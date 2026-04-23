@@ -10,9 +10,14 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Five commits on `agent/lapee' pushed to Permagit:
+Seven commits on `agent/lapee' pushed to Permagit:
 
 ```
+d78b0d3a3  v1.2 batch 5: demo-ops review-fix (stale-capture
+           guard, visible boot progress, loglevel=1,
+           captive-portal DHCP resilience)
+3b3dd2e44  v1.2 STATUS.md: overnight report + iron-reflash
+           procedure
 57bba5ef3  v1.2 batch 4: review-fix (H1 freshness tightening,
            M6 TCG EKU whitelist, g SecureBoot + cmdline +
            ima-count probes)
@@ -25,6 +30,11 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
 6c21194cc  v1.2 batch 1: kernel NIC drivers + parser fixes
            (E1, E4, E5, E6)
 ```
+
+Two independent code reviewers spoken to (curmudgeonly
+firmware-security; pragmatic demo-ops). Both verdicts: SHIP.
+Findings from both acted on in-batch. See
+"Review findings acted on" at the bottom of this report.
 
 ### What's done from the TODO list
 
@@ -189,17 +199,66 @@ walks through the TCG EK EKU + TPM spec extensions without
 tripping. Verdict should come back `trusted` (or a specifically-
 explained `warnings`) without a single `unknown` field.
 
-### Sub-agent review summary
+### Review findings acted on
 
-Curmudgeonly firmware-security reviewer ran against v1.2 code.
-Verdict: SHIP.
+**Pass 1 -- curmudgeonly firmware-security reviewer** (against
+6c21..54c1b). Verdict: SHIP. Three findings promoted into v1.2
+batch 4:
 
-  - Nothing critical.
-  - Three findings promoted to v1.2 batch 4 (H1 freshness, M6
-    TCG EKU verify_fun, g SecureBoot probe). All landed.
-  - Backlog (non-blocker): M1 multi-router DHCP iteration, M2
-    renew-flush secondary-IP gap, M3 iommu-group-counter
-    cosmetic readability. All deferred to v1.3.
+  H1  `is_fresh_boot/2' treated null reset/restart counts as
+      fresh-boot, which let an adversary strip counts to
+      silence the tamper signal. Tightened to three-way
+      classifier: both-present-and-low -> warn, either-null ->
+      CRITICAL (distinct code), both-present-and-high ->
+      CRITICAL.
+  M6  Added `ek_verify_fun/3' as pkix_path_validation
+      verify_fun. Whitelists TCG OIDs `2.23.133.8.1'
+      (id-tcg-kp-EKCertificate) and `2.23.133.2.16'
+      (id-tcg-tpmSpecification) which real EK certs carry as
+      critical extensions and OTP's default path validator
+      would reject.
+  g   Added /sys/firmware/efi/efivars/SecureBoot-...,
+      /proc/cmdline, /sys/class/tpm/tpm0/tpm_version_major,
+      and IMA runtime-measurement-count probes to the
+      envelope.
+
+**Pass 2 -- pragmatic demo-ops reviewer** (against full
+6c21..3b3dd). Verdict: SHIP with top-5 risks addressed as
+v1.2 batch 5:
+
+  TOP-1  Stale ESP on verifier's Mac -> interpret-local-capture.sh
+         now refuses files older than 30 minutes (override with
+         LAPEE_ACCEPT_STALE=1). Prevents the "dashboard shows
+         2024 data against v1.2 parser" demo-failure mode.
+  TOP-2  No-NIC-attached boot showed a frozen splash -> init
+         now renders distinct status lines at every phase,
+         including an explicit "no network interfaces found --
+         plug in Ethernet" frame when NIC_COUNT=0.
+  TOP-3  HB cold-start wait was silent -> heartbeat every
+         ~10s with elapsed-seconds count refreshing the splash.
+  TOP-4  Kernel WARN messages scrolled over the splash -> dropped
+         default cmdline `loglevel=3' to `loglevel=1' so only
+         PANIC/ALERT/CRIT/ERR reach the physical console. Dmesg
+         still has everything for serial-console post-mortem.
+  TOP-5  Captive-portal DHCP (IP but no gateway) would claim the
+         primary slot and block subsequent-interface defaults ->
+         lapee-dhcp-hook now gates PRIMARY write behind the
+         presence of a `router' field, logs ip-only leases as
+         `NO-GATEWAY (ip-only; not promoting to primary)'.
+
+Deferred (non-blocker, v1.3 backlog):
+
+  M1  lapee-dhcp-hook's `for gw in ${router:-}' iterates each
+      router; only the last wins. Single-homed demo irrelevant.
+  M2  `bound|renew' flushes the interface's existing IP before
+      re-adding; brief 0-IP gap. No running traffic on the
+      secondary in the demo.
+  M3  count_iommu_groups/0 cosmetic readability.
+  M4  /sys/kernel/security/lockdown can be one-way-escalated
+      post-init_chain; our snapshot would miss a late change.
+      Late escalation is not expected in normal boot flow.
+  M5  GeneralizedTime with fractional seconds rejected by
+      parse_x509_time/1. Rare on EK certs; noted for v1.3.
 
 ---
 
