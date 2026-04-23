@@ -436,19 +436,22 @@ do_read_commitment(Path, Opts) ->
 
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
+    LocalOpts = hb_store:scope(Opts, local),
     UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
     CommitmentsPath = hb_path:to_binary([UncommittedID, <<"commitments">>]),
     FoundCommitments =
-        case hb_store:read(Store, CommitmentsPath, Opts) of
-            {composite, CommitmentIDs} ->
+        case hb_store:list(CommitmentsPath, LocalOpts) of
+            {ok, CommitmentIDs} ->
                 lists:filtermap(
                     fun(CommitmentID) ->
                         ShouldLoad = not lists:member(CommitmentID, AlreadyLoaded),
                         ResolvedCommPath = hb_path:to_binary([CommitmentsPath, CommitmentID]),
-                        case ShouldLoad andalso do_read_commitment(ResolvedCommPath, Opts) of
+                        case
+                            ShouldLoad andalso
+                                do_read_commitment(ResolvedCommPath, LocalOpts)
+                        of
                             {ok, Commitment} ->
                                 {
                                     true,
@@ -466,8 +469,6 @@ read_all_commitments(Msg, Opts) ->
                     end,
                     CommitmentIDs
                 );
-            {error, not_found} ->
-                [];
             _ ->
                 []
     end,
