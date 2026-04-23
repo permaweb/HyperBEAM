@@ -1,7 +1,9 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 ~04:00 EDT -- v1.2 overnight pass
-shipped. USB image ready for Sam's morning Framework reboot.
+**Latest update:** 2026-04-23 ~05:00 EDT -- v1.2 overnight pass
+shipped through reviewer pass 5 (Erlang canon). USB image ready
+for Sam's morning Framework reboot (batch 7/8 are verifier-side
+only; the Apr 23 03:21 image is current for guest-runtime).
 
 For the full history (M0 -> v1.0 -> v1.1, every checkpoint, every
 bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
@@ -21,9 +23,16 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Eleven commits on `agent/lapee' pushed to Permagit:
+Thirteen commits on `agent/lapee' pushed to Permagit:
 
 ```
+7120c560b  v1.2 batch 8: Erlang canon cleanup + port TCG verify_fun
+           to dev_tpm2 (M2: ek_chain_verify_fun TCG-aware; H1
+           binary_to_int_or via safe_int; H3 dead is_fresh_boot
+           removed; H4 count_iommu_groups is_group_dir/1; L1
+           dead _SPKI removed)
+f3f10a46e  v1.2 STATUS: record reviewer pass 4 + batch 7 red-team
+           fix + v1.3 TODO backlog
 7ead6b02f  v1.2 batch 7: red-team review-fix (signature check
            on claim path, missing-EK/AK upgraded to critical,
            EK<->AK binding warning)
@@ -51,13 +60,15 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
            (E1, E4, E5, E6)
 ```
 
-Four independent code reviewers spoken to (curmudgeonly
+Five independent code reviewers spoken to (curmudgeonly
 firmware-security; pragmatic demo-ops; fresh-eyes first-time-
-contributor; adversarial red-team). All four verdicts: SHIP
-(red-team's verdict: "verifier can be bypassed -- fix before
-demo", addressed in batch 7). Findings from all four acted on
-in the corresponding batch. See "Review findings acted on" at
-the bottom of this report.
+contributor; adversarial red-team; Erlang/OTP canon). All
+five verdicts: SHIP (red-team's pre-fix verdict: "verifier can
+be bypassed -- fix before demo", addressed in batch 7;
+Erlang-canon's verdict: "blends well enough to ship -- one
+surgical refactoring pass would improve maintainability", all
+six findings addressed in batch 8). See "Review findings acted
+on" at the bottom of this report.
 
 **Known v1.3 gap (surfaced by red-team reviewer, batch 7):**
 the v1.2 verifier does NOT cryptographically prove that the AK
@@ -178,10 +189,12 @@ target table either landed or has a single known follow-up:
 
 ```
 dev_tpm_tcg        98  pass
-dev_tpm2           20  pass
+dev_tpm2           21  pass  (+1 from batch 8 TCG-whitelist
+                               coverage in ek_chain_verify_fun
+                               regression test)
 dev_tpm_interpret 104  pass  (+20 from v1.1's 84)
                 ------
-                  222  pass
+                  223  pass
 ```
 
 ### Expected iron timeline on the Framework (from v1.2 USB)
@@ -394,6 +407,46 @@ v1.3 backlog from red-team pass 4:
   - MEDIUM 3: treat any pcr-replay mismatch as critical when
     the initramfs is expected to emit a complete log (today
     we tolerate it because our stub initramfs is short)
+
+**Pass 5 -- Erlang/OTP canon reviewer** (against full
+6c21..f3f10). Verdict: "blends well enough to ship -- one
+surgical refactoring pass would improve maintainability."
+Six findings, all addressed in batch 8 (commit 7120c560b):
+
+  M2  `dev_tpm2:ek_chain_verify_fun/0' was the pre-v1.2-batch-4
+      version -- rejected every `{bad_cert, _}' including
+      `{bad_cert, {not_supported_extension, Ext}}' for TCG-critical
+      EKU (`id-tcg-kp-EKCertificate', 2.23.133.8.1) and spec-version
+      (`id-tcg-tpmSpecification', 2.23.133.2.16) extensions that
+      real Nuvoton / Infineon / STMicro EK certs carry. The parser
+      side (`dev_tpm_interpret:ek_verify_fun/3') was upgraded in
+      batch 4 M6 with the TCG whitelist, but `dev_tpm2:chk_ek_chain'
+      was not. Two verifier paths that should accept identical
+      chains would have disagreed. Ported the stricter TCG-aware
+      verify_fun back to `dev_tpm2' as a top-level 3-arg function
+      mirroring `dev_tpm_interpret:ek_verify_fun/3' one-for-one.
+      Regression test updated to cover TCG-critical pass, rogue
+      critical reject, TCG non-critical accept, non-TCG
+      non-critical unknown.
+  H1  Duplicate `binary_to_integer' try/catch in
+      `binary_to_int_or/2' and `safe_int/1'. Reimplemented the
+      former as a default-wrapping thunk over the latter so the
+      try lives in one place.
+  H3  `is_fresh_boot/2' was a legacy boolean wrapper around
+      `fresh_boot_classify/2' with zero callers. Deleted.
+  H4  `count_iommu_groups' used `element(1, string:to_integer(E))'
+      as a digit-filter. Replaced with a named `is_group_dir/1'
+      that pattern-matches both `{N, <<>>}' and `{N, ""}'.
+  L1  `decode_rsa_pub_pem' bound an unused `_SPKI' variable on
+      the SPKI fall-through path. Removed.
+  H2  Reviewer flagged `catch C:E -> {error, {C, E}}' as
+      "non-canonical" but the surrounding PEM-decoder canon in
+      this codebase (`dev_tpm2:decode_pem_rsa_pub/1', line 941;
+      `dev_tpm_interpret.erl:7079/7089') uses the same form
+      intentionally for diagnostic clarity. Declined the
+      normalisation; the architectural-layering comment at
+      `dev_tpm_interpret.erl:3305-3309' already documents why
+      the `dev_tpm2' / `dev_tpm_interpret' duplicate exists.
 
 ---
 
