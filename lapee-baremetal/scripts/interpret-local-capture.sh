@@ -112,6 +112,49 @@ if [[ ! -f "$INPUT" ]]; then
     exit 1
 fi
 
+# v1.2 demo-ops guard: reject stale captures. A mounted ESP from a
+# previous boot can leave `attestation-latest.json' around for
+# weeks or years. Someone running this script on what they think
+# is today's boot would parse yesterday's envelope and report
+# yesterday's machine state -- confusing for a demo, dangerous
+# for any policy decision.
+#
+# Threshold: 30 minutes. The file SHOULD be brand-new (just
+# written by the guest). Override with LAPEE_ACCEPT_STALE=1.
+if [[ "${LAPEE_ACCEPT_STALE:-0}" != "1" ]]; then
+    AGE_SEC=""
+    if stat -f "%m" "$INPUT" >/dev/null 2>&1; then
+        FILE_MTIME=$(stat -f "%m" "$INPUT")
+        NOW=$(date +%s)
+        AGE_SEC=$((NOW - FILE_MTIME))
+    elif stat -c "%Y" "$INPUT" >/dev/null 2>&1; then
+        FILE_MTIME=$(stat -c "%Y" "$INPUT")
+        NOW=$(date +%s)
+        AGE_SEC=$((NOW - FILE_MTIME))
+    fi
+    if [[ -n "$AGE_SEC" && "$AGE_SEC" -gt 1800 ]]; then
+        AGE_MIN=$((AGE_SEC / 60))
+        printf "\n" >&2
+        printf "  \033[1;31m!! STALE CAPTURE !!\033[0m\n" >&2
+        printf "  %s\n" "$INPUT" >&2
+        printf "  last modified: %s minutes ago\n" "$AGE_MIN" >&2
+        printf "\n" >&2
+        printf "  This file is older than 30 minutes. A mounted ESP from\n" >&2
+        printf "  a previous boot can show a stale attestation-latest.json;\n" >&2
+        printf "  the verifier would parse yesterday's capture and report\n" >&2
+        printf "  yesterday's machine state.\n" >&2
+        printf "\n" >&2
+        printf "  Unmount the ESP (diskutil unmount force /Volumes/LAPEE_ESP),\n" >&2
+        printf "  boot the target laptop fresh from USB, let the writeback\n" >&2
+        printf "  complete, then re-mount and re-run.\n" >&2
+        printf "\n" >&2
+        printf "  Or, to accept a known-stale file deliberately:\n" >&2
+        printf "      LAPEE_ACCEPT_STALE=1 %s %s\n" "$0" "$INPUT" >&2
+        printf "\n" >&2
+        exit 4
+    fi
+fi
+
 SLUG="$(echo "$LABEL" | tr 'A-Z ' 'a-z-' | tr -c 'a-z0-9-' '-' \
                      | sed 's/--*/-/g;s/^-//;s/-$//')"
 [[ -z "$SLUG" ]] && SLUG="capture"

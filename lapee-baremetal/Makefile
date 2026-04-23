@@ -153,12 +153,17 @@ INITRAMFS  ?= work/initramfs-hb.cpio.gz
 # Token-by-token:
 #   console=tty0       physical screen (Framework + any laptop)
 #   console=ttyS0      serial (QEMU -nographic; ignored on iron)
-#   quiet loglevel=3   suppress kernel info + notice; warnings +
-#                      errors still show, init's echoes still
-#                      show (they're userspace, unaffected).
-#                      Bumped from 4 to 3 in v1.2 for tighter
-#                      sub-second boot -- every buffered kmsg
-#                      takes visible ms on serial.
+#   quiet loglevel=1   suppress kernel info/notice/warning/err;
+#                      only PANIC/ALERT/CRIT/ERR reach the
+#                      physical console. Userspace echoes
+#                      (including our splash + init prints) are
+#                      unaffected. The v1.2 demo-ops review
+#                      flagged that WARN-level messages (ACPI
+#                      quirks, thunderbolt init, IOMMU group
+#                      allocation) scroll over the boot splash
+#                      and leave a garbled final frame on screen.
+#                      Dmesg still has everything for serial-
+#                      console post-mortem.
 #   panic=10           reboot 10s after kernel panic (safety)
 #   rdinit=/init       run our initramfs init as PID 1
 #   LAPEE_WRITEBACK=1  init writes attestation to the ESP
@@ -169,7 +174,7 @@ INITRAMFS  ?= work/initramfs-hb.cpio.gz
 # emit an IMA log, so PCR 10 reads as zero anyway. Re-add when
 # the guest grows an IMA runtime; keeping the default off saves
 # kernel time on every exec.
-CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=3 panic=10 rdinit=/init LAPEE_WRITEBACK=1
+CMDLINE    ?= console=tty0 console=ttyS0 quiet loglevel=1 panic=10 rdinit=/init LAPEE_WRITEBACK=1
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
 hb-usb-image:

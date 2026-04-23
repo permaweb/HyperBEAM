@@ -22,13 +22,15 @@ mkdir -p /dev/pts
 mount -t devpts -o nosuid,noexec devpts /dev/pts
 mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 
-# v1.2: Boot splash -- centred HyperBEAM ASCII art + empty status
-# slot. The lapee-dhcp-hook overwrites the status line with
-# `http://<ip>:8734' once any interface gets a DHCP lease.
-# Kernel messages may scroll past but the splash re-renders on
-# first DHCP bound event, so the final frame is clean.
+# v1.2: Boot splash -- centred HyperBEAM ASCII art + a status
+# line that starts as "booting..." and gets replaced when we
+# know more. Each visibility stage writes a fresh splash so
+# the audience always sees *something* happening. Final status
+# lands when an interface gets a DHCP lease
+# (`lapee-dhcp-hook' -> `http://<ip>:8734').
 if [ -x /usr/local/bin/lapee-splash ]; then
-    /usr/local/bin/lapee-splash > /dev/console 2>/dev/null || true
+    /usr/local/bin/lapee-splash "booting..." \
+        > /dev/console 2>/dev/null || true
 fi
 echo "[init] kernel=$(uname -r)"
 
@@ -74,6 +76,22 @@ for iface in /sys/class/net/*; do
     NIC_COUNT=$((NIC_COUNT + 1))
 done
 echo "[init] net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
+
+# Give the user a visible status before HB is up. If there's no
+# network, the splash WILL stay on this message until the
+# writeback completes -- that's the correct signal ("I see zero
+# interfaces; plug in an Ethernet cable").
+if [ -x /usr/local/bin/lapee-splash ]; then
+    if [ "$NIC_COUNT" -eq 0 ]; then
+        /usr/local/bin/lapee-splash \
+            "no network interfaces found -- plug in Ethernet" \
+            > /dev/console 2>/dev/null || true
+    else
+        /usr/local/bin/lapee-splash \
+            "$NIC_COUNT interface(s) up; starting HyperBEAM..." \
+            > /dev/console 2>/dev/null || true
+    fi
+fi
 
 # Default config files (shipped with image).
 ENFORCED_CFG=/etc/lapee/lapee-enforced.flat
@@ -217,6 +235,16 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
     ATT_OUT=/run/lapee/attestation.json
 
     echo "[writeback] phase 1: waiting for HB to answer /~tpm2@2.0a/info"
+    # Visible splash update so the audience sees something is
+    # happening during HB's cold-start (LMDB warmup, crypto
+    # init, TPM first-use can take a few seconds on iron and
+    # longer under Rosetta). Without this the screen is frozen
+    # on the initial splash for the whole wait.
+    if [ -x /usr/local/bin/lapee-splash ]; then
+        /usr/local/bin/lapee-splash \
+            "waiting for HyperBEAM..." \
+            > /dev/console 2>/dev/null || true
+    fi
     ready=0
     for i in $(seq 1 120); do
         if wget -q -O "$PROBE_OUT" --timeout=2 \
@@ -227,8 +255,20 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
             echo "[writeback] HB responded to /info after ~$((i*3))s"
             ready=1; break
         fi
-        if [ $((i % 10)) -eq 0 ]; then
-            echo "[writeback] phase 1: still waiting (probe ${i}/120)"
+        # Heartbeat every 5 probes (~10s of wall-time) so the
+        # operator sees the boot is progressing, not hung.
+        # Every 10th also refreshes the splash -- kernel WARN
+        # messages above loglevel=1 are suppressed now but the
+        # initial UEFI boot logo can still scroll past.
+        if [ $((i % 5)) -eq 0 ]; then
+            echo "[writeback] phase 1: still waiting (probe ${i}/120" \
+                 "~$((i*2))s elapsed)"
+        fi
+        if [ $((i % 10)) -eq 0 ] && \
+           [ -x /usr/local/bin/lapee-splash ]; then
+            /usr/local/bin/lapee-splash \
+                "waiting for HyperBEAM... (~$((i*2))s)" \
+                > /dev/console 2>/dev/null || true
         fi
         sleep 2
     done
