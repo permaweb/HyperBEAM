@@ -1151,7 +1151,7 @@ interpret_claim(Events, E, Db) ->
         <<"timeline">>        => claim_timeline(EvList, E)
     },
     WithVerdict = WithTimeline#{
-        <<"policy-verdict">>  => claim_policy_verdict(WithTimeline)
+        <<"policy-verdict">>  => claim_policy_verdict(WithTimeline, E)
     },
     WithSummary = WithVerdict#{
         <<"attestation-summary">> =>
@@ -2835,8 +2835,13 @@ event_seq_range(EvList) ->
 %%                 (so a policy engine can inspect the
 %%                  evidence without re-walking the tree)
 %%   version       1  (so callers can reason about evolution)
-claim_policy_verdict(Claim) ->
-    Signals = collect_policy_signals(Claim),
+%% Two-arity form so callers with the raw envelope can feed it
+%% in. The signature-verification signal requires the raw quoted
+%% bytes which the claim tree doesn't preserve.
+claim_policy_verdict(Claim) -> claim_policy_verdict(Claim, #{}).
+
+claim_policy_verdict(Claim, Envelope) ->
+    Signals = collect_policy_signals(Claim, Envelope),
     {Warnings, Criticals} = classify_policy_findings(Signals),
     Score = policy_score(Signals, Warnings, Criticals),
     Verdict = policy_verdict_from(Criticals, Warnings, Signals),
@@ -2852,7 +2857,9 @@ claim_policy_verdict(Claim) ->
 %% Pull the small set of decisive per-section facts into a
 %% flat signal map -- same keys drive the classify_ and
 %% score_ functions below.
-collect_policy_signals(Claim) ->
+collect_policy_signals(Claim) -> collect_policy_signals(Claim, #{}).
+
+collect_policy_signals(Claim, Envelope) ->
     SB = maps:get(<<"secure-boot">>, Claim, #{}),
     QI = maps:get(<<"quote-integrity">>, Claim, #{}),
     PR = maps:get(<<"pcr-replay">>, Claim, #{}),
@@ -2921,7 +2928,15 @@ collect_policy_signals(Claim) ->
                      maps:get(<<"quote">>, Claim, #{}), null),
         <<"restart-count">> =>
             maps:get(<<"restart-count">>,
-                     maps:get(<<"quote">>, Claim, #{}), null)
+                     maps:get(<<"quote">>, Claim, #{}), null),
+        %% v1.2 red-team review: capture the ACTUAL RSA-PSS
+        %% signature-verification result. Drives
+        %% quote_signature_finding/1 which is CRITICAL when false
+        %% or unknown. claim_quote_integrity's pcr-digest-match is
+        %% attacker-computable (just re-hash your chosen PCR
+        %% values); this is not (requires a TPM-held AK private).
+        <<"quote-signature-verified">> =>
+            verify_quote_signature(Envelope)
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -2931,10 +2946,12 @@ classify_policy_findings(S) ->
     Findings =
         [secure_boot_finding(S),
          quote_integrity_finding(S),
+         quote_signature_finding(S),    %% v1.2 red-team fix
          pcr_replay_finding(S),
          freshness_finding(S),
          ek_finding(S),
          ak_finding(S),
+         ek_ak_binding_finding(S),      %% v1.2 red-team warn
          ima_policy_finding(S),
          tpm_trust_finding(S),
          tme_finding(S),
@@ -3155,11 +3172,19 @@ lockdown_finding(
 lockdown_finding(_) -> ok.
 
 ek_finding(#{<<"ek-present">> := false}) ->
-    finding(warn, <<"ek-cert-missing">>,
+    %% v1.2 red-team review upgrade: an envelope with no EK cert
+    %% has no TPM-rooted cryptographic identity at all. Previously
+    %% a warning; that let an attacker who stripped ek-cert-pem
+    %% avoid every downstream ek-* finding and reach
+    %% verdict=attested-with-warnings. Upgraded to CRITICAL --
+    %% without an EK there is nothing for the quote's AK to
+    %% anchor against.
+    finding(critical, <<"ek-cert-missing">>,
             <<"ek">>,
             <<"Envelope carries no EK certificate; TPM "
               "cryptographic identity cannot be anchored to a "
-              "vendor CA.">>);
+              "vendor CA. No legitimate LapEE envelope produces "
+              "this shape.">>);
 ek_finding(#{<<"ek-currently-valid">> := false}) ->
     finding(critical, <<"ek-cert-expired-or-not-yet-valid">>,
             <<"ek">>,
@@ -3174,7 +3199,9 @@ ek_finding(#{<<"ek-chain-valid">> := false}) ->
 ek_finding(_) -> ok.
 
 ak_finding(#{<<"ak-present">> := false}) ->
-    finding(warn, <<"ak-pub-missing">>,
+    %% v1.2 red-team review upgrade: no AK = no signature to
+    %% verify = no quote integrity at all. Critical, not warn.
+    finding(critical, <<"ak-pub-missing">>,
             <<"ak">>,
             <<"Envelope carries no Attestation Key public "
               "blob; verifier cannot pin which AK signed the "
@@ -3186,6 +3213,135 @@ ak_finding(#{<<"ak-key-size-bits">> := N}) when N < 2048 ->
               "AK key size ~p bits is below the 2048-bit "
               "minimum recommended by NIST SP 800-57.", [N])));
 ak_finding(_) -> ok.
+
+%% v1.2 red-team review: claim/3 used to produce verdict=trusted
+%% without ever verifying the RSA-PSS signature over the quote.
+%% An attacker could set quote.signature=<<>> and quote.quoted=
+%% <forged TPMS_ATTEST with chosen pcrDigest>, and the claim
+%% pipeline's claim_quote_integrity would happily match the
+%% recomputed pcrDigest against the forged quoted bytes and
+%% light up "quote-integrity-match = true" -- without any TPM
+%% key ever signing anything. Fixed by adding a dedicated
+%% `quote-signature-verified' signal (computed in
+%% collect_policy_signals via verify_quote_signature/1 below)
+%% and gating verdict=trusted on it via the quote_signature_
+%% finding/1 clause here.
+quote_signature_finding(#{<<"quote-signature-verified">> := false}) ->
+    finding(critical, <<"quote-signature-invalid">>,
+            <<"quote-integrity">>,
+            <<"RSA-PSS(SHA-256) signature over TPMS_ATTEST does "
+              "not verify under the envelope's ak-pub-pem. "
+              "Either the quote was forged (no TPM key ever "
+              "signed it) or the envelope was tampered with in "
+              "transit.">>);
+quote_signature_finding(#{<<"quote-signature-verified">> := <<"unknown">>}) ->
+    finding(critical, <<"quote-signature-unknown">>,
+            <<"quote-integrity">>,
+            <<"Cannot verify the TPMS_ATTEST signature: the "
+              "envelope is missing either ak-pub-pem or a "
+              "quote signature. No trusted verdict is possible "
+              "without both.">>);
+quote_signature_finding(_) -> ok.
+
+%% v1.2 red-team review: the EK<->AK binding is NOT cryptographically
+%% proven in the v1.2 envelope. The EK chain validates an EK cert;
+%% the quote validates under an AK pubkey; no operation proves
+%% those two keys live in the same TPM. An attacker with a stolen
+%% EK + chain could generate their own RSA keypair, sign a forged
+%% quote with it, and pass chain-valid + signature-valid
+%% simultaneously.
+%%
+%% The TCG-canonical fix is TPM2_MakeCredential / TPM2_ActivateCredential
+%% provisioning: verifier wraps a secret with EK pub + AK name,
+%% guest unwraps with TPM2_ActivateCredential (requires both keys
+%% loaded in the same TPM), returns secret. Not implemented in
+%% v1.2; scheduled for v1.3. For now the envelope carries a
+%% warning so anyone reading verdict=attested-with-warnings sees
+%% exactly what's missing.
+ek_ak_binding_finding(_Signals) ->
+    finding(warn, <<"ek-ak-binding-not-implemented">>,
+            <<"ek">>,
+            <<"v1.2 does not yet cryptographically prove that the "
+              "AK (signer of the quote) lives in the same TPM as "
+              "the EK (anchor of the cert chain). An attacker "
+              "with a stolen EK + chain could pair it with an "
+              "attacker-generated AK and fool the verifier into "
+              "accepting a forged quote. TCG TPM2_MakeCredential "
+              "/ TPM2_ActivateCredential provisioning handshake "
+              "is scheduled for v1.3. Until then, trust in this "
+              "verdict requires that the envelope has not been "
+              "transported through an adversarial channel.">>).
+
+%% Verify the RSA-PSS-SHA256 signature over the envelope's
+%% TPMS_ATTEST blob. Returns `true' | `false' | `<<"unknown">>`.
+%% Uses the same primitive (rsa_pss:verify/4) and convention
+%% (salt=32, MGF1=SHA-256) as dev_tpm2:chk_quote/1 so a signed
+%% quote that passes chk_quote will also pass this check.
+verify_quote_signature(E) ->
+    Q = hb_maps:get(<<"tpm-quote">>, E, #{}, #{}),
+    AkPem = hb_maps:get(<<"ak-pub-pem">>, E, <<>>, #{}),
+    QuotedB64 = hb_maps:get(<<"quoted">>, Q, <<>>, #{}),
+    SigB64 = hb_maps:get(<<"signature">>, Q, <<>>, #{}),
+    case {AkPem, QuotedB64, SigB64} of
+        {<<>>, _, _} -> <<"unknown">>;
+        {_, <<>>, _} -> <<"unknown">>;
+        {_, _, <<>>} -> <<"unknown">>;
+        _ ->
+            try
+                Quoted = hb_util:decode(QuotedB64),
+                Sig    = hb_util:decode(SigB64),
+                case decode_rsa_pub_pem(AkPem) of
+                    {ok, RSAPub} ->
+                        case rsa_pss:verify(Quoted, sha256, Sig, RSAPub) of
+                            true  -> true;
+                            false -> false
+                        end;
+                    _ -> <<"unknown">>
+                end
+            catch _:_ -> <<"unknown">>
+            end
+    end.
+
+%% Small local PEM-RSA public-key decoder. Not sharing
+%% `dev_tpm2:decode_pem_rsa_pub/1' avoids a cross-module
+%% dependency from the parser (dev_tpm_interpret) to the
+%% device layer (dev_tpm2); the two live in different layers
+%% per the LapEE architecture.
+decode_rsa_pub_pem(Pem) when is_binary(Pem) ->
+    try
+        case public_key:pem_decode(Pem) of
+            [Entry | _] ->
+                case public_key:pem_entry_decode(Entry) of
+                    #'RSAPublicKey'{} = K -> {ok, K};
+                    {#'SubjectPublicKeyInfo'{}, _} = _SPKI ->
+                        %% Fall through to second-pass decode below.
+                        decode_rsa_pub_spki(Entry);
+                    Other ->
+                        case Other of
+                            #'SubjectPublicKeyInfo'{} = SPKI ->
+                                decode_rsa_pub_spki_from(SPKI);
+                            _ ->
+                                {error, {not_rsa, Other}}
+                        end
+                end;
+            [] -> {error, empty_pem}
+        end
+    catch C:E -> {error, {C, E}}
+    end.
+
+decode_rsa_pub_spki(Entry) ->
+    case public_key:pem_entry_decode(Entry) of
+        #'RSAPublicKey'{} = K -> {ok, K};
+        _ -> {error, not_rsa}
+    end.
+
+decode_rsa_pub_spki_from(#'SubjectPublicKeyInfo'{
+        subjectPublicKey = Bits}) ->
+    try
+        K = public_key:der_decode('RSAPublicKey', Bits),
+        {ok, K}
+    catch _:_ -> {error, not_rsa}
+    end.
 
 %% Heuristic scoring:
 %%   Start at 100. Every critical costs 40 points, every
@@ -8573,15 +8729,25 @@ claim_surface_hour14_policy_verdict_empty_test() ->
     PV = maps:get(<<"policy-verdict">>, Claim),
     ?assertEqual(1, maps:get(<<"version">>, PV)),
     Verdict = maps:get(<<"verdict">>, PV),
-    %% An empty envelope produces trust-tier=unknown etc, but
-    %% also triggers a few "unknown" warnings (secure-boot,
-    %% tme, etc.) -- so it's attested-with-warnings, not
-    %% "unknown" outright.
-    ?assert(Verdict =:= <<"unknown">> orelse
-             Verdict =:= <<"attested-with-warnings">>),
+    %% v1.2 red-team review: an envelope with no EK, no AK, and
+    %% no quote signature cannot produce a legitimate trusted
+    %% verdict. ek-cert-missing + ak-pub-missing + quote-
+    %% signature-unknown are all CRITICAL findings now, so an
+    %% empty envelope correctly lands at `untrusted'. The test
+    %% previously accepted `unknown | attested-with-warnings';
+    %% that was the bug the red-team reviewer surfaced.
+    ?assertEqual(<<"untrusted">>, Verdict),
     ?assert(is_integer(maps:get(<<"score">>, PV))),
     ?assert(is_list(maps:get(<<"warnings">>, PV))),
     ?assert(is_list(maps:get(<<"critical-failures">>, PV))),
+    %% And the critical-failures MUST include at least one of
+    %% the three missing-crypto findings v1.2 upgraded.
+    Criticals = maps:get(<<"critical-failures">>, PV),
+    CodeSet = [maps:get(<<"code">>, F) || F <- Criticals],
+    ?assert(lists:member(<<"ek-cert-missing">>, CodeSet)
+           orelse lists:member(<<"ak-pub-missing">>, CodeSet)
+           orelse lists:member(<<"quote-signature-unknown">>,
+                               CodeSet)),
     ok.
 
 %% A synthetic envelope with explicit secure-boot=true +
@@ -9627,5 +9793,58 @@ v1_2_lockdown_from_sysfs_test() ->
     {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
     LD = maps:get(<<"lockdown">>, Claim),
     ?assertEqual(<<"integrity">>, maps:get(<<"level">>, LD)).
+
+%% v1.2 red-team regression: a forged envelope that populates
+%% claim_quote_integrity's pcr-digest-match correctly (attacker
+%% computes sha256 of their chosen PCR values, puts the
+%% matching digest in a hand-rolled TPMS_ATTEST blob) but has
+%% NO valid signature and NO valid AK pubkey. Pre-v1.2 this
+%% would have scored well on the integrity branch and only
+%% incurred warnings elsewhere. Post-v1.2 it MUST land at
+%% `untrusted' via the new quote_signature_finding/1 clause.
+v1_2_forged_envelope_without_sig_is_untrusted_test() ->
+    %% Hand-build the smallest TPMS_ATTEST whose pcrDigest
+    %% matches a single known PCR 15 value, without signing
+    %% anything. Attacker's playbook: the pcr-digest recompute
+    %% path looks valid, but no signature exists.
+    PcrBytes = <<0:256>>,
+    PcrDigest = crypto:hash(sha256, PcrBytes),
+    %% TPMS_ATTEST: magic(4) + type(2) + qualifiedSigner(TPM2B)
+    %%   + extraData(TPM2B) + clockInfo(17) + firmwareVersion(8)
+    %%   + attested = TPML_PCR_SELECTION + TPM2B_DIGEST.
+    Magic = <<16#FF, "TCG">>,
+    Type  = <<16#80, 16#18>>,   %% TPM_ST_ATTEST_QUOTE
+    QualifiedSigner = <<0:16>>,  %% empty TPM2B
+    Nonce = <<0:256>>,           %% 32 zero bytes
+    ExtraData = <<32:16, Nonce/binary>>,
+    ClockInfo = <<0:136>>,
+    Firmware  = <<0:64>>,
+    SelAlg = <<11:16>>,          %% sha256
+    SelBitmap = <<3, 16#80, 0, 0>>,  %% 3-byte select with bit 15 set
+    Sel = <<1:32, SelAlg/binary, SelBitmap/binary>>,
+    DigestTpm2B = <<32:16, PcrDigest/binary>>,
+    Quoted = <<Magic/binary, Type/binary, QualifiedSigner/binary,
+               ExtraData/binary, ClockInfo/binary, Firmware/binary,
+               Sel/binary, DigestTpm2B/binary>>,
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"tpm-quote">> => #{
+            <<"quoted">> => hb_util:encode(Quoted),
+            <<"signature">> => <<>>,
+            <<"nonce">> => hb_util:encode(Nonce),
+            <<"pcr-selection">> => [15],
+            <<"pcr-values">> => #{<<"15">> => hb_util:encode(PcrBytes)}
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    PV = maps:get(<<"policy-verdict">>, Claim),
+    ?assertEqual(<<"untrusted">>, maps:get(<<"verdict">>, PV)),
+    Criticals = maps:get(<<"critical-failures">>, PV),
+    CodeSet = [maps:get(<<"code">>, F) || F <- Criticals],
+    %% Must surface quote-signature-unknown (empty sig) + ek
+    %% missing + ak missing as criticals.
+    ?assert(lists:member(<<"quote-signature-unknown">>, CodeSet)),
+    ?assert(lists:member(<<"ek-cert-missing">>, CodeSet)),
+    ?assert(lists:member(<<"ak-pub-missing">>, CodeSet)).
 
 -endif.
