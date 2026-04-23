@@ -1402,9 +1402,25 @@ claim_tpm(E, Db) ->
 %% EK-cert path uses, so merge_tpm_sources/2 can combine them
 %% key-for-key.
 interpret_tpm_capabilities(E, Db) ->
-    Caps = hb_maps:get(<<"tpm-properties">>, E, undefined, #{}),
-    case Caps of
-        #{<<"available">> := true} ->
+    CapsRaw = hb_maps:get(<<"tpm-properties">>, E, undefined, #{}),
+    %% Normalise Caps to a map so the later maps:get calls never
+    %% trip a badmap error when the envelope has no tpm-properties
+    %% block (e.g. old envelopes, or guests where init_chain never
+    %% ran).
+    Caps = case CapsRaw of
+        #{} = M -> M;
+        _       -> #{}
+    end,
+    %% `available' is stored as an atom on the guest side but may
+    %% round-trip through JSON as <<"true">>/<<"false">>. Accept
+    %% both shapes so the parser works whether the envelope came
+    %% from same-process messaging or a writeback-then-reload.
+    AvailableRaw = maps:get(<<"available">>, Caps, undefined),
+    IsAvailable = (AvailableRaw =:= true) orelse
+                  (AvailableRaw =:= <<"true">>) orelse
+                  (AvailableRaw =:= "true"),
+    case {IsAvailable, Caps} of
+        {true, _} ->
             ManuId = maps:get(<<"manufacturer">>, Caps, <<>>),
             ManuU32 = maps:get(<<"manufacturer-u32">>, Caps, 0),
             VendorEntry =
@@ -1450,13 +1466,11 @@ interpret_tpm_capabilities(E, Db) ->
                     <<"spec-revision">>      => SpecRev
                 },
                 extra_vendor_fields(VendorEntry));
-        #{<<"available">> := false} = M ->
+        {false, _} when map_size(Caps) > 0 ->
             #{<<"caps-unavailable-reason">> =>
-                  maps:get(<<"reason">>, M,
-                           <<"tpm-properties absent from envelope">>)};
-        undefined ->
-            #{};
-        _ ->
+                  maps:get(<<"reason">>, Caps,
+                           <<"tpm-properties present but available=false">>)};
+        {false, _} ->
             #{}
     end.
 
