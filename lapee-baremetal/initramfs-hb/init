@@ -53,6 +53,10 @@ echo "[init] kernel=$(uname -r)"
 
 ip link set lo up 2>/dev/null || true
 
+# Create the scratch dir BEFORE udhcpc -- its log redirect would
+# otherwise fail the command. /run is already tmpfs-mounted above.
+mkdir -p /run/lapee /etc/lapee
+
 NIC_COUNT=0
 for iface in /sys/class/net/*; do
     name=$(basename "$iface")
@@ -117,14 +121,14 @@ fi
 # world in a useful way for attestation demos).
 export HB_MODE=${HB_MODE:-debug}
 
-# /etc/lapee exists so dev_tpm2 has a writable scratch dir; /run/lapee
-# is the per-boot runtime location the NIF wrapper uses. The real EK
-# certificate (if the platform TPM has one provisioned) is read from
-# NV storage by lapee_tpm_nif:nv_read/1 inside dev_tpm2 -- there is
-# no CA to generate here, and no CA file to dump to the console. If
-# the TPM's NV has no EK cert, the attestation envelope records that
-# explicitly in `ek-cert-source.kind = "absent"'. No fakes.
-mkdir -p /etc/lapee /run/lapee
+# /etc/lapee + /run/lapee were pre-created in the networking block
+# above so udhcpc's log redirect doesn't fail. The real EK
+# certificate (if the platform TPM has one provisioned) is read
+# from NV storage by lapee_tpm_nif:nv_read/1 inside dev_tpm2 --
+# there is no CA to generate here, and no CA file to dump to the
+# console. If the TPM's NV has no EK cert, the attestation envelope
+# records that explicitly in `ek-cert-source.kind = "absent"'.
+# No fakes.
 
 # Quick boot-state report (helps debugging).
 echo "[init] /sys/class/tpm:"
