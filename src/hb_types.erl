@@ -1,9 +1,36 @@
 %%% @doc Extract Dialyzer-style type information from AO-Core devices and apply
 %%% a static `vary` transform to base and request messages.
 -module(hb_types).
--export([extract/2, vary/5, format/1]).
+-export([extract/2, vary/5]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+%% @doc Apply a device's declared base/request schemas to the messages that will
+%% participate in one AO-Core key execution. If no schema is provided, we return
+%% the messages unchanged.
+vary(Device, Key, Base, Request, Opts) ->
+    case extract(Device, Opts) of
+        {ok, #{ <<"keys">> := KeySchemas }} ->
+            case maps:get(normalize_name(Key), KeySchemas, undefined) of
+                undefined ->
+                    {ok, Base, Request};
+                Schema ->
+                    {ok,
+                        apply_schema(
+                            maps:get(<<"base">>, Schema, any_type()),
+                            Base,
+                            Opts
+                        ),
+                        apply_schema(
+                            maps:get(<<"request">>, Schema, any_type()),
+                            Request,
+                            Opts
+                        )
+                    }
+            end;
+        {error, _Reason} ->
+            {ok, Base, Request}
+    end.
 
 %% @doc Extract the public type schema for a device.
 extract(Device, _Opts) when is_map(Device) ->
@@ -23,48 +50,18 @@ extract(Device, Opts) when is_binary(Device) ->
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
-%% @doc Apply a device's declared base/request schemas to the messages that will
-%% participate in one AO-Core key execution.
-vary(Device, Key, Base, Request, Opts) ->
-    case extract(Device, Opts) of
-        {ok, #{ <<"keys">> := KeySchemas }} ->
-            case maps:get(normalize_name(Key), KeySchemas, undefined) of
-                undefined ->
-                    {ok, Base, Request};
-                Schema ->
-                    {ok,
-                        apply_schema(maps:get(<<"base">>, Schema, any_type()), Base, Opts),
-                        apply_schema(
-                            maps:get(<<"request">>, Schema, any_type()),
-                            Request,
-                            Opts
-                        )
-                    }
-            end;
-        {error, _Reason} ->
-            {ok, Base, Request}
-    end.
-
-%% @doc Render a structured type into a compact human-readable string.
-format(Type) when is_map(Type) ->
-    hb_util:bin(do_format(Type));
-format(Other) ->
-    hb_util:bin(io_lib:format("~tp", [Other])).
-
 do_extract(Module) ->
     Beam = code:which(Module),
     case beam_lib:chunks(Beam, [abstract_code]) of
         {ok, {_, [{abstract_code, {_, Forms}}]}} ->
             TypeEnv = build_type_env(Forms),
-            Specs = [Attr || Attr = {attribute, _, spec, _} <- Forms],
+            Specs = [ Attr || Attr = {attribute, _, contract, _} <- Forms ],
             KeySchemas =
                 lists:foldl(
                     fun(Spec, Acc) ->
                         case spec_to_schema(Spec, TypeEnv) of
-                            false ->
-                                Acc;
-                            {Key, Schema} ->
-                                merge_schema(Key, Schema, Acc)
+                            false -> Acc;
+                            {Key, Schema} -> Acc#{ Key => Schema }
                         end
                     end,
                     #{},
@@ -80,24 +77,6 @@ do_extract(Module) ->
         Error ->
             {error, {abstract_code_unavailable, Module, Error}}
     end.
-
-merge_schema(Key, Schema = #{ <<"arity">> := Arity }, Acc) ->
-    case maps:get(Key, Acc, undefined) of
-        undefined ->
-            Acc#{ Key => Schema };
-        #{ <<"arity">> := ExistingArity } ->
-            case schema_score(Arity) >= schema_score(ExistingArity) of
-                true -> Acc#{ Key => Schema };
-                false -> Acc
-            end
-    end.
-
-schema_score(3) -> 40;
-schema_score(2) -> 30;
-schema_score(1) -> 20;
-schema_score(0) -> 10;
-schema_score(Arity) when is_integer(Arity) -> Arity;
-schema_score(_) -> 0.
 
 build_type_env(Forms) ->
     lists:foldl(
@@ -136,9 +115,10 @@ export_type_env(TypeEnv) ->
         )
     ).
 
-spec_to_schema({attribute, _, spec, {{Name, Arity}, [Spec | _]}}, TypeEnv) ->
+spec_to_schema({attribute, _, spec, {{Name, Arity}, [Spec]}}, TypeEnv) ->
     {Args, Return} = parse_fun_spec(Spec, TypeEnv),
-    {normalize_name(Name),
+    {
+        normalize_name(Name),
         #{
             <<"arity">> => Arity,
             <<"base">> => maybe_nth(1, Args, any_type()),
@@ -159,8 +139,10 @@ maybe_nth(N, List, Default) ->
 parse_fun_spec({type, _, bounded_fun, [FunSpec, _Constraints]}, TypeEnv) ->
     parse_fun_spec(FunSpec, TypeEnv);
 parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Ret]}, TypeEnv) ->
-    {lists:map(fun(Arg) -> parse_type(Arg, TypeEnv, #{}, []) end, Args),
-        parse_type(Ret, TypeEnv, #{}, [])};
+    {
+        lists:map(fun(Arg) -> parse_type(Arg, TypeEnv, #{}, []) end, Args),
+        parse_type(Ret, TypeEnv, #{}, [])
+    };
 parse_fun_spec(Other, _TypeEnv) ->
     {[unknown_type(Other)], any_type()}.
 
@@ -238,11 +220,14 @@ parse_type({type, _, tuple, Items}, TypeEnv, VarEnv, Seen) ->
         <<"items">> => lists:map(fun(Item) -> parse_type(Item, TypeEnv, VarEnv, Seen) end, Items)
     };
 parse_type({type, _, union, Members}, TypeEnv, VarEnv, Seen) ->
-    Members1 = lists:map(fun(Member) -> parse_type(Member, TypeEnv, VarEnv, Seen) end, Members),
-    case is_boolean_union(Members1) of
-        true -> boolean_type();
-        false -> #{ <<"kind">> => <<"union">>, <<"members">> => Members1 }
-    end;
+    #{
+        <<"kind">> => <<"union">>,
+        <<"members">> =>
+            lists:map(
+                fun(Member) -> parse_type(Member, TypeEnv, VarEnv, Seen) end,
+                Members
+            )
+    };
 parse_type({type, _, range, [Min, Max]}, TypeEnv, VarEnv, Seen) ->
     #{
         <<"kind">> => <<"range">>,
@@ -261,15 +246,15 @@ parse_type({type, _, boolean, []}, _TypeEnv, _VarEnv, _Seen) -> boolean_type();
 parse_type({type, _, atom, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"atom">>);
 parse_type({type, _, pid, []}, _TypeEnv, _VarEnv, _Seen) -> scalar_type(<<"pid">>);
 parse_type({type, _, any, []}, _TypeEnv, _VarEnv, _Seen) -> any_type();
-parse_type({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) -> literal_type(normalize_atom_literal(Atom));
+parse_type({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) -> literal_type(hb_util:bin(Atom));
 parse_type({integer, _, Int}, _TypeEnv, _VarEnv, _Seen) -> literal_type(Int);
 parse_type({char, _, Char}, _TypeEnv, _VarEnv, _Seen) -> literal_type(<<Char/utf8>>);
 parse_type({string, _, String}, _TypeEnv, _VarEnv, _Seen) -> literal_type(hb_util:bin(String));
 parse_type({nil, _}, _TypeEnv, _VarEnv, _Seen) -> literal_type([]);
 parse_type(Other, _TypeEnv, _VarEnv, _Seen) -> unknown_type(Other).
 
-field_presence(map_field_exact) -> <<"required">>;
-field_presence(map_field_assoc) -> <<"optional">>;
+field_presence(map_field_exact) -> required;
+field_presence(map_field_assoc) -> optional;
 field_presence(Other) -> normalize_name(Other).
 
 key_name({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) ->
@@ -294,7 +279,7 @@ apply_schema(#{ <<"kind">> := <<"map">>, <<"keys">> := Keys }, Message, Opts)
                 case hb_maps:find(Key, Message, Opts) of
                     {ok, Value} ->
                         Acc#{ Key => project_value(Type, Value, Opts) };
-                    error when Presence =:= <<"required">> ->
+                    error when Presence =:= required ->
                         throw({required_key_missing, Key});
                     error ->
                         Acc
@@ -355,137 +340,27 @@ check_type(#{ <<"kind">> := <<"variable">> }, _Value) ->
 check_type(_, _) ->
     true.
 
-do_format(#{ <<"kind">> := <<"any">> }) ->
-    <<"any()">>;
-do_format(#{ <<"kind">> := <<"integer">> }) ->
-    <<"integer()">>;
-do_format(#{ <<"kind">> := <<"non-neg-integer">> }) ->
-    <<"non_neg_integer()">>;
-do_format(#{ <<"kind">> := <<"pos-integer">> }) ->
-    <<"pos_integer()">>;
-do_format(#{ <<"kind">> := <<"neg-integer">> }) ->
-    <<"neg_integer()">>;
-do_format(#{ <<"kind">> := <<"float">> }) ->
-    <<"float()">>;
-do_format(#{ <<"kind">> := <<"number">> }) ->
-    <<"number()">>;
-do_format(#{ <<"kind">> := <<"binary">> }) ->
-    <<"binary()">>;
-do_format(#{ <<"kind">> := <<"bitstring">> }) ->
-    <<"bitstring()">>;
-do_format(#{ <<"kind">> := <<"boolean">> }) ->
-    <<"boolean()">>;
-do_format(#{ <<"kind">> := <<"atom">> }) ->
-    <<"atom()">>;
-do_format(#{ <<"kind">> := <<"pid">> }) ->
-    <<"pid()">>;
-do_format(#{ <<"kind">> := <<"literal">>, <<"value">> := Value }) ->
-    hb_util:bin(io_lib:format("~tp", [Value]));
-do_format(#{ <<"kind">> := <<"alias">>, <<"name">> := Name }) ->
-    <<Name/binary, "()">>;
-do_format(#{ <<"kind">> := <<"variable">>, <<"name">> := Name }) ->
-    <<Name/binary>>;
-do_format(#{ <<"kind">> := <<"remote">>, <<"module">> := Mod, <<"name">> := Name, <<"args">> := [] }) ->
-    <<Mod/binary, ":", Name/binary, "()">>;
-do_format(#{ <<"kind">> := <<"remote">>, <<"module">> := Mod, <<"name">> := Name, <<"args">> := Args }) ->
-    <<Mod/binary, ":", Name/binary, "(", (join_formatted(Args))/binary, ")">>;
-do_format(#{ <<"kind">> := <<"list">>, <<"item">> := Item }) ->
-    <<"[", (do_format(Item))/binary, "]">>;
-do_format(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }) ->
-    <<"{", (join_formatted(Items))/binary, "}">>;
-do_format(#{ <<"kind">> := <<"union">>, <<"members">> := Members }) ->
-    join_formatted(Members, <<" | ">>);
-do_format(#{ <<"kind">> := <<"range">>, <<"min">> := Min, <<"max">> := Max }) ->
-    hb_util:bin(io_lib:format("~p..~p", [Min, Max]));
-do_format(#{ <<"kind">> := <<"map">>, <<"keys">> := Keys }) when map_size(Keys) =:= 0 ->
-    <<"map()">>;
-do_format(#{ <<"kind">> := <<"map">>, <<"keys">> := Keys }) ->
-    Inner =
-        join_binaries(
-            lists:map(
-                fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}) ->
-                    Sep =
-                        case Presence of
-                            <<"required">> -> <<" := ">>;
-                            _ -> <<" => ">>
-                        end,
-                    <<Key/binary, Sep/binary, (do_format(Type))/binary>>
-                end,
-                maps:to_list(Keys)
-            ),
-            <<", ">>
-        ),
-    <<"#{", Inner/binary, "}">>;
-do_format(Other) ->
-    hb_util:bin(io_lib:format("~tp", [Other])).
+%% @doc Ensure that a name is a `dash-separated-binary` form, rather than
+%% an atom, list, etc.
+normalize_name(Name) when is_atom(Name) -> hb_util:atom_to_key(Name);
+normalize_name(Name) -> hb_util:bin(Name).
 
-join_formatted(Types) ->
-    join_formatted(Types, <<", ">>).
-join_formatted(Types, Separator) ->
-    join_binaries(lists:map(fun do_format/1, Types), Separator).
+%% @doc Extract the value from a literal form.
+literal_value(#{ <<"kind">> := <<"literal">>, <<"value">> := Value }) -> Value.
 
-join_binaries([], _Separator) -> <<>>;
-join_binaries([Only], _Separator) -> Only;
-join_binaries([Bin | Rest], Separator) ->
-    <<Bin/binary, Separator/binary, (join_binaries(Rest, Separator))/binary>>.
-
-normalize_name(Name) when is_binary(Name) ->
-    binary:replace(hb_util:bin(Name), <<"_">>, <<"-">>, [global]);
-normalize_name(Name) when is_atom(Name) ->
-    normalize_name(atom_to_binary(Name, utf8));
-normalize_name(Name) when is_list(Name) ->
-    normalize_name(hb_util:bin(Name));
-normalize_name(Name) when is_integer(Name) ->
-    integer_to_binary(Name);
-normalize_name(Name) ->
-    hb_util:bin(io_lib:format("~tp", [Name])).
-
+%% @doc Extract the name from a variable form.
 var_name({var, _, Name}) -> Name;
 var_name(Name) -> Name.
 
-normalize_atom_literal(true) -> true;
-normalize_atom_literal(false) -> false;
-normalize_atom_literal(undefined) -> <<"undefined">>;
-normalize_atom_literal(Atom) -> normalize_name(Atom).
-
-literal_value(#{ <<"kind">> := <<"literal">>, <<"value">> := Value }) -> Value;
-literal_value(Other) -> do_format(Other).
-
-is_boolean_union(Members) ->
-    lists:sort(Members) =:=
-        lists:sort([literal_type(true), literal_type(false)]).
-
 any_type() -> #{ <<"kind">> => <<"any">> }.
-boolean_type() -> #{ <<"kind">> => <<"boolean">> }.
 scalar_type(Name) -> #{ <<"kind">> => Name }.
 literal_type(Value) -> #{ <<"kind">> => <<"literal">>, <<"value">> => Value }.
 alias_type(Name) -> #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(Name) }.
 variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
 map_type(Keys) -> #{ <<"kind">> => <<"map">>, <<"keys">> => Keys }.
 unknown_type(Other) -> #{ <<"kind">> => <<"unknown">>, <<"ast">> => hb_util:bin(io_lib:format("~tp", [Other])) }.
-
-%%% Tests
-
-normalize_name_test() ->
-    ?assertEqual(<<"reply-to">>, normalize_name(reply_to)).
-
-format_map_type_test() ->
-    Type =
-        #{
-            <<"kind">> => <<"map">>,
-            <<"keys">> =>
-                #{
-                    <<"slot">> =>
-                        #{
-                            <<"presence">> => <<"required">>,
-                            <<"type">> => #{ <<"kind">> => <<"integer">> }
-                        }
-                }
-        },
-    ?assertEqual(<<"#{slot := integer()}">>, format(Type)).
-
-extract_loaded_module_test() ->
-    ?assertMatch(
-        {ok, #{ <<"module">> := <<"dev_meta">>, <<"keys">> := #{}, <<"types">> := #{} }},
-        extract(dev_meta, #{})
-    ).
+boolean_type() ->
+    #{
+        <<"kind">> => <<"union">>,
+        <<"members">> => [literal_type(true), literal_type(false)]
+    }.
