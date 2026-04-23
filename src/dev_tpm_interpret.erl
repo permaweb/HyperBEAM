@@ -1205,7 +1205,7 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         <<"boot-loader">>        => claim_boot_loader(EvList),
         <<"boot-chain">>         => claim_boot_chain(EvList, Db),
         <<"kernel">>             => claim_kernel(EvList, E),
-        <<"cpu">>                => claim_cpu(EvList, Db),
+        <<"cpu">>                => claim_cpu(EvList, E, Db),
         <<"shim">>               => claim_shim(EvList),
         %% Paper section Architecture -- the quote itself carries freshness
         %% (reset-count / restart-count / clock-ms), TPM firmware
@@ -1280,7 +1280,7 @@ interpret_claim_body(Events, EvList, E, Db, Context) ->
         %% tier 5 (confidential-compute context). Every populated
         %% value carries a `*-evidence' list.
         <<"tme">>                => claim_tme(EvList, E, Db, Context),
-        <<"iommu">>              => claim_iommu(EvList),
+        <<"iommu">>              => claim_iommu(EvList, E),
         <<"lockdown">>           => claim_lockdown(EvList, E, Db),
         <<"kernel-integrity">>   => claim_kernel_integrity(EvList, E),
         <<"verity">>             => claim_verity(EvList)
@@ -1624,7 +1624,14 @@ claim_ek(E, Db) ->
             {KeyAlg, KeyBits, RsaExp, PubDerSha256} =
                 cert_public_key_summary(Cert),
             Roots = maps:get(<<"cert-roots">>, Db, []),
-            Chain = validate_ek_chain(Cert, Roots),
+            %% v1.2 E2: envelope may carry the intermediate chain
+            %% under `ek-cert-chain-pem' (PEM bundle of one or more
+            %% certs, pulled from TPM NV at `<ek-handle>+1' per TCG
+            %% EK Credential Profile section 2.2.1.4). Decode each
+            %% one into an OTPCertificate for pkix_path_validation.
+            ChainPem = hb_maps:get(<<"ek-cert-chain-pem">>, E, <<>>, #{}),
+            ChainCerts = decode_cert_bundle(ChainPem),
+            Chain = validate_ek_chain(Cert, ChainCerts, Roots),
             From = maps:get(valid_from, Attrs, undefined),
             To   = maps:get(valid_to, Attrs, undefined),
             #{
@@ -1804,36 +1811,81 @@ parse_dt_tail(<<Mo:2/binary, D:2/binary, H:2/binary,
     end;
 parse_dt_tail(_) -> error.
 
-%% Validate the EK cert chain against shipped root CAs.
-%% When no roots are loaded we return an `unknown' verdict
-%% (not a failure) since the caller may be operating in a dev
-%% environment without the vendor's CA PEMs.
-validate_ek_chain(_Cert, []) ->
+%% Decode a concatenated PEM bundle of one or more certs into a
+%% list of OTPCertificate records. Used to consume the
+%% `ek-cert-chain-pem' field that v1.2's dev_tpm2 stamps onto the
+%% envelope (it's the concatenation of every DER cert found in
+%% TPM NV at `<ek-handle>+1'). Returns `[]' on any error -- the
+%% chain is always best-effort; a missing or malformed bundle
+%% does not break the leaf-level claim.
+decode_cert_bundle(<<>>) -> [];
+decode_cert_bundle(Pem) when is_binary(Pem) ->
+    try
+        Entries = public_key:pem_decode(Pem),
+        [public_key:pkix_decode_cert(Der, otp)
+         || {'Certificate', Der, not_encrypted} <- Entries]
+    catch _:_ -> []
+    end;
+decode_cert_bundle(_) -> [].
+
+%% Validate the EK cert chain against shipped root CAs, optionally
+%% threading the envelope-supplied intermediates through the
+%% middle. TCG EK Credential Profile often ships the leaf-signing
+%% intermediate CA in NV alongside the EK cert; without it, a
+%% real EK cert issued by a vendor-sub-CA (e.g. Nuvoton's
+%% `NPCTxxx ECC384 LeafCA 012110') never chains to the root CA we
+%% have in the bundle.
+%%
+%%   Cert    -- the leaf EK cert (decoded OTPCertificate)
+%%   Chain   -- list of OTPCertificate intermediates, root-last
+%%              convention (TCG concatenates leaf->root in NV).
+%%              We DER-encode each for pkix_path_validation.
+%%   Roots   -- list of #{name, pem} from cert-roots Db.
+%%
+%% When no roots are loaded we return `unknown' (not a failure)
+%% since the caller may be operating in a dev environment.
+validate_ek_chain(Cert, Chain, Roots) ->
+    DerCert = safe_der_encode(Cert),
+    DerIntermediates = [safe_der_encode(C) || C <- Chain],
+    validate_ek_chain_1(DerCert, DerIntermediates, Roots,
+                        length(Chain)).
+
+%% Legacy 2-arg form for call sites that predate v1.2's chain
+%% threading. Equivalent to calling with an empty intermediate list.
+validate_ek_chain(Cert, Roots) ->
+    validate_ek_chain(Cert, [], Roots).
+
+safe_der_encode(Cert) ->
+    try public_key:pkix_encode('OTPCertificate', Cert, otp)
+    catch _:_ -> <<>>
+    end.
+
+validate_ek_chain_1(_DerCert, _Intermediates, [], _ChainLen) ->
     #{
         <<"validated-by-root-ca">> => null,
         <<"root-ca-count">>        => 0,
         <<"chain-valid">>          => <<"unknown">>,
         <<"reason">>               =>
-            <<"no root-cas loaded in priv/tpm-interpret/root-cas/">>
+            <<"no root-cas loaded in priv/tpm-interpret/root-cas/">>,
+        <<"intermediates-used">>   => 0
     };
-validate_ek_chain(Cert, Roots) ->
-    DerCert = try
-        public_key:pkix_encode('OTPCertificate', Cert, otp)
-    catch _:_ -> <<>>
-    end,
-    case DerCert of
-        <<>> ->
-            #{
-                <<"validated-by-root-ca">> => null,
-                <<"root-ca-count">>        => length(Roots),
-                <<"chain-valid">>          => <<"unknown">>,
-                <<"reason">>               => <<"cert re-encode failed">>
-            };
-        _ ->
-            try_validate_against_roots(DerCert, Roots, 0)
-    end.
+validate_ek_chain_1(<<>>, _Intermediates, Roots, _ChainLen) ->
+    #{
+        <<"validated-by-root-ca">> => null,
+        <<"root-ca-count">>        => length(Roots),
+        <<"chain-valid">>          => <<"unknown">>,
+        <<"reason">>               => <<"cert re-encode failed">>,
+        <<"intermediates-used">>   => 0
+    };
+validate_ek_chain_1(DerCert, DerIntermediates, Roots, ChainLen) ->
+    %% Filter intermediates down to valid DER. Keep order -- TCG
+    %% convention is leaf-to-root, which is also the order
+    %% `pkix_path_validation/3' expects for CertPath.
+    Cleaned = [D || D <- DerIntermediates, D =/= <<>>],
+    Result = try_validate_against_roots(DerCert, Cleaned, Roots, 0),
+    Result#{<<"intermediates-used">> => ChainLen}.
 
-try_validate_against_roots(_DerCert, [], Count) ->
+try_validate_against_roots(_DerCert, _Chain, [], Count) ->
     #{
         <<"validated-by-root-ca">> => null,
         <<"root-ca-count">>        => Count,
@@ -1842,12 +1894,12 @@ try_validate_against_roots(_DerCert, [], Count) ->
             <<"no root CA in priv/tpm-interpret/root-cas/ issued "
               "this certificate">>
     };
-try_validate_against_roots(DerCert, [Root | Rest], Count) ->
+try_validate_against_roots(DerCert, Chain, [Root | Rest], Count) ->
     Name = maps:get(<<"name">>, Root, <<"unknown-root">>),
     RootPem = maps:get(<<"pem">>, Root, <<>>),
     case decode_cert(RootPem) of
         {ok, RootCert} ->
-            case validate_against_one_root(DerCert, RootCert) of
+            case validate_against_one_root(DerCert, Chain, RootCert) of
                 true ->
                     #{
                         <<"validated-by-root-ca">> => Name,
@@ -1859,22 +1911,39 @@ try_validate_against_roots(DerCert, [Root | Rest], Count) ->
                     };
                 false ->
                     try_validate_against_roots(
-                      DerCert, Rest, Count + 1)
+                      DerCert, Chain, Rest, Count + 1)
             end;
         _ ->
             try_validate_against_roots(
-              DerCert, Rest, Count + 1)
+              DerCert, Chain, Rest, Count + 1)
     end.
 
-validate_against_one_root(DerCert, RootCert) ->
+validate_against_one_root(DerCert, Intermediates, RootCert) ->
     try
         RootDer = public_key:pkix_encode(
                     'OTPCertificate', RootCert, otp),
-        case public_key:pkix_path_validation(
-               RootDer, [DerCert], []) of
-            {ok, _} -> true;
-            _ -> false
-        end
+        %% pkix_path_validation/3 expects the CertPath as a list
+        %% of DER bytes in leaf->...->root order, EXCLUDING the
+        %% trust anchor. So we pass intermediates in whatever
+        %% order the TPM gave them (TCG says leaf->root) followed
+        %% by the leaf (which is pkix's final link). Wait -- spec
+        %% is: first element of CertPath is the cert signed BY
+        %% the trust anchor (i.e. closest to root), last is the
+        %% leaf. So we reverse the intermediates list + append the
+        %% leaf. But many TPMs ship chain as leaf-first already.
+        %% Try both orderings to be defensive.
+        Orders = [
+            lists:reverse(Intermediates) ++ [DerCert],  %% root-last
+            Intermediates ++ [DerCert]                    %% root-first
+        ],
+        lists:any(
+            fun(Path) ->
+                case public_key:pkix_path_validation(
+                       RootDer, Path, []) of
+                    {ok, _} -> true;
+                    _ -> false
+                end
+            end, Orders)
     catch _:_ -> false
     end.
 
@@ -1961,9 +2030,10 @@ tpm_trust_tier(_)                     -> <<"unknown">>.
 %% `priv/tpm-interpret/cpu-models.json' to attach a human-readable
 %% `codename', `brand-range', `micro-arch', `year' and the
 %% supported TEE/hardening feature set.
-claim_cpu(Events) -> claim_cpu(Events, #{}).
+claim_cpu(Events) -> claim_cpu(Events, #{}, #{}).
+claim_cpu(Events, Db) -> claim_cpu(Events, #{}, Db).
 
-claim_cpu(Events, Db) ->
+claim_cpu(Events, E, Db) ->
     UcodeEvs = [Ev || Ev <- Events,
                       maps:get(<<"event-type-code">>, Ev, 0) =:= 16#09],
     Base0 = case UcodeEvs of
@@ -1998,7 +2068,14 @@ claim_cpu(Events, Db) ->
     %% when both fire (exact CPUID is richer than a string hint)
     %% but we promote the string hint to populate `vendor' when
     %% microcode is absent.
-    enrich_cpu_from_strings(Base0, Events).
+    Base1 = enrich_cpu_from_strings(Base0, Events),
+    %% v1.2 E3: runtime /proc/cpuinfo snapshot from the guest
+    %% (stamped into the envelope as `platform-probes.cpuinfo').
+    %% This is ground-truth from the running kernel -- includes
+    %% vendor_id, model name, family/model/stepping, microcode
+    %% revision, and the full CPU feature-flags list. Wins over
+    %% the string-scan fallback when both fire.
+    enrich_cpu_from_cpuinfo(Base1, E).
 
 %% Event-string vendor hint. Returns #{vendor => ..., brand-range => ...}
 %% or #{} if no hint found.
@@ -2098,6 +2175,87 @@ pick_brand_range(Needles) ->
         [] -> null;
         [Best | _] -> Best
     end.
+
+%% Fold `platform-probes.cpuinfo' from the envelope into the CPU
+%% claim. This is the richest source we have -- it carries the
+%% exact CPUID-level identity the running kernel reports for the
+%% first processor core. When present, it wins over string-scan
+%% hints and microcode events for vendor / model / family /
+%% stepping / microcode description.
+enrich_cpu_from_cpuinfo(Base, E) ->
+    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    CpuInfo = hb_maps:get(<<"cpuinfo">>, Probes, #{}, #{}),
+    case CpuInfo of
+        #{} when map_size(CpuInfo) == 0 -> Base;
+        _ ->
+            VendorRaw = maps:get(<<"vendor-id">>, CpuInfo, <<>>),
+            ModelName = maps:get(<<"model-name">>, CpuInfo, <<>>),
+            Family    = maps:get(<<"cpu-family">>, CpuInfo, <<>>),
+            Model     = maps:get(<<"model">>, CpuInfo, <<>>),
+            Stepping  = maps:get(<<"stepping">>, CpuInfo, <<>>),
+            Microcode = maps:get(<<"microcode">>, CpuInfo, <<>>),
+            Vendor =
+                case VendorRaw of
+                    <<"GenuineIntel">> -> <<"intel">>;
+                    <<"AuthenticAMD">> -> <<"amd">>;
+                    <<>>               -> maps:get(<<"vendor">>, Base,
+                                                    <<"unknown">>);
+                    _                  -> VendorRaw
+                end,
+            Base1 = Base#{
+                <<"vendor">>           => Vendor,
+                <<"vendor-provenance">> =>
+                    [{<<"tier">>, 2},
+                     {<<"source">>, <<"proc-cpuinfo">>}],
+                <<"cpu-family">>       =>
+                    binary_to_int_or(Family,
+                        maps:get(<<"cpu-family">>, Base, null)),
+                <<"cpu-model">>        =>
+                    binary_to_int_or(Model,
+                        maps:get(<<"cpu-model">>, Base, null)),
+                <<"cpu-stepping">>     =>
+                    binary_to_int_or(Stepping,
+                        maps:get(<<"cpu-stepping">>, Base, null)),
+                <<"microcode-description">> =>
+                    case ModelName of
+                        <<>> -> maps:get(<<"microcode-description">>,
+                                          Base, <<"unknown">>);
+                        _ ->
+                            iolist_to_binary(io_lib:format(
+                                "~s (ucode=~s)",
+                                [ModelName, Microcode]))
+                    end,
+                <<"microcode-description-provenance">> =>
+                    [{<<"tier">>, 2},
+                     {<<"source">>, <<"proc-cpuinfo">>}]
+            },
+            %% brand-range from model name: `Intel(R) Xeon(R) ...'
+            %% or `AMD Ryzen 7 7840U ...'. Extract the product line.
+            BrandRange = extract_brand_range(ModelName,
+                            maps:get(<<"brand-range">>, Base, null)),
+            Base1#{<<"brand-range">> => BrandRange}
+    end.
+
+binary_to_int_or(<<>>, Default) -> Default;
+binary_to_int_or(Bin, Default) when is_binary(Bin) ->
+    case (catch binary_to_integer(Bin)) of
+        N when is_integer(N) -> N;
+        _ -> Default
+    end;
+binary_to_int_or(_, Default) -> Default.
+
+extract_brand_range(<<>>, Default) -> Default;
+extract_brand_range(ModelName, Default) when is_binary(ModelName) ->
+    Candidates = [<<"Xeon">>, <<"Core">>, <<"Pentium">>,
+                  <<"Celeron">>, <<"Ryzen">>, <<"EPYC">>,
+                  <<"Threadripper">>, <<"Athlon">>],
+    case lists:filter(
+           fun(B) -> binary:match(ModelName, B) =/= nomatch end,
+           Candidates) of
+        []      -> Default;
+        [First | _] -> First
+    end;
+extract_brand_range(_, Default) -> Default.
 
 %% Fold an event-string hint into the CPU claim. When the microcode
 %% path already produced a real vendor (`intel' | `amd'), we leave
@@ -5081,17 +5239,44 @@ claim_lockdown(Events) ->
 claim_lockdown(Events, E, Db) ->
     {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
     Mode = maps:get(<<"lockdown">>, Flags, <<"unknown">>),
-    Level = case Mode of
+    CmdlineLevel = case Mode of
         <<"confidentiality">> -> <<"confidentiality">>;
         <<"integrity">>       -> <<"integrity">>;
         <<"none">>            -> <<"none">>;
         V when is_binary(V)   -> V;
         _                     -> <<"unknown">>
     end,
-    LevelProv = case Level of
-        <<"unknown">> -> [];
-        _             -> [{<<"tier">>, 2} | CmdlineProv]
-    end,
+    %% v1.2 E3: guest reads /sys/kernel/security/lockdown into
+    %% `platform-probes.lockdown'. The file format is
+    %% "[none] integrity confidentiality" -- the bracketed entry
+    %% is the currently-active level. Runtime reading is tier-2
+    %% evidence, stronger than cmdline alone because it reflects
+    %% whatever the kernel ACTUALLY settled on (including LSM
+    %% interactions).
+    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    RawLockdown = hb_maps:get(<<"lockdown">>, Probes, null, #{}),
+    {RuntimeLevel, RuntimeProv} =
+        case parse_lockdown_line(RawLockdown) of
+            unknown -> {<<"unknown">>, []};
+            RL ->
+                {RL,
+                 [{<<"tier">>, 2},
+                  {<<"source">>,
+                   <<"/sys/kernel/security/lockdown">>},
+                  {<<"raw">>, RawLockdown}]}
+        end,
+    %% Runtime wins; fall back to cmdline flag.
+    {Level, LevelProv} =
+        case RuntimeLevel of
+            <<"unknown">> ->
+                Lp = case CmdlineLevel of
+                    <<"unknown">> -> [];
+                    _             -> [{<<"tier">>, 2} | CmdlineProv]
+                end,
+                {CmdlineLevel, Lp};
+            _ ->
+                {RuntimeLevel, RuntimeProv}
+        end,
     %% Tier 3: did a matching UKI-hash (or kernel-name / stub-name)
     %% claim lockdown-confidentiality?
     UkiHash = hb_maps:get(
@@ -5119,6 +5304,21 @@ claim_lockdown(Events, E, Db) ->
         <<"confidentiality-confirmed-evidence">>  => Tier3Evidence
     }.
 
+%% Parse a `/sys/kernel/security/lockdown' line -- the format is
+%% `[active] other1 other2', where the bracketed token is the
+%% currently-active lockdown level. Returns the active token as a
+%% binary, or the atom `unknown' if the line doesn't match.
+parse_lockdown_line(null) -> unknown;
+parse_lockdown_line(<<>>) -> unknown;
+parse_lockdown_line(Bin) when is_binary(Bin) ->
+    %% Look for "[word]" anywhere on the line.
+    case re:run(Bin, <<"\\[([A-Za-z_-]+)\\]">>,
+                [{capture, all_but_first, binary}]) of
+        {match, [Active]} -> Active;
+        _ -> unknown
+    end;
+parse_lockdown_line(_) -> unknown.
+
 %% IOMMU state (paper section Arch line 223:
 %% `IOMMU strict mode ... init_on_alloc/init_on_free').
 %%
@@ -5126,31 +5326,63 @@ claim_lockdown(Events, E, Db) ->
 %%   iommu=pt                   -> DMA-remap mode
 %%   iommu.strict=1             -> flushes per-op (no lazy invalidation)
 %%   intel_iommu=on | amd_iommu=on -> vendor-specific enable
-claim_iommu(Events) ->
+claim_iommu(Events) -> claim_iommu(Events, #{}).
+
+claim_iommu(Events, E) ->
     {Flags, CmdlineProv} = cmdline_flags_and_provenance(Events),
     Mode  = maps:get(<<"iommu">>, Flags, <<"unknown">>),
     Strct = maps:get(<<"iommu.strict">>, Flags, <<"unknown">>),
     Intel = maps:get(<<"intel_iommu">>, Flags, <<"unknown">>),
     Amd   = maps:get(<<"amd_iommu">>,   Flags, <<"unknown">>),
-    %% An IOMMU is effectively "enabled" if at least one vendor enable
-    %% flag is on or a mode was set.
-    Enabled = case {Mode, Intel, Amd} of
+    %% Tier-2 conclusion from kernel cmdline alone.
+    CmdEnabled = case {Mode, Intel, Amd} of
         {<<"unknown">>, <<"unknown">>, <<"unknown">>} -> <<"unknown">>;
         _ ->
             (Mode =/= <<"unknown">>) orelse (Intel =:= true)
                                      orelse is_binary(Amd)
     end,
-    Prov = case Enabled of
+    CmdProv = case CmdEnabled of
         <<"unknown">> -> [];
         _             -> [{<<"tier">>, 2} | CmdlineProv]
     end,
+    %% v1.2 E3: runtime probe of /sys/kernel/iommu_groups surfaced
+    %% by the guest into `platform-probes.iommu-groups-count'. If
+    %% the guest reports any groups, the IOMMU is active in the
+    %% running kernel regardless of what the cmdline said. This
+    %% is tier-2 runtime evidence (stronger than cmdline-only).
+    Probes = hb_maps:get(<<"platform-probes">>, E, #{}, #{}),
+    GroupCount = hb_maps:get(<<"iommu-groups-count">>,
+                             Probes, null, #{}),
+    {RuntimeEnabled, RuntimeProv} =
+        case GroupCount of
+            N when is_integer(N), N > 0 ->
+                {true,
+                 [{<<"tier">>, 2},
+                  {<<"source">>, <<"sysfs-iommu-groups">>},
+                  {<<"groups-count">>, N}]};
+            0 ->
+                {false,
+                 [{<<"tier">>, 2},
+                  {<<"source">>, <<"sysfs-iommu-groups">>},
+                  {<<"groups-count">>, 0}]};
+            _ ->
+                {<<"unknown">>, []}
+        end,
+    %% Runtime wins when available; fall back to cmdline.
+    {Enabled, Prov} =
+        case RuntimeEnabled of
+            <<"unknown">> -> {CmdEnabled, CmdProv};
+            _ -> {RuntimeEnabled, RuntimeProv ++ CmdProv}
+        end,
     #{
         <<"enabled">>                  => Enabled,
         <<"enabled-evidence">>         => Prov,
         <<"mode">>                     => Mode,
         <<"strict">>                   => Strct,
         <<"intel-iommu-requested">>    => Intel,
-        <<"amd-iommu-requested">>      => Amd
+        <<"amd-iommu-requested">>      => Amd,
+        <<"runtime-groups-count">>     =>
+            case GroupCount of null -> null; _ -> GroupCount end
     }.
 
 %% Kernel integrity properties (paper section Security table):
@@ -9192,5 +9424,110 @@ v1_2_freshness_safe_false_missing_counts_warns_test() ->
           <<"restart-count">>       => null},
     F = freshness_finding(S),
     ?assertEqual(warn, maps:get(<<"severity">>, F)).
+
+%% v1.2 E3: platform-probes.cpuinfo resolves `claim.cpu.vendor' +
+%% brand-range on real hardware where the TCG event log doesn't
+%% carry them. Intel example.
+v1_2_cpu_from_cpuinfo_intel_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"platform-probes">> => #{
+            <<"available">> => true,
+            <<"cpuinfo">>   => #{
+                <<"vendor-id">>  => <<"GenuineIntel">>,
+                <<"model-name">> => <<"Intel(R) Core(TM) i7-1260P">>,
+                <<"cpu-family">> => <<"6">>,
+                <<"model">>      => <<"154">>,
+                <<"stepping">>   => <<"3">>,
+                <<"microcode">>  => <<"0x2c000271">>
+            }
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    CPU = maps:get(<<"cpu">>, Claim),
+    ?assertEqual(<<"intel">>, maps:get(<<"vendor">>, CPU)),
+    ?assertEqual(<<"Core">>,  maps:get(<<"brand-range">>, CPU)),
+    ?assertEqual(6,           maps:get(<<"cpu-family">>, CPU)),
+    ?assertEqual(154,         maps:get(<<"cpu-model">>, CPU)),
+    ?assertEqual(3,           maps:get(<<"cpu-stepping">>, CPU)).
+
+v1_2_cpu_from_cpuinfo_amd_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"platform-probes">> => #{
+            <<"available">> => true,
+            <<"cpuinfo">>   => #{
+                <<"vendor-id">>  => <<"AuthenticAMD">>,
+                <<"model-name">> =>
+                    <<"AMD Ryzen 7 7840U w/ Radeon 780M Graphics">>,
+                <<"cpu-family">> => <<"25">>,
+                <<"model">>      => <<"116">>,
+                <<"stepping">>   => <<"1">>,
+                <<"microcode">>  => <<"0xa704103">>
+            }
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    CPU = maps:get(<<"cpu">>, Claim),
+    ?assertEqual(<<"amd">>,   maps:get(<<"vendor">>, CPU)),
+    ?assertEqual(<<"Ryzen">>, maps:get(<<"brand-range">>, CPU)),
+    ?assertEqual(25,          maps:get(<<"cpu-family">>, CPU)),
+    ?assertEqual(116,         maps:get(<<"cpu-model">>, CPU)).
+
+%% v1.2 E3: IOMMU groups count > 0 means IOMMU is runtime-active
+%% regardless of cmdline. Takes precedence over cmdline-only
+%% inference.
+v1_2_iommu_from_sysfs_groups_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"platform-probes">> => #{
+            <<"available">>          => true,
+            <<"iommu-groups-count">> => 23
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    IO = maps:get(<<"iommu">>, Claim),
+    ?assertEqual(true, maps:get(<<"enabled">>, IO)),
+    ?assertEqual(23, maps:get(<<"runtime-groups-count">>, IO)).
+
+v1_2_iommu_disabled_when_zero_groups_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"platform-probes">> => #{
+            <<"available">>          => true,
+            <<"iommu-groups-count">> => 0
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    IO = maps:get(<<"iommu">>, Claim),
+    ?assertEqual(false, maps:get(<<"enabled">>, IO)).
+
+%% v1.2 E3: /sys/kernel/security/lockdown parses the bracketed
+%% active entry. The guest stamps the raw line; the parser
+%% extracts the active level.
+v1_2_lockdown_parse_line_test() ->
+    ?assertEqual(<<"none">>,
+                 parse_lockdown_line(
+                    <<"[none] integrity confidentiality">>)),
+    ?assertEqual(<<"integrity">>,
+                 parse_lockdown_line(
+                    <<"none [integrity] confidentiality">>)),
+    ?assertEqual(<<"confidentiality">>,
+                 parse_lockdown_line(
+                    <<"none integrity [confidentiality]">>)),
+    ?assertEqual(unknown, parse_lockdown_line(<<"">>)),
+    ?assertEqual(unknown, parse_lockdown_line(null)).
+
+v1_2_lockdown_from_sysfs_test() ->
+    Envelope = #{
+        <<"tcg-event-log">> => <<>>,
+        <<"platform-probes">> => #{
+            <<"available">> => true,
+            <<"lockdown">>  => <<"none [integrity] confidentiality">>
+        }
+    },
+    {ok, #{<<"body">> := Claim}} = claim(Envelope, #{}, #{}),
+    LD = maps:get(<<"lockdown">>, Claim),
+    ?assertEqual(<<"integrity">>, maps:get(<<"level">>, LD)).
 
 -endif.

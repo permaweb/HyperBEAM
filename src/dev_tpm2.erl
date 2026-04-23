@@ -1078,6 +1078,11 @@ attestation(_Base, Req, Opts) ->
                         <<"issued-at-unix">> =>
                             erlang:system_time(second),
                         <<"ek-cert-pem">> => EKCertPem,
+                        %% Intermediates from NV `handle + 1'. Empty
+                        %% when the vendor didn't provision a chain
+                        %% slot, or when the cert is absent.
+                        <<"ek-cert-chain-pem">> =>
+                            ek_cert_chain_pem(),
                         %% Provenance of the EK cert -- tpm-nv (real,
                         %% with which handle + byte count) or absent
                         %% (with the probe-attempt list). This is the
@@ -1096,6 +1101,14 @@ attestation(_Base, Req, Opts) ->
                         %% "what chip is this" from ground truth.
                         <<"tpm-properties">> =>
                             tpm_properties(),
+                        %% Runtime kernel + SMBIOS snapshot so
+                        %% claim.cpu / claim.iommu / claim.lockdown
+                        %% resolve to concrete values even when the
+                        %% TCG event log doesn't carry them (paper-
+                        %% committed fields per section Architecture
+                        %% of the LapEE paper).
+                        <<"platform-probes">> =>
+                            platform_probes(),
                         <<"ak-pub-pem">> => AKPubPem,
                         <<"tpm-quote">> => #{
                             <<"pcr-selection">> => Pcrs,
@@ -1293,6 +1306,15 @@ init_chain(Opts) ->
             %% TCG-OID attributes on a real EK cert, when present,
             %% act as cross-check at the claim layer.
             capture_tpm_properties(),
+            %% v1.2 E3: snapshot kernel/sysfs identity sources that
+            %% aren't in the TCG event log (CPU vendor/model,
+            %% IOMMU groups, kernel lockdown level, SMBIOS / DMI).
+            %% These become `platform-probes' in the envelope and
+            %% feed claim.cpu / claim.iommu / claim.lockdown on the
+            %% verifier side. Probes run once at init_chain time so
+            %% every subsequent /attestation call sees the same
+            %% snapshot (important for reproducible claim digests).
+            capture_platform_probes(),
             case nif_create_ek() of
                 {ok, #{esys_tr := EKTr, public_pem := EKPem}} ->
                     persistent_term:put({dev_tpm2, ek_tr}, EKTr),
@@ -1362,6 +1384,109 @@ to_bin(L) when is_list(L) -> iolist_to_binary(L);
 to_bin(A) when is_atom(A) -> atom_to_binary(A);
 to_bin(T) -> iolist_to_binary(io_lib:format("~p", [T])).
 
+%% v1.2 E3: read the sysfs + /proc signals that identify the
+%% running platform beyond what the TCG event log carries, cache
+%% the snapshot for the /attestation envelope.
+%%
+%% Paths probed (all read-only, no side effects):
+%%
+%%   /proc/cpuinfo                      CPU vendor_id / model name /
+%%                                      family / model / stepping /
+%%                                      microcode / flags
+%%   /sys/kernel/security/lockdown      `[none] integrity confidentiality'
+%%                                      style -- the bracketed entry is
+%%                                      active
+%%   /sys/kernel/iommu_groups/          one directory per IOMMU group;
+%%                                      non-zero count == IOMMU active
+%%   /sys/class/dmi/id/sys_vendor       SMBIOS Type-1 system vendor
+%%                                      (e.g. "Framework")
+%%   /sys/class/dmi/id/product_name     SMBIOS product name
+%%   /sys/class/dmi/id/board_name       SMBIOS Type-2 board name
+%%   /sys/class/dmi/id/bios_vendor      SMBIOS Type-0 BIOS vendor
+%%   /sys/class/dmi/id/bios_version     SMBIOS Type-0 BIOS version
+%%   /sys/class/dmi/id/bios_release     SMBIOS Type-0 BIOS release
+%%
+%% Every value is surfaced as a binary; `null' when the file is
+%% absent / unreadable. Unknown paths do NOT fail the whole probe
+%% pass -- a partial snapshot is still useful.
+capture_platform_probes() ->
+    Probes = #{
+        cpuinfo          => read_cpuinfo_stanza(),
+        lockdown         => read_trim(
+            <<"/sys/kernel/security/lockdown">>),
+        iommu_groups     => count_iommu_groups(),
+        dmi_sys_vendor   => read_trim(
+            <<"/sys/class/dmi/id/sys_vendor">>),
+        dmi_product_name => read_trim(
+            <<"/sys/class/dmi/id/product_name">>),
+        dmi_board_name   => read_trim(
+            <<"/sys/class/dmi/id/board_name">>),
+        dmi_bios_vendor  => read_trim(
+            <<"/sys/class/dmi/id/bios_vendor">>),
+        dmi_bios_version => read_trim(
+            <<"/sys/class/dmi/id/bios_version">>),
+        dmi_bios_release => read_trim(
+            <<"/sys/class/dmi/id/bios_release">>),
+        probed_at_unix   => erlang:system_time(second)
+    },
+    persistent_term:put({dev_tpm2, platform_probes}, Probes),
+    ok.
+
+%% Read the first `processor' stanza of /proc/cpuinfo into a map
+%% keyed by the normalised field name (kebab-case binary). Returns
+%% an empty map on any file-read or parse error.
+read_cpuinfo_stanza() ->
+    case file:read_file(<<"/proc/cpuinfo">>) of
+        {ok, Bin} ->
+            %% Split on the blank-line stanza separator.
+            [First | _] = binary:split(Bin, <<"\n\n">>, [global]),
+            Lines = binary:split(First, <<"\n">>, [global]),
+            lists:foldl(fun line_to_kv/2, #{}, Lines);
+        _ -> #{}
+    end.
+
+line_to_kv(Line, Acc) ->
+    case binary:split(Line, <<":">>, []) of
+        [Key, Val] ->
+            K = normalise_kv_key(string:trim(Key)),
+            V = string:trim(Val),
+            %% Only the first occurrence counts (first processor
+            %% stanza); skip subsequent duplicates.
+            case maps:is_key(K, Acc) of
+                true -> Acc;
+                false -> Acc#{K => V}
+            end;
+        _ -> Acc
+    end.
+
+normalise_kv_key(K) ->
+    %% /proc/cpuinfo uses space-separated lowercase words; our
+    %% kebab-case wire convention matches.
+    Lowered = string:lowercase(K),
+    binary:replace(Lowered, <<" ">>, <<"-">>, [global]).
+
+%% Count the entries in /sys/kernel/iommu_groups/. Each group
+%% corresponds to one IOMMU-enforced isolation domain. Zero
+%% groups means either no IOMMU driver is loaded or the kernel
+%% booted without an IOMMU enable flag. Returns integer or
+%% `null' on path absence.
+count_iommu_groups() ->
+    case file:list_dir(<<"/sys/kernel/iommu_groups">>) of
+        {ok, Entries} ->
+            length([E || E <- Entries,
+                         is_integer(element(1, string:to_integer(E)))]);
+        _ -> null
+    end.
+
+%% Read a file and trim trailing whitespace (including the
+%% terminating \n that most sysfs entries have). Returns a
+%% binary on success, null on any read error.
+read_trim(Path) ->
+    case file:read_file(Path) of
+        {ok, Bin} -> string:trim(Bin, trailing, "\r\n \t");
+        _ -> null
+    end.
+
 %% Pretty the cached TPM properties for the /attestation envelope.
 %% Integers for firmware-version halves let the verifier reconstruct
 %% the full 64-bit revision (fw1 << 32 | fw2) without ambiguity; the
@@ -1402,6 +1527,57 @@ tpm_properties() ->
                   maps:get(year, P, 0)
              }
     end.
+
+%% Return the cached EK-cert-chain PEM bundle. Empty when no
+%% chain was read out of the adjacent NV slot.
+ek_cert_chain_pem() ->
+    persistent_term:get({dev_tpm2, ek_cert_chain_pem}, <<>>).
+
+%% Return the cached platform-probes map (captured at init_chain)
+%% formatted for the wire -- binary keys, null for unknown, ints
+%% preserved as ints. Not present if init_chain hasn't run yet.
+platform_probes() ->
+    case persistent_term:get({dev_tpm2, platform_probes}, undefined) of
+        undefined ->
+            #{<<"available">> => false,
+              <<"reason">>    =>
+                  <<"init_chain has not executed yet">>};
+        #{} = P ->
+            CpuInfo = maps:get(cpuinfo, P, #{}),
+            CpuMap = maps:fold(
+                fun(K, V, Acc) when is_binary(K) ->
+                       Acc#{K => V};
+                   (_, _, Acc) -> Acc
+                end, #{}, CpuInfo),
+            #{
+                <<"available">>          => true,
+                <<"cpuinfo">>            => CpuMap,
+                <<"lockdown">>           =>
+                    or_bin_null(maps:get(lockdown, P, null)),
+                <<"iommu-groups-count">> =>
+                    maps:get(iommu_groups, P, null),
+                <<"dmi-sys-vendor">>     =>
+                    or_bin_null(maps:get(dmi_sys_vendor, P, null)),
+                <<"dmi-product-name">>   =>
+                    or_bin_null(maps:get(dmi_product_name, P, null)),
+                <<"dmi-board-name">>     =>
+                    or_bin_null(maps:get(dmi_board_name, P, null)),
+                <<"dmi-bios-vendor">>    =>
+                    or_bin_null(maps:get(dmi_bios_vendor, P, null)),
+                <<"dmi-bios-version">>   =>
+                    or_bin_null(maps:get(dmi_bios_version, P, null)),
+                <<"dmi-bios-release">>   =>
+                    or_bin_null(maps:get(dmi_bios_release, P, null)),
+                <<"probed-at-unix">>     =>
+                    maps:get(probed_at_unix, P, 0)
+             }
+    end.
+
+or_bin_null(null) -> null;
+or_bin_null(<<>>) -> null;
+or_bin_null(B) when is_binary(B) -> B;
+or_bin_null(L) when is_list(L) -> iolist_to_binary(L);
+or_bin_null(_) -> null.
 
 %% Return the provenance map for the currently-cached EK cert. The
 %% ensure_ak -> init_chain -> fetch_ek_cert_from_nv pipeline populates
@@ -1457,15 +1633,35 @@ fetch_ek_cert_from_nv(Opts) ->
         {ok, Handle, Der} ->
             Pem = der_to_pem(Der),
             persistent_term:put({dev_tpm2, ek_cert_pem}, Pem),
+            %% TCG EK Credential Profile section 2.2.1.4: adjacent
+            %% NV slot (handle + 1) holds the EK cert's INTERMEDIATE
+            %% chain as concatenated DER certs. Probe it. On Sam's
+            %% Nuvoton Framework the leaf cert is issued by
+            %% `NPCTxxx ECC384 LeafCA 012110' -- without this chain
+            %% we get chain-valid=false against the vendor-root
+            %% bundle we already ship.
+            ChainHandle = Handle + 1,
+            {ChainDers, ChainSource} =
+                fetch_ek_cert_chain(ChainHandle),
+            persistent_term:put({dev_tpm2, ek_cert_chain_ders},
+                                ChainDers),
+            persistent_term:put({dev_tpm2, ek_cert_chain_pem},
+                                ders_to_pem(ChainDers)),
             persistent_term:put(
                 {dev_tpm2, ek_cert_source},
                 #{kind => <<"tpm-nv">>,
                   handle => iolist_to_binary(
                       io_lib:format("0x~8.16.0B", [Handle])),
-                  bytes => byte_size(Der)}),
+                  bytes => byte_size(Der),
+                  chain_handle => iolist_to_binary(
+                      io_lib:format("0x~8.16.0B", [ChainHandle])),
+                  chain_cert_count => length(ChainDers),
+                  chain_source => ChainSource}),
             ok;
         {error, Attempts} ->
             persistent_term:put({dev_tpm2, ek_cert_pem}, <<>>),
+            persistent_term:put({dev_tpm2, ek_cert_chain_ders}, []),
+            persistent_term:put({dev_tpm2, ek_cert_chain_pem}, <<>>),
             persistent_term:put(
                 {dev_tpm2, ek_cert_source},
                 #{kind => <<"absent">>,
@@ -1476,6 +1672,78 @@ fetch_ek_cert_from_nv(Opts) ->
                   probed => format_probe_attempts(Attempts)}),
             ok
     end.
+
+%% Read + parse the EK-cert chain slot. TCG format: one or more
+%% concatenated DER-encoded certs. Some vendors ship one
+%% intermediate; some ship the full chain down to the root. We
+%% parse whatever's there and return a list of DER cert binaries.
+fetch_ek_cert_chain(ChainHandle) ->
+    case lapee_tpm_nif:nv_read(ChainHandle) of
+        {ok, Bin} when is_binary(Bin), byte_size(Bin) > 0 ->
+            case split_concatenated_ders(Bin) of
+                [] ->
+                    {[], <<"nv-content-empty-or-non-der">>};
+                Ders ->
+                    {Ders, <<"tpm-nv">>}
+            end;
+        {error, Reason} ->
+            {[], iolist_to_binary(
+                io_lib:format("probe-failed: ~s",
+                              [reason_to_text(Reason)]))}
+    end.
+
+%% Walk a binary that should be a concatenation of DER-encoded
+%% X.509 certificates. Each cert starts with ASN.1 tag `0x30'
+%% (SEQUENCE) followed by a length encoding: short form
+%% (`0x00..0x7F', length fits in the byte) or long form
+%% (`0x80 | N' where N is the number of length bytes, then N
+%% big-endian bytes of length). Return the list of whole-cert
+%% binaries. Garbage at the end (non-0x30 bytes) terminates parsing.
+split_concatenated_ders(Bin) ->
+    split_concatenated_ders(Bin, []).
+
+split_concatenated_ders(<<>>, Acc) ->
+    lists:reverse(Acc);
+split_concatenated_ders(<<16#30, Rest/binary>> = Full, Acc) ->
+    case der_seq_total_len(Rest) of
+        {ok, TotalInner, HeaderLen} ->
+            CertLen = 1 + HeaderLen + TotalInner,
+            case Full of
+                <<Cert:CertLen/binary, Tail/binary>> ->
+                    split_concatenated_ders(Tail, [Cert | Acc]);
+                _ ->
+                    %% Length lied; stop.
+                    lists:reverse(Acc)
+            end;
+        error ->
+            lists:reverse(Acc)
+    end;
+split_concatenated_ders(_, Acc) ->
+    %% Non-0x30 byte = not a DER cert start; end of chain.
+    lists:reverse(Acc).
+
+%% Parse the ASN.1 length encoding at the start of `Bin' (the
+%% byte AFTER the 0x30 tag). Returns `{ok, ContentLen, LenBytes}'
+%% where LenBytes is the number of bytes the length encoding
+%% itself consumed.
+der_seq_total_len(<<L:8, _/binary>>) when L =< 16#7F ->
+    {ok, L, 1};
+der_seq_total_len(<<16#81, L:8, _/binary>>) ->
+    {ok, L, 2};
+der_seq_total_len(<<16#82, L:16/big, _/binary>>) ->
+    {ok, L, 3};
+der_seq_total_len(<<16#83, L:24/big, _/binary>>) ->
+    {ok, L, 4};
+der_seq_total_len(<<16#84, L:32/big, _/binary>>) ->
+    {ok, L, 5};
+der_seq_total_len(_) ->
+    error.
+
+%% Encode a list of DERs as a PEM bundle (one CERTIFICATE block
+%% each, concatenated). Empty list -> empty binary.
+ders_to_pem([]) -> <<>>;
+ders_to_pem(Ders) ->
+    iolist_to_binary([der_to_pem(D) || D <- Ders]).
 
 try_nv_handles([], Acc) -> {error, lists:reverse(Acc)};
 try_nv_handles([H | Rest], Acc) ->
