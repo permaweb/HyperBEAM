@@ -1,9 +1,20 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 ~05:00 EDT -- v1.2 overnight pass
-shipped through reviewer pass 5 (Erlang canon). USB image ready
-for Sam's morning Framework reboot (batch 7/8 are verifier-side
-only; the Apr 23 03:21 image is current for guest-runtime).
+**Latest update:** 2026-04-23 ~06:00 EDT -- v1.2 overnight pass
+shipped through reviewer pass 6 (paper-to-code correctness).
+
+> **USB re-flash required before morning demo.** Batch 9 adds the
+> producer-side `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event in
+> `init_chain' so the verifier can enforce paper property P5
+> (AK pub bound into PCR 15). Current Apr-23-03:21 image does
+> NOT emit this event; booting it with a batch-9-or-later
+> verifier would produce verdict=untrusted.
+>
+> ```
+> cd lapee-baremetal
+> make hb-usb-image    # rebuilds; ~5 min incremental, ~25 min cold
+> make hb-usb-write DEV=/dev/disk4
+> ```
 
 For the full history (M0 -> v1.0 -> v1.1, every checkpoint, every
 bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
@@ -23,9 +34,17 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Thirteen commits on `agent/lapee' pushed to Permagit:
+Fifteen commits on `agent/lapee' pushed to Permagit:
 
 ```
+(batch 9, pending push) v1.2 batch 9: paper-to-code P5
+           (key-pubkey-extend in init_chain + chk_ak_pubkey_binding
+           verifier check + ak-pubkey-extend-verified signal) +
+           verdict hardening (HIGH-2 lockdown-off-or-unknown warn,
+           MEDIUM-4 ek-chain-unknown critical, LOW-1 freshness-
+           indicator-unknown warn)
+8eb177247  v1.2 STATUS: record reviewer pass 5 + batch 8 Erlang
+           canon fixes
 7120c560b  v1.2 batch 8: Erlang canon cleanup + port TCG verify_fun
            to dev_tpm2 (M2: ek_chain_verify_fun TCG-aware; H1
            binary_to_int_or via safe_int; H3 dead is_fresh_boot
@@ -60,15 +79,15 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
            (E1, E4, E5, E6)
 ```
 
-Five independent code reviewers spoken to (curmudgeonly
+Six independent code reviewers spoken to (curmudgeonly
 firmware-security; pragmatic demo-ops; fresh-eyes first-time-
-contributor; adversarial red-team; Erlang/OTP canon). All
-five verdicts: SHIP (red-team's pre-fix verdict: "verifier can
-be bypassed -- fix before demo", addressed in batch 7;
-Erlang-canon's verdict: "blends well enough to ship -- one
-surgical refactoring pass would improve maintainability", all
-six findings addressed in batch 8). See "Review findings acted
-on" at the bottom of this report.
+contributor; adversarial red-team; Erlang/OTP canon; paper-to-
+code correctness). Verdicts: SHIP (batches 4/5/6), SHIP-after-
+batch-7 (red-team pre-fix: "verifier can be bypassed"), SHIP
+(batch 8 Erlang canon), SHIP-WITH-NOTES (paper-to-code:
+CRITICAL-1 key-pubkey-extend fixed in batch 9; CRITICAL-2/3/4/5
+paper-divergence items deferred to v1.3). See "Review findings
+acted on" at the bottom of this report for the full ledger.
 
 **Known v1.3 gap (surfaced by red-team reviewer, batch 7):**
 the v1.2 verifier does NOT cryptographically prove that the AK
@@ -173,28 +192,36 @@ target table either landed or has a single known follow-up:
   | EK cert currently-valid                  | **COVERED via E1** |
   | Quote signature + pcrDigest + nonce      | COVERED      |
   | Event-log replay vs quoted PCRs          | COVERED (0/1/7/11/14 on Framework) |
+  | AK pub bound into PCR 15                 | **COVERED via batch 9 key-pubkey-extend** |
   | AK + node-message bound into PCR 15      | COVERED      |
   | Firmware CRTM match                      | **COVERED + platform via E5** |
   | UKI hash in PCR 11                       | COVERED      |
   | Secure Boot state                        | **COVERED via g probe** |
-  | TME state                                | COVERED      |
+  | TME state attested                       | COVERED (claim side) |
+  | TME enforcement at init                  | **PAPER-AMEND + v1.3** (see reviewer 6 CRITICAL-2) |
+  | AK under Endorsement hierarchy           | **PAPER-AMEND + v1.3** (reviewer 6 CRITICAL-3) |
+  | Encrypted TPM sessions (bus sniffing)    | **PAPER-AMEND + v1.3** (reviewer 6 CRITICAL-4) |
+  | AO-Core hashpath continuity              | **PAPER-AMEND + v1.3** (reviewer 6 CRITICAL-5) |
   | IOMMU state                              | **COVERED via E3 runtime probe** |
-  | Kernel lockdown state                    | **COVERED via E3 runtime probe** |
+  | Kernel lockdown state                    | **COVERED via E3 runtime probe + batch 9 finding** |
   | IMA per-file chain (PCR 10)              | N/A stub; count probed |
   | CPU vendor / model                       | **COVERED via E3 /proc/cpuinfo** |
   | TPM manufacturer / model                 | COVERED      |
-  | freshness-safe <-> resetCount            | **COVERED via E6** |
+  | freshness-safe <-> resetCount            | **COVERED via E6 + batch 9 unknown finding** |
 
 ### Tests
 
 ```
 dev_tpm_tcg        98  pass
-dev_tpm2           21  pass  (+1 from batch 8 TCG-whitelist
-                               coverage in ek_chain_verify_fun
-                               regression test)
-dev_tpm_interpret 104  pass  (+20 from v1.1's 84)
+dev_tpm2           22  pass  (+1 batch 8 TCG-whitelist,
+                               +1 batch 9 chk_ak_pubkey_binding)
+dev_tpm_interpret 109  pass  (+20 v1.1, +5 batch 9: verify_ak
+                               _pubkey_extend, ak_pubkey_extend
+                               _finding, lockdown-unknown,
+                               ek-chain-unknown, freshness
+                               -unknown)
                 ------
-                  223  pass
+                  229  pass
 ```
 
 ### Expected iron timeline on the Framework (from v1.2 USB)
@@ -447,6 +474,196 @@ Six findings, all addressed in batch 8 (commit 7120c560b):
       normalisation; the architectural-layering comment at
       `dev_tpm_interpret.erl:3305-3309' already documents why
       the `dev_tpm2' / `dev_tpm_interpret' duplicate exists.
+
+**Pass 6 -- paper-to-code correctness auditor** (against full
+6c21..8eb17). Verdict: SHIP-WITH-NOTES. CRITICAL-1 addressed in
+batch 9; HIGH-2, MEDIUM-4, LOW-1 addressed in batch 9;
+CRITICAL-2/3/4/5 deferred to v1.3 with PAPER AMENDMENTS required.
+Method: reviewer enumerated 16 load-bearing claims from
+`../lapee-paper/main.tex` (P1..P16), mapped each to a specific
+file:line in the implementation, and flagged cases where the
+paper promises more than the code delivers. 14 findings total
+across 4 severity bands.
+
+Findings addressed in batch 9:
+
+  CRITICAL-1  (paper P5: "a verifier replaying the event log
+              observes `key-pubkey-extend' land in PCR 15 after
+              all TCB measurements"). Pre-batch-9 code did NOT
+              implement this: `init_chain/1' created the AK
+              and cached `ak_pub_pem' but never extended PCR 15
+              with it. The only PCR-15 extension was the
+              on/start hook binding the node-message-id. An
+              envelope signed with an attacker-generated AK (no
+              TPM backing) would pass chk_binding trivially
+              because the attacker controls what landed in
+              PCR 15. Fixed in batch 9:
+              - New `extend_with_ak_pubkey/1' in `dev_tpm2.erl'
+                fires at end of `init_chain/1', extends PCR 15
+                with `sha256(ak_pub_pem)', emits event type
+                `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' at seq 0.
+              - New `chk_ak_pubkey_binding/1' core check in
+                `verify/3' pipeline searches the runtime event
+                log for an EV_HYPERBEAM_KEY_PUBKEY_EXTEND event
+                whose decoded digest equals
+                `sha256(envelope.ak-pub-pem)'. Missing or
+                mismatched = `{error, _}' = `verified=false'.
+              - New `verify_ak_pubkey_extend/1' +
+                `ak_pubkey_extend_finding/1' in
+                `dev_tpm_interpret' surface the same signal on
+                the cross-node `verify-peer' path, CRITICAL when
+                false/unknown.
+  HIGH-2      `lockdown_finding/1' catch-all `_ -> ok' let
+              `lockdown-level = "none" | "unknown" | absent'
+              slide through silently. Paper's Table 2 defenses
+              for /dev/mem, kexec, ptrace-via-kallsyms, unsigned
+              module-load are only enforced when lockdown is
+              active. Fixed: catch-all -> warn (code
+              `lockdown-off-or-unknown'). Escalate to critical
+              in v1.3 once EV_IPL cmdline cross-check lands
+              (red-team v1.3 HIGH 3).
+  MEDIUM-4    `ek_finding/1' did not match `ek-chain-valid =
+              "unknown"' -- a verifier that failed to load any
+              root CAs would silently accept the EK chain as
+              "not-invalid = fine". Added explicit
+              `ek-chain-unknown' critical.
+  LOW-1      `freshness_finding/1' catch-all let an absent /
+              unknown `freshness-indicator' slide. An attacker
+              stripping the field evaded the signal. Added
+              `freshness-indicator-unknown' warn; `safe' still
+              ok; `safe-false' and `no-nonce' unchanged.
+
+Findings deferred to v1.3 with PAPER AMENDMENTS required:
+
+  CRITICAL-2  (paper P2, §Architecture): "Early init reads
+              `IA32_TME_ACTIVATE' (Intel) or `SYSCFG' bit 23
+              (AMD) and refuses to proceed if memory encryption
+              is inactive -- so a successful attestation is
+              itself proof that TME was enabled."
+              Actual code: `initramfs-hb/init' (396 lines) has
+              no MSR read and no refusal path. `tme_finding/1'
+              treats `tme-enabled = false` / `unknown' as warn.
+              A verdict=attested-with-warnings shipping with
+              TME-off contradicts the paper's abstract claim
+              "measured, attested, memory-encrypted, DMA-
+              contained single-purpose appliance".
+              v1.3 plan: add MSR read in initramfs (needs
+              `msr-tools' in buildroot or a tiny C helper in
+              `native/') with hard failure path; upgrade
+              `tme_finding(#{<<"tme-enabled">> := false})` from
+              warn to critical; strip the tier-4 "boot-reached-
+              PCR-15 -> tme-enabled=true" short-circuit from
+              `claim_tme'.
+              Paper amendment needed: if v1.3 doesn't ship
+              MSR-enforce-at-init, the paper's P2 phrasing
+              should be softened to "TME state is attested via
+              claim.tme; operator policy gates verdict".
+
+  CRITICAL-3  (paper P4, §Ephemeral-node-key-binding):
+              "TPM2_Create for a fresh signing keypair under a
+              primary on the Endorsement hierarchy."
+              Actual code: `native/lapee_tpm_nif/
+              lapee_tpm_nif.c:342-349' calls
+              `Esys_CreatePrimary(ESYS_TR_RH_OWNER, ...)' --
+              Owner hierarchy, not Endorsement. The NIF comment
+              at lines 294-298 even admits "for first-cut
+              correctness against swtpm, we instead create
+              the AK under the Owner hierarchy primary ... the
+              parent handle argument is accepted but ignored
+              for this milestone".
+              v1.3 plan: switch to Endorsement hierarchy; this
+              is tightly coupled with the
+              MakeCredential/ActivateCredential binding (red-
+              team CRITICAL 2 from pass 4) because only a real
+              EK-parented AK can be activated.
+              Paper amendment needed: v1.2 paragraph should be
+              amended to "primary under the Owner hierarchy
+              pending MakeCredential provisioning handshake"
+              OR the v1.3 code ships first.
+
+  CRITICAL-4  (paper P6, Table 2 row "TPM bus sniffing (dTPM)":
+              "Blocked at load. Encrypted sessions (HMAC +
+              parameter encryption)").
+              Actual code: every Esys call in
+              `native/lapee_tpm_nif/lapee_tpm_nif.c' uses
+              `ESYS_TR_PASSWORD' or `ESYS_TR_NONE' auth. No
+              `Esys_StartAuthSession(TPM2_SE_HMAC)' call
+              exists. SPI/LPC bus traffic between the Framework's
+              Nuvoton NPCT75x and the AMD Ryzen CPU is
+              cleartext -- bus interposers see PCR extends and
+              signed quotes on the wire.
+              v1.3 plan: add salted HMAC session creation in the
+              NIF at EK load time; use it for all Esys calls
+              touching sensitive state.
+              Paper amendment needed: Table 2 row should move
+              from "Blocked at load" to "v1.3 target; v1.2
+              leaves this to physical-security" until the NIF
+              work lands.
+
+  CRITICAL-5  (paper P11, §AO-Core Continuity): "HyperBEAM
+              seeds its AO-Core chain with a commitment to the
+              TPM event log tip immediately after
+              key-pubkey-extend; thereafter every device first-
+              load and every message extends the chain."
+              Actual code: grep for `event.log.tip|tpm.event.
+              log.tip|seeds.*ao.core' returns zero substantive
+              matches. The envelope carries the TPM event log
+              AND the AO-Core hashpath state but they are not
+              cryptographically linked.
+              v1.3 plan: add `attestation-at-hashpath-tip'
+              field to the envelope in `dev_tpm2:attestation/3'
+              recording the current AO-Core tip at quote time;
+              seed the AO-Core tip from the TPM event log tip
+              at `init_chain' via a deterministic extend.
+              Paper amendment needed: flag the claim as
+              "architectural target, v1.3" until the link is in
+              code.
+
+Findings surfaced but lower impact (all v1.3 backlog unless
+noted):
+
+  HIGH-1      `pcr_replay_finding/1' never returns critical
+              (N >= 3 still warn). Reviewer notes: "primary
+              integrity still holds because
+              `quote_integrity_finding' catches forged pcr-
+              values; this is HIGH not CRITICAL." Same as red-
+              team v1.3 MEDIUM 3. Deferred: once the golden TCG
+              event log and the strict-vs-QEMU-tolerant mode
+              distinction lands, `N >= 1' goes critical.
+  HIGH-3      No verifier version floor for firmware / BIOS
+              downgrade (paper P12, A1 assumption). The paper
+              relies on "verifier version floor" as the
+              downgrade defense; no code enforces one. Paper
+              amendment OR operator-config option in v1.3.
+  MEDIUM-1    Positive-signal floor for verdict=trusted. Today,
+              no-critical + ≥1 known-true signal suffices.
+              Paper implies a floor (SB+lockdown+TME+EK+PCR+
+              sig all positive). V1.3 or paper clarification.
+  MEDIUM-2    `commitments' field unverified (carried over from
+              red-team v1.3 backlog HIGH 1).
+  MEDIUM-3    Device-load PCR-15 extend (paper §Architecture:
+              "each first load extends PCR 15 with a named
+              event"). Code extends PCR 15 only once at
+              on/start. Paper amendment OR hook up
+              `dev_trusted_signers' to POST to
+              `~tpm2@2.0a/extend' per first-load.
+  MEDIUM-5    RSASSA-PSS for result signatures (paper P9).
+              Separate from TPM quote sig; audit item flagged
+              but not verified in review window.
+
+---
+
+## v1.3 open-question ledger (from reviewer pass 6)
+
+| # | Paper claim                                  | Code path           | Resolution       |
+|---|----------------------------------------------|---------------------|------------------|
+| 1 | P5 "key-pubkey-extend in PCR 15"             | extend_with_ak_pubkey | **FIXED batch 9** |
+| 2 | P2 "init refuses if TME off"                 | initramfs-hb/init   | PAPER-AMEND + v1.3 MSR read |
+| 3 | P4 "AK under Endorsement hierarchy"          | lapee_tpm_nif.c:342 | PAPER-AMEND + v1.3 Endorsement + MakeCredential |
+| 4 | P6 "encrypted TPM sessions"                  | lapee_tpm_nif.c:*   | PAPER-AMEND + v1.3 HMAC sessions |
+| 5 | P11 "AO-Core chain commits to TPM tip"       | (no code)           | PAPER-AMEND + v1.3 envelope field |
+| 6 | P12 "verifier version floor"                 | (no code)           | PAPER-AMEND + v1.3 config |
+| 7 | P9 RSASSA-PSS result signatures              | hb_message:sign/2   | Audit-open |
 
 ---
 
