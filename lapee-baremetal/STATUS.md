@@ -102,7 +102,113 @@ CLOSED (security-delta pass 7: CRITICAL-1 closure validated,
 two cleanups applied in batch 10). See "Review findings acted
 on" at the bottom of this report for the full ledger.
 
-**Live evidence of end-to-end working (2026-04-23 05:44 EDT):**
+**Live evidence #2: batch-11 verifier on the v1.1 real-Framework
+envelope (2026-04-23 ~06:35 EDT).** Reprocessed the 117 094-byte
+v1.1 capture (`out/local-capture/framework-13-v1-1-real-ek-
+roundtrip/input.bin') through the batch-11 HEAD verifier to
+confirm the new strict checks fire correctly on pre-batch-9
+envelopes:
+
+```
+ak-pubkey-extend-verified = false   # pre-batch-9 envelope,
+                                    #   correctly flagged
+quote-signature-verified  = true    # batch 7 intact
+ek-chain-valid            = false   # Nuvoton NV 0x01C00003
+                                    #   chain incomplete on
+                                    #   this TPM
+freshness-indicator       = safe-false
+
+verdict   = untrusted
+criticals = 3
+  freshness-safe-false         (batch 11 softened wording)
+  ek-chain-invalid             (NV 0x01C00003 empty on this Nuvoton)
+  ak-pubkey-extend-missing     (batch 9 strict check correctly
+                                fires on pre-batch-9 envelope)
+warnings  = 5
+  secure-boot-disabled
+  pcr-replay-multi-mismatch    (10 PCRs -- v1.1 had more firmware
+                                  events than QEMU)
+  ek-ak-binding-not-implemented (batch 7 honest warn)
+  tpm-known-cves               (NPCT75x x 2 CVEs)
+  lockdown-off-or-unknown      (batch 9 HIGH-2 fires because v1.1
+                                  has no platform-probes section)
+```
+
+What this confirms:
+  - Batch 9's `ak-pubkey-extend-missing' critical fires as
+    designed: a pre-batch-9 envelope (which cannot possibly have
+    the `EV_HYPERBEAM_KEY_PUBKEY_EXTEND' event) cannot reach
+    `trusted'. Paper P5 is enforced.
+  - Batch 9's `lockdown-off-or-unknown' warn fires as designed
+    on envelopes without `platform-probes'.
+  - Batch 11's softened `freshness-safe-false' message renders
+    correctly; severity still critical.
+  - Reviewer 8's morning prediction was accurate to within the
+    batch-11 delta: Framework morning verdict = untrusted, 1-2
+    criticals (freshness + possibly ek-chain), 5 warnings,
+    score 0-20.
+
+When Sam boots batch 10 in the morning, the `ak-pubkey-extend-
+missing' critical disappears (the producer emits the event),
+leaving only the 1-2 hardware-dependent criticals that are
+EXPLICITLY expected per v1.3 backlog (MakeCredential for EK-AK
+binding, Nuvoton NV 0x01C00003 chain provisioning).
+
+## Pre-demo checklist (morning of 2026-04-23)
+
+Use this in order when you wake up:
+
+```
+[ ] 1. cd lapee-baremetal
+[ ] 2. make hb-release hb-initramfs hb-usb-image
+       # If the beam files / USB are older than this commit
+       # (`git show --stat HEAD | head -3') -> rebuild.
+       # If fresh -> skip to step 3.
+[ ] 3. diskutil list                     # find /dev/diskN
+[ ] 4. make hb-usb-write DEV=/dev/diskN  # prompts before writing
+[ ] 5. Eject + reinsert into Framework
+[ ] 6. Power on Framework; F12 boot menu; select USB
+[ ] 7. Watch the HB splash. Network IP appears when DHCP lands.
+[ ] 8. From your Mac:
+       curl -H 'accept: application/json@1.0' \
+            -H 'accept-bundle: true' \
+            http://<framework-ip>:8734/~tpm2@2.0a/attestation \
+            > /tmp/framework-morning.json
+[ ] 9. Or pull from the ESP after writeback completes:
+       ./scripts/interpret-local-capture.sh \
+           --label 'Framework 13 v1.2 morning' \
+           /Volumes/LAPEE_ESP/attestation-latest.json
+[ ] 10. Expected output (per reviewer pass 8):
+        verdict  = untrusted
+        criticals= 1 or 2
+          (1) freshness-safe-false
+               -> benign, batch-11 message names both causes
+          (2) ek-chain-invalid
+               -> only IF Nuvoton NV 0x01C00003 is empty;
+                  hardware-dependent; batch 2 E2 threads it
+                  through pkix_path_validation if present
+        warnings = 5
+          secure-boot-disabled
+          pcr-replay-multi-mismatch
+          ek-ak-binding-not-implemented
+          tpm-known-cves
+          lockdown-integrity-not-confidentiality (or -off-or-unknown)
+[ ] 11. Verify `ak-pubkey-extend-verified = true' in the
+        signals block -- that's the paper P5 property working
+        for the first time on real iron.
+[ ] 12. (Optional) Cross-node verify:
+        curl 'http://localhost:8734/~tpm-interpret@1.0/verify-peer?peer=http://<framework-ip>:8734'
+```
+
+**If the morning verdict surprises you** (e.g., `unknown'
+verdict, or a critical not in the list above): diff the signals
+map against the predicted outcome in STATUS.md and see which
+signal drifted. Every `unknown' signal has a specific finding
+code; the code + its message point to the envelope field or
+code path that produced it.
+
+**Live evidence #1: batch-10 end-to-end QEMU smoke
+(2026-04-23 05:44 EDT):**
 
 ```
 $ make hb-release hb-initramfs hb-usb-image     # batch 10 build
@@ -804,6 +910,168 @@ The three notable surprises to watch for (per reviewer pass 8):
       LapEE kernel fragment. Check
       `lapee-baremetal/buildroot-external/board/lapee/linux-m1-fragment.config'
       before boot.
+
+---
+
+## Paper amendment draft (reviewer pass 9)
+
+Reviewer pass 9 (paper amendment drafter) produced ready-to-apply
+LaTeX text changes for `lapee-paper/main.tex` so the paper describes
+what v1.2 code actually delivers. Four amendments cover the four
+CRITICAL paper-code gaps from reviewer pass 6. Apply these via
+`cd ../sharp-lichterman/lapee-paper && git apply` or hand-edit
+the sections below.
+
+### Preserved claims (no paper change needed)
+
+- P5 key-pubkey-extend (lines 249-251): landed in batch 9/10; paper
+  prose is accurate.
+- Secure Boot / UKI / dm-verity (217-222), Lockdown+modsig+IOMMU
+  (223-226), Attestation evidence (258-264), Threat actors A1-A4 --
+  all unchanged, all accurate.
+
+### Amendment 1 -- TME enforcement at init (CRITICAL-2)
+
+Location: `main.tex' Architecture section, "Boot and workload
+measurement" paragraph, lines 226-230.
+
+BEFORE:
+```
+Early init reads \texttt{IA32\_TME\_ACTIVATE}
+(Intel) or \texttt{SYSCFG} bit 23 (AMD) --- see the vendor programming
+references~\cite{intel-tme,amd-sme} for exact semantics --- and refuses
+to proceed if memory encryption is inactive --- so a successful
+attestation is itself proof that TME was enabled, without relying on
+vendor-specific firmware events.
+```
+
+AFTER:
+```
+The attestation envelope carries a \texttt{claim.tme} field whose
+value derives from vendor-specific firmware events and, where
+exposed, subsequent verifier-side inspection of
+\texttt{IA32\_TME\_ACTIVATE} (Intel) or \texttt{SYSCFG} bit 23 (AMD);
+see the vendor programming references~\cite{intel-tme,amd-sme} for
+exact semantics. Verifier policy decides the verdict: an operator
+targeting the strongest tier treats \texttt{tme-enabled = false}
+or \texttt{unknown} as disqualifying. A forthcoming revision moves
+the MSR read into early init with a hard-refusal path, so that a
+successful attestation is itself proof that TME was enabled
+without relying on vendor-specific firmware events.
+```
+
+### Amendment 2 -- AK under Endorsement hierarchy (CRITICAL-3)
+
+Location: `main.tex' Architecture section, "Ephemeral node key
+binding" paragraph, lines 242-244.
+
+BEFORE:
+```
+\paragraph{Ephemeral node key binding.} At the end of measured
+boot, HyperBEAM calls \texttt{TPM2\_Create} for a fresh signing
+keypair under a primary on the Endorsement hierarchy.
+```
+
+AFTER:
+```
+\paragraph{Ephemeral node key binding.} At the end of measured
+boot, HyperBEAM calls \texttt{TPM2\_CreatePrimary} for a fresh
+signing keypair under a primary in the Owner hierarchy; a
+forthcoming revision reparents under the Endorsement hierarchy
+and binds the AK to the EK via
+\texttt{MakeCredential}/\texttt{ActivateCredential} so that the
+attestation key is cryptographically bound to the hardware-
+vendor-certified EK.
+```
+
+Downstream edit (lines 252-253): soften "an attacker cannot
+synthesize a fresh `device' without vendor collusion" to
+"conditional, in v1.2, on the verifier policing the EK-chain
+field directly; the MakeCredential handshake planned for v1.3
+makes the binding cryptographic."
+
+### Amendment 3 -- Encrypted TPM sessions (CRITICAL-4)
+
+Three edit points in `main.tex':
+
+(a) Architecture section lines 255-256:
+```
+BEFORE: All TPM sessions touching sensitive state use encrypted
+        sessions (HMAC $+$ parameter encryption~\cite{tcg-tpm2}).
+AFTER:  In a forthcoming revision, all TPM sessions touching
+        sensitive state will use encrypted sessions (HMAC $+$
+        parameter encryption~\cite{tcg-tpm2}); in v1.2 these
+        sessions use password authorisation, and operators
+        running on a discrete TPM with a cleartext SPI/LPC bus
+        should treat bus interposition as a physical-security
+        assumption until the encrypted-session work lands.
+```
+
+(b) Table 2 row (line 357), "TPM bus sniffing (dTPM)":
+```
+BEFORE: Blocked at load   | Encrypted sessions (HMAC + param enc.)
+AFTER:  \textbf{v1.3 target} | Encrypted sessions (HMAC + param enc.)
+                              planned; v1.2 treats bus interposition
+                              as physical-security.
+```
+
+(c) Implementation paragraph line 488:
+```
+BEFORE: ...exposing quote, sign, PCR-extend, NV ops,
+        event-log-read, with encrypted sessions by default.
+AFTER:  ...exposing quote, sign, PCR-extend, NV ops, and
+        event-log-read; v1.3 adds HMAC-plus-parameter-encryption
+        sessions on calls touching sensitive state.
+```
+
+### Amendment 4 -- AO-Core hashpath continuity (CRITICAL-5)
+
+Location: `main.tex' "AO-Core Continuity" section, lines 275-280.
+
+BEFORE:
+```
+HyperBEAM seeds its AO-Core chain with a commitment to the TPM
+event log tip immediately after \texttt{key-pubkey-extend};
+thereafter every device first-load and every message extends the
+chain. The two logs are not analogous mechanisms; they are the
+same cryptographic primitive composed end-to-end
+(Figure~\ref{fig:chain}).
+```
+
+AFTER:
+```
+In the architectural target, HyperBEAM seeds its AO-Core chain
+with a commitment to the TPM event log tip immediately after
+\texttt{key-pubkey-extend}, and each attestation envelope records
+the AO-Core tip at quote time; thereafter every device first-load
+and every message extends the chain. v1.2 carries both the TPM
+event log and the AO-Core hashpath in the envelope but does not
+cryptographically bind them; the planned
+\texttt{attestation-at-hashpath-tip} field closes the gap. The
+two logs are not analogous mechanisms; they are the same
+cryptographic primitive, and composing them end-to-end
+(Figure~\ref{fig:chain}) is an engineering step rather than a new
+design.
+```
+
+### Optional single-footnote alternative
+
+If preserving present-tense prose is preferred, attach this
+footnote to the first amended sentence (the TME paragraph):
+
+```
+\footnote{As of v1.2 of the reference implementation
+(\texttt{github.com/permaweb/hb-os}), TME enforcement, AK parenting
+under the Endorsement hierarchy with MakeCredential-based EK
+binding, HMAC+parameter-encrypted TPM sessions, and a cryptographic
+commitment linking the TPM event log tip into the AO-Core hashpath
+are planned for v1.3; the v1.2 envelope carries all necessary
+evidence for verifier-side policy to approximate these properties.}
+```
+
+This is the lowest-intervention path but less honest to a reader
+skimming the prose. Prefer the four per-sentence amendments above
+if the review/publishing context rewards precision.
 
 ---
 
