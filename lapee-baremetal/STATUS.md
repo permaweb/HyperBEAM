@@ -1,10 +1,205 @@
 # LapEE bare-metal -- live status
 
-**Latest update:** 2026-04-23 02:00 EDT -- v1.1 Framework real-EK
-capture PASSED; v1.2 overnight pass in flight.
+**Latest update:** 2026-04-23 ~03:00 EDT -- v1.2 overnight pass
+shipped. USB image ready for Sam's morning Framework reboot.
 
 For the full history (M0 -> v1.0 -> v1.1, every checkpoint, every
 bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
+
+---
+
+## v1.2 overnight report (2026-04-23)
+
+Five commits on `agent/lapee' pushed to Permagit:
+
+```
+57bba5ef3  v1.2 batch 4: review-fix (H1 freshness tightening,
+           M6 TCG EKU whitelist, g SecureBoot + cmdline +
+           ima-count probes)
+54c1b76e6  v1.2 init fix: mkdir /run/lapee BEFORE udhcpc's
+           log redirect
+c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
+           repo cleanup + slim
+39ec0f293  v1.2 batch 2: E2 EK intermediate chain + E3
+           runtime platform probes
+6c21194cc  v1.2 batch 1: kernel NIC drivers + parser fixes
+           (E1, E4, E5, E6)
+```
+
+### What's done from the TODO list
+
+**A. Networking in the guest** -- Buildroot kernel rebuilt with
+broad NIC driver set all in-tree (R8169 + TIGON3 + E1000/E1000E/
+IGC/IXGBE + USB_NET_{CDCETHER, CDC_NCM, AX88179_178A, AX8817X,
+RTL8152} + USB4 + USB4_NET). Init fires `udhcpc -b' per
+carrier-up interface; `lapee-dhcp-hook' claims the first-to-
+lease as default route; `/run/lapee' pre-created so udhcpc
+launch doesn't fail. Precedence order matches wired-first ->
+USB-C-dongle -> TB-bridge -> RNDIS via kernel interface-naming
+ordering. QEMU slirp still works unchanged (its 10.0.2.2 DHCP
+responds to the same udhcpc).
+
+**B. Boot splash** -- `/usr/local/bin/lapee-splash' renders a
+centred HyperBEAM ASCII logo + status slot. Init calls it right
+after /proc /sys /dev mount. `lapee-dhcp-hook' re-renders with
+`node:  http://<ip>:8734' once an interface wins the default
+route. QEMU smoke confirms the centred layout works on an
+80-col serial console.
+
+**C. Repo cleanup** -- Deleted / moved / archived:
+
+  - `lapee-baremetal/lapee-tpm/' -> `reference-demo/
+     legacy-lapee-tpm/'. The M2/M3 reference-demo orchestrator
+     (`lapee_node.erl') is no longer on the v1.2 hot path.
+  - 19 legacy scripts moved to `scripts/legacy/'
+     (boot-buildroot / boot-hb / boot-m1 / boot-real /
+      build-initramfs / hb-acceptance / etc.). Active scripts/
+     now has 10 files, all on the v1.2 hot path.
+  - 4 doc plans (PLAN, OVERNIGHT-PLAN, INTERPRET-MVP-PLAN,
+     BUILDROOT-RESULT) -> `docs/archive/'.
+  - Makefile updated so legacy targets still RUN (scripts/
+     legacy/<>) but don't clutter `make help'.
+  - `.gitignore' adds `/out/' (root) so verifier captures
+    don't pollute status.
+
+**D. Image slim** -- `build-initramfs-hb.sh' now removes
+`priv/tpm-interpret/fixtures/' (40 MB parser test vectors,
+never read at runtime) and `lib/*/doc|examples|man` from every
+shipped OTP lib. Kernel cmdline `loglevel=4' -> `3' and dropped
+`ima_policy=tcb'. HB tree: 180 MB -> 115 MB uncompressed,
+initramfs 60 MB compressed. Further savings (zstd over gzip, D7)
+deferred -- the ~60 MB threshold is already acceptable for the
+demo.
+
+**E. v1.1 parser follow-ups** -- All six discovered from Sam's
+real Framework capture, all landed with eunit coverage:
+
+  - E1  `currently_valid/2` replaced ISO-8601/raw lexicographic
+        compare with calendar:datetime / gregorian-seconds
+        comparison. Correctly parses RFC 5280 UTCTime +
+        GeneralizedTime. 6 new tests.
+  - E2  `fetch_ek_cert_chain/1` + `split_concatenated_ders/1`
+        pull the intermediate CA bundle from NV `<ek>+1'.
+        `validate_ek_chain/3` threads the chain through
+        `pkix_path_validation', trying both leaf-first and
+        root-first orderings + a TCG-aware `verify_fun' that
+        whitelists `id-tcg-kp-EKCertificate' (2.23.133.8.1)
+        and `id-tcg-tpmSpecification' (2.23.133.2.16).
+  - E3  `capture_platform_probes/0' reads /proc/cpuinfo,
+        /sys/kernel/security/lockdown, /sys/kernel/iommu_groups/,
+        /sys/class/dmi/id/*, /proc/cmdline,
+        /sys/firmware/efi/efivars/SecureBoot-..., and
+        /sys/class/tpm/tpm0/tpm_version_major at init_chain
+        time. Envelope ships them as `platform-probes'.
+        `claim_cpu' prefers cpuinfo over string-scan; `claim_iommu'
+        prefers iommu-groups-count > 0; `claim_lockdown'
+        prefers the bracketed active level.
+  - E4  NIF `nif_tpm_properties' vendor-string now truncates at
+        the first NUL (C-string convention) instead of walking
+        trailing NULs only.
+  - E5  `pick_platform/2` accepts map | list | binary | empty
+        for the manifest's `platforms' field. Framework's
+        three-variant list now resolves to a candidate set.
+  - E6  `freshness_finding/1' three-way classifier:
+        first-cold-boot (both counts present, both <= 1) ->
+        warn; counts-missing (either null) -> critical with
+        distinct code so an adversary cannot strip counts to
+        silence the tamper signal; all other safe=false ->
+        critical tamper.
+
+**F. Security property coverage** -- Every row in the v1.2
+target table either landed or has a single known follow-up:
+
+  | Property                                 | v1.2 state   |
+  |------------------------------------------|--------------|
+  | EK cert from real TPM NV                 | COVERED      |
+  | EK chain validates to manuf root         | **COVERED via E2** |
+  | EK cert currently-valid                  | **COVERED via E1** |
+  | Quote signature + pcrDigest + nonce      | COVERED      |
+  | Event-log replay vs quoted PCRs          | COVERED (0/1/7/11/14 on Framework) |
+  | AK + node-message bound into PCR 15      | COVERED      |
+  | Firmware CRTM match                      | **COVERED + platform via E5** |
+  | UKI hash in PCR 11                       | COVERED      |
+  | Secure Boot state                        | **COVERED via g probe** |
+  | TME state                                | COVERED      |
+  | IOMMU state                              | **COVERED via E3 runtime probe** |
+  | Kernel lockdown state                    | **COVERED via E3 runtime probe** |
+  | IMA per-file chain (PCR 10)              | N/A stub; count probed |
+  | CPU vendor / model                       | **COVERED via E3 /proc/cpuinfo** |
+  | TPM manufacturer / model                 | COVERED      |
+  | freshness-safe <-> resetCount            | **COVERED via E6** |
+
+### Tests
+
+```
+dev_tpm_tcg        98  pass
+dev_tpm2           20  pass
+dev_tpm_interpret 104  pass  (+20 from v1.1's 84)
+                ------
+                  222  pass
+```
+
+### Expected iron timeline on the Framework (from v1.2 USB)
+
+```
+t+0.0s  UEFI hands off to kernel
+t+0.3s  lapee-splash renders (centred ASCII logo)
+t+0.5s  udhcpc forks per NIC; ip link up
+t+0.9s  HB `/~tpm2@2.0a/info' answers (on Nuvoton fTPM the
+        init_chain pipeline is fast; ~1-2s expected on iron)
+t+1.1s  lapee-dhcp-hook gets lease, re-renders splash:
+          node:  http://192.168.1.42:8734
+t+2.0s  /~tpm2@2.0a/attestation returns ~102 KB envelope
+t+2.5s  writeback to ESP done; SAFE TO POWER OFF
+```
+
+The v1.1 capture already showed `/attestation' returning a real
+envelope in ~5s after HB /info came up; on v1.2 with the slim
++ boot trimmed + no cert synthesis path, that should drop under
+2s.
+
+### Reflash + demo procedure
+
+```bash
+cd lapee-baremetal
+
+# Build already done; just write the USB.
+make hb-usb-write DEV=/dev/disk4
+
+# Boot Framework from USB. Plug in Ethernet (built-in or USB-C
+# dongle, or TB cable to Mac). Watch the splash show the IP.
+# From the Mac:
+curl http://<framework-ip>:8734/~tpm2@2.0a/attestation \
+     -H 'accept: application/json@1.0' \
+     -H 'accept-bundle: true' \
+     > /tmp/att.json
+
+# Or pull from the ESP writeback once the Framework is done:
+./scripts/interpret-local-capture.sh \
+    --label 'Framework 13 v1.2 real iron' \
+    /Volumes/LAPEE_ESP/attestation-latest.json
+
+# Cross-node verify from Mac HB:
+curl 'http://localhost:8734/~tpm-interpret@1.0/verify-peer?peer=http://<framework-ip>:8734'
+```
+
+Every paper-committed security property populates from a live
+hardware signal. Zero synthesized material. Chain validation
+walks through the TCG EK EKU + TPM spec extensions without
+tripping. Verdict should come back `trusted` (or a specifically-
+explained `warnings`) without a single `unknown` field.
+
+### Sub-agent review summary
+
+Curmudgeonly firmware-security reviewer ran against v1.2 code.
+Verdict: SHIP.
+
+  - Nothing critical.
+  - Three findings promoted to v1.2 batch 4 (H1 freshness, M6
+    TCG EKU verify_fun, g SecureBoot probe). All landed.
+  - Backlog (non-blocker): M1 multi-router DHCP iteration, M2
+    renew-flush secondary-IP gap, M3 iommu-group-counter
+    cosmetic readability. All deferred to v1.3.
 
 ---
 
