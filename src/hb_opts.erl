@@ -229,6 +229,7 @@ raw_default_message() ->
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
             #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
             #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
+            #{<<"name">> => <<"mystislopi@1.0-pre">>, <<"module">> => dev_mysticeti},
             #{<<"name">> => <<"name@1.0">>, <<"module">> => dev_name},
             #{<<"name">> => <<"node-process@1.0">>, <<"module">> => dev_node_process},
             #{<<"name">> => <<"p4@1.0">>, <<"module">> => dev_p4},
