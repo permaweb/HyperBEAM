@@ -21,9 +21,14 @@ bug fixed, every fake ripped) see [`HISTORY.md`](HISTORY.md).
 
 ## v1.2 overnight report (2026-04-23)
 
-Seven commits on `agent/lapee' pushed to Permagit:
+Nine commits on `agent/lapee' pushed to Permagit:
 
 ```
+ec794b353  v1.2 batch 6: doc UX pass (newcomer-readable, v1.2
+           quick-start canonical, archived banners, legacy
+           Makefile separation)
+023e4db7d  v1.2 STATUS update: batch 5 demo-ops fixes +
+           two-reviewer sign-off
 d78b0d3a3  v1.2 batch 5: demo-ops review-fix (stale-capture
            guard, visible boot progress, loglevel=1,
            captive-portal DHCP resilience)
@@ -42,10 +47,11 @@ c496d5c8e  v1.2 batch 3: boot splash + multi-iface DHCP +
            (E1, E4, E5, E6)
 ```
 
-Two independent code reviewers spoken to (curmudgeonly
-firmware-security; pragmatic demo-ops). Both verdicts: SHIP.
-Findings from both acted on in-batch. See
-"Review findings acted on" at the bottom of this report.
+Three independent code reviewers spoken to (curmudgeonly
+firmware-security; pragmatic demo-ops; fresh-eyes first-time-
+contributor). All three verdicts: SHIP. Findings from all three
+acted on in the corresponding batch. See "Review findings acted
+on" at the bottom of this report.
 
 ### What's done from the TODO list
 
@@ -270,6 +276,55 @@ Deferred (non-blocker, v1.3 backlog):
       Late escalation is not expected in normal boot flow.
   M5  GeneralizedTime with fractional seconds rejected by
       parse_x509_time/1. Rare on EK certs; noted for v1.3.
+
+**Pass 3 -- fresh-eyes first-time-contributor reviewer**
+(against full 6c21..023e4d). Verdict: SHIP, with "works for
+trusted contributors who know Sam" flipped to "ready for public
+eyes" after seven HIGH documentation / UX issues. All seven
+landed as v1.2 batch 6 (commit ec794b353):
+
+  HIGH-1  Broken anchor in lapee-baremetal/README.md (v1.0
+          bookend link pointed at a STATUS.md section that had
+          moved to HISTORY.md).
+  HIGH-2  lapee-baremetal/README.md carried three competing
+          quick-starts (`make hb-usb-image' / `make hb-all' /
+          `make all') stacked without a "this is current"
+          banner -- newcomers couldn't tell which was the v1.2
+          flow. Rewritten: one paragraph on what LapEE is +
+          v1.2 quick-start canonical at the top + legacy QEMU
+          material demoted to "preserved for reference".
+  HIGH-3  Top-level README.md + AGENTS.md mentioned LapEE
+          zero times. Added a 4-line pointer to the top-level
+          README + a LapEE-specific principles section to
+          AGENTS.md (no synthetic attestation data, parser-side
+          robustness, kebab-case binary fields).
+  HIGH-4  `scripts/interpret-local-capture.sh' silently
+          required the parent HB tree to be buildable (runs
+          `rebar3 as test compile' internally). Documented in
+          the script header + README prerequisites block +
+          `brew install erlang rebar3 docker python@3' line.
+  HIGH-5  Makefile header listed legacy targets (`make demo /
+          verify / boot-real / hb-all / hb-acceptance') with
+          no mention of the v1.0-through-v1.2 Framework-boot
+          headline (`hb-usb-image / hb-usb-write /
+          hb-cross-node-verify'). Rewritten with explicit
+          "=== v1.2 hot path (current) ===" and "=== Legacy
+          ===" sections.
+  HIGH-6  docs/archive/*.md files (PLAN, OVERNIGHT-PLAN,
+          INTERPRET-MVP-PLAN, BUILDROOT-RESULT) had no
+          ARCHIVED banner; a newcomer stumbling into them
+          would read them as current. Now each leads with 6
+          quoted lines pointing back to STATUS.md + README.md.
+  HIGH-7  FEATURES.md + HARDENING.md dated 2026-04-19 but read
+          as current. FEATURES referenced the legacy target
+          `hb-final-acceptance'. Both now carry a "figures
+          are the 2026-04-19 baseline; see STATUS.md for
+          current" banner at the top; FEATURES' legacy target
+          annotated with a STATUS.md redirect.
+
+Plus MEDIUM-11 from pass 3: STATUS.md gains a Quick-links
+table at the top so a newcomer skimming can jump straight to
+the right starting point without reading the full 900+ lines.
 
 ---
 
