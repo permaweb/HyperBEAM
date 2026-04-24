@@ -12,17 +12,17 @@
 # The UKI is assembled in-container by running `systemd-ukify` over
 # the supplied kernel + initramfs + cmdline, stamped with os-release
 # metadata, linked against systemd-stub (the systemd-boot-efi shim).
-# The script was previously delegating to scripts/uki.sh, but that
-# wrapper expects host-absolute paths that break inside the tools
-# container -- so the ukify invocation is now inlined (see line 137
-# or so). scripts/uki.sh is retained for the standalone signed-UKI
-# workflow; this script does NOT call it.
+#
+# For signed-UKI workflows see `scripts/sb-setup.sh': it signs the
+# UKI produced by this script with the operator's db.key and
+# re-invokes this script with `--uki <signed>' to wrap the signed
+# PE into a new USB image.
 #
 #   Inputs  : --kernel PATH --initramfs PATH --cmdline TEXT
 #             [--size MIB]     image size in MiB (default 1024)
 #             [--uki PATH]     skip the inline ukify build and use
-#                              a pre-built UKI (e.g. one produced
-#                              by scripts/uki.sh with signing keys)
+#                              a pre-built UKI (e.g. the signed
+#                              one produced by sb-setup.sh)
 #   Outputs : --image PATH     write an .img file you can dd
 #             OR
 #             --device PATH    write directly to a raw block dev

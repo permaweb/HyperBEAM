@@ -177,11 +177,32 @@ if [ "$cmd" = "check" ]; then
             printf "  %-18s MISSING\n" "$name keys:"
         fi
     done
-    printf "  unsigned UKI:       "
-    [ -f "$BUILD_UKI" ] && echo "$BUILD_UKI ($(stat -f %z "$BUILD_UKI") bytes)" \
-        || echo "MISSING (run: make hb-usb-image)"
-    printf "  signed UKI:         "
-    [ -f "$SIGNED_UKI" ] && echo "$SIGNED_UKI ($(stat -f %z "$SIGNED_UKI") bytes)" \
+    # After `sign' runs, $BUILD_UKI is itself a signed PE (the
+    # signed UKI is copied back there by build-usb-image.sh --uki
+    # so that `make hb-usb-image' re-wraps the signed version
+    # into the USB image). Label accordingly when we can tell.
+    printf "  UKI in usb-build:   "
+    if [ -f "$BUILD_UKI" ]; then
+        _sig=""
+        if have_tool sbverify \
+                && sbverify --cert "$SB_DIR/db.crt" "$BUILD_UKI" \
+                    >/dev/null 2>&1; then
+            _sig=" [signed]"
+        elif docker image inspect "$LAPEE_TOOLS_IMAGE" \
+                >/dev/null 2>&1 \
+                && run_tool sbverify --cert "$SB_DIR/db.crt" \
+                    "$BUILD_UKI" >/dev/null 2>&1; then
+            _sig=" [signed]"
+        else
+            _sig=" [unsigned]"
+        fi
+        echo "$BUILD_UKI ($(stat -f %z "$BUILD_UKI") bytes)$_sig"
+    else
+        echo "MISSING (run: make hb-usb-image)"
+    fi
+    printf "  signed UKI (stash): "
+    [ -f "$SIGNED_UKI" ] \
+        && echo "$SIGNED_UKI ($(stat -f %z "$SIGNED_UKI") bytes)" \
         || echo "MISSING (run: $0 sign)"
     for name in PK KEK db; do
         f="$SB_DIR/enrol/$name.auth"
