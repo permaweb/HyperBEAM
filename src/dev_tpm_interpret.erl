@@ -1902,64 +1902,90 @@ validate_ek_chain_1(<<>>, _Intermediates, Roots, _ChainLen) ->
         <<"intermediates-used">>   => 0
     };
 validate_ek_chain_1(DerCert, DerIntermediates, Roots, ChainLen) ->
-    %% Filter intermediates down to valid DER. Keep order -- TCG
-    %% convention is leaf-to-root, which is also the order
+    %% Only self-signed certs may stand as trust anchors. Non-self-
+    %% signed entries in the shipped bundle are candidate
+    %% intermediates — promoting them to anchors is the reward-hack
+    %% we refuse to commit here (otherwise a manufacturer's LeafCA
+    %% dropped into `priv/tpm-interpret/root-cas/' would "validate"
+    %% any EK the LeafCA happens to have signed, stopping the chain
+    %% short of the real manufacturer root).
+    {TrueRoots, BundleIntermediates} = partition_self_signed_roots(Roots),
+    %% Filter on-TPM intermediates down to valid DER. Keep order --
+    %% TCG convention is leaf-to-root, which is also the order
     %% `pkix_path_validation/3' expects for CertPath.
     Cleaned = [D || D <- DerIntermediates, D =/= <<>>],
-    %% First pass: try each shipped root directly, using the on-TPM
-    %% intermediates (if any) as the chain. This covers the common
-    %% case: NV 0x01C00003 has the manufacturer LeafCA, NV 0x01C00002
-    %% has the EK.
-    Direct = try_validate_against_roots(DerCert, Cleaned, Roots, 0),
+    %% First pass: try each self-signed root directly, using the
+    %% on-TPM intermediates (if any) as the chain. This covers the
+    %% happy case: NV 0x01C00003 has the manufacturer LeafCA,
+    %% NV 0x01C00002 has the EK.
+    Direct = try_validate_against_roots(DerCert, Cleaned, TrueRoots, 0),
     Result = case maps:get(<<"chain-valid">>, Direct, false) of
         true  -> Direct;
         _ when Cleaned =:= [] ->
             %% Fallback when the on-TPM chain is empty (seen on
             %% Nuvoton NPCT75x Framework builds where NV 0x01C00003
-            %% is undefined). Walk pairs of shipped certs: each
-            %% other shipped cert becomes a candidate intermediate.
-            %% Verifier still terminates the trust chain at one of
-            %% our root CAs; we just supply the missing-on-TPM
-            %% intermediate from the shipped bundle. See TCG EK
-            %% Credential Profile -- the manufacturer's intermediate
-            %% CA cert is itself published separately from NV.
+            %% is undefined). For each real root, try each shipped
+            %% non-self-signed cert as the missing intermediate. See
+            %% TCG EK Credential Profile -- the manufacturer's
+            %% intermediate CA cert is itself published separately
+            %% from NV.
             try_validate_with_bundle_intermediates(
-              DerCert, Roots, Direct);
+              DerCert, TrueRoots, BundleIntermediates, Direct);
         _ -> Direct
     end,
     Result#{<<"intermediates-used">> => ChainLen}.
 
-%% @doc Pair-walk the shipped roots: for each Root try each OTHER
-%% shipped cert as a single intermediate. Stops on first successful
-%% chain; otherwise returns the original direct-attempt result
-%% unchanged so existing reason strings bubble up.
-try_validate_with_bundle_intermediates(DerCert, Roots, FallbackResult) ->
-    %% Pre-decode every shipped root. Skipping un-decodable entries
-    %% keeps the walker resilient to a bad PEM file in the bundle.
-    Decoded = [
-        {Name, Cert, Der} ||
-        R <- Roots,
+%% @doc Split the shipped bundle into self-signed trust anchors and
+%% everything else (candidate intermediates). "Self-signed" is
+%% determined by verifying the cert's signature under its own public
+%% key, not by the cheaper subject==issuer check (which would accept
+%% a same-name intermediate whose signer is a different, unknown key).
+partition_self_signed_roots(Roots) ->
+    lists:partition(
+        fun(R) ->
+            case decode_cert(maps:get(<<"pem">>, R, <<>>)) of
+                {ok, Cert} ->
+                    try public_key:pkix_is_self_signed(Cert)
+                    catch _:_ -> false
+                    end;
+                _ -> false
+            end
+        end, Roots).
+
+%% @doc Pair-walk the shipped anchors: for each self-signed root try
+%% each shipped non-self-signed cert as a single intermediate. Stops
+%% on the first successful chain; otherwise returns the original
+%% direct-attempt result unchanged so reason strings bubble up.
+try_validate_with_bundle_intermediates(DerCert, TrueRoots,
+                                       BundleIntermediates,
+                                       FallbackResult) ->
+    %% Pre-decode anchors.
+    DecodedRoots = [
+        {Name, Cert} ||
+        R <- TrueRoots,
         Name <- [maps:get(<<"name">>, R, <<"unknown-root">>)],
         Pem  <- [maps:get(<<"pem">>, R, <<>>)],
-        {ok, Cert} <- [decode_cert(Pem)],
-        Der  <- [safe_der_encode(Cert)],
-        Der =/= <<>>
+        {ok, Cert} <- [decode_cert(Pem)]
     ],
-    walk_bundle_pairs(DerCert, Decoded, Decoded, FallbackResult).
+    %% Pre-decode intermediates to DER once.
+    DecodedInters = [
+        {IName, IDer} ||
+        I <- BundleIntermediates,
+        IName <- [maps:get(<<"name">>, I, <<"unknown-intermediate">>)],
+        IPem <- [maps:get(<<"pem">>, I, <<>>)],
+        {ok, ICert} <- [decode_cert(IPem)],
+        IDer <- [safe_der_encode(ICert)],
+        IDer =/= <<>>
+    ],
+    walk_bundle_pairs(DerCert, DecodedRoots, DecodedInters, FallbackResult).
 
-walk_bundle_pairs(_DerCert, [], _AllDecoded, FallbackResult) ->
+walk_bundle_pairs(_DerCert, [], _Inters, FallbackResult) ->
     FallbackResult;
-walk_bundle_pairs(DerCert, [{AnchorName, AnchorCert, _AnchorDer} | Rest],
-                  AllDecoded, FallbackResult) ->
-    %% Walk all OTHER bundle certs as candidate intermediates for
-    %% this anchor. Self (anchor == intermediate) is excluded --
-    %% that's what try_validate_against_roots already covered.
-    Candidates = [{IName, IDer}
-                  || {IName, _IC, IDer} <- AllDecoded,
-                     IName =/= AnchorName],
-    case try_pair_chain(DerCert, AnchorCert, AnchorName, Candidates) of
+walk_bundle_pairs(DerCert, [{AnchorName, AnchorCert} | Rest],
+                  Inters, FallbackResult) ->
+    case try_pair_chain(DerCert, AnchorCert, AnchorName, Inters) of
         {ok, Hit} -> Hit;
-        not_found -> walk_bundle_pairs(DerCert, Rest, AllDecoded,
+        not_found -> walk_bundle_pairs(DerCert, Rest, Inters,
                                         FallbackResult)
     end.
 
@@ -3312,32 +3338,30 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
                       "extraData still binds to the caller's nonce. "
                       "Upgrades to stronger classification on the "
                       "next clean reboot.">>);
-        tamper ->
-            %% Reviewer pass 8 (Framework envelope predictor) noted
-            %% that the v1.1 Framework capture hits this branch
-            %% purely because the Nuvoton NPCT75x has never seen a
-            %% clean TPM2_Shutdown(STATE) -- its reset/restart
-            %% counts are both large integers (neither <= 1), so
-            %% fresh_boot_classify/2 returns `tamper' even though
-            %% no tampering has occurred. Severity stays critical
-            %% (the adversary could also hit this branch, and we
-            %% cannot distinguish benign-never-shutdown from
-            %% tampered-clock from the envelope alone), but the
-            %% message now names both causes so a demo audience
-            %% doesn't read "tampered" and panic.
-            finding(critical, <<"freshness-safe-false">>,
+        safe_false_stale_counters ->
+            %% The counts-plausible-but-safe-false default: LapEE
+            %% power-cycle posture. See fresh_boot_classify/2
+            %% comment for the full rationale. Warn, not critical.
+            finding(warn, <<"freshness-safe-false-stale-counters">>,
                     <<"freshness">>,
-                    <<"TPM clock `safe' flag is false. Either the "
-                      "TPM's clock has been tampered with since "
-                      "last reset, OR the TPM has never successfully "
-                      "executed TPM2_Shutdown(STATE) (a benign "
-                      "first-production-boot state common on "
-                      "discrete TPMs that have only ever seen "
-                      "power-cycle resets). Inspect the freshness "
-                      "section's reset-count / restart-count: "
-                      "values >> 1 plus no orderly-shutdown history "
-                      "is the benign case; anything else suggests "
-                      "investigation.">>)
+                    <<"TPM `safe' flag is false with plausible "
+                      "reset/restart counts. This is the expected "
+                      "state for a LapEE boot: HB does not issue "
+                      "TPM2_Shutdown(STATE) at node shutdown "
+                      "(single-purpose appliance power-cycle "
+                      "model), so counter values are stale across "
+                      "boots and the TPM reports safe=NO. Primary "
+                      "freshness is unaffected -- the quote's "
+                      "extraData is bound to the verifier's fresh "
+                      "nonce challenge on every attestation. "
+                      "Cross-envelope counter-based replay defense "
+                      "is weaker on this boot (counters cannot be "
+                      "trusted as monotonic across safe=false "
+                      "boundaries), but single-envelope replay is "
+                      "still covered by the fresh-nonce mechanism. "
+                      "Strict verifier policy that mandates "
+                      "safe=true MAY reject; default LapEE "
+                      "policy accepts this as warn.">>)
     end;
 freshness_finding(
   #{<<"freshness-indicator">> := <<"no-nonce">>}) ->
@@ -3390,8 +3414,27 @@ fresh_boot_classify(R, RC)
         when is_integer(R), is_integer(RC),
              R >= 16#10000000, RC >= 16#10000000 ->
     uninitialised_shadow;
+%% Default case when counts are PLAUSIBLE (i.e., below 2^28) but
+%% safe=false: the TPM has executed some number of resets and/or
+%% restarts over its lifetime, but HAS NOT executed a clean
+%% TPM2_Shutdown(STATE) since its last power-on. This is the
+%% EXPECTED state for a LapEE boot: HB does not issue
+%% TPM2_Shutdown(STATE) at node shutdown (single-purpose appliance
+%% power-cycle model), so every envelope a verifier receives from
+%% LapEE hardware carries safe=NO. Observed on Framework 13 +
+%% Nuvoton NPCT75x: 26h uptime, reset-count=147, restart-count=0.
+%%
+%% The "fresh nonce in TPMS_ATTEST.extraData" IS the primary
+%% freshness defense (verifier-controlled challenge, re-verified
+%% per attestation). Counter-based cross-envelope replay defense
+%% is a secondary defence that requires safe=true to be reliable;
+%% when safe=false we acknowledge it's weaker but the primary
+%% defense still holds. The paper amendment (STATUS.md paper-
+%% amend section) updates to note that LapEE's power-cycle
+%% posture makes safe=false the default, not an anomaly -- the
+%% verdict therefore grades this as WARN, not CRITICAL.
 fresh_boot_classify(_, _) ->
-    tamper.
+    safe_false_stale_counters.
 
 ima_policy_finding(
   #{<<"ima-policy-violations">> := N}) when N > 0 ->
