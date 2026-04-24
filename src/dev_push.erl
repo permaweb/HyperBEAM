@@ -36,6 +36,14 @@
 %%                       `N > 0' - recurse, with the inner `/push'
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
+%% `/parallel-outbox': Boolean (default `false'). When `true', each
+%%                    outbox entry's `schedule + recurse' chain runs in
+%%                    its own spawned process so a slow downstream chain
+%%                    on one entry does not block its siblings (e.g. a
+%%                    multi-target broadcast where target 1 is LLM-bound
+%%                    must not starve targets 2..N). The `hb_maps:map'
+%%                    callback returns a `<<"scheduled">>' stub for each
+%%                    spawned entry instead of the full chain result.
 push(Base, Req, Opts) ->
     Process = dev_process_lib:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
@@ -180,6 +188,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             {ok, AdditionalRes#{ <<"slot">> => Slot, <<"process">> => ID }};
         {ok, Outbox} ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
+            Parallel = parallel_outbox(Assignment, Opts),
             Downstream =
                 hb_maps:map(
                     fun(Key, RawMsgToPush = #{ <<"target">> := Target }) ->
@@ -198,9 +207,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                             end,
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
-                                push_result_message(
-                                    DownstreamProcess,
-                                    MsgToPush,
+                                Origin =
                                     #{
                                         <<"process">> => ID,
                                         <<"slot">> => Slot,
@@ -222,6 +229,14 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                                 Opts
                                             )
                                     },
+                                push_outbox_entry(
+                                    Parallel,
+                                    DownstreamProcess,
+                                    MsgToPush,
+                                    Origin,
+                                    Target,
+                                    Key,
+                                    Slot,
                                     Opts
                                 );
                             {error, not_found} ->
@@ -259,6 +274,42 @@ target_process_not_found(Target) ->
         <<"target">> => Target,
         <<"reason">> => <<"Could not access target process!">>
     }.
+
+%% @doc Resolve the optional `parallel-outbox' boolean off the request.
+%% Default `false' preserves the legacy synchronous fan-out: each outbox
+%% entry's `schedule + recurse' chain runs inline so the caller observes
+%% the full result map. Pass `true' to spawn each entry's chain in its
+%% own process -- a slow downstream chain on one entry then no longer
+%% blocks its siblings.
+parallel_outbox(Assignment, Opts) ->
+    hb_util:bin(
+        hb_maps:get(<<"parallel-outbox">>, Assignment, false, Opts)
+    ) =:= <<"true">>.
+
+%% @doc Schedule + recurse one outbox entry. With `parallel-outbox = true'
+%% the chain runs in a fresh spawn and we return a `<<"scheduled">>' stub
+%% so sibling outbox entries are not blocked by this entry's downstream
+%% latency. Otherwise the chain runs inline and the caller observes the
+%% full nested result map (the legacy contract).
+push_outbox_entry(true, DownstreamProcess, MsgToPush, Origin, Target, Key, Slot, Opts) ->
+    ?event(push,
+        {spawning_chain,
+            {outbox_key, Key},
+            {target, Target},
+            {from_slot, Slot}
+        },
+        Opts
+    ),
+    spawn(fun() ->
+        push_result_message(DownstreamProcess, MsgToPush, Origin, Opts)
+    end),
+    #{
+        <<"response">> => <<"scheduled">>,
+        <<"target">> => Target,
+        <<"outbox-key">> => Key
+    };
+push_outbox_entry(false, DownstreamProcess, MsgToPush, Origin, _Target, _Key, _Slot, Opts) ->
+    push_result_message(DownstreamProcess, MsgToPush, Origin, Opts).
 
 
 %% @doc If the outbox message has a path we interpret it as a request to perform
@@ -857,6 +908,7 @@ max_depth_test_cases() ->
         {timeout, 30, fun test_max_depth_zero_schedules_only/0},
         {timeout, 30, fun test_max_depth_one_walks_one_hop/0},
         {timeout, 30, fun test_compute_push_hook_idempotent/0},
+        {timeout, 30, fun test_parallel_outbox_returns_scheduled_stubs/0},
         fun test_parse_max_depth/0
     ].
 
@@ -1450,6 +1502,32 @@ test_compute_push_hook_idempotent() ->
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
     ?assertEqual(ReceiverSlot1, ReceiverSlot2).
 
+%% @doc `parallel-outbox = true' makes each outbox entry's chain run in
+%% its own spawn. The synchronous response degenerates to a `<<"scheduled">>'
+%% stub per entry; the actual schedule lands asynchronously on the target.
+%% We assert both: the response carries the stub, and the receiver's
+%% scheduler eventually advances.
+test_parallel_outbox_returns_scheduled_stubs() ->
+    {Sender, Receiver, MsgSlot, Opts} = setup_two_process_message(),
+    {ok, ReceiverSlotBefore} =
+        hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
+    {ok, PushResult} =
+        hb_ao:resolve(
+            Sender,
+            #{
+                <<"path">> => <<"push">>,
+                <<"slot">> => MsgSlot,
+                <<"parallel-outbox">> => true,
+                <<"max-depth">> => 0
+            },
+            Opts
+        ),
+    ?assertMatch(
+        #{ <<"1">> := #{ <<"response">> := <<"scheduled">> }},
+        PushResult
+    ),
+    ?assert(wait_for_slot_above(Receiver, ReceiverSlotBefore, 10000, Opts)).
+
 %% @doc Spin up two AOS processes -- a Sender and a Receiver with a `Reply'
 %% handler for `Action = "Ping"' -- and schedule (without pushing) a single
 %% Ping message on the Sender that targets the Receiver. Returns
@@ -1512,6 +1590,20 @@ wait_until_loop(Pred, Deadline) ->
                     wait_until_loop(Pred, Deadline)
             end
     end.
+
+%% @doc Wait until `Process'/`slot/current' is strictly greater than
+%% `Floor', or `TimeoutMs' elapses. Used to await an async push landing
+%% a fresh assignment on the target's scheduler queue.
+wait_for_slot_above(Process, Floor, TimeoutMs, Opts) ->
+    wait_until(
+        fun() ->
+            case hb_ao:resolve(Process, #{<<"path">> => <<"slot/current">>}, Opts) of
+                {ok, S} when S > Floor -> true;
+                _ -> false
+            end
+        end,
+        TimeoutMs
+    ).
 
 -ifdef(ENABLE_GENESIS_WASM).
 %% @doc Test that a message that generates another message which resides on an
