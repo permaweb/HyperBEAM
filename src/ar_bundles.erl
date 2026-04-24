@@ -548,7 +548,7 @@ decode_bundle_header(
     <<Size:256/little-integer, ID:32/binary, Rest/binary>>,
     Header
 ) ->
-    decode_bundle_header(Count - 1, Rest, [{ID, Size} | Header]);
+    decode_bundle_header(Count - 1, Rest, [{binary:copy(ID), Size} | Header]);
 decode_bundle_header(_, _, _) ->
     invalid_bundle_header.
 

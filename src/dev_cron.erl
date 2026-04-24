@@ -182,6 +182,7 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
                 }
             )
     end,
+    erlang:garbage_collect(),
     timer:sleep(IntervalMillis),
     every_worker_loop(CronPath, Req, Opts, IntervalMillis).
 

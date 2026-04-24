@@ -774,6 +774,7 @@ fetch_blocks_ranged(Current, To, TargetDepth, Workers, Opts) ->
         end,
         Workers
     ),
+    erlang:garbage_collect(),
     fetch_blocks_ranged(BatchEnd - 1, To, TargetDepth, Workers, Opts).
 
 %% @doc Process blocks until an already-indexed block is found.
@@ -794,11 +795,13 @@ fetch_blocks_open_ended(Current, TargetDepth, Workers, Opts) ->
         {all_unindexed, ToProcess} ->
             process_prefetched_blocks(
                 ToProcess, TargetDepth, Workers, Opts),
+            erlang:garbage_collect(),
             fetch_blocks_open_ended(
                 BatchEnd - 1, TargetDepth, Workers, Opts);
         {stop_at, StopHeight, ToProcess} ->
             process_prefetched_blocks(
                 ToProcess, TargetDepth, Workers, Opts),
+            erlang:garbage_collect(),
             ?event(copycat_short,
                 {arweave_block_indexing_completed,
                     {stop_at_indexed_block, StopHeight}
@@ -1600,8 +1603,14 @@ validate_and_flag_item_id(ItemBinary, DeclaredID, EncodedDeclaredID, Store) ->
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
     try dev_arweave_common:type(TX) =/= binary
-    catch _:_:_ ->
-        ?event(copycat_short, {tx_error, {tx, TX}}),
+    catch _:Reason:Stacktrace ->
+        %% TODO: This should have more visibility, for example 
+        %% increase skipped_count parameter.
+        ?event(copycat_short, 
+            {tx_error, 
+                {reason, Reason},
+                {stacktrace, Stacktrace},
+                {tx, TX}}),
         false 
     end.
 
