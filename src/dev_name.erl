@@ -6,7 +6,7 @@
 -module(dev_name).
 -export([info/1, request/3]).
 %%% Public helpers.
--export([test_arns_opts/0]).
+-export([test_arns_opts/0, name_from_host/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 

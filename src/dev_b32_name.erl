@@ -2,6 +2,8 @@
 %%% subdomains on a HyperBEAM node.
 -module(dev_b32_name).
 -export([info/1]).
+%%% Public helpers.
+-export([ encode/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
