@@ -58,6 +58,14 @@
 #                       re-signing. File lives at wifi.conf in
 #                       this directory and is .gitignored.
 #
+#   make hb-sb-apply    inject the operator's SB enrolment bundle
+#                       (secureboot/enrol/*.{cer,auth}) into the
+#                       ESP root of the currently-built
+#                       work/lapee-usb.img. Fast: no UKI re-sign,
+#                       no rebuild. Run after `sb-setup.sh enrol'
+#                       against an already-built image, or when
+#                       you've rotated keys and want to re-flash.
+#
 #   make hb-cross-node-verify
 #                       start a verifier HB on the Mac, have
 #                       it call /~tpm-interpret@1.0/verify-peer
@@ -73,7 +81,7 @@ DOCKER_AMD64 := docker run --rm --platform=linux/amd64
 .PHONY: help builders \
         buildroot buildroot-shell buildroot-clean \
         hb-release hb-initramfs hb-usb-image hb-usb-write \
-        hb-usb-qemu hb-wifi-apply hb-cross-node-verify clean
+        hb-usb-qemu hb-wifi-apply hb-sb-apply hb-cross-node-verify clean
 
 help:
 	@awk '/^# =+$$/{flag=!flag;if(!flag)exit;next} \
@@ -198,6 +206,47 @@ hb-wifi-apply:
 	        echo ">> ESP /EFI/boot/ after apply:"; \
 	        mdir -i /tmp/esp.img ::/EFI/boot/ | tail -n +3'
 	@echo ">> wifi.conf applied to work/lapee-usb.img"
+	@echo "   flash with: make hb-usb-write DEV=/dev/diskN"
+
+# ------------------------------------------------------------
+# Inject operator SB enrolment bundle into an already-built
+# USB image, without touching the signed UKI.
+# ------------------------------------------------------------
+
+hb-sb-apply:
+	@test -d secureboot/enrol || { \
+	    echo "secureboot/enrol/ missing. Run: ./scripts/sb-setup.sh enrol"; \
+	    exit 1; }
+	@test -f work/lapee-usb.img || { \
+	    echo "work/lapee-usb.img missing. Run: make hb-usb-image"; \
+	    exit 1; }
+	@count=0; for f in secureboot/enrol/PK.cer secureboot/enrol/KEK.cer \
+	                   secureboot/enrol/db.cer secureboot/enrol/PK.auth \
+	                   secureboot/enrol/KEK.auth secureboot/enrol/db.auth; do \
+	    test -f "$$f" && count=$$((count + 1)); done; \
+	test $$count -gt 0 || { \
+	    echo "no .cer / .auth files in secureboot/enrol/"; exit 1; }
+	docker run --rm --platform=linux/amd64 \
+	    -v $(LAPEE_ROOT):/w -w /w lapee-tools:latest \
+	    bash -euo pipefail -c '\
+	        START=$$(parted --script --machine /w/work/lapee-usb.img \
+	            unit s print | awk -F: "/^1:/ {gsub(\"s\",\"\",\$$2); print \$$2}"); \
+	        SECT=$$(parted --script --machine /w/work/lapee-usb.img \
+	            unit s print | awk -F: "/^1:/ {gsub(\"s\",\"\",\$$4); print \$$4}"); \
+	        dd if=/w/work/lapee-usb.img of=/tmp/esp.img \
+	            bs=512 skip=$$START count=$$SECT status=none; \
+	        for f in PK.cer KEK.cer db.cer PK.auth KEK.auth db.auth; do \
+	            if [[ -f /w/secureboot/enrol/$$f ]]; then \
+	                mcopy -i /tmp/esp.img -o \
+	                    /w/secureboot/enrol/$$f ::/$$f; \
+	            fi; \
+	        done; \
+	        dd if=/tmp/esp.img of=/w/work/lapee-usb.img \
+	            bs=512 seek=$$START count=$$SECT \
+	            conv=notrunc status=none; \
+	        echo ">> ESP root after apply:"; \
+	        mdir -i /tmp/esp.img :: | tail -n +3'
+	@echo ">> SB enrolment bundle applied to work/lapee-usb.img"
 	@echo "   flash with: make hb-usb-write DEV=/dev/diskN"
 
 # ------------------------------------------------------------
