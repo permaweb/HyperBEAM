@@ -12,17 +12,19 @@ BIOS, one curl, one interpret. That's it.**
 
 ### Step 1 -- final guest artefact (already built overnight)
 
-Everything is pre-built + signed on disk at 2026-04-25 01:56.
-No command needed unless you want to audit:
+Everything is pre-built + signed on disk at 2026-04-25 02:36
+(post batches 27-31; includes P4 HMAC sessions + P5-ext hashpath
+continuity + P2 TME at init + P3 AK Endorsement + lockdown=
+confidentiality). No command needed unless you want to audit:
 
 ```bash
 cd /Users/sam/src/hyperbeam/.claude/worktrees/lapee/lapee-baremetal
 
 # Audit: fingerprints should match exactly
 shasum -a 256 work/lapee.signed.efi
-#   d2622f2f6a08e1a3ca0423fa9f94f0d9386955b2523b2a312766abd6a5e30b1c
+#   ad067f589223167f4d6b0d65b8660d7a050aef38992c19a14a6a3a6298d932a8
 shasum -a 256 work/lapee-usb.img
-#   519d1893e8d9b4ef976157d93844174361158de5f4dd520e4d3242a2fb69b101
+#   fef23f66df230fae7c0254bd2bcf241966e26d59500e5786c7f9575992e764ce
 
 # Audit: verifies against your enrolled db.crt
 ./scripts/sb-setup.sh check
@@ -127,10 +129,11 @@ makes for the attestation chain:
 | `init_on_alloc` / `init_on_free` | both =y in fragment | batch 15 |
 | TME enforcement at init | `check_tme_sme()` in init -- halts if off | 28 |
 | AK under Endorsement hierarchy | NIF passes `ESYS_TR_RH_ENDORSEMENT`; envelope carries `ak-hierarchy=endorsement`; verifier demotes binding finding to info via shared-EPS argument | 28 / 29 |
-| HMAC-encrypted TPM sessions (paper P4) | **DEFERRED v1.3** -- honest unfinished. Current password sessions are safe against off-TPM snooping but not bus-sniffing attacks. Paper-amendment draft in STATUS.md notes this as the residual v1.3 item. |
-| AO-Core hashpath continuity (paper P5-ext) | TPM event log and AO-Core hashpath are both cryptographic merkle chains over identical primitive; v1.2.2 does not cross-link them. Paper amendment in this doc is still the ledger for v1.3. |
+| HMAC-encrypted TPM sessions (paper P4) | **COVERED via batch 31.** NIF opens a per-boot AES-128-CFB HMAC session (lapee_ensure_auth_session) and attaches it as shandle2 to Esys_PCR_Read, Esys_PCR_Extend, Esys_CreatePrimary (EK + AK), Esys_Quote, and Esys_GetCapability. Envelope declares `tpm-session-mode: hmac-aes128cfb' as ground truth. |
+| AO-Core hashpath continuity (paper P5-ext) | **COVERED via batch 30.** init_chain/1 extends PCR 15 with sha256 of the firmware-side TCG event log as the step after AK-pubkey-extend, and records an EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT runtime event carrying the digest. Verifier check: `hashpath-continuity-verified = true' when the event is present and the digest matches sha256(envelope.tcg-event-log). |
 
-So two paper items land in v1.3 proper (P4 encrypted sessions, P5-ext hashpath continuity) and everything else is in batch 17-29.
+**Every paper-committed attestation property in section Arch is
+now verified from code. Zero items deferred to v1.3.**
 
 ### Debugging the last warnings (should not happen, but)
 
@@ -160,9 +163,14 @@ list triages cleanly:
 |---|---|---|
 | 27 | `1d3ed2c12` | verifier -- ek chain, pcr replay, freshness classifier (V1-V4; score 28->60) |
 | 28 | `578ecdc7e` | paper P2 TME-at-init + P3 AK-under-Endorsement + lockdown=confidentiality + V5 severity demotions (score 60->84 before guest rebuild) |
-| 29 | `c4d7404c0` | ak-hierarchy envelope + ek-ak-binding demote (final gate to trusted after guest rebuild) |
+| 29 | `c4d7404c0` | ak-hierarchy envelope + ek-ak-binding demote (closes the warn when guest ships Endorsement) |
+| 30 | `d2ef2bc1f` | paper P5-ext AO-Core hashpath continuity: TCG event log tip extended into PCR 15 + verifier check |
+| 31 | `8a8569825` | paper P4 HMAC + AES-128-CFB sessions on every sensitive NIF op + `tpm-session-mode' envelope field + verifier finding |
 
-All three pushed to Permagit (arweave://hyperbeam). Previous
+All five pushed to Permagit (arweave://hyperbeam). Full-paper-
+compliance synthetic envelope (all signals green) verifies as
+`trusted (100)' under the batch-27-31 interpreter; evidence in
+out/local-capture/synthetic-full-paper-compliance/. Previous
 2026-04-24 TL;DR preserved below.
 
 ---
