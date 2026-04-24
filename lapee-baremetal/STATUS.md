@@ -30,32 +30,45 @@ property as a single boolean in the envelope's
 policy-verdict.signals, rather than having to walk five
 separate checks by hand.
 
-**Parallel: ASCII art boot animation**
+**Parallel: ASCII art boot animation -- LANDED**
 
-A separate agent is working on the retro-laptop 3D boot
-animation (rotating wireframe, scannable QR at the end pointing
-at http://<ip>:8734/). On an isolated worktree branch --
-inspect + cherry-pick when you're ready. Does not affect the
-main agent/lapee branch.
+Cherry-picked the sub-agent's retro-3D laptop boot animation
+(commit `5abd17091` on agent/lapee). The morning image now
+boots into a rotating ASCII wireframe clamshell laptop that
+settles face-on once HB answers `/info' and reveals a scannable
+QR code on its projected screen panel pointing at
+`http://<node-ip>:8734/'. On-disk confirmation:
+
+  /usr/bin/qrencode                    # 40 KB binary
+  /usr/local/bin/lapee-splash          # awk-based 3D engine
+  /lib/x86_64-linux-gnu/libqrencode.so.4
+  /lib/x86_64-linux-gnu/libpng16.so.16
+
+all baked into the signed UKI. Cmdline escape hatch
+`lapee.nosplash=1' falls back to the static splash if you want
+clean boot-log scroll instead.
 
 **Two commands on your Mac, one re-flash, one hash re-enrol in
 BIOS, one curl, one interpret. That's it.**
 
 ### Step 1 -- final guest artefact (already built overnight)
 
-Everything is pre-built + signed on disk at 2026-04-25 02:36
-(post batches 27-31; includes P4 HMAC sessions + P5-ext hashpath
-continuity + P2 TME at init + P3 AK Endorsement + lockdown=
-confidentiality). No command needed unless you want to audit:
+Everything is pre-built + signed on disk at 2026-04-25 03:52
+(post batches 27-32 + ASCII-splash merge; includes the retro-3D
+laptop boot animation + scannable QR code overlay, P4 HMAC
+sessions, P5-ext hashpath continuity, P2 TME at init, P3 AK
+Endorsement, lockdown=confidentiality, plus the wallet<->TPM
+root-of-trust verifier binding). No command needed unless you
+want to audit:
 
 ```bash
 cd /Users/sam/src/hyperbeam/.claude/worktrees/lapee/lapee-baremetal
 
 # Audit: fingerprints should match exactly
 shasum -a 256 work/lapee.signed.efi
-#   ad067f589223167f4d6b0d65b8660d7a050aef38992c19a14a6a3a6298d932a8
+#   a357c23d6ed4b6a6defbcf08c47447fe510bc2ae8b42444d504f7bf7cedd867f
 shasum -a 256 work/lapee-usb.img
-#   fef23f66df230fae7c0254bd2bcf241966e26d59500e5786c7f9575992e764ce
+#   c1c4d07abe94867c1adb126698a837f0c67ded483f1e2189315123aec84aa5b3
 
 # Audit: verifies against your enrolled db.crt
 ./scripts/sb-setup.sh check
@@ -202,8 +215,9 @@ list triages cleanly:
 | 30 | `d2ef2bc1f` | paper P5-ext AO-Core hashpath continuity: TCG event log tip extended into PCR 15 + verifier check |
 | 31 | `8a8569825` | paper P4 HMAC + AES-128-CFB sessions on every sensitive NIF op + `tpm-session-mode' envelope field + verifier finding |
 | 32 | `b2af30d4d` | wallet <-> TPM end-to-end binding verifier (recompute hb_message:id, check wallet in node-message, check PCR-15 extend) -- closes the root-of-trust loop |
+| ASCII | `5abd17091` | retro-3D laptop boot animation + scannable QR payoff (cherry-picked from sub-agent worktree, initramfs +170 KB) |
 
-All six pushed to Permagit (arweave://hyperbeam). Full-paper-
+All seven pushed to Permagit (arweave://hyperbeam). Full-paper-
 compliance synthetic envelope (all signals green -- six now,
 including wallet-tpm-binding-verified) verifies as `trusted
 (100)' under the batch-27-32 interpreter; evidence in
