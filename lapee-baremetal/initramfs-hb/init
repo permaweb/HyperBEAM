@@ -136,15 +136,33 @@ check_tme_sme() {
 }
 check_tme_sme
 
-# v1.2: Boot splash -- centred HyperBEAM ASCII art + a status
-# line that starts as "booting..." and gets replaced when we
-# know more. Each visibility stage writes a fresh splash so
-# the audience always sees *something* happening. Final status
-# lands when an interface gets a DHCP lease
-# (`lapee-dhcp-hook' -> `http://<ip>:8734').
+# Boot splash -- retro 3D ASCII laptop animation.
+#
+# lapee-splash runs as a long-lived daemon on /dev/console, reading
+# phase updates from /run/lapee/splash.state. The phase flow is:
+#
+#   init start                  -> phase=boot        (rotating laptop)
+#   init after NIC enumeration  -> phase=net-up or net-none
+#   init entering HB wait       -> phase=hb-wait
+#   udhcpc bound (dhcp-hook)    -> phase=hb-wait + ip=<ip>
+#                                   (pre-renders QR matrix to disk)
+#   init /info responds         -> phase=qr + ip=<ip>
+#                                   (laptop settles face-on, QR appears
+#                                    on its projected screen panel)
+#
+# The animation is cosmetic. On kernel cmdline `lapee.nosplash=1',
+# the daemon short-circuits to a single static splash and stays
+# idle (measured by the cmdline -> the operator is opting out of
+# the animation for boot-log visibility). Any render failure
+# (missing awk, unreadable tty, short console) degrades silently;
+# init proceeds regardless.
 if [ -x /usr/local/bin/lapee-splash ]; then
-    /usr/local/bin/lapee-splash "booting..." \
-        > /dev/console 2>/dev/null || true
+    /usr/local/bin/lapee-splash set boot 2>/dev/null || true
+    /usr/local/bin/lapee-splash daemon \
+        > /dev/console 2>/dev/null </dev/null &
+    SPLASH_PID=$!
+    # On iron this launch takes < 50 ms -- awk warmup + one frame.
+    trace "splash: daemon PID=$SPLASH_PID"
 fi
 echo "[init] kernel=$(uname -r)"
 
@@ -456,13 +474,9 @@ fi
 # interfaces; plug in an Ethernet cable").
 if [ -x /usr/local/bin/lapee-splash ]; then
     if [ "$NIC_COUNT" -eq 0 ]; then
-        /usr/local/bin/lapee-splash \
-            "no network interfaces found -- plug in Ethernet" \
-            > /dev/console 2>/dev/null || true
+        /usr/local/bin/lapee-splash set net-none 2>/dev/null || true
     else
-        /usr/local/bin/lapee-splash \
-            "$NIC_COUNT interface(s) up; starting HyperBEAM..." \
-            > /dev/console 2>/dev/null || true
+        /usr/local/bin/lapee-splash set net-up 2>/dev/null || true
     fi
 fi
 
@@ -634,9 +648,7 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
     # longer under Rosetta). Without this the screen is frozen
     # on the initial splash for the whole wait.
     if [ -x /usr/local/bin/lapee-splash ]; then
-        /usr/local/bin/lapee-splash \
-            "waiting for HyperBEAM..." \
-            > /dev/console 2>/dev/null || true
+        /usr/local/bin/lapee-splash set hb-wait 2>/dev/null || true
     fi
     ready=0
     for i in $(seq 1 120); do
@@ -646,6 +658,20 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                 http://127.0.0.1:8734/~tpm2@2.0a/info \
                 2>/dev/null && [ -s "$PROBE_OUT" ]; then
             trace "writeback: HB responded to /info after ~$((i*3))s"
+            # HB is live: flip the splash to qr phase so the
+            # laptop animation settles face-on and the QR appears
+            # on its screen. The IP was stashed by lapee-dhcp-hook
+            # when DHCP bound; we re-send it here for idempotence
+            # in case the hook raced (e.g. DHCP came in after HB
+            # was already up, rare on real hardware but possible).
+            if [ -x /usr/local/bin/lapee-splash ] && \
+               [ -s /run/lapee/primary-net ]; then
+                _ip=$(sed -n 's/^ip=//p' /run/lapee/primary-net)
+                if [ -n "$_ip" ]; then
+                    /usr/local/bin/lapee-splash set qr "ip=$_ip" \
+                        2>/dev/null || true
+                fi
+            fi
             ready=1; break
         fi
         # Check whether HB is even still alive -- if it exited,
@@ -669,9 +695,13 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
         fi
         if [ $((i % 10)) -eq 0 ] && \
            [ -x /usr/local/bin/lapee-splash ]; then
-            /usr/local/bin/lapee-splash \
-                "waiting for HyperBEAM... (~$((i*2))s)" \
-                > /dev/console 2>/dev/null || true
+            # Keep the splash alive -- the daemon animation is
+            # already rotating; we just refresh the footer with
+            # an elapsed-time counter so operators know we're
+            # still waiting on HB (not hung).
+            /usr/local/bin/lapee-splash set hb-wait \
+                msg="waiting for HyperBEAM... (~$((i*2))s)" \
+                2>/dev/null || true
         fi
         sleep 2
     done

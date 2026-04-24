@@ -31,8 +31,15 @@ docker run -d --platform=linux/amd64 --name lapee-hb-mini \
 docker exec -i lapee-hb-mini bash <<'SH_APT'
 set -e
 apt-get update -qq 2>&1 | tail -2
+# `qrencode' is for the lapee-splash boot animation: after HB is
+# serving /info, the splash daemon overlays a scannable QR on the
+# laptop's projected screen panel, pointing at the node URL. The
+# package ships a ~40 KB binary plus a libqrencode.so (~100 KB);
+# the shared lib depends only on libc.  Together this is ~150 KB
+# of initramfs bloat, well under the 300 KB budget the animation
+# was scoped for.
 apt-get install -y -qq busybox-static iproute2 wpasupplicant iw \
-        linux-firmware zstd 2>&1 | tail -2
+        linux-firmware zstd qrencode 2>&1 | tail -2
 SH_APT
 
 # Copy HB release into the container.
@@ -87,6 +94,16 @@ for bin in /usr/sbin/iw /sbin/iw; do
     [ -x "$bin" ] && cp "$bin" /ramfs/sbin/iw && break
 done
 
+# qrencode -- the lapee-splash boot animation uses it to generate
+# the QR code overlaid on the retro 3D laptop's screen panel once
+# HB is serving /info. The CLI is a thin wrapper around libqrencode;
+# we ship both binary + shared lib + pull libpng (transitive dep).
+# Harvested via `ldd' at line ~155 below along with the rest of the
+# dynamic libraries.
+for bin in /usr/bin/qrencode /usr/local/bin/qrencode; do
+    [ -x "$bin" ] && cp "$bin" /ramfs/usr/bin/qrencode && break
+done
+
 # WiFi firmware. Ubuntu 24.04 ships all firmware zstd-compressed as
 # `*.ucode.zst' under /lib/firmware/. Our kernel doesn't enable
 # CONFIG_FW_LOADER_COMPRESS_ZSTD (would need another rebuild), so
@@ -136,7 +153,8 @@ echo "--- firmware shipped ---"
 ls -la /ramfs/lib/firmware/ /ramfs/lib/firmware/mediatek/ 2>/dev/null
 du -sh /ramfs/lib/firmware/ 2>/dev/null
 
-# Shared libraries needed by HB (OTP + libtss2 + libcrypto + libssl + ...).
+# Shared libraries needed by HB (OTP + libtss2 + libcrypto + libssl + ...)
+# and the boot-splash `qrencode' (libqrencode + libpng + libz).
 LIB=/ramfs/lib/x86_64-linux-gnu
 for lib in libc.so.6 libc_malloc_debug.so.0 \
            libcrypto.so.3 libssl.so.3 \
@@ -149,9 +167,27 @@ for lib in libc.so.6 libc_malloc_debug.so.0 \
            libnl-3.so.200 libnl-genl-3.so.200 libnl-route-3.so.200 \
            libdbus-1.so.3 libpcsclite.so.1 \
            libgcrypt.so.20 libgpg-error.so.0 liblzma.so.5 libzstd.so.1 \
-           liblz4.so.1 libsystemd.so.0; do
+           liblz4.so.1 libsystemd.so.0 \
+           libqrencode.so.4 libpng16.so.16; do
     if [ -e /lib/x86_64-linux-gnu/$lib ]; then cp -L /lib/x86_64-linux-gnu/$lib $LIB/; fi
+    if [ ! -e $LIB/$lib ] && [ -e /usr/lib/x86_64-linux-gnu/$lib ]; then
+        cp -L /usr/lib/x86_64-linux-gnu/$lib $LIB/
+    fi
 done
+# ldd-harvest fallback for qrencode + its deps: if libqrencode.so.4
+# landed under /usr/lib/x86_64-linux-gnu instead of /lib/, the loop
+# above already caught it. Walk ldd to pick up any transitive lib
+# we missed (e.g. libpng versions drift between Ubuntu releases).
+if [ -x /ramfs/usr/bin/qrencode ]; then
+    ldd /ramfs/usr/bin/qrencode 2>/dev/null \
+        | awk '/=> \//{print $3}' \
+        | while read -r sofile; do
+            [ -f "$sofile" ] || continue
+            base=$(basename "$sofile")
+            [ -e "$LIB/$base" ] && continue
+            cp -L "$sofile" "$LIB/$base" 2>/dev/null || true
+          done
+fi
 cp -L /usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0 $LIB/ 2>/dev/null || true
 cp -L /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 $LIB/
 ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /ramfs/lib64/ld-linux-x86-64.so.2
