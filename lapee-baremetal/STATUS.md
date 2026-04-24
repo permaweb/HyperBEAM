@@ -1,6 +1,111 @@
 # LapEE bare-metal -- live status
 
-## TL;DR (morning of 2026-04-23)
+## TL;DR (morning of 2026-04-24)
+
+**Ship state: READY + SB-enrolled.** 23 code batches, 17
+reviewer passes (two of them tonight against batches 17-21 and
+22-24), no open CRITICAL/HIGH findings. Head:
+`4d3a756b8` (batch 25, .cer BIOS-UI enrolment files).
+
+**Delta vs. 2026-04-23 TL;DR below (the overnight 17 -> 25 run):**
+
+| batch | SHA | landed                                                    |
+|-------|-----|-----------------------------------------------------------|
+| 17    | `7f0d3d7e8` | WiFi via ESP-file + simpledrm + diag logs      |
+| 18    | `514db388f` | Repo cleanup (-10.6k LoC of pre-v1.2 legacy)   |
+| 19    | `7550fd2e3` | SB tooling via lapee-tools container + anchored cmdline regex |
+| 20    | `b9e7c740c` | Reviewer pass 16 surgical fixes: SSID redact, NUL detect, tpm-interpret removed from guest preload, HARDENING.md updated, PSK comment |
+| 21    | `20b44ad70` | Kernel: USB_NET_RNDIS_HOST + CFG80211_WEXT dropped |
+| 22    | `ddb7a5949` | Reviewer pass 17 fixes: wpa.log gated, cmdline_flag_set helper, gitignore reorder, doc drift, check label |
+| 23    | `78e65109f` | Single-stick SB enrolment (.auth on boot ESP)  |
+| 24    | `0f5a08ca7` | wifi.conf flow (gitignore, CMDLINE lapee.wifi=enabled, hb-wifi-apply) |
+| 25    | `4d3a756b8` | .cer files alongside .auth for BIOS UI enrolment |
+
+**Signed USB image on disk (ready to flash):**
+
+```
+work/lapee-usb.img               1.0 GB, signed UKI embedded
+                                 sha256 44cb5b30... (kernel)
+                                 sha256 86d2efad... (UKI PE; pre-.cer)
+work/lapee.signed.efi            72.7 MB (sbverify OK)
+secureboot/{PK,KEK,db}.{key,crt} operator-owned, .gitignored
+secureboot/enrol/
+  {PK,KEK,db}.auth               PKCS7-authenticated variable updates
+  {PK,KEK,db}.cer                X509 DER for BIOS UI enrolment
+```
+
+**ESP contents after flash:**
+
+```
+/EFI/Boot/BootX64.efi            signed UKI (operator db.key)
+/EFI/boot/wifi.conf              "Codi\nPin3apple!\n" (unmeasured)
+/PK.auth /KEK.auth /db.auth      PKCS7-authenticated (efi-updatevar)
+/PK.cer  /KEK.cer  /db.cer       X509 DER (BIOS file browser)
+/README.TXT                      friendly marker
+```
+
+**UKI cmdline (measured into PCR 4):**
+
+```
+console=tty0 console=ttyS0 earlyprintk=efi,keep keep_bootcon
+fbcon=nodefer loglevel=4 panic=10 rdinit=/init
+LAPEE_WRITEBACK=1 lapee.wifi=enabled
+```
+
+**Demo flow (5 steps + 3 BIOS clicks):**
+
+```bash
+cd lapee-baremetal
+diskutil list                               # find /dev/diskN
+make hb-usb-write DEV=/dev/diskN            # flash signed image
+# On Framework: F2 -> Security -> Set Supervisor Password (if not)
+#             -> Secure Boot -> Erase All Secure Boot Settings
+#             -> Administer Secure Boot Keys
+#             -> Enroll db.cer  (format: X509)
+#             -> Enroll KEK.cer (format: X509)
+#             -> Enroll PK.cer  (format: X509; last -- activates SB)
+# Save + exit. Machine auto-boots signed UKI; WiFi associates
+# to Codi via wifi.conf; HB emerges as PID 2; writeback emits
+# /Volumes/LAPEE_ESP/attestation-latest.json on power cycle.
+
+# On Mac:
+./scripts/interpret-local-capture.sh \
+    --label 'Framework 13 v1.2.2 SB-on' \
+    /Volumes/LAPEE_ESP/attestation-latest.json
+```
+
+**Expected attestation delta vs. the 2026-04-23 envelope:**
+
+| signal                          | pre-SB     | post-SB expected |
+|---------------------------------|------------|-------------------|
+| secure-boot-enabled             | false      | **true**          |
+| sb-policy-setup-mode            | (critical) | (ok -- setup mode exited) |
+| sb-policy-no-dbx                | warn       | warn (unchanged)  |
+| pcr-7 (SB policy)               | non-zero   | non-zero, different value |
+| UKI identity chain              | unsigned   | **signed by operator db.key** |
+| ak-pubkey-extend-verified       | true       | true              |
+| quote-signature-verified        | true       | true              |
+| ek-chain-valid                  | true       | true              |
+| tme-enabled                     | true       | true              |
+| freshness-safe-first-boot       | warn       | warn (first boot after clear) |
+| verdict                         | untrusted  | **attested-with-warnings** (SB off warnings flip to ok; freshness-first-boot remains) |
+
+**Reviewer-pass history (overnight):**
+
+- **Pass 16** (against `5147467..0f5a08c7`, post-batch-17). 17
+  findings: 1 CRITICAL (missing Dockerfile.tools), 4 HIGH, 5
+  MEDIUM, 7 LOW/NIT. All addressed in batch 19 + 20 + 21.
+- **Pass 17** (against `7f0d3d7e..20b44ad7`, post-batch-21). 5
+  findings: 0 CRITICAL, 2 MEDIUM (M1 wpa.log leak, M2 .gitignore
+  dead), 3 LOW/NIT. All addressed in batch 22.
+
+No review pass scheduled for the batch 23-25 work because those
+are pure UX plumbing (single-stick, wifi.conf, .cer format) with
+no new security boundary. Landed + tested end-to-end on disk.
+
+---
+
+### Prior TL;DR (morning of 2026-04-23, preserved for reference)
 
 **Ship state: READY.** 15 code batches, 13 reviewer passes,
 235/235 eunit, QEMU+OVMF+swtpm smoke PASSED end-to-end, live
