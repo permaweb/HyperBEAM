@@ -411,6 +411,12 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     }
                 }
             ),
+            % Optionally fire an async `/push' for the slot we just cached.
+            % Only fresh computes reach this branch; cache hits in `compute/3'
+            % short-circuit before we get here, so each slot is push-triggered
+            % at most once per node lifetime regardless of how many times the
+            % caller polls `/now' or `/compute'.
+            maybe_trigger_push(State, Slot, InitReq, Opts),
             {ok, ProcStateWithSnapshot};
         {error, Error} ->
             % An error occurred while computing the slot. Return the details.
@@ -451,6 +457,69 @@ prepare_next_slot(ProcID, State, RawReq, Opts) ->
     % Unset the previous results.
     PreparedState = hb_ao:set(State, #{ <<"results">> => unset }, Opts),
     {ok, Slot, PreparedState, Req}.
+
+%% @doc Fire a `~push@1.0/push' for the slot we just computed, iff the
+%% originating request carries a truthy `push' key. The push is invoked
+%% from a freshly-spawned process so a slow downstream chain cannot stall
+%% the compute path that produced this slot.
+%%
+%% `push' values:
+%%   `true' / `<<"true">>'  - push, no `max-depth' set (unbounded recursion).
+%%   non-negative integer N - push with `max-depth = N', so the fan-out
+%%                            unwinds at most N levels deep. See `dev_push'
+%%                            for `max-depth = 0' semantics: each outbox
+%%                            entry is still scheduled on its target, but
+%%                            the recursive `/push' is skipped.
+%%   anything else (or absent) - silent no-op.
+maybe_trigger_push(Process, Slot, Req, Opts) ->
+    case hb_maps:get(<<"push">>, Req, undefined, Opts) of
+        true        -> dispatch_push(Process, Slot, undefined, Req, Opts);
+        <<"true">>  -> dispatch_push(Process, Slot, undefined, Req, Opts);
+        N when is_integer(N), N >= 0 ->
+            dispatch_push(Process, Slot, N, Req, Opts);
+        Bin when is_binary(Bin) ->
+            try hb_util:int(Bin) of
+                N when is_integer(N), N >= 0 ->
+                    dispatch_push(Process, Slot, N, Req, Opts);
+                _ -> ok
+            catch _:_ -> ok
+            end;
+        _ -> ok
+    end.
+
+%% @doc Build the inner `~push@1.0/push' request for `Slot' and call
+%% `dev_push:push/3' from a freshly-spawned process. Inherits the
+%% originating request's payload keys (e.g. `result-depth', `async')
+%% so the caller's preference flows through, replaces `path'/`slot',
+%% and -- when bounded -- sets `max-depth'. The default sync mode
+%% propagates back-pressure to the compute path: a slow downstream
+%% chain throttles further hook fires rather than queueing unbounded
+%% spawns under load.
+dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
+    BaseReq =
+        (hb_maps:without([<<"push">>, <<"path">>, <<"slot">>], Req, Opts))#{
+            <<"path">> => <<"push">>,
+            <<"slot">> => Slot
+        },
+    PushReq =
+        case MaxDepth of
+            undefined -> BaseReq;
+            N -> BaseReq#{ <<"max-depth">> => N }
+        end,
+    %% Extract the canonical process spec from the live state so `dev_push:push'
+    %% ID computation lands on the same cache key that `store_result' just
+    %% wrote under -- passing the live state directly hashes to a different
+    %% key and sends the downstream read into a re-compute loop.
+    Spec = hb_maps:get(<<"process">>, Process, Process, Opts),
+    ?event(push,
+        {triggered_by_compute,
+            {slot, Slot},
+            {max_depth, MaxDepth}
+        },
+        Opts
+    ),
+    spawn(fun() -> dev_push:push(Spec, PushReq, Opts) end),
+    ok.
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
 %% key.
