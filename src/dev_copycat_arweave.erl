@@ -215,11 +215,13 @@ write_block_item_ids(Height, AchievedDepth, ItemIDs, Opts) ->
                 fun(D) ->
                     IDs = maps:get(D, ItemIDs, []),
                     Bin = encode_item_ids(IDs),
-                    hb_store:write(
+                    Result = hb_store:write(
                         Store,
                         block_items_path(Height, D),
                         Bin
-                    )
+                    ),
+                    erlang:garbage_collect(),
+                    Result
                 end,
                 lists:seq(1, MaxStoredDepth)
             ),
