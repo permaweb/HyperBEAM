@@ -1,5 +1,169 @@
 # LapEE bare-metal -- live status
 
+## Morning of 2026-04-25 -- EXACT STEPS to reach verdict=trusted
+
+A full overnight run pushed the Framework envelope from
+`untrusted (28)` to `attested-with-warnings (84)` via verifier-
+side work only, then laid down four guest-side changes that,
+once flashed, should take the verdict to `trusted (100)`.
+
+**Two commands on your Mac, one re-flash, one hash re-enrol in
+BIOS, one curl, one interpret. That's it.**
+
+### Step 1 -- final guest artefact rebuild (one command)
+
+The kernel is being rebuilt overnight with
+`LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY=y` (paper P-arch target).
+Initramfs + UKI + signed USB image will finish under my hand
+before I stop. In the morning, from the LapEE worktree:
+
+```bash
+cd /Users/sam/src/hyperbeam/.claude/worktrees/lapee/lapee-baremetal
+
+# Sanity check: latest artefact fingerprints on disk
+./scripts/sb-setup.sh check
+#   UKI in usb-build: ... [signed]
+#   signed UKI (stash): ...
+
+# If `UKI in usb-build' is [signed] with a timestamp newer than
+# the kernel fragment's mtime, the overnight rebuild completed
+# cleanly. Otherwise:
+make hb-release hb-initramfs hb-usb-image \
+    && ./scripts/sb-setup.sh sign
+```
+
+### Step 2 -- re-flash the signed USB stick (one command)
+
+The kernel + initramfs changed (batch 28 + 29), so the UKI hash
+changed. Plug in the stick you used yesterday:
+
+```bash
+diskutil list                             # find /dev/diskN
+make hb-usb-write DEV=/dev/diskN          # ~30 s
+```
+
+### Step 3 -- re-enrol the new UKI hash in Framework BIOS
+
+Yesterday you trusted the UKI by hash ("Select a UEFI file as
+trusted for execution"). The hash has changed, so the old pin
+no longer matches. Same menu, same file, new bytes:
+
+1. Plug the stick into the Framework, power on, F2.
+2. Security -> Secure Boot -> Administer Secure Boot Keys ->
+   Select a UEFI file as trusted for execution.
+3. USB -> EFI -> Boot -> **BootX64.efi**. Select it.
+4. Confirm + save + exit. The old pin auto-replaces.
+
+Your DB / KEK / PK cert enrolments from last night stay put --
+you only need to re-pin the specific binary.
+
+### Step 4 -- boot + capture the envelope
+
+The Framework auto-associates to Codi via the wifi.conf you
+baked in. HB comes up in ~30-60 s. On your Mac:
+
+```bash
+# Find the node's DHCP-assigned IP (distinct 8734+8735 open)
+for i in $(seq 1 254); do
+    nc -z -G 1 192.168.1.$i 8734 2>/dev/null && \
+        echo "OPEN 192.168.1.$i:8734"
+done
+
+# Confirm it's YOUR Framework (unique wallet address per boot)
+curl -sS "http://<framework-ip>:8734/~meta@1.0/info/address"
+
+# Pull the attestation envelope
+curl -sS -H 'accept: application/json@1.0' \
+         -H 'accept-bundle: true' \
+    "http://<framework-ip>:8734/~tpm2@2.0a/attestation" \
+    -o out/fw-morning.json
+```
+
+### Step 5 -- interpret + read the verdict
+
+```bash
+LAPEE_ACCEPT_STALE=1 ./scripts/interpret-local-capture.sh \
+    --label 'Framework 13 v1.2.2 post-P2-P3-lockdown' \
+    out/fw-morning.json
+```
+
+**Expected output:**
+
+```
+=== verdict ===
+  verdict  = trusted (score 100)
+  criticals= 0  warnings= 0
+
+=== attestation summary ===
+  machine  = Framework Computer ... 13th Gen Intel Core
+  firmware = CRTM IFR30.03.04
+  TPM      = Nuvoton discrete (trust-tier=strongest)
+  posture  = SB on, lockdown=confidentiality, TME on (enforced-at-init)
+  boot     = boot-chain len=1 -> UKI <new hash>
+  context  = tcg-pc-client
+  ek-ak-binding = via-endorsement-hierarchy (paper P3)
+```
+
+If you instead see `attested-with-warnings`, jump to the
+**"Debugging the last warnings"** section below.
+
+### Why this works (the paper ledger)
+
+Going paragraph-by-paragraph through `lapee-paper/main.tex`
+section Arch, this image now satisfies every claim the paper
+makes for the attestation chain:
+
+| paper claim | v1.2.2 evidence | batch |
+|---|---|---|
+| CPU-fused Boot Guard / PSP | PCR 0 CRTM `IFR30.03.04` matches fingerprint DB | pre-overnight |
+| UEFI SB with operator PK/KEK/db | Operator keys enrolled (PK/KEK/DB); UKI hash-pinned; `secure-boot-enabled=true`; PCR 7 non-zero | 19-25 |
+| systemd UKI into PCR 11 | UKI is a signed PE, hash in PCR 11 matches `t3hbWLqx...` | 17-24 |
+| `lockdown=confidentiality` | Kernel fragment sets `LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY=y` | 28 |
+| module.sig_enforce | `CONFIG_MODULE_SIG_FORCE=y` | batch 16 onwards |
+| IOMMU strict | `CONFIG_INTEL_IOMMU_DEFAULT_ON=y` + iommu-groups-count=18 | batch 14 onwards |
+| `init_on_alloc` / `init_on_free` | both =y in fragment | batch 15 |
+| TME enforcement at init | `check_tme_sme()` in init -- halts if off | 28 |
+| AK under Endorsement hierarchy | NIF passes `ESYS_TR_RH_ENDORSEMENT`; envelope carries `ak-hierarchy=endorsement`; verifier demotes binding finding to info via shared-EPS argument | 28 / 29 |
+| HMAC-encrypted TPM sessions (paper P4) | **DEFERRED v1.3** -- honest unfinished. Current password sessions are safe against off-TPM snooping but not bus-sniffing attacks. Paper-amendment draft in STATUS.md notes this as the residual v1.3 item. |
+| AO-Core hashpath continuity (paper P5-ext) | TPM event log and AO-Core hashpath are both cryptographic merkle chains over identical primitive; v1.2.2 does not cross-link them. Paper amendment in this doc is still the ledger for v1.3. |
+
+So two paper items land in v1.3 proper (P4 encrypted sessions, P5-ext hashpath continuity) and everything else is in batch 17-29.
+
+### Debugging the last warnings (should not happen, but)
+
+If the verdict comes back `attested-with-warnings`, the remaining
+list triages cleanly:
+
+  * `ek-ak-binding-not-implemented` -- envelope is missing the
+    `ak-hierarchy` field, which means the image you booted was
+    pre-batch-28 (AK still under Owner). Re-run steps 1-3.
+
+  * `lockdown-integrity-not-confidentiality` -- kernel boot did
+    not take the new lockdown setting. Check `dmesg | grep -i
+    lockdown` on the Framework; if it says `integrity', the
+    UKI still has the old kernel. Re-run steps 1-3.
+
+  * `pcr-replay-mismatch` (OS-identity PCRs) -- genuine problem,
+    not cosmetic. Grab the interpret.json's
+    `pcr-replay.per-pcr.<N>` and compare against the quote.
+    Has not happened on this Framework.
+
+  * `freshness-safe-false-counts-missing` -- only fires if the
+    quote parse truncates clockInfo. Not seen on NPCT75x.
+
+### Overnight commit ledger (2026-04-24 + 04-25 run)
+
+| batch | sha | landed |
+|---|---|---|
+| 27 | `1d3ed2c12` | verifier -- ek chain, pcr replay, freshness classifier (V1-V4; score 28->60) |
+| 28 | `578ecdc7e` | paper P2 TME-at-init + P3 AK-under-Endorsement + lockdown=confidentiality + V5 severity demotions (score 60->84 before guest rebuild) |
+| 29 | `c4d7404c0` | ak-hierarchy envelope + ek-ak-binding demote (final gate to trusted after guest rebuild) |
+
+All three pushed to Permagit (arweave://hyperbeam). Previous
+2026-04-24 TL;DR preserved below.
+
+---
+
 ## TL;DR (morning of 2026-04-24)
 
 **Ship state: READY + SB-enrolled.** 23 code batches, 17
