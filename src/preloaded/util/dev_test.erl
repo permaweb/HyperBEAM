@@ -73,7 +73,7 @@ varied(#{ <<"x">> := X }, _Req, _Opts) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
--spec compute(#{ already_seen => list() }, #{ slot := integer() }, map()) -> {ok, map()}.
+-spec compute(#{ already_seen => integer() }, #{ slot := integer() }, map()) -> {ok, map()}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -91,7 +91,7 @@ compute(Base, Req, Opts) ->
         )
     }.
 
--spec compute_nested(#{ already_seen => list() }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
+-spec compute_nested(#{ already_seen => integer() }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
 compute_nested(Base, Req, Opts) ->
         AssignmentSlot = hb_ao:get(<<"outer/slot">>, Req, Opts),
         Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -109,10 +109,13 @@ compute_nested(Base, Req, Opts) ->
             )
         }.
 
--spec compute_all(any(), #{ slot := integer() }, map()) -> {ok, map()}.
+-spec compute_all(#{ a => integer(), '_' => '_' }, #{ slot := integer(), '_' => '_' }, map()) -> {ok, map()}.
 compute_all(Base, Req, Opts) ->
     {ok, Base#{ <<"all">> => <<"done">> }}.
 
+-spec compute_all_nested(#{ nested := #{ a := integer() }, '_' => '_' }, #{ slot := integer(), '_' => '_' }, map()) -> {ok, map()}.
+compute_all_nested(Base, Req, Opts) ->
+    {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
