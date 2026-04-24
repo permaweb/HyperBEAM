@@ -196,6 +196,15 @@ if [[ -n "$STAGED_AUTH" ]]; then
     echo ">> staging SB enrolment bundle: $STAGED_AUTH"
 fi
 
+# Stage host-side wifi.conf if present. Lands at /EFI/boot/
+# wifi.conf in the ESP. Credentials are NOT measured (the ESP
+# partition is not part of the UKI). Parser in the init script
+# enforces size bounds, charset, and NUL-freeness.
+if [[ -f "${LAPEE_ROOT}/wifi.conf" ]]; then
+    cp "${LAPEE_ROOT}/wifi.conf" "$BUILD_DIR/wifi.conf"
+    echo ">> staging wifi.conf ($(wc -c <"${LAPEE_ROOT}/wifi.conf" | tr -d ' ') bytes)"
+fi
+
 # ---- step 2: build the disk image inside the tools container --
 
 IMG_IN_WORK="usb-build/disk.img"
@@ -255,6 +264,14 @@ docker run --rm --platform=linux/amd64 \
                     /work/usb-build/\$_a ::/\$_a
             fi
         done
+
+        # wifi.conf at /EFI/boot/wifi.conf if staged. The signed
+        # UKI cmdline carries lapee.wifi=enabled -- the capability
+        # flag -- but the credentials themselves are unmeasured.
+        if [[ -f /work/usb-build/wifi.conf ]]; then
+            mcopy -i /work/usb-build/esp.img \\
+                /work/usb-build/wifi.conf ::/EFI/boot/wifi.conf
+        fi
 
         # Seal the ESP back into the disk image.
         dd if=/work/usb-build/esp.img of=/work/${IMG_IN_WORK} \\

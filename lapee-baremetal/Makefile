@@ -49,6 +49,15 @@
 #                       validation pass before writing to real
 #                       hardware. ~5 min.
 #
+#   make hb-wifi-apply  inject host-side `wifi.conf' (two lines:
+#                       SSID / PSK) into the ESP of the currently-
+#                       built work/lapee-usb.img at /EFI/boot/
+#                       wifi.conf. Credentials are NOT measured
+#                       (wifi.conf is not part of the signed UKI);
+#                       re-run freely to change networks without
+#                       re-signing. File lives at wifi.conf in
+#                       this directory and is .gitignored.
+#
 #   make hb-cross-node-verify
 #                       start a verifier HB on the Mac, have
 #                       it call /~tpm-interpret@1.0/verify-peer
@@ -64,7 +73,7 @@ DOCKER_AMD64 := docker run --rm --platform=linux/amd64
 .PHONY: help builders \
         buildroot buildroot-shell buildroot-clean \
         hb-release hb-initramfs hb-usb-image hb-usb-write \
-        hb-usb-qemu hb-cross-node-verify clean
+        hb-usb-qemu hb-wifi-apply hb-cross-node-verify clean
 
 help:
 	@awk '/^# =+$$/{flag=!flag;if(!flag)exit;next} \
@@ -119,11 +128,16 @@ OUT        ?= work/lapee-usb.img
 # Default cmdline (v1.2.2). Preserves the EFI-stub framebuffer into
 # simpledrm + fbcon on AMD Ryzen / Intel Alder-Lake-P where efifb
 # alone silently fails to bind, keeps the kernel log visible at
-# loglevel=4 (warnings and above), and wires init + attestation
-# writeback. `lapee.wifi=enabled' is off by default; add it at
-# flash time when WiFi is wanted.
+# loglevel=4 (warnings and above), wires init + attestation
+# writeback, and opens the WiFi capability gate. `lapee.wifi=
+# enabled' measured into PCR 4 via the UKI is the PUBLIC signal
+# that the 802.11 stack is allowed to run; the PSK never touches
+# the cmdline (comes from a strictly-validated file on the ESP --
+# see `make hb-wifi-apply' / docs). Operators who want WiFi off
+# even as a possibility can override CMDLINE to drop the token.
 CMDLINE    ?= console=tty0 console=ttyS0 earlyprintk=efi,keep keep_bootcon \
-              fbcon=nodefer loglevel=4 panic=10 rdinit=/init LAPEE_WRITEBACK=1
+              fbcon=nodefer loglevel=4 panic=10 rdinit=/init \
+              LAPEE_WRITEBACK=1 lapee.wifi=enabled
 
 hb-usb-image:
 	./scripts/build-usb-image.sh \
@@ -150,6 +164,41 @@ hb-usb-write:
 
 hb-usb-qemu:
 	./scripts/boot-usb-image.sh
+
+# ------------------------------------------------------------
+# Inject a host-side wifi.conf into the ESP of the currently-
+# built lapee-usb.img WITHOUT re-signing. The UKI stays the
+# same (wifi.conf isn't inside it); only the ESP data changes.
+# Fast: ~5 s. Handy for changing networks between boots of the
+# same signed image.
+# ------------------------------------------------------------
+
+hb-wifi-apply:
+	@test -f wifi.conf || { \
+	    echo "wifi.conf missing. Create it with EXACTLY two lines:"; \
+	    echo "  <SSID>"; echo "  <PSK>"; \
+	    echo "(and nothing else). See README.md."; exit 1; }
+	@test -f work/lapee-usb.img || { \
+	    echo "work/lapee-usb.img missing. Run: make hb-usb-image"; \
+	    exit 1; }
+	docker run --rm --platform=linux/amd64 \
+	    -v $(LAPEE_ROOT):/w -w /w lapee-tools:latest \
+	    bash -euo pipefail -c '\
+	        START=$$(parted --script --machine /w/work/lapee-usb.img \
+	            unit s print | awk -F: "/^1:/ {gsub(\"s\",\"\",\$$2); print \$$2}"); \
+	        SECT=$$(parted --script --machine /w/work/lapee-usb.img \
+	            unit s print | awk -F: "/^1:/ {gsub(\"s\",\"\",\$$4); print \$$4}"); \
+	        dd if=/w/work/lapee-usb.img of=/tmp/esp.img \
+	            bs=512 skip=$$START count=$$SECT status=none; \
+	        mmd -i /tmp/esp.img -D s ::/EFI/boot 2>/dev/null || true; \
+	        mcopy -i /tmp/esp.img -o /w/wifi.conf ::/EFI/boot/wifi.conf; \
+	        dd if=/tmp/esp.img of=/w/work/lapee-usb.img \
+	            bs=512 seek=$$START count=$$SECT \
+	            conv=notrunc status=none; \
+	        echo ">> ESP /EFI/boot/ after apply:"; \
+	        mdir -i /tmp/esp.img ::/EFI/boot/ | tail -n +3'
+	@echo ">> wifi.conf applied to work/lapee-usb.img"
+	@echo "   flash with: make hb-usb-write DEV=/dev/diskN"
 
 # ------------------------------------------------------------
 # Cross-node verification.

@@ -16,6 +16,12 @@ out/local-capture/
 # sb-setup.sh writes operator Secure Boot keys here; never commit.
 /secureboot/
 
+# Operator WiFi credentials for the `make hb-wifi-apply' /
+# build-usb-image.sh auto-stage path. Never commit -- even if the
+# SSID is public, the PSK must never leave this host. The file is
+# operator-owned and per-machine; see README.md for the format.
+/wifi.conf
+
 # Misc.
 *.aux
 *.log
