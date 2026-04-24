@@ -5,7 +5,7 @@
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([secret_key_to_committer/1, remove_scheme_prefix/1]).
--export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
+-export([atom_to_key/1, key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
@@ -233,6 +233,10 @@ to_sorted_keys(Msg, Opts) when is_map(Msg) ->
     to_sorted_keys(hb_maps:keys(Msg, Opts), Opts);
 to_sorted_keys(Msg, _Opts) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
+
+%% @doc Convert an atom to its `binary-dashed-key`-equivalent form.
+atom_to_key(Atom) ->
+    binary:replace(hb_util:bin(Atom), <<"_">>, <<"-">>, [global]).
 
 %% @doc Convert keys in a map to atoms, lowering `-' to `_'.
 key_to_atom(Key) -> key_to_atom(Key, existing).
