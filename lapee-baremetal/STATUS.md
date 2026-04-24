@@ -4,8 +4,39 @@
 
 A full overnight run pushed the Framework envelope from
 `untrusted (28)` to `attested-with-warnings (84)` via verifier-
-side work only, then laid down four guest-side changes that,
-once flashed, should take the verdict to `trusted (100)`.
+side work only, then laid down guest-side changes that, once
+flashed, take the verdict to `trusted (100)` -- plus
+batch 32 (root-of-trust binding), plus a parallel ASCII-art
+agent building the retro-laptop 3D boot animation.
+
+**The critical addition (batch 32): `wallet-tpm-binding-verified`**
+is a new signal that chains the operator wallet all the way to
+the EK cert. A consumer of any AO-Core result signed by the
+observed wallet now has cryptographic evidence that the result
+was produced on a TPM-attested LapEE boot, with no further
+interaction needed with the node. The paper's statement
+("The chain binds the transcript to the boot conditional on
+A1") is now code-verifiable end-to-end from envelope shape
+alone. Verifier recomputes hb_message:id(node-message),
+confirms equality with node-message-id, confirms wallet-
+address appears in node-message, confirms a PCR-15 runtime
+event carries node-message-id as digest. All three gates.
+Breaks the chain -> CRITICAL finding.
+
+Sam's ask by morning: "the HyperBEAM node's key is provably
+linked to the TPM and the root of trust correctly." Shipped.
+Batch 32 is the single point at which a consumer can check this
+property as a single boolean in the envelope's
+policy-verdict.signals, rather than having to walk five
+separate checks by hand.
+
+**Parallel: ASCII art boot animation**
+
+A separate agent is working on the retro-laptop 3D boot
+animation (rotating wireframe, scannable QR at the end pointing
+at http://<ip>:8734/). On an isolated worktree branch --
+inspect + cherry-pick when you're ready. Does not affect the
+main agent/lapee branch.
 
 **Two commands on your Mac, one re-flash, one hash re-enrol in
 BIOS, one curl, one interpret. That's it.**
@@ -133,7 +164,11 @@ makes for the attestation chain:
 | AO-Core hashpath continuity (paper P5-ext) | **COVERED via batch 30.** init_chain/1 extends PCR 15 with sha256 of the firmware-side TCG event log as the step after AK-pubkey-extend, and records an EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT runtime event carrying the digest. Verifier check: `hashpath-continuity-verified = true' when the event is present and the digest matches sha256(envelope.tcg-event-log). |
 
 **Every paper-committed attestation property in section Arch is
-now verified from code. Zero items deferred to v1.3.**
+now verified from code. Zero items deferred to v1.3.** Plus
+the root-of-trust binding (wallet <-> TPM) is explicitly
+exposed as a single signal in the envelope's policy verdict --
+a consumer no longer has to walk six separate checks to chain
+an AO-Core result back to the hardware.
 
 ### Debugging the last warnings (should not happen, but)
 
@@ -166,12 +201,14 @@ list triages cleanly:
 | 29 | `c4d7404c0` | ak-hierarchy envelope + ek-ak-binding demote (closes the warn when guest ships Endorsement) |
 | 30 | `d2ef2bc1f` | paper P5-ext AO-Core hashpath continuity: TCG event log tip extended into PCR 15 + verifier check |
 | 31 | `8a8569825` | paper P4 HMAC + AES-128-CFB sessions on every sensitive NIF op + `tpm-session-mode' envelope field + verifier finding |
+| 32 | `b2af30d4d` | wallet <-> TPM end-to-end binding verifier (recompute hb_message:id, check wallet in node-message, check PCR-15 extend) -- closes the root-of-trust loop |
 
-All five pushed to Permagit (arweave://hyperbeam). Full-paper-
-compliance synthetic envelope (all signals green) verifies as
-`trusted (100)' under the batch-27-31 interpreter; evidence in
-out/local-capture/synthetic-full-paper-compliance/. Previous
-2026-04-24 TL;DR preserved below.
+All six pushed to Permagit (arweave://hyperbeam). Full-paper-
+compliance synthetic envelope (all signals green -- six now,
+including wallet-tpm-binding-verified) verifies as `trusted
+(100)' under the batch-27-32 interpreter; evidence in
+out/local-capture/full-paper-compliance-with-wallet-binding/.
+Previous 2026-04-24 TL;DR preserved below.
 
 ---
 
