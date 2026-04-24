@@ -132,7 +132,8 @@ mkdir -p /run/lapee /etc/lapee
 #   - PSK: 8-63 bytes. WPA2-PSK length. Safe-char set: printable
 #     ASCII excluding `\`, `"`, `$`, backtick, and control chars.
 #     These would break wpa_supplicant.conf's double-quoted
-#     string format.
+#     string format. Single-quote IS permitted (inside a double-
+#     quoted string it has no shell/config meaning).
 #
 # If the file has ANY deviation, init skips WiFi setup and logs
 # a specific reason via trace(). The PSK itself is NEVER echoed
@@ -169,11 +170,16 @@ parse_wifi_conf() {
         return 1
     fi
 
-    # Reject NUL bytes (busybox grep doesn't have -a/-I but -q on
-    # binary is fine as long as we're not reading content for
-    # interpretation).
-    if LC_ALL=C tr -d -c '\000' < "$_f" | head -c 1 \
-            | LC_ALL=C grep -q '\x00' 2>/dev/null; then
+    # Reject NUL bytes. Counting via wc -c is portable across
+    # busybox and GNU -- avoids relying on grep `\x00' escape
+    # support (which varies). `tr -d -c \\000' keeps only the
+    # NUL bytes from the file; a nonzero byte count means at
+    # least one NUL was present.
+    _nulcount=$(LC_ALL=C tr -d -c '\000' < "$_f" | wc -c | tr -d ' ')
+    case "$_nulcount" in
+        ''|*[!0-9]*) trace "wifi: NUL count failed"; return 1 ;;
+    esac
+    if [ "$_nulcount" -ne 0 ]; then
         trace "wifi: wifi.conf rejected: contains NUL"
         return 1
     fi
@@ -227,7 +233,12 @@ parse_wifi_conf() {
 
     WIFI_SSID="$_ssid"
     WIFI_PSK="$_psk"
-    trace "wifi: wifi.conf accepted: ssid=$_ssid (PSK accepted; redacted)"
+    # Redact SSID in traces -- it reaches /dev/kmsg + serial +
+    # lapee-hb-tail.log via the early boot path. Operators posting
+    # dmesg to support tickets should not be unknowingly leaking
+    # the network name. Full SSID goes into wpa_supplicant.conf
+    # only (chmod 600, never persisted to ESP).
+    trace "wifi: wifi.conf accepted (ssid len=${#_ssid}, PSK len=${#_psk}; both redacted)"
     return 0
 }
 
@@ -291,7 +302,7 @@ if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PSK" ] && \
     if [ -z "$WIFI_IFACE" ]; then
         trace "wifi: no wlan interface after 15s (card absent or driver probe failed)"
     else
-        trace "wifi: iface=$WIFI_IFACE bringing up; associating to '$WIFI_SSID'"
+        trace "wifi: iface=$WIFI_IFACE bringing up (SSID redacted)"
         ip link set "$WIFI_IFACE" up 2>/dev/null || true
         mkdir -p /var/run/wpa_supplicant
         # wpa_supplicant.conf -- strict double-quoted SSID + PSK
@@ -643,19 +654,28 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
                 if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
                     rm -f "$LINK"
                     cp "$OUT" "$LINK"
-                    # v1.2.2: persist the WiFi supplicant log
-                    # alongside the attestation so post-boot
-                    # diagnosis works without a serial console
-                    # (init tmpfs is gone after reboot; ESP
-                    # survives). Only written when LAPEE_TRACE=1
-                    # or when wpa_supplicant was invoked and
-                    # there's a log to preserve. Harmless if
-                    # neither is the case.
+                    # v1.2.2: diagnostic writeback.
+                    # - lapee-wpa.log: wpa_supplicant output,
+                    #   contains SSID + association state but
+                    #   never the PSK (wpa_supplicant doesn't
+                    #   log PSKs). Only copied when wpa was
+                    #   actually invoked.
+                    # - lapee-hb-tail.log: HB runtime log tail.
+                    #   Can contain peer URLs, request paths,
+                    #   node-message details. Operator may share
+                    #   the ESP for attestation verification, so
+                    #   gate this behind `LAPEE_TRACE=1' on
+                    #   cmdline (opt-in). HB crash diagnostics
+                    #   without LAPEE_TRACE still available via
+                    #   serial console.
                     [ -f /run/lapee/wpa.log ] && \
                         cp /run/lapee/wpa.log /mnt/esp/lapee-wpa.log 2>/dev/null
-                    [ -f /run/lapee/hb.log ] && \
+                    if grep -q 'LAPEE_TRACE=1' /proc/cmdline \
+                            2>/dev/null \
+                            && [ -f /run/lapee/hb.log ]; then
                         tail -c 65536 /run/lapee/hb.log \
                             > /mnt/esp/lapee-hb-tail.log 2>/dev/null
+                    fi
                     cat > /mnt/esp/README-VALIDATOR.txt <<RV
 LapEE attestation written on boot $STAMP.
 

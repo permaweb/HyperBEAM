@@ -14,13 +14,15 @@ out/*.srl
 out/local-capture/
 
 # Evidence bundles under out/evidence/ are kept; sub-paths that
-# churn per run are not.
+# churn per run are not. Explicit per-extension allow-lists so the
+# generic `*.log' rule below doesn't eat an evidence artefact.
 !out/evidence/
 !out/evidence/*.json
 !out/evidence/*.crt
 !out/evidence/*.flat
 !out/evidence/*.txt
 !out/evidence/*.md
+!out/evidence/*.log
 
 # sb-setup.sh writes operator Secure Boot keys here; never commit.
 /secureboot/

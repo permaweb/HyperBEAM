@@ -346,11 +346,17 @@ cat > /ramfs/etc/lapee/lapee.json <<'JSON'
         {"name": "simple-pay@1.0",   "module": "dev_simple_pay"},
         {"name": "stack@1.0",        "module": "dev_stack"},
         {"name": "structured@1.0",   "module": "dev_codec_structured"},
-        {"name": "tpm2@2.0a",        "module": "dev_tpm2"},
-        {"name": "tpm-interpret@1.0","module": "dev_tpm_interpret"}
+        {"name": "tpm2@2.0a",        "module": "dev_tpm2"}
     ]
 }
 JSON
+# Note: `tpm-interpret@1.0' is deliberately absent. The guest
+# PRODUCES attestation envelopes; it never interprets them. The
+# verifier Mac runs the interpret device. On top of being
+# runtime-unused, `priv/tpm-interpret/' (51 vendor root CAs +
+# firmware-version JSON DB) is stripped in the slim step at line
+# 224 above, so preloading dev_tpm_interpret on the guest would
+# risk an on_load crash if it ever tried to read that directory.
 
 # Our init.
 cp /init-hb /ramfs/init

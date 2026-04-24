@@ -42,31 +42,31 @@ Read from `work/linux.config.built`.
 `CONFIG_DM_VERITY`, `CONFIG_EFI_STUB`, `CONFIG_EFI_MIXED`.
 Attack-surface disabled: USB_HID, BT, SOUND, MEDIA_SUPPORT.
 
-### Missing or weaker than the LapEE posture wants
+### Hardening status (post-v1.2.2; verified against
+### `linux-m1-fragment.config' at 2026-04-23)
 
-| flag | current | target | reason |
-|---|---|---|---|
-| `FORTIFY_SOURCE` | off | **y** | compiler-level memcpy/strcpy bounds check |
-| `HARDENED_USERCOPY` | off | **y** | kernel ↔ userspace copies size/slab-validated |
-| `INIT_ON_ALLOC_DEFAULT_ON` | off | **y** | zero-on-alloc to kill use-before-init infoleaks |
-| `INIT_ON_FREE_DEFAULT_ON` | off | **y** | zero-on-free to kill use-after-free infoleaks |
-| `SLAB_FREELIST_HARDENED` | off | **y** | mitigates freelist-overwrite heap exploits |
-| `SLAB_FREELIST_RANDOM` | off | **y** | randomises slab alloc order |
-| `IO_STRICT_DEVMEM` | off | **y** | no unprivileged `/dev/mem` to device I/O |
-| `MODULE_SIG_FORCE` | off | **y** | signing is present but not enforced → unsigned modules can still load |
-| `KEXEC_SIG` | absent | **y** | signed-only kexec (prevents bootkit re-injection) |
-| `SECURITY_DMESG_RESTRICT` | off | **y** | hide kernel addresses from unpriv users |
-| `IMA_APPRAISE` + `INTEGRITY_TRUSTED_KEYRING` | off | **y** | IMA currently only *measures*; appraisal would actually block unsigned binaries |
-| `LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY` | off (integrity only) | **y** | also denies kernel-memory disclosure paths (kprobes, tracefs, etc.) |
-| `DEBUG_KERNEL` | y | **n** | production kernels should be non-debug |
+| flag | state | note |
+|---|---|---|
+| `FORTIFY_SOURCE` | **y** | compiler-level memcpy/strcpy bounds check |
+| `HARDENED_USERCOPY` | **y** | kernel ↔ userspace copies size/slab-validated |
+| `INIT_ON_ALLOC_DEFAULT_ON` | **y** | zero-on-alloc — no use-before-init infoleaks |
+| `INIT_ON_FREE_DEFAULT_ON` | **y** | zero-on-free — no use-after-free infoleaks |
+| `SLAB_FREELIST_HARDENED` | **y** | freelist-overwrite heap-exploit mitigation |
+| `SLAB_FREELIST_RANDOM` | **y** | randomises slab alloc order |
+| `IO_STRICT_DEVMEM` | **y** | no unprivileged `/dev/mem' to device I/O |
+| `MODULE_SIG_FORCE` | **y** | unsigned modules rejected at load |
+| `SECURITY_DMESG_RESTRICT` | **y** | kernel addresses hidden from unpriv users |
+| `IMA_APPRAISE` + `INTEGRITY_TRUSTED_KEYRING` | **y** | IMA appraises, not just measures |
+| `DEBUG_KERNEL` | **n** | production kernel, no debug scaffolding |
+| `LOCK_DOWN_KERNEL_FORCE_INTEGRITY` | **y** | rejects kernel-modifying operations |
+| `KEXEC_SIG` | **absent** | intentional: kexec disabled outright via lockdown, so signed-kexec is moot. Re-evaluate if/when kexec is re-enabled. |
+| `LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY` | **off** | deferred: blocks perf/kprobes/tracefs which HB's `runtime_tools' exercises. Track-step for v1.3 once the HB runtime-observability story is refactored onto non-lockdown-fenced primitives. |
 
-All are one-line additions to
-`buildroot-external/board/lapee/linux-m1-fragment.config`, producing
-a stricter kernel on the next `make buildroot`. We leave
-`LOCK_DOWN_KERNEL_FORCE_INTEGRITY` as the default until we've
-validated HB itself still boots cleanly under
-`LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY` (which would also block
-profiling, perf, kprobes — some of which HB uses via `runtime_tools`).
+Every row that says **y** was "off" or "absent" on 2026-04-19.
+The convergence to the stricter posture landed incrementally through
+v1.1 + v1.2; the audit above is the verified ground truth as of
+v1.2.2 shipping. See [`STATUS.md`](STATUS.md) for the reviewer-pass
+history that drove the convergence.
 
 ### Configurable from the LapEE posture spec
 
