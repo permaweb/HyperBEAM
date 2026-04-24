@@ -234,6 +234,10 @@ to_sorted_keys(Msg, Opts) when is_map(Msg) ->
 to_sorted_keys(Msg, _Opts) when is_list(Msg) ->
     lists:sort(fun(Key1, Key2) -> Key1 < Key2 end, Msg).
 
+%% @doc Convert an atom to its `binary-dashed-key`-equivalent form.
+atom_to_key(Atom) ->
+    binary:replace(hb_util:bin(Atom), <<"_">>, <<"-">>, [global]).
+
 %% @doc Convert keys in a map to atoms, lowering `-' to `_'.
 key_to_atom(Key) -> key_to_atom(Key, existing).
 key_to_atom(Key, _Mode) when is_atom(Key) -> Key;
