@@ -936,7 +936,8 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
                                     {target, To}
                                 }
                             )
-                    end
+                    end,
+                    erlang:garbage_collect()
             end;
         {error, _} = Error ->
             ?event(
@@ -983,6 +984,7 @@ maybe_index_block(Block, TargetDepth, Opts) ->
                     TXResults = process_block_txs(
                         ValidTXs, BlockStartOffset, TargetDepth, Height, Opts),
                     ExistingIDs = maps:get(item_ids, TXResults, #{}),
+                    erlang:garbage_collect(),
                     {block_cached, TXResults#{
                         total_txs => TotalTXs,
                         item_ids => ExistingIDs#{1 => L1IDs}
@@ -1519,6 +1521,7 @@ index_full_bundle_items(
                 {0, Depth - 1, #{}}
         end,
     ShiftedChildIDs = shift_item_ids(ChildIDs, 1),
+    erlang:garbage_collect(),
     index_full_bundle_items(
         Rest,
         binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),

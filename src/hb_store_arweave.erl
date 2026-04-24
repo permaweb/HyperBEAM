@@ -94,10 +94,12 @@ read_parent(#{ <<"index-store">> := IndexStore }, ID) ->
     ParentPath = <<"parent/", NormalizedID/binary>>,
     case hb_store:read(IndexStore, ParentPath) of
         {ok, Bin} ->
-            case decode_parent_entries(Bin) of
+            Result = case decode_parent_entries(Bin) of
                 {error, _} = Err -> Err;
                 Entries -> {ok, Entries}
-            end;
+            end,
+            erlang:garbage_collect(),
+            Result;
         _ ->
             not_found
     end;
