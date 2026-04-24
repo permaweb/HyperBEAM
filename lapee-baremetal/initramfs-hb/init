@@ -13,6 +13,15 @@
 # and attestation logic lives in dev_tpm2 via the on.start hook.
 set -eu
 
+# v1.2.2: redirect stdio to /dev/console so every `echo' (including
+# trace() output) lands on the screen + serial. Kernel exec of
+# rdinit=/init doesn't auto-wire stdin/stdout/stderr -- without this,
+# init's userspace prints go nowhere visible, even though kernel
+# printk still renders via the efi/simpledrm framebuffer. Must happen
+# AFTER the kernel has set up /dev/console (guaranteed by the time
+# /init runs as PID 1).
+exec < /dev/console > /dev/console 2>&1
+
 mount -t proc  -o nosuid,noexec,nodev  proc  /proc
 mount -t sysfs -o nosuid,noexec,nodev  sysfs /sys
 mount -t devtmpfs -o nosuid            devtmpfs /dev
@@ -21,6 +30,25 @@ mount -t tmpfs -o nosuid,nodev         tmpfs /run
 mkdir -p /dev/pts
 mount -t devpts -o nosuid,noexec devpts /dev/pts
 mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
+
+# trace MSG
+#   Console-only version. The earlier build wrote every trace
+#   line to /mnt/esp/lapee-init.log via an early-init mount of
+#   the ESP over a loop of block-device candidates -- that loop
+#   stalled when the kernel was still enumerating USB storage
+#   (mount racing with udev was slower than the boot itself).
+#   We fall back to console + /dev/kmsg only; the ESP writeback
+#   path near the end of init is the one that actually mounts
+#   the stick (by then udev has settled).
+trace() {
+    _ts=$(awk '{printf "t+%0.2fs",$1}' /proc/uptime 2>/dev/null || echo '?')
+    echo "[trace] $_ts $*"
+    # /dev/kmsg is present early and goes to dmesg + earlyprintk.
+    echo "[lapee-trace] $_ts $*" > /dev/kmsg 2>/dev/null || true
+}
+
+trace "init: started; kernel=$(uname -r 2>/dev/null || echo ?)"
+trace "init: /proc /sys /dev /tmp /run mounted"
 
 # v1.2: Boot splash -- centred HyperBEAM ASCII art + a status
 # line that starts as "booting..." and gets replaced when we
@@ -59,23 +87,264 @@ ip link set lo up 2>/dev/null || true
 # otherwise fail the command. /run is already tmpfs-mounted above.
 mkdir -p /run/lapee /etc/lapee
 
-NIC_COUNT=0
-for iface in /sys/class/net/*; do
-    name=$(basename "$iface")
-    case "$name" in
-        lo|bonding_masters|bonding|ip6tnl0|tunl0|sit0) continue ;;
+# v1.2.2 WiFi -- strictly-validated ESP-file config + cmdline gate.
+#
+# Two-dial security model:
+#   1. CAPABILITY (measured, attested):  `lapee.wifi=enabled' on the
+#      kernel cmdline. Baked into the UKI; changes the PCR-4 boot
+#      identity hash. An operator/verifier can tell from a verdict
+#      that the appliance was in WiFi-enabled mode. DEFAULT IS OFF.
+#   2. CREDENTIAL (unmeasured, untrusted):  /EFI/boot/wifi.conf on
+#      the FAT32 ESP. Format: SSID\nPASSWORD. Rewritable without
+#      a PCR change (the same boot can connect to different
+#      networks). We treat this file as hostile input and validate
+#      hard.
+#
+# Without the cmdline gate, the parser and wpa_supplicant launch
+# paths do NOT run, even if wifi.conf exists. This keeps the
+# 802.11 association + EAPOL attack surface dormant on default
+# boots. Drivers are still compiled into the kernel so `lspci'
+# reports the card; the interface stays DOWN.
+#
+# Attack-surface delta vs. USB tether: WiFi adds ~3 MB of kernel
+# code (mac80211/cfg80211/iwlwifi/mt76), ~5 MB of opaque vendor
+# firmware, ~2 MB of wpa_supplicant with an EAPOL state machine
+# history of CVEs (KRACK/FragAttacks-family). USB tether drivers
+# are ~50 KB each with no cryptographic handshake. Enabling WiFi
+# is a real trade-off; gating it explicitly is the minimum we
+# owe the paper's threat model.
+#
+# wifi.conf format: EXACTLY two lines.
+#
+#     SSID
+#     PASSWORD
+#
+# Rejected on any deviation. The PSK itself is never echoed to
+# console or kmsg.
+#
+# Parser rules:
+#   - Total file size: 10-256 bytes. (10 = 1-char SSID + \n + 8-char PSK)
+#   - No NUL bytes anywhere.
+#   - Exactly two non-empty lines (the third \n is allowed).
+#   - SSID: 1-32 bytes, IEEE 802.11 max. Strict safe-char set:
+#     [a-zA-Z0-9 _.-]. Avoids shell / wpa_supplicant.conf
+#     escape games.
+#   - PSK: 8-63 bytes. WPA2-PSK length. Safe-char set: printable
+#     ASCII excluding `\`, `"`, `$`, backtick, and control chars.
+#     These would break wpa_supplicant.conf's double-quoted
+#     string format.
+#
+# If the file has ANY deviation, init skips WiFi setup and logs
+# a specific reason via trace(). The PSK itself is NEVER echoed
+# to console or kmsg -- we just say "PSK accepted" or "PSK
+# rejected: <reason>".
+
+WIFI_SSID=""
+WIFI_PSK=""
+
+# Gate (1): capability flag on kernel cmdline. Default OFF.
+# Only when `lapee.wifi=enabled' is explicitly present do we even
+# reach the wifi.conf parser. This means the 802.11 stack +
+# supplicant CVE surface is entirely dormant on default boots.
+LAPEE_WIFI_GATE=$(sed -n 's/.*lapee\.wifi=\([^ ]*\).*/\1/p' /proc/cmdline)
+
+parse_wifi_conf() {
+    _f="$1"
+    [ -f "$_f" ] || return 1
+
+    _sz=$(wc -c < "$_f" 2>/dev/null | tr -d ' ')
+    case "$_sz" in
+        ''|*[!0-9]*)
+            trace "wifi: wc -c failed"; return 1 ;;
     esac
-    [ -e "$iface/device" ] || continue
-    echo "[init] net: up $name"
-    ip link set "$name" up 2>/dev/null || true
-    udhcpc -i "$name" -b -t 5 -T 1 -A 2 \
-           -p "/run/udhcpc.$name.pid" \
-           -s /usr/local/bin/lapee-dhcp-hook \
-           >> /run/lapee/udhcpc.log 2>&1 \
-           || echo "[net] $name: udhcpc launch failed"
-    NIC_COUNT=$((NIC_COUNT + 1))
-done
-echo "[init] net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
+    if [ "$_sz" -lt 10 ] || [ "$_sz" -gt 256 ]; then
+        trace "wifi: wifi.conf rejected: size=$_sz (want 10..256)"
+        return 1
+    fi
+
+    # Reject NUL bytes (busybox grep doesn't have -a/-I but -q on
+    # binary is fine as long as we're not reading content for
+    # interpretation).
+    if LC_ALL=C tr -d -c '\000' < "$_f" | head -c 1 \
+            | LC_ALL=C grep -q '\x00' 2>/dev/null; then
+        trace "wifi: wifi.conf rejected: contains NUL"
+        return 1
+    fi
+
+    # Read both lines (strip any \r to tolerate Windows editors).
+    _ssid=$(head -n 1 "$_f" 2>/dev/null | tr -d '\r')
+    _psk=$(sed -n '2p' "$_f" 2>/dev/null | tr -d '\r')
+
+    # Fail if a third line exists with any content.
+    if sed -n '3p' "$_f" 2>/dev/null | grep -q .; then
+        trace "wifi: wifi.conf rejected: more than 2 lines"
+        return 1
+    fi
+
+    # SSID validation.
+    if [ -z "$_ssid" ]; then
+        trace "wifi: wifi.conf rejected: SSID empty"
+        return 1
+    fi
+    if [ ${#_ssid} -gt 32 ]; then
+        trace "wifi: wifi.conf rejected: SSID len=${#_ssid} > 32"
+        return 1
+    fi
+    case "$_ssid" in
+        *[!a-zA-Z0-9_\ .-]*)
+            trace "wifi: wifi.conf rejected: SSID has chars outside [a-zA-Z0-9_ .-]"
+            return 1
+            ;;
+    esac
+
+    # PSK length + safe-char validation.
+    if [ ${#_psk} -lt 8 ] || [ ${#_psk} -gt 63 ]; then
+        trace "wifi: wifi.conf rejected: PSK length outside [8..63]"
+        return 1
+    fi
+    # Forbidden characters in the PSK: `"\$` + backtick + any
+    # ASCII control. Tested against a fixed set; the case
+    # pattern below uses shell-safe escapes.
+    case "$_psk" in
+        *'"'*|*'\'*|*'$'*|*'`'*)
+            trace "wifi: wifi.conf rejected: PSK contains forbidden shell/config-escape chars"
+            return 1
+            ;;
+    esac
+    # Control char check via tr (portable across busybox/coreutils).
+    if echo "$_psk" | LC_ALL=C tr -d -c '[:cntrl:]' | head -c 1 \
+            | grep -q . 2>/dev/null; then
+        trace "wifi: wifi.conf rejected: PSK contains control chars"
+        return 1
+    fi
+
+    WIFI_SSID="$_ssid"
+    WIFI_PSK="$_psk"
+    trace "wifi: wifi.conf accepted: ssid=$_ssid (PSK accepted; redacted)"
+    return 0
+}
+
+if [ "$LAPEE_WIFI_GATE" = "enabled" ]; then
+    trace "wifi: capability gate OPEN (lapee.wifi=enabled on cmdline)"
+    # Try to mount the ESP briefly (read-only) and read wifi.conf.
+    # Retries up to ~10 s because USB storage enumeration is async
+    # and mass-storage-class probe lands a few seconds after init
+    # starts on real hardware. We don't care if the ESP isn't
+    # found -- boot continues either way.
+    mkdir -p /mnt/esp 2>/dev/null
+    for _i in 1 2 3 4 5 6 7 8 9 10; do
+        for _dev in /dev/sd[a-z][0-9]* /dev/vd[a-z][0-9]* \
+                    /dev/nvme[0-9]n[0-9]p[0-9]* \
+                    /dev/mmcblk[0-9]p[0-9]*; do
+            [ -b "$_dev" ] || continue
+            if timeout 3 mount -t vfat -o ro,noatime "$_dev" /mnt/esp \
+                    2>/dev/null; then
+                if [ -f /mnt/esp/EFI/Boot/BootX64.efi ]; then
+                    if [ -f /mnt/esp/EFI/boot/wifi.conf ]; then
+                        parse_wifi_conf /mnt/esp/EFI/boot/wifi.conf || true
+                    elif [ -f /mnt/esp/EFI/Boot/wifi.conf ]; then
+                        # Case-insensitive filesystem: FAT32
+                        # preserves on-disk case but allows
+                        # any-case lookup. Accept PE-standard
+                        # `/EFI/Boot/' spelling too.
+                        parse_wifi_conf /mnt/esp/EFI/Boot/wifi.conf || true
+                    else
+                        trace "wifi: no /EFI/boot/wifi.conf on ESP"
+                    fi
+                    umount /mnt/esp 2>/dev/null
+                    break 2
+                fi
+                umount /mnt/esp 2>/dev/null
+            fi
+        done
+        sleep 1
+    done
+else
+    trace "wifi: capability gate CLOSED (no lapee.wifi=enabled on cmdline); 802.11 stack dormant"
+fi
+
+# If the gate was OPEN and we have both SSID and PSK after the
+# parse, bring up WiFi. If the gate was CLOSED, the preceding
+# block was skipped entirely, so WIFI_SSID/WIFI_PSK are still
+# empty and this branch is dead.
+if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PSK" ] && \
+   [ -x /sbin/wpa_supplicant ]; then
+    # Wait up to 15 s for the wlan iface to appear. iwlwifi / mt76
+    # PCI probe runs asynchronously; may land after userspace
+    # starts.
+    WIFI_IFACE=""
+    for _w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        for _i in /sys/class/net/wl*; do
+            [ -e "$_i/device" ] || continue
+            WIFI_IFACE=$(basename "$_i")
+            break 2
+        done
+        sleep 1
+    done
+    if [ -z "$WIFI_IFACE" ]; then
+        trace "wifi: no wlan interface after 15s (card absent or driver probe failed)"
+    else
+        trace "wifi: iface=$WIFI_IFACE bringing up; associating to '$WIFI_SSID'"
+        ip link set "$WIFI_IFACE" up 2>/dev/null || true
+        mkdir -p /var/run/wpa_supplicant
+        # wpa_supplicant.conf -- strict double-quoted SSID + PSK
+        # strings. Parser above rejected the `"\$`-family
+        # characters so injection isn't possible.
+        cat > /etc/wpa_supplicant.conf <<WPACFG
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=0
+update_config=0
+country=US
+network={
+    ssid="$WIFI_SSID"
+    psk="$WIFI_PSK"
+    key_mgmt=WPA-PSK WPA-PSK-SHA256
+    proto=RSN WPA
+    pairwise=CCMP
+    group=CCMP TKIP
+    scan_ssid=1
+}
+WPACFG
+        chmod 600 /etc/wpa_supplicant.conf
+        /sbin/wpa_supplicant -B \
+            -i "$WIFI_IFACE" \
+            -c /etc/wpa_supplicant.conf \
+            -f /run/lapee/wpa.log \
+            2>/dev/null \
+            || trace "wifi: wpa_supplicant launch failed; /run/lapee/wpa.log for details"
+        trace "wifi: wpa_supplicant backgrounded on $WIFI_IFACE"
+    fi
+fi
+
+# v1.2.2 kill-switch: LAPEE_NO_NET=1 on cmdline skips the
+# interface enumeration + udhcpc fork loop entirely. Use when
+# debugging a suspected network-related init stall (each udhcpc
+# blocks for -t*-T = up to ~15s before backgrounding, and across
+# multiple NICs the cumulative wait can look like a hang on a
+# screenless boot). Also useful when the node is intended to run
+# purely over ESP writeback + reboot cycles without a LAN.
+NIC_COUNT=0
+if grep -q 'LAPEE_NO_NET=1' /proc/cmdline 2>/dev/null; then
+    trace "net: SKIPPED (LAPEE_NO_NET=1 on cmdline)"
+else
+    trace "net: enumerating /sys/class/net"
+    for iface in /sys/class/net/*; do
+        name=$(basename "$iface")
+        case "$name" in
+            lo|bonding_masters|bonding|ip6tnl0|tunl0|sit0) continue ;;
+        esac
+        [ -e "$iface/device" ] || continue
+        echo "[init] net: up $name"
+        trace "net: up $name"
+        ip link set "$name" up 2>/dev/null || true
+        udhcpc -i "$name" -b -t 5 -T 1 -A 2 \
+               -p "/run/udhcpc.$name.pid" \
+               -s /usr/local/bin/lapee-dhcp-hook \
+               >> /run/lapee/udhcpc.log 2>&1 \
+               || echo "[net] $name: udhcpc launch failed"
+        NIC_COUNT=$((NIC_COUNT + 1))
+    done
+    trace "net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
+fi
 
 # Give the user a visible status before HB is up. If there's no
 # network, the splash WILL stay on this message until the
@@ -119,21 +388,20 @@ elif [ -f "$USER_CFG_DEFAULT" ]; then
     USER_CFG=$USER_CFG_DEFAULT
 fi
 
-# Build HB_CONFIG as an ordered chain:
-#   lapee.json (base: preloaded_devices minus snp/hyperbuddy, no index
-#               page render) -> [user.flat if present] -> lapee-enforced
-#               (wins on any collision; wires on/start -> extend)
-BASE_CFG=""
-[ -f "$LAPEE_JSON" ] && BASE_CFG="$LAPEE_JSON"
-
-if [ -n "$USER_CFG" ] && [ -n "$BASE_CFG" ]; then
-    HB_CONFIG="$BASE_CFG,$USER_CFG,$ENFORCED_CFG"
-    echo "[init] user config: $USER_CFG (+ lapee.json base)"
-elif [ -n "$USER_CFG" ]; then
+# v1.2.2: the LAPEE_JSON base config is currently DISABLED because
+# HB's config loader rejected the preloaded_devices override on
+# iron boot and cascaded into an `unexpected_hook_result: failure'
+# at hb_http_server:start/1 -> dev_hook:execute_handlers/4
+# (caught Apr 23 19:15 boot). Needs an HB-side fix: either the
+# loader recognising list-of-map config entries through json
+# format, or a per-LapEE release profile that pre-bakes the
+# narrower device list into hb_opts:default_message/0. Until
+# then, fall back to the v1.1-validated config chain (no base
+# override). snp/hyperbuddy devices stay in preloaded_devices
+# list but don't fire since nothing references them.
+if [ -n "$USER_CFG" ]; then
     HB_CONFIG="$USER_CFG,$ENFORCED_CFG"
-    echo "[init] user config: $USER_CFG (no lapee.json)"
-elif [ -n "$BASE_CFG" ]; then
-    HB_CONFIG="$BASE_CFG,$ENFORCED_CFG"
+    echo "[init] user config: $USER_CFG"
 else
     HB_CONFIG="$ENFORCED_CFG"
 fi
@@ -215,6 +483,7 @@ if grep -q 'LAPEE_HB_DIAG=1' /proc/cmdline 2>/dev/null; then
     while :; do sleep 3600; done
 fi
 
+trace "cd /usr/lib/hyperbeam"
 cd /usr/lib/hyperbeam
 
 # USB-stick round-trip validation path (opt-in via kernel cmdline
@@ -226,12 +495,11 @@ cd /usr/lib/hyperbeam
 # CONFIG_VFAT_FS, CONFIG_BLK_DEV_SD, CONFIG_USB_XHCI_HCD —
 # no modprobes, no network.
 if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
-    echo "[init] LAPEE_WRITEBACK=1 - running HB in background, will"
-    echo "[init] write attestation to ESP partition labelled"
-    echo "[init] LAPEE_ESP after the node comes up."
+    trace "writeback: forking HB in background"
     /usr/lib/hyperbeam/bin/hb foreground \
         > /run/lapee/hb.log 2>&1 &
     HB_PID=$!
+    trace "writeback: HB_PID=$HB_PID"
 
     # Two-phase wait. Phase 1: probe the cheap /info handler
     # with short wget timeouts, logging progress every 10
@@ -269,8 +537,18 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
                 --header='accept-bundle: true' \
                 http://127.0.0.1:8734/~tpm2@2.0a/info \
                 2>/dev/null && [ -s "$PROBE_OUT" ]; then
-            echo "[writeback] HB responded to /info after ~$((i*3))s"
+            trace "writeback: HB responded to /info after ~$((i*3))s"
             ready=1; break
+        fi
+        # Check whether HB is even still alive -- if it exited,
+        # keep looping burns the whole 240s window on a dead
+        # process. The trace line captures this for post-pull
+        # diagnosis.
+        if ! kill -0 $HB_PID 2>/dev/null; then
+            trace "writeback: HB_PID=$HB_PID died before answering /info"
+            tail -40 /run/lapee/hb.log 2>/dev/null \
+                | while IFS= read -r line; do trace "hb.log: $line"; done
+            break
         fi
         # Heartbeat every 5 probes (~10s of wall-time) so the
         # operator sees the boot is progressing, not hung.
@@ -291,11 +569,11 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
     done
 
     if [ $ready -ne 1 ]; then
-        echo "[writeback] FAIL - HB did not answer /info in ~360s"
-        echo "[writeback] tail of /run/lapee/hb.log:"
-        tail -80 /run/lapee/hb.log 2>/dev/null
+        trace "writeback: FAIL - HB did not answer /info in ~240s"
+        tail -80 /run/lapee/hb.log 2>/dev/null \
+            | while IFS= read -r line; do trace "hb.log: $line"; done
     else
-        echo "[writeback] phase 2: calling /~tpm2@2.0a/attestation (quote takes ~5s)"
+        trace "writeback: phase 2 - calling /~tpm2@2.0a/attestation"
         if wget -q -O "$ATT_OUT" --timeout=120 \
                 --header='accept: application/json@1.0' \
                 --header='accept-bundle: true' \
@@ -354,6 +632,19 @@ if grep -q 'LAPEE_WRITEBACK=1' /proc/cmdline 2>/dev/null; then
                 if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
                     rm -f "$LINK"
                     cp "$OUT" "$LINK"
+                    # v1.2.2: persist the WiFi supplicant log
+                    # alongside the attestation so post-boot
+                    # diagnosis works without a serial console
+                    # (init tmpfs is gone after reboot; ESP
+                    # survives). Only written when LAPEE_TRACE=1
+                    # or when wpa_supplicant was invoked and
+                    # there's a log to preserve. Harmless if
+                    # neither is the case.
+                    [ -f /run/lapee/wpa.log ] && \
+                        cp /run/lapee/wpa.log /mnt/esp/lapee-wpa.log 2>/dev/null
+                    [ -f /run/lapee/hb.log ] && \
+                        tail -c 65536 /run/lapee/hb.log \
+                            > /mnt/esp/lapee-hb-tail.log 2>/dev/null
                     cat > /mnt/esp/README-VALIDATOR.txt <<RV
 LapEE attestation written on boot $STAMP.
 

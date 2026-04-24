@@ -22,7 +22,18 @@ fi
 docker rm -f lapee-hb-mini 2>/dev/null || true
 docker run -d --platform=linux/amd64 --name lapee-hb-mini \
     lapee-hyperbeam-builder:latest sleep infinity >/dev/null
-docker exec lapee-hb-mini bash -c "apt-get update -qq 2>&1 | tail -1 && apt-get install -y -qq busybox-static iproute2 2>&1 | tail -1"
+# Install busybox + iproute2 + WiFi userspace (wpa_supplicant, iw).
+# Firmware blobs for Intel AX210 + MediaTek MT7922 ship in Ubuntus
+# `linux-firmware' package (monolithic ~1 GB installed; we only
+# copy the ~8 MB we actually need from /lib/firmware/ further
+# down). `iw' lives in Ubuntus universe component which is enabled
+# by default on the builder image.
+docker exec -i lapee-hb-mini bash <<'SH_APT'
+set -e
+apt-get update -qq 2>&1 | tail -2
+apt-get install -y -qq busybox-static iproute2 wpasupplicant iw \
+        linux-firmware zstd 2>&1 | tail -2
+SH_APT
 
 # Copy HB release into the container.
 docker cp "$HB_REL" lapee-hb-mini:/opt/hb
@@ -59,6 +70,73 @@ cd /
 # iproute2
 cp /usr/sbin/ip /ramfs/sbin/ip
 
+# v1.2.2 WiFi userspace. wpa_supplicant does WPA2/WPA3 auth and
+# drives the kernel drivers via nl80211. iw is a thin debugging
+# tool (scan, station info) useful when the network isn't
+# associating and we need to see what the card sees.
+#
+# Credentials are NOT on the kernel cmdline. Init parses a strictly-
+# validated `/EFI/boot/wifi.conf' off the ESP (unmeasured, written
+# by the operator on any host that can mount FAT32). The format is
+# exactly two lines: SSID\nPASSWORD. Anything else is rejected by
+# the parser, so wpa_supplicant.conf injection through the ESP file
+# is not possible.
+for bin in /usr/sbin/wpa_supplicant /sbin/wpa_supplicant; do
+    [ -x "$bin" ] && cp "$bin" /ramfs/sbin/wpa_supplicant && break
+done
+for bin in /usr/sbin/iw /sbin/iw; do
+    [ -x "$bin" ] && cp "$bin" /ramfs/sbin/iw && break
+done
+
+# WiFi firmware. Ubuntu 24.04 ships all firmware zstd-compressed as
+# `*.ucode.zst' under /lib/firmware/. Our kernel doesn't enable
+# CONFIG_FW_LOADER_COMPRESS_ZSTD (would need another rebuild), so
+# we decompress here and ship raw .ucode files. Trade-off: larger
+# initramfs (raw is ~1.6x zstd), avoided rebuild.
+#
+# Versioning: iwlwifi probes `-73` then `-72` then `-66` then `-59';
+# MediaTek has a single version per chip. We ship the latest
+# version of each so the driver's first-try succeeds; older
+# fallback versions are skipped to save ~3 MB.
+mkdir -p /ramfs/lib/firmware/mediatek
+FW_SRC=/lib/firmware
+[ -d "$FW_SRC" ] || FW_SRC=/usr/lib/firmware
+
+dec() {
+    # dec <.zst file> <target dir>
+    #   Decompress with zstd; strip `.zst' suffix.
+    [ -f "$1" ] || return 1
+    _base=$(basename "$1" .zst)
+    zstd -d -q "$1" -o "$2/$_base" 2>/dev/null \
+        || cp "$1" "$2/$(basename "$1")"
+}
+
+if [ -d "$FW_SRC" ]; then
+    # Intel AX210 (Framework 13 Intel variant):
+    #   iwlwifi-ty-a0-gf-a0-73.ucode + matching .pnvm
+    dec "$FW_SRC/iwlwifi-ty-a0-gf-a0-73.ucode.zst" /ramfs/lib/firmware \
+        || dec "$FW_SRC/iwlwifi-ty-a0-gf-a0-72.ucode.zst" /ramfs/lib/firmware
+    dec "$FW_SRC/iwlwifi-ty-a0-gf-a0.pnvm.zst"           /ramfs/lib/firmware
+    # Intel AX211 (Raptor Lake P refresh):
+    #   iwlwifi-ma-b0-gf-a0-89.ucode  + matching .pnvm
+    dec "$FW_SRC/iwlwifi-ma-b0-gf-a0-89.ucode.zst"       /ramfs/lib/firmware \
+        || dec "$FW_SRC/iwlwifi-ma-b0-gf-a0-86.ucode.zst" /ramfs/lib/firmware
+    dec "$FW_SRC/iwlwifi-ma-b0-gf-a0.pnvm.zst"           /ramfs/lib/firmware
+    # Regulatory DB (wireless compliance; iwlwifi refuses to
+    # associate without it on channels above 2.4 GHz-world-regdom).
+    for plain in "$FW_SRC/regulatory.db" "$FW_SRC/regulatory.db.p7s"; do
+        [ -f "$plain" ] && cp "$plain" /ramfs/lib/firmware/
+    done
+    # MediaTek MT7922 (Framework 13 AMD variant):
+    dec "$FW_SRC/mediatek/WIFI_MT7922_patch_mcu_1_1_hdr.bin.zst" \
+        /ramfs/lib/firmware/mediatek
+    dec "$FW_SRC/mediatek/WIFI_RAM_CODE_MT7922_1.bin.zst" \
+        /ramfs/lib/firmware/mediatek
+fi
+echo "--- firmware shipped ---"
+ls -la /ramfs/lib/firmware/ /ramfs/lib/firmware/mediatek/ 2>/dev/null
+du -sh /ramfs/lib/firmware/ 2>/dev/null
+
 # Shared libraries needed by HB (OTP + libtss2 + libcrypto + libssl + ...).
 LIB=/ramfs/lib/x86_64-linux-gnu
 for lib in libc.so.6 libc_malloc_debug.so.0 \
@@ -68,7 +146,11 @@ for lib in libc.so.6 libc_malloc_debug.so.0 \
            libpthread.so.0 libdl.so.2 libm.so.6 libz.so.1 libresolv.so.2 \
            libtinfo.so.6 libncursesw.so.6 \
            libstdc++.so.6 libgcc_s.so.1 libgmp.so.10 \
-           libmnl.so.0 libbsd.so.0 libmd.so.0 libcap.so.2; do
+           libmnl.so.0 libbsd.so.0 libmd.so.0 libcap.so.2 \
+           libnl-3.so.200 libnl-genl-3.so.200 libnl-route-3.so.200 \
+           libdbus-1.so.3 libpcsclite.so.1 \
+           libgcrypt.so.20 libgpg-error.so.0 liblzma.so.5 libzstd.so.1 \
+           liblz4.so.1 libsystemd.so.0; do
     if [ -e /lib/x86_64-linux-gnu/$lib ]; then cp -L /lib/x86_64-linux-gnu/$lib $LIB/; fi
 done
 cp -L /usr/lib/x86_64-linux-gnu/libtss2-tcti-device.so.0 $LIB/ 2>/dev/null || true
@@ -141,16 +223,36 @@ rm -rf $HB/bin/priv
 rm -rf $HB/lib/hb-0.0.1/priv/html
 rm -rf $HB/lib/hb-0.0.1/priv/static
 rm -rf $HB/lib/hb-0.0.1/priv/tpm-interpret
-rm -rf $HB/lib/hb-0.0.1/priv/crates
-# Remove the device .beam files for deps we're not running on LapEE
-# (dev_snp + dev_hyperbuddy). HB's preload_device tolerates missing
-# modules -- they just won't resolve when a request asks for them.
-# Keeps the binary footprint honest: if code is in the image, it can
-# run; if not, it can't.
-for mod in dev_snp dev_snp_lib dev_snp_nif dev_hyperbuddy \
-           dev_hyperbuddy_cache dev_hyperbuddy_assets; do
-    find $HB/lib -name "$mod.beam" -delete 2>/dev/null || true
-done
+# priv/crates/ retained: `dev_snp_nif.beam' has an `-on_load'
+# that erlang:load_nifs the Rust .so out of this directory. Even
+# when dev_snp isn't in preloaded_devices, on_load fires at module
+# load time -- which is driven by the OTP boot script before any
+# config is read. Removing the .so triggers a load failure that
+# cascades exactly like removing the .beam itself did (see above).
+# Saving these ~10 MB requires a LapEE-specific release profile,
+# not a post-build rm.
+# DO NOT delete dev_snp*/dev_hyperbuddy* .beam files here.
+#
+# Earlier versions of this slim step removed them on the logic
+# "the lapee.json preloaded_devices list excludes them, so they're
+# dead code". That logic was wrong: the OTP release boot script
+# (releases/0.0.1/hb.boot, compiled at hb-release time by reltool)
+# statically names every module in every listed application. On VM
+# startup, erlexec's embedded boot loads every such module before
+# any config (lapee.json / hb_opts) gets a chance to run. A missing
+# module ==> `load_failed' ==> `Runtime terminating during boot' ==>
+# init exits ==> kernel panic "Attempted to kill init".
+#
+# The correct slim is behavioural (don't PRELOAD them via config;
+# our lapee.json already does that), not byte-surgical. Saving a
+# few hundred KB isn't worth breaking boot. Leave the .beam files
+# in lib/hb-0.0.1/ebin; they'll just never be dispatched because
+# the device list doesn't reference them.
+#
+# If we ever want to strip them for real, the path is: regenerate
+# the .boot/.script for a LapEE-specific release profile that
+# omits the module manifest entries. That's a rebar3 relx change,
+# not a post-build find -delete.
 # .erl sources across all libs -- were only hb-0.0.1 before. None of
 # these are loaded at runtime (compiled .beam is the runtime artefact).
 find $HB/lib -type d -name src -exec rm -rf {} + 2>/dev/null || true
