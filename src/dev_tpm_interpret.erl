@@ -1906,8 +1906,81 @@ validate_ek_chain_1(DerCert, DerIntermediates, Roots, ChainLen) ->
     %% convention is leaf-to-root, which is also the order
     %% `pkix_path_validation/3' expects for CertPath.
     Cleaned = [D || D <- DerIntermediates, D =/= <<>>],
-    Result = try_validate_against_roots(DerCert, Cleaned, Roots, 0),
+    %% First pass: try each shipped root directly, using the on-TPM
+    %% intermediates (if any) as the chain. This covers the common
+    %% case: NV 0x01C00003 has the manufacturer LeafCA, NV 0x01C00002
+    %% has the EK.
+    Direct = try_validate_against_roots(DerCert, Cleaned, Roots, 0),
+    Result = case maps:get(<<"chain-valid">>, Direct, false) of
+        true  -> Direct;
+        _ when Cleaned =:= [] ->
+            %% Fallback when the on-TPM chain is empty (seen on
+            %% Nuvoton NPCT75x Framework builds where NV 0x01C00003
+            %% is undefined). Walk pairs of shipped certs: each
+            %% other shipped cert becomes a candidate intermediate.
+            %% Verifier still terminates the trust chain at one of
+            %% our root CAs; we just supply the missing-on-TPM
+            %% intermediate from the shipped bundle. See TCG EK
+            %% Credential Profile -- the manufacturer's intermediate
+            %% CA cert is itself published separately from NV.
+            try_validate_with_bundle_intermediates(
+              DerCert, Roots, Direct);
+        _ -> Direct
+    end,
     Result#{<<"intermediates-used">> => ChainLen}.
+
+%% @doc Pair-walk the shipped roots: for each Root try each OTHER
+%% shipped cert as a single intermediate. Stops on first successful
+%% chain; otherwise returns the original direct-attempt result
+%% unchanged so existing reason strings bubble up.
+try_validate_with_bundle_intermediates(DerCert, Roots, FallbackResult) ->
+    %% Pre-decode every shipped root. Skipping un-decodable entries
+    %% keeps the walker resilient to a bad PEM file in the bundle.
+    Decoded = [
+        {Name, Cert, Der} ||
+        R <- Roots,
+        Name <- [maps:get(<<"name">>, R, <<"unknown-root">>)],
+        Pem  <- [maps:get(<<"pem">>, R, <<>>)],
+        {ok, Cert} <- [decode_cert(Pem)],
+        Der  <- [safe_der_encode(Cert)],
+        Der =/= <<>>
+    ],
+    walk_bundle_pairs(DerCert, Decoded, Decoded, FallbackResult).
+
+walk_bundle_pairs(_DerCert, [], _AllDecoded, FallbackResult) ->
+    FallbackResult;
+walk_bundle_pairs(DerCert, [{AnchorName, AnchorCert, _AnchorDer} | Rest],
+                  AllDecoded, FallbackResult) ->
+    %% Walk all OTHER bundle certs as candidate intermediates for
+    %% this anchor. Self (anchor == intermediate) is excluded --
+    %% that's what try_validate_against_roots already covered.
+    Candidates = [{IName, IDer}
+                  || {IName, _IC, IDer} <- AllDecoded,
+                     IName =/= AnchorName],
+    case try_pair_chain(DerCert, AnchorCert, AnchorName, Candidates) of
+        {ok, Hit} -> Hit;
+        not_found -> walk_bundle_pairs(DerCert, Rest, AllDecoded,
+                                        FallbackResult)
+    end.
+
+try_pair_chain(_DerCert, _AnchorCert, _AnchorName, []) ->
+    not_found;
+try_pair_chain(DerCert, AnchorCert, AnchorName,
+               [{InterName, InterDer} | Rest]) ->
+    case validate_against_one_root(DerCert, [InterDer], AnchorCert) of
+        true ->
+            {ok, #{
+                <<"validated-by-root-ca">> => AnchorName,
+                <<"validated-via-intermediate">> => InterName,
+                <<"root-ca-count">>        => 0,
+                <<"chain-valid">>          => true,
+                <<"reason">>               =>
+                    <<"chain validates against ", AnchorName/binary,
+                      " via bundled intermediate ", InterName/binary>>
+            }};
+        false ->
+            try_pair_chain(DerCert, AnchorCert, AnchorName, Rest)
+    end.
 
 try_validate_against_roots(_DerCert, _Chain, [], Count) ->
     #{
@@ -3096,6 +3169,25 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
                       "quote. Defaulting to critical so the "
                       "verifier cannot be fooled by a stripped "
                       "envelope.">>);
+        uninitialised_shadow ->
+            finding(warn,
+                    <<"freshness-safe-false-shadow-uninitialised">>,
+                    <<"freshness">>,
+                    <<"TPM clock `safe' flag is false and both "
+                      "reset-count and restart-count are implausibly "
+                      "large (>= 2^28). Per TPM 2.0 Part 1 section "
+                      "34.1, when the TPM has never executed "
+                      "TPM2_Shutdown(STATE), the clock and counter "
+                      "values in NV may be stale / uninitialised "
+                      "and `safe=false' flags that the caller must "
+                      "not rely on them. Observed on Nuvoton "
+                      "NPCT75x first-production-boot. A real "
+                      "attacker cannot fabricate this pattern on a "
+                      "TPM that has seen a clean shutdown. Primary "
+                      "freshness is unaffected: the quote's "
+                      "extraData still binds to the caller's nonce. "
+                      "Upgrades to stronger classification on the "
+                      "next clean reboot.">>);
         tamper ->
             %% Reviewer pass 8 (Framework envelope predictor) noted
             %% that the v1.1 Framework capture hits this branch
@@ -3158,6 +3250,22 @@ fresh_boot_classify(R, RC)
 fresh_boot_classify(R, RC)
         when R =:= null orelse RC =:= null ->
     counts_missing;
+%% When safe=false AND both counters are implausibly huge (>= 2^28),
+%% the TPM is almost certainly returning stale-or-zero bytes from
+%% uninitialised NV shadow memory. Per TPM 2.0 Part 1 section 34.1:
+%% when the TPM has never executed TPM2_Shutdown(STATE), the clock
+%% and counter values in NV may be stale and safe=NO is set to
+%% warn the caller. Observed on Nuvoton NPCT75x on Framework 13
+%% firstboot (reset-count ~2.7 billion, restart-count ~365 million,
+%% TPM power-on age under 2 min). A real attacker cannot fabricate
+%% these values on a TPM that has executed a clean shutdown, so
+%% this pattern is a benign first-boot signature, not tamper.
+%% Upgrades to stronger classification on the next clean reboot
+%% (when safe=true, both counts reset to small-plausible values).
+fresh_boot_classify(R, RC)
+        when is_integer(R), is_integer(RC),
+             R >= 16#10000000, RC >= 16#10000000 ->
+    uninitialised_shadow;
 fresh_boot_classify(_, _) ->
     tamper.
 
@@ -4304,6 +4412,8 @@ claim_pcr_replay(Events, E) ->
     EvList = event_list(Events),
     EventsByPcr = group_events_list_by_pcr(EvList),
     PcrVals = nested(E, [<<"tpm-quote">>, <<"pcr-values">>], #{}),
+    QuotedPcrSet = sets:from_list(
+        [key_to_int(K) || K <- maps:keys(PcrVals)]),
     %% Build a per-PCR bank-alg override map from the quote's
     %% pcrSelect -- for mixed-bank quotes (some PCRs SHA-1, others
     %% SHA-256 etc) this keeps per-PCR replay using the correct
@@ -4322,10 +4432,22 @@ claim_pcr_replay(Events, E) ->
     Matching = [P || {_K, R} <- maps:to_list(PerPcr),
                      P <- [maps:get(<<"pcr-index">>, R, -1)],
                      maps:get(<<"matches">>, R, false) =:= true],
+    %% A PCR is a genuine mismatch only when the quote actually
+    %% selected that PCR (we have a quoted value) AND replay
+    %% disagreed. Event-log entries for PCRs the quote didn't
+    %% include give us NO quoted value to compare against, so
+    %% counting them as "mismatching" is a taxonomy bug -- the
+    %% verifier simply cannot verify them. They get surfaced
+    %% separately as `pcrs-unverifiable' for transparency.
     Mismatching = [P || {_K, R} <- maps:to_list(PerPcr),
                         P <- [maps:get(<<"pcr-index">>, R, -1)],
                         maps:get(<<"matches">>, R, true) =:= false,
-                        maps:get(<<"event-count">>, R, 0) > 0],
+                        maps:get(<<"event-count">>, R, 0) > 0,
+                        sets:is_element(P, QuotedPcrSet)],
+    Unverifiable = [P || {_K, R} <- maps:to_list(PerPcr),
+                         P <- [maps:get(<<"pcr-index">>, R, -1)],
+                         maps:get(<<"event-count">>, R, 0) > 0,
+                         not sets:is_element(P, QuotedPcrSet)],
     Covered = [P || {_K, R} <- maps:to_list(PerPcr),
                     P <- [maps:get(<<"pcr-index">>, R, -1)],
                     maps:get(<<"event-count">>, R, 0) > 0],
@@ -4334,6 +4456,7 @@ claim_pcr_replay(Events, E) ->
         <<"pcrs-with-events">>  => lists:sort(Covered),
         <<"pcrs-matching">>     => lists:sort(Matching),
         <<"pcrs-mismatching">>  => lists:sort(Mismatching),
+        <<"pcrs-unverifiable">> => lists:sort(Unverifiable),
         <<"consistent">>        => Mismatching =:= [] andalso
                                    Covered =/= [],
         <<"event-count">>       => length(EvList)
@@ -6445,16 +6568,22 @@ reconstruct_pcr(EvList, Quoted) ->
 
 %% Explicit-alg variant (lets callers force a bank).
 reconstruct_pcr([], _Quoted, _Alg) -> undefined;
-reconstruct_pcr(EvList, Quoted, Alg) ->
+reconstruct_pcr(EvList, Quoted0, Alg) ->
     {AlgName, HashAtom, Size} = pcr_alg_triple(Alg),
     Seed = <<0:(Size*8)>>,
+    %% Quoted may arrive here as raw bytes (in-memory path) or as
+    %% a base64url-encoded binary string (JSON-envelope path).
+    %% Normalise to raw so the downstream compare works either way.
+    Quoted = normalise_digest(Quoted0, Size),
     Replayed = lists:foldl(
         fun(Ev, Acc) ->
             case maps:get(<<"event-type-code">>, Ev, 0) of
                 3 -> Acc;
                 _ ->
                     Digests = maps:get(<<"digests">>, Ev, #{}),
-                    case maps:get(AlgName, Digests, undefined) of
+                    case normalise_digest(
+                            maps:get(AlgName, Digests, undefined),
+                            Size) of
                         D when is_binary(D), byte_size(D) =:= Size ->
                             crypto:hash(HashAtom,
                                          <<Acc/binary, D/binary>>);
@@ -6473,6 +6602,31 @@ reconstruct_pcr(EvList, Quoted, Alg) ->
         <<"replayed-from-events">> => length(EvList),
         <<"alg">>                  => AlgName
     }.
+
+%% @doc Normalise a digest value to raw bytes of the given size.
+%% Handles both the in-memory path (already raw) and the JSON-
+%% envelope path (base64url-encoded string). Any other shape
+%% returns undefined so the caller can skip the event cleanly.
+normalise_digest(undefined, _Size) -> undefined;
+normalise_digest(<<>>, _Size) -> undefined;
+normalise_digest(Bin, Size) when is_binary(Bin), byte_size(Bin) =:= Size ->
+    Bin;
+normalise_digest(Bin, Size) when is_binary(Bin) ->
+    %% base64url of Size bytes has ceil(Size*4/3) chars; for 20B
+    %% (sha1) -> 27, 32B (sha256) -> 43, 48B (sha384) -> 64, 64B
+    %% (sha512) -> 86. Match on expected lengths to avoid
+    %% accidentally decoding hex or other shapes.
+    Expected = (Size * 4 + 2) div 3,
+    case byte_size(Bin) of
+        Expected ->
+            try hb_util:decode(Bin) of
+                Raw when is_binary(Raw), byte_size(Raw) =:= Size -> Raw;
+                _ -> undefined
+            catch _:_ -> undefined
+            end;
+        _ -> undefined
+    end;
+normalise_digest(_, _) -> undefined.
 
 %% @doc Build a per-PCR `{pcr-index -> alg-name}' map from the
 %% quote's TPMS_QUOTE_INFO pcrSelect. When the quote selects
