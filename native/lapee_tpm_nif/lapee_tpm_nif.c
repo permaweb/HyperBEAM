@@ -339,8 +339,18 @@ nif_create_signing_key(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     TPM2B_DIGEST *creation_hash = NULL;
     TPMT_TK_CREATION *creation_ticket = NULL;
 
+    /* v1.2.2 paper P3 -- AK lives under the Endorsement hierarchy.
+     * Previously this used ESYS_TR_RH_OWNER as a swtpm-compat
+     * shortcut; the paper requires Endorsement so that the AK's
+     * qualifiedSigner chain in every TPMS_ATTEST roots at the
+     * same primary-seed tree as the EK (same TPM -- a verifier
+     * walking the qualifiedSigner name path can validate the AK
+     * originated in the same physical TPM as the EK in the cert
+     * chain). Factory Nuvoton NPCT75x ships with empty
+     * endorsement auth so the null-password session still works;
+     * provisioned owner-password-only TPMs are out of scope. */
     TSS2_RC rc = Esys_CreatePrimary(g_esys_ctx,
-                                    ESYS_TR_RH_OWNER,
+                                    ESYS_TR_RH_ENDORSEMENT,
                                     ESYS_TR_PASSWORD, ESYS_TR_NONE, ESYS_TR_NONE,
                                     &in_sensitive, &in_public,
                                     &outside_info, &creation_pcr,

@@ -66,6 +66,76 @@ cmdline_flag_set() {
 trace "init: started; kernel=$(uname -r 2>/dev/null || echo ?)"
 trace "init: /proc /sys /dev /tmp /run mounted"
 
+# v1.2.2 paper P2 -- TME/SME enforcement at init.
+#   Per paper section Arch: "Early init reads IA32_TME_ACTIVATE
+#   (Intel) or SYSCFG bit 23 (AMD) and refuses to proceed if
+#   memory encryption is inactive." We approximate without an MSR
+#   read (no msr-tools in the initramfs; adding it would bloat +
+#   widen lockdown relaxations). Two-tier check:
+#     (1) /proc/cpuinfo `flags' column includes `tme' (Intel) or
+#         `sme' (AMD). Absent -> CPU does not support memory
+#         encryption at all, init halts (attestation would lie
+#         about TME state).
+#     (2) dmesg early lines describe TME/SME activation:
+#         Intel: "x86/tme: Intel TME enabled (AES XTS 128-bit"
+#         AMD:   "AMD Memory Encryption Features active: SME"
+#         If neither marker appears, capability present but
+#         inactive -> halt.
+#   Operator override: `LAPEE_NO_TME=1' on cmdline skips both
+#   gates (for Intel CPUs where TME is disabled by BIOS +
+#   operator is intentionally testing without memory
+#   encryption). Override is measured via the UKI cmdline into
+#   PCR 4/8, so an attestation verifier will see the operator
+#   explicitly bypassed TME.
+check_tme_sme() {
+    if cmdline_flag_set LAPEE_NO_TME; then
+        trace "tme: LAPEE_NO_TME=1 on cmdline; skipping enforcement"
+        return 0
+    fi
+    _cpuflags=$(awk '/^flags[^:]*:/ {$1=""; $2=""; print; exit}' \
+        /proc/cpuinfo 2>/dev/null)
+    _has_cap=no
+    case " $_cpuflags " in
+        *" tme "*) _has_cap=tme ;;
+        *" sme "*) _has_cap=sme ;;
+    esac
+    if [ "$_has_cap" = "no" ]; then
+        trace "tme: CPU does not advertise tme/sme in /proc/cpuinfo; halting"
+        trace "tme: (override with LAPEE_NO_TME=1 on cmdline)"
+        if [ -x /usr/local/bin/lapee-splash ]; then
+            /usr/local/bin/lapee-splash \
+                "HALTED: CPU does not support memory encryption (TME/SME)" \
+                > /dev/console 2>/dev/null || true
+        fi
+        exec sh -c 'while :; do sleep 3600; done'
+    fi
+    # Capability present. Now check active state via dmesg.
+    # /dev/kmsg is readable here; tail-newest lines via dmesg(1)
+    # when available, else grep the kmsg device directly.
+    _active=no
+    if command -v dmesg >/dev/null 2>&1; then
+        _dmesg=$(dmesg 2>/dev/null | head -200)
+    else
+        _dmesg=$(head -c 32768 /dev/kmsg 2>/dev/null)
+    fi
+    case "$_dmesg" in
+        *"Intel TME enabled"*)       _active=intel-tme ;;
+        *"AMD Memory Encryption"*)   _active=amd-sme ;;
+    esac
+    if [ "$_active" = "no" ]; then
+        trace "tme: $_has_cap capability present but no activation log; halting"
+        trace "tme: (override with LAPEE_NO_TME=1 on cmdline)"
+        if [ -x /usr/local/bin/lapee-splash ]; then
+            /usr/local/bin/lapee-splash \
+                "HALTED: $_has_cap capability present but memory encryption not active" \
+                > /dev/console 2>/dev/null || true
+        fi
+        exec sh -c 'while :; do sleep 3600; done'
+    fi
+    trace "tme: $_has_cap capability + $_active active -> proceed"
+}
+check_tme_sme
+
 # v1.2: Boot splash -- centred HyperBEAM ASCII art + a status
 # line that starts as "booting..." and gets replaced when we
 # know more. Each visibility stage writes a fresh splash so

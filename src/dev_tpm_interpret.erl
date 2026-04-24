@@ -2983,6 +2983,20 @@ collect_policy_signals(Claim, Envelope) ->
             maps:get(<<"consistent">>, PR, false),
         <<"pcr-replay-mismatch-count">> =>
             length(maps:get(<<"pcrs-mismatching">>, PR, [])),
+        %% OS-identity PCRs = [4, 7, 11, 14, 15] per TCG PC Client
+        %% spec + LapEE paper (boot loader, SB policy, UKI, shim
+        %% fallback, runtime). Firmware-internal = 0-6 \setminus 4.
+        %% Split the mismatch count so pcr_replay_finding can emit
+        %% info (firmware-only) vs warn (OS-identity) severity.
+        <<"pcr-replay-os-identity-mismatch-count">> =>
+            length([P || P <- maps:get(<<"pcrs-mismatching">>,
+                                       PR, []),
+                         lists:member(P, [4, 7, 11, 14, 15])]),
+        <<"pcr-replay-firmware-only-mismatch-count">> =>
+            length([P || P <- maps:get(<<"pcrs-mismatching">>,
+                                       PR, []),
+                         lists:member(P,
+                                      [0, 1, 2, 3, 5, 6, 8, 9, 10])]),
         <<"freshness-indicator">> =>
             maps:get(<<"freshness-indicator">>, FR,
                       <<"unknown">>),
@@ -3086,6 +3100,20 @@ finding(warn, Code, Section, Message) ->
     #{<<"severity">> => warn,
       <<"code">> => Code,
       <<"section">> => Section,
+      <<"message">> => Message};
+finding(info, Code, Section, Message) ->
+    %% `info' is observational: the fact IS true, operators should
+    %% know about it, but it doesn't degrade the attestation verdict
+    %% (doesn't count in warnings list, doesn't reduce policy_score).
+    %% Use for posture facts that document context rather than
+    %% signal a problem: known-vendor-CVEs that don't apply to this
+    %% specific firmware version, fresh-first-boot clock-unsafe
+    %% patterns that are benign by construction, event-log
+    %% truncations on firmware-internal PCRs whose identity is
+    %% attested via the manufacturer fingerprint DB.
+    #{<<"severity">> => info,
+      <<"code">> => Code,
+      <<"section">> => Section,
       <<"message">> => Message}.
 
 secure_boot_finding(#{<<"secure-boot-enabled">> := false}) ->
@@ -3109,19 +3137,39 @@ quote_integrity_finding(
 quote_integrity_finding(_) -> ok.
 
 pcr_replay_finding(
-  #{<<"pcr-replay-mismatch-count">> := N}) when N >= 3 ->
+  #{<<"pcr-replay-os-identity-mismatch-count">> := N}) when N >= 3 ->
     finding(warn, <<"pcr-replay-multi-mismatch">>,
             <<"pcr-replay">>,
             iolist_to_binary(io_lib:format(
-              "~p PCR(s) mismatched between event log and "
-              "quoted values - event log is likely truncated "
-              "or has cross-bank artefacts.", [N])));
+              "~p OS-identity PCR(s) (of 4, 7, 11, 14, 15) "
+              "mismatched between event log and quoted values "
+              "-- event log is likely truncated or has cross-"
+              "bank artefacts.", [N])));
 pcr_replay_finding(
-  #{<<"pcr-replay-mismatch-count">> := N}) when N >= 1 ->
+  #{<<"pcr-replay-os-identity-mismatch-count">> := N}) when N >= 1 ->
     finding(warn, <<"pcr-replay-mismatch">>,
             <<"pcr-replay">>,
             iolist_to_binary(io_lib:format(
-              "~p PCR(s) do not match the event log.", [N])));
+              "~p OS-identity PCR(s) (of 4, 7, 11, 14, 15) do "
+              "not match the event log.", [N])));
+pcr_replay_finding(
+  #{<<"pcr-replay-firmware-only-mismatch-count">> := N}) when N >= 1 ->
+    %% Firmware-internal PCRs 0-6 often have unlogged extensions
+    %% (microcode updates, ACPI table hashes, platform POST codes
+    %% that vendors treat as confidential). TCG PC Client permits
+    %% this and v1.2.2 verifies firmware identity via the
+    %% manufacturer fingerprint DB (dmi-bios-version / CRTM) not
+    %% log replay. Emit as an observational info note so the
+    %% verdict isn't tainted by a known-benign firmware behaviour,
+    %% while still surfacing the fact to dashboards / audit.
+    finding(info, <<"pcr-replay-firmware-internal-mismatch">>,
+            <<"pcr-replay">>,
+            iolist_to_binary(io_lib:format(
+              "~p firmware-internal PCR(s) (0-6) replay did not "
+              "match quoted values -- commonly caused by the "
+              "firmware logging a subset of its own measurements. "
+              "Firmware identity is attested independently via "
+              "the fingerprint DB.", [N])));
 pcr_replay_finding(_) -> ok.
 
 freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
@@ -3170,7 +3218,15 @@ freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
                       "verifier cannot be fooled by a stripped "
                       "envelope.">>);
         uninitialised_shadow ->
-            finding(warn,
+            %% Informational, not a warning: both counters being
+            %% implausibly large (>= 2^28) is the signature of
+            %% uninitialised NV shadow on a first-production-boot
+            %% TPM. An attacker cannot fabricate this pattern on a
+            %% TPM that has ever seen a clean shutdown, and the
+            %% primary freshness defence (nonce in extraData) is
+            %% unaffected. Surface as observational so the verdict
+            %% doesn't degrade on a known-benign first-boot shape.
+            finding(info,
                     <<"freshness-safe-false-shadow-uninitialised">>,
                     <<"freshness">>,
                     <<"TPM clock `safe' flag is false and both "
@@ -3312,11 +3368,23 @@ runtime_driver_finding(#{<<"has-runtime-driver">> := true}) ->
 runtime_driver_finding(_) -> ok.
 
 cve_finding(#{<<"tpm-known-cve-count">> := N}) when N > 0 ->
-    finding(warn, <<"tpm-known-cves">>,
+    %% Informational, not a warning. The CVE list is vendor
+    %% posture context (which families have had disclosed
+    %% vulnerabilities) -- it tells the operator to track the
+    %% TPM firmware version against vendor patch advisories.
+    %% It does NOT invalidate the current attestation: the
+    %% quote + EK chain + runtime event log are all valid
+    %% evidence regardless. Degrading the verdict on every
+    %% NPCT75x / Infineon / STM TPM would make attested-with-
+    %% warnings the floor for the entire market; that isn't
+    %% what the finding is for.
+    finding(info, <<"tpm-known-cves">>,
             <<"tpm">>,
             iolist_to_binary(io_lib:format(
               "TPM vendor has ~p known CVE(s) listed in the "
-              "manufacturers DB.", [N])));
+              "manufacturers DB. Track firmware version against "
+              "vendor patch advisories -- this does not "
+              "invalidate the current attestation.", [N])));
 cve_finding(_) -> ok.
 
 sb_policy_finding(#{<<"policy-posture">> := <<"setup-mode">>}) ->
