@@ -175,6 +175,27 @@ if (( SIZE_MIB < ESP_MIN )); then
     die "--size $SIZE_MIB MiB too small (UKI needs at least $ESP_MIN MiB plus GPT overhead)"
 fi
 
+# ---- step 1b: stage SB enrolment .auth files if present -------
+# When `sb-setup.sh enrol' has produced PK/KEK/db .auth files
+# under secureboot/enrol/, drop them into the ESP root so the
+# Framework BIOS can enrol from the same stick that carries the
+# signed UKI. One-stick flow: plug in, F2, Setup Mode, enrol
+# db.auth / KEK.auth / PK.auth, save+exit, boot.
+
+SB_ENROL_DIR="${LAPEE_ROOT}/secureboot/enrol"
+STAGED_AUTH=""
+if [[ -d "$SB_ENROL_DIR" ]]; then
+    for f in PK.auth KEK.auth db.auth; do
+        if [[ -f "$SB_ENROL_DIR/$f" ]]; then
+            cp "$SB_ENROL_DIR/$f" "$BUILD_DIR/$f"
+            STAGED_AUTH="${STAGED_AUTH}${STAGED_AUTH:+ }$f"
+        fi
+    done
+fi
+if [[ -n "$STAGED_AUTH" ]]; then
+    echo ">> staging SB enrolment bundle: $STAGED_AUTH"
+fi
+
 # ---- step 2: build the disk image inside the tools container --
 
 IMG_IN_WORK="usb-build/disk.img"
@@ -223,6 +244,17 @@ docker run --rm --platform=linux/amd64 \
             > /work/usb-build/README.TXT
         mcopy -i /work/usb-build/esp.img \\
             /work/usb-build/README.TXT ::/README.TXT
+
+        # SB enrolment .auth files at ESP root (if staged by the
+        # host wrapper above). Framework BIOS Setup-Mode enrolment
+        # browses this partition; the operator picks each file in
+        # order db.auth -> KEK.auth -> PK.auth.
+        for _a in PK.auth KEK.auth db.auth; do
+            if [[ -f /work/usb-build/\$_a ]]; then
+                mcopy -i /work/usb-build/esp.img \\
+                    /work/usb-build/\$_a ::/\$_a
+            fi
+        done
 
         # Seal the ESP back into the disk image.
         dd if=/work/usb-build/esp.img of=/work/${IMG_IN_WORK} \\

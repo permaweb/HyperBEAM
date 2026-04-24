@@ -302,9 +302,15 @@ if [ "$cmd" = "enrol" ]; then
     cat <<'ENROL'
 
 Enrolment procedure on the Framework 13:
-  1. Copy the three .auth files above to a separate FAT-formatted
-     USB stick (not the LapEE boot stick). Root-level is fine.
-  2. Plug the enrolment USB into the Framework.
+  1. If you haven't yet: `./scripts/sb-setup.sh sign' -- this
+     bakes the three .auth files above into the ESP root of
+     work/lapee-usb.img alongside the signed UKI, so one stick
+     covers both boot and enrolment. (Running `sign' after
+     `enrol' picks up the newly-produced .auth files; running
+     `sign' before `enrol' is also fine -- rerun `sign' once
+     `enrol' lands them.)
+  2. Flash with `make hb-usb-write DEV=/dev/diskN' and plug the
+     stick into the Framework.
   3. Power on, F2 to enter BIOS.
   4. Security -> Secure Boot -> Enter Setup Mode (clears factory
      Microsoft keys; takes the machine out of a trust-chain rooted
@@ -312,12 +318,15 @@ Enrolment procedure on the Framework 13:
   5. Still in Security -> Secure Boot, enrol the three files in
      order: db.auth, KEK.auth, PK.auth. (PK last; enrolling PK
      exits setup mode and re-enables Secure Boot on the operator
-     chain.)
-  6. Save + exit. Boot from the LapEE USB -- the signed UKI from
-     `sb-setup.sh sign' will pass SB verification; any other UEFI
-     binary (including the factory Microsoft-signed installer
-     media) will be rejected. This is the intended single-purpose
-     appliance posture.
+     chain.) The BIOS file browser shows them at the ESP root.
+  6. Save + exit. The Framework then boots the signed UKI from
+     the same stick -- the `.auth' files are left in place but
+     harmless (their contents are public; they're already
+     installed in the firmware key databases now).
+
+If you prefer a separate enrolment stick: the three .auth files
+also live at secureboot/enrol/ on the host; copy them to any
+FAT-formatted USB at root. Single-stick is the cleaner default.
 
 To revert to factory Microsoft keys: Security -> Secure Boot ->
 Restore Factory Keys.
