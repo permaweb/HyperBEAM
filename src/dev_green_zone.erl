@@ -102,7 +102,7 @@ default_zone_required_opts(_Opts) ->
         % <<"routes">> => hb_opts:get(routes, [], Opts),
         % <<"on">> => hb_opts:get(on, undefined, Opts),
         % <<"scheduling-mode">> => disabled,
-        % <<"initialized">> => permanent
+        % <<"initialized">> => <<"permanent">>
     }.
 
 %% @doc Replace values of <<"self">> in a configuration map with corresponding values from Opts.

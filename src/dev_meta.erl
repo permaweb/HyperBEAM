@@ -111,8 +111,8 @@ handle_initialize([], _NodeMsg) ->
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"POST">> ->
-            case hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg) of
-                permanent ->
+            case is_permanent(NodeMsg) of
+                true ->
                     embed_status(
                         {error,
                             <<"The node message of this machine is already "
@@ -120,7 +120,7 @@ info(_, Request, NodeMsg) ->
                         },
                         NodeMsg
                     );
-                _ ->
+                false ->
                     update_node_message(Request, NodeMsg)
             end;
         _ ->
@@ -202,19 +202,15 @@ adopt_node_message(Request, NodeMsg) ->
     ?event({set_node_message_success, Request}),
     % Ensure that the node history is updated and the http-server ID is
     % not overridden.
-    case hb_opts:get(initialized, permanent, NodeMsg) of
-        permanent ->
+    case is_permanent(NodeMsg) of
+        true ->
             {error, <<"Node message is already permanent.">>};
-        _ ->
-            hb_http_server:set_opts(normalize_node_message_update(Request), NodeMsg)
+        false ->
+            hb_http_server:set_opts(Request, NodeMsg)
     end.
 
-normalize_node_message_update(
-    Request = #{ <<"initialized">> := <<"permanent">> }
-) ->
-    Request#{ <<"initialized">> => permanent };
-normalize_node_message_update(Request) ->
-    Request.
+is_permanent(NodeMsg) ->
+    hb_ao:get(<<"initialized">>, NodeMsg, not_found, NodeMsg) =:= <<"permanent">>.
 
 %% @doc Handle an AO-Core request, which is a list of messages. We apply
 %% the node's pre-processor to the request first, and then resolve the request

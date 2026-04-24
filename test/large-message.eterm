@@ -96,7 +96,7 @@
         <<"content-type">> =>
             <<"multipart/form-data; boundary=\"5zd5yKhUfgSnCzBVlt29-Vs4rQQeUBGuVqNJubt07jI\"">>,
         <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
-        <<"initialized">> => permanent,<<"only">> => local,
+        <<"initialized">> => <<"permanent">>,<<"only">> => local,
         <<"debug-show-priv">> => false,
         <<"trusted">> =>
             #{<<"append">> =>
