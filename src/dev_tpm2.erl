@@ -253,6 +253,89 @@ extend_with_ak_pubkey(AKPem) when is_binary(AKPem) ->
         {error, _} = E -> E
     end.
 
+%% @doc Extend PCR 15 with sha256(TCG event log) and record an
+%% `EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT' runtime event -- paper P5-ext
+%% "AO-Core hashpath continuity".
+%%
+%% The paper's section AO-Core Continuity says:
+%%
+%%   "HyperBEAM seeds its AO-Core chain with a commitment to the
+%%    TPM event log tip immediately after key-pubkey-extend;
+%%    thereafter every device first-load and every message extends
+%%    the chain. The two logs are not analogous mechanisms; they
+%%    are the same cryptographic primitive composed end-to-end."
+%%
+%% Mechanism: read `/sys/kernel/security/tpm0/binary_bios_measurements'
+%% (the firmware-side TCG log), hash it with SHA-256, extend PCR 15
+%% with that digest, and record a runtime event describing the
+%% extension. Every subsequent AO-Core computation whose hashpath
+%% traces back to PCR 15 now carries a commitment to the FULL
+%% firmware-to-OS measurement chain, binding the TPM world and the
+%% AO-Core world cryptographically into one continuous merkle chain
+%% (Figure 2 in the paper).
+%%
+%% Ordering note: fires AFTER `extend_with_ak_pubkey/1' so the AK
+%% pub lands in PCR 15 first (P5), then the TCG log tip lands on
+%% top (P5-ext). A verifier replaying the runtime event log
+%% observes the AK pub binding, THEN the log-tip binding, THEN the
+%% first node-message extension. PCR 15 trajectory:
+%%
+%%   0 -> sha256(0 || sha256(ak_pub_pem))
+%%     -> sha256(prev || sha256(tcg_event_log))
+%%     -> sha256(prev || sha256(hb_message:id(node_message)))
+%%     -> ...
+%%
+%% The runtime-event-log entry carries the same digest so the
+%% verifier can recompute sha256(envelope.tcg-event-log) and
+%% confirm byte-for-byte match.
+%%
+%% If the log is not available from /sys (e.g. QEMU TCG without
+%% vTPM event-log passthrough), the extension is SKIPPED cleanly:
+%% paper P5-ext is a real-hardware property. Returns ok either
+%% way so init_chain continues.
+extend_with_tcg_event_log_tip() ->
+    case read_tcg_event_log() of
+        Bin when is_binary(Bin), byte_size(Bin) > 0 ->
+            Digest = crypto:hash(sha256, Bin),
+            case nif_pcr_extend(?NODE_IDENTITY_PCR, Digest) of
+                ok ->
+                    _ = append_event(?NODE_IDENTITY_PCR,
+                        #{
+                            <<"event-type">> =>
+                                <<"EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT">>,
+                            <<"description">> =>
+                                <<"TPM event log tip commitment "
+                                  "(paper P5-ext AO-Core hashpath "
+                                  "continuity: sha256 of firmware-"
+                                  "side TCG event log extended into "
+                                  "PCR 15, so every subsequent AO-"
+                                  "Core hashpath entry carries a "
+                                  "commitment to the full boot "
+                                  "measurement chain). Digest is "
+                                  "byte-for-byte sha256 of the "
+                                  "`tcg-event-log' field in this "
+                                  "envelope.">>,
+                            <<"digest">> => hb_util:encode(Digest),
+                            <<"subject">> =>
+                                hb_util:encode(
+                                    <<"sha256(tcg-event-log)">>),
+                            <<"subject-is-message">> => false,
+                            <<"tcg-event-log-length-bytes">> =>
+                                byte_size(Bin)
+                        }),
+                    ok;
+                {error, _} = E -> E
+            end;
+        _ ->
+            %% Log not readable -- firmware doesn't expose it
+            %% (QEMU without vTPM event-log passthrough is the
+            %% typical case). Skip cleanly; a verifier will see
+            %% absent EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT on the
+            %% runtime log and grade accordingly (info on stub
+            %% boots, warn on real-hardware envelopes).
+            ok
+    end.
+
 %%%============================================================================
 %%% quote/3
 %%%============================================================================
@@ -1546,7 +1629,21 @@ init_chain(Opts) ->
                             %% sha256(ak_pub_pem) via PCR 15. See
                             %% extend_with_ak_pubkey/1 header for
                             %% the sequencing caveat.
-                            extend_with_ak_pubkey(AKPem);
+                            case extend_with_ak_pubkey(AKPem) of
+                                ok ->
+                                    %% Paper P5-ext AO-Core hashpath
+                                    %% continuity: after AK pub lands
+                                    %% in PCR 15, commit the firmware-
+                                    %% side TCG event log tip into
+                                    %% PCR 15 so every subsequent AO-
+                                    %% Core computation's hashpath
+                                    %% carries a binding to the full
+                                    %% boot measurement chain. See
+                                    %% extend_with_tcg_event_log_tip/0
+                                    %% header.
+                                    extend_with_tcg_event_log_tip();
+                                {error, _} = E -> E
+                            end;
                         {error, _} = E -> E
                     end;
                 {error, _} = E -> E

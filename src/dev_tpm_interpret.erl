@@ -3070,7 +3070,19 @@ collect_policy_signals(Claim, Envelope) ->
         %% dev_tpm2:chk_ak_pubkey_binding/1) so the cross-node
         %% verdict path also gates on it.
         <<"ak-pubkey-extend-verified">> =>
-            verify_ak_pubkey_extend(Envelope)
+            verify_ak_pubkey_extend(Envelope),
+        %% v1.2.2 paper P5-ext (AO-Core hashpath continuity): the
+        %% TPM event log tip is committed into PCR 15 as the step
+        %% immediately after the AK pub extension, so every
+        %% subsequent AO-Core hashpath entry carries a commitment
+        %% to the full boot measurement chain (paper Section AO-
+        %% Core Continuity: "HyperBEAM seeds its AO-Core chain
+        %% with a commitment to the TPM event log tip immediately
+        %% after key-pubkey-extend"). Computed by locating an
+        %% EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT event on PCR 15
+        %% whose digest matches sha256(envelope.tcg-event-log).
+        <<"hashpath-continuity-verified">> =>
+            verify_tcg_log_tip_extend(Envelope)
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -3087,6 +3099,7 @@ classify_policy_findings(S) ->
          ak_finding(S),
          ek_ak_binding_finding(S),      %% v1.2 red-team warn
          ak_pubkey_extend_finding(S),   %% v1.2 paper-to-code P5
+         hashpath_continuity_finding(S), %% v1.2.2 paper P5-ext
          ima_policy_finding(S),
          tpm_trust_finding(S),
          tme_finding(S),
@@ -3556,6 +3569,42 @@ ak_pubkey_extend_finding(
               "ephemeral-node-key-binding P5 requires both.">>);
 ak_pubkey_extend_finding(_) -> ok.
 
+%% v1.2.2 paper P5-ext: AO-Core hashpath continuity finding.
+%%
+%%   true           -> ok (paper property held)
+%%   false          -> warn (event missing or digest mismatch; the
+%%                     envelope carries TCG event log bytes but the
+%%                     runtime log does not commit to them)
+%%   `log-absent'   -> info (firmware did not expose a TCG event log
+%%                     in this envelope -- common on QEMU without
+%%                     vTPM passthrough; paper P5-ext specifically
+%%                     addresses real-hardware envelopes)
+%%   `<<"unknown">>' -> ok (envelope shape doesn't let us decide)
+hashpath_continuity_finding(
+  #{<<"hashpath-continuity-verified">> := true}) -> ok;
+hashpath_continuity_finding(
+  #{<<"hashpath-continuity-verified">> := false}) ->
+    finding(warn, <<"hashpath-continuity-missing">>,
+            <<"ak">>,
+            <<"No EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT event in the "
+              "runtime event log with digest = sha256(tcg-event-log). "
+              "Paper AO-Core continuity (P5-ext) requires the TPM "
+              "event log tip to be extended into PCR 15 immediately "
+              "after the AK pub, so every AO-Core hashpath entry "
+              "carries a commitment to the full boot chain. Without "
+              "it, the two logs (TPM + AO-Core) remain parallel but "
+              "are not cross-linked.">>);
+hashpath_continuity_finding(
+  #{<<"hashpath-continuity-verified">> := <<"log-absent">>}) ->
+    finding(info, <<"hashpath-continuity-log-absent">>,
+            <<"ak">>,
+            <<"Firmware did not expose a TCG event log in this "
+              "envelope, so paper P5-ext (AO-Core hashpath "
+              "continuity via TCG log commitment) cannot be "
+              "evaluated. Common on QEMU without vTPM passthrough; "
+              "not expected on real-hardware envelopes.">>);
+hashpath_continuity_finding(_) -> ok.
+
 %% v1.2 red-team review: the EK<->AK binding is NOT cryptographically
 %% proven in the v1.2 envelope. The EK chain validates an EK cert;
 %% the quote validates under an AK pubkey; no operation proves
@@ -3688,6 +3737,54 @@ verify_ak_pubkey_extend(E) ->
                 case Match of
                     [_|_] -> true;
                     []    -> false
+                end
+            catch _:_ -> <<"unknown">>
+            end
+    end.
+
+%% @doc Paper P5-ext (AO-Core hashpath continuity) verifier.
+%%
+%% Returns:
+%%   `true'          if the runtime event log has an
+%%                   EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT event on
+%%                   PCR 15 whose digest equals sha256 of the
+%%                   envelope's tcg-event-log bytes.
+%%   `false'         if the tcg-event-log is present but no matching
+%%                   event exists (the firmware log was available
+%%                   at init_chain time but the cross-link was not
+%%                   emitted -- paper property fails).
+%%   `<<"log-absent">>' if the envelope carries no tcg-event-log
+%%                   bytes (firmware didn't expose it). Paper P5-
+%%                   ext only binds when a log is available; emit
+%%                   as info rather than warn.
+%%   `<<"unknown">>' if the envelope shape doesn't let us decide
+%%                   (no runtime event log at all, etc.).
+verify_tcg_log_tip_extend(E) ->
+    TcgLogB64 = hb_maps:get(<<"tcg-event-log">>, E, <<>>, #{}),
+    Log = hb_maps:get(<<"runtime-event-log">>, E, [], #{}),
+    case {TcgLogB64, Log} of
+        {<<>>, _} -> <<"log-absent">>;
+        {_, []}   -> <<"unknown">>;
+        {Base64, Events} ->
+            try
+                Raw = hb_util:decode(Base64),
+                case byte_size(Raw) of
+                    0 -> <<"log-absent">>;
+                    _ ->
+                        Expected = crypto:hash(sha256, Raw),
+                        Match = [
+                            X || X <- Events,
+                                 is_map(X),
+                                 ev_pcr(X) =:= 15,
+                                 maps:get(<<"event-type">>, X, <<>>) =:=
+                                     <<"EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT">>,
+                                 hb_util:decode(
+                                   maps:get(<<"digest">>, X, <<>>)) =:=
+                                     Expected],
+                        case Match of
+                            [_|_] -> true;
+                            []    -> false
+                        end
                 end
             catch _:_ -> <<"unknown">>
             end
