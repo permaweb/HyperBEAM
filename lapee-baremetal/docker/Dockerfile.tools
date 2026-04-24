@@ -1,0 +1,39 @@
+# Linux tooling image for LapEE USB-image assembly + SB signing.
+#
+# Used by:
+#   - scripts/build-usb-image.sh: ukify + objcopy (UKI assembly),
+#     parted (GPT), dosfstools + mtools (FAT32 populate without
+#     privileged mount), dd (sector-copy ESP back into the disk).
+#   - scripts/boot-usb-image.sh: parted + dd + mtools to extract
+#     writeback artefacts from the QEMU ESP after a smoke-boot.
+#   - scripts/sb-setup.sh: sbsign / sbverify for UKI signing,
+#     cert-to-efi-sig-list + sign-efi-sig-list for producing
+#     UEFI enrolment .auth bundles. These tools are packaged for
+#     apt but were pulled from Homebrew -- we run them in-container
+#     from the macOS host so the operator never needs a Linux box.
+#
+# The image stays lean. Dropped vs. v1.1: tpm2-tools, libtss2-dev,
+# cryptsetup-bin, squashfs-tools, python3-cryptography, gcc +
+# libc6-dev (none on the v1.2.2 hot path).
+
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends \
+        systemd-ukify \
+        systemd-boot-efi \
+        binutils \
+        parted \
+        dosfstools \
+        mtools \
+        sbsigntool \
+        efitools \
+        openssl \
+        uuid-runtime \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+CMD ["/bin/bash"]

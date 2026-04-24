@@ -79,6 +79,8 @@ builders:
 	    -f docker/Dockerfile.builder       docker/
 	docker build --platform=linux/amd64 -t lapee-hyperbeam-builder:latest \
 	    -f docker/Dockerfile.hyperbeam     docker/
+	docker build --platform=linux/amd64 -t lapee-tools:latest \
+	    -f docker/Dockerfile.tools         docker/
 
 # ------------------------------------------------------------
 # Kernel build via Buildroot 2024.02 LTS inside lapee-builder.
