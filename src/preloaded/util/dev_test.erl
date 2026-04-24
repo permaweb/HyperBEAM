@@ -4,6 +4,7 @@
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
+-export([varied/3, compute_nested/3, compute_all/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -65,9 +66,14 @@ load(Base, _, _Opts) ->
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
 
+-spec varied(#{ x := any() }, #{}, #{}) -> {ok, #{ x := any(), '...' => base }}.
+varied(#{ <<"x">> := X }, _Req, _Opts) ->
+    {ok, #{ <<"x">> => hb_util:int(X) + 1, <<"...">> => base }}.
+
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
+-spec compute(#{ already_seen => list() }, #{ slot := integer() }, map()) -> {ok, map()}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -84,6 +90,28 @@ compute(Base, Req, Opts) ->
             Opts
         )
     }.
+
+-spec compute_nested(#{ already_seen => list() }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
+compute_nested(Base, Req, Opts) ->
+        AssignmentSlot = hb_ao:get(<<"outer/slot">>, Req, Opts),
+        Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
+        ?event({compute_called, {base, Base}, {req, Req}, {opts, Opts}}),
+        {ok,
+            hb_ao:set(
+                Base,
+                #{
+                    <<"random-key">> => <<"random-value">>,
+                    <<"results">> =>
+                        #{ <<"assignment-slot">> => AssignmentSlot },
+                    <<"already-seen">> => [AssignmentSlot | Seen]
+                },
+                Opts
+            )
+        }.
+
+-spec compute_all(any(), #{ slot := integer() }, map()) -> {ok, map()}.
+compute_all(Base, Req, Opts) ->
+    {ok, Base#{ <<"all">> => <<"done">> }}.
 
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 init(Msg, _Req, Opts) ->
