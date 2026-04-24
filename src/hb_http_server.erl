@@ -61,10 +61,11 @@ start() ->
     maybe_greeter(Loaded, PrivWallet),
     start(
         Loaded#{
-            priv_wallet => PrivWallet,
-            store => UpdatedStoreOpts,
-            port => hb_opts:get(port, 8734, Loaded),
-            cache_writers => [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
+            <<"priv-wallet">> => PrivWallet,
+            <<"store">> => UpdatedStoreOpts,
+            <<"port">> => hb_opts:get(port, 8734, Loaded),
+            <<"cache-writers">> =>
+                [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
         }
     ).
 start(Opts) ->
@@ -152,7 +153,7 @@ new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
         hb_maps:merge(
             hb_opts:default_message_with_env(),
-            RawNodeMsg#{ only => local }
+            RawNodeMsg#{ <<"only">> => local }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
@@ -184,7 +185,7 @@ new_server(RawNodeMsg) ->
         ),
     % Put server ID into node message so it's possible to update current server
     % params.
-    NodeMsgWithID = hb_maps:put(http_server, ServerID, NodeMsg),
+    NodeMsgWithID = hb_maps:put(<<"http-server">>, ServerID, NodeMsg),
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
     ProtoOpts = #{
         env => #{ dispatch => Dispatcher, node_msg => NodeMsgWithID },
@@ -240,7 +241,7 @@ new_server(RawNodeMsg) ->
     % Update the node message with the actual port that was used, in the event
     % that the OS assigned a different port. This happens, for example, when we
     % use port 0.
-    set_opts(NodeMsg#{ port => Port }),
+    set_opts(NodeMsg#{ <<"port">> => Port }),
     ?event(http,
         {http_server_started,
             {listener, Listener},
@@ -304,8 +305,13 @@ http3_conn_sup_loop() ->
 
 start_http2(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http2, ServerID}),
-    MaxConnections = maps:get(max_connections, NodeMsg, 10000),
-    NumAcceptors = maps:get(num_acceptors, NodeMsg, erlang:system_info(schedulers) * 4),
+    MaxConnections = maps:get(<<"max-connections">>, NodeMsg, 10000),
+    NumAcceptors =
+        maps:get(
+            <<"num-acceptors">>,
+            NodeMsg,
+            erlang:system_info(schedulers) * 4
+        ),
     TransportOpts = #{
         socket_opts => [{port, RequestedPort = hb_opts:get(port, 0, NodeMsg)}],
         max_connections => MaxConnections,
@@ -381,7 +387,7 @@ handle_request(RawReq, Body, ServerID) ->
     % `hb_http' module to calculate the duration of the request.
     StartTime = os:system_time(millisecond),
     Req = RawReq#{ start_time => StartTime },
-    NodeMsg = get_opts(#{ http_server => ServerID }),
+    NodeMsg = get_opts(#{ <<"http-server">> => ServerID }),
     put(server_id, ServerID),
     % The request is of normal AO-Core form, so we parse it and invoke
     % the meta@1.0 device to handle it.
@@ -407,7 +413,7 @@ handle_request(RawReq, Body, ServerID) ->
                 {ok, Res} =
                     dev_meta:handle(
                         NodeMsg#{
-                            commitment_device => CommitmentCodec
+                            <<"commitment-device">> => CommitmentCodec
                         },
                         ReqSingleton
                     ),
@@ -478,7 +484,7 @@ allowed_methods(Req, State) ->
     }.
 
 %% @doc Merges the provided `Opts' with uncommitted values from `Request',
-%% preserves the http_server value, and updates node_history by prepending
+%% preserves the http-server value, and updates node-history by prepending
 %% the `Request'. If a server reference exists, updates the Cowboy environment
 %% variable 'node_msg' with the resulting options map.
 set_opts(Opts) ->
@@ -489,18 +495,8 @@ set_opts(Opts) ->
             ok = cowboy:set_env(ServerRef, node_msg, Opts)
     end.
 set_opts(Request, Opts) ->
-    PreparedOpts =
-        hb_opts:mimic_default_types(
-            Opts,
-            false,
-            Opts
-        ),
-    PreparedRequest =
-        hb_opts:mimic_default_types(
-            hb_message:uncommitted(Request),
-            false,
-            Opts
-        ),
+    PreparedOpts = Opts,
+    PreparedRequest = hb_message:uncommitted(Request),
     MergedOpts =
         maps:merge(
             PreparedOpts,
@@ -509,16 +505,21 @@ set_opts(Request, Opts) ->
     ?event(set_opts, {merged_opts, {explicit, MergedOpts}}),
     History =
         hb_opts:get(node_history, [], Opts)
-            ++ [ hb_private:reset(maps:without([node_history], PreparedRequest)) ],
+            ++
+                [
+                    hb_private:reset(
+                        maps:without([<<"node-history">>], PreparedRequest)
+                    )
+                ],
     FinalOpts = MergedOpts#{
-        http_server => hb_opts:get(http_server, no_server, Opts),
-        node_history => History
+        <<"http-server">> => hb_opts:get(http_server, no_server, Opts),
+        <<"node-history">> => History
     },
     {set_opts(FinalOpts), FinalOpts}.
 
 %% @doc Get the node message for the current process.
 get_opts() ->
-    get_opts(#{ http_server => get(server_id) }).
+    get_opts(#{ <<"http-server">> => get(server_id) }).
 get_opts(NodeMsg) ->
     ServerRef = hb_opts:get(http_server, no_server_ref, NodeMsg),
     cowboy:get_env(ServerRef, node_msg, no_node_msg).
@@ -530,7 +531,7 @@ set_proc_server_id(ServerID) ->
 %% @doc Apply the default node message to the given opts map.
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.
-    TempOpts = Opts#{ only => local },
+    TempOpts = Opts#{ <<"only">> => local },
     % Get the port to use for the server. If no port is provided, we use port 0
     % will the operating system assign a free port.
     Port = hb_opts:get(port, 0, TempOpts),
@@ -553,11 +554,11 @@ set_default_opts(Opts) ->
         {wallet, Wallet}
     }),
     Opts#{
-        port => Port,
-        store => Store,
-        priv_wallet => Wallet,
-        address => hb_util:human_id(ar_wallet:to_address(Wallet)),
-        force_signed => true
+        <<"port">> => Port,
+        <<"store">> => Store,
+        <<"priv-wallet">> => Wallet,
+        <<"address">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
+        <<"force-signed">> => true
     }.
 
 %% @doc Test that we can start the server, send a message, and get a response.
@@ -594,7 +595,7 @@ start_node(Opts) ->
 set_node_opts_test() ->
     Node =
         start_node(#{
-            on => #{
+            <<"on">> => #{
                 <<"start">> => #{
                     <<"device">> =>
                         #{
@@ -617,16 +618,16 @@ set_node_opts_test() ->
 set_opts_test() ->
     DefaultOpts = hb_opts:default_message_with_env(),
     start_node(DefaultOpts#{ 
-        priv_wallet => Wallet = ar_wallet:new(), 
-        port => rand:uniform(10000) + 10000 
+        <<"priv-wallet">> => Wallet = ar_wallet:new(), 
+        <<"port">> => rand:uniform(10000) + 10000 
     }),
     Opts = get_opts(#{ 
-        http_server => hb_util:human_id(ar_wallet:to_address(Wallet))
+        <<"http-server">> => hb_util:human_id(ar_wallet:to_address(Wallet))
     }),
     NodeHistory = hb_opts:get(node_history, [], Opts),
     ?event(debug_node_history, {node_history_length, length(NodeHistory)}),
     ?assert(length(NodeHistory) == 0),
-    % Test case 1: Empty node_history case
+    % Test case 1: Empty node-history case
     Request1 = #{
         <<"hello">> => <<"world">>
     },             
@@ -636,7 +637,7 @@ set_opts_test() ->
     ?event(debug_node_history, {node_history_length, length(NodeHistory1)}),
     ?assert(length(NodeHistory1) == 1),
     ?assert(Key1 == <<"world">>),
-    % Test case 2: Non-empty node_history case
+    % Test case 2: Non-empty node-history case
     Request2 = #{
         <<"hello2">> => <<"world2">>
     },
@@ -646,7 +647,7 @@ set_opts_test() ->
     ?event(debug_node_history, {node_history_length, length(NodeHistory2)}),
     ?assert(length(NodeHistory2) == 2),
     ?assert(Key2 == <<"world2">>),
-    % Test case 3: Non-empty node_history case
+    % Test case 3: Non-empty node-history case
     {ok, UpdatedOpts3} = set_opts(#{}, UpdatedOpts2#{ <<"hello3">> => <<"world3">> }),
     NodeHistory3 = hb_opts:get(node_history, not_found, UpdatedOpts3),
     Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
@@ -659,12 +660,12 @@ restart_server_test() ->
     Wallet = ar_wallet:new(),
     BaseOpts = #{
         <<"test-key">> => <<"server-1">>,
-        priv_wallet => Wallet,
-        protocol => http2
+        <<"priv-wallet">> => Wallet,
+        <<"protocol">> => http2
     },
     _ = start_node(BaseOpts),
     N2 = start_node(BaseOpts#{ <<"test-key">> => <<"server-2">> }),
     ?assertEqual(
         {ok, <<"server-2">>},
-        hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{protocol => http2})
+        hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{ <<"protocol">> => http2 })
     ).

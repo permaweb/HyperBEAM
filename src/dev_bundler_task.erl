@@ -246,8 +246,8 @@ build_signed_tx_test() ->
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
     TestOpts = NodeOpts#{
-        priv_wallet => ar_wallet:new(),
-        store => hb_test_utils:test_store()
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
     },
     try
         Timestamp = 12344567,
@@ -311,8 +311,8 @@ build_signed_tx_on_arbundles_js_test() ->
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
     TestOpts = NodeOpts#{
-        priv_wallet => hb:wallet(),
-        store => hb_test_utils:test_store()
+        <<"priv-wallet">> => hb:wallet(),
+        <<"store">> => hb_test_utils:test_store()
     },
     try
         % Load an arweave.js-created dataitem

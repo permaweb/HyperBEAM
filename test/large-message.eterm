@@ -2,36 +2,30 @@
   <<"append">> =>
       <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
   <<"commitments">> =>
-      #{<<"6nWXloEFP1kqslsOCKCLxWvzr5GVJvvWlQAO0Uwv7MM">> =>
+      #{<<"MqW5d_PDowgYc-J3Z8RCPLP3YCRtlBoXGovShrPOtdM">> =>
             #{<<"commitment-device">> => <<"httpsig@1.0">>,
               <<"committed">> =>
-                  #{<<"1">> => <<"address">>,<<"10">> => <<"public-key">>,
-                    <<"11">> => <<"report">>,<<"12">> => <<"vcpu_type">>,
-                    <<"13">> => <<"vcpus">>,<<"14">> => <<"vmm_type">>,
-                    <<"2">> => <<"ao-types">>,<<"3">> => <<"append">>,
-                    <<"4">> => <<"firmware">>,<<"5">> => <<"guest_features">>,
-                    <<"6">> => <<"initrd">>,<<"7">> => <<"kernel">>,
-                    <<"8">> => <<"node-message">>,<<"9">> => <<"nonce">>},
-              <<"keyid">> => <<"YW8">>,
+                  [<<"address">>,<<"ao-types">>,<<"append">>,<<"firmware">>,
+                   <<"guest_features">>,<<"initrd">>,<<"kernel">>,
+                   <<"node-message">>,<<"nonce">>,<<"public-key">>,
+                   <<"report">>,<<"vcpu_type">>,<<"vcpus">>,<<"vmm_type">>],
+              <<"keyid">> => <<"constant:ao">>,
               <<"signature">> =>
-                  <<"6nWXloEFP1kqslsOCKCLxWvzr5GVJvvWlQAO0Uwv7MM">>,
+                  <<"MqW5d_PDowgYc-J3Z8RCPLP3YCRtlBoXGovShrPOtdM">>,
               <<"type">> => <<"hmac-sha256">>},
-        <<"uHPsVJP_v7B46__xiMPluCZf_6IXjsMfsUTHHC46uz4">> =>
+        <<"stapNTb5icwDufTHLDKiuYbIdFGDPor4gY3XHg1Kl94">> =>
             #{<<"commitment-device">> => <<"httpsig@1.0">>,
               <<"committed">> =>
-                  #{<<"1">> => <<"address">>,<<"10">> => <<"public-key">>,
-                    <<"11">> => <<"report">>,<<"12">> => <<"vcpu_type">>,
-                    <<"13">> => <<"vcpus">>,<<"14">> => <<"vmm_type">>,
-                    <<"2">> => <<"ao-types">>,<<"3">> => <<"append">>,
-                    <<"4">> => <<"firmware">>,<<"5">> => <<"guest_features">>,
-                    <<"6">> => <<"initrd">>,<<"7">> => <<"kernel">>,
-                    <<"8">> => <<"node-message">>,<<"9">> => <<"nonce">>},
+                  [<<"address">>,<<"ao-types">>,<<"append">>,<<"firmware">>,
+                   <<"guest_features">>,<<"initrd">>,<<"kernel">>,
+                   <<"node-message">>,<<"nonce">>,<<"public-key">>,
+                   <<"report">>,<<"vcpu_type">>,<<"vcpus">>,<<"vmm_type">>],
               <<"committer">> =>
-                  <<"ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k">>,
+                  <<"gsSeubkDDeQZgCrCYer2F8OBhYsyOR6LfGOx7OVtFFM">>,
               <<"keyid">> =>
-                  <<"rh3EGHNtQyto38UnoKwbnEkw3TqlR5b18n_uVySFBdI-t0O7lcrRM0MrL8l09YHb9ZAG5A-cB3ExZpdDCnnCGcvxFesdnapzWhYkPpXZKvgVk7NyZdRFWUJXoSaw3n5fajGShjAiOkiEzDEwHKozZnqJl-DRuuHVGcw4Q1VMk1CtzJJBCrZeNTG1crWynHa-3AfCEQ6Ou8AMs8a7ibHP57Jcmhe8xfVO4MtEvTtuMejAAjLaLIPWtzhct3rJIZmpSvwG7fAfWafqPuAx_hVjLWFv41wwhH1yA_bCU_x61n41Lqg06prUCNPBf8Ypz1EUIqKipV0O69UGHylOvA3cbpLFV6QyF1w8icae3vcKHPmQ-Fni0xD3PXZCCaiBHng4FianlIfms6IB7jXLr4dZ4utq-32wRR2anksxz6tyZ_RFWN8Tb7-qPXb5X0ESsAxAshh4vfYWRYdaMeO79I4IN2vB6EFhRHO_Jo5U-E3KDm2vyABly5x9Aw2gBUEhmEdM0T-fUZx_30UoqcqRYlAKCzpIQ4_irckldfZMGRoIlWxQP2qRTUCrOxR8rtSLWUKQTyOW9GcI0pV04q7lxRRCpZK-B76GKU8ZQnDqQerdvsFro66LXGXOESk1HN2isCV_Pwik9G1SFKftHWzDzrRlRrDWcoyoqzEMjE0wj7ttjJE">>,
+                  <<"publickey:30g0HJIeY/XRKHqW6zEn5hMHxckzKPh+aCX5s0NFPfJwlADt4Py7hx6YbGOVu1oOs+PhiUkVReFqF/vjgqwME4gBmrBvDc7gWdKwI8E5ZtVxz6kDC5Z+Cti/vYqklFWPZz2411NL/jlLVzVacGQiHBoFT3Jom28Np+R0okBaqChQOs1ZMXHvXIpB10BrHri19TLQoNGHShilIPTfoxwmS7LDEOQqniiW2G6fF09wUeqTOKQIr+CFZFyvgjlEALMtqXiSwHiITANhBijEG4R36/PJt2HVz7aYTEC8Azgc8QfMHBcQ4oVtnQLiET0ZBx9mCwv/O8O85qFL1cy03GO+Rhpg/xCTP+XLsUly7WQtUPJU33SrKciJLGxDLE8tlJhTjEpfmLItVztooMJ1dIX0SMS1CWPhTzogA30nBhd4vROaJKMsg4xjomdfLcWtTzScdlvmRU8aBnVPAUuIdMqCHNnNi3czyi89u3sM8fVPEMGQ+IAqSmIb6x4J9dOaykIX7cxHUVeW7xL33QNtQ8SctIbcQdWqylVFs5JkwZg8tPFnbxmVod3Wt4OHLoRQE5p0Q8pYv3QSKlh+8AKUCuTryC94miFU6GfC5cVKKbjoLCAGpR2Rf2dHfetNNLgAkjxeZKvo5nOYjKm+t7EAvhpMt21CuG7eJ6tErY5k0UxTT3s=">>,
               <<"signature">> =>
-                  <<"YG9aPmui8jvXL_SZz97oyj1HV596j4dKe9gaHQYkqEqwJhgG2_apue9V7_adypNeFlHiQTTU-BgNV1SNSAsSqYXXBPAQCh1Yw8BQ3NhPPhFr-as7tiwrJBwsZUe7QoHZWyBdNOLIY-E7w4QWOszRNZRnmKNWEPutyvP9a_5fxz7c8Z7zIkYvfwZUa9OZwOw4uAoUjSZ8fmv4F6bFdElrkdWpADwsATFFZiaFy4v-qdRpCKwegWAKdu2ClMEY973YoR47zoAcPqX3vX0nlzvZ9EKLVlytPanFM29yTgnDy1LokUq7hxC4I0PEz3dhubVFWhdisKConKbFCJqDX7YoaS3hu6EpeknP9Ru1TqiWSFMKe9IMQppzP7FtQOb6JKE8mvPwPbWp1WPTr9V4_qooUvUcNKPXapIJc5gWaF59aiyN9jNRjKL1XLBhCFf59BDf072oOdI52UVjCRcE58X-5HL1u7m79BWzIeGXCE6KIlqYWuGV3VIt7hE8E4lWiTEBKy8FAoScx7n5JDE1K0x8AYBff7ipzKAHZMo8vOzZYNRl5f9tNJRurKnK0CU-85TNsORCVuDgOuMAWi9MmsduicGYvINOnXSXhht1y4L-AiQExIHVVBf5kGpJi0FV-FNKhwH3Vihgx24lZ2f9HuPZUt8vmjQwoEgCZT0PYTvHi3w">>,
+                  <<"KoX1nDJaUESD6c3H0WFnFB1pe3Q6405ZAdsiQINpSrfoOQBYpLYQfoiONsr4F_wMWwJFX5ZwyqQ7HrNq9kjvT6WmDDcExskXZXZj9ZKzmr8dWimum3HF8VsO-yJQ_RE2AEfsUqvw0tXyFU_MNfIuIkH8gPIMV5j8DNVGAWLXbOW61--MQdE4yQtP4681xLSUG9gntRUlw5FApk0P5qpqerNNcYYZ5xrx0ALUZvzLu-APZuIqNdLG49q0msW1XOfDD2NJbwQbtcvrP0YHlatiu73A5v8vN_uOx_gvjLP3a6eaxTCT-bMwa4mBepYM8C6oe4-gpbSgyV5j6ma6ZD-fcBzyuixsKX0rINDICL0bEiynr5PVu7cej-24vAP3yjOjJssKtnvBtcP3Qy3jiLx0RjJ3dS2q5-wYJ5brvayjJ7CjsQbj31OWEzIxO--x2tbp5ZRbn0tx8rd2-sDxdLJQY9E_9Blp1t4weXxI4pYJQgu5Z0SgNRtnnv6iL3HfCY23ETwBjj-g9OcKZd_yGDm4W8N0NXz5G5ZokajAmuMtAxWev07np_VcGzhs5ZGbA26UWvI_lvQtIYC7kNw2ofRXk5_n1i4gtVuDPCk_nGs2IPogogKCqhTxBoV-UbBj7x5T-LWUCLgM4wAMpOzIvbGab_bXObPBOJNWNarwktPRjG4">>,
               <<"type">> => <<"rsa-pss-sha512">>}},
   <<"firmware">> =>
       <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
@@ -41,24 +35,83 @@
   <<"kernel">> =>
       <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
   <<"node-message">> =>
-      #{<<"debug_metadata">> => true,
+      #{<<"http-keepalive">> => 120000,
         <<"gateway">> => <<"https://arweave.net">>,
-        <<"process_now_from_cache">> => false,
-        <<"debug_print_map_line_threshold">> => 30,<<"http_client">> => gun,
-        <<"http_keepalive">> => 120000,<<"short_trace_len">> => 5,
-        <<"debug_print_trace">> => short,
+        <<"commitments">> =>
+            #{<<"ibuF3rWOBS48yJKc9iSv4Hi3iVsxapKB735QTnFfmH4">> =>
+                  #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                    <<"committed">> =>
+                        [<<"commitment-device">>,<<"host">>,
+                         <<"node-history">>,<<"trusted">>,<<"mode">>,
+                         <<"scheduler-location-ttl">>,<<"port">>,
+                         <<"http-server">>,<<"http-extra-opts">>,
+                         <<"relay-http-client">>,<<"compute-mode">>,
+                         <<"preprocessor">>,<<"force-signed">>,<<"store">>,
+                         <<"access-control-allow-methods">>,
+                         <<"debug-print-indent">>,<<"wasm-allow-aot">>,
+                         <<"preload-devices">>,<<"debug-committers">>,
+                         <<"debug-ids">>,<<"debug-print">>,
+                         <<"trusted-device-signers">>,
+                         <<"access-remote-cache-for-client">>,
+                         <<"debug-metadata">>,<<"status">>,
+                         <<"access-control-allow-origin">>,
+                         <<"http-request-send-timeout">>,
+                         <<"ans104-trust-gql">>,<<"process-now-from-cache">>,
+                         <<"body-keys">>,<<"debug-print-map-line-threshold">>,
+                         <<"stack-print-prefixes">>,<<"server">>,
+                         <<"snp-hashes">>,<<"ao-types">>,
+                         <<"debug-print-trace">>,<<"debug-print-binary-max">>,
+                         <<"client-error-strategy">>,<<"short-trace-len">>,
+                         <<"process-workers">>,<<"cache-lookup-hueristics">>,
+                         <<"postprocessor">>,<<"await-inprogress">>,
+                         <<"hb-config-location">>,<<"address">>,
+                         <<"http-connect-timeout">>,<<"debug-show-priv">>,
+                         <<"only">>,<<"preloaded-devices">>,<<"initialized">>,
+                         <<"bundler-ans104">>,<<"scheduling-mode">>,
+                         <<"load-remote-devices">>,<<"store-all-signed">>,
+                         <<"routes">>,<<"http-client">>,<<"cache-writers">>,
+                         <<"debug-stack-depth">>,<<"date">>,<<"gateway">>,
+                         <<"http-keepalive">>],
+                    <<"keyid">> => <<"constant:ao">>,
+                    <<"signature">> =>
+                        <<"ibuF3rWOBS48yJKc9iSv4Hi3iVsxapKB735QTnFfmH4">>,
+                    <<"type">> => <<"hmac-sha256">>}},
         <<"date">> => <<"Fri, 18 Apr 2025 19:01:31 GMT">>,
-        <<"scheduler_location_ttl">> => 604800000,
-        <<"access_control_allow_origin">> => <<"*">>,
-        <<"compute_mode">> => lazy,<<"preload_devices">> => [],
-        <<"hb_config_location">> => <<"config.flat">>,
-        <<"process_workers">> => false,
-        <<"access_control_allow_methods">> =>
-            <<"GET, POST, PUT, DELETE, OPTIONS">>,
-        <<"initialized">> => permanent,<<"only">> => local,
+        <<"http-extra-opts">> =>
+            #{<<"cache-control">> => [<<"always">>],
+              <<"commitments">> =>
+                  #{<<"xJhaaXjVL59BmMjW_WF1fAfgVO0sc8k-l-jscQhYMYc">> =>
+                        #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                          <<"committed">> =>
+                              [<<"ao-types">>,<<"cache-control">>,
+                               <<"force-message">>],
+                          <<"keyid">> => <<"constant:ao">>,
+                          <<"signature">> =>
+                              <<"xJhaaXjVL59BmMjW_WF1fAfgVO0sc8k-l-jscQhYMYc">>,
+                          <<"type">> => <<"hmac-sha256">>}},
+              <<"force-message">> => true},
+        <<"debug-stack-depth">> => 40,<<"http-client">> => gun,
+        <<"store-all-signed">> => true,<<"load-remote-devices">> => false,
+        <<"scheduling-mode">> => disabled,
+        <<"content-type">> =>
+            <<"multipart/form-data; boundary=\"5zd5yKhUfgSnCzBVlt29-Vs4rQQeUBGuVqNJubt07jI\"">>,
+        <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
+        <<"initialized">> => <<"permanent">>,<<"only">> => local,
+        <<"debug-show-priv">> => false,
         <<"trusted">> =>
             #{<<"append">> =>
                   <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
+              <<"commitments">> =>
+                  #{<<"lNS8Q5elMlh1hM6TOiXF_PSib7j1zCJY_zkYeeDzklE">> =>
+                        #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                          <<"committed">> =>
+                              [<<"ao-types">>,<<"append">>,<<"firmware">>,
+                               <<"guest_features">>,<<"initrd">>,<<"kernel">>,
+                               <<"vcpu_type">>,<<"vcpus">>,<<"vmm_type">>],
+                          <<"keyid">> => <<"constant:ao">>,
+                          <<"signature">> =>
+                              <<"lNS8Q5elMlh1hM6TOiXF_PSib7j1zCJY_zkYeeDzklE">>,
+                          <<"type">> => <<"hmac-sha256">>}},
               <<"firmware">> =>
                   <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
               <<"guest_features">> => 1,
@@ -67,124 +120,577 @@
               <<"kernel">> =>
                   <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
               <<"vcpu_type">> => 5,<<"vcpus">> => 1,<<"vmm_type">> => 1},
-        <<"snp_hashes">> =>
-            #{<<"append">> =>
-                  <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
-              <<"firmware">> =>
-                  <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-              <<"guest_features">> => 1,
-              <<"initrd">> =>
-                  <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
-              <<"kernel">> =>
-                  <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-              <<"vcpu_type">> => 5,<<"vcpus">> => 1,<<"vmm_type">> => 1},
-        <<"cache_lookup_hueristics">> => false,
+        <<"http-connect-timeout">> => 5000,
         <<"address">> => <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+        <<"hb-config-location">> => <<"config.flat">>,
+        <<"stack-print-prefixes">> => ["hb","dev","ar"],
+        <<"await-inprogress">> => named,
         <<"store">> =>
-            [#{<<"prefix">> => <<"cache-mainnet">>,
+            [#{<<"commitments">> =>
+                   #{<<"dRQXg5_QyN8uzgvJ3-Akv_MvTG1sWmjhnX_hs6zRUVc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"prefix">>,
+                                <<"store-module">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"dRQXg5_QyN8uzgvJ3-Akv_MvTG1sWmjhnX_hs6zRUVc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"prefix">> => <<"cache-mainnet">>,
                <<"store-module">> => hb_store_fs},
-             #{<<"store">> =>
-                   [#{<<"prefix">> => <<"cache-mainnet">>,
+             #{<<"commitments">> =>
+                   #{<<"Fon8zsSXeKhjHHDrv-L4EdAzPLu_3zZodJwyKcGGd14">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"store">>,<<"store-module">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"Fon8zsSXeKhjHHDrv-L4EdAzPLu_3zZodJwyKcGGd14">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"store">> =>
+                   [#{<<"commitments">> =>
+                          #{<<"dRQXg5_QyN8uzgvJ3-Akv_MvTG1sWmjhnX_hs6zRUVc">> =>
+                                #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                                  <<"committed">> =>
+                                      [<<"ao-types">>,<<"prefix">>,
+                                       <<"store-module">>],
+                                  <<"keyid">> => <<"constant:ao">>,
+                                  <<"signature">> =>
+                                      <<"dRQXg5_QyN8uzgvJ3-Akv_MvTG1sWmjhnX_hs6zRUVc">>,
+                                  <<"type">> => <<"hmac-sha256">>}},
+                      <<"prefix">> => <<"cache-mainnet">>,
                       <<"store-module">> => hb_store_fs}],
                <<"store-module">> => hb_store_gateway}],
-        <<"postprocessor">> => undefined,<<"debug_show_priv">> => false,
+        <<"postprocessor">> => undefined,
+        <<"cache-lookup-hueristics">> => false,<<"process-workers">> => false,
+        <<"short-trace-len">> => 5,<<"client-error-strategy">> => throw,
         <<"routes">> =>
-            [#{<<"node">> => #{<<"prefix">> => <<"http://localhost:6363">>},
+            [#{<<"commitments">> =>
+                   #{<<"JTEs0GsyAUvlM8DkrSPubr7CZVPOgeUjNCFCIYZGZQg">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> => [<<"node">>,<<"template">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"JTEs0GsyAUvlM8DkrSPubr7CZVPOgeUjNCFCIYZGZQg">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"node">> =>
+                   #{<<"commitments">> =>
+                         #{<<"u0hd9uk8fEO-btX2_cXfrIpo4CuAHYpRvHKmMcFxx8M">> =>
+                               #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                                 <<"committed">> => [<<"prefix">>],
+                                 <<"keyid">> => <<"constant:ao">>,
+                                 <<"signature">> =>
+                                     <<"u0hd9uk8fEO-btX2_cXfrIpo4CuAHYpRvHKmMcFxx8M">>,
+                                 <<"type">> => <<"hmac-sha256">>}},
+                     <<"prefix">> => <<"http://localhost:6363">>},
                <<"template">> => <<"/result/.*">>},
-             #{<<"nodes">> =>
-                   [#{<<"opts">> =>
-                          #{<<"http_client">> => httpc,
+             #{<<"commitments">> =>
+                   #{<<"EMMByKQKQnlDE2apYfyNLcGIrON0m62ByiVoHzDPSDg">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> => [<<"nodes">>,<<"template">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"EMMByKQKQnlDE2apYfyNLcGIrON0m62ByiVoHzDPSDg">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"nodes">> =>
+                   [#{<<"commitments">> =>
+                          #{<<"An-Mn_26I9DVtH-Tt5HahXAf7-Xo-hDFCxU45Q7Dw2k">> =>
+                                #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                                  <<"committed">> => [<<"opts">>,<<"prefix">>],
+                                  <<"keyid">> => <<"constant:ao">>,
+                                  <<"signature">> =>
+                                      <<"An-Mn_26I9DVtH-Tt5HahXAf7-Xo-hDFCxU45Q7Dw2k">>,
+                                  <<"type">> => <<"hmac-sha256">>}},
+                      <<"opts">> =>
+                          #{<<"commitments">> =>
+                                #{<<"9jDI9Wj3ylm-ja8MfREzKYtQIS6SGNTMFpjezIjCgQI">> =>
+                                      #{<<"commitment-device">> =>
+                                            <<"httpsig@1.0">>,
+                                        <<"committed">> =>
+                                            [<<"ao-types">>,<<"http-client">>,
+                                             <<"protocol">>],
+                                        <<"keyid">> => <<"constant:ao">>,
+                                        <<"signature">> =>
+                                            <<"9jDI9Wj3ylm-ja8MfREzKYtQIS6SGNTMFpjezIjCgQI">>,
+                                        <<"type">> => <<"hmac-sha256">>}},
+                            <<"http-client">> => httpc,
                             <<"protocol">> => http2},
                       <<"prefix">> =>
                           <<"https://arweave-search.goldsky.com">>},
-                    #{<<"opts">> =>
-                          #{<<"http_client">> => gun,<<"protocol">> => http2},
+                    #{<<"commitments">> =>
+                          #{<<"Yk-efnNwz7r_0_xrRnJDfyWBP7f_V0ppSYNzZhwFmqg">> =>
+                                #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                                  <<"committed">> => [<<"opts">>,<<"prefix">>],
+                                  <<"keyid">> => <<"constant:ao">>,
+                                  <<"signature">> =>
+                                      <<"Yk-efnNwz7r_0_xrRnJDfyWBP7f_V0ppSYNzZhwFmqg">>,
+                                  <<"type">> => <<"hmac-sha256">>}},
+                      <<"opts">> =>
+                          #{<<"commitments">> =>
+                                #{<<"kiy9hckKM0BbeU4ejIlXuBwUyo2luP3cGYaZuj-MAjM">> =>
+                                      #{<<"commitment-device">> =>
+                                            <<"httpsig@1.0">>,
+                                        <<"committed">> =>
+                                            [<<"ao-types">>,<<"http-client">>,
+                                             <<"protocol">>],
+                                        <<"keyid">> => <<"constant:ao">>,
+                                        <<"signature">> =>
+                                            <<"kiy9hckKM0BbeU4ejIlXuBwUyo2luP3cGYaZuj-MAjM">>,
+                                        <<"type">> => <<"hmac-sha256">>}},
+                            <<"http-client">> => gun,<<"protocol">> => http2},
                       <<"prefix">> => <<"https://arweave.net">>}],
                <<"template">> => <<"/graphql">>},
-             #{<<"node">> =>
-                   #{<<"opts">> =>
-                         #{<<"http_client">> => gun,<<"protocol">> => http2},
+             #{<<"commitments">> =>
+                   #{<<"tVdSFvNPVAKo5R5XaCTLwfFFEr8iC_6CAiyHvrtc0tQ">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> => [<<"node">>,<<"template">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"tVdSFvNPVAKo5R5XaCTLwfFFEr8iC_6CAiyHvrtc0tQ">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"node">> =>
+                   #{<<"commitments">> =>
+                         #{<<"Yk-efnNwz7r_0_xrRnJDfyWBP7f_V0ppSYNzZhwFmqg">> =>
+                               #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                                 <<"committed">> => [<<"opts">>,<<"prefix">>],
+                                 <<"keyid">> => <<"constant:ao">>,
+                                 <<"signature">> =>
+                                     <<"Yk-efnNwz7r_0_xrRnJDfyWBP7f_V0ppSYNzZhwFmqg">>,
+                                 <<"type">> => <<"hmac-sha256">>}},
+                     <<"opts">> =>
+                         #{<<"commitments">> =>
+                               #{<<"kiy9hckKM0BbeU4ejIlXuBwUyo2luP3cGYaZuj-MAjM">> =>
+                                     #{<<"commitment-device">> =>
+                                           <<"httpsig@1.0">>,
+                                       <<"committed">> =>
+                                           [<<"ao-types">>,<<"http-client">>,
+                                            <<"protocol">>],
+                                       <<"keyid">> => <<"constant:ao">>,
+                                       <<"signature">> =>
+                                           <<"kiy9hckKM0BbeU4ejIlXuBwUyo2luP3cGYaZuj-MAjM">>,
+                                       <<"type">> => <<"hmac-sha256">>}},
+                           <<"http-client">> => gun,<<"protocol">> => http2},
                      <<"prefix">> => <<"https://arweave.net">>},
                <<"template">> => <<"/raw">>}],
-        <<"debug_print">> => false,
-        <<"bundler_ans104">> => <<"https://up.arweave.net:443">>,
-        <<"client_error_strategy">> => throw,
-        <<"http_request_send_timeout">> => 60000,
-        <<"http_extra_opts">> =>
-            #{<<"cache_control">> => [<<"always">>],
-              <<"force_message">> => true},
-        <<"force_signed">> => true,
+        <<"debug-print-binary-max">> => 60,<<"debug-print-trace">> => short,
+        <<"trusted-device-signers">> => [],
         <<"server">> => <<"nginx/1.18.0 (Ubuntu)">>,
-        <<"access_remote_cache_for_client">> => false,
-        <<"await_inprogress">> => named,
-        <<"content_type">> =>
-            <<"multipart/form-data; boundary=\"5zd5yKhUfgSnCzBVlt29-Vs4rQQeUBGuVqNJubt07jI\"">>,
-        <<"http_connect_timeout">> => 5000,<<"status">> => 200,
-        <<"body_keys">> =>
-            <<"\"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\"">>,
-        <<"stack_print_prefixes">> => ["hb","dev","ar"],
-        <<"scheduling_mode">> => disabled,
-        <<"http_server">> => <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
-        <<"debug_print_binary_max">> => 60,<<"debug_ids">> => false,
-        <<"relay_http_client">> => httpc,<<"debug_stack_depth">> => 40,
-        <<"preloaded_devices">> =>
-            [#{<<"module">> => dev_codec_ans104,
-               <<"name">> => <<"ans104@1.0">>},
-             #{<<"module">> => dev_cu,<<"name">> => <<"compute@1.0">>},
-             #{<<"module">> => dev_cache,<<"name">> => <<"cache@1.0">>},
-             #{<<"module">> => dev_cacheviz,<<"name">> => <<"cacheviz@1.0">>},
-             #{<<"module">> => dev_cron,<<"name">> => <<"cron@1.0">>},
-             #{<<"module">> => dev_dedup,<<"name">> => <<"dedup@1.0">>},
-             #{<<"module">> => dev_delegated_compute,
-               <<"name">> => <<"delegated-compute@1.0">>},
-             #{<<"module">> => dev_faff,<<"name">> => <<"faff@1.0">>},
-             #{<<"module">> => dev_codec_flat,<<"name">> => <<"flat@1.0">>},
-             #{<<"module">> => dev_genesis_wasm,
-               <<"name">> => <<"genesis-wasm@1.0">>},
-             #{<<"module">> => dev_green_zone,
-               <<"name">> => <<"greenzone@1.0">>},
-             #{<<"module">> => dev_codec_httpsig,
-               <<"name">> => <<"httpsig@1.0">>},
-             #{<<"module">> => dev_hyperbuddy,
-               <<"name">> => <<"hyperbuddy@1.0">>},
-             #{<<"module">> => dev_codec_json,<<"name">> => <<"json@1.0">>},
-             #{<<"module">> => dev_json_iface,
-               <<"name">> => <<"json-iface@1.0">>},
-             #{<<"module">> => dev_lookup,<<"name">> => <<"lookup@1.0">>},
-             #{<<"module">> => dev_lua,<<"name">> => <<"lua@5.3a">>},
-             #{<<"module">> => dev_message,<<"name">> => <<"message@1.0">>},
-             #{<<"module">> => dev_meta,<<"name">> => <<"meta@1.0">>},
-             #{<<"module">> => dev_monitor,<<"name">> => <<"monitor@1.0">>},
-             #{<<"module">> => dev_multipass,
-               <<"name">> => <<"multipass@1.0">>},
-             #{<<"module">> => dev_p4,<<"name">> => <<"p4@1.0">>},
-             #{<<"module">> => dev_patch,<<"name">> => <<"patch@1.0">>},
-             #{<<"module">> => dev_poda,<<"name">> => <<"poda@1.0">>},
-             #{<<"module">> => dev_process,<<"name">> => <<"process@1.0">>},
-             #{<<"module">> => dev_push,<<"name">> => <<"push@1.0">>},
-             #{<<"module">> => dev_relay,<<"name">> => <<"relay@1.0">>},
-             #{<<"module">> => dev_router,<<"name">> => <<"router@1.0">>},
-             #{<<"module">> => dev_scheduler,
-               <<"name">> => <<"scheduler@1.0">>},
-             #{<<"module">> => dev_simple_pay,
-               <<"name">> => <<"simple-pay@1.0">>},
-             #{<<"module">> => dev_snp,<<"name">> => <<"snp@1.0">>},
-             #{<<"module">> => dev_stack,<<"name">> => <<"stack@1.0">>},
-             #{<<"module">> => dev_codec_structured,
-               <<"name">> => <<"structured@1.0">>},
-             #{<<"module">> => dev_test,<<"name">> => <<"test-device@1.0">>},
-             #{<<"module">> => dev_wasi,<<"name">> => <<"wasi@1.0">>},
-             #{<<"module">> => dev_wasm,<<"name">> => <<"wasm-64@1.0">>}],
-        <<"cache_writers">> =>
+        <<"debug-print-map-line-threshold">> => 30,
+        <<"cache-writers">> =>
             [<<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>],
-        <<"wasm_allow_aot">> => false,<<"store_all_signed">> => true,
-        <<"ans104_trust_gql">> => true,
-        <<"commitment_device">> => <<"httpsig@1.0">>,
-        <<"preprocessor">> => undefined,<<"debug_committers">> => false,
-        <<"port">> => 10000,<<"load_remote_devices">> => false,
-        <<"node_history">> => [],<<"mode">> => debug,
-        <<"trusted_device_signers">> => [],<<"debug_print_indent">> => 2,
-        <<"host">> => <<"localhost">>},
+        <<"body-keys">> =>
+            <<"\"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\", \"routes\"">>,
+        <<"process-now-from-cache">> => false,<<"ans104-trust-gql">> => true,
+        <<"http-request-send-timeout">> => 60000,
+        <<"access-control-allow-origin">> => <<"*">>,
+        <<"preload-devices">> => [],<<"status">> => 200,
+        <<"debug-metadata">> => true,
+        <<"access-remote-cache-for-client">> => false,
+        <<"debug-print">> => false,<<"debug-ids">> => false,
+        <<"debug-committers">> => false,<<"wasm-allow-aot">> => false,
+        <<"debug-print-indent">> => 2,<<"node-history">> => [],
+        <<"access-control-allow-methods">> =>
+            <<"GET, POST, PUT, DELETE, OPTIONS">>,
+        <<"snp-hashes">> =>
+            #{<<"append">> =>
+                  <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
+              <<"commitments">> =>
+                  #{<<"i9__tnv0WZrvBhw518POI8wX-WbI8URULRaoi0IXanU">> =>
+                        #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                          <<"committed">> =>
+                              [<<"ao-types">>,<<"append">>,<<"firmware">>,
+                               <<"guest-features">>,<<"initrd">>,<<"kernel">>,
+                               <<"vcpu-type">>,<<"vcpus">>,<<"vmm-type">>],
+                          <<"keyid">> => <<"constant:ao">>,
+                          <<"signature">> =>
+                              <<"i9__tnv0WZrvBhw518POI8wX-WbI8URULRaoi0IXanU">>,
+                          <<"type">> => <<"hmac-sha256">>}},
+              <<"firmware">> =>
+                  <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
+              <<"guest-features">> => 1,
+              <<"initrd">> =>
+                  <<"da6dffff50373e1d393bf92cb9b552198b1930068176a046dda4e23bb725b3bb">>,
+              <<"kernel">> =>
+                  <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
+              <<"vcpu-type">> => 5,<<"vcpus">> => 1,<<"vmm-type">> => 1},
+        <<"preloaded-devices">> =>
+            [#{<<"commitments">> =>
+                   #{<<"WgIzKrNLjvfranqsPVzdqcVhW61gZ6CvUK8cM2Hjlf0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"WgIzKrNLjvfranqsPVzdqcVhW61gZ6CvUK8cM2Hjlf0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_codec_ans104,
+               <<"name">> => <<"ans104@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"FcIKZVDaj6jjASFoRSKL-9-2--Q75U6CovN9tmBb5A0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"FcIKZVDaj6jjASFoRSKL-9-2--Q75U6CovN9tmBb5A0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_cu,<<"name">> => <<"compute@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"MBwxX7BmdGt0UWgHjqo3mzUWYgraJwDUChK0egHJgXc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"MBwxX7BmdGt0UWgHjqo3mzUWYgraJwDUChK0egHJgXc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_cache,<<"name">> => <<"cache@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"oTfVzpZWlGRpwKg7EN6CulNrXHNMg1XneIv7FdnEcF0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"oTfVzpZWlGRpwKg7EN6CulNrXHNMg1XneIv7FdnEcF0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_cacheviz,<<"name">> => <<"cacheviz@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"ptrqgDpBWXV5pIIFDS5USe0Yym-wwfF6bRkXp7PAGFY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"ptrqgDpBWXV5pIIFDS5USe0Yym-wwfF6bRkXp7PAGFY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_cron,<<"name">> => <<"cron@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"1l97J-m-rltl5MS3HbRS22W1DHfXbOwOcokTo4Cd8XE">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"1l97J-m-rltl5MS3HbRS22W1DHfXbOwOcokTo4Cd8XE">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_dedup,<<"name">> => <<"dedup@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"HSpJ3gnegfeQ4aw0hy3joobdqe7iveBdbKXr5ufTu8o">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"HSpJ3gnegfeQ4aw0hy3joobdqe7iveBdbKXr5ufTu8o">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_delegated_compute,
+               <<"name">> => <<"delegated-compute@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"wMziuzbMuVCJzfuaCnbMjZxRfnbaGBxoZU9i70D19L0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"wMziuzbMuVCJzfuaCnbMjZxRfnbaGBxoZU9i70D19L0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_faff,<<"name">> => <<"faff@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"_EROxMzToy7QMM2tZHDrdYQEuIgD6f6sn264OOM8RUI">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"_EROxMzToy7QMM2tZHDrdYQEuIgD6f6sn264OOM8RUI">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_codec_flat,<<"name">> => <<"flat@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"o_LFfTewcdOZtjQqsaSbkyJJyCReaBVNXyN5JF3DHwc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"o_LFfTewcdOZtjQqsaSbkyJJyCReaBVNXyN5JF3DHwc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_genesis_wasm,
+               <<"name">> => <<"genesis-wasm@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"m-6uz-0WlP3cqmEw_1mouRQfxXW7_2eZeYWuJAMh58Q">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"m-6uz-0WlP3cqmEw_1mouRQfxXW7_2eZeYWuJAMh58Q">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_green_zone,
+               <<"name">> => <<"greenzone@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"Ke3l-wYMmmhEZC6g8GjkQxjFF9l7MMseiyFK4qLSWww">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"Ke3l-wYMmmhEZC6g8GjkQxjFF9l7MMseiyFK4qLSWww">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_codec_httpsig,
+               <<"name">> => <<"httpsig@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"Z1uH51_5UslDULbQx4OUQMxTx5D1PJch0j6VK7uKz3I">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"Z1uH51_5UslDULbQx4OUQMxTx5D1PJch0j6VK7uKz3I">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_hyperbuddy,
+               <<"name">> => <<"hyperbuddy@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"enaoJxvYh3qZn6fAf7E6rsJqlKR5TxvTnfnenQMfMwY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"enaoJxvYh3qZn6fAf7E6rsJqlKR5TxvTnfnenQMfMwY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_codec_json,<<"name">> => <<"json@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"0WQCR2q340Pmz1E-6V6wgTwge5Lh07OE8QOQ6a6T4Wo">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"0WQCR2q340Pmz1E-6V6wgTwge5Lh07OE8QOQ6a6T4Wo">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_json_iface,
+               <<"name">> => <<"json-iface@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"qSvA69gK4G1U0eza9scaCqXGpSEfG3-uNohX6o5_vhc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"qSvA69gK4G1U0eza9scaCqXGpSEfG3-uNohX6o5_vhc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_lookup,<<"name">> => <<"lookup@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"i5Ld6UHNtumohVmFG-wQgWXaMqLlcYwp6qcxZPlUPRw">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"i5Ld6UHNtumohVmFG-wQgWXaMqLlcYwp6qcxZPlUPRw">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_lua,<<"name">> => <<"lua@5.3a">>},
+             #{<<"commitments">> =>
+                   #{<<"_sH5t56kUmkR53fPTjQaOTWiSlyczgKiNpY378dPYbc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"_sH5t56kUmkR53fPTjQaOTWiSlyczgKiNpY378dPYbc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_message,<<"name">> => <<"message@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"FIjOnvniwREAfGzl4bpe2amR26ETwixTfo6CQCSBQx4">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"FIjOnvniwREAfGzl4bpe2amR26ETwixTfo6CQCSBQx4">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_meta,<<"name">> => <<"meta@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"qR75c63-A3PiitofQocfD42B8J0KubQ_JzEflgEs4R8">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"qR75c63-A3PiitofQocfD42B8J0KubQ_JzEflgEs4R8">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_monitor,<<"name">> => <<"monitor@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"fo0E4A9barg6LSOazVKGWknZp1WZ0bw2yPCm4xk9wxY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"fo0E4A9barg6LSOazVKGWknZp1WZ0bw2yPCm4xk9wxY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_multipass,
+               <<"name">> => <<"multipass@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"gsawpXSE31rp3RM8ndsdwvP8yaiVA_7dDrJLMPfZegg">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"gsawpXSE31rp3RM8ndsdwvP8yaiVA_7dDrJLMPfZegg">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_p4,<<"name">> => <<"p4@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"v8gg37QAgRQhBUMwrQ_7YPLYN0A2ar2lRJD1fVklDB8">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"v8gg37QAgRQhBUMwrQ_7YPLYN0A2ar2lRJD1fVklDB8">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_patch,<<"name">> => <<"patch@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"Y8cFgP3GDMXyv3Nm00gpOlmdOQIlkBmHiU0diu4MkSg">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"Y8cFgP3GDMXyv3Nm00gpOlmdOQIlkBmHiU0diu4MkSg">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_poda,<<"name">> => <<"poda@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"m-5-Nm5vhpBB675U2pd_zibZt2sF7uG4Ffkilbq6KjY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"m-5-Nm5vhpBB675U2pd_zibZt2sF7uG4Ffkilbq6KjY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_process,<<"name">> => <<"process@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"LREanOHDlAb918wueVxjL4LbW6vEdNyFCCg6JBG5vF0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"LREanOHDlAb918wueVxjL4LbW6vEdNyFCCg6JBG5vF0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_push,<<"name">> => <<"push@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"5obBl2eAo0qbEkD7BiahyXHOm-oc6RH_VI2uHM2lCfY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"5obBl2eAo0qbEkD7BiahyXHOm-oc6RH_VI2uHM2lCfY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_relay,<<"name">> => <<"relay@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"M9RX3muJVY2cRrP6JXzayar0ZXSN3FzwS1MmGEguOCs">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"M9RX3muJVY2cRrP6JXzayar0ZXSN3FzwS1MmGEguOCs">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_router,<<"name">> => <<"router@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"9tmbkl56FQ8s_gkwsHt9p_iTuj-v9LGT9F0OfiTuhv0">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"9tmbkl56FQ8s_gkwsHt9p_iTuj-v9LGT9F0OfiTuhv0">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_scheduler,
+               <<"name">> => <<"scheduler@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"dIGZbk89EYutJEY1cNVynACIYtmUY7ddZQlMg05hRuU">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"dIGZbk89EYutJEY1cNVynACIYtmUY7ddZQlMg05hRuU">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_simple_pay,
+               <<"name">> => <<"simple-pay@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"_2fDkuBbXX1u2_f2dQKbjpQNtP2iNCxavfrAxLUjzjc">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"_2fDkuBbXX1u2_f2dQKbjpQNtP2iNCxavfrAxLUjzjc">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_snp,<<"name">> => <<"snp@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"ho9vsVXFTKxbm5dENzzY2QX_61Ap_yFM55wRogTSrXs">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"ho9vsVXFTKxbm5dENzzY2QX_61Ap_yFM55wRogTSrXs">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_stack,<<"name">> => <<"stack@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"_1ifdzLNTYmiwcyI4ngVRUg1drZBoeJL7V5ZOWE4U8E">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"_1ifdzLNTYmiwcyI4ngVRUg1drZBoeJL7V5ZOWE4U8E">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_codec_structured,
+               <<"name">> => <<"structured@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"0Mfbtdi2Zv3OT5zAr0TJMbM9wgYM5E50696tzNehfMY">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"0Mfbtdi2Zv3OT5zAr0TJMbM9wgYM5E50696tzNehfMY">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_test,<<"name">> => <<"test-device@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"ftIaHQvsBqo9gAzOWMaSXJ62FkqrjqtmUVY56YUXY08">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"ftIaHQvsBqo9gAzOWMaSXJ62FkqrjqtmUVY56YUXY08">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_wasi,<<"name">> => <<"wasi@1.0">>},
+             #{<<"commitments">> =>
+                   #{<<"BDpuWX788Nb868LWCKh7usOuiEONlHo4MCkoPok4Pek">> =>
+                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                           <<"committed">> =>
+                               [<<"ao-types">>,<<"module">>,<<"name">>],
+                           <<"keyid">> => <<"constant:ao">>,
+                           <<"signature">> =>
+                               <<"BDpuWX788Nb868LWCKh7usOuiEONlHo4MCkoPok4Pek">>,
+                           <<"type">> => <<"hmac-sha256">>}},
+               <<"module">> => dev_wasm,<<"name">> => <<"wasm-64@1.0">>}],
+        <<"force-signed">> => true,<<"preprocessor">> => undefined,
+        <<"compute-mode">> => lazy,<<"relay-http-client">> => httpc,
+        <<"http-server">> => <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU">>,
+        <<"port">> => 10000,<<"scheduler-location-ttl">> => 604800000,
+        <<"mode">> => debug,<<"host">> => <<"localhost">>,
+        <<"commitment-device">> => <<"httpsig@1.0">>},
   <<"nonce">> =>
       <<"XgN1kN-ZyAWtYvdUlPEM3EIIi-budUx81mjcHQ1mSNU4bfGIgeSRG0fgGtFEdPTXAcI6szcsMPvbZmwMWraKxA">>,
   <<"public-key">> =>

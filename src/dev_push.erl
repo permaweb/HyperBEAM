@@ -96,7 +96,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             hb_ao:resolve(
                 {as, <<"process@1.0">>, PrimaryProcess},
                     #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-                    Opts#{ hashpath => ignore }
+                    Opts#{ <<"hashpath">> => ignore }
                 )
         catch
             Class:Reason:Trace ->
@@ -256,7 +256,7 @@ maybe_evaluate_message(Message, Opts) ->
                     [<<"target">>],
                     Message
                 ),
-            ResolveOpts = Opts#{ force_message => true },
+            ResolveOpts = Opts#{ <<"force-message">> => true },
             case hb_ao:resolve(ReqMsg#{ <<"path">> => ResolvePath }, ResolveOpts) of
                 {ok, EvalRes} ->
                     {
@@ -431,7 +431,7 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
                     Opts
                 ) - 1
         },
-        Opts#{ cache_control => <<"always">> }
+        Opts#{ <<"cache-control">> => <<"always">> }
     ).
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
@@ -441,7 +441,7 @@ normalize_message(MsgToPush, Opts) ->
         #{
             <<"target">> => target_process(MsgToPush, Opts)
         },
-        Opts#{ hashpath => ignore }
+        Opts#{ <<"hashpath">> => ignore }
     ).
 
 %% @doc Find the target process ID for a message to push.
@@ -471,7 +471,13 @@ split_target(RawTarget) ->
 %% keys.
 calculate_base_id(GivenProcess, Opts) ->
     Process =
-        case hb_ao:get(<<"process">>, GivenProcess, Opts#{ hashpath => ignore }) of
+        case
+            hb_ao:get(
+                <<"process">>,
+                GivenProcess,
+                Opts#{ <<"hashpath">> => ignore }
+            )
+        of
             not_found -> GivenProcess;
             Proc -> Proc
         end,
@@ -479,7 +485,7 @@ calculate_base_id(GivenProcess, Opts) ->
         hb_ao:set(
             Process,
             #{ <<"authority">> => unset, <<"scheduler">> => unset },
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     {ok, BaseID} =
         hb_ao:resolve(
@@ -549,7 +555,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
                 hb_ao:resolve(
                     {as, <<"process@1.0">>, TargetProcess},
                     ScheduleReq,
-                    Opts#{ cache_control => <<"always">> }
+                    Opts#{ <<"cache-control">> => <<"always">> }
                 )
         end,
     ?event(push, {push_sched_result, {status, ErlStatus}, {response, Res}}, Opts),
@@ -605,7 +611,7 @@ augment_message(Origin, ToSched, Opts) ->
                 <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
                 <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
             },
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         )
     ).
 
@@ -796,10 +802,10 @@ genesis_wasm_tests() -> [].
 test_full_push() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        process_async_cache => false,
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => [hb_test_utils:test_store(hb_store_lmdb)]
+        <<"process-async-cache">> => false,
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Base = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Base, Opts),
@@ -840,16 +846,16 @@ test_push_as_identity() ->
     ComputeID = hb_util:human_id(ComputeWallet),
     TestStore = [hb_test_utils:test_store(hb_store_lmdb)],
     Opts = #{
-        priv_wallet => DefaultWallet,
-        cache_control => <<"always">>,
-        store => TestStore,
-        identities => #{
+        <<"priv-wallet">> => DefaultWallet,
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => TestStore,
+        <<"identities">> => #{
             SchedulingID => #{
-                priv_wallet => SchedulingWallet,
-                store => [hb_test_utils:test_store(hb_store_lmdb)]
+                <<"priv-wallet">> => SchedulingWallet,
+                <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
             },
             ComputeID => #{
-                priv_wallet => ComputeWallet
+                <<"priv-wallet">> => ComputeWallet
             }
         }
     },
@@ -858,8 +864,8 @@ test_push_as_identity() ->
     Base =
         dev_process_test_vectors:aos_process(
             Opts#{
-                authority => ComputeID,
-                scheduler => [SchedulingID, ComputeID]
+                <<"authority">> => ComputeID,
+                <<"scheduler">> => [SchedulingID, ComputeID]
             }
         ),
     ?event({base, Base}),
@@ -914,9 +920,9 @@ test_push_as_identity() ->
 test_multi_process_push() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => [hb_test_utils:test_store(hb_store_lmdb)]
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Proc1 = dev_process_test_vectors:aos_process(Opts),
     hb_cache:write(Proc1, Opts),
@@ -978,8 +984,8 @@ push_with_redirect_hint_test_disabled() ->
                     <<"name">> => <<"cache-TEST">>
                 }
             ],
-        ExtOpts = #{ priv_wallet => ar_wallet:new(), store => Stores },
-        LocalOpts = #{ priv_wallet => hb:wallet(), store => Stores },
+        ExtOpts = #{ <<"priv-wallet">> => ar_wallet:new(), <<"store">> => Stores },
+        LocalOpts = #{ <<"priv-wallet">> => hb:wallet(), <<"store">> => Stores },
         ExtScheduler = hb_http_server:start_node(ExtOpts),
         ?event(push, {external_scheduler, {location, ExtScheduler}}),
         % Create the Pong server and client
@@ -1054,9 +1060,9 @@ push_with_redirect_hint_test_disabled() ->
 test_push_prompts_encoding_change() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store =>
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> },
                 % Include a gateway store so that we can get the legacynet 
@@ -1120,8 +1126,8 @@ test_remote_routed_push() ->
     % when we create them.
     N2Opts =
         #{
-            store => N2Store,
-            priv_wallet => N2Wallet
+            <<"store">> => N2Store,
+            <<"priv-wallet">> => N2Wallet
         },
     N2 = hb_http_server:start_node(N2Opts),
     % Create the second process on the second node.
@@ -1131,9 +1137,9 @@ test_remote_routed_push() ->
     % Next, create the first node and process.
     N1Opts =
         #{
-            store => N1Store,
-            priv_wallet => N1Wallet,
-            routes =>
+            <<"store">> => N1Store,
+            <<"priv-wallet">> => N1Wallet,
+            <<"routes">> =>
                 [
                     #{
                         <<"template">> => <<Proc2ID/binary, ".*">>,
@@ -1248,7 +1254,7 @@ test_remote_routed_push() ->
 test_oracle_push() ->
     dev_process_test_vectors:init(),
     TestStore = [hb_test_utils:test_store(hb_store_lmdb)],
-    Opts = #{ priv_wallet => hb:wallet(), store => TestStore },
+    Opts = #{ <<"priv-wallet">> => hb:wallet(), <<"store">> => TestStore },
     Client = dev_process_test_vectors:aos_process(Opts),
     {ok, _} = hb_cache:write(Client, Opts),
     {ok, _} = dev_process_test_vectors:schedule_aos_call(Client, oracle_script(), Opts),
@@ -1275,9 +1281,9 @@ test_oracle_push() ->
 test_nested_push_prompts_encoding_change() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     ?event(debug_push, {opts, Opts}),
     Base = dev_process_test_vectors:aos_process(Opts),

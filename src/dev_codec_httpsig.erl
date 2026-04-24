@@ -24,9 +24,9 @@ from(Msg, Req, Opts) -> dev_codec_httpsig_conv:from(Msg, Req, Opts).
 %% @doc Generate the `Opts' to use during AO-Core operations in the codec.
 opts(RawOpts) ->
     RawOpts#{
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        force_message => false
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"force-message">> => false
     }.
 
 %% @doc A helper utility for creating a direct encoding of a HTTPSig message.
@@ -539,8 +539,8 @@ signature_params_line(RawCommitment, Opts) ->
 %% message that is sent over HTTP, signed with the codec.
 validate_large_message_from_http_test() ->
     Node = hb_http_server:start_node(Opts = #{
-        force_signed => true,
-        commitment_device => <<"httpsig@1.0">>,
+        <<"force-signed">> => true,
+        <<"commitment-device">> => <<"httpsig@1.0">>,
         extra =>
             [
                 [
@@ -577,7 +577,7 @@ validate_large_message_from_http_test() ->
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Signed = hb_message:commit(Msg, Opts),
     ?assert(hb_message:verify(Signed, all, Opts)),
     ?event({signed_msg, Signed}),
@@ -588,7 +588,7 @@ committed_id_test() ->
 
 commit_secret_key_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     CommittedMsg =
         hb_message:commit(
             Msg,
@@ -621,8 +621,8 @@ commit_secret_key_test() ->
 
 multicommitted_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
-    Signed1 = hb_message:commit(Msg, #{ priv_wallet => Wallet1 = ar_wallet:new() }),
-    Signed2 = hb_message:commit(Signed1, #{ priv_wallet => Wallet2 = ar_wallet:new() }),
+    Signed1 = hb_message:commit(Msg, #{ <<"priv-wallet">> => Wallet1 = ar_wallet:new() }),
+    Signed2 = hb_message:commit(Signed1, #{ <<"priv-wallet">> => Wallet2 = ar_wallet:new() }),
     Addr1 = hb_util:human_id(ar_wallet:to_address(Wallet1)),
     Addr2 = hb_util:human_id(ar_wallet:to_address(Wallet2)),
     ?event({signed_msg, Signed2}),
@@ -644,7 +644,7 @@ sign_and_verify_link_test() ->
         <<"untyped">> => #{ <<"inner-untyped">> => <<"inner-value">> },
         <<"typed">> => #{ <<"inner-typed">> => 123 }
     },
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     NormMsg = hb_message:convert(Msg, <<"structured@1.0">>, #{}),
     ?event({msg, NormMsg}),
     Signed = hb_message:commit(NormMsg, Opts),

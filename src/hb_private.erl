@@ -119,9 +119,9 @@ opts(Opts) ->
         end,
     NormStore = PrivStore ++ BaseStore,
     Opts#{
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store => NormStore
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"store">> => NormStore
     }.
 
 %% @doc Unset all of the private keys in a message or deep Erlang term.
@@ -187,8 +187,8 @@ priv_opts_store_read_link_test() ->
     {ok, <<"test-message">>} = hb_store:read(PublicStore, <<"link">>, #{}),
     % Read the link from the private store. First as a simple store read, then
     % as a link.
-    Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
-    PrivOpts = #{ store := PrivStore } = opts(Opts),
+    Opts = #{ <<"store">> => PublicStore, <<"priv-store">> => OnlyPrivStore },
+    PrivOpts = #{ <<"store">> := PrivStore } = opts(Opts),
     {ok, <<"test-message">>} = hb_store:read(PrivStore, <<"link">>, #{}),
     Loaded =
         hb_cache:ensure_loaded(
@@ -201,7 +201,7 @@ priv_opts_cache_read_message_test() ->
     hb:init(),
     PublicStore = [hb_test_utils:test_store()],
     OnlyPrivStore = [hb_test_utils:test_store()],
-    Opts = #{ store => PublicStore, priv_store => OnlyPrivStore },
+    Opts = #{ <<"store">> => PublicStore, <<"priv-store">> => OnlyPrivStore },
     PrivOpts = opts(Opts),
     % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a
     % complex message into the public store.

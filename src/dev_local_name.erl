@@ -74,7 +74,7 @@ direct_register(Req, Opts) ->
 
 %% @doc Returns a message containing all known names.
 find_names(Opts) ->
-    case hb_opts:get(local_names, not_found, Opts#{ only => local }) of
+    case hb_opts:get(local_names, not_found, Opts#{ <<"only">> => local }) of
         not_found ->
             find_names(load_names(Opts));
         LocalNames ->
@@ -106,14 +106,14 @@ load_names(Opts) ->
 %% use this new message, removing the need to look up the names from non-volatile
 %% storage.
 update_names(LocalNames, Opts) ->
-    hb_http_server:set_opts(NewOpts = Opts#{ local_names => LocalNames }),
+    hb_http_server:set_opts(NewOpts = Opts#{ <<"local-names">> => LocalNames }),
     NewOpts.
 
 %%% Tests
 
 generate_test_opts() ->
     Opts = #{
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     },
     Opts.
 
@@ -129,7 +129,7 @@ lookup_opts_name_test() ->
         lookup(
             #{},
             #{ <<"key">> => <<"name1">> },
-            #{ local_names => #{ <<"name1">> => <<"value1">>} }
+            #{ <<"local-names">> => #{ <<"name1">> => <<"value1">>} }
         )
     ).
 
@@ -161,7 +161,7 @@ unauthorized_test() ->
             #{},
             hb_message:commit(
                 #{ <<"key">> => <<"name1">>, <<"value">> => <<"value1">> },
-                Opts#{ priv_wallet => ar_wallet:new() }
+                Opts#{ <<"priv-wallet">> => ar_wallet:new() }
             ),
             Opts
         )

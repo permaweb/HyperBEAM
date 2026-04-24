@@ -32,7 +32,8 @@ group(Base, Req, Opts) ->
 
 process_to_group_name(Base, Opts) ->
     Initialized = dev_process_lib:ensure_process_key(Base, Opts),
-    ProcMsg = hb_ao:get(<<"process">>, Initialized, Opts#{ hashpath => ignore }),
+    ProcMsg =
+        hb_ao:get(<<"process">>, Initialized, Opts#{ <<"hashpath">> => ignore }),
     ID = hb_message:id(ProcMsg, all),
     ?event({process_to_group_name, {id, ID}, {base, Base}}),
     hb_util:human_id(ID).
@@ -42,9 +43,9 @@ process_to_group_name(Base, Opts) ->
 %% already current.
 server(GroupName, Base, Opts) ->
     ServerOpts = Opts#{
-        await_inprogress => false,
-        spawn_worker => false,
-        process_workers => false
+        <<"await-inprogress">> => false,
+        <<"spawn-worker">> => false,
+        <<"process-workers">> => false
     },
     % The maximum amount of time the worker will wait for a request before
     % checking the cache for a snapshot. Default: 5 minutes.
@@ -180,9 +181,9 @@ grouper_test() ->
     M2 = #{ <<"path">> => <<"compute">>, <<"v">> => 1 },
     M3 = #{ <<"path">> => <<"compute">>, <<"v">> => 2 },
     M4 = #{ <<"path">> => <<"not-compute">>, <<"v">> => 3 },
-    G1 = hb_persistent:group(M1, M2, #{ process_workers => true }),
-    G2 = hb_persistent:group(M1, M3, #{ process_workers => true }),
-    G3 = hb_persistent:group(M1, M4, #{ process_workers => true }),
+    G1 = hb_persistent:group(M1, M2, #{ <<"process-workers">> => true }),
+    G2 = hb_persistent:group(M1, M3, #{ <<"process-workers">> => true }),
+    G3 = hb_persistent:group(M1, M4, #{ <<"process-workers">> => true }),
     ?event({group_samples, {g1, G1}, {g2, G2}, {g3, G3}}),
     ?assertEqual(G1, G2),
     ?assertNotEqual(G1, G3).

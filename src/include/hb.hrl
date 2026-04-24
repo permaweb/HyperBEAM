@@ -30,7 +30,7 @@
 %%% underlying function.
 -define(event(X), hb_event:log(global, X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(event(Topic, X), hb_event:log(Topic, X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
--define(event(Topic, X, Opts), hb_event:log(maps:get(topic, Opts, Topic), X, ?MODULE, ?FUNCTION_NAME, ?LINE, Opts)).
+-define(event(Topic, X, Opts), hb_event:log(maps:get(<<"topic">>, Opts, Topic), X, ?MODULE, ?FUNCTION_NAME, ?LINE, Opts)).
 -define(debug_wait(T), hb:debug_wait(T, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(debug_print(X), hb_event:debug_print(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(no_prod(X), hb:no_prod(X, ?MODULE, ?LINE)).

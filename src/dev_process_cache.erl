@@ -74,7 +74,7 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
         end,
     % Apply the scope to the store and update the options message.
     ScopedStore = hb_store:scope(UnscopedStore, Scope),
-    Opts = RawOpts#{ store => ScopedStore },
+    Opts = RawOpts#{ <<"store">> => ScopedStore },
     % Convert the required path to a list of _binary_ keys.
     RequiredPath =
         case RawRequiredPath of

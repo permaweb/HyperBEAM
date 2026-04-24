@@ -434,8 +434,8 @@ cookie_test() ->
     Node =
         hb_http_server:start_node(
             #{
-                priv_wallet => ServerWallet = ar_wallet:new(),
-                on => #{
+                <<"priv-wallet">> => ServerWallet = ar_wallet:new(),
+                <<"on">> => #{
                     <<"request">> => #{
                         <<"device">> => <<"auth-hook@1.0">>,
                         <<"path">> => <<"request">>,
@@ -495,8 +495,8 @@ http_auth_test() ->
     Node =
         hb_http_server:start_node(
             #{
-                priv_wallet => ServerWallet = ar_wallet:new(),
-                on => #{
+                <<"priv-wallet">> => ServerWallet = ar_wallet:new(),
+                <<"on">> => #{
                     <<"request">> => #{
                         <<"device">> => <<"auth-hook@1.0">>,
                         <<"path">> => <<"request">>,
@@ -570,13 +570,13 @@ chained_preprocess_test() ->
     % a router chained afterwards in the request hook.
     RelayWallet = ar_wallet:new(),
     RelayAddress = hb_util:human_id(RelayWallet),
-    RelayURL = hb_http_server:start_node(#{ priv_wallet => RelayWallet }),
+    RelayURL = hb_http_server:start_node(#{ <<"priv-wallet">> => RelayWallet }),
     Node =
         hb_http_server:start_node(
             #{
-                priv_wallet => ar_wallet:new(),
-                relay_allow_commit_request => true,
-                on => #{
+                <<"priv-wallet">> => ar_wallet:new(),
+                <<"relay-allow-commit-request">> => true,
+                <<"on">> => #{
                     <<"request">> =>
                         [
                             #{
@@ -598,7 +598,7 @@ chained_preprocess_test() ->
                             }
                         ]
                 },
-                routes => [
+                <<"routes">> => [
                     #{
                         <<"template">> => <<"/~meta@1.0/info/address">>,
                         <<"node">> => #{ <<"prefix">> => RelayURL }
@@ -626,8 +626,8 @@ when_test() ->
     Node =
         hb_http_server:start_node(
             #{
-                priv_wallet => ServerWallet = ar_wallet:new(),
-                on => #{
+                <<"priv-wallet">> => ServerWallet = ar_wallet:new(),
+                <<"on">> => #{
                     <<"request">> => #{
                         <<"device">> => <<"auth-hook@1.0">>,
                         <<"path">> => <<"request">>,

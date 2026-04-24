@@ -230,7 +230,7 @@ scope(Opts, Scope) when is_map(Opts) ->
         no_viable_store -> Opts;
         Store when is_list(Store) ->
             % Store is already a list, apply scope normally
-            Opts#{ store => scope(Store, Scope) };
+            Opts#{ <<"store">> => scope(Store, Scope) };
         Store when is_map(Store) ->
             % Check if Store already has a nested 'store' key
             case maps:find(store, Store) of
@@ -240,7 +240,7 @@ scope(Opts, Scope) when is_map(Opts) ->
                 error ->
                     % Single store map, wrap in list before scoping
                     % This ensures consistent behavior
-                    Opts#{ store => scope([Store], Scope) }
+                    Opts#{ <<"store">> => scope([Store], Scope) }
             end
     end;
 scope(Store, Scope) ->
@@ -1002,7 +1002,7 @@ benchmark_message_read_write(Store) ->
     benchmark_message_read_write(Store, ?BENCH_MSG_WRITE_OPS, ?BENCH_MSG_READ_OPS).
 benchmark_message_read_write(Store, WriteOps, ReadOps) ->
     start(Store),
-    Opts = #{ store => Store, priv_wallet => hb:wallet() },
+    Opts = #{ <<"store">> => Store, <<"priv-wallet">> => hb:wallet() },
     TestDataSize = ?BENCH_MSG_DATA_SIZE * 8, % in _bits_
     timer:sleep(100),
     ?event(

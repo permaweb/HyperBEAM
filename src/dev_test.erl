@@ -111,8 +111,8 @@ restore(Msg, _Req, Opts) ->
 %% executor.
 mul(Base, Req) ->
     ?event(mul_called),
-    State = hb_ao:get(<<"state">>, Base, #{ hashpath => ignore }),
-    [Arg1, Arg2] = hb_ao:get(<<"args">>, Req, #{ hashpath => ignore }),
+    State = hb_ao:get(<<"state">>, Base, #{ <<"hashpath">> => ignore }),
+    [Arg1, Arg2] = hb_ao:get(<<"args">>, Req, #{ <<"hashpath">> => ignore }),
     ?event({mul_called, {state, State}, {args, [Arg1, Arg2]}}),
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 

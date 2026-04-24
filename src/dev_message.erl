@@ -93,7 +93,7 @@ id(List, Req, NodeOpts) when is_list(List) ->
     id(hb_message:convert(List, tabm, NodeOpts), Req, NodeOpts);
 id(RawBase, Req, NodeOpts) ->
     % Ensure that the base message is normalized before proceeding.
-    IDOpts = NodeOpts#{ linkify_mode => discard },
+    IDOpts = NodeOpts#{ <<"linkify-mode">> => discard },
     Base = ensure_commitments_loaded(RawBase, NodeOpts),
     % Remove the commitments from the base message if there are none, after
     % filtering for the committers specified in the request.
@@ -253,9 +253,9 @@ commit(Self, Req, Opts) ->
     CommitOpts =
         case hb_maps:get(<<"type">>, Req, <<"signed">>) of
             <<"unsigned">> ->
-                Opts#{ linkify_mode => discard };
+                Opts#{ <<"linkify-mode">> => discard };
             _ ->
-                Opts#{ linkify_mode => offload }
+                Opts#{ <<"linkify-mode">> => offload }
         end,
     AttMod =
         hb_ao_device:message_to_device(
@@ -908,7 +908,7 @@ cannot_get_private_keys_test() ->
         hb_ao:resolve(
             #{ <<"a">> => 1, <<"private_key">> => 2 },
             <<"private_key">>,
-            #{ hashpath => ignore }
+            #{ <<"hashpath">> => ignore }
         )
     ).
 
@@ -921,14 +921,14 @@ remove_test() ->
 		hb_ao:resolve(
             Msg,
             #{ <<"path">> => <<"remove">>, <<"item">> => <<"key1">> },
-            #{ hashpath => ignore }
+            #{ <<"hashpath">> => ignore }
         )
     ),
 	?assertMatch({ok, #{}},
 		hb_ao:resolve(
             Msg,
             #{ <<"path">> => <<"remove">>, <<"items">> => [<<"key1">>, <<"key2">>] },
-            #{ hashpath => ignore }
+            #{ <<"hashpath">> => ignore }
         )
     ).
 
@@ -942,10 +942,10 @@ unset_with_set_test() ->
 	Base = #{ <<"dangerous">> => <<"Value1">> },
 	Req = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
 	?assertMatch({ok, Res} when ?IS_EMPTY_MESSAGE(Res),
-		hb_ao:resolve(Base, Req, #{ hashpath => ignore })).
+		hb_ao:resolve(Base, Req, #{ <<"hashpath">> => ignore })).
 
 deep_unset_test() ->
-    Opts = #{ hashpath => ignore },
+    Opts = #{ <<"hashpath">> => ignore },
     Base = #{
         <<"test-key1">> => <<"Value1">>,
         <<"deep">> => #{
@@ -974,7 +974,7 @@ set_ignore_undefined_test() ->
 	Base = #{ <<"test-key">> => <<"Value1">> },
 	Req = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
 	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
-		hb_private:reset(hb_util:ok(set(Base, Req, #{ hashpath => ignore })))).
+		hb_private:reset(hb_util:ok(set(Base, Req, #{ <<"hashpath">> => ignore })))).
 
 verify_test_() ->
 	{foreach, fun () -> ok end, fun (_) -> ok end, [
@@ -987,7 +987,7 @@ verify_test_() ->
 test_verify(KeyType) ->
     Unsigned = #{ <<"a">> => <<"b">> },
     Wallet = ar_wallet:new(KeyType),
-    Signed = hb_message:commit(Unsigned, #{ priv_wallet => Wallet }),
+    Signed = hb_message:commit(Unsigned, #{ <<"priv-wallet">> => Wallet }),
     ?event({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
     ?event({bad_signed, BadSigned}),
@@ -996,7 +996,7 @@ test_verify(KeyType) ->
         hb_ao:resolve(
             #{ <<"device">> => <<"message@1.0">> },
             #{ <<"path">> => <<"verify">>, <<"body">> => Signed },
-            #{ hashpath => ignore }
+            #{ <<"hashpath">> => ignore }
         )
     ),
     % Test that we can verify a message without specifying the device explicitly.
@@ -1004,12 +1004,12 @@ test_verify(KeyType) ->
         hb_ao:resolve(
             #{},
             #{ <<"path">> => <<"verify">>, <<"body">> => Signed },
-            #{ hashpath => ignore }
+            #{ <<"hashpath">> => ignore }
         )
     ).
 
 set_nested_link_test() ->
-    Opts = #{ store => [hb_test_utils:test_store(hb_store_lmdb)] },
+    Opts = #{ <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)] },
 
     Base = #{
         <<"balances">> => #{

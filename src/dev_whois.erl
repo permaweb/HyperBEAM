@@ -30,7 +30,7 @@ ensure_host(Opts) ->
             case bootstrap_node_echo(Opts) of
                 {ok, Host} ->
                     % Set the host information in the persisted node message.
-                    hb_http_server:set_opts(NewOpts = Opts#{ node_host => Host }),
+                    hb_http_server:set_opts(NewOpts = Opts#{ <<"node-host">> => Host }),
                     {ok, NewOpts};
                 Error ->
                     Error
@@ -53,14 +53,14 @@ bootstrap_node_echo(Opts) ->
 find_self_test() ->
     BoostrapNode =
         hb_http_server:start_node(#{
-            priv_wallet => ar_wallet:new()
+            <<"priv-wallet">> => ar_wallet:new()
         }),
     PeerNode =
         hb_http_server:start_node(#{
-            port => Port = rand:uniform(40000) + 10000,
-            priv_wallet => ar_wallet:new(),
-            host_bootstrap_node => BoostrapNode,
-            http_client => httpc
+            <<"port">> => Port = rand:uniform(40000) + 10000,
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"host-bootstrap-node">> => BoostrapNode,
+            <<"http-client">> => httpc
         }),
     ?event({nodes, {peer, PeerNode}, {bootstrap, BoostrapNode}}),
     {ok, ReceivedPeerHost} = hb_http:get(PeerNode, <<"/~whois@1.0/node">>, #{}),

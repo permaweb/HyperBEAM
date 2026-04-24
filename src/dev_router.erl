@@ -164,7 +164,7 @@ routes(M1, M2, Opts) ->
                         true ->
                             % Minimize the work performed by AO-Core to make the sort
                             % more efficient.
-                            SortOpts = Opts#{ hashpath => ignore },
+                            SortOpts = Opts#{ <<"hashpath">> => ignore },
                             NewRoutes =
                                 lists:sort(
                                     fun(X, Y) ->
@@ -173,7 +173,7 @@ routes(M1, M2, Opts) ->
                                     end,
                                     [M2|Routes]
                                 ),
-                            ok = hb_http_server:set_opts(Opts#{ routes => NewRoutes }),
+                            ok = hb_http_server:set_opts(Opts#{ <<"routes">> => NewRoutes }),
                             {ok, <<"Route added.">>};
                         false -> {error, not_authorized}
                     end;
@@ -319,16 +319,23 @@ route(_, Msg, Opts) ->
 %% `<<"provider">>' message.
 load_routes(Opts) ->
     RouterOpts = hb_opts:get(router_opts, #{}, Opts),
-    case hb_maps:get(<<"provider">>, RouterOpts, not_found, Opts) of
-        not_found -> hb_opts:get(routes, [], Opts);
-        RoutesProvider ->
-            ProviderMsgs = hb_singleton:from(RoutesProvider, Opts),
-            ?event({<<"provider">>, ProviderMsgs}),
-            case hb_ao:resolve_many(ProviderMsgs, Opts) of
-                {ok, Routes} -> hb_cache:ensure_all_loaded(Routes, Opts);
+    case maps:find(<<"provider">>, RouterOpts) of
+        error -> hb_opts:get(routes, [], Opts);
+        {ok, RoutesProvider} ->
+            ?event({<<"provider">>, RoutesProvider}),
+            case provider_routes(RoutesProvider, Opts) of
+                {ok, #{ <<"routes">> := Routes }} ->
+                    hb_cache:ensure_all_loaded(Routes, Opts);
+                {ok, Routes} ->
+                    hb_cache:ensure_all_loaded(Routes, Opts);
                 {error, Error} -> throw({routes, routes_provider_failed, Error})
             end
     end.
+
+provider_routes(RoutesProvider, Opts) when is_list(RoutesProvider) ->
+    hb_ao:resolve_many(RoutesProvider, Opts);
+provider_routes(RoutesProvider, Opts) ->
+    hb_ao:resolve(RoutesProvider, Opts).
 
 %% @doc Generate a `uri' key for each node in a route.
 apply_routes(Msg, R, Opts) ->
@@ -457,7 +464,7 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
             <<"template">>,
             XM,
             #{},
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     case hb_util:template_matches(ToMatch, Template, Opts) of
         true -> XM#{ <<"reference">> => hb_path:to_binary([<<"routes">>, XKey]) };
@@ -719,7 +726,7 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Base, RawReq, Opts) ->
-    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ hashpath => ignore }),
+    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
     ?event(debug_preprocess, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
     ?event(debug_preprocess, {template_routes, TemplateRoutes}),
@@ -736,7 +743,7 @@ preprocess(Base, RawReq, Opts) ->
                             hb_ao:get(
                                 <<"body">>,
                                 RawReq,
-                                Opts#{ hashpath => ignore }
+                                Opts#{ <<"hashpath">> => ignore }
                             )
                     }};
                 <<"error">> ->
@@ -835,7 +842,8 @@ test_provider_test_parallel() ->
     Node =
         hb_http_server:start_node(Opts =
             #{
-                router_opts => #{
+                <<"store">> => hb_test_utils:test_store(),
+                <<"router-opts">> => #{
                     <<"provider">> => #{
                         <<"path">> => <<"/test-key/routes">>,
                         <<"test-key">> => #{
@@ -847,10 +855,6 @@ test_provider_test_parallel() ->
                             ]
                         }
                     }
-                },
-                store => #{
-                    <<"store-module">> => hb_store_fs,
-                    <<"name">> => <<"cache-TEST">>
                 }
             }
         ),
@@ -862,7 +866,8 @@ test_provider_test_parallel() ->
 dynamic_provider_test_parallel() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(#{
-        router_opts => #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"device">> => <<"lua@5.3a">>,
                 <<"path">> => <<"provider">>,
@@ -873,7 +878,7 @@ dynamic_provider_test_parallel() ->
                 <<"node">> => <<"test-dynamic-node">>
             }
         },
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     }),
     ?assertEqual(
         {ok, <<"test-dynamic-node">>},
@@ -885,13 +890,13 @@ local_process_provider_test_parallel_() ->
 local_process_provider() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(#{
-        priv_wallet => ar_wallet:new(),
-        router_opts => #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"path">> => <<"/router~node-process@1.0/now/known-routes">>
             }
         },
-        node_processes => #{
+        <<"node-processes">> => #{
             <<"router">> => #{
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
@@ -937,9 +942,9 @@ local_dynamic_router() ->
     TestNodes = 5,
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Node = hb_http_server:start_node(Opts = #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => ar_wallet:new(),
-        router_opts => #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"router-opts">> => #{
             <<"registrar">> => #{
                 <<"device">> => <<"router@1.0">>,
                 <<"path">> => <<"/router1~node-process@1.0/schedule">>
@@ -950,7 +955,7 @@ local_dynamic_router() ->
                         <<"/router1~node-process@1.0/compute/routes~message@1.0">>
             }
         },
-        node_processes => #{
+        <<"node-processes">> => #{
             <<"router1">> => #{
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
@@ -1079,10 +1084,10 @@ dynamic_router_pricing() ->
     ExecNode =
         hb_http_server:start_node(
             ExecOpts = #{
-                priv_wallet => ExecWallet, 
-                port => 10009,
-                store => hb_test_utils:test_store(),
-                node_processes => #{
+                <<"priv-wallet">> => ExecWallet, 
+                <<"port">> => 10009,
+                <<"store">> => hb_test_utils:test_store(),
+                <<"node-processes">> => #{
                     <<"ledger2">> => #{
                         <<"device">> => <<"process@1.0">>,
                         <<"execution-device">> => <<"lua@5.3a">>,
@@ -1106,17 +1111,17 @@ dynamic_router_pricing() ->
                         <<"authority">> => ExecNodeAddr              
                     }
                 },
-                p4_recipient => ExecNodeAddr, 
-                p4_non_chargable_routes => [
+                <<"p4-recipient">> => ExecNodeAddr, 
+                <<"p4-non-chargable-routes">> => [
                     #{ <<"template">> => <<"/*~node-process@1.0/*">> },
                     #{ <<"template">> => <<"/*~router@1.0/*">> }
                 ],
-                on => #{
+                <<"on">> => #{
                     <<"request">> => Processor,
                     <<"response">> => Processor
                 },
-                node_process_spawn_codec => <<"ans104@1.0">>,
-                router_opts => #{
+                <<"node-process-spawn-codec">> => <<"ans104@1.0">>,
+                <<"router-opts">> => #{
                     <<"offered">> => [
                         #{
                             <<"registration-peer">> => <<"http://localhost:10010">>,         
@@ -1135,10 +1140,10 @@ dynamic_router_pricing() ->
             }
         ),
     RouterNode = hb_http_server:start_node(#{
-        port => 10010,
-        store => hb_test_utils:test_store(),
-        priv_wallet => ProxyWallet,
-        on => 
+        <<"port">> => 10010,
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ProxyWallet,
+        <<"on">> => 
             #{
                 <<"request">> => #{
                     <<"device">> => <<"router@1.0">>,
@@ -1146,7 +1151,7 @@ dynamic_router_pricing() ->
                     <<"commit-request">> => true
                 }
             },
-        router_opts => #{
+        <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"path">> =>
                     <<"/router2~node-process@1.0/compute/routes~message@1.0">>
@@ -1156,8 +1161,8 @@ dynamic_router_pricing() ->
             },
             <<"registrar-path">> => <<"schedule">>
         },
-        relay_allow_commit_request => true,
-        node_processes => #{
+        <<"relay-allow-commit-request">> => true,
+        <<"node-processes">> => #{
             <<"router2">> => #{
                 <<"type">> => <<"Process">>,
                 <<"device">> => <<"process@1.0">>,
@@ -1221,15 +1226,15 @@ dynamic_router() ->
     ProxyWallet = ar_wallet:new(),
     ExecNode =
         hb_http_server:start_node(
-            ExecOpts = #{ priv_wallet => ExecWallet, store => hb_test_utils:test_store() }
+            ExecOpts = #{ <<"priv-wallet">> => ExecWallet, <<"store">> => hb_test_utils:test_store() }
         ),
     Node = hb_http_server:start_node(ProxyOpts = #{
-        snp_trusted => [
+        <<"snp-trusted">> => [
             #{
                 <<"vcpus">> => 32,
-                <<"vcpu_type">> => 5, 
-                <<"vmm_type">> => 1,
-                <<"guest_features">> => 1,
+                <<"vcpu-type">> => 5, 
+                <<"vmm-type">> => 1,
+                <<"guest-features">> => 1,
                 <<"firmware">> =>
                     <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
                 <<"kernel">> =>
@@ -1240,21 +1245,21 @@ dynamic_router() ->
                     <<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>
             }
         ],
-        store => hb_test_utils:test_store(),
-        priv_wallet => ProxyWallet,
-        on => 
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ProxyWallet,
+        <<"on">> => 
             #{
                 <<"request">> => #{
                     <<"device">> => <<"router@1.0">>,
                     <<"path">> => <<"preprocess">>
                 }
             },
-        router_opts => #{
+        <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"path">> => <<"/router~node-process@1.0/compute/routes~message@1.0">>
             }
         },
-        node_processes => #{
+        <<"node-processes">> => #{
             <<"router">> => #{
                 <<"type">> => <<"Process">>,
                 <<"device">> => <<"process@1.0">>,
@@ -1342,19 +1347,19 @@ dynamic_routing_by_performance() ->
     BenchRoutes = 16,
     TestPath = <<"/worker">>,
     % Start the main node for the test, loading the `dynamic-router' script and
-    % the http_monitor to generate performance messages.
+    % the http-monitor to generate performance messages.
     {ok, Script} = file:read_file(<<"scripts/dynamic-router.lua">>),
     Node = hb_http_server:start_node(Opts = #{
-        relay_http_client => gun,
-        store => hb_test_utils:test_store(),
-        priv_wallet => ar_wallet:new(),
-        router_opts => #{
+        <<"relay-http-client">> => gun,
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"path">> =>
                     <<"/perf-router~node-process@1.0/compute/routes~message@1.0">>
             }
         },
-        node_processes => #{
+        <<"node-processes">> => #{
             <<"perf-router">> => #{
                 <<"device">> => <<"process@1.0">>,
                 <<"execution-device">> => <<"lua@5.3a">>,
@@ -1373,9 +1378,9 @@ dynamic_routing_by_performance() ->
             }
         },
         % Define the request that should be called in order to record performance
-        % information into the process. The `body' of the `http_monitor' message
+        % information into the process. The `body' of the `http-monitor' message
         % is filled with the signed performance report.
-        http_monitor => #{
+        <<"http-monitor">> => #{
             <<"method">> => <<"POST">>,
             <<"path">> => <<"/perf-router~node-process@1.0/schedule">>
         }
@@ -1390,8 +1395,8 @@ dynamic_routing_by_performance() ->
                 XNode =
                     hb_http_server:start_node(
                         #{
-                            store => hb_test_utils:test_store(),
-                            on =>
+                            <<"store">> => hb_test_utils:test_store(),
+                            <<"on">> =>
                                 #{
                                     <<"request">> => #{
                                         <<"device">> => <<"test-device@1.0">>,
@@ -1680,21 +1685,21 @@ route_template_message_matches_test_parallel() ->
         {ok, <<"correct">>},
         route(
             #{ <<"path">> => <<"/">>, <<"special-key">> => <<"special-value">> },
-            #{ routes => Routes }
+            #{ <<"routes">> => Routes }
         )
     ),
     ?assertEqual(
         {error, no_matches},
         route(
             #{ <<"path">> => <<"/">>, <<"special-key">> => <<"special-value2">> },
-            #{ routes => Routes }
+            #{ <<"routes">> => Routes }
         )
     ),
     ?assertEqual(
         {ok, <<"fallback">>},
         route(
             #{ <<"path">> => <<"/">> },
-            #{ routes => Routes ++ [#{ <<"node">> => <<"fallback">> }] }
+            #{ <<"routes">> => Routes ++ [#{ <<"node">> => <<"fallback">> }] }
         )
     ).
 
@@ -1711,15 +1716,15 @@ route_regex_matches_test_parallel() ->
     ],
     ?assertEqual(
         {ok, <<"correct">>},
-        route(#{ <<"path">> => <<"/abc/schedule">> }, #{ routes => Routes })
+        route(#{ <<"path">> => <<"/abc/schedule">> }, #{ <<"routes">> => Routes })
     ),
     ?assertEqual(
         {ok, <<"correct">>},
-        route(#{ <<"path">> => <<"/a/b/c/schedule">> }, #{ routes => Routes })
+        route(#{ <<"path">> => <<"/a/b/c/schedule">> }, #{ <<"routes">> => Routes })
     ),
     ?assertEqual(
         {error, no_matches},
-        route(#{ <<"path">> => <<"/a/b/c/bad-key">> }, #{ routes => Routes })
+        route(#{ <<"path">> => <<"/a/b/c/bad-key">> }, #{ <<"routes">> => Routes })
     ).
 
 explicit_route_test_parallel() ->
@@ -1733,14 +1738,14 @@ explicit_route_test_parallel() ->
         {ok, <<"https://google.com">>},
         route(
             #{ <<"path">> => <<"https://google.com">> },
-            #{ routes => Routes }
+            #{ <<"routes">> => Routes }
         )
     ),
     ?assertEqual(
         {ok, <<"http://google.com">>},
         route(
             #{ <<"path">> => <<"http://google.com">> },
-            #{ routes => Routes }
+            #{ <<"routes">> => Routes }
         )
     ),
     % Test that `route-path' can also be used to specify the path, via an AO
@@ -1748,7 +1753,7 @@ explicit_route_test_parallel() ->
     ?assertMatch(
         {ok, #{ <<"node">> := <<"http://google.com">> }},
         hb_ao:resolve(
-            #{ <<"device">> => <<"router@1.0">>, routes => Routes },
+            #{ <<"device">> => <<"router@1.0">>, <<"routes">> => Routes },
             #{
                 <<"path">> => <<"match">>,
                 <<"route-path">> => <<"http://google.com">>
@@ -1759,7 +1764,7 @@ explicit_route_test_parallel() ->
 
 device_call_from_singleton_test_parallel() ->
     % Try with a real-world example, taken from a GET request to the router.
-    NodeOpts = #{ routes => Routes = [#{
+    NodeOpts = #{ <<"routes">> => Routes = [#{
         <<"template">> => <<"/some/path">>,
         <<"node">> => <<"old">>,
         <<"priority">> => 10
@@ -1775,8 +1780,8 @@ device_call_from_singleton_test_parallel() ->
 get_routes_test_parallel() ->
     Node = hb_http_server:start_node(
         #{
-            force_signed => false,
-            routes => [
+            <<"force-signed">> => false,
+            <<"routes">> => [
                 #{
                     <<"template">> => <<"*">>,
                     <<"node">> => <<"our_node">>,
@@ -1794,15 +1799,15 @@ add_route_test_parallel() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
-            force_signed => false,
-            routes => [
+            <<"force-signed">> => false,
+            <<"routes">> => [
                 #{
                     <<"template">> => <<"/some/path">>,
                     <<"node">> => <<"old">>,
                     <<"priority">> => 10
                 }
             ],
-            operator => hb_util:encode(ar_wallet:to_address(Owner))
+            <<"operator">> => hb_util:encode(ar_wallet:to_address(Owner))
         }
     ),
     Res =
@@ -1815,7 +1820,7 @@ add_route_test_parallel() ->
                     <<"node">> => <<"new">>,
                     <<"priority">> => 15
                 },
-                #{ priv_wallet => Owner }
+                #{ <<"priv-wallet">> => Owner }
             ),
             #{}
         ),
@@ -1829,15 +1834,15 @@ add_route_test_parallel() ->
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
 %% peers via `~relay@1.0', according to the node's routing table.
 request_hook_reroute_to_nearest_test_parallel() ->
-    Peer1 = hb_http_server:start_node(#{ priv_wallet => W1 = ar_wallet:new() }),
-    Peer2 = hb_http_server:start_node(#{ priv_wallet => W2 = ar_wallet:new() }),
+    Peer1 = hb_http_server:start_node(#{ <<"priv-wallet">> => W1 = ar_wallet:new() }),
+    Peer2 = hb_http_server:start_node(#{ <<"priv-wallet">> => W2 = ar_wallet:new() }),
     Address1 = hb_util:human_id(ar_wallet:to_address(W1)),
     Address2 = hb_util:human_id(ar_wallet:to_address(W2)),
     Peers = [Address1, Address2],
     Node =
         hb_http_server:start_node(Opts = #{
-            priv_wallet => ar_wallet:new(),
-            routes =>
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"routes">> =>
                 [
                     #{
                         <<"template">> => <<"/.*/.*/.*">>,
@@ -1857,7 +1862,7 @@ request_hook_reroute_to_nearest_test_parallel() ->
                             )
                     }
                 ],
-            on => #{ <<"request">> => #{ <<"device">> => <<"relay@1.0">> } }
+            <<"on">> => #{ <<"request">> => #{ <<"device">> => <<"relay@1.0">> } }
         }),
     Res =
         lists:map(
@@ -1866,7 +1871,7 @@ request_hook_reroute_to_nearest_test_parallel() ->
                     hb_http:get(
                         Node,
                         <<"/~meta@1.0/info/address">>,
-                        Opts#{ http_only_result => true }
+                        Opts#{ <<"http-only-result">> => true }
                     )
                 )
             end,
@@ -1896,17 +1901,17 @@ route_nearest_integer_preserves_opts_test_parallel() ->
                         #{
                             <<"center">> => 100,
                             <<"prefix">> => <<"http://node-100">>,
-                            <<"opts">> => #{ protocol => http2 }
+                            <<"opts">> => #{ <<"protocol">> => http2 }
                         },
                         #{
                             <<"center">> => 200,
                             <<"prefix">> => <<"http://node-200">>,
-                            <<"opts">> => #{ protocol => http2 }
+                            <<"opts">> => #{ <<"protocol">> => http2 }
                         },
                         #{
                             <<"center">> => 400,
                             <<"prefix">> => <<"http://node-400">>,
-                            <<"opts">> => #{ protocol => http2 }
+                            <<"opts">> => #{ <<"protocol">> => http2 }
                         }
                     ],
                 <<"strategy">> => <<"nearest-integer">>,
@@ -1924,7 +1929,7 @@ route_nearest_integer_preserves_opts_test_parallel() ->
     {ok, Route} =
         route(
             #{ <<"path">> => <<"/chunk">>, <<"route-by">> => 210 },
-            #{ routes => Routes }
+            #{ <<"routes">> => Routes }
         ),
     ?assertEqual(2, hb_ao:get(<<"parallel">>, Route, #{})),
     ?assertEqual(2, hb_ao:get(<<"responses">>, Route, #{})),
@@ -1962,8 +1967,8 @@ route_multirequest_parallel_limit() ->
             fun(N) ->
                 hb_http_server:start_node(
                     #{
-                        store => hb_test_utils:test_store(),
-                        on =>
+                        <<"store">> => hb_test_utils:test_store(),
+                        <<"on">> =>
                             #{
                                 <<"request">> =>
                                     #{
@@ -2005,8 +2010,8 @@ route_multirequest_parallel_limit() ->
         hb_http:request(
             #{ <<"method">> => <<"GET">>, <<"path">> => <<"/worker">> },
             #{
-                routes => Routes,
-                http_only_result => false
+                <<"routes">> => Routes,
+                <<"http-only-result">> => false
             }
         ),
     Duration = os:system_time(millisecond) - Start,
@@ -2041,30 +2046,30 @@ full_route_config_test_parallel() ->
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 3_600_000_000,
                             <<"with">> => <<"https://data-1.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 8_200_000_000,
                             <<"with">> => <<"https://data-2.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 12_200_000_000,
                             <<"with">> => <<"https://data-3.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"with">> => <<"https://data-4.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 16_200_000_000,
                             <<"with">> => <<"https://data-5.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         }
                     ],
                 <<"strategy">> => <<"Nearest-Integer">>,
@@ -2078,7 +2083,7 @@ full_route_config_test_parallel() ->
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"with">> => <<"https://arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         }
                     ],
                 <<"parallel">> => true,
@@ -2090,11 +2095,11 @@ full_route_config_test_parallel() ->
                 <<"node">> =>
                     #{
                         <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                     }
             }
         ],
-    Opts = #{ routes => Routes },
+    Opts = #{ <<"routes">> => Routes },
 
     %% --- Nearest-Integer strategy for /arweave/chunk ---
 
@@ -2196,7 +2201,7 @@ full_route_config_test_parallel() ->
     %% --- HTTP GETs through the routes ---
     %% Fire actual requests using hb_http:request/2, the same way the
     %% route_multirequest_parallel_limit test does it.
-    HttpReqOpts = #{ routes => Routes, http_only_result => false },
+    HttpReqOpts = #{ <<"routes">> => Routes, <<"http-only-result">> => false },
 
     %% Chunk request via Nearest-Integer (parallel=2, choose=3).
     %% With 3 nodes and parallel=2, wave 1 sends to 2 nodes, wave 2 sends
@@ -2229,31 +2234,31 @@ full_route_config_test_parallel() ->
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 3_600_000_000,
                             <<"with">> => <<"https://data-1.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 8_200_000_000,
                             <<"with">> => <<"https://data-2.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 12_200_000_000,
                             <<"with">> => <<"https://data-3.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 14_000_000_000,
                             <<"with">> => <<"https://data-4.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"center">> => 16_200_000_000,
                             <<"with">> => <<"https://data-5.arweave.net">>,
-                            <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                            <<"opts">> => #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                         }
                     ],
                 <<"strategy">> => <<"Nearest-Integer">>,
@@ -2271,7 +2276,7 @@ full_route_config_test_parallel() ->
                 <<"path">> => <<"/arweave/chunk/8200000100">>,
                 <<"route-by">> => 8_200_000_100
             },
-            #{ routes => AllChunkRoutes, http_only_result => false }
+            #{ <<"routes">> => AllChunkRoutes, <<"http-only-result">> => false }
         )),
     AllChunkDuration = os:system_time(millisecond) - AllChunkStart,
     ?event(router_test, {all_chunk_http_result, AllChunkHttpRes}),

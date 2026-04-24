@@ -135,7 +135,7 @@
 %% be `1'. This results in the generation of a unique initial (`Base') state,
 %% node message, and request for each `run' of the state machine.
 forall(Spec) ->
-    state_machine(Spec#{ length => hb_opts:get(length, 1, Spec) }).
+    state_machine(Spec#{ <<"length">> => hb_opts:get(length, 1, Spec) }).
 
 %% @doc Execute a state machine with a given `Specification'. Supported keys are
 %% as follows:
@@ -159,7 +159,7 @@ forall(Spec) ->
 %%   directly in the next iteration of the loop.
 %% 
 %% See the moduledoc for more details on orchestrating state machine executions.
-state_machine(Spec = #{ requests := _ }) ->
+state_machine(Spec) when is_map_key(<<"requests">>, Spec) ->
     Runs = hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
     Length = hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
     run_state_machines(
@@ -170,6 +170,7 @@ state_machine(Spec = #{ requests := _ }) ->
                     crypto:bytes_to_integer(crypto:strong_rand_bytes(4)),
                     Spec
                 ),
+            requests => hb_opts:get(requests, undefined, Spec),
             states => hb_opts:get(states, undefined, Spec),
             models => hb_opts:get(models, undefined, Spec),
             properties => hb_opts:get(properties, [], Spec),

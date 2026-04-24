@@ -25,7 +25,7 @@
 
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
-    % Calculate and set the new `preloaded_devices' option.
+    % Calculate and set the new `preloaded-devices' option.
     AllDevs = hb_opts:get(preloaded_devices, Opts),
     DevSandboxDef =
         hb_ao:get(
@@ -57,8 +57,8 @@ install(Base, State, Opts) ->
     ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
     ExecOpts =
         Opts#{
-            preloaded_devices => AdmissibleDevs,
-            hashpath => ignore
+            <<"preloaded-devices">> => AdmissibleDevs,
+            <<"hashpath">> => ignore
         },
     % Initialize the AO-Core resolver.
     BaseAOTable =

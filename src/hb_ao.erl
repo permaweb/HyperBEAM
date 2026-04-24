@@ -32,8 +32,8 @@
 %%% 
 %%% Devices can be expressed as either modules or maps. They can also be 
 %%% referenced by an Arweave ID, which can be used to load a device from 
-%%% the network (depending on the value of the `load_remote_devices' and 
-%%% `trusted_device_signers' environment settings).
+%%% the network (depending on the value of the `load-remote-devices' and
+%%% `trusted-device-signers' environment settings).
 %%% 
 %%% HyperBEAM device implementations are defined as follows:
 %%% <pre>
@@ -105,7 +105,17 @@
 -export([deep_set/4]).
 -include("include/hb.hrl").
 
--define(TEMP_OPTS, [add_key, force_message, cache_control, spawn_worker]).
+-define(
+    TEMP_OPTS,
+    [
+        <<"add-key">>,
+        <<"force-message">>,
+        <<"cache-control">>,
+        <<"spawn-worker">>,
+        <<"only">>,
+        <<"prefer">>
+    ]
+).
 
 %% @doc Get the value of a message's key by running its associated device
 %% function. Optionally, takes options that control the runtime environment. 
@@ -298,7 +308,7 @@ resolve_stage(1, {resolve, Subres}, Req, Opts) ->
     % directly, then apply the request to the result.
     ?event(debug_ao_core, {stage, 1, subresolving_base_message, {subres, Subres}}, Opts),
     % Unlike the `request' case for pre-subresolutions, we do not need to unset
-    % the `force_message' option, because the result should be a message, anyway.
+    % the `force-message' option, because the result should be a message, anyway.
     % If it is not, it is more helpful to have the message placed into the `body'
     % of a result, which can then be executed upon.
     case resolve_many(Subres, Opts) of
@@ -322,9 +332,9 @@ resolve_stage(1, Base, {resolve, Subres}, Opts) ->
     % our execution. We assume that the subresolution is already in a normalized,
     % executable form, so we pass it to `resolve_many' for execution.
     ?event(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
-    % We make sure to unset the `force_message' option so that if the subresolution
+    % We make sure to unset the `force-message' option so that if the subresolution
     % returns a literal, the rest of `resolve' will normalize it to a path.
-    case resolve_many(Subres, maps:without([force_message], Opts)) of
+    case resolve_many(Subres, maps:without([<<"force-message">>], Opts)) of
         {ok, Req} ->
             ?event(
                 ao_core,
@@ -494,7 +504,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
 			{
 				Func,
 				Opts#{
-					add_key =>
+					<<"add-key">> =>
 						case Status of
 							add_key -> Key;
 							_ -> false
@@ -532,7 +542,7 @@ resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
 	% Execution.
     ExecOpts = execution_opts(Opts),
 	Args =
-		case hb_maps:get(add_key, Opts, false, Opts) of
+		case hb_opts:get(add_key, false, Opts) of
 			false -> [Base, Req, ExecOpts];
 			Key -> [Key, Base, Req, ExecOpts]
 		end,
@@ -596,7 +606,14 @@ resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
         Opts
     ),
     resolve_stage(7, Base, Req, Res, ExecName, Opts);
-resolve_stage(7, Base, Req, {St, Res}, ExecName, Opts = #{ on := On = #{ <<"step">> := _ }}) ->
+resolve_stage(
+    7,
+    Base,
+    Req,
+    {St, Res},
+    ExecName,
+    Opts = #{ <<"on">> := On = #{ <<"step">> := _ }}
+) ->
     ?event(debug_ao_core, {stage, 7, ExecName, executing_step_hook, {on, On}}, Opts),
     % If the `step' hook is defined, we execute it. Note: This function clause
     % matches directly on the `on' key of the `Opts' map. This is in order to
@@ -638,7 +655,7 @@ resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
     % Cryptographic linking. Now that we have generated the result, we
     % need to cryptographically link the output to its input via a hashpath.
     resolve_stage(10, Base, Req,
-        case hb_opts:get(hashpath, update, Opts#{ only => local }) of
+        case hb_opts:get(hashpath, update, Opts#{ <<"only">> => local }) of
             update ->
                 NormRes = Res,
                 Priv = hb_private:from_message(NormRes),
@@ -694,7 +711,9 @@ resolve_stage(11, Base, Req, Res, ExecName, Opts) ->
 resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
     ?event(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
-    case {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ prefer => local })} of
+    case
+        {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
+    of
         {A, B} when (A == false) or (B == false) ->
             Res;
         {_, _} ->
@@ -741,7 +760,7 @@ subresolve(RawBase, DevID, Req, Opts) ->
                         set(
 							Base2,
 							set(Req, <<"path">>, unset, Opts),
-							Opts#{ force_message => false }
+							Opts#{ <<"force-message">> => false }
 						)
                 end,
             ?event(subresolution,
@@ -947,7 +966,7 @@ get(Path, {as, Device, Msg}, Default, Opts) ->
         Opts
     );
 get(Path, Msg, Default, Opts) ->
-	case resolve(Msg, #{ <<"path">> => Path }, Opts#{ spawn_worker => false }) of
+	case resolve(Msg, #{ <<"path">> => Path }, Opts#{ <<"spawn-worker">> => false }) of
 		{ok, Value} -> Value;
 		{error, _} -> Default
 	end.
@@ -1218,24 +1237,32 @@ do_normalize_keys(Map, Opts) ->
 %% @doc The execution options that are used internally by this module
 %% when calling itself.
 internal_opts(Opts) ->
-    hb_maps:merge(Opts, #{
-        topic => hb_opts:get(topic, ao_internal, Opts),
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        spawn_worker => false,
-        await_inprogress => false
-    }).
+    hb_maps:merge(
+        hb_maps:without(?TEMP_OPTS, Opts, Opts),
+        #{
+            <<"topic">> => hb_opts:get(topic, ao_internal, Opts),
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+            <<"spawn-worker">> => false,
+            <<"await-inprogress">> => false
+        }
+    ).
 
 %% @doc Return the node message that should be used in order to perform
 %% recursive executions.
 execution_opts(Opts) ->
 	% First, determine the arguments to pass to the function.
 	% While calculating the arguments we unset the add_key option.
-	Opts1 = hb_maps:remove(trace, hb_maps:without(?TEMP_OPTS, Opts, Opts), Opts),
+	Opts1 =
+        hb_maps:remove(
+            <<"trace">>,
+            hb_maps:without(?TEMP_OPTS, Opts, Opts),
+            Opts
+        ),
     % Unless the user has explicitly requested recursive spawning, we
-    % unset the spawn_worker option so that we do not spawn a new worker
+    % unset the spawn-worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_maps:get(spawn_worker, Opts1, false, Opts) of
-        recursive -> Opts1;
-        _ -> hb_maps:remove(spawn_worker, Opts1, Opts)
+    case hb_opts:get(spawn_worker, false, Opts) of
+        recursive -> Opts1#{ <<"spawn-worker">> => recursive };
+        _ -> Opts1
     end.

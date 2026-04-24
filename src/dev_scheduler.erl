@@ -88,7 +88,7 @@ next(Base, Req, Opts) ->
             hb_ao:get(
                 <<"at-slot">>,
                 Base,
-                Opts#{ hashpath => ignore }
+                Opts#{ <<"hashpath">> => ignore }
             )
         ),
     ?event(next_profiling, got_last_processed),
@@ -130,7 +130,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
             hb_ao:get(
                 <<"slot">>,
                 NextAssignment,
-                Opts#{ hashpath => ignore }
+                Opts#{ <<"hashpath">> => ignore }
             )
         )
         catch
@@ -229,7 +229,7 @@ find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
                         <<"path">> => <<"schedule/assignments">>,
                         <<"from">> => LastSlot
                     },
-                    Opts#{ scheduler_follow_redirects => true }
+                    Opts#{ <<"scheduler-follow-redirects">> => true }
                 ),
             % Convert the assignments to an ordered list of messages,
             % after removing all keys before the last processed slot.
@@ -538,7 +538,7 @@ find_server(ProcID, Base, ToSched, Opts) ->
                                 _ -> [{ToSched, <<"scheduler-location">>}]
                             end,
                             not_found,
-                            Opts#{ hashpath => ignore }
+                            Opts#{ <<"hashpath">> => ignore }
                         ),
                     ?event({sched_loc, SchedLoc}),
                     case SchedLoc of
@@ -574,7 +574,7 @@ find_process_message(ProcID, Base, ToSched, Opts) ->
             <<"process">>,
             Base,
             not_found,
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     case MaybeProcessMsg of
         not_found ->
@@ -760,7 +760,7 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
     % `/processes/procID/latest' to get the current slot.
     Path = << ProcID/binary, "/latest?process-id=", ProcID/binary>>,
     ?event({getting_slot_from_ao_core_remote, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ http_client => httpc }) of
+    case hb_http:get(Node, Path, Opts#{ <<"http-client">> => httpc }) of
         {ok, Res} ->
             ?event({remote_slot_result, {res, Res}}),
             case hb_util:int(hb_ao:get(<<"status">>, Res, 200, Opts)) of
@@ -962,7 +962,13 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                 >>
         end,
     ?event({getting_remote_schedule, {node, {string, Node}}, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ http_client => httpc, protocol => http2 }) of
+    case
+        hb_http:get(
+            Node,
+            Path,
+            Opts#{ <<"http-client">> => httpc, <<"protocol">> => http2 }
+        )
+    of
         {ok, Res} ->
             case hb_util:int(hb_ao:get(<<"status">>, Res, 200, Opts)) of
                 200 ->
@@ -978,7 +984,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                             <<"body">>,
                                             Res,
                                             <<"">>,
-                                            Opts#{ hashpath => ignore }
+                                            Opts#{ <<"hashpath">> => ignore }
                                         )
                                     ),
                                 cache_remote_schedule(Variant, ProcID, JSONRes, Opts),
@@ -1062,7 +1068,7 @@ cache_remote_schedule(<<"ao.N.1">>, ProcID, Schedule, Opts) ->
         hb_ao:get(
             <<"assignments">>,
             Schedule,
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     cache_remote_schedule(common, ProcID, Assignments, Opts);
 cache_remote_schedule(_, _ProcID, Schedule, Opts) ->
@@ -1139,7 +1145,7 @@ filter_json_assignments(JSONRes, To, From, Opts) ->
     JSONRes#{ <<"edges">> => Filtered }.
 
 post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
-    RemoteOpts = Opts#{ http_client => httpc },
+    RemoteOpts = Opts#{ <<"http-client">> => httpc },
     ProcID = without_hint(RawProcID),
     Location = hb_ao:get(<<"location">>, Redirect, Opts),
     Parsed = uri_string:parse(Location),
@@ -1239,7 +1245,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                 {path, {string, P}},
                 {process_id, {string, ProcID}}
             }),
-            LegacyOpts = Opts#{ protocol => http2 },
+            LegacyOpts = Opts#{ <<"protocol">> => http2 },
             case hb_http:post(Node, PostMsg, LegacyOpts) of
                 {ok, PostRes} ->
                     ?event({remote_schedule_result, PostRes}),
@@ -1304,7 +1310,7 @@ find_target_id(Base, Req, ToSched, Opts) ->
             end
     end.
 find_target_id(Base, Req, Opts) ->
-    TempOpts = Opts#{ hashpath => ignore },
+    TempOpts = Opts#{ <<"hashpath">> => ignore },
     Res = case hb_ao:resolve(Req, <<"target">>, TempOpts) of
         {ok, Target} ->
             % ID found at Req/target
@@ -1347,15 +1353,15 @@ find_message_to_schedule(Base, Req, Opts) ->
             <<"subject">>,
             Req,
             not_found,
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     case Subject of
         <<"base">> -> Base;
         <<"self">> -> Req;
         not_found ->
-            hb_ao:get(<<"body">>, Req, Req, Opts#{ hashpath => ignore });
+            hb_ao:get(<<"body">>, Req, Req, Opts#{ <<"hashpath">> => ignore });
         Subject ->
-            hb_ao:get(Subject, Req, Opts#{ hashpath => ignore })
+            hb_ao:get(Subject, Req, Opts#{ <<"hashpath">> => ignore })
     end.
 
 %% @doc Generate a `GET /schedule' response for a process.
@@ -1431,8 +1437,8 @@ checkpoint(State) -> {ok, State}.
 
 %% @doc Generate a _transformed_ process message, not as they are generated 
 %% by users. See `dev_process' for examples of AO process messages.
-test_process() -> test_process(#{ priv_wallet => hb:wallet()}).
-test_process(#{ priv_wallet := Wallet})  ->
+test_process() -> test_process(#{ <<"priv-wallet">> => hb:wallet()}).
+test_process(#{ <<"priv-wallet">> := Wallet})  ->
     test_process(hb_util:human_id(ar_wallet:to_address(Wallet)));
 test_process(Address) ->
     #{
@@ -1455,7 +1461,7 @@ status_test_parallel() ->
 
 register_new_process_test_parallel() ->
     start(),
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
     ?event({test_registering_new_process, {msg, Base}}),
     ?assertMatch({ok, _},
@@ -1481,7 +1487,7 @@ register_new_process_test_parallel() ->
 
 schedule_message_and_get_slot_test_parallel() ->
     start(),
-    Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
+    Base = hb_message:commit(test_process(), #{ <<"priv-wallet">> => hb:wallet() }),
     Req = #{
         <<"path">> => <<"schedule">>,
         <<"method">> => <<"POST">>,
@@ -1489,7 +1495,7 @@ schedule_message_and_get_slot_test_parallel() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"true">>
-            }, #{ priv_wallet => hb:wallet() })
+            }, #{ <<"priv-wallet">> => hb:wallet() })
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
@@ -1511,7 +1517,7 @@ redirect_to_hint_test_parallel() ->
     Base =
         hb_message:commit(
             test_process(<< RandAddr/binary, "?hint=", TestLoc/binary>>),
-            #{ priv_wallet => hb:wallet() }
+            #{ <<"priv-wallet">> => hb:wallet() }
         ),
     Req = #{
         <<"path">> => <<"schedule">>,
@@ -1524,8 +1530,8 @@ redirect_to_hint_test_parallel() ->
             Base,
             Req,
             #{
-                scheduler_follow_hints => true,
-                scheduler_follow_redirects => false
+                <<"scheduler-follow-hints">> => true,
+                <<"scheduler-follow-redirects">> => false
             }
         )
     ).
@@ -1535,7 +1541,7 @@ redirect_from_graphql_test_parallel_() ->
 redirect_from_graphql() ->
     start(),
     Opts =
-        #{ store =>
+        #{ <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
                 #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
@@ -1556,18 +1562,18 @@ redirect_from_graphql() ->
                             <<"0syT13r0s0tgPmIed95bJnuSqaD29HQNN8D3ElLSrsc">>,
                         <<"test-key">> => <<"Test-Val">>
                     },
-                    #{ priv_wallet => hb:wallet() }
+                    #{ <<"priv-wallet">> => hb:wallet() }
                 )
             },
             #{
-                scheduler_follow_redirects => false
+                <<"scheduler-follow-redirects">> => false
             }
         )
     ).
 
 get_local_schedule_test_parallel() ->
     start(),
-    Base = hb_message:commit(test_process(), #{ priv_wallet => hb:wallet() }),
+    Base = hb_message:commit(test_process(), #{ <<"priv-wallet">> => hb:wallet() }),
     Req = #{
         <<"path">> => <<"schedule">>,
         <<"method">> => <<"POST">>,
@@ -1575,7 +1581,7 @@ get_local_schedule_test_parallel() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val">>
-            }, #{ priv_wallet => hb:wallet() })
+            }, #{ <<"priv-wallet">> => hb:wallet() })
     },
     Res = #{
         <<"path">> => <<"schedule">>,
@@ -1584,7 +1590,7 @@ get_local_schedule_test_parallel() ->
             hb_message:commit(#{
                 <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"Test-Val-2">>
-            }, #{ priv_wallet => hb:wallet() })
+            }, #{ <<"priv-wallet">> => hb:wallet() })
     },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Res, #{})),
@@ -1605,8 +1611,8 @@ http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
     ExtendedOpts = Opts#{
-        priv_wallet => Wallet,
-        store => [
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => [
             hb_test_utils:test_store(),
             #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
         ]
@@ -1641,7 +1647,7 @@ http_get_slot(N, PMsg) ->
         <<"path">> => <<"/~scheduler@1.0/slot">>,
         <<"method">> => <<"GET">>,
         <<"target">> => ID
-    }, #{ priv_wallet => Wallet }), #{}).
+    }, #{ <<"priv-wallet">> => Wallet }), #{}).
 
 http_get_schedule(N, PMsg, From, To) ->
     http_get_schedule(N, PMsg, From, To, <<"application/http">>).
@@ -1656,19 +1662,19 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"from">> => From,
         <<"to">> => To,
         <<"accept">> => Format
-    }, #{ priv_wallet => Wallet }), #{}).
+    }, #{ <<"priv-wallet">> => Wallet }), #{}).
 
 http_get_schedule_redirect_test_parallel_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
     Opts =
         #{
-            store =>
+            <<"store">> =>
                 [
                     #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
                     #{ <<"store-module">> => hb_store_gateway, <<"opts">> => #{} }
                 ],
-                scheduler_follow_redirects => false
+                <<"scheduler-follow-redirects">> => false
         },
     {N, _Wallet} = http_init(Opts),
     start(),
@@ -1866,7 +1872,7 @@ single_resolution(Opts) ->
     start(),
     BenchTime = 0.25,
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Base = test_process(Opts#{ priv_wallet => Wallet }),
+    Base = test_process(Opts#{ <<"priv-wallet">> => Wallet }),
     ?event({benchmark_start, ?MODULE}),
     MsgToSchedule = hb_message:commit(#{
         <<"type">> => <<"Message">>,
@@ -1945,9 +1951,9 @@ benchmark_suite() ->
             name => fs,
             requires => [hb_store_fs],
             opts => #{
-                store => hb_test_utils:test_store(hb_store_fs),
-                scheduling_mode => local_confirmation,
-                port => 0
+                <<"store">> => hb_test_utils:test_store(hb_store_fs),
+                <<"scheduling-mode">> => local_confirmation,
+                <<"port">> => 0
             },
             desc => <<"FS store, local conf.">>
         },
@@ -1955,9 +1961,9 @@ benchmark_suite() ->
             name => fs_aggressive,
             requires => [hb_store_fs],
             opts => #{
-                store => hb_test_utils:test_store(hb_store_fs),
-                scheduling_mode => aggressive,
-                port => 0
+                <<"store">> => hb_test_utils:test_store(hb_store_fs),
+                <<"scheduling-mode">> => aggressive,
+                <<"port">> => 0
             },
             desc => <<"FS store, aggressive conf.">>
         },
@@ -1965,9 +1971,9 @@ benchmark_suite() ->
             name => rocksdb,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => hb_test_utils:test_store(hb_store_rocksdb),
-                scheduling_mode => local_confirmation,
-                port => 0
+                <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
+                <<"scheduling-mode">> => local_confirmation,
+                <<"port">> => 0
             },
             desc => <<"RocksDB store, local conf.">>
         },
@@ -1975,9 +1981,9 @@ benchmark_suite() ->
             name => rocksdb_aggressive,
             requires => [hb_store_rocksdb],
             opts => #{
-                store => hb_test_utils:test_store(hb_store_rocksdb),
-                scheduling_mode => aggressive,
-                port => 0
+                <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
+                <<"scheduling-mode">> => aggressive,
+                <<"port">> => 0
             },
             desc => <<"RocksDB store, aggressive conf.">>
         },
@@ -1985,10 +1991,10 @@ benchmark_suite() ->
             name => rocksdb_extreme_aggressive_h3,
             requires => [http3],
             opts => #{
-                store => hb_test_utils:test_store(hb_store_rocksdb),
-                scheduling_mode => aggressive,
-                protocol => http3,
-                workers => 100
+                <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
+                <<"scheduling-mode">> => aggressive,
+                <<"protocol">> => http3,
+                <<"workers">> => 100
             },
             desc => <<"100xRocksDB store, aggressive conf, http/3.">>
         }

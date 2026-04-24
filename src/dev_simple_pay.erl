@@ -5,7 +5,7 @@
 %%% The device's pricing rules are as follows:
 %%%
 %%% 1. If the request is from the operator, the cost is 0.
-%%% 2. If the request matches one of the `router_opts/offered' routes, the
+%%% 2. If the request matches one of the `router-opts/offered' routes, the
 %%%    explicit price of the route is used.
 %%% 3. Else, the price is calculated by counting the number of messages in the
 %%%    request, and multiplying by the `simple_pay_price' node option, plus the
@@ -27,7 +27,12 @@
 %% @doc Estimate the cost of the request, using the rules outlined in the
 %% moduledoc.
 estimate(_Base, EstimateReq, NodeMsg) ->
-    Req = hb_ao:get(<<"request">>, EstimateReq, NodeMsg#{ hashpath => ignore }),
+    Req =
+        hb_ao:get(
+            <<"request">>,
+            EstimateReq,
+            NodeMsg#{ <<"hashpath">> => ignore }
+        ),
     case is_operator(Req, NodeMsg) of
         true ->
             ?event(payment,
@@ -95,7 +100,7 @@ apply_price(Seq, _) ->
 %% @doc Calculate the price of a request based on the offered routes, if
 %% applicable.
 price_from_routes(UserRequest, NodeMsg) ->
-    RouterOpts = hb_opts:get(<<"router_opts">>, #{}, NodeMsg),
+    RouterOpts = hb_opts:get(<<"router-opts">>, #{}, NodeMsg),
     Routes = hb_maps:get(<<"offered">>, RouterOpts, [], NodeMsg),
     MatchRes =
         dev_router:match(
@@ -126,7 +131,12 @@ price_from_count(Messages, NodeMsg) ->
 %% will be
 charge(_, RawReq, NodeMsg) ->
     ?event(payment, {charge, RawReq}),
-    Req = hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }),
+    Req =
+        hb_ao:get(
+            <<"request">>,
+            RawReq,
+            NodeMsg#{ <<"hashpath">> => ignore }
+        ),
     case hb_message:signers(Req, NodeMsg) of
         [] ->
             ?event(payment, {charge, {error, <<"No signers">>}}),
@@ -180,7 +190,13 @@ charge(_, RawReq, NodeMsg) ->
 %% @doc Get the balance of a user in the ledger.
 balance(_, RawReq, NodeMsg) ->
     Target =
-        case hb_ao:get(<<"request">>, RawReq, NodeMsg#{ hashpath => ignore }) of
+        case
+            hb_ao:get(
+                <<"request">>,
+                RawReq,
+                NodeMsg#{ <<"hashpath">> => ignore }
+            )
+        of
             not_found ->
                 case hb_message:signers(RawReq, NodeMsg) of
                     [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
@@ -204,7 +220,7 @@ set_balance(Signer, Amount, NodeMsg) ->
     hb_http_server:set_opts(
         #{},
         NewMsg = NodeMsg#{
-            simple_pay_ledger =>
+            <<"simple-pay-ledger">> =>
                 hb_ao:set(
                     Ledger,
                     NormSigner,
@@ -279,10 +295,10 @@ test_opts(Ledger) ->
         Address,
         Wallet,
         #{
-            simple_pay_ledger => Ledger,
-            simple_pay_price => 10,
-            operator => Address,
-            on => #{
+            <<"simple-pay-ledger">> => Ledger,
+            <<"simple-pay-price">> => 10,
+            <<"operator">> => Address,
+            <<"on">> => #{
                 <<"request">> => ProcessorMsg,
                 <<"response">> => ProcessorMsg
             }
@@ -301,7 +317,7 @@ get_balance_and_top_up_test() ->
             Node,
             Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                Opts#{ priv_wallet => ClientWallet }
+                Opts#{ <<"priv-wallet">> => ClientWallet }
             ),
             Opts
         ),
@@ -319,7 +335,7 @@ get_balance_and_top_up_test() ->
                     <<"amount">> => 100,
                     <<"recipient">> => ClientAddress
                 },
-                Opts#{ priv_wallet => HostWallet }
+                Opts#{ <<"priv-wallet">> => HostWallet }
             ),
             Opts
         ),
@@ -332,7 +348,7 @@ get_balance_and_top_up_test() ->
             Node,
             hb_message:commit(
                 #{<<"path">> => <<"/~p4@1.0/balance">>},
-                Opts#{ priv_wallet => ClientWallet }
+                Opts#{ <<"priv-wallet">> => ClientWallet }
             ),
             Opts
         ),
@@ -341,7 +357,7 @@ get_balance_and_top_up_test() ->
 apply_price_test() ->
     ClientWallet = ar_wallet:new(),
     ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
-    ClientOpts = #{ priv_wallet => ClientWallet },
+    ClientOpts = #{ <<"priv-wallet">> => ClientWallet },
     {HostAddress, _HostWallet, Opts} =
         test_opts(#{ ClientAddress => 100 }),
     Node = hb_http_server:start_node(Opts),
@@ -366,7 +382,7 @@ apply_price_test() ->
             Node,
             hb_message:commit(
                 #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                Opts#{ priv_wallet => ClientWallet }
+                Opts#{ <<"priv-wallet">> => ClientWallet }
             ),
             Opts
         ),

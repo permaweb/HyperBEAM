@@ -16,9 +16,9 @@ info() ->
 
 %% @doc Get the store configured for the match index.
 store(Opts) ->
-    LocalMatchIndex = local_opt(match_index, Opts, undefined),
-    LocalStore = local_opt(store, Opts, undefined),
-    GlobalMatchIndex = hb_opts:get(match_index, false, #{ only => global }),
+    LocalMatchIndex = maps:get(<<"match-index">>, Opts, undefined),
+    LocalStore = maps:get(<<"store">>, Opts, undefined),
+    GlobalMatchIndex = hb_opts:get(match_index, false, #{ <<"only">> => global }),
     MatchIndexStore =
         case {LocalMatchIndex, LocalStore} of
             {undefined, undefined} ->
@@ -37,18 +37,6 @@ store(Opts) ->
         true -> hb_opts:get(store, [], Opts);
         ResolvedStore when not is_list(ResolvedStore) -> [ResolvedStore];
         ResolvedStore -> ResolvedStore
-    end.
-
-%% @doc Read a local option from either atom or binary key shape.
-local_opt(Key, Opts, Default) ->
-    case maps:find(Key, Opts) of
-        {ok, Value} ->
-            Value;
-        error ->
-            case maps:find(atom_to_binary(Key), Opts) of
-                {ok, Value} -> Value;
-                error -> Default
-            end
     end.
 
 %% @doc Calculate the address of a key-value pair in the match index. We use the
@@ -80,7 +68,7 @@ to_match_bin(Other) ->
 value_path(Bin, Opts) when is_binary(Bin) ->
     <<"data/", (hb_path:hashpath(Bin, Opts))/binary>>;
 value_path(Map, Opts) when is_map(Map) ->
-    hb_message:id(Map, none, Opts#{ linkify_mode => discard });
+    hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard });
 value_path(List, Opts) when is_list(List) ->
     case io_lib:printable_unicode_list(List) of
         true ->

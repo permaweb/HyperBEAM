@@ -70,7 +70,7 @@ ledger(Script, Extra, Opts) ->
                 },
                 ModExtra
             ),
-            Opts#{ priv_wallet => HostWallet }
+            Opts#{ <<"priv-wallet">> => HostWallet }
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -113,7 +113,7 @@ subledger(Root, Extra, Opts) ->
                 },
                 Extra
             ),
-            Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+            Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -142,15 +142,15 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
                         <<"recipient">> => hb_util:human_id(Recipient),
                         <<"quantity">> => Quantity
                     },
-                    Opts#{ priv_wallet => Sender }
+                    Opts#{ <<"priv-wallet">> => Sender }
                 )
             },
-            Opts#{ priv_wallet => Sender }
+            Opts#{ <<"priv-wallet">> => Sender }
         ),
     hb_ao:resolve(
         ProcMsg,
         Xfer,
-        Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
     ).
 
 %% @doc Request that a peer register with a without sub-ledger.
@@ -159,7 +159,7 @@ register(ProcMsg, Peer, Opts) when is_map(Peer) ->
 register(ProcMsg, PeerID, RawOpts) ->
     Opts =
         RawOpts#{
-            priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
+            <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
         },
     Reg =
         hb_message:commit(
@@ -413,7 +413,7 @@ normalize_without_root(RootProc, Procs) ->
 %% recipients via remote stores. This improves test performance.
 test_opts() ->
     hb:init(),
-    #{ store => [hb_test_utils:test_store()]}.
+    #{ <<"store">> => [hb_test_utils:test_store()]}.
 
 %%% Test cases.
 
@@ -761,10 +761,10 @@ multischeduler() ->
     Scheduler2 = ar_wallet:new(),
     Scheduler3 = ar_wallet:new(),
     Opts = BaseOpts#{
-        priv_wallet => NodeWallet,
-        identities => #{
+        <<"priv-wallet">> => NodeWallet,
+        <<"identities">> => #{
             <<"extra-scheduler">> => #{
-                priv_wallet => Scheduler2
+                <<"priv-wallet">> => Scheduler2
             }
         }
     },
@@ -793,7 +793,7 @@ multischeduler() ->
     ?assertEqual(100, balance(RootLedger, Bob, Opts)),
     % Create a new process with with the same schedulers, but do not provide
     % the extra scheduler in the `identities' map.
-    OptsWithoutHostWallet = maps:remove(priv_wallet, Opts),
+    OptsWithoutHostWallet = maps:remove(<<"priv-wallet">>, Opts),
     RootLedger2 =
         ledger(
             <<"scripts/hyper-token.lua">>,
@@ -808,7 +808,7 @@ multischeduler() ->
     % The transfer should succeed if:
     % - Set the `authority-required' field to contain the host wallet, while
     % - Setting the `authority-match' field to 1.
-    OptsWithoutExtraScheduler = #{ priv_wallet => NodeWallet },
+    OptsWithoutExtraScheduler = #{ <<"priv-wallet">> => NodeWallet },
     RootLedger3 =
         ledger(
             <<"scripts/hyper-token.lua">>,
@@ -825,15 +825,15 @@ multischeduler() ->
     % creating a subledger that has two different schedulers, excluding the
     % host wallet.
     OptsWithSchedulers = OptsWithoutExtraScheduler#{
-        identities => #{
+        <<"identities">> => #{
             <<"scheduler-1">> => #{
-                priv_wallet => Scheduler3
+                <<"priv-wallet">> => Scheduler3
             },
             <<"scheduler-2">> => #{
-                priv_wallet => Scheduler2
+                <<"priv-wallet">> => Scheduler2
             },
             <<"scheduler-3">> => #{
-                priv_wallet => Scheduler3
+                <<"priv-wallet">> => Scheduler3
             }
         }
     },
@@ -926,11 +926,14 @@ comma_separated_scheduler_list_test() ->
     Scheduler2 = ar_wallet:new(),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
-    Opts = (test_opts())#{ priv_wallet => NodeWallet, identities => #{
-        <<"extra-scheduler">> => #{
-            priv_wallet => Scheduler2
+    Opts = (test_opts())#{
+        <<"priv-wallet">> => NodeWallet,
+        <<"identities">> => #{
+            <<"extra-scheduler">> => #{
+                <<"priv-wallet">> => Scheduler2
+            }
         }
-    } },
+    },
     Ledger =
         ledger(
             <<"scripts/hyper-token.lua">>,

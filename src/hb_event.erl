@@ -451,10 +451,10 @@ benchmark_increment_test() ->
     ok.
 
 should_log_test() ->
-    ?assertEqual(true, should_print(log, topic_a, #{ debug_log => [topic_a] })),
-    ?assertEqual(false, should_print(log, topic_b, #{ debug_log => [topic_a] })),
-    ?assertEqual(true, should_print(log, topic_c, #{ debug_log => true })),
-    ?assertEqual(false, should_print(log, topic_d, #{ debug_log => false })).
+    ?assertEqual(true, should_print(log, topic_a, #{ <<"debug-log">> => [topic_a] })),
+    ?assertEqual(false, should_print(log, topic_b, #{ <<"debug-log">> => [topic_a] })),
+    ?assertEqual(true, should_print(log, topic_c, #{ <<"debug-log">> => true })),
+    ?assertEqual(false, should_print(log, topic_d, #{ <<"debug-log">> => false })).
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.

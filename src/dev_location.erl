@@ -397,7 +397,7 @@ latest_nonce(Signer, Nonce, Opts) ->
 %%% Tests
 
 register_scheduler_test() ->
-    Opts = #{ store => [hb_test_utils:test_store()], priv_wallet => ar_wallet:new() },
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()], <<"priv-wallet">> => ar_wallet:new() },
     Node = hb_http_server:start_node(Opts),
     Base =
         hb_message:commit(
@@ -418,8 +418,8 @@ register_scheduler_test() ->
 unsigned_get_node_is_idempotent_test() ->
     Wallet = ar_wallet:new(),
     Opts = #{
-        store => [hb_test_utils:test_store()],
-        priv_wallet => Wallet
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => Wallet
     },
     Node = hb_http_server:start_node(Opts),
     {ok, FirstRes} = hb_http:get(Node, <<"/~location@1.0/node">>, #{}),
@@ -449,8 +449,8 @@ register_location_on_boot_test() ->
     hb_http_server:start_node(#{}),
     NotifiedPeer =
         hb_http_server:start_node(#{
-            priv_wallet => NotifiedPeerWallet,
-            store => [
+            <<"priv-wallet">> => NotifiedPeerWallet,
+            <<"store">> => [
                 #{
                     <<"store-module">> => hb_store_fs,
                     <<"name">> => <<"cache-TEST/scheduler-location-notified">>
@@ -459,8 +459,8 @@ register_location_on_boot_test() ->
         }),
     RegisteringNode = hb_http_server:start_node(
         #{
-            priv_wallet => RegisteringNodeWallet,
-            on =>
+            <<"priv-wallet">> => RegisteringNodeWallet,
+            <<"on">> =>
                 #{
                     <<"start">> => #{
                         <<"device">> => <<"location@1.0">>,
@@ -475,7 +475,7 @@ register_location_on_boot_test() ->
                         }
                     }
                 },
-            location_notify => [NotifiedPeer]
+            <<"location-notify">> => [NotifiedPeer]
         }
     ),
     Address = hb_util:human_id(ar_wallet:to_address(RegisteringNodeWallet)),

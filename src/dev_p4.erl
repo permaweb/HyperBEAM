@@ -50,7 +50,7 @@
 request(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
-    Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ hashpath => ignore }),
+    Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ <<"hashpath">> => ignore }),
     Request = hb_ao:get(<<"request">>, Raw, NodeMsg),
     IsChargable = is_chargable_req(Request, NodeMsg),
     ?event(payment,
@@ -176,7 +176,7 @@ response(State, RawResponse, NodeMsg) ->
         hb_ao:get(
             <<"body">>,
             RawResponse,
-            NodeMsg#{ hashpath => ignore }
+            NodeMsg#{ <<"hashpath">> => ignore }
         ),
     Request = hb_ao:get(<<"request">>, RawResponse, NodeMsg),
     ?event(payment, {post_processing_with_devices, PricingDevice, LedgerDevice}),
@@ -328,7 +328,7 @@ test_opts(Opts, PricingDev, LedgerDev) ->
             <<"ledger-device">> => LedgerDev
         },
     Opts#{
-        on => #{
+        <<"on">> => #{
             <<"request">> => ProcessorMsg,
             <<"response">> => ProcessorMsg
         }
@@ -341,7 +341,7 @@ faff_test() ->
     Node = hb_http_server:start_node(
        test_opts(
             #{
-                faff_allow_list =>
+                <<"faff-allow-list">> =>
                     [hb_util:human_id(ar_wallet:to_address(GoodWallet))]
             }
         )
@@ -350,9 +350,9 @@ faff_test() ->
         <<"path">> => <<"/greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
-    GoodSignedReq = hb_message:commit(Req, #{ priv_wallet => GoodWallet }),
+    GoodSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => GoodWallet }),
     ?event({req, GoodSignedReq}),
-    BadSignedReq = hb_message:commit(Req, #{ priv_wallet => BadWallet }),
+    BadSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => BadWallet }),
     ?event({req, BadSignedReq}),
     {ok, Res} = hb_http:get(Node, GoodSignedReq, #{}),
     ?event(payment, {res, Res}),
@@ -370,33 +370,33 @@ non_chargable_route_test() ->
         },
     Node = hb_http_server:start_node(
         #{
-            p4_non_chargable_routes =>
+            <<"p4-non-chargable-routes">> =>
                 [
                     #{ <<"template">> => <<"/~p4@1.0/balance">> },
                     #{ <<"template">> => <<"/~meta@1.0/*/*">> }
                 ],
-            on => #{
+            <<"on">> => #{
                 <<"request">> => Processor,
                 <<"response">> => Processor
             },
-            operator => hb:address()
+            <<"operator">> => hb:address()
         }
     ),
     Req = #{
         <<"path">> => <<"/~p4@1.0/balance">>
     },
-    GoodSignedReq = hb_message:commit(Req, #{ priv_wallet => Wallet }),
+    GoodSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => Wallet }),
     Res = hb_http:get(Node, GoodSignedReq, #{}),
     ?event({res1, Res}),
     ?assertMatch({ok, 0}, Res),
     Req2 = #{ <<"path">> => <<"/~meta@1.0/info/operator">> },
-    GoodSignedReq2 = hb_message:commit(Req2, #{ priv_wallet => Wallet }),
+    GoodSignedReq2 = hb_message:commit(Req2, #{ <<"priv-wallet">> => Wallet }),
     Res2 = hb_http:get(Node, GoodSignedReq2, #{}),
     ?event({res2, Res2}),
     OperatorAddress = hb_util:human_id(hb:address()),
     ?assertEqual({ok, OperatorAddress}, Res2),
     Req3 = #{ <<"path">> => <<"/~scheduler@1.0">> },
-    BadSignedReq3 = hb_message:commit(Req3, #{ priv_wallet => Wallet }),
+    BadSignedReq3 = hb_message:commit(Req3, #{ <<"priv-wallet">> => Wallet }),
     Res3 = hb_http:get(Node, BadSignedReq3, #{}),
     ?event({res3, Res3}),
     ?assertMatch({error, _}, Res3).
@@ -448,20 +448,20 @@ hyper_token_ledger() ->
     Node =
         hb_http_server:start_node(
             #{
-                store => [hb_test_utils:test_store()],
-                priv_wallet => HostWallet,
-                p4_non_chargable_routes =>
+                <<"store">> => [hb_test_utils:test_store()],
+                <<"priv-wallet">> => HostWallet,
+                <<"p4-non-chargable-routes">> =>
                     [
                         #{
                             <<"template">> => <<"/*~node-process@1.0/*">>
                         }
                     ],
-                on => #{
+                <<"on">> => #{
                     <<"request">> => Processor,
                     <<"response">> => Processor
                 },
-                operator => OperatorAddress,
-                node_processes => #{
+                <<"operator">> => OperatorAddress,
+                <<"node-processes">> => #{
                     <<"ledger">> => #{
                         <<"device">> => <<"process@1.0">>,
                         <<"execution-device">> => <<"lua@5.3a">>,
@@ -492,7 +492,7 @@ hyper_token_ledger() ->
         <<"path">> => <<"/greeting">>,
         <<"greeting">> => <<"Hello, world!">>
     },
-    SignedReq = hb_message:commit(Req, #{ priv_wallet => BobWallet }),
+    SignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => BobWallet }),
     Res = hb_http:get(Node, SignedReq, #{}),
     ?event({expected_failure, Res}),
     ?assertMatch({error, _}, Res),
@@ -510,10 +510,10 @@ hyper_token_ledger() ->
                                 <<"quantity">> => 50,
                                 <<"recipient">> => BobAddress
                             },
-                            #{ priv_wallet => AliceWallet }
+                            #{ <<"priv-wallet">> => AliceWallet }
                         )
                 },
-                #{ priv_wallet => HostWallet }
+                #{ <<"priv-wallet">> => HostWallet }
             ),
             #{}
         ),

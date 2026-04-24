@@ -503,7 +503,7 @@ message_to_ordered_list(Message, Opts) ->
 message_to_ordered_list(_Message, [], _Key, _Opts) ->
     [];
 message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
-    case hb_maps:get(Key, Message, undefined, Opts#{ hashpath => ignore }) of
+    case hb_maps:get(Key, Message, undefined, Opts#{ <<"hashpath">> => ignore }) of
         undefined ->
             throw(
                 {missing_key,
@@ -549,14 +549,14 @@ numbered_keys_to_list(Message, Opts) ->
 %% as well as a standard map of HyperBEAM runtime options.
 hd(Message) -> hd(Message, value).
 hd(Message, ReturnType) ->
-    hd(Message, ReturnType, #{ error_strategy => throw }).
+    hd(Message, ReturnType, #{ <<"error-strategy">> => throw }).
 hd(Message, ReturnType, Opts) -> 
     hd(Message, hb_ao:keys(Message, Opts), 1, ReturnType, Opts).
 hd(_Map, [], _Index, _ReturnType, #{ error_strategy := throw }) ->
     throw(no_integer_keys);
 hd(_Map, [], _Index, _ReturnType, _Opts) -> undefined;
 hd(Message, [Key|Rest], Index, ReturnType, Opts) ->
-    case hb_ao:normalize_key(Key, Opts#{ error_strategy => return }) of
+    case hb_ao:normalize_key(Key, Opts#{ <<"error-strategy">> => return }) of
         undefined ->
             hd(Message, Rest, Index + 1, ReturnType, Opts);
         Key ->

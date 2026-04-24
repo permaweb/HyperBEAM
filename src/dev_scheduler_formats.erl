@@ -35,7 +35,7 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
                             hb_ao:get(
                                 <<"slot">>,
                                 Assignment,
-                                Opts#{ hashpath => ignore }
+                                Opts#{ <<"hashpath">> => ignore }
                             ),
                             Assignment
                         }
@@ -221,7 +221,7 @@ aos2_normalize_types(Msg) ->
 %% perform cache lookups, or await inprogress results.
 format_opts(Opts) ->
     Opts#{
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        await_inprogress => false
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"await-inprogress">> => false
     }.

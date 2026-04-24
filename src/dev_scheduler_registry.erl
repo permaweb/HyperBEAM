@@ -22,7 +22,7 @@ find(ProcID) -> find(ProcID, false).
 %% If the process is not found and `GenIfNotHosted' is true, it attemps to 
 %% create a new one 
 find(ProcID, ProcMsgOrFalse) ->
-    find(ProcID, ProcMsgOrFalse, #{ priv_wallet => hb:wallet() }).
+    find(ProcID, ProcMsgOrFalse, #{ <<"priv-wallet">> => hb:wallet() }).
 
 %% @doc Same as `find/2' but with additional options passed when spawning a 
 %% new process (if needed)
@@ -45,8 +45,8 @@ maybe_new_proc(ProcID, ProcMsg, Opts) ->
 
 test_opts() ->
     #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => hb:wallet()
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => hb:wallet()
     }.
 
 generate_test_procs(Opts) ->

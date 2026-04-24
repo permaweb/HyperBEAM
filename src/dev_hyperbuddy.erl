@@ -11,7 +11,7 @@
 %% Each filename must point to a path relative to the HyperBEAM instance's
 %% build subdirectory as follows: `priv/html/hyperbuddy@1.0'.
 info(Opts) ->
-    ServedRoutes = hb_maps:get(hyperbuddy_serve, Opts, #{}, Opts),
+    ServedRoutes = hb_opts:get(hyperbuddy_serve, #{}, Opts),
     #{
         default => fun serve/4,
         serve => ServedRoutes#{
@@ -128,9 +128,9 @@ format(Base, Req, Opts) ->
                     hb_format:message(
                         MsgLoaded,
                         Opts#{
-                            linkify_mode => discard,
-                            cache_control => [<<"no-cache">>, <<"no-store">>],
-                            debug_print_truncate => TruncateKeys
+                            <<"linkify-mode">> => discard,
+                            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                            <<"debug-print-truncate">> => TruncateKeys
                         }
                     )
                 )
@@ -246,7 +246,7 @@ return_custom_json_test() ->
                 },
                 <<"custom.json">>,
                 #{
-                    hyperbuddy_serve => #{
+                    <<"hyperbuddy-serve">> => #{
                         <<"custom.json">> => <<"test.json">>
                     }
                 }

@@ -205,7 +205,7 @@ query_match_key(Path, Opts) ->
                     hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts)),
                     Opts
                 ),
-            hb_message:id(CanonicalMsg, none, Opts#{ linkify_mode => discard });
+            hb_message:id(CanonicalMsg, none, Opts#{ <<"linkify-mode">> => discard });
         _ ->
             Path
     end.
@@ -215,7 +215,7 @@ query_match_key(Path, Opts) ->
 %% @doc Return test options with a test store.
 test_setup() ->
     Store = hb_test_utils:test_store(),
-    Opts = #{ store => Store, priv_wallet => ar_wallet:new() },
+    Opts = #{ <<"store">> => Store, <<"priv-wallet">> => ar_wallet:new() },
     % Write a simple message.
     hb_cache:write(
         #{

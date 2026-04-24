@@ -39,8 +39,8 @@ load_state(Snapshot, Opts) ->
         Body,
         Headers,
         Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-store">>, <<"no-cache">>]
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
         }
     ),
     ?event(debug_load_snapshot, {load_result, Res}),
@@ -93,8 +93,8 @@ do_compute(ProcID, Req, Opts) ->
             Body,
             AOS2,
             Opts#{
-                hashpath => ignore,
-                cache_control => [<<"no-store">>, <<"no-cache">>]
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
             }
         ),
     extract_json_res(Response, Opts).
@@ -119,8 +119,8 @@ do_dryrun(ProcID, Req, Opts) ->
         Body,
         #{},
         Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-store">>, <<"no-cache">>]
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
         }
     ),
     extract_json_res(Response, Opts).
@@ -221,8 +221,8 @@ snapshot(Msg, Req, Opts) ->
                 <<"body">> => <<"{}">>
             },
             Opts#{
-                hashpath => ignore,
-                cache_control => [<<"no-store">>, <<"no-cache">>]
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
             }
         ),
     ?event({snapshotting_result, Res}),

@@ -29,8 +29,8 @@ relay_with_payments() ->
     HostNode =
         hb_http_server:start_node(
             #{
-                operator => ar_wallet:to_address(HostWallet),
-                on => #{
+                <<"operator">> => ar_wallet:to_address(HostWallet),
+                <<"on">> => #{
                     <<"request">> => ProcessorMsg,
                     <<"response">> => ProcessorMsg
                 }
@@ -40,7 +40,7 @@ relay_with_payments() ->
     ClientBase =
         hb_message:commit(
             #{<<"path">> => <<"/~relay@1.0/call?relay-path=https://www.google.com">>},
-            #{ priv_wallet => ClientWallet }
+            #{ <<"priv-wallet">> => ClientWallet }
         ),
     % Relay the message.
     Res = hb_http:get(HostNode, ClientBase, #{}),
@@ -54,7 +54,7 @@ relay_with_payments() ->
                 <<"recipient">> => ClientAddress,
                 <<"amount">> => 100
             },
-            #{ priv_wallet => HostWallet }
+            #{ <<"priv-wallet">> => HostWallet }
         ),
     ?assertMatch({ok, _}, hb_http:get(HostNode, TopupMessage, #{})),
     % Relay the message again.
@@ -84,16 +84,16 @@ paid_wasm() ->
     HostNode =
         hb_http_server:start_node(
             Opts = #{
-				store => [
+				<<"store">> => [
 					#{
 						<<"store-module">> => hb_store_fs,
 						<<"name">> => <<"cache-TEST">>
 					}
 				],
-                simple_pay_ledger => #{ ClientAddress => 100 },
-                simple_pay_price => 10,
-                operator => ar_wallet:to_address(HostWallet),
-                on => #{
+                <<"simple-pay-ledger">> => #{ ClientAddress => 100 },
+                <<"simple-pay-price">> => 10,
+                <<"operator">> => ar_wallet:to_address(HostWallet),
+                <<"on">> => #{
                     <<"request">> => ProcessorMsg,
                     <<"response">> => ProcessorMsg
                 }
@@ -109,7 +109,7 @@ paid_wasm() ->
                 <<"body">> => WASMFile,
                 <<"parameters+list">> => <<"3.0">>
             },
-            Opts#{ priv_wallet => ClientWallet }
+            Opts#{ <<"priv-wallet">> => ClientWallet }
         ),
     {ok, Res} = hb_http:post(HostNode, ClientBase, Opts),
     % Check that the message is signed by the host node.
@@ -121,7 +121,7 @@ paid_wasm() ->
     ClientRequest =
         hb_message:commit(
             #{<<"path">> => <<"/~p4@1.0/balance">>},
-            #{ priv_wallet => ClientWallet }
+            #{ <<"priv-wallet">> => ClientWallet }
         ),
     {ok, Res2} = hb_http:get(HostNode, ClientRequest, Opts),
     ?assertMatch(60, Res2).
@@ -154,7 +154,7 @@ create_schedule_aos2_test_disabled() ->
     %   TXID it will load that TX from Arweave and execute it.	0-1	{Data or TXID}
     % {Any-Tags}	Custom Tags specific for the initial input of the Process	0-n
     Node =
-        try hb_http_server:start_node(#{ priv_wallet => hb:wallet() })
+        try hb_http_server:start_node(#{ <<"priv-wallet">> => hb:wallet() })
         catch
             _:_ ->
                 <<"http://localhost:8734">>
@@ -172,7 +172,7 @@ create_schedule_aos2_test_disabled() ->
         <<"scheduler-location">> => hb_util:human_id(hb:address())
     },
     Wallet = hb:wallet(),
-    SignedProc = hb_message:commit(ProcMsg, #{ priv_wallet => Wallet }),
+    SignedProc = hb_message:commit(ProcMsg, #{ <<"priv-wallet">> => Wallet }),
     IDNone = hb_message:id(SignedProc, none),
     IDAll = hb_message:id(SignedProc, all),
     {ok, Res} = schedule(SignedProc, IDNone, Wallet, Node),
@@ -198,7 +198,7 @@ schedule(ProcMsg, Target, Wallet, Node) ->
                 <<"target">> => Target,
                 <<"body">> => ProcMsg
             },
-            #{ priv_wallet => Wallet }
+            #{ <<"priv-wallet">> => Wallet }
         ),
     ?event({signed_req, SignedReq}),
     hb_http:post(Node, SignedReq, #{}).
@@ -222,7 +222,7 @@ relay_schedule_ans104_test() ->
     Scheduler =
         hb_http_server:start_node(
             #{
-                on => #{
+                <<"on">> => #{
                     <<"start">> => #{
                         <<"device">> => <<"location@1.0">>,
                         <<"path">> => <<"node">>,
@@ -235,16 +235,16 @@ relay_schedule_ans104_test() ->
                         }
                     }
                 },
-                store => [hb_test_utils:test_store()],
-                priv_wallet => SchedulerWallet
+                <<"store">> => [hb_test_utils:test_store()],
+                <<"priv-wallet">> => SchedulerWallet
             }
         ),
     ?event(debug_test, {scheduler, Scheduler}),
     Compute =
         hb_http_server:start_node(
             #{
-                priv_wallet => ComputeWallet,
-                store =>
+                <<"priv-wallet">> => ComputeWallet,
+                <<"store">> =>
                     [
                         ComputeStore = hb_test_utils:test_store(),
                         #{
@@ -266,15 +266,15 @@ relay_schedule_ans104_test() ->
     ?event({scheduler_location, SchedulerLocation}),
     dev_location_cache:write(
         SchedulerLocation,
-        #{ store => [ComputeStore] }
+        #{ <<"store">> => [ComputeStore] }
     ),
     % Create the relaying server.
     Relay =
         hb_http_server:start_node(#{
-            priv_wallet => RelayWallet,
-            relay_allow_commit_request => true,
-            store => [hb_test_utils:test_store()],
-            routes =>
+            <<"priv-wallet">> => RelayWallet,
+            <<"relay-allow-commit-request">> => true,
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"routes">> =>
                 [
                     #{
                         <<"template">> => <<"^/push">>,
@@ -297,7 +297,7 @@ relay_schedule_ans104_test() ->
                         ]
                     }
                 ],
-            on => #{
+            <<"on">> => #{
                 <<"request">> =>
                     #{
                         <<"device">> => <<"router@1.0">>,
@@ -315,8 +315,8 @@ relay_schedule_ans104_test() ->
     ),
     ClientOpts =
         #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => ar_wallet:new()
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"priv-wallet">> => ar_wallet:new()
         },
     % Create process to schedule, then send it to the relaying server as
     % a serialized ANS-104 data item.
@@ -328,6 +328,7 @@ relay_schedule_ans104_test() ->
                 <<"push-device">> => <<"push@1.0">>,
                 <<"scheduler">> => hb_util:human_id(SchedulerWallet),
                 <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"type">> => <<"Process">>,
                 <<"module">> => <<"URgYpPQzvxxfYQtjrIQ116bl3YBfcImo3JEnNo8Hlrk">>
             },
             ClientOpts,
@@ -346,10 +347,11 @@ relay_schedule_ans104_test() ->
     ?event(debug_test, {post_result, ScheduleRes}),
     ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 0 }}, ScheduleRes),
     % Push another message via the compute node.
-    ProcID = hb_message:id(Process, all, ClientOpts),
+    ProcID = dev_process_lib:process_id(Process, #{}, ClientOpts),
     ToPush =
         hb_message:commit(
             #{
+                <<"type">> => <<"Message">>,
                 <<"test-key">> => <<"value">>,
                 <<"rand-key">> => hb_util:encode(crypto:strong_rand_bytes(32))
             },
@@ -358,10 +360,10 @@ relay_schedule_ans104_test() ->
         ),
     PushRes =
         hb_http:post(
-            Relay,
-            ToPush#{
+            Compute,
+            #{
                 <<"path">> => <<ProcID/binary, "/push">>,
-                <<"codec-device">> => <<"ans104@1.0">>
+                <<"body">> => ToPush
             },
             ClientOpts
         ),

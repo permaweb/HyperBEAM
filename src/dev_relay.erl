@@ -141,7 +141,7 @@ call(M1, RawM2, Opts) ->
         end,
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
-    HTTPOpts = Opts#{ http_client => Client, http_only_result => false },
+    HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
     Res = case RelayPeer of
         not_found ->
             hb_http:request(TargetMod5, HTTPOpts);
@@ -179,7 +179,7 @@ request(_Base, Req, Opts) ->
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
                         <<"body">> =>
-                            hb_ao:get(<<"request">>, Req, Opts#{ hashpath => ignore })
+                            hb_ao:get(<<"request">>, Req, Opts#{ <<"hashpath">> => ignore })
                     }
                 ]
         }
@@ -198,21 +198,21 @@ call_get_test() ->
                 <<"path">> => <<"https://www.google.com/">>
             },
             <<"call">>,
-            #{ protocol => http2 }
+            #{ <<"protocol">> => http2 }
         ),
     ?assertEqual(true, byte_size(Body) > 10_000).
 
 relay_nearest_test() ->
-    Peer1 = hb_http_server:start_node(#{ priv_wallet => W1 = ar_wallet:new() }),
-    Peer2 = hb_http_server:start_node(#{ priv_wallet => W2 = ar_wallet:new() }),
+    Peer1 = hb_http_server:start_node(#{ <<"priv-wallet">> => W1 = ar_wallet:new() }),
+    Peer2 = hb_http_server:start_node(#{ <<"priv-wallet">> => W2 = ar_wallet:new() }),
     Address1 = hb_util:human_id(ar_wallet:to_address(W1)),
     Address2 = hb_util:human_id(ar_wallet:to_address(W2)),
     Peers = [Address1, Address2],
     Node =
         hb_http_server:start_node(Opts = #{
-            store => hb_opts:get(store),
-            priv_wallet => ar_wallet:new(),
-            routes => [
+            <<"store">> => hb_opts:get(store),
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"routes">> => [
                 #{
                     <<"template">> => <<"/.*">>,
                     <<"strategy">> => <<"Nearest">>,
@@ -232,8 +232,8 @@ relay_nearest_test() ->
     {ok, RelayRes} =
         hb_http:get(
             Node,
-            <<"/~relay@1.0/call?relay-path=/~meta@1.0/info">>,
-            Opts#{ http_only_result => false }
+            <<"/~relay@1.0/call?relay-path=/~meta@1.0/info/address">>,
+            Opts#{ <<"http-only-result">> => false }
         ),
     ?event(
         {relay_res,
@@ -263,15 +263,15 @@ commit_request_test() ->
     Executor =
         hb_http_server:start_node(
             #{
-                port => Port,
-                force_signed_requests => true
+                <<"port">> => Port,
+                <<"force-signed-requests">> => true
             }
         ),
     Node =
         hb_http_server:start_node(#{
-            priv_wallet => Wallet,
-            relay_allow_commit_request => true,
-            routes =>
+            <<"priv-wallet">> => Wallet,
+            <<"relay-allow-commit-request">> => true,
+            <<"routes">> =>
                 [
                     #{
                         <<"template">> => <<"/test-key">>,
@@ -284,7 +284,7 @@ commit_request_test() ->
                         ]
                     }
                 ],
-            on => #{
+            <<"on">> => #{
                 <<"request">> =>
                     #{
                         <<"device">> => <<"router@1.0">>,
