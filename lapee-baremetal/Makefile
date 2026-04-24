@@ -145,7 +145,7 @@ OUT        ?= work/lapee-usb.img
 # even as a possibility can override CMDLINE to drop the token.
 CMDLINE    ?= console=tty0 console=ttyS0 earlyprintk=efi,keep keep_bootcon \
               fbcon=nodefer loglevel=4 panic=10 rdinit=/init \
-              LAPEE_WRITEBACK=1 lapee.wifi=enabled
+              LAPEE_WRITEBACK=1 LAPEE_TRACE=1 lapee.wifi=enabled
 
 hb-usb-image:
 	./scripts/build-usb-image.sh \

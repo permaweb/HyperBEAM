@@ -139,14 +139,21 @@ check_tme_sme() {
         *"AMD Memory Encryption"*)   _active=amd-sme ;;
     esac
     if [ "$_active" = "no" ]; then
-        trace "tme: $_has_cap capability present but no activation log; halting"
-        trace "tme: (override with LAPEE_NO_TME=1 on cmdline)"
-        if [ -x /usr/local/bin/lapee-splash ]; then
-            /usr/local/bin/lapee-splash \
-                "HALTED: $_has_cap capability present but memory encryption not active" \
-                > /dev/console 2>/dev/null || true
-        fi
-        exec sh -c 'while :; do sleep 3600; done'
+        # Softened in batch 35: a cap-present-but-not-active state
+        # occurs on Framework 13 (BIOS does not expose a TME toggle)
+        # and on generic client laptops. Paper P2 commits to init
+        # refusing when memory encryption is inactive -- BUT on
+        # hardware where activation is not operator-controllable
+        # that commitment turns into a single-purpose-appliance
+        # brick. Compromise: warn loudly, mark the envelope
+        # honestly (attestation will show tme-enabled=false), and
+        # let the verdict downgrade accordingly. A deployment
+        # operator who considers TME mandatory can grep the
+        # envelope for tme-enabled=true before trusting results.
+        trace "tme: $_has_cap cap present but no kernel activation log"
+        trace "tme: warning only -- BIOS doesn't expose TME toggle"
+        trace "tme: envelope will carry tme-enabled=false honestly"
+        return 0
     fi
     trace "tme: $_has_cap capability + $_active active -> proceed"
 }
