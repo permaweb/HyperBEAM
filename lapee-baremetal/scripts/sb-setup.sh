@@ -205,10 +205,13 @@ if [ "$cmd" = "check" ]; then
         && echo "$SIGNED_UKI ($(stat -f %z "$SIGNED_UKI") bytes)" \
         || echo "MISSING (run: $0 sign)"
     for name in PK KEK db; do
-        f="$SB_DIR/enrol/$name.auth"
-        printf "  enrol/%s.auth:      " "$name"
-        [ -f "$f" ] && echo "$f ($(stat -f %z "$f") bytes)" \
-            || echo "MISSING (run: $0 enrol)"
+        for ext in auth cer; do
+            f="$SB_DIR/enrol/$name.$ext"
+            printf "  enrol/%-10s " "$name.$ext:"
+            [ -f "$f" ] \
+                && echo "$f ($(stat -f %z "$f") bytes)" \
+                || echo "MISSING (run: $0 enrol)"
+        done
     done
     exit 0
 fi
@@ -284,18 +287,30 @@ if [ "$cmd" = "enrol" ]; then
     GUID=$(cat "$SB_DIR/GUID.txt")
     mkdir -p "$SB_DIR/enrol"
 
-    echo "=== producing UEFI enrolment .auth files ==="
+    echo "=== producing UEFI enrolment bundle ==="
     echo "    GUID: $GUID"
     cd "$SB_DIR"
+    # Two artefacts per slot:
+    #   *.auth -- PKCS7-authenticated EFI_VARIABLE_AUTHENTICATION_2
+    #             envelope; for the command-line efi-updatevar /
+    #             Linux kernel path where the firmware checks
+    #             the update's PKCS7 signature before accepting.
+    #   *.cer  -- raw X509 DER; for the BIOS file-browser UI
+    #             (Framework Insyde H2O + many others) which
+    #             expects a cert file extension like .cer/.der
+    #             and does not recognise .auth.
     # PK (top of the chain, self-signed with the PK key itself).
     run_tool cert-to-efi-sig-list -g "$GUID" PK.crt PK.esl
     run_tool sign-efi-sig-list -k PK.key -c PK.crt PK PK.esl enrol/PK.auth
+    openssl x509 -in PK.crt -outform DER -out enrol/PK.cer 2>/dev/null
     # KEK (chains under PK).
     run_tool cert-to-efi-sig-list -g "$GUID" KEK.crt KEK.esl
     run_tool sign-efi-sig-list -k PK.key -c PK.crt KEK KEK.esl enrol/KEK.auth
+    openssl x509 -in KEK.crt -outform DER -out enrol/KEK.cer 2>/dev/null
     # db (chains under KEK).
     run_tool cert-to-efi-sig-list -g "$GUID" db.crt db.esl
     run_tool sign-efi-sig-list -k KEK.key -c KEK.crt db db.esl enrol/db.auth
+    openssl x509 -in db.crt -outform DER -out enrol/db.cer 2>/dev/null
     rm -f PK.esl KEK.esl db.esl
     cd "$LAPEE"
     ls -la "$SB_DIR/enrol/"
@@ -303,30 +318,38 @@ if [ "$cmd" = "enrol" ]; then
 
 Enrolment procedure on the Framework 13:
   1. If you haven't yet: `./scripts/sb-setup.sh sign' -- this
-     bakes the three .auth files above into the ESP root of
+     bakes the six enrolment files above into the ESP root of
      work/lapee-usb.img alongside the signed UKI, so one stick
      covers both boot and enrolment. (Running `sign' after
-     `enrol' picks up the newly-produced .auth files; running
-     `sign' before `enrol' is also fine -- rerun `sign' once
-     `enrol' lands them.)
+     `enrol' picks up the newly-produced files; running `sign'
+     before `enrol' is also fine -- rerun `sign' once `enrol'
+     lands them.)
   2. Flash with `make hb-usb-write DEV=/dev/diskN' and plug the
      stick into the Framework.
   3. Power on, F2 to enter BIOS.
   4. Security -> Secure Boot -> Enter Setup Mode (clears factory
      Microsoft keys; takes the machine out of a trust-chain rooted
      at Redmond and into one rooted at your operator key).
-  5. Still in Security -> Secure Boot, enrol the three files in
-     order: db.auth, KEK.auth, PK.auth. (PK last; enrolling PK
-     exits setup mode and re-enables Secure Boot on the operator
-     chain.) The BIOS file browser shows them at the ESP root.
+  5. In Security -> Secure Boot -> Administer/Manage Secure Boot
+     Keys, enrol in order: db, KEK, PK. For each: pick "Enroll"
+     / "Append", browse to the stick, pick the .cer file (the
+     BIOS file filter usually hides .auth; .cer is X509 DER and
+     the format the UI expects), choose X509 format if prompted.
+     PK last -- enrolling PK exits setup mode and re-enables
+     Secure Boot on the operator chain.
   6. Save + exit. The Framework then boots the signed UKI from
-     the same stick -- the `.auth' files are left in place but
-     harmless (their contents are public; they're already
-     installed in the firmware key databases now).
+     the same stick. The enrolment files stay on the ESP; they're
+     harmless (their contents are public once enrolled in the
+     firmware).
 
-If you prefer a separate enrolment stick: the three .auth files
-also live at secureboot/enrol/ on the host; copy them to any
-FAT-formatted USB at root. Single-stick is the cleaner default.
+Format notes:
+  .cer = X509 DER, ~870 bytes, for the BIOS UI file browser
+  .auth = PKCS7-signed EFI_VARIABLE_AUTHENTICATION_2, ~2.2 KB,
+          for the command-line `efi-updatevar' path on Linux
+
+If you prefer a separate enrolment stick: the files live at
+secureboot/enrol/ on the host; copy to any FAT USB at root.
+Single-stick is the cleaner default.
 
 To revert to factory Microsoft keys: Security -> Secure Boot ->
 Restore Factory Keys.

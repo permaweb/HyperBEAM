@@ -183,17 +183,24 @@ fi
 # db.auth / KEK.auth / PK.auth, save+exit, boot.
 
 SB_ENROL_DIR="${LAPEE_ROOT}/secureboot/enrol"
-STAGED_AUTH=""
+STAGED_SB=""
 if [[ -d "$SB_ENROL_DIR" ]]; then
-    for f in PK.auth KEK.auth db.auth; do
+    # Two formats, so the operator can enroll via either the
+    # command-line path (.auth = PKCS7-authenticated UEFI variable
+    # update) or the BIOS file-browser UI (.cer = DER-encoded
+    # X509, which is what Framework Insyde H2O expects). Ship
+    # both when they exist; the UI filter usually hides .auth so
+    # .cer is the only one the operator will actually see in the
+    # BIOS menu.
+    for f in PK.auth KEK.auth db.auth PK.cer KEK.cer db.cer; do
         if [[ -f "$SB_ENROL_DIR/$f" ]]; then
             cp "$SB_ENROL_DIR/$f" "$BUILD_DIR/$f"
-            STAGED_AUTH="${STAGED_AUTH}${STAGED_AUTH:+ }$f"
+            STAGED_SB="${STAGED_SB}${STAGED_SB:+ }$f"
         fi
     done
 fi
-if [[ -n "$STAGED_AUTH" ]]; then
-    echo ">> staging SB enrolment bundle: $STAGED_AUTH"
+if [[ -n "$STAGED_SB" ]]; then
+    echo ">> staging SB enrolment bundle: $STAGED_SB"
 fi
 
 # Stage host-side wifi.conf if present. Lands at /EFI/boot/
@@ -254,11 +261,12 @@ docker run --rm --platform=linux/amd64 \
         mcopy -i /work/usb-build/esp.img \\
             /work/usb-build/README.TXT ::/README.TXT
 
-        # SB enrolment .auth files at ESP root (if staged by the
-        # host wrapper above). Framework BIOS Setup-Mode enrolment
-        # browses this partition; the operator picks each file in
-        # order db.auth -> KEK.auth -> PK.auth.
-        for _a in PK.auth KEK.auth db.auth; do
+        # SB enrolment files at ESP root (if staged by the host
+        # wrapper above). Framework BIOS Setup-Mode file browser
+        # usually shows only the .cer form; the .auth form is
+        # there for the command-line efi-updatevar path.
+        # Enrolment order: db, KEK, PK.
+        for _a in PK.auth KEK.auth db.auth PK.cer KEK.cer db.cer; do
             if [[ -f /work/usb-build/\$_a ]]; then
                 mcopy -i /work/usb-build/esp.img \\
                     /work/usb-build/\$_a ::/\$_a
