@@ -283,9 +283,10 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
         0 -> #{};
         _ -> #{ <<"body">> => Body }
     end,
-    ConvertFrom = 
+    NormalizedHeaders = lowercase_header_keys(HeaderMap),
+    ConvertFrom =
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => BinStatus },
+            NormalizedHeaders#{ <<"status">> => BinStatus },
             BodyMap,
 			Opts
         ),
@@ -295,6 +296,19 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
         <<"httpsig@1.0">>,
         Opts
     ))#{ <<"status">> => hb_util:int(Status) }.
+
+%% @doc Lowercase all binary header keys. Applied at every inbound transport
+%% boundary so codecs see stable keys regardless of peer or proxy casing.
+%% HTTP/1.1 (RFC 7230) field names are case-insensitive; HTTP/2 (RFC 7540)
+%% mandates lowercase. Values are left untouched.
+lowercase_header_keys(Headers) when is_map(Headers) ->
+    maps:fold(
+        fun(K, V, Acc) when is_binary(K) -> Acc#{string:lowercase(K) => V};
+           (K, V, Acc) -> Acc#{K => V}
+        end,
+        #{},
+        Headers
+    ).
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -854,7 +868,7 @@ req_to_tabm_singleton(Req, Body, Opts) ->
             "?",
             (cowboy_req:qs(Req))/binary
         >>,
-    Headers = cowboy_req:headers(Req),
+    Headers = lowercase_header_keys(cowboy_req:headers(Req)),
     {ok, _Path, QueryKeys} = hb_singleton:from_path(FullPath),
     PrimitiveMsg = maps:merge(Headers, QueryKeys),
     Codec =
