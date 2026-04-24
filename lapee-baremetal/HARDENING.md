@@ -73,11 +73,14 @@ profiling, perf, kprobes — some of which HB uses via `runtime_tools`).
 These are properties of the _boot chain_ the kernel is embedded in,
 not the kernel config itself:
 
-- **UKI + Secure Boot (Microsoft UEFI CA / custom PK/KEK).** The
-  scripts in `scripts/uki.sh` + `scripts/secureboot-keys.sh' exist
-  but are not exercised on the QEMU demo run, because QEMU TCG
-  without OVMF-with-secure-boot doesn't give us a useful SRTM.
-  Real-silicon next.
+- **UKI + Secure Boot (custom PK/KEK).** `scripts/sb-setup.sh`
+  drives the operator-owned key pipeline end-to-end: generate
+  PK/KEK/db, sign the UKI, produce UEFI-enrolment `.auth` files.
+  Exercised on real silicon. No shim / no Microsoft CA; chain of
+  trust terminates at the operator-owned PK, matching the paper's
+  "device identity anchored at the TPM vendor root via the EK
+  cert chain, operator-owned UEFI trust anchor via PK/KEK/db"
+  statement.
 - **dm-verity root with signed roothash.** Kernel supports it
   (`DM_VERITY=y`); an actual verity image is a rootfs-packaging
   change, not a kernel change. Current demo uses a pure initramfs

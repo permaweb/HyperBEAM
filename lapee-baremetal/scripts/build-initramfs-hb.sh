@@ -37,10 +37,9 @@ SH_APT
 
 # Copy HB release into the container.
 docker cp "$HB_REL" lapee-hb-mini:/opt/hb
-# Copy enforced config.
-docker cp "$LAPEE/../../lapee-dev-tpm2/config/lapee-enforced.flat" \
-    lapee-hb-mini:/opt/lapee-enforced.flat 2>/dev/null || \
-    docker cp "$(git -C /Users/sam/src/hyperbeam/.claude/worktrees/lapee-dev-tpm2 rev-parse --show-toplevel)/config/lapee-enforced.flat" \
+# Copy enforced config. Ships in this repo at config/lapee-enforced.flat;
+# early batches pulled from an external worktree, now unified.
+docker cp "$LAPEE/../config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat
 # Copy the init + splash + DHCP-hook + ASCII logo.
 docker cp "$LAPEE/initramfs-hb/init"              lapee-hb-mini:/init-hb
