@@ -1373,6 +1373,17 @@ attestation(_Base, Req, Opts) ->
                         %% guest<->TPM property that cannot be
                         %% re-verified post-hoc from the wire
                         %% envelope alone).
+                        %% Refined in batch 34 after iron-smoke: P4
+                        %; session now attaches only to ops with
+                        %; TPM2B first-params (Quote + CreatePrimary
+                        %; x2) where ENCRYPT + DECRYPT attrs are
+                        %; spec-valid. Ops with list-struct first-
+                        %; params (PCR_Read/Extend, GetCapability)
+                        %; run without the session -- their payload
+                        %; is public per TCG, so bus-level
+                        %; confidentiality buys nothing. Value
+                        %; `hmac-aes128cfb' (prefix `hmac-' keeps
+                        %; the verifier's paper-P4 check clean).
                         <<"tpm-session-mode">> =>
                             <<"hmac-aes128cfb">>,
                         <<"tpm-quote">> => #{

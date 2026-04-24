@@ -70,9 +70,23 @@ lapee_ensure_auth_session(void)
         TPM2_ALG_SHA256,
         &g_auth_session);
     if (rc != TSS2_RC_SUCCESS) return rc;
-    /* Mark the session as encrypt + decrypt + continuing. TPMA
-     * mask 0xFF clears the other bits so we don't inherit stale
-     * defaults. */
+    /* Session is HMAC + parameter-encrypt/decrypt + continues.
+     *
+     * Applied only to ops whose first cmd-param AND first rsp-
+     * param are TPM2B_* structures: Esys_CreatePrimary (EK + AK)
+     * and Esys_Quote. On those ops the TPM accepts ENCRYPT +
+     * DECRYPT attributes and actually wraps the TPM2B payload
+     * under AES-128-CFB for transit over the LPC bus.
+     *
+     * Ops with list-struct first parameters (PCR_Extend takes
+     * TPML_DIGEST_VALUES, PCR_Read returns TPML_DIGEST,
+     * GetCapability uses TPMS_CAPABILITY_DATA) do NOT support
+     * parameter encryption per TPM 2.0 spec, and any session
+     * with a non-auth "purpose" attribute fails RC_ATTRIBUTES
+     * in a non-auth slot. Those ops run without this session;
+     * their responses carry public values (PCR digests, TPM
+     * vendor / fw-version readback) that the paper's threat
+     * model explicitly marks as attester-intended-public. */
     TPMA_SESSION attrs = TPMA_SESSION_ENCRYPT |
                          TPMA_SESSION_DECRYPT |
                          TPMA_SESSION_CONTINUESESSION;
@@ -201,13 +215,12 @@ nif_pcr_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     UINT32 update_counter = 0;
     TPML_PCR_SELECTION *out_sel = NULL;
     TPML_DIGEST *digests = NULL;
-    /* Paper P4: HMAC session attached as shandle1 covers the
-     * request with a rolling HMAC and encrypts the TPML_DIGEST
-     * response parameter against bus-level eavesdropping. PCR
-     * Read itself requires no auth, so shandle1 can be the
-     * pure encryption session. */
+    /* PCR_Read returns TPML_DIGEST (list-struct, not TPM2B),
+     * so parameter encryption + decrypt attrs are TPM-rejected
+     * here -- see lapee_ensure_auth_session header. Read-only,
+     * public values, no auth session. */
     TSS2_RC rc = Esys_PCR_Read(g_esys_ctx,
-                               lapee_enc_session(), ESYS_TR_NONE, ESYS_TR_NONE,
+                               ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
                                &sel, &update_counter, &out_sel, &digests);
     if (rc != TSS2_RC_SUCCESS) {
         return lapee_make_tss_error(env, "Esys_PCR_Read", rc);
@@ -253,15 +266,16 @@ nif_pcr_extend(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
 
     ESYS_TR pcr_handle = (ESYS_TR)idx; /* PCR index == ESYS_TR for PCRs 0..23. */
 
-    /* Paper P4: PCR auth via shandle1=PASSWORD (PCR 15 has empty
-     * auth by default on LapEE), plus shandle2=HMAC session for
-     * integrity + encryption of the TPML_DIGEST_VALUES request
-     * parameter. An attacker on the LPC bus cannot silently
-     * substitute our extend digest for a different value. */
+    /* PCR auth via shandle1=PASSWORD (PCR 15 has empty auth by
+     * default on LapEE). PCR_Extend takes TPML_DIGEST_VALUES
+     * (list-struct) as its first cmd-param; TPM rejects ENCRYPT
+     * attr on non-TPM2B params. Paper P4 session attaches to
+     * Quote + CreatePrimary only -- see lapee_ensure_auth_session
+     * header for the full breakdown. */
     TSS2_RC rc = Esys_PCR_Extend(g_esys_ctx,
                                  pcr_handle,
                                  ESYS_TR_PASSWORD,
-                                 lapee_enc_session(),
+                                 ESYS_TR_NONE,
                                  ESYS_TR_NONE,
                                  &digests);
     if (rc != TSS2_RC_SUCCESS) {
@@ -755,15 +769,14 @@ tpm_pt_get(TPM2_PT prop, TSS2_RC *out_rc)
 {
     TPMS_CAPABILITY_DATA *cap_data = NULL;
     TPMI_YES_NO more = TPM2_NO;
-    /* Paper P4: GetCapability needs no auth, but an HMAC-encrypted
-     * session on shandle1 still binds the request with a rolling
-     * HMAC (an attacker cannot modify the queried property) and
-     * encrypts the TPMS_CAPABILITY_DATA response -- the response
-     * carries TPM vendor / firmware-version information that feeds
-     * the attestation envelope and shouldn't be attacker-mutable. */
+    /* GetCapability response is TPMS_CAPABILITY_DATA (list-
+     * struct, not TPM2B). Encrypt/decrypt attrs fail with
+     * RC_ATTRIBUTES on this op; see lapee_ensure_auth_session
+     * header. Response carries TPM vendor / firmware version
+     * which are public per TCG -- no confidentiality need. */
     TSS2_RC rc = Esys_GetCapability(
         g_esys_ctx,
-        lapee_enc_session(), ESYS_TR_NONE, ESYS_TR_NONE,
+        ESYS_TR_NONE, ESYS_TR_NONE, ESYS_TR_NONE,
         TPM2_CAP_TPM_PROPERTIES, prop, 1,
         &more, &cap_data);
     if (out_rc) *out_rc = rc;

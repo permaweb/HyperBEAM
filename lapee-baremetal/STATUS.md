@@ -66,9 +66,9 @@ cd /Users/sam/src/hyperbeam/.claude/worktrees/lapee/lapee-baremetal
 
 # Audit: fingerprints should match exactly
 shasum -a 256 work/lapee.signed.efi
-#   1d6b0ac240cdae493722b777b7f3e03f7dafb1d378b3c7c7216808596de9398f
+#   b76cdf98677121ede38f63f2267761fa27bf553c8a9d1a82a2997f3ff71a7fd3
 shasum -a 256 work/lapee-usb.img
-#   b45ee4576cb2f9f371bbca5b5e2eb00314ff4f69ec26995c0c56562f0355efdc
+#   258cad7d98b21729bd38f51394c82275c443d8f101b8f290591bbcf1d555dde2
 
 # Audit: verifies against your enrolled db.crt
 ./scripts/sb-setup.sh check

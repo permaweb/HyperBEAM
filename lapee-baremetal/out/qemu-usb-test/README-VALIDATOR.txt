@@ -1,4 +1,4 @@
-LapEE attestation written on boot 20260423T132248Z.
+LapEE attestation written on boot 20260424T082714Z.
 
 On your verifier host (with the USB stick plugged in):
 
