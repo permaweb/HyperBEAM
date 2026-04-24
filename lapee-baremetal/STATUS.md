@@ -10,24 +10,27 @@ once flashed, should take the verdict to `trusted (100)`.
 **Two commands on your Mac, one re-flash, one hash re-enrol in
 BIOS, one curl, one interpret. That's it.**
 
-### Step 1 -- final guest artefact rebuild (one command)
+### Step 1 -- final guest artefact (already built overnight)
 
-The kernel is being rebuilt overnight with
-`LOCK_DOWN_KERNEL_FORCE_CONFIDENTIALITY=y` (paper P-arch target).
-Initramfs + UKI + signed USB image will finish under my hand
-before I stop. In the morning, from the LapEE worktree:
+Everything is pre-built + signed on disk at 2026-04-25 01:56.
+No command needed unless you want to audit:
 
 ```bash
 cd /Users/sam/src/hyperbeam/.claude/worktrees/lapee/lapee-baremetal
 
-# Sanity check: latest artefact fingerprints on disk
+# Audit: fingerprints should match exactly
+shasum -a 256 work/lapee.signed.efi
+#   d2622f2f6a08e1a3ca0423fa9f94f0d9386955b2523b2a312766abd6a5e30b1c
+shasum -a 256 work/lapee-usb.img
+#   519d1893e8d9b4ef976157d93844174361158de5f4dd520e4d3242a2fb69b101
+
+# Audit: verifies against your enrolled db.crt
 ./scripts/sb-setup.sh check
 #   UKI in usb-build: ... [signed]
-#   signed UKI (stash): ...
+#   signed UKI (stash): 72766088 bytes
 
-# If `UKI in usb-build' is [signed] with a timestamp newer than
-# the kernel fragment's mtime, the overnight rebuild completed
-# cleanly. Otherwise:
+# If the UKI timestamp is earlier than the kernel fragment's
+# mtime, the rebuild didn't finish cleanly. Rerun:
 make hb-release hb-initramfs hb-usb-image \
     && ./scripts/sb-setup.sh sign
 ```
