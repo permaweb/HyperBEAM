@@ -339,7 +339,15 @@ daemon() {
         close(STATE);
         # line format: phase=<v> [k=v ...]
         # simple space-split; values may not contain spaces.
-        new_phase = phase; new_ip = data_ip; new_msg = data_msg;
+        #
+        # new_msg starts empty every read so a phase transition
+        # without a `msg=' token falls back to the phase-default
+        # footer rather than inheriting the prior phase's msg
+        # (batch 30 bug caught by the boot-animation capture
+        # agent: qr phase on iron inherits "waiting for
+        # HyperBEAM..." from hb-wait because init calls
+        # `lapee-splash set qr "ip=$_ip"' without a msg token).
+        new_phase = phase; new_ip = data_ip; new_msg = "";
         n = split(line, f, " ");
         for (i = 1; i <= n; i++) {
             k = f[i]; v = "";
