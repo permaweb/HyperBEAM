@@ -29,8 +29,15 @@ setup_conn(Opts) ->
     hackney_pool:set_max_connections(?HACKNEY_POOL, MaxConnections),
     hackney_pool:set_timeout(?HACKNEY_POOL, KeepAlive).
 
-start_link(Opts) ->
-	gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []).
+%% @doc Start the singleton HTTP client process with runtime deps ready.
+start_link(RawOpts) ->
+    Opts = hb_opts:mimic_default_types(RawOpts, existing, RawOpts),
+    case ensure_gun_pool_runtime(Opts) of
+        ok ->
+            gen_server:start_link({local, ?MODULE}, ?MODULE, Opts, []);
+        {error, _} = Err ->
+            Err
+    end.
 
 %% @doc Convert a HTTP status code to a status atom.
 response_status_to_atom(Status) ->
@@ -59,8 +66,13 @@ request(Args, RemainingRetries, Opts) ->
 
 do_request(Args, Opts) ->
     case hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts) of
-        gun -> gun_req(Args, Opts);
-        httpc -> httpc_req(Args, Opts);
+        gun ->
+            UsePool = hb_opts:get(http_client_gun_use_pool, true, Opts),
+            case UsePool of
+                true  -> gun_pool_req(Args, Opts);
+                false -> gun_req(Args, Opts)
+            end;
+        httpc   -> httpc_req(Args, Opts);
         hackney -> hackney_req(Args, Opts)
     end.
 
@@ -100,10 +112,10 @@ httpc_req(Args, Opts) ->
     ?event({httpc_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} ->
-            Scheme = case Port of
-                443 -> "https";
-                _ -> "http"
+        {ok, {Host, Port, Transport}} ->
+            Scheme = case Transport of
+                tls -> "https";
+                tcp -> "http"
             end,
             ?event(debug_http_client, {httpc_req, {explicit, Args}}),
             URL = binary_to_list(iolist_to_binary([Scheme, "://", Host, ":", integer_to_binary(Port), Path])),
@@ -175,10 +187,10 @@ hackney_req(Args, Opts) ->
     ?event({hackney_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} ->
-            Scheme = case Port of
-                443 -> <<"https">>;
-                _ -> <<"http">>
+        {ok, {Host, Port, Transport}} ->
+            Scheme = case Transport of
+                tls -> <<"https">>;
+                tcp -> <<"http">>
             end,
             URL = <<Scheme/binary, "://",
                 (hb_util:bin(Host))/binary, ":",
@@ -253,6 +265,120 @@ gun_req(Args, Opts) ->
 	),
 	Response.
 
+gun_pool_req(Args, Opts) ->
+    StartTime = os:system_time(native),
+    #{ path := Path, method := Method } = Args,
+    Headers = hb_maps:get(headers, Args, #{}, Opts),
+    Body = hb_maps:get(body, Args, <<>>, Opts),
+    case parse_peer(hb_maps:get(peer, Args, undefined), Opts) of
+        {error, _} = Err ->
+            Err;
+        {ok, {Host, Port, Transport}} ->
+            Authority = <<(hb_util:bin(Host))/binary, ":", (integer_to_binary(Port))/binary>>,
+            %% Scope: {Transport, Protocol, TlsOptsHash}.
+            %% ConnectTimeout and Keepalive are NOT in the scope — they configure
+            %% connections inside a pool, not the identity of the pool. Callers
+            %% with different tls_opts must NOT share connections.
+            DefaultProto = case hb_features:http3() of
+                true -> http3; false -> http2
+            end,
+            TlsOptsHash = erlang:phash2(
+                hb_gun_pool_mgr:normalize_tls_opts(
+                    hb_opts:get(tls_opts, [], Opts))),
+            Scope = {Transport,
+                hb_opts:get(protocol, DefaultProto, Opts),
+                TlsOptsHash},
+            ConnInfo = #{host => hb_util:bin(Host), port => Port,
+                         transport => Transport, opts => Opts},
+            case hb_gun_pool:start_or_get_pool(Authority, Scope, ConnInfo) of
+                {error, pool_runtime_unavailable} ->
+                    case hb_opts:get(
+                            http_client_gun_allow_unpooled_fallback,
+                            false, Opts) of
+                        true ->
+                            ?event(warning,
+                                   {gun_pool_runtime_unavailable_fallback,
+                                    {host, Host}, {port, Port}}),
+                            gun_req(Args, Opts);
+                        false ->
+                            ?event(warning,
+                                   {gun_pool_runtime_unavailable,
+                                    {host, Host}, {port, Port}}),
+                            {error, pool_runtime_unavailable}
+                    end;
+                {error, _} = Err ->
+                    Err;
+                {ok, MgrPid} ->
+                    NormHeaders = normalize_gun_headers(Headers, Opts),
+                    Response = do_gun_pool_request(
+                        MgrPid, Args, NormHeaders, Body, Opts),
+                    EndTime = os:system_time(native),
+                    record_duration(#{
+                            <<"request-method">> => method_to_bin(Method),
+                            <<"request-path">>   => hb_util:bin(Path),
+                            <<"status-class">>   => get_status_class(Response),
+                            <<"duration">>       => EndTime - StartTime
+                        },
+                        Opts
+                    ),
+                    record_response_status(Method, Response, Path),
+                    Response
+            end
+    end.
+
+%% @doc Issue request to the juggler pool and await demuxed response.
+%% The manager forwards gun messages with MgrPid as the pid, so passing
+%% MgrPid to gun:await matches the {gun_*, MgrPid, StreamRef, …} shapes.
+%% cancel_fn asks the manager to stop forwarding the abandoned stream and
+%% drains stale messages from the caller mailbox.
+do_gun_pool_request(MgrPid, Args, Headers, Body, Opts) ->
+    #{method := Method, path := Path} = Args,
+    case hb_gun_pool_mgr:request(MgrPid, Method, Path, Headers, Body, Opts) of
+        {error, _} = Err ->
+            Err;
+        {ok, MgrPid, StreamRef} ->
+            SendTimeout = hb_opts:get(http_client_send_timeout, 300_000, Opts),
+            Timer = inet:start_timer(SendTimeout),
+            ResponseArgs = #{
+                pid             => MgrPid,
+                stream_ref      => StreamRef,
+                timer           => Timer,
+                limit           => hb_maps:get(limit, Args, infinity, Opts),
+                counter         => 0,
+                acc             => [],
+                method          => Method,
+                path            => Path,
+                start           => os:system_time(microsecond),
+                is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts),
+                cancel_fn       =>
+                    fun(_, R) ->
+                        hb_gun_pool_mgr:cancel_stream(MgrPid, R),
+                        hb_gun_pool:flush_stream(R)
+                    end
+            },
+            Response = await_response(ResponseArgs, Opts),
+            inet:stop_timer(Timer),
+            Response
+    end.
+
+%% @doc Expand a header map into a proplist suitable for gun:request/5,
+%% splitting any list-valued <<"cookie">> entry into one header per line
+%% (gun does not collapse list values; pooled and non-pooled paths must
+%% produce the same wire format).
+normalize_gun_headers(HeaderMap, Opts) ->
+    HeadersWithoutCookie =
+        hb_maps:to_list(
+            hb_maps:without([<<"cookie">>], HeaderMap, Opts),
+            Opts
+        ),
+    CookieLines =
+        case hb_maps:get(<<"cookie">>, HeaderMap, [], Opts) of
+            BinCookie when is_binary(BinCookie) -> [BinCookie];
+            Lines when is_list(Lines)           -> Lines
+        end,
+    HeadersWithoutCookie
+        ++ [{<<"cookie">>, Line} || Line <- CookieLines].
+
 %% @doc Start the hackney connection pool with default settings.
 %% Overridden at runtime by setup_conn/1 once node config is available.
 init_hackney_pool() ->
@@ -260,6 +386,37 @@ init_hackney_pool() ->
         {max_connections, ?DEFAULT_HACKNEY_MAX_CONNECTIONS},
         {timeout, ?DEFAULT_KEEPALIVE_TIMEOUT}
     ]).
+
+%% @doc Start gun's OTP app and the pool supervisor when pooled gun is enabled.
+ensure_gun_pool_runtime(Opts) ->
+    case {hb_opts:get(http_client, ?DEFAULT_HTTP_CLIENT, Opts),
+          hb_opts:get(http_client_gun_use_pool, true, Opts)} of
+        {gun, true} ->
+            case application:ensure_all_started(gun) of
+                {ok, _} ->
+                    ensure_gun_pool_started();
+                {error, _} = Err ->
+                    Err
+            end;
+        _ ->
+            ok
+    end.
+
+%% @doc Start the standalone gun-pool supervisor if hb_sup is not managing it.
+ensure_gun_pool_started() ->
+    case whereis(hb_gun_pool) of
+        undefined ->
+            case hb_gun_pool:start_link() of
+                {ok, _Pid} ->
+                    ok;
+                {error, {already_started, _Pid}} ->
+                    ok;
+                {error, _} = Err ->
+                    Err
+            end;
+        _Pid ->
+            ok
+    end.
 
 %% @doc Invoke the HTTP monitor message with AO-Core, if it is set in the 
 %% node message key. We invoke the given message with the `body' set to a signed
@@ -345,7 +502,7 @@ handle_info({gun_error, PID, Reason}, State) ->
 	?event(warning, {gun_connection_error, {pid, PID}, {reason, Reason}}),
 	{noreply, State};
 
-handle_info({gun_down, PID, Protocol, Reason, _KilledStreams, _UnprocessedStreams}, State) ->
+handle_info({gun_down, PID, Protocol, Reason, _KilledStreams}, State) ->
 	?event(warning, {gun_connection_down, {pid, PID}, {protocol, Protocol}, {reason, Reason}}),
 	{noreply, State};
 
@@ -367,7 +524,7 @@ terminate(_Reason, _State) ->
 open_connection(#{ peer := Peer }, Opts) ->
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
-        {ok, {Host, Port}} -> open_connection_gun(Host, Port, Peer, Opts)
+        {ok, {Host, Port, _Transport}} -> open_connection_gun(Host, Port, Peer, Opts)
     end.
 
 open_connection_gun(Host, Port, Peer, Opts) ->
@@ -421,16 +578,17 @@ open_connection_gun(Host, Port, Peer, Opts) ->
 parse_peer(Peer, Opts) ->
     Parsed = uri_string:parse(Peer),
     case Parsed of
-        #{ host := Host, port := Port } ->
-            {ok, {hb_util:list(Host), Port}};
+        #{ host := Host, port := Port } = URI ->
+            Scheme = maps:get(scheme, URI, <<>>),
+            Transport = case Scheme of <<"https">> -> tls; _ -> tcp end,
+            {ok, {hb_util:list(Host), Port, Transport}};
         URI = #{ host := Host } ->
-            {ok, {
-                hb_util:list(Host),
-                case hb_maps:get(scheme, URI, undefined, Opts) of
-                    <<"https">> -> 443;
-                    _ -> hb_opts:get(port, 8734, Opts)
-                end
-            }};
+            case hb_maps:get(scheme, URI, undefined, Opts) of
+                <<"https">> ->
+                    {ok, {hb_util:list(Host), 443, tls}};
+                _ ->
+                    {ok, {hb_util:list(Host), hb_opts:get(port, 8734, Opts), tcp}}
+            end;
         _ ->
             {error, {bad_peer, Peer}}
     end.
@@ -443,20 +601,7 @@ do_gun_request(PID, Args, Opts) ->
 	Method = hb_maps:get(method, Args, undefined, Opts),
 	Path = hb_maps:get(path, Args, undefined, Opts),
     HeaderMap = hb_maps:get(headers, Args, #{}, Opts),
-    % Normalize cookie header lines from the header map. We support both
-    % lists of cookie lines and a single cookie line.
-	HeadersWithoutCookie =
-        hb_maps:to_list(
-            hb_maps:without([<<"cookie">>], HeaderMap, Opts),
-            Opts
-        ),
-    CookieLines =
-        case hb_maps:get(<<"cookie">>, HeaderMap, [], Opts) of
-            BinCookieLine when is_binary(BinCookieLine) -> [BinCookieLine];
-            CookieLinesList -> CookieLinesList
-        end,
-    CookieHeaders = [ {<<"cookie">>, CookieLine} || CookieLine <- CookieLines ],
-    Headers = HeadersWithoutCookie ++ CookieHeaders,
+    Headers = normalize_gun_headers(HeaderMap, Opts),
 	Body = hb_maps:get(body, Args, <<>>, Opts),
     ?event(
         http_client,
@@ -478,7 +623,8 @@ do_gun_request(PID, Args, Opts) ->
             counter => 0,
             acc => [],
             start => os:system_time(microsecond),
-			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts)
+			is_peer_request => hb_maps:get(is_peer_request, Args, true, Opts),
+            cancel_fn => fun(P, R) -> gun:cancel(P, R) end
         },
 	Response = await_response(hb_maps:merge(Args, ResponseArgs, Opts), Opts),
 	record_response_status(Method, Response, Path, Opts),
@@ -488,6 +634,7 @@ do_gun_request(PID, Args, Opts) ->
 await_response(Args, Opts) ->
 	#{ pid := PID, stream_ref := Ref, timer := Timer, limit := Limit,
 			counter := Counter, acc := Acc, method := Method, path := Path } = Args,
+    CancelFn = maps:get(cancel_fn, Args, fun(P, R) -> gun:cancel(P, R) end),
 	case gun:await(PID, Ref, inet:timeout(Timer)) of
 		{response, fin, Status, Headers} ->
 			upload_metric(Args, Opts),
@@ -529,12 +676,12 @@ await_response(Args, Opts) ->
 		{error, timeout} = Response ->
 			record_response_status(Method, Response, Path, Opts),
             ?event(http_outbound, {gun_cancel, {path, Path}}),
-			gun:cancel(PID, Ref),
+			CancelFn(PID, Ref),
 			log(warning, gun_await_process_down, Args, timeout, Opts),
 			Response;
         {error,{connection_error,{stream_closed, Message}}} = Response ->
             ?event(http_outbound, {gun_cancel, {path, Path}, {message, Message}}),
-            gun:cancel(PID, Ref),
+            CancelFn(PID, Ref),
             Response;
 		{error, Reason} = Response when is_tuple(Reason) ->
 			record_response_status(Method, Response, Path),
@@ -547,7 +694,8 @@ await_response(Args, Opts) ->
 	end.
 
 %% @doc Debug `http` state logging.
-log(Type, Event, #{method := Method, peer := Peer, path := Path}, Reason, Opts) ->
+log(Type, Event, #{method := Method, path := Path} = Args, Reason, Opts) ->
+    Peer = maps:get(peer, Args, undefined),
     ?event(
         Type,
         {gun_log,
@@ -640,8 +788,13 @@ record_duration(Details, Opts) ->
                             <<"status-class">>,
                             <<"request-category">>
                         ]),
+                    DurationNative = maps:get(<<"duration">>, Details),
+                    DurationSeconds =
+                        erlang:convert_time_unit(
+                            DurationNative, native, microsecond)
+                            / 1_000_000,
                     hb_prometheus:observe(
-                        maps:get(<<"duration">>, Details),
+                        DurationSeconds,
                         http_client_duration_seconds,
                         Labels
                     );
@@ -740,6 +893,8 @@ get_status_class({ok, {{Status, _}, _, _, _, _}}) ->
 	get_status_class(Status);
 get_status_class({ok, Status, _RespondeHeaders, _Body}) ->
     get_status_class(Status);
+get_status_class({error, no_connection_available}) ->
+    <<"pool-exhausted">>;
 get_status_class({error, closed}) ->
 	<<"closed">>;
 get_status_class({error, checkout_timeout}) ->

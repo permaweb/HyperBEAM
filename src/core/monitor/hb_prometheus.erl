@@ -75,9 +75,9 @@ measure_and_report(Fun, Metric, Labels) when is_function(Fun) ->
         observe(DurationNative, Metric, Labels)
     end.
 
-observe(Duration, Metric) when is_integer(Duration) ->
+observe(Duration, Metric) when is_number(Duration) ->
     observe(Duration, Metric, []).
-observe(Duration, Metric, Labels) when is_integer(Duration) ->
+observe(Duration, Metric, Labels) when is_number(Duration) ->
     case ensure_started() of
         ok ->
             try prometheus_histogram:observe(Metric, Labels, Duration)
