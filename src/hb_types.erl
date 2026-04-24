@@ -15,6 +15,7 @@ vary(Device, Key, Base, Request, Opts) ->
                 undefined ->
                     {ok, Base, Request};
                 Schema ->
+                    ?event({apply_schema, {schema, Schema}, {base, Base}, {request, Request}}),
                     {ok,
                         apply_schema(
                             maps:get(<<"base">>, Schema, any_type()),
@@ -196,23 +197,11 @@ parse_type({type, _, map, Fields}, TypeEnv, VarEnv, Seen) ->
             )
         )
     );
-parse_type({type, _, list, [Item]}, TypeEnv, VarEnv, Seen) ->
+parse_type({type, _, ListType, Item}, TypeEnv, VarEnv, Seen)
+        when ListType =:= list; ListType =:= nonempty_list ->
     #{
         <<"kind">> => <<"list">>,
         <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen)
-    };
-parse_type({type, _, nonempty_list, [Item]}, TypeEnv, VarEnv, Seen) ->
-    #{
-        <<"kind">> => <<"list">>,
-        <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen),
-        <<"nonempty">> => true
-    };
-parse_type({type, _, maybe_improper_list, [Item, Tail]}, TypeEnv, VarEnv, Seen) ->
-    #{
-        <<"kind">> => <<"list">>,
-        <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen),
-        <<"tail">> => parse_type(Tail, TypeEnv, VarEnv, Seen),
-        <<"improper">> => true
     };
 parse_type({type, _, tuple, Items}, TypeEnv, VarEnv, Seen) ->
     #{
@@ -251,7 +240,9 @@ parse_type({integer, _, Int}, _TypeEnv, _VarEnv, _Seen) -> literal_type(Int);
 parse_type({char, _, Char}, _TypeEnv, _VarEnv, _Seen) -> literal_type(<<Char/utf8>>);
 parse_type({string, _, String}, _TypeEnv, _VarEnv, _Seen) -> literal_type(hb_util:bin(String));
 parse_type({nil, _}, _TypeEnv, _VarEnv, _Seen) -> literal_type([]);
-parse_type(Other, _TypeEnv, _VarEnv, _Seen) -> unknown_type(Other).
+parse_type(Other, _TypeEnv, _VarEnv, _Seen) -> 
+    ?event({parse_type_other, Other}),
+    unknown_type(Other).
 
 field_presence(map_field_exact) -> required;
 field_presence(map_field_assoc) -> optional;
@@ -273,35 +264,176 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
 
 apply_schema(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"all">> := All }, Message, Opts)
         when is_map(Message) ->
-    lists:foldl(
-        fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}, Acc) ->
-            case hb_maps:find(Key, Message, Opts) of
-                {ok, Value} ->
-                    Acc#{ Key => project_value(Type, Value, Opts) };
-                error when Presence =:= required ->
-                    throw({required_key_missing, Key});
-                error when Presence =:= optional ->
-                    Acc#{ Key => project_value(Type, undefined, Opts) };
-                error ->
-                    Acc
-            end
-        end,
-        #{},
-        maps:to_list(Keys)
-    );
+    ?event(apply_schema, {message, {keys, Keys}, {all, All}, {message, Message}}),
+    % Apply declared keys first so their coerced values take precedence.
+    Explicit =
+        lists:foldl(
+            fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}, Acc) ->
+                ?event({apply_schema_find, {key, Key}, {message, Message}, {presence, Presence}, {type, Type}}),
+                % If we find the key in the message, apply the schema to the value.
+                % If the key is not found and the field is required, throw an error.
+                % If the key is not found and the field is optional, skip it.
+                case hb_maps:find(Key, Message, Opts) of
+                    {ok, Value} ->
+                        Acc#{ Key => apply_schema(Type, Value, Opts) };
+                    error when Presence =:= required ->
+                        throw({required_key_missing, Key});
+                    error ->
+                        Acc
+                end 
+            end,
+            #{},
+            maps:to_list(Keys)
+        ),
+    % If `all` is true, pass through any unmatched keys unchanged.
+    case All of
+        true ->
+            maps:merge(
+                maps:without(maps:keys(Keys), Message),
+                Explicit
+            );
+        false ->
+            Explicit
+    end;
 apply_schema(Type, Message, _Opts) ->
+    ?event({apply_schema_check_type, {type, Type}, {message, Message}}),
+    % If the type matches the message, return the message unchanged.
+    % If the type does not match the message, coerce the message to the type.
     case check_type(Type, Message) of
         true -> Message;
-        false -> throw({invalid_type, Type, Message})
+        false ->
+            case coerce_type(Type, Message) of
+                error -> throw({invalid_type, Type, Message});
+                Coerced -> Coerced
+            end
     end.
 
-project_value(#{ <<"kind">> := <<"message">> } = Type, Value, Opts) ->
-    apply_schema(Type, Value, Opts);
-project_value(Type, Value, _Opts) ->
-    case check_type(Type, Value) of
-        true -> Value;
-        false -> throw({invalid_type, Type, Value})
+%% @doc Coerce a value to a type. If the value is not coercible, return error.
+%% Otherwise, return the coerced value.
+coerce_type(_, undefined) -> error;
+coerce_type(#{ <<"kind">> := <<"any">> }, Value) -> Value;
+coerce_type(#{ <<"kind">> := <<"integer">> }, Value) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(#{ <<"kind">> := <<"non-neg-integer">> }, Value) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(#{ <<"kind">> := <<"pos-integer">> }, Value) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(#{ <<"kind">> := <<"neg-integer">> }, Value) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(#{ <<"kind">> := <<"float">> }, Value) ->
+    try_coerce(fun hb_util:float/1, Value);
+coerce_type(#{ <<"kind">> := <<"number">> }, Value) ->
+    coerce_with([fun hb_util:int/1, fun hb_util:float/1], Value);
+coerce_type(#{ <<"kind">> := <<"binary">> }, Value) ->
+    try_coerce(fun hb_util:bin/1, Value);
+coerce_type(#{ <<"kind">> := <<"bitstring">> }, Value) ->
+    try_coerce(fun hb_util:bin/1, Value);
+coerce_type(#{ <<"kind">> := <<"boolean">> }, Value) ->
+    case is_boolean_coercible(Value) of
+        true -> try_coerce(fun hb_util:bool/1, Value);
+        false -> error
+    end;
+coerce_type(#{ <<"kind">> := <<"atom">> }, Value) ->
+    try_coerce(fun hb_util:atom/1, Value);
+coerce_type(#{ <<"kind">> := <<"pid">> }, _Value) ->
+    error;
+coerce_type(#{ <<"kind">> := <<"message">> }, Value) ->
+    try_coerce(fun hb_util:map/1, Value);
+coerce_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) when is_tuple(Value) ->
+    coerce_type(#{ <<"kind">> => <<"tuple">>, <<"items">> => Items }, tuple_to_list(Value));
+coerce_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }, Value) when is_list(Value) ->
+    case length(Value) =:= length(Items) of
+        false -> error;
+        true ->
+            case coerce_sequence(lists:zip(Items, Value)) of
+                error -> error;
+                Coerced -> list_to_tuple(Coerced)
+            end
+    end;
+coerce_type(#{ <<"kind">> := <<"list">>, <<"item">> := ItemType }, Value) ->
+    case try_coerce(fun hb_util:list/1, Value) of
+        error -> error;
+        Coerced -> coerce_list(ItemType, Coerced)
+    end;
+coerce_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }, Value) ->
+    coerce_union(Members, Value);
+coerce_type(#{ <<"kind">> := <<"literal">>, <<"value">> := Expected }, Value) ->
+    coerce_literal(Expected, Value);
+coerce_type(#{ <<"kind">> := <<"range">> }, Value) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_type(_, _) -> error.
+
+try_coerce(Fun, Value) ->
+    try Fun(Value) of
+        Coerced -> Coerced
+    catch
+        _:_ -> error
     end.
+
+%% @doc Coerce a value with a list of functions.
+%% This is useful for kind: number, which can be coerced to an integer or a float.
+coerce_with([], _Value) ->
+    error;
+coerce_with([Fun | Rest], Value) ->
+    case try_coerce(Fun, Value) of
+        error -> coerce_with(Rest, Value);
+        Coerced -> Coerced
+    end.
+
+%% @doc Coerce a sequence of values to a list of types.
+%% This is useful for coercing a list to a tuple.
+coerce_sequence([]) ->
+    [];
+coerce_sequence([{Type, Value} | Rest]) ->
+    case coerce_type(Type, Value) of
+        error -> error;
+        Coerced ->
+            case coerce_sequence(Rest) of
+                error -> error;
+                CoercedRest -> [Coerced | CoercedRest]
+            end
+    end.
+
+coerce_list(ItemType, Value) when is_list(Value) ->
+    coerce_sequence([{ItemType, Item} || Item <- Value]);
+coerce_list(_ItemType, _Value) ->
+    error.
+
+coerce_union([], _Value) ->
+    error;
+coerce_union([Member | Rest], Value) ->
+    case coerce_type(Member, Value) of
+        error -> coerce_union(Rest, Value);
+        Coerced -> Coerced
+    end.
+
+coerce_literal(Expected, Value) when is_integer(Expected) ->
+    try_coerce(fun hb_util:int/1, Value);
+coerce_literal(Expected, Value) when is_float(Expected) ->
+    try_coerce(fun hb_util:float/1, Value);
+coerce_literal(Expected, Value) when is_binary(Expected) ->
+    try_coerce(fun hb_util:bin/1, Value);
+coerce_literal(Expected, Value) when is_atom(Expected) ->
+    case is_boolean(Expected) andalso is_boolean_coercible(Value) of
+        true -> try_coerce(fun hb_util:bool/1, Value);
+        false -> try_coerce(fun hb_util:atom/1, Value)
+    end;
+coerce_literal(Expected, Value) when is_list(Expected) ->
+    case try_coerce(fun hb_util:list/1, Value) of
+        error -> error;
+        Coerced when length(Coerced) =:= length(Expected) -> Coerced;
+        _ -> error
+    end;
+coerce_literal(Expected, Value) when is_map(Expected) ->
+    try_coerce(fun hb_util:map/1, Value);
+coerce_literal(Expected, Value) when Value =:= Expected ->
+    Value;
+coerce_literal(_Expected, _Value) ->
+    error.
+
+is_boolean_coercible(Value) -> 
+    Coercible = [true, false, 1, 0, <<"true">>, <<"false">>, <<"1">>, <<"0">>],
+    lists:member(Value, Coercible).
 
 check_type(#{ <<"kind">> := <<"any">> }, _Value) -> true;
 check_type(#{ <<"kind">> := <<"integer">> }, Value) -> is_integer(Value);
@@ -342,6 +474,7 @@ check_type(_, _) ->
 
 %% @doc Ensure that a name is a `dash-separated-binary` form, rather than
 %% an atom, list, etc.
+normalize_name('_') -> <<"_">>;
 normalize_name(Name) when is_atom(Name) -> hb_util:atom_to_key(Name);
 normalize_name(Name) -> hb_util:bin(Name).
 
@@ -358,12 +491,18 @@ literal_type(Value) -> #{ <<"kind">> => <<"literal">>, <<"value">> => Value }.
 alias_type(Name) -> #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(Name) }.
 variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
 message_type(AllKeys) ->
-    % If the `_` key is set to `_`, then we maintain the presence of all keys.
-    % Otherwise, we only maintain the presence of the keys that are set.
+    Wildcard = maps:get(<<"_">>, AllKeys, undefined),
+    ?event(apply_schema, {message_type, {all_keys, AllKeys}, {wildcard, Wildcard}}),
+    % If the `_` key is exactly the literal `_`, pass through unmatched keys.
+    % Otherwise, only maintain explicitly declared keys.
     #{
         <<"kind">> => <<"message">>,
-        <<"keys">> => maps:without(['_'], AllKeys),
-        <<"all">> => maps:get('_', AllKeys, false) == '_'
+        <<"keys">> => maps:without([<<"_">>], AllKeys),
+        <<"all">> =>
+            case Wildcard of
+                #{ <<"type">> := #{ <<"value">> := <<"_">> } } -> true;
+                _ -> false
+            end
     }.
 unknown_type(Other) -> #{ <<"kind">> => <<"unknown">>, <<"ast">> => hb_util:bin(io_lib:format("~tp", [Other])) }.
 boolean_type() ->
@@ -411,18 +550,17 @@ successful_vary_test() ->
 vary_throw_required_key_missing_test() ->
     Opts = test_opts(),
     ?assertThrow(
-        {required_key_missing, <<"/slot">>},
+        {required_key_missing, _},
         vary(<<"test-device@1.0">>, <<"compute">>, #{}, #{}, Opts)
     ).
 
-vary_throw_required_key_wrong_type_test() ->
+vary_required_key_wrong_type_test() ->
     Opts = test_opts(),
-    ?assertThrow(
+    ?assertMatch(
         {
-            invalid_type,
-                {key, <<"/slot">>},
-                {value, <<"1">>},
-                {expected_type, integer}
+            ok,
+            #{},
+            #{ <<"slot">> := 1 }
         },
         vary(
             <<"test-device@1.0">>,
@@ -433,20 +571,19 @@ vary_throw_required_key_wrong_type_test() ->
         )
     ).
 
-vary_throw_optional_key_wrong_type_test() ->
+vary_optional_key_wrong_type_test() ->
     Opts = test_opts(),
-    ?assertThrow(
+    ?assertMatch(
         {
-            invalid_type,
-                {key, <<"/already-seen">>},
-                {value, false},
-                {expected_type, []}
+            ok,
+            #{ <<"already-seen">> := 1 },
+            #{ <<"slot">> := 1 }
         },
         vary(
             <<"test-device@1.0">>,
             <<"compute">>,
-            #{},
-            #{ <<"already-seen">> => false, <<"slot">> => 1 },
+            #{ <<"already-seen">> => <<"1">> },
+            #{ <<"slot">> => <<"1">> },
             Opts
         )
     ).
@@ -456,7 +593,7 @@ successful_nested_vary_test() ->
     {ok, VariedBase, VariedReq} =
         vary(
             <<"test-device@1.0">>,
-            <<"compute_nested">>,
+            <<"compute-nested">>,
             #{},
             #{ 
                 <<"outer">> => 
@@ -478,27 +615,145 @@ successful_nested_vary_test() ->
 vary_throw_nested_key_missing_test() ->
     Opts = test_opts(),
     ?assertThrow(
-        {required_key_missing, <<"/outer/slot">>},
+        {required_key_missing, _},
         vary(
             <<"test-device@1.0">>,
-            <<"compute_nested">>,
+            <<"compute-nested">>,
             #{},
             #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
             Opts
         )
     ).
 
-vary_throw_nested_key_wrong_type_test() ->
+vary_nested_key_wrong_type_test() ->
     Opts = test_opts(),
-    ?assertThrow(
-        {invalid_type, 
-            {key, <<"/outer/slot">>},
-            {value, <<"1">>},
-            {expected_type, integer}
-        },
+    ?assertMatch(
+        {ok, #{}, #{ <<"outer">> := #{ <<"slot">> := 1 }}},
         vary(
             <<"test-device@1.0">>,
-            <<"compute_nested">>,
+            <<"compute-nested">>,
+            #{},
+            #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
+            Opts
+        )
+    ).
+
+vary_coerces_required_key_from_binary_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute">>,
+            #{},
+            #{ <<"slot">> => <<"1">> },
+            Opts
+        ),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
+
+vary_coerces_required_key_from_list_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute">>,
+            #{},
+            #{ <<"slot">> => "1" },
+            Opts
+        ),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
+
+vary_throw_required_key_noncoercible_test() ->
+    Opts = test_opts(),
+    ?assertThrow(
+        {invalid_type, _, _},
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute">>,
+            #{},
+            #{ <<"slot">> => <<"not-an-int">> },
+            Opts
+        )
+    ).
+
+vary_coerces_optional_base_key_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute">>,
+            #{ <<"already-seen">> => <<"2">> },
+            #{ <<"slot">> => <<"1">> },
+            Opts
+        ),
+    ?assertEqual(#{ <<"already-seen">> => 2 }, VariedBase),
+    ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
+
+vary_throw_optional_base_key_noncoercible_test() ->
+    Opts = test_opts(),
+    ?assertThrow(
+        {invalid_type, _, _},
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute">>,
+            #{ <<"already-seen">> => <<"not-an-int">> },
+            #{ <<"slot">> => 1 },
+            Opts
+        )
+    ).
+
+unschematized_key_returns_messages_unchanged_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"nonexistent-func">>,
+            #{ <<"base">> => <<"value">> },
+            #{ 
+                <<"outer">> => 
+                    #{ 
+                        <<"slot">> => 1, 
+                        <<"unused">> => 
+                            #{ <<"unused-key">> => <<"unused-value">> }
+                    }
+            },
+            Opts
+        ),
+    ?event(debug_types, {vary_result, {varied_base, VariedBase}, {varied_req, VariedReq}}),
+    ?assertEqual(#{ <<"base">> => <<"value">> }, VariedBase),
+    ?assertEqual(
+        #{
+            <<"outer">> =>
+                #{
+                    <<"slot">> => 1,
+                    <<"unused">> =>
+                        #{ <<"unused-key">> => <<"unused-value">> }
+                }
+        },
+        VariedReq
+    ).
+
+unschematized_key_missing_req_is_unchanged_test() ->
+    Opts = test_opts(),
+    ?assertEqual(
+        {ok, #{}, #{ <<"outer">> => #{ <<"not-slot">> => 1 }}},
+        vary(
+            <<"test-device@1.0">>,
+            <<"nonexistent-func">>,
+            #{},
+            #{ <<"outer">> => #{ <<"not-slot">> => 1 }},
+            Opts
+        )
+    ).
+
+unschematized_key_wrong_type_is_unchanged_test() ->
+    Opts = test_opts(),
+    ?assertEqual(
+        {ok, #{}, #{ <<"outer">> => #{ <<"slot">> => <<"1">> }}},
+        vary(
+            <<"test-device@1.0">>,
+            <<"nonexistent-func">>,
             #{},
             #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
             Opts
@@ -510,8 +765,8 @@ vary_on_all_test() ->
     {ok, VariedBase, VariedReq} =
         vary(
             <<"test-device@1.0">>,
-            <<"compute_all">>,
-            #{ <<"a">> => 1, <<"b">> => 2 },
+            <<"compute-all">>,
+            #{ <<"a">> => <<"1">>, <<"b">> => 2 },
             #{ <<"slot">> => 1 },
             Opts
         ),
@@ -524,8 +779,15 @@ vary_on_all_nested_test() ->
     {ok, VariedBase, VariedReq} =
         vary(
             <<"test-device@1.0">>,
-            <<"compute_all">>,
-            #{ <<"a">> => 1, <<"b">> => 2, <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 } },
+            <<"compute-all">>,
+            #{
+                <<"a">> => <<"1">>,
+                <<"b">> => 2,
+                <<"outer">> => #{
+                    <<"c">> => <<"3">>,
+                    <<"d">> => <<"4">>
+                }
+            },
             #{ <<"slot">> => 1 },
             Opts
         ),
@@ -534,8 +796,76 @@ vary_on_all_nested_test() ->
         #{ 
             <<"a">> => 1, 
             <<"b">> => 2, 
-            <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 } 
+            <<"outer">> => #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> } 
         },
         VariedBase
     ),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
+
+vary_on_all_preserves_extra_request_keys_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-all">>,
+            #{ <<"a">> => 1 },
+            #{ <<"slot">> => 1, <<"extra">> => <<"x">> },
+            Opts
+        ),
+    ?assertEqual(#{ <<"a">> => 1 }, VariedBase),
+    ?assertEqual(
+        #{ <<"slot">> => 1, <<"extra">> => <<"x">> },
+        VariedReq
+    ).
+
+vary_on_all_preserves_nested_request_keys_test() ->
+    Opts = test_opts(),
+    {ok, _VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-all">>,
+            #{},
+            #{
+                <<"slot">> => 1,
+                <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        #{
+            <<"slot">> => 1,
+            <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 }
+        },
+        VariedReq
+    ).
+
+vary_on_all_removes_schematized_nested_keys_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-all-nested">>,
+            #{
+                <<"nested">> => #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
+                <<"other">> => <<"3">>
+            },
+            #{
+                <<"slot">> => 1,
+                <<"nested">> => #{ <<"c">> => 3, <<"d">> => 4 }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        #{
+            <<"nested">> => #{ <<"a">> => 1 },
+            <<"other">> => <<"3">>
+        },
+        VariedBase
+    ),
+    ?assertEqual(
+        #{
+            <<"slot">> => 1,
+            <<"nested">> => #{ <<"c">> => 3, <<"d">> => 4 }
+        },
+        VariedReq
+    ).
