@@ -15,6 +15,10 @@
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
 
+%% 333 + 256 = 589KB peak ≈ 603,136 bytes / 8 = 75,392 words
+-define(DEFAULT_MIN_BIN_VHEAP_SIZE, 82_000).
+-define(DEFAULT_FULL_SWEAP_AFTER, 0).
+
 %% @doc Route unknown keys through offset resolution first, then fall back to
 %% the message device for direct key access.
 info() ->
@@ -556,7 +560,18 @@ fetch_and_collect(Offsets, Opts) ->
     ).
 fetch_and_collect(Offsets, GETFun, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-    collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
+    FetchAndCollectMinBinVHeapSize = hb_opts:get(arweave_chunk_fetch_min_heap_size, ?DEFAULT_MIN_BIN_VHEAP_SIZE, Opts),
+    FetchAndCollectFullSweapAfter = hb_opts:get(arweave_chunk_fetch_full_sweap_aftger, ?DEFAULT_FULL_SWEAP_AFTER, Opts),
+    Results = 
+        hb_pmap:parallel_map(
+            Offsets, 
+            GETFun, 
+            Concurrency, 
+            [
+                {min_bin_vheap_size, FetchAndCollectMinBinVHeapSize}, 
+                {fullsweep_after, FetchAndCollectFullSweapAfter}
+            ]),
+    collect_chunks(Results).
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
