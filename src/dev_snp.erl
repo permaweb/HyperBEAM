@@ -153,7 +153,7 @@ generate(_M1, _M2, Opts) ->
         {ok, ValidLocalHashes} ?= 
             case hb_opts:get(snp_trusted, [#{}], LoadedOpts) of
                 [] -> {error, no_trusted_configs};
-                [FirstConfig | _] -> {ok, canonical_hash_keys(FirstConfig)};
+                [FirstConfig | _] -> {ok, FirstConfig};
                 _ -> {error, invalid_trusted_configs_format}
             end,
         ?event(snp_local_hashes, {explicit, ValidLocalHashes}),
@@ -413,11 +413,9 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
 -spec extract_measurement_args(Msg :: map(), NodeOpts :: map()) -> map().
 extract_measurement_args(Msg, NodeOpts) ->
     LocalHashes =
-        canonical_hash_keys(
-            hb_cache:ensure_all_loaded(
-                hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
-                NodeOpts
-            )
+        hb_cache:ensure_all_loaded(
+            hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
+            NodeOpts
         ),
     maps:from_list(
         lists:map(
@@ -432,9 +430,7 @@ extract_measurement_args(Msg, NodeOpts) ->
     ).
 
 measurement_arg_atom(Key) ->
-    binary_to_existing_atom(
-        re:replace(Key, <<"-">>, <<"_">>, [global, {return, binary}])
-    ).
+    hb_util:key_to_atom(Key, existing).
 
 %% @doc Verify the integrity of the SNP report's digital signature.
 %%
@@ -489,11 +485,7 @@ is_debug(Report) ->
     {ok, boolean()}.
 execute_is_trusted(_M1, Msg, NodeOpts) ->
     FilteredLocalHashes = get_filtered_local_hashes(Msg, NodeOpts),
-    TrustedSoftware =
-        lists:map(
-            fun canonical_hash_keys/1,
-            hb_opts:get(snp_trusted, [#{}], NodeOpts)
-        ),
+    TrustedSoftware = hb_opts:get(snp_trusted, [#{}], NodeOpts),
     ?event({trusted_software, {explicit, TrustedSoftware}}),
     IsTrusted = 
         is_software_trusted(
@@ -514,7 +506,7 @@ execute_is_trusted(_M1, Msg, NodeOpts) ->
 %% @returns A map of filtered local hashes with only enforced keys
 -spec get_filtered_local_hashes(Msg :: map(), NodeOpts :: map()) -> map().
 get_filtered_local_hashes(Msg, NodeOpts) ->
-    LocalHashes = canonical_hash_keys(hb_ao:get(<<"local-hashes">>, Msg, NodeOpts)),
+    LocalHashes = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
     EnforcedKeys = get_enforced_keys(NodeOpts),
     ?event({enforced_keys, {explicit, EnforcedKeys}}),
     FilteredLocalHashes = hb_cache:ensure_all_loaded(
@@ -538,14 +530,7 @@ get_enforced_keys(NodeOpts) ->
         hb_opts:get(snp_enforced_keys, ?COMMITTED_PARAMETERS, NodeOpts)
     ).
 
-canonical_hash_keys(Map) when is_map(Map) ->
-    maps:from_list([
-        {canonical_hash_key(Key), Value}
-        || {Key, Value} <- maps:to_list(Map)
-    ]);
-canonical_hash_keys(Value) ->
-    Value.
-
+%% @doc Convert an enforced-hash key specifier to dashed binary form.
 canonical_hash_key(Key) when is_atom(Key) ->
     canonical_hash_key(atom_to_binary(Key));
 canonical_hash_key(Key) when is_binary(Key) ->
@@ -627,9 +612,9 @@ generate_nonce(RawAddress, RawNodeMsgID) ->
 get_test_hashes() ->
     #{
         <<"vcpus">> => ?TEST_VCPUS_COUNT,
-        <<"vcpu_type">> => ?TEST_VCPU_TYPE,
-        <<"vmm_type">> => ?TEST_VMM_TYPE,
-        <<"guest_features">> => ?TEST_GUEST_FEATURES,
+        <<"vcpu-type">> => ?TEST_VCPU_TYPE,
+        <<"vmm-type">> => ?TEST_VMM_TYPE,
+        <<"guest-features">> => ?TEST_GUEST_FEATURES,
         <<"firmware">> => ?TEST_FIRMWARE_HASH,
         <<"kernel">> => ?TEST_KERNEL_HASH,
         <<"initrd">> => ?TEST_INITRD_HASH,
@@ -648,16 +633,16 @@ setup_test_nodes() ->
         <<"priv-wallet">> => ar_wallet:new(),
         <<"store">> => hb_opts:get(store),
         <<"snp-trusted">> => [
-            canonical_hash_keys(#{
+            #{
                 <<"vcpus">> => ?TEST_VCPUS_COUNT,
-                <<"vcpu_type">> => ?TEST_VCPU_TYPE,
-                <<"vmm_type">> => ?TEST_VMM_TYPE,
-                <<"guest_features">> => ?TEST_GUEST_FEATURES,
+                <<"vcpu-type">> => ?TEST_VCPU_TYPE,
+                <<"vmm-type">> => ?TEST_VMM_TYPE,
+                <<"guest-features">> => ?TEST_GUEST_FEATURES,
                 <<"firmware">> => ?TEST_FIRMWARE_HASH,
                 <<"kernel">> => ?TEST_KERNEL_HASH,
                 <<"initrd">> => ?TEST_INITRD_HASH,
                 <<"append">> => ?TEST_APPEND_HASH
-            })
+            }
         ],
         <<"snp-enforced-keys">> => [
             vcpu_type, vmm_type, guest_features,
@@ -696,7 +681,7 @@ execute_is_trusted_exact_match_should_fail_test() ->
         }
     },
     NodeOpts = #{
-        <<"snp-trusted">> => [canonical_hash_keys(get_test_hashes())],
+        <<"snp-trusted">> => [get_test_hashes()],
         <<"snp-enforced-keys">> => [
             vcpus, vcpu_type, vmm_type, guest_features,
             firmware, kernel, initrd, append
@@ -713,7 +698,7 @@ execute_is_trusted_subset_match_should_pass_test() ->
         }
     },
     NodeOpts = #{
-        <<"snp-trusted">> => [canonical_hash_keys(get_test_hashes())],
+        <<"snp-trusted">> => [get_test_hashes()],
         <<"snp-enforced-keys">> => [
             vcpu_type, vmm_type, guest_features,
             firmware, kernel, initrd, append
@@ -746,12 +731,12 @@ generate_success_test() ->
     TestWallet = ar_wallet:new(),
     TestOpts = #{
         <<"priv-wallet">> => TestWallet,
-        <<"snp-trusted">> => [canonical_hash_keys(#{
+        <<"snp-trusted">> => [#{
             <<"vcpus">> => ?TEST_VCPUS_COUNT,
-            <<"vcpu_type">> => ?TEST_VCPU_TYPE,
+            <<"vcpu-type">> => ?TEST_VCPU_TYPE,
             <<"firmware">> => ?TEST_FIRMWARE_HASH,
             <<"kernel">> => ?TEST_KERNEL_HASH
-        })]
+        }]
     },
     % Load test report data from file
     TestReportJSON = load_test_report_data(),
@@ -790,7 +775,7 @@ generate_success_test() ->
 generate_missing_wallet_test() ->
     TestOpts = #{
         % No priv-wallet provided
-        <<"snp-trusted">> => [canonical_hash_keys(#{ <<"firmware">> => ?TEST_FIRMWARE_HASH })]
+        <<"snp-trusted">> => [#{ <<"firmware">> => ?TEST_FIRMWARE_HASH }]
     },
     % Mock the NIF function (shouldn't be called)
     ok = mock_snp_nif(<<"dummy_report">>),
@@ -829,9 +814,9 @@ verify_mock_generate_success() ->
     TestWallet = ar_wallet:new(),
     TestTrustedConfig = #{
         <<"vcpus">> => 32,
-        <<"vcpu_type">> => ?TEST_VCPU_TYPE,
-        <<"vmm_type">> => ?TEST_VMM_TYPE,
-        <<"guest_features">> => ?TEST_GUEST_FEATURES,
+        <<"vcpu-type">> => ?TEST_VCPU_TYPE,
+        <<"vmm-type">> => ?TEST_VMM_TYPE,
+        <<"guest-features">> => ?TEST_GUEST_FEATURES,
         <<"firmware">> => ?TEST_FIRMWARE_HASH,
         <<"kernel">> => ?TEST_KERNEL_HASH,
         <<"initrd">> => ?TEST_INITRD_HASH,
@@ -839,7 +824,7 @@ verify_mock_generate_success() ->
     },
     GenerateOpts = #{
         <<"priv-wallet">> => TestWallet,
-        <<"snp-trusted">> => [canonical_hash_keys(TestTrustedConfig)]
+        <<"snp-trusted">> => [TestTrustedConfig]
     },
     % Load test report data and set up mock
     TestReportJSON = load_test_report_data(),
@@ -854,7 +839,7 @@ verify_mock_generate_success() ->
         ?assert(maps:is_key(<<"nonce">>, GeneratedMsg)),
         % Step 2: Set up verification options with the same trusted config
         VerifyOpts = #{
-            <<"snp-trusted">> => [canonical_hash_keys(TestTrustedConfig)],
+            <<"snp-trusted">> => [TestTrustedConfig],
             <<"snp-enforced-keys">> => [
                 vcpu_type, vmm_type, guest_features,
                 firmware, kernel, initrd, append
@@ -873,7 +858,7 @@ verify_mock_generate_success() ->
         ReportData = maps:get(<<"report">>, GeneratedMsg),
         ?assertEqual(TestReportJSON, ReportData),
         LocalHashes = maps:get(<<"local-hashes">>, GeneratedMsg),
-        ?assertEqual(canonical_hash_keys(TestTrustedConfig), LocalHashes)
+        ?assertEqual(TestTrustedConfig, LocalHashes)
     after
         % Clean up mock
         unmock_snp_nif()
@@ -887,9 +872,9 @@ verify_mock_generate_wrong_config() ->
     TestWallet = ar_wallet:new(),
     GenerateTrustedConfig = #{
         <<"vcpus">> => ?TEST_VCPUS_COUNT,
-        <<"vcpu_type">> => ?TEST_VCPU_TYPE,
-        <<"vmm_type">> => ?TEST_VMM_TYPE,
-        <<"guest_features">> => ?TEST_GUEST_FEATURES,
+        <<"vcpu-type">> => ?TEST_VCPU_TYPE,
+        <<"vmm-type">> => ?TEST_VMM_TYPE,
+        <<"guest-features">> => ?TEST_GUEST_FEATURES,
         <<"firmware">> => ?TEST_FIRMWARE_HASH,
         <<"kernel">> => ?TEST_KERNEL_HASH,
         <<"initrd">> => ?TEST_INITRD_HASH,
@@ -897,7 +882,7 @@ verify_mock_generate_wrong_config() ->
     },
     GenerateOpts = #{
         <<"priv-wallet">> => TestWallet,
-        <<"snp-trusted">> => [canonical_hash_keys(GenerateTrustedConfig)]
+        <<"snp-trusted">> => [GenerateTrustedConfig]
     },
     % Load test report data and set up mock
     TestReportJSON = load_test_report_data(),
@@ -908,12 +893,12 @@ verify_mock_generate_wrong_config() ->
         % Step 2: Set up verification with DIFFERENT trusted config
         WrongTrustedConfig = #{
             <<"vcpus">> => 32, % Different from generation config
-            <<"vcpu_type">> => 3, % Different from generation config  
+            <<"vcpu-type">> => 3, % Different from generation config
             <<"firmware">> => <<"different_firmware_hash">>,
             <<"kernel">> => <<"different_kernel_hash">>
         },
         VerifyOpts = #{
-            <<"snp-trusted">> => [canonical_hash_keys(WrongTrustedConfig)],
+            <<"snp-trusted">> => [WrongTrustedConfig],
             <<"snp-enforced-keys">> => [vcpus, vcpu_type, firmware, kernel]
         },
         % Step 3: Verify the generated report with wrong config

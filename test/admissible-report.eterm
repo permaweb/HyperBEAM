@@ -6,14 +6,14 @@
 				<<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>,
 			<<"firmware">> =>
 				<<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-			<<"guest_features">> => 1,
+			<<"guest-features">> => 1,
 			<<"initrd">> =>
 				<<"544045560322dbcd2c454bdc50f35edf0147829ec440e6cb487b4a1503f923c1">>,
 			<<"kernel">> =>
 				<<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-			<<"vcpu_type">> => 5,
+			<<"vcpu-type">> => 5,
 			<<"vcpus">> => 32,
-			<<"vmm_type">> => 1
+			<<"vmm-type">> => 1
 		},
 	<<"node-message">> =>
 		#{

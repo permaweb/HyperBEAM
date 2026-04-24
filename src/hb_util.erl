@@ -402,26 +402,10 @@ template_regex_match(ToMatch, Regex, Opts) ->
     end.
 
 template_message_match(ToMatch, TemplateWithoutPath, Opts) ->
-    % Route templates may be stored as committed messages in the node message.
-    % Their commitments are metadata, not part of the match contract.
-    CleanTemplate =
-        hb_maps:without([<<"commitments">>], TemplateWithoutPath, Opts),
-    % HTTP methods are textual route fields and may still arrive as atoms in
-    % some config-derived paths, so normalize them before matching.
-    case hb_message:match(
-        normalize_route_method(CleanTemplate),
-        normalize_route_method(ToMatch),
-        primary,
-        Opts
-    ) of
+    case hb_message:match(TemplateWithoutPath, ToMatch, primary, Opts) of
         {mismatch, value, _Key, _Val1, _Val2} -> false;
         Match -> Match
     end.
-
-normalize_route_method(Map = #{ <<"method">> := Method }) when not is_binary(Method) ->
-    Map#{ <<"method">> => hb_util:bin(Method) };
-normalize_route_method(Map) ->
-    Map.
 
 %% @doc Label a list of elements with a number.
 number(List) ->

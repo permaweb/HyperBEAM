@@ -139,80 +139,6 @@ topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
     lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
-%% @doc Canonicalize an opts or node message term to lower-case binary dash
-%% keys.
-canonicalize(Term) -> canonicalize(root, Term).
-
-canonicalize(_Context, List) when is_list(List) ->
-    case hb_util:is_string_list(List) of
-        true -> List;
-        false ->
-            lists:map(
-                fun(Item) -> canonicalize(root, Item) end,
-                List
-            )
-    end;
-canonicalize(Context, Map) when is_map(Map) ->
-    case dictionary_mode(Context) of
-        opaque ->
-            maps:from_list(
-                lists:map(
-                    fun({Key, Value}) ->
-                        {canonical_dictionary_key(Key), Value}
-                    end,
-                    maps:to_list(Map)
-                )
-            );
-        recurse_values ->
-            maps:from_list(
-                lists:map(
-                    fun({Key, Value}) ->
-                        {
-                            canonical_dictionary_key(Key),
-                            canonicalize(root, Value)
-                        }
-                    end,
-                    maps:to_list(Map)
-                )
-            );
-        normal ->
-            maps:from_list(
-                lists:map(
-                    fun({Key, Value}) ->
-                        CanonKey = canonical_key(Key),
-                        {CanonKey, canonicalize(CanonKey, Value)}
-                    end,
-                    maps:to_list(Map)
-                )
-            )
-    end;
-canonicalize(_Context, Other) -> Other.
-
-%% @doc Return how a nested node-message map should be canonicalized.
-dictionary_mode(<<"hyperbuddy-serve">>) -> opaque;
-dictionary_mode(<<"identities">>) -> recurse_values;
-dictionary_mode(<<"local-names">>) -> opaque;
-dictionary_mode(<<"balance">>) -> opaque;
-dictionary_mode(<<"balances">>) -> opaque;
-dictionary_mode(<<"commitments">>) -> recurse_values;
-dictionary_mode(<<"node-processes">>) -> recurse_values;
-dictionary_mode(<<"nodes">>) -> recurse_values;
-dictionary_mode(<<"priv-wallet-hosted">>) -> recurse_values;
-dictionary_mode(<<"simple-pay-ledger">>) -> opaque;
-dictionary_mode(<<"state">>) -> opaque;
-dictionary_mode(<<"trusted">>) -> recurse_values;
-dictionary_mode(<<"trusted-nodes">>) -> recurse_values;
-dictionary_mode(_) -> normal.
-
-canonical_dictionary_key(Key) when is_atom(Key) ->
-    atom_to_binary(Key, utf8);
-canonical_dictionary_key(Key) when is_list(Key) ->
-    case hb_util:is_string_list(Key) of
-        true -> list_to_binary(Key);
-        false -> Key
-    end;
-canonical_dictionary_key(Key) -> Key.
-
 %% @doc Convert an opts key to lower-case binary dash form.
 canonical_key(Key) when is_atom(Key) ->
     canonical_key(atom_to_binary(Key, utf8));
@@ -247,7 +173,7 @@ default_message_with_env() ->
 default_message() ->
     case erlang:get(default_message) of
         undefined ->
-            Cached = canonicalize(raw_default_message()),
+            Cached = raw_default_message(),
             erlang:put(default_message, Cached),
             Cached;
         Cached -> Cached
@@ -845,63 +771,20 @@ load_bin(Device, Bin, Opts) ->
 %% @doc Mimic the types of the default message for a given map.
 mimic_default_types(Map, _Mode, Opts) ->
     Default = default_message_with_env(),
-    mimic_default_types(canonicalize(Map), root, Default, Default, Opts).
-
-mimic_default_types(List, _Context, Default, RootDefault, Opts) when is_list(List) ->
-    case hb_util:is_string_list(List) of
-        true -> List;
-        false ->
-            DefaultItem = list_default(Default),
-            lists:map(
-                fun(Item) ->
-                    mimic_default_types(Item, root, DefaultItem, RootDefault, Opts)
-                end,
-                List
-            )
-    end;
-mimic_default_types(Map, Context, Default, RootDefault, Opts) when is_map(Map) ->
-    case dictionary_mode(Context) of
-        opaque ->
-            Map;
-        recurse_values ->
-            maps:map(
-                fun(_Key, Value) ->
-                    mimic_default_types(Value, root, RootDefault, RootDefault, Opts)
-                end,
-                Map
-            );
-        normal ->
-            maps:from_list(
-                lists:map(
-                    fun({Key, Value}) ->
-                        SubDefault = sub_default(Key, Default, Opts),
-                        {
-                            Key,
-                            mimic_default_types(
-                                coerce_value(SubDefault, Value),
-                                Key,
-                                SubDefault,
-                                RootDefault,
-                                Opts
-                            )
-                        }
+    hb_maps:from_list(
+        lists:map(
+            fun({Key, Value}) ->
+                NewKey = canonical_key(Key),
+                NewValue =
+                    case hb_maps:get(NewKey, Default, not_found, Opts) of
+                        not_found -> Value;
+                        DefaultValue -> coerce_value(DefaultValue, Value)
                     end,
-                    maps:to_list(Map)
-                )
-            )
-    end;
-mimic_default_types(Value, _Context, Default, _RootDefault, _Opts) ->
-    coerce_value(Default, Value).
-
-list_default([Default|_]) -> Default;
-list_default(_) -> not_found.
-
-sub_default(Key, Default, Opts) when is_map(Default) ->
-    hb_maps:get(Key, Default, not_found, Opts);
-sub_default(_Key, Default, _Opts) when is_list(Default) ->
-    list_default(Default);
-sub_default(_Key, _Default, _Opts) ->
-    not_found.
+                {NewKey, NewValue}
+            end,
+            hb_maps:to_list(Map, Opts)
+        )
+    ).
 
 coerce_value(not_found, Value) ->
     Value;
@@ -1039,10 +922,12 @@ ensure_node_history(Opts, RequiredOpts) ->
         % Add the Opts to the node history to validate all items
         NodeHistoryWithOpts = [ Opts | NodeHistory ],
         % Normalize required options
-        NormalizedRequiredOpts ?= canonicalize(RequiredOpts),
+        NormalizedRequiredOpts ?= hb_ao:normalize_keys(RequiredOpts),
         % Normalize all node history items once
         NormalizedNodeHistory ?= lists:map(
-            fun canonicalize/1,
+            fun(Item) ->
+                hb_ao:normalize_keys(Item)
+            end,
             NodeHistoryWithOpts
         ),
         % Get the first item (complete opts) and remaining items (differences)

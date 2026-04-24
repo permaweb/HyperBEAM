@@ -151,27 +151,14 @@ print_greeter(Config, PrivWallet) ->
 %% expects the node message to be in the `body' key.
 new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
-        hb_maps:without(
-            [<<"only">>, <<"prefer">>],
-            hb_maps:merge(
-                hb_opts:default_message_with_env(),
-                hb_opts:mimic_default_types(
-                    RawNodeMsg#{ <<"only">> => local },
-                    false,
-                    RawNodeMsg
-                )
-            ),
-            RawNodeMsg
+        hb_maps:merge(
+            hb_opts:default_message_with_env(),
+            RawNodeMsg#{ <<"only">> => local }
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
         case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
-            {ok, #{ <<"body">> := NodeMsgAfterHook }} ->
-                hb_opts:mimic_default_types(
-                    NodeMsgAfterHook,
-                    false,
-                    RawNodeMsgWithDefaults
-                );
+            {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
             Unexpected ->
                 ?event(http,
                     {failed_to_start_server,
@@ -508,18 +495,8 @@ set_opts(Opts) ->
             ok = cowboy:set_env(ServerRef, node_msg, Opts)
     end.
 set_opts(Request, Opts) ->
-    PreparedOpts =
-        hb_opts:mimic_default_types(
-            Opts,
-            false,
-            Opts
-        ),
-    PreparedRequest =
-        hb_opts:mimic_default_types(
-            hb_message:uncommitted(Request),
-            false,
-            Opts
-        ),
+    PreparedOpts = Opts,
+    PreparedRequest = hb_message:uncommitted(Request),
     MergedOpts =
         maps:merge(
             PreparedOpts,
@@ -554,10 +531,7 @@ set_proc_server_id(ServerID) ->
 %% @doc Apply the default node message to the given opts map.
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.
-    TempOpts =
-        (hb_opts:mimic_default_types(Opts, false, Opts))#{
-            <<"only">> => local
-        },
+    TempOpts = Opts#{ <<"only">> => local },
     % Get the port to use for the server. If no port is provided, we use port 0
     % will the operating system assign a free port.
     Port = hb_opts:get(port, 0, TempOpts),
@@ -579,8 +553,7 @@ set_default_opts(Opts) ->
         {store, Store},
         {wallet, Wallet}
     }),
-    CleanTempOpts = hb_maps:without([<<"only">>, <<"prefer">>], TempOpts, Opts),
-    CleanTempOpts#{
+    Opts#{
         <<"port">> => Port,
         <<"store">> => Store,
         <<"priv-wallet">> => Wallet,

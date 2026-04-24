@@ -206,8 +206,15 @@ adopt_node_message(Request, NodeMsg) ->
         permanent ->
             {error, <<"Node message is already permanent.">>};
         _ ->
-            hb_http_server:set_opts(Request, NodeMsg)
+            hb_http_server:set_opts(normalize_node_message_update(Request), NodeMsg)
     end.
+
+normalize_node_message_update(
+    Request = #{ <<"initialized">> := <<"permanent">> }
+) ->
+    Request#{ <<"initialized">> => permanent };
+normalize_node_message_update(Request) ->
+    Request.
 
 %% @doc Handle an AO-Core request, which is a list of messages. We apply
 %% the node's pre-processor to the request first, and then resolve the request
