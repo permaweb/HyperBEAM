@@ -3091,7 +3091,39 @@ collect_policy_signals(Claim, Envelope) ->
         %% -- so we treat this as a declaration and grade it.
         <<"tpm-session-mode">> =>
             hb_maps:get(<<"tpm-session-mode">>, Envelope,
-                         <<"unknown">>, #{})
+                         <<"unknown">>, #{}),
+        %% The critical end-to-end binding the paper asks for:
+        %% the HB operator wallet (which signs every AO-Core
+        %% result) must be provably linked to the TPM's
+        %% measured-boot session. Chain:
+        %%
+        %%   wallet W  \in  node-message
+        %%        |
+        %%        v   hb_message:id(node-message) = node-message-id
+        %;        v
+        %;   node-message-id extended into PCR 15
+        %;        |
+        %;        v   TPM2_Quote covers PCR 15
+        %;        v
+        %;   quote signed by AK (hierarchy = Endorsement -> same
+        %;        EPS as EK -> same physical TPM as EK cert chain)
+        %;
+        %% If every step holds the consumer of a result signed by
+        %% W can chain back to the hardware root of trust even
+        %% with no further interaction with the node. Paper AO-
+        %% Core continuity claim: "The result of every computation
+        %% in the system is signed alongside the hashpath
+        %; describing how it was made. When the signature is
+        %; produced by a LapEE-bound key ... the chain binds the
+        %; transcript to the boot conditional on A1."
+        %%
+        %% Verifier: re-compute hb_message:id(node-message) and
+        %% confirm it matches node-message-id, then check that
+        %; wallet-address is a value inside node-message, then
+        %; check that a PCR-15 event carries the decoded node-
+        %; message-id as its digest. All three must hold.
+        <<"wallet-tpm-binding-verified">> =>
+            verify_wallet_tpm_binding(Envelope)
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -3110,6 +3142,7 @@ classify_policy_findings(S) ->
          ak_pubkey_extend_finding(S),   %% v1.2 paper-to-code P5
          hashpath_continuity_finding(S), %% v1.2.2 paper P5-ext
          tpm_session_mode_finding(S),    %% v1.2.2 paper P4
+         wallet_tpm_binding_finding(S),  %% v1.2.2 root-of-trust
          ima_policy_finding(S),
          tpm_trust_finding(S),
          tme_finding(S),
@@ -3649,6 +3682,45 @@ tpm_session_mode_finding(
               "batch-31+ envelope is evaluated.">>);
 tpm_session_mode_finding(_) -> ok.
 
+%% v1.2.2 wallet <-> TPM root-of-trust binding.
+%%
+%% This is the critical chain the paper depends on: a consumer of
+%% any AO-Core result signed by the node's operator wallet must be
+%% able to chain the wallet back to the TPM's attested boot without
+%; further interaction with the node.
+%%
+%; true -> ok (chain holds end-to-end)
+%% false -> CRITICAL (chain broken -- wallet NOT provably linked to
+%;                   the TPM-attested session)
+%% unknown -> critical (envelope shape insufficient to evaluate)
+wallet_tpm_binding_finding(
+  #{<<"wallet-tpm-binding-verified">> := true}) -> ok;
+wallet_tpm_binding_finding(
+  #{<<"wallet-tpm-binding-verified">> := false}) ->
+    finding(critical, <<"wallet-tpm-binding-broken">>,
+            <<"ak">>,
+            <<"The operator wallet is not provably linked to the "
+              "TPM-attested measured-boot session. At least one of "
+              "(a) node-message-id == hb_message:id(node-message), "
+              "(b) wallet-address present as a value in node-"
+              "message, or (c) a PCR-15 runtime event carrying the "
+              "node-message-id digest did not hold. Without this "
+              "chain, a consumer cannot chain a wallet-signed AO-"
+              "Core result back to the hardware root of trust; an "
+              "attacker with a software-generated wallet could "
+              "claim LapEE provenance on results the TPM never "
+              "actually attested.">>);
+wallet_tpm_binding_finding(
+  #{<<"wallet-tpm-binding-verified">> := <<"unknown">>}) ->
+    finding(critical, <<"wallet-tpm-binding-unknown">>,
+            <<"ak">>,
+            <<"Cannot evaluate wallet <-> TPM binding: envelope "
+              "lacks wallet-address, node-message, node-message-"
+              "id, or runtime-event-log. Without all four, the "
+              "paper's root-of-trust chain cannot be walked end-"
+              "to-end.">>);
+wallet_tpm_binding_finding(_) -> ok.
+
 %% v1.2 red-team review: the EK<->AK binding is NOT cryptographically
 %% proven in the v1.2 envelope. The EK chain validates an EK cert;
 %% the quote validates under an AK pubkey; no operation proves
@@ -3785,6 +3857,89 @@ verify_ak_pubkey_extend(E) ->
             catch _:_ -> <<"unknown">>
             end
     end.
+
+%% @doc Wallet <-> TPM end-to-end binding verifier.
+%%
+%% Returns:
+%%   true           all three sub-checks hold:
+%;                  (a) node-message-id == hb_message:id(node-message)
+%;                      (recomputed by the verifier from node-message)
+%;                  (b) wallet-address appears as a value inside
+%;                      node-message (direct or nested)
+%;                  (c) a runtime event on PCR 15 carries the
+%;                      decoded node-message-id as its digest
+%;                      (same check the producer self-verification
+%;                      chk_binding/1 performs)
+%;   false          envelope has all inputs but at least one check
+%;                  failed
+%;   <<"unknown">>  envelope missing wallet-address, node-message,
+%;                  node-message-id, or runtime-event-log
+verify_wallet_tpm_binding(E) ->
+    Wallet = hb_maps:get(<<"wallet-address">>, E, null, #{}),
+    Nm     = hb_maps:get(<<"node-message">>, E, undefined, #{}),
+    Id     = hb_maps:get(<<"node-message-id">>, E, null, #{}),
+    Log    = hb_maps:get(<<"runtime-event-log">>, E, [], #{}),
+    case {Wallet, Nm, Id, Log} of
+        {null, _, _, _}       -> <<"unknown">>;
+        {_, undefined, _, _}  -> <<"unknown">>;
+        {_, _, null, _}       -> <<"unknown">>;
+        {_, _, _, []}         -> <<"unknown">>;
+        {W, NodeMap, ClaimedId, Events}
+            when is_map(NodeMap), is_binary(W), is_binary(ClaimedId) ->
+            %% (a) Recompute hb_message:id(node-message) and
+            %; compare to the declared node-message-id.
+            IdMatchesHash =
+                try
+                    %% hb_message:id returns the native (raw) id.
+                    %; Envelope carries the human_id form.
+                    Native = hb_message:id(NodeMap, all, #{}),
+                    Human = hb_util:human_id(Native),
+                    Human =:= ClaimedId
+                        orelse Native =:= ClaimedId
+                        orelse hb_util:encode(Native) =:= ClaimedId
+                catch _:_ -> false
+                end,
+            %% (b) Wallet must appear somewhere in node-message.
+            WalletInNm = map_contains_value(NodeMap, W),
+            %% (c) Runtime log has PCR-15 event whose digest
+            %; matches decoded node-message-id.
+            IdInLog =
+                try
+                    IdRaw = hb_util:decode(ClaimedId),
+                    byte_size(IdRaw) =:= 32
+                        andalso lists:any(
+                          fun(Ev) ->
+                              is_map(Ev)
+                                  andalso ev_pcr(Ev) =:= 15
+                                  andalso
+                                  (try
+                                      hb_util:decode(
+                                        maps:get(<<"digest">>, Ev, <<>>))
+                                        =:= IdRaw
+                                   catch _:_ -> false
+                                   end)
+                          end, Events)
+                catch _:_ -> false
+                end,
+            case {IdMatchesHash, WalletInNm, IdInLog} of
+                {true, true, true} -> true;
+                _                  -> false
+            end;
+        _ -> <<"unknown">>
+    end.
+
+%% Recursive search for a value in a HyperBEAM-style map. Returns
+%% true iff `Target' appears as a leaf binary, list element, or
+%% nested-map value anywhere under Root.
+map_contains_value(M, Target) when is_map(M) ->
+    lists:any(fun(V) -> contains_v(V, Target) end, maps:values(M));
+map_contains_value(_, _) -> false.
+
+contains_v(V, V) -> true;
+contains_v(V, Target) when is_map(V) -> map_contains_value(V, Target);
+contains_v(V, Target) when is_list(V) ->
+    lists:any(fun(X) -> contains_v(X, Target) end, V);
+contains_v(_, _) -> false.
 
 %% @doc Paper P5-ext (AO-Core hashpath continuity) verifier.
 %%
