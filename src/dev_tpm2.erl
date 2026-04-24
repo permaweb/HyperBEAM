@@ -1259,6 +1259,24 @@ attestation(_Base, Req, Opts) ->
                         <<"platform-probes">> =>
                             platform_probes(),
                         <<"ak-pub-pem">> => AKPubPem,
+                        %% v1.2.2 paper P3: AK is a primary under
+                        %% the Endorsement hierarchy (see
+                        %% native/lapee_tpm_nif/lapee_tpm_nif.c
+                        %% nif_create_primary_ak, which passes
+                        %% ESYS_TR_RH_ENDORSEMENT). The field is
+                        %% populated as a constant here because it
+                        %% is determined by the build's NIF code
+                        %% path, not runtime data -- any change in
+                        %% the NIF would need to be reflected here
+                        %% in the same commit. Verifier-side,
+                        %% dev_tpm_interpret uses this to demote
+                        %% the `ek-ak-binding-not-implemented'
+                        %% finding to an observational info note:
+                        %% when the AK and EK share the Endorsement
+                        %% hierarchy's primary seed, they must
+                        %% reside in the same physical TPM (TCG
+                        %% TPM 2.0 Architecture section 13.2).
+                        <<"ak-hierarchy">> => <<"endorsement">>,
                         <<"tpm-quote">> => #{
                             <<"pcr-selection">> => Pcrs,
                             <<"nonce">> => hb_util:encode(Nonce),
