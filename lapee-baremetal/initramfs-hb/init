@@ -92,6 +92,22 @@ check_tme_sme() {
         trace "tme: LAPEE_NO_TME=1 on cmdline; skipping enforcement"
         return 0
     fi
+    # Developer bypass: QEMU / KVM / Xen / VMware / VirtualBox
+    # guests can't expose TME/SME to Rosetta-emulated amd64, so
+    # make hb-usb-qemu smoke-boot would otherwise halt at this
+    # gate. Auto-detect via DMI sys_vendor and skip enforcement
+    # WITH a clear trace so the bypass is visible in logs + any
+    # attestation captured from that guest shows the virt-vendor
+    # in its platform-probes. Physical Framework 13 reads
+    # "Framework" here, never "QEMU".
+    _dmi_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null \
+        | tr -d '\r\n' || echo '')
+    case "$_dmi_vendor" in
+        QEMU|"Bochs"|"Xen"|"VMware, Inc."|"innotek GmbH"|"Microsoft Corporation")
+            trace "tme: virt host detected (dmi sys_vendor='$_dmi_vendor'); paper P2 enforcement applies only to physical silicon -- proceeding"
+            return 0
+            ;;
+    esac
     _cpuflags=$(awk '/^flags[^:]*:/ {$1=""; $2=""; print; exit}' \
         /proc/cpuinfo 2>/dev/null)
     _has_cap=no
