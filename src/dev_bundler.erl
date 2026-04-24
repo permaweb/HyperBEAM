@@ -133,7 +133,7 @@ cache_item(Item, Opts) ->
 
 %% @doc Look up the registration name for the bundler server. Derived from
 %% the HTTP server's identity (which `hb_http_server:new_server/1' itself
-%% computes from `priv_wallet') so there is exactly one bundler per HTTP
+%% computes from `priv-wallet') so there is exactly one bundler per HTTP
 %% server on a BEAM node. Falls back to the legacy global `?SERVER_NAME'
 %% atom when no wallet is available (kept for production callers that
 %% stopped the server without a configured wallet).
@@ -554,13 +554,13 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 %%% `timer:sleep/1' returns late under same-module scheduler pressure.
 
 bundle_count_test_parallel() ->
-    test_bundle(#{ bundler_max_items => 3 }).
+    test_bundle(#{ <<"bundler-max-items">> => 3 }).
 
 bundle_size_test_parallel() ->
-    test_bundle(#{ bundler_max_size => floor(3.6 * ?DATA_CHUNK_SIZE) }).
+    test_bundle(#{ <<"bundler-max-size">> => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
 bundle_dispatch_delay_test() ->
-    test_bundle(#{ bundler_max_bundle_dispatch_delay => 3000  }).
+    test_bundle(#{ <<"bundler-max-bundle-dispatch-delay">> => 3000 }).
 
 nested_bundle_test_parallel() ->
     Anchor = rand:bytes(32),
@@ -574,10 +574,10 @@ nested_bundle_test_parallel() ->
     ),
     try
         ClientOpts = #{},
-        NodeOpts2 = maps:merge(NodeOpts, #{ bundler_max_items => 3 }),
+        NodeOpts2 = maps:merge(NodeOpts, #{ <<"bundler-max-items">> => 3 }),
         Node = hb_http_server:start_node(NodeOpts2#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         }),
         %% Upload 3 data items across 4 chunks.
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -623,9 +623,9 @@ tx_error_test_parallel() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
@@ -654,9 +654,9 @@ unsigned_dataitem_test_parallel() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            debug_print => false
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"debug-print">> => false
         }),
         Item = #tx{
                 data = <<"testdata">>,
@@ -687,9 +687,9 @@ idle_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            bundler_max_idle_time => 400,
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"bundler-max-idle-time">> => 400,
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         }),
         % Test posting each of the supported signature types
         RSAWallet = ar_wallet:new({rsa, 65537}),
@@ -746,9 +746,9 @@ dispatch_blocking_test() ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 3
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 3
         }),
         %% Upload 4 data items and time each post
         Item1 = new_data_item(1, 10),
@@ -800,9 +800,9 @@ recover_respects_max_items_test_parallel() ->
         % Use max_items of 3, so 10 items should dispatch as 3+3+3+1
         MaxItems = 3,
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => MaxItems
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => MaxItems
         },
         % Create and cache 10 unbundled items
         NumItems = 10,
@@ -838,11 +838,11 @@ complete_task_sequence_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 2,
-            retry_base_delay_ms => 100,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 2,
+            <<"retry-base-delay-ms">> => 100,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -886,8 +886,8 @@ recover_bundles_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         },
         hb_http_server:start_node(Opts),
         Item1 = new_structured_data_item(1, 10, Opts),
@@ -946,11 +946,11 @@ post_tx_price_failure_retry_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 50,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 50,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -982,11 +982,11 @@ post_tx_anchor_failure_retry_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 50,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 50,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1020,11 +1020,11 @@ post_tx_post_failure_retry_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 50,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 50,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1058,11 +1058,11 @@ post_proof_failure_retry_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 50,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 50,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1093,10 +1093,10 @@ rapid_dispatch_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            bundler_workers => 3
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"bundler-workers">> => 3
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1131,11 +1131,11 @@ one_bundle_fails_others_continue_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 100,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 100,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1165,10 +1165,10 @@ parallel_task_execution_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            bundler_workers => 5
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"bundler-workers">> => 5
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1210,12 +1210,12 @@ exponential_backoff_timing_test() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 100,
-            retry_max_delay_ms => 500,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 100,
+            <<"retry-max-delay-ms">> => 500,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1259,11 +1259,11 @@ independent_task_retry_counts_test_parallel() ->
     }),
     try
         Opts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1,
-            retry_base_delay_ms => 100,
-            retry_jitter => 0
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"retry-base-delay-ms">> => 100,
+            <<"retry-jitter">> => 0
         },
         hb_http_server:start_node(Opts),
         ensure_server(Opts),
@@ -1291,11 +1291,11 @@ invalid_item_test_parallel() ->
     try
         ClientOpts = #{},
         TestOpts = NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         },
         Node = hb_http_server:start_node(TestOpts#{
-            debug_print => false
+            <<"debug-print">> => false
         }),
         % Create a valid signed item
         Item = ar_bundles:sign_item(
@@ -1325,10 +1325,10 @@ invalid_item_test_parallel() ->
     end.
 
 cache_write_failure_test_parallel() ->
-    GoodOpts = #{store => hb_test_utils:test_store()},
+    GoodOpts = #{<<"store">> => hb_test_utils:test_store()},
     BadOpts = #{
-        store => undefined,
-        debug_print => false
+        <<"store">> => undefined,
+        <<"debug-print">> => false
     }, % Invalid store will cause cache write to fail
     try
         % Start bundler with a valid store so recovery/init paths succeed.
@@ -1373,8 +1373,8 @@ test_bundle(Opts) ->
         ClientOpts = #{},
         NodeOpts2 = maps:merge(NodeOpts, Opts),
         Node = hb_http_server:start_node(NodeOpts2#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         }),
         %% Upload 3 data items across 4 chunks.
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
@@ -1402,9 +1402,9 @@ test_api_error(Responses) ->
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store(),
-            bundler_max_items => 1
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1
         }),
         Item1 = new_data_item(1, floor(2.5 * ?DATA_CHUNK_SIZE)),
         ?assertMatch({ok, _}, post_data_item(Node, Item1, ClientOpts)),
@@ -1556,14 +1556,14 @@ start_mock_gateway(Responses) ->
     ],
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     NodeOpts = #{
-        gateway => MockServer,
-        routes => [
+        <<"gateway">> => MockServer,
+        <<"routes">> => [
             #{
                 <<"template">> => <<"/arweave">>,
                 <<"node">> => #{
                     <<"match">> => <<"^/arweave">>,
                     <<"with">> => MockServer,
-                    <<"opts">> => #{http_client => httpc, protocol => http2}
+                    <<"opts">> => #{<<"http-client">> => httpc, <<"protocol">> => http2}
                 }
             }
         ]

@@ -240,8 +240,8 @@ result_to_message(Item, Opts) ->
 result_to_message(ExpectedID, Item, Opts) ->
     GQLOpts =
         Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-cache">>, <<"no-store">>]
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
         },
     % We have the headers, so we can get the data.
     Data =

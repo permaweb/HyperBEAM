@@ -214,7 +214,7 @@ load_items(BundleID, Opts, OnLoaded, OnFailed) ->
 %%% Tests
 
 basic_cache_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item = new_data_item(1, 10, Opts),
     ok = write_item(Item, Opts),
     ItemID = item_id(Item, Opts),
@@ -231,7 +231,7 @@ basic_cache_test() ->
     ok.
 
 load_unbundled_items_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item1 = new_data_item(1, <<"data1">>, Opts),
     Item2 = new_data_item(2, <<"data2">>, Opts),
     Item3 = new_data_item(3, <<"data3">>, Opts),
@@ -254,7 +254,7 @@ load_unbundled_items_test() ->
     ok.
 
 recovered_items_relink_to_original_bundle_path_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item = new_data_item(1, <<"data1">>, Opts),
     ok = write_item(Item, Opts),
     [RecoveredItem] = load_items(<<>>, Opts),
@@ -265,7 +265,7 @@ recovered_items_relink_to_original_bundle_path_test() ->
     ok.
 
 load_bundle_states_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     TX1 = new_tx(1, Opts),
     TX2 = new_tx(2, Opts),
     TX3 = new_tx(3, Opts),    
@@ -283,7 +283,7 @@ load_bundle_states_test() ->
     ok.
 
 load_bundled_items_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item1 = new_data_item(1, <<"data1">>, Opts),
     Item2 = new_data_item(2, <<"data2">>, Opts),
     Item3 = new_data_item(3, <<"data3">>, Opts),
@@ -369,8 +369,8 @@ bundler_optimistic_cache_test() ->
     L4Item2ID  = hb_util:encode(ar_bundles:id(L4Item2,  signed)),
     % Start a real node with LMDB and POST the serialized bundle wrapper over HTTP.
     Node = hb_http_server:start_node(#{
-        priv_wallet => Wallet,
-        store => hb_test_utils:test_store(hb_store_lmdb)
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => hb_test_utils:test_store(hb_store_lmdb)
     }),
     try
         StructuredBundle = hb_message:convert(

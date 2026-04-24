@@ -290,7 +290,7 @@ do_write_message(List, Store, Opts) when is_list(List) ->
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     ?event(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
-    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
     AllIDs = calculate_all_ids(Msg, Opts),
     AltIDs = AllIDs -- [UncommittedID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
@@ -393,7 +393,7 @@ calculate_all_ids(Msg, Opts) ->
         ),
     CommIDs = hb_maps:keys(Commitments, Opts),
     ?event({calculating_ids, {msg, Msg}, {commitments, Commitments}, {comm_ids, CommIDs}}),
-    All = hb_message:id(Msg, all, Opts#{ linkify_mode => discard }),
+    All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
     case lists:member(All, CommIDs) of
         true -> CommIDs;
         false -> [All | CommIDs]
@@ -437,7 +437,7 @@ do_read_commitment(Path, Opts) ->
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
     LocalOpts = hb_store:scope(Opts, local),
-    UncommittedID = hb_message:id(Msg, none, Opts#{ linkify_mode => discard }),
+    UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
     CommitmentsPath = hb_path:to_binary([UncommittedID, <<"commitments">>]),
@@ -459,7 +459,7 @@ read_all_commitments(Msg, Opts) ->
                                         CommitmentID,
                                         ensure_all_loaded(
                                             Commitment,
-                                            Opts#{ commitment => true }
+                                            Opts#{ <<"commitment">> => true }
                                         )
                                     }
                                 };
@@ -555,7 +555,7 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                             LoadedCommitment = 
                                 ensure_all_loaded(
                                     Commitment,
-                                    Opts#{ commitment => true }
+                                    Opts#{ <<"commitment">> => true }
                                 ),
                             ?event(read_commitment,
                                 {found_target_commitment,
@@ -612,7 +612,7 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                                                 #{
                                                     <<"lazy">> => true
                                                 }
-                                        end)#{ store => Store }
+                                        end)#{ <<"store">> => Store }
                                     }
                                 }
                             };
@@ -784,14 +784,14 @@ test_unsigned(Data) ->
     }.
 
 %% Helper function to create signed #tx items.
-test_signed(Data) -> test_signed(Data, #{ priv_wallet => ar_wallet:new() }).
+test_signed(Data) -> test_signed(Data, #{ <<"priv-wallet">> => ar_wallet:new() }).
 test_signed(Data, Opts) ->
     hb_message:commit(test_unsigned(Data), Opts).
 
 test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,
     ?event(debug_store_test, {store, Store}),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     {ok, ID} = write(Bin, Opts),
     {ok, RetrievedBin} = read(ID, Opts),
     ?assertEqual(Bin, RetrievedBin).
@@ -800,7 +800,7 @@ test_store_unsigned_empty_message(Store) ->
     ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Item = #{},
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
     ?event(
@@ -827,7 +827,7 @@ test_store_unsigned_nested_empty_message(Store) ->
                 <<"layer3c">> => #{}
             }
         },
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     {ok, Path} = write(Item, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Item, RetrievedItem, strict, Opts)).
@@ -836,7 +836,7 @@ test_store_unsigned_nested_empty_message(Store) ->
 test_store_simple_unsigned_message(Store) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
     ?event(debug_store_test, {store, Store}),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
     %% Read the item back
@@ -848,9 +848,9 @@ test_store_simple_unsigned_message(Store) ->
 test_store_ans104_message(Store) ->
     ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     Item = #{ <<"type">> => <<"ANS104">>, <<"content">> => <<"Hello, world!">> },
-    Committed = hb_message:commit(Item, #{ priv_wallet => hb:wallet() }),
+    Committed = hb_message:commit(Item, #{ <<"priv-wallet">> => hb:wallet() }),
     {ok, _Path} = write(Committed, Opts),
     CommittedID = hb_util:human_id(hb_message:id(Committed, all)),
     UncommittedID = hb_util:human_id(hb_message:id(Committed, none)),
@@ -864,11 +864,11 @@ test_store_ans104_message(Store) ->
 %% @doc Test storing and retrieving a simple unsigned item
 test_store_simple_signed_message(Store) ->
     ?event(debug_store_test, {store, Store}),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Item = test_signed(<<"Simple signed data item">>, #{ priv_wallet => Wallet }),
+    Item = test_signed(<<"Simple signed data item">>, #{ <<"priv-wallet">> => Wallet }),
     ?event({writing_test_message, Item}),
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
@@ -898,7 +898,7 @@ test_deeply_nested_complex_message(Store) ->
     ?event(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
-    Opts = #{ store => Store, priv_wallet => Wallet },
+    Opts = #{ <<"store">> => Store, <<"priv-wallet">> => Wallet },
     %% Create nested data
     Level3SignedSubmessage = test_signed([1,2,3], Opts),
     Outer =
@@ -964,7 +964,7 @@ test_deeply_nested_complex_message(Store) ->
 
 test_message_with_list(Store) ->
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     Msg = test_unsigned([<<"a">>, <<"b">>, <<"c">>]),
     ?event({writing_message, Msg}),
     {ok, Path} = write(Msg, Opts),
@@ -975,7 +975,7 @@ test_match_message(Store) when map_get(<<"store-module">>, Store) =/= hb_store_l
     skip;
 test_match_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     % Write two messages that match the template, and a third that does not.
     {ok, ID1} = hb_cache:write(#{ <<"x">> => <<"1">> }, Opts),
     {ok, ID2} = hb_cache:write(#{ <<"y">> => <<"2">>, <<"z">> => <<"3">> }, Opts),
@@ -1002,7 +1002,7 @@ test_match_linked_message(Store) when map_get(<<"store-module">>, Store) =/= hb_
     skip;
 test_match_linked_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     Msg = #{ <<"a">> => Inner = #{ <<"b">> => <<"c">>, <<"d">> => <<"e">> } },
     {ok, _ID} = write(Msg, Opts),
     {ok, [MatchedID]} = match(#{ <<"b">> => <<"c">> }, Opts),
@@ -1028,7 +1028,7 @@ test_match_typed_message(Store) when map_get(<<"store-module">>, Store) =/= hb_s
     skip;
 test_match_typed_message(Store) ->
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     % Add some messages that should not match the template, as well as the main
     % message that should match the template.
     write(#{ <<"atom-value">> => atom, <<"wrong">> => <<"wrong">> }, Opts),
@@ -1073,7 +1073,7 @@ cache_suite_test_() ->
 %% be written, it would cause an infinite loop.
 test_device_map_cannot_be_written_test() ->
     try
-        Opts = #{ store => StoreOpts =
+        Opts = #{ <<"store">> => StoreOpts =
             [#{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> }] },
         hb_store:reset(StoreOpts),
         Danger = #{ <<"device">> => #{}},

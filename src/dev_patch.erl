@@ -240,7 +240,7 @@ patch_to_submessage_test() ->
                             <<"banana">> => 200
                         }
                     },
-                    #{ priv_wallet => hb:wallet() }
+                    #{ <<"priv-wallet">> => hb:wallet() }
                 )
             }
         },

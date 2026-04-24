@@ -103,7 +103,7 @@ opts(Opts) ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
                     Opts#{
-                        routes => [
+                        <<"routes">> => [
                             #{
                                 % Routes for GraphQL requests to use the remote
                                 % server's GraphQL API.
@@ -118,7 +118,7 @@ opts(Opts) ->
                     };
                 <<"ao">> ->
                     Opts#{
-                        routes => [
+                        <<"routes">> => [
                             #{
                                 <<"template">> => <<"/graphql">>,
                                 <<"nodes">> =>
@@ -166,7 +166,7 @@ graphql_from_cache_test() ->
     hb_http_server:start_node(#{}),
     Opts =
         #{
-            store =>
+            <<"store">> =>
                 [
                     #{
                         <<"store-module">> => hb_store_gateway
@@ -195,14 +195,14 @@ manual_local_cache_test() ->
     {ok, FromRemote} =
         hb_cache:read(
             <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            #{ store => [Gateway] }
+            #{ <<"store">> => [Gateway] }
         ),
     ?event({writing_recvd_to_local, FromRemote}),
-    {ok, _} = hb_cache:write(FromRemote, #{ store => [Local] }),
+    {ok, _} = hb_cache:write(FromRemote, #{ <<"store">> => [Local] }),
     {ok, Read} =
         hb_cache:read(
             <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            #{ store => [Local] }
+            #{ <<"store">> => [Local] }
         ),
     ?event({read_from_local, Read}),
     ?assert(hb_message:match(Read, FromRemote)).
@@ -216,7 +216,7 @@ cache_read_message_test() ->
     },
     hb_store:reset(Local),
     WriteOpts = #{
-        store =>
+        <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local]
@@ -231,7 +231,7 @@ cache_read_message_test() ->
     {ok, Read} =
         hb_cache:read(
             <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-            #{ store => [Local] }
+            #{ <<"store">> => [Local] }
         ),
     ?assert(hb_message:match(Read, Written)).
 
@@ -251,7 +251,7 @@ avoid_double_read_test() ->
     },
     hb_store:reset(Local),
     WriteOpts = #{
-        store =>
+        <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_gateway,
                     <<"local-store">> => [Local],
@@ -260,7 +260,7 @@ avoid_double_read_test() ->
             ]
     },
     {ok, Written} = hb_cache:read(ID, WriteOpts),
-    {ok, Read} = hb_cache:read(ID, #{ store => [Local] }),
+    {ok, Read} = hb_cache:read(ID, #{ <<"store">> => [Local] }),
     try
         ?assert(hb_message:match(Read, Written)),
         %% Check number of requests make to raw
@@ -278,7 +278,7 @@ custom_raw_routes(MockServer) ->
                 #{
                     <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                     <<"opts">> => #{
-                        <<"http_client">> => httpc,
+                        <<"http-client">> => httpc,
                         <<"protocol">> => http2
                     }
                 }
@@ -290,7 +290,7 @@ custom_raw_routes(MockServer) ->
                 #{
                     <<"prefix">> => MockServer,
                     <<"opts">> => #{
-                        <<"http_client">> => gun,
+                        <<"http-client">> => gun,
                         <<"protocol">> => http2
                     }
                 }
@@ -309,7 +309,7 @@ specific_route_test() ->
     %% Define configuration, we use a valid gateway to obtain a valid response
     %% and then mock the raw endpoint to our mockserver.
     Opts = #{
-        store =>
+        <<"store">> =>
             [
                 #{ <<"store-module">> => hb_store_gateway, 
                    <<"routes">> => [
@@ -319,7 +319,7 @@ specific_route_test() ->
                             #{
                                 <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
                                 <<"opts">> => #{
-                                    <<"http_client">> => httpc,
+                                    <<"http-client">> => httpc,
                                     <<"protocol">> => http2
                                 }
                             }
@@ -333,7 +333,7 @@ specific_route_test() ->
                             #{
                                 <<"prefix">> => <<LocalNode/binary, "~message@1.0/set&body=3#">>,
                                 <<"opts">> => #{
-                                    <<"http_client">> => gun,
+                                    <<"http-client">> => gun,
                                     <<"protocol">> => http2 
                                 }
                             }
@@ -351,8 +351,8 @@ specific_route_test() ->
 external_http_access_test() ->
     Node = hb_http_server:start_node(
         #{
-            cache_control => <<"cache">>,
-            store =>
+            <<"cache-control">> => <<"cache">>,
+            <<"store">> =>
                 [
                     #{
                         <<"store-module">> => hb_store_fs,
@@ -382,7 +382,7 @@ external_http_access_test() ->
 %         hb_store:reset(EmptyStore),
 %         hb_http_server:start_node(#{}),
 %         Opts = #{
-%             store =>
+%             <<"store">> =>
 %                 [
 %                     #{
 %                         <<"store-module">> => hb_store_gateway,
@@ -390,7 +390,7 @@ external_http_access_test() ->
 %                     },
 %                     EmptyStore
 %                 ],
-%             cache_control => <<"cache">>
+%             <<"cache-control">> => <<"cache">>
 %         },
 %         ?assertMatch(
 %             {ok, #{ <<"type">> := <<"Process">> }},
@@ -416,8 +416,8 @@ external_http_access_test() ->
 %% @doc Test to verify store opts is being set for Data-Protocol ao
 store_opts_test() ->
     Opts = #{
-        cache_control => <<"cache">>,
-        store =>
+        <<"cache-control">> => <<"cache">>,
+        <<"store">> =>
             [
                 #{
                     <<"store-module">> => hb_store_fs,
@@ -452,7 +452,7 @@ verifiability_test() ->
         hb_cache:read(
             <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
             #{
-                store =>
+                <<"store">> =>
                     [
                         #{
                             <<"store-module">> => hb_store_gateway
@@ -488,7 +488,7 @@ failure_to_process_message_test_disabled() ->
         hb_cache:read(
             <<"j0_mJMXG2YO4oRcOtjYsNoUJbN2TaKLo4nTtbhKqnEU">>,
             #{
-                store =>
+                <<"store">> =>
                     [
                         #{
                             <<"store-module">> => hb_store_gateway
@@ -503,8 +503,8 @@ failure_to_process_message_test_disabled() ->
 remote_hyperbeam_node_ans104_test() ->
     ServerOpts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => hb_test_utils:test_store()
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         },
     Server = hb_http_server:start_node(ServerOpts),
     Msg =
@@ -521,7 +521,7 @@ remote_hyperbeam_node_ans104_test() ->
     LocalStore = hb_test_utils:test_store(),
     ClientOpts =
         #{
-            store =>
+            <<"store">> =>
                 [
                     #{
                         <<"store-module">> => hb_store_gateway,

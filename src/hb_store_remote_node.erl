@@ -92,7 +92,7 @@ maybe_cache(StoreOpts, Data, Links) ->
             false ->
                 skipped;
             Store ->
-                case hb_cache:write(Data, #{ store => Store }) of
+                case hb_cache:write(Data, #{ <<"store">> => Store }) of
                     {ok, RootPath} ->
                         % Remove the base path from the links.
                         LinksWithoutRootPath =
@@ -137,7 +137,7 @@ read_local_cache(StoreOpts, ID) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};
-        Store -> hb_cache:read(ID, #{ store => Store })
+        Store -> hb_cache:read(ID, #{ <<"store">> => Store })
     end.
 
 %% @doc Write a key to the remote node.
@@ -267,19 +267,19 @@ read_test() ->
     {ok, ID} =
         hb_cache:write(
 			M, 
-			#{ store => LocalStore }
+			#{ <<"store">> => LocalStore }
 		),
     ?event({wrote, ID}),
     Node =
         hb_http_server:start_node(
             #{
-                store => LocalStore
+                <<"store">> => LocalStore
             }
         ),
     RemoteStore = [
 		#{ <<"store-module">> => hb_store_remote_node, <<"node">> => Node }
 	],
-    {ok, RetrievedMsg} = hb_cache:read(ID, #{ store => RemoteStore }),
+    {ok, RetrievedMsg} = hb_cache:read(ID, #{ <<"store">> => RemoteStore }),
     ?assertMatch(#{ <<"test-key">> := Rand }, hb_cache:ensure_all_loaded(RetrievedMsg)).
 
 read_only_ids_test() ->
@@ -288,12 +288,12 @@ read_only_ids_test() ->
     {ok, ID} =
         hb_cache:write(
 			<<"message">>, 
-			#{ store => LocalStore }
+			#{ <<"store">> => LocalStore }
 		),
     Node =
         hb_http_server:start_node(
             #{
-                store => LocalStore
+                <<"store">> => LocalStore
             }
         ),
     RemoteStore = [
@@ -301,4 +301,4 @@ read_only_ids_test() ->
            <<"node">> => Node,
            <<"only-ids">> => true }
 	],
-    ?assertEqual({error, not_found}, hb_cache:read(ID, #{ store => RemoteStore })).
+    ?assertEqual({error, not_found}, hb_cache:read(ID, #{ <<"store">> => RemoteStore })).

@@ -210,8 +210,8 @@ is_explicit_lookup(Base, #{ <<"path">> := Key }, Opts) ->
 %% map with `store' and `lookup' keys, each of which is a boolean.
 %% 
 %% For example, if the last source has a `no_store', the first expresses no
-%% preference, but the Opts has `cache_control => [always]', then the result 
-%% will contain a `store => true' entry.
+%% preference, but the Opts has `<<"cache-control">> => [always]', then the result 
+%% will contain a `<<"store">> => true' entry.
 derive_cache_settings(SourceList, Opts) ->
     lists:foldr(
         fun(Source, Acc) ->
@@ -297,7 +297,7 @@ specifiers_to_cache_settings(RawCCList) ->
 
 %% Helpers to create a message with Cache-Control header
 msg_with_cc(CC) -> #{ <<"cache-control">> => CC }.
-opts_with_cc(CC) -> #{ cache_control => CC }.
+opts_with_cc(CC) -> #{ <<"cache-control">> => CC }.
 
 %% Test precedence order (Opts > Res > Req)
 opts_override_message_settings_test() ->
@@ -338,7 +338,7 @@ only_if_cached_directive_test() ->
 
 %% Test hashpath settings
 hashpath_ignore_prevents_storage_test() ->
-    Opts = (opts_with_cc([]))#{hashpath => ignore},
+    Opts = (opts_with_cc([]))#{<<"hashpath">> => ignore},
     Result = derive_cache_settings([], Opts),
     ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
 
@@ -392,10 +392,10 @@ cache_binary_result_test() ->
     CachedMsg = <<"test-message">>,
     Base = #{ <<"test-key">> => CachedMsg },
     Req = <<"test-key">>,
-    {ok, Res} = hb_ao:resolve(Base, Req, #{ cache_control => [<<"always">>] }),
+    {ok, Res} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"always">>] }),
     ?assertEqual(CachedMsg, Res),
-    {ok, Res2} = hb_ao:resolve(Base, Req, #{ cache_control => [<<"only-if-cached">>] }),
-    {ok, Res3} = hb_ao:resolve(Base, Req, #{ cache_control => [<<"only-if-cached">>] }),
+    {ok, Res2} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),
+    {ok, Res3} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),
     ?assertEqual(CachedMsg, Res2),
     ?assertEqual(Res2, Res3).
 
@@ -413,14 +413,14 @@ cache_message_result_test() ->
             Base,
             Req,
             #{
-                cache_control => [<<"always">>]
+                <<"cache-control">> => [<<"always">>]
             }
         ),
     ?event({res1, Res}),
     ?event(reading_from_cache),
-    {ok, Res2} = hb_ao:resolve(Base, Req, #{ cache_control => [<<"only-if-cached">>] }),
+    {ok, Res2} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),
     ?event(reading_from_cache_again),
-    {ok, Res3} = hb_ao:resolve(Base, Req, #{ cache_control => [<<"only-if-cached">>] }),
+    {ok, Res3} = hb_ao:resolve(Base, Req, #{ <<"cache-control">> => [<<"only-if-cached">>] }),
     ?event({res2, Res2}),
     ?event({res3, Res3}),
     ?assertEqual(Res2, Res3).

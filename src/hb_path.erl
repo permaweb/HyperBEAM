@@ -244,7 +244,7 @@ from_message(request, _, _Opts) -> undefined.
 %% @doc Convert a term into an executable path. Supports binaries, lists, and
 %% atoms. Notably, it does not support strings as lists of characters.
 term_to_path_parts(Path) ->
-    term_to_path_parts(Path, #{ error_strategy => throw }).
+    term_to_path_parts(Path, #{ <<"error-strategy">> => throw }).
 term_to_path_parts(Link, Opts) when ?IS_LINK(Link) ->
     term_to_path_parts(hb_cache:ensure_loaded(Link, Opts), Opts);
 term_to_path_parts([], _Opts) -> undefined;

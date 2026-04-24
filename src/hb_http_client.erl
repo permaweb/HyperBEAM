@@ -265,21 +265,21 @@ init_hackney_pool() ->
 %% node message key. We invoke the given message with the `body' set to a signed
 %% version of the details. This allows node operators to configure their machine
 %% to record duration statistics into customized data stores, computations, or
-%% processes etc. Additionally, we include the `http_reference' value, if set in
+%% processes etc. Additionally, we include the `http-reference' value, if set in
 %% the given `opts'.
 %% 
 %% We use `hb_ao:get' rather than `hb_opts:get', as settings configured
 %% by the `~router@1.0' route `opts' key are unable to generate atoms.
 maybe_invoke_monitor(Details, Opts) ->
-    case hb_ao:get(<<"http_monitor">>, Opts, Opts) of
+    case hb_ao:get(<<"http-monitor">>, Opts, Opts) of
         not_found -> ok;
         Monitor ->
             % We have a monitor message. Place the `details' into the body, set
-            % the `method' to "POST", add the `http_reference' (if applicable)
+            % the `method' to "POST", add the `http-reference' (if applicable)
             % and sign the request. We use the node message's wallet as the
             % source of the key.
             MaybeWithReference =
-                case hb_ao:get(<<"http_reference">>, Opts, Opts) of
+                case hb_ao:get(<<"http-reference">>, Opts, Opts) of
                     not_found -> Details;
                     Ref -> Details#{ <<"reference">> => Ref }
                 end,
@@ -617,7 +617,7 @@ init_prometheus() ->
 
 %% @doc Record the duration of the request in an async process. We write the 
 %% data to prometheus if the application is enabled, as well as invoking the
-%% `http_monitor' if appropriate.
+%% `http-monitor' if appropriate.
 record_duration(Details, Opts) ->
     spawn(
         fun() ->

@@ -9,7 +9,7 @@
     <<"anchor">>, <<"format">>, <<"quantity">>, <<"reward">>, <<"target">>,
     <<"data_root">>, <<"data_size">> ]).
 
-%% @doc Sign a message using the `priv_wallet' key in the options. Supports both
+%% @doc Sign a message using the `priv-wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
 %% signed commitments.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
@@ -1380,7 +1380,7 @@ do_signed_tabm_roundtrip(UnsignedTX, UnsignedTABM, Commitment, Device, Req) ->
     % Commit TABM
     Wallet = hb:wallet(),
     SignedTABM = hb_message:commit(
-        UnsignedTABM, #{priv_wallet => Wallet}, Device),
+        UnsignedTABM, #{<<"priv-wallet">> => Wallet}, Device),
     ?event(debug_test, {signed_tabm_roundtrip, {signed_tabm, SignedTABM}}),
     ?assert(hb_message:verify(SignedTABM), signed_tabm_roundtrip),
     {ok, _, SignedCommitment} = hb_message:commitment(
@@ -1427,7 +1427,7 @@ bundle_commitment_test() ->
     ok.
 
 test_bundle_commitment(Commit, Encode, Decode) ->
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Structured = #{ <<"list">> => [1, 2, 3] },
     ToBool = fun(unbundled) -> false; (bundled) -> true end,
     Label = lists:flatten(io_lib:format("~p -> ~p -> ~p",

@@ -144,7 +144,7 @@ recover_bundle(ServerPID, TXID, Status, Opts) ->
 %%%===================================================================
 
 recover_unbundled_items_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item1 = new_data_item(1, 10, Opts),
     Item2 = new_data_item(2, 10, Opts),
     Item3 = new_data_item(3, 10, Opts),
@@ -162,7 +162,7 @@ recover_unbundled_items_test() ->
     ).
 
 recover_bundles_skips_complete_test() ->
-    Opts = #{store => hb_test_utils:test_store()},
+    Opts = #{<<"store">> => hb_test_utils:test_store()},
     Item1 = new_data_item(1, 10, Opts),
     Item2 = new_data_item(2, 10, Opts),
     Item3 = new_data_item(3, 10, Opts),
@@ -194,8 +194,8 @@ recover_bundles_skips_complete_test() ->
 
 recover_bundles_failed_bundle_items_continue_test() ->
     Opts = #{
-        store => hb_test_utils:test_store(),
-        debug_print => false
+        <<"store">> => hb_test_utils:test_store(),
+        <<"debug-print">> => false
     },
     ValidItem = new_data_item(1, 10, Opts),
     ok = dev_bundler_cache:write_item(ValidItem, Opts),

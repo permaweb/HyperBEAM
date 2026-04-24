@@ -208,10 +208,10 @@ account_balance(
 
 rate_limit_test() ->
     ServerOpts = #{
-        rate_limit_requests => 2,
-        rate_limit_period => 1,
-        rate_limit_max => 2,
-        on =>
+        <<"rate-limit-requests">> => 2,
+        <<"rate-limit-period">> => 1,
+        <<"rate-limit-max">> => 2,
+        <<"on">> =>
             #{
                 <<"request">> =>
                     #{
@@ -237,12 +237,12 @@ rate_limit_test() ->
 
 rate_limit_reset_test() ->
     ServerOpts = #{
-        rate_limit_requests => 2,
-        rate_limit_period => 1,
-        rate_limit_max => 2,
-        rate_limit_min => 0,
-        rate_limit_exempt => [],
-        on =>
+        <<"rate-limit-requests">> => 2,
+        <<"rate-limit-period">> => 1,
+        <<"rate-limit-max">> => 2,
+        <<"rate-limit-min">> => 0,
+        <<"rate-limit-exempt">> => [],
+        <<"on">> =>
             #{
                 <<"request">> =>
                     #{

@@ -143,8 +143,8 @@ generate_test_opts() ->
     }.
 generate_test_opts(Name, Def) ->
     #{
-        node_processes => #{ Name => Def },
-        priv_wallet => ar_wallet:new()
+        <<"node-processes">> => #{ Name => Def },
+        <<"priv-wallet">> => ar_wallet:new()
     }.
 
 lookup_no_spawn_test() ->

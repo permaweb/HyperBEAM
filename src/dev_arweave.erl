@@ -131,7 +131,7 @@ get_tx(Base, Request, Opts) ->
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
                 Opts#{
-                    exclude_data =>
+                    <<"exclude-data">> =>
                         hb_util:bool(
                             find_key(
                                 <<"exclude-data">>,
@@ -202,7 +202,7 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
             StructuredTXHeader,
             <<"application/octet-stream">>,
             Opts#{
-                cache_control =>
+                <<"cache-control">> =>
                     [<<"no-cache">>, <<"no-store">>]
             }
         ),
@@ -325,7 +325,7 @@ parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
     [Start, End] = binary:split(ByteRange, <<"-">>),
     {ok, hb_util:int(Start), hb_util:int(End)};
 parse_range_params(Msg, Opts) ->
-    case hb_ao:resolve(Msg, <<"range">>, Opts#{ hashpath => ignore }) of
+    case hb_ao:resolve(Msg, <<"range">>, Opts#{ <<"hashpath">> => ignore }) of
         {ok, Str} -> parse_range_params(Str, Opts);
         _ -> false
     end.
@@ -839,7 +839,7 @@ pending(Base, Request, Opts) ->
                             (hb_util:bin(Offset))/binary
                         >>,
                         Opts#{
-                            exclude_data =>
+                            <<"exclude-data">> =>
                                 hb_util:bool(
                                     find_key(
                                         <<"exclude-data">>,
@@ -883,7 +883,7 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"method">> => Method
             },
             Opts#{
-                cache_control => [<<"no-cache">>, <<"no-store">>]
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
     to_message(Path, Method, best_response(Res), LogExtra, Opts).
@@ -1051,7 +1051,7 @@ event_request(Path, Method, Status, Extra) ->
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
 bundle_header_garbage_guard_test_parallel() ->
-    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     _Server = hb_http_server:start_node(ServerOpts),
     ProbeOffset = 376836336327208,
     Size = 121798901,
@@ -1064,17 +1064,17 @@ bundle_header_garbage_guard_test_parallel() ->
 post_ans104_message_test_parallel() ->
     Port = rand:uniform(10000) + 10000,
     ServerOpts = #{
-        store => [hb_test_utils:test_store()],
-        port => Port,
-        bundler_ans104 => iolist_to_binary(
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"port">> => Port,
+        <<"bundler-ans104">> => iolist_to_binary(
             io_lib:format("http://localhost:~p/", [Port])
         )
     },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
         #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => hb:wallet()
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"priv-wallet">> => hb:wallet()
         },
     try
         Msg =
@@ -1118,12 +1118,12 @@ post_ans104_message_test_parallel() ->
     end.
 
 post_tx_message_test_parallel() ->
-    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
         #{
-            store => [hb_test_utils:test_store()],
-            priv_wallet => hb:wallet()
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"priv-wallet">> => hb:wallet()
         },
     Msg =
         hb_message:commit(
@@ -1154,7 +1154,7 @@ post_tx_message_test_parallel() ->
     ok.
 
 post_tx_json_failure_test_parallel() ->
-    ServerOpts = #{ store => [hb_test_utils:test_store()] },
+    ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts = post_tx_json_client_opts(),
     Response = post_tx_json_request(Server, ClientOpts),
@@ -1237,9 +1237,8 @@ post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
     end.
 
 post_tx_json_two_node_server_opts(MockNode1, MockNode2) ->
-    #{
-        store => [hb_test_utils:test_store()],
-        routes => [
+    Routes =
+        [
             #{
                 <<"template">> =>
                     #{
@@ -1251,12 +1250,12 @@ post_tx_json_two_node_server_opts(MockNode1, MockNode2) ->
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"with">> => MockNode1,
-                            <<"opts">> => #{ http_client => httpc }
+                            <<"opts">> => #{ <<"http-client">> => httpc }
                         },
                         #{
                             <<"match">> => <<"^/arweave">>,
                             <<"with">> => MockNode2,
-                            <<"opts">> => #{ http_client => httpc }
+                            <<"opts">> => #{ <<"http-client">> => httpc }
                         }
                     ],
                 <<"parallel">> => true,
@@ -1264,13 +1263,16 @@ post_tx_json_two_node_server_opts(MockNode1, MockNode2) ->
                 <<"stop-after">> => false,
                 <<"admissible-status">> => 200
             }
-        ]
+        ],
+    #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"routes">> => Routes
     }.
 
 post_tx_json_client_opts() ->
     #{
-        store => [hb_test_utils:test_store()],
-        priv_wallet => hb:wallet()
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => hb:wallet()
     }.
 
 post_tx_json_payload(ClientOpts) ->
@@ -1305,9 +1307,9 @@ setup_arweave_index_opts(TXIDs) ->
     TestStore = hb_test_utils:test_store(hb_store_volatile, <<"arweave-index">>),
     IndexStore = #{ <<"module">> => hb_store_arweave, <<"index-store">> => [TestStore] },
     Opts = #{
-        store => [TestStore],
-        arweave_index_ids => true,
-        arweave_index_store => IndexStore
+        <<"store">> => [TestStore],
+        <<"arweave-index-ids">> => true,
+        <<"arweave-index-store">> => IndexStore
     },
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
@@ -1332,7 +1334,7 @@ index_test_block(Block, Opts) ->
                 "&to=",
                 BlockBin/binary
             >>,
-            Opts#{ arweave_index_ids => true }
+            Opts#{ <<"arweave-index-ids">> => true }
         ),
     ok.
 

@@ -12,7 +12,7 @@
 %% to the cache.
 opts(Opts) ->
     Opts#{
-        store =>
+        <<"store">> =>
             hb_opts:get(
                 scheduler_store,
                 hb_opts:get(store, no_viable_store, Opts),

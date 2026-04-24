@@ -99,11 +99,11 @@ do_monitor(Group, Last, Opts) ->
     end.
 
 %% @doc Register the process to lead an execution if none is found, otherwise
-%% signal that we should await resolution. When `await_inprogress' is
+%% signal that we should await resolution. When `await-inprogress' is
 %% explicitly disabled (the common case for internal/recursive resolves) we
 %% skip the grouper dispatch entirely: the leader short-circuit below would
 %% discard the computed group name anyway.
-find_or_register(_Base, _Req, #{ await_inprogress := false }) ->
+find_or_register(_Base, _Req, #{ <<"await-inprogress">> := false }) ->
     {leader, ungrouped_exec};
 find_or_register(Base, Req, Opts) ->
     find_or_register(group(Base, Req, Opts), Base, Req, Opts).
@@ -304,9 +304,9 @@ start_worker(GroupName, Msg, Opts) ->
                         GroupName,
                         Msg,
                         hb_maps:merge(Opts, #{
-                            is_worker => true,
-                            spawn_worker => false,
-                            allow_infinite => true
+                            <<"is-worker">> => true,
+                            <<"spawn-worker">> => false,
+                            <<"allow-infinite">> => true
                         },
 						Opts)
                     ]
@@ -473,7 +473,7 @@ deduplicated_execution_test() ->
 persistent_worker_test() ->
     TestTime = 200,
     Base = #{ <<"device">> => test_device() },
-    link(start_worker(Base, #{ static_worker => true })),
+    link(start_worker(Base, #{ <<"static-worker">> => true })),
     receive after 10 -> ok end,
     Req = #{ <<"path">> => <<"slow_key">>, <<"wait">> => TestTime },
     Res = #{ <<"path">> => <<"slow_key">>, <<"wait">> => trunc(TestTime*1.1) },
@@ -503,9 +503,9 @@ spawn_after_execution_test() ->
             Base,
             Req,
             #{
-                spawn_worker => true,
-                static_worker => true,
-                hashpath => ignore
+                <<"spawn-worker">> => true,
+                <<"static-worker">> => true,
+                <<"hashpath">> => ignore
             }
         ),
     receive after 10 -> ok end,

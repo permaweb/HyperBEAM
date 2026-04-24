@@ -42,7 +42,7 @@ post(Node, Message, Opts) ->
             <<"path">>,
             Message,
             <<"/">>,
-            Opts#{ topic => ao_internal }
+            Opts#{ <<"topic">> => ao_internal }
         ),
         Message,
         Opts
@@ -389,7 +389,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
-    % `port_external' can be set in the node message to override the port that
+    % `port-external' can be set in the node message to override the port that
     % the peer node should receive. This allows users to proxy requests to their
     % HB node from another port.
     WithSelfPort =
@@ -676,7 +676,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Message,
                     tabm,
                     <<"structured@1.0">>,
-                    Opts#{ topic => ao_internal }
+                    Opts#{ <<"topic">> => ao_internal }
                 ),
             {ok, EncMessage} =
                 dev_codec_httpsig:to(
@@ -727,7 +727,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                 )
                         },
                         <<"structured@1.0">>,
-                        Opts#{ topic => ao_internal }
+                        Opts#{ <<"topic">> => ao_internal }
                     )
                 )
             };
@@ -760,7 +760,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Message,
                     #{ <<"device">> => Codec, <<"bundle">> => AcceptBundle },
                     <<"structured@1.0">>,
-                    Opts#{ topic => ao_internal }
+                    Opts#{ <<"topic">> => ao_internal }
                 )
             }
     end.
@@ -833,11 +833,11 @@ default_codec(Opts) ->
 codec_to_content_type(Codec, Opts) ->
     FastOpts =
         Opts#{
-            hashpath => ignore,
-            cache_control => [<<"no-cache">>, <<"no-store">>],
-            cache_lookup_hueristics => false,
-            load_remote_devices => false,
-            error_strategy => continue
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+            <<"cache-lookup-hueristics">> => false,
+            <<"load-remote-devices">> => false,
+            <<"error-strategy">> => continue
         },
     case hb_ao:get(<<"content-type">>, #{ <<"device">> => Codec }, FastOpts) of
         not_found -> undefined;
@@ -984,7 +984,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
                     {ok, _} =
                         hb_cache:write(Decoded,
                             Opts#{
-                                store =>
+                                <<"store">> =>
                                     #{
                                         <<"store-module">> => hb_store_fs,
                                         <<"name">> => <<"cache-http">>
@@ -1166,7 +1166,7 @@ record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
 %%% Tests
 
 test_opts() ->
-    #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() }.
+    #{ <<"store">> => hb_test_utils:test_store(), <<"priv-wallet">> => hb:wallet() }.
 
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
@@ -1186,7 +1186,7 @@ simple_ao_resolve_signed_test() ->
 
 nested_ao_resolve_test() ->
     URL = hb_http_server:start_node(),
-    Opts = #{ store => hb_test_utils:test_store(), priv_wallet => hb:wallet() },
+    Opts = #{ <<"store">> => hb_test_utils:test_store(), <<"priv-wallet">> => hb:wallet() },
     {ok, Res} =
         post(
             URL,
@@ -1222,7 +1222,7 @@ wasm_compute_request(ImageFile, Func, Params, ResultPath, Opts) ->
     ).
 
 run_wasm_unsigned_test() ->
-    Node = hb_http_server:start_node(#{ force_signed => false }),
+    Node = hb_http_server:start_node(#{ <<"force-signed">> => false }),
     LocalOpts = test_opts(),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], LocalOpts),
     {ok, Res} = post(Node, Msg, LocalOpts),
@@ -1231,20 +1231,20 @@ run_wasm_unsigned_test() ->
 
 run_wasm_signed_test() ->
     Opts = test_opts(),
-    URL = hb_http_server:start_node(#{force_signed => true}),
+    URL = hb_http_server:start_node(#{ <<"force-signed">> => true }),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, Opts),
     {ok, Res} = post(URL, hb_message:commit(Msg, Opts), Opts),
     ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, Opts)).
 
 get_deep_unsigned_wasm_state_test() ->
-    URL = hb_http_server:start_node(#{force_signed => false}),
+    URL = hb_http_server:start_node(#{ <<"force-signed">> => false }),
     LocalOpts = test_opts(),
     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [3.0], <<"">>, LocalOpts),
     {ok, Res} = post(URL, Msg, LocalOpts),
     ?assertEqual(6.0, hb_ao:get(<<"/output/1">>, Res, LocalOpts)).
 
 get_deep_signed_wasm_state_test() ->
-    URL = hb_http_server:start_node(#{force_signed => true}),
+    URL = hb_http_server:start_node(#{ <<"force-signed">> => true }),
     LocalOpts = test_opts(),
     Msg =
         wasm_compute_request(
@@ -1270,12 +1270,12 @@ ans104_wasm_test() ->
     ServerStore = [hb_test_utils:test_store()],
     ServerOpts =
         #{
-            force_signed => true,
-            store => ServerStore,
-            priv_wallet => ar_wallet:new()
+            <<"force-signed">> => true,
+            <<"store">> => ServerStore,
+            <<"priv-wallet">> => ar_wallet:new()
         },
     ClientStore = [hb_test_utils:test_store()],
-    ClientOpts = #{ store => ClientStore, priv_wallet => hb:wallet() },
+    ClientOpts = #{ <<"store">> => ClientStore, <<"priv-wallet">> => hb:wallet() },
     URL = hb_http_server:start_node(ServerOpts),
     {ok, Bin} = file:read_file(<<"test/test-64.wasm">>),
     Msg =
@@ -1324,7 +1324,7 @@ send_large_signed_request_test() ->
     %                        hb_message:uncommitted(hd(hb_util:ok(
     %                            file:consult(<<"test/large-message.eterm">>)
     %                       ))),
-    %                        #{ priv_wallet => hb:wallet() }
+    %                        #{ <<"priv-wallet">> => hb:wallet() }
     %                    ))
     %                ]
     %            )
@@ -1337,9 +1337,9 @@ send_large_signed_request_test() ->
         {ok, 5},
         post(
             hb_http_server:start_node(),
-            <<"/node-message/short_trace_len">>,
+            <<"/node-message/short-trace-len">>,
             Req,
-            #{ http_client => gun }
+            #{ <<"http-client">> => gun }
         )
     ).
 
@@ -1380,15 +1380,18 @@ parallel_request_test() ->
                 [
                     #{
                         <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> =>
+                            #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                     },
                     #{
                         <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> =>
+                            #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                     },
                     #{
                         <<"prefix">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => gun, protocol => http2 }
+                        <<"opts">> =>
+                            #{ <<"http-client">> => gun, <<"protocol">> => http2 }
                     }
                 ]
             },
@@ -1399,7 +1402,8 @@ parallel_request_test() ->
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => <<"https://arweave.net">>,
-                        <<"opts">> => #{ http_client => httpc, protocol => http2 }
+                        <<"opts">> =>
+                            #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
                     }
             }
     ],
@@ -1414,7 +1418,7 @@ parallel_request_test() ->
          }
     ],
     hb_store:reset(Store),
-    Opts = #{ store => Store },
+    Opts = #{ <<"store">> => Store },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{<<"data">> := <<"1984">>}},

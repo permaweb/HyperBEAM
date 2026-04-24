@@ -568,7 +568,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) when is_binary(Key) ->
     commit_message(Message, ar_wallet:from_json(Key), Opts);
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
     ?event({committing_with_proxy, {message, Message}, {wallet, Key}}),
-    hb_message:commit(Message, Opts#{ priv_wallet => Key }).
+    hb_message:commit(Message, Opts#{ <<"priv-wallet">> => Key }).
 
 %% @doc Export wallets from a request. The request should contain a source of
 %% wallets (cookies, keys, or wallet names), or a specific list/name of a
@@ -678,7 +678,7 @@ store_wallet(in_memory, KeyID, Details, Opts) ->
     UpdatedWallets = CurrentWallets#{ KeyID => Details },
     ?event({wallet_store, {updated_wallets, UpdatedWallets}}),
     % Update the node's options with the new wallets.
-    hb_http_server:set_opts(Opts#{ priv_wallet_hosted => UpdatedWallets }),
+    hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.
@@ -769,7 +769,7 @@ binary_to_addresses(Addresses) when is_list(Addresses) ->
 %% @doc Helper function to test wallet generation and verification flow.
 test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
     Node = hb_http_server:start_node(#{
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     }),
     % Generate wallet with specified parameters
     {ok, GenResponse} = hb_http:get(Node, GeneratePath, #{}),
@@ -826,7 +826,7 @@ non_volatile_persist_generate_and_verify_test() ->
 
 import_wallet_with_key_test() ->
     Node = hb_http_server:start_node(#{
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     }),
     % Create a test wallet key to import (in real scenario from user).
     TestWallet = ar_wallet:new(),
@@ -848,7 +848,7 @@ import_wallet_with_key_test() ->
 
 list_wallets_test() ->
     Node = hb_http_server:start_node(#{
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     }),
     % Generate some wallets first.
     {ok, Base} =
@@ -880,7 +880,7 @@ list_wallets_test() ->
 
 commit_with_cookie_wallet_test() ->
     Node = hb_http_server:start_node(#{
-        priv_wallet => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new()
     }),
     % Generate a client wallet to get a cookie with full wallet key.
     {ok, GenResponse} =
@@ -931,7 +931,7 @@ export_wallet_test() ->
 
 export_non_volatile_wallet_test() ->
         Node = hb_http_server:start_node(#{
-            priv_wallet => ar_wallet:new()
+            <<"priv-wallet">> => ar_wallet:new()
         }),
         % Generate a wallet to export.
         {ok, GenResponse} =
@@ -965,7 +965,7 @@ export_individual_batch_wallets_test() ->
         hb_http_server:start_node(
             AdminOpts =
                 #{
-                    priv_wallet => AdminWallet = ar_wallet:new()
+                    <<"priv-wallet">> => AdminWallet = ar_wallet:new()
                 }
         ),
     % Generate multiple wallets and collect auth cookies.
@@ -1052,7 +1052,7 @@ export_batch_all_wallets_test() ->
         hb_http_server:start_node(
             AdminOpts =
                 #{
-                    priv_wallet => AdminWallet = ar_wallet:new()
+                    <<"priv-wallet">> => AdminWallet = ar_wallet:new()
                 }
         ),
     % Generate multiple wallets and collect auth cookies.
@@ -1106,13 +1106,13 @@ sync_wallets_test() ->
     hb_store:reset(hb_opts:get(priv_store, no_wallet_store, #{})),
     Node =
         hb_http_server:start_node(#{
-            priv_wallet => Node1Wallet = ar_wallet:new()
+            <<"priv-wallet">> => Node1Wallet = ar_wallet:new()
         }),
     % Start a second node to sync from.
     Node2 =
         hb_http_server:start_node(#{
-            priv_wallet => ar_wallet:new(),
-            wallet_admin => hb_util:human_id(Node1Wallet)
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"wallet-admin">> => hb_util:human_id(Node1Wallet)
         }),
     % Generate a wallet on the second node.
     {ok, GenResponse} =
@@ -1140,13 +1140,13 @@ sync_non_volatile_wallets_test() ->
     hb_store:reset(hb_opts:get(priv_store, no_wallet_store, #{})),
     Node =
         hb_http_server:start_node(#{
-            priv_wallet => Node1Wallet = ar_wallet:new()
+            <<"priv-wallet">> => Node1Wallet = ar_wallet:new()
         }),
     % Start a second node to sync from.
     Node2 =
         hb_http_server:start_node(#{
-            priv_wallet => ar_wallet:new(),
-            wallet_admin => hb_util:human_id(Node1Wallet)
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"wallet-admin">> => hb_util:human_id(Node1Wallet)
         }),
     % Generate a wallet on the second node.
     {ok, GenResponse} =

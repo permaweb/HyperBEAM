@@ -12,7 +12,7 @@
 %% to the cache.
 opts(Opts) ->
     Opts#{
-        store =>
+        <<"store">> =>
             hb_opts:get(
                 scheduler_store,
                 hb_opts:get(store, no_viable_store, Opts),
@@ -146,7 +146,7 @@ latest(ProcID, RawOpts) ->
                         {Assignment, <<"base-hashpath">>},
                         {Assignment, <<"hash-chain">>}
                     ],
-                    #{ hashpath => ignore }
+                    #{ <<"hashpath">> => ignore }
                 )
             }
     end.
@@ -158,8 +158,8 @@ volatile_schedule_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"volatile-sched">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"non-volatile-sched">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -184,8 +184,8 @@ concurrent_scheduler_write_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"concurrent-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"concurrent-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -229,8 +229,8 @@ concurrent_read_write_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"race-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"race-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -310,8 +310,8 @@ large_assignment_volume_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"volume-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"volume-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -347,8 +347,8 @@ rapid_restart_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"restart-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"restart-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -389,8 +389,8 @@ mixed_store_reset_operations_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"mixed-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"mixed-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -417,8 +417,8 @@ invalid_assignment_stress_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"invalid-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"invalid-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),
@@ -455,8 +455,8 @@ volatile_store_corruption_test() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"corruption-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"corruption-nonvol">>),
     Opts = #{
-        store => [NonVolStore],
-        scheduler_store => [VolStore]
+        <<"store">> => [NonVolStore],
+        <<"scheduler-store">> => [VolStore]
     },
     hb_store:start(VolStore),
     hb_store:start(NonVolStore),

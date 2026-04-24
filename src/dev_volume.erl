@@ -51,15 +51,15 @@ info(_Base, _Req, _Opts) ->
             <<"mount">> => #{
                 <<"description">> => <<"Mount an encrypted volume">>,
                 <<"required_node_opts">> => #{
-                    <<"priv_volume_key">> => <<"The encryption key">>,
-                    <<"volume_device">> => <<"The base device path">>,
-                    <<"volume_partition">> => <<"The partition path">>,
-                    <<"volume_partition_type">> => <<"The partition type">>,
-                    <<"volume_name">> => 
+                    <<"priv-volume-key">> => <<"The encryption key">>,
+                    <<"volume-device">> => <<"The base device path">>,
+                    <<"volume-partition">> => <<"The partition path">>,
+                    <<"volume-partition-type">> => <<"The partition type">>,
+                    <<"volume-name">> =>
                         <<"The name for the encrypted volume">>,
-                    <<"volume_mount_point">> => 
+                    <<"volume-mount-point">> =>
                         <<"Where to mount the volume">>,
-                    <<"volume_store_path">> => 
+                    <<"volume-store-path">> =>
                         <<"The store path on the volume">>
                 }
             },
@@ -138,13 +138,13 @@ mount(_M1, _M2, Opts) ->
     ),
     % Check for missing required node options
     case hb_opts:check_required_opts([
-        {<<"priv_volume_key">>, Key},
-        {<<"volume_device">>, Device},
-        {<<"volume_partition">>, Partition},
-        {<<"volume_partition_type">>, PartitionType},
-        {<<"volume_name">>, VolumeName}, 
-        {<<"volume_mount_point">>, MountPoint},
-        {<<"volume_store_path">>, StorePath}
+        {<<"priv-volume-key">>, Key},
+        {<<"volume-device">>, Device},
+        {<<"volume-partition">>, Partition},
+        {<<"volume-partition-type">>, PartitionType},
+        {<<"volume-name">>, VolumeName},
+        {<<"volume-mount-point">>, MountPoint},
+        {<<"volume-store-path">>, StorePath}
     ], Opts) of
         {ok, _} ->
             check_base_device(
@@ -562,8 +562,8 @@ update_node_config(StorePath, NewStore, Opts) ->
     ok = 
         hb_http_server:set_opts(
             Opts#{
-                store => NewStore, 
-                genesis_wasm_db_dir => FullGenesisPath
+                <<"store">> => NewStore, 
+                <<"genesis-wasm-db-dir">> => FullGenesisPath
             }
         ),
     ?event(debug_volume, 

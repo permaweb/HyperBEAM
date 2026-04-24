@@ -18,13 +18,13 @@
 %%% configuration.
 %%%
 %%% Configuration options:
-%%% - blacklist_providers: List of providers to load in AO format.
-%%% - blacklist_fallback: halt or continue. 
+%%% - blacklist-providers: List of providers to load in AO format.
+%%% - blacklist-fallback: halt or continue.
 %%%     - Halt waits for X milliseconds before sending 503.
 %%%     - Continue allow the connection to fetch while blacklist is being loaded.
-%%% - blacklist_timeout: How long should the request wait for the blacklist to be 
+%%% - blacklist-timeout: How long should the request wait for the blacklist to be
 %%%     loaded.
-%%% - blacklist_whitelist: List of endpoint path that are always whitelisted.
+%%% - blacklist-whitelist: List of endpoint path that are always whitelisted.
 -module(dev_blacklist).
 -export([request/3]).
 
@@ -325,12 +325,12 @@ cache_table_name(Opts) ->
 %%% Tests
 
 setup_test_env() ->
-    %% We need to create a new priv_wallet to avoid conflift when starting a
-    %% new node from an existing priv_wallet address.
+    %% We need to create a new priv-wallet to avoid conflict when starting a
+    %% new node from an existing priv-wallet address.
     Opts0 = #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => ar_wallet:new(),
-        on => #{<<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }}
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"on">> => #{<<"request">> => #{ <<"device">> => <<"blacklist@1.0">> }}
     },
     Msg1 = hb_message:commit(#{ <<"body">> => <<"test-1">> }, Opts0),
     Msg2 = hb_message:commit(#{ <<"body">> => <<"test-2">> }, Opts0),
@@ -372,7 +372,7 @@ basic_test() ->
         unsigned3 := UnsignedID3,
         blacklist := BlacklistID
     }} = setup_test_env(),
-    Opts1 = Opts0#{blacklist_providers => [BlacklistID]},
+    Opts1 = Opts0#{ <<"blacklist-providers">> => [BlacklistID]},
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -398,9 +398,9 @@ first_request_always_return_503_test() ->
     %% to initialize.
     Opts1 = 
         Opts0#{
-            blacklist_providers => [<<"/~test-device@1.0/delay?duration=200">>]
+            <<"blacklist-providers">> => [<<"/~test-device@1.0/delay?duration=200">>]
         },
-    Node = hb_http_server:start_node(Opts1#{blacklist_timeout => 0}),
+    Node = hb_http_server:start_node(Opts1#{ <<"blacklist-timeout">> => 0}),
     ?assertMatch(
         {failure, #{<<"status">> := 503, <<"body">> := <<"Loading blacklist ...">>}},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
@@ -413,7 +413,7 @@ default_provider_test() ->
         signed1 := SignedID1,
         unsigned3 := UnsignedID3
     }} = setup_test_env(),
-    Opts1 = Opts0#{ blacklist_providers => [] },
+    Opts1 = Opts0#{ <<"blacklist-providers">> => [] },
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -428,7 +428,7 @@ default_provider_test() ->
 %% @doc Test the blacklist device with a blacklist that is provided via HTTP.
 blacklist_from_external_http_test() ->
     {ok, #{
-        opts := RemoteOpts = #{ store := RootStore },
+        opts := RemoteOpts = #{ <<"store">> := RootStore },
         signed1 := SignedID1,
         unsigned3 := UnsignedID3,
         blacklist := BlacklistID
@@ -439,9 +439,9 @@ blacklist_from_external_http_test() ->
     % via HTTP.
     NodeOpts = 
         #{
-            store => RootStore,
-            priv_wallet => ar_wallet:new(),
-            blacklist_providers =>
+            <<"store">> => RootStore,
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"blacklist-providers">> =>
                 [<<
                     "/~relay@1.0/call?relay-method=GET&relay-path=",
                         BlacklistHostNode/binary, BlacklistID/binary
@@ -482,7 +482,7 @@ multiple_providers_test() ->
     {ok, BlacklistID1} = hb_cache:write(BlacklistMsg1, Opts0),
     {ok, BlacklistID2} = hb_cache:write(BlacklistMsg2, Opts0),
     Opts1 = Opts0#{
-        blacklist_providers => [BlacklistID1, BlacklistID2]
+        <<"blacklist-providers">> => [BlacklistID1, BlacklistID2]
     },
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
@@ -509,7 +509,7 @@ provider_failure_resilience_test() ->
         blacklist := BlacklistID
     }} = setup_test_env(),
     BadProvider = <<"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkk">>,
-    Opts1 = Opts0#{blacklist_providers => [BadProvider, BlacklistID]},
+    Opts1 = Opts0#{ <<"blacklist-providers">> => [BadProvider, BlacklistID]},
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},
@@ -524,7 +524,7 @@ provider_failure_resilience_test() ->
 %% @doc Test that the blacklist cache is refreshed periodically.
 refresh_periodically_test() ->
     {ok, #{
-        opts := Opts0 = #{ store := Store },
+        opts := Opts0 = #{ <<"store">> := Store },
         signed1 := SignedID1,
         unsigned3 := UnsignedID3
     }} = setup_test_env(),
@@ -545,8 +545,8 @@ refresh_periodically_test() ->
     {ok, UpdatedBlacklistID} = hb_cache:write(UpdatedBlacklistMsg, Opts0),
     ok = hb_store:link(Store, #{ <<"mutable">> => InitialBlacklistID }, Opts0),
     Opts1 = Opts0#{
-        blacklist_providers => [<<"/~cache@1.0/read?read=mutable">>],
-        blacklist_refresh_frequency => 1
+        <<"blacklist-providers">> => [<<"/~cache@1.0/read?read=mutable">>],
+        <<"blacklist-refresh-frequency">> => 1
     },
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(

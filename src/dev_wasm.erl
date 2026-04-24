@@ -302,7 +302,7 @@ instance(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Path = <<Prefix/binary, "/instance">>,
     ?event({searching_for_instance, Path, M1}),
-    hb_private:get(Path, M1, Opts#{ hashpath => ignore }).
+    hb_private:get(Path, M1, Opts#{ <<"hashpath">> => ignore }).
 
 %% @doc Handle standard library calls by:
 %% 1. Adding the right prefix to the path from BEAMR.
@@ -330,7 +330,7 @@ import(Base, Req, Opts) ->
         hb_ao:set(
             Base,
             #{ StatePath => Base },
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     ?event({state_added_base, AdjustedBase, AdjustedReq}),
     % 3. Resolve the adjusted path against the added state.
@@ -553,7 +553,7 @@ test_run_wasm(File, Func, Params, AdditionalMsg) ->
                     <<"parameters">> => Params
                 },
                 AdditionalMsg,
-                #{ hashpath => ignore }
+                #{ <<"hashpath">> => ignore }
             ),
 			#{}
         ),

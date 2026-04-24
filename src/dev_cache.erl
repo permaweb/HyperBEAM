@@ -50,7 +50,7 @@ read(_M1, M2, Opts) ->
             % The cache does not have this ID,but it may still be an explicit
             % `data/' path.
             % Store = hb_opts:get(store, [], Opts),
-            Store = maps:get(store, Opts),
+            Store = hb_opts:get(store, no_viable_store, Opts),
             ?event(dev_cache, {read, {location, Location}, {store, Store}}),
             hb_store:read(Store, Location, Opts);
         {error, _} = Error ->
@@ -241,23 +241,23 @@ setup_test_env() ->
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     ?event(dev_cache, {setup_test_env, {address, Address}}),
     Node = hb_http_server:start_node(#{ 
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store => LocalStore,
-        cache_writers => [
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"store">> => LocalStore,
+        <<"cache-writers">> => [
 			Address,
 			hb_util:human_id(ar_wallet:to_address(hb:wallet()))
 		],
-        store_all_signed => false
+        <<"store-all-signed">> => false
     }),
     ?event(dev_cache, {setup_test_env, {node_started, Node}}),
     TestOpts = #{
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        store_all_signed => false,
-        store => [
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"store-all-signed">> => false,
+        <<"store">> => [
             #{
                 <<"store-module">> => hb_store_remote_node,
                 <<"node">> => Node,
-                priv_wallet => Wallet
+                <<"priv-wallet">> => Wallet
             }
 	    ]
     },

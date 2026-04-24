@@ -62,7 +62,7 @@ suite_with_opts(Suite, OptsList) ->
                             {foreach,
                                 fun() ->
                                     FreshStore = fresh_store(Opts),
-                                    FreshOpts = Opts#{ store => FreshStore },
+                                    FreshOpts = Opts#{ <<"store">> => FreshStore },
                                     hb_http_server:set_proc_server_id(
                                         hb_util:human_id(
                                             crypto:strong_rand_bytes(32)
@@ -72,7 +72,7 @@ suite_with_opts(Suite, OptsList) ->
                                     FreshOpts
                                 end,
                                 fun(FreshOpts) ->
-                                    FreshStore = maps:get(store, FreshOpts),
+                                    FreshStore = maps:get(<<"store">>, FreshOpts),
                                     hb_store:reset(FreshStore),
                                     ok
                                 end,

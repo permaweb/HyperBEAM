@@ -13,8 +13,8 @@ test_opts() ->
 test_opts(Opts) ->
     init(),
     Opts#{
-        store => hb_test_utils:test_store(hb_store_lmdb),
-        priv_wallet => ar_wallet:new()
+        <<"store">> => hb_test_utils:test_store(hb_store_lmdb),
+        <<"priv-wallet">> => ar_wallet:new()
     }.
 
 %% @doc Generate a process message with a random number, and no executor.
@@ -29,7 +29,7 @@ base_process(Opts) ->
             <<"type">> => <<"Process">>,
             <<"test-random-seed">> => rand:uniform(1337)
         },
-        Opts#{ priv_wallet => Wallet }
+        Opts#{ <<"priv-wallet">> => Wallet }
     ).
 
 wasm_process(WASMImage) ->
@@ -47,7 +47,7 @@ wasm_process(WASMImage, Opts) ->
             },
 			Opts
         ),
-        Opts#{ priv_wallet => Wallet }
+        Opts#{ <<"priv-wallet">> => Wallet }
     ).
 
 %% @doc Generate a process message with a random number, and the 
@@ -87,7 +87,7 @@ aos_process(Opts, Stack) ->
                 <<"authority">> =>
                     hb_opts:get(authority, Address, Opts)
             }, Opts),
-        Opts#{ priv_wallet => Wallet }
+        Opts#{ <<"priv-wallet">> => Wallet }
     ).
 
 %% @doc Generate a device that has a stack of two `dev_test's for 
@@ -106,7 +106,7 @@ test_process(Opts) ->
             }, 
             Opts
         ),
-        Opts#{ priv_wallet => Wallet }
+        Opts#{ <<"priv-wallet">> => Wallet }
     ).
 
 schedule_test_message(Base, Text, Opts) ->
@@ -114,7 +114,7 @@ schedule_test_message(Base, Text, Opts) ->
 schedule_test_message(Base, Text, MsgBase, Opts) ->
     ?event(debug_test, {opts, Opts}),
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    UncommittedBase = hb_message:uncommitted(MsgBase, Opts#{ priv_wallet => Wallet }),
+    UncommittedBase = hb_message:uncommitted(MsgBase, Opts#{ <<"priv-wallet">> => Wallet }),
     Req =
         hb_message:commit(
             #{
@@ -126,12 +126,12 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
                         },
-                        Opts#{ priv_wallet => Wallet }
+                        Opts#{ <<"priv-wallet">> => Wallet }
                     )
             },
-			Opts#{ priv_wallet => Wallet }
+			Opts#{ <<"priv-wallet">> => Wallet }
         ),
-    {ok, _} = hb_ao:resolve(Base, Req, Opts#{ priv_wallet => Wallet }).
+    {ok, _} = hb_ao:resolve(Base, Req, Opts#{ <<"priv-wallet">> => Wallet }).
 
 schedule_aos_call(Base, Code) ->
     schedule_aos_call(Base, Code, #{}).
@@ -145,7 +145,7 @@ schedule_aos_call(Base, Code, Opts) ->
                 <<"data">> => Code,
                 <<"target">> => ProcID
             },
-            Opts#{ priv_wallet => Wallet }
+            Opts#{ <<"priv-wallet">> => Wallet }
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
@@ -163,10 +163,10 @@ schedule_wasm_call(Base, FuncName, Params, Opts) ->
                             <<"function">> => FuncName,
                             <<"parameters">> => Params
                         },
-                        Opts#{ priv_wallet => Wallet }
+                        Opts#{ <<"priv-wallet">> => Wallet }
                     )
             },
-            Opts#{ priv_wallet => Wallet }
+            Opts#{ <<"priv-wallet">> => Wallet }
         ),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)).
 
@@ -286,7 +286,7 @@ wasm_compute_test_parallel() ->
     % ?assertEqual([6.0], hb_ao:get(<<"results/output">>, Slot1Res, Opts)).
 
 wasm_compute_from_id_test_parallel() ->
-    Opts = test_opts(#{ cache_control => <<"always">> }),
+    Opts = test_opts(#{ <<"cache-control">> => <<"always">> }),
     Base = wasm_process(<<"test/test-64.wasm">>, Opts),
     schedule_wasm_call(Base, <<"fac">>, [5.0], Opts),
     BaseID = hb_message:id(Base, all, Opts),
@@ -299,11 +299,11 @@ http_wasm_process_by_id_test_parallel() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),
     Node = hb_http_server:start_node(Opts = #{
-        port => 10000 + rand:uniform(10000),
-        priv_wallet => SchedWallet,
-        cache_control => <<"always">>,
-        process_async_cache => false,
-        store => #{
+        <<"port">> => 10000 + rand:uniform(10000),
+        <<"priv-wallet">> => SchedWallet,
+        <<"cache-control">> => <<"always">>,
+        <<"process-async-cache">> => false,
+        <<"store">> => #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-mainnet">>
         }
@@ -328,7 +328,7 @@ http_wasm_process_by_id_test_parallel() ->
                 <<"function">> => <<"fac">>,
                 <<"parameters">> => [5.0]
             },
-            Opts#{ priv_wallet => Wallet }
+            Opts#{ <<"priv-wallet">> => Wallet }
         ),
     {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, Opts),
     ?event({schedule_msg_res, {res, Res}}),
@@ -365,7 +365,7 @@ aos_compute_test_parallel_() ->
 
 aos_browsable_state_test_parallel_() ->
     {timeout, 30, fun() ->
-        Opts = test_opts(#{ cache_control => <<"always">> }),
+        Opts = test_opts(#{ <<"cache-control">> => <<"always">> }),
         Base = aos_process(Opts),
         schedule_aos_call(
             Base,
@@ -390,11 +390,11 @@ aos_state_access_via_http_test_parallel_() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
         Node = hb_http_server:start_node(Opts = test_opts(#{
-            port => 10000 + rand:uniform(10000),
-            priv_wallet => Wallet,
-            cache_control => <<"always">>,
-            store => hb_test_utils:test_store(),
-            force_signed_requests => true
+            <<"port">> => 10000 + rand:uniform(10000),
+            <<"priv-wallet">> => Wallet,
+            <<"cache-control">> => <<"always">>,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"force-signed-requests">> => true
         })),
         Proc = aos_process(Opts),
         ProcID = hb_util:human_id(hb_message:id(Proc, all, Opts)),
@@ -471,7 +471,7 @@ aos_state_patch_test_parallel_() ->
                                 "{ method = \"PATCH\", x = \"banana\" })"
                         >>
                 },
-                Opts#{ priv_wallet => Wallet }
+                Opts#{ <<"priv-wallet">> => Wallet }
             ),
         Req = InnerReq#{
             <<"path">> => <<"schedule">>,
@@ -495,8 +495,8 @@ do_test_restore() ->
     % 2. Return the variable.
     % Execute the first computation, then the second as a disconnected process.
     Opts = test_opts(#{
-        process_cache_frequency => 1,
-        process_async_cache => false
+        <<"process-cache-frequency">> => 1,
+        <<"process-async-cache">> => false
     }),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),
@@ -529,7 +529,7 @@ now_results_test_parallel_() ->
 
 prior_results_accessible_test_parallel_() ->
 	{timeout, 30, fun() ->
-		Opts = test_opts(#{ process_async_cache => false }),
+		Opts = test_opts(#{ <<"process-async-cache">> => false }),
 		Base = aos_process(Opts),
 		schedule_aos_call(Base, <<"return 1+1">>, Opts),
 		schedule_aos_call(Base, <<"return 2+2">>, Opts),
@@ -563,7 +563,7 @@ persistent_process_test_parallel() ->
         },
         ?assertMatch(
             {ok, _},
-            hb_ao:resolve(Base, FirstSlotReq, Opts#{ spawn_worker => true })
+            hb_ao:resolve(Base, FirstSlotReq, Opts#{ <<"spawn-worker">> => true })
         ),
         T1 = hb:now(),
         ThirdSlotReq = #{
@@ -593,7 +593,7 @@ simple_wasm_persistent_worker_benchmark_test_parallel() ->
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-            Opts#{ spawn_worker => true, process_workers => true }
+            Opts#{ <<"spawn-worker">> => true, <<"process-workers">> => true }
         ),
     Iterations = hb_test_utils:benchmark(
         fun(Iteration) ->
@@ -634,7 +634,7 @@ aos_persistent_worker_benchmark_test_parallel_() ->
         },
         ?assertMatch(
             {ok, _},
-            hb_ao:resolve(Base, FirstSlotReq, #{ spawn_worker => true })
+            hb_ao:resolve(Base, FirstSlotReq, #{ <<"spawn-worker">> => true })
         ),
         Iterations = hb_test_utils:benchmark(
             fun(Iteration) ->

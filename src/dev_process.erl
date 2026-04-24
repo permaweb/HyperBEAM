@@ -159,7 +159,7 @@ snapshot(RawBase, _Req, Opts) ->
             Base,
             #{ <<"path">> => <<"snapshot">>, <<"mode">> => <<"Map">> },
             Opts#{
-                cache_control => [<<"no-cache">>, <<"no-store">>]
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
     {ok, SnapshotMsg}.
@@ -216,10 +216,10 @@ compute(Base, Req, Opts) ->
         not_found ->
             % The slot is not set, so we need to serve the latest known state
             % unless the `init' key is set to a value aside from `now'.
-            % We do this by setting the `process_now_from_cache' option to `true'.
+            % We do this by setting the `process-now-from-cache' option to `true'.
             case hb_maps:get(<<"init">>, Req, <<"now">>, Opts) of
                 <<"now">> ->
-                    now(Base, Req, Opts#{ process_now_from_cache => true });
+                    now(Base, Req, Opts#{ <<"process-now-from-cache">> => true });
                 _ ->
                     {error, not_found}
             end;
@@ -256,7 +256,7 @@ compute(Base, Req, Opts) ->
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
-    case hb_ao:get(<<"at-slot">>, Base, Opts#{ hashpath => ignore }) of
+    case hb_ao:get(<<"at-slot">>, Base, Opts#{ <<"hashpath">> => ignore }) of
         CurrentSlot when CurrentSlot == TargetSlot ->
             % We reached the target height so we force a snapshot and return.
             ?event(compute_short,
@@ -406,7 +406,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                             <<"body/action">>,
                             Req,
                             no_action_set,
-                            Opts#{ hashpath => ignore }
+                            Opts#{ <<"hashpath">> => ignore }
                         )
                     }
                 }
@@ -568,7 +568,7 @@ should_snapshot_time(Res, Opts) ->
     end.
 
 %% @doc Returns the known state of the process at either the current slot, or
-%% the latest slot in the cache depending on the `process_now_from_cache' option.
+%% the latest slot in the cache depending on the `process-now-from-cache' option.
 now(RawBase, Req, Opts) ->
     Base = dev_process_lib:ensure_process_key(RawBase, Opts),
     ProcessID = dev_process_lib:process_id(Base, #{}, Opts),
@@ -612,7 +612,7 @@ now(RawBase, Req, Opts) ->
                         % The node is configured to use the cache if possible,
                         % but forcing computation is also admissible. Subsequently,
                         % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ process_now_from_cache => false });
+                        now(Base, Req, Opts#{ <<"process-now-from-cache">> => false });
                     true ->
                         % The node is configured to only serve the latest known
                         % state from the cache, so we return the latest slot.
@@ -709,7 +709,7 @@ ensure_loaded(Base, Req, Opts) ->
                             <<"execution">>,
                             SnapshotReq,
                             normalize,
-                            Opts#{ hashpath => ignore }
+                            Opts#{ <<"hashpath">> => ignore }
                         ),
                     NormalizedWithoutSnapshot =
                         without_snapshot(Normalized, Opts),

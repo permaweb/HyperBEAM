@@ -185,7 +185,7 @@ name_from_host(ReqHost, RawNodeHost) ->
 no_resolvers_test_parallel() ->
     ?assertEqual(
         not_found,
-        resolve(<<"hello">>, #{}, #{}, #{ only => local })
+        resolve(<<"hello">>, #{}, #{}, #{ <<"only">> => local })
     ).
 
 device_resolver(Msg) ->
@@ -214,7 +214,7 @@ single_resolver_test_parallel() ->
             #{},
             #{ <<"load">> => false },
             #{
-                name_resolvers => [
+                <<"name-resolvers">> => [
                     #{<<"hello">> => <<"world">>}
                 ]
             }
@@ -230,7 +230,7 @@ message_lookup_test_parallel() ->
             #{},
             #{ <<"load">> => false },
             #{
-                name_resolvers => [
+                <<"name-resolvers">> => [
                     device_resolver(
                         #{<<"hello">> => <<"world">>}
                     )
@@ -247,7 +247,7 @@ multiple_resolvers_test_parallel() ->
             #{},
             #{ <<"load">> => false },
             #{
-                name_resolvers => [
+                <<"name-resolvers">> => [
                     device_resolver(
                         #{<<"irrelevant">> => <<"world">>}
                     ),
@@ -277,7 +277,7 @@ load_and_execute_test_parallel() ->
                 #{ <<"path">> => <<"deep">> }
             ],
             #{
-                name_resolvers => [
+                <<"name-resolvers">> => [
                     device_resolver(#{ <<"irrelevant">> => ID }),
                     device_resolver(#{ TestKey => ID })
                 ]
@@ -292,7 +292,7 @@ test_arns_opts() ->
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
     TempStore = hb_test_utils:test_store(),
     #{
-        store =>
+        <<"store">> =>
             [
                 TempStore,
                 #{
@@ -300,8 +300,8 @@ test_arns_opts() ->
                     <<"local-store">> => [TempStore]
                 }
             ],
-        name_resolvers => [Path],
-        on => #{
+        <<"name-resolvers">> => [Path],
+        <<"on">> => #{
             <<"request">> => #{
                 <<"device">> => <<"name@1.0">>
             }
@@ -339,7 +339,10 @@ arns_host_resolution_test_parallel() ->
     ).
 
 arns_host_resolution_with_node_host_test_parallel() ->
-    Opts = (test_arns_opts())#{ node_host => <<"http://localhost">>, port => 0 },
+    Opts = (test_arns_opts())#{
+        <<"node-host">> => <<"http://localhost">>,
+        <<"port">> => 0
+    },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -354,7 +357,7 @@ arns_host_resolution_with_node_host_test_parallel() ->
     ).
 
 localhost_root_request_skips_name_resolution_test_parallel() ->
-    Opts = (test_arns_opts())#{ port => 0 },
+    Opts = (test_arns_opts())#{ <<"port">> => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok,

@@ -58,7 +58,7 @@ dev_b32_name_test_() ->
     ]}.
 
 test_invalid_arns_and_not_52char_host_resolution_gives_404() ->
-    Opts = (dev_name:test_arns_opts())#{ port => 0 },
+    Opts = (dev_name:test_arns_opts())#{ <<"port">> => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, #{<<"status">> := 404}},
@@ -245,7 +245,7 @@ test_manifest_subdomain_does_not_match_path_id() ->
 
 test_opts() ->
     Store = [hb_test_utils:test_store()],
-    BaseOpts = #{ store => Store, priv_wallet => ar_wallet:new(), port => 0 },
+    BaseOpts = #{ <<"store">> => Store, <<"priv-wallet">> => ar_wallet:new(), <<"port">> => 0 },
     Msg1 =
         #{
             <<"a">> => 1,
@@ -278,9 +278,9 @@ test_opts() ->
     #{
         opts =>
             BaseOpts#{
-                store => Store,
-                name_resolvers => [#{ <<"device">> => <<"b32-name@1.0">> }],
-                on =>
+                <<"store">> => Store,
+                <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
+                <<"on">> =>
                     #{
                         <<"request">> => [#{<<"device">> => <<"name@1.0">>}]
                     }
@@ -302,10 +302,10 @@ subdomain(ID, Opts) ->
 %% IDs.
 manifest_opts() ->
     (dev_manifest:test_env_opts())#{
-        port => 0,
-        http_client_hackney_recv_timeout => 30_000,
-        name_resolvers => [#{ <<"device">> => <<"b32-name@1.0">> }],
-        on =>
+        <<"port">> => 0,
+        <<"http-client-hackney-recv-timeout">> => 30_000,
+        <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
+        <<"on">> =>
             #{
                 <<"request">> =>
                     [

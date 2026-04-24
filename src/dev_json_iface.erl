@@ -60,8 +60,8 @@ prep_call(RawM1, RawM2, Opts) ->
     M1 = hb_cache:ensure_all_loaded(RawM1, Opts),
     M2 = hb_cache:ensure_all_loaded(RawM2, Opts),
     ?event({prep_call, M1, M2, Opts}),
-    Process = hb_ao:get(<<"process">>, M1, Opts#{ hashpath => ignore }),
-    Message = hb_ao:get(<<"body">>, M2, Opts#{ hashpath => ignore }),
+    Process = hb_ao:get(<<"process">>, M1, Opts#{ <<"hashpath">> => ignore }),
+    Message = hb_ao:get(<<"body">>, M2, Opts#{ <<"hashpath">> => ignore }),
     Image = hb_ao:get(<<"process/image">>, M1, Opts),
     BlockHeight = hb_ao:get(<<"block-height">>, M2, Opts),
     Props = message_to_json_struct(denormalize_message(Message, Opts), Opts),
@@ -473,7 +473,7 @@ postprocess_outbox(Msg, Proc, Opts) ->
 
 normalize_test_opts(Opts) ->
     Opts#{
-        priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts)
+        <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts)
     }.
 
 test_init() ->
@@ -530,7 +530,7 @@ generate_aos_msg(ProcID, Code, RawOpts) ->
 basic_aos_call_test_() ->
     {timeout, 20, fun() ->
 		Msg = generate_stack("test/aos-2-pure-xs.wasm"),
-		Proc = hb_ao:get(<<"process">>, Msg, #{ hashpath => ignore }),
+		Proc = hb_ao:get(<<"process">>, Msg, #{ <<"hashpath">> => ignore }),
 		ProcID = hb_message:id(Proc, all),
 		{ok, Res} =
 			hb_ao:resolve(
@@ -546,9 +546,14 @@ basic_aos_call_test_() ->
 aos_stack_benchmark_test_() ->
     {timeout, 20, fun() ->
         BenchTime = 0.25,
-        Opts = #{ store => hb_test_utils:test_store() },
+        Opts = #{ <<"store">> => hb_test_utils:test_store() },
         RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm", <<"WASM">>, Opts),
-        Proc = hb_ao:get(<<"process">>, RawWASMMsg, Opts#{ hashpath => ignore }),
+        Proc =
+            hb_ao:get(
+                <<"process">>,
+                RawWASMMsg,
+                Opts#{ <<"hashpath">> => ignore }
+            ),
         ProcID = hb_ao:get(id, Proc, Opts),
         Msg = generate_aos_msg(ProcID, <<"return 1">>, Opts),
         {ok, Initialized} =

@@ -905,8 +905,8 @@ auto_stop_partial_index_test_parallel() ->
     Block = 1826700,
     HigherBlock = Block + 1,
     NoIndexOpts = Opts#{
-        arweave_index_ids => false,
-        arweave_index_blocks => true
+        <<"arweave-index-ids">> => false,
+        <<"arweave-index-blocks">> => true
     },
     {ok, Block} =
         hb_ao:resolve(
@@ -960,15 +960,15 @@ latest_height_failure_test_parallel() ->
     ]),
     TestStore = hb_test_utils:test_store(),
     Opts = #{
-        store => [TestStore],
-        routes => [
+        <<"store">> => [TestStore],
+        <<"routes">> => [
             #{
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> => [
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => MockURL,
-                        <<"opts">> => #{ http_client => httpc }
+                        <<"opts">> => #{ <<"http-client">> => httpc }
                     }
                 ],
                 <<"parallel">> => true,
@@ -998,16 +998,16 @@ negative_resolved_height_test_parallel() ->
     ]),
     TestStore = hb_test_utils:test_store(),
     Opts = #{
-        store => [TestStore],
-        arweave_index_blocks => false,
-        routes => [
+        <<"store">> => [TestStore],
+        <<"arweave-index-blocks">> => false,
+        <<"routes">> => [
             #{
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> => [
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => MockURL,
-                        <<"opts">> => #{ http_client => httpc }
+                        <<"opts">> => #{ <<"http-client">> => httpc }
                     }
                 ],
                 <<"parallel">> => true,
@@ -1091,9 +1091,9 @@ setup_index_opts() ->
         }
     ],
     Opts = #{
-        store => Store,
-        arweave_index_ids => true,
-        arweave_index_store => StoreOpts
+        <<"store">> => Store,
+        <<"arweave-index-ids">> => true,
+        <<"arweave-index-store">> => StoreOpts
     },
     {TestStore, StoreOpts, Opts}.
 

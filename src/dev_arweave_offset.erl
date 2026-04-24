@@ -459,8 +459,8 @@ nth_bundle_item(Index, ItemStartOffset, [{_ID, Size} | Rest]) when Index > 1 ->
 
 offset_as_name_resolver_lookup_test() ->
     Opts = #{
-        name_resolvers => [#{ <<"device">> => <<"arweave@2.9">> }],
-        on =>
+        <<"name-resolvers">> => [#{ <<"device">> => <<"arweave@2.9">> }],
+        <<"on">> =>
             #{
                 <<"request">> => [#{ <<"device">> => <<"name@1.0">> }]
             }

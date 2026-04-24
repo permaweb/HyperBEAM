@@ -312,7 +312,7 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
-        Opts#{ topic => ao_internal }
+        Opts#{ <<"topic">> => ao_internal }
     ),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
@@ -324,7 +324,7 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
-        Opts#{ topic => ao_internal }
+        Opts#{ <<"topic">> => ao_internal }
     ),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].

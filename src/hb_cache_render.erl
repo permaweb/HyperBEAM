@@ -319,7 +319,7 @@ get_label(Path) ->
 % Test data preparation functions
 prepare_unsigned_data() ->
     Opts = #{
-        store => #{
+        <<"store">> => #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST/render-fs">>
         }
@@ -329,7 +329,7 @@ prepare_unsigned_data() ->
 
 prepare_signed_data() ->
     Opts = #{
-        store => #{
+        <<"store">> => #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST/render-fs">>
         }
@@ -341,7 +341,7 @@ prepare_signed_data() ->
 
 prepare_deeply_nested_complex_message() ->
     Opts = #{
-        store => #{
+        <<"store">> => #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST/render-fs">>
         }

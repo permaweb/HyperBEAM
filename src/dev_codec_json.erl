@@ -128,7 +128,7 @@ decode_with_atom_test() ->
     ).
 
 deeply_nested_typed_keys_test() ->
-    Opts = #{ store => [hb_test_utils:test_store()] },
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
     Msg = #{
         <<"message">> =>
             [

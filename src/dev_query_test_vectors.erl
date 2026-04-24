@@ -53,10 +53,10 @@ test_env_with_blocks(InitialHeight, FinalHeight) ->
         },
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [LocalStore, ArweaveStore],
-            arweave_index_blocks => true,
-            query_arweave_remote_block_ranges => true
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [LocalStore, ArweaveStore],
+            <<"arweave-index-blocks">> => true,
+            <<"query-arweave-remote-block-ranges">> => true
         },
     Node = hb_http_server:start_node(Opts),
     hb_http:request(
@@ -98,9 +98,9 @@ write_test_message_with_recipient(Recipient, Opts) ->
 simple_blocks_query_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()],
-            arweave_index_blocks => true
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"arweave-index-blocks">> => true
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node, Opts),
@@ -144,9 +144,9 @@ simple_blocks_query_test_parallel() ->
 block_by_height_query_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()],
-            arweave_index_blocks => true
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()],
+            <<"arweave-index-blocks">> => true
         },
     Node = hb_http_server:start_node(Opts),
     get_test_blocks(Node, Opts),
@@ -196,8 +196,8 @@ block_by_height_query_test_parallel() ->
 simple_ans104_query_test_parallel() ->
     Opts =
         #{
-            priv_wallet => Wallet = ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => Wallet = ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -263,8 +263,8 @@ simple_ans104_query_test_parallel() ->
 transactions_query_tags_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -326,8 +326,8 @@ transactions_query_tags_test_parallel() ->
 transactions_query_owners_test_parallel() ->
     Opts =
         #{
-            priv_wallet => Wallet = ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => Wallet = ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -388,8 +388,8 @@ transactions_query_owners_test_parallel() ->
 transactions_query_recipients_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     Alice = ar_wallet:new(),
@@ -453,8 +453,8 @@ transactions_query_recipients_test_parallel() ->
 transactions_query_ids_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -515,8 +515,8 @@ transactions_query_ids_test_parallel() ->
 transactions_query_combined_test_parallel() ->
     Opts =
         #{
-            priv_wallet => Wallet = ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => Wallet = ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -703,7 +703,7 @@ transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->
 
 transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
     {ok, _Node, BaseOpts} = test_env_with_blocks(1892159, 1892158),
-    Opts = BaseOpts#{ query_arweave_ignore_block_ranges => true },
+    Opts = BaseOpts#{ <<"query-arweave-ignore-block-ranges">> => true },
     {ok, ID} =
         hb_cache:write(
             #{
@@ -881,8 +881,8 @@ transactions_query_cursor_by_offset_test_parallel() ->
 transaction_query_by_id_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, WrittenMsg} = write_test_message(Opts),
@@ -931,8 +931,8 @@ transaction_query_by_id_test_parallel() ->
 transaction_query_full_test_parallel() ->
     Opts =
         #{
-            priv_wallet => SenderKey = ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => SenderKey = ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     Alice = ar_wallet:new(),
@@ -1008,8 +1008,8 @@ transaction_query_full_test_parallel() ->
 transaction_query_not_found_test_parallel() ->
     Opts =
         #{
-            priv_wallet => ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Res =
         dev_query_graphql:test_query(
@@ -1044,8 +1044,8 @@ transaction_query_not_found_test_parallel() ->
 transaction_query_with_anchor_test_parallel() ->
     Opts =
         #{
-            priv_wallet => Wallet = ar_wallet:new(),
-            store => [hb_test_utils:test_store()]
+            <<"priv-wallet">> => Wallet = ar_wallet:new(),
+            <<"store">> => [hb_test_utils:test_store()]
         },
     Node = hb_http_server:start_node(Opts),
     {ok, _UnsignedID} =

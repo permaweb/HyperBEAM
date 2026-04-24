@@ -25,7 +25,7 @@ deserialize(Binary, Req, Opts) when is_binary(Binary) ->
 deserialize(TX, Req, Opts) when is_record(TX, tx) ->
     from(TX, Req, Opts).
 
-%% @doc Sign a message using the `priv_wallet' key in the options. Supports both
+%% @doc Sign a message using the `priv-wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
 %% signed commitments.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
@@ -218,7 +218,7 @@ from_maintains_tag_name_case_test() ->
     ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
 
 restore_tag_name_case_from_cache_test() ->
-    Opts = #{ store => hb_test_utils:test_store() },
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
     TX = #tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
@@ -356,7 +356,7 @@ generate_item_with_target_field_test() ->
                 <<"anchor">> => Anchor = hb_util:encode(crypto:strong_rand_bytes(32)),
                 <<"other-key">> => <<"other-value">>
             },
-            #{ priv_wallet => hb:wallet() },
+            #{ <<"priv-wallet">> => hb:wallet() },
             <<"ans104@1.0">>
         ),
     {ok, TX} = to(Msg, #{}, #{}),
@@ -397,7 +397,7 @@ ao_data_key_test() ->
                 <<"other-key">> => <<"Normal value">>,
                 <<"body">> => <<"Body value">>
             },
-            #{ priv_wallet => hb:wallet() },
+            #{ <<"priv-wallet">> => hb:wallet() },
             <<"ans104@1.0">>
         ),
     ?event({msg, Msg}),
@@ -412,7 +412,7 @@ simple_signed_to_httpsig_test() ->
     Structured =
         hb_message:commit(
             #{ <<"test-tag">> => <<"test-value">> },
-            #{ priv_wallet => ar_wallet:new() },
+            #{ <<"priv-wallet">> => ar_wallet:new() },
             #{
                 <<"commitment-device">> => <<"ans104@1.0">>
             }
@@ -471,7 +471,7 @@ field_and_tag_ordering_test() ->
     },
     Wallet = hb:wallet(),
     SignedTABM = hb_message:commit(
-        UnsignedTABM, #{priv_wallet => Wallet}, <<"ans104@1.0">>),
+        UnsignedTABM, #{<<"priv-wallet">> => Wallet}, <<"ans104@1.0">>),
     ?assert(hb_message:verify(SignedTABM)).
 
 fields_as_tags_test() ->
@@ -811,7 +811,7 @@ bundle_commitment_test() ->
     ok.
 
 test_bundle_commitment(Commit, Encode, Decode) ->
-    Opts = #{ priv_wallet => hb:wallet(), store => hb_test_utils:test_store() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet(), <<"store">> => hb_test_utils:test_store() },
     Structured = #{ <<"list">> => [1, 2, 3] },
     ToBool = fun(unbundled) -> false; (bundled) -> true end,
     Label = lists:flatten(io_lib:format("~p -> ~p -> ~p",

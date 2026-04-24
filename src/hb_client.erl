@@ -23,7 +23,7 @@ resolve(Node, Base, Req, Opts) ->
                 <<"2.path">> => unset
             },
         prefix_keys(<<"2.">>, Req, Opts),
-        Opts#{ hashpath => ignore }
+        Opts#{ <<"hashpath">> => ignore }
     ),
     hb_http:post(
         Node,
@@ -120,8 +120,8 @@ upload(Msg, Opts, CommitmentDevice) ->
 
 upload_test_opts() ->
     #{
-        bundler_ans104 => hb_http_server:start_node(#{}),
-        priv_wallet => hb:wallet()
+        <<"bundler-ans104">> => hb_http_server:start_node(#{}),
+        <<"priv-wallet">> => hb:wallet()
     }.
 
 upload_empty_message_test() ->

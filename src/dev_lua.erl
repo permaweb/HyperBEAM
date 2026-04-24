@@ -289,7 +289,7 @@ compute(Key, RawBase, RawReq, Opts) ->
                 {{as, <<"message@1.0">>, Base}, <<"function">>}
             ],
             Key,
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, function_found),
     Params =
@@ -304,7 +304,7 @@ compute(Key, RawBase, RawReq, Opts) ->
                 Req,
                 #{}
             ],
-            Opts#{ hashpath => ignore }
+            Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
@@ -383,7 +383,7 @@ snapshot(Base, _Req, Opts) ->
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
 normalize(Base, _Req, RawOpts) ->
-    Opts = RawOpts#{ hashpath => ignore },
+    Opts = RawOpts#{ <<"hashpath">> => ignore },
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
             DeviceKey =
@@ -519,7 +519,7 @@ simple_invocation_test() ->
 
 post_invocation_message_validation_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Base =
         hb_message:commit(
             #{
@@ -694,8 +694,8 @@ lua_http_hook_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(
         #{
-            priv_wallet => ar_wallet:new(),
-            on => #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"on">> => #{
                 <<"request">> =>
                     #{
                         <<"device">> => <<"lua@5.3a">>,
@@ -714,17 +714,17 @@ pure_lua_process_test() ->
     Process = generate_lua_process("test/test.lua", #{}),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_test_message(Process, #{}),
-    {ok, _} = hb_ao:resolve(Process, Message, #{ hashpath => ignore }),
+    {ok, _} = hb_ao:resolve(Process, Message, #{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_restore_test() ->
-    Opts = #{ process_cache_frequency => 1 },
+    Opts = #{ <<"process-cache-frequency">> => 1 },
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts, #{ <<"path">> => <<"inc">>}),
-    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Count1} = hb_ao:resolve(Process, <<"now/count">>, Opts),
     ?assertEqual(1, Count1),
     hb_ao:resolve(
@@ -740,7 +740,7 @@ pure_lua_process_benchmark_test_() ->
         30,
         fun() ->
             pure_lua_process_benchmark(#{
-                process_snapshot_slots => 50
+                <<"process-snapshot-slots">> => 50
             })
     end}.
 pure_lua_process_benchmark(Opts) ->
@@ -751,7 +751,7 @@ pure_lua_process_benchmark(Opts) ->
     Message = generate_test_message(Process, Opts),
     lists:foreach(
         fun(X) ->
-            hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+            hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
             ?event(debug_lua, {scheduled, X})
         end,
         lists:seq(1, BenchMsgs)
@@ -770,17 +770,18 @@ pure_lua_process_benchmark(Opts) ->
     ?assert(ExecMs =< 500).
 
 invoke_aos_test() ->
-    Opts = #{ priv_wallet => hb:wallet() },
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Process = generate_lua_process("test/hyper-aos.lua", Opts),
     {ok, _Proc} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts),
-    {ok, _Assignment} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, _Assignment} =
+        hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output">>, Opts),
     ?assertEqual(<<"1">>, hb_ao:get(<<"data">>, Results, #{})),
     ?assertEqual(<<"aos> ">>, hb_ao:get(<<"prompt">>, Results, #{})).
 
 aos_authority_not_trusted_test() ->
-    Opts = #{ priv_wallet => ar_wallet:new() },
+    Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
     Process = generate_lua_process("test/hyper-aos.lua", Opts),
     ProcID = hb_message:id(Process, all),
     {ok, _} = hb_cache:write(Process, Opts),
@@ -804,7 +805,7 @@ aos_authority_not_trusted_test() ->
         Opts
     ),
     ?event({message, Message}),
-    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ hashpath => ignore }),
+    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
     ?assertEqual(<<"Message is not trusted.">>, Results).
 
@@ -813,9 +814,9 @@ aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
         BenchMsgs = 6,
         Opts = #{
-            process_async_cache => true,
-            hashpath => ignore,
-            process_snapshot_slots => 50
+            <<"process-async-cache">> => true,
+            <<"hashpath">> => ignore,
+            <<"process-snapshot-slots">> => 50
         },
         Process = generate_lua_process("test/hyper-aos.lua", Opts),
         Message = generate_test_message(Process, Opts),
@@ -848,7 +849,8 @@ aos_process_benchmark_test_() ->
 
 %% @doc Generate a Lua process message.
 generate_lua_process(File, Opts) ->
-    NormOpts = Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
+    NormOpts =
+        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), NormOpts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     {ok, Module} = file:read_file(File),
@@ -902,7 +904,8 @@ generate_test_message(Process, Opts, ToEval) when is_binary(ToEval) ->
     );
 generate_test_message(Process, Opts, MsgBase) ->
     ProcID = hb_message:id(Process, all),
-    NormOpts = Opts#{ priv_wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
+    NormOpts =
+        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
     hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,

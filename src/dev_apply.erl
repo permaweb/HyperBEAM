@@ -248,7 +248,7 @@ resolve_with_prefix_test() ->
             Node,
             <<"/~meta@1.0/info/request:debug-info~apply@1.0">>,
             #{
-                <<"debug-info">> => <<"short_trace_len">>
+                <<"debug-info">> => <<"short-trace-len">>
             },
             #{}
         )
@@ -266,13 +266,13 @@ apply_over_http_test() ->
                         <<"test-key">> => <<"DATA">>
                     }
             },
-            #{ priv_wallet => hb:wallet() }
+            #{ <<"priv-wallet">> => hb:wallet() }
         ),
     ?assertEqual(
         {ok, <<"DATA">>},
         hb_ao:resolve(
             Signed#{ <<"path">> => <<"/user-path">> },
-            #{ priv_wallet => hb:wallet() }
+            #{ <<"priv-wallet">> => hb:wallet() }
         )
     ),
     ?assertEqual(
@@ -282,6 +282,6 @@ apply_over_http_test() ->
             Node,
             <<"/user-path">>,
             Signed,
-            #{ priv_wallet => hb:wallet() }
+            #{ <<"priv-wallet">> => hb:wallet() }
         )
     ).

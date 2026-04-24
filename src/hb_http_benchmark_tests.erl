@@ -10,7 +10,7 @@
 
 % unsigned_resolve_benchmark_test() ->
 %     BenchTime = 1,
-%     URL = hb_http_server:start_node(#{force_signed => false}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => false}),
 %     Iterations = hb_test_utils:benchmark(
 %         fun() ->
 %             hb_http:post(URL,
@@ -32,7 +32,7 @@
 % parallel_unsigned_resolve_benchmark_test() ->
 %     BenchTime = 1,
 %     BenchWorkers = 16,
-%     URL = hb_http_server:start_node(#{force_signed => false}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => false}),
 %     Iterations = hb_test_utils:benchmark(
 %         fun(_Count) ->
 %             hb_http:post(
@@ -65,7 +65,7 @@
 
 % run_wasm_unsigned_benchmark_test() ->
 %     BenchTime = 1,
-%     URL = hb_http_server:start_node(#{force_signed => false}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
 %     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
@@ -85,7 +85,7 @@
 
 % run_wasm_signed_benchmark_test_disabled() ->
 %     BenchTime = 1,
-%     URL = hb_http_server:start_node(#{force_signed => true}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
 %     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
@@ -105,7 +105,7 @@
 % parallel_wasm_unsigned_benchmark_test_disabled() ->
 %     BenchTime = 1,
 %     BenchWorkers = 16,
-%     URL = hb_http_server:start_node(#{force_signed => false}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => false}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
 %     Iterations = hb_test_utils:benchmark(
 %         fun(X) ->
@@ -128,7 +128,7 @@
 % parallel_wasm_signed_benchmark_test_disabled() ->
 %     BenchTime = 1,
 %     BenchWorkers = 16,
-%     URL = hb_http_server:start_node(#{force_signed => true}),
+%     URL = hb_http_server:start_node(#{<<"force-signed">> => true}),
 %     Msg = wasm_compute_request(<<"test/test-64.wasm">>, <<"fac">>, [10]),
 %     Iterations = hb_test_utils:benchmark(
 %         fun(_) ->
@@ -149,11 +149,11 @@
 
 % % parallel_http_scheduling_benchmark_test() ->
 % %     application:ensure_all_started(hb),
-% %     URL = hb_http_server:start_node(#{force_signed => true}),
+% %     URL = hb_http_server:start_node(#{<<"force-signed">> => true}),
 % %     BenchTime = 3,
 % %     BenchWorkers = 16,
 % %     Base = dev_scheduler:test_process(),
-% %     Proc = hb_ao:get(process, Base, #{ hashpath => ignore }),
+% %     Proc = hb_ao:get(process, Base, #{ <<"hashpath">> => ignore }),
 % %     ProcID = hb_util:id(Proc),
 % %     ?event({benchmark_start, ?MODULE}),
 % %     Iterations = hb_test_utils:benchmark(

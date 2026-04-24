@@ -120,7 +120,7 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
             {Config, Key}
         ],
         Default,
-        Opts#{ hashpath => ignore }
+        Opts#{ <<"hashpath">> => ignore }
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. First,
@@ -335,22 +335,22 @@ empty_inbox(Ref) ->
 
 good()   -> ao_node(hb_http_server:start_node(#{})).
 slow(Ms) -> ao_node(hb_http_server:start_node(slow_node_opts(Ms))).
-crash()  -> #{<<"opts">> => #{http_client => httpc}}.
+crash()  -> #{<<"opts">> => #{ <<"http-client">> => httpc }}.
 
 ao_node(URL) ->
     #{<<"uri">> => <<URL/binary, "~meta@1.0/info">>,
-      <<"opts">> => #{http_client => httpc}}.
+      <<"opts">> => #{ <<"http-client">> => httpc }}.
 
 dead_node() ->
     {ok, S} = gen_tcp:listen(0, []),
     {ok, Port} = inet:port(S),
     ok = gen_tcp:close(S),
     #{<<"uri">> => iolist_to_binary(["http://localhost:", integer_to_list(Port)]),
-      <<"opts">> => #{http_client => httpc}}.
+      <<"opts">> => #{ <<"http-client">> => httpc }}.
 
 slow_node_opts(Ms) ->
-    #{test_delay => Ms,
-      on => #{<<"request">> =>
+    #{<<"test-delay">> => Ms,
+      <<"on">> => #{<<"request">> =>
         #{<<"device">> => <<"test-device@1.0">>, <<"path">> => <<"delay">>}}}.
 
 multi(Nodes, Extra) ->
@@ -360,7 +360,7 @@ multi(Nodes, Extra) ->
 multirequest_test_() ->
     {setup,
         fun() ->
-            #{fast => good(), slow1 => slow(500), slow2 => slow(500),
+            #{fast => good(), slow1 => slow(750), slow2 => slow(750),
               good1 => good(), good2 => good(), good3 => good()}
         end,
         fun(N) -> {timeout, 30, [
@@ -373,7 +373,7 @@ multirequest_test_() ->
                 ?assertMatch({ok, _},
                     multi([maps:get(fast, N), maps:get(slow1, N), maps:get(slow2, N)],
                         #{<<"parallel">> => true, <<"stop-after">> => true})),
-                ?assert(erlang:monotonic_time(millisecond) - T0 < 500)
+                ?assert(erlang:monotonic_time(millisecond) - T0 < 750)
             end},
             {"parallel broadcast", fun() ->
                 ?assertMatch([_, _, _],
@@ -396,11 +396,11 @@ multirequest_test_() ->
 parallel_race_stops_at_first_admissible_test_() ->
     {timeout, 30, fun parallel_race_stops_at_first_admissible/0}.
 parallel_race_stops_at_first_admissible() ->
-    Delay = 500,
+    Delay = 750,
     FastURL = hb_http_server:start_node(#{}),
     SlowURL1 = hb_http_server:start_node(slow_node_opts(Delay)),
     SlowURL2 = hb_http_server:start_node(slow_node_opts(Delay)),
-    Routes = maps:get(routes, hb_opts:default_message()),
+    Routes = maps:get(<<"routes">>, hb_opts:default_message()),
     [ArweaveRoute] =
         [R || R <- Routes,
             maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,

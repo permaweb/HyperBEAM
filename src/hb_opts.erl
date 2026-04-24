@@ -66,14 +66,17 @@
     <<"store-module">> => hb_store_lmdb
 }).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
--define(DEFAULT_HTTP_OPTS, #{http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2}).
+-define(
+    DEFAULT_HTTP_OPTS,
+    #{ <<"http-client">> => ?DEFAULT_HTTP_CLIENT, <<"protocol">> => http2 }
+).
 -define(ENV_KEYS,
     #{
-        priv_key_location => {"HB_KEY", "hyperbeam-key.json"},
-        hb_config_location => {"HB_CONFIG", "config.flat"},
-        port => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
-        mode => {"HB_MODE", fun list_to_existing_atom/1},
-        paranoid_verify =>
+        <<"priv-key-location">> => {"HB_KEY", "hyperbeam-key.json"},
+        <<"hb-config-location">> => {"HB_CONFIG", "config.flat"},
+        <<"port">> => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
+        <<"mode">> => {"HB_MODE", fun list_to_existing_atom/1},
+        <<"paranoid-verify">> =>
             {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},
         % Acceptable values for paranoid_verify:
         %   false - No paranoid verification
@@ -82,24 +85,25 @@
         %   [cache_write] - Verify messages only when writing to cache
         %   [cache_read] - Verify messages only when reading from cache
         %   [http_request, cache_write] - Verify in both contexts
-        debug_print =>
+        <<"debug-print">> =>
             {
                 "HB_PRINT",
                 fun topic_list_to_atoms/1,
                 {preparsed, ?DEFAULT_PRINT_OPTS}
             },
-        debug_log =>
+        <<"debug-log">> =>
             {
                 "HB_LOG",
                 fun topic_list_to_atoms/1,
                 {preparsed, false}
             },
-        log_dir => {"HB_LOG_DIR", fun hb_util:bin/1, "logs"},
-        log_max_files => {"HB_LOG_MAX_FILES", fun hb_util:int/1, "5"},
-        log_max_bytes => {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
-        lua_scripts => {"LUA_SCRIPTS", "scripts"},
-        lua_tests => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
-        default_index =>
+        <<"log-dir">> => {"HB_LOG_DIR", fun hb_util:bin/1, "logs"},
+        <<"log-max-files">> => {"HB_LOG_MAX_FILES", fun hb_util:int/1, "5"},
+        <<"log-max-bytes">> =>
+            {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
+        <<"lua-scripts">> => {"LUA_SCRIPTS", "scripts"},
+        <<"lua-tests">> => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
+        <<"default-index">> =>
             {
                 "HB_INDEX",
                 fun("ui") ->
@@ -135,6 +139,92 @@ topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
     lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
 
+%% @doc Canonicalize an opts or node message term to lower-case binary dash
+%% keys.
+canonicalize(Term) -> canonicalize(root, Term).
+
+canonicalize(_Context, List) when is_list(List) ->
+    case hb_util:is_string_list(List) of
+        true -> List;
+        false ->
+            lists:map(
+                fun(Item) -> canonicalize(root, Item) end,
+                List
+            )
+    end;
+canonicalize(Context, Map) when is_map(Map) ->
+    case dictionary_mode(Context) of
+        opaque ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {canonical_dictionary_key(Key), Value}
+                    end,
+                    maps:to_list(Map)
+                )
+            );
+        recurse_values ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {
+                            canonical_dictionary_key(Key),
+                            canonicalize(root, Value)
+                        }
+                    end,
+                    maps:to_list(Map)
+                )
+            );
+        normal ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        CanonKey = canonical_key(Key),
+                        {CanonKey, canonicalize(CanonKey, Value)}
+                    end,
+                    maps:to_list(Map)
+                )
+            )
+    end;
+canonicalize(_Context, Other) -> Other.
+
+%% @doc Return how a nested node-message map should be canonicalized.
+dictionary_mode(<<"hyperbuddy-serve">>) -> opaque;
+dictionary_mode(<<"identities">>) -> recurse_values;
+dictionary_mode(<<"local-names">>) -> opaque;
+dictionary_mode(<<"balance">>) -> opaque;
+dictionary_mode(<<"balances">>) -> opaque;
+dictionary_mode(<<"commitments">>) -> recurse_values;
+dictionary_mode(<<"node-processes">>) -> recurse_values;
+dictionary_mode(<<"nodes">>) -> recurse_values;
+dictionary_mode(<<"priv-wallet-hosted">>) -> recurse_values;
+dictionary_mode(<<"simple-pay-ledger">>) -> opaque;
+dictionary_mode(<<"state">>) -> opaque;
+dictionary_mode(<<"trusted">>) -> recurse_values;
+dictionary_mode(<<"trusted-nodes">>) -> recurse_values;
+dictionary_mode(_) -> normal.
+
+canonical_dictionary_key(Key) when is_atom(Key) ->
+    atom_to_binary(Key, utf8);
+canonical_dictionary_key(Key) when is_list(Key) ->
+    case hb_util:is_string_list(Key) of
+        true -> list_to_binary(Key);
+        false -> Key
+    end;
+canonical_dictionary_key(Key) -> Key.
+
+%% @doc Convert an opts key to lower-case binary dash form.
+canonical_key(Key) when is_atom(Key) ->
+    canonical_key(atom_to_binary(Key, utf8));
+canonical_key(Key) when is_list(Key) ->
+    case hb_util:is_string_list(Key) of
+        true -> canonical_key(list_to_binary(Key));
+        false -> Key
+    end;
+canonical_key(Key) when is_binary(Key) ->
+    hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
+canonical_key(Key) -> Key.
+
 %% @doc Return the default message with all environment variables set.
 default_message_with_env() ->
     maps:fold(
@@ -157,7 +247,7 @@ default_message_with_env() ->
 default_message() ->
     case erlang:get(default_message) of
         undefined ->
-            Cached = raw_default_message(),
+            Cached = canonicalize(raw_default_message()),
             erlang:put(default_message, Cached),
             Cached;
         Cached -> Cached
@@ -168,32 +258,32 @@ default_message() ->
 raw_default_message() ->
     #{
         %%%%%%%% Functional options %%%%%%%%
-        hb_config_location => <<"config.flat">>,
-        initialized => true,
+        <<"hb-config-location">> => <<"config.flat">>,
+        <<"initialized">> => true,
         %% What HTTP client should the node use?
         %% Options: gun, httpc, hackney
-        http_client => ?DEFAULT_HTTP_CLIENT,
+        <<"http-client">> => ?DEFAULT_HTTP_CLIENT,
         %% Scheduling mode: Determines when the SU should inform the recipient
         %% that an assignment has been scheduled for a message.
         %% Options: aggressive(!), local_confirmation, remote_confirmation,
         %%          disabled
-        scheduling_mode => local_confirmation,
+        <<"scheduling-mode">> => local_confirmation,
         %% Compute mode: Determines whether the process device should attempt to 
         %% execute more messages on a process after it has returned a result.
         %% Options: aggressive, lazy
-        compute_mode => lazy,
+        <<"compute-mode">> => lazy,
         %% Choice of remote nodes for tasks that are not local to hyperbeam.
-        gateway => ?DEFAULT_GATEWAY,
-        bundler_ans104 => <<"https://up.arweave.net:443">>,
+        <<"gateway">> => ?DEFAULT_GATEWAY,
+        <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
         %% Location of the wallet keyfile on disk that this node will use.
-        priv_key_location => <<"hyperbeam-key.json">>,
+        <<"priv-key-location">> => <<"hyperbeam-key.json">>,
         %% The time-to-live that should be specified when we register
         %% ourselves as a scheduler on the network.
         %% Default: 7 days.
-        scheduler_location_ttl => (60 * 60 * 24 * 7) * 1000,
+        <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
         %% Preloaded devices for the node to use. These names override
         %% resolution of devices via ID to the default implementations.
-        preloaded_devices => [
+        <<"preloaded-devices">> => [
             #{<<"name">> => <<"arweave@2.9">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
@@ -256,69 +346,69 @@ raw_default_message() ->
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
         ],
         %% Default execution cache control options
-        cache_control => [<<"no-cache">>, <<"no-store">>],
-        cache_lookup_hueristics => false,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"cache-lookup-hueristics">> => false,
         % Should we await in-progress executions, rather than re-running?
         % Has three settings: false, only `named' executions, or all executions.
-        await_inprogress => named,
+        <<"await-inprogress">> => named,
         %% Should the node attempt to access data from remote caches for
         %% client requests?
-        access_remote_cache_for_client => false,
+        <<"access-remote-cache-for-client">> => false,
         %% Should the node attempt to load devices from remote signers?
-        load_remote_devices => false,
+        <<"load-remote-devices">> => false,
         %% The list of device signers that the node should trust.
-        trusted_device_signers => [],
+        <<"trusted-device-signers">> => [],
         %% What should the node do if a client error occurs?
-        client_error_strategy => throw,
+        <<"client-error-strategy">> => throw,
         %% HTTP client request options
-        http_client_connect_timeout => 5000,
-        http_client_keepalive => 120000,
-        http_client_send_timeout => 300_000,
-        port => 8734,
-        process_sampler => true,
-        process_sampler_interval => 15000,
-        wasm_allow_aot => false,
+        <<"http-client-connect-timeout">> => 5000,
+        <<"http-client-keepalive">> => 120000,
+        <<"http-client-send-timeout">> => 300_000,
+        <<"port">> => 8734,
+        <<"process-sampler">> => true,
+        <<"process-sampler-interval">> => 15000,
+        <<"wasm-allow-aot">> => false,
         %% Options for the relay device
-        relay_http_client => httpc,
+        <<"relay-http-client">> => httpc,
         %% The default codec to use for commitment signatures.
-        commitment_device => <<"httpsig@1.0">>,
+        <<"commitment-device">> => <<"httpsig@1.0">>,
         %% Dev options
-        mode => debug,
-        profiling => true,
+        <<"mode">> => debug,
+        <<"profiling">> => true,
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
-        node_history => [],
-        debug_stack_depth => 40,
-        debug_print => false,
-        debug_log => false,
-        log_dir => <<"logs">>,
-        log_max_files => 5,
-        log_max_bytes => 52428800,
-        debug_print_map_line_threshold => 30,
-        debug_print_binary_max => 60,
-        debug_print_indent => 2,
-        debug_print_truncate => 30,
-        stack_print_prefixes => ["hb", "dev", "ar", "maps"],
-        debug_print_trace => short, % `short` | `false`. Has performance impact.
-        debug_print_verify => false,
-        debug_print_metadata => true,
-        debug_print_gen_id => false,
-        debug_print_committers => true,
-        debug_print_comm_device => true,
-        debug_print_comm_type => true,
-        debug_trace_type => ?DEFAULT_TRACE_TYPE,
-        short_trace_len => 20,
-        debug_show_priv => if_present,
-        debug_resolve_links => false,
-        debug_print_fail_mode => long,
-		trusted => #{},
-        snp_enforced_keys => [
+        <<"node-history">> => [],
+        <<"debug-stack-depth">> => 40,
+        <<"debug-print">> => false,
+        <<"debug-log">> => false,
+        <<"log-dir">> => <<"logs">>,
+        <<"log-max-files">> => 5,
+        <<"log-max-bytes">> => 52428800,
+        <<"debug-print-map-line-threshold">> => 30,
+        <<"debug-print-binary-max">> => 60,
+        <<"debug-print-indent">> => 2,
+        <<"debug-print-truncate">> => 30,
+        <<"stack-print-prefixes">> => ["hb", "dev", "ar", "maps"],
+        <<"debug-print-trace">> => short, % `short` | `false`. Has performance impact.
+        <<"debug-print-verify">> => false,
+        <<"debug-print-metadata">> => true,
+        <<"debug-print-gen-id">> => false,
+        <<"debug-print-committers">> => true,
+        <<"debug-print-comm-device">> => true,
+        <<"debug-print-comm-type">> => true,
+        <<"debug-trace-type">> => ?DEFAULT_TRACE_TYPE,
+        <<"short-trace-len">> => 20,
+        <<"debug-show-priv">> => if_present,
+        <<"debug-resolve-links">> => false,
+        <<"debug-print-fail-mode">> => long,
+		<<"trusted">> => #{},
+        <<"snp-enforced-keys">> => [
             firmware, kernel, 
             initrd, append,
             vmm_type, guest_features
         ],
-        name_resolvers => ?DEFAULT_NAME_RESOLVERS,
-        routes => [
+        <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
+        <<"routes">> => [
             %% Local CU routes.
             #{
                 <<"template">> => <<"/result/.*">>,
@@ -343,15 +433,15 @@ raw_default_message() ->
                     [
                         #{
                             <<"prefix">> => <<"https://ao-search-gateway.goldsky.com">>,
-                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
+                            <<"opts">> => ?DEFAULT_HTTP_OPTS
                         },
                         #{
                             <<"prefix">> => <<"https://arweave-search.goldsky.com">>,
-                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
+                            <<"opts">> => ?DEFAULT_HTTP_OPTS
                         },
                         #{
                             <<"prefix">> => ?DEFAULT_GATEWAY,
-                            <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
+                            <<"opts">> => ?DEFAULT_HTTP_OPTS
                         }
                     ]
             },
@@ -425,7 +515,7 @@ raw_default_message() ->
                     #{
                         <<"match">> => <<"^/arweave">>,
                         <<"with">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
+                        <<"opts">> => ?DEFAULT_HTTP_OPTS
                     }
             },
             %% General Arweave requests: race all chain nodes, take
@@ -443,11 +533,11 @@ raw_default_message() ->
                 <<"node">> =>
                     #{
                         <<"prefix">> => ?DEFAULT_GATEWAY,
-                        <<"opts">> => #{ http_client => ?DEFAULT_HTTP_CLIENT, protocol => http2 }
+                        <<"opts">> => ?DEFAULT_HTTP_OPTS
                     }
             }
         ],
-        store =>
+        <<"store">> =>
             [
                 ?DEFAULT_PRIMARY_STORE,
                 #{
@@ -475,8 +565,8 @@ raw_default_message() ->
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE]
                 }
             ],
-        match_index => [?DEFAULT_PRIMARY_STORE],
-        priv_store =>
+        <<"match-index">> => [?DEFAULT_PRIMARY_STORE],
+        <<"priv-store">> =>
             [
                 #{
                     <<"store-module">> => hb_store_fs,
@@ -485,27 +575,27 @@ raw_default_message() ->
             ],
         %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
-        process_now_from_cache => false,
+        <<"process-now-from-cache">> => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
-        ans104_trust_gql => true,
+        <<"ans104-trust-gql">> => true,
         % Number of chunks to fetch in parallel when loading a TX or dataitem.
-        arweave_chunk_fetch_concurrency => 5,
-        http_extra_opts =>
+        <<"arweave-chunk-fetch-concurrency">> => 5,
+        <<"http-extra-opts">> =>
             #{
-                force_message => true,
-                cache_control => [<<"always">>]
+                <<"force-message">> => true,
+                <<"cache-control">> => [<<"always">>]
             },
         % Should the node store all signed messages?
-        store_all_signed => true,
+        <<"store-all-signed">> => true,
         % Should the node use persistent processes?
-        process_workers => false,
+        <<"process-workers">> => false,
         % Options for the router device
-        router_opts => #{
-            routes => []
+        <<"router-opts">> => #{
+            <<"routes">> => []
         },
-        on => #{
+        <<"on">> => #{
             <<"request">> =>
                 [
                     #{
@@ -535,8 +625,8 @@ raw_default_message() ->
                     }
                 ]
         },
-        scheduler_default_commitment_spec => <<"httpsig@1.0">>,
-        genesis_wasm_import_authorities =>
+        <<"scheduler-default-commitment-spec">> => <<"httpsig@1.0">>,
+        <<"genesis-wasm-import-authorities">> =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
             ],
@@ -551,7 +641,7 @@ raw_default_message() ->
         % Options:
         % - fallback: Fallback to the index page
         % - error: Return 404 Not Found
-        manifest_404 => fallback
+        <<"manifest-404">> => fallback
     }.
 
 %% @doc Get an option from the global options, optionally overriding with a
@@ -563,81 +653,67 @@ raw_default_message() ->
 %% `prefer' defaults to `local'.
 get(Key) -> ?MODULE:get(Key, undefined).
 get(Key, Default) -> ?MODULE:get(Key, Default, #{}).
-get(Key, Default, Opts) when is_binary(Key) ->
-    try binary_to_existing_atom(Key, utf8) of
-        AtomKey -> ?MODULE:get(AtomKey, Default, Opts)
-    catch
-        error:badarg -> do_get(Key, Default, Opts)
-    end;
+get(Key, Default, Opts) when is_atom(Key); is_list(Key) ->
+    ?MODULE:get(canonical_key(Key), Default, Opts);
 get(Key, Default, Opts)
-        when is_map(Opts),
-             not is_map_key(prefer, Opts),
+        when is_binary(Key),
+             is_map(Opts),
              not is_map_key(<<"only">>, Opts),
              not is_map_key(<<"prefer">>, Opts) ->
-    % Fast path for the overwhelmingly-common shapes: (a) no preference
-    % set, (b) `only => local' (all real-world HTTP request handling).
-    % The final clause falls through to do_get/3 for ENV_KEYS-backed keys
-    % (HB_PARANOID, HB_PORT, etc.) so env-var parsing + caching still
-    % happens; the `is_map_key' check is too fast (~7 ns) to move to a
-    % guard, and ?ENV_KEYS contains fun references so it can't appear in
-    % a guard anyway.
-    case Opts of
-        #{ only := global } -> do_get(Key, Default, Opts);
-        #{ Key   := Value } -> Value;
-        #{ only  := local } -> Default;
-        _ ->
-            case is_map_key(Key, ?ENV_KEYS) of
-                true -> do_get(Key, Default, Opts);
-                false ->
-                    case maps:get(Key, default_message(), '$hb_opts_not_found') of
-                        '$hb_opts_not_found' -> Default;
-                        V -> V
-                    end
-            end
-    end;
-get(Key, Default, Opts) ->
-    do_get(Key, Default, Opts).
-do_get(Key, Default, Opts = #{ <<"only">> := Only }) ->
-    do_get(Key, Default, maps:remove(<<"only">>, Opts#{ only => Only }));
-do_get(Key, Default, Opts = #{ <<"prefer">> := Prefer }) ->
-    do_get(Key, Default, maps:remove(<<"prefer">>, Opts#{ prefer => Prefer }));
-do_get(Key, Default, Opts = #{ only := local }) ->
     case maps:find(Key, Opts) of
         {ok, Value} -> Value;
-        error -> 
-            Default
+        error ->
+            case is_map_key(Key, ?ENV_KEYS) of
+                true -> do_get(Key, Default, Opts);
+                false -> maps:get(Key, default_message(), Default)
+            end
     end;
-do_get(Key, Default, Opts = #{ only := global }) ->
+get(Key, Default, Opts) when is_binary(Key) ->
+    do_get(Key, Default, Opts);
+get(Key, Default, Opts)
+        when is_map(Opts),
+             is_map_key(<<"only">>, Opts) orelse is_map_key(<<"prefer">>, Opts) ->
+    do_get(canonical_key(Key), Default, Opts);
+get(Key, Default, Opts) ->
+    ?MODULE:get(canonical_key(Key), Default, Opts).
+do_get(Key, Default, Opts = #{ <<"only">> := local }) ->
+    case maps:find(Key, Opts) of
+        {ok, Value} -> Value;
+        error -> Default
+    end;
+do_get(Key, Default, Opts = #{ <<"only">> := global }) ->
     case global_get(Key, hb_opts_not_found, Opts) of
         hb_opts_not_found -> Default;
         Value -> Value
     end;
-do_get(Key, Default, Opts = #{ prefer := global }) ->
-    case do_get(Key, hb_opts_not_found, #{ only => global }) of
-        hb_opts_not_found -> do_get(Key, Default, Opts#{ only => local });
+do_get(Key, Default, Opts = #{ <<"prefer">> := global }) ->
+    case do_get(Key, hb_opts_not_found, #{ <<"only">> => global }) of
+        hb_opts_not_found ->
+            do_get(Key, Default, Opts#{ <<"only">> => local });
         Value -> Value
     end;
-do_get(Key, Default, Opts = #{ prefer := local }) ->
-    case do_get(Key, hb_opts_not_found, Opts#{ only => local }) of
+do_get(Key, Default, Opts = #{ <<"prefer">> := local }) ->
+    case do_get(Key, hb_opts_not_found, Opts#{ <<"only">> => local }) of
         hb_opts_not_found ->
-            do_get(Key, Default, Opts#{ only => global });
+            do_get(Key, Default, Opts#{ <<"only">> => global });
         Value -> Value
     end;
 do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
-    do_get(Key, Default, Opts#{ prefer => local }).
+    do_get(Key, Default, Opts#{ <<"prefer">> => local }).
 
 %% @doc Get an environment variable or configuration key. Depending on whether
 %% the value is derived from an environment variable, we may be able to cache
 %% the result in the process dictionary.
 global_get(Key, Default, Opts) ->
-    case erlang:get({processed_env, Key}) of
+    NormKey = canonical_key(Key),
+    case erlang:get({processed_env, NormKey}) of
         {cached, Value} -> Value;
         undefined ->
             % Thee value is not cached, so we need to process it.
             {IsCachable, Value} =
-                case maps:get(Key, ?ENV_KEYS, Default) of
-                    Default -> {false, config_lookup(Key, Default, Opts)};
+                case maps:get(NormKey, ?ENV_KEYS, Default) of
+                    Default -> {false, config_lookup(NormKey, Default, Opts)};
                     {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
                         {true, ValParser(
                             cached_os_env(
@@ -647,14 +723,16 @@ global_get(Key, Default, Opts) ->
                         )};
                     {EnvKey, ValParser} when is_function(ValParser) ->
                         case cached_os_env(EnvKey, not_found) of
-                            not_found -> {false, config_lookup(Key, Default, Opts)};
+                            not_found ->
+                                {false, config_lookup(NormKey, Default, Opts)};
                             V -> {true, ValParser(V)}
                         end;
                     {EnvKey, DefaultValue} ->
                         {true, cached_os_env(EnvKey, DefaultValue)}
-                end,
+                    end,
             % Cache the result if it is immutable and return.
-            if IsCachable -> erlang:put({processed_env, Key}, {cached, Value});
+            if IsCachable ->
+                    erlang:put({processed_env, NormKey}, {cached, Value});
             true -> ok
             end,
             Value
@@ -686,7 +764,8 @@ normalize_default(Default) -> Default.
 %% @doc An abstraction for looking up configuration variables. In the future,
 %% this is the function that we will want to change to support a more dynamic
 %% configuration system.
-config_lookup(Key, Default, _Opts) -> maps:get(Key, default_message(), Default).
+config_lookup(Key, Default, _Opts) ->
+    maps:get(canonical_key(Key), default_message(), Default).
 
 %% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
 %% keys to those in the default message.
@@ -716,7 +795,7 @@ path_to_device(Path) ->
 
 %% @doc Convert a file extension to a device name.
 extension_to_device(Ext) ->
-    extension_to_device(Ext, maps:get(preloaded_devices, default_message())).
+    extension_to_device(Ext, ?MODULE:get(preloaded_devices, [], default_message())).
 extension_to_device(_, []) -> {error, not_found};
 extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
     case binary:match(Name, Ext) of
@@ -738,7 +817,7 @@ load_bin(<<"flat@1.0">>, Bin, Opts) ->
         ),
     try dev_codec_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
         {ok, Map} ->
-            {ok, mimic_default_types(Map, new_atoms, Opts)}
+            {ok, mimic_default_types(Map, false, Opts)}
     catch
         error:B -> {error, B}
     end;
@@ -752,11 +831,11 @@ load_bin(Device, Bin, Opts) ->
                         Bin,
                         <<"structured@1.0">>,
                         Device,
-                        Opts#{ linkify_mode => false }
+                        Opts#{ <<"linkify-mode">> => false }
                     ),
                     Opts
                 ),
-                new_atoms,
+                false,
                 Opts
             )
         }
@@ -764,28 +843,78 @@ load_bin(Device, Bin, Opts) ->
     end.
 
 %% @doc Mimic the types of the default message for a given map.
-mimic_default_types(Map, Mode, Opts) ->
+mimic_default_types(Map, _Mode, Opts) ->
     Default = default_message_with_env(),
-    hb_maps:from_list(lists:map(
-        fun({Key, Value}) ->
-            NewKey = try hb_util:key_to_atom(Key, Mode) catch _:_ -> Key end,
-            NewValue = 
-                case hb_maps:get(NewKey, Default, not_found, Opts) of
-                    not_found -> Value;
-                    DefaultValue when is_atom(DefaultValue) ->
-                        hb_util:atom(Value);
-                    DefaultValue when is_integer(DefaultValue) ->
-                        hb_util:int(Value);
-                    DefaultValue when is_float(DefaultValue) ->
-                        hb_util:float(Value);
-                    DefaultValue when is_binary(DefaultValue) ->
-                        Value;
-                    _ -> Value
+    mimic_default_types(canonicalize(Map), root, Default, Default, Opts).
+
+mimic_default_types(List, _Context, Default, RootDefault, Opts) when is_list(List) ->
+    case hb_util:is_string_list(List) of
+        true -> List;
+        false ->
+            DefaultItem = list_default(Default),
+            lists:map(
+                fun(Item) ->
+                    mimic_default_types(Item, root, DefaultItem, RootDefault, Opts)
                 end,
-            {NewKey, NewValue}
-        end,
-        hb_maps:to_list(Map, Opts)
-    )).
+                List
+            )
+    end;
+mimic_default_types(Map, Context, Default, RootDefault, Opts) when is_map(Map) ->
+    case dictionary_mode(Context) of
+        opaque ->
+            Map;
+        recurse_values ->
+            maps:map(
+                fun(_Key, Value) ->
+                    mimic_default_types(Value, root, RootDefault, RootDefault, Opts)
+                end,
+                Map
+            );
+        normal ->
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        SubDefault = sub_default(Key, Default, Opts),
+                        {
+                            Key,
+                            mimic_default_types(
+                                coerce_value(SubDefault, Value),
+                                Key,
+                                SubDefault,
+                                RootDefault,
+                                Opts
+                            )
+                        }
+                    end,
+                    maps:to_list(Map)
+                )
+            )
+    end;
+mimic_default_types(Value, _Context, Default, _RootDefault, _Opts) ->
+    coerce_value(Default, Value).
+
+list_default([Default|_]) -> Default;
+list_default(_) -> not_found.
+
+sub_default(Key, Default, Opts) when is_map(Default) ->
+    hb_maps:get(Key, Default, not_found, Opts);
+sub_default(_Key, Default, _Opts) when is_list(Default) ->
+    list_default(Default);
+sub_default(_Key, _Default, _Opts) ->
+    not_found.
+
+coerce_value(not_found, Value) ->
+    Value;
+coerce_value(DefaultValue, Value) when is_atom(DefaultValue) ->
+    try hb_util:atom(Value)
+    catch _:_ -> Value
+    end;
+coerce_value(DefaultValue, Value) when is_integer(DefaultValue) ->
+    hb_util:int(Value);
+coerce_value(DefaultValue, Value) when is_float(DefaultValue) ->
+    hb_util:float(Value);
+coerce_value(_DefaultValue, Value) ->
+    Value.
 
 %% @doc Find a given identity from the `identities' map, and return the options
 %% merged with the sub-options for that identity.
@@ -793,7 +922,7 @@ as(Identity, Opts) ->
     case identities(Opts) of
         #{ Identity := SubOpts } ->
             ?event({found_identity_sub_opts_are, SubOpts}),
-            {ok, maps:merge(Opts, mimic_default_types(SubOpts, new_atoms, Opts))};
+            {ok, maps:merge(Opts, mimic_default_types(SubOpts, false, Opts))};
         _ ->
             {error, not_found}
     end.
@@ -812,7 +941,7 @@ identities(Default, Opts) ->
     Addresses =
         maps:from_list(lists:filtermap(
             fun({_Name, SubOpts}) ->
-                case maps:find(priv_wallet, SubOpts) of
+                case maps:find(<<"priv-wallet">>, SubOpts) of
                     {ok, Wallet} ->
                         Addr = hb_util:human_id(ar_wallet:to_address(Wallet)),
                         {true, {Addr, SubOpts}};
@@ -826,7 +955,7 @@ identities(Default, Opts) ->
     Identities =
         maps:map(
             fun(_NameOrID, SubOpts) ->
-                case maps:find(priv_wallet, SubOpts) of
+                case maps:find(<<"priv-wallet">>, SubOpts) of
                     {ok, Wallet} ->
                         SubOpts#{ <<"address">> => hb_util:human_id(Wallet) };
                     error -> SubOpts
@@ -842,10 +971,10 @@ identities(Default, Opts) ->
         error ->
             Identities#{
                 DefaultID => #{
-                    priv_wallet => DefaultWallet
+                    <<"priv-wallet">> => DefaultWallet
                 },
                 <<"default">> => #{
-                    priv_wallet => DefaultWallet
+                    <<"priv-wallet">> => DefaultWallet
                 }
             }
     end.
@@ -910,12 +1039,10 @@ ensure_node_history(Opts, RequiredOpts) ->
         % Add the Opts to the node history to validate all items
         NodeHistoryWithOpts = [ Opts | NodeHistory ],
         % Normalize required options
-        NormalizedRequiredOpts ?= hb_ao:normalize_keys(RequiredOpts),
+        NormalizedRequiredOpts ?= canonicalize(RequiredOpts),
         % Normalize all node history items once
         NormalizedNodeHistory ?= lists:map(
-            fun(Item) -> 
-                hb_ao:normalize_keys(Item)
-            end,
+            fun canonicalize/1,
             NodeHistoryWithOpts
         ),
         % Get the first item (complete opts) and remaining items (differences)
@@ -975,55 +1102,55 @@ global_get_test() ->
     ?assertEqual(52428800, ?MODULE:get(log_max_bytes)).
 
 local_get_test() ->
-    Local = #{ only => local },
+    Local = #{ <<"only">> => local },
     ?assertEqual(undefined, 
         ?MODULE:get(test_key, undefined, Local)),
     ?assertEqual(correct,
-        ?MODULE:get(test_key, undefined, Local#{ test_key => correct })).
+        ?MODULE:get(test_key, undefined, Local#{ <<"test-key">> => correct })).
 
 local_preference_test() ->
-    Local = #{ prefer => local },
+    Local = #{ <<"prefer">> => local },
     ?assertEqual(correct,
-        ?MODULE:get(test_key, undefined, Local#{ test_key => correct })),
+        ?MODULE:get(test_key, undefined, Local#{ <<"test-key">> => correct })),
     ?assertEqual(correct,
-        ?MODULE:get(mode, undefined, Local#{ mode => correct })),
+        ?MODULE:get(mode, undefined, Local#{ <<"mode">> => correct })),
     ?assertNotEqual(undefined,
         ?MODULE:get(mode, undefined, Local)).
 
 global_preference_test() ->
-    Global = #{ prefer => global },
+    Global = #{ <<"prefer">> => global },
     ?assertEqual(undefined, ?MODULE:get(test_key, undefined, Global)),
     ?assertNotEqual(incorrect,
-        ?MODULE:get(mode, undefined, Global#{ mode => incorrect })),
+        ?MODULE:get(mode, undefined, Global#{ <<"mode">> => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
 
 load_flat_test() ->
     % File contents:
     % port: 1234
-    % node_host: https://ao.computer
+    % node-host: https://ao.computer
     % await-inprogress: false
     {ok, Conf} = load("test/config.flat", #{}),
     ?event({loaded, {explicit, Conf}}),
     % Ensure we convert types as expected.
-    ?assertEqual(1234, hb_maps:get(port, Conf)),
+    ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)).
+    ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)).
 
 load_json_test() ->
     {ok, Conf} = load("test/config.json", #{}),
     ?event(debug_node_msg, {loaded, Conf}),
-    ?assertEqual(1234, hb_maps:get(port, Conf)),
-    ?assertEqual(9001, hb_maps:get(example, Conf)),
+    ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
+    ?assertEqual(9001, hb_maps:get(<<"example">>, Conf)),
     % A binary
-    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(node_host, Conf)),
+    ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
-    ?assertEqual(false, hb_maps:get(await_inprogress, Conf)),
+    ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
     % Ensure that a store with `ao-types' is loaded correctly.
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],
-        hb_maps:get(store, Conf)
+        hb_maps:get(<<"store">>, Conf)
     ).
 
 as_identity_test() ->
@@ -1032,16 +1159,16 @@ as_identity_test() ->
     TestWallet2 = ar_wallet:new(),
     TestID2 = hb_util:human_id(TestWallet2),
     Opts = #{
-        test_key => 0,
-        priv_wallet => DefaultWallet,
-        identities => #{
+        <<"test-key">> => 0,
+        <<"priv-wallet">> => DefaultWallet,
+        <<"identities">> => #{
             <<"testname-1">> => #{
-                priv_wallet => TestWallet1,
-                test_key => 1
+                <<"priv-wallet">> => TestWallet1,
+                <<"test-key">> => 1
             },
             TestID2 => #{
-                priv_wallet => TestWallet2,
-                test_key => 2
+                <<"priv-wallet">> => TestWallet2,
+                <<"test-key">> => 2
             }
         }
     },
@@ -1054,23 +1181,23 @@ as_identity_test() ->
     % The wallets for each of the names should be the same as the wallets we
     % provided. We also check that the settings are applied correctly.
     ?assertMatch(
-        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        {ok, #{ <<"priv-wallet">> := DefaultWallet, <<"test-key">> := 0 }},
         as(<<"default">>, Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := DefaultWallet, test_key := 0 }},
+        {ok, #{ <<"priv-wallet">> := DefaultWallet, <<"test-key">> := 0 }},
         as(hb_util:human_id(DefaultWallet), Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(<<"testname-1">>, Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet1, test_key := 1 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet1, <<"test-key">> := 1 }},
         as(hb_util:human_id(TestWallet1), Opts)
     ),
     ?assertMatch(
-        {ok, #{ priv_wallet := TestWallet2, test_key := 2 }},
+        {ok, #{ <<"priv-wallet">> := TestWallet2, <<"test-key">> := 2 }},
         as(TestID2, Opts)
     ).
     
@@ -1094,7 +1221,7 @@ ensure_node_history_test() ->
             }, 
         <<"key2">> => <<"value2">>, 
         <<"extra">> => <<"value">>,
-        node_history => [
+        <<"node-history">> => [
             #{
                 <<"key1">> => 
                     #{
@@ -1124,7 +1251,7 @@ ensure_node_history_test() ->
                 <<"type">> => <<"string">>,
                 <<"value">> => <<"value1">>
             }, 
-        node_history => [
+        <<"node-history">> => [
             #{
                 <<"key1">> => 
                     #{
@@ -1147,7 +1274,7 @@ ensure_node_history_test() ->
                     <<"value">> => <<"value">>
                 }, 
             <<"key2">> => <<"value2">>,
-            node_history =>
+            <<"node-history">> =>
                 [
                     #{
                         <<"key1">> => 

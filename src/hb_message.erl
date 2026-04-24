@@ -555,7 +555,7 @@ do_paranoid_verify(Topic, Msg, Opts) ->
                     {stack, {trace, Stack}}
                 },
                 Opts#{
-                    paranoid_verify => false
+                    <<"paranoid-verify">> => false
                 }
             ),
             throw({paranoid_verification_failure, Topic, Path, Msg, FailedMsg})
@@ -938,8 +938,8 @@ commitment_devices(_Msg, _Opts) ->
 %% performed on the value of that key.
 find_target(Self, Req, Opts) ->
 	GetOpts = Opts#{
-        hashpath => ignore,
-        cache_control => [<<"no-cache">>, <<"no-store">>]
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     },
     {ok,
         case hb_maps:get(<<"target">>, Req, <<"self">>, GetOpts) of

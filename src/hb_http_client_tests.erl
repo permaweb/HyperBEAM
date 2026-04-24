@@ -13,7 +13,7 @@ hackney_basic_request_test_() ->
             headers => #{},
             body => <<>>
         },
-        Opts = #{http_client => hackney, http_retry => 0},
+        Opts = #{ <<"http-client">> => hackney, <<"http-retry">> => 0},
         {ok, 200, _, _} = hb_http_client:request(Args, Opts)
     end}.
 
@@ -28,7 +28,7 @@ hackney_bad_peer_test_() ->
             headers => #{},
             body => <<>>
         },
-        Opts = #{http_client => hackney, http_retry => 0},
+        Opts = #{ <<"http-client">> => hackney, <<"http-retry">> => 0},
         {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts),
         BadArgs = ValidArgs#{peer => <<"not-a-valid-uri">>},
         BadResult = hb_http_client:request(BadArgs, Opts),
@@ -50,7 +50,7 @@ hackney_post_test_() ->
             headers => #{},
             body => <<"{}">>
         },
-        Opts = #{http_client => hackney, http_retry => 0},
+        Opts = #{ <<"http-client">> => hackney, <<"http-retry">> => 0},
         Result = hb_http_client:request(Args, Opts),
         ?event(http_client_tests, {hackney_post_result, summarize(Result)}),
         ?assertMatch({ok, _, _, _}, Result)

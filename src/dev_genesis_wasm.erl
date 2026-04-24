@@ -565,8 +565,8 @@ import_legacy_checkpoint_test_() ->
 import_legacy_checkpoint() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        genesis_wasm_import_authorities =>
+        <<"priv-wallet">> => hb:wallet(),
+        <<"genesis-wasm-import-authorities">> =>
             [
                 <<"fcoN_xJeisVsPXA-trzVAuIiqO3ydLQxM-L4XbrQKzY">>,
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>
@@ -635,7 +635,7 @@ test_base_process(Opts) ->
         <<"scheduler-location">> => Address,
         <<"type">> => <<"Process">>,
         <<"test-random-seed">> => rand:uniform(1337)
-    }, #{ priv_wallet => Wallet }).
+    }, #{ <<"priv-wallet">> => Wallet }).
 
 test_wasm_process(WASMImage) ->
     test_wasm_process(WASMImage, #{}).
@@ -651,7 +651,7 @@ test_wasm_process(WASMImage, Opts) ->
                 <<"image">> => WASMImageID
             }
         ),
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ).
 
 test_wasm_stack_process(Opts, Stack) ->
@@ -682,16 +682,17 @@ test_wasm_stack_process(Opts, Stack) ->
                     <<"type">> => <<"Process">>
                 }
             ),
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ).
 
 test_genesis_wasm_process() ->
     Opts = #{
-        genesis_wasm_db_dir => "cache-mainnet-test/genesis-wasm",
-        genesis_wasm_checkpoints_dir => "cache-mainnet-test/genesis-wasm/checkpoints",
-        genesis_wasm_log_level => "error",
-        genesis_wasm_port => 6363,
-        execution_device => <<"genesis-wasm@1.0">>
+        <<"genesis-wasm-db-dir">> => "cache-mainnet-test/genesis-wasm",
+        <<"genesis-wasm-checkpoints-dir">> =>
+            "cache-mainnet-test/genesis-wasm/checkpoints",
+        <<"genesis-wasm-log-level">> => "error",
+        <<"genesis-wasm-port">> => 6363,
+        <<"execution-device">> => <<"genesis-wasm@1.0">>
     },
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -711,7 +712,7 @@ test_genesis_wasm_process() ->
                 <<"data-protocol">> => <<"ao">>,
                 <<"type">> => <<"Process">>
             }),
-        #{ priv_wallet => Wallet }
+        #{ <<"priv-wallet">> => Wallet }
     ).
 
 schedule_test_message(Base, Text) ->
@@ -729,10 +730,10 @@ schedule_test_message(Base, Text, MsgBase) ->
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
                         },
-                        #{ priv_wallet => Wallet }
+                        #{ <<"priv-wallet">> => Wallet }
                     )
             },
-            #{ priv_wallet => Wallet }
+            #{ <<"priv-wallet">> => Wallet }
         ),
     hb_ao:resolve(Base, Req, #{}).
 
@@ -751,16 +752,16 @@ schedule_aos_call(Base, Code, Action, Opts) ->
                 <<"target">> => ProcID,
                 <<"timestamp">> => os:system_time(millisecond)
             },
-            #{ priv_wallet => Wallet }
+            #{ <<"priv-wallet">> => Wallet }
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req).
 
 dedup_test() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     Base = test_genesis_wasm_process(),
     hb_cache:write(Base, Opts),
@@ -845,9 +846,9 @@ spawn_and_execute_slot_test_() ->
 spawn_and_execute_slot() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     Base = test_genesis_wasm_process(),
     hb_cache:write(Base, Opts),
@@ -890,9 +891,9 @@ compare_result_genesis_wasm_and_wasm_test_() ->
 compare_result_genesis_wasm_and_wasm() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     % Test with genesis-wasm
     MsgGenesisWasm = test_genesis_wasm_process(),
@@ -953,9 +954,9 @@ send_message_between_genesis_wasm_processes_test_() ->
 send_message_between_genesis_wasm_processes() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     % Create receiver process with handler
     MsgReceiver = test_genesis_wasm_process(),
@@ -1035,9 +1036,9 @@ dryrun_genesis_wasm_test_() ->
 dryrun_genesis_wasm() ->
     application:ensure_all_started(hb),
     Opts = #{
-        priv_wallet => hb:wallet(),
-        cache_control => <<"always">>,
-        store => hb_opts:get(store)
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => hb_opts:get(store)
     },
     % Set up process with increment handler to receive messages
     ProcReceiver = test_genesis_wasm_process(),

@@ -10,14 +10,14 @@
 model_test() ->
     ok = hb_invariant:state_machine(
         #{
-            states => [#{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1 }],
-            models => [#{ <<"device">> => <<"message@1.0">>, <<"a">> => 1 }],
-            requests => requests(),
-            properties => properties(),
-            next => fun next/4,
-            runs => 10,
-            length => 100,
-            opts => #{}
+            <<"states">> => [#{ <<"device">> => <<"trie@1.0">>, <<"a">> => 1 }],
+            <<"models">> => [#{ <<"device">> => <<"message@1.0">>, <<"a">> => 1 }],
+            <<"requests">> => requests(),
+            <<"properties">> => properties(),
+            <<"next">> => fun next/4,
+            <<"runs">> => 10,
+            <<"length">> => 100,
+            <<"opts">> => #{}
         }
     ).
 

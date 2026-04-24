@@ -205,8 +205,8 @@ linkify(Manifest, _Opts) ->
 
 resolve_test_parallel() ->
     Opts = #{
-        store => hb_opts:get(store, no_viable_store, #{}),
-        on => #{
+        <<"store">> => hb_opts:get(store, no_viable_store, #{}),
+        <<"on">> => #{
             <<"request">> => #{
                 <<"device">> => <<"manifest@1.0">>
             }
@@ -264,7 +264,7 @@ resolve_test_parallel() ->
     ok.
 
 manifest_default_fallback_test_parallel() ->
-    Opts = #{ store => hb_opts:get(store, no_viable_store, #{}) },
+    Opts = #{ <<"store">> => hb_opts:get(store, no_viable_store, #{}) },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
     Node = hb_http_server:start_node(Opts),
@@ -276,8 +276,8 @@ manifest_default_fallback_test_parallel() ->
 
 manifest_404_error_test_parallel() ->
     Opts = #{
-        store => hb_opts:get(store, no_viable_store, #{}),
-        manifest_404 => error
+        <<"store">> => hb_opts:get(store, no_viable_store, #{}),
+        <<"manifest-404">> => error
     },
     {ok, ManifestID} = create_generic_manifest(Opts),
     ?event({manifest_id, ManifestID}),
@@ -312,8 +312,8 @@ create_generic_manifest(Opts) ->
 %% NOTE: This test requests data to arweave node
 manifest_download_via_raw_endpoint_test_ignore() ->
     Opts = #{
-        arweave_index_ids => true,
-        store => [
+        <<"arweave-index-ids">> => true,
+        <<"store">> => [
         #{
             <<"store-module">> => hb_store_arweave,
             <<"name">> => <<"arweave-store">>,
@@ -391,7 +391,7 @@ test_env_opts() ->
     TempStore = hb_test_utils:test_store(),
     BaseOpts = 
         #{
-            store => 
+            <<"store">> => 
                 [
                     TempStore,
                     #{<<"store-module">> => hb_store_gateway}
@@ -411,7 +411,7 @@ test_env_opts() ->
         ]
     ),
     BaseOpts#{
-        on =>
+        <<"on">> =>
             #{
                 <<"request">> =>
                     [#{<<"device">> => <<"manifest@1.0">>}]

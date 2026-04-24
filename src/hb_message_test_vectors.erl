@@ -67,18 +67,18 @@ suite_test_opts(OptsName) ->
 
 test_opts(normal) ->
     #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => hb:wallet()
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => hb:wallet()
     };
 test_opts(ed25519) ->
     #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => ar_wallet:new({eddsa, ed25519})
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new({eddsa, ed25519})
     };
 test_opts(ethereum) ->
     #{
-        store => hb_test_utils:test_store(),
-        priv_wallet => ar_wallet:new(ethereum)
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new(ethereum)
      }.
  
 test_suite() ->
@@ -902,14 +902,14 @@ complex_signed_message_test(Codec, Opts) ->
 %         dev_message:commit(
 %             Msg,
 %             #{ <<"commitment-device">> => Codec },
-%             #{ priv_wallet => Wallet1 }
+%             #{ <<"priv-wallet">> => Wallet1 }
 %         ),
 %     ?event({signed_msg, SignedMsg}),
 %     {ok, MsgSignedTwice} =
 %         dev_message:commit(
 %             SignedMsg,
 %             #{ <<"commitment-device">> => Codec },
-%             #{ priv_wallet => Wallet2 }
+%             #{ <<"priv-wallet">> => Wallet2 }
 %         ),
 %     ?event({signed_msg_twice, MsgSignedTwice}),
 %     ?assert(verify(MsgSignedTwice)),
@@ -934,14 +934,14 @@ deep_multisignature_test() ->
     SignedMsg =
         hb_message:commit(
             Msg,
-            Opts#{ priv_wallet => Wallet1 },
+            Opts#{ <<"priv-wallet">> => Wallet1 },
             Codec
         ),
     ?event({signed_msg, SignedMsg}),
     MsgSignedTwice =
         hb_message:commit(
             SignedMsg,
-            Opts#{ priv_wallet => Wallet2 },
+            Opts#{ <<"priv-wallet">> => Wallet2 },
             Codec
         ),
     ?event({signed_msg_twice, MsgSignedTwice}),
@@ -1212,7 +1212,7 @@ committed_empty_keys_test(Codec, Opts) ->
 
 deeply_nested_committed_keys_test() ->
     Opts = (test_opts(normal))#{
-        store => [
+        <<"store">> => [
             #{
                 <<"store-module">> => hb_store_fs,
                 <<"name">> => <<"cache-TEST">>
@@ -1648,9 +1648,9 @@ find_multiple_commitments_test_disabled() ->
         <<"b">> => 2,
         <<"c">> => 3
     },
-    Sig1 = hb_message:commit(Msg, Opts#{ priv_wallet => ar_wallet:new() }),
+    Sig1 = hb_message:commit(Msg, Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
     {ok, _} = hb_cache:write(Sig1, Opts),
-    Sig2 = hb_message:commit(Msg, Opts#{ priv_wallet => ar_wallet:new() }),
+    Sig2 = hb_message:commit(Msg, Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
     {ok, _} = hb_cache:write(Sig2, Opts),
     {ok, ReadMsg} = hb_cache:read(hb_message:id(Msg, none, Opts), Opts),
     LoadedCommitments = hb_cache:ensure_all_loaded(ReadMsg, Opts),
@@ -1661,7 +1661,7 @@ find_multiple_commitments_test_disabled() ->
 %% invalid ordering of keys is normalized to a valid ordering.
 bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     % Opts = (test_opts(normal))#{
-    %     store => [
+    %     <<"store">> => [
     %         #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-TEST">> }
     %     ]
     % },
@@ -1701,7 +1701,7 @@ bundled_ordering_test(_Codec, _Opts) ->
     skip.
 
 rsa_wallet_not_match_message_ed25519_type_test() ->
-    Opts = #{priv_wallet => ar_wallet:new(?RSA_KEY_TYPE)},
+    Opts = #{<<"priv-wallet">> => ar_wallet:new(?RSA_KEY_TYPE)},
     SignatureType = ?EDDSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
     ?assertThrow({wrong_wallet_to_sign,
@@ -1714,7 +1714,7 @@ rsa_wallet_not_match_message_ed25519_type_test() ->
         )).
 
 ed25519_wallet_not_match_message_rsa_type_test() ->
-    Opts = #{priv_wallet => ar_wallet:new(?EDDSA_KEY_TYPE)},
+    Opts = #{<<"priv-wallet">> => ar_wallet:new(?EDDSA_KEY_TYPE)},
     SignatureType = ?RSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
     ?assertThrow({wrong_wallet_to_sign,
@@ -1727,7 +1727,7 @@ ed25519_wallet_not_match_message_rsa_type_test() ->
         )).
 
 ethereum_wallet_not_match_message_rsa_type_test() ->
-    Opts = #{priv_wallet => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
+    Opts = #{<<"priv-wallet">> => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
     SignatureType = ?RSA_SIGN_TYPE,
     Msg = #{<<"a">> => <<"b">>},
     ?assertThrow({wrong_wallet_to_sign,
@@ -1740,7 +1740,7 @@ ethereum_wallet_not_match_message_rsa_type_test() ->
         )).
 
 ethereum_wallet_match_message_ethereum_type_test() ->
-    Opts = #{priv_wallet => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
+    Opts = #{<<"priv-wallet">> => ar_wallet:new(?ETHEREUM_KEY_TYPE)},
     SignatureType = <<"ethereum">>,
     Msg = #{<<"a">> => <<"b">>},
     ?assert(is_map(hb_message:commit(

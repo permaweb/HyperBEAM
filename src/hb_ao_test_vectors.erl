@@ -122,15 +122,15 @@ test_opts() ->
         #{
             name => normal,
             desc => "Default opts",
-            opts => #{ store => hb_test_utils:test_store() },
+            opts => #{ <<"store">> => hb_test_utils:test_store() },
             skip => []
         },
         #{
             name => without_hashpath,
             desc => "Default without hashpath",
             opts => #{
-                hashpath => ignore,
-                store => hb_test_utils:test_store()
+                <<"hashpath">> => ignore,
+                <<"store">> => hb_test_utils:test_store()
             },
             skip => []
         },
@@ -138,10 +138,10 @@ test_opts() ->
             name => no_cache,
             desc => "No cache read or write",
             opts => #{
-                hashpath => ignore,
-                cache_control => [<<"no-cache">>, <<"no-store">>],
-                spawn_worker => false,
-                store => hb_test_utils:test_store()
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => hb_test_utils:test_store()
             },
             skip => [load_as]
         },
@@ -149,10 +149,10 @@ test_opts() ->
             name => only_store,
             desc => "Store, don't read",
             opts => #{
-                hashpath => update,
-                cache_control => [<<"no-cache">>],
-                spawn_worker => false,
-                store => CachedExecStore
+                <<"hashpath">> => update,
+                <<"cache-control">> => [<<"no-cache">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => CachedExecStore
             },
             skip => [
                 denormalized_device_name,
@@ -165,10 +165,10 @@ test_opts() ->
             name => only_if_cached,
             desc => "Only read, don't exec",
             opts => #{
-                hashpath => ignore,
-                cache_control => [<<"only-if-cached">>],
-                spawn_worker => false,
-                store => CachedExecStore
+                <<"hashpath">> => ignore,
+                <<"cache-control">> => [<<"only-if-cached">>],
+                <<"spawn-worker">> => false,
+                <<"store">> => CachedExecStore
             },
             skip => [
                 % Skip test with locally defined device, amongst others.
@@ -250,13 +250,14 @@ load_device_test() ->
     % Establish an execution environment which trusts the device author.
     Wallet = ar_wallet:new(),
     Opts = #{
-        load_remote_devices => true,
-        trusted_device_signers => [hb_util:human_id(ar_wallet:to_address(Wallet))],
-        store => Store = #{
+        <<"load-remote-devices">> => true,
+        <<"trusted-device-signers">> =>
+            [hb_util:human_id(ar_wallet:to_address(Wallet))],
+        <<"store">> => Store = #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST/fs">>
         },
-        priv_wallet => Wallet
+        <<"priv-wallet">> => Wallet
     },
     hb_store:reset(Store),
     ?assertEqual({ok, <<"example">>}, exec_dummy_device(Opts)).
@@ -266,13 +267,14 @@ untrusted_load_device_test() ->
     UntrustedWallet = ar_wallet:new(),
     TrustedWallet = ar_wallet:new(),
     Opts = #{
-        load_remote_devices => true,
-        trusted_device_signers => [hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
-        store => Store = #{
+        <<"load-remote-devices">> => true,
+        <<"trusted-device-signers">> =>
+            [hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
+        <<"store">> => Store = #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-TEST/fs">>
         },
-        priv_wallet => UntrustedWallet
+        <<"priv-wallet">> => UntrustedWallet
     },
     hb_store:reset(Store),
     ?assertThrow(
@@ -442,7 +444,7 @@ key_from_id_device_with_args_test(Opts) ->
             },
             Opts#{
                 <<"opts_key">> => <<"37">>,
-                <<"cache_control">> => [<<"no-cache">>, <<"no-store">>]
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         )
     ).
@@ -900,7 +902,7 @@ continue_as_test(Opts) ->
 as_commitments_test(RawOpts) ->
     % Test that attempting to cast a message as a device which it already is
     % does not lose its commitments.
-    OptsWithWallet = RawOpts#{ priv_wallet => hb:wallet() },
+    OptsWithWallet = RawOpts#{ <<"priv-wallet">> => hb:wallet() },
     Msg =
         hb_message:commit(
             #{
@@ -965,7 +967,7 @@ step_hook_test(InitOpts) ->
     Ref = make_ref(),
     Opts =
         InitOpts#{
-            on =>
+            <<"on">> =>
                 #{
                     <<"step">> =>
                         #{
@@ -1014,8 +1016,8 @@ paranoid_opts(RawOpts) ->
                 Other
         end,
     RawOpts#{
-        paranoid_verify => true,
-        debug_print => PrintOpts
+        <<"paranoid-verify">> => true,
+        <<"debug-print">> => PrintOpts
     }.
 
 paranoid_message_verification_test(RawOpts) ->
