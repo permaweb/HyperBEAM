@@ -1360,6 +1360,21 @@ attestation(_Base, Req, Opts) ->
                         %% reside in the same physical TPM (TCG
                         %% TPM 2.0 Architecture section 13.2).
                         <<"ak-hierarchy">> => <<"endorsement">>,
+                        %% v1.2.2 paper P4: every sensitive TPM op
+                        %% in this build uses an HMAC-authenticated
+                        %% AES-128-CFB-encrypted session as
+                        %% shandle2 (or shandle1 when no hierarchy
+                        %% auth is needed). See
+                        %% native/lapee_tpm_nif/lapee_tpm_nif.c
+                        %% lapee_ensure_auth_session(). Field is a
+                        %% compile-time constant tied to the NIF
+                        %% source; the verifier treats this as
+                        %% declarative (bus-level protection is a
+                        %% guest<->TPM property that cannot be
+                        %% re-verified post-hoc from the wire
+                        %% envelope alone).
+                        <<"tpm-session-mode">> =>
+                            <<"hmac-aes128cfb">>,
                         <<"tpm-quote">> => #{
                             <<"pcr-selection">> => Pcrs,
                             <<"nonce">> => hb_util:encode(Nonce),

@@ -3082,7 +3082,16 @@ collect_policy_signals(Claim, Envelope) ->
         %% EV_HYPERBEAM_TCG_LOG_TIP_COMMITMENT event on PCR 15
         %% whose digest matches sha256(envelope.tcg-event-log).
         <<"hashpath-continuity-verified">> =>
-            verify_tcg_log_tip_extend(Envelope)
+            verify_tcg_log_tip_extend(Envelope),
+        %% v1.2.2 paper P4: declarative field from the guest
+        %% (`tpm-session-mode' == "hmac-aes128cfb" when the NIF
+        %% opens an HMAC + parameter-encryption session for every
+        %% sensitive TPM op). Verifier cannot re-verify bus-level
+        %% protection from the wire envelope -- P4 is guest <-> TPM
+        %% -- so we treat this as a declaration and grade it.
+        <<"tpm-session-mode">> =>
+            hb_maps:get(<<"tpm-session-mode">>, Envelope,
+                         <<"unknown">>, #{})
     }.
 
 %% Map signals to warnings + critical-failures. Every entry
@@ -3100,6 +3109,7 @@ classify_policy_findings(S) ->
          ek_ak_binding_finding(S),      %% v1.2 red-team warn
          ak_pubkey_extend_finding(S),   %% v1.2 paper-to-code P5
          hashpath_continuity_finding(S), %% v1.2.2 paper P5-ext
+         tpm_session_mode_finding(S),    %% v1.2.2 paper P4
          ima_policy_finding(S),
          tpm_trust_finding(S),
          tme_finding(S),
@@ -3604,6 +3614,40 @@ hashpath_continuity_finding(
               "evaluated. Common on QEMU without vTPM passthrough; "
               "not expected on real-hardware envelopes.">>);
 hashpath_continuity_finding(_) -> ok.
+
+%% v1.2.2 paper P4: TPM session mode declaration.
+%%
+%%   "hmac-aes128cfb"  -> ok (paper P4 held)
+%%   "password"        -> warn (explicit regression to pre-P4)
+%%   `unknown' / absent -> info (pre-P4 build; observational)
+%%
+%% The verifier treats this as a declaration rather than
+%% something it can re-verify, because P4 is a guest<->TPM bus
+%% property (whether the TPM commands carried HMAC+encrypt
+%% coverage while they were in flight over the LPC bus), and
+%% the envelope the verifier sees is the POST-quote wire form,
+%% not the pre-quote TPM traffic.
+tpm_session_mode_finding(
+  #{<<"tpm-session-mode">> := <<"hmac-", _/binary>>}) -> ok;
+tpm_session_mode_finding(
+  #{<<"tpm-session-mode">> := <<"password">>}) ->
+    finding(warn, <<"tpm-session-mode-password">>,
+            <<"tpm">>,
+            <<"Guest declares it uses plain password TPM sessions "
+              "rather than HMAC + parameter encryption. Paper P4 "
+              "(Arch section) requires HMAC + parameter encryption "
+              "for all sensitive TPM operations on real-silicon "
+              "builds; an attacker on the LPC bus can modify TPM "
+              "responses when this protection is absent.">>);
+tpm_session_mode_finding(
+  #{<<"tpm-session-mode">> := <<"unknown">>}) ->
+    finding(info, <<"tpm-session-mode-undeclared">>,
+            <<"tpm">>,
+            <<"Envelope predates v1.2.2 batch 31 -- the guest does "
+              "not declare its TPM session mode. Assume pre-P4 (no "
+              "HMAC session guarantee). Informational until a "
+              "batch-31+ envelope is evaluated.">>);
+tpm_session_mode_finding(_) -> ok.
 
 %% v1.2 red-team review: the EK<->AK binding is NOT cryptographically
 %% proven in the v1.2 envelope. The EK chain validates an EK cert;
