@@ -284,13 +284,13 @@ grouper_skips_when_slot_cached_test() ->
         },
     M1 = dev_process_test_vectors:aos_process(Opts),
     POpts = Opts#{ <<"process-workers">> => true },
-    %% With the cache empty, every compute request must group by
-    %% process so that the worker can do the actual work.
+    % With the cache empty, every compute request must group by
+    % process so that the worker can do the actual work.
     Uncached = #{ <<"path">> => <<"compute">>, <<"slot">> => 5 },
     ProcessGroup = hb_persistent:group(M1, Uncached, POpts),
     ?assertNotEqual(ungrouped_exec, ProcessGroup),
-    %% Write slot 5 into the cache. The same request now has a result
-    %% available and the grouper should step out of the queue.
+    % Write slot 5 into the cache. The same request now has a result
+    % available and the grouper should step out of the queue.
     {ok, _} =
         dev_process_cache:write(
             ProcessGroup,
@@ -302,17 +302,17 @@ grouper_skips_when_slot_cached_test() ->
         ungrouped_exec,
         hb_persistent:group(M1, Uncached, POpts)
     ),
-    %% Cache slots are not assumed to be gap-free. A lower slot that
-    %% has not actually been written must still go through the worker.
+    % Cache slots are not assumed to be gap-free. A lower slot that
+    % has not actually been written must still go through the worker.
     MissingLower = #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
     ?assertEqual(ProcessGroup, hb_persistent:group(M1, MissingLower, POpts)),
-    %% A request for a slot beyond what we cached must still be
-    %% serialised through the worker.
+    % A request for a slot beyond what we cached must still be
+    % serialised through the worker.
     Beyond = #{ <<"path">> => <<"compute">>, <<"slot">> => 999 },
     ?assertEqual(ProcessGroup, hb_persistent:group(M1, Beyond, POpts)),
-    %% A `compute' request without a slot resolves via the cache-only
-    %% branch of `now/3' once any slot exists, so it also bypasses the
-    %% queue.
+    % A `compute' request without a slot resolves via the cache-only
+    % branch of `now/3' once any slot exists, so it also bypasses the
+    % queue.
     NoSlot = #{ <<"path">> => <<"compute">> },
     ?assertEqual(
         ungrouped_exec,
