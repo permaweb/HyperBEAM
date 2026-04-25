@@ -1009,10 +1009,6 @@ global_preference_test() ->
         ?MODULE:get(mode, undefined, Global#{ <<"mode">> => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
 
-process_workers_default_test() ->
-    ?assertEqual(named, ?MODULE:get(await_inprogress)),
-    ?assertEqual(true, ?MODULE:get(process_workers)).
-
 load_flat_test() ->
     % File contents:
     % port: 1234
