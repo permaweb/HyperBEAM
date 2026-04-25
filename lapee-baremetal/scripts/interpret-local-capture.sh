@@ -80,36 +80,20 @@ if [[ -n "$URL" && -z "$INPUT" ]]; then
         echo "error: fetch from ${URL} failed" >&2
         exit 2
     fi
-    python3 -c "
-import base64, json, sys
-doc = json.load(open('$TMP.json'))
-body = doc
-while isinstance(body, dict) and 'body' in body and \
-       isinstance(body['body'], dict):
-    body = body['body']
-raw = base64.urlsafe_b64decode(
-    body.get('tcg-event-log', '') + '==')
-sys.stdout.buffer.write(raw)
-src = body.get('tcg-event-log-source-path', 'unknown')
-fmt = body.get('tcg-event-log-format', 'unknown')
-nbytes = body.get('tcg-event-log-length-bytes', len(raw))
-print(f'>> attested tcg-event-log: {nbytes} bytes '
-      f'from {src} (format={fmt})',
-      file=sys.stderr)
-" > "$TMP.bin"
-    if [[ ! -s "$TMP.bin" ]]; then
-        echo "error: attested event log is empty or missing" >&2
-        echo "       (is a TPM driver loaded on that host? "
-        echo "        this mode requires a working TPM+AK for "
-        echo "        the /attestation call to succeed. ssh in "
-        echo "        and run 'sudo cat /sys/kernel/security/"
-        echo "        tpm0/binary_bios_measurements' to see the "
-        echo "        raw log)" >&2
+    if [[ ! -s "$TMP.json" ]]; then
+        echo "error: empty response from ${URL}/~tpm2@2.0a/attestation" >&2
+        echo "       (is a TPM driver loaded? does HB have the on.start" >&2
+        echo "        hook configured?)" >&2
         exit 3
     fi
-    INPUT="$TMP.bin"
-    echo ">> captured $(stat -f %z "$TMP.bin" 2>/dev/null || \
-                          stat -c %s "$TMP.bin") bytes"
+    # Pass the full JSON envelope downstream -- the auto-detector
+    # below picks it up via the leading `{' and routes to the
+    # envelope path so interpret/claim see the whole attested
+    # structure (EK, AK, quote, runtime + tcg event logs, node
+    # message), not just the raw TCG event log bytes.
+    INPUT="$TMP.json"
+    BYTES=$(stat -f %z "$TMP.json" 2>/dev/null || stat -c %s "$TMP.json")
+    echo ">> captured $BYTES bytes (full attestation envelope)"
 fi
 
 if [[ -z "$INPUT" ]]; then
