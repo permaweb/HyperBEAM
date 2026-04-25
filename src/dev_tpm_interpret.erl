@@ -3230,40 +3230,31 @@ quote_integrity_finding(
               "tampered with or the quote is forged.">>);
 quote_integrity_finding(_) -> ok.
 
-pcr_replay_finding(
-  #{<<"pcr-replay-os-identity-mismatch-count">> := N}) when N >= 3 ->
-    finding(warn, <<"pcr-replay-multi-mismatch">>,
-            <<"pcr-replay">>,
-            iolist_to_binary(io_lib:format(
-              "~p OS-identity PCR(s) (of 4, 7, 11, 14, 15) "
-              "mismatched between event log and quoted values "
-              "-- event log is likely truncated or has cross-"
-              "bank artefacts.", [N])));
+%% Any PCR replay mismatch is a correctness failure: the event log
+%% is the only artefact tying the *meaning* of a PCR value to a
+%% sequence of measurements. If replay does not produce the quoted
+%% value, the attester's claim about what was measured is unverified
+%% — the chain is structurally incomplete. We elevate every flavour
+%% of mismatch to critical, no matter which PCR.
 pcr_replay_finding(
   #{<<"pcr-replay-os-identity-mismatch-count">> := N}) when N >= 1 ->
-    finding(warn, <<"pcr-replay-mismatch">>,
+    finding(critical, <<"pcr-replay-mismatch">>,
             <<"pcr-replay">>,
             iolist_to_binary(io_lib:format(
-              "~p OS-identity PCR(s) (of 4, 7, 11, 14, 15) do "
-              "not match the event log.", [N])));
+              "~p OS-identity PCR(s) (of 4, 7, 11, 14, 15) replay "
+              "did not produce the quoted value. The event log "
+              "fails to account for the PCR state the TPM signed; "
+              "the attester's claim about measured boot is "
+              "unverifiable.", [N])));
 pcr_replay_finding(
   #{<<"pcr-replay-firmware-only-mismatch-count">> := N}) when N >= 1 ->
-    %% Firmware-internal PCRs 0-6 often have unlogged extensions
-    %% (microcode updates, ACPI table hashes, platform POST codes
-    %% that vendors treat as confidential). TCG PC Client permits
-    %% this and v1.2.2 verifies firmware identity via the
-    %% manufacturer fingerprint DB (dmi-bios-version / CRTM) not
-    %% log replay. Emit as an observational info note so the
-    %% verdict isn't tainted by a known-benign firmware behaviour,
-    %% while still surfacing the fact to dashboards / audit.
-    finding(info, <<"pcr-replay-firmware-internal-mismatch">>,
+    finding(critical, <<"pcr-replay-firmware-mismatch">>,
             <<"pcr-replay">>,
             iolist_to_binary(io_lib:format(
-              "~p firmware-internal PCR(s) (0-6) replay did not "
-              "match quoted values -- commonly caused by the "
-              "firmware logging a subset of its own measurements. "
-              "Firmware identity is attested independently via "
-              "the fingerprint DB.", [N])));
+              "~p firmware PCR(s) (0-6) replay did not produce "
+              "the quoted value. The event log fails to account "
+              "for the PCR state the TPM signed; firmware identity "
+              "as derived from the chain is unverifiable.", [N])));
 pcr_replay_finding(_) -> ok.
 
 freshness_finding(#{<<"freshness-indicator">> := <<"safe-false">>}
@@ -7021,7 +7012,17 @@ reconstruct_pcr(EvList, Quoted) ->
 reconstruct_pcr([], _Quoted, _Alg) -> undefined;
 reconstruct_pcr(EvList, Quoted0, Alg) ->
     {AlgName, HashAtom, Size} = pcr_alg_triple(Alg),
-    Seed = <<0:(Size*8)>>,
+    %% Seed = all-zero by default. If a TCG StartupLocality event is
+    %% present (an EV_NO_ACTION carrying `parsed.marker = "StartupLocality"'
+    %% and a non-zero locality), the platform booted at locality > 0 and
+    %% the spec-compliant initial value of PCR 0 is `<zeroes...><locality>'
+    %% (locality byte placed in the LAST byte of the bank's digest size,
+    %% per the convention shipped by tpm2-tools/eventlog: see
+    %% TCG PFP r1p05 §9.4.5.3 + tpm2_eventlog_pcr_lib's `replay_pcr_value').
+    %% StartupLocality is only attributed to PCR 0 by the parser, so a
+    %% non-zero locality in EvList unambiguously means "this is the PCR 0
+    %% replay and it needs the locality seed".
+    Seed = pcr_initial_seed(EvList, Size),
     %% Quoted may arrive here as raw bytes (in-memory path) or as
     %% a base64url-encoded binary string (JSON-envelope path).
     %% Normalise to raw so the downstream compare works either way.
@@ -7053,6 +7054,43 @@ reconstruct_pcr(EvList, Quoted0, Alg) ->
         <<"replayed-from-events">> => length(EvList),
         <<"alg">>                  => AlgName
     }.
+
+%% @doc Compute the per-PCR initial seed value. Default is all-zero;
+%% a TCG StartupLocality EV_NO_ACTION event in the per-PCR event list
+%% (only ever attributed to PCR 0 by the parser) overrides the seed
+%% with `<zeroes><locality_byte>' as required by the Intel-TXT /
+%% AMD-SKINIT D-RTM startup convention. Returns the raw bytes the
+%% downstream extension fold needs.
+pcr_initial_seed(EvList, Size) ->
+    Locality = startup_locality_from_events(EvList),
+    case Locality of
+        L when is_integer(L), L > 0, L =< 255 ->
+            %% Locality byte at the LSB of the digest -- matches the
+            %% layout that tpm2-tools' replay routine produces and
+            %% the value real Intel TXT firmware ends up with.
+            ZeroBytes = (Size - 1) * 8,
+            <<0:ZeroBytes, L:8>>;
+        _ ->
+            <<0:(Size*8)>>
+    end.
+
+startup_locality_from_events([]) -> 0;
+startup_locality_from_events([Ev | Rest]) ->
+    case maps:get(<<"event-type-code">>, Ev, 0) of
+        3 ->
+            Parsed = maps:get(<<"parsed">>, Ev, #{}),
+            case maps:get(<<"marker">>, Parsed, undefined) of
+                <<"StartupLocality">> ->
+                    case maps:get(<<"locality">>, Parsed, 0) of
+                        L when is_integer(L) -> L;
+                        _ -> startup_locality_from_events(Rest)
+                    end;
+                _ ->
+                    startup_locality_from_events(Rest)
+            end;
+        _ ->
+            startup_locality_from_events(Rest)
+    end.
 
 %% @doc Normalise a digest value to raw bytes of the given size.
 %% Handles both the in-memory path (already raw) and the JSON-
