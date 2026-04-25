@@ -275,11 +275,11 @@ grouper_skips_when_slot_cached_test() ->
     test_init(),
     Opts =
         #{
-            store => hb_test_utils:test_store(hb_store_lmdb),
-            priv_wallet => ar_wallet:new()
+            <<"store">> => hb_test_utils:test_store(hb_store_lmdb),
+            <<"priv-wallet">> => ar_wallet:new()
         },
     M1 = dev_process_test_vectors:aos_process(Opts),
-    POpts = Opts#{ process_workers => true },
+    POpts = Opts#{ <<"process-workers">> => true },
     %% With the cache empty, every compute request must group by
     %% process so that the worker can do the actual work.
     Uncached = #{ <<"path">> => <<"compute">>, <<"slot">> => 5 },

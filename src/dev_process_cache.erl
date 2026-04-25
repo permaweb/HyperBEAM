@@ -73,7 +73,7 @@ latest_slot(ProcID, Opts) ->
             StoreMsg when is_map(StoreMsg) -> [StoreMsg];
             Other -> Other
         end,
-    ScopedOpts = Opts#{ store => hb_store:scope(UnscopedStore, Scope) },
+    ScopedOpts = Opts#{ <<"store">> => hb_store:scope(UnscopedStore, Scope) },
     Path = path(ProcID, slot_root, ScopedOpts),
     case hb_cache:list_numbered(Path, ScopedOpts) of
         [] -> not_found;
