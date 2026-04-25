@@ -70,10 +70,14 @@ compute_group(Base, Req, Opts) ->
 requested_compute_already_cached(ProcID, Req, Opts) ->
     try
         case dev_process_cache:latest_slot(ProcID, Opts) of
-            {ok, LatestCached} ->
+            {ok, _LatestCached} ->
                 case requested_slot(Req, Opts) of
                     undefined -> true;
-                    Slot -> Slot =< LatestCached
+                    Slot ->
+                        case dev_process_cache:read(ProcID, Slot, Opts) of
+                            {ok, _} -> true;
+                            _ -> false
+                        end
                 end;
             _ ->
                 false
@@ -298,6 +302,10 @@ grouper_skips_when_slot_cached_test() ->
         ungrouped_exec,
         hb_persistent:group(M1, Uncached, POpts)
     ),
+    %% Cache slots are not assumed to be gap-free. A lower slot that
+    %% has not actually been written must still go through the worker.
+    MissingLower = #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
+    ?assertEqual(ProcessGroup, hb_persistent:group(M1, MissingLower, POpts)),
     %% A request for a slot beyond what we cached must still be
     %% serialised through the worker.
     Beyond = #{ <<"path">> => <<"compute">>, <<"slot">> => 999 },
