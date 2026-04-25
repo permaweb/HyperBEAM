@@ -135,17 +135,25 @@ OUT        ?= work/lapee-usb.img
 
 # Default cmdline (v1.2.2). Preserves the EFI-stub framebuffer into
 # simpledrm + fbcon on AMD Ryzen / Intel Alder-Lake-P where efifb
-# alone silently fails to bind, keeps the kernel log visible at
-# loglevel=4 (warnings and above), wires init + attestation
-# writeback, and opens the WiFi capability gate. `lapee.wifi=
-# enabled' measured into PCR 4 via the UKI is the PUBLIC signal
-# that the 802.11 stack is allowed to run; the PSK never touches
-# the cmdline (comes from a strictly-validated file on the ESP --
-# see `make hb-wifi-apply' / docs). Operators who want WiFi off
-# even as a possibility can override CMDLINE to drop the token.
-CMDLINE    ?= console=tty0 console=ttyS0 earlyprintk=efi,keep keep_bootcon \
-              fbcon=nodefer loglevel=4 panic=10 rdinit=/init \
-              LAPEE_WRITEBACK=1 LAPEE_TRACE=1 lapee.wifi=enabled
+# alone silently fails to bind. Console ordering matters: kernel
+# writes to ALL `console=' parameters but `/dev/console' (where
+# init's stdio + lapee-splash live) resolves to the LAST one — so
+# we put `console=tty0' last to land init's traces, splash, and HB
+# log echoes on the laptop screen. Serial still gets the same
+# kernel output for headless capture. `loglevel=7' surfaces the
+# full kernel debug so a stick boot is observable from the screen
+# alone (no USB-serial cable required to read the assigned IP,
+# wifi association, HB readiness, etc.).
+#
+# `lapee.wifi=enabled' measured into PCR 4 via the UKI is the
+# PUBLIC signal that the 802.11 stack is allowed to run; the PSK
+# never touches the cmdline (comes from a strictly-validated file
+# on the ESP -- see `make hb-wifi-apply' / docs). Operators who
+# want WiFi off even as a possibility can override CMDLINE to
+# drop the token.
+CMDLINE    ?= console=ttyS0 console=tty0 earlyprintk=efi,keep keep_bootcon \
+              fbcon=nodefer loglevel=7 panic=10 rdinit=/init \
+              LAPEE_WRITEBACK=1 lapee.wifi=enabled
 
 hb-usb-image:
 	./scripts/build-usb-image.sh \
