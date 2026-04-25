@@ -7,33 +7,19 @@
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Returns a group name for a request. The worker is responsible for all
-%% computation work on the same process on a single node, so we use the
-%% process ID as the group name -- but only when the request is one that
-%% actually needs the worker to compute. `compute' requests whose result
-%% is already available in the local cache return `ungrouped_exec' so
-%% that `hb_persistent:find_or_register/3' short-circuits the wait and
-%% the device's `compute/3' can serve the cached message immediately.
-%% This keeps the dedup invariants for genuine compute work while
-%% letting concurrent cache-hit reads run in parallel.
+%% @doc Return a group name for a request. Cached compute reads run
+%% ungrouped; uncached compute work groups by process ID; everything
+%% else uses the default grouper.
 group(Base, undefined, Opts) ->
     hb_persistent:default_grouper(Base, undefined, Opts);
 group(Base, Req, Opts) ->
-    case hb_opts:get(process_workers, false, Opts) of
-        false ->
-            hb_persistent:default_grouper(Base, Req, Opts);
+    ProcessWorkers = hb_opts:get(process_workers, false, Opts),
+    IsCompute = hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)),
+    case ProcessWorkers andalso IsCompute of
         true ->
-            case Req of
-                undefined ->
-                    hb_persistent:default_grouper(Base, undefined, Opts);
-                _ ->
-                    case hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)) of
-                        true ->
-                            compute_group(Base, Req, Opts);
-                        _ ->
-                            hb_persistent:default_grouper(Base, Req, Opts)
-                    end
-            end
+            compute_group(Base, Req, Opts);
+        false ->
+            hb_persistent:default_grouper(Base, Req, Opts)
     end.
 
 %% @doc Decide which group to enrol a `compute' request into. Cache-hit
@@ -41,7 +27,7 @@ group(Base, Req, Opts) ->
 %% else is serialised through the worker keyed on the process ID.
 compute_group(Base, Req, Opts) ->
     ProcID = process_to_group_name(Base, Opts),
-    case requested_compute_already_cached(ProcID, Req, Opts) of
+    case compute_cached(ProcID, dev_process:target_slot(Req, Opts), Opts) of
         true ->
             ?event(worker,
                 {compute_cache_hit_bypassing_queue,
@@ -55,60 +41,16 @@ compute_group(Base, Req, Opts) ->
             ProcID
     end.
 
-%% @doc Returns `true' iff `dev_process:compute/3' will resolve the
-%% request from the local cache without spawning or awaiting work.
-%% Mirrors the lookup rules in `dev_process:compute/3':
-%%
-%%   * Explicit `compute' or `slot' key -- cached iff that slot number
-%%     is already written.
-%%   * No slot -- the device falls into the cache-only branch of
-%%     `now/3', so cached iff at least one slot exists for the process.
-%%
-%% Any error on the cache lookup falls back to `false', so the caller
-%% defaults to the existing per-process group and behaviour is, at
-%% worst, unchanged.
-requested_compute_already_cached(ProcID, Req, Opts) ->
-    try
-        case dev_process_cache:latest_slot(ProcID, Opts) of
-            {ok, _LatestCached} ->
-                case requested_slot(Req, Opts) of
-                    undefined -> true;
-                    Slot ->
-                        case dev_process_cache:read(ProcID, Slot, Opts) of
-                            {ok, _} -> true;
-                            _ -> false
-                        end
-                end;
-            _ ->
-                false
-        end
-    catch
-        _:_ -> false
-    end.
-
-%% @doc Extract the requested slot number from a `compute' request, if
-%% any. Mirrors `dev_process:compute/3''s lookup order: an explicit
-%% `compute' key first, then `slot'. Returns `undefined' when neither
-%% is present, or when the value cannot be parsed as a non-negative
-%% integer.
-requested_slot(Req, Opts) ->
-    Raw =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"compute">>},
-                {{as, <<"message@1.0">>, Req}, <<"slot">>}
-            ],
-            Opts
-        ),
-    case Raw of
-        not_found -> undefined;
-        _ ->
-            try hb_util:int(Raw) of
-                Int when is_integer(Int), Int >= 0 -> Int;
-                _ -> undefined
-            catch
-                _:_ -> undefined
-            end
+%% @doc Return `true' if the requested compute result is already cached.
+compute_cached(ProcID, not_found, Opts) ->
+    case dev_process_cache:latest(ProcID, Opts) of
+        {ok, _Slot, _Msg} -> true;
+        _ -> false
+    end;
+compute_cached(ProcID, RawSlot, Opts) ->
+    case dev_process_cache:read(ProcID, hb_util:int(RawSlot), Opts) of
+        {ok, _Msg} -> true;
+        _ -> false
     end.
 
 process_to_group_name(Base, Opts) ->

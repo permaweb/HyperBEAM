@@ -48,6 +48,7 @@
 -module(dev_process).
 %%% Public API
 -export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([target_slot/2]).
 -export([default_device/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
@@ -204,14 +205,7 @@ init(Base, Req, Opts) ->
 compute(Base, Req, Opts) ->
     ProcBase = dev_process_lib:ensure_process_key(Base, Opts),
     ProcID = dev_process_lib:process_id(ProcBase, #{}, Opts),
-    TargetSlot =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"compute">>},
-                {{as, <<"message@1.0">>, Req}, <<"slot">>}
-            ],
-            Opts
-        ),
+    TargetSlot = target_slot(Req, Opts),
     case TargetSlot of
         not_found ->
             % The slot is not set, so we need to serve the latest known state
@@ -252,6 +246,16 @@ compute(Base, Req, Opts) ->
                     )
             end
     end.
+
+%% @doc Return the slot requested by a `compute' request, or `not_found'.
+target_slot(Req, Opts) ->
+    hb_ao:get_first(
+        [
+            {{as, <<"message@1.0">>, Req}, <<"compute">>},
+            {{as, <<"message@1.0">>, Req}, <<"slot">>}
+        ],
+        Opts
+    ).
 
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
