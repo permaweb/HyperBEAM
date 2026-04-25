@@ -869,7 +869,6 @@ genesis_wasm_tests() -> [].
 test_full_push() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        <<"process-async-cache">> => false,
         <<"priv-wallet">> => hb:wallet(),
         <<"cache-control">> => <<"always">>,
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
@@ -1462,7 +1461,6 @@ setup_two_process_message() ->
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"cache-control">> => <<"always">>,
-        <<"process-async-cache">> => false,
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Sender = dev_process_test_vectors:aos_process(Opts),

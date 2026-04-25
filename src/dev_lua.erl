@@ -814,7 +814,6 @@ aos_process_benchmark_test_() ->
     {timeout, 30, fun() ->
         BenchMsgs = 6,
         Opts = #{
-            <<"process-async-cache">> => true,
             <<"hashpath">> => ignore,
             <<"process-snapshot-slots">> => 50
         },
