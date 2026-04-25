@@ -949,7 +949,7 @@ test_push_as_identity() ->
     ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
     Script = ping_pong_script(2),
     ?event({script, Script}),
-    {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script),
+    {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script, Opts),
     ?event(push, {msg_sched_result, Req}),
     {ok, StartingMsgSlot} =
         hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),
@@ -1000,7 +1000,8 @@ test_multi_process_push() ->
                 "       print(\"GOT PONG\")\n"
                 "   end\n"
                 ")"
-            >>
+            >>,
+            Opts
         ),
     {ok, PushResult} =
         hb_ao:resolve(
@@ -1459,8 +1460,9 @@ test_compute_push_hook_idempotent() ->
 setup_two_process_message() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        <<"priv-wallet">> => hb:wallet(),
+        <<"priv-wallet">> => ar_wallet:new(),
         <<"cache-control">> => <<"always">>,
+        <<"process-async-cache">> => false,
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },
     Sender = dev_process_test_vectors:aos_process(Opts),
@@ -1489,7 +1491,8 @@ setup_two_process_message() ->
             <<
                 "Send({ Target = \"", (ReceiverID)/binary,
                 "\", Action = \"Ping\" })\n"
-            >>
+            >>,
+            Opts
         ),
     {ok, MsgSlot} =
         hb_ao:resolve(MsgSched, #{ <<"path">> => <<"slot">> }, Opts),
@@ -1538,7 +1541,7 @@ test_nested_push_prompts_encoding_change() ->
     ?event({test_setup, {base, Base}, {sched_init, SchedInit}}),
     Script = message_to_legacynet_scheduler_script(),
     ?event({script, Script}),
-    {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script),
+    {ok, Req} = dev_process_test_vectors:schedule_aos_call(Base, Script, Opts),
     ?event(push, {msg_sched_result, Req}),
     {ok, StartingMsgSlot} =
         hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),

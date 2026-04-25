@@ -516,7 +516,7 @@ raw_default_message() ->
         % Should the node store all signed messages?
         <<"store-all-signed">> => true,
         % Should the node use persistent processes?
-        <<"process-workers">> => false,
+        <<"process-workers">> => true,
         % Options for the router device
         <<"router-opts">> => #{
             <<"routes">> => []
@@ -1008,6 +1008,10 @@ global_preference_test() ->
     ?assertNotEqual(incorrect,
         ?MODULE:get(mode, undefined, Global#{ <<"mode">> => incorrect })),
     ?assertNotEqual(undefined, ?MODULE:get(mode, undefined, Global)).
+
+process_workers_default_test() ->
+    ?assertEqual(named, ?MODULE:get(await_inprogress)),
+    ?assertEqual(true, ?MODULE:get(process_workers)).
 
 load_flat_test() ->
     % File contents:
