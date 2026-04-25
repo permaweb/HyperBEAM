@@ -36,9 +36,9 @@ group(Base, Req, Opts) ->
             end
     end.
 
-%% @doc Decide which group to enrol a `compute' request into. Cache-hit
+%% @doc Decide which group to enroll a `compute' request into. Cache-hit
 %% reads bypass the per-process queue via `ungrouped_exec'; everything
-%% else is serialised through the worker keyed on the process ID.
+%% else is serialized through the worker keyed on the process ID.
 compute_group(Base, Req, Opts) ->
     ProcID = process_to_group_name(Base, Opts),
     case requested_compute_already_cached(ProcID, Req, Opts) of
@@ -63,24 +63,26 @@ compute_group(Base, Req, Opts) ->
 %%     is already written.
 %%   * No slot -- the device falls into the cache-only branch of
 %%     `now/3', so cached iff at least one slot exists for the process.
+%%   * Invalid slot -- not cached.
 %%
 %% Any error on the cache lookup falls back to `false', so the caller
-%% defaults to the existing per-process group and behaviour is, at
+%% defaults to the existing per-process group and behavior is, at
 %% worst, unchanged.
 requested_compute_already_cached(ProcID, Req, Opts) ->
     try
-        case dev_process_cache:latest_slot(ProcID, Opts) of
-            {ok, _LatestCached} ->
-                case requested_slot(Req, Opts) of
-                    undefined -> true;
-                    Slot ->
-                        case dev_process_cache:read(ProcID, Slot, Opts) of
-                            {ok, _} -> true;
-                            _ -> false
-                        end
+        case requested_slot(Req, Opts) of
+            undefined ->
+                case dev_process_cache:latest_slot(ProcID, Opts) of
+                    {ok, _LatestCached} -> true;
+                    _ -> false
                 end;
-            _ ->
-                false
+            invalid ->
+                false;
+            Slot ->
+                case dev_process_cache:read(ProcID, Slot, Opts) of
+                    {ok, _} -> true;
+                    _ -> false
+                end
         end
     catch
         _:_ -> false
@@ -89,8 +91,8 @@ requested_compute_already_cached(ProcID, Req, Opts) ->
 %% @doc Extract the requested slot number from a `compute' request, if
 %% any. Mirrors `dev_process:compute/3''s lookup order: an explicit
 %% `compute' key first, then `slot'. Returns `undefined' when neither
-%% is present, or when the value cannot be parsed as a non-negative
-%% integer.
+%% is present, or `invalid' when the explicit value cannot be parsed as
+%% a non-negative integer.
 requested_slot(Req, Opts) ->
     Raw =
         hb_ao:get_first(
@@ -105,9 +107,9 @@ requested_slot(Req, Opts) ->
         _ ->
             try hb_util:int(Raw) of
                 Int when is_integer(Int), Int >= 0 -> Int;
-                _ -> undefined
+                _ -> invalid
             catch
-                _:_ -> undefined
+                _:_ -> invalid
             end
     end.
 
@@ -273,7 +275,7 @@ grouper_test() ->
 %% should bypass the per-process worker queue (returning the
 %% `ungrouped_exec' sentinel that `hb_persistent:find_or_register/3'
 %% short-circuits). Requests that still need work, and requests for a
-%% slot beyond what is cached, must continue to serialise through the
+%% slot beyond what is cached, must continue to serialize through the
 %% process group.
 grouper_skips_when_slot_cached_test() ->
     test_init(),
@@ -306,8 +308,11 @@ grouper_skips_when_slot_cached_test() ->
     %% has not actually been written must still go through the worker.
     MissingLower = #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
     ?assertEqual(ProcessGroup, hb_persistent:group(M1, MissingLower, POpts)),
+    %% Invalid slot values are explicit requests, not slotless reads.
+    Invalid = #{ <<"path">> => <<"compute">>, <<"slot">> => <<"bad">> },
+    ?assertEqual(ProcessGroup, hb_persistent:group(M1, Invalid, POpts)),
     %% A request for a slot beyond what we cached must still be
-    %% serialised through the worker.
+    %% serialized through the worker.
     Beyond = #{ <<"path">> => <<"compute">>, <<"slot">> => 999 },
     ?assertEqual(ProcessGroup, hb_persistent:group(M1, Beyond, POpts)),
     %% A `compute' request without a slot resolves via the cache-only
