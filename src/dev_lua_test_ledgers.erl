@@ -245,7 +245,8 @@ ledgers(ProcMsg, Opts) ->
         hb_ao:get(<<"now/ledgers">>, ProcMsg, #{}, Opts),
         Opts
     ) of
-        Msg when is_map(Msg) -> hb_private:reset(Msg);
+        Msg when is_map(Msg) ->
+            hb_private:reset(hb_message:uncommitted(Msg, Opts));
         [] -> #{}
     end.
 
@@ -380,8 +381,9 @@ verify_peer_balances(ValidateProc, AllProcs, Opts) ->
         fun(PeerID, ExpectedBalance) ->
             ?assertEqual(
                 ExpectedBalance,
-                balance(ValidateProc,
+                balance(
                     maps:get(PeerID, NormProcs),
+                    hb_message:id(ValidateProc, all),
                     Opts
                 )
             )

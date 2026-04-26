@@ -142,7 +142,10 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+            case hb_opts:get(cache_hashpath_maps, false, Opts) of
+                true -> hb_cache:write_hashpath(Map, Opts);
+                false -> hb_cache:write(Res, Opts)
+            end;
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
