@@ -4,7 +4,7 @@
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
--export([varied/3, compute_nested/3, compute_all/3]).
+-export([varied/3, varied_request/3, compute_nested/3, compute_all/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -66,14 +66,18 @@ load(Base, _, _Opts) ->
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
 
--spec varied(#{ x := any() }, #{}, #{}) -> {ok, #{ x := any(), '...' => base }}.
+-spec varied(#{ x := integer() }, #{}, _) -> {ok, #{ x := integer(), _ => base }}.
 varied(#{ <<"x">> := X }, _Req, _Opts) ->
-    {ok, #{ <<"x">> => hb_util:int(X) + 1, <<"...">> => base }}.
+    {ok, #{ <<"x">> => hb_util:int(X) + 1 }}.
+
+-spec varied_request(#{}, #{ x := integer() }, _) -> {ok, #{ y := integer(), _ => request }}.
+varied_request(_Base, #{ <<"x">> := X }, _Opts) ->
+    {ok, #{ <<"y">> => hb_util:int(X) + 1 }}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
--spec compute(#{ already_seen => integer() }, #{ slot := integer() }, map()) -> {ok, map()}.
+-spec compute(#{ already_seen => [integer()], _ => _ }, #{ slot := integer() }, map()) -> {ok, map()}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = hb_ao:get(<<"slot">>, Req, Opts),
     Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -91,7 +95,7 @@ compute(Base, Req, Opts) ->
         )
     }.
 
--spec compute_nested(#{ already_seen => integer() }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
+-spec compute_nested(#{ already_seen => [integer()], _ => _ }, #{ outer := #{ slot := integer() } }, map()) -> {ok, map()}.
 compute_nested(Base, Req, Opts) ->
         AssignmentSlot = hb_ao:get(<<"outer/slot">>, Req, Opts),
         Seen = hb_ao:get(<<"already-seen">>, Base, Opts),
@@ -109,11 +113,11 @@ compute_nested(Base, Req, Opts) ->
             )
         }.
 
--spec compute_all(#{ a => integer(), '_' => '_' }, #{ slot := integer(), '_' => '_' }, map()) -> {ok, map()}.
+-spec compute_all(#{ a => integer(), _ => _ }, #{ slot := integer(), _ => _ }, map()) -> {ok, map()}.
 compute_all(Base, Req, Opts) ->
     {ok, Base#{ <<"all">> => <<"done">> }}.
 
--spec compute_all_nested(#{ nested := #{ a := integer() }, '_' => '_' }, #{ slot := integer(), '_' => '_' }, map()) -> {ok, map()}.
+-spec compute_all_nested(#{ nested := #{ a := integer() }, _ => _ }, #{ slot := integer(), _ => _ }, map()) -> {ok, map()}.
 compute_all_nested(Base, Req, Opts) ->
     {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
@@ -290,6 +294,56 @@ compute_test() ->
     {ok, Msg5} = hb_ao:resolve(Res, Msg4, #{}),
     ?assertEqual(2, hb_ao:get(<<"results/assignment-slot">>, Msg5, #{})),
     ?assertEqual([2, 1], hb_ao:get(<<"already-seen">>, Msg5, #{})).
+
+varied_overlay_cache_test() ->
+    Store = hb_test_utils:test_store(),
+    Opts =
+        #{
+            store => [Store],
+            priv_wallet => hb:wallet(),
+            cache_control => [<<"always">>]
+        },
+    Req = #{ <<"path">> => <<"varied">> },
+    Base1 =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"x">> => <<"1">>,
+            <<"keep">> => <<"first">>
+        },
+    {ok, Res1} = hb_ao:resolve(Base1, Req, Opts),
+    ?assertEqual(2, maps:get(<<"x">>, Res1)),
+    ?assertEqual(<<"first">>, maps:get(<<"keep">>, Res1)),
+    Base2 = Base1#{ <<"keep">> => <<"second">> },
+    {ok, Res2} =
+        hb_ao:resolve(
+            Base2,
+            Req,
+            Opts#{ cache_control => [<<"only-if-cached">>] }
+        ),
+    ?assertEqual(2, maps:get(<<"x">>, Res2)),
+    ?assertEqual(<<"second">>, maps:get(<<"keep">>, Res2)).
+
+varied_request_overlay_hashpath_test() ->
+    Opts =
+        #{
+            store => [hb_test_utils:test_store()],
+            priv_wallet => hb:wallet()
+        },
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
+    Req =
+        #{
+            <<"path">> => <<"varied-request">>,
+            <<"x">> => <<"1">>,
+            <<"keep">> => <<"request">>
+        },
+    {ok, Res} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(2, maps:get(<<"y">>, Res)),
+    ?assertEqual(<<"request">>, maps:get(<<"keep">>, Res)),
+    VariedBase = hb_message:normalize_commitments(Base, Opts, fast),
+    ?assertEqual(
+        hb_path:hashpath(VariedBase, Req, Opts),
+        hb_path:hashpath(Res, Opts)
+    ).
 
 restore_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"already-seen">> => [1] },
