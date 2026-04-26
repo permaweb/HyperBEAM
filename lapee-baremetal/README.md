@@ -14,11 +14,9 @@ all surfaced with tiered evidence. Zero synthesized values
 anywhere in the runtime path -- every field comes from a live
 hardware signal or is recorded as explicitly absent.
 
-Full spec: `../lapee-paper/main.tex`.
-Current mission brief + TODO list: [`STATUS.md`](STATUS.md).
-Build-up history from M0 through today: [`HISTORY.md`](HISTORY.md).
+Full spec: [`../lapee-paper/main.tex`](../lapee-paper/main.tex).
 
-## Quick start (v1.2.2, current)
+## Quick start
 
 Prerequisites (one-time install on the verifier Mac):
 
@@ -30,10 +28,9 @@ brew install erlang rebar3 docker swtpm qemu python@3
 Prerequisites on the target laptop (the TPM2 laptop you're attesting):
 
 - UEFI firmware + discrete or fTPM 2.0.
-- Secure Boot posture: default v1.2.2 USB is unsigned (boot with SB
-  off); the operator-provisioned signed-UKI workflow via
-  `scripts/sb-setup.sh` is validated on iron and documented in
-  [`HARDENING.md`](HARDENING.md).
+- Secure Boot posture: the default USB image is unsigned (boot
+  with SB off). The operator-provisioned signed-UKI workflow via
+  `scripts/sb-setup.sh` is validated on iron.
 - USB-A or USB-C port able to boot from external media.
 
 Build, write, boot, verify:
@@ -48,8 +45,8 @@ make buildroot           # one-time (or whenever kernel config
                          #   changes); ~30-60 min first build, ~3 min
                          #   incremental; produces
                          #   build-kernel/vmlinuz-lapee
-make hb-release          # HyperBEAM release with the TPM NIF + v1.2
-                         #   devices; ~3 min incremental
+make hb-release          # HyperBEAM release with the TPM NIF +
+                         #   LapEE devices; ~3 min incremental
 make hb-initramfs        # packs the release + busybox + lapee init +
                          #   WiFi firmware into work/initramfs-hb.cpio.gz
 make hb-usb-image        # wraps kernel + initramfs into a UEFI-
@@ -153,11 +150,3 @@ it in the peer `/attestation` call, rejects with
 quote nonce doesn't match. This is what makes an attestation
 envelope un-replayable.
 
-## Earlier (pre-v1.2) material preserved under `HISTORY.md`
-
-The QEMU+swtpm reference stack, the M2-M5 milestone ladder (real
-TPM NIF in a Linux container, byte-identical `pcr_read` against
-`tpm2_pcrread`), and the Python reference verifier are documented
-in [`HISTORY.md`](HISTORY.md) -- they are **not** the v1.2.2 demo
-path; keep them in mind if you want to reproduce Sam's build
-sequence from the start.
