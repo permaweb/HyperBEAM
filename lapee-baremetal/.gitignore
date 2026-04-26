@@ -12,6 +12,7 @@ out/*.key
 out/*.pem
 out/*.srl
 out/local-capture/
+out/qemu-usb-test/
 
 # sb-setup.sh writes operator Secure Boot keys here; never commit.
 /secureboot/

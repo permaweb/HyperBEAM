@@ -13,13 +13,10 @@
 # and attestation logic lives in dev_tpm2 via the on.start hook.
 set -eu
 
-# v1.2.2: redirect stdio to /dev/console so every `echo' (including
-# trace() output) lands on the screen + serial. Kernel exec of
-# rdinit=/init doesn't auto-wire stdin/stdout/stderr -- without this,
-# init's userspace prints go nowhere visible, even though kernel
-# printk still renders via the efi/simpledrm framebuffer. Must happen
-# AFTER the kernel has set up /dev/console (guaranteed by the time
-# /init runs as PID 1).
+# Wire init's stdio to /dev/console so any trace lands on the screen
+# + serial. Kernel exec of rdinit=/init doesn't auto-wire stdio --
+# without this, userspace prints go nowhere visible. Must happen
+# after the kernel has set up /dev/console (guaranteed by PID 1).
 exec < /dev/console > /dev/console 2>&1
 
 mount -t proc  -o nosuid,noexec,nodev  proc  /proc
@@ -31,32 +28,23 @@ mkdir -p /dev/pts
 mount -t devpts -o nosuid,noexec devpts /dev/pts
 mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 
-# Calm /dev/console down. Kernel at loglevel=7 (set on cmdline)
-# floods the framebuffer console at boot, which competes with the
-# splash daemon's 6 fps redraw -- the splash overwrites kernel
-# lines and kernel lines overwrite the splash so neither is
-# legible. With `dmesg -n 1', the kernel only emits KERN_ALERT/
-# EMERG to /dev/console going forward; everything else still
-# accumulates in the dmesg ring buffer (full debug, accessible
-# post-mortem). Userspace traces from this script keep going to
-# /dev/console because they bypass the kernel printk path.
+# Calm /dev/console down so the splash daemon's 12 fps redraw isn't
+# fighting kernel printk. With `dmesg -n 1' only KERN_ALERT/EMERG
+# reach the console; everything else still accumulates in the dmesg
+# ring buffer for post-mortem. Userspace traces from this script
+# keep going to /dev/kmsg (see trace() below) and reach dmesg.
 dmesg -n 1 2>/dev/null || true
 
 # Splash daemon, FIRST THING after mounts. Runs in its own BEAM VM,
 # parallel to the HyperBEAM node forked later. Same erts binary that
 # ships in HB's release -- no extra disk footprint. The .beam was
-# compiled at build time (build-initramfs-hb.sh, using the build
-# host's erlc -- BEAM bytecode is platform-independent). The splash
-# polls /run/lapee/primary-net for the IP and
-# http://127.0.0.1:8734/~meta@1.0/info for HB-readiness; it does its
-# own phase machine, so init doesn't have to push state updates.
+# compiled on the build host (build-initramfs-hb.sh); BEAM bytecode
+# is platform-independent.
 #
-# Boot config: HB's release ships boot files under
-# `releases/0.0.1/' (relx layout), not the OTP-default `bin/'
-# location. Use `start_clean' (kernel + stdlib only) and add the
-# HB lib/ ebin paths so application:ensure_all_started(inets) can
-# resolve at runtime. Globbing inside `-pa' is intentional --
-# busybox sh expands `lib/*/ebin' before invoking erl.
+# Boot config: HB's release ships boot files at relx's
+# `releases/<vsn>/' rather than OTP's `bin/' location. Use
+# `start_clean' (kernel + stdlib) and add HB's lib/ ebin paths so
+# the splash can resolve any runtime modules it needs.
 mkdir -p /run/lapee
 ERL=$(ls -1 /usr/lib/hyperbeam/erts-*/bin/erl 2>/dev/null | head -1)
 HB_BOOT=$(ls -1 /usr/lib/hyperbeam/releases/*/start_clean.boot 2>/dev/null | head -1)
@@ -72,28 +60,18 @@ if [ -x "$ERL" ] && [ -n "$HB_BOOT" ] && \
     SPLASH_PID=$!
 fi
 
-# From here on, the splash daemon owns /dev/console. Redirect init's
-# own stdout/stderr to /dev/kmsg so any stray `echo' statements land
-# in the dmesg ring buffer (post-mortem accessible) instead of
-# scribbling over the splash. trace() already only writes to
-# /dev/kmsg; this catches the leftover plain echoes.
+# From here on the splash daemon owns /dev/console. Redirect init's
+# own stdio to /dev/kmsg so any stray `echo' lands in the dmesg
+# ring buffer instead of scribbling over the splash.
 exec >/dev/kmsg 2>&1
 
 # trace MSG
-#   Console-only version. The earlier build wrote every trace
-#   line to /mnt/esp/lapee-init.log via an early-init mount of
-#   the ESP over a loop of block-device candidates -- that loop
-#   stalled when the kernel was still enumerating USB storage
-#   (mount racing with udev was slower than the boot itself).
-#   We fall back to console + /dev/kmsg only; the ESP writeback
-#   path near the end of init is the one that actually mounts
-#   the stick (by then udev has settled).
+#   Append a timestamped line to /dev/kmsg so it accumulates in
+#   the dmesg ring buffer for post-mortem (`dmesg | grep
+#   lapee-trace'). Doesn't touch /dev/console -- that's the
+#   splash's.
 trace() {
     _ts=$(awk '{printf "t+%0.2fs",$1}' /proc/uptime 2>/dev/null || echo '?')
-    # Route ONLY to /dev/kmsg (and therefore the dmesg ring buffer);
-    # /dev/console is owned by the splash daemon, so we don't print
-    # there. Boot-time forensics: `dmesg | grep lapee-trace' from a
-    # rescue shell or post-mortem of /run/lapee/dmesg.
     echo "[lapee-trace] $_ts $*" > /dev/kmsg 2>/dev/null || true
 }
 
@@ -116,38 +94,24 @@ cmdline_flag_set() {
 trace "init: started; kernel=$(uname -r 2>/dev/null || echo ?)"
 trace "init: /proc /sys /dev /tmp /run mounted"
 
-# v1.2.2 paper P2 (amended batch 37) -- memory-encryption
-# CAPABILITY enforcement at init.
+# Memory-encryption capability gate (paper P2).
 #
-# The paper's original text:
-#   "Early init reads IA32_TME_ACTIVATE (Intel) or SYSCFG bit 23
-#   (AMD) and refuses to proceed if memory encryption is
-#   inactive."
+# Init verifies that the CPU has TME/SME capability via
+# /proc/cpuinfo; activation STATE (rather than capability) is
+# reported in the attestation envelope's tme-enabled signal so the
+# verifier's policy engine -- not init -- decides whether to accept
+# a node running with encryption inactive. Init refuses only when
+# the CPU has NO memory-encryption capability at all; otherwise the
+# attestation would fundamentally lie about supported primitives.
 #
-# On Framework 13 + recent Intel kernels (observed 2026-04-24),
-# activation IS on but the kernel does NOT print an
-# `Intel TME enabled' marker that a shell script can reliably
-# grep; instead it prints an MKTME algorithm-negotiation line
-# (`x86/mktme: No known encryption algorithm is supported: 0x4')
-# that is unrelated to base-TME activation. Without msr-tools
-# in the initramfs (bloat + lockdown relaxations), there is no
-# OS-level shell command that can authoritatively report the
-# IA32_TME_ACTIVATE MSR's LOCK/ACTIVE bits.
+# Why not read the IA32_TME_ACTIVATE MSR directly? msr-tools in the
+# initramfs would mean lockdown relaxations + extra binaries; the
+# kernel's TME-enabled printk also varies across releases and CPU
+# vendors in ways a shell script can't reliably canonicalise.
 #
-# Sam 2026-04-24: "The paper should be the part that changes
-# here, not the implementation." Paper amendment (STATUS.md):
-# init verifies memory-encryption CAPABILITY via /proc/cpuinfo;
-# activation STATE is reported honestly in the attestation
-# envelope (tme-enabled signal, derived from the same
-# cpuinfo flags by claim_tme/1) for the verifier's policy
-# engine to decide. Init refuses only when the CPU has NO
-# memory-encryption capability at all -- then the attestation
-# would fundamentally lie about supported primitives.
-#
-# Operator override: `LAPEE_NO_TME=1' on cmdline skips the cap
-# gate (for CPUs where we deliberately want to run without it
-# for debugging). Override is measured into PCR 4/8 via the UKI
-# cmdline -- any attestation will carry it.
+# Operator override: `LAPEE_NO_TME=1' on the cmdline skips the gate.
+# The override is measured into PCR 4/8 via the UKI cmdline, so any
+# attestation carries it.
 check_tme_sme() {
     if cmdline_flag_set LAPEE_NO_TME; then
         trace "tme: LAPEE_NO_TME=1 on cmdline; skipping enforcement"
@@ -194,46 +158,21 @@ check_tme_sme() {
     fi
     # Capability present -> proceed. Activation state is reported
     # to the verifier via claim_tme/1 (same cpuinfo source) in the
-    # envelope's tme-enabled signal; init does NOT try to grep
-    # dmesg for an activation marker because the kernel's
-    # activation print varies across Linux releases + CPU vendors
-    # in ways that a shell script cannot reliably canonicalise.
-    # See the block-comment above this function for the paper-
-    # amendment rationale (batch 37).
-    trace "tme: $_has_cap capability present -> proceed (paper P2 amended)"
+    # envelope's tme-enabled signal.
+    trace "tme: $_has_cap capability present -> proceed"
 }
 check_tme_sme
 
-# Boot splash -- retro 3D ASCII laptop animation.
-#
-# lapee-splash runs as a long-lived daemon on /dev/console, reading
-# phase updates from /run/lapee/splash.state. The phase flow is:
-#
-#   init start                  -> phase=boot        (rotating laptop)
-#   init after NIC enumeration  -> phase=net-up or net-none
-#   init entering HB wait       -> phase=hb-wait
-#   udhcpc bound (dhcp-hook)    -> phase=hb-wait + ip=<ip>
-#                                   (pre-renders QR matrix to disk)
-#   init /info responds         -> phase=qr + ip=<ip>
-#                                   (laptop settles face-on, QR appears
-#                                    on its projected screen panel)
-#
-# The animation is cosmetic. On kernel cmdline `lapee.nosplash=1',
-# the daemon short-circuits to a single static splash and stays
-# idle (measured by the cmdline -> the operator is opting out of
-# the animation for boot-log visibility). Any render failure
-# (missing awk, unreadable tty, short console) degrades silently;
-# init proceeds regardless.
-## Splash already launched earlier (right after mounts) -- it's
-## been polling and rendering since boot. We re-emit a trace here
-## just so the boot log shows the splash status at this milestone.
+# Splash already launched right after mounts -- it's been polling
+# and rendering since boot. Re-emit a trace here so the boot log
+# shows the splash status at this milestone.
 if [ -n "${SPLASH_PID:-}" ]; then
     if kill -0 "$SPLASH_PID" 2>/dev/null; then
-        trace "splash: escript still alive (PID=$SPLASH_PID)"
+        trace "splash: alive (PID=$SPLASH_PID)"
     else
-        trace "splash: escript exited (PID=$SPLASH_PID was forked earlier)"
-        # Code-review issue #10: tail splash.err on the exit branch
-        # so a non-writeback boot still surfaces the crash reason.
+        trace "splash: exited (PID=$SPLASH_PID)"
+        # Surface any startup crash reason on the exit branch so a
+        # non-writeback boot still has an actionable trace.
         if [ -s /run/lapee/splash.err ]; then
             while IFS= read -r _l; do
                 trace "splash.err: $_l"
@@ -243,24 +182,19 @@ if [ -n "${SPLASH_PID:-}" ]; then
 fi
 echo "[init] kernel=$(uname -r)"
 
-# --- Networking (v1.2 A2-A5) -------------------------------------
+# --- Networking ---------------------------------------------------
 #
 # Enumerate every physical NIC, bring it up, and fork a udhcpc in
 # the background. The first interface to get a lease wins -- it
 # becomes the default gateway (see /usr/local/bin/lapee-dhcp-hook).
-# This matches the precedence Sam asked for:
-#   (a) built-in wired Ethernet (enp*, eth*)
-#   (b) USB-C Ethernet dongle (enp*u*, usb*)
-#   (c) Thunderbolt-bridge via USB4_NET (thunderbolt*)
-#   (d) USB RNDIS tether (rndis*)
-# The kernel assigns ascending names in roughly that order on a
-# real boot, so "first to lease wins" does the right thing without
-# explicit ranking. Secondary interfaces keep their IP for
-# diagnostics and hot-swap but don't overwrite the default route.
+# Interface precedence falls out of the kernel's ascending naming:
+#   built-in wired (enp*, eth*) -> USB-C dongle (enp*u*, usb*)
+#   -> Thunderbolt bridge (thunderbolt*) -> USB RNDIS (rndis*)
+# Secondary interfaces keep their IP for diagnostics + hot-swap but
+# don't overwrite the default route.
 #
-# QEMU compatibility: slirp (`-netdev user') includes a DHCP
-# server at 10.0.2.2, so this path works unchanged in QEMU --
-# no more hard-coded 10.0.2.15 fallback.
+# QEMU's slirp (`-netdev user') includes a DHCP server at 10.0.2.2,
+# so the same code path works unchanged under QEMU.
 
 ip link set lo up 2>/dev/null || true
 
@@ -268,7 +202,7 @@ ip link set lo up 2>/dev/null || true
 # otherwise fail the command. /run is already tmpfs-mounted above.
 mkdir -p /run/lapee /etc/lapee
 
-# v1.2.2 WiFi -- strictly-validated ESP-file config + cmdline gate.
+# WiFi -- strictly-validated ESP-file config + cmdline gate.
 #
 # Two-dial security model:
 #   1. CAPABILITY (measured, attested):  `lapee.wifi=enabled' on the
@@ -514,12 +448,9 @@ WPACFG
     fi
 fi
 
-# v1.2.2 kill-switch: LAPEE_NO_NET=1 on cmdline skips the
-# interface enumeration + udhcpc fork loop entirely. Use when
-# debugging a suspected network-related init stall (each udhcpc
-# blocks for -t*-T = up to ~15s before backgrounding, and across
-# multiple NICs the cumulative wait can look like a hang on a
-# screenless boot). Also useful when the node is intended to run
+# Kill-switch: LAPEE_NO_NET=1 on cmdline skips interface enumeration
+# + udhcpc fork loop entirely. Useful when debugging a suspected
+# network-related init stall, or when the node is intended to run
 # purely over ESP writeback + reboot cycles without a LAN.
 NIC_COUNT=0
 if cmdline_flag_set LAPEE_NO_NET; then
@@ -545,15 +476,13 @@ else
     trace "net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
 fi
 
-# Splash transitions are handled internally by lapee_splash.erl --
-# it polls /run/lapee/primary-net for the IP and the dev_tpm2 /info
-# endpoint for HB readiness, deciding boot -> net-up -> hb-wait -> qr
-# itself. Nothing in init needs to push state to the splash. The
-# old shell-splash `set ...' calls used to live here; removed in
-# the code-review follow-up (issue #2).
+# Splash phase machine is internal to lapee_splash.erl: it polls
+# /run/lapee/primary-net for the IP and the dev_tpm2 /info endpoint
+# for HB readiness, transitioning boot -> net-up -> hb-wait -> ready
+# on its own. Nothing in init pushes state to the splash.
 
 # Default config files (shipped with image).
-# v1.2.1: LAPEE_JSON is the JSON-formatted base config (preloaded_devices
+# LAPEE_JSON is the JSON-formatted base config (preloaded_devices
 # list with snp@1.0 / hyperbuddy@1.0 excluded, render_index_page=false).
 # ENFORCED_CFG is the flat-format overlay that wires the on/start hook.
 # HB_CONFIG reads a comma-separated list in first-to-last override order;
@@ -582,17 +511,14 @@ elif [ -f "$USER_CFG_DEFAULT" ]; then
     USER_CFG=$USER_CFG_DEFAULT
 fi
 
-# v1.2.2: the LAPEE_JSON base config is currently DISABLED because
-# HB's config loader rejected the preloaded_devices override on
-# iron boot and cascaded into an `unexpected_hook_result: failure'
-# at hb_http_server:start/1 -> dev_hook:execute_handlers/4
-# (caught Apr 23 19:15 boot). Needs an HB-side fix: either the
-# loader recognising list-of-map config entries through json
-# format, or a per-LapEE release profile that pre-bakes the
-# narrower device list into hb_opts:default_message/0. Until
-# then, fall back to the v1.1-validated config chain (no base
-# override). snp/hyperbuddy devices stay in preloaded_devices
-# list but don't fire since nothing references them.
+# LAPEE_JSON is currently OFF: HB's config loader rejects the
+# preloaded_devices override delivered through the JSON base config
+# and trips an `unexpected_hook_result: failure' at hb_http_server
+# startup. Until that's fixed HB-side (either by teaching the loader
+# to recognise list-of-map config entries, or by pre-baking a
+# narrower device list into a LapEE release profile), we ship just
+# the enforced flat overlay; the snp/hyperbuddy modules stay loaded
+# but never get dispatched because nothing references them.
 if [ -n "$USER_CFG" ]; then
     HB_CONFIG="$USER_CFG,$ENFORCED_CFG"
     echo "[init] user config: $USER_CFG"
@@ -714,11 +640,6 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
     ATT_OUT=/run/lapee/attestation.json
 
     echo "[writeback] phase 1: waiting for HB to answer /~tpm2@2.0a/info"
-    # The BEAM splash polls the same /info endpoint on its own
-    # schedule; nothing for init to push. (Old shell-splash
-    # `set hb-wait msg=...' calls used to scribble status updates
-    # into a state file the BEAM splash never reads. Removed in
-    # the code-review follow-up, issue #2.)
     ready=0
     for i in $(seq 1 120); do
         if wget -q -O "$PROBE_OUT" --timeout=2 \
@@ -835,29 +756,15 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                 if [ "$ATT_OK" = "1" ] && [ -s "$OUT" ]; then
                     rm -f "$LINK"
                     cp "$OUT" "$LINK"
-                    # v1.2.2: diagnostic writeback.
-                    #
-                    # Both logs below carry operator-sensitive
-                    # data when present:
-                    # - lapee-wpa.log: wpa_supplicant output.
-                    #   Does NOT log PSKs, but DOES log SSID in
-                    #   the clear (e.g. `Trying to associate
-                    #   with SSID \'HomeNet\'' and `ssid=...'
-                    #   in scan results). Batch 20's in-init
-                    #   redaction was incomplete without this
-                    #   gate -- the raw SSID would still reach
-                    #   a shared ESP.
-                    # - lapee-hb-tail.log: HB runtime log tail.
-                    #   Contains peer URLs, request paths,
-                    #   node-message details.
-                    #
-                    # Default: neither is written, so operators
-                    # sharing the ESP for attestation review
-                    # don't unknowingly ship network identity +
-                    # HB internals. Opt in with LAPEE_TRACE=1 on
-                    # cmdline. Crash diagnostics without the
-                    # gate are still available via serial console
-                    # and the kernel ring buffer.
+                    # Optional diagnostic logs, gated on LAPEE_TRACE=1
+                    # because they leak operator-sensitive context:
+                    #   - lapee-wpa.log carries SSID strings in the
+                    #     clear (`Trying to associate with SSID...').
+                    #   - lapee-hb-tail.log carries peer URLs, request
+                    #     paths, node-message details.
+                    # Default OFF so an operator sharing the ESP for
+                    # attestation review doesn't unknowingly ship
+                    # network identity + HB internals.
                     if cmdline_flag_set LAPEE_TRACE; then
                         [ -f /run/lapee/wpa.log ] && \
                             cp /run/lapee/wpa.log \
@@ -866,12 +773,9 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                             tail -c 65536 /run/lapee/hb.log \
                                 > /mnt/esp/lapee-hb-tail.log 2>/dev/null
                     fi
-                    # splash.log is copied UNCONDITIONALLY (no
-                    # LAPEE_TRACE gate). It only contains phase
-                    # transitions, the IP already shown on screen,
-                    # and httpc reasons -- no PSK, no SSID, no
-                    # wallet. Cheap diagnostic for "the splash
-                    # never advanced" reports.
+                    # splash.log is copied unconditionally: phase
+                    # transitions + the IP already shown on screen +
+                    # probe error reasons. No PSK/SSID/wallet.
                     [ -f /run/lapee/splash.log ] && \
                         cp /run/lapee/splash.log \
                             /mnt/esp/lapee-splash.log 2>/dev/null
@@ -908,25 +812,18 @@ RV
                     sync
                     SZ=$(stat -c %s "$OUT" 2>/dev/null || \
                            stat -f %z "$OUT" 2>/dev/null || echo ?)
-                    # The writeback marker is for the automated
-                    # `make hb-usb-qemu' harness -- it polls the
-                    # QEMU serial log for `LAPEE-WRITEBACK-OK' to
-                    # know it can stop the guest and extract the
-                    # ESP. Init's stdout was redirected to /dev/kmsg
-                    # at line 80; combined with the early `dmesg -n 1'
-                    # nothing userspace at default level reaches
-                    # console anymore.
-                    #
-                    # Bypass the printk plumbing entirely: write
-                    # directly to /dev/ttyS0 when present. In QEMU
-                    # `-nographic' that's the host-side serial chardev
-                    # (file-backed, where the harness reads). On
-                    # real Framework boots without a serial cable
-                    # /dev/ttyS0 is absent and the [ -w ] guard
-                    # makes this a no-op -- the operator gets their
-                    # "stick is safe to remove" reassurance from
-                    # the splash's QR phase + READY footer, no
-                    # kernel-prefixed banner scribbled on top.
+                    # Writeback marker for the automated `make
+                    # hb-usb-qemu' harness, which greps the QEMU
+                    # serial log for `LAPEE-WRITEBACK-OK' to know
+                    # it can stop the guest and extract the ESP.
+                    # init's stdio is on /dev/kmsg by now and
+                    # `dmesg -n 1' filters the kmsg-to-console path,
+                    # so write directly to /dev/ttyS0 (file-backed
+                    # chardev under QEMU `-nographic'). On a real
+                    # Framework boot without a serial cable the
+                    # device is absent; the [ -w ] guard makes it
+                    # a no-op and the operator gets their "node is
+                    # ready" signal from the splash's READY footer.
                     if [ -w /dev/ttyS0 ]; then
                         printf 'LAPEE-WRITEBACK-OK: %s (%s bytes)\n' \
                             "$OUT" "$SZ" > /dev/ttyS0 2>/dev/null || true

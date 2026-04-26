@@ -67,11 +67,7 @@ case "${1:-unknown}" in
                 # No console-side banner. The BEAM splash polls
                 # /run/lapee/primary-net for the IP and the dev_tpm2
                 # /info endpoint for HB readiness; it owns the
-                # phase machine + the QR pre-render itself. The
-                # old shell-splash `set' calls + the one-shot
-                # `/info' watcher fork that used to live here were
-                # all writing into a state file the BEAM splash
-                # never reads. Removed in code-review issue #2.
+                # phase machine itself.
             fi
         else
             echo "[net] $interface: bound ip=$ip  (secondary;" \

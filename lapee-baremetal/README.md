@@ -70,11 +70,18 @@ make hb-usb-write DEV=/dev/diskN
 
 # Plug the USB into the target laptop. Power on. Select USB boot from
 # the firmware menu (F2 / F12 / Esc depending on vendor). The boot
-# splash shows a centred HyperBEAM logo; status line updates with
-# the node's IP once DHCP lands.
+# splash spins a 3D wireframe laptop with a status line beneath:
+#   "starting LapEE..." -> "network up; starting HyperBEAM..." ->
+#   "starting HyperBEAM... <IP> (Ns)" -> "Running at http://<IP>:8734/"
 #
-# When the splash shows `SAFE TO POWER OFF + REMOVE USB STICK',
-# unplug + plug the stick into your Mac, then:
+# Pull the dashboard either from the live node over LAN, or from the
+# stick after pulling it back to the Mac (writeback path):
+
+# Live LAN -- recommended:
+./scripts/interpret-local-capture.sh --url http://<node-ip>:8734 \
+    --label 'my laptop'
+
+# Or, USB roundtrip (the stick contains attestation-latest.json):
 ./scripts/interpret-local-capture.sh \
     --label 'my laptop' \
     /Volumes/LAPEE_ESP/attestation-latest.json

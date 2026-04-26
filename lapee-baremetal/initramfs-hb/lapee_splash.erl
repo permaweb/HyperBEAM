@@ -2,31 +2,30 @@
 %%
 %% lapee_splash -- LapEE 3D animated boot splash.
 %%
-%% Runs as a SEPARATE BEAM VM forked from init, parallel to the
-%% HyperBEAM node. Same erts binary (lives in HyperBEAM's release
-%% under /usr/lib/hyperbeam/erts-*/bin/erl) but its own VM, its own
-%% scheduler, its own crash domain. If HB falls over the splash
-%% keeps drawing; if the splash falls over HB doesn't notice.
+%% Runs as its own BEAM VM, forked from init right after the basic
+%% mounts. Owns /dev/console exclusively; renders a rotating wireframe
+%% laptop with an easing-open lid at 12 fps, and prints a single
+%% status line below it. The splash polls the phase machine itself --
+%% init doesn't push state in.
+%%
+%%   boot     /run/lapee/primary-net not yet written  ("starting LapEE...")
+%%   net-up   primary-net has an ip=, /info not yet 200
+%%               ("network up; starting HyperBEAM...")
+%%   hb-wait  /info still not 200 after the first probe
+%%               ("starting HyperBEAM... <ip> (Ns)")
+%%   ready    /info returned 200 ("Running at http://<ip>:8734/")
+%%
+%% The /info probe is a raw gen_tcp HTTP/1.0 round-trip rather than
+%% an inets/httpc call -- the URL contains `~' and `@', which are
+%% lawful per RFC 3986 but trip OTP 27's URL parser. gen_tcp removes
+%% the dependency entirely.
 %%
 %% Compiled to a .beam at build time by build-initramfs-hb.sh and
-%% loaded at runtime via:
+%% loaded by init via:
 %%
-%%   erl -pa /usr/local/lib/lapee-splash -noshell -run lapee_splash main
-%%
-%% What it does:
-%%   1. 3D wireframe of a clamshell laptop, rotated around Y axis,
-%%      lid easing open from closed -> ~106 deg, ~12 fps.
-%%      Bresenham-rasterised onto a fixed 80x24 char grid centred
-%%      on the screen.
-%%   2. State machine polled internally each frame:
-%%        boot     -- before /run/lapee/primary-net exists
-%%        net-up   -- primary-net exists, IP known
-%%        hb-wait  -- IP known, HB /info not yet responding
-%%        qr       -- HB /info returns 200; lock face-on, overlay QR
-%%      No `lapee-splash set' from init needed -- the splash decides.
-%%   3. At qr phase: `qrencode -t ASCII -o - http://<ip>:8734/'
-%%      generates the QR; we overlay it on the laptop's projected
-%%      screen panel and stop the animation there.
+%%   erl -boot start_clean -pa /usr/local/lib/lapee-splash \
+%%       /usr/lib/hyperbeam/lib/*/ebin -noshell -noinput \
+%%       -run lapee_splash main
 
 -module(lapee_splash).
 -export([main/0, main/1]).
@@ -43,39 +42,22 @@ main()      -> main([]).
 -define(MIN_H, 24).
 %% Lid open angle (radians). 1.85 ≈ 106°, classic working tilt.
 -define(LID_TARGET, 1.85).
-%% Lid easing per frame. Lower = slower open. 0.04 at 12 fps =
-%% the lid reaches >95% of its target after about 7 s. Was 0.15
-%% in the first cut; user asked for slower so the open feels
-%% deliberate before the spin settles in.
+%% Lid easing per frame. Lower = slower open; 0.04 at 12 fps
+%% reaches >95% of target after ~7 s.
 -define(LID_EASE, 0.04).
-%% Yaw advance per frame, radians. Stays constant across the
-%% whole splash lifetime -- the spin never locks face-on, so the
-%% laptop keeps gently rotating with the URL underneath after HB
-%% comes up. (Earlier cut snapped the yaw to 0 at qr phase to
-%% reveal a QR overlay; the QR didn't scan reliably and the frozen
-%% pose looked sad. Steady spin reads as "alive".)
+%% Yaw advance per frame, radians. Constant for the whole splash
+%% lifetime -- the spin never locks, so the laptop keeps gently
+%% rotating with the URL underneath after HB is up.
 -define(YAW_PER_FRAME, 0.05).
 
-%% Paths are overridable via env vars so the same escript can be
-%% exercised from a Mac dev box (LAPEE_CONSOLE=/tmp/out, etc.) and
-%% from the iron initramfs (defaults below).
-console_path()    -> os:getenv("LAPEE_CONSOLE",    "/dev/console").
+%% All paths/probe targets overridable via env so the same module
+%% can be exercised from a dev box (LAPEE_CONSOLE=/tmp/out etc.).
+console_path()     -> os:getenv("LAPEE_CONSOLE",     "/dev/console").
 primary_net_path() -> os:getenv("LAPEE_PRIMARY_NET", "/run/lapee/primary-net").
-%% Probe the dev_tpm2 device's `/info' rather than `/~meta@1.0/info'
-%% so we're checking the SAME endpoint init's writeback loop checks
-%% (init line 722). If init's wait succeeds, splash's wait will too --
-%% no chance of one signalling green while the other still waits.
-%%
-%% We deliberately keep the host:port and the path SEPARATE: the probe
-%% is a raw gen_tcp speak (see hb_ready/0) so we never depend on
-%% inets/httpc URL parsing -- which threw `function_clause' under the
-%% guest's OTP 27 build for paths containing both `~' and `@', burning
-%% one full overnight boot cycle to diagnose. Captured in splash.log
-%% on real hardware before the rewrite.
-probe_host()       -> os:getenv("LAPEE_PROBE_HOST", "127.0.0.1").
+probe_host()       -> os:getenv("LAPEE_PROBE_HOST",  "127.0.0.1").
 probe_port()       -> list_to_integer(os:getenv("LAPEE_PROBE_PORT", "8734")).
-probe_path()       -> os:getenv("LAPEE_PROBE_PATH", "/~tpm2@2.0a/info").
-log_path()         -> os:getenv("LAPEE_SPLASH_LOG", "/run/lapee/splash.log").
+probe_path()       -> os:getenv("LAPEE_PROBE_PATH",  "/~tpm2@2.0a/info").
+log_path()         -> os:getenv("LAPEE_SPLASH_LOG",  "/run/lapee/splash.log").
 
 %% Terminal dimensions detected at startup via `stty size'. On the
 %% iron framebuffer console with -vga std + 8x16 font that's
@@ -99,32 +81,21 @@ detect_dims() ->
 %% Entry point
 %% ============================================================
 main(_Args) ->
-    %% Splash uses raw gen_tcp for the readiness probe, so no
-    %% inets/httpc start-up is needed. Log a startup line so the
-    %% writeback splash.log shows the daemon survived its first
-    %% sleep loop.
     log_start(),
 
-    %% Detect actual terminal dimensions. On QEMU+OVMF with -vga std
-    %% the framebuffer console is typically 128x48; on real iron
-    %% it depends on the EFI framebuffer mode. Hard-coding 80x24
-    %% would pin the splash to the upper-left of a wider screen.
+    %% Detect actual terminal dimensions. The framebuffer console
+    %% size depends on the EFI mode + chosen font; hard-coding 80x24
+    %% would pin the splash to the upper-left of any wider screen.
     {Cols, Rows} = detect_dims(),
     log_event(io_lib:format("dims: ~bx~b", [Cols, Rows])),
 
-    %% Open /dev/console raw. On the iron framebuffer console this
-    %% is a character device -- writes are atomic, ANSI escapes
-    %% interpreted in-kernel by fbcon.
+    %% Open /dev/console raw. fbcon interprets ANSI escapes in-kernel.
     {ok, Out} = file:open(console_path(), [write, raw]),
 
     %% Hide cursor, clear screen, home.
     file:write(Out, <<"\e[?25l\e[2J\e[H">>),
 
-    %% Wall-clock start so hb-wait phase can show elapsed seconds.
-    %% Operators staring at "starting HyperBEAM..." for 60-180s under
-    %% TCG-emulated amd64 need to see the counter advance, otherwise
-    %% they reasonably conclude the boot is hung. erlang:monotonic_time
-    %% is unaffected by NTP clock jumps.
+    %% Monotonic clock for the hb-wait elapsed-seconds counter.
     T0 = erlang:monotonic_time(millisecond),
 
     State0 = #{
@@ -140,7 +111,6 @@ main(_Args) ->
         hb_wait_t0  => undefined
     },
     log_event("phase=boot"),
-    %% Trap ctrl-c / sigterm so we can restore the cursor on exit.
     process_flag(trap_exit, true),
     try
         loop(State0)
@@ -152,12 +122,11 @@ main(_Args) ->
 %% ============================================================
 %% Main loop
 %% ============================================================
-%% The render+write+step_anim block is wrapped in try/catch so a
-%% degenerate-but-renderable input (e.g. a malformed qrencode
-%% output yielding lists:max([]) on the overlay path) doesn't kill
-%% the whole splash and leave the operator staring at a frozen
-%% frame for the rest of cold-start -- the exact UX bug the splash
-%% was rewritten to fix. Code-review issue #3.
+%% Render + write + step_anim is wrapped in try/catch so any frame-
+%% local crash (degenerate input from os:cmd, a transient EBADF on
+%% /dev/console during console handover, ...) just logs and reuses
+%% the previous state. The splash MUST keep moving; a frozen frame
+%% on a slow boot reads as a hang.
 loop(S0) ->
     S1 = poll_state(S0),
     S2 = try
@@ -236,27 +205,20 @@ read_ip() ->
 %% `{false, Reason}' otherwise. The Reason is a short human-readable
 %% string suitable for splash.log -- not for screen.
 %%
-%% Implementation note: this used to call httpc:request/4, but the
-%% guest's OTP 27 inets threw `error:function_clause' on URLs whose
-%% path contained both `~' and `@' (e.g. `/~tpm2@2.0a/info'), causing
-%% every poll to be caught and converted to "{false, function_clause}"
-%% so the splash sat in hb-wait forever even after HB was answering.
-%% The fix is to skip httpc and speak HTTP/1.0 over a raw gen_tcp
-%% connection -- no URL parsing, no header validation, no ssl path,
-%% nothing that can throw on a tilde. The status-line check still
-%% needs the body to start with "HTTP/1.x 200" so we read just enough
-%% bytes to see that prefix and bail.
+%% Speaks HTTP/1.0 over a raw gen_tcp connection rather than going
+%% through inets/httpc. The probe URL contains both `~' and `@'
+%% (e.g. `/~tpm2@2.0a/info'); httpc URL parsing throws on that pair
+%% under OTP 27. Raw gen_tcp has no URL parser to throw at all.
 hb_ready() ->
     Host = probe_host(),
     Port = probe_port(),
     Path = probe_path(),
     Tmo  = ?POLL_TIMEOUT_MS,
     %% `{packet, line}' makes recv block until a CRLF-terminated line
-    %% lands -- exactly the HTTP status line. Without it (raw mode),
-    %% TCG-emulated cowboy under cold-start can split "HTTP/1." and
-    %% "1 200 OK\r\n..." across two TCP segments, falling out the
-    %% bottom of the case clause as `unparsed' even though /info DID
-    %% answer 200. Code-review issue #1, fixed before sign-off.
+    %% lands -- exactly the HTTP status line. Raw mode would let
+    %% recv return after the first TCP segment, which can split
+    %% "HTTP/1." and "1 200 OK\r\n..." under a busy cowboy and miss
+    %% the 200 prefix.
     case gen_tcp:connect(Host, Port,
                          [binary, {active, false},
                           {packet, line}, {nodelay, true}],
@@ -371,17 +333,10 @@ rotate_y({X, Y, Z}, A) ->
     {X * Ca + Z * Sa, Y, -X * Sa + Z * Ca}.
 
 %% Scale (chars per laptop-width unit) derived from terminal size:
-%% target ~50% of screen width, capped to fit vertically with room
-%% for the status line below. Cells are 2:1 tall:wide so the y-axis
-%% scale factor is halved; the open laptop is ~2.6 units tall.
-%%
-%% Resulting on-screen sizes (without env override):
-%%   80x24   -> Scale 8 (32 cells / 80 wide = 40%)
-%%   160x50  -> Scale 17 (68/160 = 42%)
-%%   282x94  -> Scale 31 (124/282 = 44%)
-%%
-%% Operators on a HiDPI framebuffer where this still feels small can
-%% override via LAPEE_SPLASH_SCALE=<float>.
+%% target ~50% of screen width, capped so the lid never clips out
+%% the top or footer at any yaw. Set LAPEE_SPLASH_SCALE=<float> to
+%% override (useful when the auto-pick feels small on a HiDPI
+%% framebuffer).
 splash_scale(W, H) ->
     case os:getenv("LAPEE_SPLASH_SCALE") of
         false -> auto_scale(W, H);
@@ -396,39 +351,34 @@ splash_scale(W, H) ->
     end.
 
 auto_scale(W, H) ->
-    %% 4 laptop-width units want ~50% of screen width: 4*Scale = W/2,
-    %% so Scale = W/8.
+    %% 4 laptop-width units * Scale ≈ W/2, so Scale = W/8.
     %%
-    %% Vertically: the look-down tilt mixes Z into projected Y, so the
-    %% silhouette's row span depends on yaw. Worst-case Yt range across
-    %% all yaws is roughly [-1.29, 3.25] -> 4.54 units, halved by the
-    %% 2:1 char aspect = 2.27 * Scale rows. Reserve 5 rows for status
-    %% line + margin and bound Scale so the spinning silhouette never
-    %% clips into the footer at any yaw.
+    %% Vertically: the look-down tilt mixes Z into projected Y, so
+    %% the silhouette's row span depends on yaw. Worst-case Yt range
+    %% across all yaws is ~4.54 units, halved by the 2:1 char aspect
+    %% = 2.27*Scale rows. Reserve 5 rows for the footer + breathing
+    %% room and cap Scale so the spinning silhouette never clips at
+    %% any yaw.
     ScaleW = W / 8.0,
     ScaleH = max(2.0, (H - 5) / 2.3),
     max(4.0, min(ScaleW, ScaleH)).
 
 %% Y-coordinate shift so the laptop's vertical midpoint sits at
-%% roughly 0.45 * H (slightly above centre, so the footer beneath the
-%% base isn't crowded against the bottom edge). The yaw-aware mid
-%% point Yt is ~0.98 in tilt-space.
-%%   Cy_mid = H/2 - 0.98 * Scale * 0.5 - Lift  -> want H * 0.45
-%%   Lift   = 0.05 * H - 0.49 * Scale
+%% ~0.45*H -- slightly above centre, so the footer below the base
+%% has breathing room. Yaw-aware midpoint Yt is ~0.98 in tilt-space:
+%%   Cy_mid = H/2 - 0.98*Scale/2 - Lift  ->  H*0.45
+%%   Lift   = 0.05*H - 0.49*Scale
 splash_lift(H, Scale) ->
     0.05 * H - 0.49 * Scale.
 
-%% Row at which the status footer lands. ~0.92 * H -- below the
-%% laptop's bottom-most projected cell at any yaw (which sits near
-%% ~0.85 * H with the worst-case scale + lift above), with at least
-%% one row of breathing room. Clamp to H-1 so a tiny terminal still
-%% has somewhere to draw.
+%% Status footer row -- below the laptop's bottom-most cell at any
+%% yaw (which sits at ~0.85*H given the scale/lift above) with one
+%% row of breathing room. Clamped so a tiny terminal still draws.
 splash_status_row(H) ->
     max(1, min(H - 1, round(H * 0.92))).
 
 %% Project a 3D point to a 2D grid cell.
-%% Simple orthographic projection with a Y-axis tilt for "3/4 view".
-%% Scale + lift are computed once per frame in render/1 and threaded.
+%% Orthographic projection with a Y-axis tilt for the 3/4 view.
 project({X, Y, Z}, W, H, Scale, Lift) ->
     Tilt = 0.45,                                  %% radians, look-down
     Yt = Y * math:cos(Tilt) - Z * math:sin(Tilt),
@@ -501,11 +451,8 @@ render(#{cols := W, rows := H, yaw := Yaw, lid := Lid,
     Grid1 = lists:foldl(
               fun({P1, P2}, G) -> draw_line(G, W, H, P1, P2) end,
               Grid0, Edges2),
-    %% Single status line, well below the laptop. Its row is computed
-    %% from H so the spacing between laptop bottom and footer scales
-    %% with the screen instead of being a fixed +7. The spin keeps
-    %% going beneath the URL once HB is ready -- no face-on lock, no
-    %% QR overlay.
+    %% Single status line under the laptop. Spin continues during
+    %% the `ready' phase with the URL underneath -- no face-on lock.
     Footer = footer_text(Phase, Ip, HbT0),
     StatusRow = splash_status_row(H),
     Grid2 = overlay_centered(Grid1, W, StatusRow, Footer),
@@ -526,18 +473,10 @@ overlay_centered(Grid, W, Row, Text) ->
       Grid,
       lists:zip(lists:seq(0, length(Text) - 1), Text)).
 
-%% Status line texts -- short, single-purpose, fits on one row.
-%% These are the only words the operator sees on screen during boot.
-%%
-%% In `hb-wait' we surface the IP + elapsed seconds. The IP is known
-%% the moment udhcpc binds (well before HB cowboy is up); printing it
-%% early gives the operator the URL they'll actually use. The seconds
-%% counter exists because HB cold-start can run 60-180 s on TCG and
-%% several seconds even on iron; a static "starting HyperBEAM..." for
-%% that long looks indistinguishable from a hang.
-%%
-%% At `ready' we drop the elapsed counter and just show the URL; the
-%% laptop keeps spinning underneath. No QR overlay, no face-on lock.
+%% Status line texts -- the only words the operator sees on screen
+%% during boot. In `hb-wait' we surface the IP + an elapsed-seconds
+%% counter so a slow HB cold-start is visibly progressing rather
+%% than indistinguishable from a hang.
 footer_text(boot, _, _)              -> "starting LapEE...";
 footer_text('net-up', undefined, _)  -> "network up; starting HyperBEAM...";
 footer_text('net-up', Ip, _)         -> "network up (" ++ Ip ++ "); starting HyperBEAM...";
@@ -559,20 +498,14 @@ footer_text(_, _, _)                 -> "".
 nth(N, L) -> lists:nth(N, L).
 
 %% ============================================================
-%% Diagnostic log -- writes to /run/lapee/splash.log
+%% Diagnostic log -- /run/lapee/splash.log
 %% ============================================================
-%% File-based, append-on-each-event. Writeback in init copies this
-%% to /mnt/esp/lapee-splash.log alongside the attestation so the
-%% operator can post-mortem any "stuck splash" report after pulling
-%% the stick. NOT user-sensitive: the log records phase transitions,
-%% IP (already on screen), and httpc reasons -- no PSK, no SSID, no
-%% wallet material. We swallow all errors -- the log is best-effort
-%% diagnostic; it must never crash the splash itself.
-%% Both helpers append. log_start used to truncate; symmetry matters
-%% for the case where init's writeback copy races a second splash
-%% process (shouldn't happen, but the asymmetry was a tripwire flagged
-%% in code-review issue #5). [append] on busybox tmpfs lowers to
-%% open(O_APPEND|O_WRONLY) + write(); both atomic for sub-page lines.
+%% Append-only, per-event. init copies this to the ESP at writeback
+%% time so an operator can post-mortem the boot from the stick. The
+%% log records phase transitions, the IP (already on screen) and
+%% probe error reasons -- no PSK, no SSID, no wallet material. All
+%% errors swallowed: best-effort diagnostic, must never kill the
+%% splash itself.
 log_start() ->
     catch file:write_file(log_path(),
         io_lib:format("[lapee-splash] started pid=~p t=~p~n",
