@@ -48,6 +48,7 @@
 -module(dev_process).
 %%% Public API
 -export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([target_slot/2]).
 -export([default_device/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
@@ -204,14 +205,7 @@ init(Base, Req, Opts) ->
 compute(Base, Req, Opts) ->
     ProcBase = dev_process_lib:ensure_process_key(Base, Opts),
     ProcID = dev_process_lib:process_id(ProcBase, #{}, Opts),
-    TargetSlot =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"compute">>},
-                {{as, <<"message@1.0">>, Req}, <<"slot">>}
-            ],
-            Opts
-        ),
+    TargetSlot = target_slot(Req, Opts),
     case TargetSlot of
         not_found ->
             % The slot is not set, so we need to serve the latest known state
@@ -252,6 +246,16 @@ compute(Base, Req, Opts) ->
                     )
             end
     end.
+
+%% @doc Return the slot requested by a `compute' request, or `not_found'.
+target_slot(Req, Opts) ->
+    hb_ao:get_first(
+        [
+            {{as, <<"message@1.0">>, Req}, <<"compute">>},
+            {{as, <<"message@1.0">>, Req}, <<"slot">>}
+        ],
+        Opts
+    ).
 
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
@@ -372,13 +376,6 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => Slot },
                     Opts
                 ),
-            % Notify any waiters that the result for a slot is now available.
-            dev_process_worker:notify_compute(
-                ProcID,
-                Slot,
-                {ok, NewProcStateMsgWithSlot},
-                Opts
-            ),
             {StoreTimeMicroSecs, ProcStateWithSnapshot} =
                 timer:tc(
                     fun() ->
@@ -410,6 +407,15 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                         )
                     }
                 }
+            ),
+            % Notify waiters only after the slot is readable from the process
+            % cache. Waiters may immediately re-enter via `/compute' or `/push',
+            % and those paths treat the cache as the completion boundary.
+            dev_process_worker:notify_compute(
+                ProcID,
+                Slot,
+                {ok, ProcStateWithSnapshot},
+                Opts
             ),
             % Optionally fire an async `/push' for the slot we just cached.
             % Only fresh computes reach this branch; cache hits in `compute/3'
@@ -522,7 +528,8 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
     ok.
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
-%% key.
+%% key. The write is synchronous: callers may notify waiters or run push hooks
+%% as soon as this returns, so the slot must already be cache-visible.
 store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
     % Cache the `Snapshot' key as frequently as the node is configured to.
     ResMaybeWithSnapshot =
@@ -571,20 +578,10 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
                     }
                 ),
                 WithLastSnapshot
-        end,
-    ?event(compute, {caching_result, {proc_id, ProcID}, {slot, Slot}}, Opts),
-    Writer = 
-        fun() ->
-            dev_process_cache:write(ProcID, Slot, ResMaybeWithSnapshot, Opts)
-        end,
-    case hb_opts:get(process_async_cache, true, Opts) of
-        true ->
-            spawn(Writer),
-            ?event(compute, {caching_delegated, {proc_id, ProcID}, {slot, Slot}}, Opts);
-        false ->
-            Writer(),
-            ?event(compute, {caching_completed, {proc_id, ProcID}, {slot, Slot}}, Opts)
     end,
+    ?event(compute, {caching_result, {proc_id, ProcID}, {slot, Slot}}, Opts),
+    dev_process_cache:write(ProcID, Slot, ResMaybeWithSnapshot, Opts),
+    ?event(compute, {caching_completed, {proc_id, ProcID}, {slot, Slot}}, Opts),
     hb_maps:without([<<"snapshot">>], ResMaybeWithSnapshot, Opts).
 
 %% @doc Should we snapshot a new full state result? First, we check if the 

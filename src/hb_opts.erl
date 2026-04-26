@@ -516,7 +516,7 @@ raw_default_message() ->
         % Should the node store all signed messages?
         <<"store-all-signed">> => true,
         % Should the node use persistent processes?
-        <<"process-workers">> => false,
+        <<"process-workers">> => true,
         % Options for the router device
         <<"router-opts">> => #{
             <<"routes">> => []

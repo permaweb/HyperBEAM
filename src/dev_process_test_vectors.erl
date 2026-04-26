@@ -302,7 +302,6 @@ http_wasm_process_by_id_test_parallel() ->
         <<"port">> => 10000 + rand:uniform(10000),
         <<"priv-wallet">> => SchedWallet,
         <<"cache-control">> => <<"always">>,
-        <<"process-async-cache">> => false,
         <<"store">> => #{
             <<"store-module">> => hb_store_fs,
             <<"name">> => <<"cache-mainnet">>
@@ -495,8 +494,7 @@ do_test_restore() ->
     % 2. Return the variable.
     % Execute the first computation, then the second as a disconnected process.
     Opts = test_opts(#{
-        <<"process-cache-frequency">> => 1,
-        <<"process-async-cache">> => false
+        <<"process-cache-frequency">> => 1
     }),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),
@@ -528,12 +526,12 @@ now_results_test_parallel_() ->
     end}.
 
 prior_results_accessible_test_parallel_() ->
-	{timeout, 30, fun() ->
-		Opts = test_opts(#{ <<"process-async-cache">> => false }),
-		Base = aos_process(Opts),
-		schedule_aos_call(Base, <<"return 1+1">>, Opts),
-		schedule_aos_call(Base, <<"return 2+2">>, Opts),
-		?assertEqual(
+    {timeout, 30, fun() ->
+        Opts = test_opts(),
+        Base = aos_process(Opts),
+        schedule_aos_call(Base, <<"return 1+1">>, Opts),
+        schedule_aos_call(Base, <<"return 2+2">>, Opts),
+        ?assertEqual(
             {ok, <<"4">>},
             hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
@@ -543,11 +541,11 @@ prior_results_accessible_test_parallel_() ->
                 #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
                 Opts
             ),
-		?assertMatch(
+        ?assertMatch(
             #{ <<"results">> := #{ <<"data">> := <<"4">> } },
             hb_cache:ensure_all_loaded(Results, Opts)
-		)
-	end}.
+        )
+    end}.
 
 persistent_process_test_parallel() ->
     {timeout, 30, fun() ->
