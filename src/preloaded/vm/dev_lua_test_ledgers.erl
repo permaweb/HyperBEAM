@@ -374,13 +374,17 @@ verify_net_peer_balances(AllProcs, Opts) ->
 
 %% @doc Verify that a ledger's expectation of its balances with peer ledgers
 %% is consistent with the actual balances held.
-verify_peer_balances(_ValidateID, ValidateProc, _AllProcs, Opts) ->
+verify_peer_balances(_ValidateID, ValidateProc, NormProcs, Opts) ->
     Ledgers = ledgers(ValidateProc, Opts),
     maps:foreach(
         fun(PeerID, ExpectedBalance) ->
             ?assertEqual(
                 ExpectedBalance,
-                balance(ValidateProc, PeerID, Opts)
+                balance(
+                    maps:get(PeerID, NormProcs),
+                    hb_message:id(ValidateProc, all),
+                    Opts
+                )
             )
         end,
         Ledgers

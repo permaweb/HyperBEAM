@@ -1,7 +1,7 @@
 %%% @doc Extract Dialyzer-style type information from AO-Core devices and apply
 %%% a static `vary` transform to base and request messages.
 -module(hb_types).
--export([extract/2, vary/5]).
+-export([extract/2, vary/5, vary/7]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -33,18 +33,52 @@ vary(Device, Key, Base, Request, Opts) ->
             {ok, Base, Request}
     end.
 
+%% @doc Apply the schema for a resolved device function. This is the AO-Core
+%% entrypoint: the resolver has already mapped a key to its Erlang function.
+vary(Device, Key, Func, AddKey, Base, Request, Opts) ->
+    case extract(Device, Opts) of
+        {ok, #{ <<"keys">> := KeySchemas }} ->
+            case function_schema(Func, Key, KeySchemas) of
+                undefined ->
+                    {ok, Base, Request, none};
+                Schema ->
+                    {BaseSchema, ReqSchema, ReturnSchema} =
+                        execution_schemas(Schema, AddKey),
+                    Req =
+                        case AddKey of
+                            false -> Request;
+                            _ -> Request#{ <<"path">> => Key }
+                        end,
+                    {ok,
+                        apply_schema(implicit_base(BaseSchema), Base, Opts),
+                        apply_schema(implicit_request(ReqSchema), Req, Opts),
+                        overlay(ReturnSchema)
+                    }
+            end;
+        {error, _Reason} ->
+            {ok, Base, Request, none}
+    end.
+
 %% @doc Extract the public type schema for a device.
 extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
 extract(Module, _Opts) when is_atom(Module) ->
-    case code:ensure_loaded(Module) of
-        {module, Module} ->
-            do_extract(Module);
-        {error, Reason} ->
-            {error, {module_not_loaded, Module, Reason}}
+    case persistent_term:get({?MODULE, Module}, undefined) of
+        undefined ->
+            Res =
+                case code:ensure_loaded(Module) of
+                    {module, Module} ->
+                        do_extract(Module);
+                    {error, Reason} ->
+                        {error, {module_not_loaded, Module, Reason}}
+                end,
+            persistent_term:put({?MODULE, Module}, Res),
+            Res;
+        Res ->
+            Res
     end;
 extract(Device, Opts) when is_binary(Device) ->
-    case hb_ao_device:load(Device, Opts) of
+    case hb_device_load:reference(Device, Opts) of
         {ok, Module} -> extract(Module, Opts);
         Error -> Error
     end;
@@ -122,6 +156,7 @@ spec_to_schema({attribute, _, spec, {{Name, Arity}, [Spec]}}, TypeEnv) ->
         normalize_name(Name),
         #{
             <<"arity">> => Arity,
+            <<"args">> => Args,
             <<"base">> => maybe_nth(1, Args, any_type()),
             <<"request">> => maybe_nth(2, Args, any_type()),
             <<"opts">> => maybe_nth(3, Args, any_type()),
@@ -137,6 +172,99 @@ maybe_nth(N, List, Default) ->
         Value -> Value
     end.
 
+function_schema(Func, Key, KeySchemas) ->
+    FuncSchema =
+        case erlang:fun_info(Func, name) of
+            {name, Name} -> maps:get(normalize_name(Name), KeySchemas, undefined);
+            _ -> undefined
+        end,
+    case FuncSchema of
+        undefined -> maps:get(normalize_name(Key), KeySchemas, undefined);
+        Schema -> Schema
+    end.
+
+execution_schemas(Schema, AddKey) ->
+    Args = maps:get(<<"args">>, Schema, []),
+    Offset =
+        case AddKey of
+            false -> 0;
+            _ -> 1
+        end,
+    {
+        maybe_nth(1 + Offset, Args, any_type()),
+        maybe_nth(2 + Offset, Args, any_type()),
+        maps:get(<<"return">>, Schema, any_type())
+    }.
+
+implicit_base(Schema) ->
+    implicit_key(Schema, <<"device">>, optional).
+
+implicit_request(Schema) ->
+    implicit_key(Schema, <<"path">>, required).
+
+implicit_key(Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Key, Presence) ->
+    case maps:is_key(Key, Keys) of
+        true -> Schema;
+        false ->
+            Schema#{
+                <<"keys">> =>
+                    Keys#{
+                        Key =>
+                            #{
+                                <<"presence">> => Presence,
+                                <<"type">> => any_type()
+                            }
+                    }
+            }
+    end;
+implicit_key(Schema, _Key, _Presence) ->
+    Schema.
+
+overlay(ReturnSchema) ->
+    case overlay_type(ReturnSchema) of
+        base -> base;
+        request -> request;
+        _ -> none
+    end.
+
+overlay_type(#{ <<"kind">> := <<"message">> } = Schema) ->
+    Wildcard =
+        case maps:get(<<"wildcard">>, Schema, undefined) of
+            #{ <<"type">> := WildcardType } -> overlay_marker(WildcardType);
+            _ -> none
+        end,
+    case Wildcard of
+        none ->
+            overlay_marker(
+                maps:get(
+                    <<"type">>,
+                    maps:get(<<"...">>, maps:get(<<"keys">>, Schema, #{}), #{}),
+                    #{}
+                )
+            );
+        Overlay -> Overlay
+    end;
+overlay_type(#{ <<"kind">> := <<"tuple">>, <<"items">> := Items }) ->
+    first_overlay(Items);
+overlay_type(#{ <<"kind">> := <<"union">>, <<"members">> := Members }) ->
+    first_overlay(Members);
+overlay_type(_) ->
+    none.
+
+first_overlay([]) ->
+    none;
+first_overlay([Schema | Rest]) ->
+    case overlay_type(Schema) of
+        none -> first_overlay(Rest);
+        Overlay -> Overlay
+    end.
+
+overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"base">> }) -> base;
+overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"request">> }) -> request;
+overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"base">> }) -> base;
+overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"request">> }) -> request;
+overlay_marker(_) -> none.
+
 parse_fun_spec({type, _, bounded_fun, [FunSpec, _Constraints]}, TypeEnv) ->
     parse_fun_spec(FunSpec, TypeEnv);
 parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Ret]}, TypeEnv) ->
@@ -149,6 +277,8 @@ parse_fun_spec(Other, _TypeEnv) ->
 
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
+parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
+    any_type();
 parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
     case maps:get(Name, VarEnv, undefined) of
         undefined -> variable_type(Name);
@@ -179,7 +309,7 @@ parse_type({remote_type, _, [{atom, _, Mod}, {atom, _, Name}, Args]}, TypeEnv, V
         <<"args">> => lists:map(fun(Arg) -> parse_type(Arg, TypeEnv, VarEnv, Seen) end, Args)
     };
 parse_type({type, _, map, any}, _TypeEnv, _VarEnv, _Seen) ->
-    message_type(#{});
+    any_type();
 parse_type({type, _, map, Fields}, TypeEnv, VarEnv, Seen) ->
     message_type(
         maps:from_list(
@@ -197,6 +327,18 @@ parse_type({type, _, map, Fields}, TypeEnv, VarEnv, Seen) ->
             )
         )
     );
+parse_type({type, _, ListType, [Item]}, TypeEnv, VarEnv, Seen)
+        when ListType =:= list; ListType =:= nonempty_list ->
+    #{
+        <<"kind">> => <<"list">>,
+        <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen)
+    };
+parse_type({type, _, ListType, []}, _TypeEnv, _VarEnv, _Seen)
+        when ListType =:= list; ListType =:= nonempty_list ->
+    #{
+        <<"kind">> => <<"list">>,
+        <<"item">> => any_type()
+    };
 parse_type({type, _, ListType, Item}, TypeEnv, VarEnv, Seen)
         when ListType =:= list; ListType =:= nonempty_list ->
     #{
@@ -252,6 +394,8 @@ key_name({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) ->
     normalize_name(Atom);
 key_name({string, _, String}, _TypeEnv, _VarEnv, _Seen) ->
     hb_util:bin(String);
+key_name({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
+    <<"_">>;
 key_name(Other, TypeEnv, VarEnv, Seen) ->
     case parse_type(Other, TypeEnv, VarEnv, Seen) of
         #{ <<"kind">> := <<"literal">>, <<"value">> := Value } when is_binary(Value) ->
@@ -498,8 +642,10 @@ message_type(AllKeys) ->
     #{
         <<"kind">> => <<"message">>,
         <<"keys">> => maps:without([<<"_">>], AllKeys),
+        <<"wildcard">> => Wildcard,
         <<"all">> =>
             case Wildcard of
+                #{ <<"type">> := #{ <<"kind">> := <<"any">> } } -> true;
                 #{ <<"type">> := #{ <<"value">> := <<"_">> } } -> true;
                 _ -> false
             end
@@ -537,7 +683,7 @@ successful_vary_test() ->
             #{ <<"slot">> => 1 },
             Opts
         ),
-    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"unused">> => 1 }, VariedBase),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq),
     ?event(
         debug_types,
@@ -546,6 +692,29 @@ successful_vary_test() ->
             {varied_req, {explicit, VariedReq}}
         }
     ).
+
+function_vary_adds_implicit_keys_and_overlay_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq, Overlay} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"varied">>,
+            fun dev_test:varied/3,
+            false,
+            #{
+                <<"device">> => <<"test-device@1.0">>,
+                <<"x">> => <<"1">>,
+                <<"extra">> => <<"base">>
+            },
+            #{ <<"path">> => <<"varied">>, <<"extra">> => <<"req">> },
+            Opts
+        ),
+    ?assertEqual(
+        #{ <<"device">> => <<"test-device@1.0">>, <<"x">> => 1 },
+        VariedBase
+    ),
+    ?assertEqual(#{ <<"path">> => <<"varied">> }, VariedReq),
+    ?assertEqual(base, Overlay).
 
 vary_throw_required_key_missing_test() ->
     Opts = test_opts(),
@@ -576,13 +745,13 @@ vary_optional_key_wrong_type_test() ->
     ?assertMatch(
         {
             ok,
-            #{ <<"already-seen">> := 1 },
+            #{ <<"already-seen">> := [1] },
             #{ <<"slot">> := 1 }
         },
         vary(
             <<"test-device@1.0">>,
             <<"compute">>,
-            #{ <<"already-seen">> => <<"1">> },
+            #{ <<"already-seen">> => [<<"1">>] },
             #{ <<"slot">> => <<"1">> },
             Opts
         )
@@ -683,11 +852,11 @@ vary_coerces_optional_base_key_test() ->
         vary(
             <<"test-device@1.0">>,
             <<"compute">>,
-            #{ <<"already-seen">> => <<"2">> },
+            #{ <<"already-seen">> => [<<"2">>] },
             #{ <<"slot">> => <<"1">> },
             Opts
         ),
-    ?assertEqual(#{ <<"already-seen">> => 2 }, VariedBase),
+    ?assertEqual(#{ <<"already-seen">> => [2] }, VariedBase),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
 
 vary_throw_optional_base_key_noncoercible_test() ->
@@ -697,7 +866,7 @@ vary_throw_optional_base_key_noncoercible_test() ->
         vary(
             <<"test-device@1.0">>,
             <<"compute">>,
-            #{ <<"already-seen">> => <<"not-an-int">> },
+            #{ <<"already-seen">> => [<<"not-an-int">>] },
             #{ <<"slot">> => 1 },
             Opts
         )
