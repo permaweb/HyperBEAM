@@ -1,5 +1,81 @@
 # LapEE bare-metal -- live status
 
+**SCHEDULE NEXT RUN AFTER COMPLETE:** FALSE.
+
+## Overnight 2026-04-25/26 -- BEAM boot splash green end-to-end
+
+**Acceptance test (from the original prompt):** "the boot animation
+and the print of the IP address there actually works."
+
+**Result: PASS.** A clean QEMU `make hb-usb-qemu' boot, captured at
+`/tmp/lapee-usb-qemu.log' + ESP `lapee-splash.log', shows the splash
+advancing through every phase:
+
+```
+[lapee-splash] phase=boot
+[lapee-splash] phase=net-up ip=10.0.2.15
+[lapee-splash] phase=hb-wait (conn econnrefused)
+[lapee-splash] hb-wait: 5s, 12s, 18s, 24s, 31s, 37s, 43s, 50s, 56s elapsed
+[lapee-splash] phase=qr (HB ready)
+```
+
+The IP is shown on screen the moment udhcpc binds (well before HB is
+up), the elapsed-second counter ticks during hb-wait so a slow TCG
+cold-start no longer looks identical to a hang, and the QR overlays
+the lid panel once HB answers `/info'. Writeback completes,
+`LAPEE-WRITEBACK-OK' reaches the serial chardev, and
+`out/qemu-usb-test/attestation-latest.json' is the live envelope.
+
+### Root causes of the previous "stuck on starting HyperBEAM..."
+
+1. **httpc:request threw `function_clause' on the URL with `~' and
+   `@'.** The guest's OTP 27 inets URL parser doesn't survive
+   `/~tpm2@2.0a/info'. Every poll was caught by the splash's catch
+   clause and converted to "{false, function_clause}", so the splash
+   sat in hb-wait forever even after HB came up. Captured in
+   splash.log on a real boot before the rewrite.
+
+   **Fix:** drop httpc + inets entirely; speak HTTP/1.0 over a raw
+   `gen_tcp:connect' / `gen_tcp:send' / `gen_tcp:recv' and check for
+   the literal `HTTP/1.x 200' prefix. No URL parsing, no header
+   validation, nothing that can throw on a tilde.
+
+2. **`LAPEE-WRITEBACK-OK' marker never reached the serial console.**
+   init redirected its stdio to /dev/kmsg early on; `dmesg -n 1' --
+   set so the splash daemon owns /dev/console -- silences kmsg from
+   reaching the serial chardev. Headless `boot-usb-image.sh' waited
+   the full timeout for a marker it would never see, even when the
+   guest had completed writeback.
+
+   **Fix:** prefix the marker line with `<1>' on the kmsg copy
+   (KERN_ALERT bypasses the level filter) AND `printf' a duplicate
+   directly to /dev/ttyS0 when present. Best-effort, two-channel.
+
+### Commit
+
+`1a8b10e0e lapee-baremetal: BEAM-based 3D boot splash + writeback marker fix`
+
+Files touched:
+- `initramfs-hb/lapee_splash.erl` (NEW, 532 LoC -- the BEAM splash)
+- `initramfs-hb/init` (BEAM splash launch + kmsg redirect + marker fix + splash.log writeback)
+- `initramfs-hb/lapee-dhcp-hook` (minor)
+- `scripts/build-initramfs-hb.sh` (compile splash.erl on host, ship platform-independent .beam)
+- `scripts/boot-usb-image.sh` (`--gui' flag for visual verification mode)
+- `Makefile` (splash-frames + hb-usb-qemu-gui targets)
+
+A peer-review agent (skeptical OTP veteran personality) is reviewing
+the commit while this STATUS is being written; any high-severity
+findings will land in a follow-up commit before sign-off.
+
+### Known follow-ups (not in tonight's commit)
+
+- Orphan shell `lapee-splash` + pre-rendered `splash-frames/` are
+  still shipped in the initramfs. They're called from init/dhcp-hook
+  with `>/dev/null 2>&1' so they're harmless no-ops, but they add
+  ~600 KB and confuse future readers. Cleanup commit candidate.
+
+---
+
 ## Morning of 2026-04-25 -- EXACT STEPS to reach verdict=trusted
 
 A full overnight run pushed the Framework envelope from
