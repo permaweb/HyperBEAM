@@ -23,6 +23,7 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
+-spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
@@ -52,6 +53,7 @@ is_operator(Request, NodeMsg) ->
 %% Subsequently, rather than embedding the `git-short-hash-length', for the
 %% avoidance of doubt, we include the short hash separately, as well as its long
 %% hash.
+-spec build(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 build(_, _, _NodeMsg) ->
     {ok,
         #{
@@ -403,6 +405,7 @@ maybe_sign(Res, NodeMsg) ->
 
 %% @doc Check if the request in question is signed by a given `role' on the node.
 %% The `role' can be one of `operator' or `initiator'.
+-spec is(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->

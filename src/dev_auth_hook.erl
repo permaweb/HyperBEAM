@@ -104,6 +104,7 @@
 %%     by the user request).
 %% </pre>
 %% 
+-spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 request(Base, HookReq, Opts) ->
     ?event({auth_hook_request, {base, Base}, {hook_req, HookReq}}),
     maybe

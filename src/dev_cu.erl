@@ -4,6 +4,7 @@
 -include("include/hb.hrl").
 -hb_debug(print).
 
+-spec push(_, _) -> term().
 push(Msg, S = #{ assignment := Assignment, logger := _Logger }) ->
     ?event(
         {pushing_message,
@@ -19,6 +20,7 @@ push(Msg, S = #{ assignment := Assignment, logger := _Logger }) ->
             throw({cu_error, Error})
     end.
 
+-spec execute(_, _) -> term().
 execute(CarrierMsg, S) ->
     MaybeBundle = ar_bundles:hd(CarrierMsg),
     Store = hb_opts:get(store),

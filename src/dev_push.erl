@@ -36,6 +36,7 @@
 %%                       `N > 0' - recurse, with the inner `/push'
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
+-spec push(_, _, _) -> _.
 push(Base, Req, Opts) ->
     Process = dev_process_lib:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),

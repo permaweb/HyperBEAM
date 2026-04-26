@@ -11,6 +11,7 @@
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
+-spec generate(#{ _ => _ }, #{ committer => binary(), generator => _, _ => _ }, map()) -> term().
 generate(Base, Request, Opts) ->
     {WithCookie, Secrets} =
         case find_secrets(Request, Opts) of
@@ -33,11 +34,12 @@ generate(Base, Request, Opts) ->
 %% messages. The inbound request has the same structure as a normal `~hook@1.0'
 %% on-request hook: The message sequence is the body of the request, and the
 %% request is the request message.
+-spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := list(), _ => _ }, map()) -> term().
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe
-        {ok, SignedMsg} ?= hb_maps:find(<<"request">>, Request, Opts),
-        {ok, MessageSequence} ?= hb_maps:find(<<"body">>, Request, Opts),
+        SignedMsg = maps:get(<<"request">>, Request),
+        MessageSequence = maps:get(<<"body">>, Request),
         % Cookie auth adds set-cookie to response
         {ok, #{ <<"set-cookie">> := SetCookie }} =
             dev_codec_cookie:to(
@@ -58,12 +60,10 @@ finalize(Base, Request, Opts) ->
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
-commit(Base, Request, RawOpts) when ?IS_LINK(Request) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
-    commit(Base, hb_cache:ensure_loaded(Request, Opts), Opts);
+-spec commit(#{ _ => _ }, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, map()) -> term().
 commit(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
-    commit(hb_cache:ensure_loaded(Secret, Opts), Base, Req, Opts);
+    commit(Secret, Base, Req, Opts);
 commit(Base, Request, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     % Calculate the key to use for the commitment.
@@ -108,9 +108,7 @@ store_secret(Secret, Msg, Opts) ->
 %% @doc Verify the HMAC commitment with the key being the secret from the 
 %% request cookies. We find the appropriate cookie from the cookie message by
 %% the committer ID given in the request message.
-verify(Base, ReqLink, RawOpts) when ?IS_LINK(ReqLink) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
-    verify(Base, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
+-spec verify(#{ _ => _ }, #{ secret => binary(), committer => binary(), _ => _ }, map()) -> term().
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),
@@ -141,7 +139,7 @@ verify(Base, Request, RawOpts) ->
 %% A `generator` may be either a path or full message. If no path is present in
 %% a generator message, the `generate` path is assumed.
 generate_secret(_Base, Request, Opts) ->
-    case hb_maps:get(<<"generator">>, Request, undefined, Opts) of
+    case maps:get(<<"generator">>, Request, undefined) of
         undefined ->
             % If no generator is specified, use the default generator.
             case hb_opts:get(cookie_default_generator, <<"random">>, Opts) of
@@ -181,7 +179,7 @@ find_secrets(Request, Opts) ->
 %% @doc Find the secret key for the given committer, if it exists in the cookie.
 find_secret(Request, Opts) ->
     maybe
-        {ok, Committer} ?= hb_maps:find(<<"committer">>, Request, Opts),
+        {ok, Committer} ?= maps:find(<<"committer">>, Request),
         find_secret(Committer, Request, Opts)
     else error -> {error, no_secret}
     end.

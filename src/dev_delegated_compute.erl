@@ -9,12 +9,14 @@
 
 %% @doc Initialize or normalize the compute-lite device. For now, we don't
 %% need to do anything special here.
+-spec init(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 init(Base, _Req, _Opts) ->
     {ok, Base}.
 
 %% @doc We assume that the compute engine stores its own internal state,
 %% with snapshots triggered only when HyperBEAM requests them. Subsequently,
 %% to load a snapshot, we just need to return the original message.
+-spec normalize(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 normalize(Base, _Req, Opts) ->
     case hb_maps:find(<<"snapshot">>, Base, Opts) of
         error -> {ok, Base};
@@ -49,6 +51,7 @@ load_state(Snapshot, Opts) ->
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to
 %% evaluate.
+-spec compute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 compute(Base, Req, Opts) ->
     OutputPrefix = dev_stack:prefix(Base, Req, Opts),
     % Extract the process ID - this identifies which process to run compute
@@ -204,6 +207,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 
 %% @doc Generate a snapshot of a running computation by calling the 
 %% `GET /snapshot' endpoint.
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
     ProcID = dev_process_lib:process_id(Msg, #{}, Opts),

@@ -84,6 +84,7 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
+-spec as(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 as(RawBase, Req, Opts) ->
     {ok, Base} = ensure_loaded(RawBase, Req, Opts),
     Key = 
@@ -131,6 +132,7 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
+-spec default_device(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 default_device(Base, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_util:deep_get(<<"process/variant">>, Base, Opts)} of
@@ -142,9 +144,11 @@ default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
 %% @doc Wraps functions in the Scheduler device.
+-spec schedule(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 schedule(Base, Req, Opts) ->
     dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
 
+-spec slot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
     dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
@@ -152,6 +156,7 @@ slot(Base, Req, Opts) ->
 next(Base, _Req, Opts) ->
     dev_process_lib:run_as(<<"scheduler">>, Base, next, Opts).
 
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 snapshot(RawBase, _Req, Opts) ->
     Base = dev_process_lib:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
@@ -202,6 +207,7 @@ init(Base, Req, Opts) ->
 %%   handlers and previewing results. The POST method is the key entry point
 %%   for the dryrun functionality that allows external clients to test
 %%   message processing without side effects.
+-spec compute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 compute(Base, Req, Opts) ->
     ProcBase = dev_process_lib:ensure_process_key(Base, Opts),
     ProcID = dev_process_lib:process_id(ProcBase, #{}, Opts),
@@ -210,10 +216,10 @@ compute(Base, Req, Opts) ->
         not_found ->
             % The slot is not set, so we need to serve the latest known state
             % unless the `init' key is set to a value aside from `now'.
-            % We do this by setting the `process-now-from-cache' option to `true'.
-            case hb_maps:get(<<"init">>, Req, <<"now">>, Opts) of
+            % We do this by setting the `process_now_from_cache' option to `true'.
+            case maps:get(<<"init">>, Req, <<"now">>) of
                 <<"now">> ->
-                    now(Base, Req, Opts#{ <<"process-now-from-cache">> => true });
+                    now(Base, Req, Opts#{ process_now_from_cache => true });
                 _ ->
                     {error, not_found}
             end;
@@ -634,7 +640,8 @@ should_snapshot_time(Res, Opts) ->
     end.
 
 %% @doc Returns the known state of the process at either the current slot, or
-%% the latest slot in the cache depending on the `process-now-from-cache' option.
+%% the latest slot in the cache depending on the `process_now_from_cache' option.
+-spec now(_, _, _) -> _.
 now(RawBase, Req, Opts) ->
     Base = dev_process_lib:ensure_process_key(RawBase, Opts),
     ProcessID = dev_process_lib:process_id(Base, #{}, Opts),
@@ -689,6 +696,7 @@ now(RawBase, Req, Opts) ->
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
+-spec push(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 push(Base, Req, Opts) ->
     dev_process_lib:run_as(
         <<"push">>,

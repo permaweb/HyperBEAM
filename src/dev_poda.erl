@@ -37,6 +37,7 @@ extract_opts(Params) ->
 
 %%% Execution flow: Pre-execution validation.
 
+-spec execute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 }, Opts) ->
     case is_user_signed(Msg) of
         true ->
@@ -180,6 +181,7 @@ is_user_signed(_) -> true.
 
 %% @doc Hook used by the MU pathway (currently) to add commitments to an
 %% outbound message if the computation requests it.
+-spec push(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 push(_Item, S = #{ <<"results">> := ResultsMsg }, Opts) ->
     NewRes = commit_to_results(ResultsMsg, S, Opts),
     {ok, S#{ <<"results">> => NewRes }}.

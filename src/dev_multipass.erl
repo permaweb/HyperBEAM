@@ -13,6 +13,7 @@ info(_M1) ->
 
 %% @doc Forward the keys function to the message device, handle all others
 %% with deduplication. We only act on the first pass.
+-spec handle(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 handle(<<"keys">>, M1, _M2, Opts) ->
     dev_message:keys(M1, Opts);
 handle(<<"set">>, M1, M2, Opts) ->

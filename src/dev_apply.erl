@@ -29,6 +29,7 @@ info(_) ->
 %% @doc The default handler. If the `base' and `request' keys are present in
 %% the given request, then the `pair' function is called. Otherwise, the `eval'
 %% key is used to resolve the request.
+-spec default(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 default(Key, Base, Request, Opts) ->
     ?event(debug_apply, {req, {key, Key}, {base, Base}, {request, Request}}),
     FoundBase = hb_maps:get(<<"base">>, Request, not_found, Opts),
@@ -85,6 +86,7 @@ eval(Base, Request, Opts) ->
     end.
 
 %% @doc Apply the message found at `request' to the message found at `base'.
+-spec pair(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 pair(Base, Request, Opts) ->
     pair(<<"undefined">>, Base, Request, Opts).
 pair(PathToSet, Base, Request, Opts) ->

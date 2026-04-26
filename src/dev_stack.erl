@@ -117,20 +117,24 @@ info(Msg, Opts) ->
     ).
 
 %% @doc Return the default prefix for the stack.
+-spec prefix(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"output-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
 
 %% @doc Return the input prefix for the stack.
+-spec input_prefix(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 input_prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"input-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
 
 %% @doc Return the output prefix for the stack.
+-spec output_prefix(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 output_prefix(Base, _Req, Opts) ->
     hb_ao:get(<<"output-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
 
 %% @doc The device stack key router. Sends the request to `resolve_stack',
 %% except for `set/2' which is handled by the default implementation in
 %% `dev_message'.
+-spec router(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 router(<<"keys">>, Base, Request, Opts) ->
 	?event({keys_called, {base, Base}, {req, Request}}),
 	dev_message:keys(Base, Opts);
