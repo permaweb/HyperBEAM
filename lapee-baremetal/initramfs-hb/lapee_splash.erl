@@ -41,6 +41,20 @@ main()      -> main([]).
 -define(POLL_TIMEOUT_MS, 500).
 -define(MIN_W, 80).
 -define(MIN_H, 24).
+%% Lid open angle (radians). 1.85 ≈ 106°, classic working tilt.
+-define(LID_TARGET, 1.85).
+%% Lid easing per frame. Lower = slower open. 0.04 at 12 fps =
+%% the lid reaches >95% of its target after about 7 s. Was 0.15
+%% in the first cut; user asked for slower so the open feels
+%% deliberate before the spin settles in.
+-define(LID_EASE, 0.04).
+%% Yaw advance per frame, radians. Stays constant across the
+%% whole splash lifetime -- the spin never locks face-on, so the
+%% laptop keeps gently rotating with the URL underneath after HB
+%% comes up. (Earlier cut snapped the yaw to 0 at qr phase to
+%% reveal a QR overlay; the QR didn't scan reliably and the frozen
+%% pose looked sad. Steady spin reads as "alive".)
+-define(YAW_PER_FRAME, 0.05).
 
 %% Paths are overridable via env vars so the same escript can be
 %% exercised from a Mac dev box (LAPEE_CONSOLE=/tmp/out, etc.) and
@@ -120,10 +134,8 @@ main(_Args) ->
         frame       => 0,
         yaw         => 0.0,
         lid         => 0.0,
-        lid_target  => 1.85,
         phase       => boot,
         ip          => undefined,
-        qr_lines    => undefined,
         t0_ms       => T0,
         hb_wait_t0  => undefined
     },
@@ -165,7 +177,7 @@ loop(S0) ->
 %% ============================================================
 %% State polling -- phase machine, IP discovery, HB probe
 %% ============================================================
-poll_state(S = #{phase := Phase, ip := Ip}) ->
+poll_state(S = #{phase := Phase, ip := _Ip}) ->
     case Phase of
         boot ->
             case read_ip() of
@@ -177,9 +189,8 @@ poll_state(S = #{phase := Phase, ip := Ip}) ->
         'net-up' ->
             case hb_ready() of
                 true ->
-                    log_event("phase=qr (HB ready on first poll)"),
-                    Qr = generate_qr_lines(Ip),
-                    S#{phase => qr, qr_lines => Qr, lid_target => 1.60};
+                    log_event("phase=ready (HB ready on first poll)"),
+                    S#{phase => ready};
                 {false, Reason} ->
                     log_event(io_lib:format(
                         "phase=hb-wait (~s)", [Reason])),
@@ -189,9 +200,8 @@ poll_state(S = #{phase := Phase, ip := Ip}) ->
         'hb-wait' ->
             case hb_ready() of
                 true ->
-                    log_event("phase=qr (HB ready)"),
-                    Qr = generate_qr_lines(Ip),
-                    S#{phase => qr, qr_lines => Qr, lid_target => 1.60};
+                    log_event("phase=ready (HB ready)"),
+                    S#{phase => ready};
                 {false, _Reason} ->
                     %% Don't spam the log -- only every ~30 polls
                     %% (~2.5 s wall) to keep splash.log readable.
@@ -207,7 +217,7 @@ poll_state(S = #{phase := Phase, ip := Ip}) ->
                     end,
                     S
             end;
-        qr ->
+        ready ->
             S
     end.
 
@@ -284,32 +294,18 @@ hb_ready() ->
             {false, io_lib:format("conn ~p", [Reason])}
     end.
 
-generate_qr_lines(undefined) -> undefined;
-generate_qr_lines(Ip) ->
-    Url = lists:flatten(io_lib:format("http://~s:8734/", [Ip])),
-    %% qrencode is shipped in the initramfs at /usr/bin/qrencode.
-    %% `-m 0' = zero margin (we're tight on cells); `-t ASCIIi'
-    %% = inverted 1-cell-per-module ASCII (denser than ASCII).
-    Cmd = lists:flatten(
-              io_lib:format("qrencode -m 0 -t ASCIIi -o - '~s' 2>/dev/null",
-                            [Url])),
-    Out = os:cmd(Cmd),
-    case Out of
-        ""  -> undefined;
-        _   -> string:split(Out, "\n", all)
-    end.
-
 %% ============================================================
 %% Animation state advance
 %% ============================================================
-step_anim(S = #{frame := F, yaw := Y, lid := L, lid_target := T, phase := P}) ->
+%% The yaw advances every frame regardless of phase -- the spin
+%% never locks. The lid eases toward the open target with the
+%% per-frame step defined by ?LID_EASE; a smaller value is a slower,
+%% more deliberate open (asymptotic, so it never quite stops moving
+%% but is visually fully-open after ~7 s at 12 fps with 0.04).
+step_anim(S = #{frame := F, yaw := Y, lid := L}) ->
     F1 = F + 1,
-    Y1 = case P of
-        qr -> 0.0;          %% lock face-on at qr
-        _  -> Y + 0.05      %% slow orbit during boot/wait
-    end,
-    %% Ease lid toward target with a 15% step per frame -- smooth open
-    L1 = L + (T - L) * 0.15,
+    Y1 = Y + ?YAW_PER_FRAME,
+    L1 = L + (?LID_TARGET - L) * ?LID_EASE,
     S#{frame => F1, yaw => Y1, lid => L1}.
 
 %% ============================================================
@@ -374,17 +370,71 @@ rotate_y({X, Y, Z}, A) ->
     Ca = math:cos(A), Sa = math:sin(A),
     {X * Ca + Z * Sa, Y, -X * Sa + Z * Ca}.
 
+%% Scale (chars per laptop-width unit) derived from terminal size:
+%% target ~50% of screen width, capped to fit vertically with room
+%% for the status line below. Cells are 2:1 tall:wide so the y-axis
+%% scale factor is halved; the open laptop is ~2.6 units tall.
+%%
+%% Resulting on-screen sizes (without env override):
+%%   80x24   -> Scale 8 (32 cells / 80 wide = 40%)
+%%   160x50  -> Scale 17 (68/160 = 42%)
+%%   282x94  -> Scale 31 (124/282 = 44%)
+%%
+%% Operators on a HiDPI framebuffer where this still feels small can
+%% override via LAPEE_SPLASH_SCALE=<float>.
+splash_scale(W, H) ->
+    case os:getenv("LAPEE_SPLASH_SCALE") of
+        false -> auto_scale(W, H);
+        ""    -> auto_scale(W, H);
+        Str ->
+            try list_to_float(Str)
+            catch _:_ ->
+                try float(list_to_integer(Str))
+                catch _:_ -> auto_scale(W, H)
+                end
+            end
+    end.
+
+auto_scale(W, H) ->
+    %% 4 laptop-width units want ~50% of screen width: 4*Scale = W/2,
+    %% so Scale = W/8.
+    %%
+    %% Vertically: the look-down tilt mixes Z into projected Y, so the
+    %% silhouette's row span depends on yaw. Worst-case Yt range across
+    %% all yaws is roughly [-1.29, 3.25] -> 4.54 units, halved by the
+    %% 2:1 char aspect = 2.27 * Scale rows. Reserve 5 rows for status
+    %% line + margin and bound Scale so the spinning silhouette never
+    %% clips into the footer at any yaw.
+    ScaleW = W / 8.0,
+    ScaleH = max(2.0, (H - 5) / 2.3),
+    max(4.0, min(ScaleW, ScaleH)).
+
+%% Y-coordinate shift so the laptop's vertical midpoint sits at
+%% roughly 0.45 * H (slightly above centre, so the footer beneath the
+%% base isn't crowded against the bottom edge). The yaw-aware mid
+%% point Yt is ~0.98 in tilt-space.
+%%   Cy_mid = H/2 - 0.98 * Scale * 0.5 - Lift  -> want H * 0.45
+%%   Lift   = 0.05 * H - 0.49 * Scale
+splash_lift(H, Scale) ->
+    0.05 * H - 0.49 * Scale.
+
+%% Row at which the status footer lands. ~0.92 * H -- below the
+%% laptop's bottom-most projected cell at any yaw (which sits near
+%% ~0.85 * H with the worst-case scale + lift above), with at least
+%% one row of breathing room. Clamp to H-1 so a tiny terminal still
+%% has somewhere to draw.
+splash_status_row(H) ->
+    max(1, min(H - 1, round(H * 0.92))).
+
 %% Project a 3D point to a 2D grid cell.
 %% Simple orthographic projection with a Y-axis tilt for "3/4 view".
-project({X, Y, Z}, W, H) ->
+%% Scale + lift are computed once per frame in render/1 and threaded.
+project({X, Y, Z}, W, H, Scale, Lift) ->
     Tilt = 0.45,                                  %% radians, look-down
     Yt = Y * math:cos(Tilt) - Z * math:sin(Tilt),
-    Scale = 9.0,                                  %% chars per laptop-width
     %% Char cells are roughly 2:1 tall:wide; scale Y by half.
-    %% Lift the laptop slightly above the vertical centre so the
-    %% status line below has space without overlapping the base.
     Cx = W / 2.0 + X * Scale,
-    Cy = H / 2.0 - Yt * Scale * 0.5 - 2.0,
+    Cy = H / 2.0 - Yt * Scale * 0.5 - Lift,
     {round(Cx), round(Cy)}.
 
 %% ============================================================
@@ -436,60 +486,36 @@ plot(Grid, W, H, X, Y, Ch) ->
 %% Frame composition + ANSI emission
 %% ============================================================
 render(#{cols := W, rows := H, yaw := Yaw, lid := Lid,
-         phase := Phase, ip := Ip, qr_lines := Qr,
-         hb_wait_t0 := HbT0}) ->
+         phase := Phase, ip := Ip, hb_wait_t0 := HbT0}) ->
+    Scale = splash_scale(W, H),
+    Lift  = splash_lift(H, Scale),
     Edges = laptop_edges(Lid),
     %% Apply yaw rotation around Y axis to every point.
     Edges1 = [{rotate_y(P, Yaw), rotate_y(Q, Yaw)} || {P, Q} <- Edges],
-    %% Project to 2D.
-    Edges2 = [{project(P, W, H), project(Q, W, H)} || {P, Q} <- Edges1],
+    %% Project to 2D using the dynamic scale + lift.
+    Edges2 = [{project(P, W, H, Scale, Lift),
+               project(Q, W, H, Scale, Lift)}
+              || {P, Q} <- Edges1],
     %% Rasterise.
     Grid0 = #{},
     Grid1 = lists:foldl(
               fun({P1, P2}, G) -> draw_line(G, W, H, P1, P2) end,
               Grid0, Edges2),
-    %% Overlay QR if present (qr phase).
-    Grid2 = case {Phase, Qr} of
-        {qr, [_|_] = Lines} -> overlay_qr(Grid1, W, Lines);
-        _                    -> Grid1
-    end,
-    %% Single status line, just below the laptop. The laptop
-    %% silhouette tops out at H/2 - 2 - max-Y * Scale * 0.5 and
-    %% bottoms out at roughly H/2 + 2; placing the status at
-    %% H/2 + 7 lands it under the base with breathing room.
+    %% Single status line, well below the laptop. Its row is computed
+    %% from H so the spacing between laptop bottom and footer scales
+    %% with the screen instead of being a fixed +7. The spin keeps
+    %% going beneath the URL once HB is ready -- no face-on lock, no
+    %% QR overlay.
     Footer = footer_text(Phase, Ip, HbT0),
-    StatusRow = (H div 2) + 7,
-    Grid3 = overlay_centered(Grid2, W, min(StatusRow, H), Footer),
+    StatusRow = splash_status_row(H),
+    Grid2 = overlay_centered(Grid1, W, StatusRow, Footer),
     %% Emit: cursor home, then row by row separated by \r\n.
-    Rows = [emit_row(Grid3, W, R) || R <- lists:seq(1, H)],
+    Rows = [emit_row(Grid2, W, R) || R <- lists:seq(1, H)],
     [<<"\e[H">> |
      lists:join(<<"\r\n">>, Rows)].
 
 emit_row(Grid, W, Row) ->
     [maps:get({Row, Col}, Grid, $\s) || Col <- lists:seq(1, W)].
-
-%% Overlay a list of QR lines onto the lid panel area. We position
-%% it at the projected centre of the lid; for simplicity (and so it
-%% doesn't drift across frames) we use a fixed rectangle near the
-%% top-centre of the grid.
-overlay_qr(Grid, W, Lines) ->
-    WidthQr = lists:max([length(L) || L <- Lines]),
-    StartCol = W div 2 - WidthQr div 2,
-    StartRow = 3,
-    {GridOut, _} =
-        lists:foldl(
-          fun(Line, {G, R}) ->
-              G1 = lists:foldl(
-                     fun({Idx, Ch}, GG) ->
-                         plot(GG, W, 1000, StartCol + Idx, R, Ch)
-                     end,
-                     G,
-                     lists:zip(lists:seq(0, length(Line) - 1), Line)),
-              {G1, R + 1}
-          end,
-          {Grid, StartRow},
-          Lines),
-    GridOut.
 
 overlay_centered(Grid, W, Row, Text) ->
     Pad = max(0, (W - length(Text)) div 2),
@@ -505,11 +531,13 @@ overlay_centered(Grid, W, Row, Text) ->
 %%
 %% In `hb-wait' we surface the IP + elapsed seconds. The IP is known
 %% the moment udhcpc binds (well before HB cowboy is up); printing it
-%% early gives the operator the URL they'll actually scan -- the QR
-%% just confirms it. The seconds counter exists because HB cold-start
-%% on TCG-emulated amd64 can run 60-180 s, which to a human staring
-%% at a static "starting HyperBEAM..." looks indistinguishable from
-%% "hung". A monotonically ticking number proves the boot is alive.
+%% early gives the operator the URL they'll actually use. The seconds
+%% counter exists because HB cold-start can run 60-180 s on TCG and
+%% several seconds even on iron; a static "starting HyperBEAM..." for
+%% that long looks indistinguishable from a hang.
+%%
+%% At `ready' we drop the elapsed counter and just show the URL; the
+%% laptop keeps spinning underneath. No QR overlay, no face-on lock.
 footer_text(boot, _, _)              -> "starting LapEE...";
 footer_text('net-up', undefined, _)  -> "network up; starting HyperBEAM...";
 footer_text('net-up', Ip, _)         -> "network up (" ++ Ip ++ "); starting HyperBEAM...";
@@ -521,8 +549,8 @@ footer_text('hb-wait', Ip, HbT0) ->
     Secs = (Now - HbT0) div 1000,
     "starting HyperBEAM... " ++ Ip ++
         " (" ++ integer_to_list(Secs) ++ "s)";
-footer_text(qr, undefined, _)        -> "ready";
-footer_text(qr, Ip, _)               -> "ready at http://" ++ Ip ++ ":8734/";
+footer_text(ready, undefined, _)     -> "Running.";
+footer_text(ready, Ip, _)            -> "Running at http://" ++ Ip ++ ":8734/";
 footer_text(_, _, _)                 -> "".
 
 %% ============================================================
