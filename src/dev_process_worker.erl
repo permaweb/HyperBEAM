@@ -7,23 +7,36 @@
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Return a group name for a request.
+%% @doc Return a group name for a request. Cached compute reads run
+%% ungrouped; uncached compute work groups by process ID; everything
+%% else uses the default grouper.
 group(Base, undefined, Opts) ->
     hb_persistent:default_grouper(Base, undefined, Opts);
 group(Base, Req, Opts) ->
-    case hb_opts:get(process_workers, false, Opts)
-            andalso hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)) of
+    ProcessWorkers = hb_opts:get(process_workers, false, Opts),
+    IsCompute = hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)),
+    case ProcessWorkers andalso IsCompute of
         true ->
             compute_group(Base, Req, Opts);
         false ->
             hb_persistent:default_grouper(Base, Req, Opts)
     end.
 
-%% @doc Group uncached compute work by process; let cached reads run ungrouped.
+%% @doc Decide which group to enrol a `compute' request into. Cache-hit
+%% reads bypass the per-process queue via `ungrouped_exec'; everything
+%% else is serialised through the worker keyed on the process ID.
 compute_group(Base, Req, Opts) ->
     ProcID = process_to_group_name(Base, Opts),
     case compute_cached(ProcID, dev_process:target_slot(Req, Opts), Opts) of
-        true -> ungrouped_exec;
+        true ->
+            ?event(worker,
+                {compute_cache_hit_bypassing_queue,
+                    {proc_id, ProcID},
+                    {req, Req}
+                },
+                Opts
+            ),
+            ungrouped_exec;
         false ->
             ProcID
     end.
@@ -31,12 +44,12 @@ compute_group(Base, Req, Opts) ->
 %% @doc Return `true' if the requested compute result is already cached.
 compute_cached(ProcID, not_found, Opts) ->
     case dev_process_cache:latest(ProcID, Opts) of
-        {ok, _, _} -> true;
+        {ok, _Slot, _Msg} -> true;
         _ -> false
     end;
 compute_cached(ProcID, RawSlot, Opts) ->
     case dev_process_cache:read(ProcID, hb_util:int(RawSlot), Opts) of
-        {ok, _} -> true;
+        {ok, _Msg} -> true;
         _ -> false
     end.
 
@@ -198,7 +211,12 @@ grouper_test() ->
     ?assertEqual(G1, G2),
     ?assertNotEqual(G1, G3).
 
-%% @doc Cached compute results bypass process-worker grouping.
+%% @doc `compute' requests whose result is already in the local cache
+%% should bypass the per-process worker queue (returning the
+%% `ungrouped_exec' sentinel that `hb_persistent:find_or_register/3'
+%% short-circuits). Requests that still need work, and requests for a
+%% slot beyond what is cached, must continue to serialise through the
+%% process group.
 grouper_skips_when_slot_cached_test() ->
     test_init(),
     Opts =
@@ -208,11 +226,13 @@ grouper_skips_when_slot_cached_test() ->
         },
     M1 = dev_process_test_vectors:aos_process(Opts),
     POpts = Opts#{ <<"process-workers">> => true },
-    Group = fun(Req) -> hb_persistent:group(M1, Req, POpts) end,
-    Compute = fun(Slot) -> #{ <<"path">> => <<"compute">>, <<"slot">> => Slot } end,
-    Uncached = Compute(5),
-    ProcessGroup = Group(Uncached),
+    % With the cache empty, every compute request must group by
+    % process so that the worker can do the actual work.
+    Uncached = #{ <<"path">> => <<"compute">>, <<"slot">> => 5 },
+    ProcessGroup = hb_persistent:group(M1, Uncached, POpts),
     ?assertNotEqual(ungrouped_exec, ProcessGroup),
+    % Write slot 5 into the cache. The same request now has a result
+    % available and the grouper should step out of the queue.
     {ok, _} =
         dev_process_cache:write(
             ProcessGroup,
@@ -220,7 +240,23 @@ grouper_skips_when_slot_cached_test() ->
             #{ <<"hello">> => <<"cached">> },
             Opts
         ),
-    ?assertEqual(ungrouped_exec, Group(Uncached)),
-    ?assertEqual(ProcessGroup, Group(Compute(4))),
-    ?assertEqual(ProcessGroup, Group(Compute(999))),
-    ?assertEqual(ungrouped_exec, Group(#{ <<"path">> => <<"compute">> })).
+    ?assertEqual(
+        ungrouped_exec,
+        hb_persistent:group(M1, Uncached, POpts)
+    ),
+    % Cache slots are not assumed to be gap-free. A lower slot that
+    % has not actually been written must still go through the worker.
+    MissingLower = #{ <<"path">> => <<"compute">>, <<"slot">> => 4 },
+    ?assertEqual(ProcessGroup, hb_persistent:group(M1, MissingLower, POpts)),
+    % A request for a slot beyond what we cached must still be
+    % serialised through the worker.
+    Beyond = #{ <<"path">> => <<"compute">>, <<"slot">> => 999 },
+    ?assertEqual(ProcessGroup, hb_persistent:group(M1, Beyond, POpts)),
+    % A `compute' request without a slot resolves via the cache-only
+    % branch of `now/3' once any slot exists, so it also bypasses the
+    % queue.
+    NoSlot = #{ <<"path">> => <<"compute">> },
+    ?assertEqual(
+        ungrouped_exec,
+        hb_persistent:group(M1, NoSlot, POpts)
+    ).

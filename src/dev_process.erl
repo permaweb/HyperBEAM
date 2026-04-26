@@ -408,7 +408,9 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     }
                 }
             ),
-            % Notify only once the slot is readable from the process cache.
+            % Notify waiters only after the slot is readable from the process
+            % cache. Waiters may immediately re-enter via `/compute' or `/push',
+            % and those paths treat the cache as the completion boundary.
             dev_process_worker:notify_compute(
                 ProcID,
                 Slot,
@@ -526,7 +528,8 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
     ok.
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
-%% key.
+%% key. The write is synchronous: callers may notify waiters or run push hooks
+%% as soon as this returns, so the slot must already be cache-visible.
 store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
     % Cache the `Snapshot' key as frequently as the node is configured to.
     ResMaybeWithSnapshot =

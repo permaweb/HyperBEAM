@@ -44,7 +44,7 @@ write(ProcID, Slot, Msg, Opts) ->
 %% @doc Calculate the path of a result, given a process ID and a slot.
 path(ProcID, Ref, Opts) ->
     path(ProcID, Ref, [], Opts).
-path(ProcID, Ref, PathSuffix, Opts) ->
+path(ProcID, Ref, PathSuffix, _Opts) ->
     hb_path:to_binary(
         [
             <<"computed">>,
