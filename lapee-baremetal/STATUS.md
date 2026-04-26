@@ -63,16 +63,51 @@ Files touched:
 - `scripts/boot-usb-image.sh` (`--gui' flag for visual verification mode)
 - `Makefile` (splash-frames + hb-usb-qemu-gui targets)
 
-A peer-review agent (skeptical OTP veteran personality) is reviewing
-the commit while this STATUS is being written; any high-severity
-findings will land in a follow-up commit before sign-off.
+### Peer review pass (agent/lapee 1a8b10e0e -> f4b398b59)
 
-### Known follow-ups (not in tonight's commit)
+A skeptical OTP-veteran review agent picked up commit 1a8b10e0e and
+returned a numbered punch list. End-to-end re-verified in QEMU after
+each high-severity fix landed; final boot:
 
-- Orphan shell `lapee-splash` + pre-rendered `splash-frames/` are
-  still shipped in the initramfs. They're called from init/dhcp-hook
-  with `>/dev/null 2>&1' so they're harmless no-ops, but they add
-  ~600 KB and confuse future readers. Cleanup commit candidate.
+```
+[lapee-splash] phase=boot
+[lapee-splash] phase=net-up ip=10.0.2.15
+[lapee-splash] phase=hb-wait (conn econnrefused)
+[lapee-splash] hb-wait: 6s, 12s, 19s elapsed
+[lapee-splash] phase=qr (HB ready)
+```
+
+Marker reaches serial via direct `/dev/ttyS0' write; harness picks
+it up at `>> LAPEE-WRITEBACK-OK detected'; ESP carries
+`attestation-latest.json' (105 KB) + `lapee-splash.log' (338 B).
+
+Fixes shipped in `f4b398b59':
+
+- **#1** gen_tcp probe: `{packet, raw}` -> `{packet, line}` so a
+  split TCP segment can't fall out the case clause as `unparsed'.
+- **#2** Removed the orphan shell splash + pre-rendered frames +
+  `set ...' calls in init + dhcp-hook + the dhcp-hook /info watcher
+  fork. ~1 MB smaller initramfs; one source of truth on phase.
+- **#3** Wrapped the main loop body in try/catch so a renderable-
+  but-degenerate input (e.g. a malformed qrencode line yielding
+  `lists:max([])`) can't kill the splash silently.
+- **#4** Writeback marker re-architected: direct `/dev/ttyS0' write
+  for the harness, `trace()' via /dev/kmsg for post-mortem diagnostics.
+  No more `<1>'-vs-`dmesg -n 1' confusion, no scribbling on splash.
+- **#5** `log_start' now appends instead of truncating -- symmetric
+  with `log_event'.
+- **#9** Build script gained a docker-exec splash-.beam load-check
+  against HB's bundled erts; OTP-major-version skew fails fast at
+  build time instead of surfacing as `error_loading' on first boot.
+- **#10** Init's "splash exited" trace branch tails /run/lapee/splash.err
+  so non-writeback boots still surface the crash reason.
+- **#11** Removed dead `_ = S' / pattern simplification.
+
+Advisory items not addressed: #6 redirect-to-null choreography
+correct as-is; #7 large-terminal frame budget passes the QEMU
+acceptance test at 12 fps and only matters if a real measurement
+fires; #8 qrencode os:cmd input is gated by the `^ip=([0-9.]+)'
+regex so the format string never sees attacker-controlled bytes.
 
 ---
 
