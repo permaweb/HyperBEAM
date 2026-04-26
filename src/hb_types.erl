@@ -4,6 +4,7 @@
 -export([extract/2, vary/5, vary/7]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-define(EXTRACT_CACHE_TAG, {hb_types, extract, 1}).
 
 %% @doc Apply a device's declared base/request schemas to the messages that will
 %% participate in one AO-Core key execution. If no schema is provided, we return
@@ -62,20 +63,12 @@ vary(Device, Key, Func, AddKey, Base, Request, Opts) ->
 %% @doc Extract the public type schema for a device.
 extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
-extract(Module, _Opts) when is_atom(Module) ->
-    case persistent_term:get({?MODULE, Module}, undefined) of
-        undefined ->
-            Res =
-                case code:ensure_loaded(Module) of
-                    {module, Module} ->
-                        do_extract(Module);
-                    {error, Reason} ->
-                        {error, {module_not_loaded, Module, Reason}}
-                end,
-            persistent_term:put({?MODULE, Module}, Res),
-            Res;
-        Res ->
-            Res
+extract(Module, Opts) when is_atom(Module) ->
+    case code:ensure_loaded(Module) of
+        {module, Module} ->
+            cached_extract(Module, Opts);
+        {error, Reason} ->
+            {error, {module_not_loaded, Module, Reason}}
     end;
 extract(Device, Opts) when is_binary(Device) ->
     case hb_device_load:reference(Device, Opts) of
@@ -85,8 +78,49 @@ extract(Device, Opts) when is_binary(Device) ->
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
+cached_extract(Module, Opts) ->
+    Path = extract_cache_path(Module),
+    case read_cached_extract(Path, Opts) of
+        {ok, Res} -> Res;
+        miss ->
+            Res = do_extract(Module),
+            write_cached_extract(Path, Res, Opts),
+            Res
+    end.
+
+extract_cache_path(Module) ->
+    ModuleBin = atom_to_binary(Module, utf8),
+    MD5 = hb_util:encode(Module:module_info(md5)),
+    hb_path:to_binary([<<"ao-core">>, <<"device-", ModuleBin/binary>>, MD5]).
+
+read_cached_extract(Path, Opts) ->
+    try hb_store:read(Path, hb_store:scope(Opts, local)) of
+        {ok, Bin} ->
+            case binary_to_term(Bin, [safe]) of
+                {?EXTRACT_CACHE_TAG, Res} -> {ok, Res};
+                _ -> miss
+            end;
+        _ ->
+            miss
+    catch _:_ ->
+        miss
+    end.
+
+write_cached_extract(Path, Res = {ok, _}, Opts) ->
+    try hb_store:write(#{ Path => term_to_binary({?EXTRACT_CACHE_TAG, Res}) },
+            hb_store:scope(Opts, local)) of
+        _ -> ok
+    catch _:_ -> ok
+    end;
+write_cached_extract(_Path, _Res, _Opts) ->
+    ok.
+
 do_extract(Module) ->
-    Beam = code:which(Module),
+    Beam =
+        case code:get_object_code(Module) of
+            {Module, Binary, _Filename} -> Binary;
+            _ -> code:which(Module)
+        end,
     case beam_lib:chunks(Beam, [abstract_code]) of
         {ok, {_, [{abstract_code, {_, Forms}}]}} ->
             TypeEnv = build_type_env(Forms),
