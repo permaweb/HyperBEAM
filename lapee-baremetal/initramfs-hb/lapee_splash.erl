@@ -140,12 +140,26 @@ main(_Args) ->
 %% ============================================================
 %% Main loop
 %% ============================================================
+%% The render+write+step_anim block is wrapped in try/catch so a
+%% degenerate-but-renderable input (e.g. a malformed qrencode
+%% output yielding lists:max([]) on the overlay path) doesn't kill
+%% the whole splash and leave the operator staring at a frozen
+%% frame for the rest of cold-start -- the exact UX bug the splash
+%% was rewritten to fix. Code-review issue #3.
 loop(S0) ->
     S1 = poll_state(S0),
-    Frame = render(S1),
-    file:write(maps:get(out, S1), Frame),
+    S2 = try
+             Frame = render(S1),
+             file:write(maps:get(out, S1), Frame),
+             step_anim(S1)
+         catch
+             C:R:Stk ->
+                 catch log_event(io_lib:format(
+                     "render-crash ~p:~p ~P",
+                     [C, R, Stk, 12])),
+                 S1
+         end,
     timer:sleep(?SLEEP_MS),
-    S2 = step_anim(S1),
     loop(S2).
 
 %% ============================================================
@@ -227,9 +241,15 @@ hb_ready() ->
     Port = probe_port(),
     Path = probe_path(),
     Tmo  = ?POLL_TIMEOUT_MS,
+    %% `{packet, line}' makes recv block until a CRLF-terminated line
+    %% lands -- exactly the HTTP status line. Without it (raw mode),
+    %% TCG-emulated cowboy under cold-start can split "HTTP/1." and
+    %% "1 200 OK\r\n..." across two TCP segments, falling out the
+    %% bottom of the case clause as `unparsed' even though /info DID
+    %% answer 200. Code-review issue #1, fixed before sign-off.
     case gen_tcp:connect(Host, Port,
                          [binary, {active, false},
-                          {packet, raw}, {nodelay, true}],
+                          {packet, line}, {nodelay, true}],
                          Tmo) of
         {ok, Sock} ->
             try
@@ -415,9 +435,9 @@ plot(Grid, W, H, X, Y, Ch) ->
 %% ============================================================
 %% Frame composition + ANSI emission
 %% ============================================================
-render(S = #{cols := W, rows := H, yaw := Yaw, lid := Lid,
-             phase := Phase, ip := Ip, qr_lines := Qr,
-             hb_wait_t0 := HbT0}) ->
+render(#{cols := W, rows := H, yaw := Yaw, lid := Lid,
+         phase := Phase, ip := Ip, qr_lines := Qr,
+         hb_wait_t0 := HbT0}) ->
     Edges = laptop_edges(Lid),
     %% Apply yaw rotation around Y axis to every point.
     Edges1 = [{rotate_y(P, Yaw), rotate_y(Q, Yaw)} || {P, Q} <- Edges],
@@ -442,7 +462,6 @@ render(S = #{cols := W, rows := H, yaw := Yaw, lid := Lid,
     Grid3 = overlay_centered(Grid2, W, min(StatusRow, H), Footer),
     %% Emit: cursor home, then row by row separated by \r\n.
     Rows = [emit_row(Grid3, W, R) || R <- lists:seq(1, H)],
-    _ = S,
     [<<"\e[H">> |
      lists:join(<<"\r\n">>, Rows)].
 
@@ -521,10 +540,16 @@ nth(N, L) -> lists:nth(N, L).
 %% IP (already on screen), and httpc reasons -- no PSK, no SSID, no
 %% wallet material. We swallow all errors -- the log is best-effort
 %% diagnostic; it must never crash the splash itself.
+%% Both helpers append. log_start used to truncate; symmetry matters
+%% for the case where init's writeback copy races a second splash
+%% process (shouldn't happen, but the asymmetry was a tripwire flagged
+%% in code-review issue #5). [append] on busybox tmpfs lowers to
+%% open(O_APPEND|O_WRONLY) + write(); both atomic for sub-page lines.
 log_start() ->
     catch file:write_file(log_path(),
         io_lib:format("[lapee-splash] started pid=~p t=~p~n",
-                      [self(), erlang:monotonic_time(millisecond)])).
+                      [self(), erlang:monotonic_time(millisecond)]),
+        [append]).
 
 log_event(Msg) ->
     Line = io_lib:format("[lapee-splash] ~s~n",

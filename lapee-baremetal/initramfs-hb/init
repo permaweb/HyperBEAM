@@ -179,11 +179,17 @@ check_tme_sme() {
     if [ "$_has_cap" = "no" ]; then
         trace "tme: CPU lacks tme/sme in /proc/cpuinfo; halting (paper P2)"
         trace "tme: (override with LAPEE_NO_TME=1 on cmdline)"
-        if [ -x /usr/local/bin/lapee-splash ]; then
-            /usr/local/bin/lapee-splash \
-                "HALTED: CPU does not support memory encryption (TME/SME)" \
-                > /dev/console 2>/dev/null || true
+        # Kill the BEAM splash so its 12 fps render loop stops
+        # repainting the screen, then write the HALT banner directly
+        # to /dev/console. The brief sleep gives the splash's
+        # cursor-restore + close to land before our banner so it
+        # isn't overwritten by a final frame in flight.
+        if [ -n "${SPLASH_PID:-}" ]; then
+            kill "$SPLASH_PID" 2>/dev/null || true
+            sleep 1
         fi
+        printf '\n\nHALTED: CPU does not support memory encryption (TME/SME).\n' \
+            > /dev/console 2>/dev/null || true
         exec sh -c 'while :; do sleep 3600; done'
     fi
     # Capability present -> proceed. Activation state is reported
@@ -226,6 +232,13 @@ if [ -n "${SPLASH_PID:-}" ]; then
         trace "splash: escript still alive (PID=$SPLASH_PID)"
     else
         trace "splash: escript exited (PID=$SPLASH_PID was forked earlier)"
+        # Code-review issue #10: tail splash.err on the exit branch
+        # so a non-writeback boot still surfaces the crash reason.
+        if [ -s /run/lapee/splash.err ]; then
+            while IFS= read -r _l; do
+                trace "splash.err: $_l"
+            done < /run/lapee/splash.err
+        fi
     fi
 fi
 echo "[init] kernel=$(uname -r)"
@@ -532,17 +545,12 @@ else
     trace "net: $NIC_COUNT interface(s) enumerated; DHCP in flight"
 fi
 
-# Give the user a visible status before HB is up. If there's no
-# network, the splash WILL stay on this message until the
-# writeback completes -- that's the correct signal ("I see zero
-# interfaces; plug in an Ethernet cable").
-if [ -x /usr/local/bin/lapee-splash ]; then
-    if [ "$NIC_COUNT" -eq 0 ]; then
-        /usr/local/bin/lapee-splash set net-none 2>/dev/null || true
-    else
-        /usr/local/bin/lapee-splash set net-up 2>/dev/null || true
-    fi
-fi
+# Splash transitions are handled internally by lapee_splash.erl --
+# it polls /run/lapee/primary-net for the IP and the dev_tpm2 /info
+# endpoint for HB readiness, deciding boot -> net-up -> hb-wait -> qr
+# itself. Nothing in init needs to push state to the splash. The
+# old shell-splash `set ...' calls used to live here; removed in
+# the code-review follow-up (issue #2).
 
 # Default config files (shipped with image).
 # v1.2.1: LAPEE_JSON is the JSON-formatted base config (preloaded_devices
@@ -706,14 +714,11 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
     ATT_OUT=/run/lapee/attestation.json
 
     echo "[writeback] phase 1: waiting for HB to answer /~tpm2@2.0a/info"
-    # Visible splash update so the audience sees something is
-    # happening during HB's cold-start (LMDB warmup, crypto
-    # init, TPM first-use can take a few seconds on iron and
-    # longer under Rosetta). Without this the screen is frozen
-    # on the initial splash for the whole wait.
-    if [ -x /usr/local/bin/lapee-splash ]; then
-        /usr/local/bin/lapee-splash set hb-wait 2>/dev/null || true
-    fi
+    # The BEAM splash polls the same /info endpoint on its own
+    # schedule; nothing for init to push. (Old shell-splash
+    # `set hb-wait msg=...' calls used to scribble status updates
+    # into a state file the BEAM splash never reads. Removed in
+    # the code-review follow-up, issue #2.)
     ready=0
     for i in $(seq 1 120); do
         if wget -q -O "$PROBE_OUT" --timeout=2 \
@@ -722,19 +727,8 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                 http://127.0.0.1:8734/~tpm2@2.0a/info \
                 2>/dev/null && [ -s "$PROBE_OUT" ]; then
             trace "writeback: HB responded to /info after ~$((i*3))s"
-            # HB is live: flip the splash to qr phase so the
-            # laptop animation settles face-on and the QR appears
-            # on its screen. The IP was stashed by lapee-dhcp-hook
-            # when DHCP bound; we re-send it here for idempotence
-            # in case the hook raced (e.g. DHCP came in after HB
-            # was already up, rare on real hardware but possible).
-            if [ -x /usr/local/bin/lapee-splash ] && \
-               [ -s /run/lapee/primary-net ]; then
+            if [ -s /run/lapee/primary-net ]; then
                 _ip=$(sed -n 's/^ip=//p' /run/lapee/primary-net)
-                if [ -n "$_ip" ]; then
-                    /usr/local/bin/lapee-splash set qr "ip=$_ip" \
-                        2>/dev/null || true
-                fi
             else
                 _ip=""
             fi
@@ -766,24 +760,13 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                 | while IFS= read -r line; do trace "hb.log: $line"; done
             break
         fi
-        # Heartbeat every 5 probes (~10s of wall-time) so the
-        # operator sees the boot is progressing, not hung.
-        # Every 10th also refreshes the splash -- kernel WARN
-        # messages above loglevel=1 are suppressed now but the
-        # initial UEFI boot logo can still scroll past.
+        # Heartbeat trace every 5 probes (~10s of wall-time) so
+        # `dmesg | grep lapee-trace' has progress evidence even on a
+        # boot that ultimately times out. The screen-side counter is
+        # owned by the BEAM splash (footer_text/3 in lapee_splash.erl).
         if [ $((i % 5)) -eq 0 ]; then
-            echo "[writeback] phase 1: still waiting (probe ${i}/120" \
-                 "~$((i*2))s elapsed)"
-        fi
-        if [ $((i % 10)) -eq 0 ] && \
-           [ -x /usr/local/bin/lapee-splash ]; then
-            # Keep the splash alive -- the daemon animation is
-            # already rotating; we just refresh the footer with
-            # an elapsed-time counter so operators know we're
-            # still waiting on HB (not hung).
-            /usr/local/bin/lapee-splash set hb-wait \
-                msg="waiting for HyperBEAM... (~$((i*2))s)" \
-                2>/dev/null || true
+            trace "writeback: phase 1 still waiting" \
+                  "(probe ${i}/120 ~$((i*2))s elapsed)"
         fi
         sleep 2
     done
@@ -925,40 +908,35 @@ RV
                     sync
                     SZ=$(stat -c %s "$OUT" 2>/dev/null || \
                            stat -f %z "$OUT" 2>/dev/null || echo ?)
-                    # The writeback marker is produced for two
-                    # consumers:
-                    #  (1) the operator at the screen -- they want
-                    #      "stick is safe to remove now" reassurance
-                    #      AFTER the splash has shown them the QR;
-                    #  (2) the automated `make hb-usb-qemu' harness,
-                    #      which polls the QEMU serial log for
-                    #      `LAPEE-WRITEBACK-OK' to know it can stop
-                    #      the guest and extract artefacts.
+                    # The writeback marker is for the automated
+                    # `make hb-usb-qemu' harness -- it polls the
+                    # QEMU serial log for `LAPEE-WRITEBACK-OK' to
+                    # know it can stop the guest and extract the
+                    # ESP. Init's stdout was redirected to /dev/kmsg
+                    # at line 80; combined with the early `dmesg -n 1'
+                    # nothing userspace at default level reaches
+                    # console anymore.
                     #
-                    # init's stdout was redirected to /dev/kmsg back
-                    # at line 80 so plain `echo' lands in the kernel
-                    # ring buffer; with `dmesg -n 1' active that
-                    # never reaches the serial chardev. Two-channel
-                    # fix:
-                    #   - Write a `<1>'-prefixed copy to /dev/kmsg.
-                    #     Level 1 (ALERT) bypasses dmesg -n 1's
-                    #     ignore filter and therefore reaches every
-                    #     console (including ttyS0).
-                    #   - Write a plain copy directly to /dev/ttyS0
-                    #     when present, in case no console is
-                    #     attached to the kmsg printk path.
-                    # Each channel is best-effort. /dev/kmsg gets the
-                    # copy that the harness pattern-matches on; the
-                    # screen still belongs to the splash daemon and
-                    # is not touched here.
-                    _wb_lines="\
-LAPEE-WRITEBACK-OK: $OUT ($SZ bytes)
-LAPEE-WRITEBACK-LINK: $LINK"
-                    printf '<1>%s\n' \
-                        "$_wb_lines" > /dev/kmsg 2>/dev/null || true
-                    [ -w /dev/ttyS0 ] && \
-                        printf '%s\n' "$_wb_lines" > /dev/ttyS0 \
-                            2>/dev/null || true
+                    # Bypass the printk plumbing entirely: write
+                    # directly to /dev/ttyS0 when present. In QEMU
+                    # `-nographic' that's the host-side serial chardev
+                    # (file-backed, where the harness reads). On
+                    # real Framework boots without a serial cable
+                    # /dev/ttyS0 is absent and the [ -w ] guard
+                    # makes this a no-op -- the operator gets their
+                    # "stick is safe to remove" reassurance from
+                    # the splash's QR phase + READY footer, no
+                    # kernel-prefixed banner scribbled on top.
+                    if [ -w /dev/ttyS0 ]; then
+                        printf 'LAPEE-WRITEBACK-OK: %s (%s bytes)\n' \
+                            "$OUT" "$SZ" > /dev/ttyS0 2>/dev/null || true
+                        printf 'LAPEE-WRITEBACK-LINK: %s\n' \
+                            "$LINK" > /dev/ttyS0 2>/dev/null || true
+                    fi
+                    # Always trace via /dev/kmsg for post-mortem
+                    # `dmesg | grep' diagnostics on a real boot.
+                    trace "writeback-ok: $OUT ($SZ bytes)"
+                    trace "writeback-link: $LINK"
                 else
                     echo "[writeback] FAIL - wget could not fetch /attestation"
                 fi

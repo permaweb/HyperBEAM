@@ -64,56 +64,14 @@ case "${1:-unknown}" in
                     "${dns:-}" > "$PRIMARY"
                 echo "[net] $interface: bound ip=$ip" \
                      "gw=${router:-} dns=${dns:-none}  (primary)"
-                # No console-side banner. The splash daemon polls
-                # /run/lapee/primary-net for the IP and shows it
-                # itself once HB is ready -- /dev/console is owned
-                # by the splash; kibitzing here would just garble
-                # its current frame.
-                # Kick off QR pre-render with the bound IP so it's
-                # ready to overlay the moment we flip to qr phase.
-                # We stay on hb-wait until HB actually answers
-                # /info -- the QR shouldn't appear before the node
-                # can accept requests, or a too-eager scanner would
-                # hit ECONNREFUSED.
-                #
-                # The set command writes /run/lapee/qr.txt as a
-                # side-effect when it sees ip=..., so the daemon
-                # can pick it up instantly on the next phase flip.
-                if [ -x /usr/local/bin/lapee-splash ]; then
-                    /usr/local/bin/lapee-splash set hb-wait \
-                        "ip=$ip" 2>/dev/null || true
-                fi
-                # Fork a one-shot `/info' watcher in the non-
-                # writeback code path. Writeback init does its own
-                # /info polling + phase flip inline (see init) so
-                # we would be double-flipping there; the `[ ! -f ]'
-                # test suppresses the watcher when init has already
-                # started its own wait loop. The watcher probes
-                # 127.0.0.1 instead of $ip because HB may be bound
-                # only to localhost on cold-start (config depends
-                # on router device).
-                _watchlock=/run/lapee/hb-ready-watcher.pid
-                if [ ! -f "$_watchlock" ]; then
-                    (
-                        echo $$ > "$_watchlock"
-                        # Poll for up to ~240s. Match the
-                        # writeback-path budget -- cold BEAM +
-                        # TPM first-use can take 60-120s on iron.
-                        for _i in $(seq 1 120); do
-                            if wget -q -O /dev/null --timeout=2 \
-                                    --header='accept: application/json@1.0' \
-                                    --header='accept-bundle: true' \
-                                    http://127.0.0.1:8734/~tpm2@2.0a/info \
-                                    2>/dev/null; then
-                                /usr/local/bin/lapee-splash set qr \
-                                    "ip=$ip" 2>/dev/null
-                                break
-                            fi
-                            sleep 2
-                        done
-                        rm -f "$_watchlock"
-                    ) &
-                fi
+                # No console-side banner. The BEAM splash polls
+                # /run/lapee/primary-net for the IP and the dev_tpm2
+                # /info endpoint for HB readiness; it owns the
+                # phase machine + the QR pre-render itself. The
+                # old shell-splash `set' calls + the one-shot
+                # `/info' watcher fork that used to live here were
+                # all writing into a state file the BEAM splash
+                # never reads. Removed in code-review issue #2.
             fi
         else
             echo "[net] $interface: bound ip=$ip  (secondary;" \

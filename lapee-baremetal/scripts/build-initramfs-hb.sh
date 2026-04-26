@@ -48,18 +48,11 @@ docker cp "$HB_REL" lapee-hb-mini:/opt/hb
 # early batches pulled from an external worktree, now unified.
 docker cp "$LAPEE/../config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat
-# Copy the init + splash + DHCP-hook + ASCII logo + pre-rendered
-# splash frames. The splash frames are baked at build time by
-# `scripts/gen-splash-frames.sh' (run once on a host with full awk;
-# regenerate via `make splash-frames'). Runtime is a pure-busybox-sh
-# loop that just cat's the frame files in sequence -- no awk math,
-# no /dev/stdin, no fragile parser quirks at boot.
-docker cp "$LAPEE/initramfs-hb/init"              lapee-hb-mini:/init-hb
-docker exec lapee-hb-mini mkdir -p /ramfs-src /ramfs-src/splash-frames
-docker cp "$LAPEE/initramfs-hb/logo.ascii"        lapee-hb-mini:/ramfs-src/logo.ascii
-docker cp "$LAPEE/initramfs-hb/lapee-splash"      lapee-hb-mini:/ramfs-src/lapee-splash
-docker cp "$LAPEE/initramfs-hb/lapee-dhcp-hook"   lapee-hb-mini:/ramfs-src/lapee-dhcp-hook
-docker cp "$LAPEE/initramfs-hb/splash-frames/."   lapee-hb-mini:/ramfs-src/splash-frames/
+# Copy init + DHCP-hook into the builder. The 3D boot splash is the
+# Erlang module compiled below; init forks it as a separate BEAM VM.
+docker cp "$LAPEE/initramfs-hb/init"            lapee-hb-mini:/init-hb
+docker exec lapee-hb-mini mkdir -p /ramfs-src
+docker cp "$LAPEE/initramfs-hb/lapee-dhcp-hook" lapee-hb-mini:/ramfs-src/lapee-dhcp-hook
 
 # Compile lapee_splash.erl on the build HOST (Mac/Linux dev box)
 # rather than inside the slim runtime container -- the runtime
@@ -79,6 +72,35 @@ mkdir -p "$SPLASH_BUILD"
 ls -la "$SPLASH_BUILD/lapee_splash.beam"
 docker cp "$SPLASH_BUILD/lapee_splash.beam" \
     lapee-hb-mini:/ramfs-src/lapee_splash.beam
+
+# Confirm HB's bundled erts can actually load the .beam we just
+# produced. Run the load test INSIDE the linux/amd64 builder
+# container so the test exercises the same erts the guest will use
+# at runtime, regardless of the host architecture. Catches host vs.
+# release OTP-major-version skew before the guest hits
+# `error_loading' at boot. Code-review issue #9.
+docker exec lapee-hb-mini bash -c '
+    HB_ERL=$(ls -d /opt/hb/erts-*/bin/erl 2>/dev/null | head -1)
+    HB_BOOT=$(ls -d /opt/hb/releases/*/start_clean.boot 2>/dev/null | head -1)
+    HB_BOOT=${HB_BOOT%.boot}
+    if [ -n "$HB_ERL" ] && [ -x "$HB_ERL" ] && [ -n "$HB_BOOT" ]; then
+        if ! "$HB_ERL" -boot "$HB_BOOT" -pa /ramfs-src -noshell \
+            -eval "
+                case code:load_file(lapee_splash) of
+                    {module, _} -> halt(0);
+                    E -> io:format(standard_error,
+                                    \"load failed: ~p~n\", [E]),
+                         halt(1)
+                end."; then
+            echo "!! splash .beam not loadable by HB erts ($HB_ERL)" >&2
+            echo "!! host erlc is OTP-major-incompatible w/ HB release" >&2
+            exit 1
+        fi
+        echo "--- splash .beam load-check passed ---"
+    else
+        echo "(skipping load-check: HB erts not found in container)" >&2
+    fi
+'
 
 docker exec -i lapee-hb-mini bash <<'SH'
 set -e
@@ -225,24 +247,17 @@ ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /ramfs/lib64/ld-linux-x86-64.s
 # libssl, pulled in above) stay -- HyperBEAM's crypto NIFs still need
 # them; what is gone is the userspace CLI tool + its default config.
 
-# v1.2 boot splash + DHCP hook. These get called from /init:
-#   - lapee-splash               render centred HB ASCII + status
-#   - lapee-dhcp-hook            udhcpc action script; claims the
-#                                first-to-lease interface as the
-#                                default route + re-renders the
-#                                splash with the node URL.
-# logo.ascii is the HyperBEAM figlet-style art the splash centres.
-cp /ramfs-src/logo.ascii          /ramfs/etc/lapee/logo.ascii
-cp /ramfs-src/lapee-splash        /ramfs/usr/local/bin/lapee-splash
+# DHCP hook -- udhcpc action script that claims the first-to-lease
+# interface as the default route + writes /run/lapee/primary-net for
+# the splash daemon to pick up.
 cp /ramfs-src/lapee-dhcp-hook     /ramfs/usr/local/bin/lapee-dhcp-hook
-mkdir -p                          /ramfs/etc/lapee/splash-frames
-cp -r /ramfs-src/splash-frames/.  /ramfs/etc/lapee/splash-frames/
+chmod +x                          /ramfs/usr/local/bin/lapee-dhcp-hook
 # BEAM splash, compiled on the build host (see comment further up
-# about why not in-container). Just install the .beam.
+# about why not in-container). Just install the .beam under a
+# dedicated lib dir; init's `-pa /usr/local/lib/lapee-splash' picks
+# it up at fork time.
 mkdir -p /ramfs/usr/local/lib/lapee-splash
 cp /ramfs-src/lapee_splash.beam   /ramfs/usr/local/lib/lapee-splash/
-chmod +x /ramfs/usr/local/bin/lapee-splash \
-         /ramfs/usr/local/bin/lapee-dhcp-hook
 
 # HyperBEAM release.
 cp -r /opt/hb/. /ramfs/usr/lib/hyperbeam/
