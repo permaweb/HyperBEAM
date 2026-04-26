@@ -11,6 +11,7 @@
 content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Encode a message to a JSON string, using JSON-native typing.
+-spec to(binary() | #{ _ => _ }, #{ _ => _ }, map()) -> {ok, binary()}.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
@@ -40,6 +41,8 @@ to(Msg, Req, Opts) ->
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
+-spec from(binary() | #{ _ => _ }, #{ _ => _ }, map()) ->
+    {ok, binary() | #{ _ => _ }}.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
 from(JSON, Req, Opts) ->
     % The JSON string will be a partially-TABM encoded message: Rich number
@@ -63,16 +66,21 @@ from(JSON, Req, Opts) ->
             {ok, TABM}
     end.
 
+-spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 
+-spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 
+-spec committed(binary() | #{ _ => _ }, #{ _ => _ }, map()) -> term().
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
+-spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, map()) ->
+    {ok, binary() | #{ _ => _ }} | {error, #{ _ => _ }}.
 deserialize(Base, Req, Opts) ->
     Payload = 
         hb_ao:get(
@@ -100,6 +108,8 @@ deserialize(Base, Req, Opts) ->
     end.
 
 %% @doc Serialize a message to a JSON string.
+-spec serialize(#{ _ => _ }, #{ _ => _ }, map()) ->
+    {ok, #{ body := binary(), content_type := binary() }}.
 serialize(Base, Msg, Opts) ->
     {ok,
         #{

@@ -26,10 +26,16 @@
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
 %%% Route signature functions to the `dev_codec_httpsig' module
+-spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
+-spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+-spec from(binary() | list() | #{ _ => _ },
+    #{ encode_types => [binary()], bundle => boolean(), _ => _ },
+    map()) ->
+    {ok, binary() | list() | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
     % Encode the list as a map, then -- if our request indicates that we are
@@ -171,6 +177,8 @@ linkify_mode(Req, Opts) ->
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.
+-spec to(binary() | list() | #{ _ => _ }, #{ _ => _ }, map()) ->
+    {ok, binary() | list() | #{ _ => _ }}.
 to(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(TABM0, Req, Opts) when is_list(TABM0) ->
     % If we receive a list, we convert it to a message and run `to/3' on it. 
