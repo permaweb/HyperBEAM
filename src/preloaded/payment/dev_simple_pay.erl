@@ -26,6 +26,7 @@
 
 %% @doc Estimate the cost of the request, using the rules outlined in the
 %% moduledoc.
+-spec estimate(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 estimate(_Base, EstimateReq, NodeMsg) ->
     Req =
         hb_ao:get(
@@ -136,6 +137,7 @@ price_from_count(Messages, NodeMsg) ->
 %% @doc Preprocess a request by checking the ledger and charging the user. We 
 %% can charge the user at this stage because we know statically what the price
 %% will be
+-spec charge(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 charge(_, RawReq, NodeMsg) ->
     ?event(payment, {charge, RawReq}),
     Req =
@@ -195,6 +197,7 @@ charge(_, RawReq, NodeMsg) ->
     end.
 
 %% @doc Get the balance of a user in the ledger.
+-spec balance(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 balance(_, RawReq, NodeMsg) ->
     Target =
         case
@@ -260,6 +263,7 @@ get_balance(Signer, NodeMsg) ->
     hb_ao:get(NormSigner, Ledger, 0, NodeMsg).
 
 %% @doc Top up the user's balance in the ledger.
+-spec topup(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 topup(_, Req, NodeMsg) ->
     ?event({topup, {req, Req}, {node_msg, NodeMsg}}),
     case is_operator(Req, NodeMsg) of

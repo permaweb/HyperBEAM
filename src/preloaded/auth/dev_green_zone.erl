@@ -18,6 +18,7 @@
 %%
 %% @param _ Ignored parameter
 %% @returns A map with the `exports' key containing a list of allowed functions
+-spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_) -> 
     #{
         exports =>
@@ -129,6 +130,7 @@ replace_self_values(Config, Opts) ->
     ).
 
 %% @doc Returns `true' if the request is signed by a trusted node.
+-spec is_trusted(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 is_trusted(_M1, Req, Opts) ->
     Signers = hb_message:signers(Req, Opts),
     {ok,
@@ -164,7 +166,7 @@ is_trusted(_M1, Req, Opts) ->
 %% @param Opts A map of configuration options
 %% @returns `{ok, Binary}' on success with confirmation message, or
 %% `{error, Binary}' on failure with error message.
--spec init(M1 :: term(), M2 :: term(), Opts :: map()) -> {ok, binary()} | {error, binary()}.
+-spec init(#{ _ => _ }, #{ _ => _ }, map()) -> {ok, binary()} | {error, binary()}.
 init(_M1, _M2, Opts) ->
     ?event(green_zone, {init, start}),
     case hb_opts:get(green_zone_initialized, false, Opts) of
@@ -235,7 +237,7 @@ init(_M1, _M2, Opts) ->
 %% @param Opts A map of configuration options for join operations
 %% @returns `{ok, Map}' on success with join response details, or
 %% `{error, Binary}' on failure with error message.
--spec join(M1 :: term(), M2 :: term(), Opts :: map()) ->
+-spec join(#{ _ => _ }, #{ _ => _ }, map()) ->
         {ok, map()} | {error, binary()}.
 join(M1, M2, Opts) ->
     ?event(green_zone, {join, start}),
@@ -268,7 +270,7 @@ join(M1, M2, Opts) ->
 %% @param Opts A map of configuration options
 %% @returns `{ok, Map}' containing the encrypted key and IV on success, or
 %% `{error, Binary}' if the node is not part of a green zone
--spec key(M1 :: term(), M2 :: term(), Opts :: map()) -> 
+-spec key(#{ _ => _ }, #{ _ => _ }, map()) ->
     {ok, map()} | {error, binary()}.
 key(_M1, _M2, Opts) ->
     ?event(green_zone, {get_key, start}),
@@ -330,7 +332,7 @@ key(_M1, _M2, Opts) ->
 %% @returns `{ok, Map}' on success with confirmation details, or
 %% `{error, Binary}' if the node is not part of a green zone or
 %% identity adoption fails.
--spec become(M1 :: term(), M2 :: term(), Opts :: map()) ->
+-spec become(#{ _ => _ }, #{ _ => _ }, map()) ->
         {ok, map()} | {error, binary()}.
 become(_M1, _M2, Opts) ->
     ?event(green_zone, {become, start}),
@@ -521,11 +523,7 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             end;
         false ->
             ?event(green_zone, {join, already_joined}),
-            {error, <<"Node already part of green zone.">>};
-        {error, Reason} ->
-            % Log the error and return the initial options.
-            ?event(green_zone, {join, error, Reason}),
-            {error, Reason}
+            {error, <<"Node already part of green zone.">>}
     end.
 
 %%%--------------------------------------------------------------------

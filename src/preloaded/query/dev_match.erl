@@ -1,6 +1,6 @@
 %%% @doc A reverse index for finding all message IDs with a given key-value pair.
 -module(dev_match).
--export([info/0, all/3]).
+-export([info/0, all/3, write/3]).
 -include("include/hb.hrl").
 
 -define(CACHE_PREFIX, <<"~match@1.0">>).
@@ -9,7 +9,7 @@
 %% index.
 info() ->
     #{
-        excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>],
+        excludes => [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>, <<"write">>],
         default => fun match/4
     }.
 
@@ -78,8 +78,39 @@ value_path(List, Opts) when is_list(List) ->
 value_path(Other, Opts) ->
     value_path(hb_path:to_binary(Other), Opts).
 
+%% @doc Write all keys in the base message to the match index. Expects the `Base'
+%% message to already be converted to a TABM.
+-spec write(list(), #{ _ => _ }, map()) -> term().
+write(IDs, Base, Opts) ->
+    case store(Opts) of
+        [] -> {skip, <<"No store configured for match index.">>};
+        Store ->
+            IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+            hb_maps:map(
+                fun(RawKey, Value) ->
+                    Key = hb_ao:normalize_key(RawKey),
+                    ValuePath = value_path(Value, Opts),
+                    ok = hb_store:group(Store, address(Key, ValuePath), Opts),
+                    lists:foreach(
+                        fun(ID) ->
+                            Address = address(Key, ValuePath, ID),
+                            ?event(
+                                debug_match,
+                                {writing_reverse_index, {address, Address},
+                                Opts
+                            }),
+                            hb_store:write(Store, #{ Address => <<"">> }, Opts)
+                        end,
+                        IDs
+                    )
+                end,
+                IndexBase
+            )
+    end.
+
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
+-spec match(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
 match(Key, Base, Opts) ->
     Store = store(Opts),
@@ -98,6 +129,7 @@ match(Key, Base, Opts) ->
 
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
+-spec all(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 all(Base, _Req, Opts) ->
     IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
     Keys =
