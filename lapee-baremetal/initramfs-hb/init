@@ -31,6 +31,54 @@ mkdir -p /dev/pts
 mount -t devpts -o nosuid,noexec devpts /dev/pts
 mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 
+# Calm /dev/console down. Kernel at loglevel=7 (set on cmdline)
+# floods the framebuffer console at boot, which competes with the
+# splash daemon's 6 fps redraw -- the splash overwrites kernel
+# lines and kernel lines overwrite the splash so neither is
+# legible. With `dmesg -n 1', the kernel only emits KERN_ALERT/
+# EMERG to /dev/console going forward; everything else still
+# accumulates in the dmesg ring buffer (full debug, accessible
+# post-mortem). Userspace traces from this script keep going to
+# /dev/console because they bypass the kernel printk path.
+dmesg -n 1 2>/dev/null || true
+
+# Splash daemon, FIRST THING after mounts. Runs in its own BEAM VM,
+# parallel to the HyperBEAM node forked later. Same erts binary that
+# ships in HB's release -- no extra disk footprint. The .beam was
+# compiled at build time (build-initramfs-hb.sh, using the build
+# host's erlc -- BEAM bytecode is platform-independent). The splash
+# polls /run/lapee/primary-net for the IP and
+# http://127.0.0.1:8734/~meta@1.0/info for HB-readiness; it does its
+# own phase machine, so init doesn't have to push state updates.
+#
+# Boot config: HB's release ships boot files under
+# `releases/0.0.1/' (relx layout), not the OTP-default `bin/'
+# location. Use `start_clean' (kernel + stdlib only) and add the
+# HB lib/ ebin paths so application:ensure_all_started(inets) can
+# resolve at runtime. Globbing inside `-pa' is intentional --
+# busybox sh expands `lib/*/ebin' before invoking erl.
+mkdir -p /run/lapee
+ERL=$(ls -1 /usr/lib/hyperbeam/erts-*/bin/erl 2>/dev/null | head -1)
+HB_BOOT=$(ls -1 /usr/lib/hyperbeam/releases/*/start_clean.boot 2>/dev/null | head -1)
+HB_BOOT=${HB_BOOT%.boot}
+if [ -x "$ERL" ] && [ -n "$HB_BOOT" ] && \
+   [ -f /usr/local/lib/lapee-splash/lapee_splash.beam ]; then
+    "$ERL" -boot "$HB_BOOT" \
+           -pa /usr/local/lib/lapee-splash \
+                /usr/lib/hyperbeam/lib/*/ebin \
+           -noshell -noinput \
+           -run lapee_splash main \
+        > /dev/null 2>>/run/lapee/splash.err </dev/null &
+    SPLASH_PID=$!
+fi
+
+# From here on, the splash daemon owns /dev/console. Redirect init's
+# own stdout/stderr to /dev/kmsg so any stray `echo' statements land
+# in the dmesg ring buffer (post-mortem accessible) instead of
+# scribbling over the splash. trace() already only writes to
+# /dev/kmsg; this catches the leftover plain echoes.
+exec >/dev/kmsg 2>&1
+
 # trace MSG
 #   Console-only version. The earlier build wrote every trace
 #   line to /mnt/esp/lapee-init.log via an early-init mount of
@@ -42,8 +90,10 @@ mount -t securityfs securityfs /sys/kernel/security 2>/dev/null || true
 #   the stick (by then udev has settled).
 trace() {
     _ts=$(awk '{printf "t+%0.2fs",$1}' /proc/uptime 2>/dev/null || echo '?')
-    echo "[trace] $_ts $*"
-    # /dev/kmsg is present early and goes to dmesg + earlyprintk.
+    # Route ONLY to /dev/kmsg (and therefore the dmesg ring buffer);
+    # /dev/console is owned by the splash daemon, so we don't print
+    # there. Boot-time forensics: `dmesg | grep lapee-trace' from a
+    # rescue shell or post-mortem of /run/lapee/dmesg.
     echo "[lapee-trace] $_ts $*" > /dev/kmsg 2>/dev/null || true
 }
 
@@ -66,27 +116,38 @@ cmdline_flag_set() {
 trace "init: started; kernel=$(uname -r 2>/dev/null || echo ?)"
 trace "init: /proc /sys /dev /tmp /run mounted"
 
-# v1.2.2 paper P2 -- TME/SME enforcement at init.
-#   Per paper section Arch: "Early init reads IA32_TME_ACTIVATE
-#   (Intel) or SYSCFG bit 23 (AMD) and refuses to proceed if
-#   memory encryption is inactive." We approximate without an MSR
-#   read (no msr-tools in the initramfs; adding it would bloat +
-#   widen lockdown relaxations). Two-tier check:
-#     (1) /proc/cpuinfo `flags' column includes `tme' (Intel) or
-#         `sme' (AMD). Absent -> CPU does not support memory
-#         encryption at all, init halts (attestation would lie
-#         about TME state).
-#     (2) dmesg early lines describe TME/SME activation:
-#         Intel: "x86/tme: Intel TME enabled (AES XTS 128-bit"
-#         AMD:   "AMD Memory Encryption Features active: SME"
-#         If neither marker appears, capability present but
-#         inactive -> halt.
-#   Operator override: `LAPEE_NO_TME=1' on cmdline skips both
-#   gates (for Intel CPUs where TME is disabled by BIOS +
-#   operator is intentionally testing without memory
-#   encryption). Override is measured via the UKI cmdline into
-#   PCR 4/8, so an attestation verifier will see the operator
-#   explicitly bypassed TME.
+# v1.2.2 paper P2 (amended batch 37) -- memory-encryption
+# CAPABILITY enforcement at init.
+#
+# The paper's original text:
+#   "Early init reads IA32_TME_ACTIVATE (Intel) or SYSCFG bit 23
+#   (AMD) and refuses to proceed if memory encryption is
+#   inactive."
+#
+# On Framework 13 + recent Intel kernels (observed 2026-04-24),
+# activation IS on but the kernel does NOT print an
+# `Intel TME enabled' marker that a shell script can reliably
+# grep; instead it prints an MKTME algorithm-negotiation line
+# (`x86/mktme: No known encryption algorithm is supported: 0x4')
+# that is unrelated to base-TME activation. Without msr-tools
+# in the initramfs (bloat + lockdown relaxations), there is no
+# OS-level shell command that can authoritatively report the
+# IA32_TME_ACTIVATE MSR's LOCK/ACTIVE bits.
+#
+# Sam 2026-04-24: "The paper should be the part that changes
+# here, not the implementation." Paper amendment (STATUS.md):
+# init verifies memory-encryption CAPABILITY via /proc/cpuinfo;
+# activation STATE is reported honestly in the attestation
+# envelope (tme-enabled signal, derived from the same
+# cpuinfo flags by claim_tme/1) for the verifier's policy
+# engine to decide. Init refuses only when the CPU has NO
+# memory-encryption capability at all -- then the attestation
+# would fundamentally lie about supported primitives.
+#
+# Operator override: `LAPEE_NO_TME=1' on cmdline skips the cap
+# gate (for CPUs where we deliberately want to run without it
+# for debugging). Override is measured into PCR 4/8 via the UKI
+# cmdline -- any attestation will carry it.
 check_tme_sme() {
     if cmdline_flag_set LAPEE_NO_TME; then
         trace "tme: LAPEE_NO_TME=1 on cmdline; skipping enforcement"
@@ -116,7 +177,7 @@ check_tme_sme() {
         *" sme "*) _has_cap=sme ;;
     esac
     if [ "$_has_cap" = "no" ]; then
-        trace "tme: CPU does not advertise tme/sme in /proc/cpuinfo; halting"
+        trace "tme: CPU lacks tme/sme in /proc/cpuinfo; halting (paper P2)"
         trace "tme: (override with LAPEE_NO_TME=1 on cmdline)"
         if [ -x /usr/local/bin/lapee-splash ]; then
             /usr/local/bin/lapee-splash \
@@ -125,37 +186,15 @@ check_tme_sme() {
         fi
         exec sh -c 'while :; do sleep 3600; done'
     fi
-    # Capability present. Now check active state via dmesg.
-    # /dev/kmsg is readable here; tail-newest lines via dmesg(1)
-    # when available, else grep the kmsg device directly.
-    _active=no
-    if command -v dmesg >/dev/null 2>&1; then
-        _dmesg=$(dmesg 2>/dev/null | head -200)
-    else
-        _dmesg=$(head -c 32768 /dev/kmsg 2>/dev/null)
-    fi
-    case "$_dmesg" in
-        *"Intel TME enabled"*)       _active=intel-tme ;;
-        *"AMD Memory Encryption"*)   _active=amd-sme ;;
-    esac
-    if [ "$_active" = "no" ]; then
-        # Softened in batch 35: a cap-present-but-not-active state
-        # occurs on Framework 13 (BIOS does not expose a TME toggle)
-        # and on generic client laptops. Paper P2 commits to init
-        # refusing when memory encryption is inactive -- BUT on
-        # hardware where activation is not operator-controllable
-        # that commitment turns into a single-purpose-appliance
-        # brick. Compromise: warn loudly, mark the envelope
-        # honestly (attestation will show tme-enabled=false), and
-        # let the verdict downgrade accordingly. A deployment
-        # operator who considers TME mandatory can grep the
-        # envelope for tme-enabled=true before trusting results.
-        trace "tme: $_has_cap cap present but no kernel activation log"
-        trace "tme: warning only -- BIOS doesn't expose TME toggle"
-        trace "tme: envelope will carry tme-enabled=false honestly"
-        return 0
-    fi
-    trace "tme: $_has_cap capability + $_active active -> proceed"
+    # Capability present -> proceed. Activation state is reported
+    # to the verifier via claim_tme/1 (same cpuinfo source) in the
+    # envelope's tme-enabled signal; init does NOT try to grep
+    # dmesg for an activation marker because the kernel's
+    # activation print varies across Linux releases + CPU vendors
+    # in ways that a shell script cannot reliably canonicalise.
+    # See the block-comment above this function for the paper-
+    # amendment rationale (batch 37).
+    trace "tme: $_has_cap capability present -> proceed (paper P2 amended)"
 }
 check_tme_sme
 
@@ -179,13 +218,15 @@ check_tme_sme
 # the animation for boot-log visibility). Any render failure
 # (missing awk, unreadable tty, short console) degrades silently;
 # init proceeds regardless.
-if [ -x /usr/local/bin/lapee-splash ]; then
-    /usr/local/bin/lapee-splash set boot 2>/dev/null || true
-    /usr/local/bin/lapee-splash daemon \
-        > /dev/console 2>/dev/null </dev/null &
-    SPLASH_PID=$!
-    # On iron this launch takes < 50 ms -- awk warmup + one frame.
-    trace "splash: daemon PID=$SPLASH_PID"
+## Splash already launched earlier (right after mounts) -- it's
+## been polling and rendering since boot. We re-emit a trace here
+## just so the boot log shows the splash status at this milestone.
+if [ -n "${SPLASH_PID:-}" ]; then
+    if kill -0 "$SPLASH_PID" 2>/dev/null; then
+        trace "splash: escript still alive (PID=$SPLASH_PID)"
+    else
+        trace "splash: escript exited (PID=$SPLASH_PID was forked earlier)"
+    fi
 fi
 echo "[init] kernel=$(uname -r)"
 
@@ -694,6 +735,24 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                     /usr/local/bin/lapee-splash set qr "ip=$_ip" \
                         2>/dev/null || true
                 fi
+            else
+                _ip=""
+            fi
+            # `dmesg -n 1' was already issued at the very top of
+            # this script to give the splash daemon a clean canvas
+            # from boot through ready. Re-asserting here is cheap
+            # and idempotent in case anything else flipped it back.
+            dmesg -n 1 2>/dev/null || true
+            # Splash watchdog goes to dmesg (kmsg), not /dev/console
+            # -- the splash itself is the source of truth on screen.
+            if [ -n "${SPLASH_PID:-}" ] && kill -0 "$SPLASH_PID" 2>/dev/null; then
+                trace "splash: still alive (PID=$SPLASH_PID)"
+            elif [ -s /run/lapee/splash.err ]; then
+                while IFS= read -r _line; do
+                    trace "splash.err: $_line"
+                done < /run/lapee/splash.err
+            else
+                trace "splash: status unknown (PID=${SPLASH_PID:-none})"
             fi
             ready=1; break
         fi
@@ -824,6 +883,15 @@ if cmdline_flag_set LAPEE_WRITEBACK; then
                             tail -c 65536 /run/lapee/hb.log \
                                 > /mnt/esp/lapee-hb-tail.log 2>/dev/null
                     fi
+                    # splash.log is copied UNCONDITIONALLY (no
+                    # LAPEE_TRACE gate). It only contains phase
+                    # transitions, the IP already shown on screen,
+                    # and httpc reasons -- no PSK, no SSID, no
+                    # wallet. Cheap diagnostic for "the splash
+                    # never advanced" reports.
+                    [ -f /run/lapee/splash.log ] && \
+                        cp /run/lapee/splash.log \
+                            /mnt/esp/lapee-splash.log 2>/dev/null
                     cat > /mnt/esp/README-VALIDATOR.txt <<RV
 LapEE attestation written on boot $STAMP.
 
@@ -857,11 +925,40 @@ RV
                     sync
                     SZ=$(stat -c %s "$OUT" 2>/dev/null || \
                            stat -f %z "$OUT" 2>/dev/null || echo ?)
-                    echo "==============================================="
-                    echo "   LAPEE-WRITEBACK-OK: $OUT ($SZ bytes)"
-                    echo "   ALSO: $LINK"
-                    echo "   SAFE TO POWER OFF + REMOVE USB STICK"
-                    echo "==============================================="
+                    # The writeback marker is produced for two
+                    # consumers:
+                    #  (1) the operator at the screen -- they want
+                    #      "stick is safe to remove now" reassurance
+                    #      AFTER the splash has shown them the QR;
+                    #  (2) the automated `make hb-usb-qemu' harness,
+                    #      which polls the QEMU serial log for
+                    #      `LAPEE-WRITEBACK-OK' to know it can stop
+                    #      the guest and extract artefacts.
+                    #
+                    # init's stdout was redirected to /dev/kmsg back
+                    # at line 80 so plain `echo' lands in the kernel
+                    # ring buffer; with `dmesg -n 1' active that
+                    # never reaches the serial chardev. Two-channel
+                    # fix:
+                    #   - Write a `<1>'-prefixed copy to /dev/kmsg.
+                    #     Level 1 (ALERT) bypasses dmesg -n 1's
+                    #     ignore filter and therefore reaches every
+                    #     console (including ttyS0).
+                    #   - Write a plain copy directly to /dev/ttyS0
+                    #     when present, in case no console is
+                    #     attached to the kmsg printk path.
+                    # Each channel is best-effort. /dev/kmsg gets the
+                    # copy that the harness pattern-matches on; the
+                    # screen still belongs to the splash daemon and
+                    # is not touched here.
+                    _wb_lines="\
+LAPEE-WRITEBACK-OK: $OUT ($SZ bytes)
+LAPEE-WRITEBACK-LINK: $LINK"
+                    printf '<1>%s\n' \
+                        "$_wb_lines" > /dev/kmsg 2>/dev/null || true
+                    [ -w /dev/ttyS0 ] && \
+                        printf '%s\n' "$_wb_lines" > /dev/ttyS0 \
+                            2>/dev/null || true
                 else
                     echo "[writeback] FAIL - wget could not fetch /attestation"
                 fi

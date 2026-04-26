@@ -80,8 +80,9 @@ DOCKER_AMD64 := docker run --rm --platform=linux/amd64
 
 .PHONY: help builders \
         buildroot buildroot-shell buildroot-clean \
-        hb-release hb-initramfs hb-usb-image hb-usb-write \
-        hb-usb-qemu hb-wifi-apply hb-sb-apply hb-cross-node-verify clean
+        hb-release hb-initramfs hb-usb-image hb-usb-write splash-frames \
+        hb-usb-qemu hb-usb-qemu-gui hb-wifi-apply hb-sb-apply \
+        hb-cross-node-verify clean
 
 help:
 	@awk '/^# =+$$/{flag=!flag;if(!flag)exit;next} \
@@ -123,7 +124,18 @@ buildroot-clean:
 hb-release:
 	./scripts/build-hb-release.sh
 
-hb-initramfs:
+# splash-frames: regenerate the pre-rendered ASCII splash frames.
+# The runtime splash player (initramfs-hb/lapee-splash) is a pure
+# busybox-sh loop that just cat's frame files in sequence; the 3D
+# rotation math runs once here on a host with full awk and writes
+# initramfs-hb/splash-frames/frame-NNN.txt. Re-run any time the
+# legacy renderer (initramfs-hb/lapee-splash.awk-renderer) changes.
+splash-frames:
+	./scripts/gen-splash-frames.sh
+
+# hb-initramfs depends on splash-frames so a stale frame set never
+# ends up in the image. Cheap (~5 s on a Mac) so unconditional.
+hb-initramfs: splash-frames
 	./scripts/build-initramfs-hb.sh
 
 # Defaults. Override on the command line to re-use the target for
@@ -180,6 +192,14 @@ hb-usb-write:
 
 hb-usb-qemu:
 	./scripts/boot-usb-image.sh
+
+# hb-usb-qemu-gui boots the same signed UKI in QEMU with a Cocoa
+# window so the operator can see the framebuffer console (splash
+# daemon, kernel banners, init traces) without flashing a stick.
+# Serial log still captured at /tmp/lapee-usb-qemu.log via
+# `-serial file:'. Useful for visual splash work + boot debugging.
+hb-usb-qemu-gui:
+	./scripts/boot-usb-image.sh --gui
 
 # ------------------------------------------------------------
 # Inject a host-side wifi.conf into the ESP of the currently-

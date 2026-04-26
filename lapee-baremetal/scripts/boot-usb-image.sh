@@ -22,12 +22,17 @@ cd "$(dirname "$0")/.."
 IMG=${IMG:-work/lapee-usb.img}
 TIMEOUT=${TIMEOUT:-420}
 LOGFILE=${LOGFILE:-/tmp/lapee-usb-qemu.log}
+# `--gui' opens a QEMU window so the operator can see the framebuffer
+# console -- splash daemon, kernel banners, init traces. Default stays
+# headless (`-nographic') for non-interactive attestation testing.
+GUI=0
 
 while (($# > 0)); do
     case "$1" in
         --img)     IMG=$2; shift 2;;
         --timeout) TIMEOUT=$2; shift 2;;
         --log)     LOGFILE=$2; shift 2;;
+        --gui)     GUI=1; shift;;
         *) echo "unknown arg: $1" >&2; exit 2;;
     esac
 done
@@ -64,22 +69,58 @@ echo "    log: $LOGFILE  (timeout: ${TIMEOUT}s)"
 
 # QEMU invocation. The image boots via \EFI\Boot\BootX64.efi so
 # no -kernel / -initrd is needed — UEFI finds and executes the
-# UKI itself.
-qemu-system-x86_64 \
-    -machine q35,accel=tcg \
-    -cpu qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+avx \
-    -m 2048 -smp 4 -nographic \
-    -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}" \
-    -drive "if=pflash,format=raw,file=${SCRATCH_VARS}" \
-    -drive "file=${SCRATCH_IMG},format=raw,if=virtio" \
-    -chardev "socket,id=chrtpm,path=$(pwd)/work/tpm-qemu/swtpm-sock" \
-    -tpmdev emulator,id=tpm0,chardev=chrtpm \
-    -device tpm-tis,tpmdev=tpm0 \
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:18734-:8734" \
-    -device virtio-net-pci,netdev=net0 \
-    > "$LOGFILE" 2>&1 &
+# UKI itself. Two display modes: headless (-nographic, default;
+# kernel + init goes to host stdio) and gui (Cocoa window with
+# the framebuffer console + a serial chardev so we can still see
+# the boot log via $LOGFILE). VGA is `std' so the kernel binds
+# vesafb/efifb cleanly.
+COMMON_ARGS=(
+    -machine q35,accel=tcg
+    -cpu qemu64,+rdtscp,+ssse3,+sse4.1,+sse4.2,+avx
+    -m 2048 -smp 4
+    -drive "if=pflash,format=raw,readonly=on,file=${OVMF_CODE}"
+    -drive "if=pflash,format=raw,file=${SCRATCH_VARS}"
+    -drive "file=${SCRATCH_IMG},format=raw,if=virtio"
+    -chardev "socket,id=chrtpm,path=$(pwd)/work/tpm-qemu/swtpm-sock"
+    -tpmdev emulator,id=tpm0,chardev=chrtpm
+    -device tpm-tis,tpmdev=tpm0
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:18734-:8734"
+    -device virtio-net-pci,netdev=net0
+)
+
+# Truncate the serial log up front. Otherwise a previous boot's
+# `LAPEE-WRITEBACK-OK' marker is still in the file and the wait
+# loop below matches immediately, killing QEMU before the new
+# boot has even started.
+: > "$LOGFILE"
+
+if (( GUI )); then
+    echo "    GUI: QEMU window will open; close it (or send Ctrl-C) to stop"
+    qemu-system-x86_64 \
+        "${COMMON_ARGS[@]}" \
+        -display cocoa -vga std \
+        -serial "file:${LOGFILE}" &
+else
+    qemu-system-x86_64 \
+        "${COMMON_ARGS[@]}" \
+        -nographic \
+        > "$LOGFILE" 2>&1 &
+fi
 QEMUPID=$!
 trap 'kill $QEMUPID 2>/dev/null || true; kill $(cat work/tpm-qemu/swtpm.pid 2>/dev/null) 2>/dev/null || true' EXIT
+
+if (( GUI )); then
+    # GUI mode: hand control to the QEMU window. Do not poll the
+    # serial log or auto-kill on writeback -- the operator wants to
+    # watch the splash + interact. Wait for QEMU to exit on its own
+    # (window close, Ctrl-C, guest poweroff). Skip the writeback-
+    # extract step because there's no scripted "this run succeeded"
+    # signal from a human-driven session.
+    echo "    waiting for QEMU to exit (close window or Ctrl-C)..."
+    wait $QEMUPID 2>/dev/null || true
+    kill "$(cat work/tpm-qemu/swtpm.pid 2>/dev/null)" 2>/dev/null || true
+    exit 0
+fi
 
 # Poll for the writeback success marker (or QEMU exit).
 deadline=$((SECONDS + TIMEOUT))

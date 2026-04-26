@@ -48,12 +48,37 @@ docker cp "$HB_REL" lapee-hb-mini:/opt/hb
 # early batches pulled from an external worktree, now unified.
 docker cp "$LAPEE/../config/lapee-enforced.flat" \
     lapee-hb-mini:/opt/lapee-enforced.flat
-# Copy the init + splash + DHCP-hook + ASCII logo.
+# Copy the init + splash + DHCP-hook + ASCII logo + pre-rendered
+# splash frames. The splash frames are baked at build time by
+# `scripts/gen-splash-frames.sh' (run once on a host with full awk;
+# regenerate via `make splash-frames'). Runtime is a pure-busybox-sh
+# loop that just cat's the frame files in sequence -- no awk math,
+# no /dev/stdin, no fragile parser quirks at boot.
 docker cp "$LAPEE/initramfs-hb/init"              lapee-hb-mini:/init-hb
-docker exec lapee-hb-mini mkdir -p /ramfs-src
+docker exec lapee-hb-mini mkdir -p /ramfs-src /ramfs-src/splash-frames
 docker cp "$LAPEE/initramfs-hb/logo.ascii"        lapee-hb-mini:/ramfs-src/logo.ascii
 docker cp "$LAPEE/initramfs-hb/lapee-splash"      lapee-hb-mini:/ramfs-src/lapee-splash
 docker cp "$LAPEE/initramfs-hb/lapee-dhcp-hook"   lapee-hb-mini:/ramfs-src/lapee-dhcp-hook
+docker cp "$LAPEE/initramfs-hb/splash-frames/."   lapee-hb-mini:/ramfs-src/splash-frames/
+
+# Compile lapee_splash.erl on the build HOST (Mac/Linux dev box)
+# rather than inside the slim runtime container -- the runtime
+# release has erlc but not the `compiler' app's .beam files (relx
+# strips them by default), so erlc crashes with `compile:compile/2
+# undef'. BEAM bytecode is platform-independent, so a Mac-compiled
+# .beam runs fine in the Linux guest's Linux-built BEAM VM.
+echo "--- compiling lapee_splash.erl on build host ---"
+HOST_ERLC=$(command -v erlc || true)
+if [ -z "$HOST_ERLC" ]; then
+    echo "!! host erlc not found; install Erlang/OTP and re-run" >&2
+    exit 1
+fi
+SPLASH_BUILD="$LAPEE/work/splash-build"
+mkdir -p "$SPLASH_BUILD"
+"$HOST_ERLC" -o "$SPLASH_BUILD" "$LAPEE/initramfs-hb/lapee_splash.erl"
+ls -la "$SPLASH_BUILD/lapee_splash.beam"
+docker cp "$SPLASH_BUILD/lapee_splash.beam" \
+    lapee-hb-mini:/ramfs-src/lapee_splash.beam
 
 docker exec -i lapee-hb-mini bash <<'SH'
 set -e
@@ -210,6 +235,12 @@ ln -sf /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /ramfs/lib64/ld-linux-x86-64.s
 cp /ramfs-src/logo.ascii          /ramfs/etc/lapee/logo.ascii
 cp /ramfs-src/lapee-splash        /ramfs/usr/local/bin/lapee-splash
 cp /ramfs-src/lapee-dhcp-hook     /ramfs/usr/local/bin/lapee-dhcp-hook
+mkdir -p                          /ramfs/etc/lapee/splash-frames
+cp -r /ramfs-src/splash-frames/.  /ramfs/etc/lapee/splash-frames/
+# BEAM splash, compiled on the build host (see comment further up
+# about why not in-container). Just install the .beam.
+mkdir -p /ramfs/usr/local/lib/lapee-splash
+cp /ramfs-src/lapee_splash.beam   /ramfs/usr/local/lib/lapee-splash/
 chmod +x /ramfs/usr/local/bin/lapee-splash \
          /ramfs/usr/local/bin/lapee-dhcp-hook
 
@@ -298,8 +329,10 @@ done
 # Build-time tools that don't belong in a runtime release. `erl` +
 # `erlexec` + `run_erl` + `to_erl` + `erl_call` + `erl_child_setup` +
 # `inet_gethost` + `heart` + `epmd` + `beam.smp` + `dyn_erl` +
-# `start`/`erl.src`/`start_erl.src`/`start.src` are retained.
-for tool in ct_run dialyzer typer erlc escript; do
+# `start`/`erl.src`/`start_erl.src`/`start.src` are retained. We
+# also keep `escript' (~120 KB) -- the boot splash is an escript
+# that runs in its own BEAM VM forked off init.
+for tool in ct_run dialyzer typer erlc; do
     find $HB/erts-* -name "$tool" -delete 2>/dev/null || true
 done
 # Strip BEAM aggressively + every shared lib the NIFs ship.

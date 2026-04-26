@@ -1,803 +1,134 @@
 #!/bin/sh
-# lapee-splash -- animated LapEE boot splash.
+# lapee-splash -- pre-rendered animated boot splash.
 #
-# Usage (two modes):
+# Frames are baked at build time by scripts/gen-splash-frames.sh and
+# shipped as static text files under /etc/lapee/splash-frames/. The
+# daemon is a pure busybox-sh loop: read the state file, cat the
+# appropriate frame to /dev/console, overlay phase footer + IP via
+# cursor positioning, sleep, repeat.
 #
-#   lapee-splash daemon
-#       Long-running foreground process. Draws the 3D wireframe
-#       laptop animation, and transitions phases by reading
-#       /run/lapee/splash.state. Expected to be backgrounded by
-#       init with output redirected to /dev/console. Exits when
-#       the state file carries `phase=exit'.
-#
-#   lapee-splash set <phase> [key=val ...]
-#       One-shot: rewrite /run/lapee/splash.state atomically with
-#       a new phase + free-form k=v pairs, then exit. Any running
-#       daemon picks the new state up on its next poll cycle
-#       (~200 ms). This is the call that init + lapee-dhcp-hook
-#       make at phase transitions.
-#
-#   lapee-splash "<plain text>"
-#       Back-compat with the pre-animation API: print a centred
-#       static logo + one status line. Used as the fallback when
-#       `lapee.nosplash=1' is on the kernel cmdline, or when the
-#       daemon can't be launched (e.g. /dev/console missing).
-#
-# The animation is cosmetic. If anything fails -- missing awk,
-# unreadable tty, malformed state -- we degrade silently to the
-# static splash instead of halting init.
+# Why pre-rendered? Earlier versions ran an 800-line awk script with
+# 3D rotation math on every frame. Elegant but fragile across awks
+# (BSD vs busybox) and busybox initramfs that lack /dev/stdin. Pre-
+# rendered frames have one runtime dependency (cat + printf + sleep,
+# all in busybox), so they either work or fail loudly with a clear
+# error -- no silent crashes.
 
-set -eu
-
-STATE_DIR=/run/lapee
-STATE_FILE=$STATE_DIR/splash.state
-LOGO=${LAPEE_LOGO:-/etc/lapee/logo.ascii}
+STATE_DIR=${LAPEE_STATE_DIR:-/run/lapee}
+STATE_FILE=${LAPEE_STATE_FILE:-$STATE_DIR/splash.state}
+FRAMES_DIR=${LAPEE_FRAMES_DIR:-/etc/lapee/splash-frames}
 CONSOLE=${LAPEE_CONSOLE:-/dev/console}
 
-# -----------------------------------------------------------------
-# Static centred splash (fallback).
-# -----------------------------------------------------------------
-static_splash() {
-    _status=${1-}
-    _cols=$(stty size 2>/dev/null | awk '{print $2}' || echo 80)
-    [ -z "$_cols" ] && _cols=80
-    printf '\n'
-    if [ -f "$LOGO" ]; then
-        awk -v cols="$_cols" '{
-            n = length($0);
-            if (n >= cols) { print; next; }
-            pad = int((cols - n) / 2);
-            s = "";
-            for (i = 0; i < pad; i++) s = s " ";
-            print s $0;
-        }' < "$LOGO"
-    fi
-    if [ -n "$_status" ]; then
-        printf '%s\n' "$_status" \
-            | awk -v cols="$_cols" '{
-                n = length($0);
-                if (n >= cols) { print; next; }
-                pad = int((cols - n) / 2);
-                s = "";
-                for (i = 0; i < pad; i++) s = s " ";
-                print s $0;
-            }'
-    else
-        printf '\n'
-    fi
-    printf '\n'
-}
-
-# -----------------------------------------------------------------
-# State helpers.
-# -----------------------------------------------------------------
 set_state() {
     mkdir -p "$STATE_DIR" 2>/dev/null || return 1
     _tmp=$STATE_FILE.tmp.$$
-    # Caller passes the whole line as $*. Write atomically.
     printf '%s\n' "$*" > "$_tmp" 2>/dev/null || return 1
     mv "$_tmp" "$STATE_FILE" 2>/dev/null || return 1
 }
 
-# -----------------------------------------------------------------
-# Daemon: the 3D animation loop.
-# -----------------------------------------------------------------
-# The renderer + math all live in one awk program because busybox
-# awk has everything we need (sin/cos/atan2/sqrt, multi-dimensional
-# arrays, printf) and forking awk once per frame would burn too
-# much CPU during attestation. The awk stays alive and reads the
-# state file itself via `getline < STATEFILE'.
-#
-# Framebuffer is W x H characters in a 2D array. Each frame:
-#   1. Clear grid to spaces.
-#   2. Check state file; if phase changed, snapshot it.
-#   3. Compute rotation angle for this frame (yaw around Y).
-#   4. Rotate/project each 3D edge; rasterize via Bresenham.
-#   5. If phase==qr, overlay the pre-rendered QR matrix on the
-#      laptop's screen panel (after projecting the screen's
-#      front-face bounds).
-#   6. Compose the frame + a footer status line, print with
-#      \033[H (cursor-home) -- no full clear, so no flicker.
-#
-# Cmdline flag `lapee.nosplash=1' short-circuits the daemon back
-# to a single static splash + exit (so init still has a visible
-# trace if the animation is unwanted / causing issues).
-#
-# The QR body is pre-rendered on demand (when phase first flips
-# to `qr') by shelling out to qrencode, then fed into awk via
-# an env-var wrapped in a delimiter. qrencode itself lives in
-# /usr/bin/qrencode inside the initramfs.
+# Parse state file into globals: phase, data_ip, data_msg
+read_state() {
+    phase=""
+    data_ip=""
+    data_msg=""
+    [ -r "$STATE_FILE" ] || return 0
+    _line=$(cat "$STATE_FILE" 2>/dev/null)
+    for _tok in $_line; do
+        case "$_tok" in
+            phase=*) phase="${_tok#phase=}" ;;
+            ip=*)    data_ip="${_tok#ip=}" ;;
+            msg=*)   data_msg="${_tok#msg=}" ;;
+        esac
+    done
+}
+
+footer_text() {
+    case "$1" in
+        boot)     echo "booting..." ;;
+        net-up)   echo "interfaces up; starting HyperBEAM..." ;;
+        net-none) echo "no network found -- plug in Ethernet" ;;
+        net-wait) echo "waiting for network..." ;;
+        hb-wait)  echo "waiting for HyperBEAM..." ;;
+        qr)       if [ -n "$2" ]; then echo "scan -> http://$2:8734/"
+                  else                 echo "ready"
+                  fi ;;
+        halted)   echo "HALTED${data_msg:+: $data_msg}" ;;
+        *)        echo "" ;;
+    esac
+}
 
 daemon() {
     if grep -qw 'lapee\.nosplash=1' /proc/cmdline 2>/dev/null; then
         static_splash 'booting...'
-        # Stay alive so init's `wait' doesn't race, but don't
-        # repaint. A long sleep is cheap.
+        exec sh -c 'while :; do sleep 3600; done'
+    fi
+    printf '\033[?25l\033[2J\033[H' > "$CONSOLE" 2>/dev/null || true
+    [ -f "$STATE_FILE" ] || set_state 'phase=boot'
+
+    # Count frames
+    nframes=0
+    for f in "$FRAMES_DIR"/frame-*.txt; do
+        [ -f "$f" ] || continue
+        nframes=$((nframes + 1))
+    done
+    if [ "$nframes" -eq 0 ]; then
+        printf 'lapee-splash: no frames in %s\n' "$FRAMES_DIR" \
+            > "$CONSOLE" 2>/dev/null
         exec sh -c 'while :; do sleep 3600; done'
     fi
 
-    # Figure out terminal size once. efifb / simpledrm console on a
-    # typical Framework with 8x16 fb font can be 80x25 or much
-    # wider depending on monitor + BIOS framebuffer resolution.
-    # stty usually works on /dev/console; fall back on env vars
-    # (LAPEE_W / LAPEE_H for dev testing off-target) then 80x25.
-    W=$(stty -F "$CONSOLE" size 2>/dev/null | awk '{print $2}') || true
-    H=$(stty -F "$CONSOLE" size 2>/dev/null | awk '{print $1}') || true
-    [ -z "${W:-}" ] && W=${LAPEE_W:-80}
-    [ -z "${H:-}" ] && H=${LAPEE_H:-25}
-    # Clamp to sensible bounds. The projection math picks a scale
-    # from W, and a too-small H causes the lid to clip; we'd rather
-    # render fewer rows and let the footer be lost than distort.
-    # Clamp to sensible bounds. The projection math picks a scale
-    # from W, and a too-small H causes the lid to clip; we'd
-    # rather render fewer rows and let the footer be lost than
-    # distort. Upper cap keeps per-frame awk work bounded: at
-    # 200x80 = 16000 cells * 6 fps, that's under 100k cell-writes
-    # per second, which busybox-awk handles comfortably while
-    # HB is doing TPM quotes. Anything wider would be slower
-    # without adding visible structure -- the laptop silhouette
-    # itself is only ~80 cells wide at max scale.
-    [ "$W" -lt 40 ] && W=40
-    [ "$W" -gt 200 ] && W=200
-    [ "$H" -lt 18 ] && H=18
-    [ "$H" -gt 80 ] && H=80
+    F=0
+    while :; do
+        read_state
+        if [ "$phase" = "exit" ]; then break; fi
 
-    # Ensure a state file exists before the awk enters its loop.
-    [ -f "$STATE_FILE" ] || set_state 'phase=boot'
+        # Cursor home, paint frame
+        printf '\033[H' > "$CONSOLE" 2>/dev/null || true
+        idx=$(printf '%03d' "$F")
+        cat "$FRAMES_DIR/frame-$idx.txt" > "$CONSOLE" 2>/dev/null || true
 
-    # Hide cursor, move home, clear once.
-    printf '\033[?25l\033[2J\033[H' > "$CONSOLE" 2>/dev/null || true
+        # Footer text overlaid at fixed row 24 (25-line terminal)
+        ftxt=$(footer_text "$phase" "$data_ip")
+        if [ -n "$ftxt" ]; then
+            ftxt_len=${#ftxt}
+            pad=$(( (80 - ftxt_len) / 2 ))
+            [ "$pad" -lt 0 ] && pad=0
+            printf '\033[24;1H\033[2K%*s%s' \
+                "$pad" "" "$ftxt" > "$CONSOLE" 2>/dev/null || true
+        fi
 
-    # Run the animator. Everything below is a single awk script.
-    # Output goes to CONSOLE. On exit (phase=exit), restore cursor.
-    #
-    # The awk body is fed via a heredoc so apostrophes inside
-    # comments don't terminate a shell-single-quoted argument.
-    # Variables come in via `-v', not shell interpolation.
-    awk -v W="$W" -v H="$H" \
-        -v STATE="$STATE_FILE" \
-        -v QRFILE="$STATE_DIR/qr.txt" \
-        -v LOGO="$LOGO" \
-        -v CONS="$CONSOLE" \
-        -f /dev/stdin <<'AWK_EOF'
-    BEGIN {
-        PI = atan2(0, -1);
+        # Banner at row 25
+        banner='LapEE . HyperBEAM . Trusted Execution Environment'
+        b_len=${#banner}
+        b_pad=$(( (80 - b_len) / 2 ))
+        [ "$b_pad" -lt 0 ] && b_pad=0
+        printf '\033[25;1H\033[2K%*s%s' \
+            "$b_pad" "" "$banner" > "$CONSOLE" 2>/dev/null || true
 
-        # --- 3D model: retro clamshell laptop ------------------
-        # Coordinate system:
-        #   +x right, +y up, +z toward viewer.
-        # Laptop sits flat on y=0 plane; origin is the centre of
-        # the hinge along the back edge. All units are "laptop
-        # widths"; the real rendered size is set by the projection
-        # scale below.
-        #
-        # Base (keyboard deck): a thin slab 4.0 wide (x), 3.0 deep
-        # (z), 0.22 tall (y). Hinge sits at the back, so z in
-        # [-1.5 .. 1.5] with hinge at z=-1.5. The slab's top face
-        # is what the user types on -- rendered as its own rectangle
-        # to suggest a keyboard (not keycaps, just a shadow).
-        #
-        # Lid (screen): same width (x in [-2..2]) as the base, but
-        # thinner (0.12 tall when open) and ~2.8 long. The lid is
-        # ROTATED about the hinge axis by LID_ANGLE radians to
-        # open it. LID_ANGLE=0 is closed; 1.83 rad (~105°) is a
-        # natural working pose; we animate it from 0 to 1.83
-        # during the opening animation, then hold.
-        BW = 2.00;   # base half-width
-        BD = 1.50;   # base half-depth (back..front)
-        BH = 0.10;   # base half-thickness
-        LW = 1.95;   # lid half-width (slightly narrower -> bezel)
-        LD = 1.40;   # lid half-length along its own axis
-        LH = 0.06;   # lid half-thickness
+        F=$(( (F + 1) % nframes ))
+        sleep 0.16 2>/dev/null || sleep 1
+    done
 
-        # 8 vertices of the base cuboid (local coords; y up).
-        # Hinge is at z=-BD with y=BH. We build the base around the
-        # origin so x in [-BW, BW], y in [-BH, BH], z in [-BD, BD].
-        nbv = 0;
-        bv(-BW, -BH, -BD); bv( BW, -BH, -BD);
-        bv( BW, -BH,  BD); bv(-BW, -BH,  BD);
-        bv(-BW,  BH, -BD); bv( BW,  BH, -BD);
-        bv( BW,  BH,  BD); bv(-BW,  BH,  BD);
-        # Base edges (indices into bvx/bvy/bvz).
-        # Keep the wireframe sparse -- the 12 cuboid edges are
-        # enough to read "retro laptop". Earlier revisions drew
-        # trackpad + keyboard hint rectangles too; at SCALE <= 10
-        # those just become a tangle of `-' and `|' that flickers
-        # unhelpfully during rotation.
-        nbe = 0;
-        be(1, 2); be(2, 3); be(3, 4); be(4, 1);   # bottom rim
-        be(5, 6); be(6, 7); be(7, 8); be(8, 5);   # top rim (deck)
-        be(1, 5); be(2, 6); be(3, 7); be(4, 8);   # vertical posts
-
-        # Lid (local to the lid; hinge axis is local y=-LD, z=0).
-        # Build the lid standing up vertically (its own +y becomes
-        # the rendered +y once open). Local coords:
-        #   x in [-LW, LW], y in [-LD, LD], z in [-LH, LH].
-        # The screen's "front" face is z=+LH; we track the 4
-        # corners of that face separately so the QR phase can
-        # project onto it.
-        nlv = 0;
-        lv(-LW, -LD, -LH); lv( LW, -LD, -LH);
-        lv( LW,  LD, -LH); lv(-LW,  LD, -LH);
-        lv(-LW, -LD,  LH); lv( LW, -LD,  LH);
-        lv( LW,  LD,  LH); lv(-LW,  LD,  LH);
-        # Screen panel (inset from the bezel) -- the face whose
-        # centre we use for the QR overlay. Indices 9..12.
-        SPX = 1.65; SPY = 1.10;  # inset from LW, LD
-        lv(-SPX, -SPY,  LH + 0.001); lv( SPX, -SPY,  LH + 0.001);
-        lv( SPX,  SPY,  LH + 0.001); lv(-SPX,  SPY,  LH + 0.001);
-        # Lid wireframe:
-        #   - Front (screen) face: always drawn. This is the
-        #     face the audience is meant to recognise as "the
-        #     laptop's screen".
-        #   - Inner bezel rectangle on the screen face: the
-        #     region the QR will fill in qr phase.
-        #   - Two short verticals at the top corners, giving
-        #     the lid a faint thickness without turning into a
-        #     full cuboid (which clutters the silhouette).
-        nle = 0;
-        le(5, 6); le(6, 7); le(7, 8); le(8, 5);   # front face
-        le(9, 10); le(10, 11); le(11, 12); le(12, 9);  # bezel inset
-        le(3, 7); le(4, 8);                        # top corners' depth
-
-        # --- Camera + projection --------------------------------
-        # Character cells are ~2x as tall as wide. Multiply x by
-        # ASPECT when mapping to columns so the laptop does not
-        # come out squashed.
-        ASPECT = 2.0;
-        # Distance from camera to origin along +z.
-        CAMD = 6.0;
-        # Two scale modes:
-        #   ANIM_SCALE: used during the rotating boot animation.
-        #       Picks a size that leaves room for footer + banner
-        #       and a margin around the orbit (~0.65 * W wide).
-        #   QR_SCALE:   used once we settle to a front-facing pose
-        #       and need the lid's screen panel to be large enough
-        #       to hold a 25-module QR at 2 cols x 1 row per
-        #       module. Screen panel local width = 2 * SPX = 3.30
-        #       units; projected at yaw=0 it spans
-        #           3.30 * ASPECT * QR_SCALE cells
-        #       which we want >= 2 * qr_w (~= 50 cells for a 25-
-        #       module v2 QR). So QR_SCALE >= 25 / (3.30 * 2 / 2)
-        #       ~= 7.6. We cap it so the full model stays on screen
-        #       even on narrow consoles (if W < 80 the laptop
-        #       extends past the edges and that is fine -- the
-        #       centre where the QR sits still lands inside W).
-        # ANIM_SCALE: pick so the base (4 units wide) lands in
-        # ~0.45*W cells and the lid (up to ~3.0 units tall) in
-        # ~0.55*H cells -- whichever is smaller. Leaves room for
-        # the rotation orbit to sweep without clipping.
-        _sx = W * 0.45 / 4.0 / ASPECT;
-        _sy = H * 0.55 / 3.2;
-        ANIM_SCALE = (_sx < _sy) ? _sx : _sy;
-        QR_SCALE   = 7.8;
-        # Tilt the whole scene down by ~18 degrees around X so
-        # the viewer sees the deck top + the screen, not a perfect
-        # profile. This is the "retro demo-reel" look: camera
-        # floating slightly above the laptop, orbiting.
-        TILT = 0.30;
-        # During QR phase we want the lid face-on, so drop the tilt.
-        QR_TILT = 0.0;
-
-        # --- Initial state -------------------------------------
-        phase  = "boot";
-        data_ip = "";
-        data_msg = "";
-        qr_w = 0; qr_h = 0; qr_loaded = 0;
-
-        frame = 0;
-        lid_angle = 0.0;     # 0 = closed; eases toward target
-        lid_target = 1.85;   # ~106 degrees, classic working angle
-        yaw = 0.0;            # orbit angle
-
-        # Redraw rate: 6 fps. Cheap in awk; quiet on the CPU.
-        FPS = 6;
-        SLEEP = 0.16;        # seconds
-
-        read_state();
-        for (;;) {
-            frame++;
-            # Poll state every frame (cheap).
-            read_state();
-            if (phase == "exit") break;
-            step_model();
-            clear_grid();
-            render_laptop();
-            if (phase == "qr" && data_ip != "") {
-                ensure_qr();
-                overlay_qr();
-            }
-            compose_footer();
-            draw();
-            # Sleep via system("sleep ..."). Fork per frame is
-            # ~5-10 ms on iron; at 6 fps, under 5% CPU overhead.
-            system("sleep " SLEEP);
-        }
-        # Restore cursor.
-        out = "\033[?25h\033[" H ";1H\n";
-        print_console(out);
-    }
-
-    # --- helpers: build vertex/edge tables ---------------------
-    function bv(x, y, z) {
-        nbv++; bvx[nbv] = x; bvy[nbv] = y; bvz[nbv] = z;
-    }
-    function be(i, j) {
-        nbe++; bei[nbe] = i; bej[nbe] = j;
-    }
-    function lv(x, y, z) {
-        nlv++; lvx[nlv] = x; lvy[nlv] = y; lvz[nlv] = z;
-    }
-    function le(i, j) {
-        nle++; lei[nle] = i; lej[nle] = j;
-    }
-
-    # --- state file reader -------------------------------------
-    function read_state(   line, f, k, v, i) {
-        line = "";
-        if ((getline line < STATE) <= 0) { close(STATE); return; }
-        close(STATE);
-        # line format: phase=<v> [k=v ...]
-        # simple space-split; values may not contain spaces.
-        #
-        # new_msg starts empty every read so a phase transition
-        # without a `msg=' token falls back to the phase-default
-        # footer rather than inheriting the prior phase's msg
-        # (batch 30 bug caught by the boot-animation capture
-        # agent: qr phase on iron inherits "waiting for
-        # HyperBEAM..." from hb-wait because init calls
-        # `lapee-splash set qr "ip=$_ip"' without a msg token).
-        new_phase = phase; new_ip = data_ip; new_msg = "";
-        n = split(line, f, " ");
-        for (i = 1; i <= n; i++) {
-            k = f[i]; v = "";
-            if (index(k, "=") > 0) {
-                v = substr(k, index(k, "=") + 1);
-                k = substr(k, 1, index(k, "=") - 1);
-            }
-            if (k == "phase") new_phase = v;
-            else if (k == "ip")  new_ip = v;
-            else if (k == "msg") { new_msg = rest_of(line, i, f, n); break; }
-        }
-        if (new_phase != phase) {
-            phase = new_phase;
-            # Reset any per-phase state.
-            qr_loaded = 0;
-            if (phase == "qr") lid_target = 1.70;
-            else if (phase == "halted") lid_target = 0.40;
-            else lid_target = 1.85;
-        }
-        data_ip = new_ip;
-        data_msg = new_msg;
-    }
-    function rest_of(line, idx, f, n,   i, s) {
-        # Reconstruct f[idx]..f[n] joined by space, stripping the
-        # leading "msg=" from f[idx].
-        s = f[idx];
-        sub(/^msg=/, "", s);
-        for (i = idx + 1; i <= n; i++) s = s " " f[i];
-        return s;
-    }
-
-    # --- animation math ----------------------------------------
-    function step_model(   target_yaw, delta) {
-        # Ease lid toward target.
-        lid_angle += (lid_target - lid_angle) * 0.10;
-        # Yaw behaviour by phase:
-        #   qr:     ease yaw toward 0 (front-facing) so the QR is
-        #           scannable. Never free-orbit -- the QR overlay
-        #           is axis-aligned and only useful at yaw ~ 0.
-        #   halted: stop dead at the current angle.
-        #   boot / net-* / hb-wait: free orbit at ~6 degrees per
-        #           frame. This is the retro demo-reel motion.
-        if (phase == "qr") {
-            # Pick the nearest multiple of 2*PI so we ease along
-            # the short arc. Equivalent: let delta = normalised(-yaw),
-            # then step by fraction.
-            target_yaw = 0;
-            delta = target_yaw - yaw;
-            while (delta >  PI) delta -= 2 * PI;
-            while (delta < -PI) delta += 2 * PI;
-            yaw += delta * 0.18;
-            if (delta * delta < 0.0004) yaw = 0;   # snap when close
-        }
-        else if (phase == "halted") yaw += 0.0;
-        else                        yaw += 0.06;
-        # Wrap into [-PI, PI] to keep cos/sin stable long-term.
-        while (yaw >  PI) yaw -= 2 * PI;
-        while (yaw < -PI) yaw += 2 * PI;
-    }
-
-    # Project a local laptop-frame point to cell coords.
-    # Returns screen-space (col, row) via globals px, py, pz.
-    # Base points (kind=0): rotate by yaw, tilt, project.
-    # Lid points  (kind=1): first rotate by lid_angle around the
-    # hinge (world X axis, translated to z = -BD, y = BH),
-    # then same yaw+tilt+project.
-    function project(x, y, z, kind,    c, s, xx, yy, zz, ct, st, dy, yoff, zoff) {
-        if (kind == 1) {
-            # Lid -> world transform:
-            #   The lid's hinge runs along world-x at y=BH, z=-BD.
-            #   In the lid's LOCAL frame, the hinge is the edge at
-            #   y=-LD. So shift lid-local y by +LD (dy below) to
-            #   put the hinge at the local origin, rotate around
-            #   world-x by lid_angle, then translate back.
-            #
-            #   Rotation convention: lid_angle is the angle the
-            #   lid's local +y axis makes with world +z (forward).
-            #   So local +y initially (angle=0) points toward +z,
-            #   and at angle=pi/2 points straight up (+y world).
-            #
-            #   Lid thickness contribution: local_z extends out of
-            #   the lid's own front face, which is initially +y
-            #   (lid lying flat) and rotates toward +z as the lid
-            #   opens. So the local_z axis tracks world-(cos(a)*y
-            #   - sin(a)*z) when we resolve it below.
-            c = cos(lid_angle); s = sin(lid_angle);
-            dy = y + LD;             # distance along lid-local +y from hinge
-            yoff = dy * s + z * c;    # world-y contribution
-            zoff = dy * c - z * s;    # world-z contribution
-            # Translate hinge back to (y=BH, z=-BD) in world frame.
-            y = BH + yoff;
-            z = -BD + zoff;
-            # x is unchanged (hinge parallel to world-x).
-        }
-        # World yaw around Y.
-        c = cos(yaw); s = sin(yaw);
-        xx = x * c - z * s;
-        zz = x * s + z * c;
-        yy = y;
-        # Tilt around world X (falls to 0 during qr phase so the
-        # lid faces the camera).
-        _tilt = (phase == "qr") ? QR_TILT : TILT;
-        ct = cos(_tilt); st = sin(_tilt);
-        ny = yy * ct - zz * st;
-        nz = yy * st + zz * ct;
-        xx = xx; yy = ny; zz = nz;
-        # Perspective projection. In QR phase, use a larger scale
-        # so the lid's screen panel can hold a 25-module QR at
-        # 2 cols x 1 row per module. Note: we still project; this
-        # keeps the laptop's silhouette consistent with the boot
-        # animation, only larger.
-        _scale = (phase == "qr") ? QR_SCALE : ANIM_SCALE;
-        zd = CAMD - zz;    # positive; larger z (toward viewer) shrinks.
-        if (zd < 0.5) zd = 0.5;
-        px = (xx * ASPECT) * (CAMD / zd) * _scale + W / 2;
-        # Shift origin down slightly during qr phase so the
-        # lid-centre (where the QR will sit) ends up ~row H*0.4,
-        # leaving the footer + banner visible at the bottom.
-        _cy = (phase == "qr") ? (H * 0.55) : (H / 2);
-        py = _cy - (yy) * (CAMD / zd) * _scale;
-        pz = zd;
-    }
-
-    # --- framebuffer ------------------------------------------
-    function clear_grid(   i, j) {
-        for (i = 0; i < H; i++)
-            for (j = 0; j < W; j++) {
-                grid[i, j] = " ";
-                zbuf[i, j] = 9999;   # far; any real pz beats it
-            }
-    }
-
-    # Put char ch at (col, row) if in bounds.
-    # Z-buffer is soft: writes overwrite unless the existing cell
-    # is non-blank AND the new z is greater (further). For
-    # wireframe this mostly keeps near lines on top without a real
-    # depth buffer.
-    function put(col, row, ch, z) {
-        col = int(col + 0.5);
-        row = int(row + 0.5);
-        if (col < 0 || col >= W) return;
-        if (row < 0 || row >= H) return;
-        if (grid[row, col] == " ") { grid[row, col] = ch; zbuf[row, col] = z; return; }
-        if (z < zbuf[row, col]) { grid[row, col] = ch; zbuf[row, col] = z; }
-    }
-
-    # Pick an edge glyph from the slope of (dx, dy) in cells.
-    function glyph(dx, dy,    adx, ady) {
-        adx = dx < 0 ? -dx : dx;
-        ady = dy < 0 ? -dy : dy;
-        if (adx < 0.3 && ady < 0.3) return "+";
-        if (ady < 0.5 * adx)         return "-";
-        if (adx < 0.5 * ady)         return "|";
-        # Diagonal; sign of dx*dy picks slash direction.
-        return (dx * dy >= 0) ? "\\" : "/";
-    }
-
-    # Draw a 3D edge given by two laptop-local vertices + kind.
-    function edge(x1, y1, z1, x2, y2, z2, kind,
-                  ax, ay, az, bx, by, bz, ch, zavg, n, i, t, u, v) {
-        project(x1, y1, z1, kind);
-        ax = px; ay = py; az = pz;
-        project(x2, y2, z2, kind);
-        bx = px; by = py; bz = pz;
-        zavg = (az + bz) / 2;
-        ch = glyph(bx - ax, by - ay);
-        # Number of steps: Chebyshev distance + 1.
-        u = bx - ax; v = by - ay;
-        if (u < 0) u = -u; if (v < 0) v = -v;
-        n = (u > v) ? u : v;
-        n = int(n) + 1;
-        for (i = 0; i <= n; i++) {
-            t = (n > 0) ? (i / n) : 0;
-            put(ax + (bx - ax) * t,
-                ay + (by - ay) * t,
-                ch,
-                az + (bz - az) * t);
-        }
-        # Emphasise endpoints.
-        put(ax, ay, "+", az);
-        put(bx, by, "+", bz);
-    }
-
-    function render_laptop(   k) {
-        # Base edges.
-        for (k = 1; k <= nbe; k++) {
-            edge(bvx[bei[k]], bvy[bei[k]], bvz[bei[k]],
-                 bvx[bej[k]], bvy[bej[k]], bvz[bej[k]], 0);
-        }
-        # Lid edges.
-        for (k = 1; k <= nle; k++) {
-            edge(lvx[lei[k]], lvy[lei[k]], lvz[lei[k]],
-                 lvx[lej[k]], lvy[lej[k]], lvz[lej[k]], 1);
-        }
-    }
-
-    # --- QR overlay --------------------------------------------
-    # The QR body comes in via environment variable LAPEE_QR_BODY
-    # which a pre-processing step (get_qr() below) populated via
-    # `system("qrencode ... > /run/lapee/qr.txt")'. We read the
-    # file into a 2D bit matrix, then overlay a scaled version
-    # onto the quadrilateral defined by the four screen corners
-    # (lid local indices 9..12) projected to screen space.
-    #
-    # Simplification: instead of perspective-correct texture
-    # mapping (which would need barycentric interpolation and
-    # produce wobbly QR when the laptop is rotated), we ONLY
-    # overlay when the laptop is very near a front-facing pose
-    # (yaw near 0 modulo 2*PI). The step_model() above slows
-    # rotation during qr phase, and we additionally snap to the
-    # nearest quadrant visibility cycle. Outside that window we
-    # render the screen as a blank rectangle so the operator sees
-    # the laptop rotate once, then freeze with the QR face on.
-
-    function ensure_qr(   line, row, i, ch) {
-        if (qr_loaded) return;
-        # qrencode writes its matrix to a pre-set path. Each line
-        # may contain "█" (black/data) or " " (light) or
-        # half-height combos. To keep the math simple we ask
-        # qrencode for ASCII (`-t ASCII') which produces strict
-        # 1-cell = 1-module output: "##" for black, "  " for light
-        # per module; 2 columns per module. We split each line
-        # into modules-of-2 and call each 2-cell chunk one bit.
-        qr_w = 0; qr_h = 0;
-        if ((getline line < QRFILE) <= 0) { close(QRFILE); return; }
-        # First non-blank line determines width in characters.
-        # qrencode `-t ASCII -m 1' pads with 1 char of space each
-        # side -- good enough.
-        row = 0;
-        while (1) {
-            if (length(line) > 0) {
-                # Each module is 2 ASCII cols. Strip carriage return
-                # just in case.
-                gsub(/\r/, "", line);
-                mods = int(length(line) / 2);
-                if (row == 0) qr_w = mods;
-                for (i = 0; i < mods; i++) {
-                    ch = substr(line, i * 2 + 1, 2);
-                    qrbit[row, i] = (index(ch, "#") > 0) ? 1 : 0;
-                }
-                row++;
-            }
-            if ((getline line < QRFILE) <= 0) break;
-        }
-        close(QRFILE);
-        qr_h = row;
-        qr_loaded = (qr_w > 0 && qr_h > 0) ? 1 : 0;
-    }
-
-    # Overlay the QR on the laptop's screen panel. Strategy: keep
-    # each QR module fixed-size in console cells (2 cols x 1 row
-    # to match the 1:2 cell aspect of a typical framebuffer console
-    # with an 8x16 font -- this makes each module visually square
-    # in pixels). Project the screen-panel centre and stamp the
-    # matrix axis-aligned around it. No perspective-correct texture
-    # mapping: only useful at yaw ~ 0 (QR has to be flat-on for a
-    # scanner anyway, and step_model() snaps yaw to 0 in QR phase).
-    #
-    # If the console is too narrow (< 2*qr_w cells) or too short
-    # (< qr_h + 4 cells including footer), we drop back to a mode
-    # where the QR is drawn on its own (without the laptop wireframe
-    # underneath) so that it still scans. This is the failsafe: the
-    # user MUST see a scannable QR even on an 80x24 legacy console.
-    function overlay_qr(   cx, cy, sx, sy, qi, qj, bit, ch,
-                           panel_cx, panel_cy, qr_pw, qr_ph,
-                           xx, yy, left, top) {
-        if (!qr_loaded) return;
-        # Fixed module size.
-        CELL_W = 2;
-        CELL_H = 1;
-        qr_pw = qr_w * CELL_W;
-        qr_ph = qr_h * CELL_H;
-
-        # Project the centre of the screen panel to get the anchor.
-        # Lid-local screen-panel centre is (0, 0, LH+eps). With
-        # phase=qr, yaw is near 0 and tilt is 0, so this lands at a
-        # stable point on the screen.
-        project(0, 0, LH + 0.001, 1);
-        panel_cx = px; panel_cy = py;
-
-        # If the projected anchor + QR footprint would clip the
-        # console edges, shift the anchor to keep the QR on-screen.
-        left = int(panel_cx - qr_pw / 2 + 0.5);
-        top  = int(panel_cy - qr_ph / 2 + 0.5);
-        if (left < 0) left = 0;
-        if (top  < 0) top  = 0;
-        if (left + qr_pw > W) left = W - qr_pw;
-        if (top  + qr_ph > H - 2) top = H - 2 - qr_ph;
-
-        # If the QR simply will not fit (tiny console), still render
-        # a best-effort version: 1 col x 1 row per module. A 25x25
-        # module matrix drops to 25x25 cells, which may fit even on
-        # 80x25 at the cost of horizontal squash; QR decoders that
-        # correct for moderate aspect distortion still resolve it.
-        if (qr_pw > W || qr_ph > H - 2) {
-            CELL_W = 1;
-            CELL_H = 1;
-            qr_pw = qr_w;
-            qr_ph = qr_h;
-            left = int((W - qr_pw) / 2);
-            top  = int((H - 2 - qr_ph) / 2);
-            if (left < 0) left = 0;
-            if (top  < 0) top  = 0;
-        }
-
-        # Clear a quiet zone around the QR matrix so stray laptop
-        # wireframe glyphs don't confuse the scanner. One module's
-        # worth of margin. We clamp to grid bounds.
-        for (yy = top - CELL_H;
-             yy < top + qr_ph + CELL_H; yy++) {
-            for (xx = left - CELL_W;
-                 xx < left + qr_pw + CELL_W; xx++) {
-                if (xx >= 0 && xx < W && yy >= 0 && yy < H - 2)
-                    grid[yy, xx] = " ";
-            }
-        }
-
-        # Paint QR modules. "#" for dark (data) cells, " " for
-        # light. Using ASCII `#` keeps the appliance scannable even
-        # if the console cannot render Unicode block glyphs (old
-        # efifb + ISO 8859-1 font). Modern consoles accepting UTF-8
-        # will render "#" fine too; no worse contrast than
-        # block-elements.
-        for (qi = 0; qi < qr_h; qi++) {
-            for (qj = 0; qj < qr_w; qj++) {
-                bit = qrbit[qi, qj] + 0;
-                ch = bit ? "#" : " ";
-                sx = left + qj * CELL_W;
-                sy = top  + qi * CELL_H;
-                for (yy = sy; yy < sy + CELL_H; yy++) {
-                    for (xx = sx; xx < sx + CELL_W; xx++) {
-                        if (xx >= 0 && xx < W && yy >= 0 && yy < H)
-                            grid[yy, xx] = ch;
-                    }
-                }
-            }
-        }
-    }
-
-    # --- footer + draw -----------------------------------------
-    #
-    # Footer priority:
-    #   1. If the state file passed `msg=<free text>', use it.
-    #      This is how init's progressive elapsed-time counter
-    #      ("waiting for HyperBEAM... (~30s)") reaches the screen.
-    #   2. Otherwise, a per-phase default string.
-    #
-    # `halted' is handled specially: even with a custom msg, we
-    # prepend "HALTED:" so operators see what kind of failure the
-    # appliance hit.
-    function compose_footer(   msg) {
-        if (phase == "halted") {
-            msg = "HALTED: " (data_msg != "" ? data_msg : "see console");
-        }
-        else if (data_msg != "") {
-            msg = data_msg;
-        }
-        else if (phase == "boot")      msg = "booting...";
-        else if (phase == "net-wait")  msg = "waiting for network...";
-        else if (phase == "net-none")  msg = "no network found -- plug in Ethernet";
-        else if (phase == "net-up")    msg = "interfaces up; starting HyperBEAM...";
-        else if (phase == "hb-wait")   msg = "waiting for HyperBEAM...";
-        else if (phase == "qr")        msg = "scan -> http://" data_ip ":8734/";
-        else                           msg = "";
-        # Centre on the second-to-last row.
-        n = length(msg);
-        if (n >= W) msg = substr(msg, 1, W);
-        n = length(msg);
-        pad = int((W - n) / 2);
-        fr = H - 2;
-        for (i = 0; i < pad; i++)    grid[fr, i] = " ";
-        for (i = 0; i < n; i++)      grid[fr, pad + i] = substr(msg, i + 1, 1);
-        for (i = pad + n; i < W; i++) grid[fr, i] = " ";
-        # Bottom banner: "LapEE . HyperBEAM on TPM-attested Linux"
-        banner = "LapEE . HyperBEAM . Trusted Execution Environment";
-        n = length(banner);
-        if (n >= W) banner = substr(banner, 1, W);
-        n = length(banner);
-        pad = int((W - n) / 2);
-        fr = H - 1;
-        for (i = 0; i < pad; i++)   grid[fr, i] = " ";
-        for (i = 0; i < n; i++)     grid[fr, pad + i] = substr(banner, i + 1, 1);
-        for (i = pad + n; i < W; i++) grid[fr, i] = " ";
-    }
-
-    function draw(   i, j, line, out) {
-        # Cursor home; then per-line, write then clear-to-EOL so
-        # stale chars from a shorter prior frame get wiped.
-        out = "\033[H";
-        for (i = 0; i < H; i++) {
-            line = "";
-            for (j = 0; j < W; j++) line = line grid[i, j];
-            out = out line "\033[K";
-            if (i < H - 1) out = out "\n";
-        }
-        print_console(out);
-    }
-
-    function print_console(s) {
-        # awk `printf' to a file path prefixed with "/dev/" goes
-        # through fopen; busybox awk handles that. Redirect to
-        # CONS so init can point us at any console.
-        printf "%s", s > CONS;
-        fflush(CONS);
-    }
-AWK_EOF
-    # After awk exits (phase=exit), restore the cursor.
+    # Cleanup
     printf '\033[?25h\n' > "$CONSOLE" 2>/dev/null || true
 }
 
-# -----------------------------------------------------------------
-# `set' subcommand: update state atomically.
-# -----------------------------------------------------------------
-do_set() {
-    phase=${1:-boot}; shift || true
-    line="phase=$phase"
-    for kv in "$@"; do
-        line="$line $kv"
-    done
-    # If setting phase=qr with ip=..., also pre-render the QR
-    # matrix so the daemon's next frame can pick it up. We fork
-    # qrencode once per ip change; idempotent otherwise.
-    for kv in "$@"; do
-        case "$kv" in
-            ip=*) _ip=${kv#ip=}
-                  if command -v qrencode >/dev/null 2>&1; then
-                      mkdir -p "$STATE_DIR" 2>/dev/null
-                      qrencode -l L -m 1 -t ASCII \
-                          -o "$STATE_DIR/qr.txt" \
-                          "http://$_ip:8734/" 2>/dev/null || true
-                  fi
-                  ;;
-        esac
-    done
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
-    tmp="$STATE_FILE.tmp.$$"
-    printf '%s\n' "$line" > "$tmp"
-    mv "$tmp" "$STATE_FILE"
+static_splash() {
+    _msg=${1:-LapEE}
+    printf '\n\n   %s\n\n' "$_msg" > "$CONSOLE" 2>/dev/null || true
 }
 
-# -----------------------------------------------------------------
-# Entry point.
-# -----------------------------------------------------------------
+do_set() {
+    _line="$*"
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    _tmp="$STATE_FILE.tmp.$$"
+    printf '%s\n' "$_line" > "$_tmp"
+    mv "$_tmp" "$STATE_FILE"
+}
+
 case "${1-}" in
     daemon) daemon ;;
     set)    shift; do_set "$@" ;;
     "")     static_splash ;;
-    *)
-        # Back-compat: treat unknown $1 as a status string and
-        # render the old static splash.
-        static_splash "$1"
-        ;;
+    *)      static_splash "$1" ;;
 esac

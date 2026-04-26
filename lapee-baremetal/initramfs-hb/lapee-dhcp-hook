@@ -64,6 +64,11 @@ case "${1:-unknown}" in
                     "${dns:-}" > "$PRIMARY"
                 echo "[net] $interface: bound ip=$ip" \
                      "gw=${router:-} dns=${dns:-none}  (primary)"
+                # No console-side banner. The splash daemon polls
+                # /run/lapee/primary-net for the IP and shows it
+                # itself once HB is ready -- /dev/console is owned
+                # by the splash; kibitzing here would just garble
+                # its current frame.
                 # Kick off QR pre-render with the bound IP so it's
                 # ready to overlay the moment we flip to qr phase.
                 # We stay on hb-wait until HB actually answers
