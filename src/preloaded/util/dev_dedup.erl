@@ -31,6 +31,7 @@ info(_M1) ->
 %% @doc Forward the keys and `set' functions to the message device, handle all
 %% others with deduplication. This allows the device to be used in any context
 %% where a key is called. If the `dedup-key
+-spec handle(binary(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 handle(<<"keys">>, M1, _M2, _Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, #{});
 handle(<<"set">>, M1, M2, Opts) ->
@@ -145,8 +146,8 @@ dedup_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => append_device(<<"+D2">>),
-				<<"3">> => append_device(<<"+D3">>)
+				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
+				<<"3">> => dev_stack:generate_append_device(<<"+D3">>)
 			},
 		<<"result">> => <<"INIT">>
 	},
@@ -177,8 +178,8 @@ dedup_with_multipass_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => append_device(<<"+D2">>),
-				<<"3">> => append_device(<<"+D3">>),
+				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
+				<<"3">> => dev_stack:generate_append_device(<<"+D3">>),
                 <<"4">> => <<"multipass@1.0">>
 			},
 		<<"result">> => <<"INIT">>,
@@ -195,16 +196,3 @@ dedup_with_multipass_test() ->
 		#{ <<"result">> := <<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">> },
 		Msg5
 	).
-
-%% @doc Generate a test device that appends to a `result' key.
-append_device(Separator) ->
-	#{
-		append =>
-			fun(M1 = #{ <<"pass">> := 3 }, _) ->
-                {ok, M1};
-			   (M1 = #{ <<"result">> := Existing }, #{ <<"bin">> := New }) ->
-				{ok, M1#{ <<"result">> =>
-					<< Existing/binary, Separator/binary, New/binary>>
-				}}
-			end
-	}.

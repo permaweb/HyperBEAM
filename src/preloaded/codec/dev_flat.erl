@@ -9,6 +9,7 @@
 -include("include/hb.hrl").
 
 %% @doc Route commitments through `httpsig@1.0'.
+-spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 commit(Msg, Req, Opts) ->
     {ok,
         hb_message:commit(
@@ -19,6 +20,7 @@ commit(Msg, Req, Opts) ->
     }.
 
 %% @doc Route verification through `httpsig@1.0'.
+-spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 verify(Msg, Req, Opts) ->
     {ok,
         hb_message:verify(
@@ -29,6 +31,8 @@ verify(Msg, Req, Opts) ->
     }.
 
 %% @doc Convert a flat map to a TABM.
+-spec from(binary() | #{ _ => _ }, #{ _ => _ }, map()) ->
+    {ok, binary() | #{ _ => _ }}.
 from(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(Map, Req, Opts) when is_map(Map) ->
     {ok,
@@ -59,6 +63,8 @@ from(Map, Req, Opts) when is_map(Map) ->
     }.
 
 %% @doc Convert a TABM to a flat map.
+-spec to(binary() | list() | #{ _ => _ }, #{ _ => _ }, map()) ->
+    {ok, binary() | #{ _ => _ }}.
 to(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(List, Req, Opts) when is_list(List) ->
     to(
