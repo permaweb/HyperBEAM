@@ -7,7 +7,7 @@
 # from source.
 #
 # Artefacts produced:
-#   build-alpine/vmlinuz-lapee
+#   build-kernel/vmlinuz-lapee
 #   work/initramfs-lapee.cpio.gz
 set -euo pipefail
 cd "$(dirname "$0")/.."

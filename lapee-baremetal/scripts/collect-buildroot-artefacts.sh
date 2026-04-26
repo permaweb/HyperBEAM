@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # collect-buildroot-artefacts.sh — copy Buildroot outputs from the lapee-build-m1
-# Docker volume into the worktree's build-alpine/ and work/ directories.
+# Docker volume into the worktree's build-kernel/ and work/ directories.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,10 +14,10 @@ docker run --rm --platform=linux/amd64 -v $VOLUME:/build $IMAGE \
     exit 1
 }
 
-mkdir -p build-alpine work
+mkdir -p build-kernel work
 
 # Copy kernel.
-docker run --rm --platform=linux/amd64 -v $VOLUME:/build -v "$PWD/build-alpine:/host-out" $IMAGE \
+docker run --rm --platform=linux/amd64 -v $VOLUME:/build -v "$PWD/build-kernel:/host-out" $IMAGE \
     bash -c "test -f /build/out/images/bzImage && cp /build/out/images/bzImage /host-out/vmlinuz-lapee && \
              ls -lh /host-out/vmlinuz-lapee"
 
@@ -39,5 +39,5 @@ docker run --rm --platform=linux/amd64 -v $VOLUME:/build -v "$PWD/work:/host-wor
 
 echo
 echo "=== Artefacts collected ==="
-ls -lh build-alpine/vmlinuz-lapee work/initramfs-lapee.cpio.gz 2>&1 || true
+ls -lh build-kernel/vmlinuz-lapee work/initramfs-lapee.cpio.gz 2>&1 || true
 [[ -f work/linux.config.built ]] && echo "kernel .config: work/linux.config.built"

@@ -18,7 +18,7 @@
 #
 #   make buildroot      build the LapEE kernel. ~15-30 min first
 #                       time, incremental ~3 min. Artefact:
-#                         build-alpine/vmlinuz-lapee
+#                         build-kernel/vmlinuz-lapee
 #
 #   make hb-release     compile the HyperBEAM release with
 #                       dev_tpm2 NIF + v1.2 devices. Syncs
@@ -129,7 +129,7 @@ hb-initramfs:
 
 # Defaults. Override on the command line to re-use the target for
 # alternate kernels, custom cmdlines, image sizes, or output paths.
-KERNEL     ?= build-alpine/vmlinuz-lapee
+KERNEL     ?= build-kernel/vmlinuz-lapee
 INITRAMFS  ?= work/initramfs-hb.cpio.gz
 SIZE_MIB   ?= 1024
 OUT        ?= work/lapee-usb.img
@@ -281,5 +281,5 @@ clean:
 	rm -rf work/lapee-usb.img work/lapee-usb-last.img \
 	       work/initramfs-hb.cpio.gz work/initramfs-hb.cpio.zst \
 	       work/usb-build/ out/local-capture/
-	@echo "cleaned. Kernel artefact at build-alpine/vmlinuz-lapee preserved;"
+	@echo "cleaned. Kernel artefact at build-kernel/vmlinuz-lapee preserved;"
 	@echo "run 'make buildroot-clean' to wipe that too."

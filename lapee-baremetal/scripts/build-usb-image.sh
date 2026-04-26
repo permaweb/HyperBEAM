@@ -38,7 +38,7 @@
 # Example:
 #
 #   ./scripts/build-usb-image.sh \
-#     --kernel build-alpine/vmlinuz-lapee \
+#     --kernel build-kernel/vmlinuz-lapee \
 #     --initramfs work/initramfs-hb.cpio.gz \
 #     --cmdline "console=tty0 console=ttyS0 ima_policy=tcb panic=10" \
 #     --image work/lapee-usb.img

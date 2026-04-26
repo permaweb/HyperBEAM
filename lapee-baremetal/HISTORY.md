@@ -551,7 +551,7 @@ A sub-agent was spawned in parallel (`afe2239c85c6f20ba`) to produce
 a Buildroot-built minimal kernel + rootfs in place of the Debian
 `linux-image-amd64` currently used by `boot-hb.sh`. As of this
 writeup the Buildroot kernel build is mid-compile on Rosetta;
-artefacts expected into `build-alpine/vmlinuz-lapee` and
+artefacts expected into `build-kernel/vmlinuz-lapee` and
 `work/initramfs-lapee.cpio.gz` when done. Does not block the
 dev_tpm2 demonstration.
 

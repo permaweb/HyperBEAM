@@ -47,7 +47,7 @@ make builders            # one-time; ~3 min; builds the Docker amd64
 make buildroot           # one-time (or whenever kernel config
                          #   changes); ~30-60 min first build, ~3 min
                          #   incremental; produces
-                         #   build-alpine/vmlinuz-lapee
+                         #   build-kernel/vmlinuz-lapee
 make hb-release          # HyperBEAM release with the TPM NIF + v1.2
                          #   devices; ~3 min incremental
 make hb-initramfs        # packs the release + busybox + lapee init +

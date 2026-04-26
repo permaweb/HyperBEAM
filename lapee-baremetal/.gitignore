@@ -1,6 +1,6 @@
 # Build outputs (regenerate via make).
 work/
-build-alpine/
+build-kernel/
 build-hyperbeam/
 buildroot/
 

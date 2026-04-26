@@ -15,7 +15,7 @@ Audit of the guest the paper-aligned `~tpm2@2.0a` flow actually boots
 
 | artefact | size | note |
 |---|---|---|
-| `build-alpine/vmlinuz-lapee` | 12 MB | Linux 6.6.51 x86_64 bzImage |
+| `build-kernel/vmlinuz-lapee` | 12 MB | Linux 6.6.51 x86_64 bzImage |
 | `work/initramfs-hb.cpio.gz`  | 82 MB gz | cpio+gz wire format |
 | — extracted                  | 197 MB | runtime footprint |
 | — `usr/lib/hyperbeam`        | 180 MB | HB release (biggest block) |
