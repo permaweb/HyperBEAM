@@ -21,14 +21,14 @@
 %% @returns {ok, Data} on success,
 %%          {error, not_found} if the key does not exist,
 %%          {error, Reason} or {failure, Reason} on failure.
-read(_M1, M2, Opts) ->
-    Location = hb_ao:get(<<"read">>, M2, Opts),
+-spec read(#{ _ => _ }, #{ read := binary(), accept => binary(), _ => _ }, map()) -> term().
+read(_M1, M2 = #{ <<"read">> := Location }, Opts) ->
     ?event({read, {key_extracted, Location}}),
     ?event(debug_gateway, cache_read),
     case hb_cache:read(Location, Opts) of
         {ok, Res} ->
             ?event({read, {cache_result, ok, Res}}),
-            case hb_ao:get(<<"accept">>, M2, Opts) of
+            case maps:get(<<"accept">>, M2, not_found) of
                 <<"application/aos-2">> ->
                     ?event(dev_cache, 
 						{read, 
@@ -80,13 +80,14 @@ read(_M1, M2, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns {ok, Path} on success, where Path indicates where the data was
 %%          stored, {error, Reason} or {failure, Reason} on failure.
+-spec write(#{ _ => _ }, #{ body => binary() | #{ _ => _ }, type => binary(), _ => _ }, map()) -> term().
 write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
             ?event(dev_cache, {write, {trusted_writer, true}}),
-            Body = hb_ao:get(<<"body">>, M2, not_found, Opts),
+            Body = maps:get(<<"body">>, M2, not_found),
             Type =
-                case hb_maps:get(<<"type">>, M2, <<"single">>, Opts) of
+                case maps:get(<<"type">>, M2, <<"single">>) of
                     <<"batch">> -> <<"batch">>;
                     _ -> <<"single">>
                 end,
@@ -135,22 +136,22 @@ write(_M1, M2, Opts) ->
     end.
 
 %% @doc Link a source to a destination in the cache.
-link(_Base, Req, Opts) ->
+-spec link(#{ _ => _ }, #{ destination := binary(), source := binary(), _ => _ }, map()) -> term().
+link(_Base, Req = #{ <<"destination">> := Destination, <<"source">> := Source }, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->
-            Destination = hb_ao:get(<<"destination">>, Req, Opts),
-            Source = hb_ao:get(<<"source">>, Req, Opts),
             wrap_store_result(hb_store:link(#{ Destination => Source }, Opts));
         false ->
             {error, not_authorized}
     end.
 
-group(_Base, Req, Opts) ->
+-spec group(#{ _ => _ }, #{ group := binary(), _ => _ }, map()) -> term().
+group(_Base, Req = #{ <<"group">> := Group }, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->
             wrap_store_result(
                 hb_store:group(
-                    #{ <<"group">> => hb_ao:get(<<"group">>, Req, Opts) },
+                    #{ <<"group">> => Group },
                     Opts
                 )
             );

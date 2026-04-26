@@ -71,6 +71,7 @@ parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     ).
 
 %% @doc The default handler for the scheduler device.
+-spec router(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 router(_, Base, Req, Opts) ->
     ?event({scheduler_router_called, {req, Req}, {opts, Opts}}),
     schedule(Base, Req, Opts).
@@ -79,19 +80,13 @@ router(_, Base, Req, Opts) ->
 %% assignment. Assumes that Base is a `dev_process' or similar message, having
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
+-spec next(#{ at_slot := integer(), _ => _ }, #{ _ => _ }, map()) -> term().
 next(Base, Req, Opts) ->
     ?event(debug_next, {scheduler_next_called, {base, Base}, {req, Req}}),
     ?event(next, started_next),
     ?event(next_profiling, started_next),
     Schedule = message_cached_assignments(Base, Opts),
-    LastProcessed =
-        hb_util:int(
-            hb_ao:get(
-                <<"at-slot">>,
-                Base,
-                Opts#{ <<"hashpath">> => ignore }
-            )
-        ),
+    LastProcessed = maps:get(<<"at-slot">>, Base),
     ?event(next_profiling, got_last_processed),
     ?event(debug_next, {in_message_cache, {schedule, Schedule}}),
     ?event(next, {last_processed, LastProcessed, {message_cache, length(Schedule)}}),
@@ -346,6 +341,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
     end.
 
 %% @doc Returns information about the entire scheduler.
+-spec status(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 status(_M1, _M2, _Opts) ->
     ?event(getting_scheduler_status),
     Wallet = dev_scheduler_registry:get_wallet(),
@@ -363,11 +359,15 @@ status(_M1, _M2, _Opts) ->
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
+-spec schedule(#{ _ => _ },
+    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    map()) ->
+    term().
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
-    case hb_util:key_to_atom(hb_ao:get(<<"method">>, Req, <<"GET">>, Opts)) of
-        post -> post_schedule(Base, Req, Opts);
-        get -> get_schedule(Base, Req, Opts)
+    case hb_util:to_lower(maps:get(<<"method">>, Req, <<"GET">>)) of
+        <<"post">> -> post_schedule(Base, Req, Opts);
+        <<"get">> -> get_schedule(Base, Req, Opts)
     end.
 
 %% @doc Schedules a new message on the SU. Searches Base for the appropriate ID,
@@ -715,6 +715,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
     end.
 
 %% @doc Returns information about the current slot for a process.
+-spec slot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
     ProcID = find_target_id(M1, M2, Opts),
@@ -815,17 +816,17 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
 get_schedule(Base, Req, Opts) ->
     ProcID = hb_util:human_id(find_target_id(Base, Req, Opts)),
     From =
-        case hb_ao:get(<<"from">>, Req, not_found, Opts) of
+        case maps:get(<<"from">>, Req, not_found) of
             not_found -> 0;
             X when X < 0 -> 0;
-            FromRes -> hb_util:int(FromRes)
+            FromRes -> FromRes
         end,
     To =
-        case hb_ao:get(<<"to">>, Req, not_found, Opts) of
+        case maps:get(<<"to">>, Req, not_found) of
             not_found -> undefined;
-            ToRes -> hb_util:int(ToRes)
+            ToRes -> ToRes
         end,
-    Format = hb_ao:get(<<"accept">>, Req, <<"application/http">>, Opts),
+    Format = maps:get(<<"accept">>, Req, <<"application/http">>),
     ?event(
         {parsed_get_schedule,
             {process, ProcID},

@@ -47,6 +47,7 @@
 %% @doc Estimate the cost of a transaction and decide whether to proceed with
 %% a request. The default behavior if `pricing-device' or `p4_balances' are
 %% not set is to proceed, so it is important that a user initialize them.
+-spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 request(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
@@ -169,6 +170,7 @@ request(State, Raw, NodeMsg) ->
     end.
 
 %% @doc Postprocess the request after it has been fulfilled.
+-spec response(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 response(State, RawResponse, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
@@ -265,6 +267,7 @@ response(State, RawResponse, NodeMsg) ->
     end.
 
 %% @doc Get the balance of a user in the ledger.
+-spec balance(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 balance(_, Req, NodeMsg) ->
     case hb_hook:find(<<"request">>, NodeMsg) of
         [] ->

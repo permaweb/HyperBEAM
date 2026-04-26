@@ -51,7 +51,7 @@
         secret => binary(),
         authorization => binary(),
         raw => boolean(),
-        alg => binary(),
+        alg => atom(),
         salt => binary(),
         iterations => integer(),
         key_length => integer(),
@@ -86,7 +86,7 @@ commit(Base, Req, Opts) ->
         secret => binary(),
         authorization => binary(),
         raw => boolean(),
-        alg => binary(),
+        alg => atom(),
         salt => binary(),
         iterations => integer(),
         key_length => integer(),
@@ -95,9 +95,9 @@ commit(Base, Req, Opts) ->
     map()) ->
     {ok, #{ _ => _ }}.
 verify(Base, RawReq, Opts) ->
-    ?event({verify_invoked, {priv_base, Base}, {priv_req, RawReq}}),
+    ?event({verify_invoked, {base, Base}, {req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
-    ?event({verify_found_key, {priv_key, Key}, {priv_base, Base}, {priv_req, RawReq}}),
+    ?event({verify_found_key, {key, Key}, {base, Base}, {req, RawReq}}),
     {ok, VerifyRes} =
         hb_ao:resolve(
             #{ <<"device">> => <<"httpsig@1.0">> },
@@ -119,7 +119,7 @@ verify(Base, RawReq, Opts) ->
         secret => binary(),
         authorization => binary(),
         raw => boolean(),
-        alg => binary(),
+        alg => atom(),
         salt => binary(),
         iterations => integer(),
         key_length => integer(),
@@ -127,18 +127,16 @@ verify(Base, RawReq, Opts) ->
     },
     map()) ->
     {ok, binary()} | {error, #{ _ => _ }}.
-generate(_Msg, ReqLink, Opts) when ?IS_LINK(ReqLink) ->
-    generate(_Msg, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
     {ok, Secret};
-generate(_Msg, Req, Opts) ->
-    case hb_maps:get(<<"authorization">>, Req, undefined, Opts) of
+generate(_Msg, Req, _Opts) ->
+    case maps:get(<<"authorization">>, Req, undefined) of
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
-            ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
-            case hb_maps:get(<<"raw">>, Req, false, Opts) of
+            ?event(key_gen, {generated_key, {auth, Auth}, {decoded, Decoded}}),
+            case maps:get(<<"raw">>, Req, false) of
                 true -> {ok, Decoded};
-                false -> derive_key(Decoded, Req, Opts)
+                false -> derive_key(Decoded, Req, _Opts)
             end;
         undefined ->
             {error,
@@ -160,17 +158,11 @@ generate(_Msg, Req, Opts) ->
 
 %% @doc Derive a key from the authentication information using the PBKDF2
 %% algorithm and user specified parameters.
-derive_key(Decoded, Req, Opts) ->
-    Alg = hb_util:atom(hb_maps:get(<<"alg">>, Req, <<"sha256">>, Opts)),
-    Salt =
-        hb_maps:get(
-            <<"salt">>,
-            Req,
-            hb_crypto:sha256(?DEFAULT_SALT),
-            Opts
-        ),
-    Iterations = hb_maps:get(<<"iterations">>, Req, 2 * 600_000, Opts),
-    KeyLength = hb_maps:get(<<"key-length">>, Req, 64, Opts),
+derive_key(Decoded, Req, _Opts) ->
+    Alg = maps:get(<<"alg">>, Req, sha256),
+    Salt = maps:get(<<"salt">>, Req, hb_crypto:sha256(?DEFAULT_SALT)),
+    Iterations = maps:get(<<"iterations">>, Req, 2 * 600_000),
+    KeyLength = maps:get(<<"key-length">>, Req, 64),
     ?event(key_gen,
         {derive_key,
             {alg, Alg},

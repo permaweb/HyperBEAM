@@ -12,6 +12,7 @@ info(_Opts) ->
     }.
 
 %% @doc Try to resolve 52char subdomain back to its original TX ID
+-spec get(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 get(Key, _, _HookMsg, _Opts) ->
     ?event({resolve_52char, {key, Key}}),
     case decode(Key) of

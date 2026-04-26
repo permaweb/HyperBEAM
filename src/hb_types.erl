@@ -4,7 +4,7 @@
 -export([extract/2, vary/5, vary/7]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
--define(EXTRACT_CACHE_TAG, {hb_types, extract, 1}).
+-define(EXTRACT_CACHE_TAG, {hb_types, extract, 2}).
 
 %% @doc Apply a device's declared base/request schemas to the messages that will
 %% participate in one AO-Core key execution. If no schema is provided, we return
@@ -37,27 +37,22 @@ vary(Device, Key, Base, Request, Opts) ->
 %% @doc Apply the schema for a resolved device function. This is the AO-Core
 %% entrypoint: the resolver has already mapped a key to its Erlang function.
 vary(Device, Key, Func, AddKey, Base, Request, Opts) ->
-    case extract(Device, Opts) of
-        {ok, #{ <<"keys">> := KeySchemas }} ->
-            case function_schema(Func, Key, KeySchemas) of
-                undefined ->
-                    {ok, Base, Request, none};
-                Schema ->
-                    {BaseSchema, ReqSchema, ReturnSchema} =
-                        execution_schemas(Schema, AddKey),
-                    Req =
-                        case AddKey of
-                            false -> Request;
-                            _ -> Request#{ <<"path">> => Key }
-                        end,
-                    {ok,
-                        apply_schema(implicit_base(BaseSchema), Base, Opts),
-                        apply_schema(implicit_request(ReqSchema), Req, Opts),
-                        overlay(ReturnSchema)
-                    }
-            end;
-        {error, _Reason} ->
-            {ok, Base, Request, none}
+    case function_schema(Device, Func, Key, Opts) of
+        undefined ->
+            {ok, Base, Request, none};
+        Schema ->
+            {BaseSchema, ReqSchema, ReturnSchema} =
+                execution_schemas(Schema, AddKey),
+            Req =
+                case AddKey of
+                    false -> Request;
+                    _ -> Request#{ <<"path">> => Key }
+                end,
+            {ok,
+                apply_schema(implicit_base(BaseSchema), Base, Opts),
+                apply_schema(implicit_request(ReqSchema), Req, Opts),
+                overlay(ReturnSchema)
+            }
     end.
 
 %% @doc Extract the public type schema for a device.
@@ -130,7 +125,7 @@ do_extract(Module) ->
                     fun(Spec, Acc) ->
                         case spec_to_schema(Spec, TypeEnv) of
                             false -> Acc;
-                            {Key, Schema} -> Acc#{ Key => Schema }
+                            {Key, Schema} -> store_schema(Key, Schema, Acc)
                         end
                     end,
                     #{},
@@ -206,15 +201,78 @@ maybe_nth(N, List, Default) ->
         Value -> Value
     end.
 
+store_schema(Key, Schema, Acc) ->
+    case maps:get(Key, Acc, undefined) of
+        undefined ->
+            Acc#{ Key => Schema };
+        Existing ->
+            ExistingArity = maps:get(<<"arity">>, Existing),
+            SchemaArity = maps:get(<<"arity">>, Schema),
+            Overloads0 =
+                maps:get(
+                    <<"overloads">>,
+                    Existing,
+                    #{ ExistingArity => maps:without([<<"overloads">>], Existing) }
+                ),
+            Acc#{
+                Key =>
+                    Schema#{
+                        <<"overloads">> =>
+                            Overloads0#{
+                                SchemaArity => maps:without([<<"overloads">>], Schema)
+                            }
+                    }
+            }
+    end.
+
+function_schema(Device, Func, Key, Opts) ->
+    case extract(Device, Opts) of
+        {ok, #{ <<"keys">> := KeySchemas }} ->
+            case function_schema(Func, Key, KeySchemas) of
+                undefined -> function_module_schema(Device, Func, Key, Opts);
+                Schema -> Schema
+            end;
+        {error, _Reason} ->
+            function_module_schema(Device, Func, Key, Opts)
+    end.
+
+function_module_schema(Device, Func, Key, Opts) ->
+    case erlang:fun_info(Func, module) of
+        {module, Device} ->
+            undefined;
+        {module, Module} ->
+            case extract(Module, Opts) of
+                {ok, #{ <<"keys">> := KeySchemas }} ->
+                    function_schema(Func, Key, KeySchemas);
+                {error, _Reason} ->
+                    undefined
+            end;
+        _ ->
+            undefined
+    end.
+
 function_schema(Func, Key, KeySchemas) ->
+    {arity, Arity} = erlang:fun_info(Func, arity),
     FuncSchema =
         case erlang:fun_info(Func, name) of
-            {name, Name} -> maps:get(normalize_name(Name), KeySchemas, undefined);
+            {name, Name} -> named_schema(Name, Arity, KeySchemas);
             _ -> undefined
         end,
     case FuncSchema of
-        undefined -> maps:get(normalize_name(Key), KeySchemas, undefined);
+        undefined -> named_schema(Key, Arity, KeySchemas);
         Schema -> Schema
+    end.
+
+named_schema(Name, Arity, KeySchemas) ->
+    case maps:get(normalize_name(Name), KeySchemas, undefined) of
+        undefined ->
+            undefined;
+        #{ <<"overloads">> := Overloads } ->
+            maps:get(Arity, Overloads, undefined);
+        #{ <<"arity">> := Arity } = Schema ->
+            Schema;
+        _ ->
+            undefined
     end.
 
 execution_schemas(Schema, AddKey) ->
@@ -444,27 +502,34 @@ apply_schema(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"all">> := Al
         when is_map(Message) ->
     ?event(apply_schema, {message, {keys, Keys}, {all, All}, {message, Message}}),
     % Apply declared keys first so their coerced values take precedence.
-    Explicit =
+    {Explicit, Changed} =
         lists:foldl(
-            fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}, Acc) ->
+            fun({Key, #{ <<"presence">> := Presence, <<"type">> := Type }}, {Acc, Changed}) ->
                 ?event({apply_schema_find, {key, Key}, {message, Message}, {presence, Presence}, {type, Type}}),
                 % If we find the key in the message, apply the schema to the value.
                 % If the key is not found and the field is required, throw an error.
                 % If the key is not found and the field is optional, skip it.
                 case hb_maps:find(Key, Message, Opts) of
                     {ok, Value} ->
-                        Acc#{ Key => apply_schema(Type, Value, Opts) };
+                        Applied = apply_schema(Type, Value, Opts),
+                        RawValue = maps:get(Key, Message, '$hb_types_missing'),
+                        {
+                            Acc#{ Key => Applied },
+                            Changed orelse Applied =/= RawValue
+                        };
                     error when Presence =:= required ->
                         throw({required_key_missing, Key});
                     error ->
-                        Acc
+                        {Acc, Changed}
                 end 
             end,
-            #{},
+            {#{}, false},
             maps:to_list(Keys)
         ),
     % If `all` is true, pass through any unmatched keys unchanged.
     case All of
+        true when not Changed ->
+            Message;
         true ->
             maps:merge(
                 maps:without(maps:keys(Keys), Message),

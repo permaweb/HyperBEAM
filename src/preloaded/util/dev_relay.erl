@@ -29,6 +29,7 @@
 %% - `method': The method to use for the request. Defaults to the original method.
 %% - `commit-request': Whether the request should be committed before dispatching.
 %% Defaults to `false'.
+-spec call(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 call(M1, RawM2, Opts) ->
     ?event({relay_call, {m1, M1}, {raw_m2, RawM2}}),
     {ok, BaseTarget} = hb_message:find_target(M1, RawM2, Opts),
@@ -164,11 +165,13 @@ call(M1, RawM2, Opts) ->
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
+-spec cast(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 cast(M1, M2, Opts) ->
     spawn(fun() -> call(M1, M2, Opts) end),
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
+-spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 request(_Base, Req, Opts) ->
     {ok,
         #{

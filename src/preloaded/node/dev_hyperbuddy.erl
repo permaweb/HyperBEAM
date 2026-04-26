@@ -34,6 +34,7 @@ info(Opts) ->
     }.
 
 %% @doc The main HTML page for the REPL device.
+-spec metrics(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 metrics(_, Req, Opts) ->
     case hb_opts:get(prometheus, not hb_features:test(), Opts) of
         true ->
@@ -63,6 +64,7 @@ metrics(_, Req, Opts) ->
     end.
 
 %% @doc Return the current event counters as a message.
+-spec events(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 events(_, _Req, _Opts) ->
     {ok, hb_event:counters()}.
 
@@ -86,6 +88,7 @@ events(_, _Req, _Opts) ->
 %% ```
 %% GET /.../~hyperbuddy@1.0/format=request?truncate-keys=20
 %% ```
+-spec format(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 format(Base, Req, Opts) ->
     % Find the scope of the environment that should be printed.
     Scope =
@@ -140,6 +143,7 @@ format(Base, Req, Opts) ->
     }.
 
 %% @doc Test key for validating the behavior of the `500` HTTP response.
+-spec throw(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 throw(_Msg, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"Forced-throw unavailable in `prod` mode.">>};
@@ -148,6 +152,7 @@ throw(_Msg, _Req, Opts) ->
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly
 %% listed in the `routes' field of the `info/1' return value.
+-spec serve(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 serve(<<"keys">>, M1, _M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
 serve(<<"set">>, M1, M2, Opts) ->

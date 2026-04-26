@@ -58,6 +58,7 @@ is_operator(_Base, Req, NodeMsg) ->
 %% Subsequently, rather than embedding the `git-short-hash-length', for the
 %% avoidance of doubt, we include the short hash separately, as well as its long
 %% hash.
+-spec build(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 build(_, _, _NodeMsg) ->
     {ok,
         #{
@@ -114,6 +115,7 @@ handle_initialize([], _NodeMsg) ->
 %% @doc Get/set the node message. If the request is a `POST', we check that the
 %% request is signed by the owner of the node. If not, we return the node message
 %% as-is, aside all keys that are private (according to `hb_private').
+-spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 info(_, Request, NodeMsg) ->
     case hb_ao:get(<<"method">>, Request, NodeMsg) of
         <<"POST">> ->
@@ -409,6 +411,7 @@ maybe_sign(Res, NodeMsg) ->
 
 %% @doc Check if the request in question is signed by a given `role' on the node.
 %% The `role' can be one of `operator' or `initiator'.
+-spec is(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
