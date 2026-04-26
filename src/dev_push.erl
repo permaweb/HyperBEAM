@@ -1459,7 +1459,7 @@ test_compute_push_hook_idempotent() ->
 setup_two_process_message() ->
     dev_process_test_vectors:init(),
     Opts = #{
-        <<"priv-wallet">> => ar_wallet:new(),
+        <<"priv-wallet">> => hb:wallet(),
         <<"cache-control">> => <<"always">>,
         <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)]
     },

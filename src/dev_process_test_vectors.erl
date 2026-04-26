@@ -526,12 +526,12 @@ now_results_test_parallel_() ->
     end}.
 
 prior_results_accessible_test_parallel_() ->
-    {timeout, 30, fun() ->
-        Opts = test_opts(),
-        Base = aos_process(Opts),
-        schedule_aos_call(Base, <<"return 1+1">>, Opts),
-        schedule_aos_call(Base, <<"return 2+2">>, Opts),
-        ?assertEqual(
+	{timeout, 30, fun() ->
+		Opts = test_opts(),
+		Base = aos_process(Opts),
+		schedule_aos_call(Base, <<"return 1+1">>, Opts),
+		schedule_aos_call(Base, <<"return 2+2">>, Opts),
+		?assertEqual(
             {ok, <<"4">>},
             hb_ao:resolve(Base, <<"now/results/data">>, Opts)
         ),
@@ -541,11 +541,11 @@ prior_results_accessible_test_parallel_() ->
                 #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
                 Opts
             ),
-        ?assertMatch(
+		?assertMatch(
             #{ <<"results">> := #{ <<"data">> := <<"4">> } },
             hb_cache:ensure_all_loaded(Results, Opts)
-        )
-    end}.
+		)
+	end}.
 
 persistent_process_test_parallel() ->
     {timeout, 30, fun() ->
