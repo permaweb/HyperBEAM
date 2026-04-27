@@ -193,7 +193,8 @@ start([StoreOpts | Rest], Req, Opts) ->
         ok -> start(Rest, Req, Opts);
         {ok, _} -> start(Rest, Req, Opts);
         {error, not_found} -> start(Rest, Req, Opts);
-        Result -> Result
+        Other ->
+            error({store_start_failed, StoreOpts, Other})
     end.
 
 stop(StoreOrOpts) ->
@@ -560,15 +561,25 @@ start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     end.
 
 call_store_start(Mod, Store, Req, Opts) ->
+    {module, Mod} = code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, start, 3) of
         true -> Mod:start(Store, Req, Opts);
-        false -> Mod:start(Store)
+        false ->
+            case erlang:function_exported(Mod, start, 1) of
+                true -> Mod:start(Store);
+                false -> ok
+            end
     end.
 
 call_store_stop(Mod, Store) ->
+    {module, Mod} = code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, stop, 3) of
         true -> Mod:stop(Store, #{}, Store);
-        false -> Mod:stop(Store)
+        false ->
+            case erlang:function_exported(Mod, stop, 1) of
+                true -> Mod:stop(Store);
+                false -> ok
+            end
     end.
 
 is_store_spec(#{ <<"store-module">> := _ }) -> true;
@@ -1294,3 +1305,19 @@ get_store_scope_access_test() ->
     ?assertEqual(remote, get_store_scope(WriteStore)),
     AdminStore = #{<<"store-module">> => hb_store_remote_node, <<"access">> => [<<"admin">>]},
     ?assertEqual(remote, get_store_scope(AdminStore)).
+
+%% @doc `start/3' must fail fast on a per-store failure: a misconfigured
+%% or unreachable store is operator-visible misconfiguration, not a state
+%% to silently tolerate. Aborting boot here surfaces the broken entry
+%% with its full reason instead of letting the node come up with a
+%% partially-initialised store list whose later side-effects (e.g.
+%% prometheus declarations) never ran.
+start_fails_fast_on_per_store_failure_test() ->
+    BadStore = #{
+        <<"store-module">> => hb_nonexistent_store_for_test,
+        <<"name">> => <<"bogus">>
+    },
+    ?assertError(
+        {store_start_failed, BadStore, _},
+        start([BadStore], #{}, #{})
+    ).
