@@ -6,7 +6,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
--spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
 info(_) -> 
 	#{ default => fun handler/4 }.
 
@@ -33,7 +33,7 @@ handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
--spec once(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec once(#{ _ => _ }, #{ _ => _ }, _) -> _.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
@@ -79,7 +79,7 @@ once_worker(Path, Req, Opts) ->
 
 
 %% @doc Exported function for scheduling a recurring message.
--spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, map()) -> term().
+-spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, _) -> _.
 every(_Base, Req, Opts) ->
 	case {
 		extract_path(Req, Opts),
@@ -99,14 +99,13 @@ every(_Base, Req, Opts) ->
 				end,
 				ReqMsgID = hb_message:id(Req, all, Opts),
 				ModifiedReq =
-                    hb_maps:without(
+                    maps:without(
                         [
                             <<"interval">>,
                             <<"cron-path">>,
                             maps:get(<<"every">>, Req, <<"every">>)
                         ],
-                        Req,
-                        Opts
+                        Req
                     ),
 				Pid =
                     spawn(
@@ -140,7 +139,7 @@ every(_Base, Req, Opts) ->
 	end.
 
 %% @doc Exported function for stopping a scheduled task.
--spec stop(#{ _ => _ }, #{ task := binary(), _ => _ }, map()) -> term().
+-spec stop(#{ _ => _ }, #{ task := binary(), _ => _ }, _) -> _.
 stop(_Base, Req, _Opts) ->
 	case maps:get(<<"task">>, Req, not_found) of
 		not_found ->

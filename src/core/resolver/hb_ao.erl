@@ -421,7 +421,7 @@ resolve_stage(2, RawBase, Req, Opts) ->
     ?event(debug_ao_core, {stage, 2, prepare_vary}, Opts),
     case maybe_direct_cache_lookup(RawBase, Req, Opts) of
         continue ->
-            Base = ensure_message_loaded(RawBase, Opts),
+            Base = anchor_loaded_base(RawBase, ensure_message_loaded(RawBase, Opts)),
             case is_map(Base) andalso is_map(Req) of
                 false ->
                     legacy_cache_lookup(Base, Req, Opts);
@@ -851,11 +851,11 @@ normalize_opts(Opts) when is_map(Opts) ->
 normalize_opts(_Opts) ->
     #{}.
 
-cache_store_opts(OldBase, OldReq, Base, Req, Overlay, Opts)
-        when OldBase =/= Base; OldReq =/= Req; Overlay =/= none ->
-    Opts#{ cache_hashpath_maps => true };
-cache_store_opts(_OldBase, _OldReq, _Base, _Req, _Overlay, Opts) ->
-    Opts.
+cache_store_opts(OldBase, OldReq, Base, Req, Overlay, Opts) ->
+    case (OldBase =/= Base) orelse (OldReq =/= Req) orelse (Overlay =/= none) of
+        true -> Opts#{ cache_hashpath_maps => true };
+        false -> Opts
+    end.
 
 strip_overlay_marker(none, Res, _Opts) ->
     Res;
@@ -1029,6 +1029,15 @@ ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
     Msg.
+
+anchor_loaded_base(RawBase, Base) when ?IS_ID(RawBase), is_map(Base) ->
+    Priv = hb_private:from_message(Base),
+    case maps:is_key(<<"hashpath">>, Priv) of
+        true -> Base;
+        false -> Base#{ <<"priv">> => Priv#{ <<"hashpath">> => RawBase }}
+    end;
+anchor_loaded_base(_RawBase, Base) ->
+    Base.
 
 %% @doc Catch all return if we are in an infinite loop.
 error_infinite(Base, Req, Opts) ->

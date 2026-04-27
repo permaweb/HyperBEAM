@@ -40,10 +40,10 @@
 %% 429 status code and response if the limit is exceeded. The response includes
 %% a `retry-after' header that indicates the number of seconds the client should
 %% wait before making the next request.
--spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec request(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, _) -> _.
 request(_, Msg, Opts) ->
     ?event(rate_limit, {request, {msg, Msg}}),
-    Reference = request_reference(hb_maps:get(<<"request">>, Msg, #{}, Opts), Opts),
+    Reference = request_reference(maps:get(<<"request">>, Msg), Opts),
     case is_limited(Reference, Opts) of
         {true, Balance} ->
             ?event(

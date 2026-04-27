@@ -12,11 +12,11 @@
 -define(STATUS_TIMEOUT, 100).
 
 %% @doc Initialize the device.
--spec init(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(Msg, _Req, _Opts) -> {ok, Msg}.
 
 %% @doc Normalize the device.
--spec normalize(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec normalize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->
@@ -38,7 +38,7 @@ normalize(Msg, Req, Opts) ->
 
 %% @doc Genesis-wasm device compute handler.
 %% Normal compute execution through external CU with state persistence
--spec compute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec compute(#{ _ => _ }, #{ _ => _ }, _) -> _.
 compute(Msg, Req, Opts) ->
     % Validate whether the genesis-wasm feature is enabled.
     case delegate_request(Msg, Req, Opts) of
@@ -66,7 +66,7 @@ compute(Msg, Req, Opts) ->
     end.
 
 %% @doc Snapshot the state of the process via the `delegated-compute@1.0' device.
--spec snapshot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
 snapshot(Msg, Req, Opts) ->
     delegate_request(Msg, Req, Opts).
 
@@ -357,7 +357,7 @@ ensure_started(Opts) ->
 
 %% @doc Find either a specific checkpoint by its ID, or find the most recent
 %% checkpoint via GraphQL.
--spec import(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec import(#{ _ => _ }, #{ _ => _ }, _) -> _.
 import(Base, Req, Opts) ->
     PassedProcID = hb_maps:find(<<"process-id">>, Req, Opts),
     ProcMsg =

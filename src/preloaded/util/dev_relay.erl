@@ -29,7 +29,7 @@
 %% - `method': The method to use for the request. Defaults to the original method.
 %% - `commit-request': Whether the request should be committed before dispatching.
 %% Defaults to `false'.
--spec call(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec call(#{ _ => _ }, #{ _ => _ }, _) -> _.
 call(M1, RawM2, Opts) ->
     ?event({relay_call, {m1, M1}, {raw_m2, RawM2}}),
     {ok, BaseTarget} = hb_message:find_target(M1, RawM2, Opts),
@@ -95,15 +95,10 @@ call(M1, RawM2, Opts) ->
         },
     TargetMod3 =
         case RelayDevice of
-            not_found -> hb_maps:without([<<"device">>], TargetMod2);
+            not_found -> maps:remove(<<"device">>, TargetMod2);
             _ -> TargetMod2#{<<"device">> => RelayDevice}
         end,
-    TargetMod4 = 
-        hb_maps:without(
-            [<<"commitments">>],
-            TargetMod3,
-            Opts
-        ),
+    TargetMod4 = maps:remove(<<"commitments">>, TargetMod3),
     Commit =
         hb_ao:get_first(
             [
@@ -158,21 +153,21 @@ call(M1, RawM2, Opts) ->
     end,
     case Res of
         {ok, R} ->
-            {ok, hb_maps:without([<<"set-cookie">>], R)};
+            {ok, maps:remove(<<"set-cookie">>, R)};
         Err -> Err
     end.
 
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
--spec cast(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec cast(#{ _ => _ }, #{ _ => _ }, _) -> _.
 cast(M1, M2, Opts) ->
     spawn(fun() -> call(M1, M2, Opts) end),
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
--spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
-request(_Base, Req, Opts) ->
+-spec request(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, _) -> _.
+request(_Base, Req, _Opts) ->
     {ok,
         #{
             <<"body">> =>
@@ -181,8 +176,7 @@ request(_Base, Req, Opts) ->
                     #{
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
-                        <<"body">> =>
-                            hb_ao:get(<<"request">>, Req, Opts#{ <<"hashpath">> => ignore })
+                        <<"body">> => maps:get(<<"request">>, Req)
                     }
                 ]
         }

@@ -40,7 +40,8 @@
 -module(hb_cache).
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
--export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2]).
+-export([write_result/3, write_result/4, link_result/4, link/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -512,8 +513,112 @@ write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ?event({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
     {ok, Path} = write(Msg, Opts),
-    hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
+    HPBin = hb_path:to_binary(HP),
+    LinkReq =
+        case hb_store:resolve(Store, HPBin, Opts) of
+            {ok, HPBin} -> #{ HPBin => Path };
+            {ok, ResolvedHP} -> #{ HPBin => Path, ResolvedHP => Path };
+            _ -> #{ HPBin => Path }
+        end,
+    ok = hb_store:link(Store, LinkReq, Opts),
     {ok, Path}.
+
+%% @doc Write a result once, then link one or more `{Base, Req}' edges to it.
+write_result(Base, Req, Res, Opts) ->
+    write_result([{Base, Req}], Res, Opts).
+write_result(Edges, Res, Opts) when is_list(Edges) ->
+    {ok, Path} = write(Res, Opts),
+    lists:foreach(
+        fun({EdgeBase, EdgeReq}) ->
+            maybe_write_edge_part(EdgeBase, Opts),
+            maybe_write_edge_part(EdgeReq, Opts),
+            ok = link_result(EdgeBase, EdgeReq, Path, Opts)
+        end,
+        Edges
+    ),
+    {ok, Path}.
+
+maybe_write_edge_part(Msg, Opts) when is_map(Msg); is_list(Msg) ->
+    {ok, _} = write(Msg, Opts),
+    ok;
+maybe_write_edge_part(_Ref, _Opts) ->
+    ok.
+
+%% @doc Link a `{Base, Req}' result edge to an existing stored result path.
+link_result(Base, Req, Existing, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    EdgePath = result_edge_path(Base, Req, Opts),
+    ExistingPath = hb_path:to_binary(Existing),
+    case hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts) of
+        ok ->
+            ok;
+        Error ->
+            case ?IS_ID(Base) of
+                true ->
+                    ResolvedEdgePath = resolved_result_edge_path(Base, Req, Opts),
+                    case ResolvedEdgePath of
+                        EdgePath -> Error;
+                        _ -> hb_store:link(Store, #{ ResolvedEdgePath => ExistingPath }, Opts)
+                    end;
+                false ->
+                    Error
+            end
+    end.
+
+result_edge_path(BaseID, ReqID, Opts) when ?IS_ID(BaseID) and ?IS_ID(ReqID) ->
+    result_edge_path_from_id(BaseID, ReqID, Opts);
+result_edge_path(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
+    result_hashpath(BaseID, Req, Opts);
+result_edge_path(BaseID, Key, Opts) when ?IS_ID(BaseID) and is_binary(Key) ->
+    result_edge_path_from_id(BaseID, hb_ao:normalize_key(Key, Opts), Opts);
+result_edge_path(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
+    hb_path:hashpath(BaseMsg, Req, Opts).
+
+result_hashpath(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
+    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    result_edge_path_from_id(BaseID, ReqID, Opts).
+
+result_edge_path_from_id(BaseID, Suffix, _Opts) ->
+    hb_path:to_binary([BaseID, Suffix]).
+
+resolved_result_edge_path(BaseID, ReqID, Opts) when ?IS_ID(BaseID) and ?IS_ID(ReqID) ->
+    resolved_result_edge_path_from_id(BaseID, ReqID, Opts);
+resolved_result_edge_path(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
+    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    resolved_result_edge_path_from_id(BaseID, ReqID, Opts);
+resolved_result_edge_path(BaseID, Key, Opts) when ?IS_ID(BaseID) and is_binary(Key) ->
+    resolved_result_edge_path_from_id(BaseID, hb_ao:normalize_key(Key, Opts), Opts).
+
+resolved_result_edge_path_from_id(BaseID, Suffix, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    BasePath = result_edge_base_path(Store, BaseID, Opts),
+    hb_path:to_binary([BasePath, Suffix]).
+
+result_edge_base_path(Store, BaseID, Opts) ->
+    Probe = <<"__hb_cache_result_probe__">>,
+    case hb_store:resolve(Store, BaseID, Opts) of
+        {ok, BaseID} ->
+            case hb_store:resolve(Store, [BaseID, Probe], Opts) of
+                {ok, ResolvedProbe} -> strip_path_suffix(ResolvedProbe, Probe, BaseID);
+                _ -> BaseID
+            end;
+        {ok, ResolvedBase} ->
+            ResolvedBase;
+        _ ->
+            BaseID
+    end.
+
+strip_path_suffix(Path, Suffix, Default) ->
+    BinSuffix = <<"/", Suffix/binary>>,
+    PathSize = byte_size(Path),
+    SuffixSize = byte_size(BinSuffix),
+    case
+        PathSize > SuffixSize
+            andalso binary:part(Path, PathSize - SuffixSize, SuffixSize) =:= BinSuffix
+    of
+        true -> binary:part(Path, 0, PathSize - SuffixSize);
+        false -> Default
+    end.
 
 %% @doc Write a raw binary keys into the store and link it at a given hashpath.
 write_binary(Hashpath, Bin, Opts) ->
@@ -1228,6 +1333,27 @@ test_raw_match_read(Store) ->
         hb_maps:get(<<"body">>, RawMsg, undefined, RawOpts)
     ).
 
+test_write_result_edges(Store) ->
+    hb_store:reset(Store),
+    Opts = #{ <<"store">> => Store },
+    Base = #{ <<"device">> => <<"process@1.0">>, <<"kind">> => <<"test">> },
+    {ok, BaseID} = write(Base, Opts),
+    SlotReq = #{ <<"path">> => <<"compute">>, <<"slot">> => 7 },
+    LatestReq = #{ <<"path">> => <<"latest">> },
+    Res = #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => 7 },
+    {ok, WrittenID} = write_result([{BaseID, SlotReq}, {BaseID, LatestReq}], Res, Opts),
+    {ok, WrittenRes} = read(WrittenID, Opts),
+    ?assert(hb_message:match(Res, WrittenRes, strict, Opts)),
+    {hit, {ok, SlotRes}} = read_resolved(BaseID, SlotReq, Opts),
+    ?assert(hb_message:match(Res, SlotRes, strict, Opts)),
+    {hit, {ok, LatestRes}} = read_resolved(BaseID, LatestReq, Opts),
+    ?assert(hb_message:match(Res, LatestRes, strict, Opts)),
+    NextReq = #{ <<"path">> => <<"compute">>, <<"slot">> => 8 },
+    NextRes = Res#{ <<"at-slot">> := 8 },
+    {ok, _} = write_result(BaseID, NextReq, NextRes, Opts),
+    {hit, {ok, NextSlotRes}} = read_resolved(BaseID, NextReq, Opts),
+    ?assert(hb_message:match(NextRes, NextSlotRes, strict, Opts)).
+
 cache_suite_test_() ->
     hb_store:generate_test_suite([
         {"store unsigned empty message",
@@ -1242,7 +1368,8 @@ cache_suite_test_() ->
         {"match message", fun test_match_message/1},
         {"match linked message", fun test_match_linked_message/1},
         {"match typed message", fun test_match_typed_message/1},
-        {"raw match read", fun test_raw_match_read/1}
+        {"raw match read", fun test_raw_match_read/1},
+        {"write result edges", fun test_write_result_edges/1}
     ]).
 
 %% @doc Test that message whose device is `#{}' cannot be written. If it were to

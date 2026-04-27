@@ -56,8 +56,7 @@
 %% @param NodeOpts A map of configuration options for verification
 %% @returns `{ok, Binary}' with "true" on successful verification, or
 %% `{error, Reason}' on failure with specific error details
--spec verify(#{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, binary()} | {error, term()}.
+-spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
 verify(M1, M2, NodeOpts) ->
     ?event(snp_verify, verify_called),
     maybe
@@ -123,8 +122,7 @@ verify(M1, M2, NodeOpts) ->
 %% @param Opts A map of configuration options for report generation
 %% @returns `{ok, Map}' on success with the complete report message, or
 %% `{error, Reason}' on failure with error details
--spec generate(#{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, map()} | {error, term()}.
+-spec generate(#{ _ => _ }, #{ _ => _ }, _) -> _.
 generate(_M1, _M2, Opts) ->
     maybe
         LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),
@@ -201,8 +199,8 @@ generate(_M1, _M2, Opts) ->
 %% @param NodeOpts A map of configuration options
 %% @returns `{ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}}'
 %% on success with all extracted components, or `{error, Reason}' on failure
--spec extract_and_normalize_message(M2 :: term(), NodeOpts :: map()) ->
-    {ok, {map(), binary(), binary(), binary(), map()}} | {error, term()}.
+-spec extract_and_normalize_message(_, _) ->
+    {ok, {_, binary(), binary(), binary(), _}} | {error, _}.
 extract_and_normalize_message(M2, NodeOpts) ->
     maybe
         % Search for a `body' key in the message, and if found use it as the source
@@ -269,8 +267,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
 %% @param NodeOpts A map of configuration options
 %% @returns `{ok, NodeMsgID}' on success with the extracted ID, or
 %% `{error, missing_node_msg_id}' if no ID can be found
--spec extract_node_message_id(Msg :: map(), NodeOpts :: map()) ->
-    {ok, binary()} | {error, missing_node_msg_id}.
+-spec extract_node_message_id(_, _) -> {ok, binary()} | {error, missing_node_msg_id}.
 extract_node_message_id(Msg, NodeOpts) ->
     case {hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ <<"hashpath">> => ignore }),
           hb_ao:get(<<"node-message-id">>, Msg, NodeOpts)} of
@@ -293,8 +290,7 @@ extract_node_message_id(Msg, NodeOpts) ->
 %% @param Msg The normalized SNP message containing the nonce
 %% @param NodeOpts A map of configuration options
 %% @returns `{ok, true}' if the nonce matches, or `{error, nonce_mismatch}' on failure
--spec verify_nonce(Address :: binary(), NodeMsgID :: binary(), 
-    Msg :: map(), NodeOpts :: map()) -> {ok, true} | {error, nonce_mismatch}.
+-spec verify_nonce(binary(), binary(), _, _) -> {ok, true} | {error, nonce_mismatch}.
 verify_nonce(Address, NodeMsgID, Msg, NodeOpts) ->
     Nonce = hb_util:decode(hb_ao:get(<<"nonce">>, Msg, NodeOpts)),
     ?event({snp_nonce, Nonce}),
@@ -316,8 +312,7 @@ verify_nonce(Address, NodeMsgID, Msg, NodeOpts) ->
 %% @param NodeOpts A map of configuration options
 %% @returns `{ok, true}' if both signature and address are valid, or
 %% `{error, signature_or_address_invalid}' on failure
--spec verify_signature_and_address(MsgWithJSONReport :: map(), 
-    Address :: binary(), NodeOpts :: map()) ->
+-spec verify_signature_and_address(_, binary(), _) ->
     {ok, true} | {error, signature_or_address_invalid}.
 verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
     Signers = hb_message:signers(MsgWithJSONReport, NodeOpts),
@@ -338,7 +333,7 @@ verify_signature_and_address(MsgWithJSONReport, Address, NodeOpts) ->
 %%
 %% @param Msg The normalized SNP message containing the policy
 %% @returns `{ok, true}' if debug is disabled, or `{error, debug_enabled}' if enabled
--spec verify_debug_disabled(Msg :: map()) -> {ok, true} | {error, debug_enabled}.
+-spec verify_debug_disabled(_) -> {ok, true} | {error, debug_enabled}.
 verify_debug_disabled(Msg) ->
     DebugDisabled = not is_debug(Msg),
     ?event({debug_disabled, DebugDisabled}),
@@ -358,8 +353,7 @@ verify_debug_disabled(Msg) ->
 %% @param NodeOpts A map of configuration options including trusted software list
 %% @returns `{ok, true}' if the software is trusted, or `{error, untrusted_software}' 
 %% on failure
--spec verify_trusted_software(M1 :: term(), Msg :: map(), NodeOpts :: map()) ->
-    {ok, true} | {error, untrusted_software}.
+-spec verify_trusted_software(_, _, _) -> {ok, true} | {error, untrusted_software}.
 verify_trusted_software(M1, Msg, NodeOpts) ->
     {ok, IsTrustedSoftware} = execute_is_trusted(M1, Msg, NodeOpts),
     ?event({trusted_software, IsTrustedSoftware}),
@@ -380,8 +374,7 @@ verify_trusted_software(M1, Msg, NodeOpts) ->
 %% @param NodeOpts A map of configuration options
 %% @returns `{ok, true}' if the measurement is valid, or 
 %% `{error, measurement_invalid}' on failure
--spec verify_measurement(Msg :: map(), ReportJSON :: binary(), 
-    NodeOpts :: map()) -> {ok, true} | {error, measurement_invalid}.
+-spec verify_measurement(_, binary(), _) -> {ok, true} | {error, measurement_invalid}.
 verify_measurement(Msg, ReportJSON, NodeOpts) ->
     Args = extract_measurement_args(Msg, NodeOpts),
     ?event({args, { explicit, Args}}),
@@ -410,7 +403,7 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
 %% @param Msg The normalized SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
 %% @returns A map of measurement arguments with atom keys
--spec extract_measurement_args(Msg :: map(), NodeOpts :: map()) -> map().
+-spec extract_measurement_args(_, _) -> _.
 extract_measurement_args(Msg, NodeOpts) ->
     LocalHashes =
         hb_cache:ensure_all_loaded(
@@ -458,7 +451,7 @@ verify_report_integrity(ReportJSON) ->
 %%
 %% @param Report The SNP report containing the policy field
 %% @returns `true' if debug mode is enabled, `false' otherwise
--spec is_debug(Report :: map()) -> boolean().
+-spec is_debug(_) -> boolean().
 is_debug(Report) ->
     (hb_ao:get(<<"policy">>, Report, #{}) band (1 bsl ?DEBUG_FLAG_BIT)) =/= 0.
 
@@ -481,8 +474,7 @@ is_debug(Report) ->
 %% @param Msg The SNP message containing local software hashes
 %% @param NodeOpts A map of configuration options including trusted software
 %% @returns `{ok, true}' if software is trusted, `{ok, false}' otherwise
--spec execute_is_trusted(M1 :: term(), Msg :: map(), NodeOpts :: map()) ->
-    {ok, boolean()}.
+-spec execute_is_trusted(_, _, _) -> {ok, boolean()}.
 execute_is_trusted(_M1, Msg, NodeOpts) ->
     FilteredLocalHashes = get_filtered_local_hashes(Msg, NodeOpts),
     TrustedSoftware = hb_opts:get(snp_trusted, [#{}], NodeOpts),
@@ -504,7 +496,7 @@ execute_is_trusted(_M1, Msg, NodeOpts) ->
 %% @param Msg The SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
 %% @returns A map of filtered local hashes with only enforced keys
--spec get_filtered_local_hashes(Msg :: map(), NodeOpts :: map()) -> map().
+-spec get_filtered_local_hashes(_, _) -> _.
 get_filtered_local_hashes(Msg, NodeOpts) ->
     LocalHashes = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
     EnforcedKeys = get_enforced_keys(NodeOpts),
@@ -523,7 +515,7 @@ get_filtered_local_hashes(Msg, NodeOpts) ->
 %%
 %% @param NodeOpts A map of configuration options
 %% @returns A list of binary keys that should be enforced
--spec get_enforced_keys(NodeOpts :: map()) -> [binary()].
+-spec get_enforced_keys(_) -> [binary()].
 get_enforced_keys(NodeOpts) ->
     lists:map(
         fun canonical_hash_key/1,
@@ -554,7 +546,7 @@ canonical_hash_key(Key) when is_binary(Key) ->
 %% @param TrustedSoftware List of trusted software configurations or invalid input
 %% @param NodeOpts Configuration options for matching
 %% @returns `true' if hashes match a trusted configuration, `false' otherwise
--spec is_software_trusted(map(), [] | [map()] | term(), map()) -> boolean().
+-spec is_software_trusted(_, _, _) -> boolean().
 is_software_trusted(_FilteredLocalHashes, [], _NodeOpts) ->
     false;
 is_software_trusted(FilteredLocalHashes, TrustedSoftware, NodeOpts) 

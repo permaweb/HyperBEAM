@@ -32,7 +32,7 @@
 
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
--spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
 info(_) -> 
     #{
         exports =>
@@ -92,7 +92,7 @@ info(_Base, _Req, _Opts) ->
 %% @doc Register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be idempotent.
 %% so that it can be called only once.
--spec register(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec register(#{ _ => _ }, #{ _ => _ }, _) -> _.
 register(_M1, M2, Opts) ->
     %% Extract all required parameters from options
     %% These values will be used to construct the registration message
@@ -140,12 +140,12 @@ register(_M1, M2, Opts) ->
     {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
--spec routes(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec routes(#{ _ => _ }, #{ method => binary(), _ => _ }, _) -> _.
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = load_routes(Opts),
     ?event({routes, Routes}),
-    case hb_ao:get(<<"method">>, M2, Opts) of
+    case maps:get(<<"method">>, M2, <<"GET">>) of
         <<"POST">> ->
             RouterOpts = hb_opts:get(router_opts, #{}, Opts),
             ?event(debug_route_reg, {router_opts, RouterOpts}),
@@ -238,7 +238,7 @@ routes(M1, M2, Opts) ->
 %% Can operate as a `~router@1.0' device, which will ignore the base message,
 %% routing based on the Opts and request message provided, or as a standalone
 %% function, taking only the request message and the `Opts' map.
--spec route(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec route(#{ _ => _ }, #{ _ => _ }, _) -> _.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
@@ -409,7 +409,7 @@ do_apply_route(
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this
 %% module), or `route-path' for use by external devices and users.
--spec match(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec match(#{ _ => _ }, #{ _ => _ }, _) -> _.
 match(Base, Req, Opts) ->
     ?event(debug_preprocess,
         {matching_routes,
@@ -729,9 +729,13 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     Num.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
--spec preprocess(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec preprocess(
+    #{ 'commit-request' => boolean(), _ => _ },
+    #{ request := #{ path := binary(), _ => _ }, body := _, _ => _ },
+    _
+) -> _.
 preprocess(Base, RawReq, Opts) ->
-    Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
+    Req = maps:get(<<"request">>, RawReq),
     ?event(debug_preprocess, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
     ?event(debug_preprocess, {template_routes, TemplateRoutes}),
@@ -745,11 +749,7 @@ preprocess(Base, RawReq, Opts) ->
                     ?event(debug_preprocess, executing_locally),
                     {ok, #{
                         <<"body">> =>
-                            hb_ao:get(
-                                <<"body">>,
-                                RawReq,
-                                Opts#{ <<"hashpath">> => ignore }
-                            )
+                            maps:get(<<"body">>, RawReq)
                     }};
                 <<"error">> ->
                     ?event(debug_preprocess, preprocessor_returning_error),
@@ -765,15 +765,7 @@ preprocess(Base, RawReq, Opts) ->
         {ok, _Method, Node, _Path, _MsgWithoutMeta, _ReqOpts} ->
             ?event(debug_preprocess, {matched_route, {explicit, Res}}),
             CommitRequest =
-                hb_util:atom(
-                    hb_ao:get_first(
-                        [
-                            {Base, <<"commit-request">>}
-                        ],
-                        false,
-                        Opts
-                    )
-                ),
+                maps:get(<<"commit-request">>, Base, false),
             MaybeCommit =
                 case CommitRequest of
                     true -> #{ <<"commit-request">> => true };
@@ -803,11 +795,9 @@ preprocess(Base, RawReq, Opts) ->
                         Req
                 end,
             UserPath =
-                case hb_maps:get(<<"path">>, Req, not_found, Opts) of
+                case maps:get(<<"path">>, Req) of
                     P when is_binary(P), byte_size(P) > 0 ->
                         P;
-                    not_found ->
-                        throw({error, missing_user_path});
                     _ ->
                         throw({error, invalid_user_path})
                 end,
