@@ -278,7 +278,7 @@ do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
     % Return the path.
     Path = generate_binary_path(Bin, Opts),
-    ok = hb_store:write(Store, #{ Path => Bin }, Opts),
+    hb_store:write(Store, #{ Path => Bin }, Opts),
     %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
@@ -296,7 +296,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
     % Write all of the keys of the message into the store.
-    ok = hb_store:group(Store, UncommittedID, Opts),
+    hb_store:group(Store, UncommittedID, Opts),
     maps:map(
         fun(Key, Value) ->
             write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
@@ -314,7 +314,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
                     {uncommitted_id, UncommittedID},
                     {committed_id, AltID}
             }),
-            ok = hb_store:link(Store, #{ AltID => UncommittedID }, Opts)
+            hb_store:link(Store, #{ AltID => UncommittedID }, Opts)
         end,
         AltIDs
     ),
@@ -327,7 +327,7 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     % and link it to `baseCommHP/commitmentID`.
     Commitments = prepare_commitments(RawCommitments, Opts),
     CommitmentsBase = commitment_path(Base, Opts),
-    ok = hb_store:group(Store, CommitmentsBase, Opts),
+    hb_store:group(Store, CommitmentsBase, Opts),
     ?event(
         {writing_commitments,
             {base, Base},
@@ -339,12 +339,11 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
         fun(BaseCommID, Commitment) ->
             ?event(debug_cache, {writing_commitment, {commitment, Commitment}}),
             {ok, CommMsgID} = do_write_message(Commitment, Store, Opts),
-            ok =
-                hb_store:link(
-                    Store,
-                    #{ << CommitmentsBase/binary, "/", BaseCommID/binary >> => CommMsgID },
-                    Opts
-                )
+            hb_store:link(
+                Store,
+                #{ << CommitmentsBase/binary, "/", BaseCommID/binary >> => CommMsgID },
+                Opts
+            )
         end,
         Commitments
     ),
@@ -363,7 +362,7 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
             Opts
         ),
     {ok, Path} = do_write_message(Value, Store, Opts),
-    ok = hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
+    hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
     {ok, Path}.
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
@@ -408,7 +407,7 @@ write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ?event({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
     {ok, Path} = write(Msg, Opts),
-    ok = hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
+    hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
     {ok, Path}.
 
 %% @doc Write a raw binary keys into the store and link it at a given hashpath.
@@ -417,7 +416,7 @@ write_binary(Hashpath, Bin, Opts) ->
 write_binary(Hashpath, Bin, Store, Opts) ->
     ?event({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
     {ok, Path} = do_write_message(Bin, Store, Opts),
-    ok = hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
+    hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
@@ -1082,6 +1081,22 @@ test_device_map_cannot_be_written_test() ->
     catch
         _:_:_ -> ?assert(true)
     end.
+
+%% @doc Cache writes are best-effort with respect to the configured store
+%% list: a list whose only entry rejects write-class operations (e.g. a
+%% read-only store) must still yield `{ok, ID}', not crash. Exercises both
+%% the binary path (`hb_store:write') and the map path (`hb_store:group'
+%% plus `hb_store:link') so every store side-effect in `do_write_message'
+%% is covered.
+write_with_only_read_only_store_test() ->
+    ReadOnlyStore = #{
+        <<"store-module">> => hb_store_volatile,
+        <<"name">> => <<"cache-readonly">>,
+        <<"access">> => [<<"read">>]
+    },
+    Opts = #{ <<"store">> => [ReadOnlyStore] },
+    ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
+    ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
