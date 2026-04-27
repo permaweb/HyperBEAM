@@ -3,7 +3,7 @@
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3]).
 -export([index/3, postprocess/3, load/3]).
--export([varied/3, compute_nested/3, compute_all/3]).
+-export([varied/3, compute_nested/3, compute_all/3, compute_list/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -114,6 +114,11 @@ compute_all(Base, Req, Opts) ->
 -spec compute_all_nested(#{ nested := #{ a := integer() }, '_' => '_' }, #{ slot := integer(), '_' => '_' }, map()) -> {ok, map()}.
 compute_all_nested(Base, Req, Opts) ->
     {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
+
+-spec compute_list(#{}, #{ empty := [], items := [_] }, map()) -> {ok, map()}.
+compute_list(Base, _Req, _Opts) ->
+    {ok, Base}.
+
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),

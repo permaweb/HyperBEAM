@@ -147,8 +147,25 @@ parse_fun_spec({type, _, 'fun', [{type, _, product, Args}, Ret]}, TypeEnv) ->
 parse_fun_spec(Other, _TypeEnv) ->
     {[unknown_type(Other)], any_type()}.
 
+parse_type([], _TypeEnv, _VarEnv, _Seen) ->
+    literal_type([]);
+parse_type([Item], TypeEnv, VarEnv, Seen) ->
+    #{
+        <<"kind">> => <<"list">>,
+        <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen)
+    };
+parse_type({type, _, nil, []}, _TypeEnv, _VarEnv, _Seen) ->
+    literal_type([]);
+parse_type({type, _, ListType, [Item]}, TypeEnv, VarEnv, Seen)
+        when ListType =:= list; ListType =:= nonempty_list ->
+    #{
+        <<"kind">> => <<"list">>,
+        <<"item">> => parse_type(Item, TypeEnv, VarEnv, Seen)
+    };
 parse_type({ann_type, _, [_Var, Type]}, TypeEnv, VarEnv, Seen) ->
     parse_type(Type, TypeEnv, VarEnv, Seen);
+parse_type({var, _, '_'}, _TypeEnv, _VarEnv, _Seen) ->
+    any_type();
 parse_type({var, _, Name}, TypeEnv, VarEnv, Seen) ->
     case maps:get(Name, VarEnv, undefined) of
         undefined -> variable_type(Name);
@@ -492,7 +509,6 @@ alias_type(Name) -> #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(N
 variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
 message_type(AllKeys) ->
     Wildcard = maps:get(<<"_">>, AllKeys, undefined),
-    ?event(apply_schema, {message_type, {all_keys, AllKeys}, {wildcard, Wildcard}}),
     % If the `_` key is exactly the literal `_`, pass through unmatched keys.
     % Otherwise, only maintain explicitly declared keys.
     #{
@@ -837,6 +853,87 @@ vary_on_all_preserves_nested_request_keys_test() ->
             <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 }
         },
         VariedReq
+    ).
+
+vary_list_empty_literal_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => [], <<"items">> => [] },
+            Opts
+        ),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"empty">> => [], <<"items">> => [] }, VariedReq).
+
+vary_list_empty_literal_rejects_nonempty_test() ->
+    Opts = test_opts(),
+    ?assertThrow(
+        {invalid_type, _, _},
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => [1], <<"items">> => [] },
+            Opts
+        )
+    ).
+
+vary_list_empty_literal_rejects_nonlist_test() ->
+    Opts = test_opts(),
+    ?assertThrow(
+        {invalid_type, _, _},
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => <<"not-a-list">>, <<"items">> => [] },
+            Opts
+        )
+    ).
+
+vary_list_any_accepts_empty_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => [], <<"items">> => [] },
+            Opts
+        ),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(#{ <<"empty">> => [], <<"items">> => [] }, VariedReq).
+
+vary_list_any_accepts_mixed_values_test() ->
+    Opts = test_opts(),
+    {ok, VariedBase, VariedReq} =
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => [], <<"items">> => [1, <<"x">>, #{}] },
+            Opts
+        ),
+    ?assertEqual(#{}, VariedBase),
+    ?assertEqual(
+        #{ <<"empty">> => [], <<"items">> => [1, <<"x">>, #{}] },
+        VariedReq
+    ).
+
+vary_list_any_rejects_nonlist_test() ->
+    Opts = test_opts(),
+    ?assertThrow(
+        {invalid_type, _, _},
+        vary(
+            <<"test-device@1.0">>,
+            <<"compute-list">>,
+            #{},
+            #{ <<"empty">> => [], <<"items">> => 1 },
+            Opts
+        )
     ).
 
 vary_on_all_removes_schematized_nested_keys_test() ->
