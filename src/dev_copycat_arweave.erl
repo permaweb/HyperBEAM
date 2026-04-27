@@ -1484,6 +1484,7 @@ index_full_bundle_items(
         _ -> 1 + MinDepth
     end,
     AllIDs = DescIDs#{1 => lists:reverse(ThisLevelIDs)},
+    erlang:garbage_collect(),
     {ok, Count, FinalDepth, AllIDs};
 index_full_bundle_items(
     [{ItemID, Size} | Rest],
@@ -1521,7 +1522,6 @@ index_full_bundle_items(
                 {0, Depth - 1, #{}}
         end,
     ShiftedChildIDs = shift_item_ids(ChildIDs, 1),
-    erlang:garbage_collect(),
     index_full_bundle_items(
         Rest,
         binary:part(ItemsBin, Size, byte_size(ItemsBin) - Size),
