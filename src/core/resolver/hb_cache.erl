@@ -549,21 +549,7 @@ link_result(Base, Req, Existing, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     EdgePath = result_edge_path(Base, Req, Opts),
     ExistingPath = hb_path:to_binary(Existing),
-    case hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts) of
-        ok ->
-            ok;
-        Error ->
-            case ?IS_ID(Base) of
-                true ->
-                    ResolvedEdgePath = resolved_result_edge_path(Base, Req, Opts),
-                    case ResolvedEdgePath of
-                        EdgePath -> Error;
-                        _ -> hb_store:link(Store, #{ ResolvedEdgePath => ExistingPath }, Opts)
-                    end;
-                false ->
-                    Error
-            end
-    end.
+    hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts).
 
 result_edge_path(BaseID, ReqID, Opts) when ?IS_ID(BaseID) and ?IS_ID(ReqID) ->
     result_edge_path_from_id(BaseID, ReqID, Opts);
@@ -580,48 +566,6 @@ result_hashpath(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
 
 result_edge_path_from_id(BaseID, Suffix, _Opts) ->
     hb_path:to_binary([<<"ao-results">>, BaseID, Suffix]).
-
-legacy_result_edge_path_from_id(BaseID, Suffix, _Opts) ->
-    hb_path:to_binary([BaseID, Suffix]).
-
-resolved_result_edge_path(BaseID, ReqID, Opts) when ?IS_ID(BaseID) and ?IS_ID(ReqID) ->
-    resolved_result_edge_path_from_id(BaseID, ReqID, Opts);
-resolved_result_edge_path(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
-    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
-    resolved_result_edge_path_from_id(BaseID, ReqID, Opts);
-resolved_result_edge_path(BaseID, Key, Opts) when ?IS_ID(BaseID) and is_binary(Key) ->
-    resolved_result_edge_path_from_id(BaseID, hb_ao:normalize_key(Key, Opts), Opts).
-
-resolved_result_edge_path_from_id(BaseID, Suffix, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    BasePath = result_edge_base_path(Store, BaseID, Opts),
-    hb_path:to_binary([BasePath, Suffix]).
-
-result_edge_base_path(Store, BaseID, Opts) ->
-    Probe = <<"__hb_cache_result_probe__">>,
-    case hb_store:resolve(Store, BaseID, Opts) of
-        {ok, BaseID} ->
-            case hb_store:resolve(Store, [BaseID, Probe], Opts) of
-                {ok, ResolvedProbe} -> strip_path_suffix(ResolvedProbe, Probe, BaseID);
-                _ -> BaseID
-            end;
-        {ok, ResolvedBase} ->
-            ResolvedBase;
-        _ ->
-            BaseID
-    end.
-
-strip_path_suffix(Path, Suffix, Default) ->
-    BinSuffix = <<"/", Suffix/binary>>,
-    PathSize = byte_size(Path),
-    SuffixSize = byte_size(BinSuffix),
-    case
-        PathSize > SuffixSize
-            andalso binary:part(Path, PathSize - SuffixSize, SuffixSize) =:= BinSuffix
-    of
-        true -> binary:part(Path, 0, PathSize - SuffixSize);
-        false -> Default
-    end.
 
 %% @doc Write a raw binary keys into the store and link it at a given hashpath.
 write_binary(Hashpath, Bin, Opts) ->
@@ -1021,14 +965,7 @@ read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
 read_hashpath(_, _, _) -> miss.
 
 read_result_edge(BaseID, ReqID, Opts) ->
-    case hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)) of
-        miss ->
-            hashpath_read_result(
-                read(legacy_result_edge_path_from_id(BaseID, ReqID, Opts), Opts)
-            );
-        Hit ->
-            Hit
-    end.
+    hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)).
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
 hashpath_read_result({error, not_found}) -> miss;

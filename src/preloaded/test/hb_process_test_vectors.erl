@@ -574,7 +574,8 @@ do_test_restore() ->
     % 2. Return the variable.
     % Execute the first computation, then the second as a disconnected process.
     Opts = test_opts(#{
-        <<"process-cache-frequency">> => 1
+        process_snapshot_slots => 1,
+        process_async_cache => false
     }),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),

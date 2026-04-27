@@ -14,7 +14,7 @@ info() ->
     }.
 
 %% @doc Return the fallback index page when the manifest itself is requested.
--spec index(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec index(_, _, _) -> _.
 index(M1, M2, Opts) ->
     ?event(debug_manifest, {index_request, {base, M1}, {request, M2}}, Opts),
     case route(<<"index">>, M1, M2, Opts) of
@@ -26,7 +26,7 @@ index(M1, M2, Opts) ->
     end.
 
 %% @doc Route a request to the associated data via its manifest.
--spec route(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec route(_, _, _, _) -> _.
 route(<<"index">>, M1, M2, Opts) ->
     ?event({manifest_index, M1, M2}),
     case manifest(M1, M2, Opts) of
@@ -88,7 +88,7 @@ route(Key, M1, M2, Opts) ->
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
 %% requests for legacy (non-device-tagged) manifests and casting them to
 %% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
--spec request(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec request(_, _, _) -> _.
 request(Base, Req, Opts) ->
     ?event({on_req_manifest_detector, {base, Base}, {req, Req}}),
     maybe

@@ -17,7 +17,7 @@ info(_Opts) ->
     }.
 
 %% @doc Takes a `key' argument and returns the value of the name, if it exists.
--spec lookup(#{ _ => _ }, #{ key := binary(), _ => _ }, _) -> _.
+-spec lookup(_, #{ key := binary(), _ => _ }, _) -> _.
 lookup(_, #{ <<"key">> := Key }, Opts) ->
     ?event(local_name, {lookup, Key}),
     hb_ao:resolve(
@@ -27,13 +27,13 @@ lookup(_, #{ <<"key">> := Key }, Opts) ->
     ).
 
 %% @doc Handle all other requests by delegating to the lookup function.
--spec default_lookup(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec default_lookup(_, _, _, _) -> _.
 default_lookup(Key, _, Req, Opts) ->
     lookup(Key, Req#{ <<"key">> => Key }, Opts).
 
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
 %% must be the node operator in order to register a name.
--spec register(#{ _ => _ }, #{ key := binary(), value := _, _ => _ }, _) -> _.
+-spec register(_, #{ key := binary(), value := _, _ => _ }, _) -> _.
 register(_, Req, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"meta@1.0">> },
