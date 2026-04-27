@@ -40,10 +40,10 @@
 %%% </pre>
 %%%
 %%% Runtime options:
-%%%     Cache-Frequency: The number of assignments that will be computed 
-%%%                      before the full (restorable) state should be cached.
-%%%     Cache-Keys:      A list of the keys that should be cached for all 
-%%%                      assignments, in addition to `/Results'.
+%%%     Process-Snapshot-Slots: The number of slots between full restorable
+%%%                             state snapshots.
+%%%     Process-Snapshot-Time:  The number of seconds between full restorable
+%%%                             state snapshots.
 -module(dev_process).
 %%% Public API
 -export([info/1, as/3, compute/3, schedule/3, slot/3, latest/3, now/3, push/3, snapshot/3]).
@@ -126,7 +126,7 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
--spec default_device(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec default_device(_, _, _) -> _.
 default_device(Base, Key, Opts) ->
     NormKey = hb_ao:normalize_key(Key),
     case {NormKey, hb_util:deep_get(<<"process/variant">>, Base, Opts)} of
@@ -138,11 +138,11 @@ default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
 %% @doc Wraps functions in the Scheduler device.
--spec schedule(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec schedule(_, _, _) -> _.
 schedule(Base, Req, Opts) ->
     dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
 
--spec slot(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec slot(_, _, _) -> _.
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
     dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
@@ -150,7 +150,7 @@ slot(Base, Req, Opts) ->
 next(Base, _Req, Opts) ->
     dev_process_lib:run_as(<<"scheduler">>, Base, next, Opts).
 
--spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec snapshot(_, _, _) -> _.
 snapshot(RawBase, _Req, Opts) ->
     Base = dev_process_lib:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
@@ -628,7 +628,7 @@ write_restore_edges(_ProcID, _Slot, _Res, false, _Opts) ->
 read_restore_checkpoint(ProcID, undefined, Opts) ->
     read_restore_checkpoint(ProcID, restore_req(), Opts);
 read_restore_checkpoint(ProcID, Req, Opts) when is_map(Req) ->
-    case read_process_edge(ProcID, Req, process_cache_opts(Opts)) of
+    case read_process_edge(ProcID, Req, hb_store:scope(Opts, local)) of
         {ok, Msg = #{ <<"at-slot">> := Slot }} -> {ok, hb_util:int(Slot), Msg};
         {ok, _} -> {error, not_found};
         Other -> Other
@@ -644,15 +644,6 @@ read_restore_checkpoint(ProcID, TargetSlot, Opts) ->
         Other ->
             Other
     end.
-
-process_cache_opts(RawOpts) ->
-    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
-    UnscopedStore =
-        case hb_opts:get(store, no_viable_store, RawOpts) of
-            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
-            Other -> Other
-        end,
-    RawOpts#{ store => hb_store:scope(UnscopedStore, Scope) }.
 
 %% @doc Should we snapshot a new full state result? First, we check if the 
 %% `process_snapshot_time' option is set. If it is, we check if the elapsed time
@@ -764,7 +755,7 @@ now(RawBase, Req, Opts) ->
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
--spec push(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec push(_, _, _) -> _.
 push(Base, Req, Opts) ->
     dev_process_lib:run_as(
         <<"push">>,

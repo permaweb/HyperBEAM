@@ -8,7 +8,7 @@
 
 %% @doc Resolve either a message at an Arweave offset, or a direct key from the
 %% base message if the key is not an integer.
--spec get(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec get(_, _, _, _) -> _.
 get(Key, Base, Request, Opts) ->
     case parse(Key) of
         {ok, StartOffset, Length} ->

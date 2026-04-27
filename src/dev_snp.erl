@@ -56,7 +56,7 @@
 %% @param NodeOpts A map of configuration options for verification
 %% @returns `{ok, Binary}' with "true" on successful verification, or
 %% `{error, Reason}' on failure with specific error details
--spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec verify(_, _, _) -> _.
 verify(M1, M2, NodeOpts) ->
     ?event(snp_verify, verify_called),
     maybe
@@ -122,7 +122,7 @@ verify(M1, M2, NodeOpts) ->
 %% @param Opts A map of configuration options for report generation
 %% @returns `{ok, Map}' on success with the complete report message, or
 %% `{error, Reason}' on failure with error details
--spec generate(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec generate(_, _, _) -> _.
 generate(_M1, _M2, Opts) ->
     maybe
         LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),

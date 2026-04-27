@@ -12,7 +12,7 @@
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
 -spec generate(
-    #{ _ => _ },
+    _,
     #{ committer => binary(), generator => binary() | #{ path => binary(), _ => _ }, _ => _ },
     _
 ) -> _.
@@ -38,7 +38,7 @@ generate(Base, Request, Opts) ->
 %% messages. The inbound request has the same structure as a normal `~hook@1.0'
 %% on-request hook: The message sequence is the body of the request, and the
 %% request is the request message.
--spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
+-spec finalize(_, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe
@@ -64,7 +64,7 @@ finalize(Base, Request, Opts) ->
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
--spec commit(#{ _ => _ }, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, _) -> _.
+-spec commit(_, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, _) -> _.
 commit(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     commit(Secret, Base, Req, Opts);
@@ -112,7 +112,7 @@ store_secret(Secret, Msg, Opts) ->
 %% @doc Verify the HMAC commitment with the key being the secret from the 
 %% request cookies. We find the appropriate cookie from the cookie message by
 %% the committer ID given in the request message.
--spec verify(#{ _ => _ }, #{ secret => binary(), committer => binary(), _ => _ }, _) -> _.
+-spec verify(_, #{ secret => binary(), committer => binary(), _ => _ }, _) -> _.
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),

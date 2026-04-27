@@ -6,7 +6,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% @doc Fetch a resource from the cache using "target" ID extracted from the message
--spec read(#{ _ => _ }, #{ target := binary(), accept => binary(), _ => _ }, _) -> _.
+-spec read(_, #{ target := binary(), accept => binary(), _ => _ }, _) -> _.
 read(_M1, M2, Opts) ->
     ID = maps:get(<<"target">>, M2),
     ?event({lookup, {id, ID}, {opts, Opts}}),

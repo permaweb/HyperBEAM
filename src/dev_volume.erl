@@ -33,7 +33,7 @@
 
 %% @doc Exported function for getting device info, controls which functions 
 %% are exposed via the device API.
--spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec info(_, _, _) -> _.
 info(_) -> 
     ?event(debug_volume, {info, entry, device_info_requested}),
     #{ exports => [<<"info">>, <<"mount">>, <<"public_key">>] }.
@@ -98,7 +98,7 @@ info(_Base, _Req, _Opts) ->
 %% @param Opts A map of configuration options for volume operations.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec mount(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec mount(_, _, _) -> _.
 mount(_M1, _M2, Opts) ->
     ?event(debug_volume, {mount, entry, starting}),
     % Check if an encrypted key was sent in the request
@@ -173,7 +173,7 @@ mount(_M1, _M2, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns `{ok, Map}' containing the node's public key on success, or
 %% `{error, Binary}' if the node's wallet is not available.
--spec public_key(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec public_key(_, _, _) -> _.
 public_key(_M1, _M2, Opts) ->
     % Retrieve the node's wallet
     case hb_opts:get(priv_wallet, undefined, Opts) of

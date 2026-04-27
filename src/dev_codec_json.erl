@@ -65,20 +65,20 @@ from(JSON, Req, Opts) ->
             {ok, TABM}
     end.
 
--spec commit(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec commit(_, _, _) -> _.
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
 
--spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec verify(_, _, _) -> _.
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 
--spec committed(binary() | #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec committed(binary() | #{ _ => _ }, _, _) -> _.
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, _) -> _.
+-spec deserialize(_, #{ target => binary(), _ => _ }, _) -> _.
 deserialize(Base, Req, Opts) ->
     Target = maps:get(<<"target">>, Req, <<"body">>),
     Payload = hb_ao:get(Target, Base, Opts),
@@ -96,7 +96,7 @@ deserialize(Base, Req, Opts) ->
     end.
 
 %% @doc Serialize a message to a JSON string.
--spec serialize(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec serialize(_, _, _) -> _.
 serialize(Base, Msg, Opts) ->
     {ok,
         #{
