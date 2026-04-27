@@ -44,7 +44,7 @@
      <<"/~hyperbuddy@1.0/bundle.js">>]).
 
 %% @doc Hook handler: block requests that involve blacklisted IDs.
--spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec request(#{ _ => _ }, #{ request := #{ path => binary(), _ => _ }, _ => _ }, _) -> _.
 request(_Base, HookReq, Opts) ->
     ?event({hook_req, HookReq}),
     case hb_opts:get(blacklist_providers, false, Opts) of
@@ -79,7 +79,7 @@ request(_Base, HookReq, Opts) ->
 %% @doc Check if the message contains any blacklisted IDs.
 is_match(Msg, Opts) ->
     WhitelistRoutes = hb_opts:get(blacklist_whitelist, ?DEFAULT_WHITELIST, Opts),
-    Path = hb_maps:get(<<"path">>, maps:get(<<"request">>, Msg, #{}), no_path),
+    Path = maps:get(<<"path">>, maps:get(<<"request">>, Msg, #{}), no_path),
     case lists:member(Path, WhitelistRoutes) of 
         false -> 
             ?event({path_do_not_match_whitelist, {path, Path}}),

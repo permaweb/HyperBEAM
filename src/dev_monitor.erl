@@ -8,7 +8,7 @@
 %%% to be called with the current process state during each pass. The monitor
 %%% functions must not mutate state.
 
--spec init(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(State, _, InitState) ->
     {ok, State#{ <<"monitors">> => InitState }}.
 

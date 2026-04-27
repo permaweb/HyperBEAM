@@ -33,7 +33,7 @@
 
 %% @doc Exported function for getting device info, controls which functions 
 %% are exposed via the device API.
--spec info(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
 info(_) -> 
     ?event(debug_volume, {info, entry, device_info_requested}),
     #{ exports => [<<"info">>, <<"mount">>, <<"public_key">>] }.
@@ -98,8 +98,7 @@ info(_Base, _Req, _Opts) ->
 %% @param Opts A map of configuration options for volume operations.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec mount(#{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, binary()} | {error, binary()}.
+-spec mount(#{ _ => _ }, #{ _ => _ }, _) -> _.
 mount(_M1, _M2, Opts) ->
     ?event(debug_volume, {mount, entry, starting}),
     % Check if an encrypted key was sent in the request
@@ -174,8 +173,7 @@ mount(_M1, _M2, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns `{ok, Map}' containing the node's public key on success, or
 %% `{error, Binary}' if the node's wallet is not available.
--spec public_key(#{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, map()} | {error, binary()}.
+-spec public_key(#{ _ => _ }, #{ _ => _ }, _) -> _.
 public_key(_M1, _M2, Opts) ->
     % Retrieve the node's wallet
     case hb_opts:get(priv_wallet, undefined, Opts) of
@@ -217,7 +215,7 @@ public_key(_M1, _M2, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns `{ok, DecryptedKey}' on successful decryption, or
 %% `{error, Binary}' if decryption fails.
--spec decrypt_volume_key(binary(), map()) -> 
+-spec decrypt_volume_key(binary(), _) ->
     {ok, binary()} | {error, binary()}.
 decrypt_volume_key(EncryptedKeyBase64, Opts) ->
     % Decode the encrypted key
@@ -275,7 +273,7 @@ decrypt_volume_key(EncryptedKeyBase64, Opts) ->
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec check_base_device(
-    term(), term(), term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 check_base_device(
     Device, Partition, PartitionType, VolumeName, MountPoint, StorePath, 
@@ -316,7 +314,7 @@ check_base_device(
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec check_partition(
-    term(), term(), term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 check_partition(
     Device, Partition, PartitionType, VolumeName, MountPoint, StorePath, 
@@ -359,7 +357,7 @@ check_partition(
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec mount_existing_partition(
-    term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 mount_existing_partition(
     Partition, Key, MountPoint, VolumeName, StorePath, Opts
@@ -396,7 +394,7 @@ mount_existing_partition(
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec create_and_mount_partition(
-    term(), term(), term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 create_and_mount_partition(
     Device, Partition, PartitionType, Key, 
@@ -436,7 +434,7 @@ create_and_mount_partition(
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec format_and_mount(
-    term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 format_and_mount(
     Partition, Key, MountPoint, VolumeName, StorePath, Opts
@@ -473,7 +471,7 @@ format_and_mount(
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
 -spec mount_formatted_partition(
-    term(), term(), term(), term(), term(), map()
+    _, _, _, _, _, _
 ) -> {ok, binary()} | {error, binary()}.
 mount_formatted_partition(
     Partition, Key, MountPoint, VolumeName, StorePath, Opts
@@ -505,7 +503,7 @@ mount_formatted_partition(
 %% @param Opts The options to update.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec update_store_path(term(), map()) -> 
+-spec update_store_path(_, _) ->
     {ok, binary()} | {error, binary()}.
 update_store_path(StorePath, Opts) ->
     ?event(debug_volume, 
@@ -537,7 +535,7 @@ update_store_path(StorePath, Opts) ->
 %% @param Opts The options to update the node's configuration with.
 %% @returns `{ok, Binary}' on success with operation result message, or
 %% `{error, Binary}' on failure with error message.
--spec update_node_config(term(), term(), map()) -> 
+-spec update_node_config(_, _, _) ->
     {ok, binary()} | {error, binary()}.
 update_node_config(StorePath, NewStore, Opts) ->
     ?event(debug_volume, 

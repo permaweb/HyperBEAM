@@ -54,11 +54,10 @@
         alg => atom(),
         salt => binary(),
         iterations => integer(),
-        key_length => integer(),
+        'key-length' => integer(),
         _ => _
     },
-    map()) ->
-    {ok, #{ _ => _ }} | {error, #{ _ => _ }}.
+    _) -> _.
 commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
@@ -86,11 +85,10 @@ commit(Base, Req, Opts) ->
         alg => atom(),
         salt => binary(),
         iterations => integer(),
-        key_length => integer(),
+        'key-length' => integer(),
         _ => _
     },
-    map()) ->
-    {ok, #{ _ => _ }}.
+    _) -> _.
 verify(Base, RawReq, Opts) ->
     ?event({verify_invoked, {base, Base}, {req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
@@ -116,11 +114,10 @@ verify(Base, RawReq, Opts) ->
         alg => atom(),
         salt => binary(),
         iterations => integer(),
-        key_length => integer(),
+        'key-length' => integer(),
         _ => _
     },
-    map()) ->
-    {ok, binary()} | {error, #{ _ => _ }}.
+    _) -> _.
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
     {ok, Secret};
 generate(_Msg, Req, _Opts) ->

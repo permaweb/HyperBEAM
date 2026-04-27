@@ -9,20 +9,20 @@
 
 %% @doc Initialize or normalize the compute-lite device. For now, we don't
 %% need to do anything special here.
--spec init(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(Base, _Req, _Opts) ->
     {ok, Base}.
 
 %% @doc We assume that the compute engine stores its own internal state,
 %% with snapshots triggered only when HyperBEAM requests them. Subsequently,
 %% to load a snapshot, we just need to return the original message.
--spec normalize(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec normalize(#{ snapshot => #{ type => binary(), data => _, _ => _ }, _ => _ }, #{ _ => _ }, _) -> _.
 normalize(Base, _Req, Opts) ->
-    case hb_maps:find(<<"snapshot">>, Base, Opts) of
+    case maps:find(<<"snapshot">>, Base) of
         error -> {ok, Base};
         {ok, Snapshot} ->
-            Unset = hb_ao:set(Base, #{ <<"snapshot">> => unset }, Opts),
-            case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
+            Unset = maps:remove(<<"snapshot">>, Base),
+            case maps:get(<<"type">>, Snapshot, undefined) == <<"Checkpoint">> of
                 false -> Unset;
                 true ->
                     load_state(Snapshot, Opts),
@@ -33,8 +33,8 @@ normalize(Base, _Req, Opts) ->
 %% @doc Attempt to load a snapshot into the delegated compute server.
 load_state(Snapshot, Opts) ->
     ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
-    Body = hb_maps:get(<<"data">>, Snapshot, Opts),
-    Headers = hb_maps:without([<<"data">>], Snapshot, Opts),
+    Body = maps:get(<<"data">>, Snapshot),
+    Headers = maps:remove(<<"data">>, Snapshot),
     Res = do_relay(
         <<"POST">>,
         <<"/state">>,
@@ -51,7 +51,7 @@ load_state(Snapshot, Opts) ->
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to
 %% evaluate.
--spec compute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec compute(#{ _ => _ }, #{ type => binary(), slot => integer(), 'process-id' => binary(), _ => _ }, _) -> _.
 compute(Base, Req, Opts) ->
     OutputPrefix = dev_stack:prefix(Base, Req, Opts),
     % Extract the process ID - this identifies which process to run compute
@@ -59,14 +59,14 @@ compute(Base, Req, Opts) ->
     ProcessID = get_process_id(Base, Req, Opts),
     % If request is an assignment, we will compute the result
     % Otherwise, it is a dryrun
-    Type = hb_ao:get(<<"type">>, Req, not_found, Opts),
+    Type = maps:get(<<"type">>, Req, not_found),
     ?event({doing_delegated_compute, {req, Req}, {type, Type}}),
     % Execute the compute via external CU
     {Slot, Res} =
         case Type of
             <<"Assignment">> ->
                 {
-                    hb_ao:get(<<"slot">>, Req, Opts),
+                    maps:get(<<"slot">>, Req),
                     do_compute(ProcessID, Req, Opts)
                 };
             _ ->
@@ -77,7 +77,7 @@ compute(Base, Req, Opts) ->
 %% @doc Execute computation on a remote machine via relay and the JSON-Iface.
 do_compute(ProcID, Req, Opts) ->
     ?event({do_compute_msg, {req, Req}}),
-    Slot = hb_ao:get(<<"slot">>, Req, Opts),
+    Slot = maps:get(<<"slot">>, Req),
     {ok, AOS2 = #{ <<"body">> := Body }} =
         dev_scheduler_formats:assignments_to_aos2(
             ProcID,
@@ -110,7 +110,7 @@ do_dryrun(ProcID, Req, Opts) ->
     Body = 
         hb_json:encode(
             dev_json_iface:message_to_json_struct(
-                hb_maps:without([<<"commitments">>], Req, Opts),
+                maps:remove(<<"commitments">>, Req),
                 Opts
             )
         ),
@@ -130,12 +130,7 @@ do_dryrun(ProcID, Req, Opts) ->
 
 do_relay(Method, Path, Body, Headers, Opts) ->
     ContentType =
-        hb_maps:get(
-            <<"content-type">>,
-            Headers,
-            <<"application/json">>,
-            Opts
-        ),
+        maps:get(<<"content-type">>, Headers, <<"application/json">>),
     hb_ao:resolve(
         #{
             <<"device">> => <<"relay@1.0">>,
@@ -162,7 +157,7 @@ extract_json_res(Response, Opts) ->
             JSONRes = hb_ao:get(<<"body">>, Res, Opts),
             ?event({
                 delegated_compute_res_metadata,
-                {req, hb_maps:without([<<"body">>], Res, Opts)}
+                {req, maps:remove(<<"body">>, Res)}
             }),
             {ok, JSONRes};
         {Err, Error} when Err == error; Err == failure ->
@@ -172,7 +167,7 @@ extract_json_res(Response, Opts) ->
 get_process_id(Base, Req, Opts) ->
     RawProcessID = dev_process_lib:process_id(Base, #{}, Opts),
     case RawProcessID of
-        not_found -> hb_ao:get(<<"process-id">>, Req, Opts);
+        not_found -> maps:get(<<"process-id">>, Req);
         ProcID -> ProcID
     end.
 
@@ -207,7 +202,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 
 %% @doc Generate a snapshot of a running computation by calling the 
 %% `GET /snapshot' endpoint.
--spec snapshot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
     ProcID = dev_process_lib:process_id(Msg, #{}, Opts),

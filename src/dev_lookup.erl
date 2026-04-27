@@ -6,16 +6,16 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% @doc Fetch a resource from the cache using "target" ID extracted from the message
--spec read(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec read(#{ _ => _ }, #{ target := binary(), accept => binary(), _ => _ }, _) -> _.
 read(_M1, M2, Opts) ->
-    ID = hb_ao:get(<<"target">>, M2, Opts),
+    ID = maps:get(<<"target">>, M2),
     ?event({lookup, {id, ID}, {opts, Opts}}),
     case hb_cache:read(ID, Opts) of
         {ok, RawRes} ->
             % We are sending the result over the wire, so make sure it is
             % fully loaded, to save the recipient latency.
             ?event({lookup_result, RawRes}),
-            case hb_ao:get(<<"accept">>, M2, Opts) of
+            case maps:get(<<"accept">>, M2, undefined) of
                 <<"application/aos-2">> ->
                     Res = hb_cache:ensure_all_loaded(RawRes),
                     Struct = dev_json_iface:message_to_json_struct(Res, Opts),

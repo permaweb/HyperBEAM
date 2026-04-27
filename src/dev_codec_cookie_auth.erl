@@ -11,7 +11,11 @@
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
--spec generate(#{ _ => _ }, #{ committer => binary(), generator => _, _ => _ }, map()) -> term().
+-spec generate(
+    #{ _ => _ },
+    #{ committer => binary(), generator => binary() | #{ path => binary(), _ => _ }, _ => _ },
+    _
+) -> _.
 generate(Base, Request, Opts) ->
     {WithCookie, Secrets} =
         case find_secrets(Request, Opts) of
@@ -34,7 +38,7 @@ generate(Base, Request, Opts) ->
 %% messages. The inbound request has the same structure as a normal `~hook@1.0'
 %% on-request hook: The message sequence is the body of the request, and the
 %% request is the request message.
--spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := list(), _ => _ }, map()) -> term().
+-spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe
@@ -60,7 +64,7 @@ finalize(Base, Request, Opts) ->
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_codec_cookie' for more details on its scheme.
--spec commit(#{ _ => _ }, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, map()) -> term().
+-spec commit(#{ _ => _ }, #{ secret => binary(), committer => binary(), generator => _, _ => _ }, _) -> _.
 commit(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     commit(Secret, Base, Req, Opts);
@@ -108,7 +112,7 @@ store_secret(Secret, Msg, Opts) ->
 %% @doc Verify the HMAC commitment with the key being the secret from the 
 %% request cookies. We find the appropriate cookie from the cookie message by
 %% the committer ID given in the request message.
--spec verify(#{ _ => _ }, #{ secret => binary(), committer => binary(), _ => _ }, map()) -> term().
+-spec verify(#{ _ => _ }, #{ secret => binary(), committer => binary(), _ => _ }, _) -> _.
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_codec_cookie:opts(RawOpts),
     ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),
@@ -161,7 +165,7 @@ default_generator(_Opts) ->
 execute_generator(GeneratorPath, Opts) when is_binary(GeneratorPath) ->
     hb_ao:resolve(GeneratorPath, Opts);
 execute_generator(Generator, Opts) ->
-    Path = hb_maps:get(<<"path">>, Generator, <<"generate">>, Opts),
+    Path = maps:get(<<"path">>, Generator, <<"generate">>),
     hb_ao:resolve(Generator#{ <<"path">> => Path }, Opts).
 
 %% @doc Find all secrets in the cookie of a message.
@@ -169,9 +173,9 @@ find_secrets(Request, Opts) ->
     maybe
         {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
         [
-            hb_maps:get(SecretRef, Cookie, secret_unavailable, Opts)
+            maps:get(SecretRef, Cookie, secret_unavailable)
         ||
-            SecretRef = <<"secret-", _/binary>> <- hb_maps:keys(Cookie)
+            SecretRef = <<"secret-", _/binary>> <- maps:keys(Cookie)
         ]
     else error -> []
     end.
@@ -186,7 +190,7 @@ find_secret(Request, Opts) ->
 find_secret(Committer, Request, Opts) ->
     maybe
         {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
-        {ok, _Secret} ?= hb_maps:find(<<"secret-", Committer/binary>>, Cookie, Opts)
+        {ok, _Secret} ?= maps:find(<<"secret-", Committer/binary>>, Cookie)
     else error -> {error, not_found}
     end.
 
@@ -213,7 +217,7 @@ directly_invoke_commit_verify_test() ->
             CommittedMsg,
             #{}
         ),
-    VerifyReqWithoutComms = hb_maps:without([<<"commitments">>], VerifyReq, #{}),
+    VerifyReqWithoutComms = maps:remove(<<"commitments">>, VerifyReq),
     ?event({verify_req_without_comms, VerifyReqWithoutComms}),
     ?assert(hb_message:verify(CommittedMsg, VerifyReqWithoutComms, #{})),
     ok.

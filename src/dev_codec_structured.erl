@@ -26,16 +26,15 @@
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
 %%% Route signature functions to the `dev_codec_httpsig' module
--spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec commit(#{ _ => _ }, #{ _ => _ }, _) -> _.
 commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
--spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
 verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
--spec from(binary() | list() | #{ _ => _ },
-    #{ encode_types => [binary()], bundle => boolean(), _ => _ },
-    map()) ->
-    {ok, binary() | list() | #{ _ => _ }}.
+-spec from(_,
+    #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
+    _) -> _.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
     % Encode the list as a map, then -- if our request indicates that we are
@@ -50,7 +49,7 @@ from(List, Req, Opts) when is_list(List) ->
             Opts
         ),
     EncodingLists = lists:member(<<"list">>, find_encode_types(Req, Opts)),
-    EncodingHasAOTypes = hb_maps:is_key(<<"ao-types">>, DecodedAsMap, Opts),
+    EncodingHasAOTypes = maps:is_key(<<"ao-types">>, DecodedAsMap),
     case EncodingLists orelse EncodingHasAOTypes of
         true ->
             AOTypes = decode_ao_types(DecodedAsMap, Opts),
@@ -154,8 +153,8 @@ from(Msg, Req, Opts) when is_map(Msg) ->
 from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
 
 %% @doc Find the types that should be encoded from the request and options.
-find_encode_types(Req, Opts) ->
-    hb_maps:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES, Opts).
+find_encode_types(Req, _Opts) ->
+    maps:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES).
 
 %% @doc Determine the type for a value.
 type(Int) when is_integer(Int) -> <<"integer">>;
@@ -166,7 +165,7 @@ type(Other) -> Other.
 
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
-    case hb_maps:get(<<"bundle">>, Req, not_found, Opts) of
+    case maps:get(<<"bundle">>, Req, not_found) of
         not_found -> hb_opts:get(linkify_mode, offload, Opts);
     	true ->
             % The request is asking for a bundle, so we should _not_ linkify.
@@ -177,8 +176,7 @@ linkify_mode(Req, Opts) ->
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.
--spec to(binary() | list() | #{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, binary() | list() | #{ _ => _ }}.
+-spec to(_, #{ _ => _ }, _) -> _.
 to(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(TABM0, Req, Opts) when is_list(TABM0) ->
     % If we receive a list, we convert it to a message and run `to/3' on it. 
