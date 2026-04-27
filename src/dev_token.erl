@@ -79,24 +79,49 @@ normalize(Base, _Req, _Opts) ->
 snapshot(Base, _Req, _Opts) ->
     {ok, Base}.
 
-%% @doc Entrypoint for computations on token processes. Expects the `action'
-%% key to hold the `path' to execute after enforcing the token's security
-%% constraints. Always returns the base state unmodified in the event of 
-%% downstream device errors, such that invalid interactions do not result in
-%% invalid `~process@1.0' states.
+%% @doc Entrypoint for computations on token processes. Deduplicates by signed
+%% assignment body, then expects the `action' key to hold the `path' to execute
+%% after enforcing the token's security constraints. Always returns the base
+%% state unmodified in the event of downstream device errors, such that invalid
+%% interactions do not result in invalid `~process@1.0' states.
 compute(Base, Assignment, Opts) ->
     ?event({token_call, Assignment}),
-    maybe
-        {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
-        {ok, Action} ?= hb_ao:resolve(Assignment, <<"body/action">>, Opts),
-        {ok, Res} ?= handle_action(Action, Base, SecureReq, Opts),
-        ?event(debug_token, {route_result, Res}, Opts),
-        {ok, Res}
-    else
+    case deduplicate(Base, Assignment, Opts) of
+        {skip, DedupedBase} ->
+            ?event(token_short, {skipping_duplicate_assignment, Assignment}, Opts),
+            {ok, DedupedBase};
+        {ok, DedupedBase} ->
+            maybe
+                {ok, SecureReq} ?= enforce_security(DedupedBase, Assignment, Opts),
+                {ok, Action} ?= hb_ao:resolve(Assignment, <<"body/action">>, Opts),
+                {ok, Res} ?= handle_action(Action, DedupedBase, SecureReq, Opts),
+                ?event(debug_token, {route_result, Res}, Opts),
+                {ok, Res}
+            else
+                {error, Reason} ->
+                    ?event(token_short, {error_during_token_call, Reason}, Opts),
+                    send_error(Base, Assignment, Reason, Opts)
+            end;
         {error, Reason} ->
-            ?event(token_short, {error_during_token_call, Reason}, Opts),
+            ?event(token_short, {error_during_token_dedup, Reason}, Opts),
             send_error(Base, Assignment, Reason, Opts)
     end.
+
+%% @doc Deduplicate token computations by the signed assignment body. Replayed
+%% assignments get fresh slots, so the assignment itself cannot be the subject.
+deduplicate(Base, Assignment, Opts) ->
+    BaseDevice = hb_maps:get(<<"device">>, Base, not_found, Opts),
+    case hb_ao:resolve(Base, {as, <<"dedup@1.0">>, Assignment}, Opts) of
+        {Status, DedupedBase} when Status =:= ok; Status =:= skip ->
+            {Status, restore_device(BaseDevice, DedupedBase, Opts)};
+        Error ->
+            Error
+    end.
+
+restore_device(not_found, Base, _Opts) ->
+    Base;
+restore_device(Device, Base, Opts) ->
+    hb_ao:set(Base, <<"device">>, Device, Opts).
 
 %% @doc Enforce the security constraints of the base state upon the request.
 enforce_security(Base, Req, Opts) ->
