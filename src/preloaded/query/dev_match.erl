@@ -80,13 +80,13 @@ value_path(Other, Opts) ->
 
 %% @doc Write all keys in the base message to the match index. Expects the `Base'
 %% message to already be converted to a TABM.
--spec write(list(), #{ _ => _ }, map()) -> term().
+-spec write(_, #{ _ => _ }, _) -> _.
 write(IDs, Base, Opts) ->
     case store(Opts) of
         [] -> {skip, <<"No store configured for match index.">>};
         Store ->
             IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
-            hb_maps:map(
+            maps:foreach(
                 fun(RawKey, Value) ->
                     Key = hb_ao:normalize_key(RawKey),
                     ValuePath = value_path(Value, Opts),
@@ -110,7 +110,7 @@ write(IDs, Base, Opts) ->
 
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
--spec match(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec match(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
 match(Key, Base, Opts) ->
     Store = store(Opts),
@@ -129,13 +129,10 @@ match(Key, Base, Opts) ->
 
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
--spec all(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec all(#{ _ => _ }, #{ _ => _ }, _) -> _.
 all(Base, _Req, Opts) ->
     IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
-    Keys =
-        hb_maps:keys(
-            IndexBase
-        ),
+    Keys = maps:keys(IndexBase),
     case Keys of
         [] -> {ok, []};
         [FirstKey | Rest] ->

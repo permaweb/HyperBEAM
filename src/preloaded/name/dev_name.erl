@@ -25,7 +25,7 @@ info(_) ->
 %% pointer and its contents is loaded from the cache. For example,
 %% `GET /~name@1.0/reference' yields the message at the path specified by the
 %% `reference' key.
--spec resolve(term(), #{ _ => _ }, #{ load => boolean(), _ => _ }, map()) -> term().
+-spec resolve(_, #{ _ => _ }, #{ load => boolean(), _ => _ }, _) -> _.
 resolve(Key, _, Req, Opts) ->
     Resolvers = hb_opts:get(name_resolvers, [], Opts),
     ?event({resolvers, Resolvers}),
@@ -79,12 +79,16 @@ execute_resolver(Key, Resolver, Opts) when is_map(Resolver) ->
 
 %% @doc Implements an `on/request' compatible hook that resolves names given in
 %% the `host` key to their corresponding ID and prepends it to the execution path.
--spec request(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec request(
+    #{ _ => _ },
+    #{ request := #{ host := binary(), _ => _ }, body := _, _ => _ },
+    _
+) -> _.
 request(HookMsg, HookReq, Opts) ->
     ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}}),
     maybe
-        {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
-        {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
+        {ok, Req} ?= maps:find(<<"request">>, HookReq),
+        {ok, Host} ?= maps:find(<<"host">>, Req),
         {ok, Name} ?=
             name_from_host(
                 Host,
@@ -94,7 +98,7 @@ request(HookMsg, HookReq, Opts) ->
         ModReq =
             maybe_append_named_message(
                 ResolvedMsg,
-                hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
+                maps:get(<<"body">>, HookReq),
                 Opts
             ),
         ?event(
@@ -138,7 +142,7 @@ maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
         true when is_map(OldBase) or is_list(OldBase) -> OldReq;
         true -> [ResolvedMsg|ReqMsgsRest];
         false ->
-            case is_map(OldBase) andalso hb_maps:get(<<"path">>, OldBase, not_found, Opts) of
+            case is_map(OldBase) andalso maps:get(<<"path">>, OldBase, not_found) of
                 not_found ->
                     ?event(
                         {skipping_old_base,

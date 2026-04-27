@@ -57,7 +57,7 @@
 %% @doc Execute a named hook with the provided request and options
 %% This function finds all handlers for the hook and evaluates them in sequence.
 %% The result of each handler is used as input to the next handler.
--spec on(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec on(#{ _ => _ }, #{ _ => _ }, _) -> _.
 on(HookName, Req, Opts) ->
     ?event(hook, {attempting_execution_for_hook, HookName}),
     % Get all handlers for this hook from the options
@@ -199,7 +199,10 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:raw(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ <<"hashpath">> => ignore }
+                Opts#{
+                    <<"hashpath">> => ignore,
+                    <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+                }
             ),
         ?event(hook,
             {handler_result,

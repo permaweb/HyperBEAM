@@ -49,7 +49,7 @@ info(_Base, _Opts) ->
 
 %% @doc Boot a WASM image on the image stated in the `process/image' field of
 %% the message.
--spec init(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(M1, M2, Opts) ->
     ?event(running_init),
     % Where we should read initial parameters from.
@@ -160,7 +160,7 @@ default_import_resolver(Base, Req, Opts) ->
 
 %% @doc Call the WASM executor with a message that has been prepared by a prior
 %% pass.
--spec compute(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec compute(#{ _ => _ }, #{ _ => _ }, _) -> _.
 compute(RawM1, M2, Opts) ->
     % Normalize the message to have an open WASM instance, but no literal `State'.
     % The hashpath is not updated during this process. This allows us to take
@@ -249,7 +249,7 @@ compute(RawM1, M2, Opts) ->
 
 %% @doc Normalize the message to have an open WASM instance, but no literal
 %% `State' key. Ensure that we do not change the hashpath during this process.
--spec normalize(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec normalize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 normalize(RawM1, M2, Opts) ->
     ?event({normalize_raw_m1, RawM1}),
     M3 = 
@@ -286,7 +286,7 @@ normalize(RawM1, M2, Opts) ->
     {ok, hb_ao:set(M3, #{ <<"snapshot">> => unset }, Opts)}.
 
 %% @doc Serialize the WASM state to a binary.
--spec snapshot(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
 snapshot(M1, M2, Opts) ->
     ?event(snapshot, generating_snapshot),
     Instance = instance(M1, M2, Opts),
@@ -298,7 +298,7 @@ snapshot(M1, M2, Opts) ->
     }.
 
 %% @doc Tear down the WASM executor.
--spec terminate(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec terminate(#{ _ => _ }, #{ _ => _ }, _) -> _.
 terminate(M1, M2, Opts) ->
     ?event(terminate_called_on_dev_wasm),
     Prefix =
@@ -320,7 +320,7 @@ terminate(M1, M2, Opts) ->
 %% @doc Get the WASM instance from the message. Note that this function is exported
 %% such that other devices can use it, but it is excluded from calls from AO-Core
 %% resolution directly.
--spec instance(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec instance(#{ _ => _ }, #{ _ => _ }, _) -> _.
 instance(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Path = <<Prefix/binary, "/instance">>,
@@ -333,7 +333,7 @@ instance(M1, M2, Opts) ->
 %% 3. Resolving the adjusted-path-Req against the added-state-Base.
 %% 4. If it succeeds, return the new state from the message.
 %% 5. If it fails with `not_found', call the stub handler.
--spec import(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec import(#{ _ => _ }, #{ _ => _ }, _) -> _.
 import(Base, Req, Opts) ->
     % 1. Adjust the path to the stdlib.
     ModName = hb_ao:get(<<"module">>, Req, Opts),

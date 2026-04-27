@@ -176,7 +176,7 @@ default_generator(_Opts) ->
 execute_generator(GeneratorPath, Opts) when is_binary(GeneratorPath) ->
     hb_ao:resolve(GeneratorPath, Opts);
 execute_generator(Generator, Opts) ->
-    Path = hb_maps:get(<<"path">>, Generator, <<"generate">>, Opts),
+    Path = maps:get(<<"path">>, Generator, <<"generate">>),
     hb_ao:resolve(Generator#{ <<"path">> => Path }, Opts).
 
 %% @doc Find all secrets in the cookie of a message.
@@ -184,9 +184,9 @@ find_secrets(Request, Opts) ->
     maybe
         {ok, Cookie} ?= dev_cookie:extract(Request, #{}, Opts),
         [
-            hb_maps:get(SecretRef, Cookie, secret_unavailable, Opts)
+            maps:get(SecretRef, Cookie, secret_unavailable)
         ||
-            SecretRef = <<"secret-", _/binary>> <- hb_maps:keys(Cookie)
+            SecretRef = <<"secret-", _/binary>> <- maps:keys(Cookie)
         ]
     else error -> []
     end.
@@ -228,7 +228,7 @@ directly_invoke_commit_verify_test() ->
             CommittedMsg,
             #{}
         ),
-    VerifyReqWithoutComms = hb_maps:without([<<"commitments">>], VerifyReq, #{}),
+    VerifyReqWithoutComms = maps:remove(<<"commitments">>, VerifyReq),
     ?event({verify_req_without_comms, VerifyReqWithoutComms}),
     ?assert(hb_message:verify(CommittedMsg, VerifyReqWithoutComms, #{})),
     ok.

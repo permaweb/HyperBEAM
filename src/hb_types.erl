@@ -85,8 +85,12 @@ cached_extract(Module, Opts) ->
 
 extract_cache_path(Module) ->
     ModuleBin = atom_to_binary(Module, utf8),
-    MD5 = hb_util:encode(Module:module_info(md5)),
-    hb_path:to_binary([<<"ao-core">>, <<"device-", ModuleBin/binary>>, MD5]).
+    BeamHash =
+        case code:get_object_code(Module) of
+            {Module, Beam, _Filename} -> hb_util:encode(hb_crypto:sha256(Beam));
+            _ -> hb_util:encode(Module:module_info(md5))
+        end,
+    hb_path:to_binary([<<"ao-core">>, <<"device-", ModuleBin/binary>>, BeamHash]).
 
 read_cached_extract(Path, Opts) ->
     try hb_store:read(Path, hb_store:scope(Opts, local)) of

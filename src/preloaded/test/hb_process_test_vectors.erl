@@ -296,6 +296,85 @@ wasm_compute_from_id_test_parallel() ->
     ?event(process_compute, {computed_message, {res, Res}}),
     ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Res, Opts)).
 
+compute_native_cache_ignores_request_noise_test_parallel() ->
+    Opts = test_opts(#{ cache_control => <<"always">>, process_async_cache => false }),
+    Base =
+        hb_message:commit(
+            hb_message:uncommitted(test_process(Opts), Opts),
+            Opts
+        ),
+    schedule_test_message(Base, <<"TEST TEXT">>, Opts),
+    ProcID = lib_process:process_id(Base, #{}, Opts),
+    Req1 = #{
+        <<"path">> => <<"compute">>,
+        <<"slot">> => <<"0">>,
+        <<"accept">> => <<"text/html">>
+    },
+    Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+    {ok, Res1} = hb_ao:resolve(ProcID, Req1, Opts),
+    {ok, Res2} =
+        hb_ao:resolve(
+            ProcID,
+            Req2,
+            Opts#{ cache_control => <<"only-if-cached">> }
+        ),
+    ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res1, Opts)),
+    ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res2, Opts)).
+
+compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
+    {timeout, 30, fun() ->
+        rand:seed(default),
+        Wallet = ar_wallet:new(),
+        Opts = test_opts(#{
+            port => 10000 + rand:uniform(10000),
+            priv_wallet => Wallet,
+            cache_control => <<"always">>,
+            process_async_cache => false,
+            on =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => <<"rate-limit@1.0">>
+                        }
+                },
+            rate_limit_requests => 100,
+            rate_limit_period => 1_000_000,
+            rate_limit_max => 100
+        }),
+        Node = hb_http_server:start_node(Opts),
+        Base =
+            hb_message:commit(
+                hb_message:uncommitted(test_process(Opts), Opts),
+                Opts
+            ),
+        ok = hb_cache:write(Base, Opts),
+        schedule_test_message(Base, <<"TEST TEXT">>, Opts),
+        ProcID = hb_util:human_id(hb_message:id(Base, all, Opts)),
+        Req1 = #{
+            <<"path">> => << ProcID/binary, "/compute">>,
+            <<"slot">> => <<"0">>,
+            <<"accept">> => <<"text/html">>,
+            <<"x-real-ip">> => <<"1.2.3.4">>
+        },
+        Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+        {ok, Res1} = hb_http:get(Node, Req1, Opts),
+        ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
+        NodeOpts = hb_http_server:get_opts(#{ http_server => ServerID }),
+        ok = hb_http_server:set_opts(NodeOpts#{ cache_control => <<"only-if-cached">> }),
+        {ok, Res2} = hb_http:get(Node, Req2, Opts),
+        RateLimitPID = hb_name:lookup({dev_rate_limit, ServerID}),
+        RateLimitPID ! {balance, self(), <<"1.2.3.4">>},
+        Balance =
+            receive
+                {balance, CurrentBalance} -> CurrentBalance
+            after 1000 ->
+                timeout
+            end,
+        ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res1, Opts)),
+        ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res2, Opts)),
+        ?assert(Balance < 99)
+    end}.
+
 http_wasm_process_by_id_test_parallel() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),

@@ -11,7 +11,7 @@
 content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Encode a message to a JSON string, using JSON-native typing.
--spec to(binary() | #{ _ => _ }, #{ _ => _ }, map()) -> {ok, binary()}.
+-spec to(binary() | #{ _ => _ }, #{ bundle => boolean(), _ => _ }, _) -> _.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
@@ -46,8 +46,7 @@ to(Msg, Req, Opts) ->
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
--spec from(binary() | #{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, binary() | #{ _ => _ }}.
+-spec from(binary() | #{ _ => _ }, #{ 'accept-codec' => binary(), _ => _ }, _) -> _.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
 from(JSON, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
@@ -64,7 +63,7 @@ from(JSON, Req, Opts) ->
             ConvOpts
         ),
     ?event(debug_json, {structured, Structured}, Opts),
-    case hb_maps:get(<<"accept-codec">>, Req, undefined, Opts) of
+    case maps:get(<<"accept-codec">>, Req, undefined) of
         <<"structured@1.0">> -> {ok, Structured};
         _ ->
             % Re-encode the structured message back to TABM for the caller.
@@ -101,28 +100,17 @@ verify(Msg, Req, Opts) ->
         )
     }.
 
--spec committed(binary() | #{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec committed(binary() | #{ _ => _ }, #{ _ => _ }, _) -> _.
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);
 committed(Msg, _Req, Opts) ->
     hb_message:committed(Msg, all, Opts).
 
 %% @doc Deserialize the JSON string found at the given path.
--spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, map()) ->
-    {ok, binary() | #{ _ => _ }} | {error, #{ _ => _ }}.
+-spec deserialize(#{ _ => _ }, #{ target => binary(), _ => _ }, _) -> _.
 deserialize(Base, Req, Opts) ->
-    Payload = 
-        hb_ao:get(
-            Target =
-                hb_ao:get(
-                    <<"target">>,
-                    Req,
-                    <<"body">>,
-                    Opts
-                ),
-            Base,
-            Opts
-        ),
+    Target = maps:get(<<"target">>, Req, <<"body">>),
+    Payload = hb_ao:get(Target, Base, Opts),
     case Payload of
         not_found -> {error, #{
             <<"status">> => 404,
@@ -137,8 +125,7 @@ deserialize(Base, Req, Opts) ->
     end.
 
 %% @doc Serialize a message to a JSON string.
--spec serialize(#{ _ => _ }, #{ _ => _ }, map()) ->
-    {ok, #{ body := binary(), content_type := binary() }}.
+-spec serialize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 serialize(Base, Msg, Opts) ->
     {ok,
         #{
