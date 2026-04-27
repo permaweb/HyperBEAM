@@ -464,7 +464,25 @@ do_import(Proc, CheckpointMessage, Opts) ->
                 <<"snapshot">> => CheckpointMessage
             },
         % Save the state snapshot into the store.
-        {ok, _} ?= dev_process_cache:write(ProcID, Slot, WithSnapshot, Opts),
+        PublicCheckpoint = maps:remove(<<"snapshot">>, WithSnapshot),
+        {ok, _} ?=
+            hb_cache:write_result(
+                [
+                    {ProcID, #{ <<"path">> => <<"compute">>, <<"slot">> => Slot }},
+                    {ProcID, #{ <<"path">> => <<"latest">> }}
+                ],
+                hb_private:reset(PublicCheckpoint),
+                Opts
+            ),
+        {ok, _} ?=
+            hb_cache:write_result(
+                [
+                    {ProcID, #{ <<"path">> => <<"restore">>, <<"slot">> => Slot }},
+                    {ProcID, #{ <<"path">> => <<"restore">> }}
+                ],
+                hb_private:reset(WithSnapshot),
+                Opts
+            ),
         % Return the normalized process message.
         {ok, WithSnapshot}
     else
@@ -609,8 +627,8 @@ import_legacy_checkpoint() ->
     SnapshotData = hb_maps:get(<<"data">>, Snapshot, not_found, Opts),
     ?assert(byte_size(SnapshotData) > 0),
     ?assertMatch(
-        {ok, Slot, _} when Slot > 0,
-        dev_process_cache:latest(ProcID, Opts)
+        {hit, {ok, #{ <<"at-slot">> := Slot }}} when Slot > 0,
+        hb_cache:read_resolved(ProcID, #{ <<"path">> => <<"latest">> }, Opts)
     ),
     {ok, ActualSlot} =
         hb_ao:resolve(<<ProcID/binary, "~process@1.0/compute/at-slot">>, Opts),

@@ -43,15 +43,37 @@ compute_group(Base, Req, Opts) ->
 
 %% @doc Return `true' if the requested compute result is already cached.
 compute_cached(ProcID, not_found, Opts) ->
-    case dev_process_cache:latest(ProcID, Opts) of
-        {ok, _Slot, _Msg} -> true;
+    case read_process_edge(ProcID, latest_req(), Opts) of
+        {ok, _Msg} -> true;
         _ -> false
     end;
 compute_cached(ProcID, RawSlot, Opts) ->
-    case dev_process_cache:read(ProcID, hb_util:int(RawSlot), Opts) of
+    case read_process_edge(ProcID, slot_req(hb_util:int(RawSlot)), Opts) of
         {ok, _Msg} -> true;
         _ -> false
     end.
+
+read_process_edge(ProcID, Req, Opts) ->
+    case hb_cache:read_resolved(ProcID, Req, process_cache_opts(Opts)) of
+        {hit, {ok, Msg}} -> {ok, Msg};
+        {hit, Other} -> Other;
+        miss -> {error, not_found}
+    end.
+
+slot_req(Slot) ->
+    #{ <<"path">> => <<"compute">>, <<"slot">> => hb_util:int(Slot) }.
+
+latest_req() ->
+    #{ <<"path">> => <<"latest">> }.
+
+process_cache_opts(RawOpts) ->
+    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    UnscopedStore =
+        case hb_opts:get(store, no_viable_store, RawOpts) of
+            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
+            Other -> Other
+        end,
+    RawOpts#{ store => hb_store:scope(UnscopedStore, Scope) }.
 
 process_to_group_name(Base, Opts) ->
     Initialized = lib_process:ensure_process_key(Base, Opts),
@@ -237,9 +259,8 @@ grouper_skips_when_slot_cached_test() ->
     % Write slot 5 into the cache. The same request now has a result
     % available and the grouper should step out of the queue.
     {ok, _} =
-        dev_process_cache:write(
-            ProcessGroup,
-            5,
+        hb_cache:write_result(
+            [{ProcessGroup, #{ <<"path">> => <<"compute">>, <<"slot">> => 5 }}],
             #{ <<"hello">> => <<"cached">> },
             Opts
         ),
