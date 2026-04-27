@@ -32,7 +32,7 @@
 
 %% @doc Exported function for getting device info, controls which functions are
 %% exposed via the device API.
--spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec info(_, _, _) -> _.
 info(_) -> 
     #{
         exports =>
@@ -92,7 +92,7 @@ info(_Base, _Req, _Opts) ->
 %% @doc Register function that allows telling the current node to register
 %% a new route with a remote router node. This function should also be idempotent.
 %% so that it can be called only once.
--spec register(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec register(_, _, _) -> _.
 register(_M1, M2, Opts) ->
     %% Extract all required parameters from options
     %% These values will be used to construct the registration message
@@ -140,7 +140,7 @@ register(_M1, M2, Opts) ->
     {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
--spec routes(#{ _ => _ }, #{ method => binary(), _ => _ }, _) -> _.
+-spec routes(_, #{ method => binary(), _ => _ }, _) -> _.
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = load_routes(Opts),
@@ -238,7 +238,7 @@ routes(M1, M2, Opts) ->
 %% Can operate as a `~router@1.0' device, which will ignore the base message,
 %% routing based on the Opts and request message provided, or as a standalone
 %% function, taking only the request message and the `Opts' map.
--spec route(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec route(_, _, _) -> _.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
 route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
@@ -409,7 +409,7 @@ do_apply_route(
 %% @doc Find the first matching template in a list of known routes. Allows the
 %% path to be specified by either the explicit `path' (for internal use by this
 %% module), or `route-path' for use by external devices and users.
--spec match(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec match(_, _, _) -> _.
 match(Base, Req, Opts) ->
     ?event(debug_preprocess,
         {matching_routes,

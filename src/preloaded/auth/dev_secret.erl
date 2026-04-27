@@ -174,7 +174,7 @@
 %% @doc Generate a new wallet for a user and register it on the node. If the
 %% `committer' field is provided, we first check whether there is a wallet
 %% already registered for it. If there is, we return the wallet details.
--spec generate(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec generate(_, _, _) -> _.
 generate(Base, Request, Opts) ->
     case request_to_wallets(Base, Request, Opts) of
         [] ->
@@ -200,7 +200,7 @@ generate(Base, Request, Opts) ->
 %% @doc Import a wallet for hosting on the node. Expects the keys to be either
 %% provided as a list of keys, or a single key in the `key' field. If neither
 %% are provided, the keys are extracted from the cookie.
--spec import(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec import(_, _, _) -> _.
 import(Base, Request, Opts) ->
     Wallets =
         case hb_maps:find(<<"key">>, Request, Opts) of
@@ -390,12 +390,12 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     end.
 
 %% @doc List all hosted wallets
--spec list(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec list(_, _, _) -> _.
 list(_Base, _Request, Opts) ->
     {ok, list_wallets(Opts)}.
 
 %% @doc Sign a message with a wallet.
--spec commit(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec commit(_, _, _) -> _.
 commit(Base, Request, Opts) ->
     ?event({commit_invoked, {base, Base}, {priv_request, Request}}),
     case request_to_wallets(Base, Request, Opts) of
@@ -581,7 +581,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
 %% @doc Export wallets from a request. The request should contain a source of
 %% wallets (cookies, keys, or wallet names), or a specific list/name of a
 %% wallet to authenticate and export.
--spec export(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec export(_, _, _) -> _.
 export(Base, Request, Opts) ->
     PrivOpts = priv_store_opts(Opts),
     ModReq =
@@ -609,7 +609,7 @@ export(Base, Request, Opts) ->
     end.    
 
 %% @doc Sync wallets from a remote node
--spec sync(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec sync(_, _, _) -> _.
 sync(_Base, Request, Opts) ->
     case hb_ao:get(<<"node">>, Request, undefined, Opts) of
         undefined ->

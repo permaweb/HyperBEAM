@@ -64,7 +64,7 @@ generate(Base, Req, Opts) ->
 
 %% @doc Finalize an `on-request' hook by adding the `set-cookie' header to the
 %% end of the message sequence.
--spec finalize(#{ _ => _ }, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
+-spec finalize(_, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 finalize(Base, Request, Opts) ->
     dev_cookie_auth:finalize(Base, Request, Opts).
 
@@ -80,7 +80,7 @@ finalize(Base, Request, Opts) ->
 %% 
 %% The `format' may be specified in the request message as the `req:format' key.
 %% If no `format' is specified, the default is `default'.
--spec get_cookie(#{ _ => _ }, #{ key := binary(), format => binary(), _ => _ }, _) -> _.
+-spec get_cookie(_, #{ key := binary(), format => binary(), _ => _ }, _) -> _.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, Cookies} = extract(Base, Req, Opts),
@@ -97,7 +97,7 @@ get_cookie(Base, Req, RawOpts) ->
     end.
 
 %% @doc Return the parsed and normalized cookies from a message.
--spec extract(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec extract(_, _, _) -> _.
 extract(Msg, Req, Opts) ->
     {ok, MsgWithCookie} = from(Msg, Req, Opts),
     Cookies = hb_private:get(<<"cookie">>, MsgWithCookie, #{}, Opts),
@@ -106,7 +106,7 @@ extract(Msg, Req, Opts) ->
 %% @doc Set the keys in the request message in the cookies of the caller. Removes
 %% a set of base keys from the request message before setting the remainder as
 %% cookies.
--spec store(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec store(_, _, _) -> _.
 store(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     ?event({store, {priv_base, Base}, {priv_req, Req}}),
@@ -258,7 +258,7 @@ to_cookie_line(Key, Cookie) ->
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
 -spec from(
     #{ cookie => binary() | [binary()], 'set-cookie' => binary() | [binary()], _ => _ },
-    #{ _ => _ },
+    _,
     _
 ) -> _.
 from(Msg, Req, Opts) ->

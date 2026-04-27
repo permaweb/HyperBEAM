@@ -21,7 +21,7 @@
 %% @returns {ok, Data} on success,
 %%          {error, not_found} if the key does not exist,
 %%          {error, Reason} or {failure, Reason} on failure.
--spec read(#{ _ => _ }, #{ read := binary(), accept => binary(), _ => _ }, _) -> _.
+-spec read(_, #{ read := binary(), accept => binary(), _ => _ }, _) -> _.
 read(_M1, M2 = #{ <<"read">> := Location }, Opts) ->
     ?event({read, {key_extracted, Location}}),
     ?event(debug_gateway, cache_read),
@@ -80,7 +80,7 @@ read(_M1, M2 = #{ <<"read">> := Location }, Opts) ->
 %% @param Opts A map of configuration options.
 %% @returns {ok, Path} on success, where Path indicates where the data was
 %%          stored, {error, Reason} or {failure, Reason} on failure.
--spec write(#{ _ => _ }, #{ body => binary() | #{ _ => _ }, type => binary(), _ => _ }, _) -> _.
+-spec write(_, #{ body => binary() | #{ _ => _ }, type => binary(), _ => _ }, _) -> _.
 write(_M1, M2, Opts) ->
     case is_trusted_writer(M2, Opts) of
         true ->
@@ -135,7 +135,7 @@ write(_M1, M2, Opts) ->
     end.
 
 %% @doc Link a source to a destination in the cache.
--spec link(#{ _ => _ }, #{ destination := binary(), source := binary(), _ => _ }, _) -> _.
+-spec link(_, #{ destination := binary(), source := binary(), _ => _ }, _) -> _.
 link(_Base, Req = #{ <<"destination">> := Destination, <<"source">> := Source }, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->
@@ -144,7 +144,7 @@ link(_Base, Req = #{ <<"destination">> := Destination, <<"source">> := Source },
             {error, not_authorized}
     end.
 
--spec group(#{ _ => _ }, #{ group := binary(), _ => _ }, _) -> _.
+-spec group(_, #{ group := binary(), _ => _ }, _) -> _.
 group(_Base, Req = #{ <<"group">> := Group }, Opts) ->
     case is_trusted_writer(Req, Opts) of
         true ->

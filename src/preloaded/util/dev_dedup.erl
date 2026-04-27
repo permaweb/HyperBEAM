@@ -31,7 +31,7 @@ info(_M1) ->
 %% @doc Forward the keys and `set' functions to the message device, handle all
 %% others with deduplication. This allows the device to be used in any context
 %% where a key is called. If the `dedup-key
--spec handle(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec handle(_, _, _, _) -> _.
 handle(<<"keys">>, M1, _M2, _Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, #{});
 handle(<<"set">>, M1, M2, Opts) ->

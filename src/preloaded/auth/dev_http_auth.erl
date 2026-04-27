@@ -46,7 +46,7 @@
 
 %% @doc Generate or extract a new secret and commit to the message with the
 %% `~httpsig@1.0/commit?type=hmac-sha256&scheme=secret' commitment mechanism.
--spec commit(#{ _ => _ },
+-spec commit(_,
     #{
         secret => binary(),
         authorization => binary(),
@@ -80,7 +80,7 @@ commit(Base, Req, Opts) ->
 
 %% @doc Verify a given `Base' message with a derived `Key' using the
 %% `~httpsig@1.0' secret key HMAC commitment scheme.
--spec verify(#{ _ => _ },
+-spec verify(_,
     #{
         secret => binary(),
         authorization => binary(),
@@ -112,7 +112,7 @@ verify(Base, RawReq, Opts) ->
 %% @doc Collect authentication information from the client. If the `raw' flag
 %% is set to `true', return the raw authentication information. Otherwise,
 %% derive a key from the authentication information and return it.
--spec generate(#{ _ => _ },
+-spec generate(_,
     #{
         secret => binary(),
         authorization => binary(),

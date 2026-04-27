@@ -220,7 +220,7 @@ linkify_mode(Req, Opts) ->
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.
--spec to(_, #{ _ => _ }, _) -> _.
+-spec to(_, _, _) -> _.
 to(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(TABM0, Req, Opts) when is_list(TABM0) ->
     % If we receive a list, we convert it to a message and run `to/3' on it. 

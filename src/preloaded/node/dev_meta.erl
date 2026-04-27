@@ -58,7 +58,7 @@ is_operator(_Base, Req, NodeMsg) ->
 %% Subsequently, rather than embedding the `git-short-hash-length', for the
 %% avoidance of doubt, we include the short hash separately, as well as its long
 %% hash.
--spec build(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec build(_, _, _) -> _.
 build(_, _, _NodeMsg) ->
     {ok,
         #{
@@ -411,7 +411,7 @@ maybe_sign(Res, NodeMsg) ->
 
 %% @doc Check if the request in question is signed by a given `role' on the node.
 %% The `role' can be one of `operator' or `initiator'.
--spec is(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec is(_, _, _) -> _.
 is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
