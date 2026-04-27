@@ -2,7 +2,7 @@
 %% Spawns up to MaxWorkers workers and refills the pool as workers complete.
 -module(hb_pmap).
 
--export([parallel_map/3, parallel_map/4]).
+-export([parallel_map/3, parallel_map/4, parallel_fold/5, parallel_fold/6]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -62,6 +62,53 @@ collect(Active, Remaining, Fun, SpawnOpts, Parent, Results) ->
                         SpawnOpts,
                         Parent,
                         NewResults
+                    )
+            end;
+        {hb_pmap_worker_crash, _Ref, Class, Reason, Stacktrace} ->
+            throw({pmap_worker_crashed, Class, Reason, Stacktrace})
+    end.
+
+%% @doc Like parallel_map/4 but folds each result into an accumulator as it
+%% arrives rather than collecting all results first. This avoids holding every
+%% result in a map simultaneously, which matters when results carry large
+%% binaries. FoldFun(Result, Acc) is called in arrival order (not input order)
+%% so callers must tolerate out-of-order results (e.g. sort afterwards).
+%% GC is forced after each fold step so that large binaries in the now-folded
+%% result are freed promptly.
+parallel_fold(Items, Fun, FoldFun, Acc0, MaxWorkers) ->
+    parallel_fold(Items, Fun, FoldFun, Acc0, MaxWorkers, []).
+
+parallel_fold(Items, Fun, FoldFun, Acc0, MaxWorkers, SpawnOpts)
+        when is_list(Items), is_function(Fun, 1), is_function(FoldFun, 2) ->
+    Workers = max(1, MaxWorkers),
+    Parent = self(),
+    ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
+    {ToSpawn, Remaining} =
+        lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
+    ActiveRefs = [spawn_worker(IWR, Fun, Parent, SpawnOpts) || IWR <- ToSpawn],
+    fold_collect(ActiveRefs, Remaining, Fun, SpawnOpts, Parent, FoldFun, Acc0).
+
+fold_collect([], [], _Fun, _SpawnOpts, _Parent, _FoldFun, Acc) ->
+    Acc;
+fold_collect(Active, Remaining, Fun, SpawnOpts, Parent, FoldFun, Acc) ->
+    receive
+        {hb_pmap_result, Ref, Result} ->
+            NewAcc = FoldFun(Result, Acc),
+            erlang:garbage_collect(),
+            NewActive = lists:delete(Ref, Active),
+            case Remaining of
+                [] ->
+                    fold_collect(NewActive, [], Fun, SpawnOpts, Parent, FoldFun, NewAcc);
+                [Next | Rest] ->
+                    NextRef = spawn_worker(Next, Fun, Parent, SpawnOpts),
+                    fold_collect(
+                        [NextRef | NewActive],
+                        Rest,
+                        Fun,
+                        SpawnOpts,
+                        Parent,
+                        FoldFun,
+                        NewAcc
                     )
             end;
         {hb_pmap_worker_crash, _Ref, Class, Reason, Stacktrace} ->

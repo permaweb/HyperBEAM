@@ -384,9 +384,11 @@ get_chunk(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
     Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
     MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
-    case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
-        {ok, Chunks} ->
-            Data = iolist_to_binary(Chunks),
+    case chunks_to_binary(Offset, Length, MaybeRelativeTXID, Opts) of
+        {ok, Data} ->
+            % Chunk sub-binaries went out of scope inside chunks_to_binary.
+            % Force GC now so they are freed before this worker suspends again.
+            erlang:garbage_collect(),
             case hb_maps:is_key(<<"length">>, Request, Opts) of
                 true ->
                     {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
@@ -395,6 +397,16 @@ get_chunk(_Base, Request, Opts) ->
             end;
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% @doc Fetches the chunk range and immediately assembles into a single binary.
+%% Keeping this in its own function ensures that the intermediate Chunks list
+%% (and the chunk sub-binaries it holds) goes out of scope as soon as the
+%% caller's GC runs, rather than staying live for the rest of get_chunk/3.
+chunks_to_binary(Offset, Length, MaybeRelativeTXID, Opts) ->
+    case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
+        {ok, Chunks} -> {ok, iolist_to_binary(Chunks)};
+        Error -> Error
     end.
 
 %% @doc Fetch a range of chunks in parallel. Determines the appropriate algorithm
@@ -562,13 +574,13 @@ fetch_and_collect(Offsets, GETFun, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
     FetchAndCollectMinBinVHeapSize = hb_opts:get(arweave_chunk_fetch_min_heap_size, ?DEFAULT_MIN_BIN_VHEAP_SIZE, Opts),
     FetchAndCollectFullSweapAfter = hb_opts:get(arweave_chunk_fetch_full_sweap_aftger, ?DEFAULT_FULL_SWEAP_AFTER, Opts),
-    Results = 
+    Results =
         hb_pmap:parallel_map(
-            Offsets, 
-            GETFun, 
-            Concurrency, 
+            Offsets,
+            GETFun,
+            Concurrency,
             [
-                {min_bin_vheap_size, FetchAndCollectMinBinVHeapSize}, 
+                {min_bin_vheap_size, FetchAndCollectMinBinVHeapSize},
                 {fullsweep_after, FetchAndCollectFullSweapAfter}
             ]),
     collect_chunks(Results).
