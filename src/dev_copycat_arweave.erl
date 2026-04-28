@@ -390,24 +390,33 @@ process_l1_request(TXID, Request, Opts) ->
     observe_copycat_l1_stage(
         <<"l1_request_total">>,
         fun() ->
-            maybe
-                {ok, OwnerFilters} ?= parse_owner_filter(Request, Opts),
-                {ok, IncludeTag} ?= parse_tag_filter(<<"include-tag">>, Request, Opts),
-                {ok, ExcludeTag} ?= parse_tag_filter(<<"exclude-tag">>, Request, Opts),
-                {ok,
-                    maybe_process_l1_tx(
-                        TXID,
-                        OwnerFilters#{
-                            include_tag => IncludeTag,
-                            exclude_tag => ExcludeTag
-                        },
-                        Depth,
-                        QueryL1Offset,
-                        Opts
-                    )}
-            else
-                {error, _} = Error ->
-                    Error
+            try
+                maybe
+                    {ok, OwnerFilters} ?= parse_owner_filter(Request, Opts),
+                    {ok, IncludeTag} ?= parse_tag_filter(<<"include-tag">>, Request, Opts),
+                    {ok, ExcludeTag} ?= parse_tag_filter(<<"exclude-tag">>, Request, Opts),
+                    {ok,
+                        maybe_process_l1_tx(
+                            TXID,
+                            OwnerFilters#{
+                                include_tag => IncludeTag,
+                                exclude_tag => ExcludeTag
+                            },
+                            Depth,
+                            QueryL1Offset,
+                            Opts
+                        )}
+                else
+                    {error, _} = Error ->
+                        Error
+                end
+            catch
+                _:Reason:Stacktrace ->
+                    ?event(copycat_short,
+                        {error,
+                            {reason, Reason},
+                            {stacktrace, Stacktrace}}),
+                    {error, Reason}
             end
         end
     ).
@@ -1019,7 +1028,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
     end),
     #{ <<"index-store">> := ParentStore } = IndexStore,
     write_parent(TX#tx.id, BlockHeight, block, ParentStore),
-    case is_bundle_tx(TX, Opts) of
+    try is_bundle_tx(TX, Opts) of
         false ->
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
                 achieved_depth => max(2, TargetDepth)};
@@ -1084,6 +1093,14 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                     #{items_count => 0, bundle_count => 1,
                         skipped_count => 1, achieved_depth => 0}
             end
+    catch
+        _:Reason:Stacktrace ->
+            ?event(copycat_short,
+                {arweave_bundle_skipped,
+                    {tx, {explicit, TX#tx.id}},
+                    {reason, Reason},
+                    {stacktrace, Stacktrace}}),
+            #{items_count => 0, bundle_count => 0, skipped_count => 1, achieved_depth => 0}
     end.
 
 download_bundle_header(EndOffset, Size, Opts) ->
@@ -1598,6 +1615,7 @@ validate_and_flag_item_id(ItemBinary, DeclaredID, EncodedDeclaredID, Store) ->
     end.
 
 %% @doc Check whether a TX header indicates bundle content.
+%% NOTE: This function can throw if transaction tags aren't properly formated
 is_bundle_tx(TX, _Opts) ->
     dev_arweave_common:type(TX) =/= binary.
 
