@@ -38,6 +38,23 @@
 -export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
 -export([bignum_exp/2]).
 
+minted_between(Minted, Max, PropN, PropD, LastT, T)
+    when not is_integer(Minted) orelse not is_integer(Max)
+        orelse not is_integer(PropN) orelse not is_integer(PropD)
+        orelse not is_integer(LastT) orelse not is_integer(T) ->
+            throw({error, invalid_parameter});
+minted_between(Minted, Max, _, _, _, _)
+    when Minted < 0 orelse Max < 0 orelse Minted > Max ->
+        throw({error, invalid_minted_max_boundaries});
+minted_between(_, _, PropN, _, _, _)
+    when PropN < 0 ->
+        throw({error, invalid_negative_propn});
+minted_between(_, _, _, PropD, _, _)
+    when PropD =< 0 ->
+        throw({error, invalid_non_positive_propd});
+minted_between(_, _, PropN, PropD, _, _)
+    when PropD > PropN ->
+      throw({error, invalid_prop_division});
 minted_between(Minted, Max, PropN, PropD, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
