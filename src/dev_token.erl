@@ -41,7 +41,7 @@
         <<"reserved_keys">>,
         <<"is_reserved_key">>,
         <<"dedup">>,
-        <<"dedupt-subject">>
+        <<"dedup-subject">>
     ]
 ).
 
