@@ -1554,7 +1554,7 @@ error_resp(Status, Err, Reason) ->
         <<"status">> => Status,
         <<"body">> => #{
             <<"error">> => Err,
-            <<"reason">> => hb_util:bin(Reason)
+            <<"reason">> => reason_to_text(Reason)
         }
     }}.
 

@@ -419,7 +419,14 @@ nif_create_signing_key(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         return enif_make_badarg(env);
     }
 
-    /* Template for restricted RSA-2048 signing key (PSS, SHA-256). */
+    /* Template for restricted RSA-2048 signing key (PSS, SHA-256).
+     *
+     * NODA is important for appliance attestations: this AK uses the
+     * build's empty object auth and must keep serving quotes even if the
+     * TPM's dictionary-attack counter is locked by unrelated firmware/user
+     * activity. Without TPMA_OBJECT_NODA, real Framework TPMs reject Quote
+     * with TPM_RC_LOCKOUT once global DA lockout is active.
+     */
     TPM2B_PUBLIC in_public = {
         .size = 0,
         .publicArea = {
@@ -428,7 +435,8 @@ nif_create_signing_key(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
             .objectAttributes =
                 TPMA_OBJECT_FIXEDTPM | TPMA_OBJECT_FIXEDPARENT |
                 TPMA_OBJECT_SENSITIVEDATAORIGIN | TPMA_OBJECT_USERWITHAUTH |
-                TPMA_OBJECT_RESTRICTED | TPMA_OBJECT_SIGN_ENCRYPT,
+                TPMA_OBJECT_NODA | TPMA_OBJECT_RESTRICTED |
+                TPMA_OBJECT_SIGN_ENCRYPT,
             .authPolicy = { .size = 0 },
             .parameters.rsaDetail = {
                 .symmetric = { .algorithm = TPM2_ALG_NULL },
