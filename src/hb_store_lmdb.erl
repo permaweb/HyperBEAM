@@ -62,9 +62,12 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
                 batch_size,
                 hb_util:int(maps:get(<<"batch-size">>, Opts, ?DEFAULT_BATCH_SIZE))
             },
-            no_mem_init,
-            no_sync
+            no_mem_init
         ] ++
+        case maps:get(<<"sync">>, Opts, false) of
+            true -> [];
+            false -> [no_sync]
+        end ++
         case maps:get(<<"read-ahead">>, Opts, true) of
             true -> [];
             false -> [no_readahead]
@@ -1066,3 +1069,128 @@ list_with_link_test() ->
     ?event({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     test_stop(StoreOpts).
+
+%%% --- Write Stress Test ---
+%%% Throttled writer + sliding-window RSS stabilization check.
+%%%
+%%% The writer sleeps 1 ms every STRESS_THROTTLE_EVERY writes so the OS can
+%%% evict dirty mmap pages. LMDB opens with no_sync, so high RSS during the
+%%% warmup phase is expected and not an error.
+%%%
+%%% After the warmup period the monitor tracks a sliding window of RSS samples.
+%%% The test fails if RSS is still growing faster than STRESS_MAX_RSS_GROWTH_KiB
+%%% over the last STRESS_STABLE_WINDOW seconds, which indicates a real leak
+%%% rather than normal mmap pressure.
+
+-define(STRESS_DURATION_SECS, 300).
+-define(STRESS_WARMUP_SECS, 60).              %% RSS may climb freely during warmup
+-define(STRESS_STABLE_WINDOW, 30).            %% sliding window length in seconds
+-define(STRESS_MAX_RSS_GROWTH_KiB, 500 * 1024).%% max RSS growth over window = 500 MiB
+-define(STRESS_VALUE_SIZE, 4096).             %% 4 KiB per record
+-define(STRESS_THROTTLE_EVERY, 10).          %% sleep 1 ms every N writes
+
+%% @doc 5-minute write stress test with per-second RSS and file-size reporting.
+lmdb_write_stress_test_() ->
+    {timeout, ?STRESS_DURATION_SECS + 60, fun lmdb_write_stress/0}.
+
+lmdb_write_stress() ->
+    StoreOpts = #{
+        <<"store-module">> => ?MODULE,
+        <<"name">> => <<"/tmp/lmdb-stress-test">>,
+        <<"capacity">> => 100 * 1024 * 1024 * 1024,
+        <<"batch-size">> => 10,
+        <<"sync">> => true
+    },
+    test_reset(StoreOpts),
+    DataDir = binary_to_list(maps:get(<<"name">>, StoreOpts)),
+    DataFile = filename:join(DataDir, "data.mdb"),
+    io:format(user,
+        "~n[stress] === LMDB Write Stress Test ===~n"
+        "[stress] Duration: ~Bs | Warmup: ~Bs | Stable window: ~Bs~n"
+        "[stress] Max RSS growth over window: ~B MiB | Value: ~B B | Batch: ~B | Sync: ~p~n"
+        "[stress] LMDB: ~s~n",
+        [?STRESS_DURATION_SECS, ?STRESS_WARMUP_SECS, ?STRESS_STABLE_WINDOW,
+         ?STRESS_MAX_RSS_GROWTH_KiB div 1024, ?STRESS_VALUE_SIZE,
+         maps:get(<<"batch-size">>, StoreOpts),
+         maps:get(<<"sync">>, StoreOpts), DataFile]
+    ),
+    Value = binary:copy(<<0>>, ?STRESS_VALUE_SIZE),
+    StartTime = erlang:monotonic_time(second),
+    WriterPid = spawn(fun() -> stress_write_loop(StoreOpts, Value, 0) end),
+    MonitorResult = stress_monitor_loop(DataFile, StartTime, 0, []),
+    WriterPid ! stop,
+    FinalSize = filelib:file_size(DataFile),
+    io:format(user,
+        "[stress] === Final: LMDB ~s bytes | Result: ~p ===~n",
+        [stress_fmt(FinalSize), MonitorResult]
+    ),
+    case MonitorResult of
+        {rss_leak, GrowthKiB} ->
+            io:format(user,
+                "[stress] FAIL: RSS grew ~B KiB over ~Bs window (limit ~B KiB)~n",
+                [GrowthKiB, ?STRESS_STABLE_WINDOW, ?STRESS_MAX_RSS_GROWTH_KiB]),
+            ?assertEqual(ok, {rss_leak, GrowthKiB});
+        ok ->
+            ?assert(FinalSize > 0)
+    end,
+    test_stop(StoreOpts).
+
+stress_write_loop(StoreOpts, Value, N) ->
+    Key = <<"stress/", (integer_to_binary(N))/binary>>,
+    write(StoreOpts, Key, Value),
+    case N rem ?STRESS_THROTTLE_EVERY of
+        0 -> timer:sleep(1);
+        _ -> ok
+    end,
+    receive stop -> ok
+    after 0 -> stress_write_loop(StoreOpts, Value, N + 1)
+    end.
+
+%% RssWindow is a list of the last STRESS_STABLE_WINDOW RSS samples, newest first.
+stress_monitor_loop(DataFile, StartTime, PrevSize, RssWindow) ->
+    timer:sleep(1000),
+    Elapsed = erlang:monotonic_time(second) - StartTime,
+    FileSize = filelib:file_size(DataFile),
+    RssKB = stress_rss_kb(),
+    NewWindow = lists:sublist([RssKB | RssWindow], ?STRESS_STABLE_WINDOW),
+    Phase =
+        case Elapsed > ?STRESS_WARMUP_SECS of
+            false -> warmup;
+            true  -> stable
+        end,
+    io:format(user,
+        "[stress] t=~3Bs (~s) | RSS ~s KiB | LMDB ~s bytes | delta +~s bytes~n",
+        [Elapsed, Phase,
+         stress_fmt(RssKB), stress_fmt(FileSize), stress_fmt(FileSize - PrevSize)]
+    ),
+    LeakCheck =
+        case {Phase, length(NewWindow) >= ?STRESS_STABLE_WINDOW} of
+            {stable, true} ->
+                OldestRss = lists:last(NewWindow),
+                Growth = RssKB - OldestRss,
+                case Growth > ?STRESS_MAX_RSS_GROWTH_KiB of
+                    true  -> {rss_leak, Growth};
+                    false -> continue
+                end;
+            _ ->
+                continue
+        end,
+    case LeakCheck of
+        {rss_leak, _} = Leak -> Leak;
+        continue when Elapsed >= ?STRESS_DURATION_SECS -> ok;
+        continue -> stress_monitor_loop(DataFile, StartTime, FileSize, NewWindow)
+    end.
+
+stress_rss_kb() ->
+    Output = os:cmd("ps -o rss= -p " ++ os:getpid()),
+    try list_to_integer(string:trim(Output))
+    catch _:_ -> 0
+    end.
+
+stress_fmt(N) ->
+    Digits = integer_to_list(N),
+    lists:reverse(insert_commas(lists:reverse(Digits), 0)).
+
+insert_commas([], _) -> [];
+insert_commas(Digits, 3) -> [$, | insert_commas(Digits, 0)];
+insert_commas([D | Rest], Count) -> [D | insert_commas(Rest, Count + 1)].
