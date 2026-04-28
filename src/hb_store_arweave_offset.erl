@@ -47,7 +47,7 @@ path(ID) -> throw({cannot_encode_path, ID}).
 encode(Type, StartOffset, Length)
         when
         (Type == true orelse Type == false orelse is_binary(Type))
-        andalso ?IN_BIT_RANGE(StartOffset, ?OFFSET_SZ*8)
+        andalso ?IN_BIT_RANGE(StartOffset, ?OFFSET_SZ)
         andalso is_integer(Length) andalso Length >= 0
     ->
     <<

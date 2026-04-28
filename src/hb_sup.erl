@@ -32,7 +32,16 @@ init(Opts) ->
             type => worker,
             modules => [hb_http_client]
         },
-    {ok, {SupFlags, [GunChild | StoreChildren]}}.
+    GunPoolSupChild =
+        #{
+            id => hb_gun_pool,
+            start => {hb_gun_pool, start_link, []},
+            restart => permanent,
+            shutdown => 15000,
+            type => supervisor,
+            modules => [hb_gun_pool]
+        },
+    {ok, {SupFlags, [GunChild, GunPoolSupChild | StoreChildren]}}.
 
 %% @doc Generate a child spec for stores in the given Opts.
 store_children(Store) when not is_list(Store) ->
