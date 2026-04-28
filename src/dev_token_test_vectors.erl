@@ -68,6 +68,7 @@ generate_process(Params, Opts) ->
             <<"device">> => <<"process@1.0">>,
             <<"type">> => <<"Process">>,
             <<"execution-device">> => <<"token@1.0">>,
+            <<"dedup-subject">> => <<"body">>,
             <<"scheduler-device">> => <<"scheduler@1.0">>,
             <<"push-device">> => <<"push@1.0">>,
             <<"scheduler">> => Addr,
