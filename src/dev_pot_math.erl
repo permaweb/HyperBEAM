@@ -53,8 +53,8 @@ minted_between(_, _, _, PropD, _, _)
     when PropD =< 0 ->
         throw({error, invalid_non_positive_propd});
 minted_between(_, _, PropN, PropD, _, _)
-    when PropD > PropN ->
-      throw({error, invalid_prop_division});
+    when PropN > PropD ->
+      throw({error, invalid_prop_division});    
 minted_between(Minted, Max, PropN, PropD, LastT, T) ->
     Steps = max(T - LastT, 0),
     Remaining = Max - Minted,
