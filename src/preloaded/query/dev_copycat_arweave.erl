@@ -1034,13 +1034,25 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
                 achieved_depth => max(2, TargetDepth)};
         true when TargetDepth > 2 ->
-            L1Result = process_l1_tx_direct(
-                TXStartOffset, TX#tx.data_size,
-                TargetDepth - 1, IndexStore, TXID, TX#tx.id, Opts),
-            L1Result#{
-                achieved_depth =>
-                    max(2, maps:get(achieved_depth, L1Result, 0))
-            };
+            %% Retry to perseve bundle count
+            try 
+                L1Result = process_l1_tx_direct(
+                    TXStartOffset, TX#tx.data_size,
+                    TargetDepth - 1, IndexStore, TXID, TX#tx.id, Opts),
+                L1Result#{
+                    achieved_depth =>
+                        max(2, maps:get(achieved_depth, L1Result, 0))
+                }
+            catch 
+                _:Reason:Stacktrace ->
+                    ?event(copycat_short,
+                        {arweave_bundle_skipped,
+                            {tx, {explicit, TX#tx.id}},
+                            {reason, Reason},
+                            {stacktrace, Stacktrace}}),
+                    #{items_count => 0, bundle_count => 1,
+                        skipped_count => 1, achieved_depth => 0}
+            end;
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
