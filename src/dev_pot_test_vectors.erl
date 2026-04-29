@@ -146,6 +146,22 @@ hyperbeam_mint_current_ms_day_test() ->
     ),
     ?assertEqual(?AO_ONE_DAY_MS, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
 
+hyperbeam_mint_current_ms_256_year_inactive_gap_test() ->
+    Opts = #{},
+    InactiveT = 256 * 365 * ?AO_ONE_DAY_MS,
+    S0 =
+        (pot_state_empty(
+            [],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ))#{
+            <<"t-source">> => <<"timestamp">>
+        },
+    {ok, S1} = dev_pot:mint(S0, #{<<"timestamp">> => InactiveT}, Opts),
+    ?assertEqual(2, ?AO_TOTAL_SUPPLY - hb_maps:get(<<"minted">>, S1, 0, Opts)),
+    ?assertEqual(InactiveT, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
+
 hyperbeam_mint_current_ms_day_by_day_effective_cap_test() ->
     FinalMinted = simulate_hyperbeam_mint_days(?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS),
     ?assertEqual(
