@@ -160,6 +160,8 @@ bignum_exp(X, Y) ->
 
 do_bignum_exp(_, 0, Acc) ->
     Acc;
+do_bignum_exp(X, 1, Acc) ->
+    Acc * X;
 do_bignum_exp(X, Y, Acc) when Y rem 2 =:= 1 ->
     do_bignum_exp(X * X, Y div 2, Acc * X);
 do_bignum_exp(X, Y, Acc) ->
