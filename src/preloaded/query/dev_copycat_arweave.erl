@@ -2049,9 +2049,9 @@ mempool_sender_filter_indexes_matching_tx_test_parallel() ->
     TestStore = hb_test_utils:test_store(),
     IndexStore = #{ <<"index-store">> => [TestStore] },
     BaseOpts = #{
-        store => [TestStore],
-        arweave_index_ids => true,
-        arweave_index_store => IndexStore
+        <<"store">> => [TestStore],
+        <<"arweave-index-ids">> => true,
+        <<"arweave-index-store">> => IndexStore
     },
     ok = hb_store:reset([TestStore]),
     ok = hb_store:start([TestStore]),
@@ -2063,7 +2063,7 @@ mempool_sender_filter_indexes_matching_tx_test_parallel() ->
         hb_util:human_id(crypto:strong_rand_bytes(32))
     ),
     Opts = BaseOpts#{
-        arweave_pending_fun =>
+        <<"arweave-pending-fun">> =>
             fun(_, #{ <<"pending">> := PendingTXID }, _)
                     when PendingTXID =:= MatchTXID ->
                     {ok, MatchTX};
