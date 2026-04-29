@@ -741,7 +741,7 @@ ceil_div(Numerator, Denominator) ->
 
 %% @doc Fetch the advertised data size for an unconfirmed transaction.
 pending_tx_data_size(TXID, Opts) ->
-    case pending(#{}, #{ <<"pending">> => TXID }, Opts#{ exclude_data => true }) of
+    case pending(#{}, #{ <<"pending">> => TXID, <<"exclude-data">> => true }, Opts) of
         {ok, JSON} ->
             {ok, hb_util:int(maps:get(<<"data_size">>, JSON))};
         Error ->
@@ -1084,7 +1084,7 @@ pending(Base, Request, Opts) ->
                         <<"GET">>,
                         <<"/unconfirmed_tx/", TXID/binary>>,
                         Opts#{
-                            exclude_data => ExcludeData
+                            <<"exclude-data">> => ExcludeData
                         }
                     );
                 {ok, _RawOffset} ->

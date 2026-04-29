@@ -1810,8 +1810,8 @@ load_mempool_tx_header(TXID, Opts) ->
     ),
     case mempool_pending(
         #{},
-        #{ <<"pending">> => TXID },
-        Opts#{ exclude_data => true }
+        #{ <<"pending">> => TXID, <<"exclude-data">> => true },
+        Opts
     ) of
         {ok, TX} when is_record(TX, tx) ->
             mempool_progress(
