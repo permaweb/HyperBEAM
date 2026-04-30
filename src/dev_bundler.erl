@@ -533,7 +533,7 @@ run_completion_hooks(Bundle, Opts) ->
                     <<"body">> => Item,
                     <<"bundled-size">> => bundled_item_size(Item, Opts)
                 },
-                latest_opts(Opts)
+                Opts
             )
         end,
         lists:reverse(Bundle#bundle.items)
@@ -544,7 +544,7 @@ run_completion_hooks(Bundle, Opts) ->
             <<"body">> => Bundle#bundle.tx,
             <<"bundled-size">> => bundle_size(Bundle#bundle.tx, Opts)
         },
-        latest_opts(Opts)
+        Opts
     ).
 
 %% @doc Calculate the exact byte size of an item inside its bundle.
@@ -570,20 +570,6 @@ bundle_size(CommittedTX, Opts) ->
     case TX#tx.data_size of
         Size when is_integer(Size) -> Size;
         _ -> byte_size(TX#tx.data)
-    end.
-
-%% @doc Refresh options before running hooks that may depend on live state.
-latest_opts(Opts) ->
-    case hb_opts:get(http_server, no_server_ref, Opts) of
-        no_server_ref ->
-            Opts;
-        _ ->
-            try hb_http_server:get_opts(Opts) of
-                no_node_msg -> Opts;
-                CurrentOpts -> CurrentOpts
-            catch
-                _:_ -> Opts
-            end
     end.
 
 %% @doc Recover a single bundle and enqueue any follow-up work.
