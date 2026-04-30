@@ -5,18 +5,17 @@
 %%% device:
 %%%
 %%%     `estimate/3' opens a process-local metering session.
-%%%     `meter/[3,4]' increments resource usage during that session.
+%%%     `meter/3' increments resource usage during that session.
 %%%     `price/3' closes the session and returns the integer charge.
 %%%
-%%% Calls to `meter/[3,4]' outside an active session are no-ops, so callers do
+%%% Calls to `meter/3' outside an active session are no-ops, so callers do
 %%% not need to check whether metering is enabled. Resource names are normalized
 %%% keys, such as `arweave-bytes' and `beam-reductions'. The operator sets
 %%% `metering-rates' in the node message as a map of resource name to AO token
 %%% units per resource unit.
 -module(dev_metering).
--export([info/1, estimate/3, price/3, is_active/0, meter/3, meter/4]).
+-export([info/1, estimate/3, price/3, is_active/0, meter/3]).
 
--include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(METERING_KEY, {dev_metering, state}).
@@ -34,13 +33,11 @@ info(_) ->
     }.
 
 %% @doc Start a metering session for the request.
-estimate(_Base, EstimateReq, Opts) ->
-    Request = hb_maps:get(<<"request">>, EstimateReq, #{}, Opts),
+estimate(_Base, _EstimateReq, _Opts) ->
     {reductions, Reductions} = erlang:process_info(self(), reductions),
     erlang:put(
         ?METERING_KEY,
         #{
-            default_payer => payer(Request, Opts),
             start_reductions => Reductions,
             meters => #{}
         }
@@ -48,23 +45,21 @@ estimate(_Base, EstimateReq, Opts) ->
     {ok, 0}.
 
 %% @doc Close the metering session and calculate the final AO token price.
-price(_Base, PriceReq, Opts) ->
-    Request = hb_maps:get(<<"request">>, PriceReq, #{}, Opts),
-    State0 = metering_state(Request, Opts),
-    State = meter_reductions(State0),
-    Meters = maps:get(meters, State, #{}),
+price(_Base, _PriceReq, Opts) ->
     Rates = hb_opts:get(<<"metering-rates">>, #{}, Opts),
     Price =
-        case hb_maps:find(<<"party">>, PriceReq, Opts) of
-            {ok, Party} ->
-                price_for(
-                    maps:get(normalize_party(Party, State, Opts), Meters, #{}),
-                    Rates,
-                    Opts
-                );
-            error ->
-                price_for_all(Meters, Rates, Opts)
-        end,
+        maps:fold(
+            fun(Resource, Amount, Acc) ->
+                Rate = hb_util:int(hb_maps:get(Resource, Rates, 0, Opts)),
+                Acc + (Amount * Rate)
+            end,
+            0,
+            maps:get(
+                meters,
+                meter_reductions(erlang:get(?METERING_KEY)),
+                #{}
+            )
+        ),
     erlang:erase(?METERING_KEY),
     {ok, Price}.
 
@@ -74,7 +69,6 @@ is_active() ->
 
 %% @doc Device API for incrementing a resource counter.
 meter(Base, Req, Opts) when is_map(Base), is_map(Req) ->
-    Party = hb_maps:get(<<"party">>, Req, default, Opts),
     Resource =
         hb_maps:get(
             <<"resource">>,
@@ -83,128 +77,52 @@ meter(Base, Req, Opts) when is_map(Base), is_map(Req) ->
             Opts
         ),
     Amount = hb_maps:get(<<"amount">>, Req, 1, Opts),
-    ok = meter(Party, Resource, Amount, Opts),
+    ok = meter(Resource, Amount, Opts),
     {ok, true};
-%% @doc Helper API for other devices. Increments the default payer.
-meter(Resource, Amount, Opts) ->
-    meter(default, Resource, Amount, Opts).
 
-%% @doc Helper API for other devices. Increments a specific payer.
-meter(Party, Resource, Amount, Opts) ->
+%% @doc Helper API for other devices.
+meter(Resource, Amount, _Opts) ->
     case erlang:get(?METERING_KEY) of
         undefined ->
             ok;
         State ->
-            Payer = normalize_party(Party, State, Opts),
-            ResourceKey = normalize_resource(Resource),
-            AmountInt = non_negative_int(Amount),
-            erlang:put(
-                ?METERING_KEY,
-                add_meter(Payer, ResourceKey, AmountInt, State)
-            ),
-            ok
-    end.
-
-%% @doc Return the active metering state, creating one if needed.
-metering_state(Request, Opts) ->
-    case erlang:get(?METERING_KEY) of
-        undefined ->
-            {reductions, Reductions} = erlang:process_info(self(), reductions),
-            #{
-                default_payer => payer(Request, Opts),
-                start_reductions => Reductions,
-                meters => #{}
-            };
-        State ->
-            State
+            AmountInt = hb_util:int(Amount),
+            case AmountInt >= 0 of
+                true ->
+                    erlang:put(
+                        ?METERING_KEY,
+                        add_meter(
+                            hb_ao:normalize_key(Resource),
+                            AmountInt,
+                            State
+                        )
+                    ),
+                    ok;
+                false ->
+                    error({invalid_meter_amount, Amount})
+            end
     end.
 
 %% @doc Add the process reductions delta to the active metering state.
+meter_reductions(undefined) ->
+    #{ meters => #{} };
 meter_reductions(State = #{ start_reductions := Start }) ->
     {reductions, Current} = erlang:process_info(self(), reductions),
-    Delta = max(0, Current - Start),
     add_meter(
-        maps:get(default_payer, State),
         ?BEAM_REDUCTIONS,
-        Delta,
+        max(0, Current - Start),
         State
     ).
 
-%% @doc Add a resource amount to a party's meters.
-add_meter(_Payer, _Resource, 0, State) ->
-    State;
-add_meter(Payer, Resource, Amount, State) ->
+%% @doc Add a resource amount to the meter state.
+add_meter(Resource, Amount, State) ->
     Meters = maps:get(meters, State, #{}),
-    PayerMeters = maps:get(Payer, Meters, #{}),
-    Current = maps:get(Resource, PayerMeters, 0),
     State#{
         meters =>
             Meters#{
-                Payer =>
-                    PayerMeters#{ Resource => Current + Amount }
+                Resource => maps:get(Resource, Meters, 0) + Amount
             }
     }.
-
-%% @doc Calculate a token price across all metered parties.
-price_for_all(Meters, Rates, Opts) ->
-    maps:fold(
-        fun(_Payer, PayerMeters, Acc) ->
-            Acc + price_for(PayerMeters, Rates, Opts)
-        end,
-        0,
-        Meters
-    ).
-
-%% @doc Calculate a token price from resource meters and operator rates.
-price_for(Meters, Rates, Opts) ->
-    maps:fold(
-        fun(Resource, Amount, Acc) ->
-            Acc + (Amount * rate(Resource, Rates, Opts))
-        end,
-        0,
-        Meters
-    ).
-
-%% @doc Return the operator-configured token rate for a resource.
-rate(Resource, Rates, Opts) ->
-    case hb_maps:get(Resource, Rates, 0, Opts) of
-        Rate when is_integer(Rate) -> Rate;
-        Rate -> hb_util:int(Rate)
-    end.
-
-%% @doc Determine the default payer for a request.
-payer(Request, Opts) ->
-    case hb_message:signers(Request, Opts) of
-        [Signer] -> normalize_party(Signer, #{}, Opts);
-        [] -> <<"unknown">>;
-        Multiple ->
-            hb_util:bin(
-                lists:join(
-                    <<",">>,
-                    lists:map(fun hb_util:bin/1, Multiple)
-                )
-            )
-    end.
-
-%% @doc Normalize a payer identifier for storage in the meter map.
-normalize_party(default, State, _Opts) ->
-    maps:get(default_payer, State, <<"unknown">>);
-normalize_party(Payer, _State, _Opts) when ?IS_ID(Payer) ->
-    hb_util:human_id(Payer);
-normalize_party(Payer, _State, _Opts) ->
-    hb_util:bin(Payer).
-
-%% @doc Normalize a resource name for storage in the meter map.
-normalize_resource(Resource) ->
-    hb_ao:normalize_key(Resource).
-
-%% @doc Convert an amount to a non-negative integer.
-non_negative_int(Amount) ->
-    Int = hb_util:int(Amount),
-    case Int >= 0 of
-        true -> Int;
-        false -> error({invalid_meter_amount, Amount})
-    end.
 
 %%% Tests
 
@@ -216,67 +134,26 @@ inactive_meter_noop_test() ->
 
 %% @doc The helper API meters resources and prices them via configured rates.
 helper_price_test() ->
-    Wallet = ar_wallet:new(),
-    Request =
-        hb_message:commit(
-            #{ <<"path">> => <<"/metered">> },
-            #{ <<"priv-wallet">> => Wallet }
-        ),
     Opts = #{
         <<"metering-rates">> => #{
             <<"arweave-bytes">> => 3,
             ?BEAM_REDUCTIONS => 0
         }
     },
-    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
+    {ok, 0} = estimate(#{}, #{}, Opts),
     ok = meter(<<"arweave-bytes">>, 5, Opts),
-    {ok, 15} = price(#{}, #{ <<"request">> => Request }, Opts).
+    {ok, 15} = price(#{}, #{}, Opts).
 
 %% @doc BEAM reductions are metered between estimate and price.
 beam_reductions_price_test() ->
-    Wallet = ar_wallet:new(),
-    Request =
-        hb_message:commit(
-            #{ <<"path">> => <<"/metered">> },
-            #{ <<"priv-wallet">> => Wallet }
-        ),
     Opts = #{ <<"metering-rates">> => #{ ?BEAM_REDUCTIONS => 1 } },
-    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
+    {ok, 0} = estimate(#{}, #{}, Opts),
     lists:foreach(
         fun(_) -> erlang:phash2(rand:bytes(16)) end,
         lists:seq(1, 10)
     ),
-    {ok, Price} = price(#{}, #{ <<"request">> => Request }, Opts),
+    {ok, Price} = price(#{}, #{}, Opts),
     ?assert(Price > 0).
-
-%% @doc Pricing without a party includes all explicitly metered parties.
-explicit_party_price_test() ->
-    Wallet = ar_wallet:new(),
-    Request =
-        hb_message:commit(
-            #{ <<"path">> => <<"/metered">> },
-            #{ <<"priv-wallet">> => Wallet }
-        ),
-    Other = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
-    Opts = #{
-        <<"metering-rates">> => #{
-            <<"arweave-bytes">> => 2,
-            ?BEAM_REDUCTIONS => 0
-        }
-    },
-    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
-    ok = meter(<<"arweave-bytes">>, 3, Opts),
-    ok = meter(Other, <<"arweave-bytes">>, 5, Opts),
-    {ok, 10} =
-        price(
-            #{},
-            #{ <<"request">> => Request, <<"party">> => Other },
-            Opts
-        ),
-    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
-    ok = meter(<<"arweave-bytes">>, 3, Opts),
-    ok = meter(Other, <<"arweave-bytes">>, 5, Opts),
-    {ok, 16} = price(#{}, #{ <<"request">> => Request }, Opts).
 
 %% @doc P4 charges a dynamic metering price during response processing.
 p4_response_charge_test() ->
