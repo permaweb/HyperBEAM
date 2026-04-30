@@ -51,7 +51,7 @@ item(_Base, Req, Opts) ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
                 ok ->
-                    dev_metering:meter(
+                    dev_metering:consume(
                         <<"arweave-bytes">>,
                         bundled_item_size(Item, Opts),
                         Opts

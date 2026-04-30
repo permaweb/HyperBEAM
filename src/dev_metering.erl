@@ -5,16 +5,18 @@
 %%% device:
 %%%
 %%%     `estimate/3' opens a process-local metering session.
-%%%     `meter/3' increments resource usage during that session.
+%%%     `consume/3' increments resource usage during that session.
 %%%     `price/3' closes the session and returns the integer charge.
 %%%
-%%% Calls to `meter/3' outside an active session are no-ops, so callers do
+%%% Calls to `consume/3' outside an active session are no-ops, so callers do
 %%% not need to check whether metering is enabled. Resource names are normalized
 %%% keys, such as `arweave-bytes' and `beam-reductions'. The operator sets
 %%% `metering-rates' in the node message as a map of resource name to AO token
 %%% units per resource unit.
 -module(dev_metering).
--export([info/1, estimate/3, price/3, is_active/0, meter/3]).
+-export([info/1, estimate/3, price/3, is_active/0, consume/3]).
+
+-include("include/hb.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,8 +29,7 @@ info(_) ->
         exports =>
             [
                 <<"estimate">>,
-                <<"price">>,
-                <<"meter">>
+                <<"price">>
             ]
     }.
 
@@ -67,21 +68,8 @@ price(_Base, _PriceReq, Opts) ->
 is_active() ->
     erlang:get(?METERING_KEY) =/= undefined.
 
-%% @doc Device API for incrementing a resource counter.
-meter(Base, Req, Opts) when is_map(Base), is_map(Req) ->
-    Resource =
-        hb_maps:get(
-            <<"resource">>,
-            Req,
-            hb_maps:get(<<"resource">>, Base, undefined, Opts),
-            Opts
-        ),
-    Amount = hb_maps:get(<<"amount">>, Req, 1, Opts),
-    ok = meter(Resource, Amount, Opts),
-    {ok, true};
-
 %% @doc Helper API for other devices.
-meter(Resource, Amount, _Opts) ->
+consume(Resource, Amount, _Opts) ->
     case erlang:get(?METERING_KEY) of
         undefined ->
             ok;
@@ -129,74 +117,130 @@ add_meter(Resource, Amount, State) ->
 %% @doc Metering outside an active session is a no-op.
 inactive_meter_noop_test() ->
     erlang:erase(?METERING_KEY),
-    ok = meter(<<"arweave-bytes">>, 5, #{}),
+    ok = consume(<<"arweave-bytes">>, 5, #{}),
     ?assertEqual(false, is_active()).
 
 %% @doc The helper API meters resources and prices them via configured rates.
-helper_price_test() ->
+consume_price_test() ->
     Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
         <<"metering-rates">> => #{
             <<"arweave-bytes">> => 3,
             ?BEAM_REDUCTIONS => 0
         }
     },
-    {ok, 0} = estimate(#{}, #{}, Opts),
-    ok = meter(<<"arweave-bytes">>, 5, Opts),
-    {ok, 15} = price(#{}, #{}, Opts).
+    Metering = #{ <<"device">> => <<"metering@1.0">> },
+    {ok, 0} = hb_ao:resolve(Metering, #{ <<"path">> => <<"estimate">> }, Opts),
+    ok = consume(<<"arweave-bytes">>, 5, Opts),
+    {ok, 15} = hb_ao:resolve(Metering, #{ <<"path">> => <<"price">> }, Opts).
+
+%% @doc Resource consumption is not exposed as an AO-Core key.
+consume_is_not_device_key_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Metering = #{ <<"device">> => <<"metering@1.0">> },
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            Metering,
+            #{
+                <<"path">> => <<"consume">>,
+                <<"resource">> => <<"arweave-bytes">>,
+                <<"amount">> => 5
+            },
+            Opts
+        )
+    ).
 
 %% @doc BEAM reductions are metered between estimate and price.
 beam_reductions_price_test() ->
-    Opts = #{ <<"metering-rates">> => #{ ?BEAM_REDUCTIONS => 1 } },
-    {ok, 0} = estimate(#{}, #{}, Opts),
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"metering-rates">> => #{ ?BEAM_REDUCTIONS => 1 }
+    },
+    Metering = #{ <<"device">> => <<"metering@1.0">> },
+    {ok, 0} = hb_ao:resolve(Metering, #{ <<"path">> => <<"estimate">> }, Opts),
     lists:foreach(
         fun(_) -> erlang:phash2(rand:bytes(16)) end,
         lists:seq(1, 10)
     ),
-    {ok, Price} = price(#{}, #{}, Opts),
+    {ok, Price} = hb_ao:resolve(Metering, #{ <<"path">> => <<"price">> }, Opts),
     ?assert(Price > 0).
 
 %% @doc P4 charges a dynamic metering price during response processing.
 p4_response_charge_test() ->
+    HostWallet = ar_wallet:new(),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Rate = 2,
+    Item =
+        ar_bundles:sign_item(
+            #tx{
+                data = <<"metered-bundler-item">>,
+                tags = [{<<"test">>, <<"p4-response-metering">>}]
+            },
+            ar_wallet:new()
+        ),
+    ItemSize = byte_size(ar_bundles:serialize(Item)),
+    {ServerHandle, GatewayOpts} =
+        dev_bundler:start_mock_gateway(
+            #{
+                price => {200, <<"12345">>},
+                tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+            }
+        ),
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
             <<"ledger-device">> => <<"simple-pay@1.0">>,
             <<"pricing-device">> => <<"metering@1.0">>
         },
-    Node =
-        hb_http_server:start_node(
-            #{
-                <<"simple-pay-ledger">> => #{ Address => 100 },
-                <<"metering-rates">> => #{
-                    <<"arweave-bytes">> => 2,
-                    ?BEAM_REDUCTIONS => 0
-                },
-                <<"operator">> => hb:address(),
-                <<"on">> => #{
-                    <<"request">> => Processor,
-                    <<"response">> => Processor
-                }
-            }
-        ),
-    MeterReq =
-        hb_message:commit(
-            #{
-                <<"path">> => <<"/~metering@1.0/meter">>,
-                <<"resource">> => <<"arweave-bytes">>,
-                <<"amount">> => 5
+    Opts =
+        GatewayOpts#{
+            <<"priv-wallet">> => HostWallet,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"simple-pay-ledger">> => #{ Address => (ItemSize * Rate) + 50 },
+            <<"metering-rates">> => #{
+                <<"arweave-bytes">> => Rate,
+                ?BEAM_REDUCTIONS => 0
             },
-            #{ <<"priv-wallet">> => Wallet }
-        ),
-    ?assertMatch({ok, _}, hb_http:post(Node, MeterReq, #{})),
-    {ok, Balance} =
-        hb_http:get(
-            Node,
-            hb_message:commit(
-                #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                #{ <<"priv-wallet">> => Wallet }
+            <<"operator">> => ar_wallet:to_address(HostWallet),
+            <<"on">> => #{
+                <<"request">> => Processor,
+                <<"response">> => Processor
+            }
+        },
+    try
+        Node = hb_http_server:start_node(Opts),
+        StructuredItem =
+            hb_message:convert(
+                Item,
+                <<"structured@1.0">>,
+                <<"ans104@1.0">>,
+                Opts
             ),
-            #{}
-        ),
-    ?assertEqual(90, Balance).
+        UploadReq =
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~bundler@1.0/tx">>,
+                    <<"bundler-subject">> => <<"body">>,
+                    <<"body">> => StructuredItem
+                },
+                Opts#{ <<"priv-wallet">> => Wallet }
+            ),
+        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, Opts)),
+        [_] = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        {ok, Balance} =
+            hb_http:get(
+                Node,
+                hb_message:commit(
+                    #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                    Opts#{ <<"priv-wallet">> => Wallet }
+                ),
+                Opts
+            ),
+        ?assertEqual(50, Balance)
+    after
+        hb_mock_server:stop(ServerHandle),
+        dev_bundler:stop_server(Opts)
+    end.
