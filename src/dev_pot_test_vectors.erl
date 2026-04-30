@@ -128,7 +128,7 @@ mint_quantity_test() ->
     Period2 = dev_pot_math:minted_between(Period1, 100, 1, 2, 2, 3),
     ?assertEqual(87, Period1 + Period2).
 
-hyperbeam_mint_current_ms_day_test() ->
+mint3_current_ms_day_test() ->
     Opts = #{},
     S0 =
         (pot_state_empty(
@@ -146,7 +146,7 @@ hyperbeam_mint_current_ms_day_test() ->
     ),
     ?assertEqual(?AO_ONE_DAY_MS, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
 
-hyperbeam_mint_current_ms_256_year_inactive_gap_test() ->
+mint3_current_ms_256_year_inactive_gap_test() ->
     Opts = #{},
     InactiveT = 256 * 365 * ?AO_ONE_DAY_MS,
     S0 =
@@ -162,8 +162,8 @@ hyperbeam_mint_current_ms_256_year_inactive_gap_test() ->
     ?assertEqual(2, ?AO_TOTAL_SUPPLY - hb_maps:get(<<"minted">>, S1, 0, Opts)),
     ?assertEqual(InactiveT, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
 
-hyperbeam_mint_current_ms_day_by_day_effective_cap_test() ->
-    FinalMinted = simulate_hyperbeam_mint_days(?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS),
+mint3_current_ms_day_by_day_effective_cap_test() ->
+    FinalMinted = simulate_mint3_days(?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS),
     ?assertEqual(
         ?AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER,
         ?AO_TOTAL_SUPPLY - FinalMinted
@@ -182,12 +182,12 @@ hyperbeam_mint_current_ms_day_by_day_effective_cap_test() ->
         )
     ).
 
-simulate_hyperbeam_mint_days(Days) ->
-    simulate_hyperbeam_mint_days(0, 1, Days).
+simulate_mint3_days(Days) ->
+    simulate_mint3_days(0, 1, Days).
 
-simulate_hyperbeam_mint_days(Minted, Day, Days) when Day > Days ->
+simulate_mint3_days(Minted, Day, Days) when Day > Days ->
     Minted;
-simulate_hyperbeam_mint_days(Minted, Day, Days) ->
+simulate_mint3_days(Minted, Day, Days) ->
     LastT = (Day - 1) * ?AO_ONE_DAY_MS,
     T = Day * ?AO_ONE_DAY_MS,
     ToMint =
@@ -199,7 +199,7 @@ simulate_hyperbeam_mint_days(Minted, Day, Days) ->
             LastT,
             T
         ),
-    simulate_hyperbeam_mint_days(Minted + ToMint, Day + 1, Days).
+    simulate_mint3_days(Minted + ToMint, Day + 1, Days).
 
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
