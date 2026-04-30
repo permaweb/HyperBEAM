@@ -176,7 +176,8 @@ p4_response_charge_test() ->
                 <<"data">> => <<"metered-bundler-item">>,
                 <<"test">> => <<"p4-response-metering">>
             },
-            #{ <<"priv-wallet">> => ar_wallet:new() }
+            #{ <<"priv-wallet">> => ar_wallet:new() },
+            <<"ans104@1.0">>
         ),
     {ServerHandle, GatewayOpts} =
         dev_bundler:start_mock_gateway(

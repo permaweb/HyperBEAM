@@ -27,10 +27,17 @@ worker_loop() ->
     end.
 
 %% @doc Execute a specific task.
-execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
+execute_task(#task{type = post_tx, data = DataItems, opts = Opts} = Task) ->
+    {Items, TXItems, ItemMode} =
+        case DataItems of
+            {QueuedItems, BundledItems} ->
+                {QueuedItems, BundledItems, preconverted};
+            _ ->
+                {DataItems, DataItems, convert}
+        end,
     try
         ?event(debug_bundler, log_task(executing_task, Task, [])),
-        case build_signed_tx(Items, Opts) of
+        case build_signed_tx(TXItems, Opts, ItemMode) of
             {ok, SignedTX} ->
                 Committed = hb_message:convert(
                     SignedTX,
@@ -151,7 +158,16 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
 
 %% @doc Build and sign a bundle TX without posting it.
 build_signed_tx(Items, Opts) ->
+    build_signed_tx(Items, Opts, convert).
+
+build_signed_tx(Items, Opts, convert) ->
     TX = data_items_to_tx(Items, Opts),
+    sign_tx(TX, Opts);
+build_signed_tx(Items, Opts, preconverted) ->
+    TX = data_items_to_tx(Items),
+    sign_tx(TX, Opts).
+
+sign_tx(TX, Opts) ->
     DataSize = TX#tx.data_size,
     PriceResult = get_price(DataSize, Opts),
     AnchorResult = get_anchor(Opts),
@@ -186,6 +202,12 @@ data_items_to_tx(Items, Opts) ->
         data = List
     }).
 
+data_items_to_tx(Items) ->
+    dev_arweave_common:normalize(#tx{
+        format = 2,
+        data = lists:reverse(Items)
+    }).
+
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -209,6 +231,17 @@ log_task(Event, Task, ExtraLogs) ->
     erlang:list_to_tuple([Event | format_task(Task) ++ ExtraLogs]).
 
 %% @doc Format a task for logging.
+format_task(#task{
+        bundle_id = BundleID,
+        type = post_tx,
+        data = {DataItems, _BundledItems}
+    }) ->
+    [
+        {task_type, post_tx},
+        {timestamp, format_timestamp()},
+        {bundle, BundleID},
+        {num_items, length(DataItems)}
+    ];
 format_task(#task{bundle_id = BundleID, type = post_tx, data = DataItems}) ->
     [
         {task_type, post_tx},
