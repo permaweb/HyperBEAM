@@ -167,16 +167,21 @@ name_from_host(Host, no_host) ->
     % fails, or the node message host is not found in the client provided value
     % (node claims to be `x.com`, but the user request is for `abc.y.com`).
     case binary:split(Host, <<".">>, [global, trim_all]) of
-        [_Host] -> {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
-        [Name|_] -> {ok, Name}
+        [_Host] ->
+            {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
+        [Name|_] ->
+            case inet:parse_address(hb_util:list(Host)) of
+                {ok, _} ->
+                    {skip, <<"No subdomain found in `Host: ", Host/binary, "`.">>};
+                _ -> {ok, Name}
+            end
     end;
 name_from_host(ReqHost, RawNodeHost) ->
-    case uri_string:parse(RawNodeHost) of
-        #{ host := NodeHostName } ->
-            case binary:split(ReqHost, <<".", NodeHostName/binary>>) of
-                [Subdomain, <<>>] -> {ok, Subdomain};
-                _ -> name_from_host(ReqHost, no_host)
-            end;
+    NodeHostName = maps:get(host, uri_string:parse(RawNodeHost), RawNodeHost),
+    case binary:split(ReqHost, <<".", NodeHostName/binary>>) of
+        [Subdomain, <<>>] -> {ok, Subdomain};
+        _ when ReqHost =:= NodeHostName ->
+            {skip, <<"No subdomain found in `Host: ", ReqHost/binary, "`.">>};
         _ -> name_from_host(ReqHost, no_host)
     end.
 
@@ -356,21 +361,39 @@ arns_host_resolution_with_node_host_test_parallel() ->
         )
     ).
 
-localhost_root_request_skips_name_resolution_test_parallel() ->
-    Opts = (test_arns_opts())#{ <<"port">> => 0 },
-    Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok,
-            #{
-                <<"status">> := 307,
-                <<"location">> := <<"/~hyperbuddy@1.0/index">>
-            }},
-        hb_http:get(
-            Node,
-            #{
-                <<"path">> => <<"/">>,
-                <<"host">> => <<"localhost">>
-            },
-            Opts
-        )
+root_request_skips_name_resolution_test_parallel() ->
+    BaseOpts =
+        #{
+            <<"port">> => 0,
+            <<"name-resolvers">> => [device_resolver(#{})],
+            <<"on">> =>
+                #{ <<"request">> => #{ <<"device">> => <<"name@1.0">> } }
+        },
+    Check =
+        fun(Host, ExtraOpts) ->
+            Opts = maps:merge(BaseOpts, ExtraOpts),
+            Node = hb_http_server:start_node(Opts),
+            ?assertMatch(
+                {ok,
+                    #{
+                        <<"status">> := 307,
+                        <<"location">> := <<"/~hyperbuddy@1.0/index">>
+                    }},
+                hb_http:get(
+                    Node,
+                    #{ <<"path">> => <<"/">>, <<"host">> => Host },
+                    Opts
+                )
+            )
+        end,
+    Check(<<"localhost">>, #{}),
+    Check(<<"127.0.0.1:8734">>, #{}),
+    Check(<<"ourweave.net:8734">>, #{ <<"node-host">> => <<"ourweave.net">> }).
+
+name_from_host_test_parallel() ->
+    ?assertMatch({skip, _}, name_from_host(<<"127.0.0.1">>, no_host)),
+    ?assertEqual({ok, <<"abc">>}, name_from_host(<<"abc.127.0.0.1">>, no_host)),
+    ?assertEqual(
+        {ok, <<"sub3.sub2">>},
+        name_from_host(<<"sub3.sub2.sub1.abc.xyz">>, <<"sub1.abc.xyz">>)
     ).
