@@ -50,12 +50,13 @@ generate_initial_state(Opts) ->
     StartWeight = hb_invariant:int(1, 100_000),
     StartQty = hb_invariant:int(1, 100_000),
     StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
+    UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
     StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     % Pick an address that's not our StartAddr for our initial delegatee
     DelegateeCandidates =
         lists:delete(
             StartAddr,
-            hb_maps:keys(hb_maps:get(identities, Opts))
+            UserAddrs
         ),
     DelegateeAddr = hb_invariant:pick(DelegateeCandidates),
     DelegatedAmount = hb_invariant:int(1, StartQty),
@@ -74,6 +75,7 @@ generate_initial_state(Opts) ->
                 StartResource => #{
                     <<"accumulator">> => 0,
                     <<"last-global-accumulator">> => 0,
+                    <<"authority">> => UserAddrs,
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
@@ -114,10 +116,16 @@ generate_initial_state(Opts) ->
         ),
     S1 = lists:foldl(
         fun(Resource, State) ->
-            dev_pot:register_resource(
+            ResourceState = dev_pot:register_resource(
                 Resource,
                 hb_invariant:int(1, 100_000),
                 State,
+                Opts
+            ),
+            hb_ao:set(
+                ResourceState,
+                <<"/resources/", Resource/binary, "/authority">>,
+                UserAddrs,
                 Opts
             )
         end,
@@ -143,6 +151,7 @@ generate_request() ->
 
 deposit_generator(_State, Opts) ->
     Wallet = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
+    Addr = hb_util:human_id(Wallet),
     {
         deposit,
         hb_message:commit(
@@ -150,10 +159,10 @@ deposit_generator(_State, Opts) ->
                 <<"path">> => <<"deposit">>,
                 <<"timestamp">> => hb_invariant:int(100_000),
                 <<"body">> => #{
-                    <<"address">> => hb_util:human_id(Wallet),
+                    <<"address">> => Addr,
                     <<"quantity">> => hb_invariant:int(1, 100_000),
                     <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
-                    <<"from">> => <<"foo">> % TODO: What should this value be?
+                    <<"from">> => Addr
                 }
             },
             Opts#{ priv_wallet => Wallet }
@@ -185,7 +194,7 @@ withdraw_generator(State, Opts) ->
                             <<"address">> => UserAddr,
                             <<"quantity">> => hb_invariant:int(1, CurrentQty),
                             <<"resource">> => UserResourceID,
-                            <<"from">> => <<"foo">> % TODO: What should this value be?
+                            <<"from">> => UserAddr
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
