@@ -880,7 +880,17 @@ parent_of_id(ID, Opts) ->
             <<"start-offset">> := Offset
         }} ?= hb_store_arweave:read_offset(StoreOpts, ID),
         {ok, Block} ?= block_for_offset(Offset, Opts),
-        tx_at_offset(hb_maps:get(<<"txs">>, Block, [], Opts), Offset, StoreOpts)
+        {ok, ParentID, ParentOffset, ParentLength} ?=
+            tx_at_offset(hb_maps:get(<<"txs">>, Block, [], Opts), Offset, StoreOpts),
+        {ok, #{
+            <<"id">> => ParentID,
+            <<"offset">> => ParentOffset,
+            <<"length">> => ParentLength,
+            <<"child">> => ID,
+            <<"child-offset">> => Offset,
+            <<"block-height">> => hb_maps:get(<<"height">>, Block, null, Opts),
+            <<"block-hash">> => hb_maps:get(<<"indep_hash">>, Block, null, Opts)
+        }}
     else
         _ -> {error, not_found}
     end.
@@ -927,7 +937,7 @@ tx_at_offset([TXID | Rest], Offset, StoreOpts) ->
             <<"start-offset">> := TXOffset,
             <<"length">> := Length
         }} when TXOffset =< Offset, Offset < TXOffset + Length ->
-            {ok, TXID};
+            {ok, TXID, TXOffset, Length};
         _ ->
             tx_at_offset(Rest, Offset, StoreOpts)
     end.
