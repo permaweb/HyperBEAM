@@ -47,10 +47,11 @@ item(_Base, Req, Opts) ->
             error -> Req
         end,
     case verify_message(ItemToProcess, Opts) of
-        {ok, Item, BundledItem, BundledSize} ->
+        {ok, Item} ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
                 ok ->
+                    BundledSize = bundled_item_size(Item, Opts),
                     dev_metering:consume(
                         <<"arweave-bytes">>,
                         BundledSize,
@@ -58,7 +59,7 @@ item(_Base, Req, Opts) ->
                     ),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
-                    ServerPID ! {enqueue_item, Item, BundledSize, BundledItem},
+                    ServerPID ! {enqueue_item, Item, BundledSize},
                     {ok, #{
                         <<"id">> => ItemID,
                         <<"timestamp">> => erlang:system_time(millisecond)
@@ -86,27 +87,20 @@ item(_Base, Req, Opts) ->
     end.
 
 %% @doc Verify the subject by extracting committed fields and checking signatures.
-%% Returns {ok, Item, BundledItem, BundledSize} or {error, Reason}.
+%% Returns {ok, Item} or {error, Reason}.
 verify_message(Req, Opts) ->
     case hb_message:with_only_committed(Req, Opts) of
         {ok, Item} ->
-            TX =
-                hb_message:convert(
-                    Item,
-                    <<"ans104@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts
-                ),
-            case TX#tx.signature of
-                ?DEFAULT_SIG ->
+            case hb_message:signers(Item, Opts) of
+                [] ->
                     ?event(
                         bundler_short,
                         {verify_failed, {reason, unsigned_item}}
                     ),
                     {error, unsigned_item};
                 _ ->
-                    case ar_bundles:verify_item(TX) of
-                        true -> {ok, Item, TX, bundled_item_size(TX)};
+                    case hb_message:verify(Item, all, Opts) of
+                        true -> {ok, Item};
                         false ->
                             ?event(
                                 bundler_short,
@@ -224,18 +218,16 @@ init(Opts) ->
 server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
     receive
         {enqueue_item, Item} ->
-            BundledItem = bundled_item(Item, Opts),
             State1 =
                 add_to_queue(
                     Item,
-                    bundled_item_size(BundledItem),
-                    BundledItem,
+                    bundled_item_size(Item, Opts),
                     State,
                     Opts
                 ),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
-        {enqueue_item, Item, BundledSize, BundledItem} ->
-            State1 = add_to_queue(Item, BundledSize, BundledItem, State, Opts),
+        {enqueue_item, Item, BundledSize} ->
+            State1 = add_to_queue(Item, BundledSize, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
         {dispatch_queue, Timestamp} ->
             ?event(bundler_short, {dispatched_queue_start, calendar:now_to_universal_time(Timestamp)}),
@@ -268,12 +260,12 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
 %% @doc Add an item to the queue. Update the state with the queue's total
 %% bundled byte size.
 %% Note: Item has already been verified and cached before reaching here.
-add_to_queue(Item, BundledSize, BundledItem, State = #state{
+add_to_queue(Item, BundledSize, State = #state{
         queue = Queue,
         bytes = Bytes,
         dispatch_ref = DispatchRef
     }, Opts) ->
-    NewQueue = [{Item, BundledSize, BundledItem} | Queue],
+    NewQueue = [{Item, BundledSize} | Queue],
     NewBytes = Bytes + BundledSize,
     ?event(bundler_short, {queueing_item, 
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
@@ -331,7 +323,7 @@ dispatchable(_State) ->
 %% @doc Return the total size of a queue of items.
 queue_bytes(Items) ->
     lists:foldl(
-        fun({_Item, BundledSize, _BundledItem}, Acc) -> Acc + BundledSize end,
+        fun({_Item, BundledSize}, Acc) -> Acc + BundledSize end,
         0,
         Items
     ).
@@ -350,7 +342,7 @@ dispatch_queue(State = #state{queue = Queue, dispatch_ref = DispatchRef}) ->
 create_bundle([], State) ->
     State;
 create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
-    {Items, ItemSizes, BundledItems} = lists:unzip3(QueuedItems),
+    {Items, ItemSizes} = lists:unzip(QueuedItems),
     BundleID = make_ref(),
     Bundle = #bundle{
         id = BundleID,
@@ -375,7 +367,7 @@ create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
     Task = #task{
         bundle_id = BundleID,
         type = post_tx,
-        data = {Items, BundledItems},
+        data = Items,
         opts = Opts
     },
     enqueue_task(Task, State1).
@@ -575,30 +567,14 @@ run_completion_hooks(Bundle, Opts) ->
 
 %% @doc Calculate the exact byte size of an item inside its bundle.
 bundled_item_size(Item, Opts) ->
-    bundled_item_size(bundled_item(Item, Opts)).
-
-%% @doc Convert an item to its ANS-104 item form.
-bundled_item(Item, Opts) ->
-    hb_message:convert(
-        Item,
-        <<"ans104@1.0">>,
-        <<"structured@1.0">>,
-        Opts
-    ).
-
-bundled_item_size(TX = #tx{}) ->
-    EncodedTags = ar_bundles:encode_tags(TX#tx.tags),
-    2
-        + byte_size(TX#tx.signature)
-        + byte_size(TX#tx.owner)
-        + optional_field_size(TX#tx.target)
-        + optional_field_size(TX#tx.anchor)
-        + 16
-        + byte_size(EncodedTags)
-        + byte_size(TX#tx.data).
-
-optional_field_size(<<>>) -> 1;
-optional_field_size(Field) -> 1 + byte_size(Field).
+    TX =
+        hb_message:convert(
+            Item,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            Opts
+        ),
+    byte_size(ar_bundles:serialize(TX)).
 
 %% @doc Calculate the byte size of the completed bundle payload.
 bundle_size(CommittedTX, Opts) ->
