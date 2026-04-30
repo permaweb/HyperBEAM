@@ -48,23 +48,19 @@ price(_Base, PriceReq, Opts) ->
     Request = hb_maps:get(<<"request">>, PriceReq, #{}, Opts),
     State0 = metering_state(Request, Opts),
     State = meter_reductions(State0),
-    ChargePayer =
-        normalize_party(
-            hb_maps:get(
-                <<"party">>,
-                PriceReq,
-                maps:get(default_payer, State),
-                Opts
-            ),
-            State,
-            Opts
-        ),
+    Meters = maps:get(meters, State, #{}),
+    Rates = hb_opts:get(<<"metering-rates">>, #{}, Opts),
     Price =
-        price_for(
-            maps:get(ChargePayer, maps:get(meters, State, #{}), #{}),
-            hb_opts:get(<<"metering-rates">>, #{}, Opts),
-            Opts
-        ),
+        case hb_maps:find(<<"party">>, PriceReq, Opts) of
+            {ok, Party} ->
+                price_for(
+                    maps:get(normalize_party(Party, State, Opts), Meters, #{}),
+                    Rates,
+                    Opts
+                );
+            error ->
+                price_for_all(Meters, Rates, Opts)
+        end,
     erlang:erase(?METERING_KEY),
     {ok, Price}.
 
@@ -155,6 +151,16 @@ add_meter(Payer, Resource, Amount, State) ->
             }
     }.
 
+%% @doc Calculate a token price across all metered parties.
+price_for_all(Meters, Rates, Opts) ->
+    maps:fold(
+        fun(_Payer, PayerMeters, Acc) ->
+            Acc + price_for(PayerMeters, Rates, Opts)
+        end,
+        0,
+        Meters
+    ).
+
 %% @doc Calculate a token price from resource meters and operator rates.
 price_for(Meters, Rates, Opts) ->
     maps:fold(
@@ -241,6 +247,35 @@ beam_reductions_price_test() ->
     lists:foreach(fun(_) -> erlang:phash2(rand:bytes(16)) end, lists:seq(1, 10)),
     {ok, Price} = price(#{}, #{ <<"request">> => Request }, Opts),
     ?assert(Price > 0).
+
+%% @doc Pricing without a party includes all explicitly metered parties.
+explicit_party_price_test() ->
+    Wallet = ar_wallet:new(),
+    Request =
+        hb_message:commit(
+            #{ <<"path">> => <<"/metered">> },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    Other = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"metering-rates">> => #{
+            <<"arweave-bytes">> => 2,
+            ?BEAM_REDUCTIONS => 0
+        }
+    },
+    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
+    ok = meter(<<"arweave-bytes">>, 3, Opts),
+    ok = meter(Other, <<"arweave-bytes">>, 5, Opts),
+    {ok, 10} =
+        price(
+            #{},
+            #{ <<"request">> => Request, <<"party">> => Other },
+            Opts
+        ),
+    {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
+    ok = meter(<<"arweave-bytes">>, 3, Opts),
+    ok = meter(Other, <<"arweave-bytes">>, 5, Opts),
+    {ok, 16} = price(#{}, #{ <<"request">> => Request }, Opts).
 
 %% @doc P4 charges a dynamic metering price during response processing.
 p4_response_charge_test() ->
