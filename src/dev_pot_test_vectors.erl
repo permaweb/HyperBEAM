@@ -1286,6 +1286,17 @@ drip_same_timestamp_idempotent_test() ->
     % Should not mint additional tokens
     ?assertEqual(Minted1, Minted2).
 
+drip_backward_timestamp_does_not_remint_test() ->
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_empty([ResourceOxygen], 100, 1, 2),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 100}, Opts),
+    Minted1 = hb_maps:get(<<"minted">>, S1, 0, Opts),
+    {ok, S2} = dev_pot:mint(S1, #{<<"timestamp">> => 50}, Opts),
+    ?assertEqual(Minted1, hb_maps:get(<<"minted">>, S2, 0, Opts)),
+    ?assertEqual(100, hb_maps:get(<<"last-drip">>, S2, 0, Opts)),
+    ?assertEqual(50, hb_maps:get(<<"t">>, S2, 0, Opts)).
+
 %%% Accumulator Precision Tests
 
 accumulator_over_many_periods_test() ->
