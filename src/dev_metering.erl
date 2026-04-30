@@ -16,8 +16,6 @@
 -module(dev_metering).
 -export([info/1, estimate/3, price/3, is_active/0, consume/3]).
 
--include("include/hb.hrl").
-
 -include_lib("eunit/include/eunit.hrl").
 
 -define(METERING_KEY, {dev_metering, state}).
@@ -173,14 +171,13 @@ p4_response_charge_test() ->
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Rate = 2,
     Item =
-        ar_bundles:sign_item(
-            #tx{
-                data = <<"metered-bundler-item">>,
-                tags = [{<<"test">>, <<"p4-response-metering">>}]
+        hb_message:commit(
+            #{
+                <<"data">> => <<"metered-bundler-item">>,
+                <<"test">> => <<"p4-response-metering">>
             },
-            ar_wallet:new()
+            #{ <<"priv-wallet">> => ar_wallet:new() }
         ),
-    ItemSize = byte_size(ar_bundles:serialize(Item)),
     {ServerHandle, GatewayOpts} =
         dev_bundler:start_mock_gateway(
             #{
@@ -194,12 +191,11 @@ p4_response_charge_test() ->
             <<"ledger-device">> => <<"simple-pay@1.0">>,
             <<"pricing-device">> => <<"metering@1.0">>
         },
-    Opts =
+    BaseOpts =
         GatewayOpts#{
             <<"priv-wallet">> => HostWallet,
             <<"store">> => hb_test_utils:test_store(),
             <<"bundler-max-items">> => 1,
-            <<"simple-pay-ledger">> => #{ Address => (ItemSize * Rate) + 50 },
             <<"metering-rates">> => #{
                 <<"arweave-bytes">> => Rate,
                 ?BEAM_REDUCTIONS => 0
@@ -210,21 +206,32 @@ p4_response_charge_test() ->
                 <<"response">> => Processor
             }
         },
+    ItemSize =
+        byte_size(
+            ar_bundles:serialize(
+                hb_message:convert(
+                    Item,
+                    #{
+                        <<"device">> => <<"ans104@1.0">>,
+                        <<"bundle">> => true
+                    },
+                    <<"structured@1.0">>,
+                    BaseOpts
+                )
+            )
+        ),
+    Opts =
+        BaseOpts#{
+            <<"simple-pay-ledger">> => #{ Address => (ItemSize * Rate) + 50 }
+        },
     try
         Node = hb_http_server:start_node(Opts),
-        StructuredItem =
-            hb_message:convert(
-                Item,
-                <<"structured@1.0">>,
-                <<"ans104@1.0">>,
-                Opts
-            ),
         UploadReq =
             hb_message:commit(
                 #{
                     <<"path">> => <<"/~bundler@1.0/tx">>,
                     <<"bundler-subject">> => <<"body">>,
-                    <<"body">> => StructuredItem
+                    <<"body">> => Item
                 },
                 Opts#{ <<"priv-wallet">> => Wallet }
             ),
