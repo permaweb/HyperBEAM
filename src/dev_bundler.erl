@@ -257,20 +257,19 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
         server(assign_tasks(dispatch_queue(State)), Opts)
     end.
 
-%% @doc Add an item to the queue. Update the state with the new queue and
-%% approximate total byte size of the queue.
+%% @doc Add an item to the queue. Update the state with the queue's total
+%% bundled byte size.
 %% Note: Item has already been verified and cached before reaching here.
 add_to_queue(Item, BundledSize, State = #state{
         queue = Queue,
         bytes = Bytes,
         dispatch_ref = DispatchRef
     }, Opts) ->
-    QueueSize = erlang:external_size(Item),
     NewQueue = [{Item, BundledSize} | Queue],
-    NewBytes = Bytes + QueueSize,
+    NewBytes = Bytes + BundledSize,
     ?event(bundler_short, {queueing_item, 
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
-        {size, QueueSize},
+        {size, BundledSize},
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
     }),
@@ -324,7 +323,7 @@ dispatchable(_State) ->
 %% @doc Return the total size of a queue of items.
 queue_bytes(Items) ->
     lists:foldl(
-        fun({Item, _BundledSize}, Acc) -> Acc + erlang:external_size(Item) end,
+        fun({_Item, BundledSize}, Acc) -> Acc + BundledSize end,
         0,
         Items
     ).
