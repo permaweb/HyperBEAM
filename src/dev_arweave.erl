@@ -5,7 +5,7 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, parent_of/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
@@ -150,6 +150,13 @@ raw(Base, Request, Opts) ->
     case hb_maps:get(<<"method">>, Request, <<"GET">>, Opts) of
         <<"HEAD">> -> head_raw(Base, Request, Opts);
         <<"GET">> -> get_raw(Base, Request, Opts)
+    end.
+
+%% @doc Resolve the L1 transaction that contains an indexed L2 ANS-104 dataitem.
+parent_of(Base, Request, Opts) ->
+    case find_key(<<"parent-of">>, Base, Request, Opts) of
+        ID when ?IS_ID(ID) -> parent_of_id(ID, Opts);
+        _ -> {error, not_found}
     end.
 
 %% @doc Handle `HEAD /raw=ID` requests by reading the header chunk and
@@ -864,6 +871,66 @@ find_key(Key, Base, Request, Opts) ->
         hb_maps:get(Key, Base, not_found, Opts),
         Opts
     ).
+
+parent_of_id(ID, Opts) ->
+    StoreOpts = hb_store_arweave:store_from_opts(Opts),
+    maybe
+        {ok, #{
+            <<"codec-device">> := <<"ans104@1.0">>,
+            <<"start-offset">> := Offset
+        }} ?= hb_store_arweave:read_offset(StoreOpts, ID),
+        {ok, Block} ?= block_for_offset(Offset, Opts),
+        tx_at_offset(hb_maps:get(<<"txs">>, Block, [], Opts), Offset, StoreOpts)
+    else
+        _ -> {error, not_found}
+    end.
+
+block_for_offset(Offset, Opts) ->
+    case dev_arweave_block_cache:latest(Opts) of
+        {ok, Height} ->
+            case block_for_offset(Offset, 0, Height, Opts) of
+                {error, not_found} -> block_for_offset_current(Offset, Opts);
+                Res -> Res
+            end;
+        _ -> block_for_offset_current(Offset, Opts)
+    end.
+
+block_for_offset_current(Offset, Opts) ->
+    maybe
+        {ok, Block} ?= current(#{}, #{}, Opts),
+        Height = hb_util:int(hb_maps:get(<<"height">>, Block, 0, Opts)),
+        block_for_offset(Offset, 0, Height, Opts)
+    end.
+
+block_for_offset(_Offset, Low, High, _Opts) when Low > High ->
+    {error, not_found};
+block_for_offset(Offset, Low, High, Opts) ->
+    Height = (Low + High) div 2,
+    maybe
+        {ok, Block} ?= block({height, Height}, Opts),
+        End = hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)),
+        Size = hb_util:int(hb_maps:get(<<"block_size">>, Block, 0, Opts)),
+        Start = End - Size,
+        case {Offset < Start, Offset >= End} of
+            {true, _} -> block_for_offset(Offset, Low, Height - 1, Opts);
+            {_, true} -> block_for_offset(Offset, Height + 1, High, Opts);
+            _ -> {ok, Block}
+        end
+    end.
+
+tx_at_offset([], _Offset, _StoreOpts) ->
+    {error, not_found};
+tx_at_offset([TXID | Rest], Offset, StoreOpts) ->
+    case hb_store_arweave:read_offset(StoreOpts, TXID) of
+        {ok, #{
+            <<"codec-device">> := <<"tx@1.0">>,
+            <<"start-offset">> := TXOffset,
+            <<"length">> := Length
+        }} when TXOffset =< Offset, Offset < TXOffset + Length ->
+            {ok, TXID};
+        _ ->
+            tx_at_offset(Rest, Offset, StoreOpts)
+    end.
 
 %% @doc Make a request to the Arweave node and parse the response into an
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
