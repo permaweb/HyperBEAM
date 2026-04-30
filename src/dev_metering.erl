@@ -7,7 +7,7 @@
 %%% reductions delta, applies the operator's `metering-rates' table, and returns
 %%% the total integer token charge to P4.
 -module(dev_metering).
--export([info/1, estimate/3, price/3, meter/3, meter/4]).
+-export([info/1, estimate/3, price/3, active/0, meter/3, meter/4]).
 -export([increase/3, increase/4, totals/3]).
 
 -include("include/hb.hrl").
@@ -63,6 +63,10 @@ price(_Base, PriceReq, Opts) ->
         end,
     erlang:erase(?METERING_KEY),
     {ok, Price}.
+
+%% @doc Return whether the current process has an active metering session.
+active() ->
+    erlang:get(?METERING_KEY) =/= undefined.
 
 %% @doc Device API for incrementing a resource counter.
 meter(Base, Req, Opts) when is_map(Base), is_map(Req) ->

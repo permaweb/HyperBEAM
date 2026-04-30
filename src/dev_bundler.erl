@@ -51,11 +51,16 @@ item(_Base, Req, Opts) ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
                 ok ->
-                    dev_metering:meter(
-                        <<"arweave-bytes">>,
-                        bundled_item_size(Item, Opts),
-                        Opts
-                    ),
+                    case dev_metering:active() of
+                        true ->
+                            dev_metering:meter(
+                                <<"arweave-bytes">>,
+                                bundled_item_size(Item, Opts),
+                                Opts
+                            );
+                        false ->
+                            ok
+                    end,
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
                     ServerPID ! {enqueue_item, Item},
