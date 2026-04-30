@@ -45,7 +45,7 @@ estimate(_Base, EstimateReq, Opts) ->
             meters => #{}
         }
     ),
-    {ok, hb_util:int(hb_opts:get(metering_minimum_price, 0, Opts))}.
+    {ok, 0}.
 
 %% @doc Close the metering session and calculate the final AO token price.
 price(_Base, PriceReq, Opts) ->
@@ -84,7 +84,7 @@ meter(Base, Req, Opts) when is_map(Base), is_map(Req) ->
         ),
     Amount = hb_maps:get(<<"amount">>, Req, 1, Opts),
     ok = meter(Party, Resource, Amount, Opts),
-    {ok, current_totals()};
+    {ok, true};
 %% @doc Helper API for other devices. Increments the default payer.
 meter(Resource, Amount, Opts) ->
     meter(default, Resource, Amount, Opts).
@@ -204,13 +204,6 @@ non_negative_int(Amount) ->
     case Int >= 0 of
         true -> Int;
         false -> error({invalid_meter_amount, Amount})
-    end.
-
-%% @doc Return the current process's raw metering map.
-current_totals() ->
-    case erlang:get(?METERING_KEY) of
-        undefined -> #{};
-        State -> maps:get(meters, State, #{})
     end.
 
 %%% Tests

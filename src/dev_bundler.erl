@@ -551,34 +551,11 @@ run_completion_hooks(Bundle, Opts) ->
         Opts
     ).
 
-%% @doc Execute a single completion hook without failing the bundler server.
+%% @doc Execute a single completion hook.
 run_hook(HookName, ReqFun, Opts) ->
-    try
-        HookOpts = latest_opts(Opts),
-        case dev_hook:on(HookName, ReqFun(HookOpts), HookOpts) of
-            {ok, _} ->
-                ok;
-            {Status, _Res} ->
-                ?event(
-                    hook_error,
-                    {bundler_completion_hook_failed,
-                        {hook, HookName},
-                        {status, Status}
-                    }
-                )
-        end
-    catch
-        Class:Reason:Stack ->
-            ?event(
-                hook_error,
-                {bundler_completion_hook_exception,
-                    {hook, HookName},
-                    {class, Class},
-                    {reason, Reason},
-                    {stacktrace, {trace, Stack}}
-                }
-            )
-    end.
+    HookOpts = latest_opts(Opts),
+    _ = dev_hook:on(HookName, ReqFun(HookOpts), HookOpts),
+    ok.
 
 %% @doc Calculate the exact byte size of an item inside its bundle.
 bundled_item_size(Item, Opts) ->
