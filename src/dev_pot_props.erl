@@ -50,12 +50,13 @@ generate_initial_state(Opts) ->
     StartWeight = hb_invariant:int(1, 100_000),
     StartQty = hb_invariant:int(1, 100_000),
     StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
+    UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
     StartAddr = hb_util:human_id(hb_invariant:pick(dev_token_props:user_wallets(Opts))),
     % Pick an address that's not our StartAddr for our initial delegatee
     DelegateeCandidates =
         lists:delete(
             StartAddr,
-            hb_maps:keys(hb_maps:get(identities, Opts))
+            UserAddrs
         ),
     DelegateeAddr = hb_invariant:pick(DelegateeCandidates),
     DelegatedAmount = hb_invariant:int(1, StartQty),
@@ -74,6 +75,7 @@ generate_initial_state(Opts) ->
                 StartResource => #{
                     <<"accumulator">> => 0,
                     <<"last-global-accumulator">> => 0,
+                    <<"authority">> => UserAddrs,
                     <<"weight">> => StartWeight,
                     <<"total-deposits">> => StartQty,
                     <<"deposits">> => #{
@@ -114,10 +116,16 @@ generate_initial_state(Opts) ->
         ),
     S1 = lists:foldl(
         fun(Resource, State) ->
-            dev_pot:register_resource(
+            ResourceState = dev_pot:register_resource(
                 Resource,
                 hb_invariant:int(1, 100_000),
                 State,
+                Opts
+            ),
+            hb_ao:set(
+                ResourceState,
+                <<"/resources/", Resource/binary, "/authority">>,
+                UserAddrs,
                 Opts
             )
         end,
@@ -141,19 +149,20 @@ generate_request() ->
         fun undelegate_generator/2
     ].
 
-deposit_generator(_State, Opts) ->
+deposit_generator(State, Opts) ->
     Wallet = hb_invariant:pick(dev_token_props:user_wallets(Opts)),
+    Addr = hb_util:human_id(Wallet),
     {
         deposit,
         hb_message:commit(
             #{
                 <<"path">> => <<"deposit">>,
-                <<"timestamp">> => hb_invariant:int(100_000),
+                <<"timestamp">> => next_timestamp(State, Opts),
                 <<"body">> => #{
-                    <<"address">> => hb_util:human_id(Wallet),
+                    <<"address">> => Addr,
                     <<"quantity">> => hb_invariant:int(1, 100_000),
                     <<"resource">> => hb_invariant:pick(hb_maps:get(resources, Opts)),
-                    <<"from">> => <<"foo">> % TODO: What should this value be?
+                    <<"from">> => Addr
                 }
             },
             Opts#{ priv_wallet => Wallet }
@@ -180,12 +189,12 @@ withdraw_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"withdraw">>,
-                        <<"timestamp">> => hb_invariant:int(100_000),
+                        <<"timestamp">> => next_timestamp(State, Opts),
                         <<"body">> => #{
                             <<"address">> => UserAddr,
                             <<"quantity">> => hb_invariant:int(1, CurrentQty),
                             <<"resource">> => UserResourceID,
-                            <<"from">> => <<"foo">> % TODO: What should this value be?
+                            <<"from">> => UserAddr
                         }
                     },
                     Opts#{ priv_wallet => Wallet }
@@ -216,7 +225,7 @@ delegate_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"delegate">>,
-                        <<"timestamp">> => hb_invariant:int(100_000),
+                        <<"timestamp">> => next_timestamp(State, Opts),
                         <<"body">> => #{
                             <<"address">> => ToAddr,
                             <<"quantity">> => DelegatedQty,
@@ -247,7 +256,7 @@ undelegate_generator(State, Opts) ->
                 hb_message:commit(
                     #{
                         <<"path">> => <<"undelegate">>,
-                        <<"timestamp">> => hb_invariant:int(100_000),
+                        <<"timestamp">> => next_timestamp(State, Opts),
                         <<"body">> => #{
                             <<"address">> => ToAddr,
                             <<"quantity">> => UndelegateQty,
@@ -837,7 +846,7 @@ do_verify_inverted_index(Addr, ResourceID, State, Opts) ->
         }
     }.
 
-verify_undistributed_mint(OldState, Req, NewState, Opts) ->
+verify_undistributed_mint(OldState, _Req, NewState, Opts) ->
     UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
     OldBalanceSum =
         lists:sum(
@@ -864,7 +873,6 @@ verify_undistributed_mint(OldState, Req, NewState, Opts) ->
     PropD = hb_maps:get(<<"mint-prop-denominator">>, NewState),
     LastT = hb_maps:get(<<"t">>, OldState),
     T = hb_maps:get(<<"t">>, NewState),
-    Path = hb_maps:get(<<"path">>, Req),
     MintedOverDeltaT =
         dev_pot_math:minted_between(Minted, Max, PropN, PropD, LastT, T),
     UndistributedDisbursed = OldUndistributedMint - NewUndistributedMint,
@@ -886,7 +894,7 @@ verify_undistributed_mint(OldState, Req, NewState, Opts) ->
 % That is, deposits without consideration of delegation inflow and outflow.
 % This lets us generate coherent withdrawals without unwinding the whole
 % delegation table.
-next(OldS, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
+next(_OldS, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     Addr = hb_maps:get(<<"address">>, UnwrappedReq),
     ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
@@ -903,7 +911,7 @@ next(OldS, Req = #{<<"path">> := <<"deposit">>}, NewState, Opts) ->
         CurrentTotalDeposit + Quantity,
         Opts
     );
-next(OldS, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
+next(_OldS, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
     UnwrappedReq = hb_maps:get(<<"body">>, Req),
     Addr = hb_maps:get(<<"address">>, UnwrappedReq),
     ResourceID = hb_maps:get(<<"resource">>, UnwrappedReq),
@@ -923,6 +931,9 @@ next(OldS, Req = #{<<"path">> := <<"withdraw">>}, NewState, Opts) ->
 next(_OldS, _Req, NewS, _Opts) -> NewS.
 
 %%% Helpers
+
+next_timestamp(State, Opts) ->
+    hb_maps:get(<<"t">>, State, 0, Opts) + hb_invariant:int(100_000).
 
 % Operates over the map corresponding to the <<"users">> key in
 % the inverted index.
