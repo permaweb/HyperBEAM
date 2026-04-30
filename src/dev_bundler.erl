@@ -527,35 +527,25 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
 run_completion_hooks(Bundle, Opts) ->
     lists:foreach(
         fun(Item) ->
-            run_hook(
+            dev_hook:on(
                 <<"bundled-message-complete">>,
-                fun(HookOpts) ->
-                    #{
-                        <<"body">> => Item,
-                        <<"bundled-size">> => bundled_item_size(Item, HookOpts)
-                    }
-                end,
-                Opts
+                #{
+                    <<"body">> => Item,
+                    <<"bundled-size">> => bundled_item_size(Item, Opts)
+                },
+                latest_opts(Opts)
             )
         end,
         lists:reverse(Bundle#bundle.items)
     ),
-    run_hook(
+    dev_hook:on(
         <<"bundle-complete">>,
-        fun(HookOpts) ->
-            #{
-                <<"body">> => Bundle#bundle.tx,
-                <<"bundled-size">> => bundle_size(Bundle#bundle.tx, HookOpts)
-            }
-        end,
-        Opts
+        #{
+            <<"body">> => Bundle#bundle.tx,
+            <<"bundled-size">> => bundle_size(Bundle#bundle.tx, Opts)
+        },
+        latest_opts(Opts)
     ).
-
-%% @doc Execute a single completion hook.
-run_hook(HookName, ReqFun, Opts) ->
-    HookOpts = latest_opts(Opts),
-    _ = dev_hook:on(HookName, ReqFun(HookOpts), HookOpts),
-    ok.
 
 %% @doc Calculate the exact byte size of an item inside its bundle.
 bundled_item_size(Item, Opts) ->
