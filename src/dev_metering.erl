@@ -1,14 +1,20 @@
 %%% @doc Dynamic pricing device for P4.
 %%%
 %%% `metering@1.0' records resource usage in the current process during a P4
-%%% request/response lifecycle. `estimate/3' starts the metering session and
-%%% captures the initial BEAM reductions count. Other devices can then call
-%%% `meter/3' or `increase/3' to add resource usage. Finally, `price/3' adds the
-%%% reductions delta, applies the operator's `metering-rates' table, and returns
-%%% the total integer token charge to P4.
+%%% request/response lifecycle. It is intended to be used as a P4 pricing
+%%% device:
+%%%
+%%%     `estimate/3' opens a process-local metering session.
+%%%     `meter/[3,4]' increments resource usage during that session.
+%%%     `price/3' closes the session and returns the integer charge.
+%%%
+%%% Calls to `meter/[3,4]' outside an active session are no-ops, so callers do
+%%% not need to check whether metering is enabled. Resource names are normalized
+%%% keys, such as `arweave-bytes' and `beam-reductions'. The operator sets
+%%% `metering-rates' in the node message as a map of resource name to AO token
+%%% units per resource unit.
 -module(dev_metering).
 -export([info/1, estimate/3, price/3, is_active/0, meter/3, meter/4]).
--export([increase/3, increase/4, totals/3]).
 
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -23,9 +29,7 @@ info(_) ->
             [
                 <<"estimate">>,
                 <<"price">>,
-                <<"meter">>,
-                <<"increase">>,
-                <<"totals">>
+                <<"meter">>
             ]
     }.
 
@@ -101,20 +105,6 @@ meter(Party, Resource, Amount, Opts) ->
             ok
     end.
 
-%% @doc Alias for `meter/3' in helper and device contexts.
-increase(Base, Req, Opts) when is_map(Base), is_map(Req) ->
-    meter(Base, Req, Opts);
-increase(Resource, Amount, Opts) ->
-    meter(Resource, Amount, Opts).
-
-%% @doc Alias for `meter/4'.
-increase(Party, Resource, Amount, Opts) ->
-    meter(Party, Resource, Amount, Opts).
-
-%% @doc Return the current process's metering totals.
-totals(_Base, _Req, _Opts) ->
-    {ok, current_totals()}.
-
 %% @doc Return the active metering state, creating one if needed.
 metering_state(Request, Opts) ->
     case erlang:get(?METERING_KEY) of
@@ -126,7 +116,7 @@ metering_state(Request, Opts) ->
                 meters => #{}
             };
         State ->
-        State
+            State
     end.
 
 %% @doc Add the process reductions delta to the active metering state.
@@ -188,7 +178,12 @@ payer(Request, Opts) ->
         [Signer] -> normalize_party(Signer, #{}, Opts);
         [] -> <<"unknown">>;
         Multiple ->
-            hb_util:bin(lists:join(<<",">>, lists:map(fun hb_util:bin/1, Multiple)))
+            hb_util:bin(
+                lists:join(
+                    <<",">>,
+                    lists:map(fun hb_util:bin/1, Multiple)
+                )
+            )
     end.
 
 %% @doc Normalize a payer identifier for storage in the meter map.
@@ -220,6 +215,12 @@ current_totals() ->
 
 %%% Tests
 
+%% @doc Metering outside an active session is a no-op.
+inactive_meter_noop_test() ->
+    erlang:erase(?METERING_KEY),
+    ok = meter(<<"arweave-bytes">>, 5, #{}),
+    ?assertEqual(false, is_active()).
+
 %% @doc The helper API meters resources and prices them via configured rates.
 helper_price_test() ->
     Wallet = ar_wallet:new(),
@@ -248,7 +249,10 @@ beam_reductions_price_test() ->
         ),
     Opts = #{ <<"metering-rates">> => #{ ?BEAM_REDUCTIONS => 1 } },
     {ok, 0} = estimate(#{}, #{ <<"request">> => Request }, Opts),
-    lists:foreach(fun(_) -> erlang:phash2(rand:bytes(16)) end, lists:seq(1, 10)),
+    lists:foreach(
+        fun(_) -> erlang:phash2(rand:bytes(16)) end,
+        lists:seq(1, 10)
+    ),
     {ok, Price} = price(#{}, #{ <<"request">> => Request }, Opts),
     ?assert(Price > 0).
 
