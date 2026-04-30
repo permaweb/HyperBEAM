@@ -933,7 +933,7 @@ next(_OldS, _Req, NewS, _Opts) -> NewS.
 %%% Helpers
 
 next_timestamp(State, Opts) ->
-    hb_maps:get(<<"t">>, State, 0, Opts) + hb_invariant:int(1, 100_000).
+    hb_maps:get(<<"t">>, State, 0, Opts) + hb_invariant:int(100_000).
 
 % Operates over the map corresponding to the <<"users">> key in
 % the inverted index.
