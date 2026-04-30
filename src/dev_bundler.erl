@@ -51,6 +51,11 @@ item(_Base, Req, Opts) ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
                 ok ->
+                    dev_metering:meter(
+                        <<"arweave-bytes">>,
+                        bundled_item_size(Item, Opts),
+                        Opts
+                    ),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
                     ServerPID ! {enqueue_item, Item},
@@ -515,7 +520,104 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
             {elapsed_time_s, ElapsedTime}
         }
     ),
+    run_completion_hooks(Bundle, Opts),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
+
+%% @doc Execute hooks for each completed bundled item and the full bundle.
+run_completion_hooks(Bundle, Opts) ->
+    lists:foreach(
+        fun(Item) ->
+            run_hook(
+                <<"bundled-message-complete">>,
+                fun(HookOpts) ->
+                    #{
+                        <<"body">> => Item,
+                        <<"bundled-size">> => bundled_item_size(Item, HookOpts)
+                    }
+                end,
+                Opts
+            )
+        end,
+        lists:reverse(Bundle#bundle.items)
+    ),
+    run_hook(
+        <<"bundle-complete">>,
+        fun(HookOpts) ->
+            #{
+                <<"body">> => Bundle#bundle.tx,
+                <<"bundled-size">> => bundle_size(Bundle#bundle.tx, HookOpts)
+            }
+        end,
+        Opts
+    ).
+
+%% @doc Execute a single completion hook without failing the bundler server.
+run_hook(HookName, ReqFun, Opts) ->
+    try
+        HookOpts = latest_opts(Opts),
+        case dev_hook:on(HookName, ReqFun(HookOpts), HookOpts) of
+            {ok, _} ->
+                ok;
+            {Status, _Res} ->
+                ?event(
+                    hook_error,
+                    {bundler_completion_hook_failed,
+                        {hook, HookName},
+                        {status, Status}
+                    }
+                )
+        end
+    catch
+        Class:Reason:Stack ->
+            ?event(
+                hook_error,
+                {bundler_completion_hook_exception,
+                    {hook, HookName},
+                    {class, Class},
+                    {reason, Reason},
+                    {stacktrace, {trace, Stack}}
+                }
+            )
+    end.
+
+%% @doc Calculate the exact byte size of an item inside its bundle.
+bundled_item_size(Item, Opts) ->
+    TX =
+        hb_message:convert(
+            Item,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            Opts
+        ),
+    byte_size(ar_bundles:serialize(TX)).
+
+%% @doc Calculate the byte size of the completed bundle payload.
+bundle_size(CommittedTX, Opts) ->
+    TX =
+        hb_message:convert(
+            CommittedTX,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    case TX#tx.data_size of
+        Size when is_integer(Size) -> Size;
+        _ -> byte_size(TX#tx.data)
+    end.
+
+%% @doc Refresh options before running hooks that may depend on live state.
+latest_opts(Opts) ->
+    case hb_opts:get(http_server, no_server_ref, Opts) of
+        no_server_ref ->
+            Opts;
+        _ ->
+            try hb_http_server:get_opts(Opts) of
+                no_node_msg -> Opts;
+                CurrentOpts -> CurrentOpts
+            catch
+                _:_ -> Opts
+            end
+    end.
 
 %% @doc Recover a single bundle and enqueue any follow-up work.
 recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
