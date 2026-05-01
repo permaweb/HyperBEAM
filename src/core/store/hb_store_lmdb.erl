@@ -23,6 +23,7 @@
 -export([start/3, stop/3, scope/0, scope/1, reset/3]).
 -export([read/3, write/3, list/3, match/3]).
 -export([group/3, link/3, type/3, resolve/3]).
+-export([overlay_count/1]).
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
@@ -62,9 +63,12 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
                 batch_size,
                 hb_util:int(maps:get(<<"batch-size">>, Opts, ?DEFAULT_BATCH_SIZE))
             },
-            no_mem_init,
-            no_sync
+            no_mem_init
         ] ++
+        case maps:get(<<"sync">>, Opts, false) of
+            true -> [];
+            false -> [no_sync]
+        end ++
         case maps:get(<<"read-ahead">>, Opts, true) of
             true -> [];
             false -> [no_readahead]
@@ -84,7 +88,11 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
     % Create the LMDB environment with specified size limit
     {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
-    {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
+    SyncInterval = hb_util:int(maps:get(<<"sync-interval">>, Opts, 0)),
+    MonitorPid = spawn(fun() ->
+        overlay_monitor_loop(Env, DBInstance, DataDir, SyncInterval, 0)
+    end),
+    {ok, #{ <<"env">> => Env, <<"db">> => DBInstance, <<"monitor">> => MonitorPid }};
 start(_Store, _Req, _NodeOpts) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
 
@@ -547,8 +555,19 @@ resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
 %% @doc Retrieve or create the LMDB environment handle for a database.
 find_env(Opts) -> hb_store:find(Opts).
 
+%% @doc Return the number of writes currently pending in the elmdb overlay.
+%% Safe to call on any live database — does not trigger any I/O.
+-spec overlay_count(map()) -> non_neg_integer().
+overlay_count(Opts) ->
+    #{ <<"db">> := DB } = find_env(Opts),
+    elmdb:overlay_count(DB).
+
 %% Shutdown LMDB environment and cleanup resources
-stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }, _Req, _Opts) ->
+stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir } = StoreOpts, _Req, _Opts) ->
+    case maps:get(<<"monitor">>, StoreOpts, undefined) of
+        undefined -> ok;
+        Pid -> exit(Pid, shutdown)
+    end,
     % Soft-close by name; refs stay valid and reopen lazily on next access.
     catch elmdb:env_close_by_name(hb_util:list(DataDir)),
     ok;
@@ -593,6 +612,26 @@ sample_metrics(Name, StartTime, Type) ->
         miss -> ok
     end.
 
+%% @doc Periodically samples overlay_count and reports it to Prometheus.
+%% When sync-interval > 0, also calls env_sync every that many seconds,
+%% decoupling durability from the per-commit flush worker path.
+overlay_monitor_loop(Env, DBInstance, StoreName, SyncInterval, SecondsSinceSync) ->
+    receive
+        stop -> ok
+    after 1000 ->
+        Count = elmdb:overlay_count(DBInstance),
+        hb_prometheus:set(gauge, hb_store_lmdb_overlay_count, [StoreName], Count),
+        NextSecondsSinceSync =
+            case SyncInterval > 0 andalso SecondsSinceSync + 1 >= SyncInterval of
+                true ->
+                    elmdb:env_sync(Env),
+                    0;
+                false ->
+                    SecondsSinceSync + 1
+            end,
+        overlay_monitor_loop(Env, DBInstance, StoreName, SyncInterval, NextSecondsSinceSync)
+    end.
+
 init_prometheus() ->
     hb_prometheus:declare(histogram, [
         {name, hb_store_lmdb_duration_seconds},
@@ -604,6 +643,11 @@ init_prometheus() ->
         {name, hb_store_lmdb_hit},
         {labels, [name]},
         {help, "LMDB name requested"}
+    ]),
+    hb_prometheus:declare(gauge, [
+        {name, hb_store_lmdb_overlay_count},
+        {labels, [store_name]},
+        {help, "Number of writes pending in the elmdb overlay for each store"}
     ]),
     ok.
 

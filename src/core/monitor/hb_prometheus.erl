@@ -1,7 +1,7 @@
 %%% @doc HyperBEAM wrapper for Prometheus metrics.
 -module(hb_prometheus).
 -export([ensure_started/0, declare/2, measure_and_report/2, measure_and_report/3]).
--export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4]).
+-export([observe/2, observe/3, inc/2, inc/3, inc/4, dec/2, dec/3, dec/4, set/4]).
 -define(STARTED_CACHE_KEY, {?MODULE, started}).
 
 %% @doc Ensure the Prometheus application has been started. Caches startup
@@ -119,3 +119,12 @@ dec(Type, Metrics, Labels, Value) ->
 
 do_dec(gauge, Name, Labels, Value) ->
     prometheus_gauge:dec(Name, Labels, Value).
+
+set(gauge, Name, Labels, Value) ->
+    case ensure_started() of
+        ok ->
+            try prometheus_gauge:set(Name, Labels, Value)
+            catch error:mfa_already_exists -> ok
+            end;
+        _ -> ok
+    end.
