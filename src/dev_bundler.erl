@@ -547,22 +547,22 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
 %%% Four test cases below (`idle_test', `bundle_dispatch_delay_test',
 %%% `dispatch_blocking_test', `exponential_backoff_timing_test') assert
 %%% wall-clock timing against the bundler's internal timers. They use
-%%% EUnit's plain `_test/0' convention rather than `_test_parallel/0'
+%%% EUnit's plain `_test/0' convention rather than `_parallel_test/0'
 %%% so they run sequentially, before the parse_transform-injected
 %%% `all_parallel_test_/0' inparallel batch runs the other 20 cases.
 %%% Keeping them out of the batch avoids a ~20% flake seen when
 %%% `timer:sleep/1' returns late under same-module scheduler pressure.
 
-bundle_count_test_parallel() ->
+bundle_count_parallel_test() ->
     test_bundle(#{ <<"bundler-max-items">> => 3 }).
 
-bundle_size_test_parallel() ->
+bundle_size_parallel_test() ->
     test_bundle(#{ <<"bundler-max-size">> => floor(3.6 * ?DATA_CHUNK_SIZE) }).
 
 bundle_dispatch_delay_test() ->
     test_bundle(#{ <<"bundler-max-bundle-dispatch-delay">> => 3000 }).
 
-nested_bundle_test_parallel() ->
+nested_bundle_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -600,19 +600,19 @@ nested_bundle_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-price_error_test_parallel() ->
+price_error_parallel_test() ->
     test_api_error(#{
         price => {500, <<"error">>},
         tx_anchor => {200, hb_util:encode(rand:bytes(32))}
     }).
 
-anchor_error_test_parallel() ->
+anchor_error_parallel_test() ->
     test_api_error(#{
         price => {200, <<"12345">>},
         tx_anchor => {500, <<"error">>}
     }).
 
-tx_error_test_parallel() ->
+tx_error_parallel_test() ->
     {ServerHandle, NodeOpts} = start_mock_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
@@ -641,7 +641,7 @@ tx_error_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-unsigned_dataitem_test_parallel() ->
+unsigned_dataitem_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -789,7 +789,7 @@ dispatch_blocking_test() ->
 
 %% @doc Test that items are recovered and posted while respecting the
 %% max_items limit.
-recover_respects_max_items_test_parallel() ->
+recover_respects_max_items_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -829,7 +829,7 @@ recover_respects_max_items_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-complete_task_sequence_test_parallel() ->
+complete_task_sequence_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -873,7 +873,7 @@ complete_task_sequence_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-recover_bundles_test_parallel() ->
+recover_bundles_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -930,7 +930,7 @@ recover_bundles_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_price_failure_retry_test_parallel() ->
+post_tx_price_failure_retry_parallel_test() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
     setup_test_counter(price_attempts_counter),
@@ -966,7 +966,7 @@ post_tx_price_failure_retry_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_anchor_failure_retry_test_parallel() ->
+post_tx_anchor_failure_retry_parallel_test() ->
     Price = 12345,
     FailCount = 3,
     setup_test_counter(anchor_attempts_counter),
@@ -1002,7 +1002,7 @@ post_tx_anchor_failure_retry_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_tx_post_failure_retry_test_parallel() ->
+post_tx_post_failure_retry_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 4,
@@ -1040,7 +1040,7 @@ post_tx_post_failure_retry_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-post_proof_failure_retry_test_parallel() ->
+post_proof_failure_retry_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     FailCount = 2,
@@ -1080,7 +1080,7 @@ post_proof_failure_retry_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-rapid_dispatch_test_parallel() ->
+rapid_dispatch_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1114,7 +1114,7 @@ rapid_dispatch_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-one_bundle_fails_others_continue_test_parallel() ->
+one_bundle_fails_others_continue_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(mixed_attempts_counter),
@@ -1151,7 +1151,7 @@ one_bundle_fails_others_continue_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-parallel_task_execution_test_parallel() ->
+parallel_task_execution_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     SleepTime = 120,
@@ -1242,7 +1242,7 @@ exponential_backoff_timing_test() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-independent_task_retry_counts_test_parallel() ->
+independent_task_retry_counts_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(independent_retry_counter),
@@ -1281,7 +1281,7 @@ independent_task_retry_counts_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-invalid_item_test_parallel() ->
+invalid_item_parallel_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     {ServerHandle, NodeOpts} = start_mock_gateway(#{
@@ -1324,7 +1324,7 @@ invalid_item_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-cache_write_failure_test_parallel() ->
+cache_write_failure_parallel_test() ->
     GoodOpts = #{<<"store">> => hb_test_utils:test_store()},
     BadOpts = #{
         <<"store">> => undefined,

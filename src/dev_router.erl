@@ -838,7 +838,7 @@ preprocess(Base, RawReq, Opts) ->
 
 %%% Tests
 
-test_provider_test_parallel() ->
+test_provider_parallel_test() ->
     Node =
         hb_http_server:start_node(Opts =
             #{
@@ -863,7 +863,7 @@ test_provider_test_parallel() ->
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, Opts)
     ).
 
-dynamic_provider_test_parallel() ->
+dynamic_provider_parallel_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(#{
         <<"store">> => hb_test_utils:test_store(),
@@ -885,7 +885,7 @@ dynamic_provider_test_parallel() ->
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, #{})
     ).
 
-local_process_provider_test_parallel_() ->
+local_process_provider_parallel_test_() ->
     {timeout, 30, fun local_process_provider/0}.
 local_process_provider() ->
     {ok, Script} = file:read_file("test/test.lua"),
@@ -935,7 +935,7 @@ local_process_provider() ->
 %% @doc Example of a Lua module being used as the `<<"provider">>' for a
 %% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
-local_dynamic_router_test_parallel_() ->
+local_dynamic_router_parallel_test_() ->
     {timeout, 60, fun local_dynamic_router/0}.
 local_dynamic_router() ->
     BenchRoutes = 50,
@@ -1059,7 +1059,7 @@ local_dynamic_router() ->
 %%   likelihood based on price and performance factors
 %% - Request preprocessing and routing happens correctly between nodes
 %% - Non-chargeable routes are properly handled via template patterns
-dynamic_router_pricing_test_parallel_() ->
+dynamic_router_pricing_parallel_test_() ->
     {timeout, 30, fun dynamic_router_pricing/0}.
 dynamic_router_pricing() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
@@ -1218,7 +1218,7 @@ dynamic_router_pricing() ->
 %% HyperBEAM node. The module utilized in this example dynamically adjusts the
 %% likelihood of routing to a given node, depending upon price and performance.
 %% also include preprocessing support for routing
-dynamic_router_test_parallel_() ->
+dynamic_router_parallel_test_() ->
     {timeout, 30, fun dynamic_router/0}.
 dynamic_router() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
@@ -1339,7 +1339,7 @@ dynamic_router() ->
 %% according to the real-time performance of nodes. This test utilizes the
 %% `dynamic-router' script to manage routes and recalculate weights based on the
 %% reported performance.
-dynamic_routing_by_performance_test_parallel_() ->
+dynamic_routing_by_performance_parallel_test_() ->
     {timeout, 60, fun dynamic_routing_by_performance/0}.
 dynamic_routing_by_performance() ->
     % Setup test parameters
@@ -1498,7 +1498,7 @@ dynamic_routing_by_performance() ->
     ),
     ok.
 
-weighted_random_strategy_test_parallel() ->
+weighted_random_strategy_parallel_test() ->
     Nodes =
         [
             #{ <<"host">> => <<"1">>, <<"weight">> => 1 },
@@ -1511,7 +1511,7 @@ weighted_random_strategy_test_parallel() ->
     ?assert(ProportionOfFirstHost < 0.05),
     ?assert(ProportionOfFirstHost >= 0.0001).
 
-shuffled_strategy_test_parallel() ->
+shuffled_strategy_parallel_test() ->
     Opts = #{},
     Nodes =
         [
@@ -1550,7 +1550,7 @@ shuffled_strategy_test_parallel() ->
         )
     ).
         
-range_limited_route_filtering_test_parallel() ->
+range_limited_route_filtering_parallel_test() ->
     Opts = #{},
     Nodes = [
         #{ <<"id">> => 0, <<"max">> => 20 },
@@ -1603,7 +1603,7 @@ range_limited_route_filtering_test_parallel() ->
         lists:seq(1, 10)
     ).
 
-strategy_suite_test_parallel_() ->
+strategy_suite_parallel_test_() ->
     lists:map(
         fun(Strategy) ->
             {foreach,
@@ -1628,7 +1628,7 @@ strategy_suite_test_parallel_() ->
 
 %% @doc Ensure that `By-Base' always chooses the same node for the same
 %% hashpath.
-by_base_determinism_test_parallel() ->
+by_base_determinism_parallel_test() ->
     FirstN = 5,
     Nodes = generate_nodes(5),
     HashPaths = generate_hashpaths(100),
@@ -1670,7 +1670,7 @@ unique_nodes(Simulation) ->
         Simulation
     ).
 
-route_template_message_matches_test_parallel() ->
+route_template_message_matches_parallel_test() ->
     Routes = [
         #{
             <<"template">> => #{ <<"other-key">> => <<"other-value">> },
@@ -1703,7 +1703,7 @@ route_template_message_matches_test_parallel() ->
         )
     ).
 
-route_regex_matches_test_parallel() ->
+route_regex_matches_parallel_test() ->
     Routes = [
         #{
             <<"template">> => <<"/.*/compute">>,
@@ -1727,7 +1727,7 @@ route_regex_matches_test_parallel() ->
         route(#{ <<"path">> => <<"/a/b/c/bad-key">> }, #{ <<"routes">> => Routes })
     ).
 
-explicit_route_test_parallel() ->
+explicit_route_parallel_test() ->
     Routes = [
         #{
             <<"template">> => <<"*">>,
@@ -1762,7 +1762,7 @@ explicit_route_test_parallel() ->
         )
     ).
 
-device_call_from_singleton_test_parallel() ->
+device_call_from_singleton_parallel_test() ->
     % Try with a real-world example, taken from a GET request to the router.
     NodeOpts = #{ <<"routes">> => Routes = [#{
         <<"template">> => <<"/some/path">>,
@@ -1777,7 +1777,7 @@ device_call_from_singleton_test_parallel() ->
     ).
     
 
-get_routes_test_parallel() ->
+get_routes_parallel_test() ->
     Node = hb_http_server:start_node(
         #{
             <<"force-signed">> => false,
@@ -1795,7 +1795,7 @@ get_routes_test_parallel() ->
     {ok, Recvd} = Res,
     ?assertMatch(<<"our_node">>, Recvd).
 
-add_route_test_parallel() ->
+add_route_parallel_test() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
@@ -1833,7 +1833,7 @@ add_route_test_parallel() ->
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
 %% peers via `~relay@1.0', according to the node's routing table.
-request_hook_reroute_to_nearest_test_parallel() ->
+request_hook_reroute_to_nearest_parallel_test() ->
     Peer1 = hb_http_server:start_node(#{ <<"priv-wallet">> => W1 = ar_wallet:new() }),
     Peer2 = hb_http_server:start_node(#{ <<"priv-wallet">> => W2 = ar_wallet:new() }),
     Address1 = hb_util:human_id(ar_wallet:to_address(W1)),
@@ -1891,7 +1891,7 @@ request_hook_reroute_to_nearest_test_parallel() ->
     ),
     ?assert(HasValidSigner).
 
-route_nearest_integer_preserves_opts_test_parallel() ->
+route_nearest_integer_preserves_opts_parallel_test() ->
     Routes =
         [
             #{
@@ -1958,7 +1958,7 @@ route_nearest_integer_preserves_opts_test_parallel() ->
         SelectedURIs
     ).
 
-route_multirequest_parallel_limit_test_parallel_() ->
+route_multirequest_parallel_limit_parallel_test_() ->
     {timeout, 30, fun route_multirequest_parallel_limit/0}.
 route_multirequest_parallel_limit() ->
     DelayMs = 300,
@@ -2035,7 +2035,7 @@ route_multirequest_parallel_limit() ->
 %% typical config.json) resolves every request type correctly: single-node
 %% prefix routes, multi-node All-strategy routes, Nearest-Integer chunk
 %% routes, match/with regex routes, and fallback routes.
-full_route_config_test_parallel() ->
+full_route_config_parallel_test() ->
     Routes =
         [
             #{

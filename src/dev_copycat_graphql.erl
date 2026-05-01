@@ -275,7 +275,7 @@ run_test_node() ->
     Node = hb_http_server:start_node(Opts),
     {Node ,Opts}. 
 %% @doc Basic test to test copycat device
-basic_test_parallel() ->
+basic_parallel_test() ->
     {Node, _Opts} = run_test_node(),
     {ok, Res} =
         hb_http:get(
@@ -288,7 +288,7 @@ basic_test_parallel() ->
     ?event({basic_test_result, Res}),
     ok.
 
-query_test_parallel() ->
+query_parallel_test() ->
     Base = #{
         <<"query">> => #{
             <<"tags">> => #{
@@ -319,7 +319,7 @@ query_test_parallel() ->
     ok.
 
 %% @doc Test tag/value pair format
-tag_value_test_parallel() ->
+tag_value_parallel_test() ->
     Base = #{<<"tag">> => <<"type">>, <<"value">> => <<"process">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({tag_value_test, {query, Query}}),
@@ -332,7 +332,7 @@ tag_value_test_parallel() ->
     ok.
 
 %% @doc Test owners filter with single value
-owners_filter_test_parallel() ->
+owners_filter_parallel_test() ->
     Base = #{<<"owners">> => <<"addr123">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({owners_filter_test, {query, Query}}),
@@ -345,7 +345,7 @@ owners_filter_test_parallel() ->
     ok.
 
 %% @doc Test recipients filter with array values
-recipients_filter_test_parallel() ->
+recipients_filter_parallel_test() ->
     Base = #{<<"recipients">> => [<<"rec1">>, <<"rec2">>]},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({recipients_filter_test, {query, Query}}),
@@ -358,7 +358,7 @@ recipients_filter_test_parallel() ->
     ok.
 
 %% @doc Test ids filter
-ids_filter_test_parallel() ->
+ids_filter_parallel_test() ->
     Base = #{<<"ids">> => [<<"id1">>, <<"id2">>, <<"id3">>]},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({ids_filter_test, {query, Query}}),
@@ -371,7 +371,7 @@ ids_filter_test_parallel() ->
     ok.
 
 %% @doc Test all filter type
-all_filter_test_parallel() ->
+all_filter_parallel_test() ->
     Base = #{<<"all">> => <<"true">>},
     {ok, Query} = parse_query(Base, #{}, #{}),
     ?event({all_filter_test, {query, Query}}),
@@ -384,7 +384,7 @@ all_filter_test_parallel() ->
     ok.
 
 %% @doc Test combined multiple filters in one query
-combined_filters_test_parallel() ->
+combined_filters_parallel_test() ->
     Base = #{
         <<"query">> => #{
             <<"tags">> => #{
@@ -429,7 +429,7 @@ combined_filters_test_parallel() ->
     ok.
 
 %% @doc Real world test with actual indexing
-fetch_scheduler_location_test_parallel() ->
+fetch_scheduler_location_parallel_test() ->
     {Node, _Opts} = run_test_node(),
     Res =
         hb_http:get(
