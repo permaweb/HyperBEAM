@@ -4,6 +4,7 @@
 -module(hb_copycat_budget).
 -export([ensure_started/1, reset/1, lease/1, release/1, get_budget/0, stats/0]).
 -include_lib("eunit/include/eunit.hrl").
+-include("include/hb.hrl").
 
 -define(PERSISTENT_KEY, hb_copycat_budget).
 -define(IDX_LEASED, 1).
@@ -11,6 +12,7 @@
 -define(IDX_BUDGET, 3).
 -define(IDX_RETRIES, 4).
 -define(RETRY_SLEEP_MS, 50).
+-define(LEASE_LOOP_MAX_RETRIES, 100).
 
 -define(INIT_LOCK, hb_copycat_budget_init).
 
@@ -65,23 +67,30 @@ reset(Budget) when is_integer(Budget), Budget > 0 ->
 
 lease(Size) when is_integer(Size), Size > 0 ->
     Ref = persistent_term:get(?PERSISTENT_KEY),
-    lease_loop(Ref, Size).
+    lease_loop(Ref, Size, 0).
 
-lease_loop(Ref, Size) ->
+lease_loop(Ref, Size, ?LEASE_LOOP_MAX_RETRIES) -> 
+    ?event(error, 
+        {lease_loop_max_retries_exhausted, 
+            {ref, Ref},
+            {size, Size},
+            {max_retries, ?LEASE_LOOP_MAX_RETRIES}}),
+    throw(exhausted_lease_loop_max_retires);
+lease_loop(Ref, Size, Retries) ->
     Current = atomics:get(Ref, ?IDX_LEASED),
     Budget = atomics:get(Ref, ?IDX_BUDGET),
     case Current + Size > Budget of
         true ->
             atomics:add(Ref, ?IDX_RETRIES, 1),
             timer:sleep(?RETRY_SLEEP_MS),
-            lease_loop(Ref, Size);
+            lease_loop(Ref, Size, Retries + 1);
         false ->
             case atomics:compare_exchange(Ref, ?IDX_LEASED, Current, Current + Size) of
                 ok ->
                     update_peak(Ref, Current + Size),
                     ok;
                 _Changed ->
-                    lease_loop(Ref, Size)
+                    lease_loop(Ref, Size, Retries + 1)
             end
     end.
 
