@@ -28,7 +28,7 @@ init_with_lock(Budget) ->
             try
                 case persistent_term:get(?PERSISTENT_KEY, undefined) of
                     undefined ->
-                        Ref = atomics:new(4, [{signed, true}]),
+                        Ref = atomics:new(4, [{signed, false}]),
                         atomics:put(Ref, ?IDX_BUDGET, Budget),
                         persistent_term:put(?PERSISTENT_KEY, Ref);
                     _AlreadySet ->
@@ -58,7 +58,7 @@ await_init(Budget) ->
     end.
 
 reset(Budget) when is_integer(Budget), Budget > 0 ->
-    Ref = atomics:new(4, [{signed, true}]),
+    Ref = atomics:new(4, [{signed, false}]),
     atomics:put(Ref, ?IDX_BUDGET, Budget),
     persistent_term:put(?PERSISTENT_KEY, Ref),
     ok.
