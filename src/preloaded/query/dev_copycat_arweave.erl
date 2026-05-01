@@ -7,7 +7,7 @@
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
--export([add_owner_alias/3, resolve_owner_alias/2, set_memory_safe_cap/2, get_memory_safe_cap/1, set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
+-export([add_owner_alias/3, resolve_owner_alias/2, set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -20,6 +20,7 @@
 % Note: this means that the children of L2 bundles are not indexed at
 % depth 2.
 -define(DEFAULT_BLOCK_DEPTH, 2).
+-define(DEFAULT_COPYCAT_MEMORY_BUDGET, 6 * 1024 * 1024 * 1024).
 
 % GET /~cron@1.0/once&cron-path=~copycat@1.0/arweave
 
@@ -82,10 +83,6 @@ arweave(_Base, Request, Opts) ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
                 "`. Supported modes are: write, list, inventory">>}
     end.
-%% @doc Set safe memory resource allocation cap for the in-memory
-%% bundle processing. in bytes.
-set_memory_safe_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
-    Opts#{copycat_memory_cap => Cap}.
 %% @doc Set bundles descendant recursion cap, avoids recursion
 %% in very nested bundles (very rare).
 set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
@@ -93,23 +90,14 @@ set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
 %% @doc Get the set depth recursion cap from hb_opts.
 get_depth_recursion_cap(Opts) ->
     hb_opts:get(copycat_depth_recursion_cap, undefined, Opts).
-%% @doc Get the L1 TX data size that gets handled in-memory
-%% from hb_opts.
-get_memory_safe_cap(Opts) ->
-    hb_opts:get(copycat_memory_cap, undefined, Opts).
 
 %% @doc Return the effective per-TX memory cap, clamped to the global budget.
 %% Lazily initializes the budget pool on first call.
 effective_memory_cap(Opts) ->
     Budget = hb_opts:get(
-        copycat_memory_budget, 6 * 1024 * 1024 * 1024, Opts),
+        copycat_memory_budget, ?DEFAULT_COPYCAT_MEMORY_BUDGET, Opts),
     hb_copycat_budget:ensure_started(Budget),
-    PoolSize = hb_copycat_budget:get_budget(),
-    Cap = get_memory_safe_cap(Opts),
-    case Cap of
-        undefined -> PoolSize;
-        _ -> min(Cap, PoolSize)
-    end.
+    hb_copycat_budget:get_budget().
 
 %% @doc Return the store path for a block completion marker.
 block_indexed_path(Height) ->
@@ -362,9 +350,8 @@ parse_tag_filter(Key, Request, Opts) ->
 %% @doc Process the `id=...` copycat path for an already indexed L1 TX.
 %% applies L1-level owner/tag filters on the lightweight TX header first, then,
 %% if the TX passes and is a bundle, loads the full L1 payload once and indexes
-%% descendants in-memory (under the configured copycat_memory_cap) up to the
-%% requested safe depth (defaults to full recursion till the set
-%% copycat_depth_recursion_cap).
+%% descendants in-memory up to the requested safe depth (defaults to full recursion 
+%% till the set copycat_depth_recursion_cap).
 process_l1_request(TXID, Request, Opts) ->
     Depth = request_depth(Request, <<"safe_max">>, Opts),
     QueryL1Offset =
@@ -2412,13 +2399,6 @@ request_depth_clamping_test() ->
     ?assertEqual(6, request_depth(#{}, <<"safe_max">>, #{})),
     ok.
 
-memory_cap_setter_getter_test() ->
-    {_TestStore, _StoreOpts, Opts0} = setup_index_opts(),
-    ?assertEqual(6 * 1024 * 1024 * 1024, get_memory_safe_cap(Opts0)),
-    Opts1 = set_memory_safe_cap(1024, Opts0),
-    ?assertEqual(1024, get_memory_safe_cap(Opts1)),
-    ok.
-
 id_depth_1_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {Block, TXID} = {1827942, <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>},
@@ -3037,21 +3017,6 @@ corrupt_item_ids_read_test() ->
     IDs = read_block_item_ids(Height, Opts),
     ?assertEqual(1, length(maps:get(<<"1">>, IDs))),
     ?assertEqual(<<"corrupt">>, maps:get(<<"2">>, IDs)),
-    ok.
-
-memory_cap_depth3_floors_to_2_test() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    CappedOpts = set_memory_safe_cap(1, Opts),
-    Block = 1827942,
-    {ok, Block} =
-        hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=",
-                (hb_util:bin(Block))/binary, "&to=",
-                (hb_util:bin(Block))/binary, "&depth=3">>,
-            CappedOpts
-        ),
-    ?assert(is_block_indexed(Block, 2, CappedOpts)),
-    ?assertNot(is_block_indexed(Block, 3, CappedOpts)),
     ok.
 
 parent_encode_decode_test() ->
