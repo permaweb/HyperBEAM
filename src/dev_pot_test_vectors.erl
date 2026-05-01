@@ -1257,6 +1257,29 @@ rapid_weight_changes_test() ->
     % Final TWU should be 1 * 10 = 10
     ?assertEqual(10, hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)).
 
+weight_at_bps_cap_is_accepted_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    S1 = dev_pot:register_resource(ResourceOxygen, 10_000, S0, Opts),
+    ?assert(is_map(S1)),
+    ?assertEqual(
+        10_000,
+        hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)
+    ),
+    ?assertEqual(100_000, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)).
+
+weight_above_bps_cap_is_rejected_test() ->
+    Alice = <<"alice">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state(Alice, ResourceOxygen, 10),
+    ?assertEqual(
+        {error, <<"Weight must be less than or equal to 10000.">>},
+        dev_pot:register_resource(ResourceOxygen, 10_001, S0, Opts)
+    ).
+
 %%% Time Handling Edge Cases
 
 drip_with_large_time_jump_test() ->
