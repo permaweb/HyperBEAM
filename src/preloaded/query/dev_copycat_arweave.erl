@@ -1101,28 +1101,6 @@ download_bundle_header(EndOffset, Size, Opts) ->
         dev_arweave:bundle_header(EndOffset - Size, Opts)
     end).
 
-header_chunk(invalid_bundle_header, _FirstChunk, _StartOffset, _Opts) ->
-    {error, invalid_bundle_header};
-header_chunk(HeaderSize, FirstChunk, _StartOffset, _Opts)
-        when HeaderSize =< byte_size(FirstChunk) ->
-    {ok, FirstChunk};
-header_chunk(HeaderSize, FirstChunk, StartOffset, Opts) ->
-    Res =
-        hb_ao:resolve(
-            <<
-                ?ARWEAVE_DEVICE/binary,
-                "/chunk&offset=",
-                (hb_util:bin(StartOffset + byte_size(FirstChunk)))/binary,
-                "&length=",
-                (hb_util:bin(HeaderSize - byte_size(FirstChunk)))/binary
-            >>,
-            Opts
-        ),
-    case Res of
-        {ok, OtherChunks} -> {ok, <<FirstChunk/binary, OtherChunks/binary>>};
-        Other -> Other
-    end.
-
 %% @doc Process transactions: spawn workers and manage the worker pool.
 %% This function processes transactions in parallel using parallel_map.
 %% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
