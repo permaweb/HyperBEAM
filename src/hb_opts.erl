@@ -300,7 +300,6 @@ raw_default_message() ->
         %% The default codec to use for commitment signatures.
         <<"commitment-device">> => <<"httpsig@1.0">>,
         %% Copycat-specific options.
-        copycat_memory_cap => 6 * 1024 * 1024 * 1024,
         copycat_memory_budget => 6 * 1024 * 1024 * 1024,
         copycat_depth_recursion_cap => 6, % 2x the deepest we've seen to date
         arweave_block_workers => 3,
