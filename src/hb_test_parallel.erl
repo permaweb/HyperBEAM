@@ -2,15 +2,17 @@
 %%% opt in to parallel test execution by name.
 %%%
 %%% Any 0-arity function whose name ends in `_parallel_test' or
-%%% `_parallel_test_' is treated as a parallel test: the transform
-%%% auto-exports it and -- when the module does not already define one --
-%%% injects an `all_parallel_test_/0' generator that runs all such
-%%% functions in a single `{inparallel, ...}' EUnit batch.
+%%% `_parallel_test_' is treated as a parallel test: the transform renames
+%%% it to an internal name (e.g. `foo_par_impl'), auto-exports it, and --
+%%% when the module does not already define one -- injects an
+%%% `all_parallel_test_/0' generator that runs all such functions in a
+%%% single `{inparallel, ...}' EUnit batch.
 %%%
-%%% Because the `_parallel_test' suffix ends in `_test', EUnit's own
-%%% autoexport transform also discovers these functions. The injected
-%%% `all_parallel_test_/0' generator supersedes the individual sequential
-%%% runs by collecting them into a single parallel batch.
+%%% The rename is necessary because `_parallel_test' ends in `_test', which
+%%% causes EUnit's own autoexport transform to also discover these functions
+%%% as individual sequential tests -- resulting in every test running twice.
+%%% Renaming to a non-`_test' suffix prevents individual discovery while
+%%% keeping the parallel batch intact.
 %%%
 %%% Activation is by including `hb.hrl', which wires the transform in
 %%% under `-ifdef(TEST)'. Example:
@@ -23,17 +25,19 @@
 %%% '''
 %%%
 %%% That is the whole contract. No manual exports, no hand-written
-%%% generator, and nothing renamed.
+%%% generator, and nothing renamed by the developer.
 -module(hb_test_parallel).
 -export([parse_transform/2, all/1]).
 
 -define(SIMPLE_SUFFIX, "_parallel_test").
 -define(GENERATOR_SUFFIX, "_parallel_test_").
+-define(IMPL_SUFFIX, "_par_impl").
+-define(GEN_IMPL_SUFFIX, "_par_gen").
 -define(GENERATOR_NAME, all_parallel_test_).
 
 %% @doc Runtime helper invoked by the injected `all_parallel_test_/0'
 %% generator. Returns an `{inparallel, [...]}' EUnit test spec covering
-%% every `_parallel_test[_]/0' function exported by `Module'.
+%% every renamed implementation function exported by `Module'.
 %%
 %% Safe to call from a REPL (`hb_test_parallel:all(dev_name).') to inspect
 %% what the generator will run, which is the primary debugging hook if a
@@ -45,12 +49,12 @@ all(Module) ->
                 F
             ||
                 {F, 0} <- Module:module_info(exports),
-                    is_parallel_test_name(F)
+                    is_impl_name(F)
             ]
         ),
     {inparallel,
         [
-            {atom_to_list(F), fun Module:F/0}
+            {original_name(F), fun Module:F/0}
         ||
             F <- Funs
         ]
@@ -60,9 +64,9 @@ all(Module) ->
 
 %% @doc Invoked by the Erlang compiler when a module is compiled with
 %% `-compile({parse_transform, hb_test_parallel}).'. Scans the module's
-%% abstract forms, adds any missing exports for `_parallel_test[_]/0'
-%% functions, and injects `all_parallel_test_/0' when the module does
-%% not supply its own.
+%% abstract forms, renames `_parallel_test[_]/0' functions to internal
+%% impl names, exports them, and injects `all_parallel_test_/0' when the
+%% module does not supply its own.
 parse_transform(Forms, _Options) ->
     {Matching, HasGenerator} = scan(Forms),
     case Matching of
@@ -70,16 +74,22 @@ parse_transform(Forms, _Options) ->
             %% No parallel tests in this module; leave the forms alone.
             Forms;
         _ ->
-            %% Because `_parallel_test' ends in `_test', `eunit_autoexport'
-            %% may have already exported these functions (e.g. when
-            %% `eunit.hrl' is included before `hb.hrl'). Skip any that are
-            %% already exported to avoid "already exported" warnings.
-            AlreadyExported = sets:from_list([N || {attribute, _, export, E} <- Forms, {N, _} <- E]),
-            Exports = exports_to_inject([F || F <- Matching, not sets:is_element(F, AlreadyExported)], HasGenerator),
-            Forms1 = inject_exports(Forms, Exports),
+            RenameMap = maps:from_list([{F, impl_name(F)} || F <- Matching]),
+            Forms1 = rename_functions(Forms, RenameMap),
+            %% If `eunit_autoexport' ran first (i.e. `eunit.hrl' included
+            %% before `hb.hrl'), it will have exported the original names.
+            %% Update those entries to the new impl names so the compiler
+            %% does not see a reference to a now-nonexistent function.
+            Forms2 = update_existing_exports(Forms1, RenameMap),
+            ImplNames = maps:values(RenameMap),
+            %% Skip impl names already present to avoid "already exported"
+            %% warnings when `update_existing_exports' already covered them.
+            AlreadyExported = sets:from_list([N || {attribute, _, export, E} <- Forms2, {N, _} <- E]),
+            Exports = exports_to_inject([F || F <- ImplNames, not sets:is_element(F, AlreadyExported)], HasGenerator),
+            Forms3 = inject_exports(Forms2, Exports),
             case HasGenerator of
-                true -> Forms1;
-                false -> inject_generator(Forms1)
+                true -> Forms3;
+                false -> inject_generator(Forms3)
             end
     end.
 
@@ -111,6 +121,56 @@ is_parallel_test_name(Name) ->
     Str = atom_to_list(Name),
     lists:suffix(?SIMPLE_SUFFIX, Str)
         orelse lists:suffix(?GENERATOR_SUFFIX, Str).
+
+%% @doc True when `Name' is an internal impl name produced by this transform.
+is_impl_name(Name) ->
+    Str = atom_to_list(Name),
+    lists:suffix(?IMPL_SUFFIX, Str) orelse lists:suffix(?GEN_IMPL_SUFFIX, Str).
+
+%% @doc Derive the internal impl name by replacing the `_parallel_test[_]'
+%% suffix with a non-`_test' suffix so EUnit's autoexport transform does
+%% not discover these functions as individual tests.
+impl_name(Name) ->
+    Str = atom_to_list(Name),
+    case lists:suffix(?GENERATOR_SUFFIX, Str) of
+        true ->
+            Prefix = lists:sublist(Str, length(Str) - length(?GENERATOR_SUFFIX)),
+            list_to_atom(Prefix ++ ?GEN_IMPL_SUFFIX);
+        false ->
+            Prefix = lists:sublist(Str, length(Str) - length(?SIMPLE_SUFFIX)),
+            list_to_atom(Prefix ++ ?IMPL_SUFFIX)
+    end.
+
+%% @doc Reconstruct the original `_parallel_test[_]' label from an impl name.
+%% Used by `all/1' so that test output shows the human-readable original name.
+original_name(ImplName) ->
+    Str = atom_to_list(ImplName),
+    case lists:suffix(?GEN_IMPL_SUFFIX, Str) of
+        true ->
+            Prefix = lists:sublist(Str, length(Str) - length(?GEN_IMPL_SUFFIX)),
+            Prefix ++ ?GENERATOR_SUFFIX;
+        false ->
+            Prefix = lists:sublist(Str, length(Str) - length(?IMPL_SUFFIX)),
+            Prefix ++ ?SIMPLE_SUFFIX
+    end.
+
+%% @doc Rename matching function definitions in the abstract forms.
+rename_functions(Forms, RenameMap) ->
+    [case Form of
+        {function, Line, Name, 0, Clauses} ->
+            {function, Line, maps:get(Name, RenameMap, Name), 0, Clauses};
+        _ ->
+            Form
+    end || Form <- Forms].
+
+%% @doc Update existing `-export' attributes to use renamed impl names.
+update_existing_exports(Forms, RenameMap) ->
+    [case Form of
+        {attribute, Line, export, Exports} ->
+            {attribute, Line, export, [{maps:get(N, RenameMap, N), A} || {N, A} <- Exports]};
+        _ ->
+            Form
+    end || Form <- Forms].
 
 %% @doc Build the list of `{Name, 0}' entries the transform needs to add
 %% to the module's export table: every matching test, plus the generator
