@@ -61,7 +61,6 @@
     <<"total-weighted-units">>,
     <<"undistributed-mint">>
 ]).
--define(MAX_WEIGHT_BPS, 10_000).
 
 %%% Pot Model Functions.
 
@@ -1265,7 +1264,7 @@ validate_match_config(_) ->
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
-register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >= 0, Weight =< ?MAX_WEIGHT_BPS ->
+register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >= 0 ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         % Run the global drip to ensure the state is up to date.
@@ -1301,9 +1300,7 @@ end;
 register_resource(_, Weight, _, _) when not is_integer(Weight) ->
     {error, <<"Invalid Weight type.">>};
 register_resource(_, Weight, _, _) when is_integer(Weight), Weight < 0 ->
-    {error, <<"Weight must be a non-negative integer.">>};
-register_resource(_, Weight, _, _) when is_integer(Weight), Weight > ?MAX_WEIGHT_BPS ->
-    {error, <<"Weight must be less than or equal to 10000.">>}.
+    {error, <<"Weight must be a non-negative integer.">>}.
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->

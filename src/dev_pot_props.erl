@@ -47,7 +47,7 @@ generate_initial_state(Opts) ->
     MintCap = 21_000_000,
     PropN = 1,
     PropD = 1000,
-    StartWeight = hb_invariant:int(1, 10_000),
+    StartWeight = hb_invariant:int(1, 100_000),
     StartQty = hb_invariant:int(1, 100_000),
     StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
     UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
@@ -118,7 +118,7 @@ generate_initial_state(Opts) ->
         fun(Resource, State) ->
             ResourceState = dev_pot:register_resource(
                 Resource,
-                hb_invariant:int(1, 10_000),
+                hb_invariant:int(1, 100_000),
                 State,
                 Opts
             ),
