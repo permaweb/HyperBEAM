@@ -79,10 +79,8 @@ on(HookName, Req, Opts) ->
 %% directly via the device API. Instead it is used by `on/3' and other internal
 %% functionality to find handlers when necessary. The `find/3' variant can,
 %% however, be called directly via the device API.
--spec find(_, _, _) -> _.
 find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
--spec find(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
     case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
