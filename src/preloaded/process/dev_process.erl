@@ -191,7 +191,15 @@ init(Base, Req, Opts) ->
 %%   message processing without side effects.
 -spec compute(
     #{ initialized => binary(), 'at-slot' => integer(), _ => _ },
-    #{ compute => integer(), slot => integer(), init => binary() },
+    #{
+        compute => integer(),
+        slot => integer(),
+        init => binary(),
+        push => _,
+        'result-depth' => _,
+        async => _,
+        'max-depth' => _
+    },
     _
 ) -> _.
 compute(Base, Req, Opts) ->
