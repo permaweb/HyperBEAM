@@ -258,9 +258,13 @@ grouper_skips_when_slot_cached_test() ->
     ?assertNotEqual(ungrouped_exec, ProcessGroup),
     % Write slot 5 into the cache. The same request now has a result
     % available and the grouper should step out of the queue.
+    {ok, _} = hb_cache:write(M1, Opts),
     {ok, _} =
         hb_cache:write_result(
-            [{ProcessGroup, #{ <<"path">> => <<"compute">>, <<"slot">> => 5 }}],
+            [
+                {ProcessGroup, #{ <<"path">> => <<"compute">>, <<"slot">> => 5 }},
+                {ProcessGroup, #{ <<"path">> => <<"latest">> }}
+            ],
             #{ <<"hello">> => <<"cached">> },
             Opts
         ),

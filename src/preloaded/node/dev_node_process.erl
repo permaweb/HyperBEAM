@@ -158,9 +158,9 @@ generate_test_opts() ->
     }.
 generate_test_opts(Name, Def) ->
     #{
-        node_processes => #{ Name => Def },
-        priv_wallet => ar_wallet:new(),
-        store => hb_test_utils:test_store()
+        <<"node-processes">> => #{ Name => Def },
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
     }.
 
 lookup_no_spawn_test() ->
