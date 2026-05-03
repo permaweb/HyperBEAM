@@ -409,6 +409,14 @@ check_overload(Last, N) ->
                     % we can be restarted by the next caller.
                     case MemorySize of
                         MemorySize when MemorySize > ?MAX_MEMORY ->
+                            ?debug_print(
+                                {error,
+                                    prometheus_event_queue_terminating_on_memory_overload,
+                                    {queue, Len},
+                                    {memory_bytes, MemorySize},
+                                    {last_event, Last}
+                                }
+                            ),
                             exit(memory_overload);
                         _ -> no_action
                     end;
