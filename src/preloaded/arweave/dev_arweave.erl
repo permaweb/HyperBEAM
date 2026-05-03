@@ -787,10 +787,19 @@ parent(Base, Request, Opts) ->
                 not_found ->
                     {error, not_found}
             catch
-                error:function_clause ->
-                    {error, not_found};
-                error:badarg ->
-                    {error, not_found}
+                error:Reason:Stacktrace ->
+                    ?event(error, 
+                        {parent_read_error, 
+                            {id, ID},
+                            {reason, Reason},
+                            {stacktrace, Stacktrace}
+                        }),
+                    {failure, 
+                        #{
+                            <<"status">> => 500, 
+                            <<"type">> => <<"parent_read_error">>
+                         }
+                    }
             end
     end.
 
