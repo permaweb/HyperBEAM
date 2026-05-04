@@ -278,7 +278,7 @@ do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
     % Return the path.
     Path = generate_binary_path(Bin, Opts),
-    ok = hb_store:write(Store, #{ Path => Bin }, Opts),
+    hb_store:write(Store, #{ Path => Bin }, Opts),
     %lists:map(fun(ID) -> hb_store:make_link(Store, Path, ID) end, AllIDs),
     {ok, Path};
 do_write_message(List, Store, Opts) when is_list(List) ->
@@ -296,7 +296,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
     ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
     % Write all of the keys of the message into the store.
-    ok = hb_store:group(Store, UncommittedID, Opts),
+    hb_store:group(Store, UncommittedID, Opts),
     maps:map(
         fun(Key, Value) ->
             write_key(UncommittedID, Key, MsgHashpathAlg, Value, Store, Opts)
@@ -363,7 +363,7 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
             Opts
         ),
     {ok, Path} = do_write_message(Value, Store, Opts),
-    ok = hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
+    hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
     {ok, Path}.
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,

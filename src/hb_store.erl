@@ -91,8 +91,8 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, match, scope],
-    <<"write">> => [write, link, group, reset, scope],
+    <<"read">> => [read, resolve, list, type, match, scope, start, stop],
+    <<"write">> => [write, link, group, reset, scope, start, stop],
     <<"admin">> => [start, stop, reset, scope]
 }).
 
@@ -560,6 +560,7 @@ start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     end.
 
 call_store_start(Mod, Store, Req, Opts) ->
+    code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, start, 3) of
         true -> Mod:start(Store, Req, Opts);
         false -> Mod:start(Store)
