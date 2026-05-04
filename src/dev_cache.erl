@@ -16,15 +16,37 @@ expected_response(Base, Req, Opts) ->
         {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
         true ?= check_response_matches_expected(Response, Expected, Opts),
-        dev_hook:on(
-            [<<"~cache@1.0">>, <<"admissible-response">>],
-            #{ <<"body">> => admissible_response_body(Base, Opts) },
-            Opts
-        ),
+        fire_admissible_response_hook(Base, Opts),
         {ok, true}
     else Reason ->
         ?event(debug_admissible, {expected_response_error, Reason}),
         {ok, false}
+    end.
+
+%% @doc Fire the `admissible-response' hook. Spawns by default so the cache
+%% read returns without waiting for downstream handlers. 
+%% Set `admissible_response_hook_async => false' in `Opts' to run synchronously
+fire_admissible_response_hook(Base, Opts) ->
+    Run =
+        fun() ->
+            dev_hook:on(
+                [<<"~cache@1.0">>, <<"admissible-response">>],
+                #{ <<"body">> => admissible_response_body(Base, Opts) },
+                Opts
+            )
+        end,
+    case hb_opts:get(admissible_response_hook_async, true, Opts) of
+        false -> Run();
+        _ ->
+            spawn(fun() ->
+                try Run()
+                catch C:R:S ->
+                    ?event(error,
+                        {admissible_response_hook_async_error,
+                            {class, C}, {reason, R},
+                            {stacktrace, {trace, S}}})
+                end
+            end)
     end.
 
 %% @doc Verify that a response from a remote cache matches the expected ID.
@@ -442,3 +464,58 @@ cache_write_binary_test() ->
     ?assertEqual(TestData, ReadData),
     ?event(dev_cache, {cache_api_test}),
     ok.
+
+%% @doc Compare wall-clock time of `fire_admissible_response_hook/2' with the
+%% async flag on vs off. The hook handler sleeps `HookDelayMs' before signalling
+%% so sync mode must take >= HookDelayMs and async mode must return immediately.
+fire_admissible_response_hook_async_speed_test() ->
+    HookDelayMs = 500,
+    Self = self(),
+    Handler = #{
+        <<"path">> => <<"hook">>,
+        <<"device">> => #{
+            hook =>
+                fun(_, Req, _) ->
+                    timer:sleep(HookDelayMs),
+                    Self ! hook_ran,
+                    {ok, Req}
+                end
+        }
+    },
+    BaseOpts = #{
+        on => #{
+            <<"~cache@1.0">> =>
+                #{ <<"admissible-response">> => Handler }
+        }
+    },
+    Base = #{},
+    %% --- Sync run: fire_admissible_response_hook blocks for the full sleep.
+    {SyncMicros, _} =
+        timer:tc(fun() ->
+            fire_admissible_response_hook(Base,
+                BaseOpts#{ admissible_response_hook_async => false })
+        end),
+    SyncMs = SyncMicros div 1000,
+    receive hook_ran -> ok
+    after HookDelayMs * 4 -> error(sync_hook_never_ran)
+    end,
+    %% --- Async run: returns immediately; hook runs in spawned process.
+    {AsyncMicros, _} =
+        timer:tc(fun() ->
+            fire_admissible_response_hook(Base,
+                BaseOpts#{ admissible_response_hook_async => true })
+        end),
+    AsyncMs = AsyncMicros div 1000,
+    receive hook_ran -> ok
+    after HookDelayMs * 4 -> error(async_hook_never_ran)
+    end,
+    Speedup = case AsyncMs of 0 -> infinity; _ -> SyncMs div AsyncMs end,
+    io:format(
+        user,
+        "~nadmissible_response_hook_speed: "
+        "hook_delay=~pms sync=~pms async=~pms speedup=~px~n",
+        [HookDelayMs, SyncMs, AsyncMs, Speedup]
+    ),
+    ?assert(SyncMs >= HookDelayMs),
+    ?assert(AsyncMs < HookDelayMs div 2),
+    ?assert(SyncMs > AsyncMs * 4).
