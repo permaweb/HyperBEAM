@@ -543,6 +543,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ?event(http_server_short,
         {sent,
             {status, Status},
+            {host, get_host(TABMReq, Opts)},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
@@ -1125,6 +1126,18 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
                 )
             );
         IP -> IP
+    end.
+
+get_host(TABMReq, Opts) ->
+    Host = hb_maps:get(<<"host">>, TABMReq, <<"no_host">>, Opts),
+    MsgNode = hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts),
+    case dev_name:name_from_host(Host, MsgNode) of
+        {ok, Name} ->
+            case dev_b32_name:decode(Name) of
+                error -> Name;
+                TXID -> {decoded, {explicit, TXID}}
+            end;
+        {skip, _} -> no_host
     end.
 
 %%% Metrics
