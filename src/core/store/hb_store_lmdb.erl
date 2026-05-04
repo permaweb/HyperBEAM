@@ -566,7 +566,15 @@ overlay_count(Opts) ->
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir } = StoreOpts, _Req, _Opts) ->
     case maps:get(<<"monitor">>, StoreOpts, undefined) of
         undefined -> ok;
-        Pid -> exit(Pid, shutdown)
+        Pid -> 
+            Ref = erlang:monitor(process, Pid),
+            exit(Pid, shutdown),
+            receive
+                {'DOWN', Ref, process, Pid, _Reason} -> ok
+            after 5000 ->
+                erlang:demonitor(Ref, [flush]),
+                ok
+            end
     end,
     % Soft-close by name; refs stay valid and reopen lazily on next access.
     catch elmdb:env_close_by_name(hb_util:list(DataDir)),
