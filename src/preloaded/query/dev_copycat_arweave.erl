@@ -7,7 +7,7 @@
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
--export([add_owner_alias/3, resolve_owner_alias/2, set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
+-export([set_depth_recursion_cap/2, get_depth_recursion_cap/1]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -475,7 +475,7 @@ has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
                 LowerValue -> true;
                 _ -> false
             end
-end;
+    end;
 has_tag_pair(_, _) ->
     false.
 %% @doc Parse the range from the request.
@@ -1000,7 +1000,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
                 achieved_depth => max(2, TargetDepth)};
         true when TargetDepth > 2 ->
-            %% Retry to perseve bundle count
+            %% Retry to preserve bundle count
             try 
                 L1Result = process_l1_tx_direct(
                     TXStartOffset, TX#tx.data_size,
@@ -1745,7 +1745,7 @@ block_depth_3_test() ->
             <<"~copycat@1.0/arweave&from=1827942&to=1827942&depth=3">>,
             Opts
         ),
-    % L3 item read when doing depth=2
+    % L3 item read when doing depth=3
     assert_item_read(
         <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
         Opts),
