@@ -170,12 +170,12 @@ read_block_marker_depth(Height, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> undefined;
         #{ <<"index-store">> := Store } ->
-            case hb_store:read(Store, block_indexed_path(Height)) of
+            case hb_store:read(Store, block_indexed_path(Height), Opts) of
                 {ok, Bin} ->
                     try binary_to_integer(Bin)
                     catch _:_ -> undefined
                     end;
-                not_found -> undefined
+                {error, not_found} -> undefined
             end
     end.
 
@@ -231,9 +231,9 @@ mark_block_indexed(Height, Depth, Opts) ->
 %% @doc Read the persisted cutover height from the index store.
 read_cutover_height(Opts) ->
     Store = get_index_store(Opts),
-    case hb_store:read(Store, ?CUTOVER_KEY) of
+    case hb_store:read(Store, ?CUTOVER_KEY, Opts) of
         {ok, Bin} -> hb_util:int(Bin);
-        not_found -> undefined
+        {error, not_found} -> undefined
     end.
 
 %% @doc Write the cutover height if not already set.
@@ -533,7 +533,7 @@ is_tx_indexed(TXID, Opts) ->
     Store = get_index_store(Opts),
     case hb_store:read(Store, hb_store_arweave_offset:path(TXID), Opts) of
         {ok, _} -> true;
-        not_found -> false
+        {error, not_found} -> false
     end.
 
 %% @doc List indexed blocks and transactions in the given range.
@@ -609,17 +609,17 @@ probe_block_items(Height, Opts, TransformFun) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> #{};
         #{ <<"index-store">> := Store } ->
-            probe_block_items(Height, Store, 1, #{}, TransformFun)
+            probe_block_items(Height, Store, 1, #{}, TransformFun, Opts)
     end.
 
-probe_block_items(Height, Store, Depth, Acc, TransformFun) ->
-    case hb_store:read(Store, block_items_path(Height, Depth)) of
+probe_block_items(Height, Store, Depth, Acc, TransformFun, Opts) ->
+    case hb_store:read(Store, block_items_path(Height, Depth), Opts) of
         {ok, Bin} ->
             Key = hb_util:bin(Depth),
             probe_block_items(
                 Height, Store, Depth + 1,
-                Acc#{Key => TransformFun(Bin)}, TransformFun);
-        not_found ->
+                Acc#{Key => TransformFun(Bin)}, TransformFun, Opts);
+        {error, not_found} ->
             Acc
     end.
 
@@ -2798,11 +2798,11 @@ small_block_depth_3_test() ->
         ),
     ?assert(is_block_indexed(Block, 3, Opts)),
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
-    {ok, L1Bin} = hb_store:read(Store, block_items_path(Block, 1)),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(Block, 1), Opts),
     ?assert(length(decode_item_ids(L1Bin)) > 0),
-    {ok, L2Bin} = hb_store:read(Store, block_items_path(Block, 2)),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(Block, 2), Opts),
     ?assert(length(decode_item_ids(L2Bin)) > 0),
-    {ok, L3Bin} = hb_store:read(Store, block_items_path(Block, 3)),
+    {ok, L3Bin} = hb_store:read(Store, block_items_path(Block, 3), Opts),
     L3IDs = decode_item_ids(L3Bin),
     ?assertEqual(3, length(L3IDs)),
     assert_item_read(
@@ -2827,7 +2827,8 @@ no_mismatch_flags_on_valid_bundles_test() ->
         not_found,
         hb_store:read(
             IndexStore,
-            hb_store_arweave_offset:mismatch_path(ItemID)
+            hb_store_arweave_offset:mismatch_path(ItemID),
+            Opts
         )
     ),
     ok.
@@ -2851,13 +2852,13 @@ exact_marker_depth_test() ->
     #{ <<"index-store">> := Store } =
         hb_store_arweave:store_from_opts(Opts),
     {ok, StoredBin} =
-        hb_store:read(Store, block_indexed_path(Block)),
+        hb_store:read(Store, block_indexed_path(Block), Opts),
     StoredDepth = binary_to_integer(StoredBin),
     ?assertEqual(3, StoredDepth),
     ok.
 
 fabricated_mismatch_test() ->
-    {_TestStore, StoreOpts, _Opts} = setup_index_opts(),
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     {Priv, Pub} = ar_wallet:new(),
     Target = crypto:strong_rand_bytes(32),
     Anchor = crypto:strong_rand_bytes(32),
@@ -2874,14 +2875,16 @@ fabricated_mismatch_test() ->
     {ok, StoredActualID} =
         hb_store:read(
             IndexStore,
-            hb_store_arweave_offset:mismatch_path(FakeID)
+            hb_store_arweave_offset:mismatch_path(FakeID),
+            Opts
         ),
     ?assertEqual(RealID, StoredActualID),
     ?assertEqual(
         not_found,
         hb_store:read(
             IndexStore,
-            hb_store_arweave_offset:mismatch_path(RealID)
+            hb_store_arweave_offset:mismatch_path(RealID),
+            Opts
         )
     ),
     ok.
@@ -2894,10 +2897,10 @@ block_item_ids_depth_2_test() ->
             Opts
         ),
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
-    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1)),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1), Opts),
     L1IDs = decode_item_ids(L1Bin),
     ?assert(length(L1IDs) > 0),
-    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2)),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2), Opts),
     L2IDs = decode_item_ids(L2Bin),
     ?assert(length(L2IDs) > 0),
     L2Encoded = [hb_util:encode(ID) || ID <- L2IDs],
@@ -2906,7 +2909,7 @@ block_item_ids_depth_2_test() ->
     ?assert(is_integer(Pos54K)),
     ?assert(is_integer(PosOBK)),
     ?assert(Pos54K < PosOBK),
-    ?assertEqual(not_found, hb_store:read(Store, block_items_path(1827942, 3))),
+    ?assertEqual(not_found, hb_store:read(Store, block_items_path(1827942, 3), Opts)),
     ok.
 
 block_item_ids_depth_3_test() ->
@@ -2917,13 +2920,13 @@ block_item_ids_depth_3_test() ->
             Opts
         ),
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
-    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1)),
+    {ok, L1Bin} = hb_store:read(Store, block_items_path(1827942, 1), Opts),
     L1Count = length(decode_item_ids(L1Bin)),
     ?assertEqual(5, L1Count),
-    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2)),
+    {ok, L2Bin} = hb_store:read(Store, block_items_path(1827942, 2), Opts),
     L2Count = length(decode_item_ids(L2Bin)),
     ?assert(L2Count > 0),
-    {ok, L3Bin} = hb_store:read(Store, block_items_path(1827942, 3)),
+    {ok, L3Bin} = hb_store:read(Store, block_items_path(1827942, 3), Opts),
     L3Count = length(decode_item_ids(L3Bin)),
     ?assert(L3Count >= 1),
     L3IDs = decode_item_ids(L3Bin),

@@ -92,9 +92,9 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, match] ++ ?COMMON_POLICIES,
-    <<"write">> => [write, link, group, reset] ++ ?COMMON_POLICIES,
-    <<"admin">> => [reset] ++ ?COMMON_POLICIES
+    <<"read">> => [read, resolve, list, type, match, scope, start, stop],
+    <<"write">> => [write, link, group, reset, scope, start, stop],
+    <<"admin">> => [start, stop, reset, scope]
 }).
 
 %%% Store named terms registry functions.
@@ -561,8 +561,6 @@ start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     end.
 
 call_store_start(Mod, Store, Req, Opts) ->
-    %% function_exported doesn't load the module. We need to call ensure_loaded
-    %% here since is the first time we call a function to load the module.
     code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, start, 3) of
         true -> Mod:start(Store, Req, Opts);

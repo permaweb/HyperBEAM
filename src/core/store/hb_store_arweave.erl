@@ -31,9 +31,9 @@ first_arweave_store(
 first_arweave_store([_ | Rest]) -> first_arweave_store(Rest).
 
 %% @doc Start the Arweave store, and the downstream associated index store.
-start(#{<<"index-store">> := IndexStore}, _Req, _Opts) ->
+start(#{<<"index-store">> := IndexStore}, Req, Opts) ->
     init_prometheus(),
-    hb_store:start(IndexStore).
+    hb_store:start(IndexStore, Req, Opts).
 
 %% @doc Although the index is local, loading an item via the index will make
 %% requests to a remote node, so we define the scope as remote.
@@ -458,4 +458,4 @@ load_item_deserialize_throws_test() ->
     ProbeOffset = 376836336327208,
     Size = 4096,
     ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size),
-    ?assertMatch({error, _}, read(Opts, FakeID)).
+    ?assertMatch({error, _}, read(Opts, FakeID, #{})).
