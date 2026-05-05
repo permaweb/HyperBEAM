@@ -299,12 +299,20 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                     LoadRes =
                                         erlang:load_module(
                                             ModName,
-                                            hb_maps:get(
+                                            case hb_maps:find(
                                                 <<"body">>,
                                                 Msg,
-                                                undefined,
                                                 Opts
-                                            )
+                                            ) of
+                                                {ok, Body} -> Body;
+                                                error ->
+                                                    hb_maps:get(
+                                                        <<"data">>,
+                                                        Msg,
+                                                        undefined,
+                                                        Opts
+                                                    )
+                                            end
                                         ),
                                     case LoadRes of
                                         {module, _} ->
@@ -405,11 +413,6 @@ find_device_implementation(DevRef, Opts) ->
                 <<(?DEV_CACHE_PREFIX)/binary, DevRef/binary>>,
                 Opts
             ) of
-                {ok, DeviceID} when ?IS_ID(DeviceID) ->
-                    case hb_cache:read(DeviceID, Opts#{ <<"store">> => Store }) of
-                        {ok, _} = OK -> OK;
-                        _ -> hb_cache:read(DeviceID, Opts)
-                    end;
                 {ok, Device} ->
                     {ok, hb_util:atom(Device)};
                 _ ->

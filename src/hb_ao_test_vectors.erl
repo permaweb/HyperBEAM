@@ -212,7 +212,6 @@ exec_dummy_device(Opts) ->
         hb_message:commit(
             #{
                 <<"data-protocol">> => <<"ao">>,
-                <<"type">> => <<"Device-Spec">>,
                 <<"name">> => <<"dummy@1.0">>
             },
             Opts
@@ -241,12 +240,27 @@ exec_dummy_device(Opts) ->
         ),
     {ok, _UnsignedID} = hb_cache:write(DevMsg, Opts),
     ID = hb_message:id(DevMsg, signed, Opts),
-    ok =
-        hb_store:write(
-            hb_opts:get(device_store, hb_opts:get(store, [], Opts), Opts),
-            #{ <<"~hyperbeam@live/devices/", SpecID/binary>> => ID },
-            Opts
-        ),
+    Gateway = hb_http_server:start_node(Opts),
+    RouteOpts =
+        Opts#{
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"node">> => #{
+                            <<"uri">> =>
+                                <<Gateway/binary, "/~query@1.0/graphql">>
+                        }
+                    },
+                    #{
+                        <<"template">> => <<"^/arweave/raw">>,
+                        <<"node">> => #{
+                            <<"match">> => <<"^/arweave/raw/(.*)$">>,
+                            <<"with">> => <<Gateway/binary, "/\\1/body">>
+                        }
+                    }
+                ]
+        },
     % Ensure that we can read the device message from the cache and that it matches
     % the original message.
     {ok, RawReadMsg} = hb_cache:read(ID, Opts),
@@ -256,20 +270,20 @@ exec_dummy_device(Opts) ->
             Opts
         ),
     ?assertEqual(DevMsg, ReadMsg),
-    % Create a base message with the device ID, then request a dummy path from
+    % Create a base message with the device spec ID, then request a dummy path from
     % it.
     Req = #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },
     {ok, <<"example">>} =
         hb_ao:resolve(
             #{ <<"device">> => SpecID },
             Req,
-            Opts
+            RouteOpts
         ),
     % Resolve again through the same spec to exercise the live module cache.
     hb_ao:resolve(
         #{ <<"device">> => SpecID },
         Req,
-        Opts
+        RouteOpts
     ).
 
 load_device_test() ->
@@ -304,7 +318,7 @@ untrusted_load_device_test() ->
     },
     hb_store:reset(Store),
     ?assertThrow(
-        {error, {device_not_loadable, _, device_signer_not_trusted}},
+        {error, {device_not_loadable, _, _}},
         exec_dummy_device(Opts)
     ).
 

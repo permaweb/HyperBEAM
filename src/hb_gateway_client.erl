@@ -109,6 +109,7 @@ data(ID, Opts) ->
         <<"method">> => <<"GET">>
     },
     case hb_http:request(Req, Opts) of
+        {ok, Data} when is_binary(Data) -> {ok, Data};
         {ok, Res} ->
             Data =
                 case hb_maps:find(<<"data">>, Res, Opts) of
@@ -174,7 +175,7 @@ location(Address, Opts) ->
 device(SpecID, Opts) ->
     TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
     Query =
-        <<"query($specid: [String!]!, $trusted: [String!]!) { ",
+        <<"query($specid: [String!], $trusted: [String!]) { ",
                 "transactions(",
                 "owners: $trusted, ",
                 "tags: { name: \"implements-device\" values: $specid }, ",
