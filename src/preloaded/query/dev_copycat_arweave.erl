@@ -88,16 +88,20 @@ arweave(_Base, Request, Opts) ->
 %% @doc Set bundles descendant recursion cap, avoids recursion
 %% in very nested bundles (very rare).
 set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
-    Opts#{copycat_depth_recursion_cap => Cap}.
+    Opts#{<<"copycat_depth_recursion_cap">> => Cap}.
 %% @doc Get the set depth recursion cap from hb_opts.
 get_depth_recursion_cap(Opts) ->
-    hb_opts:get(copycat_depth_recursion_cap, undefined, Opts).
+    hb_opts:get(<<"copycat_depth_recursion_cap">>, undefined, Opts).
 
 %% @doc Return the effective per-TX memory cap, clamped to the global budget.
 %% Lazily initializes the budget pool on first call.
 effective_memory_cap(Opts) ->
-    Budget = hb_opts:get(
-        copycat_memory_budget, ?DEFAULT_COPYCAT_MEMORY_BUDGET, Opts),
+    Budget = 
+        hb_opts:get(
+        <<"copycat_memory_budget">>, 
+        ?DEFAULT_COPYCAT_MEMORY_BUDGET, 
+        Opts
+    ),
     hb_copycat_budget:ensure_started(Budget),
     hb_copycat_budget:get_budget().
 
@@ -121,9 +125,9 @@ encode_parent_entry(ParentID, bundle) when byte_size(ParentID) =:= 32 ->
     <<1, ParentID:32/binary>>.
 
 %% @doc Write a parent entry for an item to the index store.
-write_parent(ItemID, ParentData, Type, Store) ->
+write_parent(ItemID, ParentData, Type, Store, Opts) ->
     Entry = encode_parent_entry(ParentData, Type),
-    hb_store:write(Store, parent_path(ItemID), Entry).
+    hb_store:write(Store, #{parent_path(ItemID) => Entry}, Opts).
 
 %% @doc Encode a list of 32-byte raw IDs into a single binary.
 encode_item_ids(IDs) ->
@@ -206,8 +210,8 @@ write_block_item_ids(Height, AchievedDepth, ItemIDs, Opts) ->
             Bin = encode_item_ids(IDs),
             hb_store:write(
                 Store,
-                block_items_path(Height, D),
-                Bin
+                #{block_items_path(Height, D) => Bin},
+                Opts
             )
         end,
         lists:seq(1, MaxStoredDepth)
@@ -226,8 +230,8 @@ mark_block_indexed(Height, Depth, Opts) ->
     Store = get_index_store(Opts),
     hb_store:write(
         Store,
-        block_indexed_path(Height),
-        integer_to_binary(Depth)
+        #{block_indexed_path(Height) => integer_to_binary(Depth)},
+        Opts
     ).
 
 %% @doc Read the persisted cutover height from the index store.
@@ -243,7 +247,7 @@ ensure_cutover_height(Height, Opts) ->
     case read_cutover_height(Opts) of
         undefined ->
             Store = get_index_store(Opts),
-            hb_store:write(Store, ?CUTOVER_KEY, hb_util:bin(Height)),
+            hb_store:write(Store, #{?CUTOVER_KEY => hb_util:bin(Height)}, Opts),
             ?event(copycat_short, {marker_cutover_initialized, {height, Height}});
         _ -> ok
     end.
@@ -255,14 +259,14 @@ normalize_owner_id(Addr) ->
 %% @doc Adds an address to the owners aliases cache in Opts, mapping
 %% Alias -> native address for fast lookup and once per address computation.
 add_owner_alias(Addr, Alias, Opts) when is_binary(Alias) -> 
-    ExistingAliases = hb_opts:get(owner_aliases, #{}, Opts),
-    Opts#{ owner_aliases => ExistingAliases#{ Alias => normalize_owner_id(Addr) }};
+    ExistingAliases = hb_opts:get(<<"owner_aliases">>, #{}, Opts),
+    Opts#{ <<"owner_aliases">> => ExistingAliases#{ Alias => normalize_owner_id(Addr) }};
 add_owner_alias(_Addr, Alias, _Opts) ->
     throw({invalid_owner_alias, Alias}).
 
 %% @doc Retrieve the address of a given alias.
 resolve_owner_alias(Alias, Opts) when is_binary(Alias) ->
-    Aliases = hb_opts:get(owner_aliases, #{}, Opts),
+    Aliases = hb_opts:get(<<"owner_aliases">>, #{}, Opts),
     case hb_maps:find(Alias, Aliases) of
         {ok, Addr} -> {ok, Addr};
         error -> {error, {owner_alias_not_found, Alias}}
@@ -721,7 +725,7 @@ fetch_blocks(Current, To, TargetDepth, Opts) ->
     fetch_blocks_ranged(Current, To, TargetDepth, BlockWorkers, Opts).
 
 block_workers(Opts) ->
-    max(1, hb_opts:get(arweave_block_workers, 3, Opts)).
+    max(1, hb_opts:get(<<"arweave_block_workers">>, 3, Opts)).
 
 %% @doc Process a known range of blocks in parallel batches.
 fetch_blocks_ranged(Current, To, TargetDepth, _Workers, _Opts)
@@ -924,7 +928,7 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_block(Block, TargetDepth, Opts) ->
     TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
-    case hb_opts:get(arweave_index_ids, true, Opts) of
+    case hb_opts:get(<<"arweave-index-ids">>, true, Opts) of
         false -> 
             {block_skipped, #{
                 items_count => 0,
@@ -996,7 +1000,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
         )
     end),
     #{ <<"index-store">> := IndexStore } = ArweaveStore,
-    ok = write_parent(TX#tx.id, BlockHeight, block, IndexStore),
+    ok = write_parent(TX#tx.id, BlockHeight, block, IndexStore, Opts),
     try is_bundle_tx(TX, Opts) of
         false ->
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
@@ -1046,7 +1050,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                                     ItemStartOffset,
                                     Size
                                 ),
-                                ok = write_parent(ItemID, TX#tx.id, bundle, IndexStore),
+                                ok = write_parent(ItemID, TX#tx.id, bundle, IndexStore, Opts),
                                 {ItemStartOffset + Size, ItemsCountAcc + 1}
                             end,
                             {TXStartOffset + HeaderSize, 0},
@@ -1479,7 +1483,7 @@ index_full_bundle_items(
         ItemStartOffset,
         Size
     ),
-    ok = write_parent(ItemID, ParentID, bundle, IndexStore),
+    ok = write_parent(ItemID, ParentID, bundle, IndexStore, Opts),
     {DescendantCount, ItemAchievedDepth, ChildIDs} =
         case {Depth > 1, ParseResult} of
             {true, {ok, HeaderSize, ParsedItem}} ->
@@ -1549,9 +1553,8 @@ validate_and_flag_item_id(ItemBinary, DeclaredID, EncodedDeclaredID, IndexStore)
                 false ->
                     ok = hb_store:write(
                         IndexStore,
-                        hb_store_arweave_offset:mismatch_path(
-                            DeclaredID),
-                        ComputedID
+                        #{hb_store_arweave_offset:mismatch_path(DeclaredID) => ComputedID},
+                        #{}
                     ),
                     ?event(copycat_short,
                         {item_id_mismatch,
@@ -2240,25 +2243,27 @@ invalid_bundle_header_test_parallel() ->
         download_bundle_header(EndOffset, Size, Opts)),
     ok.
 
-invalid_bundle_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    Block = 1307606,
-    {ok, Block} =
-        hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+invalid_bundle_test_parallel_() ->
+    {timeout, 60, fun() ->
+        {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+        Block = 1307606,
+        {ok, Block} =
+            hb_ao:resolve(
+                <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+                Opts
+            ),
+        assert_bundle_read(
+            <<"8S12ZqO6-_icGkeuH8mFq6x9q7OIoXOqFRGH5k-wshg">>,
+            [
+                {<<"gintz-t6q_kdeP_IBQVGnp9fgFzs-pPGGehXW-V7ZRk">>, <<"1">>}
+            ],
             Opts
         ),
-    assert_bundle_read(
-        <<"8S12ZqO6-_icGkeuH8mFq6x9q7OIoXOqFRGH5k-wshg">>,
-        [
-            {<<"gintz-t6q_kdeP_IBQVGnp9fgFzs-pPGGehXW-V7ZRk">>, <<"1">>}
-        ],
-        Opts
-    ),
-    % L1 TX with bundle tags, but data is not a valid bundle. The L1 TX
-    % should still be indexed.
-    assert_item_read(<<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>, Opts),
-    ok.
+        % L1 TX with bundle tags, but data is not a valid bundle. The L1 TX
+        % should still be indexed.
+        assert_item_read(<<"cGNURX2IUt98VKVIeXSfYe6eulNwPEqijaQfvatzd_o">>, Opts),
+        ok
+    end}.
 
 block_with_large_integer_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
@@ -2558,7 +2563,7 @@ auto_stop_partial_index_test_parallel() ->
     TXIDs = hb_maps:get(<<"txs">>, BlockData, [], Opts),
     ?assert(length(TXIDs) > 0),
     [OneTXID | _] = TXIDs,
-    hb_store_arweave:write_offset(StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
+    ok = hb_store_arweave:write_offset(StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
     {ok, Block} =
         hb_ao:resolve(
             <<
@@ -2698,7 +2703,7 @@ negative_from_index_test_parallel() ->
     ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
     ok.
 
-owner_alias_roundtrip_test() ->
+owner_alias_roundtrip_test_parallel() ->
     Opts1 =
         add_owner_alias(
             <<"FPjbN7EVwP3XwQJx8qnKqJDYa4TLJ0Y8gu4AaiUuW1c">>,
@@ -3087,7 +3092,10 @@ assert_bundle_read(BundleID, ExpectedItems, Opts) ->
 assert_item_read(ItemID, Opts) ->
     ?event(debug_test, {resolving, {explicit, ItemID}}),
     ReadResult = hb_store_arweave:read(
-        hb_store_arweave:store_from_opts(Opts), ItemID),
+        hb_store_arweave:store_from_opts(Opts), 
+        #{<<"read">> => ItemID}, 
+        Opts
+    ),
     ?assertMatch({ok, _}, ReadResult, ItemID),
     {ok, Item} = ReadResult,
     ?event(debug_test, {item, Item}),
@@ -3097,8 +3105,11 @@ assert_item_read(ItemID, Opts) ->
 
 assert_item_not_read(ItemID, Opts) ->
     ReadResult = hb_store_arweave:read(
-        hb_store_arweave:store_from_opts(Opts), ItemID),
-    ?assertEqual(not_found, ReadResult),
+        hb_store_arweave:store_from_opts(Opts), 
+        #{<<"read">> => ItemID}, 
+        Opts
+    ),
+    ?assertEqual({error, not_found}, ReadResult),
     ok.
 
 has_any_indexed_tx(Height, Opts) ->
@@ -3253,7 +3264,7 @@ no_mismatch_flags_on_valid_bundles_test() ->
     ItemID = hb_util:native_id(
         <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>),
     ?assertEqual(
-        not_found,
+       {error, not_found},
         hb_store:read(
             IndexStore,
             hb_store_arweave_offset:mismatch_path(ItemID),
@@ -3309,7 +3320,7 @@ fabricated_mismatch_test() ->
         ),
     ?assertEqual(RealID, StoredActualID),
     ?assertEqual(
-        not_found,
+       {error, not_found},
         hb_store:read(
             IndexStore,
             hb_store_arweave_offset:mismatch_path(RealID),
@@ -3338,7 +3349,7 @@ block_item_ids_depth_2_test() ->
     ?assert(is_integer(Pos54K)),
     ?assert(is_integer(PosOBK)),
     ?assert(Pos54K < PosOBK),
-    ?assertEqual(not_found, hb_store:read(Store, block_items_path(1827942, 3), Opts)),
+    ?assertEqual({error, not_found}, hb_store:read(Store, block_items_path(1827942, 3), Opts)),
     ok.
 
 block_item_ids_depth_3_test() ->
@@ -3414,12 +3425,12 @@ inventory_single_block_test() ->
 inventory_range_test() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     #{ <<"index-store">> := Store } = StoreOpts,
-    hb_store:write(Store, block_indexed_path(77777777), <<"2">>),
-    hb_store:write(Store, block_items_path(77777777, 1), <<0:256>>),
-    hb_store:write(Store, block_items_path(77777777, 2), <<>>),
-    hb_store:write(Store, block_indexed_path(77777778), <<"2">>),
-    hb_store:write(Store, block_items_path(77777778, 1), <<1:256>>),
-    hb_store:write(Store, block_items_path(77777778, 2), <<>>),
+    ok = hb_store:write(Store, #{block_indexed_path(77777777) => <<"2">>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(77777777, 1) => <<0:256>>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(77777777, 2) => <<>>}, Opts),
+    ok = hb_store:write(Store, #{block_indexed_path(77777778) => <<"2">>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(77777778, 1) => <<1:256>>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(77777778, 2) => <<>>}, Opts),
     {ok, InvResult} = inventory_index(77777778, 77777777, Opts),
     Body = hb_json:decode(hb_maps:get(<<"body">>, InvResult)),
     ?assert(maps:is_key(<<"77777777">>, Body)),
@@ -3440,9 +3451,9 @@ corrupt_item_ids_read_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
     Height = 99999999,
-    hb_store:write(Store, block_indexed_path(Height), <<"2">>),
-    hb_store:write(Store, block_items_path(Height, 1), <<0:256>>),
-    hb_store:write(Store, block_items_path(Height, 2), <<0:240>>),
+    ok = hb_store:write(Store, #{block_indexed_path(Height) => <<"2">>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(Height, 1) => <<0:256>>}, Opts),
+    ok = hb_store:write(Store, #{block_items_path(Height, 2) => <<0:240>>}, Opts),
     Counts = read_block_item_counts(Height, Opts),
     ?assertEqual(1, maps:get(<<"1">>, Counts)),
     ?assertEqual(<<"corrupt">>, maps:get(<<"2">>, Counts)),
@@ -3466,7 +3477,11 @@ parent_not_found_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     StoreOpts2 = hb_store_arweave:store_from_opts(Opts),
     UnknownID = crypto:strong_rand_bytes(32),
-    ?assertEqual(not_found, hb_store_arweave:read_parent(StoreOpts2, UnknownID)),
+    ?assertEqual(
+       not_found, 
+       hb_store_arweave:read_parent(StoreOpts2, UnknownID, Opts),
+       Opts
+    ),
     ok.
 
 parent_depth_2_test() ->
@@ -3491,14 +3506,14 @@ parent_depth_2_test() ->
     BlockInfo = maps:get(hb_util:bin(Block), Body),
     L1Items = maps:get(<<"1">>, maps:get(<<"items">>, BlockInfo)),
     L1ID = hb_util:decode(hd(L1Items)),
-    {ok, [{Block, block}]} = hb_store_arweave:read_parent(StoreOpts2, L1ID),
+    {ok, [{Block, block}]} = hb_store_arweave:read_parent(StoreOpts2, L1ID, Opts),
     L2Items = maps:get(<<"2">>, maps:get(<<"items">>, BlockInfo)),
     case L2Items of
         [] -> ok;
         [FirstL2 | _] ->
             L2ID = hb_util:decode(FirstL2),
             {ok, [{L2Parent, bundle}]} =
-                hb_store_arweave:read_parent(StoreOpts2, L2ID),
+                hb_store_arweave:read_parent(StoreOpts2, L2ID, Opts),
             ?assert(lists:member(
                 hb_util:encode(L2Parent), L1Items))
     end,
@@ -3529,7 +3544,7 @@ parent_depth_3_test() ->
     L2Items = maps:get(<<"2">>, maps:get(<<"items">>, BlockInfo)),
     L3ID = hb_util:decode(hd(L3Items)),
     {ok, [{L3Parent, bundle}]} =
-        hb_store_arweave:read_parent(StoreOpts2, L3ID),
+        hb_store_arweave:read_parent(StoreOpts2, L3ID, Opts),
     ?assert(lists:member(hb_util:encode(L3Parent), L2Items)),
     ok.
 

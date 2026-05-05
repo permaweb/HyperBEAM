@@ -6,7 +6,7 @@
 %%% Unused Store API:
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
--export([store_from_opts/1, write_offset/5, read_offset/3, read_parent/2, decode_parent_entries/1, read_chunks/3]).
+-export([store_from_opts/1, write_offset/5, read_offset/3, read_parent/3, decode_parent_entries/1, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -16,7 +16,7 @@
 %% for the `arweave_index_store' option, and if not found, searches the main
 %% `store' list for the first Arweave store with an index.
 store_from_opts(Opts) ->
-    case hb_opts:get(arweave_index_store, no_store, Opts) of
+    case hb_opts:get(<<"arweave-index-store">>, no_store, Opts) of
         no_store -> first_arweave_store(hb_opts:get(store, [], Opts));
         IndexStoreOpts -> IndexStoreOpts
     end.
@@ -94,10 +94,10 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
 read_offset(_, _, _) -> not_found.
 
 %% @doc Read the parent entries for an item from the index store.
-read_parent(#{ <<"index-store">> := IndexStore }, ID) ->
+read_parent(#{ <<"index-store">> := IndexStore }, ID, Opts) ->
     NormalizedID = hb_util:native_id(ID),
     ParentPath = <<"parent/", NormalizedID/binary>>,
-    case hb_store:read(IndexStore, ParentPath) of
+    case hb_store:read(IndexStore, ParentPath, Opts) of
         {ok, Bin} ->
             case decode_parent_entries(Bin) of
                 {error, _} = Err -> Err;
@@ -106,7 +106,7 @@ read_parent(#{ <<"index-store">> := IndexStore }, ID) ->
         _ ->
             not_found
     end;
-read_parent(_, _) -> not_found.
+read_parent(_, _, _) -> not_found.
 
 decode_parent_entries(<<>>) -> [];
 decode_parent_entries(<<0, Height:64/big-unsigned, Rest/binary>>) ->
