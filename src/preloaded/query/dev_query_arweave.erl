@@ -158,7 +158,7 @@ query(Msg, <<"recipient">>, _Args, Opts) ->
 query(Msg, <<"anchor">>, _Args, Opts) ->
     case find_field_key(<<"field-anchor">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};
-        {ok, Anchor} -> {ok, hb_util:human_id(Anchor)}
+        {ok, Anchor} -> encode_anchor(Anchor)
     end;
 query(Msg, <<"data">>, _Args, Opts) ->
     Data =
@@ -183,6 +183,20 @@ query(Obj, Field, Args, _Opts) ->
         {args, Args}
     }),
     {ok, <<"Not implemented.">>}.
+
+%% @doc Encode a transaction anchor (`last_tx`) for the GraphQL response.
+%% Per the Arweave spec, an anchor is one of:
+%%   - empty (first TX from a wallet),
+%%   - a 32-byte raw TX ID (the wallet's last outgoing TX), or
+%%   - a 48-byte raw block hash (any of the last 50 blocks).
+%% The cached value may already be base64url-encoded (43 / 64 chars). Other
+%% sizes are not valid per the spec.
+encode_anchor(<<>>) -> {ok, <<>>};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 32 -> {ok, hb_util:encode(Bin)};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 48 -> {ok, hb_util:encode(Bin)};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 43 -> {ok, Bin};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 64 -> {ok, Bin};
+encode_anchor(Other) -> {error, <<"invalid_anchor: ", Other/binary>>}.
 
 %% @doc Find and return a value from the fields of a message (from its
 %% commitments).
