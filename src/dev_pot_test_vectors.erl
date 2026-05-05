@@ -3,6 +3,18 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%% HyperBEAM AO mint checkpoints for the current millisecond-based pot curve.
+-define(AO_TOKEN_DENOMINATION, 1_000_000_000_000).
+-define(AO_TOTAL_SUPPLY, 21_000_000 * ?AO_TOKEN_DENOMINATION).
+-define(AO_MINT_PROP_DENOMINATOR, 1_000_000_000_000_000).
+-define(AO_ONE_DAY_MS, 86_400_000).
+-define(AO_MS_STEP_NUMERATOR, 5_492).
+-define(AO_CURRENT_MS_FIRST_DAY_MINTED, 9_962_321_008_608_663).
+%% Daily flooring means the lazy curve becomes unable to mint the final
+%% 2,107 raw units when evaluated once per day.
+-define(AO_CURRENT_MS_EFFECTIVE_CAP_DAYS, 93_762).
+-define(AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER, 2_107).
+
 %%% Test Helper Functions
 
 %% @doc Create a pot state with one user
@@ -115,6 +127,79 @@ mint_quantity_test() ->
     Period1 = dev_pot_math:minted_between(0, 100, 1, 2, 0, 2),
     Period2 = dev_pot_math:minted_between(Period1, 100, 1, 2, 2, 3),
     ?assertEqual(87, Period1 + Period2).
+
+mint3_current_ms_day_test() ->
+    Opts = #{},
+    S0 =
+        (pot_state_empty(
+            [],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ))#{
+            <<"t-source">> => <<"timestamp">>
+        },
+    {ok, S1} = dev_pot:mint(S0, #{<<"timestamp">> => ?AO_ONE_DAY_MS}, Opts),
+    ?assertEqual(
+        ?AO_CURRENT_MS_FIRST_DAY_MINTED,
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+    ),
+    ?assertEqual(?AO_ONE_DAY_MS, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
+
+mint3_current_ms_256_year_inactive_gap_test() ->
+    Opts = #{},
+    InactiveT = 256 * 365 * ?AO_ONE_DAY_MS,
+    S0 =
+        (pot_state_empty(
+            [],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ))#{
+            <<"t-source">> => <<"timestamp">>
+        },
+    {ok, S1} = dev_pot:mint(S0, #{<<"timestamp">> => InactiveT}, Opts),
+    ?assertEqual(2, ?AO_TOTAL_SUPPLY - hb_maps:get(<<"minted">>, S1, 0, Opts)),
+    ?assertEqual(InactiveT, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
+
+mint3_current_ms_day_by_day_effective_cap_test() ->
+    FinalMinted = simulate_mint3_days(?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS),
+    ?assertEqual(
+        ?AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER,
+        ?AO_TOTAL_SUPPLY - FinalMinted
+    ),
+    NextT = (?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS + 1) * ?AO_ONE_DAY_MS,
+    LastT = ?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS * ?AO_ONE_DAY_MS,
+    ?assertEqual(
+        0,
+        dev_pot_math:minted_between(
+            FinalMinted,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            LastT,
+            NextT
+        )
+    ).
+
+simulate_mint3_days(Days) ->
+    simulate_mint3_days(0, 1, Days).
+
+simulate_mint3_days(Minted, Day, Days) when Day > Days ->
+    Minted;
+simulate_mint3_days(Minted, Day, Days) ->
+    LastT = (Day - 1) * ?AO_ONE_DAY_MS,
+    T = Day * ?AO_ONE_DAY_MS,
+    ToMint =
+        dev_pot_math:minted_between(
+            Minted,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            LastT,
+            T
+        ),
+    simulate_mint3_days(Minted + ToMint, Day + 1, Days).
 
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
@@ -1200,6 +1285,17 @@ drip_same_timestamp_idempotent_test() ->
     Minted2 = hb_maps:get(<<"minted">>, S2, 0, Opts),
     % Should not mint additional tokens
     ?assertEqual(Minted1, Minted2).
+
+drip_backward_timestamp_does_not_remint_test() ->
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_empty([ResourceOxygen], 100, 1, 2),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 100}, Opts),
+    Minted1 = hb_maps:get(<<"minted">>, S1, 0, Opts),
+    {ok, S2} = dev_pot:mint(S1, #{<<"timestamp">> => 50}, Opts),
+    ?assertEqual(Minted1, hb_maps:get(<<"minted">>, S2, 0, Opts)),
+    ?assertEqual(100, hb_maps:get(<<"last-drip">>, S2, 0, Opts)),
+    ?assertEqual(50, hb_maps:get(<<"t">>, S2, 0, Opts)).
 
 %%% Accumulator Precision Tests
 

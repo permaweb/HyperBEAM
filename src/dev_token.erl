@@ -39,7 +39,9 @@
         <<"info">>,
         <<"set_path">>,
         <<"reserved_keys">>,
-        <<"is_reserved_key">>
+        <<"is_reserved_key">>,
+        <<"dedup">>,
+        <<"dedup-subject">>
     ]
 ).
 

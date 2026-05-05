@@ -118,9 +118,10 @@ drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, Opts)
     );
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
 drip_global(S, Opts) ->
-    T = hb_ao:get(<<"t">>, S, 0, Opts),
+    RawT = hb_ao:get(<<"t">>, S, 0, Opts),
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
+    T = max(RawT, LastT),
     MintCap = hb_ao:get(<<"mint-cap">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
