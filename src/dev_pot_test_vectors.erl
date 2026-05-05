@@ -213,23 +213,21 @@ single_resource_test() ->
     report(S2, Opts),
     S3 = dev_pot:test_drip(S2, #{ <<"t">> => 1 }, Opts),
     report(S3, Opts),
-    % At t=1, there are 20 pot units and 50 minted to distribute, 50 div 20 = 2,
-    % so it's 20 to each address with 10 undistributed
-    ?assertEqual(20, dev_pot:balance(Addr1, S3, Opts)),
-    ?assertEqual(20, dev_pot:balance(Addr2, S3, Opts)),
+    % At t=1, there are 20 pot units and 50 minted to distribute. The scaled
+    % accumulator preserves 50 / 20 = 2.5, so each address receives 25.
+    ?assertEqual(25, dev_pot:balance(Addr1, S3, Opts)),
+    ?assertEqual(25, dev_pot:balance(Addr2, S3, Opts)),
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
-    % At t=2, there are 20 pot units and 25 + 10 minted to distribute, 35 div 20 = 1,
-    % so it's 10 to each address with 15 undistributed
-    ?assertEqual(30, dev_pot:balance(Addr1, S4, Opts)),
-    ?assertEqual(30, dev_pot:balance(Addr2, S4, Opts)),
+    % At t=2, cumulative distribution per address is floor((50 + 25) / 2) = 37.
+    ?assertEqual(37, dev_pot:balance(Addr1, S4, Opts)),
+    ?assertEqual(37, dev_pot:balance(Addr2, S4, Opts)),
     % Set Addr1 to have 75% of the total deposits.
     S5 = dev_pot:deposit(Addr1, ResourceID, 20, S4, Opts),
     report(S5, Opts),
-    % Calculate the expected balance for Addr1. At this step we mint 12 and have
-    % 15 undistributed, and there are 40 total pot units. 27 div 40 = 0, and
-    % we advance 27 undistributed.
-    NewExpectedB1 = 30,
+    % Addr1 materializes 37 before increasing its deposit. At t=3 it receives
+    % floor(12 * 30 / 40) = 9 more.
+    NewExpectedB1 = 46,
     S6 = dev_pot:test_drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
@@ -277,13 +275,14 @@ multiple_resources_test() ->
     ?assertEqual(250, dev_pot:balance(Addr2, S3, Opts)),
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
-    % 20 pot units, 250 minted. 250 div 20 = 12. Each user: +120 yield
-    ?assertEqual(370, dev_pot:balance(Addr1, S4, Opts)),
-    ?assertEqual(370, dev_pot:balance(Addr2, S4, Opts)),
+    % 20 pot units, 250 minted. The scaled accumulator preserves 250 / 20 = 12.5.
+    % Each user receives floor(37.5) from resource1 and floor(337.5) from resource2.
+    ?assertEqual(374, dev_pot:balance(Addr1, S4, Opts)),
+    ?assertEqual(374, dev_pot:balance(Addr2, S4, Opts)),
     % Withdraw to make Addr1 have 1/10 of pot units
     S5a = dev_pot:withdraw(Addr1, Resource2, 1, S4, Opts),
     S5b = dev_pot:withdraw(Addr2, Resource1, 1, S5a, Opts),
-    NewExpectedB1 = 13 + 370,  % 135 div 10 = 13, Addr1 has 1 unit
+    NewExpectedB1 = 387,
     S6 = dev_pot:test_drip(S5b, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
@@ -309,10 +308,11 @@ single_resource_modified_weight_test() ->
     S3 = dev_pot:test_drip(S1, #{}, Opts),
     S4 = dev_pot:register_resource(<<"oxygen">>, 10, S3, Opts),
     report(S4, Opts),
-    % There's 10 pot units and 25 minted, alice accumulates 20.
+    % There's 10 pot units and 25 minted, and the scaled accumulator preserves
+    % 25 / 10 = 2.5 across Alice's weighted units.
     S5 = dev_pot:test_drip(S4, #{}, Opts),
     report(S5, Opts),
-    ?assertEqual(70, dev_pot:balance(Alice, S5, Opts)),
+    ?assertEqual(75, dev_pot:balance(Alice, S5, Opts)),
     ok.
 
 multiresource_modified_weight_test() ->
@@ -829,6 +829,28 @@ drip_user_with_zero_quantity_test() ->
     S1_claim = dev_pot:deposit(Alice, ResourceOxygen, 1, S1, Opts),
     ?assertEqual(0, dev_pot:balance(Bob, S1_claim, Opts)),
     ?assert(dev_pot:balance(Alice, S1_claim, Opts) > 0).
+
+raw_18_decimal_price_weight_deposit_distributes_scaled_reward_test() ->
+    Alice = <<"alice">>,
+    ResourceStETH = <<"steth">>,
+    Opts = #{},
+    Quantity = 10_000_000_000_000_000,
+    Weight = 2300,
+    S0 =
+        pot_state_empty(
+            [ResourceStETH],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ),
+    S1 = dev_pot:register_resource(ResourceStETH, Weight, S0, Opts),
+    S2 = dev_pot:deposit(Alice, ResourceStETH, Quantity, S1, Opts),
+    S3 = dev_pot:test_drip(S2, #{ <<"t">> => ?AO_ONE_DAY_MS }, Opts),
+    Minted = hb_maps:get(<<"minted">>, S3, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts),
+    ?assertEqual(0, Minted div TotalWeightedUnits),
+    ?assert(hb_maps:get(<<"accumulator">>, S3, 0, Opts) > 0),
+    ?assert(dev_pot:balance(Alice, S3, Opts) > 0).
 
 %%% Minting Boundary Condition Tests
 
@@ -1696,89 +1718,95 @@ mint_distribution_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     S0 = pot_state(Alice, ResourceOxygen, 20),
-    % Tick 0: mint = 50, pot units = 20, accumulate 2 with an undistributed mint of 10
+    % Tick 0: mint = 50, pot units = 20, accumulate 2.5 scaled with no
+    % undistributed mint.
     S1 = dev_pot:test_drip(S0, #{ <<"t">> => 1 }, Opts),
     ?assertEqual(
         50,
         hb_maps:get(<<"minted">>, S1, not_found, Opts)
     ),
     ?assertEqual(
-        10,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S1, not_found, Opts)
     ),
     ?assertEqual(
-        2,
+        2_500_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S1, not_found, Opts)
     ),
-    % Tick 1: mint = 25 + 10, pot units = 20, accumulate 1 with an undistributed mint of 15
+    % Tick 1: mint = 25, pot units = 20, accumulate 1.25 scaled with no
+    % undistributed mint.
     S2 = dev_pot:test_drip(S1, #{ <<"t">> => 2 }, Opts),
     ?assertEqual(
         75,
         hb_maps:get(<<"minted">>, S2, not_found, Opts)
     ),
     ?assertEqual(
-        15,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S2, not_found, Opts)
     ),
     ?assertEqual(
-        3,
+        3_750_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S2, not_found, Opts)
     ),
-    % Tick 3: mint = 12 + 15, pot units = 20, accumulate 1 with an undistributed mint of 7
+    % Tick 3: mint = 12, pot units = 20, accumulate 0.6 scaled with no
+    % undistributed mint.
     S3 = dev_pot:test_drip(S2, #{ <<"t">> => 3 }, Opts),
     ?assertEqual(
         87,
         hb_maps:get(<<"minted">>, S3, not_found, Opts)
     ),
     ?assertEqual(
-        7,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S3, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        4_350_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S3, not_found, Opts)
     ),
-    % Tick 4: mint = 6 + 7, pot units = 20, accumulate 0 with an undistributed mint of 13
+    % Tick 4: mint = 6, pot units = 20, accumulate 0.3 scaled with no
+    % undistributed mint.
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 4 }, Opts),
     ?assertEqual(
         93,
         hb_maps:get(<<"minted">>, S4, not_found, Opts)
     ),
     ?assertEqual(
-        13,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S4, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        4_650_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S4, not_found, Opts)
     ),
-    % Tick 5: mint = 3 + 13, pot units = 20, accumulate 0 with an undistributed mint of 16
+    % Tick 5: mint = 3, pot units = 20, accumulate 0.15 scaled with no
+    % undistributed mint.
     S5 = dev_pot:test_drip(S4, #{ <<"t">> => 5 }, Opts),
     ?assertEqual(
         96,
         hb_maps:get(<<"minted">>, S5, not_found, Opts)
     ),
     ?assertEqual(
-        16,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S5, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        4_800_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S5, not_found, Opts)
     ),
     S6 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S5, Opts),
-    % Tick 6: mint 2 + 16, pot units = 10, accumulate 1 with an undistributed mint of 8
+    % Tick 6: mint 2, pot units = 10, accumulate 0.2 scaled with no
+    % undistributed mint.
     S7 = dev_pot:test_drip(S6, #{ <<"t">> => 6 }, Opts),
     ?assertEqual(
         98,
         hb_maps:get(<<"minted">>, S7, not_found, Opts)
     ),
     ?assertEqual(
-        8,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S7, not_found, Opts)
     ),
     ?assertEqual(
-        5,
+        5_000_000_000_000_000_000,
         hb_maps:get(<<"accumulator">>, S7, not_found, Opts)
     ).
 
