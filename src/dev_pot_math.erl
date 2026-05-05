@@ -40,6 +40,7 @@
 
 -define(MAX_EXACT_POWER_DIGITS, 1000).
 -define(FIXED_SCALE_DIGITS, [40, 60, 80]).
+-define(REWARD_SCALE, 1000000000000000000).
 
 minted_between(Minted, Max, PropN, PropD, LastT, T)
     when not is_integer(Minted) orelse not is_integer(Max)
@@ -170,8 +171,10 @@ do_bignum_exp(X, Y, Acc) ->
 drip_global(Acc, ToMint, TotalWeightedUnits) when TotalWeightedUnits =:= 0 ->
     {Acc, ToMint};
 drip_global(Acc, ToMint, TotalWeightedUnits) ->
-    NewAcc = Acc + (ToMint div TotalWeightedUnits),
-    UndistributedMint = ToMint rem TotalWeightedUnits,
+    AccDelta = (ToMint * ?REWARD_SCALE) div TotalWeightedUnits,
+    Distributed = (AccDelta * TotalWeightedUnits) div ?REWARD_SCALE,
+    NewAcc = Acc + AccDelta,
+    UndistributedMint = ToMint - Distributed,
     {NewAcc, UndistributedMint}.
 
 drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
@@ -180,4 +183,4 @@ drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
 drip_user(ResourceAcc, LastResourceAcc, UserQty) ->
     drip_user(0, ResourceAcc, LastResourceAcc, UserQty).
 drip_user(Balance, ResourceAcc, LastResourceAcc, UserQty) ->
-    Balance + ((ResourceAcc - LastResourceAcc) * UserQty).
+    Balance + (((ResourceAcc - LastResourceAcc) * UserQty) div ?REWARD_SCALE).
