@@ -296,23 +296,21 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                             ),
                                             new_atoms
                                         ),
+                                    BEAMCode =
+                                        case hb_maps:find(<<"body">>, Msg, Opts) of
+                                            {ok, Code} -> Code;
+                                            error ->
+                                                hb_maps:get(
+                                                    <<"data">>,
+                                                    Msg,
+                                                    undefined,
+                                                    Opts
+                                                )
+                                        end,
                                     LoadRes =
                                         erlang:load_module(
                                             ModName,
-                                            case hb_maps:find(
-                                                <<"body">>,
-                                                Msg,
-                                                Opts
-                                            ) of
-                                                {ok, Body} -> Body;
-                                                error ->
-                                                    hb_maps:get(
-                                                        <<"data">>,
-                                                        Msg,
-                                                        undefined,
-                                                        Opts
-                                                    )
-                                            end
+                                            BEAMCode
                                         ),
                                     case LoadRes of
                                         {module, _} ->
