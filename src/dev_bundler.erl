@@ -51,9 +51,15 @@ item(_Base, Req, Opts) ->
             ItemID = hb_message:id(Item, signed, Opts),
             case cache_item(Item, Opts) of
                 ok ->
+                    BundledSize = bundled_item_size(Item, Opts),
+                    dev_metering:consume(
+                        <<"arweave-bytes">>,
+                        BundledSize,
+                        Opts
+                    ),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
-                    ServerPID ! {enqueue_item, Item},
+                    ServerPID ! {enqueue_item, Item, BundledSize},
                     {ok, #{
                         <<"id">> => ItemID,
                         <<"timestamp">> => erlang:system_time(millisecond)
@@ -212,7 +218,16 @@ init(Opts) ->
 server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
     receive
         {enqueue_item, Item} ->
-            State1 = add_to_queue(Item, State, Opts),
+            State1 =
+                add_to_queue(
+                    Item,
+                    bundled_item_size(Item, Opts),
+                    State,
+                    Opts
+                ),
+            server(assign_tasks(maybe_dispatch(State1)), Opts);
+        {enqueue_item, Item, BundledSize} ->
+            State1 = add_to_queue(Item, BundledSize, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
         {dispatch_queue, Timestamp} ->
             ?event(bundler_short, {dispatched_queue_start, calendar:now_to_universal_time(Timestamp)}),
@@ -242,16 +257,19 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
         server(assign_tasks(dispatch_queue(State)), Opts)
     end.
 
-%% @doc Add an enqueue_item to the queue. Update the state with the new queue
-%% and approximate total byte size of the queue.
+%% @doc Add an item to the queue. Update the state with the queue's total
+%% bundled byte size.
 %% Note: Item has already been verified and cached before reaching here.
-add_to_queue(Item, State = #state{queue = Queue, bytes = Bytes, dispatch_ref =  DispatchRef}, Opts) ->
-    ItemSize = erlang:external_size(Item),
-    NewQueue = [Item | Queue],
-    NewBytes = Bytes + ItemSize,
+add_to_queue(Item, BundledSize, State = #state{
+        queue = Queue,
+        bytes = Bytes,
+        dispatch_ref = DispatchRef
+    }, Opts) ->
+    NewQueue = [{Item, BundledSize} | Queue],
+    NewBytes = Bytes + BundledSize,
     ?event(bundler_short, {queueing_item, 
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
-        {size, erlang:external_size(Item)},
+        {size, BundledSize},
         {queue_size, length(NewQueue)},
         {queue_bytes, NewBytes}
     }),
@@ -305,7 +323,7 @@ dispatchable(_State) ->
 %% @doc Return the total size of a queue of items.
 queue_bytes(Items) ->
     lists:foldl(
-        fun(Item, Acc) -> Acc + erlang:external_size(Item) end,
+        fun({_Item, BundledSize}, Acc) -> Acc + BundledSize end,
         0,
         Items
     ).
@@ -323,11 +341,13 @@ dispatch_queue(State = #state{queue = Queue, dispatch_ref = DispatchRef}) ->
 %% @doc Create a bundle and enqueue its initial post task.
 create_bundle([], State) ->
     State;
-create_bundle(Items, State = #state{bundles = Bundles, opts = Opts}) ->
+create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
+    {Items, ItemSizes} = lists:unzip(QueuedItems),
     BundleID = make_ref(),
     Bundle = #bundle{
         id = BundleID,
         items = Items,
+        item_sizes = ItemSizes,
         status = initializing,
         tx = undefined,
         proofs = #{},
@@ -515,7 +535,60 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
             {elapsed_time_s, ElapsedTime}
         }
     ),
+    run_completion_hooks(Bundle, Opts),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
+
+%% @doc Execute hooks for each completed bundled item and the full bundle.
+run_completion_hooks(Bundle, Opts) ->
+    lists:foreach(
+        fun({Item, Size}) ->
+            dev_hook:on(
+                <<"bundled-message-complete">>,
+                #{
+                    <<"body">> => Item,
+                    <<"bundled-size">> => Size
+                },
+                Opts
+            )
+        end,
+        lists:zip(
+            lists:reverse(Bundle#bundle.items),
+            lists:reverse(Bundle#bundle.item_sizes)
+        )
+    ),
+    dev_hook:on(
+        <<"bundle-complete">>,
+        #{
+            <<"body">> => Bundle#bundle.tx,
+            <<"bundled-size">> => bundle_size(Bundle#bundle.tx, Opts)
+        },
+        Opts
+    ).
+
+%% @doc Calculate the exact byte size of an item inside its bundle.
+bundled_item_size(Item, Opts) ->
+    TX =
+        hb_message:convert(
+            Item,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            Opts
+        ),
+    byte_size(ar_bundles:serialize(TX)).
+
+%% @doc Calculate the byte size of the completed bundle payload.
+bundle_size(CommittedTX, Opts) ->
+    TX =
+        hb_message:convert(
+            CommittedTX,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    case TX#tx.data_size of
+        Size when is_integer(Size) -> Size;
+        _ -> byte_size(TX#tx.data)
+    end.
 
 %% @doc Recover a single bundle and enqueue any follow-up work.
 recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
@@ -523,6 +596,7 @@ recover_bundle(CommittedTX, Items, State = #state{opts = Opts}) ->
     Bundle = #bundle{
         id = BundleID,
         items = Items,
+        item_sizes = [bundled_item_size(Item, Opts) || Item <- Items],
         status = tx_posted,
         tx = CommittedTX,
         proofs = #{},
