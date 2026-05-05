@@ -167,12 +167,12 @@ location(Address, Opts) ->
                     result_to_message(ID, Item, Opts)
             end
     end.
-    
+
 %% @doc AO-Core devices are defined primarily by their specification IDs. To find
-%% compatible device implementations we must query for messages with the 
+%% compatible device implementations we must query for messages with the
 %% appropriate tags and signatures.
 device(SpecID, Opts) ->
-    TrustedSigners = hb_opts:get(<<"trusted-signers">>, [], Opts),
+    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
     Query =
         <<"query($specid: [String!]!, $trusted: [String!]!) { ",
                 "transactions(",
@@ -196,7 +196,7 @@ device(SpecID, Opts) ->
                 not_found ->
                     ?event(
                         device_load,
-                        {no_viable_device_implemntations, {device, SpecID}}
+                        {no_viable_device_implementations, {device, SpecID}}
                     ),
                     {error, not_found};
                 Item = #{ <<"id">> := ID } ->
@@ -210,7 +210,7 @@ device(SpecID, Opts) ->
                     result_to_message(ID, Item, Opts)
             end
     end.
-        
+
 %% @doc Run a GraphQL request encoded as a binary. The node message may contain 
 %% a list of URLs to use, optionally as a tuple with an additional map of options
 %% to use for the request.
