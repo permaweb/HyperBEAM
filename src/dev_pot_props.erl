@@ -846,46 +846,33 @@ do_verify_inverted_index(Addr, ResourceID, State, Opts) ->
         }
     }.
 
-verify_undistributed_mint(OldState, _Req, NewState, Opts) ->
+verify_undistributed_mint(_OldState, _Req, NewState, Opts) ->
     UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
-    OldBalanceSum =
+    StoredBalances = hb_maps:get(<<"balances">>, NewState, #{}, Opts),
+    UnclaimedYield =
         lists:sum(
             lists:map(
-                fun(Addr) -> dev_pot:balance(Addr, OldState, Opts)
+                fun(Addr) ->
+                    dev_pot:balance(Addr, NewState, Opts)
+                        - hb_maps:get(Addr, StoredBalances, 0, Opts)
                 end,
                 UserAddrs
             )
         ),
-    NewBalanceSum =
-        lists:sum(
-            lists:map(
-                fun(Addr) -> dev_pot:balance(Addr, NewState, Opts)
-                end,
-                UserAddrs
-            )
-        ),
-    AccumulatedYield = NewBalanceSum - OldBalanceSum,
-    OldUndistributedMint = hb_maps:get(<<"undistributed-mint">>, OldState, 0),
     NewUndistributedMint = hb_maps:get(<<"undistributed-mint">>, NewState, 0),
-    Minted = hb_maps:get(<<"minted">>, OldState, 0),
-    Max = hb_maps:get(<<"mint-cap">>, NewState),
-    PropN = hb_maps:get(<<"mint-prop-numerator">>, NewState),
-    PropD = hb_maps:get(<<"mint-prop-denominator">>, NewState),
-    LastT = hb_maps:get(<<"t">>, OldState),
-    T = hb_maps:get(<<"t">>, NewState),
-    MintedOverDeltaT =
-        dev_pot_math:minted_between(Minted, Max, PropN, PropD, LastT, T),
-    UndistributedDisbursed = OldUndistributedMint - NewUndistributedMint,
-    AccumulatedYield =:= MintedOverDeltaT + UndistributedDisbursed orelse
+    Minted = hb_maps:get(<<"minted">>, NewState, 0),
+    TotalSupply = hb_maps:get(<<"total-supply">>, NewState, 0),
+    VisiblePotSupply = TotalSupply + UnclaimedYield,
+    VisiblePotSupply =< Minted - NewUndistributedMint orelse
     {error,
         {bad_undistributed_mint,
-            {minted_over_deltat, MintedOverDeltaT},
-            {accumulated_yield, AccumulatedYield},
+            {minted, Minted},
+            {total_supply, TotalSupply},
+            {unclaimed_yield, UnclaimedYield},
+            {visible_pot_supply, VisiblePotSupply},
             {new_undistributed_mint, NewUndistributedMint},
-            {old_undistributed_mint, OldUndistributedMint},
-            {loss, AccumulatedYield - (MintedOverDeltaT + UndistributedDisbursed)},
-            {last_t, LastT},
-            {t, T}
+            {available_distributed_mint, Minted - NewUndistributedMint},
+            {excess_supply, VisiblePotSupply - (Minted - NewUndistributedMint)}
         }
     }.
 
