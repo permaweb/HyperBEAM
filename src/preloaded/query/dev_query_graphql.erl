@@ -109,11 +109,11 @@ handle(_Base, RawReq, Opts) ->
     ?event({request, {processed, Req}}),
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
     OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
-    Vars = 
-        hb_message:uncommitted_deep(
-            hb_maps:get(<<"variables">>, Req, #{}, Opts),
-            Opts
-        ),
+    Vars =
+        case hb_maps:get(<<"variables">>, Req, #{}, Opts) of
+            V when is_map(V) -> hb_message:uncommitted_deep(V, Opts);
+            _ -> #{}
+        end,
     ?event(
         {graphql_run_called,
             {query, Query},
