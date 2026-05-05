@@ -208,6 +208,16 @@ test_opts() ->
 %% extension, this will also allow us to load a device from Arweave due to the
 %% remote store implementations.
 exec_dummy_device(Opts) ->
+    SpecMsg =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"name">> => <<"dummy@1.0">>
+            },
+            Opts
+        ),
+    {ok, _SpecUnsignedID} = hb_cache:write(SpecMsg, Opts),
+    SpecID = hb_message:id(SpecMsg, signed, Opts),
     % Compile the test device and store it in an accessible cache to the execution
     % environment.
     {ok, ModName, Bin} = compile:file("test/dev_dummy.erl", [binary]),
@@ -218,6 +228,7 @@ exec_dummy_device(Opts) ->
                     <<"data-protocol">> => <<"ao">>,
                     <<"variant">> => <<"ao.N.1">>,
                     <<"content-type">> => <<"application/beam">>,
+                    <<"implements-device">> => SpecID,
                     <<"module-name">> => ModName,
                     <<"requires-otp-release">> =>
                         hb_util:bin(erlang:system_info(otp_release)),
@@ -229,6 +240,27 @@ exec_dummy_device(Opts) ->
         ),
     {ok, _UnsignedID} = hb_cache:write(DevMsg, Opts),
     ID = hb_message:id(DevMsg, signed, Opts),
+    Gateway = hb_http_server:start_node(Opts),
+    RouteOpts =
+        Opts#{
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"/graphql">>,
+                        <<"node">> => #{
+                            <<"uri">> =>
+                                <<Gateway/binary, "/~query@1.0/graphql">>
+                        }
+                    },
+                    #{
+                        <<"template">> => <<"^/arweave/raw">>,
+                        <<"node">> => #{
+                            <<"match">> => <<"^/arweave/raw/(.*)$">>,
+                            <<"with">> => <<Gateway/binary, "/\\1/body">>
+                        }
+                    }
+                ]
+        },
     % Ensure that we can read the device message from the cache and that it matches
     % the original message.
     {ok, RawReadMsg} = hb_cache:read(ID, Opts),
@@ -238,12 +270,20 @@ exec_dummy_device(Opts) ->
             Opts
         ),
     ?assertEqual(DevMsg, ReadMsg),
-    % Create a base message with the device ID, then request a dummy path from
+    % Create a base message with the device spec ID, then request a dummy path from
     % it.
+    Req = #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },
+    {ok, <<"example">>} =
+        hb_ao:resolve(
+            #{ <<"device">> => SpecID },
+            Req,
+            RouteOpts
+        ),
+    % Resolve again through the same spec to exercise the live module cache.
     hb_ao:resolve(
-        #{ <<"device">> => ID },
-        #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },
-        Opts
+        #{ <<"device">> => SpecID },
+        Req,
+        RouteOpts
     ).
 
 load_device_test() ->
@@ -278,7 +318,7 @@ untrusted_load_device_test() ->
     },
     hb_store:reset(Store),
     ?assertThrow(
-        {error, {device_not_loadable, _, device_signer_not_trusted}},
+        {error, {device_not_loadable, _, _}},
         exec_dummy_device(Opts)
     ).
 

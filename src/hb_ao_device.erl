@@ -245,8 +245,8 @@ maybe_normalize_device_key(Key, Mode) ->
     end.
 
 %% @doc Load a device module from its name or a message ID.
-%% Returns {ok, Executable} where Executable is the device module. On error,
-%% a tuple of the form {error, Reason} is returned.
+%% Returns `{ok, Executable}` where `Executable` is the device module as an atom.
+%% On error, a tuple of the form `{error, Reason}` is returned.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(ID, _Opts) when is_atom(ID) ->
     case code:ensure_loaded(ID) of
@@ -255,35 +255,35 @@ load(ID, _Opts) when is_atom(ID) ->
     end;
 load(ID, Opts) when ?IS_ID(ID) ->
     ?event(device_load, {requested_load, {id, ID}}, Opts),
-	case hb_opts:get(load_remote_devices, false, Opts) of
-        false ->
-            {error, remote_devices_disabled};
-		true ->
-            ?event(device_load, {loading_from_cache, {id, ID}}, Opts),
-			{ok, Msg} = hb_cache:read(ID, Opts),
-            ?event(device_load, {received_device, {id, ID}, {msg, Msg}}, Opts),
+    case find_device_implementation(ID, Opts) of
+        {ok, Atom} when is_atom(Atom) ->
+            % The device has already been loaded and executed previously
+            % so there is no need to load it again.
+            {ok, Atom};
+        {ok, Msg} ->
+            % Device resolution has returned a candidate message ID to
+            % us. Verify that the device is trusted, compatible, and
+            % then load it if so.
             TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
-			Trusted =
-				lists:any(
-					fun(Signer) ->
-						lists:member(Signer, TrustedSigners)
-					end,
-					hb_message:signers(Msg, Opts)
-				),
+            Signers = hb_message:signers(Msg, Opts),
+            Trusted =
+                lists:any(
+                    fun(Signer) -> lists:member(Signer, TrustedSigners) end,
+                    Signers
+                ),
             ?event(device_load,
                 {verifying_device_trust,
                     {id, ID},
                     {trusted, Trusted},
-                    {signers, hb_message:signers(Msg, Opts)}
+                    {signers, Signers}
                 },
                 Opts
             ),
-			case Trusted of
-				false -> {error, device_signer_not_trusted};
-				true ->
-                    ?event(device_load, {loading_device, {id, ID}}, Opts),
-					case hb_maps:get(<<"content-type">>, Msg, undefined, Opts) of
-						<<"application/beam">> ->
+            case Trusted of
+                false -> {error, device_signer_not_trusted};
+                true ->
+                    case hb_maps:get(<<"content-type">>, Msg, undefined, Opts) of
+                        <<"application/beam">> ->
                             case verify_device_compatibility(Msg, Opts) of
                                 ok ->
                                     ModName =
@@ -296,18 +296,25 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                             ),
                                             new_atoms
                                         ),
-                                    LoadRes = 
+                                    BEAMCode =
+                                        case hb_maps:find(<<"body">>, Msg, Opts) of
+                                            {ok, Code} -> Code;
+                                            error ->
+                                                hb_maps:get(
+                                                    <<"data">>,
+                                                    Msg,
+                                                    undefined,
+                                                    Opts
+                                                )
+                                        end,
+                                    LoadRes =
                                         erlang:load_module(
                                             ModName,
-                                            hb_maps:get(
-                                                <<"body">>,
-                                                Msg,
-                                                undefined,
-                                                Opts
-                                            )
+                                            BEAMCode
                                         ),
                                     case LoadRes of
                                         {module, _} ->
+                                            cache_device_module(ID, ModName, Opts),
                                             {ok, ModName};
                                         {error, Reason} ->
                                             {error, {device_load_failed, Reason}}
@@ -324,8 +331,10 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                 }
                             }
                     end
-			end
-	end;
+            end;
+        {error, _} = Error ->
+            Error
+    end;
 load(ID, Opts) ->
     NormKey =
         case is_atom(ID) of
@@ -387,6 +396,53 @@ verify_device_compatibility(Msg, Opts) ->
         [] -> ok;
         _ -> {error, {failed_requirements, FailedToMatch}}
     end.
+
+-define(DEV_CACHE_PREFIX, <<"~hyperbeam@live/devices/">>).
+%% @doc Return the local module name used to evaluate messages with a given
+%% device type.
+find_device_implementation(DevRef, Opts) ->
+    case hb_opts:get(load_remote_devices, false, Opts) of
+        false ->
+            {error, remote_devices_disabled};
+        true ->
+            Store = device_store(Opts),
+            case hb_store:read(
+                Store,
+                <<(?DEV_CACHE_PREFIX)/binary, DevRef/binary>>,
+                Opts
+            ) of
+                {ok, Device} ->
+                    {ok, hb_util:atom(Device)};
+                _ ->
+                    % If the device is not already loaded into the `device-store`,
+                    % load it from the gateway store and cache it.
+                    case hb_gateway_client:device(DevRef, Opts) of
+                        {ok, DeviceMsg} -> {ok, DeviceMsg};
+                        _ ->
+                            {
+                                error,
+                                <<
+                                    "Device `",
+                                    DevRef/binary,
+                                    "` not loadable on this node."
+                                >>
+                            }
+                    end
+            end
+    end.
+
+%% @doc Cache the local module name used to evaluate messages with a given
+%% device type.
+cache_device_module(ID, ModName, Opts) ->
+    hb_store:write(
+        device_store(Opts),
+        #{ <<(?DEV_CACHE_PREFIX)/binary, ID/binary>> => hb_util:bin(ModName) },
+        Opts
+    ).
+
+%% @doc Return the configured store for live device metadata.
+device_store(Opts) ->
+    hb_opts:get(device_store, hb_opts:get(store, [], Opts), Opts).
 
 %% @doc Get the info map for a device, optionally giving it a message if the
 %% device's info function is parameterized by one.

@@ -11,7 +11,7 @@
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
--export([location/2]).
+-export([device/2, location/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -109,6 +109,7 @@ data(ID, Opts) ->
         <<"method">> => <<"GET">>
     },
     case hb_http:request(Req, Opts) of
+        {ok, Data} when is_binary(Data) -> {ok, Data};
         {ok, Res} ->
             Data =
                 case hb_maps:find(<<"data">>, Res, Opts) of
@@ -167,7 +168,50 @@ location(Address, Opts) ->
                     result_to_message(ID, Item, Opts)
             end
     end.
-        
+
+%% @doc AO-Core devices are defined primarily by their specification IDs. To find
+%% compatible device implementations we must query for messages with the
+%% appropriate tags and signatures.
+device(SpecID, Opts) ->
+    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
+    Query =
+        <<"query($specid: [String!], $trusted: [String!]) { ",
+                "transactions(",
+                "owners: $trusted, ",
+                "tags: { name: \"implements-device\" values: $specid }, ",
+                "first: 1",
+            "){ ",
+                "edges { ",
+                    (item_spec())/binary ,
+                " } ",
+            "} ",
+        "}">>,
+    Variables = #{ <<"trusted">> => TrustedSigners, <<"specid">> => [SpecID] },
+    case query(Query, Variables, Opts) of
+        {error, Reason} ->
+            ?event({device_read_failed, {query, Query}, {error, Reason}}),
+            {error, Reason};
+        {ok, GqlMsg} ->
+            ?event({device_query_success, {query, Query}, {response, GqlMsg}}),
+            case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
+                not_found ->
+                    ?event(
+                        device_load,
+                        {no_viable_device_implementations, {device, SpecID}}
+                    ),
+                    {error, not_found};
+                Item = #{ <<"id">> := ID } ->
+                    ?event(
+                        device_load,
+                        {implementation_found_via_graphql,
+                            {device, SpecID},
+                            {id, ID}
+                        }
+                    ),
+                    result_to_message(ID, Item, Opts)
+            end
+    end.
+
 %% @doc Run a GraphQL request encoded as a binary. The node message may contain 
 %% a list of URLs to use, optionally as a tuple with an additional map of options
 %% to use for the request.
