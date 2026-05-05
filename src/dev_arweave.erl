@@ -809,7 +809,7 @@ parent(Base, Request, Opts) ->
             {error, not_found};
         ID ->
             StoreOpts = hb_store_arweave:store_from_opts(Opts),
-            try hb_store_arweave:read_parent(StoreOpts, ID) of
+            try hb_store_arweave:read_parent(StoreOpts, ID, Opts) of
                 {ok, [{Height, block} | _]} ->
                     Entry = #{
                         <<"type">> => <<"block">>,
@@ -1013,7 +1013,7 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
             Opts
         ),
     CacheRes =
-        case hb_opts:get(arweave_index_blocks, true, Opts) of
+        case hb_opts:get(<<"arweave-index-blocks">>, true, Opts) of
             true -> dev_arweave_block_cache:write(Block, Opts);
             false -> skipped
         end,
@@ -1621,9 +1621,9 @@ head_raw_ans104_deserialize_throws_test_parallel() ->
         <<"index-store">> => [TestStore]
     },
     Opts = #{
-        store => [TestStore],
-        arweave_index_ids => true,
-        arweave_index_store => IndexStore
+        <<"store">> => [TestStore],
+        <<"arweave-index-ids">> => true,
+        <<"arweave-index-store">> => IndexStore
     },
     FakeID = <<"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC">>,
     %% Same interior offset as bundle_header_garbage_guard_test_parallel.
