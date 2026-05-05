@@ -440,8 +440,8 @@ simple_pot_process_test() ->
     ),
     ?event(debug_test, {state, Process}, Opts),
     ?assertEqual(1, balance(Process, id(Bob),Opts)),
-    ?assertEqual(8999, balance(Process, id(Alice), Opts)),
-    ?assertEqual(9000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    ?assertEqual(9749, balance(Process, id(Alice), Opts)),
+    ?assertEqual(9750, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 weight_authority_can_update_weight_without_resource_config_authority_test() ->
     Opts = test_opts(),
@@ -852,9 +852,9 @@ transfer_with_unclaimed_yield_test() ->
     % Advance time to generate yield
     % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=1:
     % ToMint = 10000 * (2^1 - 1^1) / 2^1 = 10000 * 1 / 2 = 5000
-    % GlobalAcc = 0 + (5000 / 1000) = 5 (per weighted unit)
-    % ResourceAcc = 0 + (5 * 100) = 500
-    % Alice's yield = (500 - 0) * 10 = 5000 tokens!
+    % GlobalAcc = (5000 * 10^18) / 1000 = 5 * 10^18
+    % ResourceAcc = (5 * 10^18) * 100 = 500 * 10^18
+    % Alice's yield = ((500 * 10^18 - 0) * 10) / 10^18 = 5000 tokens!
     %?assertEqual(500, dev_token_lib:balance(Process, id(Alice), Opts)),
     % % Try to transfer 700 tokens
     % % Should fail without normalize_mint (500 < 700)
@@ -865,13 +865,11 @@ transfer_with_unclaimed_yield_test() ->
         Alice,
         Opts
     ),
-    % Alice should have: (500 + 5000) - 700 = 4800
+    % Alice should have: (500 + 7500) - 700 = 7300
     % Bob should have: 700
-    ?assertEqual(6800, balance(Process, id(Alice), Opts)),
+    ?assertEqual(7300, balance(Process, id(Alice), Opts)),
     ?assertEqual(700, balance(Process, id(Bob), Opts)),
-    % Total supply should be updated
-    % Initial: 500, Minted: 5000, New total: 5500
-    ?assertEqual(7500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 normalized_balance_normalizes_lazy_mint_test() ->
     Opts = test_opts(),
@@ -910,10 +908,10 @@ normalized_balance_normalizes_lazy_mint_test() ->
     % Raw `now/balances` remains stale because explicit `mint` advances global
     % pot state, but does not claim Alice's user-specific lazy yield.
     ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
-    % After the global mint, Alice has 7000 lazy claimable yield on top of her
+    % After the global mint, Alice has 7500 lazy claimable yield on top of her
     % explicit 500 token balance.
-    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
-    ?assertEqual(7500, balance(Process, AliceAddr, Opts)).
+    ?assertEqual(8000, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8000, balance(Process, AliceAddr, Opts)).
 
 %% @doc Ensure raw `dev_token_lib:supply/2` ignores trie metadata and returns
 %% the numeric sum of persisted balances.
@@ -973,8 +971,8 @@ public_global_mint_still_drips_without_subject_test() ->
     ),
     ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
     ?assertEqual(7500, hb_ao:get(<<"now/minted">>, Process, Opts)),
-    ?assertEqual(7, hb_ao:get(<<"now/accumulator">>, Process, Opts)),
-    ?assertEqual(7500, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
+    ?assertEqual(7_500_000_000_000_000_000, hb_ao:get(<<"now/accumulator">>, Process, Opts)),
+    ?assertEqual(8000, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
 
 %% @doc Test that invalid subject addresses are rejected before mint-device
 %% dispatch and do not mutate persisted state.
@@ -1052,8 +1050,8 @@ public_mint_allows_foreign_subject_test() ->
         BobWallet,
         Opts
     ),
-    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
-    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    ?assertEqual(8500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 %% @doc Test that public persisted mint forwards `body.subject` for the caller,
 %% allowing the request to persist the subject claim.
@@ -1091,8 +1089,8 @@ public_mint_allows_self_subject_test() ->
         AliceWallet,
         Opts
     ),
-    ?assertEqual(8000, dev_token_lib:balance(Process, AliceAddr, Opts)),
-    ?assertEqual(8000, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
+    ?assertEqual(8500, dev_token_lib:balance(Process, AliceAddr, Opts)),
+    ?assertEqual(8500, hb_ao:get(<<"now/total-supply">>, Process, Opts)).
 
 %% @doc Test direct claim_yield functionality from a single resource
 claim_yield_single_resource_test() ->
@@ -1130,7 +1128,7 @@ claim_yield_single_resource_test() ->
     ),
     BaseAfterClaim = dev_token_lib:now(Process, Opts),
     ?event({after_claim, BaseAfterClaim}),
-    ?assertEqual(8000, balance(BaseAfterClaim, AliceAddr,Opts)).
+    ?assertEqual(8500, balance(BaseAfterClaim, AliceAddr,Opts)).
 
 %% @doc Test claim_yield across multiple resources
 claim_yield_multiple_resources_test() ->
@@ -1161,8 +1159,9 @@ claim_yield_multiple_resources_test() ->
     State2 = dev_token_lib:now(State, Opts),
     % Under real scheduled slot timing, each setup action consumes a slot.
     % By the explicit mint, oxygen has already realized one more accumulator
-    % step than in the old lazy body.t model, so Alice ends at 9250.
-    ?assertEqual(9250, balance(State2, id(Alice), Opts)).
+    % step than in the old lazy body.t model. The scaled accumulator preserves
+    % fractional per-unit yield, so Alice ends at 9375.
+    ?assertEqual(9375, balance(State2, id(Alice), Opts)).
 
 %% @doc Test claim_yield when address has no deposits (edge case)
 claim_yield_no_deposits_test() ->
