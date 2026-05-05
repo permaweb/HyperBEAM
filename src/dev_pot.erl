@@ -59,7 +59,8 @@
     <<"last-drip">>,
     <<"t">>,
     <<"total-weighted-units">>,
-    <<"undistributed-mint">>
+    <<"undistributed-mint">>,
+    <<"accumulator-remainder">>
 ]).
 
 %%% Pot Model Functions.
@@ -137,20 +138,24 @@ drip_global(S, Opts) ->
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    AccumulatorRemainder =
+        hb_maps:get(<<"accumulator-remainder">>, S, 0, Opts),
     ?event(debug_test,
         {drip_global,
             {t, T},
             {last_drip, LastT},
             {minted, AlreadyMinted},
             {undistributed_mint, UndistributedMint},
+            {accumulator_remainder, AccumulatorRemainder},
             {total_weighted_units, TotalWeightedUnits},
             {global_accumulator, GlobalAcc},
             {to_mint, ToMint}
         }, Opts),
-    {NewGlobalAcc, NewUndistributedMint} =
+    {NewGlobalAcc, NewUndistributedMint, NewAccumulatorRemainder} =
         dev_pot_math:drip_global(
             GlobalAcc,
             ToMint + UndistributedMint,
+            AccumulatorRemainder,
             TotalWeightedUnits
         ),
     ?event(debug_test,
@@ -166,7 +171,8 @@ drip_global(S, Opts) ->
             <<"accumulator">> => NewGlobalAcc,
             <<"last-drip">> => T,
             <<"minted">> => AlreadyMinted + ToMint,
-            <<"undistributed-mint">> => NewUndistributedMint
+            <<"undistributed-mint">> => NewUndistributedMint,
+            <<"accumulator-remainder">> => NewAccumulatorRemainder
         },
         Opts
     ).

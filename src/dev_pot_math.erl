@@ -35,7 +35,7 @@
 %%% '''
 -module(dev_pot_math).
 -export([minted_between/6]).
--export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
+-export([drip_global/4, drip_resource/4, drip_user/3, drip_user/4]).
 -export([bignum_exp/2]).
 
 -define(MAX_EXACT_POWER_DIGITS, 1000).
@@ -168,14 +168,15 @@ do_bignum_exp(X, Y, Acc) when Y rem 2 =:= 1 ->
 do_bignum_exp(X, Y, Acc) ->
     do_bignum_exp(X * X, Y div 2, Acc).
 
-drip_global(Acc, ToMint, TotalWeightedUnits) when TotalWeightedUnits =:= 0 ->
-    {Acc, ToMint};
-drip_global(Acc, ToMint, TotalWeightedUnits) ->
-    AccDelta = (ToMint * ?REWARD_SCALE) div TotalWeightedUnits,
-    Distributed = (AccDelta * TotalWeightedUnits) div ?REWARD_SCALE,
+drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits)
+        when TotalWeightedUnits =:= 0 ->
+    {Acc, ToMint, AccumulatorRemainder};
+drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits) ->
+    Numerator = (ToMint * ?REWARD_SCALE) + AccumulatorRemainder,
+    AccDelta = Numerator div TotalWeightedUnits,
+    NewAccumulatorRemainder = Numerator rem TotalWeightedUnits,
     NewAcc = Acc + AccDelta,
-    UndistributedMint = ToMint - Distributed,
-    {NewAcc, UndistributedMint}.
+    {NewAcc, 0, NewAccumulatorRemainder}.
 
 drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
     ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).
