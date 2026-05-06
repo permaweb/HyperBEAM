@@ -29,66 +29,34 @@
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-        <<"mempool">> ->
-            index_mempool(Request, Opts);
-        <<"write">> ->
+        <<"mempool">> -> index_mempool(Request, Opts);
+        <<"write">> -> 
             case hb_maps:find(<<"id">>, Request, Opts) of
-                {ok, TXID} ->
-                    case process_l1_request(TXID, Request, Opts) of
-                        {ok, Stats} when is_map(Stats) ->
-                            ?event(
-                                copycat_short,
-                                {arweave_tx_indexed,
-                                    {id, {explicit, TXID}},
-                                    {items_indexed, maps:get(items_count, Stats, 0)},
-                                    {bundle_txs, maps:get(bundle_count, Stats, 0)},
-                                    {skipped_txs, maps:get(skipped_count, Stats, 0)}
-                                }
-                            ),
-                            {ok, Stats#{
-                                <<"body">> => maps:get(items_count, Stats, 0)
-                            }};
-                        _ -> 
-                            {ok, #{
-                                items_count => 0,
-                                bundle_count => 0,
-                                skipped_count => 0,
-                                <<"body">> => 0
-                            }}                         
-                    end;
+                {ok, TXID} -> index_explicit_tx(TXID, Request, Opts);
                 error ->
-                    case parse_range(Request, Opts) of
-                        {error, unavailable} ->
-                            {error, unavailable};
-                        {ok, {From, To}} ->
-                            TargetDepth = request_depth(
-                                Request, ?DEFAULT_BLOCK_DEPTH, Opts),
-                            ?event(copycat_short,
-                                {indexing_blocks,
-                                    {from, From}, {to, To},
-                                    {depth, TargetDepth}}
-                            ),
-                            fetch_blocks(From, To, TargetDepth, Opts)
-                    end
+                    Depth = request_depth(Request, ?DEFAULT_BLOCK_DEPTH, Opts),
+                    with_range(
+                        Request, 
+                        Opts,
+                        fun(F, T, O) -> fetch_blocks(F, T, Depth, O) end
+                    )
             end;
-        <<"list">> ->
-            case parse_range(Request, Opts) of
-                {error, unavailable} -> {error, unavailable};
-                {ok, {From, To}} -> list_index(From, To, Opts)
-            end;
-        <<"inventory">> ->
-            case parse_range(Request, Opts) of
-                {error, unavailable} -> {error, unavailable};
-                {ok, {From, To}} -> inventory_index(From, To, Opts)
-            end;
+        <<"list">> -> with_range(Request, Opts, fun list_index/3);
+        <<"inventory">> -> with_range(Request, Opts, fun inventory_index/3);
+        <<"headers">> -> with_range(Request, Opts, fun index_headers/3);
         Mode ->
-            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
-                "`. Supported modes are: write, list, inventory">>}
+            {
+                error, 
+                <<"Unsupported mode `", (hb_util:bin(Mode))/binary,"`. Supported", 
+                "modes are: write, list, inventory, headers, mempool">>
+            }
     end.
+
 %% @doc Set bundles descendant recursion cap, avoids recursion
 %% in very nested bundles (very rare).
 set_depth_recursion_cap(Cap, Opts) when is_integer(Cap), Cap > 0 ->
     Opts#{<<"copycat_depth_recursion_cap">> => Cap}.
+
 %% @doc Get the set depth recursion cap from hb_opts.
 get_depth_recursion_cap(Opts) ->
     hb_opts:get(<<"copycat_depth_recursion_cap">>, undefined, Opts).
@@ -513,6 +481,12 @@ parse_range(Request, Opts) ->
             {error, unavailable}
     end.
 
+with_range(Request, Opts, Fun) ->
+    case parse_range(Request, Opts) of
+        {error, unavailable} -> {error, unavailable};
+        {ok, {From, To}} -> Fun(From, To, Opts)
+    end.
+
 normalize_height(Height, Opts) ->
     RequestedHeight = hb_util:int(Height),
     case RequestedHeight < 0 of
@@ -702,27 +676,51 @@ classify_txs(TXIDs, Opts) ->
         TXIDs
     ).
 
+%% @doc Index a single L1 TX by ID. Returns indexing stats (items, bundles,
+%% skipped) on success, or zeroed stats on failure.
+index_explicit_tx(TXID, Request, Opts) ->
+    case process_l1_request(TXID, Request, Opts) of
+        {ok, Stats} when is_map(Stats) ->
+            ?event(copycat_short,
+                {arweave_tx_indexed,
+                    {id, {explicit, TXID}},
+                    {items_indexed, maps:get(items_count, Stats, 0)},
+                    {bundle_txs, maps:get(bundle_count, Stats, 0)},
+                    {skipped_txs, maps:get(skipped_count, Stats, 0)}
+                }
+            ),
+            {ok, Stats#{ <<"body">> => maps:get(items_count, Stats, 0) }};
+        _ ->
+            {ok, #{
+                items_count   => 0,
+                bundle_count  => 0,
+                skipped_count => 0,
+                <<"body">>    => 0
+            }}
+    end.
+
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
 %% is omitted, stop at the first block already indexed at the requested depth
 %% (via block markers above cutover, or legacy per-TX check below cutover).
-fetch_blocks(Current, To, TargetDepth, _Opts)
-        when is_integer(To), Current < To ->
+fetch_blocks(From, To, Depth, Opts) ->
+    ?event(copycat_short,
+        {indexing_blocks, {from, From}, {to, To}, {depth, Depth}}),
+    do_fetch_blocks(From, To, Depth, Opts).
+
+do_fetch_blocks(Current, To, Depth, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
-            {reached_target, To},
-            {target_depth, TargetDepth}
+            {reached_target, To}, {target_depth, Depth}
         }
     ),
     {ok, To};
-fetch_blocks(Current, undefined, _TargetDepth, _Opts) when Current < 0 ->
+do_fetch_blocks(Current, undefined, _Depth, _Opts) when Current < 0 ->
     {ok, 0};
-fetch_blocks(Current, undefined, TargetDepth, Opts) ->
-    BlockWorkers = block_workers(Opts),
-    fetch_blocks_open_ended(Current, TargetDepth, BlockWorkers, Opts);
-fetch_blocks(Current, To, TargetDepth, Opts) ->
-    BlockWorkers = block_workers(Opts),
-    fetch_blocks_ranged(Current, To, TargetDepth, BlockWorkers, Opts).
+do_fetch_blocks(Current, undefined, Depth, Opts) ->
+    fetch_blocks_open_ended(Current, Depth, block_workers(Opts), Opts);
+do_fetch_blocks(Current, To, Depth, Opts) ->
+    fetch_blocks_ranged(Current, To, Depth, block_workers(Opts), Opts).
 
 block_workers(Opts) ->
     max(1, hb_opts:get(<<"arweave_block_workers">>, 3, Opts)).
