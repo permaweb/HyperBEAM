@@ -539,7 +539,7 @@ verify_auth(WalletDetails, Req, Opts) ->
 wallets_from_cookie(Msg, Opts) ->
     % Parse the cookie as a Structured-Fields map.
     ParsedCookie =
-        try dev_codec_cookie:extract(Msg, #{ <<"format">> => <<"cookie">> }, Opts) of
+        try dev_cookie:extract(Msg, #{ <<"format">> => <<"cookie">> }, Opts) of
             {ok, CookieMsg} -> CookieMsg
         catch _:_ -> {error, <<"Invalid cookie format.">>}
         end,
@@ -650,7 +650,7 @@ secrets_to_keyids(Secrets) when is_list(Secrets) ->
     [ hd(secrets_to_keyids(Secret)) || Secret <- Secrets ];
 secrets_to_keyids(Secret) when is_binary(Secret) ->
     ?event({secrets_to_keyids, {secret, Secret}}),
-    KeyID = dev_codec_httpsig_keyid:secret_key_to_committer(Secret),
+    KeyID = dev_httpsig_keyid:secret_key_to_committer(Secret),
     [ {secret, <<"secret:", KeyID/binary>>, Secret} ].
 
 %% @doc Parse the exportable setting for a wallet and return a list of addresses

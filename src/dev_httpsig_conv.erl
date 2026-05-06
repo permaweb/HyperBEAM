@@ -25,7 +25,7 @@
 %%% 		  structured field.
 %%%         - Otherwise encode the value as a part in the multipart response
 %%% 
--module(dev_codec_httpsig_conv).
+-module(dev_httpsig_conv).
 -export([to/3, from/3, encode_http_msg/2]).
 %%% Helper utilities
 -include("include/hb.hrl").
@@ -62,7 +62,7 @@ from(HTTP, _Req, Opts) ->
         ),
     % Finally, we need to add the signatures to the TABM.
     Commitments =
-        dev_codec_httpsig_siginfo:siginfo_to_commitments(
+        dev_httpsig_siginfo:siginfo_to_commitments(
             WithIDs,
             OrderedBodyKeys,
             Opts
@@ -118,7 +118,7 @@ body_to_tabm(HTTP, Opts) ->
                     ),
                 % Merge all of the parts into a single TABM.
                 {ok, MergedParts} =
-                    dev_codec_flat:from(
+                    dev_flat:from(
                         maps:from_list(OrderedBodyTABMs),
                         #{},
                         Opts
@@ -246,7 +246,7 @@ from_body_part(InlinedKey, Part, Opts) ->
                         end
                 end,
             Commitments =
-                dev_codec_httpsig_siginfo:siginfo_to_commitments(
+                dev_httpsig_siginfo:siginfo_to_commitments(
                     Headers#{ PartName => RawBody },
                     [PartName],
                     Opts
@@ -436,7 +436,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
     {ok,
         maps:merge(
             Intermediate,
-            dev_codec_httpsig_siginfo:commitments_to_siginfo(
+            dev_httpsig_siginfo:commitments_to_siginfo(
                 TABM,
                 CommitmentsMap,
                 Opts
@@ -556,7 +556,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
             ?event({adding_content_digest, {msg, Enc1}}),
             hb_maps:merge(
                 Enc1,
-                dev_codec_httpsig:add_content_digest(Enc1, Opts),
+                dev_httpsig:add_content_digest(Enc1, Opts),
                 Opts
             )
     end,
@@ -896,7 +896,7 @@ group_maps_flat_compatible_test() ->
         }
     },
     Lifted = group_maps(Map),
-    ?assertEqual(dev_codec_flat:from(Lifted, #{}, #{}), {ok, Map}),
+    ?assertEqual(dev_flat:from(Lifted, #{}, #{}), {ok, Map}),
     ok.
 
 encode_message_with_links_test() ->

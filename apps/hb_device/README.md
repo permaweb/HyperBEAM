@@ -13,6 +13,16 @@ The root module is `dev_example`; every module whose name starts with
 `dev_example_` is treated as package-internal. The generated module exports
 only the functions exported by `dev_example.erl`.
 
+Root modules can declare the implemented device name or an existing device spec
+ID with:
+
+```erlang
+-implements(<<"example@1.0">>).
+```
+
+If no explicit spec file is configured, the packager uses the root module's top
+`%%% @doc` comment as a markdown device spec body.
+
 ## Use in a Device Repo
 
 Add HyperBEAM as a dependency for editor support and runtime APIs, and add the
@@ -72,6 +82,7 @@ Common options:
 --root, -r      Root module, or comma-separated root modules.
 --src-dir, -s   Source directory. Defaults to src.
 --out-dir, -o   Artifact directory. Defaults to _build/default/packaged-devices.
+--spec          Markdown or HTML spec file for the selected root.
 --store-dir     Filesystem preload store. Defaults to _build/default/preloaded-device-store.
 --metadata-file Preload metadata term file. Defaults to _build/default/preloaded-device-metadata.eterm.
 --key, -k       Wallet keyfile used to sign preload messages. Defaults to hyperbeam-key.json.

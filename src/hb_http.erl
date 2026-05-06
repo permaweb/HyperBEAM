@@ -153,7 +153,7 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                     Opts
                 ),
                 {ok, MsgWithCookies} =
-                    dev_codec_cookie:from(
+                    dev_cookie:from(
                         #{ <<"set-cookie">> => SetCookieLines },
                         #{},
                         Opts
@@ -362,17 +362,17 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.
     {MaybeCookie, WithoutCookie} =
-        case dev_codec_cookie:extract(Message, #{}, Opts) of
+        case dev_cookie:extract(Message, #{}, Opts) of
             {ok, NoCookies} when map_size(NoCookies) == 0 ->
                 {#{}, Message};
             {ok, _Cookies} ->
                 {ok, #{ <<"cookie">> := CookieLines }} =
-                    dev_codec_cookie:to(
+                    dev_cookie:to(
                         Message,
                         #{ <<"format">> => <<"cookie">> },
                         Opts
                     ),
-                {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+                {ok, CookieReset} = dev_cookie:reset(Message, Opts),
                 ?event(debug_http, {cookie_lines, CookieLines}),
                 {
                     #{ <<"cookie">> => CookieLines },
@@ -554,16 +554,16 @@ should_finalize_stream(_, _EncodedBody) -> false.
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
 %% `set-cookie' and `cookie' fields are treated as viable sources of cookies.
 reply_handle_cookies(Req, Message, Opts) ->
-    {ok, Cookies} = dev_codec_cookie:extract(Message, #{}, Opts),
+    {ok, Cookies} = dev_cookie:extract(Message, #{}, Opts),
     ?event(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
     case Cookies of
         NoCookies when map_size(NoCookies) == 0 -> {ok, Req, Message};
         _ ->
             % The internal values of the `cookie' field will be stored in the
-            % `priv_store' by default, so we let `dev_codec_cookie:opts/1'
+            % `priv_store' by default, so we let `dev_cookie:opts/1'
             % reset the options.
             {ok, #{ <<"set-cookie">> := SetCookieLines }} =
-                dev_codec_cookie:to(
+                dev_cookie:to(
                     Message,
                     #{ <<"format">> => <<"set-cookie">> },
                     Opts
@@ -589,7 +589,7 @@ reply_handle_cookies(Req, Message, Opts) ->
                     Req,
                     SetCookieLines
                 ),
-            {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+            {ok, CookieReset} = dev_cookie:reset(Message, Opts),
             {
                 ok,
                 FinalReq,
@@ -679,7 +679,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Opts#{ <<"topic">> => ao_internal }
                 ),
             {ok, EncMessage} =
-                dev_codec_httpsig:to(
+                dev_httpsig:to(
                     TABM,
                     case AcceptBundle of
                         true ->
@@ -1070,7 +1070,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         case maps:get(<<"cookie">>, RawHeaders, undefined) of
             undefined -> {ok, BaseMsg};
             Cookie ->
-                dev_codec_cookie:from(
+                dev_cookie:from(
                     BaseMsg#{ <<"cookie">> => Cookie },
                     Req,
                     Opts

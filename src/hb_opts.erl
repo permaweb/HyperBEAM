@@ -687,7 +687,7 @@ load_bin(<<"flat@1.0">>, Bin, Opts) ->
             fun(Line) -> string:trim(Line, trailing) end,
             binary:split(Bin, <<"\n">>, [global])
         ),
-    try dev_codec_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
+    try dev_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
         {ok, Map} ->
             {ok, mimic_default_types(Map, false, Opts)}
     catch

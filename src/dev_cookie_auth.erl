@@ -1,7 +1,7 @@
 %%% @doc Implements the `message@1.0' commitment interface for the `~cookie@1.0',
 %%% as well as the `generator' interface type for the `~auth-hook@1.0' device.
-%%% See the [cookie codec](dev_codec_cookie.html) documentation for more details.
--module(dev_codec_cookie_auth).
+%%% See the [cookie codec](dev_cookie.html) documentation for more details.
+-module(dev_cookie_auth).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 -export([commit/3, verify/3]).
@@ -10,7 +10,7 @@
 %% @doc Generate a new secret (if no `committer' specified), and use it as the
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
-%% module documentation of `dev_codec_cookie' for more details on its scheme.
+%% module documentation of `dev_cookie' for more details on its scheme.
 generate(Base, Request, Opts) ->
     {WithCookie, Secrets} =
         case find_secrets(Request, Opts) of
@@ -40,7 +40,7 @@ finalize(Base, Request, Opts) ->
         {ok, MessageSequence} ?= hb_maps:find(<<"body">>, Request, Opts),
         % Cookie auth adds set-cookie to response
         {ok, #{ <<"set-cookie">> := SetCookie }} =
-            dev_codec_cookie:to(
+            dev_cookie:to(
                 SignedMsg,
                 #{ <<"format">> => <<"set-cookie">> },
                 Opts
@@ -57,15 +57,15 @@ finalize(Base, Request, Opts) ->
 %% @doc Generate a new secret (if no `committer' specified), and use it as the
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
-%% module documentation of `dev_codec_cookie' for more details on its scheme.
+%% module documentation of `dev_cookie' for more details on its scheme.
 commit(Base, Request, RawOpts) when ?IS_LINK(Request) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     commit(Base, hb_cache:ensure_loaded(Request, Opts), Opts);
 commit(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     commit(hb_cache:ensure_loaded(Secret, Opts), Base, Req, Opts);
 commit(Base, Request, RawOpts) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     % Calculate the key to use for the commitment.
     SecretRes =
         case find_secret(Request, Opts) of
@@ -86,7 +86,7 @@ commit(Base, Request, RawOpts) ->
 %% commit a message and set the given secret key in the cookie.
 commit(Secret, Base, Request, Opts) ->
     {ok, CommittedMsg} =
-        dev_codec_httpsig_proxy:commit(
+        dev_httpsig_proxy:commit(
             <<"cookie@1.0">>,
             Secret,
             Base,
@@ -97,35 +97,35 @@ commit(Secret, Base, Request, Opts) ->
 
 %% @doc Update the nonces for a given secret.
 store_secret(Secret, Msg, Opts) ->
-    CookieAddr = dev_codec_httpsig_keyid:secret_key_to_committer(Secret),
+    CookieAddr = dev_httpsig_keyid:secret_key_to_committer(Secret),
     % Create the cookie parameters, using the name as the key and the secret as
     % the value.
-    {ok, Cookies} = dev_codec_cookie:extract(Msg, #{}, Opts),
+    {ok, Cookies} = dev_cookie:extract(Msg, #{}, Opts),
     NewCookies = Cookies#{ <<"secret-", CookieAddr/binary>> => Secret },
-    {ok, WithCookie} = dev_codec_cookie:store(Msg, NewCookies, Opts),
+    {ok, WithCookie} = dev_cookie:store(Msg, NewCookies, Opts),
     {ok, WithCookie}.
 
 %% @doc Verify the HMAC commitment with the key being the secret from the 
 %% request cookies. We find the appropriate cookie from the cookie message by
 %% the committer ID given in the request message.
 verify(Base, ReqLink, RawOpts) when ?IS_LINK(ReqLink) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     verify(Base, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),
-    dev_codec_httpsig_proxy:verify(
+    dev_httpsig_proxy:verify(
         hb_util:decode(Secret),
         Base,
         Req,
         Opts
     );
 verify(Base, Request, RawOpts) ->
-    Opts = dev_codec_cookie:opts(RawOpts),
+    Opts = dev_cookie:opts(RawOpts),
     ?event({verify_finding_key, {base, Base}, {request, Request}}),
     case find_secret(Request, Opts) of
         {ok, Secret} ->
-            dev_codec_httpsig_proxy:verify(
+            dev_httpsig_proxy:verify(
                 hb_util:decode(Secret),
                 Base,
                 Request,
@@ -169,7 +169,7 @@ execute_generator(Generator, Opts) ->
 %% @doc Find all secrets in the cookie of a message.
 find_secrets(Request, Opts) ->
     maybe
-        {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
+        {ok, Cookie} ?= dev_cookie:extract(Request, #{}, Opts),
         [
             hb_maps:get(SecretRef, Cookie, secret_unavailable, Opts)
         ||
@@ -187,7 +187,7 @@ find_secret(Request, Opts) ->
     end.
 find_secret(Committer, Request, Opts) ->
     maybe
-        {ok, Cookie} ?= dev_codec_cookie:extract(Request, #{}, Opts),
+        {ok, Cookie} ?= dev_cookie:extract(Request, #{}, Opts),
         {ok, _Secret} ?= hb_maps:find(<<"secret-", Committer/binary>>, Cookie, Opts)
     else error -> {error, not_found}
     end.
@@ -241,10 +241,10 @@ http_set_get_cookies_test() ->
 %% @doc Takes the cookies from the `GenerateResponse' and applies them to the
 %% `Target' message.
 apply_cookie(NextReq, GenerateResponse, Opts) ->
-    {ok, Cookie} = dev_codec_cookie:extract(GenerateResponse, #{}, Opts),
-    {ok, NextWithParsedCookie} = dev_codec_cookie:store(NextReq, Cookie, Opts),
+    {ok, Cookie} = dev_cookie:extract(GenerateResponse, #{}, Opts),
+    {ok, NextWithParsedCookie} = dev_cookie:store(NextReq, Cookie, Opts),
     {ok, NextWithCookie} =
-        dev_codec_cookie:to(
+        dev_cookie:to(
             NextWithParsedCookie,
             #{ <<"format">> => <<"cookie">> },
             Opts

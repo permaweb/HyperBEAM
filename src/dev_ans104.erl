@@ -1,6 +1,6 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
--module(dev_codec_ans104).
+-module(dev_ans104).
 -export([to/3, from/3, commit/3, verify/3, content_type/1]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
@@ -106,22 +106,22 @@ do_from(RawTX, Req, Opts) ->
     TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
     ?event({from, {parsed_tx, TX}}),
     % Get the fields, tags, and data from the TX.
-    Fields = dev_codec_ans104_from:fields(TX, <<>>, Opts),
-    Tags = dev_codec_ans104_from:tags(TX, Opts),
-    Data = dev_codec_ans104_from:data(TX, Req, Tags, Opts),
+    Fields = dev_ans104_from:fields(TX, <<>>, Opts),
+    Tags = dev_ans104_from:tags(TX, Opts),
+    Data = dev_ans104_from:data(TX, Req, Tags, Opts),
     ?event({from,
         {parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}}),
     % Calculate the committed keys on from the TX.
-    Keys = dev_codec_ans104_from:committed(
+    Keys = dev_ans104_from:committed(
         ?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
     ?event({from, {determined_committed_keys, Keys}}),
     % Create the base message from the fields, tags, and data, filtering to
     % include only the keys that are committed. Will throw if a key is missing.
-    Base = dev_codec_ans104_from:base(Keys, Fields, Tags, Data, Opts),
+    Base = dev_ans104_from:base(Keys, Fields, Tags, Data, Opts),
     ?event({from, {calculated_base_message, Base}}),
     % Add the commitments to the message if the TX has a signature.
-    FieldCommitments = dev_codec_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
-    WithCommitments = dev_codec_ans104_from:with_commitments(
+    FieldCommitments = dev_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
+    WithCommitments = dev_ans104_from:with_commitments(
         ?BASE_FIELDS, TX, <<"ans104@1.0">>, FieldCommitments,
         Tags, Base, Keys, Opts),
     ?event({from, {parsed_message, WithCommitments}}),
@@ -151,23 +151,23 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
         RawTABM,
         Opts
     ),
-    IsBundle = dev_codec_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
-    MaybeBundle = dev_codec_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
+    IsBundle = dev_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
+    MaybeBundle = dev_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
     dev_arweave_common:log_conversion(ans104_to, {to, {maybe_bundle, MaybeBundle}}),
 
     % Calculate and normalize the `data', if applicable.
-    Data = dev_codec_ans104_to:data(MaybeBundle, Req, Opts),
+    Data = dev_ans104_to:data(MaybeBundle, Req, Opts),
     dev_arweave_common:log_conversion(ans104_to, {to, {calculated_data, Data}}),
-    TX0 = dev_codec_ans104_to:siginfo(
+    TX0 = dev_ans104_to:siginfo(
         MaybeBundle, MaybeCommitment,
-        fun dev_codec_ans104_to:fields_to_tx/4, Opts
+        fun dev_ans104_to:fields_to_tx/4, Opts
     ),
     dev_arweave_common:log_conversion(ans104_to, {to, {found_siginfo, TX0}}),
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
-    Tags = dev_codec_ans104_to:tags(
+    Tags = dev_ans104_to:tags(
         TX1, MaybeCommitment, MaybeBundle,
-        dev_codec_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
+        dev_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
     dev_arweave_common:log_conversion(ans104_to, {to, {calculated_tags, Tags}}),
     TX2 = TX1#tx { tags = Tags },
     Res =
@@ -457,9 +457,9 @@ unsorted_tag_map_test() ->
         ),
     ?assert(ar_bundles:verify_item(TX)),
     ?event({tx, TX}),
-    {ok, TABM} = dev_codec_ans104:from(TX, #{}, #{}),
+    {ok, TABM} = dev_ans104:from(TX, #{}, #{}),
     ?event({tabm, TABM}),
-    {ok, Decoded} = dev_codec_ans104:to(TABM, #{}, #{}),
+    {ok, Decoded} = dev_ans104:to(TABM, #{}, #{}),
     ?event({decoded, Decoded}),
     ?assert(ar_bundles:verify_item(Decoded)).
 
@@ -526,7 +526,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
             <<"c2">> => <<"value3">>
         }
     },
-    {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, UnsignedTX} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     ?event({tx, UnsignedTX}),
     ?assertEqual([
         {<<"bundle-format">>, <<"binary">>},
@@ -536,7 +536,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
         {<<"c1">>, <<"value2">>}
     ], UnsignedTX#tx.tags),
     ?assert(UnsignedTX#tx.manifest =/= undefined),
-    {ok, TABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
+    {ok, TABM} = dev_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {expected_tabm, {explicit, UnsignedTABM}}),
     ?event(debug_test, {tabm, {explicit, TABM}}),
     ?assertEqual(UnsignedTABM, TABM).
@@ -565,7 +565,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
         {<<"Bundle-Format">>, <<"binary">>},
         {<<"Bundle-Version">>, <<"2.0.0">>}
     ], UnsignedTX#tx.tags),
-    {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
+    {ok, UnsignedTABM} = dev_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
     Commitment = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
@@ -582,7 +582,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
     ?assertEqual(
         ExpectedCommitment,
         hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
-    {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, TX} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     ?event(debug_test, {expected_tx, UnsignedTX}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
@@ -613,7 +613,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
         {<<"Bundle-Format">>, <<"binary">>},
         {<<"Bundle-Version">>, <<"2.0.0">>}
     ], UnsignedTX#tx.tags),
-    {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
+    {ok, UnsignedTABM} = dev_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
     Commitment = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
@@ -630,7 +630,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
     ?assertEqual(
         ExpectedCommitment,
         hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
-    {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, TX} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
     ok.
@@ -662,7 +662,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
         {<<"Bundle-Format">>, <<"binary">>},
         {<<"Bundle-Version">>, <<"2.0.0">>}
     ], UnsignedTX#tx.tags),
-    {ok, UnsignedTABM} = dev_codec_ans104:from(UnsignedTX, #{}, #{}),
+    {ok, UnsignedTABM} = dev_ans104:from(UnsignedTX, #{}, #{}),
     ?event(debug_test, {tabm, UnsignedTABM}),
     Commitment = hb_message:commitment(
         hb_util:human_id(UnsignedTX#tx.unsigned_id), UnsignedTABM),
@@ -680,7 +680,7 @@ unsigned_mixedcase_bundle_map_tags_test() ->
     ?assertEqual(
         ExpectedCommitment,
         hb_maps:with([<<"committed">>, <<"original-tags">>], Commitment, #{})),
-    {ok, TX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, TX} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     ?event(debug_test, {tx, TX}),
     ?assertEqual(UnsignedTX, TX),
     ok.
@@ -696,7 +696,7 @@ signed_lowercase_bundle_map_tags_test() ->
             <<"c2">> => <<"value3">>
         }
     },
-    {ok, UnsignedTX} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, UnsignedTX} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     SignedTX = ar_bundles:sign_item(UnsignedTX, Wallet),
     ?event({tx, SignedTX}),
     ?assertEqual([
@@ -707,7 +707,7 @@ signed_lowercase_bundle_map_tags_test() ->
         {<<"c1">>, <<"value2">>}
     ], SignedTX#tx.tags),
     ?assert(SignedTX#tx.manifest =/= undefined),
-    {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
+    {ok, SignedTABM} = dev_ans104:from(SignedTX, #{}, #{}),
     ?event({signed_tabm, SignedTABM}),
     % Recursively exclude commitments from the SignedTABM for the match test.
     ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
@@ -728,7 +728,7 @@ signed_lowercase_bundle_map_tags_test() ->
             <<"bundle-version">>,
             <<"bundle-map">>], Commitment, #{})),
 
-    {ok, TX} = dev_codec_ans104:to(SignedTABM, #{}, #{}),
+    {ok, TX} = dev_ans104:to(SignedTABM, #{}, #{}),
     ?event({tx, TX}),
     ?assert(ar_bundles:verify_item(TX)),
     ?assertEqual(SignedTX, TX).
@@ -744,7 +744,7 @@ signed_mixedcase_bundle_map_tags_test() ->
             <<"tagb2">> => <<"value2">>
         }
     },
-    {ok, UnsignedTX0} = dev_codec_ans104:to(UnsignedTABM, #{}, #{}),
+    {ok, UnsignedTX0} = dev_ans104:to(UnsignedTABM, #{}, #{}),
     % Force some of the bundle tags to be out of order and mixed case. Once
     % we sign this version of the transaction, the ordering and casing should
     % be locked in and preserved across future conversions.
@@ -766,7 +766,7 @@ signed_mixedcase_bundle_map_tags_test() ->
         {<<"Bundle-Version">>, <<"2.0.0">>}
     ], SignedTX#tx.tags),
     ?assert(SignedTX#tx.manifest =/= undefined),
-    {ok, SignedTABM} = dev_codec_ans104:from(SignedTX, #{}, #{}),
+    {ok, SignedTABM} = dev_ans104:from(SignedTX, #{}, #{}),
     ?event(debug_test, {signed_tabm, SignedTABM}),
     % Recursively exclude commitments from the SignedTABM for the match test.
     ?assert(hb_message:match(UnsignedTABM, SignedTABM, only_present, #{})),
@@ -794,7 +794,7 @@ signed_mixedcase_bundle_map_tags_test() ->
             <<"bundle-version">>,
             <<"bundle-map">>,
             <<"original-tags">>], Commitment, #{})),
-    {ok, TX} = dev_codec_ans104:to(SignedTABM, #{}, #{}),
+    {ok, TX} = dev_ans104:to(SignedTABM, #{}, #{}),
     ?event(debug_test, {tx, TX}),
     ?assert(ar_bundles:verify_item(TX)),
     ?assertEqual(SignedTX, TX).

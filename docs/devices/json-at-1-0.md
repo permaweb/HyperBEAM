@@ -39,4 +39,4 @@ This retrieves the node configuration from the meta device and serializes it to 
 - [Message Device](../resources/source-code/dev_message.md) - Works well with JSON serialization
 - [Meta Device](../resources/source-code/dev_meta.md) - Can provide configuration data to serialize
 
-[json module](../resources/source-code/dev_codec_json.md)
+[json module](../resources/source-code/dev_json.md)

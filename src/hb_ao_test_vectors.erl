@@ -237,30 +237,9 @@ exec_dummy_device(Opts) ->
 				Opts
             ),
             Opts
-        ),
+    ),
     {ok, _UnsignedID} = hb_cache:write(DevMsg, Opts),
     ID = hb_message:id(DevMsg, signed, Opts),
-    Gateway = hb_http_server:start_node(Opts),
-    RouteOpts =
-        Opts#{
-            <<"routes">> =>
-                [
-                    #{
-                        <<"template">> => <<"/graphql">>,
-                        <<"node">> => #{
-                            <<"uri">> =>
-                                <<Gateway/binary, "/~query@1.0/graphql">>
-                        }
-                    },
-                    #{
-                        <<"template">> => <<"^/arweave/raw">>,
-                        <<"node">> => #{
-                            <<"match">> => <<"^/arweave/raw/(.*)$">>,
-                            <<"with">> => <<Gateway/binary, "/\\1/body">>
-                        }
-                    }
-                ]
-        },
     % Ensure that we can read the device message from the cache and that it matches
     % the original message.
     {ok, RawReadMsg} = hb_cache:read(ID, Opts),
@@ -270,20 +249,19 @@ exec_dummy_device(Opts) ->
             Opts
         ),
     ?assertEqual(DevMsg, ReadMsg),
-    % Create a base message with the device spec ID, then request a dummy path from
-    % it.
+    % Create base messages with the implementation and spec IDs, then request a
+    % dummy path from each.
     Req = #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },
     {ok, <<"example">>} =
         hb_ao:resolve(
-            #{ <<"device">> => SpecID },
+            #{ <<"device">> => ID },
             Req,
-            RouteOpts
+            Opts
         ),
-    % Resolve again through the same spec to exercise the live module cache.
     hb_ao:resolve(
         #{ <<"device">> => SpecID },
         Req,
-        RouteOpts
+        Opts
     ).
 
 load_device_test() ->
@@ -318,7 +296,7 @@ untrusted_load_device_test() ->
     },
     hb_store:reset(Store),
     ?assertThrow(
-        {error, {device_not_loadable, _, _}},
+        {error, {device_not_loadable, _, device_signer_not_trusted}},
         exec_dummy_device(Opts)
     ).
 

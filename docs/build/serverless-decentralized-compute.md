@@ -74,7 +74,7 @@ If a HyperBEAM node performing these computations runs within a supported Truste
 
 This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
 
-*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)).
+*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_httpsig`](../resources/source-code/dev_httpsig.md)).
 *   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
 
 Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.

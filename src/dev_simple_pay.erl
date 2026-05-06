@@ -208,9 +208,8 @@ balance(_, RawReq, NodeMsg) ->
 
 %% @doc Adjust a user's balance, normalizing their wallet ID first.
 set_balance(Signer, Amount, NodeMsg) ->
-    LiveNodeMsg = latest_node_msg(NodeMsg),
     NormSigner = hb_util:human_id(Signer),
-    Ledger = hb_opts:get(simple_pay_ledger, #{}, LiveNodeMsg),
+    Ledger = hb_opts:get(simple_pay_ledger, #{}, NodeMsg),
     ?event(payment,
         {modifying_balance,
             {user, NormSigner},
@@ -220,31 +219,17 @@ set_balance(Signer, Amount, NodeMsg) ->
     ),
     hb_http_server:set_opts(
         #{},
-        NewMsg = LiveNodeMsg#{
+        NewMsg = NodeMsg#{
             <<"simple-pay-ledger">> =>
                 hb_ao:set(
                     Ledger,
                     NormSigner,
                     Amount,
-                    LiveNodeMsg
+                    NodeMsg
                 )
         }
     ),
     {ok, NewMsg}.
-
-%% @doc Refresh the node message before mutating the ledger.
-latest_node_msg(NodeMsg) ->
-    case hb_opts:get(http_server, no_server_ref, NodeMsg) of
-        no_server_ref ->
-            NodeMsg;
-        _ ->
-            try hb_http_server:get_opts(NodeMsg) of
-                no_node_msg -> NodeMsg;
-                CurrentNodeMsg -> CurrentNodeMsg
-            catch
-                _:_ -> NodeMsg
-            end
-    end.
 
 %% @doc Get the balance of a user in the ledger.
 get_balance(Signer, NodeMsg) ->

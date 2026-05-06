@@ -1,5 +1,5 @@
 -module(dev_test).
--hb_device(<<"test-device@1.0">>).
+-implements(<<"test-device@1.0">>).
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3]).

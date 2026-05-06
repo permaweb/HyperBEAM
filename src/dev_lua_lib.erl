@@ -1,7 +1,7 @@
 %%% @doc A module for providing AO library functions to the Lua environment.
 %%% This module contains the implementation of the functions, each by the name
 %%% that should be used in the `ao' table in the Lua environment. Every export
-%%% is imported into the Lua environment.
+%%% listed in `LUA_LIB_FUNCS' is imported into the Lua environment.
 %%% 
 %%% Each function adheres closely to the Luerl calling convention, adding the 
 %%% appropriate node message as a third argument:
@@ -22,6 +22,7 @@
 %%% execution that is able to perform AO-Core resolutions. Without the following
 %%% devices, all resolutions will fail.
 -define(MINIMAL_AO_CORE_DEVICES, [<<"structured@1.0">>]).
+-define(LUA_LIB_FUNCS, [get, resolve, set, event]).
 
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
@@ -94,7 +95,7 @@ install(Base, State, Opts) ->
                             ),
                             % Call the function with the decoded arguments.
                             {Res, ResState} =
-                                ?MODULE:FuncName(Args, ImportState, ExecOpts),
+                                dispatch(FuncName, Args, ImportState, ExecOpts),
                             % Encode the response for return to Lua
                             return(Res, ResState, Opts)
                         end,
@@ -103,15 +104,19 @@ install(Base, State, Opts) ->
                 StateOut
             end,
             State2,
-            [
-                FuncName
-            ||
-                {FuncName, _} <- dev_lua_lib:module_info(exports),
-                FuncName /= module_info,
-                FuncName /= ?FUNCTION_NAME
-            ]
+            ?LUA_LIB_FUNCS
         )
     }.
+
+%% @doc Dispatch Lua library calls without relying on dynamic module calls.
+dispatch(get, Args, State, Opts) ->
+    get(Args, State, Opts);
+dispatch(resolve, Args, State, Opts) ->
+    resolve(Args, State, Opts);
+dispatch(set, Args, State, Opts) ->
+    set(Args, State, Opts);
+dispatch(event, Args, State, Opts) ->
+    event(Args, State, Opts).
 
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->

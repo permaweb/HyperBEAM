@@ -11,7 +11,7 @@
 -define(DEFAULT_SRC_DIR, "src").
 -define(DEFAULT_OUT_DIR, "_build/default/packaged-devices").
 -define(HASH_CHARS, 20).
--define(BASE32_ALPHABET, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").
+-define(BASE32_ALPHABET, "abcdefghijklmnopqrstuvwxyz234567").
 
 %% @doc Package a root device module from the default source directory.
 package(Root) ->
@@ -25,7 +25,7 @@ package(Root, Opts) when is_atom(Root) ->
     Files = namespace_files(Root, Sources),
     case Files of
         [] -> {error, {root_not_found, Root}};
-        _ -> package(Root, Files, SrcDir, OutDir)
+        _ -> package(Root, Files, SrcDir, OutDir, Opts)
     end.
 
 %% @doc Package all multi-module devices from the default source directory.
@@ -45,7 +45,10 @@ package_devices(Opts) ->
     Results =
         lists:map(
             fun(Root) ->
-                try package(Root, #{ src_dir => SrcDir, out_dir => OutDir }) of
+                try package(
+                    Root,
+                    Opts#{ src_dir => SrcDir, out_dir => OutDir }
+                ) of
                     {error, Reason} ->
                         {error, Root, Reason};
                     Res ->
@@ -84,7 +87,7 @@ verify(Opts) ->
     Results.
 
 %% @doc Package a set of source files in a device namespace.
-package(Root, Files, SrcDir, OutDir) ->
+package(Root, Files, SrcDir, OutDir, Opts) ->
     SourceOutDir = filename:join(OutDir, "src"),
     BeamOutDir = filename:join(OutDir, "ebin"),
     PreparedDir = filename:join(OutDir, "prepared"),
@@ -92,7 +95,9 @@ package(Root, Files, SrcDir, OutDir) ->
     ensure_dir(BeamOutDir),
     ensure_dir(PreparedDir),
     MergeFiles = mergeable_files(Root, Files),
-    Generated = generated_module_name(Root, MergeFiles),
+    RootFile = root_file(Root, MergeFiles),
+    Generated = generated_module_name(Root, RootFile, MergeFiles),
+    OnLoads = source_on_loads(MergeFiles),
     PreparedFiles = prepare_source_files(MergeFiles, PreparedDir),
     [GeneratedSrc] =
         igor:merge(
@@ -101,9 +106,10 @@ package(Root, Files, SrcDir, OutDir) ->
             igor_options(Root, SrcDir, SourceOutDir)
         ),
     ok = clean_generated_source(GeneratedSrc),
+    ok = add_combined_on_load(GeneratedSrc, OnLoads),
     {ok, Generated, Beam, Warnings} = compile_generated(GeneratedSrc),
     ok = maybe_print_warnings(GeneratedSrc, Warnings),
-    RootExports = source_exports(root_file(Root, MergeFiles)),
+    RootExports = source_exports(RootFile),
     case verify_generated(Generated, Beam, RootExports, GeneratedSrc, MergeFiles) of
         ok ->
             BeamOut =
@@ -111,13 +117,15 @@ package(Root, Files, SrcDir, OutDir) ->
             ok = file:write_file(BeamOut, Beam),
             #{
                 root => Root,
-                name => device_name(Root, root_file(Root, MergeFiles)),
+                name => device_name(Root, RootFile),
+                implements => device_implements(Root, RootFile),
                 module => Generated,
                 source => GeneratedSrc,
                 beam_file => BeamOut,
                 beam => Beam,
                 exports => RootExports,
-                files => MergeFiles
+                files => MergeFiles,
+                spec => device_spec(Root, RootFile, Opts)
             };
         Error ->
             Error
@@ -173,10 +181,20 @@ discover_devices_from_sources(Sources) ->
 %% @doc Return true if `Mod' is the root of a device namespace.
 is_device_root(Mod, Sources) ->
     is_dev_module(Mod) andalso
-        not lists:any(
-            fun(Prefix) -> lists:keymember(Prefix, 1, Sources) end,
-            source_prefixes(Mod)
+        (
+            explicit_device_root(Mod, Sources)
+            orelse
+            not lists:any(
+                fun(Prefix) -> lists:keymember(Prefix, 1, Sources) end,
+                source_prefixes(Mod)
+            )
         ).
+
+explicit_device_root(Mod, Sources) ->
+    case lists:keyfind(Mod, 1, Sources) of
+        {Mod, File} -> source_implements(File) =/= error;
+        false -> false
+    end.
 
 %% @doc Return shorter source module prefixes for `Mod'.
 source_prefixes(Mod) ->
@@ -223,14 +241,12 @@ mergeable_files(Root, Files) ->
         {Mod, File}
     ||
         {Mod, File} <- Files,
-        Mod =:= Root orelse mergeable_helper(File)
+        Mod =:= Root orelse not source_loads_nif(File)
     ].
 
-mergeable_helper(File) ->
-    case source_attributes(File) of
-        {ok, Attrs} -> not lists:keymember(on_load, 1, Attrs);
-        error -> true
-    end.
+%% @doc NIF helpers bind to their original module name, so leave them external.
+source_loads_nif(File) ->
+    binary:match(read_file(File), <<"load_nif">>) =/= nomatch.
 
 %% @doc Read the declared module name from an Erlang source file.
 source_module(File) ->
@@ -248,6 +264,29 @@ source_module(File) ->
 source_exports(File) ->
     {ok, Attrs} = source_attributes(File),
     lists:usort(lists:append([Exports || {export, Exports} <- Attrs])).
+
+%% @doc Return declared on-load callbacks from a source file set.
+source_on_loads(Files) ->
+    lists:filtermap(
+        fun({Mod, File}) ->
+            case source_on_load(File) of
+                {ok, Fun} -> {true, {Mod, Fun}};
+                error -> false
+            end
+        end,
+        Files
+    ).
+
+source_on_load(File) ->
+    case source_attributes(File) of
+        {ok, Attrs} ->
+            case [OnLoad || {on_load, OnLoad} <- Attrs] of
+                [{Fun, 0} | _] -> {ok, Fun};
+                _ -> error
+            end;
+        error ->
+            error
+    end.
 
 %% @doc Return the Erlang source attributes that can be read without compiling.
 source_attributes(File) ->
@@ -281,20 +320,28 @@ is_dev_module(Mod) ->
 
 %% @doc Return the public device name for a root source module.
 device_name(Root, File) ->
-    case source_device_name(File) of
-        {ok, Name} ->
+    case source_implements(File) of
+        {ok, ID} when is_binary(ID), byte_size(ID) == 43 ->
+            derived_device_name(Root);
+        {ok, Name} when is_binary(Name) ->
             Name;
         error ->
             derived_device_name(Root)
     end.
 
-%% @doc Return the explicit `hb_device' name attribute, if present.
-source_device_name(File) ->
+%% @doc Return the implemented device name or spec ID for a root source module.
+device_implements(Root, File) ->
+    case source_implements(File) of
+        {ok, Implements} -> Implements;
+        error -> derived_device_name(Root)
+    end.
+
+%% @doc Return the explicit `implements' attribute, if present.
+source_implements(File) ->
     case source_attributes(File) of
         {ok, Attrs} ->
-            case [Name || {hb_device, Name} <- Attrs] of
+            case [Name || {implements, Name} <- Attrs] of
                 [Name | _] when is_binary(Name) -> {ok, Name};
-                [#{ <<"name">> := Name } | _] when is_binary(Name) -> {ok, Name};
                 _ -> error
             end;
         error ->
@@ -305,18 +352,126 @@ source_device_name(File) ->
 derived_device_name(Root) ->
     Name0 = atom_to_list(Root),
     Name1 = string:prefix(Name0, "dev_"),
-    Name2 =
-        case string:prefix(Name1, "codec_") of
-            nomatch -> Name1;
-            CodecName -> CodecName
-        end,
     iolist_to_binary([
-        string:replace(Name2, "_", "-", all),
+        string:replace(Name1, "_", "-", all),
         "@1.0"
     ]).
 
+%% @doc Return the markdown device specification for a root source module.
+device_spec(Root, File, Opts) ->
+    case spec_file(Root, Opts) of
+        undefined ->
+            #{
+                <<"content-type">> => <<"text/markdown">>,
+                <<"body">> => module_doc_spec(Root, File)
+            };
+        SpecFile ->
+            #{
+                <<"content-type">> => spec_content_type(SpecFile),
+                <<"body">> => read_file(SpecFile)
+            }
+    end.
+
+%% @doc Return an explicit spec file for a root if one was configured.
+spec_file(Root, Opts) ->
+    Specs = specs_map(maps:get(specs, Opts, #{})),
+    case maps:find(Root, Specs) of
+        {ok, File} ->
+            File;
+        error ->
+            spec_file_for_root(
+                Root,
+                maps:get(spec, Opts, undefined),
+                maps:get(roots, Opts, [Root])
+            )
+    end.
+
+spec_file_for_root(_Root, undefined, _Roots) ->
+    undefined;
+spec_file_for_root(_Root, _Spec, all) ->
+    undefined;
+spec_file_for_root(Root, Spec, [Root]) ->
+    Spec;
+spec_file_for_root(_Root, _Spec, _Roots) ->
+    undefined.
+
+specs_map(Specs) when is_map(Specs) ->
+    Specs;
+specs_map(Specs) when is_list(Specs) ->
+    maps:from_list(Specs).
+
+%% @doc Infer a text content type for an explicit spec file.
+spec_content_type(File) ->
+    case filename:extension(File) of
+        ".html" -> <<"text/html">>;
+        ".htm" -> <<"text/html">>;
+        _ -> <<"text/markdown">>
+    end.
+
+%% @doc Convert the top module `@doc' comment to a markdown spec body.
+module_doc_spec(Root, File) ->
+    Doc = module_doc(File),
+    Title = iolist_to_binary(["# ", device_name(Root, File), "\n\n"]),
+    case Doc of
+        <<>> ->
+            iolist_to_binary([
+                Title,
+                "Generated from `",
+                atom_to_binary(Root),
+                "`."
+            ]);
+        _ -> <<Title/binary, Doc/binary>>
+    end.
+
+%% @doc Extract the top module documentation comments from a source file.
+module_doc(File) ->
+    {ok, Bin} = file:read_file(File),
+    Lines = binary:split(Bin, <<"\n">>, [global]),
+    iolist_to_binary(module_doc_lines(Lines, seek, [])).
+
+module_doc_lines([], _Mode, Acc) ->
+    lists:join(<<"\n">>, lists:reverse(Acc));
+module_doc_lines([Line | Lines], seek, Acc) ->
+    case first_doc_line(Line) of
+        {ok, DocLine} ->
+            module_doc_lines(Lines, collect, [DocLine | Acc]);
+        skip ->
+            module_doc_lines(Lines, seek, Acc);
+        stop ->
+            []
+    end;
+module_doc_lines([Line | Lines], collect, Acc) ->
+    case module_doc_line(Line) of
+        {ok, DocLine} ->
+            module_doc_lines(Lines, collect, [DocLine | Acc]);
+        skip ->
+            module_doc_lines(Lines, collect, Acc);
+        stop ->
+            lists:join(<<"\n">>, lists:reverse(Acc))
+    end.
+
+first_doc_line(Line) ->
+    case module_doc_line(Line) of
+        {ok, _} = DocLine -> DocLine;
+        skip -> skip;
+        stop -> top_source_line(Line)
+    end.
+
+module_doc_line(<<"%%% @doc ", Rest/binary>>) -> {ok, Rest};
+module_doc_line(<<"%%% @doc", Rest/binary>>) -> {ok, string:trim(Rest)};
+module_doc_line(<<"%%% ", Rest/binary>>) -> {ok, Rest};
+module_doc_line(<<"%%%", Rest/binary>>) -> {ok, string:trim(Rest)};
+module_doc_line(<<"%%", _/binary>>) -> skip;
+module_doc_line(<<>>) -> skip;
+module_doc_line(_) -> stop.
+
+top_source_line(<<"-", _/binary>>) -> skip;
+top_source_line(<<" ", Rest/binary>>) -> top_source_line(Rest);
+top_source_line(<<"\t", Rest/binary>>) -> top_source_line(Rest);
+top_source_line(_) -> stop.
+
 %% @doc Return the deterministic generated module name for a device package.
-generated_module_name(Root, Files) ->
+generated_module_name(Root, RootFile, Files) ->
     Hash =
         base32_hash(
             crypto:hash(
@@ -334,14 +489,15 @@ generated_module_name(Root, Files) ->
             )
         ),
     list_to_atom(
-        "_hb_device_" ++ sanitize_module_name(Root) ++ "_" ++ Hash
+        "_hb_device_" ++ sanitize_device_name(device_name(Root, RootFile)) ++
+            "_" ++ Hash
     ).
 
 %% @doc Return a short base32 hash suitable for a generated module name.
 base32_hash(Hash) ->
     lists:sublist(base32_encode(Hash), ?HASH_CHARS).
 
-%% @doc Encode bytes as uppercase, unpadded RFC 4648 base32.
+%% @doc Encode bytes as lowercase, unpadded RFC 4648 base32.
 base32_encode(Bin) ->
     base32_encode(Bin, 0, 0, []).
 
@@ -368,15 +524,17 @@ emit_base32(Rest, Buffer, Bits, Acc) ->
 base32_char(Index) ->
     lists:nth(Index + 1, ?BASE32_ALPHABET).
 
-%% @doc Convert a source module atom into a safe generated-name component.
-sanitize_module_name(Mod) ->
+%% @doc Convert a device name into a safe generated-name component.
+sanitize_device_name(Name) when is_binary(Name) ->
+    sanitize_device_name(binary_to_list(Name));
+sanitize_device_name(Name) ->
     [
         case is_module_name_char(Char) of
             true -> Char;
             false -> $_
         end
     ||
-        Char <- atom_to_list(Mod)
+        Char <- Name
     ].
 
 %% @doc Return true if a character is safe in a generated module name component.
@@ -393,6 +551,7 @@ read_file(File) ->
 
 %% @doc Copy package sources with packager-only attributes removed.
 prepare_source_files(Files, Dir) ->
+    Internal = sets:from_list([Mod || {Mod, _File} <- Files]),
     [
         begin
             Out = filename:join(Dir, filename:basename(File)),
@@ -400,18 +559,162 @@ prepare_source_files(Files, Dir) ->
             ok =
                 file:write_file(
                     Out,
-                    re:replace(
-                        Bin,
-                        <<"(?m)^-hb_device\\([^\\n]*\\)\\.\\n">>,
-                        <<>>,
-                        [global, {return, binary}]
-                    )
+                    prepare_source(Mod, File, Bin, Internal)
                 ),
             {Mod, Out}
         end
     ||
         {Mod, File} <- Files
     ].
+
+prepare_source(Mod, File, Bin, Internal) ->
+    Source0 = strip_packager_attributes(Bin),
+    {Source, CaptureWrappers} =
+        rewrite_internal_function_captures(Source0, Mod, Internal),
+    case source_on_load(File) of
+        {ok, Fun} ->
+            iolist_to_binary([
+                Source,
+                CaptureWrappers,
+                "\n",
+                on_load_wrapper_function(Mod, Fun)
+            ]);
+        error ->
+            iolist_to_binary([Source, CaptureWrappers])
+    end.
+
+%% @doc Wrap internal remote fun captures so Igor can localize their calls.
+rewrite_internal_function_captures(Bin, Mod, Internal) ->
+    {Source, Captures} =
+        rewrite_internal_function_captures(Bin, Mod, Internal, []),
+    {
+        Source,
+        function_capture_wrappers(
+            Mod,
+            lists:usort(Captures)
+        )
+    }.
+
+rewrite_internal_function_captures(Bin, Mod, Internal, Captures) ->
+    Pattern =
+        <<"fun\\s+([a-z][a-zA-Z0-9_@]*)\\s*:\\s*"
+            "([a-z][a-zA-Z0-9_@]*)\\s*/\\s*([0-9]+)">>,
+    case re:run(Bin, Pattern, [{capture, [0, 1, 2, 3], index}]) of
+        {match, [{Start, Len}, ModPos, FunPos, ArityPos]} ->
+            Before = binary:part(Bin, 0, Start),
+            Match = binary:part(Bin, Start, Len),
+            RestStart = Start + Len,
+            Rest = binary:part(Bin, RestStart, byte_size(Bin) - RestStart),
+            TargetMod = binary_to_atom(capture_binary_part(Bin, ModPos), utf8),
+            TargetFun = binary_to_atom(capture_binary_part(Bin, FunPos), utf8),
+            Arity = binary_to_integer(capture_binary_part(Bin, ArityPos)),
+            case sets:is_element(TargetMod, Internal) of
+                true ->
+                    Capture = {TargetMod, TargetFun, Arity},
+                    Replacement =
+                        io_lib:format(
+                            "fun ~p/~B",
+                            [function_capture_wrapper(Mod, Capture), Arity]
+                        ),
+                    {Rest1, Captures1} =
+                        rewrite_internal_function_captures(
+                            Rest,
+                            Mod,
+                            Internal,
+                            [Capture | Captures]
+                        ),
+                    {iolist_to_binary([Before, Replacement, Rest1]), Captures1};
+                false ->
+                    {Rest1, Captures1} =
+                        rewrite_internal_function_captures(
+                            Rest,
+                            Mod,
+                            Internal,
+                            Captures
+                        ),
+                    {iolist_to_binary([Before, Match, Rest1]), Captures1}
+            end;
+        nomatch ->
+            {Bin, Captures}
+    end.
+
+capture_binary_part(Bin, {Start, Len}) ->
+    binary:part(Bin, Start, Len).
+
+function_capture_wrappers(_Mod, []) ->
+    <<>>;
+function_capture_wrappers(Mod, Captures) ->
+    [
+        "\n",
+        [
+            function_capture_wrapper_function(Mod, Capture)
+        ||
+            Capture <- Captures
+        ]
+    ].
+
+function_capture_wrapper_function(Mod, {TargetMod, TargetFun, Arity}) ->
+    Args = function_capture_args(Arity),
+    ArgsList = lists:flatten(lists:join(", ", Args)),
+    io_lib:format(
+        "~p(~s) ->~n    ~p:~p(~s).~n",
+        [
+            function_capture_wrapper(
+                Mod,
+                {TargetMod, TargetFun, Arity}
+            ),
+            ArgsList,
+            TargetMod,
+            TargetFun,
+            ArgsList
+        ]
+    ).
+
+function_capture_args(0) ->
+    [];
+function_capture_args(Arity) ->
+    [
+        "A" ++ integer_to_list(Index)
+    ||
+        Index <- lists:seq(1, Arity)
+    ].
+
+function_capture_wrapper(Mod, {TargetMod, TargetFun, Arity}) ->
+    list_to_atom(
+        lists:flatten(
+            io_lib:format(
+                "__hb_device_fun_~s__~s__~s__~B__",
+                [
+                    atom_to_list(Mod),
+                    atom_to_list(TargetMod),
+                    atom_to_list(TargetFun),
+                    Arity
+                ]
+            )
+        )
+    ).
+
+%% @doc Remove source attributes that only make sense before packaging.
+strip_packager_attributes(Bin) ->
+    lists:foldl(
+        fun(Pattern, Acc) ->
+            re:replace(Acc, Pattern, <<>>, [global, {return, binary}])
+        end,
+        Bin,
+        [
+            <<"(?m)^-implements\\([^\\n]*\\)\\.\\n">>,
+            <<"(?m)^-on_load\\([^\\n]*\\)\\.\\n">>
+        ]
+    ).
+
+on_load_wrapper_function(Mod, Fun) ->
+    io_lib:format(
+        "~p() ->~n    ~p().~n",
+        [on_load_wrapper(Mod), Fun]
+    ).
+
+on_load_wrapper(Mod) ->
+    list_to_atom("__hb_device_on_load_" ++ atom_to_list(Mod) ++ "__").
 
 %% @doc Clean generated deployment source before compiling it.
 clean_generated_source(File) ->
@@ -434,6 +737,45 @@ clean_generated_source(File) ->
             [eunit_autoexport, hb_test_parallel]
         ),
     file:write_file(File, fix_igor_comments(WithoutTransforms)).
+
+%% @doc Add one generated on-load callback that executes merged callbacks.
+add_combined_on_load(_File, []) ->
+    ok;
+add_combined_on_load(File, OnLoads) ->
+    {ok, Bin} = file:read_file(File),
+    file:write_file(
+        File,
+        iolist_to_binary([
+            add_on_load_attribute(Bin),
+            "\n",
+            combined_on_load_functions(OnLoads)
+        ])
+    ).
+
+add_on_load_attribute(Bin) ->
+    re:replace(
+        Bin,
+        <<"(?m)^-module\\(([^)]*)\\)\\.\\n">>,
+        <<"-module(\\1).\n-on_load('__hb_device_on_load__'/0).\n">>,
+        [{return, binary}]
+    ).
+
+combined_on_load_functions(OnLoads) ->
+    [
+        "\n'__hb_device_on_load__'() ->\n",
+        "    '__hb_device_run_on_load__'([\n",
+        lists:join(",\n", [on_load_fun(Mod) || {Mod, _Fun} <- OnLoads]),
+        "\n    ]).\n\n",
+        "'__hb_device_run_on_load__'([]) -> ok;\n",
+        "'__hb_device_run_on_load__'([Fun | Rest]) ->\n",
+        "    case Fun() of\n",
+        "        ok -> '__hb_device_run_on_load__'(Rest);\n",
+        "        Other -> Other\n",
+        "    end.\n"
+    ].
+
+on_load_fun(Mod) ->
+    io_lib:format("        fun ~p/0", [on_load_wrapper(Mod)]).
 
 %% @doc Normalize Igor's old-source comment markers.
 fix_igor_comments(Bin) ->
@@ -744,8 +1086,18 @@ package_fixture_test() ->
         beam := Beam,
         exports := Exports,
         files := Files,
-        source := Source
+        source := Source,
+        implements := Implements,
+        spec := Spec
     } = Res,
+    ?assertEqual(<<"example@1.0">>, Implements),
+    ?assertMatch(
+        {_, _},
+        binary:match(
+            maps:get(<<"body">>, Spec),
+            <<"Example root module for HyperBEAM device packaging.">>
+        )
+    ),
     ?assert(lists:keymember(dev_example_codec, 1, Files)),
     ?assert(lists:keymember(dev_example_state, 1, Files)),
     ?assert(lists:member({ping, 3}, Exports)),
@@ -767,6 +1119,51 @@ package_fixture_test() ->
         {ok, <<"example:pong">>},
         Module:ping(#{}, #{}, #{})
     ),
+    ?assertEqual(
+        {ok, <<"example:capture">>},
+        Module:capture(#{}, #{ <<"body">> => <<"capture">> }, #{})
+    ),
+    code:purge(Module),
+    code:delete(Module).
+
+%% @doc Prove an explicit spec file can override the root module documentation.
+explicit_spec_file_test() ->
+    SrcDir = fixture_src_dir(),
+    OutDir = "_build/test/packaged-devices-with-spec",
+    SpecFile = "_build/test/hb_device_packager/spec.md",
+    ok = filelib:ensure_dir(SpecFile),
+    ok = file:write_file(SpecFile, <<"# Explicit Spec\n">>),
+    #{ spec := Spec } =
+        package(dev_example, #{
+            src_dir => SrcDir,
+            out_dir => OutDir,
+            spec => SpecFile
+        }),
+    ?assertEqual(<<"text/markdown">>, maps:get(<<"content-type">>, Spec)),
+    ?assertEqual(<<"# Explicit Spec\n">>, maps:get(<<"body">>, Spec)).
+
+%% @doc Prove merged on-load callbacks run when the package is loaded.
+combined_on_load_test() ->
+    SrcDir = "_build/test/hb_device_packager/on_load/src",
+    OutDir = "_build/test/hb_device_packager/on_load/out",
+    RootKey = {dev_onload, root},
+    HelperKey = {dev_onload_helper, helper},
+    ok = write_on_load_fixture(SrcDir),
+    persistent_term:erase(RootKey),
+    persistent_term:erase(HelperKey),
+    #{ module := Module, beam := Beam } =
+        package(dev_onload, #{ src_dir => SrcDir, out_dir => OutDir }),
+    code:purge(Module),
+    code:delete(Module),
+    ?assertEqual(
+        {module, Module},
+        code:load_binary(Module, atom_to_list(Module) ++ ".beam", Beam)
+    ),
+    ?assertEqual(loaded, persistent_term:get(RootKey)),
+    ?assertEqual(loaded, persistent_term:get(HelperKey)),
+    ?assertEqual({ok, helper}, Module:value(#{}, #{}, #{})),
+    persistent_term:erase(RootKey),
+    persistent_term:erase(HelperKey),
     code:purge(Module),
     code:delete(Module).
 
@@ -809,4 +1206,37 @@ fixture_src_dir() ->
         true -> "fixtures/example/src";
         false -> "apps/hb_device/fixtures/example/src"
     end.
+
+write_on_load_fixture(SrcDir) ->
+    Root = filename:join(SrcDir, "dev_onload.erl"),
+    Helper = filename:join(SrcDir, "dev_onload_helper.erl"),
+    ok = filelib:ensure_dir(Root),
+    ok =
+        file:write_file(
+            Root,
+            [
+                "%%% @doc On-load package fixture.\n",
+                "-module(dev_onload).\n",
+                "-implements(<<\"onload@1.0\">>).\n",
+                "-on_load(load/0).\n",
+                "-export([value/3]).\n",
+                "load() ->\n",
+                "    persistent_term:put({dev_onload, root}, loaded),\n",
+                "    ok.\n",
+                "value(_Base, _Req, _Opts) ->\n",
+                "    {ok, dev_onload_helper:value()}.\n"
+            ]
+        ),
+    file:write_file(
+        Helper,
+        [
+            "-module(dev_onload_helper).\n",
+            "-on_load(load/0).\n",
+            "-export([value/0]).\n",
+            "load() ->\n",
+            "    persistent_term:put({dev_onload_helper, helper}, loaded),\n",
+            "    ok.\n",
+            "value() -> helper.\n"
+        ]
+    ).
 -endif.

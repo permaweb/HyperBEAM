@@ -811,7 +811,7 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
     ?event({decoded, Decoded}),
     ?assertEqual(true, hb_message:verify(Decoded, all, Opts)),
     ?event({matching, {input, SignedMsg}, {encoded, Encoded}, {decoded, Decoded}}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
+    ?event({http, {string, dev_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes).
@@ -833,7 +833,7 @@ specific_order_signed_message_test(RawCodec, Opts) ->
             Codec#{ <<"committed">> => [<<"key-3">>, <<"key-1">>, <<"key-2">>] }
         ),
     ?event({signed_msg, SignedMsg}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
+    ?event({http, {string, dev_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)).
 
 specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
@@ -1690,7 +1690,7 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     ?event({committed, Msg}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(Msg, Opts)}}),
+    ?event({http, {string, dev_httpsig_conv:encode_http_msg(Msg, Opts)}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({matching, {input, Msg}, {output, Decoded}}),
     MatchRes = hb_message:match(Msg, Decoded, primary, Opts),

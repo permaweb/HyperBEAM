@@ -34,7 +34,7 @@
 %%%             Raw binary WASM state
 %%% </pre>
 -module(dev_wasm).
--hb_device(<<"wasm-64@1.0">>).
+-implements(<<"wasm-64@1.0">>).
 -export([info/2, init/3, compute/3, import/3, terminate/3, snapshot/3, normalize/3]).
 %%% API for other devices:
 -export([instance/3]).

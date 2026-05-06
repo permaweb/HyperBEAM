@@ -29,7 +29,6 @@
 -record(bundle, {
     id,
     items,
-    item_sizes,
     status,
     tx,
     proofs,

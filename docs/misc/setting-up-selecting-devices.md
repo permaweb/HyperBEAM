@@ -56,7 +56,7 @@ If you want to monetize your node's services:
 If security is a priority:
 
 - **~snp@1.0**: For generating and validating proofs that a node is executing inside a Trusted Execution Environment (TEE)
-- **dev_codec_httpsig**: Implements HTTP Message Signatures as described in RFC-9421
+- **dev_httpsig**: Implements HTTP Message Signatures as described in RFC-9421
 
 ### Legacynet Compatibility
 
@@ -154,7 +154,7 @@ A "friends and family" pricing policy that allows users to process requests only
 
 Generates and validates proofs that a node is executing inside a Trusted Execution Environment (TEE). Nodes executing inside TEEs use an ephemeral key pair that provably exists only inside the TEE.
 
-### dev_codec_httpsig
+### dev_httpsig
 
 Implements HTTP Message Signatures as described in RFC-9421, providing a way to authenticate and verify the integrity of HTTP messages.
 

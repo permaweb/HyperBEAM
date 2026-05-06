@@ -15,6 +15,9 @@ src/dev_greeting_state.erl
 src/dev_greeting_text.erl
 ```
 
+The root uses `-implements(<<"greeting@1.0">>).`; its top `%%% @doc` comment is
+used as the default markdown device spec body during preload packaging.
+
 Run:
 
 ```sh

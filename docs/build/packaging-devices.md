@@ -26,6 +26,19 @@ Only exports from the root module remain exported. Helper exports become
 private generated functions, so callers cannot accidentally reach across device
 boundaries.
 
+The root module may declare the implemented device name or an existing device
+spec ID:
+
+```erlang
+-implements(<<"example@1.0">>).
+```
+
+When the implementation is not already tied to a spec ID, the preload step signs
+a device spec message. By default its body is markdown rendered from the root
+module's top `%%% @doc` comment. A package can override that with `--spec
+path/to/spec.md` for one root, or with `{specs, [{dev_example, "spec.md"}]}` in
+the `hb_device` config for multiple roots.
+
 ## External Device Project
 
 Add HyperBEAM as a dependency for editor support and runtime APIs, and add the

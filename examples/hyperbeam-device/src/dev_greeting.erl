@@ -1,5 +1,6 @@
 %%% @doc Example external HyperBEAM device root module.
 -module(dev_greeting).
+-implements(<<"greeting@1.0">>).
 -export([greet/3]).
 
 %% @doc Build a greeting from request state.

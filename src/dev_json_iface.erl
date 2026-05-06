@@ -34,6 +34,7 @@
 %%%             /Results/Outbox
 %%%             /Results/Data</pre>
 -module(dev_json_iface).
+-implements(<<"json-iface@1.0">>).
 -export([init/3, compute/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
@@ -116,7 +117,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 CommitmentSignature =
                     hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKeyId =
-                    dev_codec_httpsig_keyid:remove_scheme_prefix(
+                    dev_httpsig_keyid:remove_scheme_prefix(
                         hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
                     ),
                 case lists:member(owner_as_address, Features) of

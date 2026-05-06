@@ -16,7 +16,7 @@
 %%% receive in the `to/1' function, and give in `from/1') is TABM.
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
--module(dev_codec_structured).
+-module(dev_structured).
 -export([to/3, from/3, commit/3, verify/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/2, encode_value/1, implicit_keys/2]).
@@ -25,9 +25,9 @@
 
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
-%%% Route signature functions to the `dev_codec_httpsig' module
-commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
-verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
+%%% Route signature functions to the `dev_httpsig' module
+commit(Msg, Req, Opts) -> dev_httpsig:commit(Msg, Req, Opts).
+verify(Msg, Req, Opts) -> dev_httpsig:verify(Msg, Req, Opts).
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};

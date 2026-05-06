@@ -3,8 +3,8 @@
 %%% It implements the codec standard (from/1, to/1), as well as the optional
 %%% commitment functions (id/3, sign/3, verify/3). The commitment functions
 %%% are found in this module, while the codec functions are relayed to the 
-%%% `dev_codec_httpsig_conv' module.
--module(dev_codec_httpsig).
+%%% `dev_httpsig_conv' module.
+-module(dev_httpsig).
 %%% Codec API functions
 -export([to/3, from/3]).
 %%% Uni-directional codec support (_to_ binary/header+body components), but not 
@@ -17,9 +17,9 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%%% Routing functions for the `dev_codec_httpsig_conv' module
-to(Msg, Req, Opts) -> dev_codec_httpsig_conv:to(Msg, Req, Opts).
-from(Msg, Req, Opts) -> dev_codec_httpsig_conv:from(Msg, Req, Opts).
+%%% Routing functions for the `dev_httpsig_conv' module
+to(Msg, Req, Opts) -> dev_httpsig_conv:to(Msg, Req, Opts).
+from(Msg, Req, Opts) -> dev_httpsig_conv:from(Msg, Req, Opts).
 
 %% @doc Generate the `Opts' to use during AO-Core operations in the codec.
 opts(RawOpts) ->
@@ -56,7 +56,7 @@ serialize(Msg, _Req, Opts) ->
     % We assume the default format of `binary` if none of the prior clauses
     % match.
     HTTPSig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts), 
-    {ok, dev_codec_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
+    {ok, dev_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
 
 verify(Base, Req, RawOpts) ->
     % A rsa-pss-sha512 commitment is verified by regenerating the signature
@@ -64,7 +64,7 @@ verify(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, EncMsg, EncComm, _} = normalize_for_encoding(Base, Req, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),
-    KeyRes = dev_codec_httpsig_keyid:req_to_key_material(Req, Opts),
+    KeyRes = dev_httpsig_keyid:req_to_key_material(Req, Opts),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
     ?event(debug_httpsig,
         {
@@ -190,8 +190,8 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),
     ?event({req_to_key_material, {req, Req}}),
-    {ok, Scheme, Key, KeyID} = dev_codec_httpsig_keyid:req_to_key_material(Req, Opts),
-    Committer = dev_codec_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
+    {ok, Scheme, Key, KeyID} = dev_httpsig_keyid:req_to_key_material(Req, Opts),
+    Committer = dev_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
     % Remove any existing hmac commitments with the given keyid before adding
     % the new one.
     Msg =
@@ -389,7 +389,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         ),
     KeysForCommitment =
         decode_committed_keys(
-            dev_codec_httpsig_siginfo:from_siginfo_keys(
+            dev_httpsig_siginfo:from_siginfo_keys(
                 EncodedWithSigInfo,
                 BodyKeys,
                 KeysForEncoding
@@ -494,7 +494,7 @@ signature_params_line(RawCommitment, Opts) ->
                     list,
                     lists:map(
                         fun(Key) -> {item, {string, Key}, []} end,
-                        dev_codec_httpsig_siginfo:add_derived_specifiers(
+                        dev_httpsig_siginfo:add_derived_specifiers(
                             hb_util:message_to_ordered_list(
                                 maps:get(<<"committed">>, Commitment),
                                 Opts

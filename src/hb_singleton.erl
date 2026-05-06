@@ -436,7 +436,7 @@ maybe_typed(Key, Value, Opts) ->
                     };
                 {_T, RawValue} when is_binary(RawValue) ->
                     Decoded = hb_escape:decode_quotes(RawValue),
-                    {typed, OnlyKey, dev_codec_structured:decode_value(Type, Decoded)}
+                    {typed, OnlyKey, dev_structured:decode_value(Type, Decoded)}
             end
     end.
 

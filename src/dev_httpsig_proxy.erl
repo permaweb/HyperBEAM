@@ -12,7 +12,7 @@
 %%% 
 %%% This module is currently used by the `~cookie@1.0' and `~http-auth@1.0'
 %%% devices.
--module(dev_codec_httpsig_proxy).
+-module(dev_httpsig_proxy).
 -export([commit/5, verify/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

@@ -1,5 +1,5 @@
 %%% @doc Library functions for decoding L1 TXs to TABM form.
--module(dev_codec_tx_to).
+-module(dev_tx_to).
 -export([fields_to_tx/4, excluded_tags/3]).
 -include("include/hb.hrl").
 

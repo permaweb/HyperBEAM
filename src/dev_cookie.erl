@@ -32,7 +32,7 @@
 %%% `set-cookie', `cookie').
 %%% `/from': Converts a message containing encoded cookies into a message
 %%% containing the cookies parsed and normalized.
--module(dev_codec_cookie).
+-module(dev_cookie).
 %%% Public cookie manipulation API.
 -export([get_cookie/3, store/3, extract/3, reset/2]).
 %%% Public message codec API.
@@ -50,19 +50,19 @@
 opts(Opts) -> hb_private:opts(Opts).
 
 %%% ~message@1.0 Commitments API keys.
-commit(Base, Req, RawOpts) -> dev_codec_cookie_auth:commit(Base, Req, RawOpts).
-verify(Base, Req, RawOpts) -> dev_codec_cookie_auth:verify(Base, Req, RawOpts).
+commit(Base, Req, RawOpts) -> dev_cookie_auth:commit(Base, Req, RawOpts).
+verify(Base, Req, RawOpts) -> dev_cookie_auth:verify(Base, Req, RawOpts).
 
 %% @doc Preprocessor keys that utilize cookies and the `~secret@1.0' device to
 %% sign inbound HTTP requests from users if they are not already signed. We use
 %% the `~hook@1.0' authentication framework to implement this.
 generate(Base, Req, Opts) ->
-    dev_codec_cookie_auth:generate(Base, Req, Opts).
+    dev_cookie_auth:generate(Base, Req, Opts).
 
 %% @doc Finalize an `on-request' hook by adding the `set-cookie' header to the
 %% end of the message sequence.
 finalize(Base, Request, Opts) ->
-    dev_codec_cookie_auth:finalize(Base, Request, Opts).
+    dev_cookie_auth:finalize(Base, Request, Opts).
 
 %% @doc Get the cookie with the given key from the base message. The format of
 %% the cookie is determined by the `format' key in the request message:

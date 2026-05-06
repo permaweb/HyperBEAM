@@ -414,19 +414,86 @@ find_device_implementation(DevRef, Opts) ->
         {ok, Module} ->
             {ok, Module};
         {error, not_found} ->
-            case find_preloaded_device_implementation(DevRef, Opts) of
+            case read_device_implementation_message(DevRef, Opts) of
                 {ok, DeviceMsg} ->
                     {ok, DeviceMsg};
                 {error, _} ->
-                    find_remote_device_implementation(DevRef, Opts)
+                    PreloadOpts = hb_device_preload:effective_opts(Opts),
+                    case read_preloaded_device_implementation(DevRef, PreloadOpts) of
+                        {ok, DeviceMsg} ->
+                            {ok, DeviceMsg};
+                        {error, _} ->
+                            find_device_implementation_by_spec(DevRef, Opts)
+                    end
             end
+    end.
+
+%% @doc Find an implementation message for a local or remote device spec ID.
+find_device_implementation_by_spec(DevRef, Opts) ->
+    case find_preloaded_device_implementation(DevRef, Opts) of
+        {ok, DeviceMsg} ->
+            {ok, DeviceMsg};
+        {error, _} ->
+            case find_local_device_implementation(DevRef, Opts) of
+                {ok, DeviceMsg} -> {ok, DeviceMsg};
+                {error, _} -> find_remote_device_implementation(DevRef, Opts)
+            end
+    end.
+
+%% @doc Find a signed implementation message in the configured local store.
+find_local_device_implementation(DevRef, Opts) ->
+    LocalOpts = Opts#{ <<"commitment-device">> => dev_httpsig },
+    case dev_match:all(#{ <<"implements-device">> => DevRef }, #{}, LocalOpts) of
+        {ok, Matches} ->
+            load_first_local_device_implementation(lists:sort(Matches), LocalOpts);
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Read the first BEAM implementation message from the local store.
+load_first_local_device_implementation([], _Opts) ->
+    {error, not_found};
+load_first_local_device_implementation([ID | Rest], Opts) ->
+    case read_device_implementation_message(ID, Opts) of
+        {ok, Msg} -> {ok, Msg};
+        {error, not_found} ->
+            load_first_local_device_implementation(Rest, Opts)
+    end.
+
+%% @doc Read a BEAM implementation message by its ID.
+read_device_implementation_message(ID, Opts) ->
+    maybe
+        {ok, <<"application/beam">>} ?=
+            hb_cache:read([ID, <<"content-type">>], Opts),
+        {ok, ModuleName} ?= hb_cache:read([ID, <<"module-name">>], Opts),
+        {ok, Beam} ?= hb_cache:read([ID, <<"body">>], Opts),
+        {ok, RequiredOTP} ?=
+            hb_cache:read([ID, <<"requires-otp-release">>], Opts),
+        {ok,
+            #{
+                <<"content-type">> => <<"application/beam">>,
+                <<"module-name">> => ModuleName,
+                <<"body">> => Beam,
+                <<"requires-otp-release">> => RequiredOTP,
+                <<"commitments">> => device_implementation_commitments(ID, Opts)
+            }}
+    else
+        _ -> {error, not_found}
+    end.
+
+%% @doc Read a device implementation's commitments without decoding the full
+%% message body.
+device_implementation_commitments(ID, Opts) ->
+    case hb_cache:read([ID, <<"commitments">>], Opts) of
+        {ok, Commitments} when is_map(Commitments) -> Commitments;
+        _ -> #{}
     end.
 
 %% @doc Find a signed implementation message in the local preloaded store.
 find_preloaded_device_implementation(DevRef, Opts) ->
     PreloadOpts =
         (hb_device_preload:effective_opts(Opts))#{
-            <<"commitment-device">> => dev_codec_httpsig
+            <<"commitment-device">> => dev_httpsig
         },
     case dev_match:all(#{ <<"implements-device">> => DevRef }, #{}, PreloadOpts) of
         {ok, Matches} ->
@@ -700,7 +767,7 @@ preloaded_device_resolve_test_() ->
         ),
         ?assertEqual(false, code:is_loaded(dev_example_codec)),
         ?assertMatch(
-            {ok, <<"_hb_device_dev_example_", _/binary>>},
+            {ok, <<"_hb_device_example_1_0_", _/binary>>},
             hb_store:read(DeviceStore, <<"devices/example@1.0">>, Opts)
         )
     end}.

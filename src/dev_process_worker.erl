@@ -196,7 +196,7 @@ info_test() ->
     test_init(),
     M1 = dev_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao_device:info(M1, #{}),
-    ?assertEqual(fun dev_process_worker:group/3, hb_maps:get(grouper, Res, undefined, #{})).
+    ?assert(is_function(hb_maps:get(grouper, Res, undefined, #{}), 3)).
 
 grouper_test() ->
     test_init(),

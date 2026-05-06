@@ -59,7 +59,7 @@ node-message/preloaded_devices/poda@1.0: "dev_poda"
 node-message/preloaded_devices/p4@1.0: "dev_p4"
 node-message/ao-type-port: integer
 node-message/preloaded_devices/monitor@1.0: "dev_monitor"
-node-message/preloaded_devices/structured@1.0: "dev_codec_structured"
+node-message/preloaded_devices/structured@1.0: "dev_structured"
 node-message/ao-type-http_connect_timeout: integer
 node-message/debug_print: "false"
 node-message/ao-type-http_default_remote_port: integer
@@ -76,7 +76,7 @@ node-message/compute_mode: "lazy"
 node-message/http_request_send_timeout: 60000
 node-message/only: "local"
 node-message/preloaded_devices/relay@1.0: "dev_relay"
-node-message/preloaded_devices/ans104@1.0: "dev_codec_ans104"
+node-message/preloaded_devices/ans104@1.0: "dev_ans104"
 node-message/ao-type-wasm_allow_aot: atom
 status: 200
 commitments/hmac-sha256/commitment-device: httpsig@1.0
@@ -132,7 +132,7 @@ node-message/snp_hashes/ao-type-vcpus: integer
 node-message/ao-type-only: atom
 node-message/ao-type-debug_print_indent: integer
 node-message/snp_hashes/ao-type-vmm_type: integer
-node-message/preloaded_devices/flat@1.0: "dev_codec_flat"
+node-message/preloaded_devices/flat@1.0: "dev_flat"
 node-message/ao-type-cache_control: list
 node-message/access_remote_cache_for_client: "false"
 node-message/trusted/ao-type-guest_features: integer
@@ -160,7 +160,7 @@ node-message/preloaded_devices/ao-type-snp@1.0: atom
 vcpu_type: 5
 node-message/trusted/ao-type-vcpus: integer
 node-message/ao-type-short_trace_len: integer
-node-message/preloaded_devices/httpsig@1.0: "dev_codec_httpsig"
+node-message/preloaded_devices/httpsig@1.0: "dev_httpsig"
 node-message/preloaded_devices/ao-type-faff@1.0: atom
 node-message/snp_hashes/initrd: 853ebf56bc6ba5f08bd5583055a457898ffa3545897bee00103d3066b8766f5c
 node-message/cache_results: "false"

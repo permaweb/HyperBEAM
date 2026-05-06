@@ -29,16 +29,16 @@
 %%% The structure of the conversions is as follows:
 %%% 
 %%% <pre>
-%%%     Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
-%%%     HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
-%%%     Flat Maps ==> dev_codec_flat:from/1 ==> TABM
+%%%     Arweave TX/ANS-104 ==> dev_ans104:from/1 ==> TABM
+%%%     HTTP Signed Message ==> dev_httpsig_conv:from/1 ==> TABM
+%%%     Flat Maps ==> dev_flat:from/1 ==> TABM
 %%% 
-%%%     TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
-%%%     AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
+%%%     TABM ==> dev_structured:to/1 ==> AO-Core Message
+%%%     AO-Core Message ==> dev_structured:from/1 ==> TABM
 %%% 
-%%%     TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
-%%%     TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
-%%%     TABM ==> dev_codec_flat:to/1 ==> Flat Maps
+%%%     TABM ==> dev_ans104:to/1 ==> Arweave TX/ANS-104
+%%%     TABM ==> dev_httpsig_conv:to/1 ==> HTTP Signed Message
+%%%     TABM ==> dev_flat:to/1 ==> Flat Maps
 %%%     ...
 %%% </pre>
 %%% 
@@ -113,7 +113,7 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
 to_tabm(Msg, SourceFormat, Opts) ->
     {SourceCodecMod, Params} = conversion_spec_to_req(SourceFormat, Opts),
     % We use _from_ here because the codecs are labelled from the perspective
-    % of their own format. `dev_codec_ans104:from/1' will convert _from_
+    % of their own format. `dev_ans104:from/1' will convert _from_
     % an ANS-104 message _into_ a TABM.
     case SourceCodecMod:from(Msg, Params, Opts) of
         {ok, TypicalMsg} when is_map(TypicalMsg) ->
@@ -125,7 +125,7 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
     {TargetCodecMod, Params} = conversion_spec_to_req(TargetFormat, Opts),
     % We use the _to_ function here because each of the codecs we may call in
     % this step are labelled from the perspective of the target format. For 
-    % example, `dev_codec_httpsig:to/1' will convert _from_ a TABM to an
+    % example, `dev_httpsig:to/1' will convert _from_ a TABM to an
     % HTTPSig message.
     case TargetCodecMod:to(Msg, Params, Opts) of
         {ok, TypicalMsg} when is_map(TypicalMsg) ->

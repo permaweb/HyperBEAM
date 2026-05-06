@@ -1,5 +1,5 @@
 %%% @doc A battery of cookie parsing and encoding test vectors.
--module(dev_codec_cookie_test_vectors).
+-module(dev_cookie_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -26,9 +26,9 @@ assert_set(TestSet, Fun) ->
 
 %% @doc Convert a cookie message to a string.
 to_string(CookieMsg) ->
-    {ok, BaseMsg} = dev_codec_cookie:store(#{}, CookieMsg, #{}),
+    {ok, BaseMsg} = dev_cookie:store(#{}, CookieMsg, #{}),
     {ok, Msg} =
-        dev_codec_cookie:to(
+        dev_cookie:to(
             BaseMsg,
             #{ <<"format">> => <<"set-cookie">> },
             #{}
@@ -38,12 +38,12 @@ to_string(CookieMsg) ->
 %% @doc Convert a string to a cookie message.
 from_string(String) ->
     {ok, BaseMsg} =
-        dev_codec_cookie:from(
+        dev_cookie:from(
             #{ <<"set-cookie">> => String },
             #{},
             #{}
         ),
-    {ok, Cookie} = dev_codec_cookie:extract(BaseMsg, #{}, #{}),
+    {ok, Cookie} = dev_cookie:extract(BaseMsg, #{}, #{}),
     Cookie.
 
 %%% Tests

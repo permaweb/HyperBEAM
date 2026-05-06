@@ -323,7 +323,7 @@
                            <<"signature">> =>
                                <<"WgIzKrNLjvfranqsPVzdqcVhW61gZ6CvUK8cM2Hjlf0">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_ans104,
+               <<"module">> => dev_ans104,
                <<"name">> => <<"ans104@1.0">>},
              #{<<"commitments">> =>
                    #{<<"FcIKZVDaj6jjASFoRSKL-9-2--Q75U6CovN9tmBb5A0">> =>
@@ -405,7 +405,7 @@
                            <<"signature">> =>
                                <<"_EROxMzToy7QMM2tZHDrdYQEuIgD6f6sn264OOM8RUI">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_flat,<<"name">> => <<"flat@1.0">>},
+               <<"module">> => dev_flat,<<"name">> => <<"flat@1.0">>},
              #{<<"commitments">> =>
                    #{<<"o_LFfTewcdOZtjQqsaSbkyJJyCReaBVNXyN5JF3DHwc">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -437,7 +437,7 @@
                            <<"signature">> =>
                                <<"Ke3l-wYMmmhEZC6g8GjkQxjFF9l7MMseiyFK4qLSWww">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_httpsig,
+               <<"module">> => dev_httpsig,
                <<"name">> => <<"httpsig@1.0">>},
              #{<<"commitments">> =>
                    #{<<"Z1uH51_5UslDULbQx4OUQMxTx5D1PJch0j6VK7uKz3I">> =>
@@ -459,7 +459,7 @@
                            <<"signature">> =>
                                <<"enaoJxvYh3qZn6fAf7E6rsJqlKR5TxvTnfnenQMfMwY">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_json,<<"name">> => <<"json@1.0">>},
+               <<"module">> => dev_json,<<"name">> => <<"json@1.0">>},
              #{<<"commitments">> =>
                    #{<<"0WQCR2q340Pmz1E-6V6wgTwge5Lh07OE8QOQ6a6T4Wo">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -653,7 +653,7 @@
                            <<"signature">> =>
                                <<"_1ifdzLNTYmiwcyI4ngVRUg1drZBoeJL7V5ZOWE4U8E">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_structured,
+               <<"module">> => dev_structured,
                <<"name">> => <<"structured@1.0">>},
              #{<<"commitments">> =>
                    #{<<"0Mfbtdi2Zv3OT5zAr0TJMbM9wgYM5E50696tzNehfMY">> =>

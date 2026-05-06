@@ -1,7 +1,7 @@
 %%% @doc A simple JSON codec for HyperBEAM's message format. Takes a
 %%% message as TABM and returns an encoded JSON string representation.
 %%% This codec utilizes the httpsig@1.0 codec for signing and verifying.
--module(dev_codec_json).
+-module(dev_json).
 -export([to/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
 -export([deserialize/3, serialize/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -32,7 +32,7 @@ to(Msg, Req, Opts) ->
             false -> Restructured
         end,
     {ok, JSONStructured} =
-        dev_codec_structured:from(
+        dev_structured:from(
             Loaded,
             Req#{ <<"encode-types">> => [<<"atom">>] },
             Opts
@@ -48,7 +48,7 @@ from(JSON, Req, Opts) ->
     % This is resource-intensive and could be improved, but ensures that the
     % results are fully normalized.
     {ok, Structured} =
-        dev_codec_structured:to(
+        dev_structured:to(
             json:decode(JSON),
             #{},
             Opts
@@ -58,14 +58,14 @@ from(JSON, Req, Opts) ->
         <<"structured@1.0">> -> {ok, Structured};
         _ ->
             % Re-encode the structured message back to TABM for the caller.
-            {ok, TABM} = dev_codec_structured:from(Structured, Req, Opts),
+            {ok, TABM} = dev_structured:from(Structured, Req, Opts),
             ?event(debug_json, {tabm, TABM}, Opts),
             {ok, TABM}
     end.
 
-commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
+commit(Msg, Req, Opts) -> dev_httpsig:commit(Msg, Req, Opts).
 
-verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
+verify(Msg, Req, Opts) -> dev_httpsig:verify(Msg, Req, Opts).
 
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);

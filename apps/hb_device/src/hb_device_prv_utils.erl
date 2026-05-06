@@ -17,6 +17,8 @@ opts() ->
             "Directory containing Erlang source files."},
         {out_dir, $o, "out-dir", {string, undefined},
             "Directory to write packaged device artifacts."},
+        {spec, undefined, "spec", {string, undefined},
+            "Markdown or HTML spec file for the selected device root."},
         {store_dir, undefined, "store-dir", {string, undefined},
             "Filesystem store directory for preloaded devices."},
         {metadata_file, undefined, "metadata-file", {string, undefined},
@@ -32,7 +34,9 @@ packager_opts(State) ->
     #{
         src_dir => option(src_dir, Cli, Config, ?DEFAULT_SRC_DIR),
         out_dir => option(out_dir, Cli, Config, ?DEFAULT_OUT_DIR),
-        roots => roots(Cli, Config)
+        roots => roots(Cli, Config),
+        spec => option(spec, Cli, Config, undefined),
+        specs => proplists:get_value(specs, Config, #{})
     }.
 
 %% @doc Convert rebar3 state into preload options.

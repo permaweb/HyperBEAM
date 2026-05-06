@@ -5,7 +5,7 @@
 %%% and node identity cloning. All operations are protected by hardware 
 %%% commitment and encryption.
 -module(dev_green_zone).
--hb_device(<<"greenzone@1.0">>).
+-implements(<<"greenzone@1.0">>).
 -export([info/1, info/3, join/3, init/3, become/3, key/3, is_trusted/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

@@ -32,7 +32,7 @@
 %%% such that it is a public constant (needed in order for reproducibility 
 %%% between nodes), and hashed in order to provide additional entropy, in 
 %%% alignment with RFC 8018, Section 4.1.
--module(dev_codec_http_auth).
+-module(dev_http_auth).
 -export([commit/3, verify/3]).
 -export([generate/3]).
 -include("include/hb.hrl").
@@ -50,7 +50,7 @@ commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
             {ok, CommitRes} =
-                dev_codec_httpsig_proxy:commit(
+                dev_httpsig_proxy:commit(
                     <<"http-auth@1.0">>,
                     Key,
                     Base,
@@ -70,7 +70,7 @@ verify(Base, RawReq, Opts) ->
     {ok, Key} = generate(Base, RawReq, Opts),
     ?event({verify_found_key, {key, Key}, {base, Base}, {req, RawReq}}),
     {ok, VerifyRes} =
-        dev_codec_httpsig_proxy:verify(
+        dev_httpsig_proxy:verify(
             Key,
             Base,
             RawReq,

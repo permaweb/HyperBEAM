@@ -71,7 +71,11 @@ effective_opts(Opts) ->
             Opts;
         Store ->
             Opts#{
-                <<"store">> => prepend_store(Store, hb_opts:get(store, [], Opts)),
+                <<"store">> =>
+                    prepend_store(
+                        read_only_store(Store),
+                        hb_opts:get(store, [], Opts)
+                    ),
                 <<"match-index">> => Store
             }
     end.
@@ -117,6 +121,9 @@ preloaded_store(Opts) ->
         [] -> [];
         Store -> Store
     end.
+
+read_only_store(Store) ->
+    Store#{ <<"access">> => [<<"read">>] }.
 
 prepend_store(Store, Stores) when is_list(Stores) ->
     [Store | lists:filter(fun(Existing) -> Existing =/= Store end, Stores)];

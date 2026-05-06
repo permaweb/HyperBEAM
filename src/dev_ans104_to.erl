@@ -1,5 +1,5 @@
 %%% @doc Library functions for encoding messages to the ANS-104 format.
--module(dev_codec_ans104_to).
+-module(dev_ans104_to).
 -export([is_bundle/3, maybe_load/3, data/3, tags/5, excluded_tags/3]).
 -export([siginfo/4, fields_to_tx/4]).
 -include("include/hb.hrl").
@@ -97,7 +97,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
         case hb_maps:find(<<"keyid">>, Commitment, Opts) of
             {ok, KeyID} ->
                 hb_util:decode(
-                    dev_codec_httpsig_keyid:remove_scheme_prefix(KeyID)
+                    dev_httpsig_keyid:remove_scheme_prefix(KeyID)
                 );
             error -> ?DEFAULT_OWNER
         end,
@@ -169,7 +169,7 @@ data(TABM, Req, Opts) ->
     NestedMsgs =
         hb_maps:map(
             fun(_, Msg) ->
-                hb_util:ok(dev_codec_ans104:to(Msg, Req, Opts))
+                hb_util:ok(dev_ans104:to(Msg, Req, Opts))
             end,
             UnencodedNestedMsgs,
             Opts
@@ -184,7 +184,7 @@ data(TABM, Req, Opts) ->
             NestedMsgs;
         {DataVal, _} ->
             NestedMsgs#{
-                DataKey => hb_util:ok(dev_codec_ans104:to(DataVal, Req, Opts))
+                DataKey => hb_util:ok(dev_ans104:to(DataVal, Req, Opts))
             }
     end.
 

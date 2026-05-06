@@ -1,6 +1,6 @@
 %% @doc A module for converting between commitments and their encoded `signature'
 %% and `signature-input' keys.
--module(dev_codec_httpsig_siginfo).
+-module(dev_httpsig_siginfo).
 -export([commitments_to_siginfo/3, siginfo_to_commitments/3]).
 -export([committed_keys_to_siginfo/1, to_siginfo_keys/3, from_siginfo_keys/3]).
 -export([add_derived_specifiers/1, remove_derived_specifiers/1]).
@@ -294,7 +294,7 @@ sf_siginfo_to_commitment(Msg, BodyKeys, SFSig, SFSigInput, Opts) ->
         end,
     KeyID = maps:get(<<"keyid">>, Commitment4, <<>>),
     Commitment5 =
-        case dev_codec_httpsig_keyid:keyid_to_committer(KeyID) of
+        case dev_httpsig_keyid:keyid_to_committer(KeyID) of
             undefined ->
                 Commitment4;
             Committer ->
@@ -341,7 +341,7 @@ decoding_nested_map_binary(Bin) ->
 %% - Otherwise, we return the list unchanged.
 to_siginfo_keys(Msg, Commitment, Opts) ->
     {ok, _EncMsg, EncComm, _} =
-        dev_codec_httpsig:normalize_for_encoding(Msg, Commitment, Opts),
+        dev_httpsig:normalize_for_encoding(Msg, Commitment, Opts),
     maps:get(<<"committed">>, EncComm).
 
 %% @doc Normalize a list of `httpsig@1.0' keys to their equivalents in AO-Core

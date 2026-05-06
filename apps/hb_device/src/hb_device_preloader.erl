@@ -30,6 +30,8 @@ build(Opts) ->
             src_dir => SrcDir,
             out_dir => OutDir,
             roots => maps:get(roots, Opts, all),
+            spec => maps:get(spec, Opts, undefined),
+            specs => maps:get(specs, Opts, #{}),
             print => maps:get(print, Opts, true)
         }),
     Devices = lists:map(fun(Result) -> write_device(Result, StoreOpts) end, Results),
@@ -71,8 +73,8 @@ store_opts(Store, Wallet) ->
         hb_store:write(
             DeviceStore,
             #{
-                <<"devices/structured@1.0">> => <<"dev_codec_structured">>,
-                <<"devices/httpsig@1.0">> => <<"dev_codec_httpsig">>
+                <<"devices/structured@1.0">> => <<"dev_structured">>,
+                <<"devices/httpsig@1.0">> => <<"dev_httpsig">>
             },
             #{}
         ),
@@ -81,7 +83,7 @@ store_opts(Store, Wallet) ->
         <<"match-index">> => Store,
         <<"device-store">> => DeviceStore,
         <<"priv-wallet">> => Wallet,
-        <<"commitment-device">> => dev_codec_httpsig
+        <<"commitment-device">> => dev_httpsig
     }.
 
 %% @doc Sign and write one packaged device spec and implementation.
@@ -89,24 +91,16 @@ write_device(
     #{
         root := Root,
         name := Name,
+        implements := Implements,
         module := Module,
         beam := Beam,
         exports := Exports,
-        files := Files
+        files := Files,
+        spec := Spec
     },
     Opts
 ) ->
-    SpecMsg =
-        sign(#{
-            <<"data-protocol">> => <<"ao">>,
-            <<"variant">> => <<"ao.N.1">>,
-            <<"type">> => <<"device-spec">>,
-            <<"name">> => Name,
-            <<"root-module">> => hb_util:bin(Root),
-            <<"exports">> => encode_exports(Exports)
-        }, Opts),
-    {ok, _SpecUnsignedID} = hb_cache:write(SpecMsg, Opts),
-    SpecID = hb_message:id(SpecMsg, signed, Opts),
+    SpecID = write_spec(Root, Name, Implements, Exports, Spec, Opts),
     ImplMsg =
         sign(hb_ao:normalize_keys(
             #{
@@ -135,7 +129,26 @@ write_device(
 
 %% @doc Sign a message with the preload commitment device.
 sign(Msg, Opts) ->
-    hb_message:commit(Msg, Opts, #{ <<"commitment-device">> => dev_codec_httpsig }).
+    hb_message:commit(Msg, Opts, #{ <<"commitment-device">> => dev_httpsig }).
+
+%% @doc Write the implemented device spec, unless it is already an ID.
+write_spec(_Root, _Name, Implements, _Exports, _Spec, _Opts)
+        when is_binary(Implements), byte_size(Implements) == 43 ->
+    Implements;
+write_spec(Root, _Name, Implements, Exports, Spec, Opts) ->
+    SpecMsg =
+        sign(#{
+            <<"data-protocol">> => <<"ao">>,
+            <<"variant">> => <<"ao.N.1">>,
+            <<"type">> => <<"device-spec">>,
+            <<"name">> => Implements,
+            <<"root-module">> => hb_util:bin(Root),
+            <<"exports">> => encode_exports(Exports),
+            <<"content-type">> => maps:get(<<"content-type">>, Spec),
+            <<"body">> => maps:get(<<"body">>, Spec)
+        }, Opts),
+    {ok, _SpecUnsignedID} = hb_cache:write(SpecMsg, Opts),
+    hb_message:id(SpecMsg, signed, Opts).
 
 %% @doc Encode export pairs into structured values.
 encode_exports(Exports) ->
