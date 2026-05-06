@@ -20,7 +20,8 @@
     <<"committers">>,
     <<"committed">>
 ]).
-
+%% Default max size for remote BEAM device artifacts. default can be 
+%% overwritten with `remote_device_byte_cap` in Opts.
 -define(DEFAULT_REMOTE_DEVICE_BYTE_CAP, 1024 * 1024).
 
 %% @doc Truncate the arguments of a function to the number of arguments it

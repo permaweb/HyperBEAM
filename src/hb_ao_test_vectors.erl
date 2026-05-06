@@ -302,6 +302,33 @@ load_device_test() ->
     hb_store:reset(Store),
     ?assertEqual({ok, <<"example">>}, exec_dummy_device(Opts)).
 
+oversized_load_device_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"load-remote-devices">> => true,
+        <<"remote-device-byte-cap">> => 1,
+        <<"trusted-device-signers">> =>
+            [hb_util:human_id(ar_wallet:to_address(Wallet))],
+        <<"store">> => Store = #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> => <<"cache-TEST/fs">>
+        },
+        <<"priv-wallet">> => Wallet
+    },
+    hb_store:reset(Store),
+    ?assertThrow(
+        {error,
+            {device_not_loadable,
+                _,
+                {device_load_failed,
+                    {remote_device_byte_size_exceeds_limit, _},
+                    {byte_size_cap, 1}
+                }
+            }
+        },
+        exec_dummy_device(Opts)
+    ).
+
 untrusted_load_device_test() ->
     % Establish an execution environment which does not trust the device author.
     UntrustedWallet = ar_wallet:new(),
