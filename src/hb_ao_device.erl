@@ -21,6 +21,8 @@
     <<"committed">>
 ]).
 
+-define(DEFAULT_REMOTE_DEVICE_BYTE_CAP, 1024 * 1024).
+
 %% @doc Truncate the arguments of a function to the number of arguments it
 %% actually takes.
 truncate_args(Fun, Args) ->
@@ -307,18 +309,36 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                                     Opts
                                                 )
                                         end,
-                                    LoadRes =
-                                        erlang:load_module(
-                                            ModName,
-                                            BEAMCode
-                                        ),
-                                    case LoadRes of
-                                        {module, _} ->
-                                            cache_device_module(ID, ModName, Opts),
-                                            {ok, ModName};
-                                        {error, Reason} ->
-                                            {error, {device_load_failed, Reason}}
-                                    end;
+                                    MaxDeviceBytes = hb_util:int(
+                                        hb_opts:get(
+                                            remote_device_byte_cap,
+                                            ?DEFAULT_REMOTE_DEVICE_BYTE_CAP,
+                                            Opts
+                                        )
+                                    ),
+                                    case is_binary(BEAMCode) andalso byte_size(BEAMCode) > MaxDeviceBytes of
+                                        true ->
+                                            BEAMCodeSize = byte_size(BEAMCode),
+                                            {error,
+                                                {device_load_failed,
+                                                    {remote_device_byte_size_exceeds_limit, BEAMCodeSize},
+                                                    {byte_size_cap, MaxDeviceBytes}
+                                                }
+                                            };
+                                        false ->
+                                            LoadRes =
+                                                erlang:load_module(
+                                                    ModName,
+                                                    BEAMCode
+                                                ),
+                                            case LoadRes of
+                                                {module, _} ->
+                                                    cache_device_module(ID, ModName, Opts),
+                                                    {ok, ModName};
+                                                {error, Reason} ->
+                                                    {error, {device_load_failed, Reason}}
+                                            end
+                                        end;
                                 {error, Reason} ->
                                     {error, {device_load_failed, Reason}}
                             end;
