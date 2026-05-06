@@ -198,4 +198,4 @@ concurrent_leases_test() ->
     ok.
 
 reset_to_default() ->
-    reset(hb_opts:get(<<"copycat_memory_budget">>, 6 * 1024 * 1024 * 1024, #{})).
+    reset(hb_opts:get(<<"copycat-memory-budget">>, 6 * 1024 * 1024 * 1024, #{})).

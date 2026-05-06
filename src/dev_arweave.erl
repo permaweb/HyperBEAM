@@ -1417,7 +1417,8 @@ index_test_tx(TXID, IndexStore, Opts) ->
             TXID,
             <<"tx@1.0">>,
             StartOffset,
-            Size
+            Size,
+            Opts
         ),
     ?assertMatch({ok, _}, hb_store_arweave:read_offset(IndexStore, TXID)),
     ok.
@@ -1630,7 +1631,7 @@ head_raw_ans104_deserialize_throws_test_parallel() ->
     ProbeOffset = 376836336327208,
     Size = 4096,
     ok = hb_store_arweave:write_offset(
-        IndexStore, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size
+        IndexStore, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size, Opts
     ),
     ?assertMatch(
         {error, _},
