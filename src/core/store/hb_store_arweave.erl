@@ -457,7 +457,7 @@ load_item_deserialize_throws_test() ->
     ProbeOffset = 376836336327208,
     Size = 4096,
     ok = write_offset(Opts, FakeID, <<"ans104@1.0">>, ProbeOffset - 1, Size),
-    ?assertMatch({error, _}, read(Opts, FakeID, #{})).
+    ?assertMatch({error, _}, read(Opts, #{ <<"read">> => FakeID }, #{})).
 
 root_offset_confirmed_parent_test() ->
     Store = [hb_test_utils:test_store()],
