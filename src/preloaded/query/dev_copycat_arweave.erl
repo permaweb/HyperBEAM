@@ -650,6 +650,77 @@ inventory_local(Current, To, Opts, Acc) ->
                 Acc#{BlockKey => BlockInfo})
     end.
 
+%% @doc mode=headers: walk every confirmed item recorded under the indexed
+%% blocks in [From..To], read the full message via the normal cache path,
+%% and write it into the local store via `hb_cache:write'. Top-level tag
+%% fields and commitment fields land path-keyed under `<id>/...' so any
+%% future filter (tags, owners, recipients, target, anchor, ...) is naturally
+%% answerable by `hb_cache:match'.
+%%
+%% Items already laid out under local-store are skipped, so reruns are
+%% idempotent and serve as the natural retry mechanism for previously failed
+%% ids. 
+index_tx_headers(From, undefined, Opts) ->
+    index_tx_headers(From, 0, Opts);
+index_tx_headers(From, To, _Opts) when From < To ->
+    {ok, {From, To}};
+index_tx_headers(From, To, Opts) ->
+    Candidates = collect_header_candidates(From, To, Opts, []),
+    Workers = hb_opts:get(<<"copycat-headers-workers">>, 8, Opts),
+    ?event(copycat_short,
+        {headers_scan_started,
+            {from, From}, {to, To},
+            {candidates, length(Candidates)},
+            {workers, Workers}
+        }
+    ),
+    hb_pmap:parallel_map(
+        Candidates,
+        fun(ID) -> 
+            case index_headers(ID, Opts) of
+                skipped -> ?event(copycat_short, {header_skipped, {id, ID}});
+                {ok, _} -> ?event(copycat_short, {header_indexed, {id, ID}});
+                {error, Reason} -> 
+                    ?event(copycat_short, 
+                        {header_index_crash, 
+                            {id, ID}, {reason, Reason}
+                        }
+                    )
+            end    
+        end,
+        Workers
+    ),
+    ?event(copycat_short, {headers_scan_completed, {from, From}, {to, To}}),
+    {ok, {From, To}}.
+
+%% @doc Walk indexed blocks from `Current' down to `To', collecting all
+%% confirmed item IDs across every depth.
+collect_header_candidates(Current, To, _Opts, Acc) when Current < To -> Acc;
+collect_header_candidates(Current, To, Opts, Acc) ->
+    case read_block_marker_depth(Current, Opts) of
+        undefined ->
+            collect_header_candidates(Current - 1, To, Opts, Acc);
+        _Depth ->
+            Candidates = 
+                lists:append(maps:values(read_block_item_ids(Current, Opts))),
+            collect_header_candidates(Current - 1, To, Opts, Candidates ++ Acc)
+    end.
+
+%% @doc If the ID is not already in the local store, read it from the arweave
+%% store and write it into the local store.
+index_headers(ID, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    try
+        case hb_cache:read(ID, LocalOpts) of
+            {ok, _} -> skipped;
+            _ ->
+                {ok, Msg} =  hb_cache:read(ID, Opts),
+                hb_cache:write(Msg, LocalOpts)
+        end
+    catch _:Reason -> 
+        {error, Reason}
+    end.
+
 fetch_block_header(Height, Opts) ->
     ?event(debug_copycat, {fetching_block, Height}),
     observe_event(<<"block_header">>, fun() ->
@@ -3648,6 +3719,34 @@ parent_endpoint_not_found_test() ->
         )
     ),
     ok.
+
+strip_preserves_verify_test_parallel() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=write&depth=3">>,
+            Opts
+        ),
+    L1ID = <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
+    L2ID = <<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>,
+    L3ID = <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
+    lists:foreach(
+        fun(ID) ->
+            index_headers(ID, Opts),
+            {ok, HeaderMsg} = hb_cache:read(ID, hb_store:scope(Opts, local)),
+            ?event(
+                {verify_msg,
+                    {id, ID},
+                    {unsigned, hb_message:id(HeaderMsg, unsigned, Opts)},
+                    {signed, hb_message:id(HeaderMsg, signed, Opts)},
+                    {all, hb_message:id(HeaderMsg, all, Opts)}
+                }
+            ),
+            ?assert(hb_message:verify(HeaderMsg, all, Opts), {verify_failed, ID}),
+            ?assertEqual(ID, hb_message:id(HeaderMsg, signed, Opts))
+        end,
+        [L1ID, L3ID, L2ID]
+    ).
 
 index_of(Elem, List) -> index_of(Elem, List, 1).
 
