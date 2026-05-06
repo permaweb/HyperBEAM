@@ -560,6 +560,9 @@ start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     end.
 
 call_store_start(Mod, Store, Req, Opts) ->
+    %% function_exported doesn't load the module. We need to call ensure_loaded
+    %% here since is the first time we call a function to load the module.
+    code:ensure_loaded(Mod),
     case erlang:function_exported(Mod, start, 3) of
         true -> Mod:start(Store, Req, Opts);
         false -> Mod:start(Store)
