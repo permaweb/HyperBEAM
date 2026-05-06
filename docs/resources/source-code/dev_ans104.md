@@ -1,4 +1,4 @@
-# [Module dev_codec_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_ans104.erl)
+# [Module dev_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_ans104.erl)
 
 
 

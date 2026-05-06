@@ -1,4 +1,4 @@
-# [Module dev_codec_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig_conv.erl)
+# [Module dev_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_httpsig_conv.erl)
 
 
 

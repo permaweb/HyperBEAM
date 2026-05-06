@@ -1557,6 +1557,7 @@ start_mock_gateway(Responses) ->
     {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
     NodeOpts = #{
         <<"gateway">> => MockServer,
+        <<"device-store">> => test_device_store(),
         <<"routes">> => [
             #{
                 <<"template">> => <<"/arweave">>,
@@ -1569,6 +1570,25 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+%% @doc Return a device cache that routes bundler unit tests to this module.
+test_device_store() ->
+    Store = #{
+        <<"store-module">> => hb_store_volatile,
+        <<"name">> =>
+            <<
+                "bundler-test-device-cache-",
+                (hb_util:encode(crypto:strong_rand_bytes(6)))/binary
+            >>
+    },
+    ok = hb_store:start(Store),
+    ok =
+        hb_store:write(
+            Store,
+            #{ <<"devices/bundler@1.0">> => <<"dev_bundler">> },
+            #{}
+        ),
+    Store.
 
 setup_test_counter(Table) ->
     cleanup_test_counter(Table),

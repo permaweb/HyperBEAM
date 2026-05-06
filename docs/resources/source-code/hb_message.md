@@ -37,16 +37,16 @@ and O(1) access maps), such that operations upon them are efficient.
 The structure of the conversions is as follows:
 
 <pre>
-Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
-HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
-Flat Maps ==> dev_codec_flat:from/1 ==> TABM
+Arweave TX/ANS-104 ==> dev_ans104:from/1 ==> TABM
+HTTP Signed Message ==> dev_httpsig_conv:from/1 ==> TABM
+Flat Maps ==> dev_flat:from/1 ==> TABM
 
-TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
-AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
+TABM ==> dev_structured:to/1 ==> AO-Core Message
+AO-Core Message ==> dev_structured:from/1 ==> TABM
 
-TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
-TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
-TABM ==> dev_codec_flat:to/1 ==> Flat Maps
+TABM ==> dev_ans104:to/1 ==> Arweave TX/ANS-104
+TABM ==> dev_httpsig_conv:to/1 ==> HTTP Signed Message
+TABM ==> dev_flat:to/1 ==> Flat Maps
 ...
 </pre>
 

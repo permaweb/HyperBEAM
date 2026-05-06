@@ -1,4 +1,4 @@
-# [Module dev_codec_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_structured.erl)
+# [Module dev_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_structured.erl)
 
 
 

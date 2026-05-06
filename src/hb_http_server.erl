@@ -547,6 +547,11 @@ set_default_opts(Opts) ->
                 Stores;
             PassedStore -> PassedStore
         end,
+    TrustedDeviceSigners =
+        case hb_opts:get(trusted_device_signers, [], TempOpts) of
+            [] -> [hb_util:human_id(ar_wallet:to_address(Wallet))];
+            PassedSigners -> PassedSigners
+        end,
     hb_store:start(
         hb_opts:get(preloaded_store, hb_device_preload:default_store(), Opts)
     ),
@@ -562,6 +567,7 @@ set_default_opts(Opts) ->
         <<"store">> => Store,
         <<"priv-wallet">> => Wallet,
         <<"address">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
+        <<"trusted-device-signers">> => TrustedDeviceSigners,
         <<"force-signed">> => true
     }.
 

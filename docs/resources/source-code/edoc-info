@@ -1,9 +1,9 @@
 %% encoding: UTF-8
 {application,hb}.
 {modules,[ar_bundles,ar_deep_hash,ar_rate_limiter,ar_timestamp,ar_tx,
-          ar_wallet,dev_cache,dev_cacheviz,dev_codec_ans104,dev_codec_flat,
-          dev_codec_httpsig,dev_codec_httpsig_conv,dev_codec_json,
-          dev_codec_structured,dev_cron,dev_cu,dev_dedup,
+          ar_wallet,dev_cache,dev_cacheviz,dev_ans104,dev_flat,
+          dev_httpsig,dev_httpsig_conv,dev_json,
+          dev_structured,dev_cron,dev_cu,dev_dedup,
           dev_delegated_compute,dev_faff,dev_genesis_wasm,dev_green_zone,
           dev_hook,dev_hyperbuddy,dev_json_iface,dev_local_name,dev_lookup,
           dev_lua,dev_lua_lib,dev_lua_test,dev_manifest,dev_message,dev_meta,

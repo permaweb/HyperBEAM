@@ -9,7 +9,7 @@
     name_resolver/1,
     name_resolvers/1,
     resolve_name/2,
-    effective_opts/1,
+    store_opts/1,
     trusted_signers/1,
     device_names/1
 ]).
@@ -64,18 +64,14 @@ resolve_name(Name, Opts) ->
             resolve_with_name_device(NormName, Opts)
     end.
 
-%% @doc Return opts that read device data from the preloaded store first.
-effective_opts(Opts) ->
+%% @doc Return opts that read device data only from the preloaded store.
+store_opts(Opts) ->
     case preloaded_store(Opts) of
         [] ->
-            Opts;
+            Opts#{ <<"store">> => [], <<"match-index">> => [] };
         Store ->
             Opts#{
-                <<"store">> =>
-                    prepend_store(
-                        read_only_store(Store),
-                        hb_opts:get(store, [], Opts)
-                    ),
+                <<"store">> => [read_only_store(Store)],
                 <<"match-index">> => Store
             }
     end.
@@ -124,15 +120,6 @@ preloaded_store(Opts) ->
 
 read_only_store(Store) ->
     Store#{ <<"access">> => [<<"read">>] }.
-
-prepend_store(Store, Stores) when is_list(Stores) ->
-    [Store | lists:filter(fun(Existing) -> Existing =/= Store end, Stores)];
-prepend_store(Store, Store) ->
-    [Store];
-prepend_store(Store, []) ->
-    [Store];
-prepend_store(Store, OtherStore) ->
-    [Store, OtherStore].
 
 resolve_with_name_device(<<"name@1.0">>, _Opts) ->
     not_found;

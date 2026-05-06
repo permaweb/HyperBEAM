@@ -414,16 +414,16 @@ find_device_implementation(DevRef, Opts) ->
         {ok, Module} ->
             {ok, Module};
         {error, not_found} ->
-            case read_device_implementation_message(DevRef, Opts) of
+            PreloadOpts = hb_device_preload:store_opts(Opts),
+            case read_preloaded_device_implementation(DevRef, PreloadOpts) of
                 {ok, DeviceMsg} ->
                     {ok, DeviceMsg};
                 {error, _} ->
-                    PreloadOpts = hb_device_preload:effective_opts(Opts),
-                    case read_preloaded_device_implementation(DevRef, PreloadOpts) of
+                    case find_device_implementation_by_spec(DevRef, Opts) of
                         {ok, DeviceMsg} ->
                             {ok, DeviceMsg};
                         {error, _} ->
-                            find_device_implementation_by_spec(DevRef, Opts)
+                            read_remote_device_implementation_message(DevRef, Opts)
                     end
             end
     end.
@@ -485,14 +485,22 @@ read_device_implementation_message(ID, Opts) ->
 %% message body.
 device_implementation_commitments(ID, Opts) ->
     case hb_cache:read([ID, <<"commitments">>], Opts) of
-        {ok, Commitments} when is_map(Commitments) -> Commitments;
+        {ok, Commitments} when is_map(Commitments) ->
+            hb_cache:ensure_all_loaded(Commitments, Opts);
         _ -> #{}
+    end.
+
+%% @doc Read a remote BEAM implementation message by its ID, if enabled.
+read_remote_device_implementation_message(ID, Opts) ->
+    case hb_opts:get(load_remote_devices, false, Opts) of
+        true -> read_device_implementation_message(ID, Opts);
+        false -> {error, remote_devices_disabled}
     end.
 
 %% @doc Find a signed implementation message in the local preloaded store.
 find_preloaded_device_implementation(DevRef, Opts) ->
     PreloadOpts =
-        (hb_device_preload:effective_opts(Opts))#{
+        (hb_device_preload:store_opts(Opts))#{
             <<"commitment-device">> => dev_httpsig
         },
     case dev_match:all(#{ <<"implements-device">> => DevRef }, #{}, PreloadOpts) of

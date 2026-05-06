@@ -1049,6 +1049,31 @@ event_request(Path, Method, Status, Extra) ->
 
 %%% Tests
 
+%% @doc Return opts that route Arweave unit tests to this source module.
+test_opts() ->
+    test_opts(#{}).
+test_opts(Opts) ->
+    Opts#{ <<"device-store">> => test_device_store() }.
+
+%% @doc Return a device cache that routes Arweave unit tests to this module.
+test_device_store() ->
+    Store = #{
+        <<"store-module">> => hb_store_volatile,
+        <<"name">> =>
+            <<
+                "arweave-test-device-cache-",
+                (hb_util:encode(crypto:strong_rand_bytes(6)))/binary
+            >>
+    },
+    ok = hb_store:start(Store),
+    ok =
+        hb_store:write(
+            Store,
+            #{ <<"devices/arweave@2.9">> => <<"dev_arweave">> },
+            #{}
+        ),
+    Store.
+
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
 bundle_header_garbage_guard_test_parallel() ->
@@ -1307,11 +1332,11 @@ post_tx_json_request(Server, ClientOpts) ->
 setup_arweave_index_opts(TXIDs) ->
     TestStore = hb_test_utils:test_store(hb_store_volatile, <<"arweave-index">>),
     IndexStore = #{ <<"module">> => hb_store_arweave, <<"index-store">> => [TestStore] },
-    Opts = #{
+    Opts = test_opts(#{
         <<"store">> => [TestStore],
         <<"arweave-index-ids">> => true,
         <<"arweave-index-store">> => IndexStore
-    },
+    }),
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
     %     fun(Block) -> ok = index_test_block(Block, Opts) end,
@@ -1369,6 +1394,7 @@ tx_index_block(<<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>) -> 753012;
 tx_index_block(<<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>) -> 1233918.
 
 get_tx_basic_data_test_parallel() ->
+    Opts = test_opts(),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1376,10 +1402,10 @@ get_tx_basic_data_test_parallel() ->
             <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
             <<"exclude-data">> => false
         },
-        #{}
+        Opts
     ),
     ?event(debug_test, {structured_tx, Structured}),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     % Hash the data to make it easier to match
     StructuredWithHash = Structured#{
         <<"data">> => hb_util:encode(
@@ -1397,6 +1423,7 @@ get_tx_basic_data_test_parallel() ->
 
 %% @doc The data for this transaction ends with two smaller chunks.
 get_tx_split_chunk_test_parallel() ->
+    Opts = test_opts(),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1404,9 +1431,9 @@ get_tx_split_chunk_test_parallel() ->
             <<"tx">> => <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
             <<"exclude-data">> => false
         },
-        #{}
+        Opts
     ),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     ?assertEqual(
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         hb_message:id(Structured, signed)),
@@ -1418,7 +1445,7 @@ get_tx_split_chunk_test_parallel() ->
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
 
     Child = hb_ao:get(<<"1/2">>, Structured),
-    ?assert(hb_message:verify(Child, all, #{})),
+    ?assert(hb_message:verify(Child, all, Opts)),
     ?event(debug_test, {child, {explicit, hb_message:id(Child, signed)}}),
     ?assertEqual(
         <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
@@ -1724,7 +1751,7 @@ get_partial_chunk_post_split_test_parallel() ->
     %% 
     Offset = 378092137521399,
     ExpectedLength = 1000,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1745,7 +1772,7 @@ get_full_chunk_post_split_test_parallel() ->
     %% 
     Offset = 378092137521399,
     ExpectedLength = ?DATA_CHUNK_SIZE,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1766,7 +1793,7 @@ get_multi_chunk_post_split_test_parallel() ->
     %% 
     Offset = 378092137521399,
     ExpectedLength = ?DATA_CHUNK_SIZE * 3,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1789,7 +1816,7 @@ get_mid_chunk_post_split_test_parallel() ->
     %% 
     Offset = 378092137521399 + 200_000,
     ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1810,7 +1837,7 @@ get_partial_chunk_pre_split_test_parallel() ->
     %% 
     Offset = 30575701172109,
     ExpectedLength = 1000,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1831,7 +1858,7 @@ get_full_chunk_pre_split_test_parallel() ->
     %% 
     Offset = 30575701172109,
     ExpectedLength = ?DATA_CHUNK_SIZE,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1852,7 +1879,7 @@ get_multi_chunk_pre_split_test_parallel() ->
     %% 
     Offset = 30575701172109,
     ExpectedLength = ?DATA_CHUNK_SIZE * 3,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1873,7 +1900,7 @@ get_mid_chunk_pre_split_test_parallel() ->
     %% 
     Offset = 30575701172109 + 200_000,
     ExpectedLength = ?DATA_CHUNK_SIZE + 300_000,
-    Opts = #{},
+    Opts = test_opts(),
     {ok, Data} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1992,7 +2019,7 @@ reassemble_bundle2_test_parallel() ->
 %% reassembles the bundle and nested items. This is also useful tool 
 %% debugging tool to check that a bundle is present in the weave.
 assert_bundle_tx(TXID) ->
-    Opts = #{},
+    Opts = test_opts(),
     {ok, #{ <<"body">> := OffsetBody }} =
         hb_http:request(
             #{

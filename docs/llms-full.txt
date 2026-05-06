@@ -412,7 +412,7 @@ If a HyperBEAM node performing these computations runs within a supported Truste
 
 This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
 
-*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)).
+*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_httpsig`](../resources/source-code/dev_httpsig.md)).
 *   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
 
 Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
@@ -463,7 +463,7 @@ This retrieves the node configuration from the meta device and serializes it to 
 - [Message Device](../resources/source-code/dev_message.md) - Works well with JSON serialization
 - [Meta Device](../resources/source-code/dev_meta.md) - Can provide configuration data to serialize
 
-[json module](../resources/source-code/dev_codec_json.md)
+[json module](../resources/source-code/dev_json.md)
 --- END OF FILE: docs/devices/json-at-1-0.md ---
 
 --- START OF FILE: docs/devices/lua-at-5-3a.md ---
@@ -552,7 +552,7 @@ This device is particularly useful for:
 *   Creating and modifying transient messages on the fly using query parameters.
 *   Retrieving specific values from a message map.
 *   Inspecting the keys of a message.
-*   Handling message commitments and verification (though often delegated to specialized commitment devices like [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   Handling message commitments and verification (though often delegated to specialized commitment devices like [`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
 
 ## Core Functionality
 
@@ -586,8 +586,8 @@ The `message@1.0` device reserves several keys for specific operations:
 *   **`set_path`**: A special case for setting the `path` key itself, which cannot be done via the standard `set` operation.
 *   **`remove`**: Removes one or more specified keys from the message. Requires an `item` or `items` parameter.
 *   **`keys`**: Returns a list of all public (non-private) keys present in the message map.
-*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
-*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
+*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
 *   **`committers`**: Returns a list of committers associated with the commitments in the message. Can be filtered by request parameters.
 *   **`commitments`**: Used internally and in requests to filter or specify which commitments to operate on (e.g., for `id` or `verify`).
 *   **`verify`**: Verifies the commitments attached to the message. Can be filtered by `committers` or specific `commitment` IDs in the request. Delegates verification to the device specified in each commitment (`commitment-device`).
@@ -999,7 +999,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md), [`dev_monitor`](../resources/source-code/dev_monitor.md)):** Coordinate complex execution flows, schedule tasks, or monitor process activity.
 
@@ -1087,7 +1087,7 @@ This shows the 'cache' of your process. Each response is:
 Beyond path segments, HyperBEAM URLs can include query parameters that utilize a special type casting syntax. This allows specifying the desired data type for a parameter directly within the URL using the format `key+type=value`.
 
 - **Syntax**: A `+` symbol separates the parameter key from its intended type (e.g., `count+integer=42`, `items+list="apple",7`).
-- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../resources/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../resources/source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
+- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../resources/source-code/hb_singleton.md) and [`dev_structured:decode_value`](../resources/source-code/dev_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
 - **Supported Types**: Common types include `integer`, `float`, `list`, `map`, `atom`, `binary` (often implicit), and `resolve` (for path resolution). List values often follow the [HTTP Structured Fields format (RFC 8941)](https://www.rfc-editor.org/rfc/rfc8941.html).
 
 This powerful feature enables the expression of complex data structures directly in URLs.
@@ -2931,8 +2931,8 @@ the cache set by the `target` key in the request.
 
 --- END OF FILE: docs/resources/source-code/dev_cacheviz.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_ans104.md ---
-# [Module dev_codec_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_ans104.erl)
+--- START OF FILE: docs/resources/source-code/dev_ans104.md ---
+# [Module dev_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_ans104.erl)
 
 
 
@@ -3132,10 +3132,10 @@ a binary, which we return as is.
 Verify an ANS-104 commitment.
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_ans104.md ---
+--- END OF FILE: docs/resources/source-code/dev_ans104.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_flat.md ---
-# [Module dev_codec_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_flat.erl)
+--- START OF FILE: docs/resources/source-code/dev_flat.md ---
+# [Module dev_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_flat.erl)
 
 
 
@@ -3251,10 +3251,10 @@ Convert a TABM to a flat map.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_flat.md ---
+--- END OF FILE: docs/resources/source-code/dev_flat.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_httpsig_conv.md ---
-# [Module dev_codec_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig_conv.erl)
+--- START OF FILE: docs/resources/source-code/dev_httpsig_conv.md ---
+# [Module dev_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_httpsig_conv.erl)
 
 
 
@@ -3496,10 +3496,10 @@ that can translated to a given web server Response API
 Decode the `ao-ids` key into a map.
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_httpsig_conv.md ---
+--- END OF FILE: docs/resources/source-code/dev_httpsig_conv.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_httpsig.md ---
-# [Module dev_codec_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig.erl)
+--- START OF FILE: docs/resources/source-code/dev_httpsig.md ---
+# [Module dev_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_httpsig.erl)
 
 
 
@@ -3513,7 +3513,7 @@ This module implements HTTP Message Signatures as described in RFC-9421
 It implements the codec standard (from/1, to/1), as well as the optional
 commitment functions (id/3, sign/3, verify/3). The commitment functions
 are found in this module, while the codec functions are relayed to the
-`dev_codec_httpsig_conv` module.
+`dev_httpsig_conv` module.
 <a name="types"></a>
 
 ## Data Types ##
@@ -4136,10 +4136,10 @@ Given the signature name, and the Request/Response Message Context
 verify the named signature by constructing the signature base and comparing
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_httpsig.md ---
+--- END OF FILE: docs/resources/source-code/dev_httpsig.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_json.md ---
-# [Module dev_codec_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_json.erl)
+--- START OF FILE: docs/resources/source-code/dev_json.md ---
+# [Module dev_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_json.erl)
 
 
 
@@ -4222,10 +4222,10 @@ Encode a message to a JSON string.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_json.md ---
+--- END OF FILE: docs/resources/source-code/dev_json.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_structured.md ---
-# [Module dev_codec_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_structured.erl)
+--- START OF FILE: docs/resources/source-code/dev_structured.md ---
+# [Module dev_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_structured.erl)
 
 
 
@@ -4332,7 +4332,7 @@ Convert a TABM into a native HyperBEAM message.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_structured.md ---
+--- END OF FILE: docs/resources/source-code/dev_structured.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_cron.md ---
 # [Module dev_cron.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cron.erl)
@@ -15488,16 +15488,16 @@ and O(1) access maps), such that operations upon them are efficient.
 The structure of the conversions is as follows:
 
 <pre>
-Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
-HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
-Flat Maps ==> dev_codec_flat:from/1 ==> TABM
+Arweave TX/ANS-104 ==> dev_ans104:from/1 ==> TABM
+HTTP Signed Message ==> dev_httpsig_conv:from/1 ==> TABM
+Flat Maps ==> dev_flat:from/1 ==> TABM
 
-TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
-AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
+TABM ==> dev_structured:to/1 ==> AO-Core Message
+AO-Core Message ==> dev_structured:from/1 ==> TABM
 
-TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
-TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
-TABM ==> dev_codec_flat:to/1 ==> Flat Maps
+TABM ==> dev_ans104:to/1 ==> Arweave TX/ANS-104
+TABM ==> dev_httpsig_conv:to/1 ==> HTTP Signed Message
+TABM ==> dev_flat:to/1 ==> Flat Maps
 ...
 </pre>
 
@@ -20638,12 +20638,12 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="ar_wallet.md" class="module">ar_wallet</a></td></tr>
 <tr><td><a href="dev_cache.md" class="module">dev_cache</a></td></tr>
 <tr><td><a href="dev_cacheviz.md" class="module">dev_cacheviz</a></td></tr>
-<tr><td><a href="dev_codec_ans104.md" class="module">dev_codec_ans104</a></td></tr>
-<tr><td><a href="dev_codec_flat.md" class="module">dev_codec_flat</a></td></tr>
-<tr><td><a href="dev_codec_httpsig.md" class="module">dev_codec_httpsig</a></td></tr>
-<tr><td><a href="dev_codec_httpsig_conv.md" class="module">dev_codec_httpsig_conv</a></td></tr>
-<tr><td><a href="dev_codec_json.md" class="module">dev_codec_json</a></td></tr>
-<tr><td><a href="dev_codec_structured.md" class="module">dev_codec_structured</a></td></tr>
+<tr><td><a href="dev_ans104.md" class="module">dev_ans104</a></td></tr>
+<tr><td><a href="dev_flat.md" class="module">dev_flat</a></td></tr>
+<tr><td><a href="dev_httpsig.md" class="module">dev_httpsig</a></td></tr>
+<tr><td><a href="dev_httpsig_conv.md" class="module">dev_httpsig_conv</a></td></tr>
+<tr><td><a href="dev_json.md" class="module">dev_json</a></td></tr>
+<tr><td><a href="dev_structured.md" class="module">dev_structured</a></td></tr>
 <tr><td><a href="dev_cron.md" class="module">dev_cron</a></td></tr>
 <tr><td><a href="dev_cu.md" class="module">dev_cu</a></td></tr>
 <tr><td><a href="dev_dedup.md" class="module">dev_dedup</a></td></tr>
@@ -20999,7 +20999,7 @@ These options control how HyperBEAM manages devices.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
-<!-- Complex options like preloaded_devices, devices are omitted -->
+<!-- Complex options like device-store, devices are omitted -->
 
 ### Debug & Development
 

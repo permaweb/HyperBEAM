@@ -150,8 +150,8 @@ add_dynamic_keys(NodeMsg) ->
                 %% Create a new map with address and merge it (overwriting existing)
                 Address = hb_util:id(ar_wallet:to_address(Wallet)),
                 NodeMsg#{ <<"address">> => Address }
-        end,
-    add_identity_addresses(UpdatedNodeMsg).
+    end,
+    add_device_names(add_identity_addresses(UpdatedNodeMsg)).
 
 add_identity_addresses(NodeMsg) ->
     Identities = hb_opts:get(identities, #{}, NodeMsg),
@@ -163,6 +163,12 @@ add_identity_addresses(NodeMsg) ->
         }
     end, Identities),
     NodeMsg#{ <<"identities">> => NewIdentities }.
+
+%% @doc Add the generated local device names to the node info response.
+add_device_names(NodeMsg) ->
+    NodeMsg#{
+        <<"devices">> => lists:sort(hb_device_preload:device_names(NodeMsg))
+    }.
 
 %% @doc Validate that the request is signed by the operator of the node, then
 %% allow them to update the node message.
