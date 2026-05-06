@@ -61,7 +61,7 @@ load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
 test_func(_) ->
-	{ok, <<"GOOD FUNCTION">>}.
+    dev_test_example_mod:test_func().
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new

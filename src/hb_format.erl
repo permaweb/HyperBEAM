@@ -573,9 +573,9 @@ trace({Func, ArityOrTerm, Extras}, Prefixes) ->
 trace({Mod, Func, ArityOrTerm, Extras}, _Prefixes) ->
     ExtraMap = hb_maps:from_list(Extras),
     indent(
-        "~p:~p/~p [~s]~n",
+        "~s:~p/~p [~s]~n",
         [
-            Mod, Func, ArityOrTerm,
+            trace_module(Mod), Func, ArityOrTerm,
             case hb_maps:get(line, ExtraMap, undefined) of
                 undefined -> "No details";
                 Line ->
@@ -680,11 +680,33 @@ is_erlang_generated_fun_name(_) ->
 %% traces, or their raw form for others.
 trace_element(Bin) when is_binary(Bin) -> Bin;
 trace_element({Mod, Line}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [trace_module(Mod), Line]));
 trace_element({Mod, _, _, [{file, _}, {line, Line}|_]}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [trace_module(Mod), Line]));
 trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
+    lists:flatten(io_lib:format("~s:~p", [trace_module(Mod), Func])).
+
+%% @doc Format packaged device module names using their developer-facing root.
+trace_module(Mod) when is_atom(Mod) ->
+    case demangle_device_module(atom_to_list(Mod)) of
+        {ok, Root} -> Root;
+        error -> lists:flatten(io_lib:format("~p", [Mod]))
+    end;
+trace_module(Mod) ->
+    lists:flatten(io_lib:format("~p", [Mod])).
+
+%% @doc Return the root module name embedded in a packaged device module atom.
+demangle_device_module("_hb_device_" ++ Rest) ->
+    case string:tokens(Rest, "_") of
+        [] ->
+            error;
+        [_] ->
+            error;
+        Parts ->
+            {ok, string:join(lists:sublist(Parts, length(Parts) - 1), "_")}
+    end;
+demangle_device_module(_) ->
+    error.
 
 %% @doc Utility function to help macro `?trace/0' remove the first frame of the
 %% stack trace.
