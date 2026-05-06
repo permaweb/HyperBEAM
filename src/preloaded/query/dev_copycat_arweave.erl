@@ -43,7 +43,7 @@ arweave(_Base, Request, Opts) ->
             end;
         <<"list">> -> with_range(Request, Opts, fun list_index/3);
         <<"inventory">> -> with_range(Request, Opts, fun inventory_index/3);
-        <<"headers">> -> with_range(Request, Opts, fun index_headers/3);
+        <<"headers">> -> with_range(Request, Opts, fun index_tx_headers/3);
         Mode ->
             {
                 error, 
@@ -950,7 +950,8 @@ maybe_index_block(Block, TargetDepth, Opts) ->
                 {ok, TXs} ->
                     Height = hb_maps:get(<<"height">>, Block, 0, Opts),
                     L1IDs = [TX#tx.id || TX <- TXs],
-                    TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
+                    TXsWithData = 
+                        ar_block:generate_size_tagged_list_from_txs(TXs, Height),
                     ValidTXs = lists:filter(
                         fun({{padding, _}, _}) -> false; (_) -> true end,
                         TXsWithData
@@ -1153,7 +1154,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
         {ok,
             #{
                 <<"codec-device">> := <<"tx@1.0">>,
-                <<"start-offset">> := StartOffset,
+                <<"offset">> := StartOffset,
                 <<"length">> := Length
             }} ?=
             observe_copycat_l1_stage(
