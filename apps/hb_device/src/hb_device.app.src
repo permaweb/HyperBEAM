@@ -1,0 +1,10 @@
+{application, hb_device,
+    [
+        {description, "HyperBEAM device packaging rebar3 plugin"},
+        {vsn, "0.1.0"},
+        {registered, []},
+        {applications, [kernel, stdlib, crypto, syntax_tools, compiler]},
+        {env, []},
+        {modules, []}
+    ]
+}.

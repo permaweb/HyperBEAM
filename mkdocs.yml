@@ -24,6 +24,7 @@ nav:
       - Exposing process state: 'build/exposing-process-state.md'
       - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
       - Extending HyperBEAM: 'build/extending-hyperbeam.md'
+      - Packaging HyperBEAM Devices: 'build/packaging-devices.md'
   - Devices:
       - Overview: 'devices/overview.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
@@ -249,4 +250,3 @@ extra:
       link: https://github.com/permaweb/hyperBEAM
       name: GitHub
   generator: false
-

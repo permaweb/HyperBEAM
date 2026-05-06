@@ -1,12 +1,17 @@
 %%% @doc Build flattened BEAM artifacts for multi-module HyperBEAM devices.
 -module(hb_device_packager).
--export([package/1, package/2, package_devices/0, package_devices/2]).
+-export([package/1, package/2]).
+-export([package_devices/0, package_devices/1, package_devices/2]).
+-export([source_modules/1, verify/1]).
 
+-ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
+-endif.
 
 -define(DEFAULT_SRC_DIR, "src").
 -define(DEFAULT_OUT_DIR, "_build/default/packaged-devices").
 -define(HASH_CHARS, 20).
+-define(BASE32_ALPHABET, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567").
 
 %% @doc Package a root device module from the default source directory.
 package(Root) ->
@@ -27,14 +32,20 @@ package(Root, Opts) when is_atom(Root) ->
             package(Root, Files, SrcDir, OutDir)
     end.
 
-%% @doc Package all preloaded source devices with multi-module namespaces.
+%% @doc Package all multi-module devices from the default source directory.
 package_devices() ->
-    package_devices(?DEFAULT_SRC_DIR, ?DEFAULT_OUT_DIR).
+    package_devices(#{}).
 
 %% @doc Package all multi-module devices in `SrcDir' into `OutDir'.
 package_devices(SrcDir, OutDir) ->
+    package_devices(#{ src_dir => SrcDir, out_dir => OutDir }).
+
+%% @doc Package all configured multi-module devices.
+package_devices(Opts) ->
+    SrcDir = maps:get(src_dir, Opts, ?DEFAULT_SRC_DIR),
+    OutDir = maps:get(out_dir, Opts, ?DEFAULT_OUT_DIR),
     Sources = source_modules(SrcDir),
-    Roots = device_roots(Sources),
+    Roots = device_roots(Sources, maps:get(roots, Opts, all)),
     Results =
         lists:map(
             fun(Root) ->
@@ -42,7 +53,7 @@ package_devices(SrcDir, OutDir) ->
                     {error, Reason} ->
                         {error, Root, Reason};
                     Res ->
-                        print_package_result(Res),
+                        print_package_result(Res, Opts),
                         {ok, Res}
                 catch
                     Class:Reason:Stacktrace ->
@@ -61,20 +72,17 @@ package_devices(SrcDir, OutDir) ->
         ),
     case Failures of
         [] ->
-            io:format(
-                user,
-                "Packaged ~p device namespace(s).~n",
-                [length(Results)]
-            ),
-            Results;
+            maybe_print_summary(length(Results), Opts),
+            [Res || {ok, Res} <- Results];
         _ ->
-            io:format(
-                standard_error,
-                "Failed to package device namespace(s): ~p~n",
-                [Failures]
-            ),
             erlang:error({failed_to_package_devices, Failures})
     end.
+
+%% @doc Package and load-check all configured multi-module devices.
+verify(Opts) ->
+    Results = package_devices(Opts),
+    lists:foreach(fun verify_loadable/1, Results),
+    Results.
 
 %% @doc Package a set of source files in a device namespace.
 package(Root, Files, SrcDir, OutDir) ->
@@ -124,23 +132,18 @@ source_modules(SrcDir) ->
     ).
 
 %% @doc Return root device modules that have namespace helper modules.
-device_roots(Sources) ->
-    Modules = sets:from_list([Mod || {Mod, _File} <- Sources]),
-    Candidates =
-        case preloaded_device_modules() of
-            [] ->
-                [Mod || {Mod, _File} <- Sources, is_dev_module(Mod)];
-            Preloaded ->
-                [Mod || Mod <- Preloaded, sets:is_element(Mod, Modules)]
-        end,
+device_roots(Sources, all) ->
     lists:sort(
         [
             Root
         ||
-            Root <- Candidates,
+            {Root, _File} <- Sources,
+            is_dev_module(Root),
             length(namespace_files(Root, Sources)) > 1
         ]
-    ).
+    );
+device_roots(_Sources, Roots) when is_list(Roots) ->
+    lists:sort(Roots).
 
 %% @doc Return all source files in a root device namespace.
 namespace_files(Root, Sources) ->
@@ -158,6 +161,7 @@ namespace_files(Root, Sources) ->
         ]
     ).
 
+%% @doc Sort the root module before helper modules.
 namespace_file_order(Root, Root) -> 0;
 namespace_file_order(_Root, _Mod) -> 1.
 
@@ -204,19 +208,6 @@ root_file(Root, Files) ->
     {Root, File} = lists:keyfind(Root, 1, Files),
     File.
 
-%% @doc Return locally configured preloaded device modules, if available.
-preloaded_device_modules() ->
-    try
-        [
-            Mod
-        ||
-            #{ <<"module">> := Mod } <-
-                hb_opts:get(preloaded_devices, [], #{})
-        ]
-    catch
-        _:_ -> []
-    end.
-
 %% @doc Return true if a module follows the local `dev_' naming convention.
 is_dev_module(Mod) ->
     lists:prefix("dev_", atom_to_list(Mod)).
@@ -245,10 +236,34 @@ generated_module_name(Root, Files) ->
 
 %% @doc Return a short base32 hash suitable for a generated module name.
 base32_hash(Hash) ->
-    lists:sublist(
-        [Char || Char <- hb_util:list(base32:encode(Hash)), Char =/= $=],
-        ?HASH_CHARS
-    ).
+    lists:sublist(base32_encode(Hash), ?HASH_CHARS).
+
+%% @doc Encode bytes as uppercase, unpadded RFC 4648 base32.
+base32_encode(Bin) ->
+    base32_encode(Bin, 0, 0, []).
+
+base32_encode(<<Byte, Rest/binary>>, Buffer, Bits, Acc) ->
+    emit_base32(Rest, (Buffer bsl 8) bor Byte, Bits + 8, Acc);
+base32_encode(<<>>, _Buffer, 0, Acc) ->
+    lists:reverse(Acc);
+base32_encode(<<>>, Buffer, Bits, Acc) ->
+    Index = (Buffer bsl (5 - Bits)) band 31,
+    lists:reverse([base32_char(Index) | Acc]).
+
+emit_base32(Rest, Buffer, Bits, Acc) when Bits >= 5 ->
+    Shift = Bits - 5,
+    Index = (Buffer bsr Shift) band 31,
+    Buffer1 =
+        case Shift of
+            0 -> 0;
+            _ -> Buffer band ((1 bsl Shift) - 1)
+        end,
+    emit_base32(Rest, Buffer1, Shift, [base32_char(Index) | Acc]);
+emit_base32(Rest, Buffer, Bits, Acc) ->
+    base32_encode(Rest, Buffer, Bits, Acc).
+
+base32_char(Index) ->
+    lists:nth(Index + 1, ?BASE32_ALPHABET).
 
 %% @doc Convert a source module atom into a safe generated-name component.
 sanitize_module_name(Mod) ->
@@ -384,53 +399,97 @@ find_internal_remote_call(Node, Internal, Acc) ->
             Acc
     end.
 
+%% @doc Verify a generated package BEAM can be loaded.
+verify_loadable(#{ module := Module, beam := Beam }) ->
+    code:purge(Module),
+    code:delete(Module),
+    case code:load_binary(Module, atom_to_list(Module) ++ ".beam", Beam) of
+        {module, Module} ->
+            code:purge(Module),
+            code:delete(Module),
+            ok;
+        Error ->
+            erlang:error({generated_beam_load_failed, Module, Error})
+    end.
+
 %% @doc Ensure a target artifact directory exists.
 ensure_dir(Dir) ->
     ok = filelib:ensure_dir(filename:join(Dir, ".keep")).
 
-%% @doc Print a compact package result line for the rebar3 alias.
+%% @doc Print a compact package result line for the rebar3 provider.
 print_package_result(
-    #{ root := Root, module := Module, files := Files, beam_file := BeamFile }
+    #{ root := Root, module := Module, files := Files, beam_file := BeamFile },
+    Opts
 ) ->
-    io:format(
-        user,
-        "Packaged ~p -> ~p (~p files): ~s~n",
-        [Root, Module, length(Files), BeamFile]
-    ).
+    case maps:get(print, Opts, true) of
+        true ->
+            io:format(
+                user,
+                "Packaged ~p -> ~p (~p files): ~s~n",
+                [Root, Module, length(Files), BeamFile]
+            );
+        false ->
+            ok
+    end.
 
-%%% Tests
+%% @doc Print a compact package count summary.
+maybe_print_summary(Count, Opts) ->
+    case maps:get(print, Opts, true) of
+        true -> io:format(user, "Packaged ~p device namespace(s).~n", [Count]);
+        false -> ok
+    end.
 
-%% @doc Prove a multi-module device packages into one AO-resolvable module.
-package_dev_test_test() ->
+-ifdef(TEST).
+%% @doc Prove a multi-module device packages into one local module.
+package_fixture_test() ->
+    SrcDir = fixture_src_dir(),
     OutDir = "_build/test/packaged-devices",
-    Res = package(dev_test, #{ out_dir => OutDir }),
+    Res = package(dev_example, #{ src_dir => SrcDir, out_dir => OutDir }),
     #{
         module := Module,
         beam := Beam,
         exports := Exports,
-        files := Files
+        files := Files,
+        source := Source
     } = Res,
-    ?assert(lists:keymember(dev_test_example_mod, 1, Files)),
-    ?assert(lists:member({test_func, 1}, Exports)),
-    ?assert(not lists:member({test_func, 0}, Exports)),
+    ?assert(lists:keymember(dev_example_codec, 1, Files)),
+    ?assert(lists:keymember(dev_example_state, 1, Files)),
+    ?assert(lists:member({ping, 3}, Exports)),
+    ?assert(not lists:member({encode, 1}, Exports)),
+    ?assert(not lists:member({default, 0}, Exports)),
+    ?assertEqual(Module, maps:get(
+        module,
+        package(dev_example, #{ src_dir => SrcDir, out_dir => OutDir })
+    )),
+    {ok, GeneratedSource} = file:read_file(Source),
+    ?assertEqual(nomatch, binary:match(GeneratedSource, <<"dev_example_codec:">>)),
     code:purge(Module),
     code:delete(Module),
-    code:purge(dev_test_example_mod),
-    code:delete(dev_test_example_mod),
     ?assertEqual(
         {module, Module},
         code:load_binary(Module, atom_to_list(Module) ++ ".beam", Beam)
     ),
     ?assertEqual(
-        {ok, <<"GOOD FUNCTION">>},
-        hb_ao:resolve(#{ <<"device">> => Module }, test_func, #{})
+        {ok, <<"example:pong">>},
+        Module:ping(#{}, #{}, #{})
     ),
-    ?assertEqual(
-        ["dev_test:test_func"],
-        hb_format:trace_to_list([{Module, test_func, 1, []}])
-    ),
-    ?assertEqual(false, code:is_loaded(dev_test_example_mod)),
-    ?assertEqual(
-        Module,
-        maps:get(module, package(dev_test, #{ out_dir => OutDir }))
-    ).
+    code:purge(Module),
+    code:delete(Module).
+
+%% @doc Prove verification packages and load-checks configured devices.
+verify_fixture_test() ->
+    Res =
+        verify(#{
+            src_dir => fixture_src_dir(),
+            out_dir => "_build/test/verified-devices",
+            roots => [dev_example],
+            print => false
+        }),
+    ?assertMatch([#{ root := dev_example }], Res).
+
+fixture_src_dir() ->
+    case filelib:is_dir("fixtures/example/src") of
+        true -> "fixtures/example/src";
+        false -> "apps/hb_device/fixtures/example/src"
+    end.
+-endif.
