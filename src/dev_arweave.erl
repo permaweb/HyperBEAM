@@ -4,6 +4,7 @@
 %%% The node(s) that are used to query data may be configured by altering the
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
+-hb_device(<<"arweave@2.9">>).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).

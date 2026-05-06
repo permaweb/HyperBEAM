@@ -257,8 +257,7 @@ rebar3 shell --eval "hb:start_mainnet(#{
   key_location => 'path/to/my/wallet.key',
   p4_pricing-device => '~simple-pay@1.0',
   p4_ledger-device => '~simple-pay@1.0',
-  simple_pay_price => 0.01,
-  preloaded_devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler']
+  simple_pay_price => 0.01
 })."
 
 ```
@@ -274,8 +273,7 @@ rebar3 shell --eval "hb:start_mainnet(#{
   key_location => 'path/to/my/wallet.key',
   p4_pricing-device => '~simple-pay@1.0',
   p4_ledger-device => '~simple-pay@1.0',
-  simple_pay_price => 0.05,
-  preloaded_devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler', '~snp@1.0']
+  simple_pay_price => 0.05
 })."
 
 ```

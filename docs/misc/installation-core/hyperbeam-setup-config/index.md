@@ -24,7 +24,9 @@ Key properties of messages:
 
 ## Devices
 
-HyperBEAM supports numerous devices, each enabling different services. There are approximately 25 different devices included in the preloaded_devices of a HyperBEAM node.
+HyperBEAM supports numerous devices, each enabling different services. The base
+build packages local `dev_*` namespaces into signed implementation messages and
+stores them in the configured `preloaded_store`.
 
 ### Key Preloaded Devices
 
@@ -59,4 +61,4 @@ Each HyperBEAM node is configured using the `~meta@1.0` device, which provides a
 
 - [Setup HyperBEAM](setup.md): Instructions for installing and running HyperBEAM
 - [Configuration](configuration.md): How to configure your HyperBEAM installation
-- [Testing](testing.md): Run tests to verify your installation 
+- [Testing](testing.md): Run tests to verify your installation

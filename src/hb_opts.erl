@@ -207,71 +207,14 @@ raw_default_message() ->
         %% ourselves as a scheduler on the network.
         %% Default: 7 days.
         <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
-        %% Preloaded devices for the node to use. These names override
-        %% resolution of devices via ID to the default implementations.
-        <<"preloaded-devices">> => [
-            #{<<"name">> => <<"arweave@2.9">>, <<"module">> => dev_arweave},
-            #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
-            #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
-            #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
-            #{<<"name">> => <<"b32-name@1.0">>, <<"module">> => dev_b32_name},
-            #{<<"name">> => <<"blacklist@1.0">>, <<"module">> => dev_blacklist},
-            #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
-            #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
-            #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
-            #{<<"name">> => <<"cacheviz@1.0">>, <<"module">> => dev_cacheviz},
-            #{<<"name">> => <<"cookie@1.0">>, <<"module">> => dev_codec_cookie},
-            #{<<"name">> => <<"cron@1.0">>, <<"module">> => dev_cron},
-            #{<<"name">> => <<"dedup@1.0">>, <<"module">> => dev_dedup},
-            #{<<"name">> => <<"delegated-compute@1.0">>, <<"module">> => dev_delegated_compute},
-            #{<<"name">> => <<"faff@1.0">>, <<"module">> => dev_faff},
-            #{<<"name">> => <<"flat@1.0">>, <<"module">> => dev_codec_flat},
-            #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
-            #{<<"name">> => <<"gzip@1.0">>, <<"module">> => dev_gzip},
-            #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
-            #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
-            #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
-            #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
-            #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
-            #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
-            #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
-            #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
-            #{<<"name">> => <<"local-name@1.0">>, <<"module">> => dev_local_name},
-            #{<<"name">> => <<"location@1.0">>, <<"module">> => dev_location},
-            #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
-            #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
-            #{<<"name">> => <<"manifest@1.0">>, <<"module">> => dev_manifest},
-            #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
-            #{<<"name">> => <<"metering@1.0">>, <<"module">> => dev_metering},
-            #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
-            #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
-            #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
-            #{<<"name">> => <<"name@1.0">>, <<"module">> => dev_name},
-            #{<<"name">> => <<"node-process@1.0">>, <<"module">> => dev_node_process},
-            #{<<"name">> => <<"p4@1.0">>, <<"module">> => dev_p4},
-            #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
-            #{<<"name">> => <<"poda@1.0">>, <<"module">> => dev_poda},
-            #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
-            #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
-            #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
-            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
-            #{<<"name">> => <<"rate-limit@1.0">>, <<"module">> => dev_rate_limit},
-            #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
-            #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
-            #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
-            #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
-            #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
-            #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
-            #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
-            #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
-            #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
-            #{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
-            #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
-            #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
-            #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
-        ],
+        %% Generated local store and metadata for bootstrapping base devices.
+        <<"preloaded-store">> => hb_device_preload:default_store(),
+        <<"preloaded-device-metadata">> =>
+            hb_device_preload:default_metadata_file(),
+        <<"device-store">> => #{
+            <<"store-module">> => hb_store_volatile,
+            <<"name">> => <<"device-cache">>
+        },
         %% Default execution cache control options
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"cache-lookup-hueristics">> => false,
@@ -334,7 +277,8 @@ raw_default_message() ->
             initrd, append,
             vmm_type, guest_features
         ],
-        <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
+        <<"name-resolvers">> =>
+            hb_device_preload:name_resolvers(?DEFAULT_NAME_RESOLVERS),
         <<"routes">> => [
             %% Local CU routes.
             #{
@@ -722,12 +666,13 @@ path_to_device(Path) ->
 
 %% @doc Convert a file extension to a device name.
 extension_to_device(Ext) ->
-    extension_to_device(Ext, ?MODULE:get(preloaded_devices, [], default_message())).
-extension_to_device(_, []) -> {error, not_found};
-extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
-    case binary:match(Name, Ext) of
-        nomatch -> extension_to_device(Ext, Rest);
-        {0, _} -> {ok, Name}
+    case Ext of
+        <<"flat">> -> {ok, <<"flat@1.0">>};
+        <<"json">> -> {ok, <<"json@1.0">>};
+        <<"structured">> -> {ok, <<"structured@1.0">>};
+        <<"ans104">> -> {ok, <<"ans104@1.0">>};
+        <<"httpsig">> -> {ok, <<"httpsig@1.0">>};
+        _ -> {error, not_found}
     end.
 
 %% @doc Parse a given binary with a device (defaulting to `flat@1.0') into a

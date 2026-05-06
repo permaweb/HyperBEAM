@@ -5,6 +5,7 @@
 %%% and node identity cloning. All operations are protected by hardware 
 %%% commitment and encryption.
 -module(dev_green_zone).
+-hb_device(<<"greenzone@1.0">>).
 -export([info/1, info/3, join/3, init/3, become/3, key/3, is_trusted/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -82,7 +83,7 @@ info(_Base, _Req, _Opts) ->
 %%
 %% This function defines the baseline security requirements for nodes in a green zone:
 %% 1. Restricts loading of remote devices and only allows trusted signers
-%% 2. Limits to preloaded devices from the initiating machine
+%% 2. Restricts device loading to trusted local or remote implementations
 %% 3. Enforces specific store configuration
 %% 4. Prevents route changes from the defaults
 %% 5. Requires matching hooks across all peers
@@ -97,7 +98,6 @@ default_zone_required_opts(_Opts) ->
         % <<"trusted-device-signers">> =>
         %     hb_opts:get(trusted_device_signers, [], Opts),
         % <<"load-remote-devices">> => hb_opts:get(load_remote_devices, false, Opts),
-        % <<"preloaded-devices">> => hb_opts:get(preloaded_devices, [], Opts),
         % % <<"store">> => hb_opts:get(store, [], Opts),
         % <<"routes">> => hb_opts:get(routes, [], Opts),
         % <<"on">> => hb_opts:get(on, undefined, Opts),

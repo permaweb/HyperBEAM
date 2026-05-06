@@ -6,4 +6,5 @@
 init(State0) ->
     {ok, State1} = hb_device_prv_package:init(State0),
     {ok, State2} = hb_device_prv_verify:init(State1),
-    {ok, State2}.
+    {ok, State3} = hb_device_prv_preload:init(State2),
+    {ok, State3}.

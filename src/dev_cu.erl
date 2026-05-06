@@ -1,4 +1,5 @@
 -module(dev_cu).
+-hb_device(<<"compute@1.0">>).
 -export([push/2, execute/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").

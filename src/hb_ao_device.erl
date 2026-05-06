@@ -264,8 +264,8 @@ load(ID, Opts) when ?IS_ID(ID) ->
             % Device resolution has returned a candidate message ID to
             % us. Verify that the device is trusted, compatible, and
             % then load it if so.
-            TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
-            Signers = hb_message:signers(Msg, Opts),
+            TrustedSigners = device_trusted_signers(Msg, Opts),
+            Signers = device_signers(Msg, Opts),
             Trusted =
                 lists:any(
                     fun(Signer) -> lists:member(Signer, TrustedSigners) end,
@@ -287,14 +287,13 @@ load(ID, Opts) when ?IS_ID(ID) ->
                             case verify_device_compatibility(Msg, Opts) of
                                 ok ->
                                     ModName =
-                                        hb_util:key_to_atom(
+                                        module_name_to_atom(
                                             hb_maps:get(
                                                 <<"module-name">>,
                                                 Msg,
                                                 undefined,
                                                 Opts
-                                            ),
-                                            new_atoms
+                                            )
                                         ),
                                     BEAMCode =
                                         case hb_maps:find(<<"body">>, Msg, Opts) of
@@ -308,7 +307,7 @@ load(ID, Opts) when ?IS_ID(ID) ->
                                                 )
                                         end,
                                     LoadRes =
-                                        erlang:load_module(
+                                        ensure_device_module_loaded(
                                             ModName,
                                             BEAMCode
                                         ),
@@ -341,12 +340,22 @@ load(ID, Opts) ->
             true -> ID;
             false -> hb_ao:normalize_key(ID)
         end,
-    case lists:search(
-        fun (#{ <<"name">> := Name }) -> Name =:= NormKey end,
-        Preloaded = hb_opts:get(preloaded_devices, [], Opts)
-    ) of
-        false -> {error, {module_not_admissable, NormKey, Preloaded}};
-        {value, #{ <<"module">> := Mod }} -> load(Mod, Opts)
+    case read_cached_device_module(NormKey, Opts) of
+        {ok, Mod} ->
+            {ok, Mod};
+        {error, not_found} ->
+            case hb_device_preload:resolve_name(NormKey, Opts) of
+                {ok, SpecID} ->
+                    case load(SpecID, Opts) of
+                        {ok, Mod} ->
+                            cache_device_module(NormKey, Mod, Opts),
+                            {ok, Mod};
+                        {error, _} = Error ->
+                            Error
+                    end;
+                not_found ->
+                    {error, {device_name_not_found, NormKey}}
+            end
     end.
 
 %% @doc Verify that a device is compatible with the current machine.
@@ -397,38 +406,150 @@ verify_device_compatibility(Msg, Opts) ->
         _ -> {error, {failed_requirements, FailedToMatch}}
     end.
 
--define(DEV_CACHE_PREFIX, <<"~hyperbeam@live/devices/">>).
+-define(DEV_CACHE_PREFIX, <<"devices/">>).
 %% @doc Return the local module name used to evaluate messages with a given
 %% device type.
 find_device_implementation(DevRef, Opts) ->
+    case read_cached_device_module(DevRef, Opts) of
+        {ok, Module} ->
+            {ok, Module};
+        {error, not_found} ->
+            case find_preloaded_device_implementation(DevRef, Opts) of
+                {ok, DeviceMsg} ->
+                    {ok, DeviceMsg};
+                {error, _} ->
+                    find_remote_device_implementation(DevRef, Opts)
+            end
+    end.
+
+%% @doc Find a signed implementation message in the local preloaded store.
+find_preloaded_device_implementation(DevRef, Opts) ->
+    PreloadOpts =
+        (hb_device_preload:effective_opts(Opts))#{
+            <<"commitment-device">> => dev_codec_httpsig
+        },
+    case dev_match:all(#{ <<"implements-device">> => DevRef }, #{}, PreloadOpts) of
+        {ok, Matches} ->
+            load_first_device_implementation(lists:sort(Matches), PreloadOpts);
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Read the first BEAM implementation message from a candidate ID list.
+load_first_device_implementation([], _Opts) ->
+    {error, not_found};
+load_first_device_implementation([ID | Rest], Opts) ->
+    case read_preloaded_device_implementation(ID, Opts) of
+        {ok, Msg} -> {ok, Msg};
+        {error, not_found} ->
+            load_first_device_implementation(Rest, Opts)
+    end.
+
+%% @doc Read just the keys needed to load a preloaded BEAM implementation.
+read_preloaded_device_implementation(ID, Opts) ->
+    maybe
+        {ok, <<"application/beam">>} ?=
+            hb_cache:read([ID, <<"content-type">>], Opts),
+        {ok, ModuleName} ?= hb_cache:read([ID, <<"module-name">>], Opts),
+        {ok, Beam} ?= hb_cache:read([ID, <<"body">>], Opts),
+        {ok, RequiredOTP} ?=
+            hb_cache:read([ID, <<"requires-otp-release">>], Opts),
+        {ok,
+            #{
+                <<"content-type">> => <<"application/beam">>,
+                <<"module-name">> => ModuleName,
+                <<"body">> => Beam,
+                <<"requires-otp-release">> => RequiredOTP,
+                <<"priv">> => #{
+                    <<"device-signers">> => preloaded_device_signers(Opts),
+                    <<"trusted-device-signers">> =>
+                        preloaded_device_trusted_signers(Opts)
+                }
+            }}
+    else
+        _ -> {error, not_found}
+    end.
+
+%% @doc Return signers for a loaded device message.
+device_signers(#{ <<"priv">> := #{ <<"device-signers">> := Signers } }, _Opts) ->
+    Signers;
+device_signers(Msg, Opts) ->
+    hb_message:signers(Msg, Opts).
+
+%% @doc Return trust roots for a loaded device message.
+device_trusted_signers(
+    #{ <<"priv">> := #{ <<"trusted-device-signers">> := Signers } },
+    _Opts
+) ->
+    Signers;
+device_trusted_signers(_Msg, Opts) ->
+    hb_device_preload:trusted_signers(Opts).
+
+%% @doc Preserve generated module name case when converting to an atom.
+module_name_to_atom(ModName) when is_atom(ModName) ->
+    ModName;
+module_name_to_atom(ModName) when is_binary(ModName) ->
+    binary_to_atom(ModName).
+
+%% @doc Load a packaged device module if its content-addressed module name is
+%% not already present in the VM.
+ensure_device_module_loaded(ModName, BEAMCode) ->
+    case code:is_loaded(ModName) of
+        false ->
+            code:load_binary(ModName, atom_to_list(ModName) ++ ".beam", BEAMCode);
+        _ -> {module, ModName}
+    end.
+
+%% @doc Return the signer recorded in the generated preload metadata.
+preloaded_device_signers(Opts) ->
+    case maps:get(<<"signer">>, hb_device_preload:metadata(Opts), undefined) of
+        undefined -> [];
+        Signer -> [Signer]
+    end.
+
+%% @doc Trust the configured local preload store signer for preload artifacts.
+preloaded_device_trusted_signers(Opts) ->
+    unique_signers(
+        preloaded_device_signers(Opts) ++ hb_device_preload:trusted_signers(Opts)
+    ).
+
+unique_signers(Signers) ->
+    lists:reverse(lists:foldl(
+        fun(Signer, Acc) ->
+            case lists:member(Signer, Acc) of
+                true -> Acc;
+                false -> [Signer | Acc]
+            end
+        end,
+        [],
+        Signers
+    )).
+
+%% @doc Resolve a device implementation through the configured remote path.
+find_remote_device_implementation(DevRef, Opts) ->
     case hb_opts:get(load_remote_devices, false, Opts) of
         false ->
             {error, remote_devices_disabled};
         true ->
-            Store = device_store(Opts),
-            case hb_store:read(
-                Store,
-                <<(?DEV_CACHE_PREFIX)/binary, DevRef/binary>>,
-                Opts
-            ) of
-                {ok, Device} ->
-                    {ok, hb_util:atom(Device)};
+            case hb_gateway_client:device(DevRef, Opts) of
+                {ok, DeviceMsg} -> {ok, DeviceMsg};
                 _ ->
-                    % If the device is not already loaded into the `device-store`,
-                    % load it from the gateway store and cache it.
-                    case hb_gateway_client:device(DevRef, Opts) of
-                        {ok, DeviceMsg} -> {ok, DeviceMsg};
-                        _ ->
-                            {
-                                error,
-                                <<
-                                    "Device `",
-                                    DevRef/binary,
-                                    "` not loadable on this node."
-                                >>
-                            }
-                    end
+                    {
+                        error,
+                        <<
+                            "Device `",
+                            DevRef/binary,
+                            "` not loadable on this node."
+                        >>
+                    }
             end
+    end.
+
+%% @doc Read a cached local module name for a device reference.
+read_cached_device_module(DevRef, Opts) ->
+    case hb_store:read(device_store(Opts), device_cache_key(DevRef), Opts) of
+        {ok, Device} -> {ok, hb_util:atom(Device)};
+        _ -> {error, not_found}
     end.
 
 %% @doc Cache the local module name used to evaluate messages with a given
@@ -436,13 +557,24 @@ find_device_implementation(DevRef, Opts) ->
 cache_device_module(ID, ModName, Opts) ->
     hb_store:write(
         device_store(Opts),
-        #{ <<(?DEV_CACHE_PREFIX)/binary, ID/binary>> => hb_util:bin(ModName) },
+        #{ device_cache_key(ID) => hb_util:bin(ModName) },
         Opts
     ).
 
+%% @doc Return the cache key for a device reference.
+device_cache_key(ID) ->
+    <<(?DEV_CACHE_PREFIX)/binary, (hb_util:bin(ID))/binary>>.
+
 %% @doc Return the configured store for live device metadata.
 device_store(Opts) ->
-    hb_opts:get(device_store, hb_opts:get(store, [], Opts), Opts).
+    hb_opts:get(
+        device_store,
+        #{
+            <<"store-module">> => hb_store_volatile,
+            <<"name">> => <<"device-cache">>
+        },
+        Opts
+    ).
 
 %% @doc Get the info map for a device, optionally giving it a message if the
 %% device's info function is parameterized by one.
@@ -523,3 +655,59 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
 %% implement the `set' key, which returns a `Result' with the values changed
 %% according to the `Request' passed to it.
 default() -> dev_message.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+%% @doc Load and execute a packaged fixture device through the preload store.
+preloaded_device_resolve_test_() ->
+    {timeout, 60, fun() ->
+        StoreDir = "_build/test/preloaded-device-store",
+        MetadataFile = "_build/test/preloaded-device-metadata.eterm",
+        Metadata =
+            hb_device_preloader:build(#{
+                src_dir => hb_device_fixture_src_dir(),
+                out_dir => "_build/test/preloaded-device-packages",
+                store_dir => StoreDir,
+                metadata_file => MetadataFile,
+                roots => [dev_example],
+                key => "_build/test/preload-key.json",
+                print => false
+            }),
+        Store = maps:get(<<"store">>, Metadata),
+        Signer = maps:get(<<"signer">>, Metadata),
+        DeviceStore = #{
+            <<"store-module">> => hb_store_volatile,
+            <<"name">> => <<"preloaded-device-resolve-test">>
+        },
+        Opts = #{
+            <<"preloaded-store">> => Store,
+            <<"preloaded-device-metadata">> => MetadataFile,
+            <<"trusted-device-signers">> => [Signer],
+            <<"device-store">> => DeviceStore
+        },
+        code:purge(dev_example_codec),
+        code:delete(dev_example_codec),
+        ?assertEqual(false, code:is_loaded(dev_example_codec)),
+        ?assertMatch({ok, _}, load(<<"example@1.0">>, Opts)),
+        ?assertMatch(
+            {ok, << "example:pong" >>},
+            hb_ao:resolve(
+                #{ <<"device">> => <<"example@1.0">> },
+                #{ <<"path">> => <<"ping">> },
+                Opts
+            )
+        ),
+        ?assertEqual(false, code:is_loaded(dev_example_codec)),
+        ?assertMatch(
+            {ok, <<"_hb_device_dev_example_", _/binary>>},
+            hb_store:read(DeviceStore, <<"devices/example@1.0">>, Opts)
+        )
+    end}.
+
+hb_device_fixture_src_dir() ->
+    case filelib:is_dir("apps/hb_device/fixtures/example/src") of
+        true -> "apps/hb_device/fixtures/example/src";
+        false -> "../hb_device/fixtures/example/src"
+    end.
+-endif.

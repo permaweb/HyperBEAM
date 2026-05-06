@@ -547,6 +547,10 @@ set_default_opts(Opts) ->
                 Stores;
             PassedStore -> PassedStore
         end,
+    hb_store:start(
+        hb_opts:get(preloaded_store, hb_device_preload:default_store(), Opts)
+    ),
+    hb_store:start(hb_opts:get(device_store, [], Opts)),
     ?event({set_default_opts,
         {given, TempOpts},
         {port, Port},

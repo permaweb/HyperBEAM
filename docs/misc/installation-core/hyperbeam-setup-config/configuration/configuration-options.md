@@ -78,7 +78,9 @@ These options control how HyperBEAM manages devices.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `preloaded_devices` | Map | (see code) | Devices for the node to use, overriding resolution via ID |
+| `preloaded_store` | Store | Filesystem store | Local signed device specs and implementations to check before remote loading |
+| `preloaded_device_metadata` | Path | `_build/default/preloaded-device-metadata.eterm` | Generated name resolver metadata for the preload store |
+| `device_store` | Store | Volatile store | Runtime cache of resolved device names and loaded module names |
 | `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
 | `devices` | List | [] | Additional devices to load |
 
@@ -110,4 +112,4 @@ These options control debugging and development features.
 
 ## Complete Option List
 
-For the most up-to-date list of configuration options, refer to the `default_message/0` function in the `hb_opts` module in the HyperBEAM source code. 
+For the most up-to-date list of configuration options, refer to the `default_message/0` function in the `hb_opts` module in the HyperBEAM source code.
