@@ -336,7 +336,7 @@ write_parent(ItemID, ParentData, Type, Store, Opts) ->
     case 
         lists:member(
             ?SCOPE_PARENT, 
-            hb_maps:get(<<"copycat-scope">>, Opts, [?SCOPE_PARENT])
+            hb_opts:get(<<"copycat-scope">>, [], Opts)
         ) of
         true ->
             Entry = encode_parent_entry(ParentData, Type),
@@ -357,7 +357,7 @@ write_offset(
     case 
         lists:member(
             ?SCOPE_OFFSET, 
-            hb_maps:get(<<"copycat-scope">>, Opts, [?SCOPE_OFFSET])
+            hb_opts:get(<<"copycat-scope">>, [], Opts)
         ) of
         true ->
             Value = hb_store_arweave_offset:encode(CodecName, StartOffset, Length),
