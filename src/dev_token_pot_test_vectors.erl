@@ -4,8 +4,15 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+-define(POT_REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(POT_PRICE_SCALE, 1_000_000). % 1e6
+-define(POT_ACCUMULATOR_SCALE, (?POT_REWARD_SCALE * ?POT_PRICE_SCALE)).
+
 %%% Test Helpers: State Accessors.
 %%% ----------------------------------------------------------------------------
+
+scaled_accumulator(Numerator, Denominator) ->
+    (Numerator * ?POT_ACCUMULATOR_SCALE) div Denominator.
 
 %% @doc Get balance for an account.
 balance(Process, Wallet, Opts) when is_tuple(Wallet) ->
@@ -971,7 +978,10 @@ public_global_mint_still_drips_without_subject_test() ->
     ),
     ?assertEqual(500, dev_token_lib:balance(Process, AliceAddr, Opts)),
     ?assertEqual(7500, hb_ao:get(<<"now/minted">>, Process, Opts)),
-    ?assertEqual(7_500_000_000_000_000_000, hb_ao:get(<<"now/accumulator">>, Process, Opts)),
+    ?assertEqual(
+        scaled_accumulator(15, 2),
+        hb_ao:get(<<"now/accumulator">>, Process, Opts)
+    ),
     ?assertEqual(8000, dev_token_lib:normalized_balance(Process, AliceAddr, Opts)).
 
 %% @doc Test that invalid subject addresses are rejected before mint-device
