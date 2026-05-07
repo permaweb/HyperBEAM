@@ -19,6 +19,8 @@ info(Opts) ->
             <<"index">> => <<"index.html">>,
             <<"bundle.js">> => <<"bundle.js">>,
             <<"fonts.css">> => <<"fonts.css">>,
+            <<"favicon-light.png">> => <<"favicon-light.png">>,
+            <<"favicon-dark.png">> => <<"favicon-dark.png">>,
             <<"font-dm-sans-italic.ttf">> => <<"font-dm-sans-italic.ttf">>,
             <<"font-dm-sans-variable.ttf">> => <<"font-dm-sans-variable.ttf">>,
             <<"font-geist-mono-variable.ttf">> => <<"font-geist-mono-variable.ttf">>,
