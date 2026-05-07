@@ -62,6 +62,7 @@
     <<"undistributed-mint">>,
     <<"accumulator-remainder">>
 ]).
+-define(POT_QUANTITY_SCALE, 1_000_000_000_000_000_000). % 1e18
 
 %%% Pot Model Functions.
 
@@ -433,8 +434,16 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No `quantity' provided.">>,
                 Opts
             ),
+        QuantityScale =
+            hb_maps:get(
+                <<"quantity-scale">>,
+                Req,
+                ?POT_QUANTITY_SCALE,
+                Opts
+            ),
+        {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
         true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
-        {ok, {Address, ResourceID, Amount}}
+        {ok, {Address, ResourceID, NormalizedAmount}}
     end.
 
 %% @doc Verify a request against the resource-local `authority` policy for a
@@ -1522,3 +1531,8 @@ user(Addr, S, Opts) ->
         true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
         hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts)
     end.
+normalize_quantity(Qty, QuantityScale)
+        when is_integer(Qty), is_integer(QuantityScale), QuantityScale > 0 ->
+    {ok, (Qty * ?POT_QUANTITY_SCALE) div QuantityScale};
+normalize_quantity(_, _) ->
+    {error, invalid_quantity_or_scale}.
