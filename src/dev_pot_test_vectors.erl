@@ -14,6 +14,9 @@
 %% 2,107 raw units when evaluated once per day.
 -define(AO_CURRENT_MS_EFFECTIVE_CAP_DAYS, 93_762).
 -define(AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER, 2_107).
+-define(POT_REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(POT_PRICE_SCALE, 1_000_000). % 1e6
+-define(POT_ACCUMULATOR_SCALE, (?POT_REWARD_SCALE * ?POT_PRICE_SCALE)).
 
 %%% Test Helper Functions
 
@@ -200,6 +203,9 @@ simulate_mint3_days(Minted, Day, Days) ->
             T
         ),
     simulate_mint3_days(Minted + ToMint, Day + 1, Days).
+
+scaled_accumulator(Numerator, Denominator) ->
+    (Numerator * ?POT_ACCUMULATOR_SCALE) div Denominator.
 
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
@@ -1730,7 +1736,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S1, not_found, Opts)
     ),
     ?assertEqual(
-        2_500_000_000_000_000_000,
+        scaled_accumulator(5, 2),
         hb_maps:get(<<"accumulator">>, S1, not_found, Opts)
     ),
     % Tick 1: mint = 25, pot units = 20, accumulate 1.25 scaled with no
@@ -1745,7 +1751,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S2, not_found, Opts)
     ),
     ?assertEqual(
-        3_750_000_000_000_000_000,
+        scaled_accumulator(15, 4),
         hb_maps:get(<<"accumulator">>, S2, not_found, Opts)
     ),
     % Tick 3: mint = 12, pot units = 20, accumulate 0.6 scaled with no
@@ -1760,7 +1766,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S3, not_found, Opts)
     ),
     ?assertEqual(
-        4_350_000_000_000_000_000,
+        scaled_accumulator(87, 20),
         hb_maps:get(<<"accumulator">>, S3, not_found, Opts)
     ),
     % Tick 4: mint = 6, pot units = 20, accumulate 0.3 scaled with no
@@ -1775,7 +1781,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S4, not_found, Opts)
     ),
     ?assertEqual(
-        4_650_000_000_000_000_000,
+        scaled_accumulator(93, 20),
         hb_maps:get(<<"accumulator">>, S4, not_found, Opts)
     ),
     % Tick 5: mint = 3, pot units = 20, accumulate 0.15 scaled with no
@@ -1790,7 +1796,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S5, not_found, Opts)
     ),
     ?assertEqual(
-        4_800_000_000_000_000_000,
+        scaled_accumulator(24, 5),
         hb_maps:get(<<"accumulator">>, S5, not_found, Opts)
     ),
     S6 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S5, Opts),
@@ -1806,7 +1812,7 @@ mint_distribution_test() ->
         hb_maps:get(<<"undistributed-mint">>, S7, not_found, Opts)
     ),
     ?assertEqual(
-        5_000_000_000_000_000_000,
+        scaled_accumulator(5, 1),
         hb_maps:get(<<"accumulator">>, S7, not_found, Opts)
     ).
 
