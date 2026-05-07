@@ -4,11 +4,79 @@
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1" />
-		<title>HyperBEAM</title>
-		<link rel="stylesheet" href="/~hyperbuddy@1.0/fonts.css">
+		<link rel="icon" href="favicon-light.png" type="image/png" media="(prefers-color-scheme: light)" />
+		<link rel="icon" href="favicon-dark.png" type="image/png" media="(prefers-color-scheme: dark)" />
+		<title>Hyperbuddy</title>
 	</head>
 	<body>
 		<div id="root"></div>
+		<div id="app-loader">
+			<img id="loader-icon" src="favicon-light.png" alt="Loading"></img>
+		</div>
+		<style>
+			#app-loader {
+				position: fixed;
+				top: 50%;
+				left: 50%;
+				transform: translate(-50%, -50%);
+				z-index: 9999;
+			}
+
+			#app-loader img {
+				width: 35px;
+			}
+		</style>
+		<script>
+			const themeBackgrounds = {
+				'light-primary': '#f5f5f5',
+				'dark-primary': '#141414',
+			};
+
+			const preferesColorSchemeDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark-primary' : 'light-primary';
+
+			function getTheme() {
+				try {
+					const settings = localStorage.getItem('settings');
+					if (settings) {
+						const parsed = JSON.parse(settings);
+
+						if (parsed.theme === 'system') {
+							return preferesColorSchemeDark;			
+						}
+
+						return parsed.theme;
+					}
+				} catch (e) {
+					console.error(e);
+				}
+
+				return preferesColorSchemeDark
+			}
+
+			const theme = getTheme();
+			const backgroundColor = themeBackgrounds[theme] || themeBackgrounds['dark'];
+			document.body.style.background = backgroundColor;
+
+			const isDarkTheme = theme.startsWith('dark');
+			const iconColor = isDarkTheme ? '#EBEBEB' : '#444444';
+			const loaderIcon = document.querySelector('#app-loader span');
+			const loaderImage = document.getElementById('loader-icon');
+
+			if (loaderIcon) {
+				loaderIcon.style.color = iconColor;
+			}
+
+			if (loaderImage) {
+				loaderImage.src = isDarkTheme ? 'favicon-dark.png' : 'favicon-light.png';
+			}
+
+			window.hideAppLoader = function () {
+				const loader = document.getElementById('app-loader');
+				if (loader) {
+					loader.style.display = 'none';
+				}
+			};
+		</script>
 		<script type="module" src="/~hyperbuddy@1.0/bundle.js"></script>
 	</body>
 </html>

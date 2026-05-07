@@ -116,7 +116,7 @@ p {
 
 @media (prefers-color-scheme: dark) {
     body {
-        background: #1b1b1b;
+        background: #141414;
     }
 
     #main, #number {
