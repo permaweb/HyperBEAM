@@ -839,19 +839,19 @@ drip_user_with_zero_quantity_test() ->
 
 raw_18_decimal_price_weight_deposit_distributes_scaled_reward_test() ->
     Alice = <<"alice">>,
-    ResourceStETH = <<"steth">>,
+    Resource18Decimal = <<"18-decimal-asset">>,
     Opts = #{},
     Quantity = 10_000_000_000_000_000,
     Weight = 2300,
     S0 =
         pot_state_empty(
-            [ResourceStETH],
+            [Resource18Decimal],
             ?AO_TOTAL_SUPPLY,
             ?AO_MS_STEP_NUMERATOR,
             ?AO_MINT_PROP_DENOMINATOR
         ),
-    S1 = dev_pot:register_resource(ResourceStETH, Weight, S0, Opts),
-    S2 = dev_pot:deposit(Alice, ResourceStETH, Quantity, S1, Opts),
+    S1 = dev_pot:register_resource(Resource18Decimal, Weight, S0, Opts),
+    S2 = dev_pot:deposit(Alice, Resource18Decimal, Quantity, S1, Opts),
     S3 = dev_pot:test_drip(S2, #{ <<"t">> => ?AO_ONE_DAY_MS }, Opts),
     Minted = hb_maps:get(<<"minted">>, S3, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts),
@@ -1668,31 +1668,31 @@ very_large_deposit_test() ->
 quantity_scale_normalizes_very_large_deposit_test() ->
     Alice = <<"alice">>,
     Oracle = <<"oracle">>,
-    ResourceBTC = <<"btc">>,
+    ResourceLarge8Decimal = <<"large-8-decimal-asset">>,
     Opts = #{},
-    BtcScale = 100_000_000,
-    FullBtcSupply = 21_000_000 * BtcScale,
-    BtcAtOneMillionUsdWeight = 1_000_000 * ?POT_PRICE_SCALE,
-    NormalizedFullBtcSupply = 21_000_000 * ?POT_QUANTITY_SCALE,
-    NormalizedOneBtc = ?POT_QUANTITY_SCALE,
-    S0 = pot_state_empty([ResourceBTC]),
+    AssetScale = 100_000_000,
+    FullAssetSupply = 21_000_000 * AssetScale,
+    LargePriceWeight = 1_000_000 * ?POT_PRICE_SCALE,
+    NormalizedFullAssetSupply = 21_000_000 * ?POT_QUANTITY_SCALE,
+    NormalizedOneAsset = ?POT_QUANTITY_SCALE,
+    S0 = pot_state_empty([ResourceLarge8Decimal]),
     S1 =
         hb_ao:set(
             S0,
-            <<"/resources/btc/authority">>,
+            <<"/resources/large-8-decimal-asset/authority">>,
             [Oracle],
             Opts
         ),
-    S2 = dev_pot:register_resource(ResourceBTC, BtcAtOneMillionUsdWeight, S1, Opts),
+    S2 = dev_pot:register_resource(ResourceLarge8Decimal, LargePriceWeight, S1, Opts),
     S3 =
         dev_pot:deposit(
             S2,
             #{
                 <<"body">> => #{
                     <<"address">> => Alice,
-                    <<"resource">> => ResourceBTC,
-                    <<"quantity">> => FullBtcSupply,
-                    <<"quantity-scale">> => BtcScale,
+                    <<"resource">> => ResourceLarge8Decimal,
+                    <<"quantity">> => FullAssetSupply,
+                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
@@ -1700,11 +1700,11 @@ quantity_scale_normalizes_very_large_deposit_test() ->
         ),
     ?assert(is_map(S3)),
     ?assertEqual(
-        NormalizedFullBtcSupply,
-        dev_pot:get_deposit(Alice, ResourceBTC, S3, Opts)
+        NormalizedFullAssetSupply,
+        dev_pot:get_deposit(Alice, ResourceLarge8Decimal, S3, Opts)
     ),
     ?assertEqual(
-        NormalizedFullBtcSupply * BtcAtOneMillionUsdWeight,
+        NormalizedFullAssetSupply * LargePriceWeight,
         hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts)
     ),
     S4 =
@@ -1713,9 +1713,9 @@ quantity_scale_normalizes_very_large_deposit_test() ->
             #{
                 <<"body">> => #{
                     <<"address">> => Alice,
-                    <<"resource">> => ResourceBTC,
-                    <<"quantity">> => BtcScale,
-                    <<"quantity-scale">> => BtcScale,
+                    <<"resource">> => ResourceLarge8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
@@ -1723,11 +1723,11 @@ quantity_scale_normalizes_very_large_deposit_test() ->
         ),
     ?assert(is_map(S4)),
     ?assertEqual(
-        NormalizedFullBtcSupply - NormalizedOneBtc,
-        dev_pot:get_deposit(Alice, ResourceBTC, S4, Opts)
+        NormalizedFullAssetSupply - NormalizedOneAsset,
+        dev_pot:get_deposit(Alice, ResourceLarge8Decimal, S4, Opts)
     ),
     ?assertEqual(
-        (NormalizedFullBtcSupply - NormalizedOneBtc) * BtcAtOneMillionUsdWeight,
+        (NormalizedFullAssetSupply - NormalizedOneAsset) * LargePriceWeight,
         hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
     ).
 
