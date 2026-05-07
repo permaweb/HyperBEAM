@@ -694,15 +694,43 @@ normalize_default(Default) -> Default.
 config_lookup(Key, Default, _Opts) ->
     maps:get(canonical_key(Key), default_message(), Default).
 
-%% @doc Parse a `flat@1.0' encoded file into a map, matching the types of the 
-%% keys to those in the default message.
+%% @doc Parse a configuration source into a map, matching the types of the
+%% keys to those in the default message. The source may be a single path or
+%% a comma-separated list of paths. When multiple paths are provided, each
+%% is loaded individually (with extension-based parsing and type coercion
+%% applied per source) and the results are deep-merged left-to-right, so
+%% sources on the right override sources on the left.
 load(Path) -> load(Path, #{}).
 load(Path, Opts) ->
+    case binary:split(hb_util:bin(Path), <<",">>, [global]) of
+        [_] -> load_path(Path, Opts);
+        Parts ->
+            Trimmed =
+                lists:filter(
+                    fun(P) -> P =/= <<>> end,
+                    [iolist_to_binary(string:trim(P)) || P <- Parts]
+                ),
+            load_paths(Trimmed, Opts)
+    end.
+
+%% @doc Load a single configuration source from disk.
+load_path(Path, Opts) ->
     {ok, Device} = path_to_device(Path),
     case file:read_file(Path) of
         {ok, Bin} ->
             load_bin(Device, Bin, Opts);
         _ -> {error, not_found}
+    end.
+
+%% @doc Load each configuration source in turn, deep-merging the results in
+%% left-to-right order. Fails fast if any individual source cannot be loaded.
+load_paths(Paths, Opts) -> load_paths(Paths, Opts, #{}).
+load_paths([], _Opts, Acc) -> {ok, Acc};
+load_paths([P | Rest], Opts, Acc) ->
+    case load_path(P, Opts) of
+        {ok, Map} ->
+            load_paths(Rest, Opts, hb_util:deep_merge(Acc, Map, Opts));
+        {error, _} = Err -> Err
     end.
 
 %% @doc Convert a path to a device from its file extension. If no extension is
@@ -1034,6 +1062,36 @@ load_json_test() ->
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
     % Ensure that a store with `ao-types' is loaded correctly.
+    ?assertMatch(
+        [#{ <<"store-module">> := hb_store_fs }|_],
+        hb_maps:get(<<"store">>, Conf)
+    ).
+
+load_multi_precedence_test() ->
+    %% Two sources via a comma-separated path. Each is parsed and type-coerced
+    %% individually, then deep-merged left-to-right so the right-hand source
+    %% overrides shared keys.
+    A = "test/config-multi-a.flat",
+    B = "test/config-multi-b.flat",
+    ok = file:write_file(A, <<"port: 1111\nshared: left\n">>),
+    ok = file:write_file(B, <<"shared: right\nextra: only-right\n">>),
+    try
+        {ok, Conf} = load(A ++ "," ++ B, #{}),
+        ?assertEqual(1111, hb_maps:get(<<"port">>, Conf)),
+        ?assertEqual(<<"right">>, hb_maps:get(<<"shared">>, Conf)),
+        ?assertEqual(<<"only-right">>, hb_maps:get(<<"extra">>, Conf))
+    after
+        file:delete(A),
+        file:delete(B)
+    end.
+
+load_multi_mixed_extensions_test() ->
+    %% Comma-separated sources with different extensions: each is parsed by
+    %% the device implied by its own extension before being merged.
+    {ok, Conf} = load("test/config.flat,test/config.json", #{}),
+    ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
+    ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
+    ?assertEqual(9001, hb_maps:get(<<"example">>, Conf)),
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],
         hb_maps:get(<<"store">>, Conf)
