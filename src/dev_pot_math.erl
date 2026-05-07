@@ -40,7 +40,9 @@
 
 -define(MAX_EXACT_POWER_DIGITS, 1000).
 -define(FIXED_SCALE_DIGITS, [40, 60, 80]).
--define(REWARD_SCALE, 1000000000000000000).
+-define(REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(PRICE_SCALE, 1_000_000). % 1e6
+-define(ACCUMULATOR_SCALE, (?REWARD_SCALE * ?PRICE_SCALE)).
 
 minted_between(Minted, Max, PropN, PropD, LastT, T)
     when not is_integer(Minted) orelse not is_integer(Max)
@@ -172,7 +174,7 @@ drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits)
         when TotalWeightedUnits =:= 0 ->
     {Acc, ToMint, AccumulatorRemainder};
 drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits) ->
-    Numerator = (ToMint * ?REWARD_SCALE) + AccumulatorRemainder,
+    Numerator = (ToMint * ?ACCUMULATOR_SCALE) + AccumulatorRemainder,
     AccDelta = Numerator div TotalWeightedUnits,
     NewAccumulatorRemainder = Numerator rem TotalWeightedUnits,
     NewAcc = Acc + AccDelta,
@@ -184,4 +186,4 @@ drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
 drip_user(ResourceAcc, LastResourceAcc, UserQty) ->
     drip_user(0, ResourceAcc, LastResourceAcc, UserQty).
 drip_user(Balance, ResourceAcc, LastResourceAcc, UserQty) ->
-    Balance + (((ResourceAcc - LastResourceAcc) * UserQty) div ?REWARD_SCALE).
+    Balance + (((ResourceAcc - LastResourceAcc) * UserQty) div ?ACCUMULATOR_SCALE).
