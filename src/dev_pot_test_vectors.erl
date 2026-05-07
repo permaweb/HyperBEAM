@@ -14,6 +14,7 @@
 %% 2,107 raw units when evaluated once per day.
 -define(AO_CURRENT_MS_EFFECTIVE_CAP_DAYS, 93_762).
 -define(AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER, 2_107).
+-define(POT_QUANTITY_SCALE, 1_000_000_000_000_000_000). % 1e18
 -define(POT_REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
 -define(POT_PRICE_SCALE, 1_000_000). % 1e6
 -define(POT_ACCUMULATOR_SCALE, (?POT_REWARD_SCALE * ?POT_PRICE_SCALE)).
@@ -1663,6 +1664,72 @@ very_large_deposit_test() ->
     S1 = dev_pot:deposit(Alice, ResourceOxygen, LargeAmount, S0, Opts),
     ?assertEqual(LargeAmount, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     ?assertEqual(LargeAmount, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)).
+
+quantity_scale_normalizes_very_large_deposit_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    ResourceBTC = <<"btc">>,
+    Opts = #{},
+    BtcScale = 100_000_000,
+    FullBtcSupply = 21_000_000 * BtcScale,
+    BtcAtOneMillionUsdWeight = 1_000_000 * ?POT_PRICE_SCALE,
+    NormalizedFullBtcSupply = 21_000_000 * ?POT_QUANTITY_SCALE,
+    NormalizedOneBtc = ?POT_QUANTITY_SCALE,
+    S0 = pot_state_empty([ResourceBTC]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/btc/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 = dev_pot:register_resource(ResourceBTC, BtcAtOneMillionUsdWeight, S1, Opts),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceBTC,
+                    <<"quantity">> => FullBtcSupply,
+                    <<"quantity-scale">> => BtcScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertEqual(
+        NormalizedFullBtcSupply,
+        dev_pot:get_deposit(Alice, ResourceBTC, S3, Opts)
+    ),
+    ?assertEqual(
+        NormalizedFullBtcSupply * BtcAtOneMillionUsdWeight,
+        hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts)
+    ),
+    S4 =
+        dev_pot:withdraw(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceBTC,
+                    <<"quantity">> => BtcScale,
+                    <<"quantity-scale">> => BtcScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S4)),
+    ?assertEqual(
+        NormalizedFullBtcSupply - NormalizedOneBtc,
+        dev_pot:get_deposit(Alice, ResourceBTC, S4, Opts)
+    ),
+    ?assertEqual(
+        (NormalizedFullBtcSupply - NormalizedOneBtc) * BtcAtOneMillionUsdWeight,
+        hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
+    ).
 
 very_large_minted_amount_test() ->
     Alice = <<"alice">>,
