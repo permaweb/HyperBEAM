@@ -841,8 +841,8 @@ raw_18_decimal_price_weight_deposit_distributes_scaled_reward_test() ->
     Alice = <<"alice">>,
     Resource18Decimal = <<"18-decimal-asset">>,
     Opts = #{},
-    Quantity = 10_000_000_000_000_000,
-    Weight = 2300,
+    Quantity = 10_000_000_000_000_000, % 0.01 at 1e18 scale
+    Weight = 2300 * ?POT_PRICE_SCALE, % $2300
     S0 =
         pot_state_empty(
             [Resource18Decimal],
@@ -1670,9 +1670,9 @@ quantity_scale_normalizes_very_large_deposit_test() ->
     Oracle = <<"oracle">>,
     ResourceLarge8Decimal = <<"large-8-decimal-asset">>,
     Opts = #{},
-    AssetScale = 100_000_000,
-    FullAssetSupply = 21_000_000 * AssetScale,
-    LargePriceWeight = 1_000_000 * ?POT_PRICE_SCALE,
+    AssetScale = 100_000_000, % 1e8
+    FullAssetSupply = 21_000_000 * AssetScale, % 21M supply
+    LargePriceWeight = 1_000_000 * ?POT_PRICE_SCALE, % $1M
     NormalizedFullAssetSupply = 21_000_000 * ?POT_QUANTITY_SCALE,
     NormalizedOneAsset = ?POT_QUANTITY_SCALE,
     S0 = pot_state_empty([ResourceLarge8Decimal]),
@@ -1730,6 +1730,60 @@ quantity_scale_normalizes_very_large_deposit_test() ->
         (NormalizedFullAssetSupply - NormalizedOneAsset) * LargePriceWeight,
         hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
     ).
+
+sub_unit_price_8_decimal_asset_distributes_reward_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    ResourceSubUnit8Decimal = <<"sub-unit-8-decimal-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    LargeSupply = 150_000_000_000 * AssetScale, % 150B supply
+    SubUnitPriceWeight = 150_000, % $0.0015
+    NormalizedLargeSupply = 150_000_000_000 * ?POT_QUANTITY_SCALE,
+    S0 =
+        pot_state_empty(
+            [ResourceSubUnit8Decimal],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/sub-unit-8-decimal-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 = dev_pot:register_resource(ResourceSubUnit8Decimal, SubUnitPriceWeight, S1, Opts),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceSubUnit8Decimal,
+                    <<"quantity">> => LargeSupply,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertEqual(
+        NormalizedLargeSupply,
+        dev_pot:get_deposit(Alice, ResourceSubUnit8Decimal, S3, Opts)
+    ),
+    ?assertEqual(
+        NormalizedLargeSupply * SubUnitPriceWeight,
+        hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts)
+    ),
+    S4 = dev_pot:test_drip(S3, #{ <<"t">> => ?AO_ONE_DAY_MS }, Opts),
+    Minted = hb_maps:get(<<"minted">>, S4, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts),
+    ?assertEqual(0, Minted div TotalWeightedUnits),
+    ?assert(hb_maps:get(<<"accumulator">>, S4, 0, Opts) > 0),
+    ?assert(dev_pot:balance(Alice, S4, Opts) > 0).
 
 very_large_minted_amount_test() ->
     Alice = <<"alice">>,
