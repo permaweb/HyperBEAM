@@ -1,4 +1,4 @@
-# [Module dev_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cache.erl)
+# [Module dev_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_cache.erl)
 
 
 

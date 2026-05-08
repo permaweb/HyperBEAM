@@ -29,7 +29,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md), [`dev_monitor`](../resources/source-code/dev_monitor.md)):** Coordinate complex execution flows, schedule tasks, or monitor process activity.
 

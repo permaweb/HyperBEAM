@@ -110,7 +110,7 @@ These options control how HyperBEAM manages devices.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
-<!-- Complex options like preloaded_devices, devices are omitted -->
+<!-- Complex options like preloaded-store, devices are omitted -->
 
 ### Debug & Development
 
