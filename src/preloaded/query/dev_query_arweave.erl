@@ -145,11 +145,16 @@ query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
 query(#{ <<"address">> := Address }, <<"address">>, _Args, _Opts) ->
     {ok, Address};
 query(Msg, <<"fee">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"fee">>, Msg, 0, Opts)};
+    case find_field_key(<<"field-reward">>, Msg, Opts) of
+        {ok, null} -> {ok, 0};
+        {ok, Reward} -> hb_util:safe_int(Reward)
+    end;
 query(Msg, <<"quantity">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"quantity">>, Msg, 0, Opts)};
 query(Number, <<"winston">>, _Args, _Opts) when is_number(Number) ->
     {ok, Number};
+query(Number, <<"ar">>, _Args, _Opts) when is_number(Number) ->                              
+    {ok, winston_to_ar(Number)};
 query(Msg, <<"recipient">>, _Args, Opts) ->
     case find_field_key(<<"field-target">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};
@@ -650,3 +655,13 @@ explicit_ids(Args, Opts) ->
             _ -> []
         end
     ).
+
+winston_to_ar(W) when is_integer(W), W >= 0 ->                                         
+    case {W div 1000000000000, W rem 1000000000000} of                                    
+        {Whole, 0} ->                                                                     
+            hb_util:bin(io_lib:format("~B", [Whole]));                                    
+        {Whole, Frac} ->                                                                  
+            Padded = io_lib:format("~12..0B", [Frac]),                                    
+            Trimmed = string:trim(Padded, trailing, "0"),                                 
+            hb_util:bin(io_lib:format("~B.~s", [Whole, Trimmed]))                         
+    end.  
