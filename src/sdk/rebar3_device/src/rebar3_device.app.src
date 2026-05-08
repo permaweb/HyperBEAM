@@ -1,0 +1,17 @@
+{application, rebar3_device,
+    [
+        {description, "HyperBEAM device packaging rebar3 provider"},
+        {vsn, "0.1.0"},
+        {modules,
+            [
+                rebar3_device,
+                rebar3_device_args,
+                rebar3_device_prv_package,
+                rebar3_device_prv_preload,
+                rebar3_device_prv_publish,
+                rebar3_device_prv_test,
+                rebar3_device_prv_verify
+            ]},
+        {registered, []},
+        {applications, [kernel, stdlib]}
+    ]}.
