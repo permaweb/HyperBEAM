@@ -856,16 +856,13 @@ transfer_with_unclaimed_yield_test() ->
         10,
         Opts
     ),
-    % Advance time to generate yield
-    % With mint_cap=10000, mint_prop={1,2}, going from t=0 to t=1:
-    % ToMint = 10000 * (2^1 - 1^1) / 2^1 = 10000 * 1 / 2 = 5000
-    % GlobalAcc = (5000 * 10^18) / 1000 = 5 * 10^18
-    % ResourceAcc = (5 * 10^18) * 100 = 500 * 10^18
-    % Alice's yield = ((500 * 10^18 - 0) * 10) / 10^18 = 5000 tokens!
+    % By the transfer, the pot has minted 7,500 raw units. With 1,000 TWU,
+    % GlobalAcc = 7.5 * AccumulatorScale, ResourceAcc =
+    % 7.5 * AccumulatorScale * 100, and Alice's yield is 7,500.
     %?assertEqual(500, dev_token_lib:balance(Process, id(Alice), Opts)),
     % % Try to transfer 700 tokens
     % % Should fail without normalize_mint (500 < 700)
-    % % Should succeed with normalize_mint (500 + 5000 = 5500 > 700)
+    % % Should succeed with normalize_mint (500 + 7500 = 8000 > 700)
     push_request(
         Process,
         transfer_req(id(Bob), 700),

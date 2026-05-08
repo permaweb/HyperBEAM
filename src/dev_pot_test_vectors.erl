@@ -1738,7 +1738,7 @@ sub_unit_price_8_decimal_asset_distributes_reward_test() ->
     Opts = #{},
     AssetScale = 100_000_000, % 1e8
     LargeSupply = 150_000_000_000 * AssetScale, % 150B supply
-    SubUnitPriceWeight = 150_000, % $0.0015
+    SubUnitPriceWeight = 1_500, % $0.0015
     NormalizedLargeSupply = 150_000_000_000 * ?POT_QUANTITY_SCALE,
     S0 =
         pot_state_empty(
