@@ -1,4 +1,4 @@
-# [Module dev_push.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_push.erl)
+# [Module dev_push.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_push.erl)
 
 
 

@@ -1,4 +1,4 @@
-# [Module dev_dedup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_dedup.erl)
+# [Module dev_dedup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_dedup.erl)
 
 
 

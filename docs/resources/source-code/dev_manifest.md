@@ -1,4 +1,4 @@
-# [Module dev_manifest.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_manifest.erl)
+# [Module dev_manifest.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_manifest.erl)
 
 
 

@@ -11,7 +11,7 @@ HyperBEAM is built with a modular architecture to ensure scalability, maintainab
 - **HyperBEAM Core**: The main framework that orchestrates data processing, storage, and routing.
 - **Compute Unit**: Handles computational tasks and integrates with the HyperBEAM core for distributed processing.
 - **Trusted Execution Environment (TEE)**: Ensures secure execution of sensitive operations.
-- **Client Libraries**: Tools and SDKs for interacting with HyperBEAM, including the JavaScript client.
+- **Client Libraries**: Tools for interacting with HyperBEAM, including the JavaScript client.
 
 ## Getting Started
 
@@ -20,4 +20,3 @@ To explore the source code, you can clone the repository from [GitHub](https://g
 ## Navigation
 
 Use the navigation menu to dive into specific parts of the codebase. Each module includes detailed documentation, code comments, and examples to assist in understanding and contributing to the project.
-

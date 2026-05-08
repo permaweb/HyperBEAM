@@ -1,4 +1,4 @@
-# [Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cacheviz.erl)
+# [Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_cacheviz.erl)
 
 
 
