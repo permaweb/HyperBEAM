@@ -406,8 +406,9 @@ withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
     {error, <<"Withdraw amount must be an Integer.">>}.
 
 %% @doc Parse a request to modify a deposit and verify that it originates from
-%% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
-%% if the request is valid, otherwise returns `{error, Reason}'.
+%% the valid resource authority. Returns `{ok, {Address, ResourceID,
+%% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
+%% Reason}'.
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -434,6 +435,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No `quantity' provided.">>,
                 Opts
             ),
+        true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
         QuantityScale =
             hb_maps:get(
                 <<"quantity-scale">>,
@@ -442,7 +444,6 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 Opts
             ),
         {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
-        true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
         {ok, {Address, ResourceID, NormalizedAmount}}
     end.
 
