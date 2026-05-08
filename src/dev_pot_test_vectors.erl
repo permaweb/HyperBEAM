@@ -1731,6 +1731,163 @@ quantity_scale_normalizes_very_large_deposit_test() ->
         hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
     ).
 
+quantity_scale_delegation_uses_normalized_units_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    Oracle = <<"oracle">>,
+    Resource8Decimal = <<"delegated-8-decimal-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    RawTenAssets = 10 * AssetScale,
+    NormalizedTenAssets = 10 * ?POT_QUANTITY_SCALE,
+    NormalizedThreeAssets = 3 * ?POT_QUANTITY_SCALE,
+    NormalizedPointOneAsset = ?POT_QUANTITY_SCALE div 10,
+    NormalizedOneAsset = ?POT_QUANTITY_SCALE,
+    S0 = pot_state_empty([Resource8Decimal]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/delegated-8-decimal-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 = dev_pot:register_resource(Resource8Decimal, ?POT_PRICE_SCALE, S1, Opts),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => RawTenAssets,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S3, Opts)
+    ),
+    {ok, S4} =
+        dev_pot:delegate(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedThreeAssets,
+                    <<"quantity-scale">> => AssetScale
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets - NormalizedThreeAssets,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S4, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S4, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S4,
+            0,
+            Opts
+        )
+    ),
+    {ok, S5} =
+        dev_pot:delegate(
+            S4,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedPointOneAsset,
+                    <<"quantity-scale">> => AssetScale
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets - NormalizedThreeAssets - NormalizedPointOneAsset,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S5, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S5, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S5,
+            0,
+            Opts
+        )
+    ),
+    {ok, S6} =
+        dev_pot:undelegate(
+            S5,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedOneAsset,
+                    <<"quantity-scale">> => AssetScale
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets
+            - NormalizedThreeAssets
+            - NormalizedPointOneAsset
+            + NormalizedOneAsset,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S6, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset - NormalizedOneAsset,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S6, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset - NormalizedOneAsset,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S6,
+            0,
+            Opts
+        )
+    ).
+
 sub_unit_price_8_decimal_asset_distributes_reward_test() ->
     Alice = <<"alice">>,
     Oracle = <<"oracle">>,
