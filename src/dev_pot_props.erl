@@ -4,6 +4,9 @@
 
 -define(USERS, 10).
 -define(RESOURCES, 10).
+-define(POT_PRICE_SCALE, 1_000_000). % 1e6
+-define(MAX_PROP_PRICE, 100_000_000). % $100M
+-define(MAX_PROP_WEIGHT, (?MAX_PROP_PRICE * ?POT_PRICE_SCALE)).
 
 simulation_test_() ->
     [
@@ -47,7 +50,7 @@ generate_initial_state(Opts) ->
     MintCap = 21_000_000,
     PropN = 1,
     PropD = 1000,
-    StartWeight = hb_invariant:int(1, 100_000),
+    StartWeight = hb_invariant:int(1, ?MAX_PROP_WEIGHT),
     StartQty = hb_invariant:int(1, 100_000),
     StartResource = hb_invariant:pick(hb_maps:get(resources, Opts)),
     UserAddrs = hb_maps:keys(hb_maps:get(identities, Opts)),
@@ -118,7 +121,7 @@ generate_initial_state(Opts) ->
         fun(Resource, State) ->
             ResourceState = dev_pot:register_resource(
                 Resource,
-                hb_invariant:int(1, 100_000),
+                hb_invariant:int(1, ?MAX_PROP_WEIGHT),
                 State,
                 Opts
             ),
