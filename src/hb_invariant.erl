@@ -135,7 +135,7 @@
 %% be `1'. This results in the generation of a unique initial (`Base') state,
 %% node message, and request for each `run' of the state machine.
 forall(Spec) ->
-    state_machine(Spec#{ <<"length">> => hb_opts:get(length, 1, Spec) }).
+    state_machine(hb_ao:explicit_set(Spec, #{ <<"length">> => hb_opts:get(length, 1, Spec) })).
 
 %% @doc Execute a state machine with a given `Specification'. Supported keys are
 %% as follows:
@@ -163,7 +163,7 @@ state_machine(Spec) when is_map_key(<<"requests">>, Spec) ->
     Runs = hb_opts:get(runs, ?DEFAULT_RUNS, Spec),
     Length = hb_opts:get(length, ?DEFAULT_LENGTH, Spec),
     run_state_machines(
-        Spec#{
+        hb_ao:explicit_set(Spec, #{
             seed =>
                 hb_opts:get(
                     seed,
@@ -180,7 +180,7 @@ state_machine(Spec) when is_map_key(<<"requests">>, Spec) ->
             runs_remaining => Runs,
             length => Length,
             requests_remaining => Length
-        }
+        })
     );
 state_machine(_Spec) ->
     throw({invalid_spec, missing_request_generator}).
@@ -193,19 +193,19 @@ run_state_machines(
         length := Length
     }
 ) ->
-    seed(Spec#{ stage => init }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => init })),
     Opts = generate_opts(Spec),
-    SpecWithOpts = Spec#{ opts => Opts },
+    SpecWithOpts = hb_ao:explicit_set(Spec, #{ opts => Opts }),
     InitialState = generate_initial_state(SpecWithOpts),
     ?event({generated_initial_state, InitialState}),
     InitialModelState = generate_initial_model_state(SpecWithOpts),
     ResSequence =
         run_state_machine(
-            SpecWithOpts#{
+            hb_ao:explicit_set(SpecWithOpts, #{
                 requests_remaining => Length,
                 state => InitialState,
                 model_state => InitialModelState
-            }
+            })
         ),
     ?event({run_result, ResSequence}),
     case lists:last(ResSequence) of
@@ -230,7 +230,7 @@ run_state_machines(
                 },
                 Opts
             ),
-            run_state_machines(Spec#{ runs_remaining => RunsRemaining - 1 })
+            run_state_machines(hb_ao:explicit_set(Spec, #{ runs_remaining => RunsRemaining - 1 }))
     end.
 
 %% @doc Invoke the execution of a single state machine run.
@@ -249,9 +249,9 @@ run_state_machine(Spec = #{ requests_remaining := RequestsRemaining }) ->
                         Req
                     |
                         run_state_machine(
-                            NextSpec#{
+                            hb_ao:explicit_set(NextSpec, #{
                                 requests_remaining => RequestsRemaining - 1
-                            }
+                            })
                         )
                     ];
                 {error, Type, Reason} ->
@@ -283,12 +283,12 @@ stage_to_int({execute, request}) -> 4.
 
 %% @doc Generate a node message (`Opts') for a `run' of the state machine.
 generate_opts(Spec = #{ opts := Opts }) ->
-    seed(Spec#{ stage => {generate, opts} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, opts} })),
     execute_generator(Opts, [Spec]).
 
 %% @doc Generate an initial (`Base') state for a `run' of the state machine.
 generate_initial_state(Spec = #{ states := Gen, opts := Opts }) ->
-    seed(Spec#{ stage => {generate, state} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, state} })),
     execute_generator(Gen, [Opts]).
 
 %% @doc Generate an initial model (comparator) state for a `run' of the state
@@ -296,7 +296,7 @@ generate_initial_state(Spec = #{ states := Gen, opts := Opts }) ->
 generate_initial_model_state(#{ models := undefined }) ->
     undefined;
 generate_initial_model_state(Spec = #{ models := Gen, opts := Opts }) ->
-    seed(Spec#{ stage => {generate, state} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, state} })),
     execute_generator(Gen, [Opts]).
 
 %% @doc Generate a request for an element of the `sequence' of requests for a
@@ -315,7 +315,7 @@ generate_request(
             opts := Opts
         }
 ) ->
-    seed(Spec#{ stage => {generate, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, request} })),
     execute_generator(Gen, [State, Opts]);
 generate_request(
         Spec = #{
@@ -325,9 +325,9 @@ generate_request(
             opts := Opts
         }
 ) ->
-    seed(Spec#{ stage => {generate, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, request} })),
     StateReq = execute_generator(Gen, [State, Opts]),
-    seed(Spec#{ stage => {generate, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {generate, request} })),
     ModelReq = execute_generator(Gen, [ModelState, Opts]),
     {StateReq, ModelReq}.
 
@@ -350,15 +350,15 @@ execute_request(
         Spec = #{ model_state := undefined, state := State, opts := Opts },
         Req
     ) ->
-    seed(Spec#{ stage => {execute, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {execute, request} })),
     do_request(State, Req, Opts);
 execute_request(
         Spec = #{ model_state := ModelState, state := State, opts := Opts },
         {Req, ModelReq}
     ) ->
-    seed(Spec#{ stage => {execute, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {execute, request} })),
     StateRes = do_request(State, Req, Opts),
-    seed(Spec#{ stage => {execute, request} }),
+    seed(hb_ao:explicit_set(Spec, #{ stage => {execute, request} })),
     ModelRes = do_request(ModelState, ModelReq, Opts),
     case {StateRes, ModelRes} of
         {{ok, NewState}, {ok, NewModelState}} ->
@@ -456,9 +456,9 @@ enforce_property(
 %% state. If a model state is provided, the `next' function is applied to both
 %% the primary and model states.
 apply_next(Spec = #{ next := undefined, model_state := undefined }, _, {ok, NewState}) ->
-    Spec#{ state => NewState };
+    hb_ao:explicit_set(Spec, #{ state => NewState });
 apply_next(Spec = #{ next := undefined }, _, {ok, NewState, NewModelState}) ->
-    Spec#{ model_state => NewModelState, state => NewState };
+    hb_ao:explicit_set(Spec, #{ model_state => NewModelState, state => NewState });
 apply_next(
         Spec = #{
             next := Next,
@@ -468,10 +468,10 @@ apply_next(
         },
         Req,
         {ok, NewState, NewModelState}) ->
-    Spec#{
+    hb_ao:explicit_set(Spec, #{
         state => Next(OldState, Req, NewState, Opts),
         model_state => Next(OldModelState, Req, NewModelState, Opts)
-    };
+    });
 apply_next(
         Spec = #{
             next := Next,
@@ -480,9 +480,9 @@ apply_next(
         },
         Req,
         {ok, NewState}) ->
-    Spec#{
+    hb_ao:explicit_set(Spec, #{
         state => Next(OldState, Req, NewState, Opts)
-    }.
+    }).
 
 %%% Pseudorandom Value Generators.
 

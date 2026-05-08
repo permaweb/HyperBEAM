@@ -125,7 +125,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
             hb_ao:get(
                 <<"slot">>,
                 NextAssignment,
-                Opts#{ <<"hashpath">> => ignore }
+                hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
             )
         )
         catch
@@ -158,11 +158,11 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
                             Opts
                         );
                     false ->
-                        Base#{
+                        hb_ao:explicit_set(Base, #{
                             <<"scheduler@1.0">> => #{
                                 <<"lookahead-worker">> => Lookahead
                             }
-                        }
+                        })
                 end,
             ?event(debug_next,
                 {next_returning,
@@ -224,7 +224,7 @@ find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
                         <<"path">> => <<"schedule/assignments">>,
                         <<"from">> => LastSlot
                     },
-                    Opts#{ <<"scheduler-follow-redirects">> => true }
+                    hb_ao:explicit_set(Opts, #{ <<"scheduler-follow-redirects">> => true })
                 ),
             % Convert the assignments to an ordered list of messages,
             % after removing all keys before the last processed slot.
@@ -525,7 +525,7 @@ find_server(ProcID, Base, ToSched, Opts) ->
                 not_found ->
                     ?event({no_pid_in_local_registry, ProcID}),
                     Proc = find_process_message(ProcID, Base, ToSched, Opts),
-                    ?event({found_process, {process, Proc}, {base, Base}}),
+                    ?event(debug_lua, {found_process, {process, Proc}, {base, Base}}),
                     SchedLoc =
                         hb_ao:get_first(
                             [
@@ -537,7 +537,7 @@ find_server(ProcID, Base, ToSched, Opts) ->
                                 _ -> [{ToSched, <<"scheduler-location">>}]
                             end,
                             not_found,
-                            Opts#{ <<"hashpath">> => ignore }
+                            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                         ),
                     ?event({sched_loc, SchedLoc}),
                     case SchedLoc of
@@ -573,7 +573,7 @@ find_process_message(ProcID, Base, ToSched, Opts) ->
             <<"process">>,
             Base,
             not_found,
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     case MaybeProcessMsg of
         not_found ->
@@ -760,7 +760,7 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
     % `/processes/procID/latest' to get the current slot.
     Path = << ProcID/binary, "/latest?process-id=", ProcID/binary>>,
     ?event({getting_slot_from_ao_core_remote, {path, {string, Path}}}),
-    case hb_http:get(Node, Path, Opts#{ <<"http-client">> => httpc }) of
+    case hb_http:get(Node, Path, hb_ao:explicit_set(Opts, #{ <<"http-client">> => httpc })) of
         {ok, Res} ->
             ?event({remote_slot_result, {res, Res}}),
             case hb_util:int(hb_ao:get(<<"status">>, Res, 200, Opts)) of
@@ -791,7 +791,7 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
                     NewRedirect =
                         generate_redirect(
                             ProcID,
-                            Res#{ <<"variant">> => <<"ao.TN.1">> },
+                            hb_ao:explicit_set(Res, #{ <<"variant">> => <<"ao.TN.1">> }),
                             Opts
                         ),
                     ?event({recursing_on_new_redirect, {redirect, NewRedirect}}),
@@ -966,7 +966,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
         hb_http:get(
             Node,
             Path,
-            Opts#{ <<"http-client">> => httpc, <<"protocol">> => http2 }
+            hb_ao:explicit_set(Opts, #{ <<"http-client">> => httpc, <<"protocol">> => http2 })
         )
     of
         {ok, Res} ->
@@ -984,7 +984,7 @@ do_get_remote_schedule(ProcID, LocalAssignments, From, To, Redirect, Opts) ->
                                             <<"body">>,
                                             Res,
                                             <<"">>,
-                                            Opts#{ <<"hashpath">> => ignore }
+                                            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                                         )
                                     ),
                                 cache_remote_schedule(Variant, ProcID, JSONRes, Opts),
@@ -1053,12 +1053,12 @@ cache_remote_schedule(<<"ao.TN.1">>, ProcID, Schedule, Opts) ->
     ModSchedule =
         lists:map(
             fun(Assignment) ->
-                Assignment#{
+                hb_ao:explicit_set(Assignment, #{
                     <<"variant">> => <<"ao.TN.1">>,
                     <<"slot">> =>
                         hb_maps:get(<<"cursor">>, Assignment, undefined, Opts),
                     <<"process">> => ProcID
-                }
+                })
             end,
             hb_util:ok(hb_maps:find(<<"edges">>, Schedule, Opts))
         ),
@@ -1068,7 +1068,7 @@ cache_remote_schedule(<<"ao.N.1">>, ProcID, Schedule, Opts) ->
         hb_ao:get(
             <<"assignments">>,
             Schedule,
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     cache_remote_schedule(common, ProcID, Assignments, Opts);
 cache_remote_schedule(_, _ProcID, Schedule, Opts) ->
@@ -1107,7 +1107,7 @@ cache_remote_schedule(_, _ProcID, Schedule, Opts) ->
 %% @doc Get the node URL from a redirect.
 node_from_redirect(Redirect, Opts) ->
     uri_string:recompose(
-        (
+        hb_ao:explicit_set((
             hb_maps:remove(
                 query,
                 uri_string:parse(
@@ -1115,7 +1115,7 @@ node_from_redirect(Redirect, Opts) ->
                 ),
 				Opts
             )
-        )#{path => <<"/">>}
+        ), #{path => <<"/">>})
     ).
 
 %% @doc Filter JSON assignment results from a remote legacy scheduler.
@@ -1142,14 +1142,14 @@ filter_json_assignments(JSONRes, To, From, Opts) ->
             Edges
         ),
     ?event({filtered, {length, length(Filtered)}, {edges, Filtered}}),
-    JSONRes#{ <<"edges">> => Filtered }.
+    hb_ao:explicit_set(JSONRes, #{ <<"edges">> => Filtered }).
 
 post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
-    RemoteOpts = Opts#{ <<"http-client">> => httpc },
+    RemoteOpts = hb_ao:explicit_set(Opts, #{ <<"http-client">> => httpc }),
     ProcID = without_hint(RawProcID),
     Location = hb_ao:get(<<"location">>, Redirect, Opts),
     Parsed = uri_string:parse(Location),
-    Node = uri_string:recompose((hb_maps:remove(query, Parsed, Opts))#{path => <<"/">>}),
+    Node = uri_string:recompose(hb_ao:explicit_set((hb_maps:remove(query, Parsed, Opts)), #{path => <<"/">>})),
     Variant = hb_ao:get(<<"variant">>, Redirect, <<"ao.N.1">>, Opts),
     case Variant of
         <<"ao.N.1">> ->
@@ -1245,7 +1245,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
                 {path, {string, P}},
                 {process_id, {string, ProcID}}
             }),
-            LegacyOpts = Opts#{ <<"protocol">> => http2 },
+            LegacyOpts = hb_ao:explicit_set(Opts, #{ <<"protocol">> => http2 }),
             case hb_http:post(Node, PostMsg, LegacyOpts) of
                 {ok, PostRes} ->
                     ?event({remote_schedule_result, PostRes}),
@@ -1310,7 +1310,7 @@ find_target_id(Base, Req, ToSched, Opts) ->
             end
     end.
 find_target_id(Base, Req, Opts) ->
-    TempOpts = Opts#{ <<"hashpath">> => ignore },
+    TempOpts = hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore }),
     Res = case hb_ao:resolve(Req, <<"target">>, TempOpts) of
         {ok, Target} ->
             % ID found at Req/target
@@ -1353,15 +1353,15 @@ find_message_to_schedule(Base, Req, Opts) ->
             <<"subject">>,
             Req,
             not_found,
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     case Subject of
         <<"base">> -> Base;
         <<"self">> -> Req;
         not_found ->
-            hb_ao:get(<<"body">>, Req, Req, Opts#{ <<"hashpath">> => ignore });
+            hb_ao:get(<<"body">>, Req, Req, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore }));
         Subject ->
-            hb_ao:get(Subject, Req, Opts#{ <<"hashpath">> => ignore })
+            hb_ao:get(Subject, Req, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore }))
     end.
 
 %% @doc Generate a `GET /schedule' response for a process.
@@ -1610,13 +1610,13 @@ http_init() -> http_init(#{}).
 http_init(Opts) ->
     start(),
     Wallet = ar_wallet:new(),
-    ExtendedOpts = Opts#{
+    ExtendedOpts = hb_ao:explicit_set(Opts, #{
         <<"priv-wallet">> => Wallet,
         <<"store">> => [
             hb_test_utils:test_store(),
             #{ <<"store-module">> => hb_store_gateway, <<"store">> => [] }
         ]
-    },
+    }),
     Node = hb_http_server:start_node(ExtendedOpts),
     {Node, ExtendedOpts}.
 
@@ -1628,11 +1628,11 @@ http_post_schedule_sign(Node, Msg, ProcessMsg, Opts) ->
                 <<"method">> => <<"POST">>,
                 <<"body">> =>
                     hb_message:commit(
-                        Msg#{
+                        hb_ao:explicit_set(Msg, #{
                             <<"target">> =>
                                 hb_util:human_id(hb_message:id(ProcessMsg, all, Opts)),
                             <<"type">> => <<"Message">>
-                        },
+                        }),
                         Opts
                     )
             },
@@ -1813,10 +1813,10 @@ http_post_legacy_schedule_test_disabled() ->
                 <<"ans104@1.0">>
             ),
         WithMethodAndPath =
-            Signed#{
+            hb_ao:explicit_set(Signed, #{
                 <<"path">> => <<"/~scheduler@1.0/schedule">>,
                 <<"method">> => <<"POST">>
-            },
+            }),
         ?event(debug_downgrade, {signed, Signed}),
         {Status, Res} = hb_http:post(Node, WithMethodAndPath, Opts),
         ?event(debug_downgrade, {status, Status}),
@@ -1872,7 +1872,7 @@ single_resolution(Opts) ->
     start(),
     BenchTime = 0.25,
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Base = test_process(Opts#{ <<"priv-wallet">> => Wallet }),
+    Base = test_process(hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })),
     ?event({benchmark_start, ?MODULE}),
     MsgToSchedule = hb_message:commit(#{
         <<"type">> => <<"Message">>,

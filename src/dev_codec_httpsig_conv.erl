@@ -433,14 +433,21 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
                 Commitments
         end,
     ?event({converting_commitments_to_siginfo, Msg}),
+    % TODO: Previously, this would often be an empty map, which 
+    % commitments_to_siginfo would just return #{}.
+    % However, with the change to set (normalizes all keys), this is no longer
+    % the case. Hmac commitments break in the nif decode phase. Currently, 
+    % we catch all errors and return #{}, to simulate previous behavior,
+    % but this is not a proper solution.
     {ok,
         maps:merge(
             Intermediate,
+            try 
             dev_codec_httpsig_siginfo:commitments_to_siginfo(
                 TABM,
                 CommitmentsMap,
                 Opts
-            )
+            ) catch _ -> #{}; _:_ -> #{} end
         )
     }.
 

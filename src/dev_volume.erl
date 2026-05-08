@@ -560,10 +560,10 @@ update_node_config(StorePath, NewStore, Opts) ->
     ),
     ok = 
         hb_http_server:set_opts(
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"store">> => NewStore, 
                 <<"genesis-wasm-db-dir">> => FullGenesisPath
-            }
+            })
         ),
     ?event(debug_volume, 
         {update_node_config, config_updated, success}

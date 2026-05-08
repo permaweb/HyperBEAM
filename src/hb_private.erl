@@ -51,7 +51,7 @@ get(InputPath, Msg, Default, Opts) ->
 set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
-    ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
+    ?event(set_priv, {set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
     NewPriv = hb_util:deep_set(Path, Value, Priv, opts(Opts)),
     ?event({set_private_res, {out, NewPriv}}),
     set_priv(Msg, NewPriv).

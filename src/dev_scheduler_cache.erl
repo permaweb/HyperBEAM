@@ -11,14 +11,14 @@
 %% @doc Merge the scheduler store with the main store. Used before writing
 %% to the cache.
 opts(Opts) ->
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"store">> =>
             hb_opts:get(
                 scheduler_store,
                 hb_opts:get(store, no_viable_store, Opts),
                 Opts
             )
-    }.
+    }).
 
 %% @doc Write an assignment message into the cache.
 write(RawAssignment, RawOpts) ->

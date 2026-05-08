@@ -15,7 +15,7 @@ push(Msg, S = #{ assignment := Assignment, logger := _Logger }) ->
     case hb_client:compute(Assignment, Msg) of
         {ok, Results} ->
             ?event(computed_results),
-            {ok, S#{ results => Results }};
+            {ok, hb_ao:explicit_set(S, #{ results => Results })};
         Error ->
             throw({cu_error, Error})
     end.
@@ -51,17 +51,17 @@ execute(CarrierMsg, S) ->
                     not_found ->
                         ?event(message_to_commit_to_not_found),
                         {ok,
-                            S#{
+                            hb_ao:explicit_set(S, #{
                                 results =>
                                     #tx {
                                         tags = [{<<"status">>, 404}],
                                         data = <<"Requested message to commit to not in results bundle.">>
                                     }
-                            }
+                            })
                         };
                     _ ->
                         ?event(message_to_commit_to_found),
-                        {ok, S#{
+                        {ok, hb_ao:explicit_set(S, #{
                             results => ar_bundles:sign_item(
                                 #tx {
                                     tags = [
@@ -72,10 +72,10 @@ execute(CarrierMsg, S) ->
                                 },
                                 hb:wallet()
                             )
-                        }}
+                        })}
                 end;
             false ->
-                {ok, S#{ results => Results }}
+                {ok, hb_ao:explicit_set(S, #{ results => Results })}
         end,
     ?event(returning_computed_results),
     {ResType, ModState}.

@@ -14,7 +14,7 @@ info(Opts) ->
     ServedRoutes = hb_opts:get(hyperbuddy_serve, #{}, Opts),
     #{
         default => fun serve/4,
-        serve => ServedRoutes#{
+        serve => hb_ao:explicit_set(ServedRoutes, #{
             % Default message viewer page:
             <<"index">> => <<"index.html">>,
             <<"bundle.js">> => <<"bundle.js">>,
@@ -27,7 +27,7 @@ info(Opts) ->
             <<"500.html">> => <<"500.html">>,
             <<"styles.css">> => <<"styles.css">>,
             <<"script.js">> => <<"script.js">>
-        },
+        }),
         excludes => [<<"return_file">>]
     }.
 
@@ -56,7 +56,7 @@ metrics(_, Req, Opts) ->
                     RawHeaderMap,
 					Opts
                 ),
-            {ok, Headers#{ <<"body">> => Body }};
+            {ok, hb_ao:explicit_set(Headers, #{ <<"body">> => Body })};
         false ->
             {ok, #{ <<"body">> => <<"Prometheus metrics disabled.">> }}
     end.
@@ -130,11 +130,11 @@ format(Base, Req, Opts) ->
                 hb_util:bin(
                     hb_format:message(
                         MsgLoaded,
-                        Opts#{
+                        hb_ao:explicit_set(Opts, #{
                             <<"linkify-mode">> => discard,
                             <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
                             <<"debug-print-truncate">> => TruncateKeys
-                        }
+                        })
                     )
                 )
         }

@@ -41,7 +41,7 @@ compute(Msg, Req, Opts) ->
                     {
                         as,
                         <<"patch@1.0">>,
-                        Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                        hb_ao:explicit_set(Req, #{ <<"patch-from">> => <<"/results/outbox">> })
                     },
                     Opts
                 ),
@@ -108,7 +108,7 @@ do_compute(State, Req, Opts) ->
                 {
                     as,
                     <<"patch@1.0">>,
-                    Req#{ <<"patch-from">> => <<"/results/outbox">> }
+                    hb_ao:explicit_set(Req, #{ <<"patch-from">> => <<"/results/outbox">> })
                 },
                 Opts
             ),
@@ -133,7 +133,7 @@ do_compute(State, Req, Opts) ->
             ReqWithoutCommitments = hb_message:uncommitted_deep(Req, Opts),
             Req2 =
                 hb_message:commit(
-                    ReqWithoutCommitments#{
+                    hb_ao:explicit_set(ReqWithoutCommitments, #{
                         <<"path">> => 
                             hb_maps:get(<<"path">>, Req, <<"compute">>, Opts),
                         <<"slot">> =>
@@ -149,7 +149,7 @@ do_compute(State, Req, Opts) ->
                                 },
                                 Opts
                             )
-                    },
+                    }),
                     Opts
                 ),
             ?event(dedup_short,
@@ -450,10 +450,10 @@ do_import(Proc, CheckpointMessage, Opts) ->
         Slot = hb_util:int(SlotBin),
         InitializedProc = dev_process_lib:ensure_process_key(Proc, Opts),
         WithSnapshot =
-            InitializedProc#{
+            hb_ao:explicit_set(InitializedProc, #{
                 <<"at-slot">> => Slot,
                 <<"snapshot">> => CheckpointMessage
-            },
+            }),
         % Save the state snapshot into the store.
         PublicCheckpoint = maps:remove(<<"snapshot">>, WithSnapshot),
         {ok, _} ?=
@@ -749,10 +749,10 @@ schedule_test_message(Base, Text, MsgBase) ->
                 <<"method">> => <<"POST">>,
                 <<"body">> =>
                     hb_message:commit(
-                        UncommittedBase#{
+                        hb_ao:explicit_set(UncommittedBase, #{
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
-                        },
+                        }),
                         #{ <<"priv-wallet">> => Wallet }
                     )
             },
@@ -819,10 +819,10 @@ dedup_test() ->
                 <<"method">> => <<"POST">>,
                 <<"body">> =>
                     hb_message:commit(
-                        UncommittedBase#{
+                        hb_ao:explicit_set(UncommittedBase, #{
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => <<"TEST MSG">>
-                        },
+                        }),
                         Opts
                     )
             },

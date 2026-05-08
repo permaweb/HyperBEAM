@@ -102,7 +102,7 @@ opts(Opts) ->
         {ok, Node} ->
             case hb_maps:get(<<"node-type">>, Opts, <<"arweave">>, Opts) of
                 <<"arweave">> ->
-                    Opts#{
+                    hb_ao:explicit_set(Opts, #{
                         <<"routes">> => [
                             #{
                                 % Routes for GraphQL requests to use the remote
@@ -115,9 +115,9 @@ opts(Opts) ->
                                 <<"nodes">> => [#{ <<"prefix">> => Node }]
                             }
                         ]
-                    };
+                    });
                 <<"ao">> ->
-                    Opts#{
+                    hb_ao:explicit_set(Opts, #{
                         <<"routes">> => [
                             #{
                                 <<"template">> => <<"/graphql">>,
@@ -140,7 +140,7 @@ opts(Opts) ->
                                 ]
                             }
                         ]
-                    }
+                    })
             end
     end.
 

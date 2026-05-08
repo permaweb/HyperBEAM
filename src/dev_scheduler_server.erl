@@ -283,10 +283,10 @@ do_assign(State, Message, ReplyPID) ->
             DispatchFun()
     end,
     % Update the state with the next hashpath.
-    State#{
-        current := NextSlot,
-        base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
-    }.
+    hb_ao:explicit_set(State, #{
+        current => NextSlot,
+        base_state_hashpath => next_hashpath(BaseStateHashpath, Assignment, State)
+    }, Opts).
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
@@ -297,7 +297,7 @@ commit_assignment(BaseAssignment, State) ->
         fun(Wallet, Assignment) ->
             hb_message:commit(
                 Assignment,
-                Opts#{ <<"priv-wallet">> => Wallet },
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet }),
                 CommittmentSpec
             )
         end,

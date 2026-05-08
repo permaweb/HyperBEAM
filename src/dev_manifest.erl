@@ -110,13 +110,13 @@ request(Base, Req, Opts) ->
                 ?event(
                     debug_manifest,
                     {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}),
-                {ok, Req#{ <<"body">> => [Loaded|Rest] }};
+                {ok, hb_ao:explicit_set(Req, #{ <<"body">> => [Loaded|Rest] })};
             {[], {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
+                {ok, hb_ao:explicit_set(Req, #{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] })};
             {_, {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted|maybe_no_cache_404(Rest, Opts)] }}
+                {ok, hb_ao:explicit_set(Req, #{ <<"body">> => [Casted|maybe_no_cache_404(Rest, Opts)] })}
         end
     else
         {error, not_found} ->
@@ -143,7 +143,7 @@ maybe_no_cache_404(Rest, Opts) ->
     end.
 
 no_cache(Msg) when is_map(Msg) ->
-    Msg#{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] };
+    hb_ao:explicit_set(Msg, #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] });
 no_cache(Msg) ->
     Msg.
 
@@ -195,14 +195,14 @@ manifest(Base, _Req, Opts) ->
     FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
     {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
     LinkifiedPaths = linkify(DeepPaths, Opts),
-    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
-    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+    Structured = hb_ao:explicit_set(FlatManifest, #{ <<"paths">> => LinkifiedPaths }),
+    {ok, hb_ao:explicit_set(Structured, #{ <<"device">> => <<"manifest@1.0">> })}.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([store], Opts))#{ scope => [local, remote]},
-    {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
+    LinkOptsBase = hb_ao:explicit_set((maps:with([store], Opts)), #{ scope => [local, remote]}),
+    {link, ID, hb_ao:explicit_set(LinkOptsBase, #{ <<"type">> => <<"link">>, <<"lazy">> => false })};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(
         fun(_Key, Val) -> linkify(Val, Opts) end,
@@ -426,10 +426,10 @@ test_env_opts() ->
             <<"item-oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4.bin">>
         ]
     ),
-    BaseOpts#{
+    hb_ao:explicit_set(BaseOpts, #{
         <<"on">> =>
             #{
                 <<"request">> =>
                     [#{<<"device">> => <<"manifest@1.0">>}]
             }
-    }.
+    }).

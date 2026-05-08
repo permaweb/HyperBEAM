@@ -350,10 +350,10 @@ arns_host_resolution_test_parallel() ->
     ).
 
 arns_host_resolution_with_node_host_test_parallel() ->
-    Opts = (test_arns_opts())#{
+    Opts = hb_ao:explicit_set((test_arns_opts()), #{
         <<"node-host">> => <<"http://localhost">>,
         <<"port">> => 0
-    },
+    }),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},

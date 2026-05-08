@@ -226,7 +226,7 @@ read_ids(_, 0, _Opts) -> [];
 read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
-            [AnnotatedID#{ <<"node">> => Msg } | read_ids(Rest, Count - 1, Opts)];
+            [hb_ao:explicit_set(AnnotatedID, #{ <<"node">> => Msg }) | read_ids(Rest, Count - 1, Opts)];
         _ ->
             read_ids(Rest, Count, Opts)
     end.
@@ -478,9 +478,9 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
             false -> {0, <<>>}
         end,
     WithCursor =
-        Annotated#{
+        hb_ao:explicit_set(Annotated, #{
             <<"cursor">> => << (hb_util:bin(Offset))/binary, Postfix/binary >>
-        },
+        }),
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.

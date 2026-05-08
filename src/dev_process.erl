@@ -158,9 +158,9 @@ snapshot(RawBase, _Req, Opts) ->
             <<"execution">>,
             Base,
             #{ <<"path">> => <<"snapshot">>, <<"mode">> => <<"Map">> },
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
-            }
+            })
         ),
     {ok, SnapshotMsg}.
 
@@ -225,7 +225,7 @@ compute(Base, Req, Opts) ->
             % We do this by setting the `process_now_from_cache' option to `true'.
             case maps:get(<<"init">>, Req, <<"now">>) of
                 <<"now">> ->
-                    now(Base, Req, Opts#{ process_now_from_cache => true });
+                    now(Base, Req, hb_ao:explicit_set(Opts, #{ process_now_from_cache => true }));
                 _ ->
                     {error, not_found}
             end;
@@ -268,7 +268,7 @@ target_slot(Req, _Opts) ->
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
-    case hb_ao:get(<<"at-slot">>, Base, Opts#{ <<"hashpath">> => ignore }) of
+    case hb_ao:get(<<"at-slot">>, Base, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })) of
         CurrentSlot when CurrentSlot == TargetSlot ->
             % We reached the target height so we force a snapshot and return.
             ?event(compute_short,
@@ -297,11 +297,11 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                         }
                     ),
                     {error,
-                        Res#{
+                        hb_ao:explicit_set(Res, #{
                             <<"phase">> => <<"get-schedule">>,
                             <<"attempted-slot">> => NextSlot,
                             <<"process-id">> => ProcID
-                        }
+                        })
                     };
                 {ok, #{ <<"body">> := SlotMsg, <<"state">> := State }} ->
                     % Compute the next single state transition.
@@ -448,10 +448,10 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                 }
             ),
             {error,
-                ErrMsg#{
+                hb_ao:explicit_set(ErrMsg, #{
                     <<"phase">> => <<"compute">>,
                     <<"attempted-slot">> => Slot
-                }
+                })
             }
     end.
 
@@ -462,7 +462,7 @@ prepare_next_slot(ProcID, State, RawReq, Opts) ->
     % If the input message does not have a path, set it to `compute'.
     Req =
         case hb_path:from_message(request, RawReq, Opts) of
-            undefined -> RawReq#{ <<"path">> => <<"compute">> };
+            undefined -> hb_ao:explicit_set(RawReq, #{ <<"path">> => <<"compute">> });
             _ -> RawReq
         end,
     ?event(compute, {input_msg, Req}),
@@ -510,14 +510,14 @@ maybe_trigger_push(Process, Slot, Req, Opts) ->
 %% spawns under load.
 dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
     BaseReq =
-        (hb_maps:without([<<"push">>, <<"path">>, <<"slot">>], Req, Opts))#{
+        hb_ao:explicit_set((hb_maps:without([<<"push">>, <<"path">>, <<"slot">>], Req, Opts)), #{
             <<"path">> => <<"push">>,
             <<"slot">> => Slot
-        },
+        }),
     PushReq =
         case MaxDepth of
             undefined -> BaseReq;
-            N -> BaseReq#{ <<"max-depth">> => N }
+            N -> hb_ao:explicit_set(BaseReq, #{ <<"max-depth">> => N })
         end,
     %% Extract the canonical process spec from the live state so `dev_push:push'
     %% ID computation lands on the same cache key that `store_result' just
@@ -706,7 +706,7 @@ should_snapshot_time(Res, Opts) ->
 %% the latest slot in the cache depending on the `process_now_from_cache' option.
 -spec latest(_, _, _) -> _.
 latest(Base, Req, Opts) ->
-    now(Base, Req, Opts#{ process_now_from_cache => always }).
+    now(Base, Req, hb_ao:explicit_set(Opts, #{ process_now_from_cache => always })).
 
 -spec now(_, _, _) -> _.
 now(RawBase, Req, Opts) ->
@@ -752,7 +752,7 @@ now(RawBase, Req, Opts) ->
                         % The node is configured to use the cache if possible,
                         % but forcing computation is also admissible. Subsequently,
                         % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ process_now_from_cache => false });
+                        now(Base, Req, hb_ao:explicit_set(Opts, #{ process_now_from_cache => false }));
                     true ->
                         % The node is configured to only serve the latest known
                         % state from the cache, so we return the latest slot.
@@ -819,15 +819,15 @@ ensure_loaded(Base, Req, Opts) ->
                     #{ <<"commitments">> := SignCommits } =
                         hb_message:with_commitments(ProcID, Process, Opts),
                     UpdateProcess =
-                        Process#{
+                        hb_ao:explicit_set(Process, #{
                             <<"commitments">> =>
                                 maps:merge(HmacCommits, SignCommits)
-                        },
+                        }),
                     SnapshotReq =
-                        SnapshotMsg#{
+                        hb_ao:explicit_set(SnapshotMsg, #{
                             <<"process">> => UpdateProcess,
                             <<"initialized">> => <<"true">>
-                        },
+                        }),
                     ?event(compute,
                         {found_state_checkpoint,
                             {proc_id, ProcID},
@@ -840,7 +840,7 @@ ensure_loaded(Base, Req, Opts) ->
                             <<"execution">>,
                             SnapshotReq,
                             normalize,
-                            Opts#{ <<"hashpath">> => ignore }
+                            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                         ),
                     NormalizedWithoutSnapshot =
                         without_snapshot(Normalized, Opts),

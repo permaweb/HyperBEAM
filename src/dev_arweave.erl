@@ -133,7 +133,7 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
-                Opts#{
+                hb_ao:explicit_set(Opts, #{
                     <<"exclude-data">> =>
                         hb_util:bool(
                             find_key(
@@ -143,7 +143,7 @@ get_tx(Base, Request, Opts) ->
                                 Opts
                             )
                         )
-                }
+                })
             )
     end.
 
@@ -205,10 +205,10 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
             <<"content-type">>,
             StructuredTXHeader,
             <<"application/octet-stream">>,
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"cache-control">> =>
                     [<<"no-cache">>, <<"no-store">>]
-            }
+            })
         ),
     {ok,
         #{
@@ -287,7 +287,7 @@ get_raw(Base, Request, Opts) ->
                     ),
                 {
                     ok,
-                    Header#{
+                    hb_ao:explicit_set(Header, #{
                         <<"status">> => 206,
                         <<"content-type">> => ContentType,
                         <<"content-length">> => RangeLength,
@@ -301,15 +301,15 @@ get_raw(Base, Request, Opts) ->
                                 (hb_util:bin(FullContentLength))/binary
                             >>,
                         <<"body">> => Data
-                    }
+                    })
                 };
             false ->
                 case hb_store_arweave:read_chunks(ArweaveDataOffset, FullContentLength, Opts) of
                     {ok, Data} ->
-                        {ok, Header#{
+                        {ok, hb_ao:explicit_set(Header, #{
                             <<"content-type">> => ContentType,
                             <<"body">> => Data
-                        }};
+                        })};
                     Error ->
                         ?event(
                             arweave,
@@ -329,7 +329,7 @@ parse_range_params(<<"bytes ", ByteDescriptor/binary>>, _Opts) ->
     [Start, End] = binary:split(ByteRange, <<"-">>),
     {ok, hb_util:int(Start), hb_util:int(End)};
 parse_range_params(Msg, Opts) ->
-    case hb_ao:resolve(Msg, <<"range">>, Opts#{ <<"hashpath">> => ignore }) of
+    case hb_ao:resolve(Msg, <<"range">>, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })) of
         {ok, Str} -> parse_range_params(Str, Opts);
         _ -> false
     end.
@@ -849,7 +849,7 @@ pending(Base, Request, Opts) ->
                             "/",
                             (hb_util:bin(Offset))/binary
                         >>,
-                        Opts#{
+                        hb_ao:explicit_set(Opts, #{
                             <<"exclude-data">> =>
                                 hb_util:bool(
                                     find_key(
@@ -859,7 +859,7 @@ pending(Base, Request, Opts) ->
                                         Opts
                                     )
                                 )
-                        }
+                        })
                     )
             end
     end.
@@ -889,13 +889,13 @@ request(Method, Path, Extra, LogExtra, Opts) ->
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
         hb_http:request(
-            Extra#{
+            hb_ao:explicit_set(Extra, #{
                 <<"path">> => <<"/arweave", Path/binary>>,
                 <<"method">> => Method
-            },
-            Opts#{
+            }),
+            hb_ao:explicit_set(Opts, #{
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
-            }
+            })
         ),
     to_message(Path, Method, best_response(Res), LogExtra, Opts).
 
@@ -1101,9 +1101,9 @@ post_ans104_message_test_parallel() ->
         {ok, PostRes} =
             hb_http:post(
                 Server,
-                Msg#{
+                hb_ao:explicit_set(Msg, #{
                     <<"path">> => <<"/~arweave@2.9/tx">>
-                },
+                }),
                 ClientOpts
             ),
         ?assertMatch(#{ <<"status">> := 200 }, PostRes),
@@ -1149,10 +1149,10 @@ post_tx_message_test_parallel() ->
     Response =
         hb_http:post(
             Server,
-            Msg#{
+            hb_ao:explicit_set(Msg, #{
                 <<"device">> => <<"arweave@2.9">>,
                 <<"path">> => <<"/tx">>
-            },
+            }),
             ClientOpts
         ),
     ?event(debug_test, {post_response, Response}),
@@ -1345,7 +1345,7 @@ index_test_block(Block, Opts) ->
                 "&to=",
                 BlockBin/binary
             >>,
-            Opts#{ <<"arweave-index-ids">> => true }
+            hb_ao:explicit_set(Opts, #{ <<"arweave-index-ids">> => true })
         ),
     ok.
 
@@ -1391,11 +1391,11 @@ get_tx_basic_data_test_parallel() ->
     ?event(debug_test, {structured_tx, Structured}),
     ?assert(hb_message:verify(Structured, all, #{})),
     % Hash the data to make it easier to match
-    StructuredWithHash = Structured#{
+    StructuredWithHash = hb_ao:explicit_set(Structured, #{
         <<"data">> => hb_util:encode(
             crypto:hash(sha256, (maps:get(<<"data">>, Structured)))
         )
-    },
+    }),
     ExpectedMsg = #{
         <<"data">> => <<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>,
         <<"reward">> => <<"482143296">>,
@@ -1466,7 +1466,7 @@ get_tx_basic_data_exclude_data_test_parallel() ->
     ),
     ?event(debug_test, {raw_data, RawData}),
     Data = hb_ao:get(<<"body">>, RawData, Opts),
-    StructuredWithData = Structured#{ <<"data">> => Data },
+    StructuredWithData = hb_ao:explicit_set(Structured, #{ <<"data">> => Data }),
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
     ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
@@ -1502,7 +1502,7 @@ get_tx_data_tag_exclude_data_test_parallel() ->
         Opts
     ),
     Data = hb_ao:get(<<"body">>, RawData, Opts),
-    StructuredWithData = Structured#{ <<"data">> => Data },
+    StructuredWithData = hb_ao:explicit_set(Structured, #{ <<"data">> => Data }),
     ?assert(hb_message:verify(StructuredWithData, all, Opts)),
     DataHash = hb_util:encode(crypto:hash(sha256, Data)),
     ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
@@ -2162,7 +2162,7 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
             ?assertEqual(false, maps:is_key(<<"data">>, TXHeader)),
             ?event(debug_test, {tx_header, TXHeader}),
             ?assert(hb_message:verify(TXHeader, all, Opts)),
-            TXWithData = TXHeader#{ <<"data">> => Data },
+            TXWithData = hb_ao:explicit_set(TXHeader, #{ <<"data">> => Data }),
             ?event(debug_test, {tx_with_data, TXWithData}),
             ?assert(hb_message:verify(TXWithData, all, Opts))
             % ?assertEqual(RawData, Data)

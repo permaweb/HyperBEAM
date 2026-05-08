@@ -30,7 +30,7 @@ hackney_bad_peer_test_() ->
         },
         Opts = #{ <<"http-client">> => hackney, <<"http-retry">> => 0},
         {ok, 200, _, _} = hb_http_client:request(ValidArgs, Opts),
-        BadArgs = ValidArgs#{peer => <<"not-a-valid-uri">>},
+        BadArgs = hb_ao:explicit_set(ValidArgs, #{peer => <<"not-a-valid-uri">>}),
         BadResult = hb_http_client:request(BadArgs, Opts),
         ?event(http_client_tests, {hackney_bad_peer_result, BadResult}),
         ?assertMatch({error, _}, BadResult),

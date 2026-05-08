@@ -489,7 +489,7 @@ json_roundtrip_with_owner_recovery_test() ->
     TX = make_signed_ecdsa_tx(Wallet),
     ExpectedAddress = ar_wallet:to_address(Pub, KeyType),
     JSON = ar_tx:tx_to_json_struct(TX),
-    JSONEmptyOwner = JSON#{<<"owner">> => <<>>},
+    JSONEmptyOwner = hb_ao:explicit_set(JSON, #{<<"owner">> => <<>>}),
     ParsedTX = ar_tx:json_struct_to_tx(JSONEmptyOwner),
     ?assertEqual(Pub, ParsedTX#tx.owner),
     ?assertEqual(ExpectedAddress, ParsedTX#tx.owner_address).
@@ -511,7 +511,7 @@ full_sign_json_recover_verify_roundtrip_test() ->
     TX = make_signed_ecdsa_tx(Wallet),
     ?assertEqual(true, ar_tx:verify(TX)),
     JSON = ar_tx:tx_to_json_struct(TX),
-    JSONEmptyOwner = JSON#{<<"owner">> => <<>>},
+    JSONEmptyOwner = hb_ao:explicit_set(JSON, #{<<"owner">> => <<>>}),
     ParsedTX = ar_tx:json_struct_to_tx(JSONEmptyOwner),
     ?assertEqual(true, ar_tx:verify(ParsedTX)).
 

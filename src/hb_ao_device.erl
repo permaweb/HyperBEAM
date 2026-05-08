@@ -95,7 +95,7 @@ message_to_fun(Msg, Key, Opts) ->
                             % to default to.
 							?event({found_default_handler, {mod, DefaultMod}}),
                             message_to_fun(
-                                Msg#{ <<"device">> => DefaultMod },
+                                hb_ao:explicit_set(Msg, #{ <<"device">> => DefaultMod }),
                                 Key,
                                 Opts
                             );
@@ -121,7 +121,7 @@ message_to_fun(Msg, Key, Opts) ->
                                             {dev, DefaultDev}
                                         }),
                                     message_to_fun(
-                                        Msg#{ <<"device">> => DefaultDev },
+                                        hb_ao:explicit_set(Msg, #{ <<"device">> => DefaultDev }, Opts),
                                         Key,
                                         Opts
                                     )
@@ -156,7 +156,7 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 					{ok, MsgWithoutDevice} =
 						dev_message:remove(Msg, #{ item => device }, Opts),
 					message_to_fun(
-						MsgWithoutDevice#{ <<"device">> => default() },
+						hb_ao:explicit_set(MsgWithoutDevice, #{ <<"device">> => default() }),
 						Key,
 						Opts
 					);

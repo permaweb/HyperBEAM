@@ -100,6 +100,7 @@
 %%% Shortcuts and tools:
 -export([keys/1, keys/2, keys/3]).
 -export([get/2, get/3, get/4, get_first/2, get_first/3]).
+-export([explicit_set/2, explicit_set/3, explicit_set/4]).
 -export([set/3, set/4, remove/2, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
 -export([deep_set/4]).
@@ -151,7 +152,7 @@ resolve(Base, Req, Opts) ->
         ao_core,
         {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}
     ),
-    MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
+    MessagesToExec = [ explicit_set(Req, #{ <<"path">> => Path }, Opts) || Path <- PathParts ],
     ?event(debug_ao_core,
         {stage,
             1,
@@ -1141,6 +1142,22 @@ keys(Msg, Opts, remove) ->
         keys(Msg, Opts, keep)
     ).
 
+%% @doc Perform a direct top-level map update without invoking AO semantics.
+explicit_set(Map, Patch) ->
+    explicit_set(Map, Patch, #{ priv_wallet => hb:wallet(), foo => <<"bar2">> }).
+explicit_set(Map, Patch, Opts) when is_map(Map), is_map(Patch) ->
+    hb_message:normalize_commitments(
+        maps:merge(Map, Patch),
+        Opts,
+        recommit
+    );
+
+explicit_set(Map, Key, Value) when is_map(Map), not is_map(Key) ->
+    explicit_set(Map, #{ Key => Value }, #{ priv_wallet => hb:wallet(), foo => <<"bar">> }).
+%% @doc Perform a direct top-level single-key update without invoking AO semantics.
+explicit_set(Map, Key, Value, Opts) when is_map(Map) ->
+    explicit_set(Map, #{ Key => Value }, Opts).
+
 %% @doc Shortcut for setting a key in the message using its underlying device.
 %% Like the `get/3' function, this function honors the `error_strategy' option.
 %% `set' works with maps and recursive paths while maintaining the appropriate
@@ -1344,11 +1361,15 @@ has_only_binary_keys({_K, _V, _Iter}) -> false.
 
 %% @doc The original full-walk body, used when a non-binary key is present.
 do_normalize_keys(Map, Opts) ->
+    Rand = rand:uniform(1000000),
+    ?event(explicit_set, {normalizing_keys, {map, {explicit, Map}}, {rand, {explicit, Rand}}}),
     hb_maps:from_list(
         lists:map(
             fun({Key, Value}) when is_map(Value) ->
+                ?event(explicit_set, {normalizing_keys, {map, {explicit, Value}}, {rand, {explicit, Rand}}, {input, {explicit, Map}}}),
                 {hb_ao:normalize_key(Key), Value};
             ({Key, Value}) ->
+                ?event(explicit_set, {normalizing_keys, {not_map, {explicit, Value}}, {rand, {explicit, Rand}}, {input, {explicit, Map}}}),
                 {hb_ao:normalize_key(Key), Value}
             end,
             hb_maps:to_list(Map, Opts)

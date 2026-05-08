@@ -32,7 +32,7 @@ estimate(_Base, EstimateReq, NodeMsg) ->
         hb_ao:get(
             <<"request">>,
             EstimateReq,
-            NodeMsg#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(NodeMsg, #{ <<"hashpath">> => ignore })
         ),
     case is_operator(Req, NodeMsg) of
         true ->
@@ -75,7 +75,7 @@ estimate(_Base, EstimateReq, NodeMsg) ->
 %% @doc If the request is for the `apply@1.0' device, we should price the
 %% inner request in addition to the price of the outer request.
 apply_price([{as, Device, Msg} | Rest], NodeMsg) ->
-    apply_price([Msg#{ <<"device">> => Device } | Rest], NodeMsg);
+    apply_price([hb_ao:explicit_set(Msg, #{ <<"device">> => Device }) | Rest], NodeMsg);
 apply_price(
         [Req = #{ <<"device">> := <<"apply@1.0">> }, #{ <<"path">> := Path } | Rest],
         NodeMsg
@@ -89,7 +89,7 @@ apply_price(
     UserRequest =
         hb_maps:without(
             [<<"device">>],
-            UserMessage#{ <<"path">> => UserPath }
+            hb_ao:explicit_set(UserMessage, #{ <<"path">> => UserPath })
         ),
     ?event(payment, {estimating_price_of_subrequest, {req, UserRequest}}),
     {ok, Price} = estimate(#{}, #{ <<"request">> => UserRequest }, NodeMsg),
@@ -137,7 +137,7 @@ charge(_, RawReq, NodeMsg) ->
         hb_ao:get(
             <<"request">>,
             RawReq,
-            NodeMsg#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(NodeMsg, #{ <<"hashpath">> => ignore })
         ),
     case hb_message:signers(Req, NodeMsg) of
         [] ->
@@ -197,7 +197,7 @@ balance(_, RawReq, NodeMsg) ->
             hb_ao:get(
                 <<"request">>,
                 RawReq,
-                NodeMsg#{ <<"hashpath">> => ignore }
+                hb_ao:explicit_set(NodeMsg, #{ <<"hashpath">> => ignore })
             )
         of
             not_found ->
@@ -222,7 +222,7 @@ set_balance(Signer, Amount, NodeMsg) ->
     ),
     hb_http_server:set_opts(
         #{},
-        NewMsg = NodeMsg#{
+        NewMsg = hb_ao:explicit_set(NodeMsg, #{
             <<"simple-pay-ledger">> =>
                 hb_ao:set(
                     Ledger,
@@ -230,7 +230,7 @@ set_balance(Signer, Amount, NodeMsg) ->
                     Amount,
                     NodeMsg
                 )
-        }
+        })
     ),
     {ok, NewMsg}.
 
@@ -321,7 +321,7 @@ get_balance_and_top_up_test() ->
             Node,
             Req = hb_message:commit(
                 #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ClientWallet })
             ),
             Opts
         ),
@@ -339,7 +339,7 @@ get_balance_and_top_up_test() ->
                     <<"amount">> => 100,
                     <<"recipient">> => ClientAddress
                 },
-                Opts#{ <<"priv-wallet">> => HostWallet }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => HostWallet })
             ),
             Opts
         ),
@@ -352,7 +352,7 @@ get_balance_and_top_up_test() ->
             Node,
             hb_message:commit(
                 #{<<"path">> => <<"/~p4@1.0/balance">>},
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ClientWallet })
             ),
             Opts
         ),
@@ -386,7 +386,7 @@ apply_price_test() ->
             Node,
             hb_message:commit(
                 #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ClientWallet })
             ),
             Opts
         ),

@@ -202,13 +202,13 @@ init(_M1, _M2, Opts) ->
                         ExistingAES
                 end,
             % Store the wallet, AES key, and an empty trusted nodes map.
-            hb_http_server:set_opts(NewOpts =Opts#{
+            hb_http_server:set_opts(NewOpts =hb_ao:explicit_set(Opts, #{
                 <<"priv-wallet">> => NodeWallet,
                 <<"priv-green-zone-aes">> => GreenZoneAES,
                 <<"trusted-nodes">> => #{},
                 <<"green-zone-required-opts">> => ProcessedRequiredConfig,
                 <<"green-zone-initialized">> => true
-            }),
+            })),
             try_mount_encrypted_volume(GreenZoneAES, NewOpts),
             ?event(green_zone, {init, complete}),
             {ok, <<"Green zone initialized successfully.">>}
@@ -393,14 +393,14 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
     % 8. Add the target node's keypair to the local node's identities.
     GreenZoneWallet = {{KeyType, Priv, Pub}, {KeyType, Pub}},
     Identities = hb_opts:get(identities, #{}, Opts),
-    UpdatedIdentities = Identities#{
+    UpdatedIdentities = hb_ao:explicit_set(Identities, #{
         <<"green-zone">> => #{
             <<"priv-wallet">> => GreenZoneWallet
         }
-    },
-    NewOpts = Opts#{
+    }),
+    NewOpts = hb_ao:explicit_set(Opts, #{
         <<"identities">> => UpdatedIdentities
-    },
+    }),
     ok = 
         hb_http_server:set_opts(
             NewOpts
@@ -491,9 +491,9 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
                             % Update local configuration with the retrieved
                             % shared AES key.
                             ?event(green_zone, {opts, {explicit, InitOpts}}),
-                            NewOpts = InitOpts#{
+                            NewOpts = hb_ao:explicit_set(InitOpts, #{
                                 <<"priv-green-zone-aes">> => AESKey
-                            },
+                            }),
                             hb_http_server:set_opts(NewOpts),
                             {ok, #{ 
                                 <<"body">> => 
@@ -667,9 +667,9 @@ add_trusted_node(NodeAddr, Report, RequesterPubKey, Opts) ->
         <<"public-key">> => RequesterPubKey
     }, TrustedNodes),
     % Update configuration with the new trusted nodes and AES key.
-    ok = hb_http_server:set_opts(Opts#{
+    ok = hb_http_server:set_opts(hb_ao:explicit_set(Opts, #{
         <<"trusted-nodes">> => UpdatedTrustedNodes
-    }).
+    })).
 
 %% @doc Encrypts an AES key with a node's RSA public key.
 %%
@@ -740,10 +740,10 @@ decrypt_zone_key(EncZoneKey, Opts) ->
 try_mount_encrypted_volume(Key, Opts) ->
     ?event(debug_volume, {try_mount_encrypted_volume, start}),
     % Set up options for volume mounting with default paths
-    VolumeOpts = Opts#{
+    VolumeOpts = hb_ao:explicit_set(Opts, #{
         <<"priv-volume-key">> => Key,
         <<"volume-skip-decryption">> => <<"true">>
-    },
+    }),
     % Call the dev_volume:mount function to handle the complete process
     case dev_volume:mount(undefined, undefined, VolumeOpts) of
         {ok, Result} ->

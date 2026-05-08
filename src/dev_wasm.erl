@@ -308,7 +308,7 @@ instance(M1, M2, Opts) ->
     Prefix = dev_stack:prefix(M1, M2, Opts),
     Path = <<Prefix/binary, "/instance">>,
     ?event({searching_for_instance, Path, M1}),
-    hb_private:get(Path, M1, Opts#{ <<"hashpath">> => ignore }).
+    hb_private:get(Path, M1, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })).
 
 %% @doc Handle standard library calls by:
 %% 1. Adding the right prefix to the path from BEAMR.
@@ -331,13 +331,13 @@ import(Base, Req, Opts) ->
             FuncName/binary
         >>,
     StatePath = << Prefix/binary, "/stdlib/", ModName/binary, "/state" >>,
-    AdjustedReq = Req#{ <<"path">> => AdjustedPath },
+    AdjustedReq = hb_ao:explicit_set(Req, #{ <<"path">> => AdjustedPath }),
     % 2. Add the current state to the message at the stdlib path.
     AdjustedBase =
         hb_ao:set(
             Base,
             #{ StatePath => Base },
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     ?event({state_added_base, AdjustedBase, AdjustedReq}),
     % 3. Resolve the adjusted path against the added state.
@@ -527,7 +527,7 @@ state_export_and_restore_test() ->
     {ok, State} = hb_ao:resolve(Resa, <<"snapshot">>, #{}),
     ?event({state_res, State}),
     % Restore the state without calling Init.
-    NewBase = hb_maps:merge(Msg0, Extras#{ <<"snapshot">> => State }, #{}),
+    NewBase = hb_maps:merge(Msg0, hb_ao:explicit_set(Extras, #{ <<"snapshot">> => State }), #{}),
     ?assertEqual(
         {ok, [4]},
         hb_ao:resolve(NewBase, <<"compute/results/output">>, #{})

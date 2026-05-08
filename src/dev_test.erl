@@ -62,7 +62,7 @@ index(Msg, _Req, Opts) ->
 %% @doc Return a message with the device set to this module.
 -spec load(_, _, _) -> _.
 load(Base, _, _Opts) ->
-    {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
+    {ok, hb_ao:explicit_set(Base, #{ <<"device">> => <<"test-device@1.0">> })}.
 
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
@@ -116,11 +116,11 @@ compute_nested(Base, Req, Opts) ->
 
 -spec compute_all(#{ a => integer(), _ => _ }, #{ slot := integer(), _ => _ }, _) -> _.
 compute_all(Base, Req, Opts) ->
-    {ok, Base#{ <<"all">> => <<"done">> }}.
+    {ok, hb_ao:explicit_set(Base, #{ <<"all">> => <<"done">> })}.
 
 -spec compute_all_nested(#{ nested := #{ a := integer() }, _ => _ }, #{ slot := integer(), _ => _ }, _) -> _.
 compute_all_nested(Base, Req, Opts) ->
-    {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
+    {ok, hb_ao:explicit_set(Base, #{ <<"nested">> => #{ <<"all">> => <<"done">> } })}.
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 -spec init(_, _, _) -> _.
 init(Msg, _Req, Opts) ->
@@ -166,7 +166,7 @@ snapshot(Base, Req, _Opts) ->
 -spec postprocess(_, _, _) -> _.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
-    hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
+    hb_http_server:set_opts(hb_ao:explicit_set(Opts, #{ <<"postprocessor-called">> => true })),
     {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
@@ -313,12 +313,12 @@ varied_overlay_cache_test() ->
     {ok, Res1} = hb_ao:resolve(Base1, Req, Opts),
     ?assertEqual(2, maps:get(<<"x">>, Res1)),
     ?assertEqual(<<"first">>, maps:get(<<"keep">>, Res1)),
-    Base2 = Base1#{ <<"keep">> => <<"second">> },
+    Base2 = hb_ao:explicit_set(Base1, #{ <<"keep">> => <<"second">> }),
     {ok, Res2} =
         hb_ao:resolve(
             Base2,
             Req,
-            Opts#{ cache_control => [<<"only-if-cached">>] }
+            hb_ao:explicit_set(Opts, #{ cache_control => [<<"only-if-cached">>] })
         ),
     ?assertEqual(2, maps:get(<<"x">>, Res2)),
     ?assertEqual(<<"second">>, maps:get(<<"keep">>, Res2)).

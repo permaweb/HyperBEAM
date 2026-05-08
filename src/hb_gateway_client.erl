@@ -239,10 +239,10 @@ result_to_message(Item, Opts) ->
     end.
 result_to_message(ExpectedID, Item, Opts) ->
     GQLOpts =
-        Opts#{
+        hb_ao:explicit_set(Opts, #{
             <<"hashpath">> => ignore,
             <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
-        },
+        }),
     % We have the headers, so we can get the data.
     Data =
         case hb_maps:get(<<"data">>, Item, not_found, GQLOpts) of
@@ -332,7 +332,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                         Comms = hb_maps:get(<<"commitments">>, Structured, #{}, Opts),
                         AttName = hd(hb_maps:keys(Comms, Opts)),
                         Comm = hb_maps:get(AttName, Comms, not_found, Opts),
-                        Structured#{
+                        hb_ao:explicit_set(Structured, #{
                             <<"commitments">> => #{
                                 AttName =>
                                     Comm#{
@@ -354,7 +354,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                                             )
                                     }
                             }
-                        }
+                        })
                 end
         end,
     {ok, Embedded}.

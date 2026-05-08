@@ -189,7 +189,7 @@ maybe_deep_inspect(Pid, Info, #{opts := Opts, last_deep_inspect := Last} = State
                     ?event(system_monitor,
                         {deep_inspect_error, Pid, Class, Reason})
             end,
-            State#{last_deep_inspect => Now};
+            hb_ao:explicit_set(State, #{last_deep_inspect => Now});
         false ->
             State
     end.

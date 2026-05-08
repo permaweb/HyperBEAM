@@ -206,7 +206,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
         % Search for a `body' key in the message, and if found use it as the source
         % of the report. If not found, use the message itself as the source.
         ?event({node_opts, {explicit, NodeOpts}}),
-        RawMsg = hb_ao:get(<<"body">>, M2, M2, NodeOpts#{ <<"hashpath">> => ignore }),
+        RawMsg = hb_ao:get(<<"body">>, M2, M2, hb_ao:explicit_set(NodeOpts, #{ <<"hashpath">> => ignore })),
         ?event({msg, {explicit, RawMsg}}),
         MsgWithJSONReport =
             hb_util:ok(
@@ -269,7 +269,7 @@ extract_and_normalize_message(M2, NodeOpts) ->
 %% `{error, missing_node_msg_id}' if no ID can be found
 -spec extract_node_message_id(_, _) -> {ok, binary()} | {error, missing_node_msg_id}.
 extract_node_message_id(Msg, NodeOpts) ->
-    case {hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ <<"hashpath">> => ignore }),
+    case {hb_ao:get(<<"node-message">>, Msg, hb_ao:explicit_set(NodeOpts, #{ <<"hashpath">> => ignore })),
           hb_ao:get(<<"node-message-id">>, Msg, NodeOpts)} of
         {undefined, undefined} ->
             {error, missing_node_msg_id};
@@ -668,9 +668,9 @@ load_test_report_data() ->
 execute_is_trusted_exact_match_should_fail_test() ->
     % Test case: Exact match with trusted software should fail when vcpus differ
     Msg = #{
-        <<"local-hashes">> => (get_test_hashes())#{
+        <<"local-hashes">> => hb_ao:explicit_set((get_test_hashes()), #{
             <<"vcpus">> => 16
-        }
+        })
     },
     NodeOpts = #{
         <<"snp-trusted">> => [get_test_hashes()],
@@ -685,9 +685,9 @@ execute_is_trusted_exact_match_should_fail_test() ->
 execute_is_trusted_subset_match_should_pass_test() ->
     % Test case: Match with subset of keys in trusted software should pass
     Msg = #{
-        <<"local-hashes">> => (get_test_hashes())#{
+        <<"local-hashes">> => hb_ao:explicit_set((get_test_hashes()), #{
             <<"vcpus">> => 16
-        }
+        })
     },
     NodeOpts = #{
         <<"snp-trusted">> => [get_test_hashes()],

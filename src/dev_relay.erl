@@ -86,17 +86,17 @@ call(M1, RawM2, Opts) ->
         ),
     TargetMod1 =
         if RelayBody == not_found -> BaseTarget;
-        true -> BaseTarget#{<<"body">> => RelayBody}
+        true -> hb_ao:explicit_set(BaseTarget, #{<<"body">> => RelayBody})
         end,
     TargetMod2 =
-        TargetMod1#{
+        hb_ao:explicit_set(TargetMod1, #{
             <<"method">> => RelayMethod,
             <<"path">> => RelayPath
-        },
+        }),
     TargetMod3 =
         case RelayDevice of
             not_found -> maps:remove(<<"device">>, TargetMod2);
-            _ -> TargetMod2#{<<"device">> => RelayDevice}
+            _ -> hb_ao:explicit_set(TargetMod2, #{<<"device">> => RelayDevice})
         end,
     TargetMod4 = maps:remove(<<"commitments">>, TargetMod3),
     Commit =
@@ -137,7 +137,7 @@ call(M1, RawM2, Opts) ->
         end,
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
-    HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
+    HTTPOpts = hb_ao:explicit_set(Opts, #{ <<"http-client">> => Client, <<"http-only-result">> => false }),
     Res = case RelayPeer of
         not_found ->
             hb_http:request(TargetMod5, HTTPOpts);
@@ -230,7 +230,7 @@ relay_nearest_test() ->
         hb_http:get(
             Node,
             <<"/~relay@1.0/call?relay-path=/~meta@1.0/info/address">>,
-            Opts#{ <<"http-only-result">> => false }
+            hb_ao:explicit_set(Opts, #{ <<"http-only-result">> => false })
         ),
     ?event(
         {relay_res,

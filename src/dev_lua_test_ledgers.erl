@@ -37,7 +37,7 @@ ledger(Script, Extra, Opts) ->
         case maps:get(<<"balance">>, Extra, undefined) of
             undefined -> Extra;
             RawBalance ->
-                Extra#{
+                hb_ao:explicit_set(Extra, #{
                     <<"balance">> =>
                         maps:from_list(
                             lists:map(
@@ -54,7 +54,7 @@ ledger(Script, Extra, Opts) ->
                                 maps:to_list(RawBalance)
                             )
                         )
-                }
+                })
         end,
     Proc =
         hb_message:commit(
@@ -70,7 +70,7 @@ ledger(Script, Extra, Opts) ->
                 },
                 ModExtra
             ),
-            Opts#{ <<"priv-wallet">> => HostWallet }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => HostWallet })
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -108,12 +108,12 @@ subledger(Root, Extra, Opts) ->
     Proc = 
         hb_message:commit(
             maps:merge(
-                BareRoot#{
+                hb_ao:explicit_set(BareRoot, #{
                     <<"token">> => hb_message:id(Root, all)
-                },
+                }),
                 Extra
             ),
-            Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) })
         ),
     hb_cache:write(Proc, Opts),
     Proc.
@@ -136,21 +136,21 @@ transfer(ProcMsg, Sender, Recipient, Quantity, Route, Opts) ->
         hb_message:commit(#{
             <<"path">> => <<"push">>,
             <<"body">> =>
-                hb_message:commit(MaybeRoute#{
+                hb_message:commit(hb_ao:explicit_set(MaybeRoute, #{
                         <<"action">> => <<"Transfer">>,
                         <<"target">> => hb_message:id(ProcMsg, all),
                         <<"recipient">> => hb_util:human_id(Recipient),
                         <<"quantity">> => Quantity
-                    },
-                    Opts#{ <<"priv-wallet">> => Sender }
+                    }),
+                    hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Sender })
                 )
             },
-            Opts#{ <<"priv-wallet">> => Sender }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Sender })
         ),
     hb_ao:resolve(
         ProcMsg,
         Xfer,
-        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) })
     ).
 
 %% @doc Request that a peer register with a without sub-ledger.
@@ -158,9 +158,9 @@ register(ProcMsg, Peer, Opts) when is_map(Peer) ->
     register(ProcMsg, hb_message:id(Peer, all), Opts);
 register(ProcMsg, PeerID, RawOpts) ->
     Opts =
-        RawOpts#{
+        hb_ao:explicit_set(RawOpts, #{
             <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), RawOpts)
-        },
+        }),
     Reg =
         hb_message:commit(
             #{
@@ -262,10 +262,10 @@ map(Procs, Opts) ->
                     #{ <<"token">> := _ } -> #{};
                     _ -> #{ root => true }
                 end,
-            MaybeRoot#{
+            hb_ao:explicit_set(MaybeRoot, #{
                 balances => Balances,
                 ledgers => Ledgers
-            }
+            })
         end,
         maps:map(fun(_, Proc) -> balances(Proc, Opts) end, NormProcs),
         maps:map(fun(_, Proc) -> ledgers(Proc, Opts) end, NormProcs)
@@ -762,14 +762,14 @@ multischeduler() ->
     NodeWallet = ar_wallet:new(),
     Scheduler2 = ar_wallet:new(),
     Scheduler3 = ar_wallet:new(),
-    Opts = BaseOpts#{
+    Opts = hb_ao:explicit_set(BaseOpts, #{
         <<"priv-wallet">> => NodeWallet,
         <<"identities">> => #{
             <<"extra-scheduler">> => #{
                 <<"priv-wallet">> => Scheduler2
             }
         }
-    },
+    }),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
     RootLedger =
@@ -814,9 +814,9 @@ multischeduler() ->
     RootLedger3 =
         ledger(
             <<"scripts/hyper-token.lua">>,
-            ProcExtra#{
+            hb_ao:explicit_set(ProcExtra, #{
                 <<"scheduler-match">> => 1
-            },
+            }),
             OptsWithoutExtraScheduler
         ),
     transfer(RootLedger3, Alice, Bob, 100, OptsWithoutExtraScheduler),
@@ -826,7 +826,7 @@ multischeduler() ->
     % Further, we ensure that the `scheduler-required' field is satisfied by
     % creating a subledger that has two different schedulers, excluding the
     % host wallet.
-    OptsWithSchedulers = OptsWithoutExtraScheduler#{
+    OptsWithSchedulers = hb_ao:explicit_set(OptsWithoutExtraScheduler, #{
         <<"identities">> => #{
             <<"scheduler-1">> => #{
                 <<"priv-wallet">> => Scheduler3
@@ -838,7 +838,7 @@ multischeduler() ->
                 <<"priv-wallet">> => Scheduler3
             }
         }
-    },
+    }),
     % Create 3 subledgers with the same process, but different schedulers. Two
     % that are valid (containing the `scheduler-required' field), and one that
     % is invalid (does not contain the scheduler from `scheduler-required').
@@ -928,14 +928,14 @@ comma_separated_scheduler_list_test() ->
     Scheduler2 = ar_wallet:new(),
     Alice = ar_wallet:new(),
     Bob = ar_wallet:new(),
-    Opts = (test_opts())#{
+    Opts = hb_ao:explicit_set((test_opts()), #{
         <<"priv-wallet">> => NodeWallet,
         <<"identities">> => #{
             <<"extra-scheduler">> => #{
                 <<"priv-wallet">> => Scheduler2
             }
         }
-    },
+    }),
     Ledger =
         ledger(
             <<"scripts/hyper-token.lua">>,

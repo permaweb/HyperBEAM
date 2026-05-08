@@ -160,7 +160,7 @@ execute_handler(
         <<"step">>,
         maps:remove(<<"step">>, Handler),
         Req,
-        Opts#{ <<"on">> => maps:remove(<<"step">>, On) }
+        hb_ao:explicit_set(Opts, #{ <<"on">> => maps:remove(<<"step">>, On) })
     );
 execute_handler(HookName, Handler, Req, Opts) ->
     try
@@ -170,12 +170,12 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % `hook/commit` key is set to `true`, the handler request will be
         % committed before execution.
         BaseReq =
-            Req#{
+            hb_ao:explicit_set(Req, #{
                 <<"path">> =>
                     hb_maps:get(<<"path">>, Handler, HookName, Opts),
                 <<"method">> =>
                     hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
-            },
+            }),
         CommitReqBin = 
             hb_util:bin(
                 hb_util:deep_get(
@@ -209,10 +209,10 @@ execute_handler(HookName, Handler, Req, Opts) ->
             hb_ao:resolve(
                 PreparedBase,
                 PreparedReq,
-                Opts#{
+                hb_ao:explicit_set(Opts, #{
                     <<"hashpath">> => ignore,
                     <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
-                }
+                })
             ),
         ?event(hook,
             {handler_result,
@@ -262,7 +262,7 @@ single_handler_test() ->
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, _) ->
-                    {ok, Req#{ <<"handler_executed">> => true }}
+                    {ok, hb_ao:explicit_set(Req, #{ <<"handler_executed">> => true })}
                 end
         }
     },
@@ -278,7 +278,7 @@ multiple_handlers_test() ->
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, _) ->
-                    {ok, Req#{ <<"handler1">> => true }}
+                    {ok, hb_ao:explicit_set(Req, #{ <<"handler1">> => true })}
                 end
         }
     },
@@ -286,7 +286,7 @@ multiple_handlers_test() ->
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, _) ->
-                    {ok, Req#{ <<"handler2">> => true }}
+                    {ok, hb_ao:explicit_set(Req, #{ <<"handler2">> => true })}
                 end
         }
     },
@@ -303,7 +303,7 @@ halt_on_error_test() ->
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, _) ->
-                    {ok, Req#{ <<"handler1">> => true }}
+                    {ok, hb_ao:explicit_set(Req, #{ <<"handler1">> => true })}
                 end
         }
     },
@@ -319,7 +319,7 @@ halt_on_error_test() ->
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, _) ->
-                    {ok, Req#{ <<"handler3">> => true }}
+                    {ok, hb_ao:explicit_set(Req, #{ <<"handler3">> => true })}
                 end
         }
     },

@@ -95,7 +95,7 @@ collect_loop(State) ->
         {request, Tag, Body} ->
             ?event({request, Tag, Body}),
             Requests = maps:get(Tag, State, []),
-            collect_loop(State#{Tag => [Body | Requests]});
+            collect_loop(hb_ao:explicit_set(State, #{Tag => [Body | Requests]}));
         {get_requests, Tag, From} ->
             Requests = maps:get(Tag, State, []),
             From ! {requests, lists:reverse(Requests)},

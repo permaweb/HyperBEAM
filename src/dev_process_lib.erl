@@ -6,7 +6,8 @@
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Req, Opts) ->
-    case hb_ao:get(<<"process">>, Base, Opts#{ <<"hashpath">> => ignore }) of
+    ?event(debug_process_id, {start}),
+    case hb_ao:get(<<"process">>, Base, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })) of
         not_found ->
             process_id(ensure_process_key(Base, Opts), Req, Opts);
         Process ->
@@ -21,7 +22,7 @@ process_id(Base, Req, Opts) ->
                 {true, _} ->
                     hb_message:id(
                         Process,
-                        hb_util:atom(maps:get(<<"commitments">>, Req, <<"signed">>)),
+                        hb_util:atom(maps:get(<<"commitments-type">>, Req, <<"signed">>)),
                         Opts
                     )
             end
@@ -119,7 +120,7 @@ ensure_process_key(Base, Opts) ->
                 hb_ao:set(
                     hb_message:uncommitted(Base, Opts),
                     #{ <<"process">> => Committed },
-                    Opts#{ <<"hashpath">> => ignore }
+                    hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                 ),
             ?event(
                 {set_process_key_res,

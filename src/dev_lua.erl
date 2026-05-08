@@ -104,23 +104,23 @@ find_modules(Base, Opts) ->
         {not_found, _} ->
             load_modules(MaybeBodyMod, Opts);
         {Module, _} when is_binary(Module)->
-            find_modules(Base#{ <<"module">> => [Module] }, Opts);
+            find_modules(hb_ao:explicit_set(Base, #{ <<"module">> => [Module] }), Opts);
         {Module, _} when is_map(Module) ->
             % If the module is a map, check its content type to see if it is 
             % a literal Lua module, or a map of modules with content types.
             case hb_ao:get(<<"content-type">>, Module, Opts) of
                 LuaCT when ?IS_LUA_TYPE(LuaCT) ->
                     find_modules(
-                        Base#{ <<"module">> => [Module] },
+                        hb_ao:explicit_set(Base, #{ <<"module">> => [Module] }),
                         Opts
                     );
                 _ ->
                     % If the script is not a literal Lua script binary, assume
                     % it is a map of scripts with content types, and recurse.
                     find_modules(
-                        Base#{
+                        hb_ao:explicit_set(Base, #{
                             <<"module">> => maps:values(Module)
-                        },
+                        }),
                         Opts
                     )
             end;
@@ -292,7 +292,7 @@ compute(Key, RawBase, RawReq, Opts) ->
                 {{as, <<"message@1.0">>, Base}, <<"function">>}
             ],
             Key,
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     ?event(debug_lua, function_found),
     Params =
@@ -307,7 +307,7 @@ compute(Key, RawBase, RawReq, Opts) ->
                 Req,
                 #{}
             ],
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
@@ -343,11 +343,11 @@ process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
     case decode(MsgResult, Opts) of
         Msg when is_map(Msg) ->
             ?event(lua, {response, {status, Status}, {msg, Msg}}),
-            {hb_util:atom(Status), Msg#{
+            {hb_util:atom(Status), hb_ao:explicit_set(Msg, #{
                 <<"priv">> => Priv#{
                     <<"state">> => NewState
                 }
-            }};
+            })};
         NonMsgRes -> {hb_util:atom(Status), NonMsgRes}
     end;
 process_response({lua_error, RawError, State}, _Priv, Opts) ->
@@ -388,7 +388,7 @@ snapshot(Base, _Req, Opts) ->
 %% @doc Restore the Lua state from a snapshot, if it exists.
 -spec normalize(_, _, _) -> _.
 normalize(Base, _Req, RawOpts) ->
-    Opts = RawOpts#{ <<"hashpath">> => ignore },
+    Opts = hb_ao:explicit_set(RawOpts, #{ <<"hashpath">> => ignore }),
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
             DeviceKey =
@@ -729,7 +729,7 @@ pure_lua_restore_test() ->
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts, #{ <<"path">> => <<"inc">>}),
-    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
+    {ok, _} = hb_ao:resolve(Process, Message, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
     {ok, Count1} = hb_ao:resolve(Process, <<"now/count">>, Opts),
     ?assertEqual(1, Count1),
     hb_ao:resolve(
@@ -756,7 +756,7 @@ pure_lua_process_benchmark(Opts) ->
     Message = generate_test_message(Process, Opts),
     lists:foreach(
         fun(X) ->
-            hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
+            hb_ao:resolve(Process, Message, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
             ?event(debug_lua, {scheduled, X})
         end,
         lists:seq(1, BenchMsgs)
@@ -780,7 +780,7 @@ invoke_aos_test() ->
     {ok, _Proc} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts),
     {ok, _Assignment} =
-        hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
+        hb_ao:resolve(Process, Message, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output">>, Opts),
     ?assertEqual(<<"1">>, hb_ao:get(<<"data">>, Results, #{})),
     ?assertEqual(<<"aos> ">>, hb_ao:get(<<"prompt">>, Results, #{})).
@@ -810,7 +810,7 @@ aos_authority_not_trusted_test() ->
         Opts
     ),
     ?event({message, Message}),
-    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
+    {ok, _} = hb_ao:resolve(Process, Message, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
     ?assertEqual(<<"Message is not trusted.">>, Results).
 
@@ -854,7 +854,7 @@ aos_process_benchmark_test_() ->
 %% @doc Generate a Lua process message.
 generate_lua_process(File, Opts) ->
     NormOpts =
-        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }),
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), NormOpts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     {ok, Module} = file:read_file(File),
@@ -909,17 +909,17 @@ generate_test_message(Process, Opts, ToEval) when is_binary(ToEval) ->
 generate_test_message(Process, Opts, MsgBase) ->
     ProcID = hb_message:id(Process, all),
     NormOpts =
-        Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) }),
     hb_message:commit(#{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">>,
             <<"body">> =>
                 hb_message:commit(
-                    MsgBase#{
+                    hb_ao:explicit_set(MsgBase, #{
                         <<"target">> => ProcID,
                         <<"type">> => <<"Message">>,
                         <<"random-seed">> => rand:uniform(1337)
-                    },
+                    }),
                     NormOpts
                 )
         },

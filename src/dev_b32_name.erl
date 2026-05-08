@@ -59,7 +59,7 @@ dev_b32_name_test_() ->
     ]}.
 
 test_invalid_arns_and_not_52char_host_resolution_gives_404() ->
-    Opts = (dev_name:test_arns_opts())#{ <<"port">> => 0 },
+    Opts = hb_ao:explicit_set((dev_name:test_arns_opts()), #{ <<"port">> => 0 }),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, #{<<"status">> := 404}},
@@ -278,14 +278,14 @@ test_opts() ->
     {ok, _UnsignedID3} = hb_cache:write(SignedMsg3, BaseOpts),
     #{
         opts =>
-            BaseOpts#{
+            hb_ao:explicit_set(BaseOpts, #{
                 <<"store">> => Store,
                 <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
                 <<"on">> =>
                     #{
                         <<"request">> => [#{<<"device">> => <<"name@1.0">>}]
                     }
-            },
+            }),
         id1 => UnsignedID1,
         id2 => UnsignedID2,
         id3 => SignedMsg3,
@@ -302,7 +302,7 @@ subdomain(ID, Opts) ->
 %% @doc Returns `Opts' with a test environment preloaded with manifest related
 %% IDs.
 manifest_opts() ->
-    (dev_manifest:test_env_opts())#{
+    hb_ao:explicit_set((dev_manifest:test_env_opts()), #{
         <<"port">> => 0,
         <<"http-client-hackney-recv-timeout">> => 30_000,
         <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
@@ -314,4 +314,4 @@ manifest_opts() ->
                         #{<<"device">> => <<"manifest@1.0">>}
                     ]
             }
-    }.
+    }).

@@ -73,12 +73,12 @@ process_cache_opts(RawOpts) ->
             StoreMsg when is_map(StoreMsg) -> [StoreMsg];
             Other -> Other
         end,
-    RawOpts#{ store => hb_store:scope(UnscopedStore, Scope) }.
+    hb_ao:explicit_set(RawOpts, #{ store => hb_store:scope(UnscopedStore, Scope) }).
 
 process_to_group_name(Base, Opts) ->
     Initialized = dev_process_lib:ensure_process_key(Base, Opts),
     ProcMsg =
-        hb_ao:get(<<"process">>, Initialized, Opts#{ <<"hashpath">> => ignore }),
+        hb_ao:get(<<"process">>, Initialized, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
     ID = hb_message:id(ProcMsg, all),
     ?event({process_to_group_name, {id, ID}, {base, Base}}),
     hb_util:human_id(ID).
@@ -87,11 +87,11 @@ process_to_group_name(Base, Opts) ->
 %% execution of `hb_ao:resolve/3', so the state we are given is the
 %% already current.
 server(GroupName, Base, Opts) ->
-    ServerOpts = Opts#{
+    ServerOpts = hb_ao:explicit_set(Opts, #{
         <<"await-inprogress">> => false,
         <<"spawn-worker">> => false,
         <<"process-workers">> => false
-    },
+    }),
     % The maximum amount of time the worker will wait for a request before
     % checking the cache for a snapshot. Default: 5 minutes.
     Timeout = hb_opts:get(process_worker_max_idle, 300_000, Opts),
@@ -131,7 +131,7 @@ server(GroupName, Base, Opts) ->
         hb_ao:resolve(
             Base,
             <<"snapshot">>,
-            ServerOpts#{ <<"cache-control">> => [<<"store">>] }
+            hb_ao:explicit_set(ServerOpts, #{ <<"cache-control">> => [<<"store">>] })
         ),
         % Return the current process state.
         {ok, Base}
@@ -247,7 +247,7 @@ grouper_skips_when_slot_cached_test() ->
             <<"priv-wallet">> => ar_wallet:new()
         },
     M1 = dev_process_test_vectors:aos_process(Opts),
-    POpts = Opts#{ <<"process-workers">> => true },
+    POpts = hb_ao:explicit_set(Opts, #{ <<"process-workers">> => true }),
     % With the cache empty, every compute request must group by
     % process so that the worker can do the actual work.
     Uncached = #{ <<"path">> => <<"compute">>, <<"slot">> => 5 },

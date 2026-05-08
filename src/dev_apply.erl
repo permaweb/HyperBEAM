@@ -38,7 +38,7 @@ default(Key, Base, Request, Opts) ->
         {B, R} when B =/= not_found andalso R =/= not_found ->
             pair(Key, Base, Request, Opts);
         _ ->
-            eval(Base, Request#{ <<"apply-path">> => Key }, Opts)
+            eval(Base, hb_ao:explicit_set(Request, #{ <<"apply-path">> => Key }), Opts)
     end.
 
 %% @doc Apply a request. We source the `base' message for the request either
@@ -76,7 +76,7 @@ eval(Base, Request, Opts) ->
                             >>
                         };
                     {ok, ApplyPath} ->
-                        ApplyMsg = ApplyBase#{ <<"path">> => ApplyPath },
+                        ApplyMsg = hb_ao:explicit_set(ApplyBase, #{ <<"path">> => ApplyPath }),
                         ?event({executing, ApplyMsg}),
                         hb_ao:resolve(ApplyMsg, Opts)
                 end
@@ -99,7 +99,7 @@ pair(PathToSet, Base, Request, Opts) ->
         PreparedRequest =
             case PathToSet of
                 <<"undefined">> -> RequestSource;
-                _ -> RequestSource#{ <<"path">> => PathToSet }
+                _ -> hb_ao:explicit_set(RequestSource, #{ <<"path">> => PathToSet })
             end,
         ?event({eval_pair, {base, BaseSource}, {request, PreparedRequest}}),
         hb_ao:resolve(BaseSource, PreparedRequest, Opts)
@@ -273,7 +273,7 @@ apply_over_http_test() ->
     ?assertEqual(
         {ok, <<"DATA">>},
         hb_ao:resolve(
-            Signed#{ <<"path">> => <<"/user-path">> },
+            hb_ao:explicit_set(Signed, #{ <<"path">> => <<"/user-path">> }),
             #{ <<"priv-wallet">> => hb:wallet() }
         )
     ),

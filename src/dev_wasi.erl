@@ -236,14 +236,14 @@ init() ->
 generate_wasi_stack(File, Func, Params) ->
     init(),
     Msg0 = dev_wasm:cache_wasm_image(File),
-    Base = Msg0#{
+    Base = hb_ao:explicit_set(Msg0, #{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> => [<<"wasi@1.0">>, <<"wasm-64@1.0">>],
         <<"output-prefixes">> => [<<"wasm">>, <<"wasm">>],
         <<"stack-keys">> => [<<"init">>, <<"compute">>],
         <<"function">> => Func,
         <<"params">> => Params
-    },
+    }),
     {ok, Req} = hb_ao:resolve(Base, <<"init">>, #{}),
     Req.
 
@@ -282,7 +282,7 @@ basic_aos_exec_test() ->
     {ok, EnvBin} = hb_beamr_io:read(Instance, Ptr2, byte_size(Env)),
     ?assertEqual(Env, EnvBin),
     ?assertEqual(Msg, MsgBin),
-    Ready = Init#{ <<"parameters">> => [Ptr1, Ptr2] },
+    Ready = hb_ao:explicit_set(Init, #{ <<"parameters">> => [Ptr1, Ptr2] }),
     {ok, StateRes} = hb_ao:resolve(Ready, <<"compute">>, #{}),
     [Ptr] = hb_ao:get(<<"results/wasm/output">>, StateRes),
     {ok, Output} = hb_beamr_io:read_string(Instance, Ptr),

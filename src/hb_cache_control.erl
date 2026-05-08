@@ -247,7 +247,7 @@ maybe_set(Map1, Map2, Opts) ->
 cache_source_to_cache_settings({opts, Opts}, _) ->
     CCMap = specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)),
     case hb_opts:get(hashpath, update, Opts) of
-        ignore -> CCMap#{ <<"store">> => false };
+        ignore -> hb_ao:explicit_set(CCMap, #{ <<"store">> => false });
         _ -> CCMap
     end;
 cache_source_to_cache_settings(Msg, Opts) ->
@@ -341,7 +341,7 @@ only_if_cached_directive_test() ->
 
 %% Test hashpath settings
 hashpath_ignore_prevents_storage_test() ->
-    Opts = (opts_with_cc([]))#{<<"hashpath">> => ignore},
+    Opts = hb_ao:explicit_set((opts_with_cc([])), #{<<"hashpath">> => ignore}),
     Result = derive_cache_settings([], Opts),
     ?assertEqual(#{<<"store">> => ?DEFAULT_STORE_OPT, <<"lookup">> => ?DEFAULT_LOOKUP_OPT}, Result).
 

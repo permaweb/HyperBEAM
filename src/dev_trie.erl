@@ -24,11 +24,13 @@
 %%% but cannot be properly normalized.
 -define(RADIX, 256).
 
+-spec info() -> _.
 info() ->
     #{
         default => fun get/4
      }.
 
+-spec keys(_, _) -> _.
 keys(Trie, Opts) ->
     collect_keys(Trie, <<>>, Opts, []).
 
@@ -67,7 +69,7 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
 %% message.
 -spec get(_, _, _, _) -> _.
 get(Key, Trie, Req, Opts) ->
-    get(Trie, Req#{<<"key">> => Key}, Opts).
+    get(Trie, hb_ao:explicit_set(Req, #{<<"key">> => Key}, Opts), Opts).
 -spec get(_, _, _) -> _.
 get(TrieNode, Req, Opts) ->
     case hb_maps:find(<<"key">>, Req, Opts) of
@@ -78,7 +80,8 @@ get(TrieNode, Req, Opts) ->
 %% @doc Set keys and their values in the trie.
 -spec set(_, _, _) -> _.
 set(Trie, Req, Opts) ->
-    Insertable = hb_maps:without([<<"path">>], Req, Opts),
+    ?event(trie_set, {setting_trie, {trie, Trie}, {req, Req}}),
+    Insertable = hb_maps:without([<<"commitments">>, <<"path">>], Req, Opts),
     KeyVals = hb_maps:to_list(Insertable, Opts),
     {ok, do_set(Trie, KeyVals, Opts)}.
 do_set(Trie, [], Opts) ->
@@ -286,7 +289,7 @@ longest_prefix_match({BestLabel, BestSize}, Key, [EdgeLabel | EdgeLabels], N) ->
 %%% Tests
 test_opts() ->
     #{
-        <<"store">> => [hb_test_utils:test_store()],
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)],
         <<"priv-wallet">> => hb:wallet()
     }.
 count_nodes(TrieNode, Opts) when not is_map(TrieNode) -> 0;
@@ -512,7 +515,7 @@ large_balance_table_test() ->
     {ok, BaseTrie} =
         hb_ao:resolve(
             #{ <<"device">> => <<"trie@1.0">> },
-            Balances#{ <<"path">> => <<"set">> },
+            hb_ao:explicit_set(Balances, #{ <<"path">> => <<"set">> }, Opts),
             Opts
         ),
     UpdateBalanceA =

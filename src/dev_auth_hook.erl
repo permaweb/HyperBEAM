@@ -254,7 +254,7 @@ generate_secret(Provider, Request, Opts) ->
             % The provider returned a direct key, calculate the committer and
             % generate a wallet for it, if needed.
             ?event({secret_from_provider, Secret}),
-            {ok, Provider#{ <<"secret">> => Secret }, strip_sensitive(Request, Opts)};
+            {ok, hb_ao:explicit_set(Provider, #{ <<"secret">> => Secret }), strip_sensitive(Request, Opts)};
         {ok, NormalizedReq} when is_map(NormalizedReq) ->
             % If there is a `wallet' field in the request, we move it to the
             % provider, else continue with the existing provider.
@@ -264,7 +264,7 @@ generate_secret(Provider, Request, Opts) ->
                     ?event({key_found_in_normalized_req, Key}),
                     {
                         ok,
-                        Provider#{ <<"secret">> => Key },
+                        hb_ao:explicit_set(Provider, #{ <<"secret">> => Key }),
                         strip_sensitive(NormalizedReq, Opts)
                     };
                 error ->
@@ -400,11 +400,11 @@ call_provider(Key, Provider, Request, Opts) ->
     ?event({call_provider, {key, Key}, {provider, Provider}, {req, Request}}),
     ExecKey = hb_maps:get(<< Key/binary, "-path">>, Provider, Key, Opts),
     ?event({call_provider, {exec_key, ExecKey}}),
-    case hb_ao:resolve(Provider, Request#{ <<"path">> => ExecKey }, Opts) of
+    case hb_ao:resolve(Provider, hb_ao:explicit_set(Request, #{ <<"path">> => ExecKey }), Opts) of
         {ok, Msg} when is_map(Msg) ->
             % The result is a message. We revert the path to its original value.
             case maps:find(<<"path">>, Request) of
-                {ok, Path} -> {ok, Msg#{ <<"path">> => Path }};
+                {ok, Path} -> {ok, hb_ao:explicit_set(Msg, #{ <<"path">> => Path })};
                 _ -> {ok, Msg}
             end;
         {ok, _} = Res ->

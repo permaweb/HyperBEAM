@@ -29,7 +29,7 @@ unzip(Base, _Req, Opts) ->
                     {ok,
                         maps:remove(
                             <<"content-encoding">>,
-                            Base#{ <<"body">> => zlib:gunzip(Body) }
+                            hb_ao:explicit_set(Base, #{ <<"body">> => zlib:gunzip(Body) })
                         )}
             end;
         _ ->
@@ -48,10 +48,10 @@ zip(Base, _Req, _Opts) ->
     case maps:find(<<"body">>, Base) of
         {ok, Body} ->
             {ok,
-                Base#{
+                hb_ao:explicit_set(Base, #{
                     <<"body">> => zlib:gzip(Body),
                     <<"content-encoding">> => <<"gzip">>
-                }};
+                })};
         error ->
             {error, <<"No `body' key to zip found in message.">>}
     end.

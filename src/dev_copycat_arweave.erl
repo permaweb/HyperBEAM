@@ -124,12 +124,12 @@ list_index_blocks(Current, To, Opts, Acc) ->
                             list_index_blocks(Current - 1, To, Opts, Acc);
                         _ ->
                             BlockKey = hb_util:bin(Current),
-                            NewAcc = Acc#{
+                            NewAcc = hb_ao:explicit_set(Acc, #{
                                 BlockKey => #{
                                     <<"indexed">> => IndexedTXs,
                                     <<"not-indexed">> => NotIndexedTXs
                                 }
-                            },
+                            }),
                             list_index_blocks(Current - 1, To, Opts, NewAcc)
                     end
             end;
@@ -288,7 +288,7 @@ maybe_index_ids(Block, Opts) ->
                         TXsWithData
                     ),
                     TXResults = process_txs(ValidTXs, BlockStartOffset, Opts),
-                    {block_cached, TXResults#{total_txs => TotalTXs}}
+                    {block_cached, hb_ao:explicit_set(TXResults, #{total_txs => TotalTXs})}
             end
     end.
 
@@ -904,10 +904,10 @@ auto_stop_partial_index_test_parallel() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     HigherBlock = Block + 1,
-    NoIndexOpts = Opts#{
+    NoIndexOpts = hb_ao:explicit_set(Opts, #{
         <<"arweave-index-ids">> => false,
         <<"arweave-index-blocks">> => true
-    },
+    }),
     {ok, Block} =
         hb_ao:resolve(
             <<

@@ -23,7 +23,7 @@ resolve(Node, Base, Req, Opts) ->
                 <<"2.path">> => unset
             },
         prefix_keys(<<"2.">>, Req, Opts),
-        Opts#{ <<"hashpath">> => ignore }
+        hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
     ),
     hb_http:post(
         Node,
@@ -55,9 +55,9 @@ routes(Node, Opts) ->
 
 add_route(Node, Route, Opts) ->
     resolve(Node,
-        Route#{
+        hb_ao:explicit_set(Route, #{
             <<"device">> => <<"Router@1.0">>
-        },
+        }),
         #{
             <<"path">> => <<"routes">>,
             <<"method">> => <<"POST">>

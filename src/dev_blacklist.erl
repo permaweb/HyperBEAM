@@ -57,7 +57,7 @@ request(_Base, HookReq, Opts) ->
                     ?event(blacklist, {blocked, ID}, Opts),
                     {
                         ok,
-                        HookReq#{
+                        hb_ao:explicit_set(HookReq, #{
                             <<"body">> =>
                                 [#{
                                     <<"status">> => 451,
@@ -69,7 +69,7 @@ request(_Base, HookReq, Opts) ->
                                             "content policy. Blocked ID: ", ID/binary
                                         >>
                                 }]
-                        }
+                        })
                     };
                 Response ->
                     Response
@@ -282,10 +282,10 @@ ensure_cache_table(Msg, Opts) ->
                     case IsInitialized of
                         true -> {ok, Msg};
                         false -> 
-                            {error, Msg#{
+                            {error, hb_ao:explicit_set(Msg, #{
                                 <<"status">> => 503, 
                                 <<"body">> => <<"Loading blacklist ...">>
-                            }}
+                            })}
                     end
             end
     end.
@@ -373,7 +373,7 @@ basic_test() ->
         unsigned3 := UnsignedID3,
         blacklist := BlacklistID
     }} = setup_test_env(),
-    Opts1 = Opts0#{ <<"blacklist-providers">> => [BlacklistID]},
+    Opts1 = hb_ao:explicit_set(Opts0, #{ <<"blacklist-providers">> => [BlacklistID]}),
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -398,10 +398,10 @@ first_request_always_return_503_test() ->
     %% Try to call an external node to force take more time 
     %% to initialize.
     Opts1 = 
-        Opts0#{
+        hb_ao:explicit_set(Opts0, #{
             <<"blacklist-providers">> => [<<"/~test-device@1.0/delay?duration=200">>]
-        },
-    Node = hb_http_server:start_node(Opts1#{ <<"blacklist-timeout">> => 0}),
+        }),
+    Node = hb_http_server:start_node(hb_ao:explicit_set(Opts1, #{ <<"blacklist-timeout">> => 0})),
     ?assertMatch(
         {failure, #{<<"status">> := 503, <<"body">> := <<"Loading blacklist ...">>}},
         hb_http:get(Node, <<"/", UnsignedID3/binary, "/body">>, Opts1)
@@ -414,7 +414,7 @@ default_provider_test() ->
         signed1 := SignedID1,
         unsigned3 := UnsignedID3
     }} = setup_test_env(),
-    Opts1 = Opts0#{ <<"blacklist-providers">> => [] },
+    Opts1 = hb_ao:explicit_set(Opts0, #{ <<"blacklist-providers">> => [] }),
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {ok, <<"test-3">>},
@@ -482,9 +482,9 @@ multiple_providers_test() ->
     BlacklistMsg2 = hb_message:commit(Blacklist2, Opts0),
     {ok, BlacklistID1} = hb_cache:write(BlacklistMsg1, Opts0),
     {ok, BlacklistID2} = hb_cache:write(BlacklistMsg2, Opts0),
-    Opts1 = Opts0#{
+    Opts1 = hb_ao:explicit_set(Opts0, #{
         <<"blacklist-providers">> => [BlacklistID1, BlacklistID2]
-    },
+    }),
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},
@@ -510,7 +510,7 @@ provider_failure_resilience_test() ->
         blacklist := BlacklistID
     }} = setup_test_env(),
     BadProvider = <<"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkk">>,
-    Opts1 = Opts0#{ <<"blacklist-providers">> => [BadProvider, BlacklistID]},
+    Opts1 = hb_ao:explicit_set(Opts0, #{ <<"blacklist-providers">> => [BadProvider, BlacklistID]}),
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},
@@ -545,10 +545,10 @@ refresh_periodically_test() ->
     UpdatedBlacklistMsg = hb_message:commit(UpdatedBlacklist, Opts0),
     {ok, UpdatedBlacklistID} = hb_cache:write(UpdatedBlacklistMsg, Opts0),
     ok = hb_store:link(Store, #{ <<"mutable">> => InitialBlacklistID }, Opts0),
-    Opts1 = Opts0#{
+    Opts1 = hb_ao:explicit_set(Opts0, #{
         <<"blacklist-providers">> => [<<"/~cache@1.0/read?read=mutable">>],
         <<"blacklist-refresh-frequency">> => 1
-    },
+    }),
     Node = hb_http_server:start_node(Opts1),
     ?assertMatch(
         {error, #{ <<"status">> := 451 }},

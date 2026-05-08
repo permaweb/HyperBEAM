@@ -175,7 +175,7 @@ debit(Ref, Amount, State = #{ peers := Peers, min := Min }, Now) ->
     case account_balance(Ref, State, Now) of
         infinity -> State;
         Balance ->
-            State#{
+            hb_ao:explicit_set(State, #{
                 peers =>
                     Peers#{
                         Ref =>
@@ -184,7 +184,7 @@ debit(Ref, Amount, State = #{ peers := Peers, min := Min }, Now) ->
                                 last => Now
                             }
                     }
-            }
+            })
     end.
 
 %% @doc Calculate the current balance for a user, including unused capacity 

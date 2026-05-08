@@ -79,9 +79,9 @@ process_disk_line(Line, {CurrentDisk, Acc}) ->
         _ ->
             % Add line to current disk's data
             CurrentData = maps:get(<<"data">>, CurrentDisk),
-            UpdatedDisk = CurrentDisk#{
+            UpdatedDisk = hb_ao:explicit_set(CurrentDisk, #{
                 <<"data">> => [Line | CurrentData]
-            },
+            }),
             % Update the list with the modified disk entry
             UpdatedAcc = [UpdatedDisk | lists:delete(CurrentDisk, Acc)],
             {UpdatedDisk, UpdatedAcc}
@@ -104,11 +104,11 @@ parse_disk_line(Line, Info) ->
     SizePattern = "^Disk .+: ([0-9.]+ [KMGT]iB), ([0-9]+) bytes, ([0-9]+) sectors",
     case re:run(Line, SizePattern, [{capture, [1, 2, 3], binary}]) of
         {match, [Size, Bytes, Sectors]} ->
-            Info#{
+            hb_ao:explicit_set(Info, #{
                 <<"size">> => Size,
                 <<"bytes">> => binary_to_integer(Bytes),
                 <<"sectors">> => binary_to_integer(Sectors)
-            };
+            });
         _ -> 
             parse_disk_model_line(Line, Info)
     end.
@@ -119,7 +119,7 @@ parse_disk_model_line(Line, Info) ->
     ModelPattern = "^Disk model: (.+)\\s*$",
     case re:run(Line, ModelPattern, [{capture, [1], binary}]) of
         {match, [Model]} ->
-            Info#{<<"model">> => string:trim(Model)};
+            hb_ao:explicit_set(Info, #{<<"model">> => string:trim(Model)});
         _ ->
             parse_disk_units_line(Line, Info)
     end.
@@ -130,7 +130,7 @@ parse_disk_units_line(Line, Info) ->
     UnitsPattern = "^Units: (.+)$",
     case re:run(Line, UnitsPattern, [{capture, [1], binary}]) of
         {match, [Units]} ->
-            Info#{<<"units">> => Units};
+            hb_ao:explicit_set(Info, #{<<"units">> => Units});
         _ ->
             parse_sector_size_line(Line, Info)
     end.
@@ -141,12 +141,12 @@ parse_sector_size_line(Line, Info) ->
     SectorPattern = "^Sector size \\(logical/physical\\): ([^/]+)/(.+)$",
     case re:run(Line, SectorPattern, [{capture, [1, 2], binary}]) of
         {match, [LogicalSize, PhysicalSize]} ->
-            Info#{
+            hb_ao:explicit_set(Info, #{
                 <<"sector_size">> => #{
                     <<"logical">> => string:trim(LogicalSize),
                     <<"physical">> => string:trim(PhysicalSize)
                 }
-            };
+            });
         _ ->
             parse_io_size_line(Line, Info)
     end.
@@ -157,12 +157,12 @@ parse_io_size_line(Line, Info) ->
     IOPattern = "^I/O size \\(minimum/optimal\\): ([^/]+)/(.+)$",
     case re:run(Line, IOPattern, [{capture, [1, 2], binary}]) of
         {match, [MinSize, OptSize]} ->
-            Info#{
+            hb_ao:explicit_set(Info, #{
                 <<"io_size">> => #{
                     <<"minimum">> => string:trim(MinSize),
                     <<"optimal">> => string:trim(OptSize)
                 }
-            };
+            });
         _ -> 
             Info
     end.
@@ -646,14 +646,14 @@ update_store_config(
             ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
             NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
             ?event(debug_volume, {fs, StoreConfig, NewPath, NewName}),
-            StoreConfig#{<<"name">> => NewName};
+            hb_ao:explicit_set(StoreConfig, #{<<"name">> => NewName});
         hb_store_lmdb ->
             ExistingPath = maps:get(<<"name">>, StoreConfig, <<"">>),
             NewName = <<NewPath/binary, "/", ExistingPath/binary>>,
             ?event(debug_volume, {migrate_start, ExistingPath, NewName}),
             safe_stop_lmdb_store(StoreConfig),
             ?event(debug_volume, {using_existing_store, NewName}),
-            FinalConfig = StoreConfig#{<<"name">> => NewName},
+            FinalConfig = hb_ao:explicit_set(StoreConfig, #{<<"name">> => NewName}),
             safe_start_lmdb_store(FinalConfig),
             FinalConfig;
         hb_store_rocksdb ->
@@ -661,9 +661,9 @@ update_store_config(
         hb_store_gateway ->
             % For gateway store, recursively update nested store configs
             NestedStore = maps:get(<<"store">>, StoreConfig, []),
-            StoreConfig#{
+            hb_ao:explicit_set(StoreConfig, #{
                 <<"store">> => update_store_config(NestedStore, NewPath)
-            };
+            });
         _ ->
             % For any other store type, update the prefix
             % StoreConfig#{<<"name">> => NewPath}
@@ -771,7 +771,7 @@ update_store_config_test() ->
     },
     NewPath = <<"/encrypted/mount">>,
     Updated = update_store_config(FSStore, NewPath),
-    Expected = FSStore#{<<"name">> => <<"/encrypted/mount/cache">>},
+    Expected = hb_ao:explicit_set(FSStore, #{<<"name">> => <<"/encrypted/mount/cache">>}),
     ?assertEqual(Expected, Updated),
     % Test list of stores
     StoreList = [FSStore, #{<<"store-module">> => hb_store_gateway}],

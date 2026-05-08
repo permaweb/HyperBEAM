@@ -40,10 +40,10 @@ load_state(Snapshot, Opts) ->
         <<"/state">>,
         Body,
         Headers,
-        Opts#{
+        hb_ao:explicit_set(Opts, #{
             <<"hashpath">> => ignore,
             <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
-        }
+        })
     ),
     ?event(debug_load_snapshot, {load_result, Res}),
     Res.
@@ -95,10 +95,10 @@ do_compute(ProcID, Req, Opts) ->
             <<"/result/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary>>,
             Body,
             AOS2,
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"hashpath">> => ignore,
                 <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
-            }
+            })
         ),
     extract_json_res(Response, Opts).
 
@@ -121,10 +121,10 @@ do_dryrun(ProcID, Req, Opts) ->
         <<"/dry-run?process-id=", ProcID/binary>>,
         Body,
         #{},
-        Opts#{
+        hb_ao:explicit_set(Opts, #{
             <<"hashpath">> => ignore,
             <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
-        }
+        })
     ),
     extract_json_res(Response, Opts).
 
@@ -136,7 +136,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
             <<"device">> => <<"relay@1.0">>,
             <<"content-type">> => ContentType
         },
-        Headers#{
+        hb_ao:explicit_set(Headers, #{
             <<"path">> => <<"call">>,
             <<"target">> => <<"payload">>,
             <<"payload">> =>
@@ -146,7 +146,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
                     <<"body">> => Body,
                     <<"content-type">> => ContentType
                 }
-        },
+        }),
         Opts
     ).
 
@@ -219,10 +219,10 @@ snapshot(Msg, Req, Opts) ->
                 <<"content-type">> => <<"application/json">>,
                 <<"body">> => <<"{}">>
             },
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"hashpath">> => ignore,
                 <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
-            }
+            })
         ),
     ?event({snapshotting_result, Res}),
     case Res of

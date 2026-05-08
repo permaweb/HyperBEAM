@@ -139,7 +139,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
             report_ensure_loaded_not_found(Ref, Link, Opts)
     end;
 ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
-	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
+	ensure_loaded(Ref, {link, ID, hb_ao:explicit_set(LinkOpts, #{ <<"lazy">> => true})}, Opts);
 ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
     Msg.
 
@@ -291,7 +291,7 @@ do_write_message(List, Store, Opts) when is_list(List) ->
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     ?event(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
-    UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
+    UncommittedID = hb_message:id(Msg, none, hb_ao:explicit_set(Opts, #{ <<"linkify-mode">> => discard })),
     AllIDs = calculate_all_ids(Msg, Opts),
     AltIDs = AllIDs -- [UncommittedID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
@@ -394,7 +394,7 @@ calculate_all_ids(Msg, Opts) ->
         ),
     CommIDs = hb_maps:keys(Commitments, Opts),
     ?event({calculating_ids, {msg, Msg}, {commitments, Commitments}, {comm_ids, CommIDs}}),
-    All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
+    All = hb_message:id(Msg, all, hb_ao:explicit_set(Opts, #{ <<"linkify-mode">> => discard })),
     case lists:member(All, CommIDs) of
         true -> CommIDs;
         false -> [All | CommIDs]
@@ -489,7 +489,7 @@ do_read_commitment(Path, Opts) ->
 %% @doc Load all of the commitments for a message into memory.
 read_all_commitments(Msg, Opts) ->
     LocalOpts = hb_store:scope(Opts, local),
-    UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
+    UncommittedID = hb_message:id(Msg, none, hb_ao:explicit_set(Opts, #{ <<"linkify-mode">> => discard })),
     CurrentCommitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     AlreadyLoaded = hb_maps:keys(CurrentCommitments, Opts),
     CommitmentsPath = hb_path:to_binary([UncommittedID, <<"commitments">>]),
@@ -511,7 +511,7 @@ read_all_commitments(Msg, Opts) ->
                                         CommitmentID,
                                         ensure_all_loaded(
                                             Commitment,
-                                            Opts#{ <<"commitment">> => true }
+                                            hb_ao:explicit_set(Opts, #{ <<"commitment">> => true })
                                         )
                                     }
                                 };
@@ -529,7 +529,7 @@ read_all_commitments(Msg, Opts) ->
             CurrentCommitments,
             maps:from_list(FoundCommitments)
         ),
-    Msg#{ <<"commitments">> => NewCommitments }.
+    hb_ao:explicit_set(Msg, #{ <<"commitments">> => NewCommitments }).
 %% @doc List all of the subpaths of a given path and return a map of keys and
 %% links to the subpaths, including their types.
 store_read(Path, Store, Opts) ->
@@ -607,7 +607,7 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                             LoadedCommitment = 
                                 ensure_all_loaded(
                                     Commitment,
-                                    Opts#{ <<"commitment">> => true }
+                                    hb_ao:explicit_set(Opts, #{ <<"commitment">> => true })
                                 ),
                             ?event(read_commitment,
                                 {found_target_commitment,
@@ -651,19 +651,19 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
                                                 % subpath with `lazy' set to `true'
                                                 % because we need to resolve the link
                                                 % to get the final value.
-                                                #{
+                                                hb_ao:explicit_set(#{}, #{
                                                     <<"type">> => Type,
                                                     <<"lazy">> => true
-                                                };
+                                                });
                                             _ ->
                                                 % We do not have an `ao-types' entry for the
                                                 % subpath, so we return a link to the
                                                 % subpath with `lazy' set to `true',
                                                 % because the subpath is a literal
                                                 % value.
-                                                #{
+                                                hb_ao:explicit_set(#{}, #{
                                                     <<"lazy">> => true
-                                                }
+                                                })
                                         end)#{ <<"store">> => Store }
                                     }
                                 }
@@ -1127,7 +1127,7 @@ test_write_result_edges(Store) ->
     {hit, {ok, LatestRes}} = read_resolved(BaseID, LatestReq, Opts),
     ?assert(hb_message:match(Res, LatestRes, strict, Opts)),
     NextReq = #{ <<"path">> => <<"compute">>, <<"slot">> => 8 },
-    NextRes = Res#{ <<"at-slot">> := 8 },
+    NextRes = hb_ao:explicit_set(Res, #{ <<"at-slot">> => 8 }),
     {ok, _} = write_result(BaseID, NextReq, NextRes, Opts),
     {hit, {ok, NextSlotRes}} = read_resolved(BaseID, NextReq, Opts),
     ?assert(hb_message:match(NextRes, NextSlotRes, strict, Opts)).

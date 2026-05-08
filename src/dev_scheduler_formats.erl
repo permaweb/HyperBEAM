@@ -35,7 +35,7 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
                             hb_ao:get(
                                 <<"slot">>,
                                 Assignment,
-                                Opts#{ <<"hashpath">> => ignore }
+                                hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                             ),
                             Assignment
                         }
@@ -179,14 +179,14 @@ aos2_to_assignment(A, RawOpts) ->
                 )
         end,
     ?event({message, Message}),
-    NormalizedAssignment#{ <<"body">> => Message }.
+    hb_ao:explicit_set(NormalizedAssignment, #{ <<"body">> => Message }).
 
 %% @doc The `hb_gateway_client' module expects all JSON structures to at least
 %% have a `data' field. This function ensures that.
 aos2_normalize_data(JSONStruct) ->
     case JSONStruct of
         #{<<"data">> := _} -> JSONStruct;
-        _ -> JSONStruct#{ <<"data">> => <<>> }
+        _ -> hb_ao:explicit_set(JSONStruct, #{ <<"data">> => <<>> })
     end.
 
 %% @doc Normalize an AOS2 formatted message to ensure that all field NAMES and
@@ -195,19 +195,19 @@ aos2_normalize_data(JSONStruct) ->
 %% NOTE: This will result in a message that is not verifiable! It is, however,
 %% necessary for gaining compatibility with the AOS2-style scheduling API.
 aos2_normalize_types(Msg = #{ <<"timestamp">> := TS }) when is_binary(TS) ->
-    aos2_normalize_types(Msg#{ <<"timestamp">> => hb_util:int(TS) });
+    aos2_normalize_types(hb_ao:explicit_set(Msg, #{ <<"timestamp">> => hb_util:int(TS) }));
 aos2_normalize_types(Msg = #{ <<"nonce">> := Nonce })
         when is_binary(Nonce) and not is_map_key(<<"slot">>, Msg) ->
     aos2_normalize_types(
-        Msg#{ <<"slot">> => hb_util:int(Nonce) }
+        hb_ao:explicit_set(Msg, #{ <<"slot">> => hb_util:int(Nonce) })
     );
 aos2_normalize_types(Msg = #{ <<"epoch">> := DS }) when is_binary(DS) ->
-    aos2_normalize_types(Msg#{ <<"epoch">> => hb_util:int(DS) });
+    aos2_normalize_types(hb_ao:explicit_set(Msg, #{ <<"epoch">> => hb_util:int(DS) }));
 aos2_normalize_types(Msg = #{ <<"slot">> := Slot }) when is_binary(Slot) ->
-    aos2_normalize_types(Msg#{ <<"slot">> => hb_util:int(Slot) });
+    aos2_normalize_types(hb_ao:explicit_set(Msg, #{ <<"slot">> => hb_util:int(Slot) }));
 aos2_normalize_types(Msg) when not is_map_key(<<"block-hash">>, Msg) ->
     ?event({missing_block_hash, Msg}),
-    aos2_normalize_types(Msg#{ <<"block-hash">> => hb_util:encode(<<0:256>>) });
+    aos2_normalize_types(hb_ao:explicit_set(Msg, #{ <<"block-hash">> => hb_util:encode(<<0:256>>) }));
 aos2_normalize_types(Msg) ->
     ?event(
         {
@@ -220,8 +220,8 @@ aos2_normalize_types(Msg) ->
 %% @doc For all scheduler format operations, we do not calculate hashpaths,
 %% perform cache lookups, or await inprogress results.
 format_opts(Opts) ->
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"hashpath">> => ignore,
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"await-inprogress">> => false
-    }.
+    }).

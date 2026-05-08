@@ -62,16 +62,16 @@ prep_call(RawM1, RawM2, Opts) ->
     M1 = hb_cache:ensure_all_loaded(RawM1, Opts),
     M2 = hb_cache:ensure_all_loaded(RawM2, Opts),
     ?event({prep_call, M1, M2, Opts}),
-    Process = hb_ao:get(<<"process">>, M1, Opts#{ <<"hashpath">> => ignore }),
-    Message = hb_ao:get(<<"body">>, M2, Opts#{ <<"hashpath">> => ignore }),
+    Process = hb_ao:get(<<"process">>, M1, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
+    Message = hb_ao:get(<<"body">>, M2, hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })),
     Image = hb_ao:get(<<"process/image">>, M1, Opts),
     BlockHeight = hb_ao:get(<<"block-height">>, M2, Opts),
     Props = message_to_json_struct(denormalize_message(Message, Opts), Opts),
     MsgProps =
-        Props#{
+        hb_ao:explicit_set(Props, #{
             <<"Module">> => Image,
             <<"Block-Height">> => BlockHeight
-        },
+        }),
     MsgJson = hb_json:encode(MsgProps),
     ProcessProps =
         #{
@@ -87,15 +87,15 @@ denormalize_message(Message, Opts) ->
             [] -> Message;
             [PrimarySigner|_] ->
                 {ok, _, Commitment} = hb_message:commitment(PrimarySigner, Message, Opts),
-                Message#{
+                hb_ao:explicit_set(Message, #{
                     <<"owner">> => hb_util:human_id(PrimarySigner),
                     <<"signature">> =>
                         hb_ao:get(<<"signature">>, Commitment, <<>>, Opts)
-                }
+                })
         end,
-    NormOwnerMsg#{
+    hb_ao:explicit_set(NormOwnerMsg, #{
         <<"id">> => hb_message:id(Message, all, Opts)
-    }.
+    }).
 
 message_to_json_struct(RawMsg, Opts) ->
     message_to_json_struct(RawMsg, [owner_as_address], Opts).
@@ -461,10 +461,10 @@ postprocess_outbox(Msg, Proc, Opts) ->
     AdjustedOutbox =
         hb_maps:map(
             fun(_Key, XMsg) ->
-                XMsg#{
+                hb_ao:explicit_set(XMsg, #{
                     <<"from-process">> => hb_ao:get(id, Proc, Opts),
                     <<"from-image">> => hb_ao:get(<<"image">>, Proc, Opts)
-                }
+                })
             end,
             hb_ao:get(<<"outbox">>, Msg, #{}, Opts),
             Opts
@@ -474,9 +474,9 @@ postprocess_outbox(Msg, Proc, Opts) ->
 %%% Tests
 
 normalize_test_opts(Opts) ->
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts)
-    }.
+    }).
 
 test_init() ->
     application:ensure_all_started(hb).
@@ -491,7 +491,7 @@ generate_stack(File, _Mode, RawOpts) ->
     test_init(),
     Msg0 = dev_wasm:cache_wasm_image(File, Opts),
     Image = hb_ao:get(<<"image">>, Msg0, Opts),
-    Base = Msg0#{
+    Base = hb_ao:explicit_set(Msg0, #{
         <<"device">> => <<"stack@1.0">>,
         <<"device-stack">> =>
             [
@@ -511,7 +511,7 @@ generate_stack(File, _Mode, RawOpts) ->
                 <<"scheduler">> => hb:address(),
                 <<"authority">> => hb:address()
             }, Opts)
-    },
+    }),
     {ok, Req} = hb_ao:resolve(Base, <<"init">>, Opts),
     Req.
 
@@ -555,7 +555,7 @@ aos_stack_benchmark_test_() ->
             hb_ao:get(
                 <<"process">>,
                 RawWASMMsg,
-                Opts#{ <<"hashpath">> => ignore }
+                hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
             ),
         ProcID = hb_ao:get(id, Proc, Opts),
         Msg = generate_aos_msg(ProcID, <<"return 1">>, Opts),

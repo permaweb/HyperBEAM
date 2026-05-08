@@ -11,14 +11,14 @@
 %% @doc Merge the location store with the main store. Used before writing
 %% to the cache.
 opts(Opts) ->
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"store">> =>
             hb_opts:get(
                 scheduler_store,
                 hb_opts:get(store, no_viable_store, Opts),
                 Opts
             )
-    }.
+    }).
 
 %% @doc Read the latest known scheduler location for an address.
 read(Address, RawOpts) ->

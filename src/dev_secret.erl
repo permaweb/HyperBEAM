@@ -186,14 +186,14 @@ generate(Base, Request, Opts) ->
             % Wallets found, return them.
             {
                 ok,
-                WalletDetails#{
+                hb_ao:explicit_set(WalletDetails, #{
                     <<"body">> =>
                         hb_maps:get(
                             <<"keyid">>,
                             Base,
                             Opts
                         )
-                }
+                })
             }
     end.
 
@@ -236,9 +236,9 @@ import_wallets(Wallets, Base, Request, Opts) ->
                                 RegRes,
                                 Opts
                             ),
-                        Merged#{
+                        hb_ao:explicit_set(Merged, #{
                             <<"imported">> => [ WalletAddress | OldImported ]
-                        };
+                        });
                     {error, _} -> Acc
                 end
             end,
@@ -246,10 +246,10 @@ import_wallets(Wallets, Base, Request, Opts) ->
             Wallets
         ),
     {ok,
-        Res#{
+        hb_ao:explicit_set(Res, #{
             <<"body">> =>
                 addresses_to_binary(hb_maps:get(<<"imported">>, Res, [], Opts))
-        }
+        })
     }.
 
 %% @doc Transform a wallet key serialized form into a wallet.
@@ -284,9 +284,9 @@ register_wallet(Wallet, Base, Request, Opts) ->
                 end
         end,
     AccessControl =
-        BaseAccessControl#{
+        hb_ao:explicit_set(BaseAccessControl, #{
             <<"wallet-address">> => hb_util:human_id(Address)
-        },
+        }),
     Controllers =
         hb_ao:get(<<"controllers">>, Request, default, Opts),
     RequiredControllers =
@@ -297,14 +297,14 @@ register_wallet(Wallet, Base, Request, Opts) ->
     AuthRequest =
         case hb_ao:get(<<"secret">>, Base, undefined, Opts) of
             undefined ->
-                Request#{
+                hb_ao:explicit_set(Request, #{
                     <<"path">> => <<"commit">>
-                };
+                });
             Secret ->
-                Request#{
+                hb_ao:explicit_set(Request, #{
                     <<"path">> => <<"commit">>,
                     <<"secret">> => Secret
-                }
+                })
         end,
     ?event({register_wallet, {access_control, AccessControl}, {request, AuthRequest}}),
     case hb_ao:resolve(AccessControl, AuthRequest, Opts) of
@@ -355,7 +355,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             Opts
         ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
-    Base = RespBase#{ <<"body">> => KeyID },
+    Base = hb_ao:explicit_set(RespBase, #{ <<"body">> => KeyID }),
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
         <<"client">> ->
@@ -364,7 +364,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             JSONKey = hb_maps:get(<<"wallet">>, WalletDetails, undefined, Opts),
             % Don't store, set the cookie in the response.
             hb_ao:resolve(
-                Base#{ <<"device">> => <<"cookie@1.0">> },
+                hb_ao:explicit_set(Base, #{ <<"device">> => <<"cookie@1.0">> }),
                 #{
                     <<"path">> => <<"store">>,
                     <<"wallet-", Address/binary>> => hb_escape:encode_quotes(JSONKey)
@@ -531,11 +531,11 @@ verify_controllers(WalletDetails, Request, Opts) ->
 verify_auth(WalletDetails, Req, Opts) ->
     AuthBase = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
     AuthRequest =
-        Req#{
+        hb_ao:explicit_set(Req, #{
             <<"path">> => <<"verify">>,
             <<"committer">> =>
                 hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts)
-        },
+        }),
     ?event({verify_wallet, {auth_base, AuthBase}, {request, AuthRequest}}),
     hb_ao:resolve(AuthBase, AuthRequest, Opts).
 
@@ -572,7 +572,7 @@ commit_message(Message, #{ <<"wallet">> := Key }, Opts) when is_binary(Key) ->
     commit_message(Message, ar_wallet:from_json(Key), Opts);
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
     ?event({committing_with_proxy, {message, Message}, {wallet, Key}}),
-    hb_message:commit(Message, Opts#{ <<"priv-wallet">> => Key }).
+    hb_message:commit(Message, hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Key })).
 
 %% @doc Export wallets from a request. The request should contain a source of
 %% wallets (cookies, keys, or wallet names), or a specific list/name of a
@@ -584,7 +584,7 @@ export(Base, Request, Opts) ->
         case hb_ao:get(<<"keyids">>, Request, not_found, Opts) of
             <<"all">> ->
                 AllLocalWallets = list_wallets(Opts),
-                Request#{ <<"keyids">> => AllLocalWallets };
+                hb_ao:explicit_set(Request, #{ <<"keyids">> => AllLocalWallets });
             _ -> Request
         end,
     ?event({export, {base, Base}, {request, ModReq}}),
@@ -618,10 +618,10 @@ sync(_Base, Request, Opts) ->
                     SignAs -> hb_opts:as(SignAs, Opts)
                 end,
             ExportRequest =
-                (hb_message:commit(
+                hb_ao:explicit_set((hb_message:commit(
                     #{ <<"keyids">> => Wallets },
                     SignAsOpts
-                ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+                )), #{ <<"path">> => <<"/~secret@1.0/export">> }),
             ?event({sync, {export_req, ExportRequest}}),
             case hb_http:get(Node, ExportRequest, SignAsOpts) of
                 {ok, ExportResponse} ->
@@ -681,10 +681,10 @@ store_wallet(in_memory, KeyID, Details, Opts) ->
     % Get existing wallets
     CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, Opts),
     % Add new wallet
-    UpdatedWallets = CurrentWallets#{ KeyID => Details },
+    UpdatedWallets = hb_ao:explicit_set(CurrentWallets, #{ KeyID => Details }),
     ?event({wallet_store, {updated_wallets, UpdatedWallets}}),
     % Update the node's options with the new wallets.
-    hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
+    hb_http_server:set_opts(hb_ao:explicit_set(Opts, #{ <<"priv-wallet-hosted">> => UpdatedWallets })),
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.
@@ -993,13 +993,13 @@ export_individual_batch_wallets_test() ->
     {ok, ExportAllResponse} =
         hb_http:get(
             Node,
-            (hb_message:commit(
+            hb_ao:explicit_set((hb_message:commit(
                 #{
                     <<"device">> => <<"secret@1.0">>,
                     <<"keyids">> => [WalletKeyID1, WalletKeyID2]
                 },
                 AdminOpts
-            ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+            )), #{ <<"path">> => <<"/~secret@1.0/export">> }),
             #{}
         ),
 
@@ -1007,13 +1007,13 @@ export_individual_batch_wallets_test() ->
     {ok, ExportWallet1Response} =
     hb_http:get(
         Node,
-        (hb_message:commit(
+        hb_ao:explicit_set((hb_message:commit(
             #{
                 <<"device">> => <<"secret@1.0">>,
                 <<"keyids">> => [WalletKeyID1]
             },
             AdminOpts
-        ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+        )), #{ <<"path">> => <<"/~secret@1.0/export">> }),
         #{}
     ),
     
@@ -1080,13 +1080,13 @@ export_batch_all_wallets_test() ->
     {ok, ExportResponse} =
         hb_http:get(
             Node,
-            (hb_message:commit(
+            hb_ao:explicit_set((hb_message:commit(
                 #{
                     <<"device">> => <<"secret@1.0">>,
                     <<"keyids">> => <<"all">>
                 },
                 AdminOpts
-            ))#{ <<"path">> => <<"/~secret@1.0/export">> },
+            )), #{ <<"path">> => <<"/~secret@1.0/export">> }),
             #{}
         ),
     ?event({export_batch_test, {export_response, ExportResponse}}),

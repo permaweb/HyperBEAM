@@ -201,8 +201,8 @@ store_with_workers(MultiStoreOpts = #{ <<"stores">> := Stores }) ->
             MultiStoreOpts,
             ?DEFAULT_STORE_WORKERS
         ),
-    MultiStoreOpts#{
-        <<"stores">> :=
+    hb_ao:explicit_set(MultiStoreOpts, #{
+        <<"stores">> =>
             lists:map(
                 fun(StoreOpts) ->
                     StoreNumWorkers =
@@ -219,7 +219,7 @@ store_with_workers(MultiStoreOpts = #{ <<"stores">> := Stores }) ->
                 end,
                 Stores
             )
-    }.
+    }).
 
 %% @doc Create a new worker process for the given store options.
 start_worker(StoreOpts) ->
@@ -325,7 +325,7 @@ key_in_any_store_is_found_test() ->
 write_meets_confirmation_threshold_test() ->
     with_multi_store(
         fun(#{ multi_store := MultiStore, stores := Stores }) ->
-            StoreWithConfirmations = MultiStore#{ <<"confirmations">> => 2 },
+            StoreWithConfirmations = hb_ao:explicit_set(MultiStore, #{ <<"confirmations">> => 2 }),
             Key = <<"minimum-confirmations-key">>,
             Value = <<"minimum-confirmations-value">>,
             ?assertEqual(

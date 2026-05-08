@@ -60,13 +60,13 @@ start() ->
         ),
     maybe_greeter(Loaded, PrivWallet),
     start(
-        Loaded#{
+        hb_ao:explicit_set(Loaded, #{
             <<"priv-wallet">> => PrivWallet,
             <<"store">> => UpdatedStoreOpts,
             <<"port">> => hb_opts:get(port, 8734, Loaded),
             <<"cache-writers">> =>
                 [hb_util:human_id(ar_wallet:to_address(PrivWallet))]
-        }
+        })
     ).
 start(Opts) ->
     application:ensure_all_started([
@@ -153,7 +153,7 @@ new_server(RawNodeMsg) ->
     RawNodeMsgWithDefaults =
         hb_maps:merge(
             hb_opts:default_message_with_env(),
-            RawNodeMsg#{ <<"only">> => local }
+            hb_ao:explicit_set(RawNodeMsg, #{ <<"only">> => local })
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
@@ -203,11 +203,11 @@ new_server(RawNodeMsg) ->
                 try
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
                     prometheus_registry:register_collectors([hb_metrics_collector]),
-                    ProtoOpts#{
+                    hb_ao:explicit_set(ProtoOpts, #{
                         metrics_callback =>
                             fun prometheus_cowboy2_instrumenter:observe/1,
                         stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
-                    }
+                    })
                 catch
                     Type:Reason ->
                         % If the prometheus application is not started, we can
@@ -241,7 +241,7 @@ new_server(RawNodeMsg) ->
     % Update the node message with the actual port that was used, in the event
     % that the OS assigned a different port. This happens, for example, when we
     % use port 0.
-    set_opts(NodeMsg#{ <<"port">> => Port }),
+    set_opts(hb_ao:explicit_set(NodeMsg, #{ <<"port">> => Port })),
     ?event(http,
         {http_server_started,
             {listener, Listener},
@@ -276,7 +276,7 @@ start_http3(ServerID, ProtoOpts, NodeMsg) ->
                 ServerID,
                 1024,
                 ranch:normalize_opts(
-                    hb_maps:to_list(TransOpts#{ port => ActualPort })
+                    hb_maps:to_list(hb_ao:explicit_set(TransOpts, #{ port => ActualPort }))
                 ),
                 ProtoOpts,
                 []
@@ -386,7 +386,7 @@ handle_request(RawReq, Body, ServerID) ->
     % Insert the start time into the request so that it can be used by the
     % `hb_http' module to calculate the duration of the request.
     StartTime = os:system_time(millisecond),
-    Req = RawReq#{ start_time => StartTime },
+    Req = hb_ao:explicit_set(RawReq, #{ start_time => StartTime }),
     NodeMsg = get_opts(#{ <<"http-server">> => ServerID }),
     put(server_id, ServerID),
     % The request is of normal AO-Core form, so we parse it and invoke
@@ -412,9 +412,9 @@ handle_request(RawReq, Body, ServerID) ->
                 % Invoke the meta@1.0 device to handle the request.
                 {ok, Res} =
                     dev_meta:handle(
-                        NodeMsg#{
+                        hb_ao:explicit_set(NodeMsg, #{
                             <<"commitment-device">> => CommitmentCodec
-                        },
+                        }),
                         ReqSingleton
                     ),
                 hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
@@ -469,10 +469,10 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     ErrorDetailsMaxSize = hb_opts:get(error_details_max_size, ?DEFAULT_ERROR_DETAILS_MAX_SIZE, NodeMsg),
     % Remove leading and trailing noise from the stacktrace and details.
     FormattedErrorMsg =
-        ErrorMsg#{
+        hb_ao:explicit_set(ErrorMsg, #{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
             <<"details">> => hb_format:truncate(hb_util:bin(hb_format:remove_noise(DetailsStr)), ErrorDetailsMaxSize)
-        },
+        }),
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
 
 %% @doc Return the list of allowed methods for the HTTP server.
@@ -511,10 +511,10 @@ set_opts(Request, Opts) ->
                         maps:without([<<"node-history">>], PreparedRequest)
                     )
                 ],
-    FinalOpts = MergedOpts#{
+    FinalOpts = hb_ao:explicit_set(MergedOpts, #{
         <<"http-server">> => hb_opts:get(http_server, no_server, Opts),
         <<"node-history">> => History
-    },
+    }),
     {set_opts(FinalOpts), FinalOpts}.
 
 %% @doc Get the node message for the current process.
@@ -531,7 +531,7 @@ set_proc_server_id(ServerID) ->
 %% @doc Apply the default node message to the given opts map.
 set_default_opts(Opts) ->
     % Create a temporary opts map that does not include the defaults.
-    TempOpts = Opts#{ <<"only">> => local },
+    TempOpts = hb_ao:explicit_set(Opts, #{ <<"only">> => local }),
     % Get the port to use for the server. If no port is provided, we use port 0
     % will the operating system assign a free port.
     Port = hb_opts:get(port, 0, TempOpts),
@@ -553,13 +553,13 @@ set_default_opts(Opts) ->
         {store, Store},
         {wallet, Wallet}
     }),
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"port">> => Port,
         <<"store">> => Store,
         <<"priv-wallet">> => Wallet,
         <<"address">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
         <<"force-signed">> => true
-    }.
+    }).
 
 %% @doc Test that we can start the server, send a message, and get a response.
 start_node() ->
@@ -603,7 +603,7 @@ set_node_opts_test() ->
                                 fun(_, #{ <<"body">> := NodeMsg }, _) ->
                                     {ok, #{
                                         <<"body">> =>
-                                            NodeMsg#{ <<"test-success">> => true }
+                                            hb_ao:explicit_set(NodeMsg, #{ <<"test-success">> => true })
                                     }}
                                 end
                         }
@@ -617,10 +617,10 @@ set_node_opts_test() ->
 %% manages node history, and updates server state.
 set_opts_test() ->
     DefaultOpts = hb_opts:default_message_with_env(),
-    start_node(DefaultOpts#{ 
+    start_node(hb_ao:explicit_set(DefaultOpts, #{ 
         <<"priv-wallet">> => Wallet = ar_wallet:new(), 
         <<"port">> => rand:uniform(10000) + 10000 
-    }),
+    })),
     Opts = get_opts(#{ 
         <<"http-server">> => hb_util:human_id(ar_wallet:to_address(Wallet))
     }),
@@ -648,7 +648,7 @@ set_opts_test() ->
     ?assert(length(NodeHistory2) == 2),
     ?assert(Key2 == <<"world2">>),
     % Test case 3: Non-empty node-history case
-    {ok, UpdatedOpts3} = set_opts(#{}, UpdatedOpts2#{ <<"hello3">> => <<"world3">> }),
+    {ok, UpdatedOpts3} = set_opts(#{}, hb_ao:explicit_set(UpdatedOpts2, #{ <<"hello3">> => <<"world3">> })),
     NodeHistory3 = hb_opts:get(node_history, not_found, UpdatedOpts3),
     Key3 = hb_opts:get(<<"hello3">>, not_found, UpdatedOpts3),
     ?event(debug_node_history, {node_history_length, length(NodeHistory3)}),
@@ -664,7 +664,7 @@ restart_server_test() ->
         <<"protocol">> => http2
     },
     _ = start_node(BaseOpts),
-    N2 = start_node(BaseOpts#{ <<"test-key">> => <<"server-2">> }),
+    N2 = start_node(hb_ao:explicit_set(BaseOpts, #{ <<"test-key">> => <<"server-2">> })),
     ?assertEqual(
         {ok, <<"server-2">>},
         hb_http:get(N2, <<"/~meta@1.0/info/test-key">>, #{ <<"protocol">> => http2 })

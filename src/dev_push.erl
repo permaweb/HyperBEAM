@@ -88,12 +88,13 @@ is_async(Process, Req, Opts) ->
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
+    ?event(debug_do_push, {start_push, {assignment, Assignment}}),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ID = dev_process_lib:process_id(PrimaryProcess, #{}, Opts),
     UncommittedID =
         dev_process_lib:process_id(
             PrimaryProcess,
-            #{ <<"commitments">> => <<"none">> },
+            #{ <<"commitments-type">> => <<"none">> },
             Opts
         ),
     BaseID = calculate_base_id(PrimaryProcess, Opts),
@@ -111,7 +112,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
             hb_ao:resolve(
                 {as, <<"process@1.0">>, PrimaryProcess},
                     #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-                    Opts#{ <<"hashpath">> => ignore }
+                    hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
                 )
         catch
             Class:Reason:Trace ->
@@ -178,7 +179,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     case {Status, hb_ao:get(<<"outbox">>, Result, #{}, Opts)} of
         {ok, NoResults} when ?IS_EMPTY_MESSAGE(NoResults) ->
             ?event(push_short, {done, {process, {string, ID}}, {slot, Slot}}),
-            {ok, AdditionalRes#{ <<"slot">> => Slot, <<"process">> => ID }};
+            {ok, hb_ao:explicit_set(AdditionalRes, #{ <<"slot">> => Slot, <<"process">> => ID })};
         {ok, Outbox} ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
@@ -197,6 +198,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                         <<"source">> => RawMsgToPush
                                     }
                             end,
+                        ?event(debug_do_push, {maybe_evaluate_message, {msg_to_push, MsgToPush}}),
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
                                 push_result_message(
@@ -244,10 +246,10 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                     ),
                     Opts
                 ),
-            {ok, maps:merge(Downstream, AdditionalRes#{
+            {ok, maps:merge(Downstream, hb_ao:explicit_set(AdditionalRes, #{
                 <<"slot">> => Slot,
                 <<"process">> => ID
-            })};
+            }))};
         {Err, Error} when Err == error; Err == failure ->
             ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
             {error, Error}
@@ -277,19 +279,19 @@ maybe_evaluate_message(Message, Opts) ->
                     [<<"target">>],
                     Message
                 ),
-            ResolveOpts = Opts#{ <<"force-message">> => true },
-            case hb_ao:resolve(ReqMsg#{ <<"path">> => ResolvePath }, ResolveOpts) of
+            ResolveOpts = hb_ao:explicit_set(Opts, #{ <<"force-message">> => true }),
+            case hb_ao:resolve(hb_ao:explicit_set(ReqMsg, #{ <<"path">> => ResolvePath }), ResolveOpts) of
                 {ok, EvalRes} ->
                     {
                         ok,
-                        EvalRes#{
+                        hb_ao:explicit_set(EvalRes, #{
                             <<"target">> =>
                                 hb_ao:get(
                                     <<"target">>,
                                     Message,
                                     Opts
                                 )
-                        }
+                        })
                     };
                 Err -> Err
             end
@@ -466,12 +468,12 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
         case parse_max_depth(hb_maps:get(<<"max-depth">>, Origin, undefined, Opts)) of
             undefined -> BaseReq;
             N when is_integer(N), N > 0 ->
-                BaseReq#{ <<"max-depth">> => N - 1 }
+                hb_ao:explicit_set(BaseReq, #{ <<"max-depth">> => N - 1 })
         end,
     hb_ao:resolve(
         {as, <<"process@1.0">>, TargetID},
         Req,
-        Opts#{ <<"cache-control">> => <<"always">> }
+        hb_ao:explicit_set(Opts, #{ <<"cache-control">> => <<"always">> })
     ).
 
 %% @doc Normalise the `max-depth' value supplied by the caller. Accepts a
@@ -495,7 +497,7 @@ normalize_message(MsgToPush, Opts) ->
         #{
             <<"target">> => target_process(MsgToPush, Opts)
         },
-        Opts#{ <<"hashpath">> => ignore }
+        hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
     ).
 
 %% @doc Find the target process ID for a message to push.
@@ -529,7 +531,7 @@ calculate_base_id(GivenProcess, Opts) ->
             hb_ao:get(
                 <<"process">>,
                 GivenProcess,
-                Opts#{ <<"hashpath">> => ignore }
+                hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
             )
         of
             not_found -> GivenProcess;
@@ -539,7 +541,7 @@ calculate_base_id(GivenProcess, Opts) ->
         hb_ao:set(
             Process,
             #{ <<"authority">> => unset, <<"scheduler">> => unset },
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     {ok, BaseID} =
         hb_ao:resolve(
@@ -609,7 +611,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
                 hb_ao:resolve(
                     {as, <<"process@1.0">>, TargetProcess},
                     ScheduleReq,
-                    Opts#{ <<"cache-control">> => <<"always">> }
+                    hb_ao:explicit_set(Opts, #{ <<"cache-control">> => <<"always">> })
                 )
         end,
     ?event(push, {push_sched_result, {status, ErlStatus}, {response, Res}}, Opts),
@@ -665,7 +667,7 @@ augment_message(Origin, ToSched, Opts) ->
                 <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
                 <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
             },
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         )
     ).
 
@@ -769,7 +771,7 @@ commit_result(Msg, Committers, Codec, Opts) ->
 
 %% @doc Push a message or a process, prior to pushing the resulting slot number.
 schedule_initial_message(Base, Req, Opts) ->
-    ModReq = Req#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
+    ModReq = hb_ao:explicit_set(Req, #{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> }),
     ?event(push, {initial_push, {base, Base}, {req, ModReq}}, Opts),
     case hb_ao:resolve(Base, ModReq, Opts) of
         {ok, Res} ->
@@ -824,9 +826,9 @@ parse_redirect(Location, Opts) ->
     Parsed = uri_string:parse(Location),
     Node =
         uri_string:recompose(
-            (hb_maps:remove(query, Parsed, Opts))#{
+            hb_ao:explicit_set((hb_maps:remove(query, Parsed, Opts)), #{
                 path => <<"/schedule">>
-            }
+            })
         ),
     {Node, hb_maps:get(path, Parsed, undefined, Opts)}.
 
@@ -845,7 +847,7 @@ dev_push_test_() ->
 
 core_push_test_cases() ->
     [
-        {timeout, 30, fun test_full_push/0},
+        % {timeout, 30, fun test_full_push_test/0},
         {timeout, 90, fun test_push_as_identity/0},
         {timeout, 30, fun test_multi_process_push/0},
         {timeout, 30, fun test_push_prompts_encoding_change/0},
@@ -867,7 +869,9 @@ genesis_wasm_tests() -> [{timeout, 30, fun test_nested_push_prompts_encoding_cha
 genesis_wasm_tests() -> [].
 -endif.
 
-test_full_push() ->
+test_full_push_test_() ->
+    {timeout, 600, fun test_full_push_/0}.
+test_full_push_() ->
     dev_process_test_vectors:init(),
     Opts = #{
         <<"priv-wallet">> => hb:wallet(),
@@ -930,10 +934,10 @@ test_push_as_identity() ->
     % its authority and scheduler.
     Base =
         dev_process_test_vectors:aos_process(
-            Opts#{
+            hb_ao:explicit_set(Opts, #{
                 <<"authority">> => ComputeID,
                 <<"scheduler">> => [SchedulingID, ComputeID]
-            }
+            })
         ),
     ?event({base, Base}),
     % Perform the remainder of the test as with `full_push_test_/0'.

@@ -703,7 +703,7 @@ transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->
 
 transactions_query_filter_by_block_can_ignore_ranges_test_parallel() ->
     {ok, _Node, BaseOpts} = test_env_with_blocks(1892159, 1892158),
-    Opts = BaseOpts#{ <<"query-arweave-ignore-block-ranges">> => true },
+    Opts = hb_ao:explicit_set(BaseOpts, #{ <<"query-arweave-ignore-block-ranges">> => true }),
     {ok, ID} =
         hb_cache:write(
             #{

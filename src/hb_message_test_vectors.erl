@@ -536,7 +536,7 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     % message as an ANS104 message instead.
     NestedCodec = case Codec of
         <<"tx@1.0">> -> <<"ans104@1.0">>;
-        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        #{ <<"device">> := <<"tx@1.0">> } -> hb_ao:explicit_set(Codec, #{ <<"device">> => <<"ans104@1.0">> }, Opts);
         _ -> Codec
     end,
     Msg =
@@ -659,7 +659,7 @@ signed_nested_message_with_child_test(Codec, Opts) ->
     % message as an ANS104 message instead.
     NestedCodec = case Codec of
         <<"tx@1.0">> -> <<"ans104@1.0">>;
-        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        #{ <<"device">> := <<"tx@1.0">> } -> hb_ao:explicit_set(Codec, #{ <<"device">> => <<"ans104@1.0">> }, Opts);
         _ -> Codec
     end,
     Msg = #{
@@ -830,7 +830,7 @@ specific_order_signed_message_test(RawCodec, Opts) ->
         hb_message:commit(
             Msg,
             Opts,
-            Codec#{ <<"committed">> => [<<"key-3">>, <<"key-1">>, <<"key-2">>] }
+            hb_ao:explicit_set(Codec, #{ <<"committed">> => [<<"key-3">>, <<"key-1">>, <<"key-2">>] }, Opts)
         ),
     ?event({signed_msg, SignedMsg}),
     ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
@@ -852,7 +852,7 @@ specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
         hb_message:commit(
             Msg,
             Opts,
-            Codec#{
+            hb_ao:explicit_set(Codec, #{
                 <<"committed">> =>
                     [
                         <<"key-3">>,
@@ -861,7 +861,7 @@ specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
                         <<"key-2">>,
                         <<"key-4">>
                     ]
-            }
+            }, Opts)
         ),
     ?event({signed_msg, SignedMsg}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)).
@@ -934,14 +934,14 @@ deep_multisignature_test() ->
     SignedMsg =
         hb_message:commit(
             Msg,
-            Opts#{ <<"priv-wallet">> => Wallet1 },
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet1 }, Opts),
             Codec
         ),
     ?event({signed_msg, SignedMsg}),
     MsgSignedTwice =
         hb_message:commit(
             SignedMsg,
-            Opts#{ <<"priv-wallet">> => Wallet2 },
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet2 }, Opts),
             Codec
         ),
     ?event({signed_msg_twice, MsgSignedTwice}),
@@ -1185,6 +1185,7 @@ committed_keys_test(Codec, Opts) ->
     ?assert(lists:member(<<"a">>, CommittedKeys)),
     ?assert(lists:member(<<"b">>, CommittedKeys)),
     ?assert(lists:member(<<"c">>, CommittedKeys)),
+    % TODO: Is this test necessary? We no longer set keys this way (uncommitted).
     MsgToFilter = Signed#{ <<"bad-key">> => <<"BAD VALUE">> },
     ?assert(
         not lists:member(
@@ -1211,14 +1212,14 @@ committed_empty_keys_test(Codec, Opts) ->
     ?assert(lists:member(<<"non-empty">>, CommittedKeys)).
 
 deeply_nested_committed_keys_test() ->
-    Opts = (test_opts(normal))#{
+    Opts = hb_ao:explicit_set((test_opts(normal)), #{
         <<"store">> => [
             #{
                 <<"store-module">> => hb_store_fs,
                 <<"name">> => <<"cache-TEST">>
             }
         ]
-    },
+    }),
     Msg = #{
         <<"a">> => 1,
         <<"b">> => #{ <<"c">> => #{ <<"d">> => <<0:((1 + 1024) * 1024)>> } },
@@ -1251,7 +1252,7 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
     % message as an ANS104 message instead.
     NestedCodec = case Codec of
         <<"tx@1.0">> -> <<"ans104@1.0">>;
-        #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
+        #{ <<"device">> := <<"tx@1.0">> } -> hb_ao:explicit_set(Codec, #{ <<"device">> => <<"ans104@1.0">> }, Opts);
         _ -> Codec
     end,
     Msg =
@@ -1356,6 +1357,7 @@ large_body_committed_keys_test(Codec, Opts) ->
             ?assert(lists:member(<<"a">>, CommittedKeys)),
             ?assert(lists:member(<<"b">>, CommittedKeys)),
             ?assert(lists:member(<<"c">>, CommittedKeys)),
+            % TODO: Is this test necessary? We no longer set keys this way (uncommitted).
             MsgToFilter = Signed#{ <<"bad-key">> => <<"BAD VALUE">> },
             ?assert(
                 not lists:member(
@@ -1648,9 +1650,9 @@ find_multiple_commitments_test_disabled() ->
         <<"b">> => 2,
         <<"c">> => 3
     },
-    Sig1 = hb_message:commit(Msg, Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Sig1 = hb_message:commit(Msg, hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ar_wallet:new() }, Opts)),
     {ok, _} = hb_cache:write(Sig1, Opts),
-    Sig2 = hb_message:commit(Msg, Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Sig2 = hb_message:commit(Msg, hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ar_wallet:new() }, Opts)),
     {ok, _} = hb_cache:write(Sig2, Opts),
     {ok, ReadMsg} = hb_cache:read(hb_message:id(Msg, none, Opts), Opts),
     LoadedCommitments = hb_cache:ensure_all_loaded(ReadMsg, Opts),
@@ -1676,7 +1678,7 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
                 <<"d">> => <<"4">>
             },
             Opts,
-            Codec#{
+            hb_ao:explicit_set(Codec, #{
                 <<"committed">> => [
                     <<"a">>,
                     <<"b">>,
@@ -1685,7 +1687,7 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
                     <<"c-2">>,
                     <<"d">>
                 ]
-            }
+            }, Opts)
         ),
     ?event({committed, Msg}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),

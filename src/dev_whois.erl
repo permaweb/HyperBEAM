@@ -32,7 +32,7 @@ ensure_host(Opts) ->
             case bootstrap_node_echo(Opts) of
                 {ok, Host} ->
                     % Set the host information in the persisted node message.
-                    hb_http_server:set_opts(NewOpts = Opts#{ <<"node-host">> => Host }),
+                    hb_http_server:set_opts(NewOpts = hb_ao:explicit_set(Opts, #{ <<"node-host">> => Host })),
                     {ok, NewOpts};
                 Error ->
                     Error

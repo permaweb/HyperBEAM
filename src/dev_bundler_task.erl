@@ -245,10 +245,10 @@ build_signed_tx_test() ->
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
-    TestOpts = NodeOpts#{
+    TestOpts = hb_ao:explicit_set(NodeOpts, #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"store">> => hb_test_utils:test_store()
-    },
+    }),
     try
         Timestamp = 12344567,
         ListValue = [<<"a">>, <<"b">>, <<"c">>],
@@ -310,10 +310,10 @@ build_signed_tx_on_arbundles_js_test() ->
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
-    TestOpts = NodeOpts#{
+    TestOpts = hb_ao:explicit_set(NodeOpts, #{
         <<"priv-wallet">> => hb:wallet(),
         <<"store">> => hb_test_utils:test_store()
-    },
+    }),
     try
         % Load an arweave.js-created dataitem
         Item = ar_bundles:deserialize(

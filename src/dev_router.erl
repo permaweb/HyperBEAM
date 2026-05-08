@@ -167,7 +167,7 @@ routes(M1, M2, Opts) ->
                         true ->
                             % Minimize the work performed by AO-Core to make the sort
                             % more efficient.
-                            SortOpts = Opts#{ <<"hashpath">> => ignore },
+                            SortOpts = hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore }),
                             NewRoutes =
                                 lists:sort(
                                     fun(X, Y) ->
@@ -176,7 +176,7 @@ routes(M1, M2, Opts) ->
                                     end,
                                     [M2|Routes]
                                 ),
-                            ok = hb_http_server:set_opts(Opts#{ <<"routes">> => NewRoutes }),
+                            ok = hb_http_server:set_opts(hb_ao:explicit_set(Opts, #{ <<"routes">> => NewRoutes })),
                             {ok, <<"Route added.">>};
                         false -> {error, not_authorized}
                     end;
@@ -197,7 +197,7 @@ routes(M1, M2, Opts) ->
                         case RegistrarPath of
                             not_found -> M2;
                             RegPath ->
-                                M2#{ <<"path">> => RegPath }
+                                hb_ao:explicit_set(M2, #{ <<"path">> => RegPath })
                         end,
                     RegistrarMsgs = hb_singleton:from(Registrar, Opts) ++ [RegReq],
                     ?event(debug_route_reg, {registrar_msgs, RegistrarMsgs}),
@@ -308,9 +308,9 @@ route(_, Msg, Opts) ->
                                         _ ->
                                             {
                                                 ok,
-                                                RouteWithAppliedNodes#{
+                                                hb_ao:explicit_set(RouteWithAppliedNodes, #{
                                                     <<"nodes">> => Chosen
-                                                }
+                                                })
                                             }
                                     end
                             end
@@ -349,7 +349,7 @@ apply_routes(Msg, R, Opts) ->
             fun(N) ->
                 ?event({apply_route, {msg, Msg}, {node, N}}),
                 case apply_route(Msg, N, Opts) of
-                    {ok, URI} when is_binary(URI) -> N#{ <<"uri">> => URI };
+                    {ok, URI} when is_binary(URI) -> hb_ao:explicit_set(N, #{ <<"uri">> => URI });
                     {ok, RMsg} -> hb_maps:merge(N, RMsg);
                     {error, _} -> N
                 end
@@ -357,7 +357,7 @@ apply_routes(Msg, R, Opts) ->
             hb_util:message_to_ordered_list(Nodes, Opts)
         ),
     ?event({nodes_after_apply, NodesWithRouteApplied}),
-    R#{ <<"nodes">> => NodesWithRouteApplied }.
+    hb_ao:explicit_set(R, #{ <<"nodes">> => NodesWithRouteApplied }).
 
 %% @doc Apply a node map's rules for transforming the path of the message.
 %% Supports the following keys:
@@ -425,7 +425,7 @@ match(Base, Req, Opts) ->
         end,
     Match =
         match_routes(
-            Req#{ <<"path">> => TargetPath },
+            hb_ao:explicit_set(Req, #{ <<"path">> => TargetPath }),
             hb_ao:get(<<"routes">>, {as, <<"message@1.0">>, Base}, [], Opts),
             Opts
         ),
@@ -450,7 +450,7 @@ match_routes(ToMatch, Routes, Opts) ->
     ).
 match_routes(Req = #{ <<"route-path">> := Path }, Routes, Keys, Opts) ->
     match_routes(
-        (maps:without([<<"route-path">>], Req))#{ <<"path">> => Path },
+        hb_ao:explicit_set((maps:without([<<"route-path">>], Req)), #{ <<"path">> => Path }),
         Routes,
         Keys,
         Opts
@@ -469,10 +469,10 @@ match_routes(ToMatch, Routes, [XKey|Keys], Opts) ->
             <<"template">>,
             XM,
             #{},
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     case hb_util:template_matches(ToMatch, Template, Opts) of
-        true -> XM#{ <<"reference">> => hb_path:to_binary([<<"routes">>, XKey]) };
+        true -> hb_ao:explicit_set(XM, #{ <<"reference">> => hb_path:to_binary([<<"routes">>, XKey]) });
         false -> match_routes(ToMatch, Routes, Keys, Opts)
     end.
 
@@ -816,12 +816,12 @@ preprocess(Base, RawReq, Opts) ->
                 #{
                     <<"body">> =>
                         [
-                            MaybeCommit#{
+                            hb_ao:explicit_set(MaybeCommit, #{
                                 <<"device">> => <<"relay@1.0">>,
                                 <<"relay-device">> => <<"apply@1.0">>,
                                 <<"method">> => <<"POST">>,
                                 <<"peer">> => Node
-                            },
+                            }),
                             #{
                                 <<"path">> => <<"call">>,
                                 <<"target">> => <<"proxy-message">>,
@@ -1867,7 +1867,7 @@ request_hook_reroute_to_nearest_test_parallel() ->
                     hb_http:get(
                         Node,
                         <<"/~meta@1.0/info/address">>,
-                        Opts#{ <<"http-only-result">> => true }
+                        hb_ao:explicit_set(Opts, #{ <<"http-only-result">> => true })
                     )
                 )
             end,
@@ -2345,7 +2345,7 @@ simulation_occurences(SimRes, Nodes) ->
         fun(NearestNodes, Acc) ->
             lists:foldl(
                 fun(Node, Acc2) ->
-                    Acc2#{ Node => hb_maps:get(Node, Acc2, 0, #{}) + 1 }
+                    hb_ao:explicit_set(Acc2, #{ Node => hb_maps:get(Node, Acc2, 0, #{}) + 1 })
                 end,
                 Acc,
                 NearestNodes

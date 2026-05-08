@@ -28,7 +28,7 @@ info(_Base, _Req, _Opts) ->
 handler(<<"set">>, Base, Req, Opts) -> dev_message:set(Base, Req, Opts);
 handler(<<"keys">>, Base, _Req, _Opts) -> dev_message:keys(Base);
 handler(Interval, Base, Req, Opts) ->
-    every(Base, Req#{ <<"interval">> => Interval }, Opts).
+    every(Base, hb_ao:explicit_set(Req, #{ <<"interval">> => Interval }), Opts).
 
 %% @doc Exported function for scheduling a one-time message.
 -spec once(_, _, _) -> _.
@@ -62,7 +62,7 @@ once_worker(Path, Req, Opts) ->
 	% Directly call the meta device on the newly constructed 'singleton', just
     % as hb_http_server does.
 	try
-		dev_meta:handle(Opts, Req#{ <<"path">> => Path})
+		dev_meta:handle(Opts, hb_ao:explicit_set(Req, #{ <<"path">> => Path}))
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -166,7 +166,7 @@ stop(_Base, Req, _Opts) ->
 	end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
-    Req1 = Req#{<<"path">> => CronPath},
+    Req1 = hb_ao:explicit_set(Req, #{<<"path">> => CronPath}),
     ?event(
         {cron_every_worker_executing,
             {path, CronPath},
@@ -366,7 +366,7 @@ test_worker(State) ->
 		{increment} ->
 			NewCount = maps:get(count, State, 0) + 1,
 			?event({test_worker_incremented, NewCount}),
-			test_worker(State#{count := NewCount});
+			test_worker(hb_ao:explicit_set(State, #{count => NewCount}));
 		{update, NewState} ->
 			 ?event({test_worker_updated, NewState}),
 			 test_worker(NewState);

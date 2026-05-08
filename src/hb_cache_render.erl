@@ -42,7 +42,7 @@ cache_path_to_graph(InitPath, GraphOpts, Store, Opts) when is_binary(InitPath) -
     cache_path_to_graph(Store, GraphOpts, [InitPath], Opts);
 cache_path_to_graph(Store, GraphOpts, RootKeys, Opts) ->
     % Use a map to track nodes, arcs and visited paths (to avoid cycles)
-    EmptyGraph = GraphOpts#{ nodes => #{}, arcs => #{}, visited => #{} },
+    EmptyGraph = hb_ao:explicit_set(GraphOpts, #{ nodes => #{}, arcs => #{}, visited => #{} }),
     % Process all root keys and get the final graph
     lists:foldl(
         fun(Key, Acc) -> traverse_store(Store, Key, undefined, Acc, Opts) end,
@@ -70,7 +70,7 @@ traverse_store(Store, Path, Parent, Graph, Opts) ->
         #{ JoinedPath := _ } -> Graph;
         _ ->
             % Mark as visited to avoid cycles
-            Graph1 = Graph#{visited => hb_maps:put(JoinedPath, true, hb_maps:get(visited, Graph, #{}, Opts), Opts)},
+            Graph1 = hb_ao:explicit_set(Graph, #{visited => hb_maps:put(JoinedPath, true, hb_maps:get(visited, Graph, #{}, Opts), Opts)}),
             % ?event({traverse_store, {key, Key}, {graph1, Graph1}}),
             % Process node based on its type
             case hb_store:type(Store, ResolvedPath, Opts) of
@@ -133,13 +133,13 @@ process_composite_node(Store, _Key, Parent, ResolvedPath, JoinedPath, Graph, Opt
 %% @doc Add a node to the graph
 add_node(Graph, ID, Color, Opts) ->
     Nodes = hb_maps:get(nodes, Graph, #{}, Opts),
-    Graph#{nodes => hb_maps:put(ID, {ID, Color}, Nodes, Opts)}.
+    hb_ao:explicit_set(Graph, #{nodes => hb_maps:put(ID, {ID, Color}, Nodes, Opts)}).
 
 %% @doc Add an arc to the graph
 add_arc(Graph, From, To, Label, Opts) ->
     ?event({insert_arc, {id1, From}, {id2, To}, {label, Label}}),
     Arcs = hb_maps:get(arcs, Graph, #{}, Opts),
-    Graph#{arcs => hb_maps:put({From, To, Label}, true, Arcs, Opts)}.
+    hb_ao:explicit_set(Graph, #{arcs => hb_maps:put({From, To, Label}, true, Arcs, Opts)}).
 
 %% @doc Extract a label from a path
 extract_label(Path) ->

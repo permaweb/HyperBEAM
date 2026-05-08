@@ -42,7 +42,7 @@ post(Node, Message, Opts) ->
             <<"path">>,
             Message,
             <<"/">>,
-            Opts#{ <<"topic">> => ao_internal }
+            hb_ao:explicit_set(Opts, #{ <<"topic">> => ao_internal })
         ),
         Message,
         Opts
@@ -83,7 +83,7 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
     % over that.
     {ok, NewMethod, Node, NewPath, NewMsg, NewOpts} =
         message_to_request(
-            Message#{ <<"path">> => URI, <<"method">> => Method },
+            hb_ao:explicit_set(Message, #{ <<"path">> => URI, <<"method">> => Method }),
             MergedOpts
         ),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
@@ -285,16 +285,16 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
     end,
     ConvertFrom = 
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => BinStatus },
+            hb_ao:explicit_set(HeaderMap, #{ <<"status">> => BinStatus }),
             BodyMap,
 			Opts
         ),
-    (hb_message:convert(
+    hb_ao:explicit_set((hb_message:convert(
         ConvertFrom,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
         <<"httpsig@1.0">>,
         Opts
-    ))#{ <<"status">> => hb_util:int(Status) }.
+    )), #{ <<"status">> => hb_util:int(Status) }).
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -385,7 +385,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % set an explicit preference.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found -> hb_ao:explicit_set(WithoutPriv, #{ <<"accept-bundle">> => true });
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -393,7 +393,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % the peer node should receive. This allows users to proxy requests to their
     % HB node from another port.
     WithSelfPort =
-        WithAcceptBundle#{
+        hb_ao:explicit_set(WithAcceptBundle, #{
             <<"ao-peer-port">> =>
                 hb_maps:get(
                     <<"ao-peer-port">>,
@@ -405,7 +405,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                     ),
                     Opts
                 )
-        },
+        }),
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
     BinPath = hb_path:normalize(hb_path:to_binary(Path)),
     ReqBase = #{ peer => BinPeer, path => BinPath, method => Method },
@@ -437,7 +437,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                     _ ->
                         hb_message:with_only_committed(WithSelfPort, Opts)
                 end,
-            ReqBase#{
+            hb_ao:explicit_set(ReqBase, #{
                 headers =>
                     MaybeCookie#{
                         <<"codec-device">> => <<"ans104@1.0">>,
@@ -463,13 +463,13 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                             Opts
                         )
                     )
-            };
+            });
         _ ->
-            ReqBase#{
+            hb_ao:explicit_set(ReqBase, #{
                 headers =>
                     maps:merge(MaybeCookie, maps:without([<<"body">>], Message)),
                 body => maps:get(<<"body">>, Message, <<>>)
-            }
+            })
     end.
 
 %% @doc Reply to the client's HTTP request with a message.
@@ -498,6 +498,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             Message,
             Opts
         ),
+    ?event(http_reply, {encode_reply, {status, Status}, {headers, HeadersBeforeCors}, {body, EncodedBody}}),
     % Get the CORS request headers from the message, if they exist.
     ReqHdr = cowboy_req:header(<<"access-control-request-headers">>, Req, <<"">>),
     HeadersWithCors = add_cors_headers(HeadersBeforeCors, ReqHdr, Opts),
@@ -511,14 +512,25 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             {enc_body, EncodedBody}
         }
     ),
-    ReqBeforeStream = Req#{ resp_headers => EncodedHeaders },
+    ?event(http_reply, {req, Req}),
+    ?event(http_reply, {req_before_stream, {headers, EncodedHeaders}}),
+    ReqBeforeStream = hb_message:uncommitted_deep(
+        hb_private:reset(
+            hb_ao:explicit_set(Req, #{ resp_headers => EncodedHeaders }, Opts)
+        ),
+        Opts
+    ),
+    ?event(http_reply, {req_before_stream, {req, ReqBeforeStream}}),
     PostStreamReq = cowboy_req:stream_reply(Status, #{}, ReqBeforeStream),
+    ?event(http_reply, {post_stream_req, {explicit, PostStreamReq}}),
     Fin =
         case should_finalize_stream(Status, EncodedBody) of
             true -> fin;
             false -> nofin
         end,
-    cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
+    ?event(http_reply, {stream_body, {fin, Fin}, {body, EncodedBody}}),
+    cowboy_req:stream_body(EncodedBody, Fin, hb_message:uncommitted_deep(PostStreamReq, Opts)),
+    ?event(http_reply, {done}),
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
@@ -581,10 +593,10 @@ reply_handle_cookies(Req, Message, Opts) ->
                         % key parsed from the cookie line as the key, but do not
                         % be surprised if while debugging you see a different
                         % key created by Cowboy in the response headers.
-                        ReqAcc#{
+                        hb_ao:explicit_set(ReqAcc, #{
                             resp_cookies =>
                                 RespCookies#{ CookieRef => FullCookieLine }
-                        }
+                        })
                     end,
                     Req,
                     SetCookieLines
@@ -607,9 +619,9 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
     },
      WithAllowHeaders = case ReqHdr of
         <<>> -> CorHeaders;
-        _ -> CorHeaders#{
+        _ -> hb_ao:explicit_set(CorHeaders, #{
              <<"access-control-allow-headers">> => ReqHdr
-        }
+        })
     end,
     % Keys in the given message will overwrite the defaults listed below if 
     % included, due to `hb_maps:merge''s precidence order.
@@ -676,7 +688,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Message,
                     tabm,
                     <<"structured@1.0">>,
-                    Opts#{ <<"topic">> => ao_internal }
+                    hb_ao:explicit_set(Opts, #{ <<"topic">> => ao_internal })
                 ),
             {ok, EncMessage} =
                 dev_codec_httpsig:to(
@@ -688,11 +700,11 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                 <<"bundle">> => true
                             };
                         false ->
-                            TABMReq#{
+                            hb_ao:explicit_set(TABMReq, #{
                                 <<"path">> => <<"to">>,
                                 <<"index">> =>
                                     hb_opts:get(generate_index, true, Opts)
-                            }
+                            })
                     end,
                     Opts
                 ),
@@ -727,7 +739,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                 )
                         },
                         <<"structured@1.0">>,
-                        Opts#{ <<"topic">> => ao_internal }
+                        hb_ao:explicit_set(Opts, #{ <<"topic">> => ao_internal })
                     )
                 )
             };
@@ -760,7 +772,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     Message,
                     #{ <<"device">> => Codec, <<"bundle">> => AcceptBundle },
                     <<"structured@1.0">>,
-                    Opts#{ <<"topic">> => ao_internal }
+                    hb_ao:explicit_set(Opts, #{ <<"topic">> => ao_internal })
                 )
             }
     end.
@@ -783,7 +795,7 @@ accept_to_codec(#{ <<"require-codec">> := RequiredCodec }, _Reply, Opts) ->
 accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when ?IS_LINK(Link) ->
     accept_to_codec(
         OriginalReq,
-        Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
+        hb_ao:explicit_set(Reply, #{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) }),
         Opts
     );
 accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
@@ -832,13 +844,13 @@ default_codec(Opts) ->
 %% a fast-path for options that are not needed for this one-time lookup.
 codec_to_content_type(Codec, Opts) ->
     FastOpts =
-        Opts#{
+        hb_ao:explicit_set(Opts, #{
             <<"hashpath">> => ignore,
             <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
             <<"cache-lookup-hueristics">> => false,
             <<"load-remote-devices">> => false,
             <<"error-strategy">> => continue
-        },
+        }),
     case hb_ao:get(<<"content-type">>, #{ <<"device">> => Codec }, FastOpts) of
         not_found -> undefined;
         CT -> CT
@@ -965,7 +977,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
     {ok, Decoded} =
         hb_message:with_only_committed(
             hb_message:convert(
-                PrimMsg#{ <<"body">> => Body },
+                hb_ao:explicit_set(PrimMsg, #{ <<"body">> => Body }),
                 <<"structured@1.0">>,
                 <<"httpsig@1.0">>,
                 Opts
@@ -983,13 +995,13 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
                     ?event(http_verify, {storing_signed_from_wire, Decoded}),
                     {ok, _} =
                         hb_cache:write(Decoded,
-                            Opts#{
+                            hb_ao:explicit_set(Opts, #{
                                 <<"store">> =>
                                     #{
                                         <<"store-module">> => hb_store_fs,
                                         <<"name">> => <<"cache-http">>
                                     }
-                            }
+                            })
                         );
                 false ->
                     do_nothing
@@ -1038,7 +1050,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
     FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
     BaseMsg =
-        FilteredMsg#{
+        hb_ao:explicit_set(FilteredMsg, #{
             <<"method">> => Method,
             <<"path">> => MsgPath,
             <<"accept-bundle">> =>
@@ -1061,7 +1073,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                         maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
                     )
                 )
-        },
+        }),
     ?event(debug_accept, {normalize_unsigned, {accept, Accept}}),
     % Parse and add the cookie from the request, if present. We reinstate the
     % `cookie' field in the message, as it is not typically signed, yet should
@@ -1071,7 +1083,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             undefined -> {ok, BaseMsg};
             Cookie ->
                 dev_codec_cookie:from(
-                    BaseMsg#{ <<"cookie">> => Cookie },
+                    hb_ao:explicit_set(BaseMsg, #{ <<"cookie">> => Cookie }),
                     Req,
                     Opts
                 )
@@ -1087,18 +1099,18 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         undefined -> NormalBody;
         P2PPort ->
             Peer = <<RealIP/binary, ":", (hb_util:bin(P2PPort))/binary>>,
-            (hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts))#{
+            hb_ao:explicit_set((hb_message:without_unless_signed(<<"ao-peer-port">>, NormalBody, Opts)), #{
                 <<"ao-peer">> => Peer
-            }
+            })
     end,
     WithPrivIP = hb_private:set(WithPeer, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
     WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
-        Device -> WithPrivIP#{<<"device">> => Device}
+        Device -> hb_ao:explicit_set(WithPrivIP, #{<<"device">> => Device})
     end,
     Host = cowboy_req:host(Req),
-    WithDevice#{<<"host">> => Host}.
+    hb_ao:explicit_set(WithDevice, #{<<"host">> => Host}).
 
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
@@ -1298,13 +1310,13 @@ ans104_wasm_test() ->
     {ok, Res} =
         post(
             URL,
-            Msg#{ <<"path">> => <<"/init/compute/results">> },
+            hb_ao:explicit_set(Msg, #{ <<"path">> => <<"/init/compute/results">> }),
             ClientOpts
         ),
     %% TODO: Is there a better way to do this?
     {link, LinkID, _ } = maps:get(<<"output">>, Res),
     %% We need to resolve agaisnt the server cache
-    {ok, #{<<"body">> := Body}} = post(URL, Msg#{<<"path">> => <<"/", LinkID/binary, "/1">>}, ClientOpts),
+    {ok, #{<<"body">> := Body}} = post(URL, hb_ao:explicit_set(Msg, #{<<"path">> => <<"/", LinkID/binary, "/1">>}), ClientOpts),
     ?assertEqual(<<"6.00000000000000000000e+00">>, Body),
     % @TODO this assertion should pass, but it doesn't due to how `bundle`
     % tag is handled between client an server. Commenting out for now.

@@ -85,7 +85,7 @@ priv_store_remaining(Msg, RemainingPath) ->
 priv_store_remaining(Msg, RemainingPath, Opts) ->
     Priv = hb_private:from_message(Msg),
     AOCore = hb_maps:get(<<"ao-core">>, Priv, #{}, Opts),
-    Msg#{
+    hb_ao:explicit_set(Msg, #{
         <<"priv">> =>
             Priv#{
                 <<"ao-core">> =>
@@ -93,7 +93,7 @@ priv_store_remaining(Msg, RemainingPath, Opts) ->
                         <<"remaining">> => RemainingPath
                     }
             }
-    }.
+    }).
 
 %%% @doc Add an ID of a Req to the HashPath of another message.
 hashpath(Bin, _Opts) when is_binary(Bin) ->

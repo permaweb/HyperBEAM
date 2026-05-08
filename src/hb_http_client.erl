@@ -169,10 +169,11 @@ hackney_req(Args, Opts) ->
         peer := Peer,
         path := Path,
         method := RawMethod,
-        headers := Headers,
+        headers := RawHeaders,
         body := Body
     } = Args,
-    ?event({hackney_req, Args}),
+    Headers = hb_private:reset(hb_maps:without([<<"commitments">>], RawHeaders)),
+    ?event(hackney_req, {args, Args}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
         {ok, {Host, Port}} ->
@@ -198,6 +199,7 @@ hackney_req(Args, Opts) ->
                 {checkout_timeout, CheckoutTimeout},
                 {recv_timeout, RecvTimeout}],
             StartTime = erlang:monotonic_time(native),
+            ?event(hackney_req, {request, {method, Method}, {url, URL}, {headers, {explicit, HeaderList}}, {body, {explicit, Body}}, {opts, HackneyOpts}}),
             Response = case hackney:request(Method, URL, HeaderList, Body, HackneyOpts) of
                 {ok, Status, RespHeaders, RespBody} ->
                     download_metric(RespBody, Opts),
@@ -207,9 +209,10 @@ hackney_req(Args, Opts) ->
                     ?event(debug_http_client, {hackney_resp, Status, RespHeaders, no_body}),
                     {ok, Status, RespHeaders, <<>>};
                 {error, Reason} ->
-                    ?event(http_client, {hackney_error, Reason}),
+                    ?event(hackney_req, {hackney_error, Reason}),
                     {error, Reason}
             end,
+            ?event(hackney_req, {response, {response, Response}}),
             EndTime = erlang:monotonic_time(native),
             record_duration(#{
                     <<"request-method">> => method_to_bin(Method),
@@ -281,18 +284,18 @@ maybe_invoke_monitor(Details, Opts) ->
             MaybeWithReference =
                 case hb_ao:get(<<"http-reference">>, Opts, Opts) of
                     not_found -> Details;
-                    Ref -> Details#{ <<"reference">> => Ref }
+                    Ref -> hb_ao:explicit_set(Details, #{ <<"reference">> => Ref }, Opts)
                 end,
             Req =
-                Monitor#{
+                hb_ao:explicit_set(Monitor, #{
                     <<"body">> =>
                         hb_message:commit(
-                            MaybeWithReference#{
+                            hb_ao:explicit_set(MaybeWithReference, #{
                                 <<"method">> => <<"POST">>
-                            },
+                            }),
                             Opts
                         )
-                },
+                }, Opts),
             % Use the singleton parse to generate the message sequence to 
             % execute.
             ReqMsgs = hb_singleton:from(Req, Opts),
@@ -404,9 +407,9 @@ open_connection_gun(Host, Port, Peer, Opts) ->
     % Fallback through earlier HTTP versions if the protocol is not supported.
     GunOpts =
         case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
-            http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            http2 -> BaseGunOpts#{protocols => [http2]};
-            http1 -> BaseGunOpts#{protocols => [http]}
+            http3 -> hb_ao:explicit_set(BaseGunOpts, #{protocols => [http3], transport => quic}, Opts);
+            http2 -> hb_ao:explicit_set(BaseGunOpts, #{protocols => [http2]}, Opts);
+            http1 -> hb_ao:explicit_set(BaseGunOpts, #{protocols => [http]}, Opts)
         end,
     ?event(http_outbound,
         {gun_open,
@@ -494,20 +497,20 @@ await_response(Args, Opts) ->
 			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
 			{ok, Status, Headers, <<>>};
 		{response, nofin, Status, Headers} ->
-			await_response(Args#{ status => Status, headers => Headers }, Opts);
+			await_response(hb_ao:explicit_set(Args, #{ status => Status, headers => Headers }, Opts), Opts);
 		{data, nofin, Data} ->
 			case Limit of
 				infinity ->
-					await_response(Args#{ acc := [Acc | Data] }, Opts);
+					await_response(hb_ao:explicit_set(Args, #{ acc => [Acc | Data] }, Opts), Opts);
 				Limit ->
 					Counter2 = size(Data) + Counter,
 					case Limit >= Counter2 of
 						true ->
 							await_response(
-                                Args#{
-                                    counter := Counter2,
-                                    acc := [Acc | Data]
-                                },
+                                hb_ao:explicit_set(Args, #{
+                                    counter => Counter2,
+                                    acc => [Acc | Data]
+                                }, Opts),
                                 Opts
                             );
 						false ->
@@ -648,7 +651,7 @@ record_duration(Details, Opts) ->
                     ok
             end,
             maybe_invoke_monitor(
-                Details#{ <<"path">> => <<"duration">> },
+                hb_ao:explicit_set(Details, #{ <<"path">> => <<"duration">> }, Opts),
                 Opts
             )
         end

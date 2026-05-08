@@ -51,7 +51,7 @@
 request(State, Raw, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
-    Messages = hb_ao:get(<<"body">>, Raw, NodeMsg#{ <<"hashpath">> => ignore }),
+    Messages = hb_ao:get(<<"body">>, Raw, hb_ao:explicit_set(NodeMsg, #{ <<"hashpath">> => ignore })),
     Request = hb_ao:get(<<"request">>, Raw, NodeMsg),
     IsChargable = is_chargable_req(Request, NodeMsg),
     ?event(payment,
@@ -69,8 +69,8 @@ request(State, Raw, NodeMsg) ->
             ?event(payment, {p4_pre_pricing_response, {error, <<"infinity">>}}),
             {ok, #{ <<"body">> => Messages }};
         {true, true} ->
-            PricingMsg = State#{ <<"device">> => PricingDevice },
-            LedgerMsg = State#{ <<"device">> => LedgerDevice },
+            PricingMsg = hb_ao:explicit_set(State, #{ <<"device">> => PricingDevice }),
+            LedgerMsg = hb_ao:explicit_set(State, #{ <<"device">> => LedgerDevice }),
             PricingReq = #{
                 <<"path">> => <<"estimate">>,
                 <<"request">> => Request,
@@ -178,7 +178,7 @@ response(State, RawResponse, NodeMsg) ->
         hb_ao:get(
             <<"body">>,
             RawResponse,
-            NodeMsg#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(NodeMsg, #{ <<"hashpath">> => ignore })
         ),
     Request = hb_ao:get(<<"request">>, RawResponse, NodeMsg),
     ?event(payment, {post_processing_with_devices, PricingDevice, LedgerDevice}),
@@ -188,8 +188,8 @@ response(State, RawResponse, NodeMsg) ->
         false ->
             {ok, #{ <<"body">> => Response }};
         true ->
-            PricingMsg = State#{ <<"device">> => PricingDevice },
-            LedgerMsg = State#{ <<"device">> => LedgerDevice },
+            PricingMsg = hb_ao:explicit_set(State, #{ <<"device">> => PricingDevice }),
+            LedgerMsg = hb_ao:explicit_set(State, #{ <<"device">> => LedgerDevice }),
             PricingReq = #{
                 <<"path">> => <<"price">>,
                 <<"request">> => Request,
@@ -201,7 +201,7 @@ response(State, RawResponse, NodeMsg) ->
                     {error, _Error} ->
                         % The pricing device is unable to give us a cost for
                         % the request, so we try to estimate it instead.
-                        EstimateReq = PricingReq#{ <<"path">> => <<"estimate">> },
+                        EstimateReq = hb_ao:explicit_set(PricingReq, #{ <<"path">> => <<"estimate">> }),
                         hb_ao:resolve(PricingMsg, EstimateReq, NodeMsg);
                     {ok, P} -> {ok, P}
                 end,
@@ -275,7 +275,7 @@ balance(_, Req, NodeMsg) ->
         [Handler] ->
             LedgerDevice =
                 hb_ao:get(<<"ledger-device">>, Handler, false, NodeMsg),
-            LedgerMsg = Handler#{ <<"device">> => LedgerDevice },
+            LedgerMsg = hb_ao:explicit_set(Handler, #{ <<"device">> => LedgerDevice }),
             LedgerReq = #{
                 <<"path">> => <<"balance">>,
                 <<"request">> => Req
@@ -330,12 +330,12 @@ test_opts(Opts, PricingDev, LedgerDev) ->
             <<"pricing-device">> => PricingDev,
             <<"ledger-device">> => LedgerDev
         },
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"on">> => #{
             <<"request">> => ProcessorMsg,
             <<"response">> => ProcessorMsg
         }
-    }.
+    }).
 
 %% @doc Simple test of p4's capabilities with the `faff@1.0' device.
 faff_test() ->

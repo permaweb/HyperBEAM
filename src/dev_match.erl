@@ -68,7 +68,7 @@ to_match_bin(Other) ->
 value_path(Bin, Opts) when is_binary(Bin) ->
     <<"data/", (hb_path:hashpath(Bin, Opts))/binary>>;
 value_path(Map, Opts) when is_map(Map) ->
-    hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard });
+    hb_message:id(Map, none, hb_ao:explicit_set(Opts, #{ <<"linkify-mode">> => discard }));
 value_path(List, Opts) when is_list(List) ->
     case io_lib:printable_unicode_list(List) of
         true ->

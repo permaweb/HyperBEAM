@@ -12,10 +12,10 @@ test_opts() ->
     test_opts(#{}).
 test_opts(Opts) ->
     init(),
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         <<"store">> => hb_test_utils:test_store(hb_store_lmdb),
         <<"priv-wallet">> => ar_wallet:new()
-    }.
+    }).
 
 %% @doc Generate a process message with a random number, and no executor.
 base_process(Opts) ->
@@ -29,7 +29,7 @@ base_process(Opts) ->
             <<"type">> => <<"Process">>,
             <<"test-random-seed">> => rand:uniform(1337)
         },
-        Opts#{ <<"priv-wallet">> => Wallet }
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
     ).
 
 wasm_process(WASMImage) ->
@@ -47,7 +47,7 @@ wasm_process(WASMImage, Opts) ->
             },
 			Opts
         ),
-        Opts#{ <<"priv-wallet">> => Wallet }
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
     ).
 
 %% @doc Generate a process message with a random number, and the 
@@ -87,7 +87,7 @@ aos_process(Opts, Stack) ->
                 <<"authority">> =>
                     hb_opts:get(authority, Address, Opts)
             }, Opts),
-        Opts#{ <<"priv-wallet">> => Wallet }
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
     ).
 
 %% @doc Generate a device that has a stack of two `dev_test's for 
@@ -106,7 +106,7 @@ test_process(Opts) ->
             }, 
             Opts
         ),
-        Opts#{ <<"priv-wallet">> => Wallet }
+        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
     ).
 
 schedule_test_message(Base, Text, Opts) ->
@@ -114,7 +114,7 @@ schedule_test_message(Base, Text, Opts) ->
 schedule_test_message(Base, Text, MsgBase, Opts) ->
     ?event(debug_test, {opts, Opts}),
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    UncommittedBase = hb_message:uncommitted(MsgBase, Opts#{ <<"priv-wallet">> => Wallet }),
+    UncommittedBase = hb_message:uncommitted(MsgBase, hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })),
     Req =
         hb_message:commit(
             #{
@@ -122,16 +122,16 @@ schedule_test_message(Base, Text, MsgBase, Opts) ->
                 <<"method">> => <<"POST">>,
                 <<"body">> =>
                     hb_message:commit(
-                        UncommittedBase#{
+                        hb_ao:explicit_set(UncommittedBase, #{
                             <<"type">> => <<"Message">>,
                             <<"test-label">> => Text
-                        },
-                        Opts#{ <<"priv-wallet">> => Wallet }
+                        }),
+                        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
                     )
             },
-			Opts#{ <<"priv-wallet">> => Wallet }
+			hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
         ),
-    {ok, _} = hb_ao:resolve(Base, Req, Opts#{ <<"priv-wallet">> => Wallet }).
+    {ok, _} = hb_ao:resolve(Base, Req, hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })).
 
 schedule_aos_call(Base, Code) ->
     schedule_aos_call(Base, Code, #{}).
@@ -145,7 +145,7 @@ schedule_aos_call(Base, Code, Opts) ->
                 <<"data">> => Code,
                 <<"target">> => ProcID
             },
-            Opts#{ <<"priv-wallet">> => Wallet }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
         ),
     schedule_test_message(Base, <<"TEST MSG">>, Req, Opts).
 
@@ -163,10 +163,10 @@ schedule_wasm_call(Base, FuncName, Params, Opts) ->
                             <<"function">> => FuncName,
                             <<"parameters">> => Params
                         },
-                        Opts#{ <<"priv-wallet">> => Wallet }
+                        hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
                     )
             },
-            Opts#{ <<"priv-wallet">> => Wallet }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
         ),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, Opts)).
 
@@ -214,7 +214,7 @@ recursive_path_resolution_test_parallel() ->
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"slot/current">> },
-            Opts#{ <<"hashpath">> => ignore }
+            hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
         ),
     ?event({resolved_current_slot, CurrentSlot}),
     ?assertMatch(
@@ -309,13 +309,13 @@ compute_native_cache_ignores_request_noise_test_parallel() ->
         <<"slot">> => <<"0">>,
         <<"accept">> => <<"text/html">>
     },
-    Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+    Req2 = hb_ao:explicit_set(Req1, #{ <<"accept">> => <<"application/json">> }),
     {ok, Res1} = hb_ao:resolve(ProcID, Req1, Opts),
     {ok, Res2} =
         hb_ao:resolve(
             ProcID,
             Req2,
-            Opts#{ cache_control => <<"only-if-cached">> }
+            hb_ao:explicit_set(Opts, #{ cache_control => <<"only-if-cached">> })
         ),
     ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res1, Opts)),
     ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res2, Opts)).
@@ -355,11 +355,11 @@ compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
             <<"accept">> => <<"text/html">>,
             <<"x-real-ip">> => <<"1.2.3.4">>
         },
-        Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+        Req2 = hb_ao:explicit_set(Req1, #{ <<"accept">> => <<"application/json">> }),
         {ok, Res1} = hb_http:get(Node, Req1, Opts),
         ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
         NodeOpts = hb_http_server:get_opts(#{ http_server => ServerID }),
-        ok = hb_http_server:set_opts(NodeOpts#{ cache_control => <<"only-if-cached">> }),
+        ok = hb_http_server:set_opts(hb_ao:explicit_set(NodeOpts, #{ cache_control => <<"only-if-cached">> })),
         {ok, Res2} = hb_http:get(Node, Req2, Opts),
         RateLimitPID = hb_name:lookup({dev_rate_limit, ServerID}),
         RateLimitPID ! {balance, self(), <<"1.2.3.4">>},
@@ -406,7 +406,7 @@ http_wasm_process_by_id_test_parallel() ->
                 <<"function">> => <<"fac">>,
                 <<"parameters">> => [5.0]
             },
-            Opts#{ <<"priv-wallet">> => Wallet }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
         ),
     {ok, Res} = hb_http:post(Node, << ProcID/binary, "/schedule">>, ExecMsg, Opts),
     ?event({schedule_msg_res, {res, Res}}),
@@ -549,12 +549,12 @@ aos_state_patch_test_parallel_() ->
                                 "{ method = \"PATCH\", x = \"banana\" })"
                         >>
                 },
-                Opts#{ <<"priv-wallet">> => Wallet }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Wallet })
             ),
-        Req = InnerReq#{
+        Req = hb_ao:explicit_set(InnerReq, #{
             <<"path">> => <<"schedule">>,
             <<"method">> => <<"POST">> 
-        },
+        }),
         {ok, _} = hb_ao:resolve(Base, Req, Opts),
         Res = #{ <<"path">> => <<"compute">>, <<"slot">> => 0 },
         {ok, Msg4} = hb_ao:resolve(Base, Res, Opts),
@@ -641,7 +641,7 @@ persistent_process_test_parallel() ->
         },
         ?assertMatch(
             {ok, _},
-            hb_ao:resolve(Base, FirstSlotReq, Opts#{ <<"spawn-worker">> => true })
+            hb_ao:resolve(Base, FirstSlotReq, hb_ao:explicit_set(Opts, #{ <<"spawn-worker">> => true }))
         ),
         T1 = hb:now(),
         ThirdSlotReq = #{
@@ -671,7 +671,7 @@ simple_wasm_persistent_worker_benchmark_test_parallel() ->
         hb_ao:resolve(
             Base,
             #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
-            Opts#{ <<"spawn-worker">> => true, <<"process-workers">> => true }
+            hb_ao:explicit_set(Opts, #{ <<"spawn-worker">> => true, <<"process-workers">> => true })
         ),
     Iterations = hb_test_utils:benchmark(
         fun(Iteration) ->

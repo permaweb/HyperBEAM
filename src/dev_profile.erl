@@ -41,7 +41,7 @@ eval(Fun, Req, Opts) when is_function(Fun) ->
     do_eval(
         Fun,
         case return_mode(Req, Opts, undefined) of
-            undefined -> Req#{ <<"return-mode">> => <<"open">> };
+            undefined -> hb_ao:explicit_set(Req, #{ <<"return-mode">> => <<"open">> });
             _ -> Req
         end,
         Opts
@@ -63,7 +63,7 @@ eval(PathKey, Base, Req, Opts) when not is_function(Base) ->
             };
         Path ->
             do_eval(
-                fun() -> hb_ao:resolve(Req#{ <<"path">> => Path }, Opts) end,
+                fun() -> hb_ao:resolve(hb_ao:explicit_set(Req, #{ <<"path">> => Path }), Opts) end,
                 Req,
                 Opts
             )

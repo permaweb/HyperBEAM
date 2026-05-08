@@ -118,7 +118,7 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
                 index_graphql(
                     NewTotal,
                     Query,
-                    Vars#{ <<"after">> => Cursor },
+                    hb_ao:explicit_set(Vars, #{ <<"after">> => Cursor }),
                     Node,
                     OpName,
                     Opts

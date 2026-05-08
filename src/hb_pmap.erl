@@ -44,6 +44,8 @@ collect([], [], _Fun, _Parent, Results) ->
 collect(Active, Remaining, Fun, Parent, Results) ->
     receive
         {hb_pmap_result, Ref, Result} ->
+            % TODO: Explicit set fails here because it is unable to normalize the ref.
+            % Should it?
             NewResults = Results#{Ref => Result},
             NewActive = lists:delete(Ref, Active),
             case Remaining of

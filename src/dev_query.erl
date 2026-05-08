@@ -215,7 +215,7 @@ query_match_key(Path, Opts) ->
                     hb_private:reset(hb_cache:ensure_all_loaded(Msg, Opts)),
                     Opts
                 ),
-            hb_message:id(CanonicalMsg, none, Opts#{ <<"linkify-mode">> => discard });
+            hb_message:id(CanonicalMsg, none, hb_ao:explicit_set(Opts, #{ <<"linkify-mode">> => discard }));
         _ ->
             Path
     end.

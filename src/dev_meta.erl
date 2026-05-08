@@ -151,20 +151,20 @@ add_dynamic_keys(NodeMsg) ->
             Wallet ->
                 %% Create a new map with address and merge it (overwriting existing)
                 Address = hb_util:id(ar_wallet:to_address(Wallet)),
-                NodeMsg#{ <<"address">> => Address }
+                hb_ao:explicit_set(NodeMsg, #{ <<"address">> => Address })
         end,
     add_identity_addresses(UpdatedNodeMsg).
 
 add_identity_addresses(NodeMsg) ->
     Identities = hb_opts:get(identities, #{}, NodeMsg),
     NewIdentities = maps:map(fun(_, Identity) ->
-        Identity#{
+        hb_ao:explicit_set(Identity, #{
             <<"address">> => hb_util:human_id(
                 hb_opts:get(priv_wallet, hb:wallet(), Identity)
             )
-        }
+        })
     end, Identities),
-    NodeMsg#{ <<"identities">> => NewIdentities }.
+    hb_ao:explicit_set(NodeMsg, #{ <<"identities">> => NewIdentities }).
 
 %% @doc Validate that the request is signed by the operator of the node, then
 %% allow them to update the node message.
@@ -253,7 +253,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
             Res =
                 hb_ao:resolve_many(
                     PreProcessedMsg,
-                    HTTPOpts#{ <<"force-message">> => true }
+                    hb_ao:explicit_set(HTTPOpts, #{ <<"force-message">> => true })
                 ),
             {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
@@ -320,7 +320,7 @@ embed_status({ErlStatus, Res}, NodeMsg) when is_map(Res) ->
     case lists:member(<<"status">>, hb_message:committed(Res, all, NodeMsg)) of
         false ->
             HTTPCode = status_code({ErlStatus, Res}, NodeMsg),
-            {ok, Res#{ <<"status">> => HTTPCode }};
+            {ok, hb_ao:explicit_set(Res, #{ <<"status">> => HTTPCode })};
         true ->
             {ok, Res}
     end;
@@ -515,7 +515,7 @@ unauthorized_set_node_msg_fails_test() ->
                     <<"path">> => <<"/~meta@1.0/info">>,
                     <<"evil-config-item">> => <<"BAD">>
                 },
-                Opts#{ <<"priv-wallet">> => ar_wallet:new() }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ar_wallet:new() })
             ),
             #{}
         ),
@@ -543,7 +543,7 @@ authorized_set_node_msg_succeeds_test() ->
                     <<"path">> => <<"/~meta@1.0/info">>,
                     <<"test-config-item">> => <<"test2">>
                 },
-                Opts#{ <<"priv-wallet">> => Owner }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Owner })
             ),
             Opts
         ),
@@ -581,7 +581,7 @@ permanent_node_message_test() ->
                     <<"test-config-item">> => <<"test2">>,
                     <<"initialized">> => <<"permanent">>
                 },
-                Opts#{ <<"priv-wallet">> => Owner }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Owner })
             ),
             Opts
         ),
@@ -597,7 +597,7 @@ permanent_node_message_test() ->
                     <<"path">> => <<"/~meta@1.0/info">>,
                     <<"test-config-item">> => <<"bad-value">>
                 },
-                Opts#{ <<"priv-wallet">> => Owner }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Owner })
             ),
             Opts
         ),
@@ -627,7 +627,7 @@ claim_node_test() ->
                     <<"path">> => <<"/~meta@1.0/info">>,
                     <<"operator">> => hb_util:human_id(Address)
                 },
-                Opts#{ <<"priv-wallet">> => Owner}
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Owner})
             ),
             Opts
         ),
@@ -643,7 +643,7 @@ claim_node_test() ->
                     <<"path">> => <<"/~meta@1.0/info">>,
                     <<"test-config-item">> => <<"test2">>
                 },
-                Opts#{ <<"priv-wallet">> => Owner }
+                hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => Owner })
             ),
             Opts
         ),
@@ -732,10 +732,10 @@ modify_request_test() ->
                                             #{
                                                 <<"body">> =>
                                                     [
-                                                        M#{
+                                                        hb_ao:explicit_set(M, #{
                                                             <<"added">> =>
                                                                 <<"value">>
-                                                        }
+                                                        })
                                                     |
                                                         Ms
                                                     ]

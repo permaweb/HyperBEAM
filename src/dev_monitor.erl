@@ -10,14 +10,14 @@
 
 -spec init(_, _, _) -> _.
 init(State, _, InitState) ->
-    {ok, State#{ <<"monitors">> => InitState }}.
+    {ok, hb_ao:explicit_set(State, #{ <<"monitors">> => InitState })}.
 
 execute(Message, State = #{ <<"pass">> := Pass, <<"passes">> := Passes }) when Pass == Passes ->
     signal(State, {message, Message});
 execute(_, S) -> {ok, S}.
 
 add_monitor(Mon, State = #{ <<"monitors">> := Monitors }) ->
-    {ok, State#{ <<"monitors">> => [Mon | Monitors] }}.
+    {ok, hb_ao:explicit_set(State, #{ <<"monitors">> => [Mon | Monitors] })}.
 
 end_of_schedule(State) -> signal(State, end_of_schedule).
 
@@ -33,6 +33,6 @@ signal(State = #{ <<"monitors">> := StartingMonitors }, Signal) ->
             StartingMonitors
         ),
     ?event({remaining_monitors, length(RemainingMonitors)}),
-    {ok, State#{ <<"monitors">> := RemainingMonitors }}.
+    {ok, hb_ao:explicit_set(State, #{ <<"monitors">> => RemainingMonitors })}.
 
 uses() -> all.

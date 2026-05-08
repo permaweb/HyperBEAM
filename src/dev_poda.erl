@@ -72,7 +72,7 @@ execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 },
                             Comms
                         ),
                     % Update the arg prefix to include the unwrapped message.
-                    {ok, S#{ <<"vfs">> => VFS1, <<"arg_prefix">> =>
+                    {ok, hb_ao:explicit_set(S, #{ <<"vfs">> => VFS1, <<"arg_prefix">> =>
                         [
                             % Traverse two layers of `/Message/Message' to get
                             % the actual message, then replace `/Message' with it.
@@ -82,7 +82,7 @@ execute(Outer = #tx { data = #{ <<"body">> := Msg } }, S = #{ <<"pass">> := 1 },
                                 }
                             }
                         ]
-                    }};
+                    })};
                 {false, Reason} -> return_error(S, Reason)
             end
     end;
@@ -158,7 +158,7 @@ validate_commitment(Msg, Comm, Opts) ->
 return_error(S = #{ <<"wallet">> := Wallet }, Reason) ->
     ?event({poda_return_error, Reason}),
     ?debug_wait(10000),
-    {skip, S#{
+    {skip, hb_ao:explicit_set(S, #{
         results => #{
             <<"/outbox">> =>
                 ar_bundles:sign_item(
@@ -169,7 +169,7 @@ return_error(S = #{ <<"wallet">> := Wallet }, Reason) ->
                     Wallet
                 )
         }
-    }}.
+    })}.
 
 %%% @doc Determines if a user committed
 is_user_signed(#tx { data = #{ <<"body">> := Msg } }) ->
@@ -184,7 +184,7 @@ is_user_signed(_) -> true.
 -spec push(_, _, _) -> _.
 push(_Item, S = #{ <<"results">> := ResultsMsg }, Opts) ->
     NewRes = commit_to_results(ResultsMsg, S, Opts),
-    {ok, S#{ <<"results">> => NewRes }}.
+    {ok, hb_ao:explicit_set(S, #{ <<"results">> => NewRes })}.
 
 commit_to_results(Msg, S, Opts) ->
     case is_map(Msg#tx.data) of

@@ -172,7 +172,7 @@ transformer_message(Base, Opts) ->
 	?event({creating_transformer, {for, Base}}),
     BaseInfo = info(Base, Opts),
 	{ok, 
-		Base#{
+		hb_ao:explicit_set(Base, #{
 			<<"device">> => #{
 				info =>
 					fun() ->
@@ -189,7 +189,7 @@ transformer_message(Base, Opts) ->
 					end,
 				<<"type">> => <<"stack-transformer">>
 			}
-		}
+		})
 	}.
 
 %% @doc Return Base, transformed such that the device named `Key' from the
@@ -407,9 +407,9 @@ generate_append_device(Separator, Status) ->
                 {ok, M1};
 			   (M1 = #{ <<"result">> := Existing }, #{ <<"bin">> := New }) ->
 				?event({appending, {existing, Existing}, {new, New}}),
-				{Status, M1#{ <<"result">> =>
+				{Status, hb_ao:explicit_set(M1, #{ <<"result">> =>
 					<< Existing/binary, Separator/binary, New/binary>>
-				}}
+				})}
 			end
 	}.
 
@@ -602,9 +602,9 @@ no_prefix_test() ->
 
 output_prefix_test() ->
     Base =
-        (test_prefix_msg())#{
+        hb_ao:explicit_set((test_prefix_msg()), #{
             <<"output-prefixes">> => #{ <<"1">> => <<"out1/">>, <<"2">> => <<"out2/">> }
-        },
+        }),
     Req =
         #{
             <<"path">> => <<"prefix_set">>,
@@ -619,10 +619,10 @@ output_prefix_test() ->
 
 input_and_output_prefixes_test() ->
     Base =
-        (test_prefix_msg())#{
+        hb_ao:explicit_set((test_prefix_msg()), #{
             <<"input-prefixes">> => #{ 1 => <<"in1/">>, 2 => <<"in2/">> },
             <<"output-prefixes">> => #{ 1 => <<"out1/">>, 2 => <<"out2/">> }
-        },
+        }),
     Req =
         #{
             <<"path">> => <<"prefix_set">>,
@@ -638,10 +638,10 @@ input_and_output_prefixes_test() ->
 
 input_output_prefixes_passthrough_test() ->
     Base =
-        (test_prefix_msg())#{
+        hb_ao:explicit_set((test_prefix_msg()), #{
             <<"output-prefix">> => <<"combined-out/">>,
             <<"input-prefix">> => <<"combined-in/">>
-        },
+        }),
     Req =
         #{
             <<"path">> => <<"prefix_set">>,
@@ -723,12 +723,12 @@ not_found_test() ->
 			#{
 				<<"1">> => generate_append_device(<<"+D1">>),
 				<<"2">> =>
-                    (generate_append_device(<<"+D2">>))#{
+                    hb_ao:explicit_set((generate_append_device(<<"+D2">>)), #{
                         special =>
                             fun(M1) ->
                                 {ok, M1#{ <<"output">> => 1337 }}
                             end
-                    }
+                    })
 			},
 		<<"result">> => <<"INIT">>
 	},

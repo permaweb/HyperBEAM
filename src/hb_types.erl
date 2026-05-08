@@ -46,7 +46,7 @@ vary(Device, Key, Func, AddKey, Base, Request, Opts) ->
             Req =
                 case AddKey of
                     false -> Request;
-                    _ -> Request#{ <<"path">> => Key }
+                    _ -> hb_ao:explicit_set(Request, #{ <<"path">> => Key })
                 end,
             {ok,
                 apply_schema(implicit_base(BaseSchema), Base, Opts),
@@ -151,13 +151,13 @@ build_type_env(Forms) ->
         fun
             ({attribute, _, Tag, {Name, Ast, Vars}}, Acc)
                     when Tag =:= type; Tag =:= opaque ->
-                Acc#{
+                hb_ao:explicit_set(Acc, #{
                     Name =>
                         #{
                             vars => [var_name(Var) || Var <- Vars],
                             ast => Ast
                         }
-                };
+                });
             (_, Acc) ->
                 Acc
         end,
@@ -208,7 +208,7 @@ maybe_nth(N, List, Default) ->
 store_schema(Key, Schema, Acc) ->
     case maps:get(Key, Acc, undefined) of
         undefined ->
-            Acc#{ Key => Schema };
+            hb_ao:explicit_set(Acc, #{ Key => Schema });
         Existing ->
             ExistingArity = maps:get(<<"arity">>, Existing),
             SchemaArity = maps:get(<<"arity">>, Schema),
@@ -218,7 +218,7 @@ store_schema(Key, Schema, Acc) ->
                     Existing,
                     #{ ExistingArity => maps:without([<<"overloads">>], Existing) }
                 ),
-            Acc#{
+            hb_ao:explicit_set(Acc, #{
                 Key =>
                     Schema#{
                         <<"overloads">> =>
@@ -226,7 +226,7 @@ store_schema(Key, Schema, Acc) ->
                                 SchemaArity => maps:without([<<"overloads">>], Schema)
                             }
                     }
-            }
+            })
     end.
 
 function_schema(Device, Func, Key, Opts) ->
@@ -302,7 +302,7 @@ implicit_key(Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Key,
     case maps:is_key(Key, Keys) of
         true -> Schema;
         false ->
-            Schema#{
+            hb_ao:explicit_set(Schema, #{
                 <<"keys">> =>
                     Keys#{
                         Key =>
@@ -311,7 +311,7 @@ implicit_key(Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }, Key,
                                 <<"type">> => any_type()
                             }
                     }
-            }
+            })
     end;
 implicit_key(Schema, _Key, _Presence) ->
     Schema.
@@ -528,7 +528,7 @@ apply_schema(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"all">> := Al
                 end 
             end,
             {#{}, false},
-            maps:to_list(Keys)
+            maps:to_list(hb_message:uncommitted_deep(hb_private:reset(Keys), Opts))
         ),
     % If `all` is true, pass through any unmatched keys unchanged.
     case All of

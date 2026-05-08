@@ -230,7 +230,7 @@ scope(Opts, Scope) when is_map(Opts) ->
         no_viable_store -> Opts;
         Store when is_list(Store) ->
             % Store is already a list, apply scope normally
-            Opts#{ <<"store">> => scope(Store, Scope) };
+            hb_ao:explicit_set(Opts, #{ <<"store">> => scope(Store, Scope) });
         Store when is_map(Store) ->
             % Check if Store already has a nested 'store' key
             case maps:find(store, Store) of
@@ -240,7 +240,7 @@ scope(Opts, Scope) when is_map(Opts) ->
                 error ->
                     % Single store map, wrap in list before scoping
                     % This ensures consistent behavior
-                    Opts#{ <<"store">> => scope([Store], Scope) }
+                    hb_ao:explicit_set(Opts, #{ <<"store">> => scope([Store], Scope) })
             end
     end;
 scope(Store, Scope) ->
@@ -646,15 +646,15 @@ strongest_error(Current, _Error) -> Current.
 %% default into all HyperBEAM distributions.
 test_stores() ->
     [
-        (hb_test_utils:test_store(hb_store_fs))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs)), #{
             <<"benchmark-scale">> => 0.001
-        },
-        (hb_test_utils:test_store(hb_store_lmdb))#{
+        }),
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_lmdb)), #{
             <<"benchmark-scale">> => 0.5
-        },
-        (hb_test_utils:test_store(hb_store_volatile))#{
+        }),
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_volatile)), #{
             <<"benchmark-scale">> => 0.01
-        }
+        })
     ] ++ rocks_stores().
 
 -ifdef(ENABLE_ROCKSDB).
@@ -1114,7 +1114,7 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
 %% @doc Test that read-only stores allow read operations but block write operations
 read_only_access_test() ->
     TestStore = hb_test_utils:test_store(hb_store_fs, <<"access-read-only">>),
-    ReadOnlyStore = TestStore#{<<"access">> => [<<"read">>]},
+    ReadOnlyStore = hb_ao:explicit_set(TestStore, #{<<"access">> => [<<"read">>]}),
     WriteStore = hb_test_utils:test_store(hb_store_fs, <<"access-write">>),
     StoreList = [ReadOnlyStore, WriteStore],
     TestKey = <<"test-key">>,
@@ -1138,9 +1138,9 @@ read_only_access_test() ->
 %% @doc Test that write-only stores allow write operations but block read operations  
 write_only_access_test() ->
     WriteOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"access-write-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"access-write-only">>)), #{
             <<"access">> => [<<"write">>]
-        },
+        }),
     ReadStore = hb_test_utils:test_store(hb_store_fs, <<"access-read-fallback">>),
     StoreList = [WriteOnlyStore, ReadStore],
     TestKey = <<"write-test-key">>,
@@ -1160,9 +1160,9 @@ write_only_access_test() ->
 %% @doc Test admin-only stores for start/stop/reset operations
 admin_only_access_test() ->
     AdminOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"access-admin-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"access-admin-only">>)), #{
             <<"access">> => [<<"admin">>, <<"read">>, <<"write">>]
-        },
+        }),
     StoreList = [AdminOnlyStore],
     TestKey = <<"admin-test-key">>,
     TestValue = <<"admin-test-value">>,
@@ -1176,13 +1176,13 @@ admin_only_access_test() ->
 %% @doc Test multiple access permissions
 multi_access_permissions_test() ->
     ReadWriteStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"access-read-write">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"access-read-write">>)), #{
             <<"access">> => [<<"read">>, <<"write">>]
-        },
+        }),
     AdminStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"access-admin-fallback">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"access-admin-fallback">>)), #{
             <<"access">> => [<<"admin">>]
-        },
+        }),
     StoreList = [ReadWriteStore, AdminStore],
     TestKey = <<"multi-access-key">>,
     TestValue = <<"multi-access-value">>,
@@ -1200,13 +1200,13 @@ multi_access_permissions_test() ->
 store_access_list_test() ->
     % Chain: Read-only -> Write-only -> Unrestricted
     ReadOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"chain-read-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"chain-read-only">>)), #{
             <<"access">> => [<<"read">>]
-        },
+        }),
     WriteOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"chain-write-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"chain-write-only">>)), #{
             <<"access">> => [<<"write">>]
-        },
+        }),
     UnrestrictedStore =
         hb_test_utils:test_store(hb_store_fs, <<"chain-unrestricted">>),
     StoreChain = [ReadOnlyStore, WriteOnlyStore, UnrestrictedStore],
@@ -1224,9 +1224,9 @@ store_access_list_test() ->
 %% @doc Test invalid access permissions are ignored
 invalid_access_permissions_test() ->
     InvalidAccessStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"access-invalid">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"access-invalid">>)), #{
             <<"access">> => [<<"invalid-policy">>, <<"nonexistent-policy">>]
-        },
+        }),
     FallbackStore = hb_test_utils:test_store(hb_store_fs, <<"access-fallback">>),
     StoreList = [InvalidAccessStore, FallbackStore],
     TestKey = <<"invalid-access-key">>,
@@ -1244,9 +1244,9 @@ invalid_access_permissions_test() ->
 %% @doc Test list operations with access control
 list_access_control_test() ->
     ReadOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"list-read-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"list-read-only">>)), #{
             <<"access">> => [<<"read">>]
-        },
+        }),
     WriteStore = hb_test_utils:test_store(hb_store_fs, <<"list-write">>),
     StoreList = [ReadOnlyStore, WriteStore],
     ListGroup = <<"list-test-group">>,
@@ -1268,9 +1268,9 @@ list_access_control_test() ->
 %% @doc Test make_link operations with write access
 make_link_access_test() ->
     WriteOnlyStore =
-        (hb_test_utils:test_store(hb_store_fs, <<"link-write-only">>))#{
+        hb_ao:explicit_set((hb_test_utils:test_store(hb_store_fs, <<"link-write-only">>)), #{
             <<"access">> => [<<"write">>,<<"read">>]
-        },
+        }),
     FallbackStore = hb_test_utils:test_store(hb_store_fs, <<"link-fallback">>),
     StoreList = [WriteOnlyStore, FallbackStore],
     SourceKey = <<"link-source">>,

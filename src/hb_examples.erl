@@ -109,7 +109,7 @@ paid_wasm() ->
                 <<"body">> => WASMFile,
                 <<"parameters+list">> => <<"3.0">>
             },
-            Opts#{ <<"priv-wallet">> => ClientWallet }
+            hb_ao:explicit_set(Opts, #{ <<"priv-wallet">> => ClientWallet })
         ),
     {ok, Res} = hb_http:post(HostNode, ClientBase, Opts),
     % Check that the message is signed by the host node.
@@ -338,10 +338,10 @@ relay_schedule_ans104_test() ->
     ScheduleRes =
         hb_http:post(
             Relay,
-            Process#{
+            hb_ao:explicit_set(Process, #{
                 <<"path">> => <<"push">>,
                 <<"codec-device">> => <<"ans104@1.0">>
-            },
+            }),
             ClientOpts
         ),
     ?event(debug_test, {post_result, ScheduleRes}),

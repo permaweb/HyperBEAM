@@ -97,7 +97,7 @@ request(Config, Method, Path, Message, Opts) ->
 %% @doc Get the multirequest options from the config or message. The options in 
 %% the message take precidence over the options in the config.
 multirequest_opts(Config, Message, Opts) ->
-    Opts#{
+    hb_ao:explicit_set(Opts, #{
         nodes =>
             multirequest_opt(<<"nodes">>, Config, Message, #{}, Opts),
         responses =>
@@ -110,7 +110,7 @@ multirequest_opts(Config, Message, Opts) ->
             multirequest_opt(<<"admissible-status">>, Config, Message, <<"All">>, Opts),
         parallel =>
             multirequest_opt(<<"parallel">>, Config, Message, false, Opts)
-    }.
+    }).
 
 %% @doc Get a value for a multirequest option from the config or message.
 multirequest_opt(Key, Config, Message, Default, Opts) ->
@@ -120,7 +120,7 @@ multirequest_opt(Key, Config, Message, Default, Opts) ->
             {Config, Key}
         ],
         Default,
-        Opts#{ <<"hashpath">> => ignore }
+        hb_ao:explicit_set(Opts, #{ <<"hashpath">> => ignore })
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. First,
@@ -239,7 +239,7 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 admissible_response(_Response, undefined, _Opts) -> true;
 admissible_response(Response, Msg, Opts) ->
     Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
-    Req = Response#{ <<"path">> => Path },
+    Req = hb_ao:explicit_set(Response, #{ <<"path">> => Path }),
     Base = hb_message:without_unless_signed([<<"path">>], Msg, Opts),
     ?event(debug_multi,
         {executing_admissible_message, {message, Base}, {req, Req}}
@@ -354,7 +354,7 @@ slow_node_opts(Ms) ->
         #{<<"device">> => <<"test-device@1.0">>, <<"path">> => <<"delay">>}}}.
 
 multi(Nodes, Extra) ->
-    Config = Extra#{<<"nodes">> => Nodes, <<"admissible-status">> => 200},
+    Config = hb_ao:explicit_set(Extra, #{<<"nodes">> => Nodes, <<"admissible-status">> => 200}),
     hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}).
 
 multirequest_test_() ->
@@ -405,9 +405,9 @@ parallel_race_stops_at_first_admissible() ->
         [R || R <- Routes,
             maps:get(<<"template">>, R, undefined) =:= <<"^/arweave">>,
             maps:is_key(<<"nodes">>, R)],
-    Config = ArweaveRoute#{
+    Config = hb_ao:explicit_set(ArweaveRoute, #{
         <<"nodes">> => [ao_node(FastURL), ao_node(SlowURL1), ao_node(SlowURL2)]
-    },
+    }),
     T0 = erlang:monotonic_time(millisecond),
     Result = hb_http_multi:request(Config, <<"GET">>, <<"/">>, #{}, #{}),
     Elapsed = erlang:monotonic_time(millisecond) - T0,

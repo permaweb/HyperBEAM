@@ -119,17 +119,17 @@ move(Mode, Base, Req, Opts) ->
                                 == <<"patch@1.0">>,
                             if Method orelse Device ->
                                 {
-                                    PatchAcc#{
+                                    hb_ao:explicit_set(PatchAcc, #{
                                         Key =>
                                             maps:without(
                                                 [<<"commitments">>, <<"Tags">>],
                                                 Msg
                                             )
-                                    },
+                                    }),
                                     NewSourceAcc
                                 };
                             true ->
-                                {PatchAcc, NewSourceAcc#{ Key => Msg }}
+                                {PatchAcc, hb_ao:explicit_set(NewSourceAcc, #{ Key => Msg })}
                             end
                         end,
                         {#{}, #{}},
@@ -393,7 +393,7 @@ custom_set_patch_test() ->
     ?assertEqual(<<"50">>, hb_ao:get(<<"balances/A">>, State1, #{})),
     ?assertEqual(<<"250">>, hb_ao:get(<<"balances/", ID2/binary>>, State1, #{})),
     State2 =
-        State1#{
+        hb_ao:explicit_set(State1, #{
             <<"results">> => #{
                 <<"outbox">> => #{
                     <<"1">> => #{
@@ -405,7 +405,7 @@ custom_set_patch_test() ->
                     }
                 }
             }
-        },
+        }),
     {ok, State3} = hb_ao:resolve(State2, <<"compute">>, #{}),
     ?event(debug_test, {resolved_state, State3}),
     ?assertEqual(<<"1">>, hb_ao:get(<<"balances/", ID1/binary>>, State3, #{})),
