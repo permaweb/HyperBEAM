@@ -1373,6 +1373,40 @@ very_small_deposit_yield_test() ->
     ?assert(BobBalance >= 49900),
     ?assert(BobBalance < 50000).
 
+frequent_materialization_drops_sub_raw_yield_test() ->
+    Alice = <<"alice">>,
+    ResourceDust = <<"dust-resource">>,
+    Opts = #{},
+    S0 = dev_pot:deposit(Alice, ResourceDust, 1, pot_state_empty([ResourceDust]), Opts),
+    SPassive =
+        hb_ao:set(
+            S0,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE,
+            Opts
+        ),
+    ?assertEqual(1, dev_pot:balance(Alice, SPassive, Opts)),
+    SHalf =
+        hb_ao:set(
+            S0,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE div 2,
+            Opts
+        ),
+    {ok, SMaterializedHalf} =
+        dev_pot:mint(SHalf, #{<<"subject">> => Alice}, Opts),
+    ?assertEqual(0, dev_pot:balance(Alice, SMaterializedHalf, Opts)),
+    SFull =
+        hb_ao:set(
+            SMaterializedHalf,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE,
+            Opts
+        ),
+    {ok, SMaterializedFull} =
+        dev_pot:mint(SFull, #{<<"subject">> => Alice}, Opts),
+    ?assertEqual(0, dev_pot:balance(Alice, SMaterializedFull, Opts)).
+
 %%% Yield Claiming Tests
 
 deposit_then_immediate_withdraw_test() ->
@@ -1941,6 +1975,99 @@ sub_unit_price_8_decimal_asset_distributes_reward_test() ->
     ?assertEqual(0, Minted div TotalWeightedUnits),
     ?assert(hb_maps:get(<<"accumulator">>, S4, 0, Opts) > 0),
     ?assert(dev_pot:balance(Alice, S4, Opts) > 0).
+
+ten_million_user_billion_tvl_aggregate_math_test() ->
+    %% This intentionally does not allocate 10M deposit records. It validates
+    %% the equivalent aggregate TWU and per-user arithmetic for an even split.
+    Users = 10_000_000,
+
+    %% Scenario:
+    %% - 1M units of a high-price 18-decimal asset at $2,300.
+    %% - 5B units of stable asset A at $1.
+    %% - 2B units of stable asset B at $1.
+    %% All quantities are normalized to POT_QUANTITY_SCALE and prices use
+    %% POT_PRICE_SCALE, so the aggregate TVL is $9.3B:
+    %%   (1M * 2300) + 5B + 2B = 9.3B USD.
+    HighPriceTotalQty = 1_000_000 * ?POT_QUANTITY_SCALE,
+    StableATotalQty = 5_000_000_000 * ?POT_QUANTITY_SCALE,
+    StableBTotalQty = 2_000_000_000 * ?POT_QUANTITY_SCALE,
+    HighPriceWeight = 2_300 * ?POT_PRICE_SCALE,
+    StableWeight = ?POT_PRICE_SCALE,
+    ExpectedTotalWeightedUnits = 9_300_000_000 * ?POT_QUANTITY_SCALE * ?POT_PRICE_SCALE,
+    TotalWeightedUnits =
+        (HighPriceTotalQty * HighPriceWeight)
+            + (StableATotalQty * StableWeight)
+            + (StableBTotalQty * StableWeight),
+
+    %% First-day AO mint under the millisecond curve. This is the same checkpoint
+    %% asserted in mint3_current_ms_day_test/0.
+    ToMint =
+        dev_pot_math:minted_between(
+            0,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            0,
+            ?AO_ONE_DAY_MS
+        ),
+    ?assertEqual(?AO_CURRENT_MS_FIRST_DAY_MINTED, ToMint),
+    ?assertEqual(ExpectedTotalWeightedUnits, TotalWeightedUnits),
+
+    %% GlobalAcc is the scaled per-weighted-unit reward delta for the day:
+    %%   floor(ToMint * POT_ACCUMULATOR_SCALE / TotalWeightedUnits).
+    %% The non-zero remainder proves sub-accumulator dust is carried forward
+    %% globally instead of being treated as raw AO supply.
+    {GlobalAcc, 0, AccumulatorRemainder} =
+        dev_pot_math:drip_global(0, ToMint, 0, TotalWeightedUnits),
+    ?assertEqual(1_071_217, GlobalAcc),
+    ?assert(AccumulatorRemainder > 0),
+
+    %% Even split across 10M users:
+    %% - each user gets 0.1 high-price asset
+    %% - each user gets 500 stable A
+    %% - each user gets 200 stable B
+    HighPriceUserQty = HighPriceTotalQty div Users,
+    StableAUserQty = StableATotalQty div Users,
+    StableBUserQty = StableBTotalQty div Users,
+
+    %% Resource accumulators multiply the global accumulator by the resource's
+    %% price weight. User yield then converts the scaled accumulator back to raw
+    %% AO units with drip_user/3.
+    HighPriceResAcc =
+        dev_pot_math:drip_resource(0, GlobalAcc, 0, HighPriceWeight),
+    StableResAcc =
+        dev_pot_math:drip_resource(0, GlobalAcc, 0, StableWeight),
+    HighPriceYield = dev_pot_math:drip_user(HighPriceResAcc, 0, HighPriceUserQty),
+    StableAYield = dev_pot_math:drip_user(StableResAcc, 0, StableAUserQty),
+    StableBYield = dev_pot_math:drip_user(StableResAcc, 0, StableBUserQty),
+    ?assertEqual(246_379_910, HighPriceYield),
+    ?assertEqual(535_608_500, StableAYield),
+    ?assertEqual(214_243_400, StableBYield),
+
+    %% Aggregate all representative users and verify no inflation. The gap below
+    %% ToMint is raw AO dust/rounding and remains below one AO.
+    PerUserYield = HighPriceYield + StableAYield + StableBYield,
+    AggregateUserYield = PerUserYield * Users,
+    ?assertEqual(996_231_810, PerUserYield),
+    ?assertEqual(9_962_318_100_000_000, AggregateUserYield),
+    ?assert(AggregateUserYield =< ToMint),
+    ?assert(ToMint - AggregateUserYield < ?AO_TOKEN_DENOMINATION),
+
+    %% Tiny user edge case: a $0.10 stable position (deposit) passively accrues raw AO over
+    %% the full day, but if materialized at each single global accumulator tick
+    %% it floors to zero each time. This documents the current no per-user
+    %% remainder tradeoff.
+    TinyUserQty = ?POT_QUANTITY_SCALE div 10,
+    TinyPassiveYield = dev_pot_math:drip_user(StableResAcc, 0, TinyUserQty),
+    TinySingleTickYield =
+        dev_pot_math:drip_user(
+            dev_pot_math:drip_resource(0, 1, 0, StableWeight),
+            0,
+            TinyUserQty
+        ),
+    ?assertEqual(107_121, TinyPassiveYield),
+    ?assertEqual(0, TinySingleTickYield),
+    ?assertEqual(1_071_210_000_000, TinyPassiveYield * Users).
 
 very_large_minted_amount_test() ->
     Alice = <<"alice">>,
