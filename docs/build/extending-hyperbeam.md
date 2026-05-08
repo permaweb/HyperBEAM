@@ -1,83 +1,93 @@
 # Extending HyperBEAM
 
-HyperBEAM's modular design, built on AO-Core principles and Erlang/OTP, makes it highly extensible. You can add new functionalities or modify existing behaviors primarily by creating new **Devices** or implementing **Pre/Post-Processors**.
+There is one production path for putting a new device into a
+HyperBEAM node: write Erlang sources, package them with the Forge, and
+let the runtime load the resulting `_hb_device_*` BEAM archive. That
+single path covers both the devices baked into the HyperBEAM
+repository and third-party devices that ship in their own repos.
 
-!!! warning "Advanced Topic"
-    Extending HyperBEAM requires a good understanding of Erlang/OTP, the AO-Core protocol, and HyperBEAM's internal architecture. This guide provides a high-level overview; detailed implementation requires deeper exploration of the source code.
+This page is a quick orientation. The reference details live in the
+[Device packaging](device-packaging.md) and
+[External device repository](external-device-repository.md) guides.
 
-## Approach 1: Creating New Devices
+## The shape of a device
 
-This is the most common way to add significant new capabilities.
-A Device is essentially an Erlang module (typically named `dev_*.erl`) that processes AO-Core messages.
+A device is a namespace of Erlang modules:
 
-**Steps:**
+* one root: `dev_<name>.erl` whose exports become the device's
+  public API;
+* optionally one or more helpers: `dev_<name>_*.erl` whose functions
+  are loaded only under the generated `_hb_device_*__*` helper names.
 
-1.  **Define Purpose:** Clearly define what your device will do. What kind of messages will it process? What state will it manage (if any)? What functions (keys) will it expose?
-2.  **Create Module:** Create a new Erlang module (e.g., `src/dev_my_new_device.erl`).
-3.  **Implement `info/0..2` (Optional but Recommended):** Define an `info` function to signal capabilities and requirements to HyperBEAM (e.g., exported keys, variant/version ID).
-    ```erlang
-    info() ->
-        #{
-          variant => <<"MyNewDevice/1.0">>,
-          exports => [<<"do_something">>, <<"get_status">>]
-        }.
-    ```
-4.  **Implement Key Functions:** Create Erlang functions corresponding to the keys your device exposes. These functions typically take `StateMessage`, `InputMessage`, and `Environment` as arguments and return `{ok, NewMessage}` or `{error, Reason}`.
-    ```erlang
-    do_something(StateMsg, InputMsg, Env) ->
-        % ... perform action based on InputMsg ...
-        NewState = ..., % Calculate new state
-        {ok, NewState}.
+The root may declare `-implements(<<"name@version">>).` (or a 43-char
+specification ID); without it the Forge derives the human name from the
+module — `dev_my_thing` → `my-thing@1.0`.
 
-    get_status(StateMsg, _InputMsg, _Env) ->
-        % ... read status from StateMsg ...
-        StatusData = ..., 
-        {ok, StatusData}.
-    ```
-5.  **Handle State (If Applicable):** Devices can be stateless or stateful. Stateful devices manage their state within the `StateMessage` passed between function calls.
-6.  **Register Device:** Ensure HyperBEAM knows about your device. This might involve adding it to build configurations or potentially a dynamic registration mechanism if available.
-7.  **Testing:** Write EUnit tests for your device's functions.
+```erlang
+%%% @doc One-paragraph description that becomes the device's
+%%% Device-Specification body. Markdown is fine.
+-module(dev_my_thing).
+-export([info/1, do/3]).
 
-**Example Idea:** A device that bridges to another blockchain network, allowing AO processes to read data or trigger transactions on that chain.
+info(_Opts) ->
+    #{ exports => [<<"do">>] }.
 
-## Approach 2: Building Pre/Post-Processors
+do(Base, Req, Opts) ->
+    %% Implement the device's behaviour by returning {ok, Result}
+    %% or {error, Reason}.
+    {ok, Base#{ <<"echo">> => maps:get(<<"input">>, Req, undefined) }}.
+```
 
-Pre/post-processors allow you to intercept incoming requests *before* they reach the target device/process (`preprocess`) or modify the response *after* execution (`postprocess`). These are often implemented using the `dev_stack` device or specific hooks within the request handling pipeline.
+A top-level `%%% @doc` block becomes the spec body; alternatively
+`-specification("path/to/spec.md").` points at an out-of-line file.
 
-**Use Cases:**
+## In-repo devices
 
-*   **Authentication/Authorization:** Checking signatures or permissions before allowing execution.
-*   **Request Modification:** Rewriting requests, adding metadata, or routing based on specific criteria.
-*   **Response Formatting:** Changing the structure or content type of the response.
-*   **Metering/Logging:** Recording request details or charging for usage before or after execution.
+The HyperBEAM repository keeps every device source under
+`src/preloaded`. The `compile` step runs the same Forge preload pipeline
+over that directory and emits an LMDB `preloaded-store` plus the index
+ID the kernel default config consumes:
 
-**Implementation:**
+```bash
+rebar3 compile          # builds kernel + forge, then preloads
+rebar3 eunit            # runs the kernel tests against the bake
+```
 
-Processors often involve checking specific conditions (like request path or headers) and then either:
+`hb_ao_device:load/2` resolves every device — including
+`message@1.0`, `httpsig@1.0`, etc. — through that store. There is no
+privileged kernel path that would let `dev_message` be used directly
+as a runtime device.
 
-a.  Passing the request through unchanged.
-b.  Modifying the request/response message structure.
-c.  Returning an error or redirect.
-<!-- d. The guide on [Building Pre/Post-Processors](TODO:link-to-pre-post-processor-guide-once-available) provides a detailed example pattern, particularly focusing on exempting certain routes. -->
+## External devices
 
-**Example Idea:** A preprocessor that automatically adds a timestamp tag to all incoming messages for a specific process.
-<!-- 
-## Approach 3: Modifying Existing Devices (Use with Caution)
+Third-party devices live in their own rebar3 projects, depending on
+HyperBEAM. Once the Forge template is installed in the user rebar3
+config, create one with:
 
-You could directly modify the source code of existing `dev_*.erl` modules. However, this is generally discouraged as it makes future updates harder and can break compatibility. -->
+```bash
+rebar3 new device name=my_device
+```
 
-## Approach 3: Custom Routing Strategies
+Then iterate with:
 
-While `dev_router` provides basic strategies (round-robin, etc.), you could potentially implement a custom load balancing or routing strategy module that `dev_router` could be configured to use. This would involve understanding the interfaces expected by `dev_router`.
+```bash
+rebar3 device package    # build _hb_device_*.beam-archive.zip
+rebar3 device verify     # check archive invariants
+rebar3 device test       # run dev_<root> EUnit against a fresh store
+rebar3 device publish    # sign and upload to Arweave
+```
 
-**Example Idea:** A routing strategy that queries worker nodes for their specific capabilities before forwarding a request.
+See [External device repository](external-device-repository.md) for
+the full template.
 
-## Getting Started
+## Runtime shape
 
-1.  **Familiarize Yourself:** Deeply understand Erlang/OTP and the HyperBEAM codebase (`src/` directory), especially [`hb_ao.erl`](../resources/source-code/hb_ao.md), [`hb_message.erl`](../resources/source-code/hb_message.md), and existing `dev_*.erl` modules relevant to your idea.
-2.  **Study Examples:** Look at simple devices like `dev_patch.erl` or more complex ones like `dev_process.erl` to understand patterns.
-3.  **Start Small:** Implement a minimal version of your idea first.
-4.  **Test Rigorously:** Use `rebar3 eunit` extensively.
-5.  **Engage Community:** Ask questions in developer channels if you get stuck.
+The build-time preloaded resolver message maps each name to a signed
+specification ID, and the `device-store` runtime cache maps resolved
+names and IDs to loaded generated module atoms. Operators who want to
+change the baked-in set rebuild the in-repo source set or point
+`<<"preloaded-store">>` at a store produced by an external build.
 
-Extending HyperBEAM allows you to tailor the AO network's capabilities to specific needs, contributing to its rich and evolving ecosystem.
+Codec devices use the same source and runtime naming as every other
+device: source modules are `dev_<name>.erl`, and runtime atoms are
+`_hb_device_<name>_<hash>`.

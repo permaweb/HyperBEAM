@@ -24,7 +24,7 @@ Key properties of messages:
 
 ## Devices
 
-HyperBEAM supports numerous devices, each enabling different services. There are approximately 25 different devices included in the preloaded_devices of a HyperBEAM node.
+HyperBEAM supports numerous devices, each enabling different services. There are approximately 25 different devices baked into a HyperBEAM node's preloaded-store.
 
 ### Key Preloaded Devices
 

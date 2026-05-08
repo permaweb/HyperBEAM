@@ -1,4 +1,4 @@
-# [Module dev_scheduler.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler.erl)
+# [Module dev_scheduler.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler.erl)
 
 
 

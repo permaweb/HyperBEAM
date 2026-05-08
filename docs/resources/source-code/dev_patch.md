@@ -1,4 +1,4 @@
-# [Module dev_patch.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_patch.erl)
+# [Module dev_patch.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_patch.erl)
 
 
 

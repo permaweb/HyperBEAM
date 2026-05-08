@@ -1,4 +1,4 @@
-# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_green_zone.erl)
+# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_green_zone.erl)
 
 
 
@@ -17,7 +17,7 @@ commitment and encryption.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td>Adds a node to the trusted nodes list with its commitment report.</td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td>Clones the identity of a target node in the green zone.</td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td>Generate the node message that should be set prior to joining
-a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td>Attempts to mount an encrypted volume using the green zone AES key.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
+a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -252,7 +252,7 @@ join_peer(PeerLocation::binary(), PeerID::binary(), M1::term(), M2::term(), Opts
 </code></pre>
 <br />
 
-`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: May contain ShouldMount flag to enable encrypted volume mounting<br />
+`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: Additional request details<br />
 
 returns: `{ok, Map}` on success with confirmation message, or
 `{error, Map|Binary}` on failure with error details
@@ -267,7 +267,6 @@ This function handles the client-side join flow when connecting to a peer:
 5. Verifies the response signature
 6. Decrypts the returned AES key
 7. Updates local configuration with the shared key
-8. Optionally mounts an encrypted volume using the shared key
 
 <a name="key-3"></a>
 
@@ -334,21 +333,6 @@ This test function verifies that encryption and decryption using the RSA keys
 from the wallet work correctly. It creates a new wallet, encrypts a test
 message with the RSA public key, and then decrypts it with the RSA private
 key, asserting that the decrypted message matches the original.
-
-<a name="try_mount_encrypted_volume-2"></a>
-
-### try_mount_encrypted_volume/2 * ###
-
-`try_mount_encrypted_volume(AESKey, Opts) -> any()`
-
-Attempts to mount an encrypted volume using the green zone AES key.
-
-This function handles the complete process of secure storage setup by
-delegating to the dev_volume module, which provides a unified interface
-for volume management.
-
-The encryption key used for the volume is the same AES key used for green zone
-communication, ensuring that only nodes in the green zone can access the data.
 
 <a name="validate_join-3"></a>
 
