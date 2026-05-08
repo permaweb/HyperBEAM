@@ -1,0 +1,17 @@
+{application, plugin,
+    [
+        {description, "HyperBEAM device packaging rebar3 provider"},
+        {vsn, "0.1.0"},
+        {modules,
+            [
+                plugin,
+                plugin_args,
+                plugin_prv_package,
+                plugin_prv_preload,
+                plugin_prv_publish,
+                plugin_prv_test,
+                plugin_prv_verify
+            ]},
+        {registered, []},
+        {applications, [kernel, stdlib]}
+    ]}.
