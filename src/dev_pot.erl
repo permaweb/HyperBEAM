@@ -34,6 +34,14 @@
 %%% - child mints trust their direct `parent` process for inherited resource
 %%%   config and writes; forwarded parent `register` notifications set both
 %%%   `resource-authority` and `weight-authority` to that parent process.
+%%%
+%%% Quantity model:
+%%% - `deposit` / `withdraw` request bodies may provide `quantity-scale` to
+%%%   normalize source-token raw units into pot units.
+%%% - direct `deposit/5` and `withdraw/5` calls already expect normalized pot
+%%%   units.
+%%% - `delegate` / `undelegate` always move existing normalized pot units and do
+%%%   not apply `quantity-scale`.
 %%% 
 %%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
@@ -408,7 +416,8 @@ withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID,
 %% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
-%% Reason}'.
+%% Reason}'. `quantity-scale` is optional; when omitted, `quantity` is already
+%% interpreted as normalized pot units (POT_QUANTITY_SCALE).
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -581,7 +590,8 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
             end
     end.
 
-%% @doc Delegate some quantity of a resource from one address to another.
+%% @doc Delegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is only interpreted by deposit/withdraw request parsing.
 -spec delegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -762,7 +772,8 @@ delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
 delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Delegate Amount must be of integer type">>}.
 
-%% @doc Undelegate some quantity of a resource from one address to another.
+%% @doc Undelegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is only interpreted by deposit/withdraw request parsing.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
