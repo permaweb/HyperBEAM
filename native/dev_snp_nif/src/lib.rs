@@ -9,5 +9,5 @@ mod verification;
 mod helpers;
 
 rustler::init!(
-    "dev_snp_nif"// Module name as used in Erlang.
+    "hb_snp_nif" // Module name as used in Erlang.
 );

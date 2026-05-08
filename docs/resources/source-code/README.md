@@ -59,7 +59,7 @@
 <tr><td><a href="dev_scheduler_server.md" class="module">dev_scheduler_server</a></td></tr>
 <tr><td><a href="dev_simple_pay.md" class="module">dev_simple_pay</a></td></tr>
 <tr><td><a href="dev_snp.md" class="module">dev_snp</a></td></tr>
-<tr><td><a href="dev_snp_nif.md" class="module">dev_snp_nif</a></td></tr>
+<tr><td><a href="hb_snp_nif.md" class="module">hb_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
 <tr><td><a href="dev_volume.md" class="module">dev_volume</a></td></tr>
