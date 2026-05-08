@@ -20,6 +20,7 @@
 -include("include/hb.hrl").
 -include("include/hb_opts.hrl").
 -include("include/hb_arweave_nodes.hrl").
+-include("include/hb_store_arweave.hrl").
 -include("../../_build/hb_preloaded_index.hrl").
 
 -ifndef(PRELOADED_DEVICES_INDEX_MESSAGE_ID).
@@ -288,7 +289,7 @@ raw_default_message() ->
         <<"copycat-memory-budget">> => 6 * 1024 * 1024 * 1024,
         <<"copycat-depth-recursion-cap">> => 6, % 2x the deepest we've seen to date
         <<"arweave-block-workers">> => 3,
-        <<"copycat-scope">> => ["offset", "parent"],
+        <<"copycat-scope">> => [?SCOPE_OFFSET, ?SCOPE_PARENT],
         % Dev options
         <<"mode">> => debug,
         <<"profiling">> => true,

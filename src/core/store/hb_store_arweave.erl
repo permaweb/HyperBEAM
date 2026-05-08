@@ -14,11 +14,10 @@
 -export([decode_item_ids/1, is_block_indexed/3, is_post_cutover/2, mark_block_indexed/3 ]).
 -export([root_offset/2]).
 -include("include/hb.hrl").
+-include("include/hb_store_arweave.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(PARTITION_SIZE, 3_600_000_000_000).
--define(SCOPE_PARENT, <<"parent">>).
--define(SCOPE_OFFSET, <<"offset">>).
 -define(CUTOVER_KEY, <<"block/marker-cutover-height">>).
 
 %% @doc Find the first Arweave store from the given node message. Searches first
