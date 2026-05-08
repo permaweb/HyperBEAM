@@ -18,7 +18,7 @@
 -export([remove_leading_noise/1, remove_trailing_noise/1, remove_noise/1]).
 -export([truncate/2]).
 %%% Public Utility Functions.
--export([escape_format/1, short_id/1, trace_to_list/1]).
+-export([escape_format/1, short_id/1, trace_to_list/1, device_atom/1]).
 -export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -export([process_from_trace/1]).
 -include("include/hb.hrl").
@@ -680,11 +680,21 @@ is_erlang_generated_fun_name(_) ->
 %% traces, or their raw form for others.
 trace_element(Bin) when is_binary(Bin) -> Bin;
 trace_element({Mod, Line}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Line]));
 trace_element({Mod, _, _, [{file, _}, {line, Line}|_]}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Line]));
 trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Func])).
+
+%% @doc Trace-friendly module rendering. Replaces generated
+%% `_hb_device_*' atoms with their `~<name>+<hash>' short form so that
+%% stack traces stay legible.
+pp_mod(Atom) when is_atom(Atom) ->
+    case hb_packager:is_generated_module(Atom) of
+        true -> device_atom(Atom);
+        false -> io_lib:format("~p", [Atom])
+    end;
+pp_mod(Other) -> io_lib:format("~p", [Other]).
 
 %% @doc Utility function to help macro `?trace/0' remove the first frame of the
 %% stack trace.
@@ -1082,6 +1092,22 @@ short_id(<< "/", SingleElemHashpath/binary >>) ->
     end;
 short_id(Key) when byte_size(Key) < 43 -> Key;
 short_id(_) -> undefined.
+
+%% @doc Render a runtime device atom in human-friendly form. Generated
+%% `_hb_device_<name>_<hash>' atoms become `~<name>+<short-hash>'; any
+%% other atom is returned unchanged. Used by trace formatting and the
+%% debug print path so that long generated atoms do not flood the
+%% output.
+device_atom(Atom) when is_atom(Atom) ->
+    case hb_packager:generated_module_parts(Atom) of
+        not_generated -> Atom;
+        {Name, Hash} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            iolist_to_binary([
+                <<"~">>, Name, <<"+">>, Short
+            ])
+    end;
+device_atom(Other) -> Other.
 
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.
