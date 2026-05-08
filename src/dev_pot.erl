@@ -52,7 +52,7 @@
 -export([register/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
--export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4, register_resource/5]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
@@ -1256,7 +1256,7 @@ validate_signer_config(Value, Opts) when is_binary(Value) ->
     catch
         _:_ -> {error, <<"Signer config must be a valid binary or list.">>}
     end;
-validate_signer_config(Value, Opts) when is_list(Value) ->
+validate_signer_config(Value, _Opts) when is_list(Value) ->
     case Value of
         [] ->
             {error, <<"Signer config list must not be empty.">>};
@@ -1291,9 +1291,16 @@ validate_match_config(_) ->
 
 %% @doc Set the weight of a specific resource in the pot, updating the pot state
 %% as necessary.
-register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >= 0 ->
+register_resource(ResourceID, Weight, S, Opts) ->
+    register_resource(ResourceID, Weight, keep_existing, S, Opts).
+register_resource(_, Weight, _, _, _) when not is_integer(Weight) ->
+    {error, <<"Invalid Weight type.">>};
+register_resource(_, Weight, _, _, _) when is_integer(Weight), Weight < 0 ->
+    {error, <<"Weight must be a non-negative integer.">>};
+register_resource(ResourceID, Weight, QuantityScale, S, Opts) when is_integer(Weight), Weight >= 0 ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= is_valid_quantity_scale(QuantityScale),
         % Run the global drip to ensure the state is up to date.
         S0 = drip_global(S, Opts),
         S1 = drip_resource(ResourceID, S0, Opts),
@@ -1301,6 +1308,12 @@ register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >
         % (`/total-weighted-units').
         Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
         OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        % Denomination may be changed on case the assets undergo a redomination
+        ExistingQuantityScale = hb_ao:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
+        NewQuantityScale = case QuantityScale of
+            keep_existing -> ExistingQuantityScale;
+            _ -> QuantityScale
+        end,
         ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
         % Update the total weighted units counter. Subtract the deposits at the old
         % weight first, then add the deposits at the new weight.
@@ -1315,19 +1328,24 @@ register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >
                 S1,
                 #{
                     <<"resources">> => #{
-                        ResourceID => Resource#{ <<"weight">> => Weight }
+                        ResourceID => Resource#{ <<"weight">> => Weight, <<"quantity-scale">> => NewQuantityScale }
                     },
                     <<"total-weighted-units">> => NewTotalWeightedUnits
                 },
                 Opts
             ),
         send_weight_notice(ResourceID, Weight, AfterSet, Opts)
-end;
+end.
 
-register_resource(_, Weight, _, _) when not is_integer(Weight) ->
-    {error, <<"Invalid Weight type.">>};
-register_resource(_, Weight, _, _) when is_integer(Weight), Weight < 0 ->
-    {error, <<"Weight must be a non-negative integer.">>}.
+is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0 ->
+    true;
+is_valid_quantity_scale(Scale) when is_atom(Scale) ->
+    case Scale of
+        keep_existing -> true;
+        _ -> false
+    end;
+is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer.">>}.
+
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
