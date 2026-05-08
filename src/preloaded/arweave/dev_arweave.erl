@@ -1662,7 +1662,8 @@ index_test_tx(TXID, IndexStore, Opts) ->
             TXID,
             <<"tx@1.0">>,
             StartOffset,
-            Size
+            Size,
+            Opts
         ),
     ?assertMatch({ok, _}, hb_store_arweave:read_offset(IndexStore, TXID, Opts)),
     ok.

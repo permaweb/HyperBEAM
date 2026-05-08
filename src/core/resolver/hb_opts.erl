@@ -288,6 +288,7 @@ raw_default_message() ->
         <<"copycat-memory-budget">> => 6 * 1024 * 1024 * 1024,
         <<"copycat-depth-recursion-cap">> => 6, % 2x the deepest we've seen to date
         <<"arweave-block-workers">> => 3,
+        <<"copycat-scope">> => ["offset", "parent"],
         % Dev options
         <<"mode">> => debug,
         <<"profiling">> => true,
