@@ -455,6 +455,7 @@ match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
         {ok, Result} -> match_args(Rest, [Result | Acc], Opts);
+        not_found    -> match_args(Rest, [[] | Acc], Opts);
         _Error -> match_args(Rest, Acc, Opts)
     end.
 
