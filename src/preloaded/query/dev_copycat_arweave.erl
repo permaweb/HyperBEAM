@@ -1786,7 +1786,7 @@ write_mempool_offsets(TXID, TX, Opts) ->
                     {loaded_bytes, byte_size(Data)}}
             ),
             ok = hb_store_arweave:write_offset(
-                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
+                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size, Opts),
             write_mempool_children(Store, TXID, TX, Data, Opts);
         _Error ->
             #{ status => missing_data }
@@ -1797,7 +1797,7 @@ write_mempool_children(Store, TXID, TX, Data, Opts) ->
         true ->
             case load_mempool_bundle_index(TXID, Data, Opts) of
                 {ok, HeaderSize, BundleIndex} ->
-                    write_mempool_items(Store, TXID, BundleIndex, HeaderSize),
+                    write_mempool_items(Store, TXID, BundleIndex, HeaderSize, Opts),
                     #{
                         status => indexed,
                         tx_offsets_written => 1,
@@ -1816,7 +1816,7 @@ write_mempool_children(Store, TXID, TX, Data, Opts) ->
                     Ref = #{ <<"relative">> => TXID, <<"offset">> => 0 },
                     hb_store_arweave:write_offset(
                         Store, ItemID, <<"ans104@1.0">>,
-                        Ref, TX#tx.data_size),
+                        Ref, TX#tx.data_size, Opts),
                     #{
                         status => indexed,
                         tx_offsets_written => 1,
@@ -1830,12 +1830,12 @@ write_mempool_children(Store, TXID, TX, Data, Opts) ->
             end
     end.
 
-write_mempool_items(_Store, _TXID, [], _Offset) -> ok;
-write_mempool_items(Store, TXID, [{ItemID, Size} | Rest], Offset) ->
+write_mempool_items(_Store, _TXID, [], _Offset, _Opts) -> ok;
+write_mempool_items(Store, TXID, [{ItemID, Size} | Rest], Offset, Opts) ->
     Ref = #{ <<"relative">> => TXID, <<"offset">> => Offset },
     hb_store_arweave:write_offset(
-        Store, hb_util:encode(ItemID), <<"ans104@1.0">>, Ref, Size),
-    write_mempool_items(Store, TXID, Rest, Offset + Size).
+        Store, hb_util:encode(ItemID), <<"ans104@1.0">>, Ref, Size, Opts),
+    write_mempool_items(Store, TXID, Rest, Offset + Size, Opts).
 
 load_mempool_data(_TXID, #tx{ data_size = 0 }, _Opts) ->
     {ok, <<>>};
