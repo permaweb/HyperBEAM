@@ -445,13 +445,12 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 Opts
             ),
         true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
-        QuantityScale =
-            hb_maps:get(
-                <<"quantity-scale">>,
-                Req,
-                ?POT_QUANTITY_SCALE,
-                Opts
-            ),
+        QuantityScale = case hb_maps:find(<<"quantity-scale">>, Req, Opts) of
+            {ok, ReqScale} -> ReqScale;
+            error ->
+                Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, Base, #{}, Opts),
+                hb_maps:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts)
+            end,
         {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
         {ok, {Address, ResourceID, NormalizedAmount}}
     end.
