@@ -416,8 +416,9 @@ withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID,
 %% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
-%% Reason}'. `quantity-scale` is optional; when omitted, `quantity` is already
-%% interpreted as normalized pot units (POT_QUANTITY_SCALE).
+%% Reason}'. `quantity-scale` is optional; when omitted, `quantity-scale` gets
+%% checked if configured in the resource's store, if that is missing too
+%% then `quantity` is interpreted as normalized pot units (POT_QUANTITY_SCALE).
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -1024,18 +1025,28 @@ register(State, Assignment, Opts) ->
             hb_maps:find(<<"weight-authority">>, Req, Opts) =/= error orelse
             hb_maps:find(<<"weight-authority-required">>, Req, Opts) =/= error orelse
             hb_maps:find(<<"weight-authority-match">>, Req, Opts) =/= error,
+        HasResourceConfigMutation = 
+            hb_maps:find(<<"weight">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"quantity-scale">>, Req, Opts) =/= error,
         true ?=
-            case {HasAdminMutation, hb_maps:find(<<"weight">>, Req, Opts)} of
+            case {HasAdminMutation, HasResourceConfigMutation} of
                 {true, _} ->
                     enforce_resource_config_authority(From, State, Req, Opts);
-                {false, {ok, _}} ->
+                {false, true} ->
                     enforce_resource_weight_authority(ResID, From, State, Req, Opts);
                 _ ->
                     true
             end,
+        ResourceConfigMutations = {
+            hb_maps:find(<<"weight">>, Req, Opts), 
+            hb_maps:find(<<"quantity-scale">>, Req, Opts)
+        },
         State2 =
-            case hb_maps:find(<<"weight">>, Req, Opts) of
-                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
+            case ResourceConfigMutations of
+                {{ok, Weight}, {ok, QuantityScale}} ->
+                    register_resource(ResID, Weight, QuantityScale, State, Opts);
+                {{ok, Weight}, _} -> register_resource(ResID, Weight, State, Opts);
+                {_, {ok, QuantityScale}} -> register_resource(ResID, keep_existing, QuantityScale, State, Opts);
                 _ -> State
             end,
         true ?= is_map(State2) orelse State2,
@@ -1292,21 +1303,22 @@ validate_match_config(_) ->
 %% as necessary.
 register_resource(ResourceID, Weight, S, Opts) ->
     register_resource(ResourceID, Weight, keep_existing, S, Opts).
-register_resource(_, Weight, _, _, _) when not is_integer(Weight) ->
-    {error, <<"Invalid Weight type.">>};
-register_resource(_, Weight, _, _, _) when is_integer(Weight), Weight < 0 ->
-    {error, <<"Weight must be a non-negative integer.">>};
-register_resource(ResourceID, Weight, QuantityScale, S, Opts) when is_integer(Weight), Weight >= 0 ->
+register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         true ?= is_valid_quantity_scale(QuantityScale),
+        true ?= is_valid_weight(Weight),
         % Run the global drip to ensure the state is up to date.
         S0 = drip_global(S, Opts),
         S1 = drip_resource(ResourceID, S0, Opts),
         % Calculate the new total deposited units for the weighted global counter
         % (`/total-weighted-units').
         Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
-        OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ExistingWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ReqWeight = case Weight of
+            keep_existing -> ExistingWeight;
+            _ -> Weight
+        end,
         % Denomination may be changed on case the assets undergo a redomination
         ExistingQuantityScale = hb_ao:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
         NewQuantityScale = case QuantityScale of
@@ -1319,31 +1331,30 @@ register_resource(ResourceID, Weight, QuantityScale, S, Opts) when is_integer(We
         LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
         NewTotalWeightedUnits =
             LastTotalWeightedUnits
-                - (OldWeight * ResourceDeposits)
-                + (Weight * ResourceDeposits),
+                - (ExistingWeight * ResourceDeposits)
+                + (ReqWeight * ResourceDeposits),
         % Update the resource and the global weighted units counter.
         AfterSet =
             hb_ao:set(
                 S1,
                 #{
                     <<"resources">> => #{
-                        ResourceID => Resource#{ <<"weight">> => Weight, <<"quantity-scale">> => NewQuantityScale }
+                        ResourceID => Resource#{ <<"weight">> => ReqWeight, <<"quantity-scale">> => NewQuantityScale }
                     },
                     <<"total-weighted-units">> => NewTotalWeightedUnits
                 },
                 Opts
             ),
-        send_weight_notice(ResourceID, Weight, AfterSet, Opts)
+        send_weight_notice(ResourceID, ReqWeight, AfterSet, Opts)
 end.
 
-is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0 ->
-    true;
-is_valid_quantity_scale(Scale) when is_atom(Scale) ->
-    case Scale of
-        keep_existing -> true;
-        _ -> false
-    end;
+is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0 -> true;
+is_valid_quantity_scale(keep_existing) -> true;
 is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer.">>}.
+
+is_valid_weight(W) when is_integer(W), W >= 0 -> true;
+is_valid_weight(keep_existing) -> true;
+is_valid_weight(_) -> {error, <<"Weight must be a non-negative integer.">>}.
 
 
 %% @doc Update the inverted index for a specific address in a specific resource.
