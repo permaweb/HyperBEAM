@@ -27,7 +27,8 @@
 %%% Authority model:
 %%% - `deposit` / `withdraw` are authorized per resource by that resource's
 %%%   `authority` security policy.
-%%% - `weight` updates may be delegated per resource via `weight-authority`.
+%%% - `weight` and `quantity-scale` updates may be
+%%%    delegated per resource via `weight-authority`.
 %%% - resource config changes (`authority*`, `weight-authority*`) remain
 %%%   guarded by the pot-wide `mint-authority` policy, or by the configured
 %%%   `parent` when the pot is acting as a child mint.
@@ -37,7 +38,8 @@
 %%%
 %%% Quantity model:
 %%% - `deposit` / `withdraw` request bodies may provide `quantity-scale` to
-%%%   normalize source-token raw units into pot units.
+%%%   normalize source-token raw units into pot units, or have it already
+%%%   configured in the resource's config under `quantity-scale`.
 %%% - direct `deposit/5` and `withdraw/5` calls already expect normalized pot
 %%%   units.
 %%% - `delegate` / `undelegate` always move existing normalized pot units and do
@@ -294,7 +296,7 @@ maybe_initialize_subscriptions(Base, Req, Opts) ->
     end.
 
 %% @doc If the process has a `parent' mint set, send a subscription request to
-%% the parent process for all `set-weight' messages.
+%% the parent process for all `register' messages.
 initialize_subscriptions(Base, _Req, Opts) ->
     case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
         not_found -> Base;
@@ -1345,7 +1347,7 @@ register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
                 },
                 Opts
             ),
-        send_weight_notice(ResourceID, ReqWeight, AfterSet, Opts)
+        send_resource_config_notice(ResourceID, ReqWeight, NewQuantityScale, AfterSet, Opts)
 end.
 
 is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0 -> true;
@@ -1399,17 +1401,18 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
         Opts
     ).
 
-%% @doc Send a `set-weight' update message to all subscribed listeners. We use
+%% @doc Send a `register' update message to all subscribed listeners. We use
 %% `notify/3' instead of `send/3' to do this as (by default) there is nobody that
 %% will be listening for this message. Clients can call `subscribe' with a
-%% `subscribe-target' of `broadcast' and an `subscribe-action' of `set-weight'
+%% `subscribe-target' of `broadcast' and an `subscribe-action' of `register'
 %% to be notified of these events.
-send_weight_notice(ResourceID, Weight, S, Opts) ->
+send_resource_config_notice(ResourceID, Weight, QuantityScale, S, Opts) ->
     dev_process_outbox:notify(
         #{
             <<"action">> => <<"register">>,
             <<"resource">> => ResourceID,
-            <<"weight">> => Weight
+            <<"weight">> => Weight,
+            <<"quantity-scale">> => QuantityScale
         },
         S,
         Opts

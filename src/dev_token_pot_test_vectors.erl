@@ -1234,15 +1234,15 @@ pot_subscriptions_test() ->
         },
         Opts
     ),
-    % Push an action on the child mint to initialize it, subsribing to all 
-    % messages on the parent mint's set-weight action.
+    % Push an action on the child mint to initialize it, subscribing to all 
+    % messages on the parent mint's register action.
     push_request(ChildProcess, #{ <<"action">> => <<"mint">> }, Opts),
     ?assertEqual(
         [dev_process_lib:process_id(ChildProcess, Opts)],
         dev_token_lib:subscribers(ParentProcess, <<"register">>, Opts)
     ),
-    % Push set-weight actions on the parent mint and verify that the child mint
-    % also updates accordingly.
+    % Push register resource config updates on the parent mint and verify that
+    % the child mint also updates accordingly.
     push_set_weight(ParentProcess, Resource, 100, Opts),
     ?assertEqual(100, weight(ParentProcess, Resource, Opts)),
     ?assertEqual(100, weight(ChildProcess, Resource, Opts)),
