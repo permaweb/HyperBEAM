@@ -1599,6 +1599,82 @@ notify_rejects_non_register_forward_action_test() ->
         dev_pot:notify(State, Assignment, Opts)
     ).
 
+quantity_scale_register_update_and_notify_test() ->
+    Admin = <<"admin">>,
+    Parent = <<"parent">>,
+    Alice = <<"alice">>,
+    Resource = <<"scale-config-resource">>,
+    Opts = #{},
+    Weight = 7,
+    Quantity = 10,
+    AssetScale = 100_000_000, % 1e8
+    S0 =
+        (pot_state(Alice, Resource, Quantity, Weight, 100, 1, 2))#{
+            <<"mint-authority">> => Admin
+        },
+    InitialTWU = hb_maps:get(<<"total-weighted-units">>, S0, 0, Opts),
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Admin
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(<<"/resources/", Resource/binary, "/quantity-scale">>, S1, 0, Opts)
+    ),
+    ?assertEqual(Weight, hb_ao:get(<<"/resources/", Resource/binary, "/weight">>, S1, 0, Opts)),
+    ?assertEqual(InitialTWU, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)),
+    ChildState = (pot_state_empty([Resource]))#{ <<"parent">> => Parent },
+    ForwardedRegister =
+        dev_process_outbox:original_from_forwarded(
+            #{
+                <<"x-action">> => <<"register">>,
+                <<"x-resource">> => Resource,
+                <<"x-weight">> => Weight,
+                <<"x-quantity-scale">> => AssetScale
+            },
+            Opts
+        ),
+    ChildAfterNotify =
+        dev_pot:register(
+            ChildState,
+            #{
+                <<"type">> => <<"notification">>,
+                <<"body">> =>
+                    maps:merge(
+                        ForwardedRegister,
+                        #{
+                            <<"from">> => Parent,
+                            <<"resource-authority">> => Parent,
+                            <<"weight-authority">> => Parent
+                        }
+                    )
+            },
+            Opts
+        ),
+    ?assert(is_map(ChildAfterNotify)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(
+            <<"/resources/", Resource/binary, "/quantity-scale">>,
+            ChildAfterNotify,
+            0,
+            Opts
+        )
+    ),
+    ?assertEqual(
+        Weight,
+        hb_ao:get(<<"/resources/", Resource/binary, "/weight">>, ChildAfterNotify, 0, Opts)
+    ).
+
 %%% Empty/Zero State Tests
 
 zero_mint_cap_test() ->
