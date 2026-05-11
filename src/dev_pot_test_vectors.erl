@@ -1717,7 +1717,14 @@ quantity_scale_normalizes_very_large_deposit_test() ->
             [Oracle],
             Opts
         ),
-    S2 = dev_pot:register_resource(ResourceLarge8Decimal, LargePriceWeight, S1, Opts),
+    S2 =
+        dev_pot:register_resource(
+            ResourceLarge8Decimal,
+            LargePriceWeight,
+            AssetScale,
+            S1,
+            Opts
+        ),
     S3 =
         dev_pot:deposit(
             S2,
@@ -1726,7 +1733,6 @@ quantity_scale_normalizes_very_large_deposit_test() ->
                     <<"address">> => Alice,
                     <<"resource">> => ResourceLarge8Decimal,
                     <<"quantity">> => FullAssetSupply,
-                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
@@ -1749,7 +1755,6 @@ quantity_scale_normalizes_very_large_deposit_test() ->
                     <<"address">> => Alice,
                     <<"resource">> => ResourceLarge8Decimal,
                     <<"quantity">> => AssetScale,
-                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
@@ -1763,6 +1768,75 @@ quantity_scale_normalizes_very_large_deposit_test() ->
     ?assertEqual(
         (NormalizedFullAssetSupply - NormalizedOneAsset) * LargePriceWeight,
         hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
+    ).
+
+inline_quantity_scale_is_rejected_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    Resource8Decimal = <<"inline-scale-rejected-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    S0 = pot_state_empty([Resource8Decimal]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/inline-scale-rejected-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 =
+        dev_pot:register_resource(
+            Resource8Decimal,
+            ?POT_PRICE_SCALE,
+            AssetScale,
+            S1,
+            Opts
+        ),
+    ?assertMatch(
+        {error, <<"quantity-scale must be configured on the resource.">>},
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        )
+    ),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertMatch(
+        {error, <<"quantity-scale must be configured on the resource.">>},
+        dev_pot:withdraw(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        )
     ).
 
 quantity_scale_delegation_uses_normalized_units_test() ->
@@ -1785,7 +1859,14 @@ quantity_scale_delegation_uses_normalized_units_test() ->
             [Oracle],
             Opts
         ),
-    S2 = dev_pot:register_resource(Resource8Decimal, ?POT_PRICE_SCALE, S1, Opts),
+    S2 =
+        dev_pot:register_resource(
+            Resource8Decimal,
+            ?POT_PRICE_SCALE,
+            AssetScale,
+            S1,
+            Opts
+        ),
     S3 =
         dev_pot:deposit(
             S2,
@@ -1794,7 +1875,6 @@ quantity_scale_delegation_uses_normalized_units_test() ->
                     <<"address">> => Alice,
                     <<"resource">> => Resource8Decimal,
                     <<"quantity">> => RawTenAssets,
-                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
@@ -1812,8 +1892,7 @@ quantity_scale_delegation_uses_normalized_units_test() ->
                     <<"from">> => Alice,
                     <<"address">> => Bob,
                     <<"resource">> => Resource8Decimal,
-                    <<"quantity">> => NormalizedThreeAssets,
-                    <<"quantity-scale">> => AssetScale
+                    <<"quantity">> => NormalizedThreeAssets
                 }
             },
             Opts
@@ -1850,8 +1929,7 @@ quantity_scale_delegation_uses_normalized_units_test() ->
                     <<"from">> => Alice,
                     <<"address">> => Bob,
                     <<"resource">> => Resource8Decimal,
-                    <<"quantity">> => NormalizedPointOneAsset,
-                    <<"quantity-scale">> => AssetScale
+                    <<"quantity">> => NormalizedPointOneAsset
                 }
             },
             Opts
@@ -1888,8 +1966,7 @@ quantity_scale_delegation_uses_normalized_units_test() ->
                     <<"from">> => Alice,
                     <<"address">> => Bob,
                     <<"resource">> => Resource8Decimal,
-                    <<"quantity">> => NormalizedOneAsset,
-                    <<"quantity-scale">> => AssetScale
+                    <<"quantity">> => NormalizedOneAsset
                 }
             },
             Opts
@@ -1945,7 +2022,14 @@ sub_unit_price_8_decimal_asset_distributes_reward_test() ->
             [Oracle],
             Opts
         ),
-    S2 = dev_pot:register_resource(ResourceSubUnit8Decimal, SubUnitPriceWeight, S1, Opts),
+    S2 =
+        dev_pot:register_resource(
+            ResourceSubUnit8Decimal,
+            SubUnitPriceWeight,
+            AssetScale,
+            S1,
+            Opts
+        ),
     S3 =
         dev_pot:deposit(
             S2,
@@ -1954,7 +2038,6 @@ sub_unit_price_8_decimal_asset_distributes_reward_test() ->
                     <<"address">> => Alice,
                     <<"resource">> => ResourceSubUnit8Decimal,
                     <<"quantity">> => LargeSupply,
-                    <<"quantity-scale">> => AssetScale,
                     <<"from">> => Oracle
                 }
             },
