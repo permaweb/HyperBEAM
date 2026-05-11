@@ -37,9 +37,9 @@
 %%%   `resource-authority` and `weight-authority` to that parent process.
 %%%
 %%% Quantity model:
-%%% - `deposit` / `withdraw` request bodies may provide `quantity-scale` to
-%%%   normalize source-token raw units into pot units, or have it already
-%%%   configured in the resource's config under `quantity-scale`.
+%%% - `deposit` / `withdraw` request bodies are normalized from source-token raw
+%%%   units using the resource's configured `quantity-scale`. If unset, the
+%%%   quantity is interpreted as already normalized pot units.
 %%% - direct `deposit/5` and `withdraw/5` calls already expect normalized pot
 %%%   units.
 %%% - `delegate` / `undelegate` always move existing normalized pot units and do
@@ -375,6 +375,7 @@ deposit(State, Assignment, Opts) ->
         StateWithT = ensure_initialized(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
+        {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
 -spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
@@ -418,9 +419,9 @@ withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
 %% @doc Parse a request to modify a deposit and verify that it originates from
 %% the valid resource authority. Returns `{ok, {Address, ResourceID,
 %% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
-%% Reason}'. `quantity-scale` is optional; when omitted, `quantity-scale` gets
-%% checked if configured in the resource's store, if that is missing too
-%% then `quantity` is interpreted as normalized pot units (POT_QUANTITY_SCALE).
+%% Reason}'. `quantity-scale` is resource configuration only. Requests that
+%% carry it inline are rejected; otherwise the resource's configured scale is
+%% used, falling back to already-normalized pot units (POT_QUANTITY_SCALE).
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -448,14 +449,19 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 Opts
             ),
         true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
-        QuantityScale = case hb_maps:find(<<"quantity-scale">>, Req, Opts) of
-            {ok, ReqScale} -> ReqScale;
-            error ->
-                Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, Base, #{}, Opts),
-                hb_maps:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts)
+        no_inline_quantity_scale ?=
+            case hb_maps:find(<<"quantity-scale">>, Req, Opts) of
+                error -> no_inline_quantity_scale;
+                {ok, _} -> inline_quantity_scale
             end,
+        Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, Base, #{}, Opts),
+        QuantityScale = hb_maps:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
         {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
         {ok, {Address, ResourceID, NormalizedAmount}}
+    else
+        inline_quantity_scale ->
+            {error, <<"quantity-scale must be configured on the resource.">>};
+        Other -> Other
     end.
 
 %% @doc Verify a request against the resource-local `authority` policy for a
@@ -593,7 +599,7 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
     end.
 
 %% @doc Delegate normalized pot units of a resource from one address to another.
-%% `quantity-scale` is only interpreted by deposit/withdraw request parsing.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec delegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -775,7 +781,7 @@ delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Delegate Amount must be of integer type">>}.
 
 %% @doc Undelegate normalized pot units of a resource from one address to another.
-%% `quantity-scale` is only interpreted by deposit/withdraw request parsing.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -992,7 +998,7 @@ ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
 %% caller, then applies supported resource-scoped config mutations.
 %% 
 %% Authorization model:
-%% - `weight`-only updates may be performed by:
+%% - `weight` / `quantity-scale` updates may be performed by:
 %%   - the configured `parent`
 %%   - the pot-wide `mint-authority`
 %%   - the resource-local `weight-authority`
@@ -1132,9 +1138,9 @@ enforce_resource_config_authority(From, State, Req, Opts) ->
         end,
         true ?= AuthRes
     end.
-%% @doc Enforce authorization for weight-only updates. Parent may always
+%% @doc Enforce authorization for reward config updates. Parent may always
 %% reconfigure its children, explicit per-resource `weight-authority` can
-%% update the weight, and `mint-authority` remains the global override.
+%% update `weight` / `quantity-scale`, and `mint-authority` remains the global override.
 enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
     maybe
@@ -1154,7 +1160,7 @@ enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
                             ) of
                                 true -> true;
                                 {error, _} ->
-                                    {error, <<"Caller is not authorized to update resource weight.">>}
+                                    {error, <<"Caller is not authorized to update resource reward config.">>}
                             end
                     end
             end,
@@ -1301,8 +1307,8 @@ validate_match_config(Match) when is_binary(Match) ->
 validate_match_config(_) ->
     {error, <<"Match threshold must be a non-negative integer.">>}.
 
-%% @doc Set the weight of a specific resource in the pot, updating the pot state
-%% as necessary.
+%% @doc Set the reward config of a specific resource in the pot, updating the pot
+%% state as necessary.
 register_resource(ResourceID, Weight, S, Opts) ->
     register_resource(ResourceID, Weight, keep_existing, S, Opts).
 register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
