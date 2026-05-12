@@ -680,11 +680,21 @@ is_erlang_generated_fun_name(_) ->
 %% traces, or their raw form for others.
 trace_element(Bin) when is_binary(Bin) -> Bin;
 trace_element({Mod, Line}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Line]));
 trace_element({Mod, _, _, [{file, _}, {line, Line}|_]}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Line]));
 trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
+    lists:flatten(io_lib:format("~s:~p", [pp_mod(Mod), Func])).
+
+%% @doc Trace-friendly module rendering. Replaces generated
+%% `_hb_device_*' atoms with their `~<name>+<hash>' short form so that
+%% stack traces stay legible.
+pp_mod(Atom) when is_atom(Atom) ->
+    case device_atom(Atom) of
+        Atom -> io_lib:format("~p", [Atom]);
+        Rendered -> Rendered
+    end;
+pp_mod(Other) -> io_lib:format("~p", [Other]).
 
 %% @doc Utility function to help macro `?trace/0' remove the first frame of the
 %% stack trace.
@@ -1086,6 +1096,53 @@ short_id(<< "/", SingleElemHashpath/binary >>) ->
     end;
 short_id(Key) when byte_size(Key) < 43 -> Key;
 short_id(_) -> undefined.
+
+%% @doc Render a runtime device atom in human-friendly form. Generated
+%% `_hb_device_<name>_<hash>' atoms become `~<name>+<short-hash>'; any
+%% other atom is returned unchanged. Used by trace formatting and the
+%% debug print path so that long generated atoms do not flood the
+%% output.
+device_atom(Atom) when is_atom(Atom) ->
+    case generated_device_parts(Atom) of
+        not_generated -> Atom;
+        {Name, Hash} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            iolist_to_binary([
+                <<"~">>, Name, <<"+">>, Short
+            ]);
+        {Name, Hash, Helper} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            iolist_to_binary([
+                <<"~">>, Name, <<"/">>, Helper, <<"+">>, Short
+            ])
+    end;
+device_atom(Other) -> Other.
+
+%% @doc Split generated runtime device atoms into display components.
+generated_device_parts(Atom) when is_atom(Atom) ->
+    generated_device_parts(atom_to_binary(Atom, utf8));
+generated_device_parts(<<"_hb_device_", Rest/binary>>) ->
+    [RootPart | HelperParts] = binary:split(Rest, <<"__">>, [global]),
+    case binary:split(RootPart, <<"_">>, [global]) of
+        Parts when length(Parts) >= 2 ->
+            [Hash | RevName] = lists:reverse(Parts),
+            Name =
+                iolist_to_binary(
+                    lists:join(<<"_">>, lists:reverse(RevName))
+                ),
+            case HelperParts of
+                [] ->
+                    {Name, Hash};
+                _ ->
+                    Helper =
+                        iolist_to_binary(lists:join(<<"__">>, HelperParts)),
+                    {Name, Hash, Helper}
+            end;
+        _ ->
+            not_generated
+    end;
+generated_device_parts(_) ->
+    not_generated.
 
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.
