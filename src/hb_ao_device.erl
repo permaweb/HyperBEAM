@@ -247,7 +247,7 @@ maybe_normalize_device_key(Key, Mode) ->
 %% runtime devices must resolve to signed `_hb_device_*' modules.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(Atom, Opts) when is_atom(Atom) ->
-    case is_generated_module(Atom) of
+    case is_hyperbeam_module(Atom) of
         true ->
             case code:ensure_loaded(Atom) of
                 {module, Atom} -> {ok, Atom};
@@ -361,9 +361,6 @@ resolve_name(Ref, Opts) ->
 %% @doc Normalize AO-Core name-resolution results to a specification ID.
 spec_result({ok, ID}) when ?IS_ID(ID) ->
     {ok, ID};
-spec_result({ok, #{ <<"ao-result">> := <<"body">>, <<"body">> := ID }})
-        when ?IS_ID(ID) ->
-    {ok, ID};
 spec_result({error, Msg = #{}}) ->
     {error, Msg};
 spec_result(_) ->
@@ -398,15 +395,15 @@ load_preloaded_implementation(Ref, SpecID, Opts) ->
             })
     end.
 
-%% @doc Load from configured stores, then gateways when enabled.
+%% @doc Load from configured stores falling back to gateways when enabled.
 load_cached_or_remote_implementation(Ref, SpecID, Opts) ->
     SearchOpts = (with_preloaded_store(Opts))#{ <<"match-index">> => false },
     case {
         load_local_implementation(Ref, SpecID, SearchOpts),
         hb_opts:get(load_remote_devices, false, Opts)
     } of
-        {{ok, _} = Ok, _} -> Ok;
-        {{error, _} = Error, _} -> Error;
+        {Ok = {ok, _}, _} -> Ok;
+        {Error = {error, _}, _} -> Error;
         {not_found, false} -> not_found;
         {not_found, true} ->
             case hb_gateway_client:device(SpecID, Opts) of
@@ -432,8 +429,8 @@ load_implementation_ids([ID | IDs], Ref, SpecID, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} ->
             case verify_implementation(Msg, Ref, SpecID, Opts) of
-                {ok, _} = Ok -> Ok;
-                {error, _} = Error when IDs =:= [] -> Error;
+                Ok = {ok, _} -> Ok;
+                Error = {error, _} when IDs =:= [] -> Error;
                 {error, _} -> load_implementation_ids(IDs, Ref, SpecID, Opts)
             end;
         _ ->
@@ -443,8 +440,8 @@ load_implementation_ids([ID | IDs], Ref, SpecID, Opts) ->
 %% @doc Verify a signed implementation archive and load its root module.
 verify_implementation(Msg, Ref, SpecID, Opts) ->
     LoadedMsg = load_implementation_message(Msg, Opts),
-    Signers = implementation_signers(LoadedMsg, Opts),
-    Trusted = signer_trusted(Signers, trusted_signers(Opts)),
+    Signers = hb_message:signers(Msg, Opts),
+    Trusted = is_signer_trusted(Signers, trusted_signers(Opts)),
     ?event(device_load,
         {verifying_device_trust,
             {ref, Ref},
@@ -453,11 +450,8 @@ verify_implementation(Msg, Ref, SpecID, Opts) ->
         },
         Opts
     ),
-    case Trusted of
-        false ->
-            {error, load_error(<<"device-signer-not-trusted">>, Ref)};
-        true ->
-            verify_implementation_message(LoadedMsg, Ref, SpecID, Opts)
+    if Trusted -> verify_implementation_message(LoadedMsg, Ref, SpecID, Opts);
+    true ->  {error, load_error(<<"device-signer-not-trusted">>, Ref)}
     end.
 
 %% @doc Load links in an implementation message without bootstrapping codecs.
@@ -466,27 +460,6 @@ load_implementation_message(Msg, Opts) ->
         raw -> hb_cache:ensure_all_loaded(Msg, Opts);
         _ -> hb_cache:read_all_commitments(Msg, Opts)
     end.
-
-%% @doc Extract implementation signers from normal or raw cache reads.
-implementation_signers(Msg, Opts) ->
-    case hb_message:signers(Msg, Opts) of
-        [] -> commitment_signers(Msg, Opts);
-        Signers -> Signers
-    end.
-
-%% @doc Extract signers directly from commitment messages.
-commitment_signers(Msg, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    hb_maps:values(hb_maps:filtermap(
-        fun(_ID, Commitment) ->
-            case hb_maps:get(<<"committer">>, Commitment, undefined, Opts) of
-                undefined -> false;
-                Signer -> {true, Signer}
-            end
-        end,
-        Commitments,
-        Opts
-    )).
 
 %% @doc Verify implementation metadata before loading the archive.
 verify_implementation_message(Msg, Ref, SpecID, Opts) ->
@@ -541,7 +514,7 @@ load_archive(undefined, _Archive, _Msg, Ref, _Opts) ->
 load_archive(_, undefined, _Msg, Ref, _Opts) ->
     {error, load_error(<<"missing-archive">>, Ref)};
 load_archive(ModBin, Archive, Msg, Ref, Opts) ->
-    case is_generated_module(ModBin) of
+    case is_hyperbeam_module(ModBin) of
         false ->
             {error, load_error(
                 <<"non-generated-module-name">>, Ref, ModBin
@@ -559,10 +532,18 @@ load_archive(ModBin, Archive, Msg, Ref, Opts) ->
 %% @doc Extract BEAM modules from a deterministic implementation archive.
 archive_modules(Archive) ->
     case zip:unzip(Archive, [memory]) of
-        {ok, Files} ->
-            read_archive_modules(Files);
+        {ok, Files} -> read_archive_modules(Files);
         {error, Reason} ->
-            {error, {archive_extract_failed, Reason}}
+            {
+                error,
+                #{
+                    <<"body">> =>
+                        <<
+                            "Could not extract archive: ",
+                            (hb_util:bin(Reason))/binary
+                        >>
+                }
+            }
     end.
 
 read_archive_modules(Files) ->
@@ -591,7 +572,7 @@ archive_beam_module(Path, Beam) ->
         {ok, {Mod, _Chunks}} ->
             ModBin = atom_to_binary(Mod, utf8),
             ExpectedPath = <<ModBin/binary, ".beam">>,
-            case {is_generated_module(Mod), Path} of
+            case {is_hyperbeam_module(Mod), Path} of
                 {false, _} ->
                     {error, {non_generated_module_name, ModBin}};
                 {true, ExpectedPath} ->
@@ -643,16 +624,18 @@ archive_module_matches_root(RootBin, ModBin) ->
 %% @doc Load an archive unless all modules are already present.
 maybe_load_archive(RootMod, Modules, Msg, Opts) ->
     case archive_loaded(Modules) of
-        true ->
-            {ok, RootMod};
+        true -> {ok, RootMod};
         false ->
             case code:atomic_load(Modules) of
                 ok ->
                     case run_archive_on_loads(Msg, Opts) of
                         ok -> {ok, RootMod};
                         {error, Reason} ->
-                            {error, load_error(
-                                <<"on-load-failed">>, RootMod, Reason)}
+                            {error,
+                                load_error(
+                                    <<"on-load-failed">>, RootMod, Reason
+                                )
+                            }
                     end;
                 {error, Reason} ->
                     AlreadyLoaded =
@@ -674,12 +657,10 @@ load_error(Code, Ref) ->
 load_error(Code, Ref, Reason) ->
     (load_error(Code, Ref))#{ <<"reason">> => reason_bin(Reason) }.
 
-reason_bin(Reason) when is_binary(Reason) ->
-    Reason;
-reason_bin(Reason) when is_atom(Reason) ->
-    hb_util:bin(Reason);
-reason_bin(Reason) ->
-    iolist_to_binary(io_lib:format("~p", [Reason])).
+%% @doc Cast all error reason representations to binary form.
+reason_bin(Reason) when is_binary(Reason) -> Reason;
+reason_bin(Reason) when is_atom(Reason) -> hb_util:bin(Reason);
+reason_bin(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %% @doc Check that every module in an archive is present in the code server.
 archive_loaded(Modules) ->
@@ -740,8 +721,16 @@ decode_archive_on_loads(_Other, _Acc) ->
 %% @doc Run decoded on-load callbacks in package order.
 run_archive_on_load_list([], _Opts) ->
     ok;
-run_archive_on_load_list([#{ <<"module-name">> := ModBin,
-                             <<"function">> := FunBin } | Rest], Opts) ->
+run_archive_on_load_list(
+        [
+            #{
+                <<"module-name">> := ModBin,
+                <<"function">> := FunBin
+            }
+        |
+            Rest
+        ],
+        Opts) ->
     Mod = hb_util:key_to_atom(ModBin, existing),
     Fun = hb_util:key_to_atom(FunBin, existing),
     case apply(Mod, Fun, []) of
@@ -839,7 +828,7 @@ lookup_process_dict_device_cache(Ref) ->
 
 %% @doc Turn a cached generated module binary into a loaded atom.
 lookup_cached_module(ModBin) when is_binary(ModBin) ->
-    case is_generated_module(ModBin) of
+    case is_hyperbeam_module(ModBin) of
         false -> not_found;
         true ->
             try hb_util:key_to_atom(ModBin, existing) of
@@ -858,8 +847,6 @@ loaded_module(ModName) ->
     end.
 
 %% @doc Cache a device name or specification ID as a generated module binary.
-cache_device_module(_Ref, undefined, _Opts) ->
-    ok;
 cache_device_module(Ref, ModName, Opts) when is_atom(ModName) ->
     erlang:put({?MODULE, device_cache, Ref}, ModName),
     cache_device_module(Ref, hb_util:bin(ModName), Opts);
@@ -875,12 +862,10 @@ cache_device_module(Ref, ModBin, Opts) when is_binary(Ref), is_binary(ModBin) ->
     end.
 
 %% @doc Recognize the generated device module naming convention.
-is_generated_module(Atom) when is_atom(Atom) ->
-    is_generated_module(hb_util:bin(Atom));
-is_generated_module(<<"_hb_device_", _/binary>>) ->
-    true;
-is_generated_module(_) ->
-    false.
+is_hyperbeam_module(Atom) when is_atom(Atom) ->
+    is_hyperbeam_module(hb_util:bin(Atom));
+is_hyperbeam_module(<<"_hb_device_", _/binary>>) -> true;
+is_hyperbeam_module(_) -> false.
 
 %%% --------------------------------------------------------------------
 %%% Store helpers
@@ -892,25 +877,22 @@ device_store(Opts) ->
 
 %% @doc The build-time store containing preloaded specs/impls + index.
 preloaded_store(Opts) ->
-    hb_opts:get(preloaded_store, undefined, node_config_opts(Opts)).
+    hb_opts:get(preloaded_store, undefined, opts(Opts)).
 
-%% @doc Read node configuration even from request-local resolver contexts.
-node_config_opts(Opts) ->
+%% @doc Generate a generic form of the `Opts` map without `cache-control` and
+%% precedence keys.
+opts(Opts) ->
     maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts).
 
 %% @doc Load the preloaded resolver message with an in-memory primitive device.
 preloaded_resolver(Opts) ->
-    NodeOpts = node_config_opts(Opts),
+    NodeOpts = opts(Opts),
     Store = preloaded_store(NodeOpts),
     IndexID = hb_opts:get(preloaded_devices_index, undefined, NodeOpts),
     case Store =:= undefined orelse IndexID =:= undefined of
-        true ->
-            not_found;
+        true -> not_found;
         false ->
-            ReadOpts = NodeOpts#{
-                    <<"store">> => Store,
-                    <<"cache-read-mode">> => raw
-            },
+            ReadOpts = NodeOpts#{ <<"store">> => Store, <<"cache-read-mode">> => raw },
             case hb_cache:read(IndexID, ReadOpts) of
                 {ok, Resolver} ->
                     {Resolver#{
@@ -988,11 +970,11 @@ default_trusted_signers(Opts) ->
     catch _:_ -> [] end.
 
 %% @doc Determine whether an implementation signer is trusted.
-signer_trusted([], _TrustedSigners) ->
+is_signer_trusted([], _TrustedSigners) ->
     false;
-signer_trusted(_Signers, all) ->
+is_signer_trusted(_Signers, all) ->
     true;
-signer_trusted(Signers, List) when is_list(List) ->
+is_signer_trusted(Signers, List) when is_list(List) ->
     case lists:member(all, List) of
         true -> true;
         false ->
@@ -1001,7 +983,7 @@ signer_trusted(Signers, List) when is_list(List) ->
                 Signers
             )
     end;
-signer_trusted(_Signers, _TrustedSigners) ->
+is_signer_trusted(_Signers, _TrustedSigners) ->
     false.
 
 %% @doc Get the info map for a device, optionally giving it a message if the
