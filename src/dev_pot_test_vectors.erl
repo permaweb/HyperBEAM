@@ -1722,6 +1722,30 @@ quantity_scale_register_update_and_notify_test() ->
         hb_ao:get(<<"/resources/", Resource/binary, "/weight">>, ChildAfterNotify, 0, Opts)
     ).
 
+quantity_scale_above_pot_scale_is_rejected_test() ->
+    Admin = <<"admin">>,
+    Resource = <<"scale-too-large-resource">>,
+    Opts = #{},
+    TooLargeScale = ?POT_QUANTITY_SCALE * 10,
+    S0 =
+        (pot_state_empty([Resource]))#{
+            <<"mint-authority">> => Admin
+        },
+    ?assertMatch(
+        {error, <<"QuantityScale must be a positive integer <= POT_QUANTITY_SCALE.">>},
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => TooLargeScale,
+                    <<"from">> => Admin
+                }
+            },
+            Opts
+        )
+    ).
+
 %%% Empty/Zero State Tests
 
 zero_mint_cap_test() ->

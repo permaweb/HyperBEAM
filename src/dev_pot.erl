@@ -1356,9 +1356,9 @@ register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
         send_resource_config_notice(ResourceID, ReqWeight, NewQuantityScale, AfterSet, Opts)
 end.
 
-is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0 -> true;
+is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0, Scale =< ?POT_QUANTITY_SCALE -> true;
 is_valid_quantity_scale(keep_existing) -> true;
-is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer.">>}.
+is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer <= POT_QUANTITY_SCALE.">>}.
 
 is_valid_weight(W) when is_integer(W), W >= 0 -> true;
 is_valid_weight(keep_existing) -> true;
