@@ -384,14 +384,6 @@ get_chunk(_Base, Request, Opts) ->
             {error, Reason}
     end.
 
-%% @doc Fetch a range of chunks in parallel. Determines the appropriate
-%% algorithm to use based on offset, length, and an optional relative
-%% transaction ID. For global (no relative TX) offsets, returns exactly the
-%% bytes in the inclusive range [Offset, Offset + Length - 1]: both leading
-%% and trailing overshoot are trimmed and any interior gaps in chunk
-%% coverage are filled iteratively. For relative-TX offsets the legacy
-%% concatenation path is used and the caller may receive more than Length
-%% bytes (no trailing trim), so it must truncate the result itself.
 fetch_chunk_range(Offset, Length, undefined, Opts)
         when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
         ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
