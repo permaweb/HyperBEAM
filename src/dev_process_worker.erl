@@ -196,7 +196,10 @@ info_test() ->
     test_init(),
     M1 = dev_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao_device:info(M1, #{}),
-    ?assertEqual(fun dev_process_worker:group/3, hb_maps:get(grouper, Res, undefined, #{})).
+    Grouper = hb_maps:get(grouper, Res, undefined, #{}),
+    ?assert(is_function(Grouper, 3)),
+    {module, Mod} = erlang:fun_info(Grouper, module),
+    ?assertMatch(<<"_hb_device_", _/binary>>, atom_to_binary(Mod, utf8)).
 
 grouper_test() ->
     test_init(),

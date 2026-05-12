@@ -32,7 +32,7 @@ resolve(Key, _, Req, Opts) ->
     ?event({resolvers, Resolvers}),
     case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
-            case hb_util:atom(hb_ao:get(<<"load">>, Req, true, Opts)) of
+            case hb_util:atom(hb_maps:get(<<"load">>, Req, true, Opts)) of
                 false ->
                     {ok, Resolved};
                 true ->

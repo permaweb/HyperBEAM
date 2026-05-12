@@ -203,32 +203,40 @@ list(Path, Store, Opts) ->
 %% it to find the matching messages. This lowers the complexity class of the
 %% match to `O(keys * log(cache_size))` instead of `O(cache_size)`.
 match(MatchSpec, Opts) ->
-    Spec = hb_message:convert(MatchSpec, tabm, <<"structured@1.0">>, Opts),
-    NormalizedSpec = maps:without([<<"ao-types">>], hb_ao:normalize_keys(Spec, Opts)),
-    case hb_opts:get(match_index, false, Opts) of
-        false ->
-            ConvertedMatchSpec =
-                maps:map(
-                    fun(_, Value) ->
-                        generate_binary_path(Value, Opts)
-                    end,
-                    NormalizedSpec
-                ),
-            case hb_store:match(
-                hb_opts:get(store, no_viable_store, Opts),
-                ConvertedMatchSpec,
-                Opts
-            ) of
-                {ok, []} -> {error, not_found};
-                {ok, Matches} -> {ok, Matches};
-                _ -> {error, not_found}
-            end;
+    ReadMode = hb_opts:get(cache_read_mode, normal, Opts),
+    NormalizedSpec = normalize_match_spec(MatchSpec, ReadMode, Opts),
+    case {ReadMode, hb_opts:get(match_index, false, Opts)} of
+        {raw, _} -> store_match(NormalizedSpec, Opts);
+        {_, false} -> store_match(NormalizedSpec, Opts);
         _ ->
             case dev_match:all(NormalizedSpec, #{}, Opts) of
                 {ok, []} -> {error, not_found};
                 {ok, Matches} -> {ok, Matches};
                 _ -> {error, not_found}
             end
+    end.
+%% @doc Normalize match values for store reverse-index lookups.
+normalize_match_spec(MatchSpec, raw, Opts) ->
+    maps:without([<<"ao-types">>], hb_ao:normalize_keys(MatchSpec, Opts));
+normalize_match_spec(MatchSpec, _ReadMode, Opts) ->
+    Spec = hb_message:convert(MatchSpec, tabm, <<"structured@1.0">>, Opts),
+    maps:without([<<"ao-types">>], hb_ao:normalize_keys(Spec, Opts)).
+
+%% @doc Match using the store's reverse index.
+store_match(NormalizedSpec, Opts) ->
+    ConvertedMatchSpec =
+        maps:map(
+            fun(_, Value) -> generate_binary_path(Value, Opts) end,
+            NormalizedSpec
+        ),
+    case hb_store:match(
+        hb_opts:get(store, no_viable_store, Opts),
+        ConvertedMatchSpec,
+        Opts
+    ) of
+        {ok, []} -> {error, not_found};
+        {ok, Matches} -> {ok, Matches};
+        _ -> {error, not_found}
     end.
 
 %% @doc Generate the path at which a binary value should be stored.
@@ -419,17 +427,25 @@ write_binary(Hashpath, Bin, Store, Opts) ->
     hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
 
-%% @doc Read the message at a path. Returns in `structured@1.0' format: Either a
-%% richly typed map or a direct binary.
+%% @doc Read the message at a path. Returns in `structured@1.0' format: Either
+%% a richly typed map or a direct binary. If `cache-read-mode' is `raw',
+%% composite reads return lazy links without decoding `ao-types' or normalizing
+%% commitments.
 read(Path, Opts) ->
-    StoreReadResult =
-        store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts),
-    case StoreReadResult of 
-        {ok, Res} ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    case {
+        store_read(Path, Store, Opts),
+        hb_opts:get(cache_read_mode, normal, Opts)
+    } of
+        {{ok, Res}, raw} ->
+            {ok, Res};
+        {{ok, Res}, _} ->
             hb_message:paranoid_verify(cache_read, Res, Opts),
             {ok, hb_message:normalize_commitments(Res, Opts)};
-        _ -> StoreReadResult
+        {Other, _} ->
+            Other
     end.
+
 do_read_commitment(Path, Opts) ->
     store_read(Path, hb_opts:get(store, no_viable_store, Opts), Opts).
 
@@ -533,6 +549,26 @@ store_read(Target, Path, Store, Opts) ->
 
 %% @doc Prepare a set of links from a listing of subpaths.
 prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
+    case hb_opts:get(cache_read_mode, normal, Opts) of
+        raw -> prepare_raw_links(RootPath, Subpaths, Store);
+        _ -> prepare_typed_links(Target, RootPath, Subpaths, Store, Opts)
+    end.
+
+%% @doc Prepare lazy links without touching typed codec helpers.
+prepare_raw_links(RootPath, Subpaths, Store) ->
+    maps:from_list([
+        {Subpath,
+            {link,
+                hb_path:to_binary([RootPath, Subpath]),
+                #{ <<"lazy">> => true, <<"store">> => Store }
+            }}
+    ||
+        Subpath <- Subpaths,
+        Subpath =/= <<"ao-types">>
+    ]).
+
+%% @doc Prepare typed links using `ao-types' and commitment normalization.
+prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
     {ok, Implicit, Types} = read_ao_types(RootPath, Subpaths, Store, Opts),
     Res =
         maps:from_list(lists:filtermap(
@@ -1051,6 +1087,33 @@ test_match_typed_message(Store) ->
         hb_message:normalize_commitments(Msg, Opts),
         ensure_all_loaded(Read2, Opts)
     ).
+
+raw_lmdb_match_read_test() ->
+    Store = #{
+        <<"store-module">> => hb_store_lmdb,
+        <<"name">> =>
+            hb_util:bin(filename:join(
+                ["/tmp", "hb_cache_raw_" ++ integer_to_list(erlang:system_time())]
+            ))
+    },
+    hb_store:reset(Store),
+    Opts = #{ <<"store">> => Store },
+    Msg = #{
+        <<"content-type">> => <<"application/beam">>,
+        <<"implements-device">> => <<"test-spec">>,
+        <<"body">> => <<"beam-bytes">>
+    },
+    {ok, ID} = write(Msg, Opts),
+    RawOpts = Opts#{
+        <<"cache-read-mode">> => raw,
+        <<"match-index">> => [Store]
+    },
+    ?assertEqual(
+        {ok, [ID]},
+        match(#{ <<"implements-device">> => <<"test-spec">> }, RawOpts)
+    ),
+    {ok, RawMsg} = read(ID, RawOpts),
+    ?assertEqual(<<"beam-bytes">>, hb_maps:get(<<"body">>, RawMsg, undefined, RawOpts)).
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
