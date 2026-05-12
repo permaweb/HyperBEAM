@@ -1,7 +1,10 @@
 %% @doc Math functions for the dev_pot module. Expresses a model as follows:
 %%% ```
+%%% Scale:      AccumulatorScale = RewardScale * PriceScale.
+%%%
 %%% Initialization:
 %%%   Global:     Acc = 0,
+%%%               AccRemainder = 0,
 %%%               TWU = 0.
 %%%   Resource:   Acc = 0,
 %%%               LastGlobal = Global.Acc.
@@ -10,10 +13,13 @@
 %%%               Global.TWU += Qty * Resource.Weight.
 %%%            
 %%% Drip:
-%%%   Global:     Acc += ToMint / Global.TWU.
+%%%   Global:     Numerator = ToMint * AccumulatorScale + AccRemainder,
+%%%               Acc += Numerator div Global.TWU,
+%%%               AccRemainder = Numerator rem Global.TWU.
 %%%   Resource:   Acc += (Global.Acc - LastGlobal) * Weight,
 %%%               LastGlobal = Global.Acc.
-%%%   User:       Balance += (Resource.Acc - LastResource) * Qty.
+%%%   User:       Balance += ((Resource.Acc - LastResource) * Qty)
+%%%                          div AccumulatorScale.
 %%% 
 %%% Modify:
 %%%   Weight:     Global.drip(),
