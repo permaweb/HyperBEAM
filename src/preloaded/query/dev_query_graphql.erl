@@ -240,23 +240,26 @@ message_query(Msg, <<"cursor">>, _Args, Opts) ->
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
 
-keys_to_template(Keys) ->
-    maps:from_list(lists:foldl(
-        fun(#{<<"name">> := Name, <<"value">> := Value}, Acc) ->
-            [{Name, Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := [Value]}, Acc) ->
-            [{Name, Value} | Acc];
-        (#{<<"name">> := Name, <<"values">> := Values}, _Acc) ->
-            throw(
-                {multivalue_tag_search_not_supported, #{
-                    <<"name">> => Name,
-                    <<"values">> => Values
-                }}
-            )
-        end,
-        [],
-        Keys
-    )).
+%% @doc Build a tag-match template from a list of GraphQL tag filters.  
+keys_to_template(Keys) ->                                                                                                               
+    maps:from_list([key_to_pair(K) || K <- Keys]).                                                                                      
+                                                                                                                                        
+key_to_pair(#{ <<"name">> := Name, <<"value">> := Value }) ->                                                                             
+    {normalize_tag_name(Name), Value};                                                                                                  
+key_to_pair(#{ <<"name">> := Name, <<"values">> := [Value] }) ->                                                                          
+    {normalize_tag_name(Name), Value};                                                                                                  
+key_to_pair(#{ <<"name">> := Name, <<"values">> := Values} ) ->                                                                           
+    throw(
+        {multivalue_tag_search_not_supported, #{
+            <<"name">> => Name,
+            <<"values">> => Values
+        }}
+    ).
+
+%% @doc Lowercase a GraphQL tag name to match the storage convention used by                                                            
+%% `dev_codec_ans104_from'. Without this, query for `Action' never matches `action'.                                                                                                                                    
+normalize_tag_name(Name) ->                                                                                                             
+    hb_util:to_lower(hb_ao:normalize_key(Name)).
 
 %%% Test helpers.
 
