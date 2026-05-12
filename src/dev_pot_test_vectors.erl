@@ -402,6 +402,53 @@ weight_authority_match_requires_multiple_signers_test() ->
     ?assert(is_map(S2)),
     ?assertEqual(200, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)).
 
+weight_authority_can_update_quantity_scale_test() ->
+    Admin = <<"admin">>,
+    WeightAuthority = <<"weight-authority">>,
+    Alice = <<"alice">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    Weight = 100,
+    Quantity = 10,
+    AssetScale = 100_000_000, % 1e8
+    S0 =
+        (pot_state(Alice, Resource, Quantity, Weight, 100, 1, 2))#{
+            <<"mint-authority">> => Admin
+        },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => Weight,
+                    <<"from">> => Admin,
+                    <<"weight-authority">> => WeightAuthority
+                }
+            },
+            Opts
+        ),
+    InitialTWU = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+    S2 =
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => WeightAuthority
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(<<"/resources/oxygen/quantity-scale">>, S2, 0, Opts)
+    ),
+    ?assertEqual(Weight, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)),
+    ?assertEqual(InitialTWU, hb_maps:get(<<"total-weighted-units">>, S2, 0, Opts)).
+
 resource_authority_required_signer_is_enforced_test() ->
     Admin = <<"admin">>,
     Alice = <<"alice">>,
