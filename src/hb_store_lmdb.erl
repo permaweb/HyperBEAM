@@ -422,6 +422,8 @@ match(Opts, MatchKVs, _NodeOpts) ->
         ),
     ?event({elmdb_match, MatchKVs}),
     case elmdb:match(DBInstance, WithPrefixes) of
+        {ok, []} ->
+            {error, not_found};
         {ok, Matches} ->
             ?event({elmdb_matched, Matches}),
             {ok, Matches};

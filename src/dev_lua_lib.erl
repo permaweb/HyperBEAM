@@ -25,8 +25,10 @@
 
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
-    % Calculate and set the new `preloaded-devices' option.
-    AllDevs = hb_opts:get(preloaded_devices, Opts),
+    % Compute the device-name allowlist for the Lua sandbox. When the
+    % caller provides a `device-sandbox' field, only those names plus
+    % the minimal-AO-Core set are admissible; otherwise we leave the
+    % allowlist undefined (no restriction).
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
@@ -34,30 +36,18 @@ install(Base, State, Opts) ->
             false,
             Opts
         ),
-    AdmissibleDevs =
+    AdmissibleNames =
         case DevSandboxDef of
-            false -> AllDevs;
+            false -> all;
             DevNames ->
-                lists:map(
-                    fun(Name) ->
-                        [Dev] =
-                            lists:filter(
-                                fun(X) ->
-                                    hb_ao:get(<<"name">>, X, Opts) == Name
-                                end,
-                                AllDevs
-                            ),
-                        Dev
-                    end,
-                    hb_util:message_to_ordered_list(
-                        hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
-                    )
+                hb_util:message_to_ordered_list(
+                    hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
                 )
         end,
-    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
+    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleNames}}),
     ExecOpts =
         Opts#{
-            <<"preloaded-devices">> => AdmissibleDevs,
+            <<"admissible-devices">> => AdmissibleNames,
             <<"hashpath">> => ignore
         },
     % Initialize the AO-Core resolver.
@@ -94,29 +84,35 @@ install(Base, State, Opts) ->
                                             luerl:decode(Arg, ImportState),
                                             Opts
                                         )
-                                    end,
-                                    RawArgs
-                                ),
-                            % Call the function with the decoded arguments.
-                            {Res, ResState} =
-                                ?MODULE:FuncName(Args, ImportState, ExecOpts),
-                            % Encode the response for return to Lua
-                            return(Res, ResState, Opts)
-                        end,
-                        StateIn
+                            end,
+                            RawArgs
+                        ),
+                        % Call the function with the decoded arguments.
+                        {Res, ResState} =
+                            dispatch(FuncName, Args, ImportState, ExecOpts),
+                        % Encode the response for return to Lua
+                        return(Res, ResState, Opts)
+                    end,
+                    StateIn
                     ),
                 StateOut
             end,
             State2,
-            [
-                FuncName
-            ||
-                {FuncName, _} <- dev_lua_lib:module_info(exports),
-                FuncName /= module_info,
-                FuncName /= ?FUNCTION_NAME
-            ]
+            library_functions()
         )
     }.
+
+library_functions() ->
+    [get, resolve, set, event].
+
+dispatch(get, Args, ExecState, ExecOpts) ->
+    get(Args, ExecState, ExecOpts);
+dispatch(resolve, Args, ExecState, ExecOpts) ->
+    resolve(Args, ExecState, ExecOpts);
+dispatch(set, Args, ExecState, ExecOpts) ->
+    set(Args, ExecState, ExecOpts);
+dispatch(event, Args, ExecState, ExecOpts) ->
+    event(Args, ExecState, ExecOpts).
 
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->
@@ -191,7 +187,7 @@ event([Event], ExecState, Opts) ->
     event([global, Event], ExecState, Opts);
 event([Group, Event], State, Opts) when is_list(Event) ->
     event([Group, list_to_tuple(Event)], State, Opts);
-event([Group, Event], ExecState, Opts) ->
+event([Group, Event], ExecState, _Opts) ->
     ?event(
         lua_event,
         {event,
