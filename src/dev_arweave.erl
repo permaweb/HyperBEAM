@@ -366,30 +366,51 @@ post_chunk(Request, Opts) ->
 
 %% @doc Retrieve a chunk or slice of bytes by its offset, either relative to the
 %% global Arweave data tree, or relative to the start of a specific pending
-%% transaction.
+%% transaction. When called without an explicit length and without a pending
+%% TX, return the suffix of a single upstream chunk from Offset onward;
+%% otherwise return exactly Length bytes from the requested range.
 get_chunk(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
     Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
     MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
-    case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
-        {ok, Chunks} ->
-            Data = iolist_to_binary(Chunks),
-            case hb_maps:is_key(<<"length">>, Request, Opts) of
-                true ->
-                    {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
-                false ->
-                    {ok, Data}
-            end;
-        {error, Reason} ->
-            {error, Reason}
+    HasExplicitLength = hb_maps:is_key(<<"length">>, Request, Opts),
+    case {HasExplicitLength, MaybeRelativeTXID} of
+        {false, undefined} ->
+            single_chunk_suffix(Offset, Opts);
+        _ ->
+            case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
+                {ok, Chunks} ->
+                    Data = iolist_to_binary(Chunks),
+                    case HasExplicitLength of
+                        true ->
+                            {ok, binary:part(Data, 0, min(Length, byte_size(Data)))};
+                        false ->
+                            {ok, Data}
+                    end;
+                {error, Reason} ->
+                    {error, Reason}
+            end
     end.
 
-%% @doc Fetch a range of chunks in parallel. Determines the appropriate algorithm
-%% to use to get the chunks based on offset, length, and an optional relative
-%% transaction ID. Notably, this function returns the binary for all of the
-%% chunks that were fetched, not just the requested length. This allows callers
-%% to avoid wasted additional requests in some circumstances, but also requires
-%% them to handle truncation themselves.
+%% @doc Fetch the single upstream chunk containing Offset and return its
+%% suffix from Offset onward. Used when the chunk request has no explicit
+%% length: the caller wants "a chunk's worth" rather than an exact range.
+single_chunk_suffix(Offset, Opts) ->
+    case decode_chunk(get_chunk(Offset, Opts)) of
+        {ok, {ChunkStart, _ChunkEnd, Data}} ->
+            Skip = max(0, Offset - ChunkStart),
+            {ok, binary:part(Data, Skip, byte_size(Data) - Skip)};
+        {error, _} = Err -> Err
+    end.
+
+%% @doc Fetch a range of chunks in parallel. Determines the appropriate
+%% algorithm to use based on offset, length, and an optional relative
+%% transaction ID. For global (no relative TX) offsets, returns exactly the
+%% bytes in the inclusive range [Offset, Offset + Length - 1]: both leading
+%% and trailing overshoot are trimmed and any interior gaps in chunk
+%% coverage are filled iteratively. For relative-TX offsets the legacy
+%% concatenation path is used and the caller may receive more than Length
+%% bytes (no trailing trim), so it must truncate the result itself.
 fetch_chunk_range(Offset, Length, undefined, Opts)
         when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
         ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
@@ -404,15 +425,10 @@ fetch_chunk_range(Offset, Length, RelativeTXID, Opts)
         when is_binary(RelativeTXID) ->
     get_chunk_range_relative(Offset, Length, RelativeTXID, Opts).
 
-%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. Query at
-%% DATA_CHUNK_SIZE increments up to EndOffset, and if the assembled data is
-%% still short, fetch exactly one additional tail chunk. This can happen
-%% when a dataitem starts in the middle of a chunk, the initial set of
-%% offsets generated doesn't know this and so leaves off a single chunk at
-%% the end.
-%% 
-%% Note: we don't want to *always* query an extra chunk because if it doesn't
-%% exist, dev_arweave will consider the dataitem missing.
+%% @doc Post-threshold: chunks occupy fixed 256KiB buckets aligned to
+%% absolute weave offsets, which need not coincide with Offset. Query at
+%% DATA_CHUNK_SIZE increments and let fill_gaps iteratively cover any
+%% remaining holes until the range is contiguous.
 get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
@@ -420,29 +436,7 @@ get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
         []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} ->
-            % Check for one additional tail chunk if needed.
-            Sorted = sort_chunks(ChunkInfos),
-            {ok, Binaries} = assemble_chunks(Sorted, Offset),
-            ExpectedLength = EndOffset - Offset + 1,
-            BinarySize = iolist_size(Binaries),
-            case BinarySize < ExpectedLength of
-                false ->
-                    {ok, Binaries};
-                true ->
-                    ExtraOffset = min(
-                        lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(debug_arweave, {fetching_extra_chunk,
-                        {binary_size, BinarySize},
-                        {expected_length, ExpectedLength},
-                        {extra_offset, ExtraOffset}}),
-                    case fetch_and_collect([ExtraOffset], Opts) of
-                        {ok, ExtraInfos} ->
-                            assemble_chunks(Sorted ++ ExtraInfos, Offset);
-                        Error ->
-                            Error
-                    end
-            end;
+        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
         Error -> Error
     end.
 
@@ -498,12 +492,17 @@ get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
     end.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
-%% of each gap until the entire range [Offset, EndOffset] is covered.
+%% of each gap until the entire range [Offset, EndOffset] is covered. Trims
+%% any trailing bytes beyond EndOffset so the result matches the requested
+%% range exactly; assemble_chunks already trims the leading edge.
 fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
     Sorted = sort_chunks(ChunkInfos),
     case find_gaps(Sorted, Offset, EndOffset) of
         [] ->
-            assemble_chunks(Sorted, Offset);
+            {ok, Binaries} = assemble_chunks(Sorted, Offset),
+            Bin = iolist_to_binary(Binaries),
+            Expected = EndOffset - Offset + 1,
+            {ok, binary:part(Bin, 0, min(Expected, byte_size(Bin)))};
         Gaps ->
             % WARNING: the find_gaps logic is untested in production and may not
             % be needed. We have yet to find an L1 TX that is chunked in such
