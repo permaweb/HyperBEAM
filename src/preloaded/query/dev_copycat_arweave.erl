@@ -40,12 +40,11 @@ arweave(_Base, Request, Opts) ->
             end;
         <<"list">> -> with_range(Request, Opts, fun list_index/3);
         <<"inventory">> -> with_range(Request, Opts, fun inventory_index/3);
-        <<"headers">> -> with_range(Request, Opts, fun index_tx_headers/3);
         Mode ->
             {
-                error, 
-                <<"Unsupported mode `", (hb_util:bin(Mode))/binary,"`. Supported", 
-                "modes are: write, list, inventory, headers, mempool">>
+                error,
+                <<"Unsupported mode `", (hb_util:bin(Mode))/binary,"`. Supported",
+                "modes are: write, list, inventory, mempool">>
             }
     end.
 
@@ -482,76 +481,36 @@ inventory_local(Current, To, Opts, Acc) ->
             inventory_local(Current - 1, To, Opts,
                 Acc#{BlockKey => BlockInfo})
     end.
-
-%% @doc mode=headers: walk every confirmed item recorded under the indexed
-%% blocks in [From..To], read the full message via the normal cache path,
-%% and write it into the local store via `hb_cache:write'. Top-level tag
-%% fields and commitment fields land path-keyed under `<id>/...' so any
-%% future filter (tags, owners, recipients, target, anchor, ...) is naturally
-%% answerable by `hb_cache:match'.
-%%
-%% Items already laid out under local-store are skipped, so reruns are
-%% idempotent and serve as the natural retry mechanism for previously failed
-%% ids. 
-index_tx_headers(From, undefined, Opts) ->
-    index_tx_headers(From, 0, Opts);
-index_tx_headers(From, To, _Opts) when From < To ->
-    {ok, {From, To}};
-index_tx_headers(From, To, Opts) ->
-    Candidates = collect_header_candidates(From, To, Opts, []),
-    Workers = hb_opts:get(<<"copycat-headers-workers">>, 8, Opts),
-    ?event(copycat_short,
-        {headers_scan_started,
-            {from, From}, {to, To},
-            {candidates, length(Candidates)},
-            {workers, Workers}
-        }
-    ),
-    hb_pmap:parallel_map(
-        Candidates,
-        fun(ID) -> 
-            case index_headers(ID, Opts) of
-                skipped -> ?event(copycat_short, {header_skipped, {id, ID}});
-                {ok, _} -> ?event(copycat_short, {header_indexed, {id, ID}});
-                {error, Reason} -> 
-                    ?event(copycat_short, 
-                        {header_index_crash, 
-                            {id, ID}, {reason, Reason}
+    
+%% @doc Materialise a parsed `#tx{}' header into local-store so that
+%% `hb_cache:match' can answer GraphQL filters. No-op when header indexing is
+%%  disabled via `<<"index-headers">>'. 
+write_item_header(TX, Codec, Opts) ->
+    case hb_opts:get(<<"index-headers">>, true, Opts) of
+        true ->
+            LocalOpts = hb_store:scope(Opts, local),
+            maybe
+                Msg = hb_message:convert(TX, <<"structured@1.0">>, Codec, LocalOpts),
+                {ok, _Path} ?= hb_cache:write(Msg, LocalOpts),
+                ?event(copycat_short,
+                    {header_inline_written,
+                        {id, {explicit, hb_util:encode(TX#tx.id)}},
+                        {codec, Codec}
+                    }
+                ),
+                ok
+            else
+                {error, R} ->
+                    ?event(copycat_short,
+                        {header_write_failed,
+                            {id, {explicit, hb_util:encode(TX#tx.id)}},
+                            {codec, Codec},
+                            {reason, R}
                         }
-                    )
-            end    
-        end,
-        Workers
-    ),
-    ?event(copycat_short, {headers_scan_completed, {from, From}, {to, To}}),
-    {ok, {From, To}}.
-
-%% @doc Walk indexed blocks from `Current' down to `To', collecting all
-%% confirmed item IDs across every depth.
-collect_header_candidates(Current, To, _Opts, Acc) when Current < To -> Acc;
-collect_header_candidates(Current, To, Opts, Acc) ->
-    case hb_store_arweave:read_block_marker_depth(Current, Opts) of
-        undefined ->
-            collect_header_candidates(Current - 1, To, Opts, Acc);
-        _Depth ->
-            Candidates = 
-                lists:append(maps:values(hb_store_arweave:read_block_item_ids(Current, Opts))),
-            collect_header_candidates(Current - 1, To, Opts, Candidates ++ Acc)
-    end.
-
-%% @doc If the ID is not already in the local store, read it from the arweave
-%% store and write it into the local store.
-index_headers(ID, Opts) ->
-    LocalOpts = hb_store:scope(Opts, local),
-    try
-        case hb_cache:read(ID, LocalOpts) of
-            {ok, _} -> skipped;
-            _ ->
-                {ok, Msg} =  hb_cache:read(ID, Opts),
-                hb_cache:write(Msg, LocalOpts)
-        end
-    catch _:Reason -> 
-        {error, Reason}
+                    ),
+                    {error, R}
+            end;
+        _ -> ok
     end.
 
 fetch_block_header(Height, Opts) ->
@@ -898,6 +857,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
     end),
     #{ <<"index-store">> := IndexStore } = ArweaveStore,
     ok = hb_store_arweave:write_parent(TX#tx.id, BlockHeight, block, IndexStore, Opts),
+    ok = write_item_header(TX, <<"tx@1.0">>, Opts),
     try is_bundle_tx(TX, Opts) of
         false ->
             #{items_count => 0, bundle_count => 0, skipped_count => 0,
@@ -1382,6 +1342,11 @@ index_full_bundle_items(
         Opts
     ),
     ok = hb_store_arweave:write_parent(ItemID, ParentID, bundle, IndexStore, Opts),
+    ok = 
+        case ParseResult of
+            {ok, _, Parsed} -> write_item_header(Parsed, <<"ans104@1.0">>, Opts);
+            _ -> ok
+        end,
     {DescendantCount, ItemAchievedDepth, ChildIDs} =
         case {Depth > 1, ParseResult} of
             {true, {ok, HeaderSize, ParsedItem}} ->
@@ -3524,7 +3489,8 @@ strip_preserves_verify_test_parallel() ->
     L3ID = <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
     lists:foreach(
         fun(ID) ->
-            index_headers(ID, Opts),
+            %% mode=write now materialises the header inline, so no
+            %% separate index_headers call is needed.
             {ok, HeaderMsg} = hb_cache:read(ID, hb_store:scope(Opts, local)),
             ?event(
                 {verify_msg,
