@@ -154,14 +154,8 @@ init_prometheus() ->
 %% @doc Format a schedule location for use as a prometheus label.
 format_location(undefined) ->
     <<"undefined">>;
-format_location({Mod, Func, Arity}) ->
-    <<
-        (atom_to_binary(Mod))/binary, ":",
-        (atom_to_binary(Func))/binary, "/",
-        (integer_to_binary(Arity))/binary
-    >>;
-format_location(_) ->
-    <<"unknown">>.
+format_location(MFA) ->
+    hb_format:format_mfa(MFA).
 
 %% @doc If the timeout exceeds the deep inspection threshold and
 %% enough time has passed since the last inspection, grab detailed
@@ -215,7 +209,7 @@ deep_inspect(Pid, ScheduleInfo) ->
     ?event(system_monitor, {deep_inspect, Pid, ScheduleInfo, ProcInfo}),
     Stack = proplists:get_value(current_stacktrace, ProcInfo, []),
     Entry = stack_entry(Stack),
-    Location = stack_location(Stack),
+    Location = hb_format:stack_location(Stack),
     hb_prometheus:inc(counter, system_monitor_deep_inspect_total,
         [Entry, Location]).
 
@@ -224,37 +218,6 @@ stack_entry([]) ->
     <<"unknown">>;
 stack_entry(Stack) ->
     hb_format:process_from_trace(Stack).
-
-%% @doc Build a compact location label from the stack: `mid/current`.
-%% Current is the innermost frame (head of stacktrace), mid is
-%% roughly 1/3 from the bottom — a frame that gives codebase context
-%% without being the generic entry or the leaf.
-stack_location([]) ->
-    <<"unknown">>;
-stack_location([Only]) ->
-    format_frame(Only);
-stack_location(Stack) ->
-    Current = hd(Stack),
-    Len = length(Stack),
-    MidIdx = max(1, Len - (Len div 3)),
-    Mid = lists:nth(MidIdx, Stack),
-    case Mid =:= Current of
-        true ->
-            format_frame(Current);
-        false ->
-            <<
-                (format_frame(Mid))/binary, "/",
-                (format_frame(Current))/binary
-            >>
-    end.
-
-%% @doc Format a single stack frame as `mod:func/arity`.
-format_frame({Mod, Func, Arity, _}) ->
-    format_location({Mod, Func, Arity});
-format_frame({Mod, Func, Arity}) ->
-    format_location({Mod, Func, Arity});
-format_frame(_) ->
-    <<"unknown">>.
 
 %% @doc Safely retrieve process info. The process may have died
 %% between the monitor event and our inspection.

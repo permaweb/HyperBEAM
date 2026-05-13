@@ -21,6 +21,7 @@
 -export([escape_format/1, short_id/1, trace_to_list/1]).
 -export([get_trace/1, print_trace/4, trace_macro_helper/5, print_trace_short/4]).
 -export([process_from_trace/1]).
+-export([format_mfa/1, stack_location/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -657,6 +658,43 @@ process_from_trace([TraceElement | Rest], Spawner) ->
                 (hb_util:bin(trace_element(TraceElement)))/binary
             >>
         end.
+
+%% @doc Format an MFA tuple or stack frame as `mod:func/arity`.
+format_mfa({Mod, Func, Arity, _}) when is_integer(Arity) ->
+    format_mfa({Mod, Func, Arity});
+format_mfa({Mod, Func, Args, _}) when is_list(Args) ->
+    format_mfa({Mod, Func, length(Args)});
+format_mfa({Mod, Func, Arity}) when is_integer(Arity) ->
+    <<
+        (atom_to_binary(Mod))/binary, ":",
+        (atom_to_binary(Func))/binary, "/",
+        (integer_to_binary(Arity))/binary
+    >>;
+format_mfa(_) ->
+    <<"unknown">>.
+
+%% @doc Build a compact location label from a stack: `mid/current`.
+%% Current is the innermost frame (head of stacktrace), mid is
+%% roughly 1/3 from the bottom — a frame that gives codebase
+%% context without being the generic entry or the leaf.
+stack_location([]) ->
+    <<"unknown">>;
+stack_location([Only]) ->
+    format_mfa(Only);
+stack_location(Stack) ->
+    Current = hd(Stack),
+    Len = length(Stack),
+    MidIdx = max(1, Len - (Len div 3)),
+    Mid = lists:nth(MidIdx, Stack),
+    case Mid =:= Current of
+        true ->
+            format_mfa(Current);
+        false ->
+            <<
+                (format_mfa(Mid))/binary, "/",
+                (format_mfa(Current))/binary
+            >>
+    end.
 
 trace_element_is_glue({proc_lib, init_p_do_apply, _, _}) ->
     true;
