@@ -86,11 +86,14 @@ commit(Base, Request, RawOpts) ->
 %% commit a message and set the given secret key in the cookie.
 commit(Secret, Base, Request, Opts) ->
     {ok, CommittedMsg} =
-        dev_httpsig_proxy:commit(
-            <<"cookie@1.0">>,
-            Secret,
-            Base,
-            Request,
+        hb_ao:resolve(
+            #{ <<"device">> => <<"httpsig@1.0">> },
+            Request#{
+                <<"path">> => <<"proxy-commit">>,
+                <<"commitment-device">> => <<"cookie@1.0">>,
+                <<"secret">> => Secret,
+                <<"message">> => Base
+            },
             Opts
         ),
     store_secret(Secret, CommittedMsg, Opts).
@@ -114,10 +117,13 @@ verify(Base, ReqLink, RawOpts) when ?IS_LINK(ReqLink) ->
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_cookie:opts(RawOpts),
     ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),
-    dev_httpsig_proxy:verify(
-        hb_util:decode(Secret),
-        Base,
-        Req,
+    hb_ao:resolve(
+        #{ <<"device">> => <<"httpsig@1.0">> },
+        Req#{
+            <<"path">> => <<"proxy-verify">>,
+            <<"secret">> => hb_util:decode(Secret),
+            <<"message">> => Base
+        },
         Opts
     );
 verify(Base, Request, RawOpts) ->
@@ -125,10 +131,13 @@ verify(Base, Request, RawOpts) ->
     ?event({verify_finding_key, {base, Base}, {request, Request}}),
     case find_secret(Request, Opts) of
         {ok, Secret} ->
-            dev_httpsig_proxy:verify(
-                hb_util:decode(Secret),
-                Base,
-                Request,
+            hb_ao:resolve(
+                #{ <<"device">> => <<"httpsig@1.0">> },
+                Request#{
+                    <<"path">> => <<"proxy-verify">>,
+                    <<"secret">> => hb_util:decode(Secret),
+                    <<"message">> => Base
+                },
                 Opts
             );
         {error, Err} ->

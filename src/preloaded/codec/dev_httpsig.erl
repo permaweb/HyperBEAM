@@ -12,6 +12,8 @@
 -export([serialize/2, serialize/3]).
 %%% Commitment API functions
 -export([commit/3, verify/3]).
+%%% HMAC secret proxy API functions
+-export([proxy_commit/3, proxy_verify/3]).
 %%% Public API functions
 -export([add_content_digest/2, normalize_for_encoding/3]).
 -include("include/hb.hrl").
@@ -28,6 +30,25 @@ opts(RawOpts) ->
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"force-message">> => false
     }.
+
+%% @doc Proxy a secret HMAC commitment, overriding the commitment device.
+proxy_commit(_Base, Req, Opts) ->
+    dev_httpsig_proxy:commit(
+        hb_maps:get(<<"commitment-device">>, Req, Opts),
+        hb_maps:get(<<"secret">>, Req, Opts),
+        hb_maps:get(<<"message">>, Req, Opts),
+        Req,
+        Opts
+    ).
+
+%% @doc Proxy secret HMAC verification.
+proxy_verify(_Base, Req, Opts) ->
+    dev_httpsig_proxy:verify(
+        hb_maps:get(<<"secret">>, Req, Opts),
+        hb_maps:get(<<"message">>, Req, Opts),
+        Req,
+        Opts
+    ).
 
 %% @doc A helper utility for creating a direct encoding of a HTTPSig message.
 %% 
