@@ -698,7 +698,11 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             % We have a hint. Construct a redirect message.
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
-            case dev_location:read(Scheduler, Opts) of
+            case hb_ao:resolve(
+                #{ <<"device">> => <<"location@1.0">> },
+                #{ <<"path">> => Scheduler },
+                Opts
+            ) of
                 {ok, SchedMsg} ->
                     % We have a cached scheduler location. Use it to construct a
                     % redirect message.
