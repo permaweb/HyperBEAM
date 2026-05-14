@@ -5,8 +5,6 @@
 %%% first resolver that matches.
 -module(dev_name).
 -export([info/1, request/3]).
-%%% Public helpers.
--export([test_arns_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -290,32 +288,9 @@ load_and_execute_test_parallel() ->
         )
     ).
 
-%% @doc Return an `Opts` for an environment with the default ARNS name export
-%% and a temporary store for the test.
-test_arns_opts() ->
-    JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
-    Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
-    TempStore = hb_test_utils:test_store(),
-    #{
-        <<"store">> =>
-            [
-                TempStore,
-                #{
-                    <<"store-module">> => hb_store_gateway,
-                    <<"local-store">> => [TempStore]
-                }
-            ],
-        <<"name-resolvers">> => [Path],
-        <<"on">> => #{
-            <<"request">> => #{
-                <<"device">> => <<"name@1.0">>
-            }
-        }
-    }.
-
 %% @doc Names from JSON test.
 arns_json_snapshot_test_parallel() ->
-    Opts = test_arns_opts(),
+    Opts = hb_name_test_utils:arns_opts(),
     ?assertMatch(
         {ok, <<"text/html">>},
         hb_ao:resolve_many(
@@ -329,7 +304,7 @@ arns_json_snapshot_test_parallel() ->
     ).
 
 arns_host_resolution_test_parallel() ->
-    Opts = test_arns_opts(),
+    Opts = hb_name_test_utils:arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -344,7 +319,7 @@ arns_host_resolution_test_parallel() ->
     ).
 
 arns_host_resolution_with_node_host_test_parallel() ->
-    Opts = (test_arns_opts())#{
+    Opts = (hb_name_test_utils:arns_opts())#{
         <<"node-host">> => <<"http://localhost">>,
         <<"port">> => 0
     },

@@ -58,7 +58,7 @@ dev_b32_name_test_() ->
     ]}.
 
 test_invalid_arns_and_not_52char_host_resolution_gives_404() ->
-    Opts = (dev_name:test_arns_opts())#{ <<"port">> => 0 },
+    Opts = (hb_name_test_utils:arns_opts())#{ <<"port">> => 0 },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, #{<<"status">> := 404}},
@@ -301,7 +301,7 @@ subdomain(ID, Opts) ->
 %% @doc Returns `Opts' with a test environment preloaded with manifest related
 %% IDs.
 manifest_opts() ->
-    (dev_manifest:test_env_opts())#{
+    (hb_name_test_utils:manifest_opts())#{
         <<"port">> => 0,
         <<"http-client-hackney-recv-timeout">> => 30_000,
         <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
