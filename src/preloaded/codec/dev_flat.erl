@@ -8,9 +8,25 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%%% Route signature functions to the `dev_httpsig' module
-commit(Msg, Req, Opts) -> dev_httpsig:commit(Msg, Req, Opts).
-verify(Msg, Req, Opts) -> dev_httpsig:verify(Msg, Req, Opts).
+%% @doc Route commitments through `httpsig@1.0'.
+commit(Msg, Req, Opts) ->
+    {ok,
+        hb_message:commit(
+            Msg,
+            Opts,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        )
+    }.
+
+%% @doc Route verification through `httpsig@1.0'.
+verify(Msg, Req, Opts) ->
+    {ok,
+        hb_message:verify(
+            Msg,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> },
+            Opts
+        )
+    }.
 
 %% @doc Convert a flat map to a TABM.
 from(Bin, _, _Opts) when is_binary(Bin) -> {ok, Bin};

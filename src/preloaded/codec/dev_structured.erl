@@ -25,9 +25,25 @@
 
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
-%%% Route signature functions to the `dev_httpsig' module
-commit(Msg, Req, Opts) -> dev_httpsig:commit(Msg, Req, Opts).
-verify(Msg, Req, Opts) -> dev_httpsig:verify(Msg, Req, Opts).
+%% @doc Route commitments through `httpsig@1.0'.
+commit(Msg, Req, Opts) ->
+    {ok,
+        hb_message:commit(
+            Msg,
+            Opts,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        )
+    }.
+
+%% @doc Route verification through `httpsig@1.0'.
+verify(Msg, Req, Opts) ->
+    {ok,
+        hb_message:verify(
+            Msg,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> },
+            Opts
+        )
+    }.
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};

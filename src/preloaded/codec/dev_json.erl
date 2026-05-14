@@ -63,9 +63,25 @@ from(JSON, Req, Opts) ->
             {ok, TABM}
     end.
 
-commit(Msg, Req, Opts) -> dev_httpsig:commit(Msg, Req, Opts).
+%% @doc Route commitments through `httpsig@1.0'.
+commit(Msg, Req, Opts) ->
+    {ok,
+        hb_message:commit(
+            Msg,
+            Opts,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        )
+    }.
 
-verify(Msg, Req, Opts) -> dev_httpsig:verify(Msg, Req, Opts).
+%% @doc Route verification through `httpsig@1.0'.
+verify(Msg, Req, Opts) ->
+    {ok,
+        hb_message:verify(
+            Msg,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> },
+            Opts
+        )
+    }.
 
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);
