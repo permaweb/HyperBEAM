@@ -17,8 +17,6 @@
 -module(dev_bundler).
 -export([tx/3, item/3, ensure_server/1, stop_server/0, stop_server/1]).
 -export([get_state/0, get_state/1]).
-%%% Test-only exports.
--export([start_mock_gateway/1]).
 
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
@@ -640,7 +638,7 @@ nested_bundle_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -687,7 +685,7 @@ anchor_error_test_parallel() ->
     }).
 
 tx_error_test_parallel() ->
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
             price => {200, <<"12345">>},
@@ -719,7 +717,7 @@ unsigned_dataitem_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -752,7 +750,7 @@ unsigned_dataitem_test_parallel() ->
 idle_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -807,7 +805,7 @@ dispatch_blocking_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)},
@@ -866,7 +864,7 @@ dispatch_blocking_test() ->
 recover_respects_max_items_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -906,7 +904,7 @@ recover_respects_max_items_test_parallel() ->
 complete_task_sequence_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -950,7 +948,7 @@ complete_task_sequence_test_parallel() ->
 recover_bundles_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         chunk => fun(_Req) ->
             timer:sleep(250),
             {200, <<"OK">>}
@@ -1008,7 +1006,7 @@ post_tx_price_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
     setup_test_counter(price_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => fun(_Req) ->
             Count = increment_test_counter(price_attempts_counter) - 1,
             case Count < FailCount of
@@ -1044,7 +1042,7 @@ post_tx_anchor_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 3,
     setup_test_counter(anchor_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => fun(_Req) ->
             Count = increment_test_counter(anchor_attempts_counter) - 1,
@@ -1081,7 +1079,7 @@ post_tx_post_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 4,
     setup_test_counter(tx_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1119,7 +1117,7 @@ post_proof_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 2,
     setup_test_counter(chunk_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         chunk => fun(_Req) ->
@@ -1157,7 +1155,7 @@ post_proof_failure_retry_test_parallel() ->
 rapid_dispatch_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1192,7 +1190,7 @@ one_bundle_fails_others_continue_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(mixed_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1229,7 +1227,7 @@ parallel_task_execution_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     SleepTime = 120,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         chunk => fun(_Req) ->
@@ -1268,7 +1266,7 @@ exponential_backoff_timing_test() ->
     Price = 12345,
     FailCount = 5,
     setup_test_counter(backoff_cap_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1320,7 +1318,7 @@ independent_task_retry_counts_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(independent_retry_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1358,7 +1356,7 @@ independent_task_retry_counts_test_parallel() ->
 invalid_item_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -1437,7 +1435,7 @@ test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -1472,7 +1470,7 @@ test_bundle(Opts) ->
     end.
 
 test_api_error(Responses) ->
-    {ServerHandle, NodeOpts} = start_mock_gateway(Responses),
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(Responses),
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
@@ -1619,30 +1617,6 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
             ?assert(hb_message:verify(CachedItemFromUnsignedID, all, ClientOpts))
         end, ExpectedItems),
     ok.
-
-start_mock_gateway(Responses) ->
-    DefaultResponse = {200, <<>>},
-    Endpoints = [
-        {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
-        {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
-        {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
-        {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
-    ],
-    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
-    NodeOpts = #{
-        <<"gateway">> => MockServer,
-        <<"routes">> => [
-            #{
-                <<"template">> => <<"/arweave">>,
-                <<"node">> => #{
-                    <<"match">> => <<"^/arweave">>,
-                    <<"with">> => MockServer,
-                    <<"opts">> => #{<<"http-client">> => httpc, <<"protocol">> => http2}
-                }
-            }
-        ]
-    },
-    {ServerHandle, NodeOpts}.
 
 read_from_cache(Node, Path) ->
     ReadMsg = #{

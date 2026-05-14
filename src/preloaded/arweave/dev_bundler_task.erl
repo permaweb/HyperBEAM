@@ -241,7 +241,7 @@ format_timestamp() ->
 build_signed_tx_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -306,7 +306,7 @@ build_signed_tx_test() ->
 build_signed_tx_on_arbundles_js_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),

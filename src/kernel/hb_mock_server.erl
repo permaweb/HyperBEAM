@@ -2,6 +2,7 @@
 %%% configurable responses. 
 -module(hb_mock_server).
 -export([start/1, stop/1, get_requests/2, get_requests/3, get_requests/4]).
+-export([start_arweave_gateway/1]).
 %% Cowboy handler callback
 -export([init/2]).
 -include("include/hb.hrl").
@@ -56,6 +57,34 @@ start(Endpoints) ->
     Port = ranch:get_port(ListenerID),
     ServerURL = iolist_to_binary(io_lib:format("http://localhost:~p", [Port])),
     {ok, ServerURL, {CollectorPID, ListenerID}}.
+
+%% @doc Start a mock Arweave gateway and return node options that route to it.
+start_arweave_gateway(Responses) ->
+    DefaultResponse = {200, <<>>},
+    Endpoints = [
+        {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
+        {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
+        {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
+        {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
+    ],
+    {ok, MockServer, ServerHandle} = start(Endpoints),
+    NodeOpts = #{
+        <<"gateway">> => MockServer,
+        <<"routes">> => [
+            #{
+                <<"template">> => <<"/arweave">>,
+                <<"node">> => #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockServer,
+                    <<"opts">> => #{
+                        <<"http-client">> => httpc,
+                        <<"protocol">> => http2
+                    }
+                }
+            }
+        ]
+    },
+    {ServerHandle, NodeOpts}.
 
 stop({CollectorPID, ListenerID}) ->
     cowboy:stop_listener(ListenerID),
@@ -132,4 +161,3 @@ init(Req0, {Tag, Response, CollectorPID} = State) ->
         false -> Response
     end,
     {ok, cowboy_req:reply(StatusCode, #{}, ResponseBody, Req), State}.
-

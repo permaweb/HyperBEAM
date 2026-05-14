@@ -140,7 +140,7 @@ bundler_dynamic_metering() ->
     Anchor = rand:bytes(32),
     NetworkPrice = 12345,
     {ServerHandle, GatewayOpts} =
-        dev_bundler:start_mock_gateway(
+        hb_mock_server:start_arweave_gateway(
             #{
                 price => {200, integer_to_binary(NetworkPrice)},
                 tx_anchor => {200, hb_util:encode(Anchor)}
@@ -217,7 +217,7 @@ bundler_completion_payment_hook() ->
     Anchor = rand:bytes(32),
     NetworkPrice = 12345,
     {ServerHandle, GatewayOpts} =
-        dev_bundler:start_mock_gateway(
+        hb_mock_server:start_arweave_gateway(
             #{
                 price => {200, integer_to_binary(NetworkPrice)},
                 tx_anchor => {200, hb_util:encode(Anchor)}
