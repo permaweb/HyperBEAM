@@ -1,8 +1,7 @@
 # Setting Up a Scheduler Device
 
-> **Note:** When your node launches, it will normally post (announce) its scheduler location automatically. This guide is useful if you need to re-announce the location or manually update the published location data.
 
-This guide is for operators who are already running a production HyperBEAM node and want to register it as an AO scheduler.
+This guide is for operators who are already running a production HyperBEAM node and want to register it as an AO scheduler on the network publicly.
 
 ## Prerequisites
 
