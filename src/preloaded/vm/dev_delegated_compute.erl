@@ -110,13 +110,16 @@ do_compute(ProcID, Req, Opts) ->
 do_dryrun(ProcID, Req, Opts) ->
     ?event({do_dryrun_msg, {req, Req}}),
     % Remove commitments from the message before sending to the external CU
-    Body = 
-        hb_json:encode(
-            dev_json_iface:message_to_json_struct(
-                hb_maps:without([<<"commitments">>], Req, Opts),
-                Opts
-            )
+    {ok, Struct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => hb_maps:without([<<"commitments">>], Req, Opts)
+            },
+            Opts
         ),
+    Body = hb_json:encode(Struct),
     ?event({do_dryrun_body, {string, Body}}),
     % Send to external CU via relay using /dry-run endpoint
     Response = do_relay(
@@ -192,7 +195,15 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
                     {req, Req}
                 }
             ),
-            {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
+            {ok, Msg} =
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"json-iface@1.0">> },
+                    #{
+                        <<"path">> => <<"from">>,
+                        <<"json">> => JSONRes
+                    },
+                    Opts
+                ),
             Raw = hb_json:decode(JSONRes, Opts),
             {ok,
                 hb_ao:set(

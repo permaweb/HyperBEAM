@@ -35,7 +35,7 @@
 %%%             /Results/Data</pre>
 -module(dev_json_iface).
 -implements(<<"json-iface@1.0">>).
--export([init/3, compute/3]).
+-export([init/3, compute/3, to/3, from/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
 %%% Test helper exports:
@@ -191,6 +191,15 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             end,
         <<"PublicKey">> => PublicKey
     }.
+
+%% @doc Convert a message into an AOS2-compatible JSON structure.
+to(Base, Req, Opts) ->
+    {ok,
+        message_to_json_struct(
+            hb_maps:get(<<"message">>, Req, Base, Opts),
+            Opts
+        )
+    }.
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
 prepare_tags(Msg, Opts) ->
@@ -272,6 +281,10 @@ json_to_message(Other, _Opts) ->
             <<"received">> => Other
         }
     }.
+
+%% @doc Convert an AOS2-compatible JSON result into a message.
+from(Base, Req, Opts) ->
+    json_to_message(hb_maps:get(<<"json">>, Req, Base, Opts), Opts).
 
 safe_to_id(<<>>) -> <<>>;
 safe_to_id(ID) -> hb_util:human_id(ID).
