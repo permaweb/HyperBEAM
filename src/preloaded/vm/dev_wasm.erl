@@ -292,7 +292,7 @@ normalize(RawM1, M2, Opts) ->
                 ?event(wasm_instance_found_not_deserializing),
                 RawM1
         end,
-    dev_message:set(M3, #{ <<"snapshot">> => unset }, Opts).
+    {ok, hb_ao:set(M3, #{ <<"snapshot">> => unset }, Opts)}.
 
 %% @doc Serialize the WASM state to a binary.
 snapshot(M1, M2, Opts) ->
