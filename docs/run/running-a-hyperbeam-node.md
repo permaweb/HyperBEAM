@@ -147,10 +147,8 @@ The simplest way to start a HyperBEAM node for development or testing is using `
 rebar3 shell
 ```
 
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>For current process operations, start HyperBEAM with the <code>genesis_wasm</code> profile by running <code>rebar3 as genesis_wasm shell</code>.</p>
-</div>
+>[!NOTE]
+>For current process operations, start HyperBEAM with the <code>genesis_wasm</code> profile by running <code>rebar3 as genesis_wasm shell</code>.
 
 This command:
 
