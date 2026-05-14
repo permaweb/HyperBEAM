@@ -23,7 +23,7 @@ init(Opts) ->
                 intensity => 0,
                 period => 1},
     StoreChildren = store_children(hb_opts:get(store, [], Opts)),
-    GunChild =
+    HttpClientChild =
         #{
             id => hb_http_client,
             start => {hb_http_client, start_link, [Opts]},
@@ -32,7 +32,7 @@ init(Opts) ->
             type => worker,
             modules => [hb_http_client]
         },
-    {ok, {SupFlags, [GunChild | StoreChildren]}}.
+    {ok, {SupFlags, [HttpClientChild | StoreChildren]}}.
 
 %% @doc Generate a child spec for stores in the given Opts.
 store_children(Store) when not is_list(Store) ->

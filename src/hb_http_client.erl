@@ -789,6 +789,8 @@ get_status_class({error, {down, noproc}}) ->
     <<"noproc">>;
 get_status_class({error, {stream_error, {closed, normal}}}) ->
     <<"stream-closed">>;
+get_status_class({error, Error}) when is_atom(Error) ->
+    atom_to_binary(Error);
 get_status_class(208) ->
 	<<"already-processed">>;
 get_status_class(404) ->
