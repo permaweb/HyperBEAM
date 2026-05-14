@@ -918,7 +918,16 @@ auto_stop_partial_index_test_parallel() ->
             >>,
             NoIndexOpts
         ),
-    {ok, BlockData} = dev_arweave_block_cache:read(Block, Opts),
+    {ok, BlockData} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"block">>,
+                <<"block">> => Block,
+                <<"cache-control">> => [<<"only-if-cached">>]
+            },
+            Opts
+        ),
     TXIDs = hb_maps:get(<<"txs">>, BlockData, [], Opts),
     ?assert(length(TXIDs) > 0),
     [OneTXID | _] = TXIDs,
