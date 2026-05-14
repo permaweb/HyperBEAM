@@ -539,7 +539,11 @@ verify_auth(WalletDetails, Req, Opts) ->
 wallets_from_cookie(Msg, Opts) ->
     % Parse the cookie as a Structured-Fields map.
     ParsedCookie =
-        try dev_cookie:extract(Msg, #{ <<"format">> => <<"cookie">> }, Opts) of
+        try hb_ao:resolve(
+            Msg#{ <<"device">> => <<"cookie@1.0">> },
+            #{ <<"path">> => <<"extract">>, <<"format">> => <<"cookie">> },
+            Opts
+        ) of
             {ok, CookieMsg} -> CookieMsg
         catch _:_ -> {error, <<"Invalid cookie format.">>}
         end,
