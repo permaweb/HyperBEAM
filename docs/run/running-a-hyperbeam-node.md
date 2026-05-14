@@ -38,7 +38,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
 *   `git`: Version control for fetching the source code.
 *   `pkg-config`: Helps find installed libraries during compilation.
 *   `ncurses-dev` / `ncurses`: Required for some terminal interface elements used by Erlang/OTP.
-*   `libssl-dev` / `openssl`: Necessary for cryptographic operations and secure connections (HTTPS). You might need to set specific environment variables for `openssl` during Erlang compilation if bui[...]
+*   `libssl-dev` / `openssl`: Necessary for cryptographic operations and secure connections (HTTPS). You might need to set specific environment variables for `openssl` during Erlang compilation if[...]
 *   `sudo` (Linux/macOS): Needed for system-level installations.
 *   `curl`: Used for downloading dependencies or interacting with web services.
 *   `ca-certificates` (Linux): Required for validating SSL certificates (often handled by the OS on macOS/Windows).
@@ -84,7 +84,7 @@ Installation methods:
     ```
 
 === "Linux / macOS (Direct Download)"
-    Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x reba[...]
+    Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x [...]`
 
 <!-- === "asdf (Recommended)"
     If using `asdf`, you can install it via the `rebar` plugin:
@@ -147,8 +147,10 @@ The simplest way to start a HyperBEAM node for development or testing is using `
 rebar3 shell
 ```
 
-!!! note
-    For current process operations, start HyperBEAM with the `genesis_wasm` profile by running `rebar3 as genesis_wasm shell`.
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>For current process operations, start HyperBEAM with the <code>genesis_wasm</code> profile by running <code>rebar3 as genesis_wasm shell</code>.</p>
+</div>
 
 This command:
 
@@ -183,7 +185,7 @@ rebar3 as rocksdb, genesis_wasm shell
 
 ## Node Configuration
 
-HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or comma[...]
+HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or [...]
 
 See the dedicated [Configuring Your HyperBEAM Node](./configuring-your-machine.md) guide for detailed information on all configuration methods and options.
 
@@ -199,7 +201,7 @@ A JSON response containing node information indicates success.
 
 ## Running for Production (Mainnet)
 
-While you can connect to the main AO network using the `rebar3 shell` for testing purposes (potentially using specific configurations or helper functions like `hb:start_mainnet/1` if available and app[...]
+While you can connect to the main AO network using the `rebar3 shell` for testing purposes (potentially using specific configurations or helper functions like `hb:start_mainnet/1` if available an[...]
 
 **1. Build the Release:**
 
@@ -217,7 +219,7 @@ This command compiles the project and packages it along with the Erlang Runtime 
 
 **2. Configure the Release:**
 
-Navigate into the release directory (e.g., `cd _build/default/rel/hb`). Ensure you have a correctly configured `config.flat` file here. See the [configuration guide](./configuring-your-machine.md) for[...]
+Navigate into the release directory (e.g., `cd _build/default/rel/hb`). Ensure you have a correctly configured `config.flat` file here. See the [configuration guide](./configuring-your-machine.md[...] 
 
 **3. Start the Node:**
 
