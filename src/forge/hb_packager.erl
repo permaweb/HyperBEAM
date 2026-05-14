@@ -661,7 +661,7 @@ generated_module_parts(_) -> not_generated.
 %% @doc Rename every source module in a device namespace, compile the
 %% renamed modules independently, and pack their BEAMs into a
 %% deterministic in-memory ZIP archive.
-compile_archive(RootMod, Root, RootFile, Helpers, Hash, PrivFiles, _Opts) ->
+compile_archive(RootMod, Root, RootFile, Helpers, Hash, PrivFiles, Opts) ->
     Entries = [{Root, RootFile} | Helpers],
     Renamings = module_renamings(RootMod, Root, Entries),
     TmpDir = package_tmp_dir(RootMod),
@@ -689,7 +689,8 @@ compile_archive(RootMod, Root, RootFile, Helpers, Hash, PrivFiles, _Opts) ->
             Copied,
             Renamings,
             OnLoads,
-            IncludeDirs
+            IncludeDirs,
+            Opts
         ),
     OriginalMods = [Mod || {Mod, _} <- Entries],
     GeneratedMods = [New || {_Old, New} <- Renamings],
@@ -844,14 +845,28 @@ decode_on_loads(<<ModLen:32, Rest0/binary>>, Acc)
 decode_on_loads(_Other, _Acc) ->
     {error, invalid_on_load_metadata}.
 
-compile_renamed_modules(RenamedPaths, Copied, Renamings, OnLoads, IncludeDirs) ->
+compile_renamed_modules(
+    RenamedPaths,
+    Copied,
+    Renamings,
+    OnLoads,
+    IncludeDirs,
+    Opts
+) ->
     [
-        compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs)
+        compile_renamed_module(
+            Path,
+            Copied,
+            Renamings,
+            OnLoads,
+            IncludeDirs,
+            Opts
+        )
       ||
         Path <- lists:sort(RenamedPaths)
     ].
 
-compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs) ->
+compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs, Opts) ->
     Mod = atom_of_file(Path),
     Source = source_for_renamed_module(Mod, Copied, Renamings),
     %% Persist `on_load' callbacks as archive metadata instead of leaving the
@@ -864,6 +879,7 @@ compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs) ->
             debug_info,
             {source, binary_to_list(filename_only(Source))}
         ] ++
+        test_compile_opts(Opts) ++
         [{i, Dir} || Dir <- IncludeDirs] ++ [
             nowarn_unused_function,
             nowarn_unused_vars,
@@ -887,6 +903,12 @@ compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs) ->
             );
         Other ->
             erlang:error({device_compile_failed, Mod, Other})
+    end.
+
+test_compile_opts(Opts) ->
+    case hb_maps:get(<<"test">>, Opts, false, Opts) of
+        true -> [{d, 'TEST'}];
+        _ -> []
     end.
 
 source_for_renamed_module(Mod, Copied, Renamings) ->

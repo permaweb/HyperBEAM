@@ -52,12 +52,13 @@ run(Args, NodeOpts) ->
     Roots = maps:get(<<"device-roots">>, Args, all),
     KeyPath = maps:get(<<"key">>, Args),
     Wallet = load_wallet(KeyPath),
+    PackageOpts = package_opts(Args, NodeOpts),
     case default_preloaded_dirs(Dirs) of
         {ok, DefaultDirs} ->
             Groups =
                 hb_packager:scan(DefaultDirs, #{}) ++
                 hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-            Pkgs = [hb_packager:package(G, NodeOpts) || G <- Groups],
+            Pkgs = [hb_packager:package(G, PackageOpts) || G <- Groups],
             {ok, Result} =
                 hb_preload:build_dir(Pkgs, Wallet, OutputDir, NodeOpts),
             HeaderPath = header_path(OutputDir),
@@ -82,6 +83,13 @@ load_wallet(undefined) ->
     hb:wallet();
 load_wallet(Path) ->
     hb:wallet(binary_to_list(hb_util:bin(Path))).
+
+%% @doc Add test compile flags when the caller is building a test store.
+package_opts(Args, NodeOpts) ->
+    case maps:get(<<"test">>, Args, false) of
+        true -> NodeOpts#{ <<"test">> => true };
+        _ -> NodeOpts
+    end.
 
 %% @doc Return the HyperBEAM dependency's preloaded source directory.
 default_preloaded_dirs(Dirs) ->

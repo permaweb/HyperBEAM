@@ -1,10 +1,9 @@
 %%% @doc `rebar3 device test' — package devices, build a preloaded-store,
-%%% and run their EUnit suites with the resulting store mounted as the
-%%% node's `preloaded-store'.
+%%% and run their generated EUnit suites through the resulting store.
 %%%
 %%% This is the developer's primary smoke-test loop: every device under
 %%% the configured source directory is packaged, every device's spec/
-%%% impl message is signed and indexed, and then its root module EUnit
+%%% impl message is signed and indexed, and then its generated EUnit
 %%% suites run against the just-built store.
 -module(plugin_prv_test).
 -export([init/1, do/1, format_error/1]).
@@ -38,59 +37,86 @@ do(State) ->
     % device tests can resolve their dependencies.
     {ok, Result} =
         plugin_prv_preload:run(
-            Args#{ <<"device-roots">> => all },
+            Args#{ <<"device-roots">> => all, <<"test">> => true },
             #{}
         ),
     Dirs = maps:get(<<"device-src">>, Args),
     Roots = maps:get(<<"device-roots">>, Args, all),
     % Scan the source directory for root device groups.
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-    % Test every source module in each selected package namespace.
-    Modules = lists:usort(lists:append([group_modules(G) || G <- Groups])),
-    case Modules of
+    % Re-package the selected groups with test exports to discover the
+    % generated module names that the runtime will load from the store.
+    Pkgs = [
+        hb_packager:package(G, #{ <<"test">> => true })
+     ||
+        G <- Groups
+    ],
+    Modules = lists:usort(lists:append([
+        maps:get(module_names, Pkg)
+     ||
+        Pkg <- Pkgs
+    ])),
+    Names = [maps:get(device_name, Pkg) || Pkg <- Pkgs],
+    case Names of
         [] ->
             rebar_api:info("device test: nothing to test", []),
             {ok, State};
         _ ->
-            % Run the tests against the preloaded-store.
-            ModuleArg = string:join([atom_to_list(M) || M <- Modules], ","),
-            Store = maps:get(store, Result),
-            StorePath = maps:get(<<"name">>, Store),
-            Index = maps:get(index, Result),
-            InnerCmd =
-                "HB_PRELOADED_STORE=" ++ shell_quote(StorePath) ++
-                " HB_PRELOADED_DEVICES_INDEX=" ++ shell_quote(Index) ++
-                " rebar3 eunit --module=" ++ ModuleArg,
-            Cmd = "sh -c " ++ shell_quote(InnerCmd),
-            rebar_api:info(
-                "device test: running ~s against preloaded-store ~s",
-                [ModuleArg, StorePath]
-            ),
-            case rebar_utils:sh(Cmd, [{return_on_error, true}]) of
-                {ok, Output} ->
-                    % Print the test output.
-                    rebar_api:info("~ts", [Output]),
-                    {ok, State};
-                {error, {Code, Output}} ->
-                    % Print the test error output.
-                    rebar_api:error("~ts", [Output]),
-                    {error, format_error({eunit_failed, Code})}
+            Opts = test_opts(Result),
+            case load_devices(Names, Opts) of
+                ok ->
+                    rebar_api:info(
+                        "device test: running generated modules ~p",
+                        [Modules]
+                    ),
+                    start_apps(),
+                    case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
+                        ok -> {ok, State};
+                        error -> {error, format_error(eunit_failed)};
+                        Other -> {error, format_error({eunit_failed, Other})}
+                    end;
+                {error, Reason} ->
+                    {error, format_error(Reason)}
             end
     end.
 
-shell_quote(Value) ->
-    "'" ++
-        string:replace(
-            binary_to_list(hb_util:bin(Value)),
-            "'",
-            "'\\''",
-            all
-        ) ++
-        "'".
+test_opts(Result) ->
+    #{
+        <<"preloaded-store">> => maps:get(store, Result),
+        <<"preloaded-devices-index">> => maps:get(index, Result),
+        <<"trusted-devices">> => maps:get(impls, Result),
+        <<"device-store">> =>
+            #{
+                <<"store-module">> => hb_store_volatile,
+                <<"name">> =>
+                    iolist_to_binary([
+                        <<"device-test-">>,
+                        integer_to_binary(
+                            erlang:unique_integer([positive])
+                        )
+                    ])
+            }
+    }.
+
+load_devices([], _Opts) ->
+    ok;
+load_devices([Name | Names], Opts) ->
+    case hb_ao_device:load(Name, Opts) of
+        {ok, Mod} ->
+            rebar_api:info("device test: loaded ~s as ~p", [Name, Mod]),
+            load_devices(Names, Opts);
+        {error, Reason} ->
+            {error, {device_load_failed, Name, Reason}}
+    end.
+
+start_apps() ->
+    lists:foreach(fun start_app/1, [hackney, prometheus, hb]).
+
+start_app(App) ->
+    case application:ensure_all_started(App) of
+        {ok, _} -> ok;
+        {error, Reason} -> erlang:error({app_start_failed, App, Reason})
+    end.
 
 format_error(Reason) ->
     io_lib:format("device test failed: ~p", [Reason]).
-
-%% @doc Return every source module in a package namespace.
-group_modules(G) ->
-    [maps:get(root, G)] ++ [H || {H, _Path} <- maps:get(helpers, G)].
