@@ -8,12 +8,15 @@
 
 %% @doc Resolve either a message at an Arweave offset, or a direct key from the
 %% base message if the key is not an integer.
-get(Key, Base, Request, Opts) ->
+get(Key, Base, _Request, Opts) ->
     case parse(Key) of
         {ok, StartOffset, Length} ->
             load_item_at_offset(StartOffset, Length, Opts);
         error ->
-            dev_message:get(Key, Base, Request, Opts)
+            case hb_maps:get(Key, Base, not_found, Opts) of
+                not_found -> {error, not_found};
+                Value -> {ok, Value}
+            end
     end.
 
 %% @doc Parse a path key as a global Arweave start offset. The supported syntax
@@ -286,7 +289,7 @@ maybe_nested_item(
     maybe
         {ok, HeaderSize, HeaderTX} ?= deserialize_header(FirstChunk),
         true ?= TargetOffset >= ItemStartOffset + HeaderSize,
-        true ?= dev_arweave_common:type(HeaderTX) =/= binary,
+        true ?= ar_tx:type(HeaderTX) =/= binary,
         message_from_offset(
             TargetOffset,
             ItemStartOffset + HeaderSize,

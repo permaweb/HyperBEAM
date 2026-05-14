@@ -159,7 +159,7 @@ build_signed_tx(Items, Opts) ->
         {{ok, Price}, {ok, Anchor}} ->
             Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
             SignedTX = 
-                dev_arweave_common:normalize(
+                ar_tx:normalize(
                     ar_tx:sign(
                         TX#tx{anchor = Anchor, reward = Price},
                         Wallet
@@ -181,7 +181,7 @@ data_items_to_tx(Items, Opts) ->
             )
         end,
         lists:reverse(Items)),
-    dev_arweave_common:normalize(#tx{
+    ar_tx:normalize(#tx{
         format = 2,
         data = List
     }).

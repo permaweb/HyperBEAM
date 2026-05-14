@@ -402,7 +402,7 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
-    dev_arweave_common:type(TX) =/= binary.
+    ar_tx:type(TX) =/= binary.
 
 %% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->

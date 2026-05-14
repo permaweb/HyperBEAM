@@ -138,9 +138,9 @@ generate(_M1, _M2, Opts) ->
         % Generate address and node message components
         Address = hb_util:human_id(ar_wallet:to_address(ValidWallet)),
         NodeMsg = hb_private:reset(LoadedOpts),
-        {ok, PublicNodeMsgID} ?= dev_message:id(
+        PublicNodeMsgID = hb_message:id(
             NodeMsg,
-            #{ <<"committers">> => <<"none">> },
+            none,
             LoadedOpts
         ),
         RawPublicNodeMsgID = hb_util:native_id(PublicNodeMsgID),
@@ -279,7 +279,7 @@ extract_node_message_id(Msg, NodeOpts) ->
         {undefined, ID} ->
             {ok, ID};
         {NodeMsg, _} ->
-            dev_message:id(NodeMsg, #{}, NodeOpts)
+            {ok, hb_message:id(NodeMsg, none, NodeOpts)}
     end.
 
 %% @doc Verify that the nonce in the report matches the expected value.

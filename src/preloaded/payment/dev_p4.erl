@@ -296,9 +296,16 @@ is_chargable_req(Req, NodeMsg) ->
             NodeMsg
         ),
     Matches =
-        dev_router:match(
-            #{ <<"routes">> => NonChargableRoutes },
-            Req,
+        hb_ao:direct(
+            <<"router@1.0">>,
+            #{
+                <<"device">> => <<"router@1.0">>,
+                <<"routes">> => NonChargableRoutes
+            },
+            Req#{
+                <<"path">> => <<"match">>,
+                <<"route-path">> => hb_maps:get(<<"path">>, Req, no_path, NodeMsg)
+            },
             NodeMsg
         ),
     ?event(

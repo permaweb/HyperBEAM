@@ -103,7 +103,7 @@ from(TX, Req, Opts) when is_record(TX, tx) ->
     end.
 do_from(RawTX, Req, Opts) ->
     % Ensure the TX is fully deserialized.
-    TX = ar_bundles:deserialize(dev_arweave_common:normalize(RawTX)),
+    TX = ar_bundles:deserialize(ar_tx:normalize(RawTX)),
     ?event({from, {parsed_tx, TX}}),
     % Get the fields, tags, and data from the TX.
     Fields = dev_ans104_from:fields(TX, <<>>, Opts),
@@ -145,7 +145,8 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
 to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    dev_arweave_common:log_conversion(ans104_to, {to, {inbound, RawTABM}, {req, Req}}),
+    ?event(ans104_to, {to, {inbound, RawTABM}, {req, Req}},
+        #{debug_print_verify => false}),
     MaybeCommitment = hb_message:commitment(
         #{ <<"commitment-device">> => <<"ans104@1.0">> },
         RawTABM,
@@ -153,25 +154,29 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
     ),
     IsBundle = dev_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
     MaybeBundle = dev_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
-    dev_arweave_common:log_conversion(ans104_to, {to, {maybe_bundle, MaybeBundle}}),
+    ?event(ans104_to, {to, {maybe_bundle, MaybeBundle}},
+        #{debug_print_verify => false}),
 
     % Calculate and normalize the `data', if applicable.
     Data = dev_ans104_to:data(MaybeBundle, Req, Opts),
-    dev_arweave_common:log_conversion(ans104_to, {to, {calculated_data, Data}}),
+    ?event(ans104_to, {to, {calculated_data, Data}},
+        #{debug_print_verify => false}),
     TX0 = dev_ans104_to:siginfo(
         MaybeBundle, MaybeCommitment,
         fun dev_ans104_to:fields_to_tx/4, Opts
     ),
-    dev_arweave_common:log_conversion(ans104_to, {to, {found_siginfo, TX0}}),
+    ?event(ans104_to, {to, {found_siginfo, TX0}},
+        #{debug_print_verify => false}),
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
     Tags = dev_ans104_to:tags(
         TX1, MaybeCommitment, MaybeBundle,
         dev_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
-    dev_arweave_common:log_conversion(ans104_to, {to, {calculated_tags, Tags}}),
+    ?event(ans104_to, {to, {calculated_tags, Tags}},
+        #{debug_print_verify => false}),
     TX2 = TX1#tx { tags = Tags },
     Res =
-        try dev_arweave_common:normalize(TX2)
+        try ar_tx:normalize(TX2)
         catch
             Type:Error:Stacktrace ->
                 ?event({
@@ -183,7 +188,8 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
                 }),
                 erlang:raise(Type, Error, Stacktrace)
         end,
-    dev_arweave_common:log_conversion(ans104_to, {to, {result, Res}}),
+    ?event(ans104_to, {to, {result, Res}},
+        #{debug_print_verify => false}),
     {ok, Res};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
@@ -215,7 +221,7 @@ from_maintains_tag_name_case_test() ->
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
     ?event({converted_tx, ConvertedTX}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
+    ?assertEqual(ConvertedTX, ar_tx:normalize(SignedTX)).
 
 restore_tag_name_case_from_cache_test() ->
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
@@ -247,7 +253,7 @@ restore_tag_name_case_from_cache_test() ->
     ?assert(ar_bundles:verify_item(ReadTX)).
 
 unsigned_duplicated_tag_name_test() ->
-    TX = dev_arweave_common:normalize(#tx {
+    TX = ar_tx:normalize(#tx {
         tags = [
             {<<"Test-Tag">>, <<"test-value">>},
             {<<"test-tag">>, <<"test-value-2">>}
@@ -495,7 +501,7 @@ fields_as_tags_test() ->
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
     ?event({converted_tx, ConvertedTX}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
+    ?assertEqual(ConvertedTX, ar_tx:normalize(SignedTX)).
 
 data_tag_with_data_test() ->
     Data = <<"myrealdata">>,
@@ -514,7 +520,7 @@ data_tag_with_data_test() ->
     ConvertedTX = hb_util:ok(to(TABM, #{}, #{})),
     ?event(debug_test, {converted_tx, ConvertedTX}),
     ?assert(ar_bundles:verify_item(ConvertedTX)),
-    ?assertEqual(ConvertedTX, dev_arweave_common:normalize(SignedTX)).
+    ?assertEqual(ConvertedTX, ar_tx:normalize(SignedTX)).
 
 unsigned_lowercase_bundle_map_tags_test() ->
     UnsignedTABM = #{
@@ -542,7 +548,7 @@ unsigned_lowercase_bundle_map_tags_test() ->
     ?assertEqual(UnsignedTABM, TABM).
 
 unsigned_mixedcase_bundle_list_tags_1_test() ->
-    UnsignedTX = dev_arweave_common:normalize(#tx{
+    UnsignedTX = ar_tx:normalize(#tx{
         tags = [
             {<<"TagA1">>, <<"value1">>},
             {<<"TagA2">>, <<"value2">>},
@@ -589,7 +595,7 @@ unsigned_mixedcase_bundle_list_tags_1_test() ->
     ok.
 
 unsigned_mixedcase_bundle_list_tags_2_test() ->
-    UnsignedTX = dev_arweave_common:normalize(#tx{
+    UnsignedTX = ar_tx:normalize(#tx{
         tags = [
             {<<"TagA1">>, <<"value1">>},
             {<<"TagA2">>, <<"value2">>},
@@ -636,7 +642,7 @@ unsigned_mixedcase_bundle_list_tags_2_test() ->
     ok.
 
 unsigned_mixedcase_bundle_map_tags_test() ->
-    UnsignedTX = dev_arweave_common:normalize(#tx{
+    UnsignedTX = ar_tx:normalize(#tx{
         tags = [
             {<<"bundle-map">>, <<"IJ9HnMqGT4qNc8_O_wZ5-3qTPHC2ZVXxsK03kDRoQw0">>},
             {<<"TagA1">>, <<"value1">>},

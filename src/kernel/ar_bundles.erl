@@ -25,9 +25,9 @@ signer(Item) -> crypto:hash(sha256, Item#tx.owner).
 %% the atom `not_signed'. In all other cases, we return the ID of the item.
 id(Item) -> id(Item, unsigned).
 id(Item, Type) when not is_record(Item, tx) ->
-    id(dev_arweave_common:normalize(Item), Type);
+    id(ar_tx:normalize(Item), Type);
 id(Item = #tx { unsigned_id = ?DEFAULT_ID }, unsigned) ->
-    CorrectedItem = dev_arweave_common:reset_ids(Item),
+    CorrectedItem = ar_tx:reset_ids(Item),
     CorrectedItem#tx.unsigned_id;
 id(#tx { unsigned_id = UnsignedID }, unsigned) ->
     UnsignedID;
@@ -75,7 +75,7 @@ find(_Key, _) ->
 
 %% @doc Create a new data item. Should only be used for testing.
 new_item(Target, Anchor, Tags, Data) ->
-    dev_arweave_common:reset_ids(
+    ar_tx:reset_ids(
         #tx{
             format = ans104,
             target = Target,
@@ -90,14 +90,14 @@ new_item(Target, Anchor, Tags, Data) ->
 sign_item(_, undefined) -> throw(wallet_not_found);
 sign_item(RawItem, {PrivKey, {KeyType, Owner}}) ->
     Item =
-        (dev_arweave_common:normalize(RawItem))#tx{
+        (ar_tx:normalize(RawItem))#tx{
             format = ans104,
             owner = Owner,
             signature_type = KeyType
         },
     % Generate the signature from the data item's data segment in 'signed'-ready mode.
     Sig = ar_wallet:sign(PrivKey, data_item_signature_data(Item)),
-    dev_arweave_common:reset_ids(Item#tx{signature = Sig}).
+    ar_tx:reset_ids(Item#tx{signature = Sig}).
 
 %% @doc Verify the validity of a data item.
 verify_item(DataItem) ->
@@ -191,7 +191,7 @@ enforce_valid_tx(TX) ->
 %% @doc Generate the data segment to be signed for a data item.
 data_item_signature_data(RawItem) ->
     true = enforce_valid_tx(RawItem),
-    {_, Item} = dev_arweave_common:serialize_data(RawItem),
+    {_, Item} = ar_tx:serialize_data(RawItem),
     ar_deep_hash:hash([
         utf8_encoded("dataitem"),
         utf8_encoded("1"),
@@ -237,7 +237,7 @@ serialize(not_found) -> throw(not_found);
 serialize(TX) when is_binary(TX) -> TX;
 serialize(RawTX) when is_record(RawTX, tx) ->
     true = enforce_valid_tx(RawTX),
-    {_, TX} = dev_arweave_common:serialize_data(RawTX),
+    {_, TX} = ar_tx:serialize_data(RawTX),
     EncodedTags = encode_tags(TX#tx.tags),
     <<
         (encode_signature_type(TX#tx.signature_type))/binary,
@@ -294,7 +294,7 @@ finalize_bundle_data(Processed) ->
 
 new_manifest(Index) ->
     ?event({new_manifest, Index}),
-    TX = dev_arweave_common:normalize(#tx{
+    TX = ar_tx:normalize(#tx{
         format = ans104,
         tags = [
             {<<"data-protocol">>, <<"bundle-map">>},
@@ -311,7 +311,7 @@ to_serialized_pair(Item, Normalize, Signed) when is_binary(Item) ->
         #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Item },
         Normalize, Signed);
 to_serialized_pair(Item, true, Signed) ->
-    to_serialized_pair(dev_arweave_common:normalize(Item), false, Signed);
+    to_serialized_pair(ar_tx:normalize(Item), false, Signed);
 to_serialized_pair(Item, false, Signed) ->
     ?event({to_serialized_pair, Item}),
     % TODO: This is a hack to get the ID of the item. We need to do this because we may not
@@ -435,7 +435,7 @@ deserialize_item(Binary) ->
 %% at any later point.
 deserialize_item_wrapper(Binary) ->
     {ok, _HeaderSize, Header} = deserialize_header(Binary),
-    dev_arweave_common:reset_ids(Header).
+    ar_tx:reset_ids(Header).
 
 %% @doc Deserialize the header of an item, returning a #tx record with the 
 %% remaining unprocessed data in the #tx.data field.
@@ -462,7 +462,7 @@ deserialize_header(Binary) ->
     }.
 
 maybe_unbundle(Item) ->
-    case dev_arweave_common:type(Item) of
+    case ar_tx:type(Item) of
         list -> unbundle_list(Item);
         binary -> Item;
         map -> unbundle_map(Item)
@@ -475,7 +475,7 @@ unbundle_list(Item) ->
     end.
 
 unbundle_map(Item) ->
-    MapTXID = dev_arweave_common:tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
+    MapTXID = ar_tx:tagfind(<<"bundle-map">>, Item#tx.tags, <<>>),
     case unbundle(Item#tx.data) of
         ?DEFAULT_DATA -> Item#tx{data = ?DEFAULT_DATA};
         Items ->
@@ -697,7 +697,7 @@ with_tags_test() ->
     assert_data_item(KeyType, Owner, Target, Anchor, Tags, <<"taggeddata">>, SignedDataItem2).
 
 with_zero_length_tag_test() ->
-    Item = dev_arweave_common:normalize(#tx{
+    Item = ar_tx:normalize(#tx{
         format = ans104,
         tags = [
             {<<"normal-tag-1">>, <<"tag1">>},
@@ -751,17 +751,17 @@ decode_bundle_header_test() ->
 unsigned_data_item_id_test() ->
     Item1 = deserialize(
         serialize(
-            dev_arweave_common:reset_ids(
+            ar_tx:reset_ids(
                 #tx{format = ans104, data = <<"data1">>}))
     ),
     Item2 = deserialize(
         serialize(
-            dev_arweave_common:reset_ids(
+            ar_tx:reset_ids(
                 #tx{format = ans104, data = <<"data2">>}))),
     ?assertNotEqual(Item1#tx.unsigned_id, Item2#tx.unsigned_id).
 
 unsigned_data_item_normalization_test() ->
-    NewItem = dev_arweave_common:normalize(#tx{ format = ans104, data = <<"Unsigned data">> }),
+    NewItem = ar_tx:normalize(#tx{ format = ans104, data = <<"Unsigned data">> }),
     ReNormItem = deserialize(serialize(NewItem)),
     ?assertEqual(NewItem, ReNormItem).
 
@@ -775,7 +775,7 @@ assert_data_item(KeyType, Owner, Target, Anchor, Tags, Data, DataItem) ->
     ?assertEqual(byte_size(Data), DataItem#tx.data_size).
 
 empty_bundle_test() ->
-    Bundle = serialize(dev_arweave_common:normalize(#tx{data = []})),
+    Bundle = serialize(ar_tx:normalize(#tx{data = []})),
     ?event(debug_test, {bundle, {explicit, Bundle}}),
     BundleItem = deserialize(Bundle),
     ?assertEqual(#{}, BundleItem#tx.data).
@@ -788,7 +788,7 @@ bundle_with_one_item_test() ->
         ItemData = crypto:strong_rand_bytes(1000)
     ),
     ?event(debug_test, {item, Item}),
-    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item]})),
+    Bundle = serialize(ar_tx:normalize(#tx{data = [Item]})),
     ?event(debug_test, {bundle, {explicit, Bundle}}),
     Deserialized = deserialize(Bundle),
     ?event(debug_test, {bundle_item, Deserialized}),
@@ -807,7 +807,7 @@ bundle_with_two_items_test() ->
         [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
         ItemData2 = crypto:strong_rand_bytes(32)
     ),
-    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item1, Item2]})),
+    Bundle = serialize(ar_tx:normalize(#tx{data = [Item1, Item2]})),
     BundleItem = deserialize(Bundle),
     ?assertEqual(ItemData1, (maps:get(<<"1">>, BundleItem#tx.data))#tx.data),
     ?assertEqual(ItemData2, (maps:get(<<"2">>, BundleItem#tx.data))#tx.data).
@@ -829,7 +829,7 @@ recursive_bundle_test() ->
         anchor = crypto:strong_rand_bytes(32),
         data = [Item2]
     }, W),
-    Bundle = serialize(dev_arweave_common:normalize(#tx{data = [Item3]})),
+    Bundle = serialize(ar_tx:normalize(#tx{data = [Item3]})),
     BundleItem = deserialize(Bundle),
     #{<<"1">> := UnbundledItem3} = BundleItem#tx.data,
     #{<<"1">> := UnbundledItem2} = UnbundledItem3#tx.data,
@@ -849,7 +849,7 @@ bundle_map_test() ->
         anchor = crypto:strong_rand_bytes(32),
         data = #{<<"key1">> => Item1}
     }, W),
-    Bundle = serialize(dev_arweave_common:normalize(Item2)),
+    Bundle = serialize(ar_tx:normalize(Item2)),
     BundleItem = deserialize(Bundle),
     ?assertEqual(Item1#tx.data, (maps:get(<<"key1">>, BundleItem#tx.data))#tx.data),
     ?assert(verify_item(BundleItem)).
@@ -864,7 +864,7 @@ eddsa_cases_test() ->
         tags = [{<<"tag1">>, <<"value1">>}, {<<"tag2">>, <<"value2">>}],
         data = <<"item1_data">>
     }, Key),
-    Bundle = serialize(dev_arweave_common:normalize(Item1)),
+    Bundle = serialize(ar_tx:normalize(Item1)),
     BundleItem = deserialize(Bundle),
     %% Sign a valid transaction and verify it
     ?assert(verify_item(BundleItem)),
@@ -883,9 +883,9 @@ eddsa_cases_test() ->
 extremely_large_bundle_test() ->
     W = ar_wallet:new(),
     Data = crypto:strong_rand_bytes(100_000_000),
-    Norm = dev_arweave_common:normalize(#tx { data = #{ <<"key">> => #tx { data = Data } } }),
+    Norm = ar_tx:normalize(#tx { data = #{ <<"key">> => #tx { data = Data } } }),
     Signed = sign_item(Norm, W),
-    Serialized = serialize(dev_arweave_common:normalize(Signed)),
+    Serialized = serialize(ar_tx:normalize(Signed)),
     Deserialized = deserialize(Serialized),
     ?assert(verify_item(Deserialized)).
 
@@ -914,7 +914,7 @@ deep_member_test() ->
         },
         W
     ),
-    Item2 = deserialize(serialize(dev_arweave_common:normalize(sign_item(
+    Item2 = deserialize(serialize(ar_tx:normalize(sign_item(
         #tx{
             data = #{ <<"key2">> => Item }
         },
@@ -933,7 +933,7 @@ serialize_deserialize_deep_signed_bundle_test() ->
     % Test that we can serialize, deserialize, and get the same IDs back.
     Item1 = sign_item(#tx{data = <<"item1_data">>}, W),
     Item2 = sign_item(#tx{data = #{<<"key1">> => Item1}}, W),
-    Bundle = serialize(dev_arweave_common:normalize(Item2)),
+    Bundle = serialize(ar_tx:normalize(Item2)),
     Deser2 = deserialize(Bundle),
     #{ <<"key1">> := Deser1 } = Deser2#tx.data,
     ?assertEqual(id(Item2, unsigned), id(Deser2, unsigned)),
@@ -964,7 +964,7 @@ arbundles_item_roundtrip_test() ->
         {<<"Content-Type">>, <<"text/plain">>},
         {<<"App-Name">>, <<"arbundles-gen">>}
     ], Item#tx.tags),
-    Serialized = serialize(dev_arweave_common:normalize(Item)),
+    Serialized = serialize(ar_tx:normalize(Item)),
     ?assertEqual(Bin, Serialized).
 
 arbundles_list_bundle_roundtrip_test() ->
@@ -1006,7 +1006,7 @@ arbundles_list_bundle_roundtrip_test() ->
     ?assert(verify_item(Item2)),
     ?assert(verify_item(Item3)),
 
-    Reserialized = dev_arweave_common:normalize(Deserialized),
+    Reserialized = ar_tx:normalize(Deserialized),
     ?event(debug_test, {reserialized, Reserialized}),
     ?assert(verify_item(Reserialized)),
     ?assertEqual(Bin, Reserialized#tx.data),
@@ -1037,7 +1037,7 @@ arbundles_single_list_bundle_roundtrip_test() ->
     ?assertEqual([{<<"Type">>, <<"list">>}, {<<"Index">>, <<"1">>}], Item#tx.tags),
     ?assert(verify_item(Item)),
 
-    Reserialized = dev_arweave_common:normalize(Deserialized),
+    Reserialized = ar_tx:normalize(Deserialized),
     ?event(debug_test, {reserialized, Reserialized}),
     ?assert(verify_item(Reserialized)),
     ?assertEqual(Bin, Reserialized#tx.data),
@@ -1069,7 +1069,7 @@ arbundles_map_bundle_roundtrip_test() ->
     Manifest = Deserialized#tx.manifest,
     ?event(debug_test, {manifest, Manifest}),
     ?assertNotEqual(undefined, Manifest),
-    ?assertEqual(false, dev_arweave_common:is_signed(Manifest)),
+    ?assertEqual(false, ar_tx:is_signed(Manifest)),
     ?assertEqual([
         {<<"data-protocol">>, <<"bundle-map">>},
         {<<"variant">>, <<"0.0.1">>}
@@ -1081,7 +1081,7 @@ arbundles_map_bundle_roundtrip_test() ->
         <<"key2">> => <<"m4D2fObeaz5qFkhpacO1K351jaksg2j0-wpyCetAOb4">>
     }, Index),
     
-    Reserialized = serialize(dev_arweave_common:normalize(Deserialized)),
+    Reserialized = serialize(ar_tx:normalize(Deserialized)),
     ?event(debug_test, {reserialized, Reserialized}),
     ?assertEqual(Bin, Reserialized).
 

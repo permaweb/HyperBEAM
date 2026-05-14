@@ -300,7 +300,13 @@ header_case_string(Key) ->
 %% the environment has been set up by `prep_call/3' and that the WASM executor
 %% has been called with `computed{pass=1}'.
 results(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, M1},
+            <<"">>,
+            Opts
+        ),
     Type = hb_ao:get(<<"results/", Prefix/binary, "/type">>, M1, Opts),
     Proc = hb_ao:get(<<"process">>, M1, Opts),
     case hb_ao:normalize_key(Type) of
@@ -350,8 +356,14 @@ results(M1, M2, Opts) ->
     end.
 
 %% @doc Read the results out of the execution environment.
-env_read(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+env_read(M1, _M2, Opts) ->
+    Prefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, M1},
+            <<"">>,
+            Opts
+        ),
     Output = hb_ao:get(<<"results/", Prefix/binary, "/output">>, M1, Opts),
     case hb_private:get(<<Prefix/binary, "/read">>, M1, Opts) of
         not_found ->
@@ -362,8 +374,14 @@ env_read(M1, M2, Opts) ->
     end.
 
 %% @doc Write the message and process into the execution environment.
-env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
-    Prefix = dev_stack:prefix(Base, Req, Opts),
+env_write(ProcessStr, MsgStr, Base, _Req, Opts) ->
+    Prefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, Base},
+            <<"">>,
+            Opts
+        ),
     Params = 
         case hb_private:get(<<Prefix/binary, "/write">>, Base, Opts) of
             not_found ->

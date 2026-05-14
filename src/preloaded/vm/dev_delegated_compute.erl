@@ -50,7 +50,13 @@ load_state(Snapshot, Opts) ->
 %% `POST /compute' and the body is the JSON-encoded message that we want to
 %% evaluate.
 compute(Base, Req, Opts) ->
-    OutputPrefix = dev_stack:prefix(Base, Req, Opts),
+    OutputPrefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, Base},
+            <<"">>,
+            Opts
+        ),
     % Extract the process ID - this identifies which process to run compute
     % against.
     ProcessID = get_process_id(Base, Req, Opts),

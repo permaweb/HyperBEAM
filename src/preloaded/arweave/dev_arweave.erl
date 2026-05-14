@@ -2047,7 +2047,7 @@ assert_bundle_items(TXID, StartOffset, Size, Opts) ->
                 {format, Item#tx.format},
                 {signature_type, Item#tx.signature_type}
             }),
-            case dev_arweave_common:type(Item) of
+            case ar_tx:type(Item) of
                 list -> print_nested_items(Item#tx.data);
                 _ -> ok
             end,

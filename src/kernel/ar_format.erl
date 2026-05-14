@@ -14,11 +14,11 @@
 format(TX) -> format(TX, 0).
 format(TX, Indent) -> format(TX, Indent, #{}).
 format(TX, Indent, Opts) when is_list(TX); is_map(TX) ->
-    format(dev_arweave_common:normalize(TX), Indent, Opts);
+    format(ar_tx:normalize(TX), Indent, Opts);
 format(TX, Indent, Opts) when is_record(TX, tx) ->
     MustVerify = hb_opts:get(debug_ids, true, Opts),
     Valid =
-        if MustVerify -> verify(dev_arweave_common:normalize(TX));
+        if MustVerify -> verify(ar_tx:normalize(TX));
         true -> true
         end,
     UnsignedID =
@@ -59,7 +59,7 @@ format(TX, Indent, Opts) when is_record(TX, tx) ->
             format_line("!!! CAUTION: ITEM IS SIGNED BUT INVALID !!!", Indent + 1);
         false -> []
     end ++
-    case dev_arweave_common:is_signed(TX) of
+    case ar_tx:is_signed(TX) of
         true ->
             format_line("Signer: ~s",
                 [hb_util:safe_encode(ar_bundles:signer(TX))], 

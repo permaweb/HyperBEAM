@@ -230,7 +230,7 @@ with_signed_commitment(
                     <<"signature">> => hb_util:encode(Item#tx.signature),
                     <<"keyid">> =>
                         <<"publickey:", (hb_util:encode(Item#tx.owner))/binary>>,
-                    <<"type">> => dev_arweave_common:serialize_sig_type(Item#tx.signature_type),
+                    <<"type">> => ar_tx:serialize_sig_type(Item#tx.signature_type),
                     <<"bundle">> => bundle_commitment_key(Tags, Opts),
                     <<"original-tags">> => original_tags(
                         BaseFields, Item, Opts)

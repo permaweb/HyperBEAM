@@ -106,7 +106,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
             {ok, OriginalTags} -> original_tags_to_tags(OriginalTags);
             error -> []
         end,
-    SignatureType = dev_arweave_common:deserialize_sig_type(
+    SignatureType = ar_tx:deserialize_sig_type(
         maps:get(<<"type">>, Commitment)
     ),
     ?event({commitment_owner, Owner}),
