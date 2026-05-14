@@ -38,8 +38,6 @@
 -export([init/3, compute/3, to/3, from/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
-%%% Test helper exports:
--export([generate_stack/1, generate_stack/2, generate_stack/3, generate_aos_msg/2]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -517,7 +515,7 @@ generate_stack(File, Mode) ->
 generate_stack(File, _Mode, RawOpts) ->
     Opts = normalize_test_opts(RawOpts),
     test_init(),
-    Msg0 = dev_wasm:cache_wasm_image(File, Opts),
+    Msg0 = hb_wasm_test_utils:cache_image(File, Opts),
     Image = hb_ao:get(<<"image">>, Msg0, Opts),
     Base = Msg0#{
         <<"device">> => <<"stack@1.0">>,

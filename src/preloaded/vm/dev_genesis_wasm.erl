@@ -641,7 +641,8 @@ test_wasm_process(WASMImage) ->
     test_wasm_process(WASMImage, #{}).
 test_wasm_process(WASMImage, Opts) ->
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    #{ <<"image">> := WASMImageID } = dev_wasm:cache_wasm_image(WASMImage, Opts),
+    #{ <<"image">> := WASMImageID } =
+        hb_wasm_test_utils:cache_image(WASMImage, Opts),
     hb_message:commit(
         maps:merge(
             hb_message:uncommitted(test_base_process(Opts)),
