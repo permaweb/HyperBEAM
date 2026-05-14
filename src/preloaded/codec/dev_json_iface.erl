@@ -116,10 +116,9 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                     hb_message:commitment(Signer, RawMsg, Opts),
                 CommitmentSignature =
                     hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
-                CommitmentKeyId =
-                    dev_httpsig_keyid:remove_scheme_prefix(
-                        hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
-                    ),
+                CommitmentKeyId = hb_util:remove_scheme_prefix(
+                    hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
+                ),
                 case lists:member(owner_as_address, Features) of
                     true -> 
                         {

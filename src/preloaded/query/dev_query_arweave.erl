@@ -134,7 +134,7 @@ query(Msg, <<"owner">>, _Args, Opts) ->
                     {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
                     {ok, Address} = hb_maps:find(<<"committer">>, Commitment, Opts),
                     {ok, KeyID} = hb_maps:find(<<"keyid">>, Commitment, Opts),
-                    Key = dev_httpsig_keyid:remove_scheme_prefix(KeyID),
+                    Key = hb_util:remove_scheme_prefix(KeyID),
                     {ok, #{
                         <<"address">> => Address,
                         <<"key">> => Key

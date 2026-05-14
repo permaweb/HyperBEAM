@@ -650,7 +650,7 @@ secrets_to_keyids(Secrets) when is_list(Secrets) ->
     [ hd(secrets_to_keyids(Secret)) || Secret <- Secrets ];
 secrets_to_keyids(Secret) when is_binary(Secret) ->
     ?event({secrets_to_keyids, {secret, Secret}}),
-    KeyID = dev_httpsig_keyid:secret_key_to_committer(Secret),
+    KeyID = hb_util:secret_key_to_committer(Secret),
     [ {secret, <<"secret:", KeyID/binary>>, Secret} ].
 
 %% @doc Parse the exportable setting for a wallet and return a list of addresses

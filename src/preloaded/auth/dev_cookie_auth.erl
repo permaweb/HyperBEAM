@@ -97,7 +97,7 @@ commit(Secret, Base, Request, Opts) ->
 
 %% @doc Update the nonces for a given secret.
 store_secret(Secret, Msg, Opts) ->
-    CookieAddr = dev_httpsig_keyid:secret_key_to_committer(Secret),
+    CookieAddr = hb_util:secret_key_to_committer(Secret),
     % Create the cookie parameters, using the name as the key and the secret as
     % the value.
     {ok, Cookies} = dev_cookie:extract(Msg, #{}, Opts),

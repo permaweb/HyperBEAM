@@ -96,9 +96,7 @@ commitment_to_tx(Commitment, FieldsFun, Opts) ->
     Owner =
         case hb_maps:find(<<"keyid">>, Commitment, Opts) of
             {ok, KeyID} ->
-                hb_util:decode(
-                    dev_httpsig_keyid:remove_scheme_prefix(KeyID)
-                );
+                hb_util:decode(hb_util:remove_scheme_prefix(KeyID));
             error -> ?DEFAULT_OWNER
         end,
     Tags =
