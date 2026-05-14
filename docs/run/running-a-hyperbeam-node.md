@@ -38,7 +38,7 @@ To successfully build and run a HyperBEAM node, your system needs several softwa
 *   `git`: Version control for fetching the source code.
 *   `pkg-config`: Helps find installed libraries during compilation.
 *   `ncurses-dev` / `ncurses`: Required for some terminal interface elements used by Erlang/OTP.
-*   `libssl-dev` / `openssl`: Necessary for cryptographic operations and secure connections (HTTPS). You might need to set specific environment variables for `openssl` during Erlang compilation if building from source on macOS.
+*   `libssl-dev` / `openssl`: Necessary for cryptographic operations and secure connections (HTTPS). You might need to set specific environment variables for `openssl` during Erlang compilation if bui[...]
 *   `sudo` (Linux/macOS): Needed for system-level installations.
 *   `curl`: Used for downloading dependencies or interacting with web services.
 *   `ca-certificates` (Linux): Required for validating SSL certificates (often handled by the OS on macOS/Windows).
@@ -84,7 +84,7 @@ Installation methods:
     ```
 
 === "Linux / macOS (Direct Download)"
-    Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x rebar3`).
+    Get the `rebar3` binary from the [official website](https://rebar3.org/). Place the downloaded `rebar3` file in your system's `PATH` (e.g., `/usr/local/bin`) and make it executable (`chmod +x reba[...]
 
 <!-- === "asdf (Recommended)"
     If using `asdf`, you can install it via the `rebar` plugin:
@@ -137,7 +137,7 @@ Before starting a node, ensure you have:
 *   Installed the [system dependencies](#system-dependencies) mentioned above.
 *   Cloned the [HyperBEAM repository](https://github.com/permaweb/HyperBEAM) (`git clone ...`).
 *   Compiled the source code (`rebar3 compile` in the repo directory).
-*   An Arweave **wallet keyfile** (e.g., generated via [Wander](https://www.wander.app)). The path to this file is typically set via the `hb_key` configuration option (see [Configuring Your HyperBEAM Node](./configuring-your-machine.md)).
+*   An Arweave **wallet keyfile** (e.g., generated via [Wander](https://www.wander.app)). The path to this file is typically set via the `hb_key` configuration option (see [Configuring Your HyperBEAM [...]
 
 ## Starting a Basic Node
 
@@ -146,6 +146,9 @@ The simplest way to start a HyperBEAM node for development or testing is using `
 ```bash
 rebar3 shell
 ```
+
+!!! note
+    For current process operations, start HyperBEAM with the `genesis_wasm` profile by running `rebar3 as genesis_wasm shell`.
 
 This command:
 
@@ -180,7 +183,7 @@ rebar3 as rocksdb, genesis_wasm shell
 
 ## Node Configuration
 
-HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or command-line arguments.
+HyperBEAM offers various configuration options (port, key file, data storage, logging, etc.). These are primarily set using a `config.flat` file and can be overridden by environment variables or comma[...]
 
 See the dedicated [Configuring Your HyperBEAM Node](./configuring-your-machine.md) guide for detailed information on all configuration methods and options.
 
@@ -196,7 +199,7 @@ A JSON response containing node information indicates success.
 
 ## Running for Production (Mainnet)
 
-While you can connect to the main AO network using the `rebar3 shell` for testing purposes (potentially using specific configurations or helper functions like `hb:start_mainnet/1` if available and applicable), the standard and recommended method for a stable production deployment (like running on the mainnet) is to build and run a **release**.
+While you can connect to the main AO network using the `rebar3 shell` for testing purposes (potentially using specific configurations or helper functions like `hb:start_mainnet/1` if available and app[...]
 
 **1. Build the Release:**
 
@@ -214,7 +217,7 @@ This command compiles the project and packages it along with the Erlang Runtime 
 
 **2. Configure the Release:**
 
-Navigate into the release directory (e.g., `cd _build/default/rel/hb`). Ensure you have a correctly configured `config.flat` file here. See the [configuration guide](./configuring-your-machine.md) for details on setting mainnet parameters (port, key file location, store path, specific peers, etc.). Environment variables can also be used to override settings in the release's `config.flat` when starting the node.
+Navigate into the release directory (e.g., `cd _build/default/rel/hb`). Ensure you have a correctly configured `config.flat` file here. See the [configuration guide](./configuring-your-machine.md) for[...]
 
 **3. Start the Node:**
 
