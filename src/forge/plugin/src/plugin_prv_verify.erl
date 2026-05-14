@@ -50,8 +50,7 @@ do(State) ->
     case [R || R <- Results, R =/= ok] of
         [] -> 
             rebar_api:info(
-                "device verify: successfully verified",
-                [length(Pkgs)]
+                "device verify1: successfully verified"
             ),
             {ok, State};
         Errors -> {error, format_error({verify_failures, Errors})}

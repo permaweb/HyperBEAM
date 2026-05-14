@@ -43,10 +43,9 @@ do(State) ->
     NodeOpts =
         #{
             <<"priv-wallet">> => Wallet,
+            <<"commitment-device">> => <<"ans104@1.0">>,
             <<"preloaded-store">> => maps:get(store, Preload),
-            <<"preloaded-devices-index">> => maps:get(index, Preload),
-            <<"store">> =>
-                [#{ <<"store-module">> => hb_store_arweave }]
+            <<"preloaded-devices-index">> => maps:get(index, Preload)
         },
     % Scan the source directory for root device groups.
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
@@ -62,14 +61,16 @@ do(State) ->
                         hb_packager:spec_message(Pkg, NodeOpts),
                         NodeOpts
                     ),
-                {ok, SpecID} = hb_cache:write(Spec, NodeOpts),
+                {ok, _} = hb_cache:write(Spec, NodeOpts),
+                SpecID = upload(Spec, NodeOpts),
                 % Sign and upload the implementation message.
                 Impl =
                     hb_message:commit(
                         hb_packager:impl_message(Pkg, SpecID, NodeOpts),
                         NodeOpts
                     ),
-                {ok, ImplID} = hb_cache:write(Impl, NodeOpts),
+                {ok, _} = hb_cache:write(Impl, NodeOpts),
+                ImplID = upload(Impl, NodeOpts),
                 #{
                     device_name => maps:get(device_name, Pkg),
                     spec_id => SpecID,
@@ -89,6 +90,19 @@ do(State) ->
 
 load_wallet(undefined) -> hb:wallet();
 load_wallet(Path) -> hb:wallet(binary_to_list(hb_util:bin(Path))).
+
+upload(Msg, Opts) ->
+    ID = hb_message:id(Msg, signed, Opts),
+    case hb_client:upload(Msg, Opts, <<"ans104@1.0">>) of
+        {ok, #{ <<"id">> := ID }} ->
+            ID;
+        {ok, #{ <<"id">> := OtherID }} ->
+            error({publish_id_mismatch, ID, OtherID});
+        {ok, Res} ->
+            error({publish_upload_failed, ID, Res});
+        {error, Reason} ->
+            error({publish_upload_failed, ID, Reason})
+    end.
 
 format_error(Reason) ->
     io_lib:format("device publish failed: ~p", [Reason]).
