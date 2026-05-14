@@ -147,9 +147,6 @@ The simplest way to start a HyperBEAM node for development or testing is using `
 rebar3 shell
 ```
 
->[!NOTE]
->For current process operations, start HyperBEAM with the <code>genesis_wasm</code> profile by running <code>rebar3 as genesis_wasm shell</code>.
-
 This command:
 
 1.  Starts the Erlang Virtual Machine (BEAM) with all HyperBEAM modules loaded.
