@@ -60,10 +60,10 @@ json(Base, Req, Opts) ->
     Res.
 
 %% @doc Return a renderer in HTML form for the JSON format.
-index(Base, _, _Opts) ->
+index(Base, _, Opts) ->
     ?event({cacheviz_index, {base, Base}}),
-    dev_hyperbuddy:return_file(<<"cacheviz@1.0">>, <<"graph.html">>).
+    hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.html">>, Opts).
 
 %% @doc Return a JS library that can be used to render the JSON format.
-js(_, _, _Opts) ->
-    dev_hyperbuddy:return_file(<<"cacheviz@1.0">>, <<"graph.js">>).
+js(_, _, Opts) ->
+    hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.js">>, Opts).

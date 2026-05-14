@@ -14,6 +14,7 @@
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
 -export([start_node/0, start_node/1]).
+-export([static/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 %% Define the max size we can return in 500 error details field.
@@ -93,6 +94,33 @@ maybe_greeter(MergedConfig, PrivWallet) ->
             print_greeter(MergedConfig, PrivWallet);
         true ->
             ok
+    end.
+
+%% @doc Serve a static file from the application HTML directory.
+static(Device, Name, _Opts) ->
+    Base = hb_util:bin(code:priv_dir(hb)),
+    Filename = <<Base/binary, "/html/", Device/binary, "/", Name/binary>>,
+    case file:read_file(Filename) of
+        {ok, Body} ->
+            {ok, #{
+                <<"body">> => Body,
+                <<"content-type">> => static_content_type(Filename)
+            }};
+        {error, _} ->
+            {error, not_found}
+    end.
+
+%% @doc Return the HTTP content type for a static asset.
+static_content_type(Filename) ->
+    case filename:extension(Filename) of
+        <<".html">> -> <<"text/html">>;
+        <<".js">> -> <<"text/javascript">>;
+        <<".css">> -> <<"text/css">>;
+        <<".png">> -> <<"image/png">>;
+        <<".ico">> -> <<"image/x-icon">>;
+        <<".ttf">> -> <<"font/ttf">>;
+        <<".json">> -> <<"application/json">>;
+        _ -> <<"text/plain">>
     end.
 
 %% @doc Print the greeter message to the console. Includes the version, operator
