@@ -248,3 +248,4 @@ To stop the node running *within the `rebar3 shell`*, press `Ctrl+C` twice or us
 *   **Configure Your Node:** Deep dive into [configuration options](./configuring-your-machine.md).
 *   **TEE Nodes:** Learn about running nodes in [Trusted Execution Environments](./tee-nodes.md) for enhanced security.
 *   **Routers:** Understand how to configure and run a [router node](./joining-running-a-router.md).
+*   **Scheduler Device:** Learn how to [set up a Scheduler device](./setting-up-a-scheduler-device.md) to announce your node as an AO scheduler.
