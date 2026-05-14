@@ -212,7 +212,8 @@ match(MatchSpec, Opts) ->
         {raw, _} -> store_match(NormalizedSpec, Opts);
         {_, false} -> store_match(NormalizedSpec, Opts);
         _ ->
-            case dev_match:all(NormalizedSpec, #{}, Opts) of
+            MatchMod = match_device(Opts),
+            case MatchMod:all(NormalizedSpec, #{}, Opts) of
                 {ok, []} -> {error, not_found};
                 {ok, Matches} -> {ok, Matches};
                 _ -> {error, not_found}
@@ -378,6 +379,10 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     {ok, Path} = do_write_message(Value, Store, Opts),
     hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
     {ok, Path}.
+
+%% @doc Resolve the packaged match-index backend.
+match_device(Opts) ->
+    hb_ao_device:message_to_device(#{ <<"device">> => <<"match@1.0">> }, Opts).
 
 %% @doc Write all message keys to the optional match index.
 write_match_index(IDs, Base, Opts) ->

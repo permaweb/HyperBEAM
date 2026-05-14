@@ -557,6 +557,7 @@ bootstrap_device_map() ->
         <<"ans104@1.0">> => dev_ans104,
         <<"flat@1.0">> => dev_flat,
         <<"json@1.0">> => dev_json,
+        <<"match@1.0">> => dev_match,
         <<"tx@1.0">> => dev_tx
     }.
 
