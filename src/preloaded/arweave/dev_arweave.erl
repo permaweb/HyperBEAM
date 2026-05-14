@@ -1102,46 +1102,42 @@ post_ans104_message_test_parallel() ->
             <<"store">> => [hb_test_utils:test_store()],
             <<"priv-wallet">> => hb:wallet()
         },
-    try
-        Msg =
-            hb_message:commit(
-                #{
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"type">> => <<"Process">>,
-                    <<"data">> => <<"test-data">>
-                },
-                ClientOpts,
-                #{ <<"commitment-device">> => <<"ans104@1.0">> }
-            ),
-        {ok, PostRes} =
-            hb_http:post(
-                Server,
-                Msg#{
-                    <<"path">> => <<"/~arweave@2.9/tx">>
-                },
-                ClientOpts
-            ),
-        ?assertMatch(#{ <<"status">> := 200 }, PostRes),
-        ?event(debug_test, {post_res, PostRes}),
-        SignedID = hb_message:id(Msg, signed, ClientOpts),
-        {ok, GetRes} =
-            hb_http:get(
-                Server, <<"/", SignedID/binary>>,
-                ClientOpts
-            ),
-        ?assertMatch(
+    Msg =
+        hb_message:commit(
             #{
-                <<"status">> := 200,
-                <<"variant">> := <<"ao.N.1">>,
-                <<"type">> := <<"Process">>,
-                <<"data">> := <<"test-data">>
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"Process">>,
+                <<"data">> => <<"test-data">>
             },
-            GetRes
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
-        ok
-    after
-        dev_bundler:stop_server()
-    end.
+    {ok, PostRes} =
+        hb_http:post(
+            Server,
+            Msg#{
+                <<"path">> => <<"/~arweave@2.9/tx">>
+            },
+            ClientOpts
+        ),
+    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
+    SignedID = hb_message:id(Msg, signed, ClientOpts),
+    {ok, GetRes} =
+        hb_http:get(
+            Server, <<"/", SignedID/binary>>,
+            ClientOpts
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 200,
+            <<"variant">> := <<"ao.N.1">>,
+            <<"type">> := <<"Process">>,
+            <<"data">> := <<"test-data">>
+        },
+        GetRes
+    ),
+    ok.
 
 post_tx_message_test_parallel() ->
     ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
