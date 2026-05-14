@@ -48,7 +48,12 @@ do(State) ->
     % Verify each package.
     Results = [verify_pkg(Output, P) || P <- Pkgs],
     case [R || R <- Results, R =/= ok] of
-        [] -> {ok, State};
+        [] -> 
+            rebar_api:info(
+                "device verify: successfully verified",
+                [length(Pkgs)]
+            ),
+            {ok, State};
         Errors -> {error, format_error({verify_failures, Errors})}
     end.
 

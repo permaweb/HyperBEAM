@@ -80,7 +80,7 @@ do(State) ->
         ),
     lists:foreach(
         fun(#{ device_name := Name, spec_id := SID, impl_id := IID }) ->
-            rebar_api:info("device publish: ~s spec=~s impl=~s",
+            rebar_api:info("device publish2: ~s spec=~s impl=~s",
                 [Name, SID, IID])
         end,
         Results
