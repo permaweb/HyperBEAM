@@ -293,7 +293,7 @@ load_and_execute_test_parallel() ->
 %% @doc Return an `Opts` for an environment with the default ARNS name export
 %% and a temporary store for the test.
 test_arns_opts() ->
-    JSONNames = <<"G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8">>,
+    JSONNames = <<"fG_Tr0H7xI64xTXVq9-O9YvUefht-gW30gtOHGRMhb8">>,
     Path = <<JSONNames/binary, "~json@1.0/deserialize&target=data">>,
     TempStore = hb_test_utils:test_store(),
     #{
