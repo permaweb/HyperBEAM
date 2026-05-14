@@ -266,7 +266,7 @@ response(State, RawResponse, NodeMsg) ->
 
 %% @doc Get the balance of a user in the ledger.
 balance(_, Req, NodeMsg) ->
-    case dev_hook:find(<<"request">>, NodeMsg) of
+    case hb_hook:find(<<"request">>, NodeMsg) of
         [] ->
             {error, <<"No request hook found.">>};
         [Handler] ->

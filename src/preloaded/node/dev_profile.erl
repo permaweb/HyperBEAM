@@ -337,7 +337,7 @@ test_engine(Type, Engine) ->
 %% simulate some basic compute that is performant.
 test_profiler_exec(function, Engine) ->
     eval(
-        fun() -> dev_meta:build(#{}, #{}, #{}) end,
+        fun() -> {ok, #{ <<"node">> => <<"HyperBEAM">> }} end,
         #{ <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
         #{}
     );
