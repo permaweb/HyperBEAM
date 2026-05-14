@@ -10,10 +10,8 @@
 %%% a single event, the key's value can be set to a list of hooks.
 %%% 
 %%% `hook's themselves do not need to be added explicitly. Any device can add
-%%% a hook by simply executing `dev_hook:on(HookName, Req, Opts)`. This
-%%% function is does not affect the hashpath of a message and is not exported on
-%%% the device's API, such that it is not possible to call it directly with
-%%% AO-Core resolution.
+%%% a hook by simply executing `hb_hook:on(HookName, Req, Opts)`. This
+%%% function does not affect the hashpath of a message.
 %%% 
 %%% All handlers are expressed in the form of a message, upon which the hook's
 %%% request is evaluated:
@@ -51,18 +49,10 @@
 %%%             generate the response.
 %%%         Result/body: The message to be sent in response to the request.
 %%% 
-%%% Additionally, this module implements a traditional device API, allowing the
-%%% node operator to register hooks to the node and find those that are
-%%% currently active.
--module(dev_hook).
-%%% Backend API for calling hooks, used by devices as well as AO-Core.
--export([info/1, on/3, find/2, find/3]).
+-module(hb_hook).
+-export([on/3, find/2, find/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-
-%% @doc Device API information
-info(_) ->
-    #{ excludes => [<<"on">>] }.
 
 %% @doc Execute a named hook with the provided request and options
 %% This function finds all handlers for the hook and evaluates them in sequence.
@@ -83,11 +73,7 @@ on(HookName, Req, Opts) ->
     end.
 
 %% @doc Get all handlers for a specific hook from the node message options.
-%% Handlers are stored in the `on' key of this message. The `find/2' variant of
-%% this function only takes a hook name and node message, and is not called
-%% directly via the device API. Instead it is used by `on/3' and other internal
-%% functionality to find handlers when necessary. The `find/3' variant can,
-%% however, be called directly via the device API.
+%% Handlers are stored in the `on' key of this message.
 find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
 find(_Base, Req, Opts) ->
@@ -202,9 +188,15 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 {req, {explicit, PreparedReq}}
             }
         ),
-        % Resolve the prepared request upon the handler.
+        % Execute the prepared request upon the handler.
         {Status, Res} =
-            hb_ao:resolve(
+            hb_ao:direct(
+                hb_maps:get(
+                    <<"device">>,
+                    PreparedBase,
+                    hb_ao_device:default(),
+                    Opts
+                ),
                 PreparedBase,
                 PreparedReq,
                 Opts#{ <<"hashpath">> => ignore }

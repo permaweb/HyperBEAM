@@ -55,7 +55,7 @@ verify(Base, Req, RawOpts) -> dev_cookie_auth:verify(Base, Req, RawOpts).
 
 %% @doc Preprocessor keys that utilize cookies and the `~secret@1.0' device to
 %% sign inbound HTTP requests from users if they are not already signed. We use
-%% the `~hook@1.0' authentication framework to implement this.
+%% the hook authentication framework to implement this.
 generate(Base, Req, Opts) ->
     dev_cookie_auth:generate(Base, Req, Opts).
 

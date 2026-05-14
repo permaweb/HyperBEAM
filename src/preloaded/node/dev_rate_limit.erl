@@ -1,4 +1,4 @@
-%%% @doc A basic rate limiter device. It is intended for use as a `~hook@1.0`
+%%% @doc A basic rate limiter device. It is intended for use as a 
 %%% `on/request` handler. It limits the number of requests per time period from a
 %%% given IP address, returning a 429 status code and response if the limit is
 %%% exceeded.

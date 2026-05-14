@@ -185,7 +185,7 @@ new_server(RawNodeMsg) ->
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
-        case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
+        case hb_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
             {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
             Unexpected ->
                 ?event(http,

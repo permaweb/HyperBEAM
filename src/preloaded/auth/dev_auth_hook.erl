@@ -345,7 +345,7 @@ maybe_sign_messages(Provider, Key, [Msg | Rest], Opts) ->
 %% @doc Finalize the response by adding authentication state
 finalize(KeyProvider, SignedReq, MessageSequence, Opts) ->
     % Add the signed request and message sequence to the response, mirroring the
-    % structure of a normal `~hook@1.0' on-request hook.
+    % structure of a normal request hook.
     Req =
         #{
             <<"request">> => SignedReq,

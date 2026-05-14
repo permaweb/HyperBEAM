@@ -540,7 +540,7 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
 run_completion_hooks(Bundle, Opts) ->
     lists:foreach(
         fun({Item, Size}) ->
-            dev_hook:on(
+            hb_hook:on(
                 <<"bundled-message-complete">>,
                 #{
                     <<"body">> => Item,
@@ -554,7 +554,7 @@ run_completion_hooks(Bundle, Opts) ->
             lists:reverse(Bundle#bundle.item_sizes)
         )
     ),
-    dev_hook:on(
+    hb_hook:on(
         <<"bundle-complete">>,
         #{
             <<"body">> => Bundle#bundle.tx,

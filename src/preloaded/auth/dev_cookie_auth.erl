@@ -30,9 +30,9 @@ generate(Base, Request, Opts) ->
     }.
 
 %% @doc Finalize an `on-request' hook by adding the cookie to the chain of 
-%% messages. The inbound request has the same structure as a normal `~hook@1.0'
-%% on-request hook: The message sequence is the body of the request, and the
-%% request is the request message.
+%% messages. The inbound request has the same structure as a normal request
+%% hook: The message sequence is the body of the request, and the request is
+%% the request message.
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe

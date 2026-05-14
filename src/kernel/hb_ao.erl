@@ -637,7 +637,7 @@ resolve_stage(
         <<"status">> => St,
         <<"body">> => Res
     },
-    case dev_hook:on(<<"step">>, HookReq, Opts) of
+    case hb_hook:on(<<"step">>, HookReq, Opts) of
         {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
             resolve_stage(8, Base, Req, {NewStatus, NewRes}, ExecName, Opts);
         Error ->

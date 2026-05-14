@@ -6,7 +6,7 @@
 %%% returned from a provider, it is parsed as a newline-delimited list of IDs.
 %%% Multiple providers are merged into a single cache (union of all IDs).
 %%% 
-%%% The device is intended for use as a `~hook@1.0` `on/request` handler. It
+%%% The device is intended for use as a request hook handler. It
 %%% blocks requests when any ID present in the hook payload matches the active
 %%% blacklist. The device also implements a `refresh` key that can be used to
 %%% force a reload of the blacklist cache, potentially on node startup or on a 
