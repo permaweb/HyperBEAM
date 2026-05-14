@@ -185,7 +185,7 @@ manifest(Base, _Req, Opts) ->
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([store], Opts))#{ scope => [local, remote]},
+    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ <<"scope">> => [local, remote]},
     {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(
@@ -202,6 +202,59 @@ linkify(Manifest, _Opts) ->
     Manifest.
 
 %%% Tests
+
+linkified_paths_keep_store_and_remote_scope_test() ->
+    Store = hb_test_utils:test_store(),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    {link, ID, LinkOpts} = linkify(#{ <<"id">> => ID }, #{ <<"store">> => Store }),
+    ?assertEqual(Store, maps:get(<<"store">>, LinkOpts)),
+    ?assertEqual([local, remote], hb_opts:get(scope, undefined, LinkOpts)),
+    ?assertNot(maps:is_key(store, LinkOpts)),
+    ?assertNot(maps:is_key(scope, LinkOpts)).
+
+manifest_child_link_remote_fallback_test_parallel() ->
+    LocalStore = hb_test_utils:test_store(hb_store_fs, <<"manifest-local">>),
+    RemoteStore =
+        (hb_test_utils:test_store(hb_store_fs, <<"manifest-remote">>))#{
+            <<"scope">> => remote
+        },
+    Opts = #{
+        <<"store">> => [LocalStore, RemoteStore],
+        <<"on">> => #{
+            <<"request">> => #{
+                <<"device">> => <<"manifest@1.0">>
+            }
+        }
+    },
+    ok = hb_store:start([LocalStore, RemoteStore]),
+    Child = <<"Remote child">>,
+    {ok, ChildID} = hb_cache:write(Child, #{ <<"store">> => RemoteStore }),
+    Manifest = #{
+        <<"paths">> => #{
+            <<"page1">> => #{ <<"id">> => ChildID }
+        },
+        <<"index">> => #{ <<"path">> => <<"page1">> }
+    },
+    ManifestMsg = #{
+        <<"device">> => <<"manifest@1.0">>,
+        <<"body">> => hb_json:encode(Manifest)
+    },
+    {ok, ManifestID} = hb_cache:write(ManifestMsg, #{ <<"store">> => LocalStore }),
+    ?assertEqual({ok, Child}, hb_cache:read(ChildID, #{ <<"store">> => RemoteStore })),
+    ?assertEqual({ok, Child}, hb_cache:read(ChildID, Opts)),
+    ?assertMatch(
+        <<"Remote child">>,
+        hb_cache:ensure_loaded(
+            {link, ChildID, #{
+                <<"scope">> => [local, remote],
+                <<"type">> => <<"link">>,
+                <<"lazy">> => false
+            }},
+            Opts
+        )
+    ),
+    Node = hb_http_server:start_node(Opts),
+    ?assertEqual({ok, <<"Remote child">>}, hb_http:get(Node, << ManifestID/binary, "/page1" >>, Opts)).
 
 resolve_test_parallel() ->
     Opts = #{
