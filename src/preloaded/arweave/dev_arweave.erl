@@ -742,7 +742,7 @@ read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) ->
 %% block hash length (43 characters), it is used as an ID. If it is parsable as
 %% an integer, it is used as a block height. If it is not present, the current
 %% block is used.
-block(Base, Request, Opts) ->
+block(Base, Request, Opts) when is_map(Base) ->
     Block =
         hb_ao:get_first(
             [
@@ -755,10 +755,10 @@ block(Base, Request, Opts) ->
     case Block of
         <<"current">> -> current(Base, Request, Opts);
         not_found -> current(Base, Request, Opts);
-        ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Opts);
+        ID when ?IS_BLOCK_ID(ID) -> block({id, ID}, Request, Opts);
         MaybeHeight ->
             try hb_util:int(MaybeHeight) of
-                Int -> block({height, Int}, Opts)
+                Int -> block({height, Int}, Request, Opts)
             catch
                 _:_ ->
                     {
@@ -766,24 +766,41 @@ block(Base, Request, Opts) ->
                         <<"Invalid block reference `", MaybeHeight/binary, "`">>
                     }
             end
-    end.
-block({id, ID}, Opts) ->
+    end;
+block({id, ID}, Req, Opts) ->
     case hb_cache:read(ID, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {id, {explicit, ID}}
             }),
             {ok, Block};
+        {error, not_found} when is_map(Req) ->
+            case only_if_cached(Req, Opts) of
+                true -> {error, not_found};
+                false -> request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
+            end;
         {error, not_found} ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
     end;
-block({height, Height}, Opts) ->
+block({height, Height}, Req, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {height, Height}
             }),
             {ok, Block};
+        {error, not_found} when is_map(Req) ->
+            case only_if_cached(Req, Opts) of
+                true -> {error, not_found};
+                false ->
+                    request(
+                        <<"GET">>,
+                        <<"/block/height/",
+                            (hb_util:bin(Height))/binary>>,
+                        #{ <<"route-by">> => Height },
+                        Opts
+                    )
+            end;
         {error, not_found} ->
             request(
                 <<"GET">>,
@@ -793,6 +810,13 @@ block({height, Height}, Opts) ->
                 Opts
             )
     end.
+
+%% @doc Return whether the request only permits cached values.
+only_if_cached(Req, Opts) ->
+    lists:member(
+        <<"only-if-cached">>,
+        hb_maps:get(<<"cache-control">>, Req, [], Opts)
+    ).
 
 %% @doc Retrieve the current block information from Arweave.
 current(_Base, _Request, Opts) ->

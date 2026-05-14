@@ -16,7 +16,6 @@
 %%% Default returned page size and maximum allowed page size.
 -define(DEFAULT_PAGE_SIZE, 10).
 -define(DEFAULT_MAX_PAGE_SIZE, 100).
-
 %% @doc The arguments that are supported by the Arweave GraphQL API.
 -define(SUPPORTED_QUERY_ARGS,
     [
@@ -341,7 +340,7 @@ block_range_to_offset_range(Heights, Opts) ->
 %% when `query_arweave_remote_block_ranges' is `true' (the default) and the
 %% block is not cached locally, falls back to `arweave@2.9/block'.
 read_block(Height, Opts) ->
-    case dev_arweave_block_cache:read(Height, Opts) of
+    case read_cached_block(Height, Opts) of
         {ok, Block} -> {ok, Block};
         {error, not_found} ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
@@ -365,6 +364,34 @@ read_block(Height, Opts) ->
                     );
                 _ -> not_found
             end
+    end.
+
+%% @doc Read a block from the Arweave pseudo-path cache.
+read_cached_block(Height, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"block">>,
+            <<"block">> => Height,
+            <<"cache-control">> => [<<"only-if-cached">>]
+        },
+        Opts
+    ).
+
+%% @doc Return the latest block height indexed in the Arweave pseudo-path cache.
+latest_cached_block(Opts) ->
+    Blocks =
+        hb_cache:list_numbered(
+            hb_path:to_binary([
+                <<"~arweave@2.9">>,
+                <<"block">>,
+                <<"height">>
+            ]),
+            Opts
+        ),
+    case Blocks of
+        [] -> not_found;
+        _ -> {ok, lists:max(Blocks)}
     end.
 
 %%% Match argument processing
@@ -420,20 +447,16 @@ match(<<"height">>, Heights, Opts) ->
         case hb_maps:find(<<"max">>, Heights, Opts) of
             {ok, GivenMax} -> GivenMax;
             error ->
-                hb_util:ok(dev_arweave_block_cache:latest(Opts))
+                hb_util:ok(latest_cached_block(Opts))
         end,
-    ScopedStores = scoped_store(Opts),
     {ok,
         lists:filtermap(
             fun(Height) ->
-                Path = dev_arweave_block_cache:path(Height, Opts),
-                case hb_store:type(ScopedStores, Path, Opts) of
-                    {error, not_found} -> false;
-                    {ok, _} ->
-                        case hb_store:resolve(ScopedStores, Path, Opts) of
-                            {ok, ResolvedPath} -> {true, ResolvedPath};
-                            _ -> false
-                        end
+                case read_cached_block(Height, Opts) of
+                    {ok, Block} ->
+                        {true, hb_message:id(Block, none, Opts)};
+                    _ ->
+                        false
                 end
             end,
             lists:seq(Min, Max)
