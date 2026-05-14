@@ -92,7 +92,7 @@ run_as(Key, Base, Req, Opts) ->
 %% In situations where the key that is `run_as' returns a message with a 
 %% transformed device, this is useful.
 as_process(Base, Opts) ->
-    {ok, Proc} = dev_message:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts),
+    Proc = hb_ao:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts),
     Proc.
 
 %% @doc Set the results of the current process.
