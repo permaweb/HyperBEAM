@@ -46,7 +46,7 @@
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"device">> => <<"b32-name@1.0">> },
         <<
-            "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
+            "fG_Tr0H7xI64xTXVq9-O9YvUefht-gW30gtOHGRMhb8",
                 "~json@1.0/deserialize&target=data"
         >>
     ]
