@@ -17,7 +17,15 @@ init(Msg, _Req, _Opts) -> {ok, Msg}.
 normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->
-            dev_delegated_compute:normalize(Msg, Req, Opts);
+            hb_ao:resolve(
+                Msg,
+                {
+                    as,
+                    <<"delegated-compute@1.0">>,
+                    Req#{ <<"path">> => <<"normalize">> }
+                },
+                Opts
+            );
         false ->
             {error, #{
                 <<"status">> => 500,
