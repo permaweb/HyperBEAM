@@ -3,7 +3,7 @@
 %%% supports writing messages to the store, if the node message has the
 %%% writer's address in its `cache_writers' key.
 -module(dev_cache).
--export([read/3, write/3, link/3, group/3, read_from_cache/2]).
+-export([read/3, write/3, link/3, group/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -270,41 +270,6 @@ setup_test_env() ->
 	    ]
     },
     {ok, TestOpts, [LocalStore, Wallet, Address, Node]}.
-
-%% @doc Read data from the cache via HTTP.
-%% Constructs a GET request using the provided path, sends it to the node,
-%% and returns the response.
-%%
-%% @param Node The target node.
-%% @param Path The key or location where the data is stored.
-%% @returns The response read from the cache (either binary or wrapped in
-%%          {ok, Response}).
-read_from_cache(Node, Path) ->
-    ?event(dev_cache, {read_from_cache, {start, Node, Path}}),
-    ReadMsg = #{
-        <<"path">> => <<"/~cache@1.0/read">>,
-        <<"method">> => <<"GET">>,
-        <<"read">> => Path
-    },
-    ?event(dev_cache, {read_from_cache, {request_created, ReadMsg}}),
-    ?event({test_read, request, ReadMsg}),
-    ReadResult = hb_http:get(Node, ReadMsg, #{}),
-    ?event(dev_cache, {read_from_cache, {http_get, ReadResult}}),
-    case ReadResult of
-        ReadResponse when is_binary(ReadResponse) ->
-            ?event(dev_cache, 
-				{read_from_cache, 
-					{response_binary, ReadResponse}
-				}
-			),
-            ReadResponse;
-        {ok, ReadResponse} ->
-            ?event(dev_cache, {read_from_cache, {response_ok, ReadResponse}}),
-            ReadResponse;
-        {error, Reason} ->
-            ?event(dev_cache, {read_from_cache, {response_error, Reason}}),
-            {error, Reason}
-    end.
 
 %%%--------------------------------------------------------------------
 %%% Tests

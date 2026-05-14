@@ -1601,10 +1601,10 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
     ?assertEqual(undefined, BundleDeserialized#tx.manifest),
     % Verify that the TX was cached
     SignedTXID = hb_message:id(TXStructured, signed, ClientOpts),
-    CachedTXFromSignedID = dev_cache:read_from_cache(Node, SignedTXID),
+    CachedTXFromSignedID = read_from_cache(Node, SignedTXID),
     ?assert(hb_message:verify(CachedTXFromSignedID, all, ClientOpts)),
     UnsignedTXID = hb_message:id(TXStructured, unsigned, ClientOpts),
-    CachedTXFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedTXID),
+    CachedTXFromUnsignedID = read_from_cache(Node, UnsignedTXID),
     ?assert(hb_message:verify(CachedTXFromUnsignedID, all, ClientOpts)),
     % Verify that the items were cached
     lists:foreach(
@@ -1612,10 +1612,10 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
             ItemStructured = hb_message:convert(
                 Item, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
             SignedItemID = hb_message:id(ItemStructured, signed, ClientOpts),
-            CachedItemFromSignedID = dev_cache:read_from_cache(Node, SignedItemID),
+            CachedItemFromSignedID = read_from_cache(Node, SignedItemID),
             ?assert(hb_message:verify(CachedItemFromSignedID, all, ClientOpts)),
             UnsignedItemID = hb_message:id(ItemStructured, unsigned, ClientOpts),
-            CachedItemFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedItemID),
+            CachedItemFromUnsignedID = read_from_cache(Node, UnsignedItemID),
             ?assert(hb_message:verify(CachedItemFromUnsignedID, all, ClientOpts))
         end, ExpectedItems),
     ok.
@@ -1643,6 +1643,18 @@ start_mock_gateway(Responses) ->
         ]
     },
     {ServerHandle, NodeOpts}.
+
+read_from_cache(Node, Path) ->
+    ReadMsg = #{
+        <<"path">> => <<"/~cache@1.0/read">>,
+        <<"method">> => <<"GET">>,
+        <<"read">> => Path
+    },
+    case hb_http:get(Node, ReadMsg, #{}) of
+        ReadResponse when is_binary(ReadResponse) -> ReadResponse;
+        {ok, ReadResponse} -> ReadResponse;
+        {error, Reason} -> {error, Reason}
+    end.
 
 setup_test_counter(Table) ->
     cleanup_test_counter(Table),
