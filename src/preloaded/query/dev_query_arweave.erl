@@ -339,7 +339,7 @@ block_range_to_offset_range(Heights, Opts) ->
 
 %% @doc Read block metadata by height.  Tries the local block cache first;
 %% when `query_arweave_remote_block_ranges' is `true' (the default) and the
-%% block is not cached locally, falls back to `dev_arweave:block/2'.
+%% block is not cached locally, falls back to `arweave@2.9/block'.
 read_block(Height, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
         {ok, Block} -> {ok, Block};
@@ -347,14 +347,22 @@ read_block(Height, Opts) ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
                 true ->
                     ?event({read_block_remote, {height, Height}}),
-                    dev_arweave:block(#{}, #{ <<"block">> => Height }, Opts);
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{ <<"path">> => <<"block">>, <<"block">> => Height },
+                        Opts
+                    );
                 _ -> not_found
             end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
                 true ->
                     ?event({read_block_remote, {height, Height}}),
-                    dev_arweave:block(#{}, #{ <<"block">> => Height }, Opts);
+                    hb_ao:resolve(
+                        #{ <<"device">> => <<"arweave@2.9">> },
+                        #{ <<"path">> => <<"block">>, <<"block">> => Height },
+                        Opts
+                    );
                 _ -> not_found
             end
     end.
