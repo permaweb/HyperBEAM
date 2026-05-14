@@ -160,3 +160,81 @@ unpackaged_atom_is_rejected_test() ->
             #{ <<"device-bootstrap">> => hb_packager:bootstrap_device_map() }
         )
     ).
+
+
+published_external_devices_load_test() ->
+    EchoSpec = <<"5VZCfqqSc2eS1qtOrS48KXvGKtM3sd2nRySE80IoIbA">>,
+    EchoImpl = <<"g6Im0NQft_IFLb2uEyAUe85fT-fVT23fQd7ICpFq5t8">>,
+    NifSpec = <<"mVW7QLyoSJa2KsCnsulbqBEHQoz2B4GUsZur9jjugyg">>,
+    NifImpl = <<"uZA1iOddhC-4n-dhVzOjBUodVMzEMZ9NSQYR1mgAIzI">>,
+    Store = hb_test_utils:test_store(),
+    hb_store:reset(Store),
+    Opts =
+        #{
+            <<"load-remote-devices">> => true,
+            <<"trusted-devices">> =>
+                [EchoImpl, NifImpl],
+            <<"store">> => Store,
+            <<"routes">> => [
+                #{
+                    <<"template">> => <<"/graphql">>,
+                    <<"nodes">> =>
+                        [
+                            #{
+                                <<"prefix">> =>
+                                    <<"https://ao-search-gateway.goldsky.com">>,
+                                <<"opts">> =>
+                                    #{ <<"http-client">> => hackney,
+                                        <<"protocol">> => http2 }
+                            },
+                            #{
+                                <<"prefix">> =>
+                                    <<"https://arweave-search.goldsky.com">>,
+                                <<"opts">> =>
+                                    #{ <<"http-client">> => hackney,
+                                        <<"protocol">> => http2 }
+                            },
+                            #{
+                                <<"prefix">> => <<"https://arweave.net">>,
+                                <<"opts">> =>
+                                    #{ <<"http-client">> => hackney,
+                                        <<"protocol">> => http2 }
+                            }
+                        ]
+                },
+                #{
+                    <<"template">> => <<"^/arweave/raw">>,
+                    <<"nodes">> => [
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://permagate.io">>
+                        },
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => <<"https://arweave.net">>
+                        }
+                    ],
+                    <<"parallel">> => false,
+                    <<"responses">> => 1,
+                    <<"stop-after">> => true,
+                    <<"admissible-status">> => 200
+                }
+            ],
+            <<"device-bootstrap">> => hb_packager:bootstrap_device_map()
+        },
+    ?assertEqual(
+        {ok, <<"loaded-echo-device">>},
+        hb_ao:resolve(
+            #{ <<"device">> => EchoSpec },
+            #{ <<"path">> => <<"echo">>, <<"input">> => <<"loaded-echo-device">> },
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, 42},
+        hb_ao:resolve(
+            #{ <<"device">> => NifSpec },
+            #{ <<"path">> => <<"add">>, <<"a">> => 2, <<"b">> => 40 },
+            Opts
+        )
+    ).

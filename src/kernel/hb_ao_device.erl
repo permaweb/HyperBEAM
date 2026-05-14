@@ -701,9 +701,10 @@ maybe_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts) ->
     end.
 
 load_archive_modules(RootMod, Modules, Msg, Opts) ->
-    case code:atomic_load(Modules) of
+    LoadModules = maybe_patch_legacy_nifs(Modules),
+    case code:atomic_load(LoadModules) of
         ok ->
-            case run_archive_on_loads(Msg, Opts) of
+            case run_archive_on_loads(RootMod, Msg, Opts) of
                 ok -> {ok, RootMod};
                 {error, Reason} ->
                     {error, load_error(
@@ -737,8 +738,140 @@ reason_bin(Reason) ->
 archive_loaded(Modules) ->
     lists:all(fun({Mod, _, _}) -> code:is_loaded(Mod) =/= false end, Modules).
 
+maybe_patch_legacy_nifs(Modules) ->
+    lists:append([maybe_patch_legacy_nif(Module) || Module <- Modules]).
+
+maybe_patch_legacy_nif({Mod, Path, Beam} = Module) ->
+    case beam_lib:chunks(Beam, [abstract_code]) of
+        {ok, {Mod, [{abstract_code, {raw_abstract_v1, Forms}}]}} ->
+            case legacy_nif_module(Forms) of
+                undefined ->
+                    [Module];
+                NifMod ->
+                    Stubs = legacy_nif_stubs(Forms),
+                    case compile_legacy_nif_modules(Mod, NifMod, Forms, Stubs) of
+                        {ok, PatchedBeam, NifBeam} ->
+                            [
+                                {NifMod, atom_to_list(NifMod) ++ ".beam", NifBeam},
+                                {Mod, Path, PatchedBeam}
+                            ];
+                        error ->
+                            [Module]
+                    end
+            end;
+        _ ->
+            [Module]
+    end.
+
+legacy_nif_module(Forms) ->
+    case legacy_nif_modules(Forms) of
+        [] -> undefined;
+        [NifMod | _] -> NifMod
+    end.
+
+legacy_nif_modules(Term) when is_tuple(Term) ->
+    case Term of
+        {call, _, {remote, _, {atom, _, erlang}, {atom, _, load_nif}},
+            [PathExpr, _]} ->
+            case legacy_nif_path(PathExpr) of
+                undefined -> [];
+                Name -> [hb_util:key_to_atom(hb_util:bin(Name), new_atoms)]
+            end;
+        _ ->
+            legacy_nif_modules(tuple_to_list(Term))
+    end;
+legacy_nif_modules(Term) when is_list(Term) ->
+    lists:append([legacy_nif_modules(Elem) || Elem <- Term]);
+legacy_nif_modules(_) ->
+    [].
+
+legacy_nif_path({string, _, Path}) ->
+    filename:basename(Path);
+legacy_nif_path({call, _, {remote, _, {atom, _, filename}, {atom, _, join}},
+        Args}) ->
+    legacy_nif_path(lists:last(Args));
+legacy_nif_path(_) ->
+    undefined.
+
+legacy_nif_stubs(Forms) ->
+    [
+        {Name, Arity}
+     ||
+        {function, _, Name, Arity, Clauses} <- Forms,
+        legacy_nif_stub_clauses(Clauses)
+    ].
+
+legacy_nif_stub_clauses(Clauses) ->
+    lists:all(fun legacy_nif_stub_clause/1, Clauses).
+
+legacy_nif_stub_clause({clause, _, _, _, Body}) ->
+    case Body of
+        [{call, _, {remote, _, {atom, _, erlang}, {atom, _, nif_error}}, _}] ->
+            true;
+        _ ->
+            false
+    end.
+
+compile_legacy_nif_modules(Mod, NifMod, Forms, Stubs) ->
+    NifForms = legacy_nif_original_forms(NifMod, Forms, Stubs),
+    PatchedForms = legacy_nif_patched_forms(Mod, NifMod, Forms, Stubs),
+    case {
+        compile:forms(NifForms, [binary, return_errors]),
+        compile:forms(PatchedForms, [binary, return_errors])
+    } of
+        {{ok, NifMod, NifBeam}, {ok, Mod, PatchedBeam}} ->
+            {ok, PatchedBeam, NifBeam};
+        {{ok, NifMod, NifBeam, _}, {ok, Mod, PatchedBeam, _}} ->
+            {ok, PatchedBeam, NifBeam};
+        _ ->
+            error
+    end.
+
+legacy_nif_original_forms(NifMod, Forms, Stubs) ->
+    [legacy_nif_original_form(NifMod, Stubs, Form) || Form <- Forms].
+
+legacy_nif_original_form(NifMod, _Stubs, {attribute, Ann, module, _}) ->
+    {attribute, Ann, module, NifMod};
+legacy_nif_original_form(_NifMod, Stubs, {attribute, Ann, export, Exports}) ->
+    {attribute, Ann, export, lists:usort(Exports ++ Stubs)};
+legacy_nif_original_form(_NifMod, _Stubs, Form) ->
+    Form.
+
+legacy_nif_patched_forms(Mod, NifMod, Forms, Stubs) ->
+    [
+        legacy_nif_patched_form(Mod, NifMod, Stubs, Form)
+     ||
+        Form <- Forms
+    ].
+
+legacy_nif_patched_form(Mod, _NifMod, _Stubs, {attribute, Ann, module, _}) ->
+    {attribute, Ann, module, Mod};
+legacy_nif_patched_form(_Mod, NifMod, _Stubs, {function, Ann, init, 0, _}) ->
+    legacy_nif_delegate_function(Ann, NifMod, init, 0);
+legacy_nif_patched_form(_Mod, NifMod, Stubs,
+        {function, Ann, Name, Arity, _} = Form) ->
+    case lists:member({Name, Arity}, Stubs) of
+        true -> legacy_nif_delegate_function(Ann, NifMod, Name, Arity);
+        false -> Form
+    end;
+legacy_nif_patched_form(_Mod, _NifMod, _Stubs, Form) ->
+    Form.
+
+legacy_nif_delegate_function(Ann, NifMod, Name, Arity) ->
+    Args =
+        [
+            {var, Ann, hb_util:key_to_atom(<<"Arg", (integer_to_binary(N))/binary>>,
+                new_atoms)}
+         ||
+            N <- lists:seq(1, Arity)
+        ],
+    {function, Ann, Name, Arity,
+        [{clause, Ann, Args, [],
+            [{call, Ann, {remote, Ann, {atom, Ann, NifMod}, {atom, Ann, Name}},
+                Args}]}]}.
+
 %% @doc Execute the flat on-load metadata embedded in the implementation.
-run_archive_on_loads(Msg, Opts) ->
+run_archive_on_loads(RootMod, Msg, Opts) ->
     case hb_maps:get(<<"on-load">>, Msg, <<>>, Opts) of
         <<>> ->
             ok;
@@ -747,7 +880,7 @@ run_archive_on_loads(Msg, Opts) ->
                 ?ON_LOAD_FORMAT ->
                     case decode_archive_on_loads(OnLoad) of
                         {ok, OnLoads} ->
-                            run_archive_on_load_list(OnLoads);
+                            run_archive_on_loads_in_dir(RootMod, OnLoads);
                         {error, _} = Error ->
                             Error
                     end;
@@ -782,6 +915,33 @@ decode_archive_on_loads(<<ModLen:32, Rest0/binary>>, Acc)
     end;
 decode_archive_on_loads(_Other, _Acc) ->
     {error, invalid_on_load_metadata}.
+
+run_archive_on_loads_in_dir(RootMod, OnLoads) ->
+    Dir = implementation_dir(RootMod),
+    case filelib:is_dir(Dir) of
+        true ->
+            global:trans(
+                {?MODULE, archive_on_load_cwd},
+                fun() -> with_cwd(Dir, fun() ->
+                    run_archive_on_load_list(OnLoads)
+                end) end,
+                [node()],
+                infinity
+            );
+        false ->
+            run_archive_on_load_list(OnLoads)
+    end.
+
+with_cwd(Dir, Fun) ->
+    {ok, Cwd} = file:get_cwd(),
+    case file:set_cwd(Dir) of
+        ok ->
+            try Fun()
+            after _ = file:set_cwd(Cwd)
+            end;
+        {error, Reason} ->
+            {error, {set_cwd_failed, Dir, Reason}}
+    end.
 
 %% @doc Run decoded on-load callbacks in package order.
 run_archive_on_load_list([]) ->
@@ -837,13 +997,28 @@ implementation_root(Opts) ->
 write_implementation_files(_Dir, []) ->
     ok;
 write_implementation_files(Dir, [{Rel, Body} | Rest]) ->
+    case write_implementation_file(Dir, Rel, Body) of
+        ok ->
+            case write_implementation_file(
+                filename:join(Dir, "priv"),
+                Rel,
+                Body
+            ) of
+                ok -> write_implementation_files(Dir, Rest);
+                {error, _} = Error -> Error
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+write_implementation_file(Dir, Rel, Body) ->
     Path = filename:join(Dir, hb_util:list(Rel)),
     case filelib:ensure_dir(Path) of
         ok ->
             case file:write_file(Path, Body) of
                 ok ->
                     maybe_make_executable(Rel, Path),
-                    write_implementation_files(Dir, Rest);
+                    ok;
                 {error, Reason} ->
                     {error, {resource_write_failed, Rel, Reason}}
             end;

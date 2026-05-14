@@ -305,6 +305,7 @@ maybe_invoke_monitor(Details, Opts) ->
 %%% ==================================================================
 
 init(Opts) ->
+    application:ensure_all_started([hackney]),
     init_hackney_pool(),
     case prometheus_enabled(Opts) of
         true ->

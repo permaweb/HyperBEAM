@@ -85,20 +85,54 @@ load_wallet(Path) ->
 
 %% @doc Return the HyperBEAM dependency's preloaded source directory.
 default_preloaded_dirs(Dirs) ->
-    DefaultDir = <<"_build/default/lib/hb/src/preloaded">>,
-    case is_hb_checkout() orelse source_covers(DefaultDir, Dirs) of
+    CandidateDirs = default_preloaded_dir_candidates(),
+    case is_hb_checkout() orelse sources_cover(CandidateDirs, Dirs) of
         true ->
             {ok, []};
         false ->
-            case filelib:is_dir(DefaultDir) of
-                true -> {ok, [DefaultDir]};
-                false -> {error, missing_hb_dependency_preloaded_devices}
+            case first_existing_dir(CandidateDirs) of
+                {ok, DefaultDir} -> {ok, [DefaultDir]};
+                error -> {error, missing_hb_dependency_preloaded_devices}
             end
+    end.
+
+default_preloaded_dir_candidates() ->
+    unique_dirs(
+        [<<"_checkouts/hb/src/preloaded">>] ++
+        [
+            hb_util:bin(Path)
+        ||
+            Path <- filelib:wildcard("_build/*/lib/hb/src/preloaded")
+        ] ++
+        [<<"_build/default/lib/hb/src/preloaded">>]
+    ).
+
+unique_dirs(Dirs) ->
+    unique_dirs(Dirs, []).
+
+unique_dirs([], Acc) ->
+    lists:reverse(Acc);
+unique_dirs([Dir | Rest], Acc) ->
+    case lists:member(Dir, Acc) of
+        true -> unique_dirs(Rest, Acc);
+        false -> unique_dirs(Rest, [Dir | Acc])
+    end.
+
+first_existing_dir([]) ->
+    error;
+first_existing_dir([Dir | Rest]) ->
+    case filelib:is_dir(Dir) of
+        true -> {ok, Dir};
+        false -> first_existing_dir(Rest)
     end.
 
 %% @doc Return true when the provider is running inside the HyperBEAM repo.
 is_hb_checkout() ->
     filelib:is_file("src/kernel/hb_ao_device.erl").
+
+%% @doc Return true when `Dirs' already includes one of `CandidateDirs'.
+sources_cover(CandidateDirs, Dirs) ->
+    lists:any(fun(Dir) -> source_covers(Dir, Dirs) end, CandidateDirs).
 
 %% @doc Return true when `Dirs' already includes `Dir'.
 source_covers(Dir, Dirs) ->
