@@ -42,9 +42,12 @@
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
+-export([match_store/1, match_address/2, match_value_path/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(MATCH_CACHE_PREFIX, <<"~match@1.0">>).
 
 %% @doc Ensure that a value is loaded from the cache if it is an ID or a link.
 %% If it is not loadable we raise an error. If the value is a message, we will
@@ -311,8 +314,11 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
         end,
         maps:without([<<"priv">>], Msg)
     ),
-    % Optionally store the message into the match index, if the index is configured.
-    dev_match:write(AllIDs, Msg, Opts),
+    % Optionally store the message into the match index, if configured.
+    case hb_opts:get(match_index, false, Opts) of
+        false -> ok;
+        _ -> write_match_index(AllIDs, Msg, Opts)
+    end,
     % Write the commitments to the store, linking each commitment ID to the
     % uncommitted message.
     lists:map(
@@ -372,6 +378,99 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     {ok, Path} = do_write_message(Value, Store, Opts),
     hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
     {ok, Path}.
+
+%% @doc Write all message keys to the optional match index.
+write_match_index(IDs, Base, Opts) ->
+    case match_store(Opts) of
+        [] -> {skip, <<"No store configured for match index.">>};
+        Store ->
+            IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+            hb_maps:map(
+                fun(RawKey, Value) ->
+                    Key = hb_ao:normalize_key(RawKey),
+                    ValuePath = match_value_path(Value, Opts),
+                    hb_store:group(Store, match_address(Key, ValuePath), Opts),
+                    lists:foreach(
+                        fun(ID) ->
+                            Address = match_address(Key, ValuePath, ID),
+                            ?event(
+                                debug_match,
+                                {writing_reverse_index, {address, Address}},
+                                Opts
+                            ),
+                            hb_store:write(Store, #{ Address => <<"">> }, Opts)
+                        end,
+                        IDs
+                    )
+                end,
+                IndexBase
+            )
+    end.
+
+%% @doc Get the store configured for the match index.
+match_store(Opts) ->
+    LocalMatchIndex = maps:get(<<"match-index">>, Opts, undefined),
+    LocalStore = maps:get(<<"store">>, Opts, undefined),
+    GlobalMatchIndex = hb_opts:get(match_index, false, #{ <<"only">> => global }),
+    MatchIndexStore =
+        case {LocalMatchIndex, LocalStore} of
+            {undefined, undefined} ->
+                GlobalMatchIndex;
+            {undefined, _} ->
+                LocalStore;
+            {Local, Store}
+                    when Store =/= undefined andalso
+                        Local =:= GlobalMatchIndex ->
+                Store;
+            {Local, _} ->
+                Local
+        end,
+    case MatchIndexStore of
+        false -> [];
+        true -> hb_opts:get(store, [], Opts);
+        ResolvedStore when not is_list(ResolvedStore) -> [ResolvedStore];
+        ResolvedStore -> ResolvedStore
+    end.
+
+%% @doc Calculate the match-index address of a key-value pair.
+match_address(Key, Value) ->
+    KeyBin = match_bin(Key),
+    ValueBin = match_bin(Value),
+    iolist_to_binary([?MATCH_CACHE_PREFIX, "&", KeyBin, "=", ValueBin]).
+match_address(Key, Value, ID) ->
+    IDBin = match_bin(ID),
+    <<(match_address(Key, Value))/binary, "/", IDBin/binary>>.
+
+%% @doc Normalize a term to its match-index binary form.
+match_bin(Bin) when is_binary(Bin) -> Bin;
+match_bin(Atom) when is_atom(Atom) -> atom_to_binary(Atom);
+match_bin(Int) when is_integer(Int) -> integer_to_binary(Int);
+match_bin(Float) when is_float(Float) -> float_to_binary(Float, [compact]);
+match_bin(List) when is_list(List) ->
+    try iolist_to_binary(List)
+    catch
+        _:_ -> term_to_binary(List)
+    end;
+match_bin(Other) ->
+    term_to_binary(Other).
+
+%% @doc Return the path representation used by cache key-value links.
+match_value_path(Bin, Opts) when is_binary(Bin) ->
+    <<"data/", (hb_path:hashpath(Bin, Opts))/binary>>;
+match_value_path(Map, Opts) when is_map(Map) ->
+    hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard });
+match_value_path(List, Opts) when is_list(List) ->
+    case io_lib:printable_unicode_list(List) of
+        true ->
+            match_value_path(iolist_to_binary(List), Opts);
+        false ->
+            match_value_path(
+                hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
+                Opts
+            )
+    end;
+match_value_path(Other, Opts) ->
+    match_value_path(hb_path:to_binary(Other), Opts).
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents
