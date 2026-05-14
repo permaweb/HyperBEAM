@@ -8,6 +8,7 @@
 %%% the AO-Core resolver has returned a result.
 -module(dev_meta).
 -export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
+-export([is_operator/3]).
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -23,7 +24,7 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
-info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
+info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
@@ -44,6 +45,11 @@ is_operator(Request, NodeMsg) ->
             NativeAddress -> hb_util:human_id(NativeAddress)
         end,
     EncOperator == unclaimed orelse lists:member(EncOperator, RequestSigners).
+
+%% @doc Return whether the request in the body is signed by the node operator.
+is_operator(_Base, Req, NodeMsg) ->
+    {ok, is_operator(hb_maps:get(<<"body">>, Req, Req, NodeMsg), NodeMsg)}.
+
 %% @doc Emits the version number and commit hash of the HyperBEAM node source,
 %% if available.
 %% 

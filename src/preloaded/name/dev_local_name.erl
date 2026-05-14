@@ -35,15 +35,19 @@ default_lookup(Key, _, Req, Opts) ->
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
 %% must be the node operator in order to register a name.
 register(_, Req, Opts) ->
-    case dev_meta:is(admin, Req, Opts) of
-        false ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"meta@1.0">> },
+        #{ <<"path">> => <<"is-operator">>, <<"body">> => Req },
+        Opts#{ <<"hashpath">> => ignore }
+    ) of
+        {ok, false} ->
             {error,
                 #{
                     <<"status">> => 403,
                     <<"message">> => <<"Unauthorized.">>
                 }
             };
-        true ->
+        {ok, true} ->
             direct_register(Req, Opts)
     end.
 
