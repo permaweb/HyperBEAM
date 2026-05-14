@@ -173,9 +173,15 @@ manifest(Base, _Req, Opts) ->
             ],
             not_found,
             Opts
-        ),
+    ),
     FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    {ok, DeepPaths} = dev_flat:from(FlatPaths, #{}, Opts),
+    DeepPaths =
+        hb_message:convert(
+            FlatPaths,
+            <<"structured@1.0">>,
+            <<"flat@1.0">>,
+            Opts
+        ),
     LinkifiedPaths = linkify(DeepPaths, Opts),
     Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
     {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.

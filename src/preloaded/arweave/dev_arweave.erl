@@ -947,10 +947,11 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }
     {ok, Body};
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, Block} =
-        dev_json:from(
+    Block =
+        hb_message:convert(
             Body,
-            #{ <<"accept-codec">> => <<"structured@1.0">> },
+            <<"structured@1.0">>,
+            <<"json@1.0">>,
             Opts
         ),
     CacheRes =

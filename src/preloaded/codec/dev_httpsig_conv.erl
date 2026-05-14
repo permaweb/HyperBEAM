@@ -117,10 +117,11 @@ body_to_tabm(HTTP, Opts) ->
                         Parts
                     ),
                 % Merge all of the parts into a single TABM.
-                {ok, MergedParts} =
-                    dev_flat:from(
+                MergedParts =
+                    hb_message:convert(
                         maps:from_list(OrderedBodyTABMs),
-                        #{},
+                        tabm,
+                        <<"flat@1.0">>,
                         Opts
                     ),
                 % Calculate the ordered body keys of the multipart data. The
@@ -896,7 +897,10 @@ group_maps_flat_compatible_test() ->
         }
     },
     Lifted = group_maps(Map),
-    ?assertEqual(dev_flat:from(Lifted, #{}, #{}), {ok, Map}),
+    ?assertEqual(
+        hb_message:convert(Lifted, tabm, <<"flat@1.0">>, #{}),
+        Map
+    ),
     ok.
 
 encode_message_with_links_test() ->
