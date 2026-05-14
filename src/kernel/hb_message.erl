@@ -54,7 +54,7 @@
 %%% retrieving messages.
 %%% 
 %%% Test vectors to ensure the functioning of this module and the codecs that
-%%% interact with it are found in `hb_message_test_vectors.erl'.
+%%% interact with it are found in `hb_codec_test_vectors.erl'.
 -module(hb_message).
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).

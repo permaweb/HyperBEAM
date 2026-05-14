@@ -194,7 +194,7 @@ test_init() ->
 
 info_test() ->
     test_init(),
-    M1 = dev_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
+    M1 = hb_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao_device:info(M1, #{}),
     Grouper = hb_maps:get(grouper, Res, undefined, #{}),
     ?assert(is_function(Grouper, 3)),
@@ -203,7 +203,7 @@ info_test() ->
 
 grouper_test() ->
     test_init(),
-    M1 = dev_process_test_vectors:aos_process(),
+    M1 = hb_process_test_vectors:aos_process(),
     M2 = #{ <<"path">> => <<"compute">>, <<"v">> => 1 },
     M3 = #{ <<"path">> => <<"compute">>, <<"v">> => 2 },
     M4 = #{ <<"path">> => <<"not-compute">>, <<"v">> => 3 },
@@ -227,7 +227,7 @@ grouper_skips_when_slot_cached_test() ->
             <<"store">> => hb_test_utils:test_store(hb_store_lmdb),
             <<"priv-wallet">> => ar_wallet:new()
         },
-    M1 = dev_process_test_vectors:aos_process(Opts),
+    M1 = hb_process_test_vectors:aos_process(Opts),
     POpts = Opts#{ <<"process-workers">> => true },
     % With the cache empty, every compute request must group by
     % process so that the worker can do the actual work.

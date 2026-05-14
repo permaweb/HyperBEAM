@@ -1,8 +1,8 @@
 %%% @doc Test vectors for the `~process@1.0' and associated subsystems.
--module(dev_process_test_vectors).
+-module(hb_process_test_vectors).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-%%% Helpers used by other devices that utilize `~process@1.0'.
+%%% Helpers used by tests that exercise `~process@1.0'.
 -export([init/0, aos_process/0, aos_process/1, test_process/0, wasm_process/1]).
 -export([schedule_aos_call/2, schedule_aos_call/3]).
 

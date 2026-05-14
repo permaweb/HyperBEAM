@@ -1,7 +1,7 @@
 %%% @doc A battery of test vectors for message codecs, implementing the 
 %%% `message@1.0' encoding and commitment APIs. Additionally, this module 
 %%% houses tests that ensure the general functioning of the `hb_message' API.
--module(hb_message_test_vectors).
+-module(hb_codec_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
