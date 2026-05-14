@@ -17,7 +17,7 @@
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_structured).
--export([to/3, from/3, commit/3, verify/3]).
+-export([to/3, from/3, commit/3, verify/3, encode_types/3, decode_types/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/2, encode_value/1, implicit_keys/2]).
 -include("include/hb.hrl").
@@ -233,6 +233,9 @@ to(TABM0, Req, Opts) ->
 
 %% @doc Generate an `ao-types' structured field from a map of keys and their
 %% types.
+encode_types(Base, Req, Opts) ->
+    {ok, encode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
+
 encode_ao_types(Types, _Opts) ->
     iolist_to_binary(hb_structured_fields:dictionary(
         lists:map(
@@ -247,6 +250,9 @@ encode_ao_types(Types, _Opts) ->
 %% @doc Parse the `ao-types' field of a TABM if present, and return a map of
 %% keys and their types. If the given value is a list, we return an empty map
 %% as there can be no `ao-types'.
+decode_types(Base, Req, Opts) ->
+    {ok, decode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
+
 decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->
     decode_ao_types(hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);

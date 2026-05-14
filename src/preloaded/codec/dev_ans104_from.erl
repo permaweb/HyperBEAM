@@ -40,7 +40,16 @@ tags(Item, Opts) ->
 %% @doc Ensure the encoded keys in the `ao-types' field are lowercased and
 %% normalized like the other keys in the tags field.
 ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
-    AOTypes = dev_structured:decode_ao_types(AoTypes, Opts),
+    ConvOpts = Opts#{ <<"hashpath">> => ignore },
+    {ok, AOTypes} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"structured@1.0">> },
+            #{
+                <<"path">> => <<"decode-types">>,
+                <<"body">> => AoTypes
+            },
+            ConvOpts
+        ),
     % Normalize all keys in the ao-types map and re-encode
     NormAOTypes =
         maps:fold(
@@ -51,7 +60,15 @@ ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
             #{},
             AOTypes
         ),
-    EncodedAOTypes = dev_structured:encode_ao_types(NormAOTypes, Opts),
+    {ok, EncodedAOTypes} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"structured@1.0">> },
+            #{
+                <<"path">> => <<"encode-types">>,
+                <<"body">> => NormAOTypes
+            },
+            ConvOpts
+        ),
     Tags#{ <<"ao-types">> := EncodedAOTypes };
 ao_types(Tags, _Opts) ->
     Tags.
