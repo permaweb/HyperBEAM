@@ -185,7 +185,7 @@ manifest(Base, _Req, Opts) ->
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([store], Opts))#{ scope => [local, remote]},
+    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ <<"scope">> => [local, remote]},
     {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(
@@ -202,6 +202,13 @@ linkify(Manifest, _Opts) ->
     Manifest.
 
 %%% Tests
+
+linkified_paths_keep_store_and_remote_scope_test() ->
+    Store = hb_test_utils:test_store(),
+    ID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    {link, ID, LinkOpts} = linkify(#{ <<"id">> => ID }, #{ <<"store">> => Store }),
+    ?assertEqual(Store, maps:get(<<"store">>, LinkOpts)),
+    ?assertEqual([local, remote], hb_opts:get(scope, undefined, LinkOpts)).
 
 resolve_test_parallel() ->
     Opts = #{
