@@ -102,8 +102,12 @@ find_target(Base, RawReq, Opts) ->
 %% the new scheduler-location to the given registry, and return it to the caller.
 node(Base, RawReq, RawOpts) ->
     Opts =
-        case dev_whois:ensure_host(RawOpts) of
-            {ok, NewOpts} -> NewOpts;
+        case hb_ao:resolve(
+            #{ <<"device">> => <<"whois@1.0">> },
+            #{ <<"path">> => <<"node">> },
+            RawOpts
+        ) of
+            {ok, Host} -> RawOpts#{ <<"node-host">> => Host };
             _ -> RawOpts
         end,
     Req = find_target(Base, RawReq, Opts),

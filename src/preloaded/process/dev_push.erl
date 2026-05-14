@@ -396,8 +396,12 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             <<"route-path">> => Path
         },
     Opts =
-        case dev_whois:ensure_host(RawOpts) of
-            {ok, NewOpts} -> NewOpts;
+        case hb_ao:resolve(
+            #{ <<"device">> => <<"whois@1.0">> },
+            #{ <<"path">> => <<"node">> },
+            RawOpts
+        ) of
+            {ok, Host} -> RawOpts#{ <<"node-host">> => Host };
             _ -> RawOpts
         end,
     Self = hb_opts:get(node_host, host_not_specified, Opts),
