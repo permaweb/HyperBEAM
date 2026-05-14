@@ -14,6 +14,7 @@ content_type(_) -> {ok, <<"application/json">>}.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
+    ConvOpts = Opts#{ <<"hashpath">> => ignore },
     % The input to this function will be a TABM message, so we:
     % 1. Convert it to a structured message.
     % 2. Load any linked items if we are in `bundle' mode.
@@ -24,41 +25,53 @@ to(Msg, Req, Opts) ->
             hb_private:reset(Msg),
             <<"structured@1.0">>,
             tabm,
-            Opts
+            ConvOpts
         ),
     Loaded =
         case hb_maps:get(<<"bundle">>, Req, false, Opts) of
             true -> hb_cache:ensure_all_loaded(Restructured, Opts);
             false -> Restructured
         end,
-    {ok, JSONStructured} =
-        dev_structured:from(
+    JSONStructured =
+        hb_message:convert(
             Loaded,
-            Req#{ <<"encode-types">> => [<<"atom">>] },
-            Opts
+            tabm,
+            #{
+                <<"device">> => <<"structured@1.0">>,
+                <<"encode-types">> => [<<"atom">>]
+            },
+            ConvOpts
         ),
     {ok, hb_json:encode(JSONStructured)}.
 
 %% @doc Decode a JSON string to a message.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};
 from(JSON, Req, Opts) ->
+    ConvOpts = Opts#{ <<"hashpath">> => ignore },
     % The JSON string will be a partially-TABM encoded message: Rich number
     % and list types, but no `atom's. Subsequently, we convert it to a fully
     % structured message after decoding, then turn the result back into a TABM.
     % This is resource-intensive and could be improved, but ensures that the
     % results are fully normalized.
-    {ok, Structured} =
-        dev_structured:to(
+    Structured =
+        hb_message:convert(
             json:decode(JSON),
-            #{},
-            Opts
+            <<"structured@1.0">>,
+            tabm,
+            ConvOpts
         ),
     ?event(debug_json, {structured, Structured}, Opts),
     case hb_maps:get(<<"accept-codec">>, Req, undefined, Opts) of
         <<"structured@1.0">> -> {ok, Structured};
         _ ->
             % Re-encode the structured message back to TABM for the caller.
-            {ok, TABM} = dev_structured:from(Structured, Req, Opts),
+            TABM =
+                hb_message:convert(
+                    Structured,
+                    tabm,
+                    Req#{ <<"device">> => <<"structured@1.0">> },
+                    ConvOpts
+                ),
             ?event(debug_json, {tabm, TABM}, Opts),
             {ok, TABM}
     end.
