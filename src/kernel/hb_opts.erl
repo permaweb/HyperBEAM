@@ -231,7 +231,9 @@ raw_default_message() ->
         <<"preloaded-store">> =>
             #{
                 <<"store-module">> => hb_store_lmdb,
-                <<"name">> => <<"_build/preloaded-store">>
+                <<"name">> => <<"_build/preloaded-store">>,
+                <<"capacity">> => 1024 * 1024 * 1024,
+                <<"read-only">> => true
             },
         %% Build-time ID of the preloaded name resolver message.
         <<"preloaded-devices-index">> => preloaded_index_default(),

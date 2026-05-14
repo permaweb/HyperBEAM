@@ -48,7 +48,9 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     StoreCfg =
         #{
             <<"store-module">> => hb_store_lmdb,
-            <<"name">> => OutputBin
+            <<"name">> => OutputBin,
+            <<"capacity">> => 1024 * 1024 * 1024,
+            <<"lock">> => false
         },
     %% Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
