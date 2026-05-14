@@ -811,7 +811,6 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
     ?event({decoded, Decoded}),
     ?assertEqual(true, hb_message:verify(Decoded, all, Opts)),
     ?event({matching, {input, SignedMsg}, {encoded, Encoded}, {decoded, Decoded}}),
-    ?event({http, {string, dev_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes).
@@ -833,7 +832,6 @@ specific_order_signed_message_test(RawCodec, Opts) ->
             Codec#{ <<"committed">> => [<<"key-3">>, <<"key-1">>, <<"key-2">>] }
         ),
     ?event({signed_msg, SignedMsg}),
-    ?event({http, {string, dev_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)).
 
 specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
@@ -890,33 +888,6 @@ complex_signed_message_test(Codec, Opts) ->
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes).
-
-% multisignature_test(Codec) ->
-%     Wallet1 = ar_wallet:new(),
-%     Wallet2 = ar_wallet:new(),
-%     Msg = #{
-%         <<"data">> => <<"TEST_DATA">>,
-%         <<"test_key">> => <<"TEST_VALUE">>
-%     },
-%     {ok, SignedMsg} =
-%         dev_message:commit(
-%             Msg,
-%             #{ <<"commitment-device">> => Codec },
-%             #{ <<"priv-wallet">> => Wallet1 }
-%         ),
-%     ?event({signed_msg, SignedMsg}),
-%     {ok, MsgSignedTwice} =
-%         dev_message:commit(
-%             SignedMsg,
-%             #{ <<"commitment-device">> => Codec },
-%             #{ <<"priv-wallet">> => Wallet2 }
-%         ),
-%     ?event({signed_msg_twice, MsgSignedTwice}),
-%     ?assert(verify(MsgSignedTwice)),
-%     {ok, Committers} = dev_message:committers(MsgSignedTwice),
-%     ?event({committers, Committers}),
-%     ?assert(lists:member(hb_util:human_id(ar_wallet:to_address(Wallet1)), Committers)),
-%     ?assert(lists:member(hb_util:human_id(ar_wallet:to_address(Wallet2)), Committers)).
 
 deep_multisignature_test() ->
     % Only the `httpsig@1.0' codec supports multisignatures.
@@ -999,7 +970,7 @@ signed_deep_message_test(Codec, Opts) ->
             Codec
         ),
     ?event({signed_msg, SignedMsg}),
-    {ok, Res} = dev_message:verify(SignedMsg, #{ <<"committers">> => <<"all">>}, Opts),
+    Res = hb_message:verify(SignedMsg, all, Opts),
     ?event({verify_res, Res}),
     ?assertEqual(true, hb_message:verify(SignedMsg, all, Opts)),
     ?event({verified, SignedMsg}),
@@ -1007,12 +978,7 @@ signed_deep_message_test(Codec, Opts) ->
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, Decoded}),
-    {ok, DecodedRes} =
-        dev_message:verify(
-            Decoded,
-            #{ <<"committers">> => <<"all">>},
-            Opts
-        ),
+    DecodedRes = hb_message:verify(Decoded, all, Opts),
     ?event({verify_decoded_res, DecodedRes}),
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
@@ -1034,8 +1000,8 @@ unsigned_id_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?assertEqual(
-        dev_message:id(Decoded, #{ <<"committers">> => <<"none">>}, Opts),
-        dev_message:id(Msg, #{ <<"committers">> => <<"none">>}, Opts)
+        hb_message:id(Decoded, none, Opts),
+        hb_message:id(Msg, none, Opts)
     ).
 
 % signed_id_test_disabled() ->
@@ -1096,7 +1062,7 @@ hashpath_sign_verify_test(Codec, Opts) ->
     ?event({msg, {explicit, Msg}}),
     SignedMsg = hb_message:commit(Msg, Opts, Codec),
     ?event({signed_msg, {explicit, SignedMsg}}),
-    {ok, Res} = dev_message:verify(SignedMsg, #{ <<"committers">> => <<"all">>}, Opts),
+    Res = hb_message:verify(SignedMsg, all, Opts),
     ?event({verify_res, {explicit, Res}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)),
     ?event({verified, {explicit, SignedMsg}}),
@@ -1690,7 +1656,6 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     ?event({committed, Msg}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
-    ?event({http, {string, dev_httpsig_conv:encode_http_msg(Msg, Opts)}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({matching, {input, Msg}, {output, Decoded}}),
     MatchRes = hb_message:match(Msg, Decoded, primary, Opts),
