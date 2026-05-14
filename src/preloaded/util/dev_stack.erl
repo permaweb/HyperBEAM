@@ -98,8 +98,6 @@
 %%% resulting HashPath remains correct and verifiable.
 -module(dev_stack).
 -export([info/2, router/4, prefix/3, input_prefix/3, output_prefix/3]).
-%%% Test exports
--export([generate_append_device/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -include("include/hb.hrl").

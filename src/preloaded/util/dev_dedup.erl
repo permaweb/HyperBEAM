@@ -145,8 +145,8 @@ dedup_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
-				<<"3">> => dev_stack:generate_append_device(<<"+D3">>)
+				<<"2">> => append_device(<<"+D2">>),
+				<<"3">> => append_device(<<"+D3">>)
 			},
 		<<"result">> => <<"INIT">>
 	},
@@ -177,8 +177,8 @@ dedup_with_multipass_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
-				<<"3">> => dev_stack:generate_append_device(<<"+D3">>),
+				<<"2">> => append_device(<<"+D2">>),
+				<<"3">> => append_device(<<"+D3">>),
                 <<"4">> => <<"multipass@1.0">>
 			},
 		<<"result">> => <<"INIT">>,
@@ -195,3 +195,16 @@ dedup_with_multipass_test() ->
 		#{ <<"result">> := <<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">> },
 		Msg5
 	).
+
+%% @doc Generate a test device that appends to a `result' key.
+append_device(Separator) ->
+	#{
+		append =>
+			fun(M1 = #{ <<"pass">> := 3 }, _) ->
+                {ok, M1};
+			   (M1 = #{ <<"result">> := Existing }, #{ <<"bin">> := New }) ->
+				{ok, M1#{ <<"result">> =>
+					<<Existing/binary, Separator/binary, New/binary>>
+				}}
+			end
+	}.
