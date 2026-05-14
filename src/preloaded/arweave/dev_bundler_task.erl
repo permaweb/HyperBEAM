@@ -41,8 +41,12 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     Task,
                     [{tx, {explicit, hb_message:id(Committed, signed, Opts)}}]
                 )),
-                PostTXResponse = dev_arweave:post_tx_header(
-                    SignedTX,
+                PostTXResponse = hb_ao:resolve(
+                    #{ <<"device">> => <<"arweave@2.9">> },
+                    Committed#{
+                        <<"path">> => <<"tx">>,
+                        <<"method">> => <<"POST">>
+                    },
                     Opts
                 ),
                 case PostTXResponse of
@@ -138,7 +142,15 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         <<"data_root">> => hb_util:encode(DataRoot)
     },
     try
-        Response = dev_arweave:post_chunk(Request, Opts),
+        Response =
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                Request#{
+                    <<"path">> => <<"chunk">>,
+                    <<"method">> => <<"POST">>
+                },
+                Opts
+            ),
         case Response of
             {ok, _} -> {ok, proof_posted};
             {error, Reason} -> {error, Reason}
