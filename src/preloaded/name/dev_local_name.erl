@@ -3,8 +3,6 @@
 %%% non-volatile storage of the node message to store the names long-term.
 -module(dev_local_name).
 -export([info/1, lookup/3, register/3]).
-%%% HyperBEAM public (non-AO resolvable) functions.
--export([direct_register/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -14,7 +12,7 @@
 %% @doc Export only the `lookup' and `register' functions.
 info(_Opts) ->
     #{
-        excludes => [<<"direct_register">>, <<"keys">>, <<"set">>],
+        excludes => [<<"keys">>, <<"set">>],
         default => fun default_lookup/4
     }.
 
@@ -110,7 +108,16 @@ load_names(Opts) ->
 %% use this new message, removing the need to look up the names from non-volatile
 %% storage.
 update_names(LocalNames, Opts) ->
-    hb_http_server:set_opts(NewOpts = Opts#{ <<"local-names">> => LocalNames }),
+    NewOpts = Opts#{ <<"local-names">> => LocalNames },
+    case hb_opts:get(http_server, no_server_ref, Opts) of
+        no_server_ref ->
+            ok;
+        _ ->
+            ServerOpts = hb_http_server:get_opts(Opts),
+            hb_http_server:set_opts(
+                ServerOpts#{ <<"local-names">> => LocalNames }
+            )
+    end,
     NewOpts.
 
 %%% Tests

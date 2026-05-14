@@ -429,6 +429,11 @@ hyper_token_ledger() ->
     AliceAddress = hb_util:human_id(AliceWallet),
     BobWallet = ar_wallet:new(),
     BobAddress = hb_util:human_id(BobWallet),
+    LedgerName =
+        <<"ledger-",
+            (integer_to_binary(erlang:unique_integer([positive])))/binary
+        >>,
+    LedgerPath = <<"/", LedgerName/binary, "~node-process@1.0">>,
     {ok, TokenScript} = file:read_file("scripts/hyper-token.lua"),
     {ok, ProcessScript} = file:read_file("scripts/hyper-token-p4.lua"),
     {ok, ClientScript} = file:read_file("scripts/hyper-token-p4-client.lua"),
@@ -444,7 +449,7 @@ hyper_token_ledger() ->
                 <<"name">> => <<"scripts/hyper-token-p4-client.lua">>,
                 <<"body">> => ClientScript
             },
-            <<"ledger-path">> => <<"/ledger~node-process@1.0">>
+            <<"ledger-path">> => LedgerPath
         },
     % Start the node with the processor and the `local-process' ledger 
     % (component 2) running the `hyper-token.lua' and `hyper-token-p4.lua'
@@ -469,7 +474,7 @@ hyper_token_ledger() ->
                 },
                 <<"operator">> => OperatorAddress,
                 <<"node-processes">> => #{
-                    <<"ledger">> => #{
+                    LedgerName => #{
                         <<"device">> => <<"process@1.0">>,
                         <<"execution-device">> => <<"lua@5.3a">>,
                         <<"scheduler-device">> => <<"scheduler@1.0">>,
@@ -509,7 +514,7 @@ hyper_token_ledger() ->
             Node,
             hb_message:commit(
                 #{
-                    <<"path">> => <<"/ledger~node-process@1.0/schedule">>,
+                    <<"path">> => <<LedgerPath/binary, "/schedule">>,
                     <<"body">> =>
                         hb_message:commit(
                             #{
@@ -534,7 +539,7 @@ hyper_token_ledger() ->
     {ok, Balances} =
         hb_http:get(
             Node,
-            <<"/ledger~node-process@1.0/now/balance">>,
+            <<LedgerPath/binary, "/now/balance">>,
             #{}
         ),
     ?event(debug_charge, {balances, Balances}),

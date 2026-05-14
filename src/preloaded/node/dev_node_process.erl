@@ -67,10 +67,24 @@ spawn_register(Name, Opts) ->
                     Opts
                 ),
             ?event(node_process, {initialized, {name, Name}, {assignment, Assignment}}),
+            RegisterOpts =
+                case hb_opts:get(priv_wallet, no_viable_wallet, Opts) of
+                    no_viable_wallet -> Opts;
+                    Wallet ->
+                        Opts#{ <<"operator">> => ar_wallet:to_address(Wallet) }
+                end,
             RegResult =
-                dev_local_name:direct_register(
-                    #{ <<"key">> => Name, <<"value">> => ID },
-                    Opts
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"local-name@1.0">> },
+                    hb_message:commit(
+                        #{
+                            <<"path">> => <<"register">>,
+                            <<"key">> => Name,
+                            <<"value">> => ID
+                        },
+                        RegisterOpts
+                    ),
+                    RegisterOpts
                 ),
             ?event(node_process, {registered, {name, Name}, {process_id, ID}}),
             case RegResult of
