@@ -2,18 +2,24 @@
 %% Spawns up to MaxWorkers workers and refills the pool as workers complete.
 -module(hb_pmap).
 
--export([parallel_map/3]).
+-export([parallel_map/3, parallel_map/4]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-parallel_map(Items, Fun, MaxWorkers) when is_list(Items), is_function(Fun, 1) ->
+-define(DEFAULT_TIMEOUT, 60_000).
+
+parallel_map(Items, Fun, MaxWorkers) ->
+    parallel_map(Items, Fun, MaxWorkers, #{}).
+
+parallel_map(Items, Fun, MaxWorkers, Opts) when is_list(Items), is_function(Fun, 1), is_map(Opts) ->
+    Timeout = hb_opts:get(<<"pmap-timeout">>, ?DEFAULT_TIMEOUT, Opts),
     Workers = max(1, MaxWorkers),
     Parent = self(),
     ItemsWithRefs = [{Item, make_ref()} || Item <- Items],
     {ToSpawn, Remaining} =
         lists:split(min(length(ItemsWithRefs), Workers), ItemsWithRefs),
     ActiveRefs = [spawn_worker(IWR, Fun, Parent) || IWR <- ToSpawn],
-    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}),
+    ResultsMap = collect(ActiveRefs, Remaining, Fun, Parent, #{}, Timeout),
     [maps:get(Ref, ResultsMap) || {_Item, Ref} <- ItemsWithRefs].
 
 spawn_worker({Item, Ref}, Fun, Parent) ->
@@ -39,16 +45,16 @@ spawn_worker({Item, Ref}, Fun, Parent) ->
     ),
     Ref.
 
-collect([], [], _Fun, _Parent, Results) ->
+collect([], [], _Fun, _Parent, Results, _Timeout) ->
     Results;
-collect(Active, Remaining, Fun, Parent, Results) ->
+collect(Active, Remaining, Fun, Parent, Results, Timeout) ->
     receive
         {hb_pmap_result, Ref, Result} ->
             NewResults = Results#{Ref => Result},
             NewActive = lists:delete(Ref, Active),
             case Remaining of
                 [] ->
-                    collect(NewActive, [], Fun, Parent, NewResults);
+                    collect(NewActive, [], Fun, Parent, NewResults, Timeout);
                 [Next | Rest] ->
                     NextRef = spawn_worker(Next, Fun, Parent),
                     collect(
@@ -56,11 +62,14 @@ collect(Active, Remaining, Fun, Parent, Results) ->
                         Rest,
                         Fun,
                         Parent,
-                        NewResults
+                        NewResults,
+                        Timeout
                     )
             end;
         {hb_pmap_worker_crash, _Ref, Class, Reason, Stacktrace} ->
             throw({pmap_worker_crashed, Class, Reason, Stacktrace})
+    after Timeout ->
+        throw({pmap_worker_timed_out, {timeout, Timeout}, {function, Fun}})
     end.
 
 %%% Tests
@@ -106,6 +115,18 @@ worker_crash_fails_fast_test() ->
                 (Item) -> Item
             end,
             2
+        )
+    ).
+
+%% @doc Verifies that a worker exceeding pmap_timeout throws the expected error.
+timeout_triggered_test() ->
+    ?assertThrow(
+        {pmap_worker_timed_out, {timeout, 100}, _},
+        parallel_map(
+            [1],
+            fun(_) -> timer:sleep(5000) end,
+            1,
+            #{<<"pmap-timeout">> => 100}
         )
     ).
 
