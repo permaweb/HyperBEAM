@@ -360,10 +360,10 @@ status_code(_, _NodeMsg) -> 200.
 message_to_status(#{ <<"body">> := Status }, NodeMsg) when is_atom(Status) ->
     status_code(Status, NodeMsg);
 message_to_status(Item, NodeMsg) when is_map(Item) ->
-    % Note: We use `dev_message' directly here, such that we do not cause 
+    % Note: We use `hb_maps' directly here, such that we do not cause 
     % additional AO-Core calls for every request. This is particularly important
     % if a remote server is being used for all AO-Core requests by a node.
-    case dev_message:get(<<"status">>, Item, NodeMsg) of
+    case hb_maps:find(<<"status">>, Item, NodeMsg) of
         {ok, RawStatus} when is_integer(RawStatus) -> RawStatus;
         {ok, RawStatus} when is_atom(RawStatus) ->
             status_code(RawStatus, NodeMsg);
