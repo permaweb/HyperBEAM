@@ -27,9 +27,10 @@
 -export([check_size/2, check_value/2, check_type/2, ok_or_throw/3]).
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_keys/2]).
--export([base58_encode/1]).
+-export([base58_encode/1, atom_to_dashed_binary/1]).
 -include("include/hb.hrl").
 
+-include_lib("eunit/include/eunit.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
 %%% HTTP API into the correct types for the HyperBEAM runtime, if they are not
@@ -845,3 +846,17 @@ base58_encode_int(N) ->
     Char = binary:at(Alphabet, Rem),
     Rest = base58_encode_int(N div 58),
     <<Rest/binary, Char>>.
+
+%% @doc Convert an atom with underscope to dashed binary form.
+atom_to_dashed_binary(Key) when is_atom(Key) ->
+    re:replace(
+        atom_to_binary(Key),
+        <<"_">>,
+        <<"-">>,
+        [global, {return, binary}]
+    ).
+
+%% Tests
+
+atom_to_dashed_binary_test_parallel() ->
+    ?assertEqual(atom_to_dashed_binary(atom_1), <<"atom-1">>).

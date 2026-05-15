@@ -456,7 +456,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
         http_error,
         {returning_500_error,
             {method, cowboy_req:method(Req)},
-            {path, cowboy_req:path(Req)},
+            {path, {string, cowboy_req:path(Req)}},
             {string,
                 hb_format:indent_lines(
                     <<"\n", ErrorBin/binary, "\n">>,
