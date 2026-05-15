@@ -34,7 +34,7 @@
 %%%             /Results/Outbox
 %%%             /Results/Data</pre>
 -module(dev_json_iface).
--export([init/3, compute/3]).
+-export([init/3, compute/3, to/3, from/3]).
 %%% Public interface helpers:
 -export([message_to_json_struct/2, json_to_message/2]).
 %%% Test helper exports:
@@ -45,6 +45,10 @@
 %% @doc Initialize the device.
 init(M1, _M2, Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>}, Opts)}.
+
+%% @doc Return the stack output prefix from the message.
+output_prefix(Base, Opts) ->
+    hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc On first pass prepare the call, on second pass get the results.
 compute(M1, M2, Opts) ->
@@ -116,7 +120,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
                 CommitmentSignature =
                     hb_ao:get(<<"signature">>, Commitment, <<>>, Opts),
                 CommitmentKeyId =
-                    dev_codec_httpsig_keyid:remove_scheme_prefix(
+                    hb_util:remove_scheme_prefix(
                         hb_ao:get(<<"keyid">>, Commitment, <<>>, Opts)
                     ),
                 case lists:member(owner_as_address, Features) of
@@ -191,6 +195,16 @@ message_to_json_struct(RawMsg, Features, Opts) ->
             end,
         <<"PublicKey">> => PublicKey
     }.
+
+%% @doc Convert a message into an AOS2-compatible JSON structure.
+to(Base, Req, Opts) ->
+    {ok,
+        message_to_json_struct(
+            hb_maps:get(<<"message">>, Req, Base, Opts),
+            Opts
+        )
+    }.
+
 %% @doc Prepare the tags of a message as a key-value list, for use in the 
 %% construction of the JSON-Struct message.
 prepare_tags(Msg, Opts) ->
@@ -273,6 +287,10 @@ json_to_message(Other, _Opts) ->
         }
     }.
 
+%% @doc Convert an AOS2-compatible JSON result into a message.
+from(Base, Req, Opts) ->
+    json_to_message(hb_maps:get(<<"json">>, Req, Base, Opts), Opts).
+
 safe_to_id(<<>>) -> <<>>;
 safe_to_id(ID) -> hb_util:human_id(ID).
 
@@ -299,7 +317,7 @@ header_case_string(Key) ->
 %% the environment has been set up by `prep_call/3' and that the WASM executor
 %% has been called with `computed{pass=1}'.
 results(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix = output_prefix(M1, Opts),
     Type = hb_ao:get(<<"results/", Prefix/binary, "/type">>, M1, Opts),
     Proc = hb_ao:get(<<"process">>, M1, Opts),
     case hb_ao:normalize_key(Type) of
@@ -349,8 +367,8 @@ results(M1, M2, Opts) ->
     end.
 
 %% @doc Read the results out of the execution environment.
-env_read(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+env_read(M1, _M2, Opts) ->
+    Prefix = output_prefix(M1, Opts),
     Output = hb_ao:get(<<"results/", Prefix/binary, "/output">>, M1, Opts),
     case hb_private:get(<<Prefix/binary, "/read">>, M1, Opts) of
         not_found ->
@@ -361,8 +379,8 @@ env_read(M1, M2, Opts) ->
     end.
 
 %% @doc Write the message and process into the execution environment.
-env_write(ProcessStr, MsgStr, Base, Req, Opts) ->
-    Prefix = dev_stack:prefix(Base, Req, Opts),
+env_write(ProcessStr, MsgStr, Base, _Req, Opts) ->
+    Prefix = output_prefix(Base, Opts),
     Params = 
         case hb_private:get(<<Prefix/binary, "/write">>, Base, Opts) of
             not_found ->
@@ -486,7 +504,7 @@ generate_stack(File, Mode) ->
 generate_stack(File, _Mode, RawOpts) ->
     Opts = normalize_test_opts(RawOpts),
     test_init(),
-    Msg0 = dev_wasm:cache_wasm_image(File, Opts),
+    Msg0 = hb_wasm_test_utils:cache_image(File, Opts),
     Image = hb_ao:get(<<"image">>, Msg0, Opts),
     Base = Msg0#{
         <<"device">> => <<"stack@1.0">>,

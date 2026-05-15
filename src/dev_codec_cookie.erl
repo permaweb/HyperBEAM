@@ -34,7 +34,7 @@
 %%% containing the cookies parsed and normalized.
 -module(dev_codec_cookie).
 %%% Public cookie manipulation API.
--export([get_cookie/3, store/3, extract/3, reset/2]).
+-export([get_cookie/3, store/3, extract/3, reset/2, reset/3]).
 %%% Public message codec API.
 -export([to/3, from/3]).
 %%% Public commit/verify API.
@@ -143,6 +143,8 @@ reset(Base, RawOpts) ->
             Opts
         ),
     {ok, WithoutPrivCookie}.
+reset(Base, _Req, Opts) ->
+    reset(Base, Opts).
 
 %% @doc Convert a message containing cookie sources (`cookie', `set-cookie',
 %% or `priv/cookie') into a message containing the cookies serialized as the

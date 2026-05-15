@@ -132,17 +132,15 @@ message_to_fun(Msg, Key, Opts) ->
 
 %% @doc Extract the device module from a message.
 message_to_device(Msg, Opts) ->
-    case dev_message:get(<<"device">>, Msg, Opts) of
-        {error, not_found} ->
-            % The message does not specify a device, so we use the default device.
-            default();
-        {ok, DevID} ->
-            case load(DevID, Opts) of
-                {error, Reason} ->
-                    % Error case: A device is specified, but it is not loadable.
-                    throw({error, {device_not_loadable, DevID, Reason}});
-                {ok, DevMod} -> DevMod
-            end
+    DevID =
+        case hb_maps:get(<<"device">>, Msg, not_found, Opts) of
+            not_found -> default();
+            ID -> ID
+        end,
+    case load(DevID, Opts) of
+        {error, Reason} ->
+            throw({error, {device_not_loadable, DevID, Reason}});
+        {ok, DevMod} -> DevMod
     end.
 
 %% @doc Parse a handler key given by a device's `info'.
@@ -153,8 +151,8 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 		{ok, Exclude} ->
 			case lists:member(Key, Exclude) of
 				true ->
-					{ok, MsgWithoutDevice} =
-						dev_message:remove(Msg, #{ item => device }, Opts),
+					MsgWithoutDevice =
+						hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
 						MsgWithoutDevice#{ <<"device">> => default() },
 						Key,

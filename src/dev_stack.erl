@@ -118,22 +118,22 @@ info(Msg, Opts) ->
 
 %% @doc Return the default prefix for the stack.
 prefix(Base, _Req, Opts) ->
-    hb_ao:get(<<"output-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
+    hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc Return the input prefix for the stack.
 input_prefix(Base, _Req, Opts) ->
-    hb_ao:get(<<"input-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
+    hb_ao:get(<<"input-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc Return the output prefix for the stack.
 output_prefix(Base, _Req, Opts) ->
-    hb_ao:get(<<"output-prefix">>, {as, dev_message, Base}, <<"">>, Opts).
+    hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
 
 %% @doc The device stack key router. Sends the request to `resolve_stack',
 %% except for `set/2' which is handled by the default implementation in
 %% `dev_message'.
 router(<<"keys">>, Base, Request, Opts) ->
 	?event({keys_called, {base, Base}, {req, Request}}),
-	dev_message:keys(Base, Opts);
+	hb_message:keys(Base, Opts);
 router(Key, Base, Request, Opts) ->
     case hb_path:matches(Key, <<"transform">>) of
         true -> transformer_message(Base, Opts);
@@ -146,7 +146,7 @@ router(Base, Request, Opts) ->
             not_found ->
                 hb_ao:get(
                     <<"mode">>,
-                    {as, dev_message, Base},
+                    {as, <<"message@1.0">>, Base},
                     <<"Fold">>,
                     Opts
                 );
@@ -195,7 +195,7 @@ transformer_message(Base, Opts) ->
 transform(Base, Key, Opts) ->
 	% Get the device stack message from Base.
     ?event({transforming_stack, {key, Key}, {base, Base}, {opts, Opts}}),
-	case hb_ao:get(<<"device-stack">>, {as, dev_message, Base}, Opts) of
+	case hb_ao:get(<<"device-stack">>, {as, <<"message@1.0">>, Base}, Opts) of
         not_found -> throw({error, no_valid_device_stack});
         StackMsg ->
 			% Find the requested key in the device stack.
@@ -211,7 +211,7 @@ transform(Base, Key, Opts) ->
                     % - The prefixes for the device.
                     % - The prior prefixes for later restoration.
 					?event({activating_device, DevMsg}),
-					dev_message:set(
+					hb_message:set(
                         Base,
 						#{
 							<<"device">> => DevMsg,
@@ -219,34 +219,34 @@ transform(Base, Key, Opts) ->
                             <<"input-prefix">> =>
                                 hb_ao:get(
                                     [<<"input-prefixes">>, Key],
-                                    {as, dev_message, Base},
+                                    {as, <<"message@1.0">>, Base},
                                     undefined,
                                     Opts
                                 ),
                             <<"output-prefix">> =>
                                 hb_ao:get(
                                     [<<"output-prefixes">>, Key],
-                                    {as, dev_message, Base},
+                                    {as, <<"message@1.0">>, Base},
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-device">> =>
                                 hb_ao:get(
                                     <<"device">>,
-                                    {as, dev_message, Base},
+                                    {as, <<"message@1.0">>, Base},
                                     Opts
                                 ),
                             <<"previous-input-prefix">> =>
                                 hb_ao:get(
                                     <<"input-prefix">>,
-                                    {as, dev_message, Base},
+                                    {as, <<"message@1.0">>, Base},
                                     undefined,
                                     Opts
                                 ),
                             <<"previous-output-prefix">> =>
                                 hb_ao:get(
                                     <<"output-prefix">>,
-                                    {as, dev_message, Base},
+                                    {as, <<"message@1.0">>, Base},
                                     undefined,
                                     Opts
                                 )
@@ -262,29 +262,29 @@ transform(Base, Key, Opts) ->
 %% @doc The main device stack execution engine. See the moduledoc for more
 %% information.
 resolve_fold(Base, Request, Opts) ->
-	{ok, InitDevMsg} = dev_message:get(<<"device">>, Base, Opts),
+	{ok, InitDevMsg} = hb_maps:find(<<"device">>, Base, Opts),
     StartingPassValue =
-        hb_ao:get(<<"pass">>, {as, dev_message, Base}, unset, Opts),
+        hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Base}, unset, Opts),
     PreparedMessage = hb_ao:set(Base, <<"pass">>, 1, Opts),
     case resolve_fold(PreparedMessage, Request, 1, Opts) of
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
         {ok, Result} ->
-            dev_message:set(
+            hb_message:set(
                 Result,
                 #{
                     <<"device">> => InitDevMsg,
                     <<"input-prefix">> =>
                         hb_ao:get(
                             <<"previous-input-prefix">>,
-                            {as, dev_message, Result},
+                            {as, <<"message@1.0">>, Result},
                             undefined,
                             Opts
                         ),
                     <<"output-prefix">> =>
                         hb_ao:get(
                             <<"previous-output-prefix">>,
-                            {as, dev_message, Result},
+                            {as, <<"message@1.0">>, Result},
                             undefined,
                             Opts
                         ),
@@ -348,7 +348,7 @@ resolve_map(Base, Request, Opts) ->
     DevKeys =
         hb_ao:get(
             <<"device-stack">>,
-            {as, dev_message, Base},
+            {as, <<"message@1.0">>, Base},
             Opts
         ),
     Res = {ok,
@@ -370,7 +370,7 @@ resolve_map(Base, Request, Opts) ->
 increment_pass(Message, Opts) ->
     hb_ao:set(
         Message,
-        #{ <<"pass">> => hb_ao:get(<<"pass">>, {as, dev_message, Message}, 1, Opts) + 1 },
+        #{ <<"pass">> => hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Message}, 1, Opts) + 1 },
         Opts
     ).
 
@@ -448,8 +448,8 @@ transform_external_call_device_test() ->
 											{ok, hb_maps:keys(MsgX1, #{})};
 										(Key, MsgX1) ->
 											{ok, Value} =
-												dev_message:get(Key, MsgX1, #{}),
-											dev_message:set(
+												hb_maps:find(Key, MsgX1, #{}),
+											hb_message:set(
 												MsgX1,
 												#{ Key =>
 													<< Value/binary, "-Cool">>
@@ -609,9 +609,9 @@ output_prefix_test() ->
         },
     {ok, Ex2Res} = hb_ao:resolve(Base, Req, #{}),
     ?assertMatch(1,
-        hb_ao:get(<<"out1/example">>, {as, dev_message, Ex2Res}, #{})),
+        hb_ao:get(<<"out1/example">>, {as, <<"message@1.0">>, Ex2Res}, #{})),
     ?assertMatch(1,
-        hb_ao:get(<<"out2/example">>, {as, dev_message, Ex2Res}, #{})).
+        hb_ao:get(<<"out2/example">>, {as, <<"message@1.0">>, Ex2Res}, #{})).
 
 input_and_output_prefixes_test() ->
     Base =
@@ -628,9 +628,9 @@ input_and_output_prefixes_test() ->
         },
     {ok, Res} = hb_ao:resolve(Base, Req, #{}),
     ?assertMatch(1,
-        hb_ao:get(<<"out1/example">>, {as, dev_message, Res}, #{})),
+        hb_ao:get(<<"out1/example">>, {as, <<"message@1.0">>, Res}, #{})),
     ?assertMatch(2,
-        hb_ao:get(<<"out2/example">>, {as, dev_message, Res}, #{})).
+        hb_ao:get(<<"out2/example">>, {as, <<"message@1.0">>, Res}, #{})).
 
 input_output_prefixes_passthrough_test() ->
     Base =
@@ -648,7 +648,7 @@ input_output_prefixes_passthrough_test() ->
     ?assertMatch(1,
         hb_ao:get(
             <<"combined-out/example">>,
-            {as, dev_message, Ex2Res},
+            {as, <<"message@1.0">>, Ex2Res},
             #{}
         )
     ).

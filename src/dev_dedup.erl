@@ -32,9 +32,9 @@ info(_M1) ->
 %% others with deduplication. This allows the device to be used in any context
 %% where a key is called. If the `dedup-key
 handle(<<"keys">>, M1, _M2, _Opts) ->
-    dev_message:keys(M1);
+    hb_message:keys(M1);
 handle(<<"set">>, M1, M2, Opts) ->
-    dev_message:set(M1, M2, Opts);
+    hb_message:set(M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
     ?event({dedup_handle, {key, Key}, {base, M1}, {req, M2}}),
     % Find the relevant parameters from the messages. We search for the
@@ -145,8 +145,8 @@ dedup_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
-				<<"3">> => dev_stack:generate_append_device(<<"+D3">>)
+				<<"2">> => append_device(<<"+D2">>),
+				<<"3">> => append_device(<<"+D3">>)
 			},
 		<<"result">> => <<"INIT">>
 	},
@@ -177,8 +177,8 @@ dedup_with_multipass_test() ->
 		<<"device-stack">> =>
 			#{
 				<<"1">> => <<"dedup@1.0">>,
-				<<"2">> => dev_stack:generate_append_device(<<"+D2">>),
-				<<"3">> => dev_stack:generate_append_device(<<"+D3">>),
+				<<"2">> => append_device(<<"+D2">>),
+				<<"3">> => append_device(<<"+D3">>),
                 <<"4">> => <<"multipass@1.0">>
 			},
 		<<"result">> => <<"INIT">>,
@@ -191,7 +191,20 @@ dedup_with_multipass_test() ->
     {ok, Msg4} = hb_ao:resolve(Res, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     {ok, Msg5} = hb_ao:resolve(Msg4, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
-    ?assertMatch(
+	?assertMatch(
 		#{ <<"result">> := <<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">> },
 		Msg5
 	).
+
+%% @doc Generate a test device that appends to a `result' key.
+append_device(Separator) ->
+	#{
+		append =>
+			fun(M1 = #{ <<"pass">> := 3 }, _) ->
+                {ok, M1};
+			   (M1 = #{ <<"result">> := Existing }, #{ <<"bin">> := New }) ->
+				{ok, M1#{ <<"result">> =>
+					<< Existing/binary, Separator/binary, New/binary>>
+				}}
+			end
+	}.

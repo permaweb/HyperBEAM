@@ -54,7 +54,7 @@
 %%% retrieving messages.
 %%% 
 %%% Test vectors to ensure the functioning of this module and the codecs that
-%%% interact with it are found in `hb_message_test_vectors.erl'.
+%%% interact with it are found in `hb_codec_test_vectors.erl'.
 -module(hb_message).
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
@@ -66,6 +66,7 @@
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
+-export([keys/1, keys/2, set/3]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -179,6 +180,9 @@ conversion_spec_to_req(Spec, Opts) ->
 id(Msg) -> id(Msg, uncommitted).
 id(Msg, Opts) when is_map(Opts) -> id(Msg, uncommitted, Opts);
 id(Msg, Committers) -> id(Msg, Committers, #{}).
+id(Msg, Spec, Opts) when is_map(Spec) ->
+    {ok, ID} = message(<<"id">>, Msg, Spec, Opts),
+    hb_util:human_id(ID);
 id(Msg, RawCommitters, Opts) ->
     CommSpec =
         case RawCommitters of
@@ -190,12 +194,7 @@ id(Msg, RawCommitters, Opts) ->
             List when is_list(List) -> #{ <<"committers">> => List }
         end,
     ?event({getting_id, {msg, Msg}, {spec, CommSpec}}),
-    {ok, ID} =
-        dev_message:id(
-            Msg,
-            CommSpec#{ <<"path">> => <<"id">> },
-            Opts
-        ),
+    {ok, ID} = message(<<"id">>, Msg, CommSpec, Opts),
     hb_util:human_id(ID).
 
 %% @doc Normalize the IDs in a message, ensuring that there is at least one
@@ -239,11 +238,10 @@ do_normalize_commitments(Msg, Opts, passive) ->
     case {UnsignedCommitments, SignedCommitments} of
         {[], _} ->
             {ok, #{ <<"commitments">> := NewCommitments }} =
-                dev_message:commit(
+                message(
+                    <<"commit">>,
                     uncommitted(Msg),
-                    #{ 
-                        <<"type">> => <<"unsigned">>
-                    },
+                    #{ <<"type">> => <<"unsigned">> },
                     Opts
                 ),
             MergedCommitments = hb_maps:merge(
@@ -263,11 +261,10 @@ do_normalize_commitments(Msg, Opts, verify) ->
             _ -> {undefined, #{}}
         end,
     {ok, #{ <<"commitments">> := NormCommitments }} =
-        dev_message:commit(
+        message(
+            <<"commit">>,
             uncommitted(Msg),
-            MaybeCommittedSpec#{ 
-                <<"type">> => <<"unsigned">>
-            },
+            MaybeCommittedSpec#{ <<"type">> => <<"unsigned">> },
             Opts
         ),
     ?event(normalization, {normalizing_commitments, verify}),
@@ -288,8 +285,9 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 Opts
             );
         {_OldID, _NewID} ->
-            {ok, #{ <<"commitments">> := NewCommitments }} = 
-                dev_message:commit(
+            {ok, #{ <<"commitments">> := NewCommitments }} =
+                message(
+                    <<"commit">>,
                     uncommitted(Msg),
                     #{ <<"type">> => <<"unsigned">> },
                     Opts
@@ -435,7 +433,8 @@ commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, Opts, Spec) ->
     {ok, Signed} =
-        dev_message:commit(
+        message(
+            <<"commit">>,
             Msg,
             Spec#{
                 <<"commitment-device">> =>
@@ -480,7 +479,8 @@ committed(Msg, CommittersMsg, Opts) ->
             {opts, Opts}
         }
     ),
-    {ok, CommittedKeys} = dev_message:committed(Msg, CommittersMsg, Opts),
+    {ok, CommittedKeys} =
+        message(<<"committed">>, Msg, CommittersMsg, Opts),
     CommittedKeys.
 
 %% @doc wrapper function to verify a message.
@@ -505,12 +505,7 @@ verify(Msg, Committers, Opts) when not is_map(Committers) ->
     );
 verify(Msg, Spec, Opts) ->
     ?event(verify, {verify, {spec, Spec}}),
-    {ok, Res} =
-        dev_message:verify(
-            Msg,
-            Spec,
-            Opts
-        ),
+    {ok, Res} = message(<<"verify">>, Msg, Spec, Opts),
     Res.
 
 %% @doc Verify a message recursively, including all nested messages.
@@ -616,7 +611,33 @@ uncommitted_deep(Msg, Opts) ->
 %% @doc Return all of the committers on a message that have 'normal', 256 bit, 
 %% addresses.
 signers(Msg, Opts) ->
-    hb_util:ok(dev_message:committers(Msg, #{}, Opts)).
+    hb_util:ok(message(<<"committers">>, Msg, #{}, Opts)).
+
+%% @doc Return public keys using the message device.
+keys(Msg) ->
+    keys(Msg, #{}).
+keys(Msg, Opts) ->
+    message(<<"keys">>, Msg, #{}, Opts).
+
+%% @doc Set message keys using the message device.
+set(Msg, Values, Opts) ->
+    message(<<"set">>, Msg, Values, Opts).
+
+%% @doc Invoke the message device directly for kernel message helpers.
+message(Key, Msg, Req, Opts) ->
+    CallReq = Req#{ <<"path">> => Key },
+    {Status, _Dev, Func} =
+        hb_ao_device:message_to_fun(
+            #{ <<"device">> => <<"message@1.0">> },
+            Key,
+            Opts
+        ),
+    Args =
+        case Status of
+            add_key -> [Key, Msg, CallReq, Opts];
+            _ -> [Msg, CallReq, Opts]
+        end,
+    apply(Func, hb_ao_device:truncate_args(Func, Args)).
 
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
