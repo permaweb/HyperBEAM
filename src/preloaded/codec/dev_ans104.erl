@@ -1,6 +1,7 @@
 %%% @doc Codec for managing transformations from `ar_bundles'-style Arweave TX
 %%% records to and from TABMs.
 -module(dev_ans104).
+-device_libraries([lib_arweave_common]).
 -export([to/3, from/3, commit/3, verify/3, content_type/1]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
@@ -106,22 +107,22 @@ do_from(RawTX, Req, Opts) ->
     TX = ar_bundles:deserialize(ar_tx:normalize(RawTX)),
     ?event({from, {parsed_tx, TX}}),
     % Get the fields, tags, and data from the TX.
-    Fields = dev_ans104_from:fields(TX, <<>>, Opts),
-    Tags = dev_ans104_from:tags(TX, Opts),
-    Data = dev_ans104_from:data(TX, Req, Tags, Opts),
+    Fields = lib_arweave_common:fields(TX, <<>>, Opts),
+    Tags = lib_arweave_common:tags(TX, Opts),
+    Data = lib_arweave_common:data(TX, Req, Tags, fun dev_ans104:from/3, Opts),
     ?event({from,
         {parsed_components, {fields, Fields}, {tags, Tags}, {data, Data}}}),
     % Calculate the committed keys on from the TX.
-    Keys = dev_ans104_from:committed(
+    Keys = lib_arweave_common:committed(
         ?BASE_FIELDS, TX, Fields, Tags, Data, Opts),
     ?event({from, {determined_committed_keys, Keys}}),
     % Create the base message from the fields, tags, and data, filtering to
     % include only the keys that are committed. Will throw if a key is missing.
-    Base = dev_ans104_from:base(Keys, Fields, Tags, Data, Opts),
+    Base = lib_arweave_common:base(Keys, Fields, Tags, Data, Opts),
     ?event({from, {calculated_base_message, Base}}),
     % Add the commitments to the message if the TX has a signature.
-    FieldCommitments = dev_ans104_from:fields(TX, ?FIELD_PREFIX, Opts),
-    WithCommitments = dev_ans104_from:with_commitments(
+    FieldCommitments = lib_arweave_common:fields(TX, ?FIELD_PREFIX, Opts),
+    WithCommitments = lib_arweave_common:with_commitments(
         ?BASE_FIELDS, TX, <<"ans104@1.0">>, FieldCommitments,
         Tags, Base, Keys, Opts),
     ?event({from, {parsed_message, WithCommitments}}),
@@ -152,26 +153,27 @@ to(RawTABM, Req, Opts) when is_map(RawTABM) ->
         RawTABM,
         Opts
     ),
-    IsBundle = dev_ans104_to:is_bundle(MaybeCommitment, Req, Opts),
-    MaybeBundle = dev_ans104_to:maybe_load(RawTABM, IsBundle, Opts),
+    IsBundle = lib_arweave_common:is_bundle(MaybeCommitment, Req, Opts),
+    MaybeBundle = lib_arweave_common:maybe_load(RawTABM, IsBundle, Opts),
     ?event(ans104_to, {to, {maybe_bundle, MaybeBundle}},
         #{debug_print_verify => false}),
 
     % Calculate and normalize the `data', if applicable.
-    Data = dev_ans104_to:data(MaybeBundle, Req, Opts),
+    Data = lib_arweave_common:data(
+        MaybeBundle, Req, fun dev_ans104:to/3, Opts),
     ?event(ans104_to, {to, {calculated_data, Data}},
         #{debug_print_verify => false}),
-    TX0 = dev_ans104_to:siginfo(
+    TX0 = lib_arweave_common:siginfo(
         MaybeBundle, MaybeCommitment,
-        fun dev_ans104_to:fields_to_tx/4, Opts
+        fun lib_arweave_common:fields_to_tx/4, Opts
     ),
     ?event(ans104_to, {to, {found_siginfo, TX0}},
         #{debug_print_verify => false}),
     TX1 = TX0#tx { data = Data },
     % Calculate the tags for the TX.
-    Tags = dev_ans104_to:tags(
+    Tags = lib_arweave_common:tags(
         TX1, MaybeCommitment, MaybeBundle,
-        dev_ans104_to:excluded_tags(TX1, MaybeBundle, Opts), Opts),
+        lib_arweave_common:excluded_tags(TX1, MaybeBundle, Opts), Opts),
     ?event(ans104_to, {to, {calculated_tags, Tags}},
         #{debug_print_verify => false}),
     TX2 = TX1#tx { tags = Tags },

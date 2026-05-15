@@ -46,6 +46,15 @@ tx(Base, Request, Opts) ->
 %% you should use the ~bundler@1.0 device.
 post_tx(Base, RawRequest, Opts) ->
     {ok, Request} = extract_target(Base, RawRequest, Opts),
+    case hb_maps:find(<<"commitment-device">>, Request, Opts) of
+        {ok, Device} ->
+            post_tx(Base, Request, Opts, Device);
+        error ->
+            post_tx_detect_device(Base, Request, Opts)
+    end.
+
+%% @doc Detect the commitment device to use when posting a transaction.
+post_tx_detect_device(Base, Request, Opts) ->
     case hb_message:commitment_devices(Request, Opts) of
         [Device] -> post_tx(Base, Request, Opts, Device);
         [] -> 

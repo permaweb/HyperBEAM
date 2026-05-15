@@ -2,7 +2,7 @@
 %%% (potentially multi-layer) paths as their keys, and a normal TABM binary as 
 %%% their value.
 -module(dev_flat).
--export([from/3, to/3, commit/3, verify/3]).
+-export([from/3, to/3, commit/3, verify/3, deserialize/3]).
 %%% Testing utilities
 -export([serialize/1, serialize/2, deserialize/1]).
 -include_lib("eunit/include/eunit.hrl").
@@ -127,6 +127,10 @@ deserialize(Bin) when is_binary(Bin) ->
         binary:split(Bin, <<"\n">>, [global])
     ),
     {ok, hb_message:convert(Flat, <<"structured@1.0">>, <<"flat@1.0">>, #{})}.
+
+%% @doc Parse flat text into a TABM.
+deserialize(Bin, _Req, _Opts) ->
+    deserialize(Bin).
 
 %%% Tests
 

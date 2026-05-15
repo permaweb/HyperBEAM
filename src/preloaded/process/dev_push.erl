@@ -2,6 +2,7 @@
 %%% pushes the resulting messages to other processes. The `push'ing mechanism
 %%% continues until the there are no remaining messages to push.
 -module(dev_push).
+-device_libraries([lib_process]).
 %%% Public API
 -export([push/3]).
 -include("include/hb.hrl").
@@ -37,7 +38,7 @@
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
 push(Base, Req, Opts) ->
-    Process = dev_process_lib:as_process(Base, Opts),
+    Process = lib_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -88,9 +89,9 @@ is_async(Process, Req, Opts) ->
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    ID = dev_process_lib:process_id(PrimaryProcess, #{}, Opts),
+    ID = lib_process:process_id(PrimaryProcess, #{}, Opts),
     UncommittedID =
-        dev_process_lib:process_id(
+        lib_process:process_id(
             PrimaryProcess,
             #{ <<"commitments">> => <<"none">> },
             Opts
@@ -1052,7 +1053,7 @@ push_with_redirect_hint_test_disabled() ->
         PongServerID =
             hb_ao:get(
                 <<"process/id">>,
-                dev_process_lib:ensure_process_key(PongServer, LocalOpts),
+                lib_process:ensure_process_key(PongServer, LocalOpts),
                 LocalOpts
             ),
         {ok, ServerScriptSchedResp} =

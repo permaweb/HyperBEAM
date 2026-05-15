@@ -116,7 +116,8 @@ preloaded_index_default() ->
         <<"log-max-bytes">> =>
             {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         <<"lua-scripts">> => {"LUA_SCRIPTS", "scripts"},
-        <<"lua-tests">> => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
+        <<"lua-tests">> =>
+            {"LUA_TESTS", fun lua_tests_from_env/1, tests},
         <<"default-index">> =>
             {
                 "HB_INDEX",
@@ -158,6 +159,10 @@ preloaded_store_from_env(Path) ->
         <<"store-module">> => hb_store_lmdb,
         <<"name">> => hb_util:bin(Path)
     }.
+
+%% @doc Keep the raw Lua test selector in opts; the Lua test device parses it.
+lua_tests_from_env(tests) -> tests;
+lua_tests_from_env(Spec) -> hb_util:bin(Spec).
 
 %% @doc Convert an opts key to lower-case binary dash form.
 canonical_key(Key) when is_atom(Key) ->
@@ -760,7 +765,13 @@ load_bin(<<"flat@1.0">>, Bin, Opts) ->
             fun(Line) -> string:trim(Line, trailing) end,
             binary:split(Bin, <<"\n">>, [global])
         ),
-    try dev_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
+    try hb_ao:direct(
+            <<"flat@1.0">>,
+            iolist_to_binary(lists:join(<<"\n">>, Ls)),
+            #{ <<"path">> => <<"deserialize">> },
+            Opts
+        )
+    of
         {ok, Map} ->
             {ok, mimic_default_types(Map, false, Opts)}
     catch

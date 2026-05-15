@@ -60,7 +60,7 @@ run(Args, NodeOpts) ->
                 hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
             Pkgs = [hb_packager:package(G, PackageOpts) || G <- Groups],
             {ok, Result} =
-                hb_preload:build_dir(Pkgs, Wallet, OutputDir, NodeOpts),
+                hb_preload:build_dir(Pkgs, Wallet, OutputDir, PackageOpts),
             HeaderPath = header_path(OutputDir),
             ok =
                 hb_preload:write_index_header(

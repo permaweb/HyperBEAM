@@ -54,7 +54,7 @@ compute_cached(ProcID, RawSlot, Opts) ->
     end.
 
 process_to_group_name(Base, Opts) ->
-    Initialized = dev_process_lib:ensure_process_key(Base, Opts),
+    Initialized = lib_process:ensure_process_key(Base, Opts),
     ProcMsg =
         hb_ao:get(<<"process">>, Initialized, Opts#{ <<"hashpath">> => ignore }),
     ID = hb_message:id(ProcMsg, all),

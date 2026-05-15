@@ -2,7 +2,7 @@
 -implements(<<"test-device@1.0">>).
 -export([info/3]).
 -export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
--export([mangle/3, update_state/3, increment_counter/3, delay/3]).
+-export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -42,6 +42,7 @@ info(_Base, _Req, _Opts) ->
 			<<"mul">> => <<"Multiply function">>,
 			<<"snapshot">> => <<"Snapshot function">>,
 			<<"response">> => <<"Response function">>,
+			<<"append">> => <<"Append a test value">>,
 			<<"update_state">> => <<"Update state function">>
 		}
 	},
@@ -121,6 +122,15 @@ mul(Base, Req) ->
 snapshot(Base, Req, _Opts) ->
     ?event({snapshot_called, {base, Base}, {req, Req}}),
     {ok, #{}}.
+
+%% @doc Append a test binary to the `result' key.
+append(Base = #{ <<"pass">> := 3 }, _Req, _Opts) ->
+    {ok, Base};
+append(Base, Req, Opts) ->
+    Existing = hb_maps:get(<<"result">>, Base, <<>>, Opts),
+    Prefix = hb_maps:get(<<"append-prefix">>, Base, <<>>, Opts),
+    Bin = hb_maps:get(<<"bin">>, Req, <<>>, Opts),
+    {ok, Base#{ <<"result">> => <<Existing/binary, Prefix/binary, Bin/binary>> }}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->

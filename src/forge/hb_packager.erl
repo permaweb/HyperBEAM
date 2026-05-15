@@ -6,12 +6,11 @@
 %%% the root becomes `_hb_device_<sanitized-name>_<hash>' and helpers
 %%% become `_hb_device_<sanitized-name>_<hash>__<helper-tail>'.
 %%%
-%%% The hash is the unsigned message ID of an AO-Core message that
-%%% contains the device's source files (file name and contents).  This
-%%% means the hash is uniquely determined by the source set and is not
-%%% materially controllable by the device author.  The hash is encoded
-%%% as lowercase unpadded base32 so that it can appear in an Erlang
-%%% atom.
+%%% The hash is derived from a framed SHA-256 stream of the device's source
+%%% file names and contents. This means the hash is uniquely determined by the
+%%% source set and is not materially controllable by the device author. The
+%%% hash is encoded as lowercase unpadded base32 so that it can appear in an
+%%% Erlang atom.
 %%%
 %%% The packager also produces signed AO-Core messages for the device's
 %%% _specification_ (markdown derived from the root module's top moduledoc,
@@ -34,7 +33,7 @@
 -export([sanitize_device_name/1, generated_module_name/2]).
 -export([is_generated_module/1, generated_module_parts/1]).
 -export([encode_on_loads/1, decode_on_loads/1]).
--export([base32_lower/1, bootstrap_device_map/0]).
+-export([base32_lower/1, load_archive/1]).
 -ifdef(TEST).
 -export([test_fixture_dir/0]).
 -endif.
@@ -67,6 +66,7 @@ scan(Dirs) -> scan(Dirs, #{}).
 scan(Dirs, Opts) when is_list(Dirs) ->
     %% Get all device files under the given directories.
     Files = lists:flatmap(fun list_dev_files/1, Dirs),
+    LibFiles = maps:from_list(lists:flatmap(fun list_lib_files/1, Dirs)),
     %% Sort once so grouping is deterministic.
     Sorted = lists:keysort(1, Files),
     Names = [Name || {Name, _Path} <- Sorted],
@@ -77,7 +77,7 @@ scan(Dirs, Opts) when is_list(Dirs) ->
         sets:from_list(
             [N || {N, P} <- Sorted, file_has_implements(P)]
         ),
-    Groups = group_by_namespace(Sorted, Names, ForcedRoots),
+    Groups = group_by_namespace(Sorted, Names, ForcedRoots, LibFiles),
     DeviceRoots = hb_maps:get(<<"device-roots">>, Opts, all, Opts),
     case DeviceRoots of
         all -> Groups;
@@ -97,6 +97,20 @@ list_dev_files(Dir) ->
         false -> [];
         true ->
             Pattern = filename:join(binary_to_list(Bin), "**/dev_*.erl"),
+            [
+                {atom_of_file(P), hb_util:bin(P)}
+              ||
+                P <- filelib:wildcard(Pattern)
+            ]
+    end.
+
+%% @doc Recursively list `lib_*.erl' files in a directory.
+list_lib_files(Dir) ->
+    Bin = hb_util:bin(Dir),
+    case filelib:is_dir(Bin) of
+        false -> [];
+        true ->
+            Pattern = filename:join(binary_to_list(Bin), "**/lib_*.erl"),
             [
                 {atom_of_file(P), hb_util:bin(P)}
               ||
@@ -125,7 +139,7 @@ file_has_implements(Path) ->
 %% in the candidate set AND `dev_foo_bar' itself does not declare a
 %% `-implements(...)' attribute.  Modules that explicitly declare the
 %% device they implement are always roots.
-group_by_namespace(Files, _Names, ForcedRoots) ->
+group_by_namespace(Files, _Names, ForcedRoots, LibFiles) ->
     ByDepth =
         lists:sort(
             fun({A, _}, {B, _}) -> namespace_key(A) =< namespace_key(B) end,
@@ -177,11 +191,13 @@ group_by_namespace(Files, _Names, ForcedRoots) ->
                 lists:sort(
                     [H || {R, H} <- Helpers, R =:= Root]
                 ),
+            RootLibraries = library_modules(maps:get(Root, FilesMap), LibFiles),
             #{
                 root => Root,
                 root_file => maps:get(Root, FilesMap),
                 helpers =>
                     [{H, maps:get(H, FilesMap)} || H <- RootHelpers],
+                libraries => RootLibraries,
                 files =>
                     maps:from_list(
                         [
@@ -189,6 +205,10 @@ group_by_namespace(Files, _Names, ForcedRoots) ->
                                 read_file(maps:get(M, FilesMap))}
                           ||
                             M <- [Root | RootHelpers]
+                        ] ++
+                        [
+                            {filename_only(Path), read_file(Path)}
+                         || {_Lib, Path} <- RootLibraries
                         ]
                     )
             }
@@ -196,6 +216,32 @@ group_by_namespace(Files, _Names, ForcedRoots) ->
       ||
         Root <- SortedRoots
     ].
+
+%% @doc Return the lib_* modules explicitly requested by a device root.
+library_modules(RootFile, LibFiles) ->
+    {_Forms, Attrs} = parse_module(RootFile),
+    lists:map(
+        fun(Mod) ->
+            case maps:find(Mod, LibFiles) of
+                {ok, Path} -> {Mod, Path};
+                error -> erlang:error({missing_device_library, Mod, RootFile})
+            end
+        end,
+        lists:usort(lists:flatmap(fun library_attr/1, Attrs))
+    ).
+
+library_attr({device_libraries, Mods}) ->
+    normalize_libraries(Mods);
+library_attr(_) ->
+    [].
+
+normalize_libraries(Mods) when is_list(Mods) ->
+    lists:flatmap(fun normalize_libraries/1, Mods);
+normalize_libraries(Mod) when is_atom(Mod) ->
+    case lists:prefix("lib_", atom_to_list(Mod)) of
+        true -> [Mod];
+        false -> erlang:error({invalid_device_library, Mod})
+    end.
 
 %% @doc Sort shorter namespaces before their helpers.
 namespace_key(Mod) ->
@@ -255,14 +301,16 @@ package_all(Groups, Opts) ->
 %% root module name, BEAM archive, source, declared `implements' name
 %% (if present), and metadata used to construct the spec/implementation
 %% messages.
-package(#{ root := Root, root_file := RootFile, helpers := Helpers, files := Files }, Opts) ->
+package(#{ root := Root, root_file := RootFile, helpers := Helpers,
+    files := Files } = Group, Opts) ->
+    Libraries = maps:get(libraries, Group, []),
     % Get the attirbutes of the root module.
     {_RootForms, RootAttrs} = parse_module(RootFile),
     % If the root or any helpers dynamically call the
     % original internal module namespace, reject.
     reject_dynamic_internal_source_calls(
-        [Root | [H || {H, _} <- Helpers]],
-        [{Root, RootFile} | Helpers]
+        [Root | [M || {M, _} <- Helpers ++ Libraries]],
+        [{Root, RootFile} | Helpers ++ Libraries]
     ),
     % Use the declared `-implements' value when present, otherwise derive the
     % device name from the root module atom.
@@ -283,7 +331,8 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers, files := Fil
     % Compile the rewritten root + helpers into one deterministic archive.
     ArchivePkg =
         compile_archive(
-            ModName, Root, RootFile, Helpers, SourceHash, PrivFiles, Opts
+            ModName, Root, RootFile, Helpers, Libraries, SourceHash,
+            PrivFiles, Opts
         ),
     % Export metadata is kept separately so the runtime can verify the root
     % API without unpacking the original source again.
@@ -308,6 +357,7 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers, files := Fil
             hb_util:bin(erlang:system_info(system_architecture)),
         root_module => Root,
         helpers => [H || {H, _} <- Helpers],
+        libraries => [L || {L, _} <- Libraries],
         files => Files,
         priv_files => PrivFiles
     }.
@@ -530,36 +580,55 @@ reverse_concat(Lines) ->
 %%% Hashing & module naming
 %%% --------------------------------------------------------------------
 
-%% @doc Compute the canonical package ID of a device's file set. The source
-%% set is represented as a normal AO-Core message whose keys are bare source
-%% filenames and whose values are the complete file contents.
-source_id(FilesMap, Opts) ->
-    %% Generate an AO-Core message ID for the set of module files.
-    SourceMsg = maps:from_list(lists:sort(maps:to_list(FilesMap))),
-    hb_message:id(SourceMsg, unsigned, source_id_opts(Opts)).
+%% @doc Compute the canonical package ID of a device's file set before the
+%% preloaded message/codec devices exist. The framed stream has the same input
+%% surface as the intended AO-Core source message: bare filename keys and full
+%% file contents.
+source_id(FilesMap, _Opts) ->
+    hb_util:human_id(crypto:hash(sha256, source_id_stream(FilesMap))).
+
+source_id_stream(FilesMap) ->
+    [
+        <<"hyperbeam-device-source-v1">>,
+        [
+            [<<(byte_size(Name)):32>>, Name, <<(byte_size(Body)):64>>, Body]
+         ||
+            {Name, Body} <- lists:sort(maps:to_list(FilesMap))
+        ]
+    ].
 
 source_id_to_hash(SourceID) ->
     base32_lower(hb_util:native_id(SourceID)).
 
-source_id_opts(Opts) ->
-    case hb_opts:get(device_bootstrap, undefined, Opts) of
-        Map when is_map(Map) -> Opts;
-        _ -> Opts#{ <<"device-bootstrap">> => bootstrap_device_map() }
+%% @doc Load a generated package archive into the current code server.
+load_archive(Pkg) ->
+    Archive = maps:get(archive, Pkg),
+    {ok, Files} = zip:unzip(Archive, [memory]),
+    Beams =
+        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
+    Modules =
+        [
+            begin
+                Path = maps:get(<<"archive-path">>, Meta),
+                ModBin = maps:get(<<"module-name">>, Meta),
+                Mod = binary_to_atom(ModBin, utf8),
+                {Mod, binary_to_list(Path), maps:get(Path, Beams)}
+            end
+         ||
+            Meta <- maps:get(archive_modules, Pkg)
+        ],
+    case code:atomic_load(Modules) of
+        ok ->
+            ok;
+        {error, Reason} ->
+            case lists:all(
+                fun({Mod, _, _}) -> code:is_loaded(Mod) =/= false end,
+                Modules
+            ) of
+                true -> ok;
+                false -> {error, {archive_load_failed, Reason}}
+            end
     end.
-
-%% @doc The build-time source modules needed before a preloaded-store exists.
-%% Runtime node opts should not set `<<"device-bootstrap">>'.
-bootstrap_device_map() ->
-    #{
-        <<"message@1.0">> => dev_message,
-        <<"httpsig@1.0">> => dev_httpsig,
-        <<"structured@1.0">> => dev_structured,
-        <<"ans104@1.0">> => dev_ans104,
-        <<"flat@1.0">> => dev_flat,
-        <<"json@1.0">> => dev_json,
-        <<"match@1.0">> => dev_match,
-        <<"tx@1.0">> => dev_tx
-    }.
 
 %% @doc Encode bytes as lowercase, unpadded base32 (RFC 4648 alphabet).
 base32_lower(Bin) when is_binary(Bin) ->
@@ -662,8 +731,9 @@ generated_module_parts(_) -> not_generated.
 %% @doc Rename every source module in a device namespace, compile the
 %% renamed modules independently, and pack their BEAMs into a
 %% deterministic in-memory ZIP archive.
-compile_archive(RootMod, Root, RootFile, Helpers, Hash, PrivFiles, Opts) ->
-    Entries = [{Root, RootFile} | Helpers],
+compile_archive(
+        RootMod, Root, RootFile, Helpers, Libraries, Hash, PrivFiles, Opts) ->
+    Entries = [{Root, RootFile} | Helpers ++ Libraries],
     Renamings = module_renamings(RootMod, Root, Entries),
     TmpDir = package_tmp_dir(RootMod),
     Copied =
@@ -724,9 +794,10 @@ generated_constituent_module_name(RootMod, Root, Mod) ->
     RootPrefix = "dev_" ++ RootTail ++ "_",
     ModStr = atom_to_list(Mod),
     Tail =
-        case lists:prefix(RootPrefix, ModStr) of
-            true -> lists:nthtail(length(RootPrefix), ModStr);
-            false -> ModStr
+        case {lists:prefix(RootPrefix, ModStr), lists:prefix("lib_", ModStr)} of
+            {true, _} -> lists:nthtail(length(RootPrefix), ModStr);
+            {_, true} -> lists:nthtail(length("lib_"), ModStr);
+            _ -> ModStr
         end,
     binary_to_atom(
         <<(atom_to_binary(RootMod, utf8))/binary, "__",
@@ -1434,35 +1505,16 @@ hash_changes_with_content_test() ->
     Hash2 = maps:get(hash, Pkg2),
     ?assertNotEqual(Hash1, Hash2).
 
-package_hash_is_source_message_id_test() ->
+package_hash_is_source_id_test() ->
     Dir = test_fixture_dir(),
     [Group = #{ files := Files }] = scan([Dir], #{}),
     Pkg = package(Group, #{}),
-    SourceID = hb_message:id(
-        maps:from_list(lists:sort(maps:to_list(Files))),
-        unsigned,
-        source_id_opts(#{})
-    ),
+    SourceID = source_id(Files, #{}),
     ?assertEqual(SourceID, maps:get(source_id, Pkg)),
     ?assertEqual(source_id_to_hash(SourceID), maps:get(hash, Pkg)).
 
 load_pkg_archive(Pkg) ->
-    Archive = maps:get(archive, Pkg),
-    {ok, Files} = zip:unzip(Archive, [memory]),
-    Beams =
-        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
-    Modules =
-        [
-            begin
-                Path = maps:get(<<"archive-path">>, Meta),
-                ModBin = maps:get(<<"module-name">>, Meta),
-                Mod = binary_to_atom(ModBin, utf8),
-                {Mod, binary_to_list(Path), maps:get(Path, Beams)}
-            end
-          ||
-            Meta <- maps:get(archive_modules, Pkg)
-        ],
-    code:atomic_load(Modules).
+    load_archive(Pkg).
 
 run_pkg_on_loads([]) ->
     ok;

@@ -164,8 +164,13 @@ resolve(Base, Req, Opts) ->
 %% @doc Invoke a device key directly, bypassing the AO-Core resolver loop.
 direct(Device, Base, Req, Opts) ->
     Key = hb_path:hd(Req, Opts),
+    Msg =
+        case is_map(Base) of
+            true -> Base#{ <<"device">> => Device };
+            false -> #{ <<"device">> => Device }
+        end,
     {Status, _Dev, Func} =
-        hb_ao_device:message_to_fun(Base#{ <<"device">> => Device }, Key, Opts),
+        hb_ao_device:message_to_fun(Msg, Key, Opts),
     Args =
         case Status of
             add_key -> [Key, Base, Req, Opts];
@@ -247,6 +252,8 @@ resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
+resolve_stage(1, ID, Req, Opts) when ?IS_ID(ID) ->
+    resolve_stage(1, ensure_message_loaded(ID, Opts), Req, Opts);
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
@@ -879,7 +886,7 @@ ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
             LoadedMsg;
         failure ->
             failure;
-        not_found ->
+        {error, not_found} ->
             throw({necessary_message_not_found, <<"/">>, MsgID})
     end;
 ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->

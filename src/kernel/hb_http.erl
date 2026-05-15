@@ -152,8 +152,9 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                     },
                     Opts
                 ),
+                Cookie = cookie_device(Opts),
                 {ok, MsgWithCookies} =
-                    dev_cookie:from(
+                    Cookie:from(
                         #{ <<"set-cookie">> => SetCookieLines },
                         #{},
                         Opts
@@ -299,11 +300,31 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
     % Get the route for the message
-    Res = route_to_request(M, RouteRes = dev_router:route(M, Opts), Opts),
+    RouteReq = M#{
+        <<"path">> => <<"route">>,
+        <<"route-path">> => hb_maps:get(<<"path">>, M, <<>>, Opts)
+    },
+    Res =
+        route_to_request(
+            M,
+            RouteRes = hb_ao:direct(<<"router@1.0">>, #{}, RouteReq, Opts),
+            Opts
+        ),
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
     Res.
 
-%% @doc Parse a `dev_router:route' response and return a tuple of request
+%% @doc Resolve the packaged cookie device module.
+cookie_device(Opts) ->
+    hb_ao_device:message_to_device(#{ <<"device">> => <<"cookie@1.0">> }, Opts).
+
+%% @doc Resolve the packaged Hyperbuddy device module.
+hyperbuddy_device(Opts) ->
+    hb_ao_device:message_to_device(
+        #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        Opts
+    ).
+
+%% @doc Parse a `router@1.0/route' response and return a tuple of request
 %% parameters.
 route_to_request(M, {ok, URI}, Opts) when is_binary(URI) ->
     route_to_request(M, {ok, #{ <<"uri">> => URI, <<"opts">> => #{} }}, Opts);
@@ -359,20 +380,21 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     Message = hb_ao:normalize_keys(RawMessage, Opts),
     % Verify the outbound message if paranoid mode is enabled for http_request
     hb_message:paranoid_verify(http_request, Message, Opts),
+    Cookie = cookie_device(Opts),
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.
     {MaybeCookie, WithoutCookie} =
-        case dev_cookie:extract(Message, #{}, Opts) of
+        case Cookie:extract(Message, #{}, Opts) of
             {ok, NoCookies} when map_size(NoCookies) == 0 ->
                 {#{}, Message};
             {ok, _Cookies} ->
                 {ok, #{ <<"cookie">> := CookieLines }} =
-                    dev_cookie:to(
+                    Cookie:to(
                         Message,
                         #{ <<"format">> => <<"cookie">> },
                         Opts
                     ),
-                {ok, CookieReset} = dev_cookie:reset(Message, Opts),
+                {ok, CookieReset} = Cookie:reset(Message, Opts),
                 ?event(debug_http, {cookie_lines, CookieLines}),
                 {
                     #{ <<"cookie">> => CookieLines },
@@ -554,16 +576,17 @@ should_finalize_stream(_, _EncodedBody) -> false.
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
 %% `set-cookie' and `cookie' fields are treated as viable sources of cookies.
 reply_handle_cookies(Req, Message, Opts) ->
-    {ok, Cookies} = dev_cookie:extract(Message, #{}, Opts),
+    Cookie = cookie_device(Opts),
+    {ok, Cookies} = Cookie:extract(Message, #{}, Opts),
     ?event(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
     case Cookies of
         NoCookies when map_size(NoCookies) == 0 -> {ok, Req, Message};
         _ ->
             % The internal values of the `cookie' field will be stored in the
-            % `priv_store' by default, so we let `dev_cookie:opts/1'
+            % `priv_store' by default, so we let `cookie@1.0/opts'
             % reset the options.
             {ok, #{ <<"set-cookie">> := SetCookieLines }} =
-                dev_cookie:to(
+                Cookie:to(
                     Message,
                     #{ <<"format">> => <<"set-cookie">> },
                     Opts
@@ -589,7 +612,7 @@ reply_handle_cookies(Req, Message, Opts) ->
                     Req,
                     SetCookieLines
                 ),
-            {ok, CookieReset} = dev_cookie:reset(Message, Opts),
+            {ok, CookieReset} = Cookie:reset(Message, Opts),
             {
                 ok,
                 FinalReq,
@@ -654,18 +677,16 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     {bundle, AcceptBundle}
                 }
             ),
-            {ok, ErrMsg} =
-                dev_hyperbuddy:return_error(Message, Opts),
+            Hyperbuddy = hyperbuddy_device(Opts),
+            {ok, ErrMsg} = Hyperbuddy:return_error(Message, Opts),
             {Status,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {404, <<"httpsig@1.0">>, false} ->
+            Hyperbuddy = hyperbuddy_device(Opts),
             {ok, ErrMsg} =
-                dev_hyperbuddy:return_file(
-                    <<"hyperbuddy@1.0">>,
-                    <<"404.html">>
-                ),
+                Hyperbuddy:return_file(<<"hyperbuddy@1.0">>, <<"404.html">>),
             {Status,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
@@ -678,22 +699,25 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     <<"structured@1.0">>,
                     Opts#{ <<"topic">> => ao_internal }
                 ),
-            {ok, EncMessage} =
-                dev_httpsig:to(
+            EncMessage =
+                hb_message:convert(
                     TABM,
-                    case AcceptBundle of
+                    (case AcceptBundle of
                         true ->
                             #{
+                                <<"device">> => <<"httpsig@1.0">>,
                                 <<"path">> => <<"to">>,
                                 <<"bundle">> => true
                             };
                         false ->
                             TABMReq#{
+                                <<"device">> => <<"httpsig@1.0">>,
                                 <<"path">> => <<"to">>,
                                 <<"index">> =>
                                     hb_opts:get(generate_index, true, Opts)
                             }
-                    end,
+                    end),
+                    tabm,
                     Opts
                 ),
             {
@@ -1070,7 +1094,8 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         case maps:get(<<"cookie">>, RawHeaders, undefined) of
             undefined -> {ok, BaseMsg};
             Cookie ->
-                dev_cookie:from(
+                CookieMod = cookie_device(Opts),
+                CookieMod:from(
                     BaseMsg#{ <<"cookie">> => Cookie },
                     Req,
                     Opts
@@ -1305,7 +1330,7 @@ ans104_wasm_test() ->
     {link, LinkID, _ } = maps:get(<<"output">>, Res),
     %% We need to resolve agaisnt the server cache
     {ok, #{<<"body">> := Body}} = post(URL, Msg#{<<"path">> => <<"/", LinkID/binary, "/1">>}, ClientOpts),
-    ?assertEqual(<<"6.00000000000000000000e+00">>, Body),
+    ?assertEqual(6.0, Body),
     % @TODO this assertion should pass, but it doesn't due to how `bundle`
     % tag is handled between client an server. Commenting out for now.
     % ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, ClientOpts)),

@@ -55,16 +55,15 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     %% Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
     hb_store:start(StoreCfg, #{}, Opts),
-    %% The build-time signing flow needs a usable codec device before
-    %% any preloaded-store exists. We point the resolver at the source
-    %% modules via `<<"device-bootstrap">>' for the duration of this
-    %% build.  Runtime nodes never set that opt.
+    DeviceStore = device_store(),
+    hb_store:start(DeviceStore, #{}, Opts),
     LocalOpts =
         Opts#{
             <<"store">> => [StoreCfg],
-            <<"priv-wallet">> => Wallet,
-            <<"device-bootstrap">> => hb_packager:bootstrap_device_map()
+            <<"device-store">> => DeviceStore,
+            <<"priv-wallet">> => Wallet
         },
+    ok = load_build_devices(Pkgs, LocalOpts),
     %% Sign and write each spec + each impl message; collect signed IDs.
     {SpecIDs, ImplIDs} =
         lists:foldl(
@@ -86,6 +85,7 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     % Write the index message to the store.
     IndexID = persist_signed(IndexMsg, LocalOpts),
     ok = hb_store:stop(StoreCfg, #{}, Opts),
+    ok = hb_store:stop(DeviceStore, #{}, Opts),
     {
         ok,
         #{
@@ -95,6 +95,51 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
             impls => lists:reverse(ImplIDs)
         }
     }.
+
+%% @doc Volatile cache used only while signing the preloaded-store.
+device_store() ->
+    #{
+        <<"store-module">> => hb_store_volatile,
+        <<"name">> =>
+            iolist_to_binary([
+                <<"preload-build-devices-">>,
+                integer_to_binary(erlang:unique_integer([positive]))
+            ])
+    }.
+
+%% @doc Load the generated message/codec devices needed to sign and write
+%% preload artifacts. These are packaged modules, not source `dev_*' modules.
+load_build_devices(Pkgs, Opts) ->
+    ByName =
+        maps:from_list(
+            [{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]
+        ),
+    lists:foreach(
+        fun(Name) ->
+            Pkg =
+                case maps:find(Name, ByName) of
+                    {ok, Found} -> Found;
+                    error -> error({missing_preload_build_device, Name})
+                end,
+            ok = hb_packager:load_archive(Pkg),
+            cache_build_device(Name, maps:get(module_name, Pkg), Opts)
+        end,
+        required_build_devices()
+    ).
+
+cache_build_device(Name, Mod, Opts) ->
+    hb_ao_device:cache_device_module(Name, Mod, Opts).
+
+required_build_devices() ->
+    [
+        <<"message@1.0">>,
+        <<"httpsig@1.0">>,
+        <<"structured@1.0">>,
+        <<"flat@1.0">>,
+        <<"json@1.0">>,
+        <<"ans104@1.0">>,
+        <<"tx@1.0">>
+    ].
 
 %% @doc Write a package to the store by writing its spec and implementation messages.
 %% Returns `{SignedSpecID, SignedImplID}'.
@@ -176,16 +221,17 @@ build_signs_and_indexes_test() ->
     SrcDir = hb_packager:test_fixture_dir(),
     [Group] = hb_packager:scan([SrcDir], #{}),
     Pkg = hb_packager:package(Group, #{}),
+    Pkgs = preload_build_pkgs() ++ [Pkg],
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    {ok, Result} = build_dir([Pkg], Wallet, Dir, #{}),
+    {ok, Result} = build_dir(Pkgs, Wallet, Dir, #{}),
     Store = maps:get(store, Result),
     IndexID = maps:get(index, Result),
     SpecIDs = maps:get(specs, Result),
     ImplIDs = maps:get(impls, Result),
-    %% One spec, one impl recorded.
-    ?assertEqual(1, map_size(SpecIDs)),
-    ?assertMatch([_], ImplIDs),
+    %% The fixture plus build devices are recorded.
+    ?assert(maps:is_key(maps:get(device_name, Pkg), SpecIDs)),
+    ?assert(length(ImplIDs) >= 1),
     %% Index ID must be a 43-char human ID.
     ?assert(byte_size(IndexID) == 43),
     %% Store must be an LMDB store at our dir.
@@ -196,7 +242,6 @@ build_signs_and_indexes_test() ->
     {ok, Got} =
         hb_store:read(Store, <<IndexID/binary, "/", Name/binary>>, NodeOpts),
     SpecID = maps:get(Name, SpecIDs),
-    [ImplID] = ImplIDs,
     ?assertEqual(SpecID, Got),
     ?assertEqual(
         {error, not_found},
@@ -204,7 +249,22 @@ build_signs_and_indexes_test() ->
     ),
     ?assertEqual({ok, Address}, signer(Store, IndexID, NodeOpts)),
     ?assertEqual({ok, Address}, signer(Store, SpecID, NodeOpts)),
-    ?assertEqual({ok, Address}, signer(Store, ImplID, NodeOpts)).
+    lists:foreach(
+        fun(ImplID) ->
+            ?assertEqual({ok, Address}, signer(Store, ImplID, NodeOpts))
+        end,
+        ImplIDs
+    ).
+
+preload_build_pkgs() ->
+    Dirs = ["src/preloaded/message", "src/preloaded/codec"],
+    [
+        Pkg
+     ||
+        Group <- hb_packager:scan(Dirs, #{}),
+        Pkg <- [hb_packager:package(Group, #{})],
+        lists:member(maps:get(device_name, Pkg), required_build_devices())
+    ].
 
 signer(Store, ID, Opts) ->
     hb_store:read(

@@ -14,7 +14,7 @@
 start(_StartType, _StartArgs) ->
     hb:init(),
     hb_sup:start_link(),
-    ok = dev_scheduler_registry:start(),
+    hb_name:start(),
     _TimestampServer = ar_timestamp:start(),
     {ok, _} = hb_http_server:start().
 

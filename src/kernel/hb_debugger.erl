@@ -22,7 +22,8 @@ profile_and_stop(Fun) ->
     io:format("profiling-output: started.~n"),
     io:format("Profiling function: ~p.~n", [Fun]),
     Res =
-        dev_profile:eval(
+        hb_ao:direct(
+            <<"profile@1.0">>,
             Fun,
             #{ <<"return-mode">> => <<"open">>, <<"engine">> => <<"eflame">> },
             #{}

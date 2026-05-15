@@ -4,6 +4,7 @@
 %%% block where at least one TX is already indexed, then stops. If `to' is
 %%% provided, every block in the range is processed.
 -module(dev_copycat_arweave).
+-device_libraries([lib_arweave_common]).
 -export([arweave/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -407,7 +408,7 @@ is_bundle_tx(TX, _Opts) ->
 %% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Size, Opts)
+        lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
 resolve_tx_headers(TXIDs, Opts) ->

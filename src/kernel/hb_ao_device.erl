@@ -3,6 +3,7 @@
 %%% functions from a device.
 -module(hb_ao_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
+-export([cache_device_module/3]).
 -export([implementation_dir/1]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
@@ -264,17 +265,7 @@ load(Ref, Opts) when is_binary(Ref) ->
         false ->
             {error, load_error(<<"device-not-admissible">>, NormRef)};
         true ->
-            case bootstrap_lookup(NormRef, Opts) of
-                {ok, BootAtom} ->
-                    case code:ensure_loaded(BootAtom) of
-                        {module, BootAtom} -> {ok, BootAtom};
-                        _ ->
-                            {error, load_error(
-                                <<"bootstrap-load-failed">>, BootAtom)}
-                    end;
-                not_found ->
-                    load_binary(NormRef, Opts)
-            end
+            load_binary(NormRef, Opts)
     end.
 
 %% @doc Resolve and load a normalized binary device reference.
@@ -294,21 +285,6 @@ load_binary(NormRef, Opts) ->
                     {error, load_error(<<"device-not-found">>, NormRef)};
                 {error, _} = Error -> Error
             end
-    end.
-
-%% @doc The build-time bootstrap path. The preloader needs a working
-%% signing flow before any preloaded-store exists. Setting
-%% `<<"device-bootstrap">>' to a `#{ Name (binary) => Mod (atom) }' map
-%% in opts makes binary-name resolution return those atoms directly without
-%% touching the store. Runtime opts never set this key.
-bootstrap_lookup(Ref, Opts) ->
-    case hb_opts:get(device_bootstrap, undefined, Opts) of
-        Map when is_map(Map) ->
-            case hb_maps:find(Ref, Map, Opts) of
-                {ok, Mod} when is_atom(Mod) -> {ok, Mod};
-                _ -> not_found
-            end;
-        _ -> not_found
     end.
 
 %% @doc Check the optional operator allow-list for runtime-loadable devices.
@@ -472,7 +448,7 @@ verify_implementation(Msg, Ref, SpecID, Opts) ->
 
 verify_implementation(Msg, Ref, SpecID, ID, Opts) ->
     LoadedMsg = load_implementation_message(Msg, Opts),
-    Signers = hb_message:signers(LoadedMsg, Opts),
+    Signers = implementation_signers(LoadedMsg, Opts),
     TrustedDevice = is_trusted_device(ID, Opts),
     Trusted = TrustedDevice orelse
         is_signer_trusted(Signers, trusted_signers(Opts)),
@@ -492,6 +468,22 @@ verify_implementation(Msg, Ref, SpecID, ID, Opts) ->
         true ->
             verify_implementation_message(LoadedMsg, Ref, SpecID, Opts)
     end.
+
+%% @doc Extract implementation signers without loading the message device.
+implementation_signers(Msg, Opts) ->
+    hb_maps:values(
+        hb_maps:filtermap(
+            fun(_ID, Commitment) ->
+                case hb_maps:get(<<"committer">>, Commitment, undefined, Opts) of
+                    undefined -> false;
+                    Signer -> {true, Signer}
+                end
+            end,
+            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            Opts
+        ),
+        Opts
+    ).
 
 %% @doc Load links in an implementation message without bootstrapping codecs.
 load_implementation_message(Msg, Opts) ->
@@ -513,7 +505,12 @@ verify_implementation_message(Msg, Ref, SpecID, Opts) ->
                 ok ->
                     load_archive(
                         hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
-                        hb_maps:get(<<"body">>, Msg, undefined, Opts),
+                        hb_maps:get(
+                            <<"body">>,
+                            Msg,
+                            hb_maps:get(<<"data">>, Msg, undefined, Opts),
+                            Opts
+                        ),
                         Msg,
                         Ref,
                         Opts
@@ -688,7 +685,7 @@ maybe_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts) ->
         false ->
             case prepare_implementation_dir(
                 RootMod,
-                hb_message:id(Msg, signed, Opts),
+                atom_to_binary(RootMod, utf8),
                 ResourceFiles,
                 Opts
             ) of

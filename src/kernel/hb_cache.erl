@@ -135,7 +135,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
             ),
             case hb_maps:get(<<"type">>, LinkOpts, undefined, Opts) of
                 undefined -> LoadedMsg;
-                Type -> dev_structured:decode_value(Type, LoadedMsg)
+                Type -> structured_decode_value(Type, LoadedMsg, Opts)
             end;
         {error, not_found} ->
             report_ensure_loaded_not_found(Ref, Link, Opts)
@@ -779,10 +779,10 @@ prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
     % Convert the message to an ordered list if the ao-types indicate that it
     % should be so. If it is a message, we ensure that the commitments are 
     % normalized (have an unsigned comm. ID) and loaded into memory.
-    case dev_structured:is_list_from_ao_types(Types, Opts) of
-        true ->
+    case hb_maps:get(<<".">>, Types, undefined, Opts) of
+        <<"list">> ->
             hb_util:message_to_ordered_list(Merged, Opts);
-        false ->
+        _ ->
             case hb_opts:get(lazy_loading, true, Opts) of
                 true -> Merged;
                 false -> ensure_all_loaded(Merged, Opts)
@@ -797,7 +797,7 @@ read_ao_types(Path, Subpaths, Store, Opts) ->
         true ->
             {ok, TypesBin} =
                 hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts),
-            Types = dev_structured:decode_ao_types(TypesBin, Opts),
+            Types = structured_decode_types(TypesBin, Opts),
             ?event({parsed_ao_types, {types, Types}}),
             {ok, types_to_implicit(Types), Types};
         false ->
@@ -814,6 +814,31 @@ types_to_implicit(Types) ->
            (_, _) -> false
         end,
         Types
+    ).
+
+%% @doc Decode the `ao-types' field through the structured device.
+structured_decode_types(Types, Opts) ->
+    hb_util:ok(
+        hb_ao:direct(
+            <<"structured@1.0">>,
+            Types,
+            #{ <<"path">> => <<"decode-types">> },
+            Opts
+        )
+    ).
+
+%% @doc Decode one typed cache value through the structured device.
+structured_decode_value(Type, Value, Opts) ->
+    hb_util:ok(
+        hb_ao:direct(
+            <<"structured@1.0">>,
+            Value,
+            #{
+                <<"path">> => <<"decode-value">>,
+                <<"type">> => Type
+            },
+            Opts
+        )
     ).
 
 %% @doc Read the result of a computation, using heuristics. The supported
@@ -895,7 +920,7 @@ read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) -
     ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
-    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    ReqID = hb_message:id(Req, all, Opts),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
@@ -1012,13 +1037,7 @@ test_store_simple_signed_message(Store) ->
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
     % %% Read the item back
-    % {ok, UID} = dev_message:id(Item, #{ <<"committers">> => <<"none">> }, Opts),
-    % {ok, RetrievedItemUnsig} = read(UID, Opts),
-    % ?event({retreived_unsigned_message, {expected, Item}, {got, RetrievedItemUnsig}}),
-    % MatchRes = hb_message:match(Item, RetrievedItemUnsig, strict, Opts),
-    % ?event({match_result, MatchRes}),
-    % ?assert(MatchRes),
-    {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
+    CommittedID = hb_message:id(Item, [Address], Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
     ?event({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
     MatchResSigned = 

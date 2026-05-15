@@ -30,8 +30,7 @@ main(_Args) ->
             end,
             Groups
         ),
-    {ok, Result} =
-        hb_preload:build_dir(Pkgs, Wallet, OutputDir, #{}),
+    {ok, Result} = hb_preload:build_dir(Pkgs, Wallet, OutputDir, #{}),
     Index = maps:get(index, Result),
     io:format("[preload] index = ~s~n", [Index]),
     HeaderPath = <<"_build/hb_preloaded_index.hrl">>,

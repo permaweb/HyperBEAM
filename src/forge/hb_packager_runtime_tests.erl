@@ -19,7 +19,19 @@ setup() ->
         hb_packager:scan([SrcDir], #{})
             ++ hb_packager:scan(
                 ["src/preloaded"],
-                #{ <<"device-roots">> => [dev_name, dev_message] }
+                #{
+                    <<"device-roots">> =>
+                        [
+                            dev_name,
+                            dev_message,
+                            dev_httpsig,
+                            dev_structured,
+                            dev_flat,
+                            dev_json,
+                            dev_ans104,
+                            dev_tx
+                        ]
+                }
             ),
     Pkgs = [hb_packager:package(Group, #{}) || Group <- Groups],
     [Pkg] =
@@ -46,7 +58,7 @@ setup() ->
             <<"data-protocol">> => <<"ao">>,
             <<"variant">> => <<"ao.N.1">>,
             <<"implements-device">> => SpecID
-        }, #{ <<"store">> => Store }),
+        }, #{ <<"store">> => Store, <<"cache-read-mode">> => raw }),
     DevStore = hb_test_utils:test_store(),
     Opts = #{
         <<"store">> => [Store],
@@ -152,11 +164,4 @@ unpackaged_atom_is_rejected_test() ->
     ?assertMatch(
         {error, #{ <<"error">> := <<"device-must-be-packaged">> }},
         hb_ao_device:load(dev_message, #{})
-    ),
-    ?assertMatch(
-        {error, #{ <<"error">> := <<"device-must-be-packaged">> }},
-        hb_ao_device:load(
-            dev_message,
-            #{ <<"device-bootstrap">> => hb_packager:bootstrap_device_map() }
-        )
     ).

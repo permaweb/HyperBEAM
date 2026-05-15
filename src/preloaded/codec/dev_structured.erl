@@ -18,6 +18,7 @@
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_structured).
 -export([to/3, from/3, commit/3, verify/3, encode_types/3, decode_types/3]).
+-export([decode_value/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/2, encode_value/1, implicit_keys/2]).
 -include("include/hb.hrl").
@@ -252,6 +253,10 @@ encode_ao_types(Types, _Opts) ->
 %% as there can be no `ao-types'.
 decode_types(Base, Req, Opts) ->
     {ok, decode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
+
+%% @doc Decode a single typed value.
+decode_value(Base, Req, Opts) ->
+    {ok, decode_value(hb_maps:get(<<"type">>, Req, Req, Opts), Base)}.
 
 decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->

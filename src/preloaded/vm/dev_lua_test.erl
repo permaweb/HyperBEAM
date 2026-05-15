@@ -91,7 +91,7 @@ parse_spec(Str) ->
 
 %% @doc Main entrypoint for Lua tests.
 exec_test_() ->
-    ScriptDefs = hb_opts:get(lua_tests),
+    ScriptDefs = parse_spec(hb_opts:get(lua_tests)),
     lists:map(
         fun({File, Funcs}) -> suite(File, Funcs) end,
         ScriptDefs

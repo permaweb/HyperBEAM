@@ -39,20 +39,21 @@ schema() ->
 %% as the spawned process is registered, which is before `init/1' completes.
 ensure_started() -> ensure_started(#{}).
 ensure_started(Opts) ->
-    case persistent_term:get({?MODULE, ready}, false) of
+    Mod = callback_module(),
+    case persistent_term:get({Mod, ready}, false) of
         true -> ok;
         false ->
             hb_name:singleton(
                 graphql_controller,
                 fun() ->
                     init(Opts),
-                    persistent_term:put({?MODULE, ready}, true),
+                    persistent_term:put({Mod, ready}, true),
                     receive stop -> ok end
                 end
             ),
             case hb_util:wait_until(
                     fun() ->
-                        persistent_term:get({?MODULE, ready}, false)
+                        persistent_term:get({Mod, ready}, false)
                     end,
                     ?START_TIMEOUT
                 ) of
@@ -66,13 +67,14 @@ init(_Opts) ->
     ?event(graphql_init_called),
     application:ensure_all_started(graphql),
     ?event(graphql_application_started),
+    Mod = callback_module(),
     GraphQLOpts =
         #{
-            scalars => #{ default => ?MODULE },
-            interfaces => #{ default => ?MODULE },
-            unions => #{ default => ?MODULE },
-            objects => #{ default => ?MODULE },
-            enums => #{ default => ?MODULE }
+            scalars => #{ default => Mod },
+            interfaces => #{ default => Mod },
+            unions => #{ default => Mod },
+            objects => #{ default => Mod },
+            enums => #{ default => Mod }
         },
     ok = graphql:load_schema(GraphQLOpts, schema()),
     ?event(graphql_schema_loaded),
@@ -88,6 +90,11 @@ init(_Opts) ->
     ok = graphql:validate_schema(),
     ?event(graphql_schema_validated),
     ok.
+
+%% @doc Return the module name after packaging/renaming.
+callback_module() ->
+    {module, Mod} = erlang:fun_info(fun input/2, module),
+    Mod.
 
 handle(_Base, RawReq, Opts) ->
     ?event({request, RawReq}),

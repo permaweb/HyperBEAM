@@ -42,8 +42,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Extract the first key from a `Request''s `Path' field.
-%% Note: This function uses the `dev_message:get/2' function, rather than 
-%% a generic call as the path should always be an explicit key in the message.
 hd(Req, Opts) ->
     %?event({key_from_path, Req, Opts}),
     case pop_request(Req, Opts) of
@@ -104,18 +102,8 @@ hashpath(RawBase, Opts) ->
     case hb_private:from_message(Base) of
         #{ <<"hashpath">> := HP } -> HP;
         _ ->
-            % Note: We do not use `hb_message:id' here because it will call
-            % hb_ao:resolve, which will call `hashpath' recursively.
             try
-                hb_util:human_id(
-                    hb_util:ok(
-                        dev_message:id(
-                            Base,
-                            #{ <<"commitments">> => <<"all">> },
-                            Opts
-                        )
-                    )
-                )
+                message_id(Base, Opts)
             catch
                 A:B:ST ->
                     throw(
@@ -141,13 +129,7 @@ hashpath(Base, Req, HashpathAlg, Opts) when is_map(Req) ->
         {0, _} when ReqPath =/= undefined ->
             hashpath(Base, to_binary(hd(ReqPath)), HashpathAlg, Opts);
         _ ->
-            {ok, ReqID} =
-                dev_message:id(
-                    Req,
-                    #{ <<"commitments">> => <<"all">> },
-                    Opts
-                ),
-            hashpath(Base, hb_util:human_id(ReqID), HashpathAlg, Opts)
+            hashpath(Base, message_id(Req, Opts), HashpathAlg, Opts)
     end;
 hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
     ?event({hashpath, {basehp, {explicit, BaseHashpath}}, {reqid, {explicit, HumanReqID}}}),
@@ -177,14 +159,23 @@ hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
 %%% If no hashpath algorithm is specified, the protocol defaults to
 %%% `sha-256-chain'.
 hashpath_alg(Msg, Opts) ->
-    case dev_message:get(<<"hashpath-alg">>, Msg, Opts) of
-        {ok, <<"sha-256-chain">>} ->
+    case hb_maps:get(<<"hashpath-alg">>, Msg, <<"sha-256-chain">>, Opts) of
+        <<"sha-256-chain">> ->
             fun hb_crypto:sha256_chain/2;
-        {ok, <<"accumulate-256">>} ->
+        <<"accumulate-256">> ->
             fun hb_crypto:accumulate/2;
-        {error, not_found} ->
+        _ ->
             fun hb_crypto:sha256_chain/2
     end.
+
+%% @doc Calculate the all-commitments message ID without full AO-Core resolve.
+message_id(Msg, Opts) ->
+    hb_util:human_id(hb_util:ok(hb_ao:direct(
+        <<"message@1.0">>,
+        Msg,
+        #{ <<"path">> => <<"id">>, <<"commitments">> => <<"all">> },
+        Opts
+    ))).
 
 %%% @doc Add a message to the head (next to execute) of a request path.
 push_request(Msg, Path) ->

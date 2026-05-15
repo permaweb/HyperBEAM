@@ -23,8 +23,8 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
-handler(<<"set">>, Base, Req, Opts) -> dev_message:set(Base, Req, Opts);
-handler(<<"keys">>, Base, _Req, _Opts) -> dev_message:keys(Base);
+handler(<<"set">>, Base, Req, Opts) -> hb_message:set(Base, Req, Opts);
+handler(<<"keys">>, Base, _Req, _Opts) -> hb_message:keys(Base);
 handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
@@ -59,7 +59,7 @@ once_worker(Path, Req, Opts) ->
 	% Directly call the meta device on the newly constructed 'singleton', just
     % as hb_http_server does.
 	try
-		dev_meta:handle(Opts, Req#{ <<"path">> => Path})
+		hb_ao:resolve(Req#{ <<"path">> => Path}, Opts)
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -170,7 +170,7 @@ every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
         }
     ),
     try
-        dev_meta:handle(Opts, Req1),
+        hb_ao:resolve(Req1, Opts),
         ?event({cron_every_worker_executed, {path, CronPath}})
     catch
         Class:Reason:Stack ->

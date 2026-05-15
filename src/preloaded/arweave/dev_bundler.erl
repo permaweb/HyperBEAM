@@ -15,7 +15,7 @@
 %%% available for reading instantly (`optimistically'), even before the
 %%% transaction is dispatched.
 -module(dev_bundler).
--export([tx/3, item/3, ensure_server/1, stop_server/0, stop_server/1]).
+-export([tx/3, item/3, ensure_server/1]).
 -export([get_state/0, get_state/1]).
 
 -include("include/hb.hrl").
@@ -23,7 +23,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Default options.
--define(SERVER_NAME, bundler_server).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
 -define(DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT, 30_000). % 30 seconds.
@@ -50,11 +49,9 @@ item(_Base, Req, Opts) ->
             case cache_item(Item, Opts) of
                 ok ->
                     BundledSize = bundled_item_size(Item, Opts),
-                    dev_metering:consume(
-                        <<"arweave-bytes">>,
-                        BundledSize,
-                        Opts
-                    ),
+                    {ok, Metering} =
+                        hb_ao_device:load(<<"metering@1.0">>, Opts),
+                    Metering:consume(<<"arweave-bytes">>, BundledSize, Opts),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
                     ServerPID ! {enqueue_item, Item, BundledSize},
@@ -135,18 +132,21 @@ cache_item(Item, Opts) ->
 
 %%% Bundling server.
 
-%% @doc Look up the registration name for the bundler server. Derived from
-%% the HTTP server's identity (which `hb_http_server:new_server/1' itself
-%% computes from `priv-wallet') so there is exactly one bundler per HTTP
-%% server on a BEAM node. Falls back to the legacy global `?SERVER_NAME'
-%% atom when no wallet is available (kept for production callers that
-%% stopped the server without a configured wallet).
+%% @doc Look up the registration name for this node's bundler server.
+%% The key is the HTTP server's cryptographic address, so each HTTP server
+%% gets its own bundler process.
 server_name(Opts) ->
-    case hb_opts:get(priv_wallet, undefined, Opts) of
-        undefined -> ?SERVER_NAME;
-        Wallet ->
-            {bundler_server,
-                hb_util:human_id(ar_wallet:to_address(Wallet))}
+    {bundler_server, server_address(Opts)}.
+
+%% @doc Find the cryptographic address of the HTTP server that owns this
+%% bundler. Direct tests without an HTTP server use their configured wallet.
+server_address(Opts) ->
+    case hb_opts:get(<<"http-server">>, undefined, Opts) of
+        undefined ->
+            Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+            hb_util:human_id(ar_wallet:to_address(Wallet));
+        Address ->
+            hb_util:bin(Address)
     end.
 
 %% @doc Return the PID of the bundler server. If the server is not running,
@@ -157,19 +157,6 @@ ensure_server(Opts) ->
         Name,
         fun() -> init(Opts) end
     ).
-
-%% @doc Stop the default bundler server. Used by production-oriented
-%% tests that rely on the global `?SERVER_NAME'.
-stop_server() ->
-    stop_server(#{}).
-stop_server(Opts) ->
-    Name = server_name(Opts),
-    case hb_name:lookup(Name) of
-        undefined -> ok;
-        PID ->
-            PID ! stop,
-            hb_name:unregister(Name)
-    end.
 
 %% @doc Return the current bundler server state for tests.
 get_state() ->
@@ -1397,39 +1384,39 @@ invalid_item_test_parallel() ->
     end.
 
 cache_write_failure_test_parallel() ->
-    GoodOpts = #{<<"store">> => hb_test_utils:test_store()},
+    Wallet = ar_wallet:new(),
+    GoodOpts = #{
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => hb_test_utils:test_store()
+    },
     BadOpts = #{
+        <<"priv-wallet">> => Wallet,
         <<"store">> => undefined,
         <<"debug-print">> => false
     }, % Invalid store will cause cache write to fail
-    try
-        % Start bundler with a valid store so recovery/init paths succeed.
-        ensure_server(GoodOpts),
-        Item = ar_bundles:sign_item(
-            #tx{
-                data = <<"testdata">>,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            ar_wallet:new()
-        ),
-        StructuredItem = hb_message:convert(
-            Item, <<"structured@1.0">>, <<"ans104@1.0">>, GoodOpts),
-        % Call item/3 directly without a store, should cause cache write
-        % to fail.
-        Result = dev_bundler:item(#{}, StructuredItem, BadOpts),
-        ?assertMatch({error, #{
-            <<"status">> := 500,
-            <<"error">> := <<"cache-write-failed">>}}, Result),
-        ok
-    after
-        stop_server()
-    end.
+    % Start bundler with a valid store so recovery/init paths succeed.
+    ensure_server(GoodOpts),
+    Item = ar_bundles:sign_item(
+        #tx{
+            data = <<"testdata">>,
+            tags = [{<<"tag1">>, <<"value1">>}]
+        },
+        ar_wallet:new()
+    ),
+    StructuredItem = hb_message:convert(
+        Item, <<"structured@1.0">>, <<"ans104@1.0">>, GoodOpts),
+    % Call item/3 directly without a store, should cause cache write
+    % to fail.
+    Result = dev_bundler:item(#{}, StructuredItem, BadOpts),
+    ?assertMatch({error, #{
+        <<"status">> := 500,
+        <<"error">> := <<"cache-write-failed">>}}, Result),
+    ok.
 
 stop_test_servers(ServerHandle) ->
     stop_test_servers(ServerHandle, #{}).
-stop_test_servers(ServerHandle, Opts) ->
-    hb_mock_server:stop(ServerHandle),
-    stop_server(Opts).
+stop_test_servers(ServerHandle, _Opts) ->
+    hb_mock_server:stop(ServerHandle).
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),

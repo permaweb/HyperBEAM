@@ -343,9 +343,13 @@ result_to_message(ExpectedID, Item, Opts) ->
         }),
     ?event({raw_ans104, TX}),
     ?event({ans104_form_response, TX}),
-    TABM = hb_util:ok(dev_ans104:from(TX, #{}, Opts)),
-    ?event({decoded_tabm, TABM}),
-    Structured = hb_util:ok(dev_structured:to(TABM, #{}, Opts)),
+    Structured =
+        hb_message:convert(
+            TX,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            Opts
+        ),
     % Some graphql nodes do not grant the `anchor' or `last_tx' fields, so we
     % verify the data item and optionally add the explicit keys as committed
     % fields _if_ the node desires it.

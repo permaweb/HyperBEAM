@@ -46,11 +46,12 @@ do(State) ->
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
     % Re-package the selected groups with test exports to discover the
     % generated module names that the runtime will load from the store.
-    Pkgs = [
-        hb_packager:package(G, #{ <<"test">> => true })
-     ||
-        G <- Groups
-    ],
+    Pkgs =
+        [
+            hb_packager:package(G, #{ <<"test">> => true })
+         ||
+            G <- Groups
+        ],
     Modules = lists:usort(lists:append([
         maps:get(module_names, Pkg)
      ||
@@ -62,22 +63,30 @@ do(State) ->
             rebar_api:info("device test: nothing to test", []),
             {ok, State};
         _ ->
-            Opts = test_opts(Result),
-            case load_devices(Names, Opts) of
-                ok ->
-                    rebar_api:info(
-                        "device test: running generated modules ~p",
-                        [Modules]
-                    ),
-                    start_apps(),
-                    case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
-                        ok -> {ok, State};
-                        error -> {error, format_error(eunit_failed)};
-                        Other -> {error, format_error({eunit_failed, Other})}
-                    end;
-                {error, Reason} ->
-                    {error, format_error(Reason)}
-            end
+            with_preloaded_test_modules(
+                Roots,
+                fun(TestModules) ->
+                    test_modules(State, Names, Modules ++ TestModules, Result)
+                end
+            )
+    end.
+
+test_modules(State, Names, Modules, Result) ->
+    Opts = test_opts(Result),
+    case load_devices(Names, Opts) of
+        ok ->
+            rebar_api:info(
+                "device test: running generated modules ~p",
+                [Modules]
+            ),
+            start_apps(),
+            case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
+                ok -> {ok, State};
+                error -> {error, format_error(eunit_failed)};
+                Other -> {error, format_error({eunit_failed, Other})}
+            end;
+        {error, Reason} ->
+            {error, format_error(Reason)}
     end.
 
 test_opts(Result) ->
@@ -117,6 +126,58 @@ start_app(App) ->
         {ok, _} -> ok;
         {error, Reason} -> erlang:error({app_start_failed, App, Reason})
     end.
+
+with_preloaded_test_modules(Roots, Fun) when is_function(Fun, 1) ->
+    {Ebin, Modules} = compile_preloaded_test_modules(),
+    try Fun(test_modules_to_run(Modules, Roots))
+    after
+        code:del_path(Ebin),
+        lists:foreach(fun purge_test_module/1, Modules),
+        file:del_dir_r(filename:dirname(Ebin))
+    end.
+
+compile_preloaded_test_modules() ->
+    Ebin = filename:join(["_build", "device-test-fixtures", "ebin"]),
+    ok = filelib:ensure_dir(filename:join(Ebin, "x")),
+    code:add_patha(Ebin),
+    Modules =
+        lists:map(
+            fun(Path) ->
+                case compile:file(Path, test_compile_opts(Ebin)) of
+                    {ok, Mod} -> Mod;
+                    {ok, Mod, _} -> Mod;
+                    Error ->
+                        error({preloaded_test_compile_failed, Path, Error})
+                end
+            end,
+            lists:sort(filelib:wildcard("src/preloaded/test/hb_*.erl"))
+        ),
+    {Ebin, Modules}.
+
+test_compile_opts(Ebin) ->
+    [
+        debug_info,
+        {d, 'TEST'},
+        {outdir, Ebin},
+        {i, "src"},
+        {i, "src/kernel"}
+    ].
+
+test_modules_to_run(_Modules, Roots) when Roots =/= all ->
+    [];
+test_modules_to_run(Modules, all) ->
+    [
+        Mod
+     ||
+        Mod <- Modules,
+        not lists:suffix("_test_utils", atom_to_list(Mod)),
+        Mod =/= hb_process_test_vectors
+    ].
+
+purge_test_module(Mod) ->
+    code:purge(Mod),
+    code:delete(Mod),
+    code:purge(Mod).
 
 format_error(Reason) ->
     io_lib:format("device test failed: ~p", [Reason]).

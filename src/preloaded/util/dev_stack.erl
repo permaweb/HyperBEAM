@@ -131,7 +131,7 @@ output_prefix(Base, _Req, Opts) ->
 %% `dev_message'.
 router(<<"keys">>, Base, Request, Opts) ->
 	?event({keys_called, {base, Base}, {req, Request}}),
-	dev_message:keys(Base, Opts);
+	hb_message:keys(Base, Opts);
 router(Key, Base, Request, Opts) ->
     case hb_path:matches(Key, <<"transform">>) of
         true -> transformer_message(Base, Opts);
@@ -209,10 +209,9 @@ transform(Base, Key, Opts) ->
                     % - The prefixes for the device.
                     % - The prior prefixes for later restoration.
 					?event({activating_device, DevMsg}),
-					dev_message:set(
+					hb_message:set(
                         Base,
-						#{
-							<<"device">> => DevMsg,
+						(activate_device_message(DevMsg))#{
                             <<"device-key">> => Key,
                             <<"input-prefix">> =>
                                 hb_ao:get(
@@ -257,10 +256,16 @@ transform(Base, Key, Opts) ->
 			end
 	end.
 
+%% @doc Normalize stack entries into a patch applied before execution.
+activate_device_message(DevMsg = #{ <<"device">> := _ }) ->
+    DevMsg;
+activate_device_message(DevMsg) ->
+    #{ <<"device">> => DevMsg }.
+
 %% @doc The main device stack execution engine. See the moduledoc for more
 %% information.
 resolve_fold(Base, Request, Opts) ->
-	{ok, InitDevMsg} = dev_message:get(<<"device">>, Base, Opts),
+	{ok, InitDevMsg} = hb_message:get(<<"device">>, Base, Opts),
     StartingPassValue =
         hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Base}, unset, Opts),
     PreparedMessage = hb_ao:set(Base, <<"pass">>, 1, Opts),
@@ -268,7 +273,7 @@ resolve_fold(Base, Request, Opts) ->
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
         {ok, Result} ->
-            dev_message:set(
+            hb_message:set(
                 Result,
                 #{
                     <<"device">> => InitDevMsg,
@@ -446,8 +451,8 @@ transform_external_call_device_test() ->
 											{ok, hb_maps:keys(MsgX1, #{})};
 										(Key, MsgX1) ->
 											{ok, Value} =
-												dev_message:get(Key, MsgX1, #{}),
-											dev_message:set(
+												hb_message:get(Key, MsgX1, #{}),
+											hb_message:set(
 												MsgX1,
 												#{ Key =>
 													<< Value/binary, "-Cool">>

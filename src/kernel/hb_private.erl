@@ -203,9 +203,18 @@ priv_opts_cache_read_message_test() ->
     OnlyPrivStore = [hb_test_utils:test_store()],
     Opts = #{ <<"store">> => PublicStore, <<"priv-store">> => OnlyPrivStore },
     PrivOpts = opts(Opts),
-    % Use the `~scheduler@1.0' and `~process@1.0' infrastructure to write a
-    % complex message into the public store.
-    Msg = hb_cache:ensure_all_loaded(hb_process_test_vectors:aos_process(Opts), Opts),
+    % Write a signed nested message into the public store.
+    Msg =
+        hb_cache:ensure_all_loaded(
+            hb_message:commit(
+                #{
+                    <<"body">> => <<"test-message">>,
+                    <<"nested">> => #{ <<"key">> => <<"value">> }
+                },
+                Opts#{ <<"priv-wallet">> => ar_wallet:new() }
+            ),
+            Opts
+        ),
     {ok, ID} = hb_cache:write(Msg, Opts),
     % Ensure we can read the message using the public store.
     {ok, PubMsg} = hb_cache:read(ID, Opts),

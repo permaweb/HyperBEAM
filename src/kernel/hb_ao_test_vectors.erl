@@ -222,7 +222,7 @@ exec_dummy_device(Opts) ->
     % environment.
     [DummyGroup] =
         hb_packager:scan(
-            ["test"],
+            ["src/forge/test/fixtures"],
             #{ <<"device-roots">> => [<<"dev_dummy">>] }
         ),
     DummyPkg = hb_packager:package(DummyGroup, Opts),
@@ -288,13 +288,9 @@ load_device_test() ->
     Opts = #{
         <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
-            [hb_util:human_id(ar_wallet:to_address(Wallet))],
-        <<"store">> => Store = #{
-            <<"store-module">> => hb_store_lmdb,
-            <<"name">> => <<"cache-TEST/lmdb">>
-        },
-        <<"priv-wallet">> => Wallet,
-        <<"device-bootstrap">> => hb_packager:bootstrap_device_map()
+            [hb:address(), hb_util:human_id(ar_wallet:to_address(Wallet))],
+        <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
+        <<"priv-wallet">> => Wallet
     },
     hb_store:reset(Store),
     ?assertEqual({ok, <<"example">>}, exec_dummy_device(Opts)).
@@ -306,13 +302,9 @@ untrusted_load_device_test() ->
     Opts = #{
         <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
-            [hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
-        <<"store">> => Store = #{
-            <<"store-module">> => hb_store_lmdb,
-            <<"name">> => <<"cache-TEST/lmdb">>
-        },
-        <<"priv-wallet">> => UntrustedWallet,
-        <<"device-bootstrap">> => hb_packager:bootstrap_device_map()
+            [hb:address(), hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
+        <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
+        <<"priv-wallet">> => UntrustedWallet
     },
     hb_store:reset(Store),
     ?assertThrow(
@@ -433,7 +425,7 @@ gen_handler_device() ->
                 #{
                     handler =>
                         fun(<<"set">>, M1, M2, Opts) ->
-                            dev_message:set(M1, M2, Opts);
+                            hb_ao:direct(<<"message@1.0">>, M1, M2, Opts);
                         (_, _, _, _) ->
                             {ok, <<"HANDLER VALUE">>}
                         end

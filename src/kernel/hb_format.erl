@@ -771,13 +771,13 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
                     undefined
             end;
         (Key) ->
-            case dev_message:get(Key, Msg, Opts) of
+            case hb_maps:find(Key, Msg, Opts) of
                 {ok, Val} ->
                     case short_id(Val) of
                         undefined -> Val;
                         ShortID -> ShortID
                     end;
-                {error, _} -> undefined
+                error -> undefined
             end
         end,
     FilterUndef =
@@ -804,13 +804,21 @@ message(RawMsg, Opts, Indent) when is_map(RawMsg) ->
         case map_size(KnownComms) == 0 andalso GenerateIDs of
             false -> Msg#{ <<"commitments">> => KnownComms };
             true ->
-                case dev_message:commit(Msg, #{ <<"type">> => <<"unsigned">> }, Opts) of
+                case hb_ao:direct(
+                    <<"message@1.0">>,
+                    Msg,
+                    #{
+                        <<"path">> => <<"commit">>,
+                        <<"type">> => <<"unsigned">>
+                    },
+                    Opts
+                ) of
                     {ok, XMsg} -> XMsg;
                     {error, _} -> Msg#{ <<"commitments">> => #{} }
                 end
         end,
-    {ok, CommittedKeys} =
-        dev_message:committed(
+    CommittedKeys =
+        hb_message:committed(
             MsgWithNormComms,
             #{ <<"commitment-ids">> => <<"all">> },
             Opts

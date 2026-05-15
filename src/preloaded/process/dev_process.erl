@@ -40,6 +40,7 @@
 %%%     Cache-Keys:      A list of the keys that should be cached for all 
 %%%                      assignments, in addition to `/Results'.
 -module(dev_process).
+-device_libraries([lib_process]).
 %%% Public API
 -export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
 -export([target_slot/2]).
@@ -91,7 +92,7 @@ as(RawBase, Req, Opts) ->
         ),
     {ok,
         hb_util:deep_merge(
-            dev_process_lib:ensure_process_key(Base, Opts),
+            lib_process:ensure_process_key(Base, Opts),
             #{
                 <<"device">> =>
                     hb_maps:get(
@@ -126,30 +127,23 @@ as(RawBase, Req, Opts) ->
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
 default_device(Base, Key, Opts) ->
-    NormKey = hb_ao:normalize_key(Key),
-    case {NormKey, hb_util:deep_get(<<"process/variant">>, Base, Opts)} of
-        {<<"execution">>, <<"ao.TN.1">>} -> <<"genesis-wasm@1.0">>;
-        _ -> default_device_index(NormKey)
-    end.
-default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
-default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
-default_device_index(<<"push">>) -> <<"push@1.0">>.
+    lib_process:default_device(Base, Key, Opts).
 
 %% @doc Wraps functions in the Scheduler device.
 schedule(Base, Req, Opts) ->
-    dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
+    lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
 
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
-    dev_process_lib:run_as(<<"scheduler">>, Base, Req, Opts).
+    lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
 
 next(Base, _Req, Opts) ->
-    dev_process_lib:run_as(<<"scheduler">>, Base, next, Opts).
+    lib_process:run_as(<<"scheduler">>, Base, next, Opts).
 
 snapshot(RawBase, _Req, Opts) ->
-    Base = dev_process_lib:ensure_process_key(RawBase, Opts),
+    Base = lib_process:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
-        dev_process_lib:run_as(
+        lib_process:run_as(
             <<"execution">>,
             Base,
             #{ <<"path">> => <<"snapshot">>, <<"mode">> => <<"Map">> },
@@ -166,7 +160,7 @@ snapshot(RawBase, _Req, Opts) ->
 init(Base, Req, Opts) ->
     ?event({init_called, {base, Base}, {req, Req}}),
     {ok, Initialized} =
-        dev_process_lib:run_as(
+        lib_process:run_as(
             <<"execution">>,
             Base,
             #{ <<"path">> => <<"init">> },
@@ -197,8 +191,8 @@ init(Base, Req, Opts) ->
 %%   for the dryrun functionality that allows external clients to test
 %%   message processing without side effects.
 compute(Base, Req, Opts) ->
-    ProcBase = dev_process_lib:ensure_process_key(Base, Opts),
-    ProcID = dev_process_lib:process_id(ProcBase, #{}, Opts),
+    ProcBase = lib_process:ensure_process_key(Base, Opts),
+    ProcID = lib_process:process_id(ProcBase, #{}, Opts),
     TargetSlot = target_slot(Req, Opts),
     case TargetSlot of
         not_found ->
@@ -265,7 +259,7 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 Opts
             ),
             store_result(true, ProcID, TargetSlot, Base, Req, Opts),
-            {ok, without_snapshot(dev_process_lib:as_process(Base, Opts), Opts)};
+            {ok, without_snapshot(lib_process:as_process(Base, Opts), Opts)};
         CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -349,7 +343,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
     {RuntimeMicroSecs, Res} =
         timer:tc(
             fun() ->
-                dev_process_lib:run_as(<<"execution">>, PreparedState, Req, Opts)
+                lib_process:run_as(<<"execution">>, PreparedState, Req, Opts)
             end
         ),
     ?event(
@@ -487,8 +481,8 @@ maybe_trigger_push(Process, Slot, Req, Opts) ->
         _ -> ok
     end.
 
-%% @doc Build the inner `~push@1.0/push' request for `Slot' and call
-%% `dev_push:push/3' from a freshly-spawned process. Inherits the
+%% @doc Build the inner `~push@1.0/push' request for `Slot' and invoke it from
+%% a freshly-spawned process. Inherits the
 %% originating request's payload keys (e.g. `result-depth', `async')
 %% so the caller's preference flows through, replaces `path'/`slot',
 %% and -- when bounded -- sets `max-depth'. The default sync mode
@@ -506,8 +500,8 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
             undefined -> BaseReq;
             N -> BaseReq#{ <<"max-depth">> => N }
         end,
-    %% Extract the canonical process spec from the live state so `dev_push:push'
-    %% ID computation lands on the same cache key that `store_result' just
+    % Extract the canonical process spec from the live state so push ID
+    % computation lands on the same cache key that `store_result' just
     %% wrote under -- passing the live state directly hashes to a different
     %% key and sends the downstream read into a re-compute loop.
     Spec = hb_maps:get(<<"process">>, Process, Process, Opts),
@@ -518,7 +512,7 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
         },
         Opts
     ),
-    spawn(fun() -> dev_push:push(Spec, PushReq, Opts) end),
+    spawn(fun() -> hb_ao:direct(<<"push@1.0">>, Spec, PushReq, Opts) end),
     ok.
 
 %% @doc Store the resulting state in the cache, potentially with the snapshot
@@ -630,8 +624,8 @@ should_snapshot_time(Res, Opts) ->
 %% @doc Returns the known state of the process at either the current slot, or
 %% the latest slot in the cache depending on the `process-now-from-cache' option.
 now(RawBase, Req, Opts) ->
-    Base = dev_process_lib:ensure_process_key(RawBase, Opts),
-    ProcessID = dev_process_lib:process_id(Base, #{}, Opts),
+    Base = lib_process:ensure_process_key(RawBase, Opts),
+    ProcessID = lib_process:process_id(Base, #{}, Opts),
     case hb_opts:get(process_now_from_cache, false, Opts) of
         false ->
             {ok, CurrentSlot} =
@@ -684,9 +678,9 @@ now(RawBase, Req, Opts) ->
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
 push(Base, Req, Opts) ->
-    dev_process_lib:run_as(
+    lib_process:run_as(
         <<"push">>,
-        dev_process_lib:ensure_process_key(Base, Opts),
+        lib_process:ensure_process_key(Base, Opts),
         Req,
         Opts
     ).
@@ -696,7 +690,7 @@ push(Base, Req, Opts) ->
 ensure_loaded(Base, Req, Opts) ->
     % Get the nonce we are currently on and the inbound nonce.
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
-    ProcID = dev_process_lib:process_id(Base, #{}, Opts),
+    ProcID = lib_process:process_id(Base, #{}, Opts),
     ?event({ensure_loaded, {base, Base}, {req, Req}}),
     case hb_ao:get(<<"initialized">>, Base, Opts) of
         <<"true">> ->
@@ -765,7 +759,7 @@ ensure_loaded(Base, Req, Opts) ->
                         Opts
                     ),
                     {ok, Normalized} =
-                        dev_process_lib:run_as(
+                        lib_process:run_as(
                             <<"execution">>,
                             SnapshotReq,
                             normalize,

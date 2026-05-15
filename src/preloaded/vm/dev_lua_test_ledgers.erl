@@ -245,7 +245,8 @@ ledgers(ProcMsg, Opts) ->
         hb_ao:get(<<"now/ledgers">>, ProcMsg, #{}, Opts),
         Opts
     ) of
-        Msg when is_map(Msg) -> hb_private:reset(Msg);
+        Msg when is_map(Msg) ->
+            hb_private:reset(hb_message:uncommitted(Msg, Opts));
         [] -> #{}
     end.
 
@@ -364,26 +365,22 @@ verify_net_supply(RootProc, AllProcs, Opts) ->
 %% ledgers and the actual balances held.
 verify_net_peer_balances(AllProcs, Opts) ->
     NormProcs = normalize_env(AllProcs),
-    maps:map(
-        fun(ValidateProc, _) ->
-            verify_peer_balances(ValidateProc, NormProcs, Opts)
+    maps:foreach(
+        fun(ValidateID, ValidateProc) ->
+            verify_peer_balances(ValidateID, ValidateProc, NormProcs, Opts)
         end,
         NormProcs
     ).
 
 %% @doc Verify that a ledger's expectation of its balances with peer ledgers
 %% is consistent with the actual balances held.
-verify_peer_balances(ValidateProc, AllProcs, Opts) ->
+verify_peer_balances(_ValidateID, ValidateProc, _AllProcs, Opts) ->
     Ledgers = ledgers(ValidateProc, Opts),
-    NormProcs = normalize_env(AllProcs),
-    maps:map(
+    maps:foreach(
         fun(PeerID, ExpectedBalance) ->
             ?assertEqual(
                 ExpectedBalance,
-                balance(ValidateProc,
-                    maps:get(PeerID, NormProcs),
-                    Opts
-                )
+                balance(ValidateProc, PeerID, Opts)
             )
         end,
         Ledgers

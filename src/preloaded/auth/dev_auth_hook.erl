@@ -280,7 +280,12 @@ strip_sensitive(Request, Opts) ->
 %% the provider after normalization.
 generate_wallet(Provider, Request, Opts) ->
     {ok, #{ <<"body">> := WalletID }} =
-        dev_secret:generate(Provider, Request, Opts),
+        hb_ao:direct(
+            <<"secret@1.0">>,
+            Provider,
+            Request#{ <<"path">> => <<"generate">> },
+            Opts
+        ),
     ?event({generated_wallet, WalletID}),
     {ok, Provider, refresh_opts(Opts)}.
 
@@ -296,7 +301,12 @@ sign_request(Provider, Msg, Opts) ->
             IgnoredKeys = ignored_keys(Msg, Opts),
             WithoutIgnored = hb_maps:without(IgnoredKeys, Msg, Opts),
             % Call the wallet to sign the request.
-            case dev_secret:commit(WithoutIgnored, Provider, Opts) of
+            case hb_ao:direct(
+                <<"secret@1.0">>,
+                WithoutIgnored,
+                Provider#{ <<"path">> => <<"commit">> },
+                Opts
+            ) of
                 {ok, Signed} ->
                     ?event({auth_hook_signed, Signed}),
                     SignedWithIgnored = 

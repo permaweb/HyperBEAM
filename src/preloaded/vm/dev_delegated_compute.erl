@@ -3,6 +3,7 @@
 %%% bring trusted results into the local node, or as the `Execution-Device' of
 %%% an AO process.
 -module(dev_delegated_compute).
+-device_libraries([lib_process]).
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -176,7 +177,7 @@ extract_json_res(Response, Opts) ->
     end.
 
 get_process_id(Base, Req, Opts) ->
-    RawProcessID = dev_process_lib:process_id(Base, #{}, Opts),
+    RawProcessID = lib_process:process_id(Base, #{}, Opts),
     case RawProcessID of
         not_found -> hb_ao:get(<<"process-id">>, Req, Opts);
         ProcID -> ProcID
@@ -223,7 +224,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 %% `GET /snapshot' endpoint.
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
-    ProcID = dev_process_lib:process_id(Msg, #{}, Opts),
+    ProcID = lib_process:process_id(Msg, #{}, Opts),
     Res = 
         hb_ao:resolve(
             #{

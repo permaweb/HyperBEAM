@@ -436,7 +436,18 @@ maybe_typed(Key, Value, Opts) ->
                     };
                 {_T, RawValue} when is_binary(RawValue) ->
                     Decoded = hb_escape:decode_quotes(RawValue),
-                    {typed, OnlyKey, dev_structured:decode_value(Type, Decoded)}
+                    {typed,
+                        OnlyKey,
+                        hb_util:ok(hb_ao:direct(
+                            <<"structured@1.0">>,
+                            Decoded,
+                            #{
+                                <<"path">> => <<"decode-value">>,
+                                <<"type">> => Type
+                            },
+                            Opts
+                        ))
+                    }
             end
     end.
 
