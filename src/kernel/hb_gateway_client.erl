@@ -173,7 +173,7 @@ location(Address, Opts) ->
 %% compatible device implementations we must query for messages with the
 %% appropriate tags and signatures.
 device(SpecID, Opts) ->
-    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
+    TrustedSigners = hb_ao_device:trusted_signers(Opts),
     Query =
         <<"query($specid: [String!], $trusted: [String!]) { ",
                 "transactions(",

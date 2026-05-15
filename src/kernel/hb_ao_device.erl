@@ -4,7 +4,7 @@
 -module(hb_ao_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
 -export([implementation_dir/1]).
--export([is_direct_key_access/3, is_direct_key_access/4]).
+-export([is_direct_key_access/3, is_direct_key_access/4, trusted_signers/1]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
 -include("include/hb.hrl").
 
