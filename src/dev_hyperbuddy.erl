@@ -7,11 +7,11 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Export an explicit list of files via http. Filenames added to the 
-%% `hyperbuddy_serve' key of the node message will be served as static files.
+%% `hyperbuddy-serve' key of the node message will be served as static files.
 %% Each filename must point to a path relative to the HyperBEAM instance's
 %% build subdirectory as follows: `priv/html/hyperbuddy@1.0'.
 info(Opts) ->
-    ServedRoutes = hb_opts:get(hyperbuddy_serve, #{}, Opts),
+    ServedRoutes = hb_opts:get(<<"hyperbuddy-serve">>, #{}, Opts),
     #{
         default => fun serve/4,
         serve => ServedRoutes#{

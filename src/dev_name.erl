@@ -28,7 +28,7 @@ info(_) ->
 %% `GET /~name@1.0/reference' yields the message at the path specified by the
 %% `reference' key.
 resolve(Key, _, Req, Opts) ->
-    Resolvers = hb_opts:get(name_resolvers, [], Opts),
+    Resolvers = hb_opts:get(<<"name-resolvers">>, [], Opts),
     ?event({resolvers, Resolvers}),
     case match_resolver(Key, Resolvers, Opts) of
         {ok, Resolved} ->
