@@ -435,7 +435,7 @@ gen_handler_device() ->
                 #{
                     handler =>
                         fun(<<"set">>, M1, M2, Opts) ->
-                            dev_message:set(M1, M2, Opts);
+                            hb_message:set(M1, M2, Opts);
                         (_, _, _, _) ->
                             {ok, <<"HANDLER VALUE">>}
                         end
@@ -589,7 +589,7 @@ get_as_with_device_test(Opts) ->
     ),
     ?assertEqual(
         <<"ACTUAL VALUE">>,
-        hb_ao:get(test_key, {as, dev_message, Msg}, Opts)
+        hb_ao:get(test_key, {as, <<"message@1.0">>, Msg}, Opts)
     ).
 
 set_with_device_test(Opts) ->

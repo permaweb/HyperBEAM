@@ -140,7 +140,7 @@ bundler_dynamic_metering() ->
     Anchor = rand:bytes(32),
     NetworkPrice = 12345,
     {ServerHandle, GatewayOpts} =
-        dev_bundler:start_mock_gateway(
+        hb_mock_server:start_arweave_gateway(
             #{
                 price => {200, integer_to_binary(NetworkPrice)},
                 tx_anchor => {200, hb_util:encode(Anchor)}
@@ -189,8 +189,7 @@ bundler_dynamic_metering() ->
         ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, #{})),
         ?assertEqual(50, bundle_payment_balance(Node, UploaderWallet))
     after
-        hb_mock_server:stop(ServerHandle),
-        dev_bundler:stop_server(Opts)
+        hb_mock_server:stop(ServerHandle)
     end.
 
 %% @doc Release a paid bundling fee to an operator-specified address only after
@@ -217,7 +216,7 @@ bundler_completion_payment_hook() ->
     Anchor = rand:bytes(32),
     NetworkPrice = 12345,
     {ServerHandle, GatewayOpts} =
-        dev_bundler:start_mock_gateway(
+        hb_mock_server:start_arweave_gateway(
             #{
                 price => {200, integer_to_binary(NetworkPrice)},
                 tx_anchor => {200, hb_util:encode(Anchor)}
@@ -303,8 +302,7 @@ bundler_completion_payment_hook() ->
             bundle_payment_balance(Node, BundleReleaseWallet)
         )
     after
-        hb_mock_server:stop(ServerHandle),
-        dev_bundler:stop_server(Opts)
+        hb_mock_server:stop(ServerHandle)
     end.
 
 %% @doc Build a per-message hook that validates the item payload and releases pay.
@@ -573,9 +571,22 @@ relay_schedule_ans104_test() ->
             #{}
         ),
     ?event({scheduler_location, SchedulerLocation}),
-    dev_location_cache:write(
-        SchedulerLocation,
-        #{ <<"store">> => [ComputeStore] }
+    LocationOpts = #{ <<"store">> => [ComputeStore] },
+    {ok, LocationPath} = hb_cache:write(SchedulerLocation, LocationOpts),
+    lists:foreach(
+        fun(Signer) ->
+            ok = hb_store:link(
+                [ComputeStore],
+                #{
+                    hb_path:to_binary([
+                        <<"~location@1.0">>,
+                        hb_util:human_id(Signer)
+                    ]) => LocationPath
+                },
+                LocationOpts
+            )
+        end,
+        hb_message:signers(SchedulerLocation, LocationOpts)
     ),
     % Create the relaying server.
     Relay =
@@ -656,7 +667,7 @@ relay_schedule_ans104_test() ->
     ?event(debug_test, {post_result, ScheduleRes}),
     ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 0 }}, ScheduleRes),
     % Push another message via the compute node.
-    ProcID = dev_process_lib:process_id(Process, #{}, ClientOpts),
+    ProcID = lib_process:process_id(Process, #{}, ClientOpts),
     ToPush =
         hb_message:commit(
             #{
