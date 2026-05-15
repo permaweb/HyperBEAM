@@ -790,7 +790,7 @@ get_status_class({error, {down, noproc}}) ->
 get_status_class({error, {stream_error, {closed, normal}}}) ->
     <<"stream-closed">>;
 get_status_class({error, Error}) when is_atom(Error) ->
-    atom_to_binary(Error);
+    hb_util:atom_to_dashed_binary(Error);
 get_status_class(208) ->
 	<<"already-processed">>;
 get_status_class(404) ->
@@ -807,7 +807,7 @@ get_status_class(Data) when is_binary(Data) ->
 			get_status_class(Status)
 		end;
 get_status_class(Data) when is_atom(Data) ->
-	atom_to_binary(Data);
+	hb_util:atom_to_dashed_binary(Data);
 get_status_class(StatusClass) ->
     ?event(warning, {unknown_status_class, {status_class, StatusClass}}),
 	<<"unknown">>.
