@@ -434,9 +434,10 @@ handle_task_failed(WorkerPID, Task, Reason, State = #state{
     ?event(
         bundler_short,
         dev_bundler_task:log_task(task_failed_retrying, Task, [
-            {reason, {explicit, Reason}},
+            {bundle_id, {explicit, Task#task.bundle_id}},
             {retry_count, RetryCount},
-            {delay_ms, Delay}
+            {delay_ms, Delay},
+            {reason, {explicit, Reason}}
         ])
     ),
     Task1 = Task#task{retry_count = RetryCount + 1},

@@ -141,7 +141,8 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         Response = dev_arweave:post_chunk(Request, Opts),
         case Response of
             {ok, _} -> {ok, proof_posted};
-            {error, Reason} -> {error, Reason}
+            {error, Reason} -> {error, Reason};
+            {failure, Reason} = Reason -> {error, Reason}
         end
     catch
         _:Err:_Stack ->
