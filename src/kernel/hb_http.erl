@@ -307,7 +307,11 @@ message_to_request(M, Opts) ->
     Res =
         route_to_request(
             M,
-            RouteRes = hb_ao:direct(<<"router@1.0">>, #{}, RouteReq, Opts),
+            RouteRes = hb_ao:direct(
+                #{ <<"device">> => <<"router@1.0">> },
+                RouteReq,
+                Opts
+            ),
             Opts
         ),
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),

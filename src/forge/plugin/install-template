@@ -54,6 +54,12 @@ script_dir() {
 default_template_dir() {
     if [ "${REBAR_GLOBAL_CONFIG_DIR:-}" ]; then
         printf '%s/.config/rebar3/templates' "$REBAR_GLOBAL_CONFIG_DIR"
+    elif [ "${REBAR_CACHE_DIR:-}" ]; then
+        printf '%s/.config/rebar3/templates' "$REBAR_CACHE_DIR"
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        printf '%s/Library/Application Support/rebar3/templates' "$HOME"
+    elif [ "${XDG_CONFIG_HOME:-}" ]; then
+        printf '%s/rebar3/templates' "$XDG_CONFIG_HOME"
     else
         printf '%s/.config/rebar3/templates' "$HOME"
     fi

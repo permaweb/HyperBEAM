@@ -6,11 +6,12 @@
 %%% the root becomes `_hb_device_<sanitized-name>_<hash>' and helpers
 %%% become `_hb_device_<sanitized-name>_<hash>__<helper-tail>'.
 %%%
-%%% The hash is derived from a framed SHA-256 stream of the device's source
-%%% file names and contents. This means the hash is uniquely determined by the
-%%% source set and is not materially controllable by the device author. The
-%%% hash is encoded as lowercase unpadded base32 so that it can appear in an
-%%% Erlang atom.
+%%% The hash is the unsigned message ID of an AO-Core message that
+%%% contains the device's source files (file name and contents).  This
+%%% means the hash is uniquely determined by the source set and is not
+%%% materially controllable by the device author.  The hash is encoded
+%%% as lowercase unpadded base32 so that it can appear in an Erlang
+%%% atom.
 %%%
 %%% The packager also produces signed AO-Core messages for the device's
 %%% _specification_ (markdown derived from the root module's top moduledoc,
@@ -293,9 +294,45 @@ read_file(Path) ->
 %%% Packaging
 %%% --------------------------------------------------------------------
 
-%% @doc Package every device returned by {@link scan/2}.
+%% @doc Package every device returned by {@link scan/2}. Normal package
+%% identity uses the AO-Core message ID of the source-file message. The
+%% packager privately bootstraps the devices needed to calculate that ID.
 package_all(Groups, Opts) ->
-    [package(G, Opts) || G <- Groups].
+    PackageGroups = package_groups(Groups, Opts),
+    case package_id_mode(Opts) of
+        bootstrap ->
+            [package(G, Opts) || G <- PackageGroups];
+        normal ->
+            with_bootstrap_package_devices(
+                PackageGroups,
+                Opts,
+                fun(BootOpts) ->
+                    NormalOpts = BootOpts#{ <<"package-id-mode">> => normal },
+                    [package(G, NormalOpts) || G <- PackageGroups]
+                end
+            )
+    end.
+
+package_groups(Groups, Opts) ->
+    case hb_maps:get(<<"include-build-seeds">>, Opts, false, Opts) of
+        true -> unique_groups(Groups ++ seed_groups(Groups, Opts));
+        false -> Groups
+    end.
+
+unique_groups(Groups) ->
+    {_, Unique} =
+        lists:foldl(
+            fun(G, {Seen, Acc}) ->
+                Root = maps:get(root, G),
+                case sets:is_element(Root, Seen) of
+                    true -> {Seen, Acc};
+                    false -> {sets:add_element(Root, Seen), [G | Acc]}
+                end
+            end,
+            {sets:new(), []},
+            Groups
+        ),
+    lists:reverse(Unique).
 
 %% @doc Package one device group. Returns a map containing the generated
 %% root module name, BEAM archive, source, declared `implements' name
@@ -580,16 +617,33 @@ reverse_concat(Lines) ->
 %%% Hashing & module naming
 %%% --------------------------------------------------------------------
 
-%% @doc Compute the canonical package ID of a device's file set before the
-%% preloaded message/codec devices exist. The framed stream has the same input
-%% surface as the intended AO-Core source message: bare filename keys and full
-%% file contents.
-source_id(FilesMap, _Opts) ->
-    hb_util:human_id(crypto:hash(sha256, source_id_stream(FilesMap))).
+%% @doc Compute the normal package ID of a device's file set. The source
+%% set is represented as a normal AO-Core message whose keys are bare source
+%% filenames and whose values are the complete file contents.
+source_id(FilesMap, Opts) ->
+    SourceMsg = maps:from_list(lists:sort(maps:to_list(FilesMap))),
+    case package_id_mode(Opts) of
+        normal -> hb_message:id(SourceMsg, unsigned, Opts);
+        bootstrap -> bootstrap_source_id(SourceMsg)
+    end.
+
+package_id_mode(Opts) ->
+    case hb_maps:get(<<"package-id-mode">>, Opts, normal, Opts) of
+        normal -> normal;
+        <<"normal">> -> normal;
+        bootstrap -> bootstrap;
+        <<"bootstrap">> -> bootstrap
+    end.
+
+bootstrap_source_id(FilesMap) ->
+    <<"bootstrap_", (base32_lower(crypto:hash(
+        sha256,
+        source_id_stream(FilesMap)
+    )))/binary>>.
 
 source_id_stream(FilesMap) ->
     [
-        <<"hyperbeam-device-source-v1">>,
+        <<"hyperbeam-bootstrap-device-source-v1">>,
         [
             [<<(byte_size(Name)):32>>, Name, <<(byte_size(Body)):64>>, Body]
          ||
@@ -597,6 +651,8 @@ source_id_stream(FilesMap) ->
         ]
     ].
 
+source_id_to_hash(<<"bootstrap_", _/binary>> = SourceID) ->
+    SourceID;
 source_id_to_hash(SourceID) ->
     base32_lower(hb_util:native_id(SourceID)).
 
@@ -629,6 +685,115 @@ load_archive(Pkg) ->
                 false -> {error, {archive_load_failed, Reason}}
             end
     end.
+
+%% @doc Package with temporary generated message/codec devices loaded into a
+%% build-local volatile device-store. The temporary packages are never written
+%% to the preloaded-store.
+with_bootstrap_package_devices(Groups, Opts, Fun) ->
+    Store = volatile_device_store(<<"package-bootstrap">>),
+    hb_store:start(Store, #{}, Opts),
+    try
+        BootOpts =
+            Opts#{
+                <<"package-id-mode">> => bootstrap,
+                <<"device-store">> => Store
+            },
+        SeedPkgs = [package(G, BootOpts) || G <- seed_groups(Groups, Opts)],
+        ok = load_and_cache_seed_devices(SeedPkgs, BootOpts),
+        try Fun(BootOpts)
+        after purge_package_modules(SeedPkgs)
+        end
+    after
+        hb_store:stop(Store, #{}, Opts)
+    end.
+
+volatile_device_store(Prefix) ->
+    #{
+        <<"store-module">> => hb_store_volatile,
+        <<"name">> =>
+            iolist_to_binary([
+                Prefix,
+                <<"-">>,
+                integer_to_binary(erlang:unique_integer([positive]))
+            ])
+    }.
+
+seed_groups(Groups, Opts) ->
+    Roots = seed_roots(Opts),
+    Found = [G || G = #{ root := Root } <- Groups, lists:member(Root, Roots)],
+    Missing = Roots -- [Root || #{ root := Root } <- Found],
+    Extra = scan_seed_groups(Missing, Opts),
+    StillMissing = Missing -- [Root || #{ root := Root } <- Extra],
+    case StillMissing of
+        [] -> Found ++ Extra;
+        _ -> error({missing_bootstrap_device_sources, StillMissing})
+    end.
+
+scan_seed_groups([], _Opts) ->
+    [];
+scan_seed_groups(Roots, Opts) ->
+    scan(bootstrap_device_dirs(Opts), #{ <<"device-roots">> => Roots }).
+
+seed_roots(Opts) ->
+    [device_name_to_root(Name) || Name <- seed_device_names(Opts)].
+
+seed_device_names(Opts) ->
+    lists:usort([
+        <<"message@1.0">>,
+        <<"structured@1.0">>,
+        hb_opts:get(commitment_device, <<"httpsig@1.0">>, Opts)
+    ]).
+
+device_name_to_root(Name) when ?IS_ID(Name) ->
+    error({bootstrap_commitment_device_must_be_named, Name});
+device_name_to_root(<<"~", Rest/binary>>) ->
+    device_name_to_root(Rest);
+device_name_to_root(Name) ->
+    [Base | _] = binary:split(hb_util:bin(Name), <<"@">>),
+    Tail0 = binary:replace(Base, <<"-">>, <<"_">>, [global]),
+    Tail = binary:replace(Tail0, <<"/">>, <<"_">>, [global]),
+    binary_to_atom(<<"dev_", Tail/binary>>, utf8).
+
+bootstrap_device_dirs(Opts) ->
+    case hb_maps:get(
+        <<"bootstrap-device-src">>,
+        Opts,
+        [<<"src/preloaded">>, <<"_build/default/lib/hb/src/preloaded">>],
+        Opts
+    ) of
+        Dir when is_binary(Dir) -> [Dir];
+        Dir = [C | _] when is_integer(C) -> [Dir];
+        Dirs when is_list(Dirs) -> Dirs
+    end.
+
+load_and_cache_seed_devices(Pkgs, Opts) ->
+    ByName = maps:from_list([{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]),
+    lists:foreach(
+        fun(Name) ->
+            Pkg = maps:get(Name, ByName),
+            ok = load_archive(Pkg),
+            cache_seed_device(Name, maps:get(module_name, Pkg), Opts)
+        end,
+        seed_device_names(Opts)
+    ).
+
+cache_seed_device(Name, ModName, Opts) ->
+    Store = hb_maps:get(<<"device-store">>, Opts, undefined, Opts),
+    hb_store:write(
+        Store,
+        #{ <<"devices/", Name/binary>> => atom_to_binary(ModName, utf8) },
+        Opts
+    ).
+
+purge_package_modules(Pkgs) ->
+    lists:foreach(
+        fun(Mod) ->
+            code:purge(Mod),
+            code:delete(Mod),
+            code:purge(Mod)
+        end,
+        lists:append([maps:get(module_names, Pkg) || Pkg <- Pkgs])
+    ).
 
 %% @doc Encode bytes as lowercase, unpadded base32 (RFC 4648 alphabet).
 base32_lower(Bin) when is_binary(Bin) ->
@@ -1415,7 +1580,7 @@ base32_lower_known_vector_test() ->
 package_emits_root_only_exports_test() ->
     Dir = test_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
+    Pkg = package_for_test(Group),
     Mod = maps:get(module_name, Pkg),
     ?assert(is_generated_module(Mod)),
     ok = load_pkg_archive(Pkg),
@@ -1429,7 +1594,7 @@ package_emits_root_only_exports_test() ->
 package_helper_not_loaded_separately_test() ->
     Dir = test_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
+    Pkg = package_for_test(Group),
     Mod = maps:get(module_name, Pkg),
     [Mod, HelperMod] = maps:get(module_names, Pkg),
     % Ensure helper isn't loaded yet.
@@ -1448,7 +1613,7 @@ pure_on_load_metadata_is_flat_and_runnable_test() ->
     persistent_term:erase(hb_packager_on_load_test),
     Dir = on_load_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
+    Pkg = package_for_test(Group),
     Msg = impl_message(Pkg, <<"spec-id">>, #{}),
     ?assert(is_binary(maps:get(<<"on-load">>, Msg))),
     ?assertEqual(?ON_LOAD_FORMAT, maps:get(<<"on-load-format">>, Msg)),
@@ -1461,12 +1626,15 @@ pure_on_load_metadata_is_flat_and_runnable_test() ->
 dynamic_internal_dispatch_rejected_test() ->
     Dir = dynamic_dispatch_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    ?assertError({dynamic_internal_dispatch, _, _}, package(Group, #{})).
+    ?assertError(
+        {dynamic_internal_dispatch, _, _},
+        package_for_test(Group)
+    ).
 
 archive_contains_ebin_and_priv_entries_test() ->
     Dir = priv_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
+    Pkg = package_for_test(Group),
     Msg = impl_message(Pkg, <<"spec-id">>, #{}),
     ?assertEqual(
         hb_util:bin(erlang:system_info(system_architecture)),
@@ -1486,14 +1654,14 @@ archive_contains_ebin_and_priv_entries_test() ->
 derived_implements_uses_module_name_test() ->
     Dir = test_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
+    Pkg = package_for_test(Group),
     %% No `-implements' attribute, so derived from module name.
     ?assertEqual(<<"test-pkg@1.0">>, maps:get(device_name, Pkg)).
 
 hash_changes_with_content_test() ->
     Dir = test_fixture_dir(),
     [Group] = scan([Dir], #{}),
-    Pkg1 = package(Group, #{}),
+    Pkg1 = package_for_test(Group),
     Hash1 = maps:get(hash, Pkg1),
     %% Mutate the helper file slightly and re-scan.
     HelperPath = filename:join(Dir, "dev_test_pkg_helper.erl"),
@@ -1501,20 +1669,41 @@ hash_changes_with_content_test() ->
     ok = file:write_file(HelperPath,
         <<Old/binary, "%% noise\n">>),
     [Group2] = scan([Dir], #{}),
-    Pkg2 = package(Group2, #{}),
+    Pkg2 = package_for_test(Group2),
     Hash2 = maps:get(hash, Pkg2),
     ?assertNotEqual(Hash1, Hash2).
 
-package_hash_is_source_id_test() ->
+package_hash_is_source_message_id_test() ->
     Dir = test_fixture_dir(),
-    [Group = #{ files := Files }] = scan([Dir], #{}),
-    Pkg = package(Group, #{}),
-    SourceID = source_id(Files, #{}),
-    ?assertEqual(SourceID, maps:get(source_id, Pkg)),
+    [Group] = scan([Dir], #{}),
+    [Pkg] = package_all(
+        [Group],
+        #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] }
+    ),
+    SourceID = maps:get(source_id, Pkg),
+    ?assert(?IS_ID(SourceID)),
     ?assertEqual(source_id_to_hash(SourceID), maps:get(hash, Pkg)).
 
+package_for_test(Group) ->
+    package(Group, #{ <<"package-id-mode">> => bootstrap }).
+
 load_pkg_archive(Pkg) ->
-    load_archive(Pkg).
+    Archive = maps:get(archive, Pkg),
+    {ok, Files} = zip:unzip(Archive, [memory]),
+    Beams =
+        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
+    Modules =
+        [
+            begin
+                Path = maps:get(<<"archive-path">>, Meta),
+                ModBin = maps:get(<<"module-name">>, Meta),
+                Mod = binary_to_atom(ModBin, utf8),
+                {Mod, binary_to_list(Path), maps:get(Path, Beams)}
+            end
+          ||
+            Meta <- maps:get(archive_modules, Pkg)
+        ],
+    code:atomic_load(Modules).
 
 run_pkg_on_loads([]) ->
     ok;

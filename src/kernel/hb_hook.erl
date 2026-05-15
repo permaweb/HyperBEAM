@@ -191,12 +191,6 @@ execute_handler(HookName, Handler, Req, Opts) ->
         % Execute the prepared request upon the handler.
         {Status, Res} =
             hb_ao:direct(
-                hb_maps:get(
-                    <<"device">>,
-                    PreparedBase,
-                    hb_ao_device:default(),
-                    Opts
-                ),
                 PreparedBase,
                 PreparedReq,
                 Opts#{ <<"hashpath">> => ignore }

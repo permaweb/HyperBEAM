@@ -45,13 +45,14 @@ do(State) ->
             <<"priv-wallet">> => Wallet,
             <<"preloaded-store">> => maps:get(store, Preload),
             <<"preloaded-devices-index">> => maps:get(index, Preload),
+            <<"bootstrap-device-src">> => plugin_args:bootstrap_preloaded_dirs(),
             <<"store">> =>
                 [#{ <<"store-module">> => hb_store_arweave }]
         },
     % Scan the source directory for root device groups.
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
     % Package each device group.
-    Pkgs = [hb_packager:package(G, NodeOpts) || G <- Groups],
+    Pkgs = hb_packager:package_all(Groups, NodeOpts),
     % Sign and upload each package.
     Results =
         lists:map(

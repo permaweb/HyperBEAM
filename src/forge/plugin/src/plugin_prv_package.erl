@@ -46,14 +46,12 @@ run_with_args(Args) ->
     % Package each device group, and write to the output directory.
     Pkgs =
         lists:map(
-            fun(Group) ->
-                % Package the device group.
-                Pkg = hb_packager:package(Group, #{}),
+            fun(Pkg) ->
                 % Write the package to the output directory.
                 write_pkg(OutputBin, Pkg),
                 Pkg
             end,
-            Groups
+            hb_packager:package_all(Groups, package_opts())
         ),
     rebar_api:info(
         "device package: emitted ~p archives to ~s",
@@ -76,3 +74,6 @@ format_error(Reason) ->
     io_lib:format("device package failed: ~p", [Reason]).
 
 opts() -> plugin_args:opts().
+
+package_opts() ->
+    #{ <<"bootstrap-device-src">> => plugin_args:bootstrap_preloaded_dirs() }.

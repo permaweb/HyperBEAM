@@ -52,15 +52,18 @@ run(Args, NodeOpts) ->
     Roots = maps:get(<<"device-roots">>, Args, all),
     KeyPath = maps:get(<<"key">>, Args),
     Wallet = load_wallet(KeyPath),
-    PackageOpts = package_opts(Args, NodeOpts),
     case default_preloaded_dirs(Dirs) of
         {ok, DefaultDirs} ->
+            PackageOpts =
+                (package_opts(Args, NodeOpts))#{
+                    <<"bootstrap-device-src">> =>
+                        plugin_args:bootstrap_preloaded_dirs(DefaultDirs)
+                },
             Groups =
                 hb_packager:scan(DefaultDirs, #{}) ++
                 hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-            Pkgs = [hb_packager:package(G, PackageOpts) || G <- Groups],
             {ok, Result} =
-                hb_preload:build_dir(Pkgs, Wallet, OutputDir, PackageOpts),
+                hb_preload:build_groups(Groups, Wallet, OutputDir, PackageOpts),
             HeaderPath = header_path(OutputDir),
             ok =
                 hb_preload:write_index_header(

@@ -21,19 +21,21 @@ setup() ->
                 ["src/preloaded"],
                 #{
                     <<"device-roots">> =>
-                        [
-                            dev_name,
-                            dev_message,
-                            dev_httpsig,
-                            dev_structured,
-                            dev_flat,
-                            dev_json,
-                            dev_ans104,
-                            dev_tx
-                        ]
+                        [dev_name, dev_message, dev_httpsig, dev_structured]
                 }
             ),
-    Pkgs = [hb_packager:package(Group, #{}) || Group <- Groups],
+    Wallet = ar_wallet:new(),
+    PreloadDir =
+        list_to_binary(filename:join(["/tmp",
+            "hb_pkg_rt_" ++ integer_to_list(erlang:system_time())])),
+    {ok, Result} =
+        hb_preload:build_groups(
+            Groups,
+            Wallet,
+            PreloadDir,
+            #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] }
+        ),
+    Pkgs = maps:get(pkgs, Result),
     [Pkg] =
         [
             Package
@@ -41,14 +43,9 @@ setup() ->
             Package <- Pkgs,
             maps:get(device_name, Package) =:= <<"test-pkg@1.0">>
         ],
-    Wallet = ar_wallet:new(),
     % Use the encode/0 form ar_wallet uses internally so this matches
     % whatever `hb_message:signers/2' returns for impl messages.
     Address = hb_util:encode(ar_wallet:to_address(Wallet)),
-    PreloadDir =
-        list_to_binary(filename:join(["/tmp",
-            "hb_pkg_rt_" ++ integer_to_list(erlang:system_time())])),
-    {ok, Result} = hb_preload:build_dir(Pkgs, Wallet, PreloadDir, #{}),
     Store = maps:get(store, Result),
     Index = maps:get(index, Result),
     SpecIDs = maps:get(specs, Result),
@@ -58,7 +55,7 @@ setup() ->
             <<"data-protocol">> => <<"ao">>,
             <<"variant">> => <<"ao.N.1">>,
             <<"implements-device">> => SpecID
-        }, #{ <<"store">> => Store, <<"cache-read-mode">> => raw }),
+        }, #{ <<"store">> => Store }),
     DevStore = hb_test_utils:test_store(),
     Opts = #{
         <<"store">> => [Store],

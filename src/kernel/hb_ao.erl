@@ -94,7 +94,7 @@
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2, direct/4]).
+-export([resolve/2, resolve/3, resolve_many/2, direct/3, direct/4]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
@@ -160,6 +160,16 @@ resolve(Base, Req, Opts) ->
         }
     ),
     resolve_many([Base | MessagesToExec], Opts).
+
+%% @doc Invoke the device named by `Base' directly, bypassing the
+%% AO-Core resolver loop.
+direct(Base, Req, Opts) ->
+    direct(
+        hb_maps:get(<<"device">>, Base, hb_ao_device:default(), Opts),
+        Base,
+        Req,
+        Opts
+    ).
 
 %% @doc Invoke a device key directly, bypassing the AO-Core resolver loop.
 direct(Device, Base, Req, Opts) ->

@@ -23,7 +23,7 @@
 %%% </ul>
 -module(hb_preload).
 
--export([build/3, build_dir/4]).
+-export([build/3, build_groups/4, build_dir/4]).
 -export([write_index_header/2]).
 
 -include("include/hb.hrl").
@@ -42,6 +42,15 @@ build(Pkgs, Wallet, Opts) ->
     Dir = hb_maps:get(<<"output-dir">>, Opts, default_dir(), Opts),
     build_dir(Pkgs, Wallet, Dir, Opts).
 
+build_groups(Groups, Wallet, OutputDir, Opts) ->
+    PackageOpts = Opts#{ <<"include-build-seeds">> => true },
+    build_dir(
+        hb_packager:package_all(Groups, PackageOpts),
+        Wallet,
+        OutputDir,
+        Opts
+    ).
+
 build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     % Create a store config for the preloaded-store at the output directory.
     OutputBin = hb_util:bin(OutputDir),
@@ -55,7 +64,7 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     %% Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
     hb_store:start(StoreCfg, #{}, Opts),
-    DeviceStore = device_store(),
+    DeviceStore = device_store(<<"preload-normal">>),
     hb_store:start(DeviceStore, #{}, Opts),
     LocalOpts =
         Opts#{
@@ -92,54 +101,52 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
             store => StoreCfg,
             index => IndexID,
             specs => SpecIDs,
-            impls => lists:reverse(ImplIDs)
+            impls => lists:reverse(ImplIDs),
+            pkgs => Pkgs
         }
     }.
 
-%% @doc Volatile cache used only while signing the preloaded-store.
-device_store() ->
+%% @doc Build-local device cache used only while signing final preload
+%% artifacts.
+device_store(Prefix) ->
     #{
         <<"store-module">> => hb_store_volatile,
         <<"name">> =>
             iolist_to_binary([
-                <<"preload-build-devices-">>,
+                Prefix,
+                <<"-">>,
                 integer_to_binary(erlang:unique_integer([positive]))
             ])
     }.
 
-%% @doc Load the generated message/codec devices needed to sign and write
-%% preload artifacts. These are packaged modules, not source `dev_*' modules.
+%% @doc Load the final generated devices needed to sign and write preload
+%% artifacts. These are normal generated packages, never source modules.
 load_build_devices(Pkgs, Opts) ->
     ByName =
-        maps:from_list(
-            [{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]
-        ),
+        maps:from_list([{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]),
     lists:foreach(
         fun(Name) ->
-            Pkg =
-                case maps:find(Name, ByName) of
-                    {ok, Found} -> Found;
-                    error -> error({missing_preload_build_device, Name})
-                end,
+            Pkg = maps:get(Name, ByName),
             ok = hb_packager:load_archive(Pkg),
             cache_build_device(Name, maps:get(module_name, Pkg), Opts)
         end,
-        required_build_devices()
+        required_build_devices(Opts)
     ).
 
 cache_build_device(Name, Mod, Opts) ->
-    hb_ao_device:cache_device_module(Name, Mod, Opts).
+    Store = hb_maps:get(<<"device-store">>, Opts, undefined, Opts),
+    hb_store:write(
+        Store,
+        #{ <<"devices/", Name/binary>> => atom_to_binary(Mod, utf8) },
+        Opts
+    ).
 
-required_build_devices() ->
-    [
+required_build_devices(Opts) ->
+    lists:usort([
         <<"message@1.0">>,
-        <<"httpsig@1.0">>,
         <<"structured@1.0">>,
-        <<"flat@1.0">>,
-        <<"json@1.0">>,
-        <<"ans104@1.0">>,
-        <<"tx@1.0">>
-    ].
+        hb_opts:get(commitment_device, <<"httpsig@1.0">>, Opts)
+    ]).
 
 %% @doc Write a package to the store by writing its spec and implementation messages.
 %% Returns `{SignedSpecID, SignedImplID}'.
@@ -217,19 +224,43 @@ build_signs_and_indexes_test() ->
     Dir =
         filename:join(["/tmp",
             "hb_preload_test_" ++ integer_to_list(erlang:system_time())]),
-    %% Use the packager's fixture helper to build a single-device set.
+    %% Build the fixture with the minimal seed devices needed to sign.
     SrcDir = hb_packager:test_fixture_dir(),
     [Group] = hb_packager:scan([SrcDir], #{}),
-    Pkg = hb_packager:package(Group, #{}),
-    Pkgs = preload_build_pkgs() ++ [Pkg],
+    Groups =
+        [Group] ++
+        hb_packager:scan(
+            ["src/preloaded"],
+            #{
+                <<"device-roots">> =>
+                    [dev_message, dev_httpsig, dev_structured]
+            }
+        ),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    {ok, Result} = build_dir(Pkgs, Wallet, Dir, #{}),
+    {ok, Result} =
+        build_groups(
+            Groups,
+            Wallet,
+            Dir,
+            #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] }
+        ),
+    Pkg =
+        lists:foldl(
+            fun(P, Acc) ->
+                case maps:get(device_name, P) of
+                    <<"test-pkg@1.0">> -> P;
+                    _ -> Acc
+                end
+            end,
+            undefined,
+            maps:get(pkgs, Result)
+        ),
     Store = maps:get(store, Result),
     IndexID = maps:get(index, Result),
     SpecIDs = maps:get(specs, Result),
     ImplIDs = maps:get(impls, Result),
-    %% The fixture plus build devices are recorded.
+    %% The fixture plus seed devices are recorded.
     ?assert(maps:is_key(maps:get(device_name, Pkg), SpecIDs)),
     ?assert(length(ImplIDs) >= 1),
     %% Index ID must be a 43-char human ID.
@@ -255,16 +286,6 @@ build_signs_and_indexes_test() ->
         end,
         ImplIDs
     ).
-
-preload_build_pkgs() ->
-    Dirs = ["src/preloaded/message", "src/preloaded/codec"],
-    [
-        Pkg
-     ||
-        Group <- hb_packager:scan(Dirs, #{}),
-        Pkg <- [hb_packager:package(Group, #{})],
-        lists:member(maps:get(device_name, Pkg), required_build_devices())
-    ].
 
 signer(Store, ID, Opts) ->
     hb_store:read(

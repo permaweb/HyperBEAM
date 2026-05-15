@@ -44,13 +44,14 @@ do(State) ->
     Roots = maps:get(<<"device-roots">>, Args, all),
     % Scan the source directory for root device groups.
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-    % Re-package the selected groups with test exports to discover the
-    % generated module names that the runtime will load from the store.
+    % Use the exact packages written to the test preloaded-store.
+    SelectedRoots = [maps:get(root, G) || G <- Groups],
     Pkgs =
         [
-            hb_packager:package(G, #{ <<"test">> => true })
+            Pkg
          ||
-            G <- Groups
+            Pkg <- maps:get(pkgs, Result),
+            lists:member(maps:get(root_module, Pkg), SelectedRoots)
         ],
     Modules = lists:usort(lists:append([
         maps:get(module_names, Pkg)
@@ -73,21 +74,49 @@ do(State) ->
 
 test_modules(State, Names, Modules, Result) ->
     Opts = test_opts(Result),
-    case load_devices(Names, Opts) of
-        ok ->
-            rebar_api:info(
-                "device test: running generated modules ~p",
-                [Modules]
-            ),
-            start_apps(),
-            case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
-                ok -> {ok, State};
-                error -> {error, format_error(eunit_failed)};
-                Other -> {error, format_error({eunit_failed, Other})}
-            end;
-        {error, Reason} ->
-            {error, format_error(Reason)}
+    with_preloaded_env(Result, fun() ->
+        case load_devices(Names, Opts) of
+            ok ->
+                rebar_api:info(
+                    "device test: running generated modules ~p",
+                    [Modules]
+                ),
+                start_apps(),
+                case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
+                    ok -> {ok, State};
+                    error -> {error, format_error(eunit_failed)};
+                    Other -> {error, format_error({eunit_failed, Other})}
+                end;
+            {error, Reason} ->
+                {error, format_error(Reason)}
+        end
+    end).
+
+with_preloaded_env(Result, Fun) ->
+    StorePath = hb_util:bin(hb_maps:get(<<"name">>, maps:get(store, Result))),
+    Index = hb_util:bin(maps:get(index, Result)),
+    OldStore = os:getenv("HB_PRELOADED_STORE"),
+    OldIndex = os:getenv("HB_PRELOADED_DEVICES_INDEX"),
+    os:putenv("HB_PRELOADED_STORE", binary_to_list(StorePath)),
+    os:putenv("HB_PRELOADED_DEVICES_INDEX", binary_to_list(Index)),
+    erase_preloaded_env_cache(),
+    try Fun()
+    after
+        restore_env("HB_PRELOADED_STORE", OldStore),
+        restore_env("HB_PRELOADED_DEVICES_INDEX", OldIndex),
+        erase_preloaded_env_cache()
     end.
+
+restore_env(Name, false) ->
+    os:unsetenv(Name);
+restore_env(Name, Value) ->
+    os:putenv(Name, Value).
+
+erase_preloaded_env_cache() ->
+    erase({os_env, "HB_PRELOADED_STORE"}),
+    erase({os_env, "HB_PRELOADED_DEVICES_INDEX"}),
+    erase({processed_env, <<"preloaded-store">>}),
+    erase({processed_env, <<"preloaded-devices-index">>}).
 
 test_opts(Result) ->
     #{

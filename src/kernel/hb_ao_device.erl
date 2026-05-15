@@ -3,7 +3,6 @@
 %%% functions from a device.
 -module(hb_ao_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
--export([cache_device_module/3]).
 -export([implementation_dir/1]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
@@ -918,27 +917,30 @@ verify_device_compatibility(Msg, Opts) ->
 %% the cached BEAM is no longer loaded.
 lookup_device_cache(Ref, Opts) ->
     case erlang:get({?MODULE, device_cache, Ref}) of
-        ModName when is_atom(ModName) ->
-            loaded_module(ModName);
+        ModName when is_atom(ModName), ModName =/= undefined ->
+            case loaded_module(ModName) of
+                {ok, _} = Ok -> Ok;
+                not_found -> lookup_device_store(Ref, Opts)
+            end;
         _ ->
-            case device_store(Opts) of
-                undefined -> not_found;
-                Store ->
-                    Key = <<?DEV_CACHE_PREFIX/binary, Ref/binary>>,
-                    case hb_store:read(Store, Key, Opts) of
-                        {ok, ModBin} ->
-                            case lookup_cached_module(ModBin) of
-                                {ok, ModName} = Ok ->
-                                    erlang:put(
-                                        {?MODULE, device_cache, Ref},
-                                        ModName
-                                    ),
-                                    Ok;
-                                not_found ->
-                                    not_found
-                            end;
-                        _ -> not_found
-                    end
+            lookup_device_store(Ref, Opts)
+    end.
+
+lookup_device_store(Ref, Opts) ->
+    case device_store(Opts) of
+        undefined -> not_found;
+        Store ->
+            Key = <<?DEV_CACHE_PREFIX/binary, Ref/binary>>,
+            case hb_store:read(Store, Key, Opts) of
+                {ok, ModBin} ->
+                    case lookup_cached_module(ModBin) of
+                        {ok, ModName} = Ok ->
+                            erlang:put({?MODULE, device_cache, Ref}, ModName),
+                            Ok;
+                        not_found ->
+                            not_found
+                    end;
+                _ -> not_found
             end
     end.
 

@@ -297,7 +297,6 @@ is_chargable_req(Req, NodeMsg) ->
         ),
     Matches =
         hb_ao:direct(
-            <<"router@1.0">>,
             #{
                 <<"device">> => <<"router@1.0">>,
                 <<"routes">> => NonChargableRoutes

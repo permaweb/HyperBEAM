@@ -137,6 +137,20 @@ node uses the freshly generated preloaded-store.
 Operators control the bake via the source set their build runs
 `rebar3 device preload` over.
 
+### Forge preload bootstrap
+
+The preloaded-store builder has one forge-private bootstrap step. To
+sign and write normal AO-Core messages, the builder first packages and
+loads only the minimal build devices: `message@1.0`, `structured@1.0`,
+and the configured commitment device (`httpsig@1.0` by default). Those
+temporary packages use a visible `bootstrap_` suffix and live only in a
+build-local volatile device store. They are then discarded.
+
+The real preload build runs separately with a fresh volatile
+device-store. All final package identities are normal AO-Core unsigned
+message IDs of the source-file message, and no `bootstrap_` package ID
+is written to the final preloaded-store.
+
 ## Project template
 
 The Forge also ships a `rebar3 new` template for external device

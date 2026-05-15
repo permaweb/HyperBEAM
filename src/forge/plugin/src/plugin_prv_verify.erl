@@ -44,7 +44,7 @@ do(State) ->
     % Scan the source directory for all device groups.
     Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
     % Package each device group.
-    Pkgs = [hb_packager:package(G, #{}) || G <- Groups],
+    Pkgs = hb_packager:package_all(Groups, package_opts()),
     % Verify each package.
     Results = [verify_pkg(Output, P) || P <- Pkgs],
     case [R || R <- Results, R =/= ok] of
@@ -141,6 +141,9 @@ maybe_make_executable(Rel, Path) ->
 
 default_exports() ->
     [{module_info, 0}, {module_info, 1}].
+
+package_opts() ->
+    #{ <<"bootstrap-device-src">> => plugin_args:bootstrap_preloaded_dirs() }.
 
 %% @doc Check that the helpers are not loaded separately from the root module.
 check_helpers_unloaded(Output, Mod, Root, Helpers) ->

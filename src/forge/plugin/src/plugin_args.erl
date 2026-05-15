@@ -13,7 +13,7 @@
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(plugin_args).
 
--export([opts/0, parse/2]).
+-export([opts/0, parse/2, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
 
 opts() ->
     [
@@ -55,3 +55,14 @@ to_bin(B) when is_binary(B) -> B.
 
 maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
+
+bootstrap_preloaded_dirs() ->
+    bootstrap_preloaded_dirs([]).
+
+bootstrap_preloaded_dirs([]) ->
+    case filelib:is_file("src/kernel/hb_ao_device.erl") of
+        true -> [<<"src/preloaded">>];
+        false -> [<<"_build/default/lib/hb/src/preloaded">>]
+    end;
+bootstrap_preloaded_dirs(Dirs) ->
+    Dirs.

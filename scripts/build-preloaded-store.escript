@@ -19,18 +19,20 @@ main(_Args) ->
     io:format("[preload] scanning ~s...~n", [SrcDir]),
     Groups = hb_packager:scan([SrcDir], #{}),
     io:format("[preload] packaging ~p devices~n", [length(Groups)]),
-    Pkgs =
-        lists:map(
-            fun(G) ->
-                Pkg = hb_packager:package(G, #{}),
-                io:format("[preload]   ~s -> ~p~n",
-                    [maps:get(device_name, Pkg),
-                     maps:get(module_name, Pkg)]),
-                Pkg
-            end,
-            Groups
+    {ok, Result} =
+        hb_preload:build_groups(
+            Groups,
+            Wallet,
+            OutputDir,
+            #{ <<"bootstrap-device-src">> => [SrcDir] }
         ),
-    {ok, Result} = hb_preload:build_dir(Pkgs, Wallet, OutputDir, #{}),
+    lists:foreach(
+        fun(Pkg) ->
+            io:format("[preload]   ~s -> ~p~n",
+                [maps:get(device_name, Pkg), maps:get(module_name, Pkg)])
+        end,
+        maps:get(pkgs, Result)
+    ),
     Index = maps:get(index, Result),
     io:format("[preload] index = ~s~n", [Index]),
     HeaderPath = <<"_build/hb_preloaded_index.hrl">>,
