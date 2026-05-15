@@ -94,7 +94,7 @@
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2]).
+-export([resolve/2, resolve/3, resolve_many/2, direct/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
@@ -160,6 +160,20 @@ resolve(Base, Req, Opts) ->
         }
     ),
     resolve_many([Base | MessagesToExec], Opts).
+
+%% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
+%% normalization, cache, hashpath, worker, and other management components.
+direct(Base, Req, Opts) ->
+    ExecOpts = execution_opts(Opts),
+    Key = hb_path:hd(Req, ExecOpts),
+    {Status, _Dev, Func} =
+        hb_ao_device:message_to_fun(Base, Key, ExecOpts),
+    Args =
+        case Status of
+            add_key -> [Key, Base, Req, ExecOpts];
+            _ -> [Base, Req, ExecOpts]
+        end,
+    apply(Func, hb_ao_device:truncate_args(Func, Args)).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
@@ -625,7 +639,7 @@ resolve_stage(
         <<"status">> => St,
         <<"body">> => Res
     },
-    case dev_hook:on(<<"step">>, HookReq, Opts) of
+    case hb_hook:on(<<"step">>, HookReq, Opts) of
         {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
             resolve_stage(8, Base, Req, {NewStatus, NewRes}, ExecName, Opts);
         Error ->
