@@ -1,8 +1,15 @@
 %%% @doc A library of common functions for building devices that interact with 
 %%% the `~process@1.0` meta-device structure.
--module(dev_process_lib).
+-module(lib_process).
 -include("include/hb.hrl").
--export([as_process/2, run_as/4, process_id/3, set_results/3, ensure_process_key/2]).
+-export([
+    as_process/2,
+    run_as/4,
+    process_id/3,
+    set_results/3,
+    ensure_process_key/2,
+    default_device/3
+]).
 
 %% @doc Returns the process ID of the current process.
 process_id(Base, Req, Opts) ->
@@ -48,7 +55,7 @@ run_as(Key, Base, Req, Opts) ->
                         hb_maps:get(
                             << Key/binary, "-device">>,
                             Base,
-                            dev_process:default_device(Base, Key, Opts),
+                            default_device(Base, Key, Opts),
                             Opts
                         ),
                 % Configure input prefix for proper message routing within the device
@@ -92,8 +99,7 @@ run_as(Key, Base, Req, Opts) ->
 %% In situations where the key that is `run_as' returns a message with a 
 %% transformed device, this is useful.
 as_process(Base, Opts) ->
-    {ok, Proc} = dev_message:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts),
-    Proc.
+    hb_ao:set(Base, #{ <<"device">> => <<"process@1.0">> }, Opts).
 
 %% @doc Set the results of the current process.
 set_results(State, Results, Opts) ->
@@ -131,3 +137,14 @@ ensure_process_key(Base, Opts) ->
             Res;
         _ -> Base
     end.
+
+%% @doc Returns the default device for a given piece of process functionality.
+default_device(Base, Key, Opts) ->
+    NormKey = hb_ao:normalize_key(Key),
+    case {NormKey, hb_util:deep_get(<<"process/variant">>, Base, Opts)} of
+        {<<"execution">>, <<"ao.TN.1">>} -> <<"genesis-wasm@1.0">>;
+        _ -> default_device_index(NormKey)
+    end.
+default_device_index(<<"scheduler">>) -> <<"scheduler@1.0">>;
+default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
+default_device_index(<<"push">>) -> <<"push@1.0">>.

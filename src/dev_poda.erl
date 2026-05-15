@@ -248,7 +248,7 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
             ),
             CompleteCommitments =
                 ar_bundles:sign_item(
-                    dev_arweave_common:normalize(
+                    ar_tx:normalize(
                         #tx {
                             data = 
                                 hb_maps:from_list(
@@ -263,7 +263,7 @@ add_commitments(NewMsg, S = #{ <<"assignment">> := Assignment, <<"store">> := _S
                     Wallet
                 ),
             CommitmentBundle = ar_bundles:sign_item(
-                dev_arweave_common:normalize(
+                ar_tx:normalize(
                     #tx{
                         target = NewMsg#tx.target,
                         data = #{

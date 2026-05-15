@@ -97,7 +97,7 @@ req_to_default_scheme(Req, _Opts) ->
 %% @doc Apply the requested scheme to generate the key material (key and keyid).
 apply_scheme(publickey, KeyID, _Req) ->
     % Remove the `publickey:' prefix from the keyid and return the key.
-    PubKey = base64:decode(remove_scheme_prefix(KeyID)),
+    PubKey = base64:decode(hb_util:remove_scheme_prefix(KeyID)),
     {ok, PubKey, << "publickey:", (base64:encode(PubKey))/binary >>};
 apply_scheme(constant, RawKeyID, _Req) ->
     % In the `constant' scheme, the key is simply the key itself, including the
@@ -110,7 +110,7 @@ apply_scheme(constant, RawKeyID, _Req) ->
 apply_scheme(secret, _KeyID, Req) ->
     % In the `secret' scheme, the key is hashed to generate a keyid.
     Secret = maps:get(<<"secret">>, Req, undefined),
-    Committer = secret_key_to_committer(Secret),
+    Committer = hb_util:secret_key_to_committer(Secret),
     {ok, Secret, << "secret:", Committer/binary >>};
 apply_scheme(_Scheme, _Key, _KeyID) ->
     {error, unsupported_scheme}.
@@ -131,21 +131,18 @@ keyid_to_committer(publickey, KeyID) ->
     % same raw bytes, and is subsequently safe.
     hb_util:human_id(
         ar_wallet:to_address(
-            hb_util:decode(remove_scheme_prefix(KeyID))
+            hb_util:decode(hb_util:remove_scheme_prefix(KeyID))
         )
     );
 keyid_to_committer(secret, KeyID) ->
-    remove_scheme_prefix(KeyID);
+    hb_util:remove_scheme_prefix(KeyID);
 keyid_to_committer(constant, _KeyID) ->
     undefined.
 
 %% @doc Given a secret key, generate the committer value for a commitment.
 secret_key_to_committer(Key) ->
-    hb_util:human_id(hb_crypto:sha256(Key)).
+    hb_util:secret_key_to_committer(Key).
 
 %% @doc Remove the `scheme:' prefix from a keyid.
 remove_scheme_prefix(KeyID) ->
-    case binary:split(KeyID, <<":">>) of
-        [_Scheme, Key] -> Key;
-        [Key] -> Key
-    end.
+    hb_util:remove_scheme_prefix(KeyID).
