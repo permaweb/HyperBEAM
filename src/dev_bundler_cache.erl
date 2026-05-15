@@ -372,46 +372,42 @@ bundler_optimistic_cache_test() ->
         <<"priv-wallet">> => Wallet,
         <<"store">> => hb_test_utils:test_store(hb_store_lmdb)
     }),
-    try
-        StructuredBundle = hb_message:convert(
-            L2Bundle,
-            <<"structured@1.0">>,
-            <<"ans104@1.0">>,
-            #{}
-        ),
-        ?assertMatch({ok, _}, hb_http:post(
-            Node,
-            #{
-                <<"path">> => <<"/~bundler@1.0/tx">>,
-                <<"bundler-subject">> => <<"body">>,
-                <<"body">> => StructuredBundle
-            },
-            #{}
-        )),
-        % Every item at every nesting level must be independently readable
-        % via a bare GET /ID — the real user-facing access pattern.
-        AllItems = [
-            {l2bundle, L2BundleID},
-            {l3item,   L3ItemID},
-            {l3bundle, L3BundleID},
-            {l4item1,  L4Item1ID},
-            {l4item2,  L4Item2ID}
-        ],
-        lists:foreach(
-            fun({Label, ExpectedID}) ->
-                {ok, Msg} = hb_http:get(
-                    Node, #{ <<"path">> => <<"/", ExpectedID/binary>> }, #{}),
-                ?event(debug_test, {item_result,
-                    {label, Label}, {expected_id, ExpectedID}, {msg, Msg}}),
-                ?assert(hb_message:verify(Msg)),
-                ?assertEqual(ExpectedID, hb_message:id(Msg, signed))
-            end,
-            AllItems
-        ),
-        ok
-    after
-        dev_bundler:stop_server()
-    end.
+    StructuredBundle = hb_message:convert(
+        L2Bundle,
+        <<"structured@1.0">>,
+        <<"ans104@1.0">>,
+        #{}
+    ),
+    ?assertMatch({ok, _}, hb_http:post(
+        Node,
+        #{
+            <<"path">> => <<"/~bundler@1.0/tx">>,
+            <<"bundler-subject">> => <<"body">>,
+            <<"body">> => StructuredBundle
+        },
+        #{}
+    )),
+    % Every item at every nesting level must be independently readable
+    % via a bare GET /ID — the real user-facing access pattern.
+    AllItems = [
+        {l2bundle, L2BundleID},
+        {l3item,   L3ItemID},
+        {l3bundle, L3BundleID},
+        {l4item1,  L4Item1ID},
+        {l4item2,  L4Item2ID}
+    ],
+    lists:foreach(
+        fun({Label, ExpectedID}) ->
+            {ok, Msg} = hb_http:get(
+                Node, #{ <<"path">> => <<"/", ExpectedID/binary>> }, #{}),
+            ?event(debug_test, {item_result,
+                {label, Label}, {expected_id, ExpectedID}, {msg, Msg}}),
+            ?assert(hb_message:verify(Msg)),
+            ?assertEqual(ExpectedID, hb_message:id(Msg, signed))
+        end,
+        AllItems
+    ),
+    ok.
 
 new_data_item(Index, SizeOrData, Opts) ->
     Data = case is_binary(SizeOrData) of

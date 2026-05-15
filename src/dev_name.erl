@@ -5,8 +5,6 @@
 %%% first resolver that matches.
 -module(dev_name).
 -export([info/1, request/3]).
-%%% Public helpers.
--export([test_arns_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 

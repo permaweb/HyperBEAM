@@ -266,7 +266,7 @@ response(State, RawResponse, NodeMsg) ->
 
 %% @doc Get the balance of a user in the ledger.
 balance(_, Req, NodeMsg) ->
-    case dev_hook:find(<<"request">>, NodeMsg) of
+    case hb_hook:find(<<"request">>, NodeMsg) of
         [] ->
             {error, <<"No request hook found.">>};
         [Handler] ->
@@ -296,9 +296,16 @@ is_chargable_req(Req, NodeMsg) ->
             NodeMsg
         ),
     Matches =
-        dev_router:match(
-            #{ <<"routes">> => NonChargableRoutes },
-            Req,
+        hb_ao:direct(
+            #{
+                <<"device">> => <<"router@1.0">>,
+                <<"routes">> => NonChargableRoutes
+            },
+            Req#{
+                <<"path">> => <<"match">>,
+                <<"route-path">> =>
+                    hb_maps:get(<<"path">>, Req, no_path, NodeMsg)
+            },
             NodeMsg
         ),
     ?event(

@@ -103,9 +103,16 @@ price_from_routes(UserRequest, NodeMsg) ->
     RouterOpts = hb_opts:get(<<"router-opts">>, #{}, NodeMsg),
     Routes = hb_maps:get(<<"offered">>, RouterOpts, [], NodeMsg),
     MatchRes =
-        dev_router:match(
-            #{ <<"routes">> => Routes },
-            UserRequest,
+        hb_ao:direct(
+            #{
+                <<"device">> => <<"router@1.0">>,
+                <<"routes">> => Routes
+            },
+            UserRequest#{
+                <<"path">> => <<"match">>,
+                <<"route-path">> =>
+                    hb_maps:get(<<"path">>, UserRequest, no_path, NodeMsg)
+            },
             NodeMsg
         ),
     case MatchRes of

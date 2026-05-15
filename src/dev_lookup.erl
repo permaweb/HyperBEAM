@@ -17,7 +17,15 @@ read(_M1, M2, Opts) ->
             case hb_ao:get(<<"accept">>, M2, Opts) of
                 <<"application/aos-2">> ->
                     Res = hb_cache:ensure_all_loaded(RawRes),
-                    Struct = dev_json_iface:message_to_json_struct(Res, Opts),
+                    {ok, Struct} =
+                        hb_ao:resolve(
+                            #{ <<"device">> => <<"json-iface@1.0">> },
+                            #{
+                                <<"path">> => <<"to">>,
+                                <<"message">> => Res
+                            },
+                            Opts
+                        ),
                     {ok,
                         #{
                             <<"body">> => hb_json:encode(Struct),
@@ -55,7 +63,15 @@ aos2_message_lookup_test() ->
             #{}
         ),
     
-    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, RetrievedMsg, #{}), #{}),
+    {ok, Decoded} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"from">>,
+                <<"json">> => hb_ao:get(<<"body">>, RetrievedMsg, #{})
+            },
+            #{}
+        ),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"data">>, Decoded, #{})).
 
 http_lookup_test() ->
@@ -74,5 +90,13 @@ http_lookup_test() ->
         <<"accept">> => <<"application/aos-2">>
     }, Opts#{ <<"priv-wallet">> => Wallet }),
     {ok, Res} = hb_http:post(Node, Req, Opts),
-    {ok, Decoded} = dev_json_iface:json_to_message(hb_ao:get(<<"body">>, Res, Opts), Opts),
+    {ok, Decoded} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"from">>,
+                <<"json">> => hb_ao:get(<<"body">>, Res, Opts)
+            },
+            Opts
+        ),
     ?assertEqual(<<"test-data">>, hb_ao:get(<<"Data">>, Decoded, Opts)).

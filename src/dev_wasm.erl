@@ -48,14 +48,22 @@ info(_Base, _Opts) ->
         excludes => [instance]
     }.
 
+%% @doc Return the stack input prefix from the message.
+input_prefix(Base, Opts) ->
+    hb_ao:get(<<"input-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
+
+%% @doc Return the stack output prefix from the message.
+output_prefix(Base, Opts) ->
+    hb_ao:get(<<"output-prefix">>, {as, <<"message@1.0">>, Base}, <<"">>, Opts).
+
 %% @doc Boot a WASM image on the image stated in the `process/image' field of
 %% the message.
-init(M1, M2, Opts) ->
+init(M1, _M2, Opts) ->
     ?event(running_init),
     % Where we should read initial parameters from.
-    InPrefix = dev_stack:input_prefix(M1, M2, Opts),
+    InPrefix = input_prefix(M1, Opts),
     % Where we should read/write our own state to.
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix = output_prefix(M1, Opts),
     ?event({in_prefix, InPrefix}),
     ImageBin =
         case hb_ao:get(<<InPrefix/binary, "/image">>, M1, Opts) of
@@ -131,7 +139,7 @@ default_import_resolver(Base, Req, Opts) ->
         args := Args,
         func_sig := Signature
     } = Req,
-    Prefix = dev_stack:prefix(Base, Req, Opts),
+    Prefix = output_prefix(Base, Opts),
     {ok, Res} =
         hb_ao:resolve(
             hb_private:set(
@@ -162,7 +170,7 @@ compute(RawM1, M2, Opts) ->
     % - A message with a WASM instance in `priv/' but no `State' key.
     {ok, M1} = normalize(RawM1, M2, Opts),
     ?event(running_compute),
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix = output_prefix(M1, Opts),
     case hb_ao:get(pass, M1, Opts) of
         X when X == 1 orelse X == not_found ->
             % Extract the WASM Instance, func, params, and standard library
@@ -254,7 +262,7 @@ normalize(RawM1, M2, Opts) ->
                 Memory = 
                     hb_ao:get(
                         [<<"snapshot">>] ++ DeviceKey ++ [<<"body">>],
-                        {as, dev_message, RawM1},
+                        {as, <<"message@1.0">>, RawM1},
                         Opts
                     ),
                 case Memory of
@@ -269,7 +277,7 @@ normalize(RawM1, M2, Opts) ->
                 ?event(wasm_instance_found_not_deserializing),
                 RawM1
         end,
-    dev_message:set(M3, #{ <<"snapshot">> => unset }, Opts).
+    {ok, hb_ao:set(M3, #{ <<"snapshot">> => unset }, Opts)}.
 
 %% @doc Serialize the WASM state to a binary.
 snapshot(M1, M2, Opts) ->
@@ -285,7 +293,7 @@ snapshot(M1, M2, Opts) ->
 %% @doc Tear down the WASM executor.
 terminate(M1, M2, Opts) ->
     ?event(terminate_called_on_dev_wasm),
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix = output_prefix(M1, Opts),
     Instance = instance(M1, M2, Opts),
     hb_beamr:stop(Instance),
     {ok, hb_private:set(M1,
@@ -298,8 +306,8 @@ terminate(M1, M2, Opts) ->
 %% @doc Get the WASM instance from the message. Note that this function is exported
 %% such that other devices can use it, but it is excluded from calls from AO-Core
 %% resolution directly.
-instance(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+instance(M1, _M2, Opts) ->
+    Prefix = output_prefix(M1, Opts),
     Path = <<Prefix/binary, "/instance">>,
     ?event({searching_for_instance, Path, M1}),
     hb_private:get(Path, M1, Opts#{ <<"hashpath">> => ignore }).
@@ -314,7 +322,7 @@ import(Base, Req, Opts) ->
     % 1. Adjust the path to the stdlib.
     ModName = hb_ao:get(<<"module">>, Req, Opts),
     FuncName = hb_ao:get(<<"func">>, Req, Opts),
-    Prefix = dev_stack:prefix(Base, Req, Opts),
+    Prefix = output_prefix(Base, Opts),
     AdjustedPath =
         <<
             Prefix/binary,
@@ -348,7 +356,7 @@ import(Base, Req, Opts) ->
 %% call details into the message.
 undefined_import_stub(Base, Req, Opts) ->
     ?event({unimplemented_dev_wasm_call, {base, Base}, {req, Req}}),
-    Prefix = dev_stack:prefix(Base, Req, Opts),
+    Prefix = output_prefix(Base, Opts),
     UndefinedCallsPath =
         <<"state/results/", Prefix/binary, "/undefined-calls">>,
     Res = hb_ao:set(

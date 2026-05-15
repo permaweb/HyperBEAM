@@ -179,7 +179,7 @@ p4_response_charge_test() ->
             #{ <<"priv-wallet">> => ar_wallet:new() }
         ),
     {ServerHandle, GatewayOpts} =
-        dev_bundler:start_mock_gateway(
+        hb_mock_server:start_arweave_gateway(
             #{
                 price => {200, <<"12345">>},
                 tx_anchor => {200, hb_util:encode(rand:bytes(32))}
@@ -248,6 +248,5 @@ p4_response_charge_test() ->
             ),
         ?assertEqual(50, Balance)
     after
-        hb_mock_server:stop(ServerHandle),
-        dev_bundler:stop_server(Opts)
+        hb_mock_server:stop(ServerHandle)
     end.

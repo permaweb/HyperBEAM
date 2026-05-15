@@ -447,7 +447,12 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
     case GreenZoneAES == undefined of
         true ->
             Wallet = hb_opts:get(priv_wallet, undefined, InitOpts),
-            {ok, Report} = dev_snp:generate(#{}, #{}, InitOpts),
+            {ok, Report} =
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"snp@1.0">> },
+                    <<"generate">>,
+                    InitOpts
+                ),
             WalletPub = element(2, Wallet),
             ?event(green_zone, {remove_uncommitted, Report}),
             MergedReq = hb_ao:set(
@@ -569,7 +574,11 @@ validate_join(M1, Req, Opts) ->
     end,
     ?event(green_zone, {public_key, {explicit, RequesterPubKey}}),
     % Verify the commitment report provided in the join request.
-    case dev_snp:verify(M1, Req, Opts) of
+    case hb_ao:resolve(
+        {as, <<"snp@1.0">>, M1},
+        Req#{ <<"path">> => <<"verify">> },
+        Opts
+    ) of
         {ok, <<"true">>} ->
             % Commitment verified.
             ?event(green_zone, {join, commitment, verified}),
@@ -754,8 +763,11 @@ try_mount_encrypted_volume(Key, Opts) ->
         <<"priv-volume-key">> => Key,
         <<"volume-skip-decryption">> => <<"true">>
     },
-    % Call the dev_volume:mount function to handle the complete process
-    case dev_volume:mount(undefined, undefined, VolumeOpts) of
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"volume@1.0">> },
+        #{ <<"path">> => <<"mount">> },
+        VolumeOpts
+    ) of
         {ok, Result} ->
             ?event(debug_volume, {volume_mount, success, Result}),
             ok;

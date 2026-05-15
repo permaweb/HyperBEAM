@@ -102,7 +102,8 @@
         <<"log-max-bytes">> =>
             {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         <<"lua-scripts">> => {"LUA_SCRIPTS", "scripts"},
-        <<"lua-tests">> => {"LUA_TESTS", fun dev_lua_test:parse_spec/1, tests},
+        <<"lua-tests">> =>
+            {"LUA_TESTS", fun hb_lua_test_utils:parse_spec/1, tests},
         <<"default-index">> =>
             {
                 "HB_INDEX",
@@ -241,6 +242,7 @@ raw_default_message() ->
             #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
             #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
             #{<<"name">> => <<"manifest@1.0">>, <<"module">> => dev_manifest},
+            #{<<"name">> => <<"match@1.0">>, <<"module">> => dev_match},
             #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
             #{<<"name">> => <<"metering@1.0">>, <<"module">> => dev_metering},
             #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
@@ -770,7 +772,13 @@ load_bin(<<"flat@1.0">>, Bin, Opts) ->
             fun(Line) -> string:trim(Line, trailing) end,
             binary:split(Bin, <<"\n">>, [global])
         ),
-    try dev_codec_flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls))) of
+    Flat =
+        hb_ao_device:message_to_device(
+            #{ <<"device">> => <<"flat@1.0">> },
+            Opts
+        ),
+    try Flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls)))
+    of
         {ok, Map} ->
             {ok, mimic_default_types(Map, false, Opts)}
     catch

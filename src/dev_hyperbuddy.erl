@@ -148,8 +148,8 @@ throw(_Msg, _Req, Opts) ->
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly
 %% listed in the `routes' field of the `info/1' return value.
-serve(<<"keys">>, M1, _M2, Opts) -> dev_message:keys(M1, Opts);
-serve(<<"set">>, M1, M2, Opts) -> dev_message:set(M1, M2, Opts);
+serve(<<"keys">>, M1, _M2, Opts) -> hb_message:keys(M1, Opts);
+serve(<<"set">>, M1, M2, Opts) -> hb_message:set(M1, M2, Opts);
 serve(Key, _, _, Opts) ->
     ?event({hyperbuddy_serving, Key}),
     ServeRoutes = hb_maps:get(serve, info(Opts), #{}, Opts),
@@ -162,30 +162,7 @@ serve(Key, _, _, Opts) ->
 return_file(Device, Name) ->
     return_file(Device, Name, #{}).
 return_file(Device, Name, Template) ->
-    Base = hb_util:bin(code:priv_dir(hb)),
-    Filename = <<Base/binary, "/html/", Device/binary, "/", Name/binary >>,
-    ?event({hyperbuddy_serving, Filename}),
-    case file:read_file(Filename) of
-        {ok, RawBody} ->
-            Body = apply_template(RawBody, Template),
-            {ok, #{
-                <<"body">> => Body,
-                <<"content-type">> =>
-                    case filename:extension(Filename) of
-                        <<".html">> -> <<"text/html">>;
-                        <<".js">> -> <<"text/javascript">>;
-                        <<".css">> -> <<"text/css">>;
-                        <<".png">> -> <<"image/png">>;
-                        <<".ico">> -> <<"image/x-icon">>;
-                        <<".ttf">> -> <<"font/ttf">>;
-                        <<".json">> -> <<"application/json">>;
-                        _ -> <<"text/plain">>
-                    end
-                }
-            };
-        {error, _} ->
-            {error, not_found}
-    end.
+    hb_http_server:static(Device, Name, Template, #{}).
 
 %% @doc Return an error page, with the `{{error}}` template variable replaced.
 return_error(Error, Opts) when not is_map(Error) ->
@@ -195,23 +172,6 @@ return_error(ErrorMsg, Opts) ->
         <<"hyperbuddy@1.0">>,
         <<"500.html">>,
         #{ <<"error">> => hb_format:error(ErrorMsg, Opts) }
-    ).
-
-%% @doc Apply a template to a body.
-apply_template(Body, Template) when is_map(Template) ->
-    apply_template(Body, maps:to_list(Template));
-apply_template(Body, []) ->
-    Body;
-apply_template(Body, [{Key, Value} | Rest]) ->
-    ?event(debug_apply_template, {key, Key, value, Value}),
-    apply_template(
-        re:replace(
-            Body,
-            <<"\\{\\{", Key/binary, "\\}\\}">>,
-            hb_util:bin(Value),
-            [global, {return, binary}]
-        ),
-        Rest
     ).
 
 %%% Tests
