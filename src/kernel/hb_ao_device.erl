@@ -1083,7 +1083,8 @@ trusted_devices(Opts) ->
 trusted_signers(Opts) ->
     case hb_opts:get(trusted_device_signers, [], Opts) of
         [] -> default_trusted_signers(Opts);
-        Configured -> Configured
+        Signers when is_list(Signers) -> [hb_util:bin(Signer) || Signer <- Signers];
+        _ -> []
     end.
 
 %% @doc The production default is the node wallet address.
@@ -1108,17 +1109,11 @@ is_trusted_device(ID, Opts) ->
 %% @doc Determine whether an implementation signer is trusted.
 is_signer_trusted([], _TrustedSigners) ->
     false;
-is_signer_trusted(_Signers, all) ->
-    true;
 is_signer_trusted(Signers, List) when is_list(List) ->
-    case lists:member(all, List) of
-        true -> true;
-        false ->
-            lists:any(
-                fun(Signer) -> lists:member(Signer, List) end,
-                Signers
-            )
-    end;
+    lists:any(
+        fun(Signer) -> lists:member(Signer, List) end,
+        Signers
+    );
 is_signer_trusted(_Signers, _TrustedSigners) ->
     false.
 

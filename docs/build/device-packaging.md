@@ -125,7 +125,7 @@ variables. Returns each device's spec and impl IDs on stdout.
 | `<<"preloaded-store">>` | store map | LMDB preloaded device store. |
 | `<<"preloaded-devices-index">>` | binary | Committed ID of the flat preloaded resolver message. Embedded into `hb_opts` from `_build/hb_preloaded_index.hrl` during compilation. |
 | `<<"device-store">>` | store map | Volatile cache of name/spec-ID → loaded module atom. |
-| `<<"trusted-device-signers">>` | `[Address]` or `all` | Acceptable signer addresses for impl messages. Defaults to the node wallet. |
+| `<<"trusted-device-signers">>` | `[Address]` | Acceptable signer addresses for impl messages. Empty/default uses the node wallet. |
 | `<<"trusted-devices">>` | `[ImplID]` | Implementation message IDs trusted directly, bypassing signer matching for those IDs only. |
 | `<<"load-remote-devices">>` | bool | Whether unmatched devices may be fetched via the Arweave gateway. |
 | `<<"admissible-devices">>` | `all` or `[Name]` | Per-execution allowlist (used by the Lua sandbox). |
