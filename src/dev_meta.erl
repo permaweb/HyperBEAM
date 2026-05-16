@@ -8,6 +8,7 @@
 %%% the AO-Core resolver has returned a result.
 -module(dev_meta).
 -export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
+-export([is_operator/3]).
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -23,7 +24,7 @@
 %% info call will match the three-argument version of the function. If in the 
 %% future the `request' is added as an argument to AO-Core's internal `info'
 %% function, we will need to find a different approach.
-info(_) -> #{ exports => [<<"info">>, <<"build">>] }.
+info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
@@ -292,7 +293,7 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
             <<"body">> => Body
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
-    case dev_hook:on(HookName, HookReq, NodeMsg) of
+    case hb_hook:on(HookName, HookReq, NodeMsg) of
         {ok, #{ <<"body">> := ResponseBody }} ->
             ?event(hook,
                 {resolve_hook_success,
@@ -354,10 +355,7 @@ status_code(_, _NodeMsg) -> 200.
 message_to_status(#{ <<"body">> := Status }, NodeMsg) when is_atom(Status) ->
     status_code(Status, NodeMsg);
 message_to_status(Item, NodeMsg) when is_map(Item) ->
-    % Note: We use `dev_message' directly here, such that we do not cause 
-    % additional AO-Core calls for every request. This is particularly important
-    % if a remote server is being used for all AO-Core requests by a node.
-    case dev_message:get(<<"status">>, Item, NodeMsg) of
+    case hb_maps:find(<<"status">>, Item, NodeMsg) of
         {ok, RawStatus} when is_integer(RawStatus) -> RawStatus;
         {ok, RawStatus} when is_atom(RawStatus) ->
             status_code(RawStatus, NodeMsg);
@@ -470,6 +468,10 @@ is(initiator, Request, NodeMsg) ->
                     }}
             end
     end.
+
+%% @doc Return whether the request in the body is signed by the node operator.
+is_operator(_Base, Req, NodeMsg) ->
+    {ok, is_operator(hb_maps:get(<<"body">>, Req, Req, NodeMsg), NodeMsg)}.
 
 %%% Tests
 

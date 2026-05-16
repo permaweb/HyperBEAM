@@ -45,6 +45,7 @@
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+-define(MATCH_PREFIX, <<"~match@1.0">>).
 
 %% @doc Ensure that a value is loaded from the cache if it is an ID or a link.
 %% If it is not loadable we raise an error. If the value is a message, we will
@@ -132,7 +133,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
             ),
             case hb_maps:get(<<"type">>, LinkOpts, undefined, Opts) of
                 undefined -> LoadedMsg;
-                Type -> dev_codec_structured:decode_value(Type, LoadedMsg)
+                Type -> hb_util:decode(Type, LoadedMsg)
             end;
         {error, not_found} ->
             report_ensure_loaded_not_found(Ref, Link, Opts)
@@ -224,7 +225,13 @@ match(MatchSpec, Opts) ->
                 _ -> {error, not_found}
             end;
         _ ->
-            case dev_match:all(NormalizedSpec, #{}, Opts) of
+            case hb_ao:raw(
+                <<"match@1.0">>,
+                <<"all">>,
+                NormalizedSpec,
+                #{},
+                Opts
+            ) of
                 {ok, []} -> {error, not_found};
                 {ok, Matches} -> {ok, Matches};
                 _ -> {error, not_found}
@@ -303,8 +310,11 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
         end,
         maps:without([<<"priv">>], Msg)
     ),
-    % Optionally store the message into the match index, if the index is configured.
-    dev_match:write(AllIDs, Msg, Opts),
+    % Optionally store the message into the match index, if configured.
+    case hb_opts:get(match_index, false, Opts) of
+        false -> ok;
+        _ -> write_match_index(AllIDs, Msg, Opts)
+    end,
     % Write the commitments to the store, linking each commitment ID to the
     % uncommitted message.
     lists:map(
@@ -364,6 +374,84 @@ write_key(Base, Key, HPAlg, Value, Store, Opts) ->
     {ok, Path} = do_write_message(Value, Store, Opts),
     hb_store:link(Store, #{ KeyHashPath => Path }, Opts),
     {ok, Path}.
+
+%% @doc Write all message keys to the optional match index.
+write_match_index(IDs, Base, Opts) ->
+    case match_store(Opts) of
+        [] -> {skip, <<"No store configured for match index.">>};
+        Store ->
+            IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+            hb_maps:map(
+                fun(RawKey, Value) ->
+                    Key = hb_ao:normalize_key(RawKey),
+                    ValuePath = match_value_path(Value, Opts),
+                    hb_store:group(Store, match_address(Key, ValuePath), Opts),
+                    lists:foreach(
+                        fun(ID) ->
+                            Address = match_address(Key, ValuePath, ID),
+                            ?event(
+                                debug_match,
+                                {writing_reverse_index, {address, Address}},
+                                Opts
+                            ),
+                            hb_store:write(Store, #{ Address => <<"">> }, Opts)
+                        end,
+                        IDs
+                    )
+                end,
+                IndexBase
+            )
+    end.
+
+%% @doc Get the store configured for the match index.
+match_store(Opts) ->
+    Global = hb_opts:get(match_index, false, #{ <<"only">> => global }),
+    LocalStore = hb_opts:get(store, Global, Opts#{ <<"only">> => local }),
+    case hb_opts:get(match_index, LocalStore, Opts#{ <<"only">> => local }) of
+        false -> [];
+        true -> hb_opts:get(store, [], Opts);
+        Store when is_list(Store) -> Store;
+        Store -> [Store]
+    end.
+
+%% @doc Calculate the address of a key-value pair in the match index.
+match_address(Key, Value) ->
+    KeyBin = match_bin(Key),
+    ValueBin = match_bin(Value),
+    iolist_to_binary([?MATCH_PREFIX, "&", KeyBin, "=", ValueBin]).
+match_address(Key, Value, ID) ->
+    IDBin = match_bin(ID),
+    <<(match_address(Key, Value))/binary, "/", IDBin/binary>>.
+
+%% @doc Normalize a match-index path part.
+match_bin(Bin) when is_binary(Bin) -> Bin;
+match_bin(Atom) when is_atom(Atom) -> atom_to_binary(Atom);
+match_bin(Int) when is_integer(Int) -> integer_to_binary(Int);
+match_bin(Float) when is_float(Float) -> float_to_binary(Float, [compact]);
+match_bin(List) when is_list(List) ->
+    try iolist_to_binary(List)
+    catch _:_ -> term_to_binary(List)
+    end;
+match_bin(Other) ->
+    term_to_binary(Other).
+
+%% @doc Return the path representation used by cache key-value links.
+match_value_path(Bin, Opts) when is_binary(Bin) ->
+    <<"data/", (hb_path:hashpath(Bin, Opts))/binary>>;
+match_value_path(Map, Opts) when is_map(Map) ->
+    hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard });
+match_value_path(List, Opts) when is_list(List) ->
+    case io_lib:printable_unicode_list(List) of
+        true ->
+            match_value_path(iolist_to_binary(List), Opts);
+        false ->
+            match_value_path(
+                hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
+                Opts
+            )
+    end;
+match_value_path(Other, Opts) ->
+    match_value_path(hb_path:to_binary(Other), Opts).
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents
@@ -639,10 +727,10 @@ prepare_links(Target, RootPath, Subpaths, Store, Opts) ->
     % Convert the message to an ordered list if the ao-types indicate that it
     % should be so. If it is a message, we ensure that the commitments are 
     % normalized (have an unsigned comm. ID) and loaded into memory.
-    case dev_codec_structured:is_list_from_ao_types(Types, Opts) of
-        true ->
+    case hb_maps:get(<<".">>, Types, undefined, Opts) of
+        <<"list">> ->
             hb_util:message_to_ordered_list(Merged, Opts);
-        false ->
+        _ ->
             case hb_opts:get(lazy_loading, true, Opts) of
                 true -> Merged;
                 false -> ensure_all_loaded(Merged, Opts)
@@ -657,7 +745,7 @@ read_ao_types(Path, Subpaths, Store, Opts) ->
         true ->
             {ok, TypesBin} =
                 hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts),
-            Types = dev_codec_structured:decode_ao_types(TypesBin, Opts),
+            Types = structured_decode_types(TypesBin, Opts),
             ?event({parsed_ao_types, {types, Types}}),
             {ok, types_to_implicit(Types), Types};
         false ->
@@ -675,6 +763,19 @@ types_to_implicit(Types) ->
         end,
         Types
     ).
+
+%% @doc Decode the `ao-types' field through the structured device.
+structured_decode_types(Types, Opts) ->
+    hb_util:ok(
+        hb_ao:raw(
+            <<"structured@1.0">>,
+            <<"decode-types">>,
+            Types,
+            #{},
+            Opts
+        )
+    ).
+
 
 %% @doc Read the result of a computation, using heuristics. The supported
 %% heuristics are as follows:
@@ -755,7 +856,7 @@ read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) -
     ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
-    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    ReqID = hb_message:id(Req, all, Opts),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
@@ -872,13 +973,13 @@ test_store_simple_signed_message(Store) ->
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
     % %% Read the item back
-    % {ok, UID} = dev_message:id(Item, #{ <<"committers">> => <<"none">> }, Opts),
+    % UID = hb_message:id(Item, none, Opts),
     % {ok, RetrievedItemUnsig} = read(UID, Opts),
     % ?event({retreived_unsigned_message, {expected, Item}, {got, RetrievedItemUnsig}}),
     % MatchRes = hb_message:match(Item, RetrievedItemUnsig, strict, Opts),
     % ?event({match_result, MatchRes}),
     % ?assert(MatchRes),
-    {ok, CommittedID} = dev_message:id(Item, #{ <<"committers">> => [Address] }, Opts),
+    CommittedID = hb_message:id(Item, [Address], Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
     ?event({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
     MatchResSigned = 

@@ -41,8 +41,12 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
                     Task,
                     [{tx, {explicit, hb_message:id(Committed, signed, Opts)}}]
                 )),
-                PostTXResponse = dev_arweave:post_tx_header(
-                    SignedTX,
+                PostTXResponse = hb_ao:resolve(
+                    #{ <<"device">> => <<"arweave@2.9">> },
+                    Committed#{
+                        <<"path">> => <<"tx">>,
+                        <<"method">> => <<"POST">>
+                    },
                     Opts
                 ),
                 case PostTXResponse of
@@ -138,7 +142,15 @@ execute_task(#task{type = post_proof, data = Proof, opts = Opts} = Task) ->
         <<"data_root">> => hb_util:encode(DataRoot)
     },
     try
-        Response = dev_arweave:post_chunk(Request, Opts),
+        Response =
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                Request#{
+                    <<"path">> => <<"chunk">>,
+                    <<"method">> => <<"POST">>
+                },
+                Opts
+            ),
         case Response of
             {ok, _} -> {ok, proof_posted};
             {error, Reason} -> {error, Reason};
@@ -160,7 +172,7 @@ build_signed_tx(Items, Opts) ->
         {{ok, Price}, {ok, Anchor}} ->
             Wallet = hb_opts:get(priv_wallet, no_viable_wallet, Opts),
             SignedTX = 
-                dev_arweave_common:normalize(
+                ar_tx:normalize(
                     ar_tx:sign(
                         TX#tx{anchor = Anchor, reward = Price},
                         Wallet
@@ -182,7 +194,7 @@ data_items_to_tx(Items, Opts) ->
             )
         end,
         lists:reverse(Items)),
-    dev_arweave_common:normalize(#tx{
+    ar_tx:normalize(#tx{
         format = 2,
         data = List
     }).
@@ -242,7 +254,7 @@ format_timestamp() ->
 build_signed_tx_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -307,7 +319,7 @@ build_signed_tx_test() ->
 build_signed_tx_on_arbundles_js_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = dev_bundler:start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),

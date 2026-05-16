@@ -50,11 +50,14 @@ commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
             {ok, CommitRes} =
-                dev_codec_httpsig_proxy:commit(
-                    <<"http-auth@1.0">>,
-                    Key,
-                    Base,
-                    Req,
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"httpsig@1.0">> },
+                    Req#{
+                        <<"path">> => <<"proxy-commit">>,
+                        <<"commitment-device">> => <<"http-auth@1.0">>,
+                        <<"secret">> => Key,
+                        <<"message">> => Base
+                    },
                     Opts
                 ),
             ?event({commit_result, CommitRes}),
@@ -70,10 +73,13 @@ verify(Base, RawReq, Opts) ->
     {ok, Key} = generate(Base, RawReq, Opts),
     ?event({verify_found_key, {key, Key}, {base, Base}, {req, RawReq}}),
     {ok, VerifyRes} =
-        dev_codec_httpsig_proxy:verify(
-            Key,
-            Base,
-            RawReq,
+        hb_ao:resolve(
+            #{ <<"device">> => <<"httpsig@1.0">> },
+            RawReq#{
+                <<"path">> => <<"proxy-verify">>,
+                <<"secret">> => Key,
+                <<"message">> => Base
+            },
             Opts
         ),
     ?event({verify_result, VerifyRes}),

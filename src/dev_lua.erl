@@ -399,7 +399,7 @@ normalize(Base, _Req, RawOpts) ->
             SerializedState =
                 hb_ao:get(
                     [<<"snapshot">>] ++ DeviceKey ++ [<<"body">>],
-                    {as, dev_message, Base},
+                    {as, <<"message@1.0">>, Base},
                     Opts
                 ),
             case SerializedState of

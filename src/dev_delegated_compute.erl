@@ -50,7 +50,13 @@ load_state(Snapshot, Opts) ->
 %% `POST /compute' and the body is the JSON-encoded message that we want to
 %% evaluate.
 compute(Base, Req, Opts) ->
-    OutputPrefix = dev_stack:prefix(Base, Req, Opts),
+    OutputPrefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, Base},
+            <<"">>,
+            Opts
+        ),
     % Extract the process ID - this identifies which process to run compute
     % against.
     ProcessID = get_process_id(Base, Req, Opts),
@@ -104,13 +110,16 @@ do_compute(ProcID, Req, Opts) ->
 do_dryrun(ProcID, Req, Opts) ->
     ?event({do_dryrun_msg, {req, Req}}),
     % Remove commitments from the message before sending to the external CU
-    Body = 
-        hb_json:encode(
-            dev_json_iface:message_to_json_struct(
-                hb_maps:without([<<"commitments">>], Req, Opts),
-                Opts
-            )
+    {ok, Struct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => hb_maps:without([<<"commitments">>], Req, Opts)
+            },
+            Opts
         ),
+    Body = hb_json:encode(Struct),
     ?event({do_dryrun_body, {string, Body}}),
     % Send to external CU via relay using /dry-run endpoint
     Response = do_relay(
@@ -167,7 +176,7 @@ extract_json_res(Response, Opts) ->
     end.
 
 get_process_id(Base, Req, Opts) ->
-    RawProcessID = dev_process_lib:process_id(Base, #{}, Opts),
+    RawProcessID = lib_process:process_id(Base, #{}, Opts),
     case RawProcessID of
         not_found -> hb_ao:get(<<"process-id">>, Req, Opts);
         ProcID -> ProcID
@@ -186,7 +195,15 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
                     {req, Req}
                 }
             ),
-            {ok, Msg} = dev_json_iface:json_to_message(JSONRes, Opts),
+            {ok, Msg} =
+                hb_ao:resolve(
+                    #{ <<"device">> => <<"json-iface@1.0">> },
+                    #{
+                        <<"path">> => <<"from">>,
+                        <<"json">> => JSONRes
+                    },
+                    Opts
+                ),
             Raw = hb_json:decode(JSONRes, Opts),
             {ok,
                 hb_ao:set(
@@ -206,7 +223,7 @@ handle_relay_response(Base, Req, Opts, Response, OutputPrefix, ProcessID, Slot) 
 %% `GET /snapshot' endpoint.
 snapshot(Msg, Req, Opts) ->
     ?event({snapshotting, {req, Req}}),
-    ProcID = dev_process_lib:process_id(Msg, #{}, Opts),
+    ProcID = lib_process:process_id(Msg, #{}, Opts),
     Res = 
         hb_ao:resolve(
             #{

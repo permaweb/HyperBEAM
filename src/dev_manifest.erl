@@ -2,8 +2,6 @@
 %%% https://specs.ar.io/?tx=lXLd0OPwo-dJLB_Amz5jgIeDhiOkjXuM3-r0H_aiNj0
 -module(dev_manifest).
 -export([index/3, info/0, request/3]).
-%%% Public test exports
--export([test_env_opts/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -177,7 +175,13 @@ manifest(Base, _Req, Opts) ->
             Opts
         ),
     FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    {ok, DeepPaths} = dev_codec_flat:from(FlatPaths, #{}, Opts),
+    DeepPaths =
+        hb_message:convert(
+            FlatPaths,
+            <<"structured@1.0">>,
+            <<"flat@1.0">>,
+            Opts
+        ),
     LinkifiedPaths = linkify(DeepPaths, Opts),
     Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
     {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.

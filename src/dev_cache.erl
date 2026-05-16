@@ -35,7 +35,15 @@ read(_M1, M2, Opts) ->
 							{accept_header, <<"application/aos-2">>}
 						}
 					),
-                    JSONMsg = dev_json_iface:message_to_json_struct(Res, Opts),
+                    {ok, JSONMsg} =
+                        hb_ao:resolve(
+                            #{ <<"device">> => <<"json-iface@1.0">> },
+                            #{
+                                <<"path">> => <<"to">>,
+                                <<"message">> => Res
+                            },
+                            Opts
+                        ),
                     ?event(dev_cache, {read, {json_message, JSONMsg}}),
                     {ok,
                         #{

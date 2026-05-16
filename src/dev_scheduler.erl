@@ -203,7 +203,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
 find_next_assignment(_Base, _Req, Schedule = [_Next|_], _LastSlot, _Opts) ->
     {ok, Schedule, undefined};
 find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
-    ProcID = dev_process_lib:process_id(Base, Req, Opts),
+    ProcID = lib_process:process_id(Base, Req, Opts),
     LocalCacheRes =
         case hb_util:atom(hb_opts:get(scheduler_ignore_local_cache, false, Opts)) of
             true -> not_found;
@@ -698,7 +698,11 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
             % We have a hint. Construct a redirect message.
             generate_redirect(ProcID, Hint, Opts);
         not_found ->
-            case dev_location:read(Scheduler, Opts) of
+            case hb_ao:resolve(
+                #{ <<"device">> => <<"location@1.0">> },
+                #{ <<"path">> => Scheduler },
+                Opts
+            ) of
                 {ok, SchedMsg} ->
                     % We have a cached scheduler location. Use it to construct a
                     % redirect message.
@@ -1302,7 +1306,7 @@ post_legacy_schedule(ProcID, OnlyCommitted, Node, Opts) ->
 find_target_id(Base, Req, ToSched, Opts) ->
     case hb_ao:get(<<"type">>, ToSched, not_found, Opts) of
         <<"Process">> ->
-            dev_process_lib:process_id(ToSched, #{}, Opts);
+            lib_process:process_id(ToSched, #{}, Opts);
         _ ->
             case hb_ao:get(<<"target">>, ToSched, not_found, Opts) of
                 not_found -> find_target_id(Base, Req, Opts);
@@ -1319,20 +1323,20 @@ find_target_id(Base, Req, Opts) ->
             case hb_ao:resolve(Req, <<"type">>, TempOpts) of
                 {ok, <<"Process">>} ->
                     % Req is a Process, so the ID is at Req/id
-                    dev_process_lib:process_id(Req, #{}, Opts);
+                    lib_process:process_id(Req, #{}, Opts);
                 _ ->
                     case hb_ao:resolve(Base, <<"process">>, TempOpts) of
                         {ok, _Process} ->
-                            dev_process_lib:process_id(Base, #{}, Opts);
+                            lib_process:process_id(Base, #{}, Opts);
                         _ ->
                             % Does the message have a type of process?
                             case hb_ao:get(<<"type">>, Base, TempOpts) of
                                 <<"Process">> ->
                                     % Yes: Base is the process.
-                                    dev_process_lib:process_id(Base, #{}, Opts);
+                                    lib_process:process_id(Base, #{}, Opts);
                                 _ ->
                                     % No: Req is the target process.
-                                    dev_process_lib:process_id(Req, #{}, Opts)
+                                    lib_process:process_id(Req, #{}, Opts)
                             end
                 end
             end
@@ -1502,7 +1506,7 @@ schedule_message_and_get_slot_test_parallel() ->
     Res = #{
         <<"path">> => <<"slot">>,
         <<"method">> => <<"GET">>,
-        <<"process">> => dev_process_lib:process_id(Base, #{}, #{})
+        <<"process">> => lib_process:process_id(Base, #{}, #{})
     },
     ?event({pg, dev_scheduler_registry:get_processes()}),
     ?event({getting_schedule, {msg, Res}}),

@@ -1,6 +1,6 @@
 %%% @doc A reverse index for finding all message IDs with a given key-value pair.
 -module(dev_match).
--export([info/0, all/3, write/3]).
+-export([info/0, all/3]).
 -include("include/hb.hrl").
 
 -define(CACHE_PREFIX, <<"~match@1.0">>).
@@ -10,7 +10,7 @@
 info() ->
     #{
         excludes =>
-            [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>, <<"write">>],
+            [<<"set">>, <<"remove">>, <<"id">>, <<"verify">>],
         default => fun match/4
     }.
 
@@ -46,9 +46,6 @@ address(Key, Value) ->
     KeyBin = to_match_bin(Key),
     ValueBin = to_match_bin(Value),
     iolist_to_binary([?CACHE_PREFIX, "&", KeyBin, "=", ValueBin]).
-address(Key, Value, ID) ->
-    IDBin = to_match_bin(ID),
-    <<(address(Key, Value))/binary, "/", IDBin/binary>>.
 
 to_match_bin(Bin) when is_binary(Bin) -> Bin;
 to_match_bin(Atom) when is_atom(Atom) -> atom_to_binary(Atom);
@@ -82,35 +79,6 @@ value_path(List, Opts) when is_list(List) ->
 value_path(Other, Opts) ->
     value_path(hb_path:to_binary(Other), Opts).
 
-%% @doc Write all keys in the base message to the match index. Expects the `Base'
-%% message to already be converted to a TABM.
-write(IDs, Base, Opts) ->
-    case store(Opts) of
-        [] -> {skip, <<"No store configured for match index.">>};
-        Store ->
-            IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
-            hb_maps:map(
-                fun(RawKey, Value) ->
-                    Key = hb_ao:normalize_key(RawKey),
-                    ValuePath = value_path(Value, Opts),
-                    hb_store:group(Store, address(Key, ValuePath), Opts),
-                    lists:foreach(
-                        fun(ID) ->
-                            Address = address(Key, ValuePath, ID),
-                            ?event(
-                                debug_match,
-                                {writing_reverse_index, {address, Address},
-                                Opts
-                            }),
-                            hb_store:write(Store, #{ Address => <<"">> }, Opts)
-                        end,
-                        IDs
-                    )
-                end,
-                IndexBase
-            )
-    end.
-
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
@@ -132,7 +100,8 @@ match(Key, Base, Opts) ->
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
 all(Base, _Req, Opts) ->
-    IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+    IndexBase =
+        hb_message:uncommitted(hb_private:reset(Base)),
     Keys =
         hb_maps:keys(
             IndexBase

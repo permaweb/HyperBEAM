@@ -946,10 +946,11 @@ to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }
     {ok, Body};
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, Block} =
-        dev_codec_json:from(
+    Block =
+        hb_message:convert(
             Body,
-            #{ <<"accept-codec">> => <<"structured@1.0">> },
+            <<"structured@1.0">>,
+            <<"json@1.0">>,
             Opts
         ),
     CacheRes =
@@ -1076,46 +1077,42 @@ post_ans104_message_test_parallel() ->
             <<"store">> => [hb_test_utils:test_store()],
             <<"priv-wallet">> => hb:wallet()
         },
-    try
-        Msg =
-            hb_message:commit(
-                #{
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"type">> => <<"Process">>,
-                    <<"data">> => <<"test-data">>
-                },
-                ClientOpts,
-                #{ <<"commitment-device">> => <<"ans104@1.0">> }
-            ),
-        {ok, PostRes} =
-            hb_http:post(
-                Server,
-                Msg#{
-                    <<"path">> => <<"/~arweave@2.9/tx">>
-                },
-                ClientOpts
-            ),
-        ?assertMatch(#{ <<"status">> := 200 }, PostRes),
-        ?event(debug_test, {post_res, PostRes}),
-        SignedID = hb_message:id(Msg, signed, ClientOpts),
-        {ok, GetRes} =
-            hb_http:get(
-                Server, <<"/", SignedID/binary>>,
-                ClientOpts
-            ),
-        ?assertMatch(
+    Msg =
+        hb_message:commit(
             #{
-                <<"status">> := 200,
-                <<"variant">> := <<"ao.N.1">>,
-                <<"type">> := <<"Process">>,
-                <<"data">> := <<"test-data">>
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"Process">>,
+                <<"data">> => <<"test-data">>
             },
-            GetRes
+            ClientOpts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
-        ok
-    after
-        dev_bundler:stop_server()
-    end.
+    {ok, PostRes} =
+        hb_http:post(
+            Server,
+            Msg#{
+                <<"path">> => <<"/~arweave@2.9/tx">>
+            },
+            ClientOpts
+        ),
+    ?assertMatch(#{ <<"status">> := 200 }, PostRes),
+    ?event(debug_test, {post_res, PostRes}),
+    SignedID = hb_message:id(Msg, signed, ClientOpts),
+    {ok, GetRes} =
+        hb_http:get(
+            Server, <<"/", SignedID/binary>>,
+            ClientOpts
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 200,
+            <<"variant">> := <<"ao.N.1">>,
+            <<"type">> := <<"Process">>,
+            <<"data">> := <<"test-data">>
+        },
+        GetRes
+    ),
+    ok.
 
 post_tx_message_test_parallel() ->
     ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
@@ -2046,7 +2043,7 @@ assert_bundle_items(TXID, StartOffset, Size, Opts) ->
                 {format, Item#tx.format},
                 {signature_type, Item#tx.signature_type}
             }),
-            case dev_arweave_common:type(Item) of
+            case ar_tx:type(Item) of
                 list -> print_nested_items(Item#tx.data);
                 _ -> ok
             end,

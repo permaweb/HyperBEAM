@@ -15,17 +15,14 @@
 %%% available for reading instantly (`optimistically'), even before the
 %%% transaction is dispatched.
 -module(dev_bundler).
--export([tx/3, item/3, ensure_server/1, stop_server/0, stop_server/1]).
+-export([tx/3, item/3, ensure_server/1]).
 -export([get_state/0, get_state/1]).
-%%% Test-only exports.
--export([start_mock_gateway/1]).
 
 -include("include/hb.hrl").
 -include("include/dev_bundler.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Default options.
--define(SERVER_NAME, bundler_server).
 -define(DEFAULT_MAX_SIZE, 100_000_000). % 100 MB.
 -define(DEFAULT_MAX_IDLE_TIME, 300_000). % 5 minutes.
 -define(DEFAULT_BUNDLER_MAX_DISPATCH_TIMEOUT, 30_000). % 30 seconds.
@@ -52,11 +49,8 @@ item(_Base, Req, Opts) ->
             case cache_item(Item, Opts) of
                 ok ->
                     BundledSize = bundled_item_size(Item, Opts),
-                    dev_metering:consume(
-                        <<"arweave-bytes">>,
-                        BundledSize,
-                        Opts
-                    ),
+                    {ok, Metering} = hb_ao_device:load(<<"metering@1.0">>, Opts),
+                    Metering:consume(<<"arweave-bytes">>, BundledSize, Opts),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)
                     ServerPID ! {enqueue_item, Item, BundledSize},
@@ -137,18 +131,21 @@ cache_item(Item, Opts) ->
 
 %%% Bundling server.
 
-%% @doc Look up the registration name for the bundler server. Derived from
-%% the HTTP server's identity (which `hb_http_server:new_server/1' itself
-%% computes from `priv-wallet') so there is exactly one bundler per HTTP
-%% server on a BEAM node. Falls back to the legacy global `?SERVER_NAME'
-%% atom when no wallet is available (kept for production callers that
-%% stopped the server without a configured wallet).
+%% @doc Look up the registration name for this node's bundler server.
+%% The key is the HTTP server's cryptographic address, so each HTTP server
+%% gets its own bundler process.
 server_name(Opts) ->
-    case hb_opts:get(priv_wallet, undefined, Opts) of
-        undefined -> ?SERVER_NAME;
-        Wallet ->
-            {bundler_server,
-                hb_util:human_id(ar_wallet:to_address(Wallet))}
+    {bundler_server, server_address(Opts)}.
+
+%% @doc Find the cryptographic address of the HTTP server that owns this
+%% bundler. Direct tests without an HTTP server use their configured wallet.
+server_address(Opts) ->
+    case hb_opts:get(<<"http-server">>, undefined, Opts) of
+        undefined ->
+            Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+            hb_util:human_id(ar_wallet:to_address(Wallet));
+        Address ->
+            hb_util:bin(Address)
     end.
 
 %% @doc Return the PID of the bundler server. If the server is not running,
@@ -159,19 +156,6 @@ ensure_server(Opts) ->
         Name,
         fun() -> init(Opts) end
     ).
-
-%% @doc Stop the default bundler server. Used by production-oriented
-%% tests that rely on the global `?SERVER_NAME'.
-stop_server() ->
-    stop_server(#{}).
-stop_server(Opts) ->
-    Name = server_name(Opts),
-    case hb_name:lookup(Name) of
-        undefined -> ok;
-        PID ->
-            PID ! stop,
-            hb_name:unregister(Name)
-    end.
 
 %% @doc Return the current bundler server state for tests.
 get_state() ->
@@ -542,7 +526,7 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
 run_completion_hooks(Bundle, Opts) ->
     lists:foreach(
         fun({Item, Size}) ->
-            dev_hook:on(
+            hb_hook:on(
                 <<"bundled-message-complete">>,
                 #{
                     <<"body">> => Item,
@@ -556,7 +540,7 @@ run_completion_hooks(Bundle, Opts) ->
             lists:reverse(Bundle#bundle.item_sizes)
         )
     ),
-    dev_hook:on(
+    hb_hook:on(
         <<"bundle-complete">>,
         #{
             <<"body">> => Bundle#bundle.tx,
@@ -640,7 +624,7 @@ nested_bundle_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -687,7 +671,7 @@ anchor_error_test_parallel() ->
     }).
 
 tx_error_test_parallel() ->
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             tx => {400, <<"Transaction verification failed.">>},
             price => {200, <<"12345">>},
@@ -719,7 +703,7 @@ unsigned_dataitem_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -752,7 +736,7 @@ unsigned_dataitem_test_parallel() ->
 idle_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -807,7 +791,7 @@ dispatch_blocking_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)},
@@ -866,7 +850,7 @@ dispatch_blocking_test() ->
 recover_respects_max_items_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -906,7 +890,7 @@ recover_respects_max_items_test_parallel() ->
 complete_task_sequence_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -950,7 +934,7 @@ complete_task_sequence_test_parallel() ->
 recover_bundles_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         chunk => fun(_Req) ->
             timer:sleep(250),
             {200, <<"OK">>}
@@ -1008,7 +992,7 @@ post_tx_price_failure_retry_test_parallel() ->
     Anchor = rand:bytes(32),
     FailCount = 3,
     setup_test_counter(price_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => fun(_Req) ->
             Count = increment_test_counter(price_attempts_counter) - 1,
             case Count < FailCount of
@@ -1044,7 +1028,7 @@ post_tx_anchor_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 3,
     setup_test_counter(anchor_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => fun(_Req) ->
             Count = increment_test_counter(anchor_attempts_counter) - 1,
@@ -1081,7 +1065,7 @@ post_tx_post_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 4,
     setup_test_counter(tx_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1119,7 +1103,7 @@ post_proof_failure_retry_test_parallel() ->
     Price = 12345,
     FailCount = 2,
     setup_test_counter(chunk_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         chunk => fun(_Req) ->
@@ -1157,7 +1141,7 @@ post_proof_failure_retry_test_parallel() ->
 rapid_dispatch_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1192,7 +1176,7 @@ one_bundle_fails_others_continue_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(mixed_attempts_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1229,7 +1213,7 @@ parallel_task_execution_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     SleepTime = 120,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         chunk => fun(_Req) ->
@@ -1268,7 +1252,7 @@ exponential_backoff_timing_test() ->
     Price = 12345,
     FailCount = 5,
     setup_test_counter(backoff_cap_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1320,7 +1304,7 @@ independent_task_retry_counts_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
     setup_test_counter(independent_retry_counter),
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)},
         tx => fun(_Req) ->
@@ -1358,7 +1342,7 @@ independent_task_retry_counts_test_parallel() ->
 invalid_item_test_parallel() ->
     Anchor = rand:bytes(32),
     Price = 12345,
-    {ServerHandle, NodeOpts} = start_mock_gateway(#{
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
         price => {200, integer_to_binary(Price)},
         tx_anchor => {200, hb_util:encode(Anchor)}
     }),
@@ -1399,45 +1383,45 @@ invalid_item_test_parallel() ->
     end.
 
 cache_write_failure_test_parallel() ->
-    GoodOpts = #{<<"store">> => hb_test_utils:test_store()},
+    Wallet = ar_wallet:new(),
+    GoodOpts = #{
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => hb_test_utils:test_store()
+    },
     BadOpts = #{
+        <<"priv-wallet">> => Wallet,
         <<"store">> => undefined,
         <<"debug-print">> => false
     }, % Invalid store will cause cache write to fail
-    try
-        % Start bundler with a valid store so recovery/init paths succeed.
-        ensure_server(GoodOpts),
-        Item = ar_bundles:sign_item(
-            #tx{
-                data = <<"testdata">>,
-                tags = [{<<"tag1">>, <<"value1">>}]
-            },
-            ar_wallet:new()
-        ),
-        StructuredItem = hb_message:convert(
-            Item, <<"structured@1.0">>, <<"ans104@1.0">>, GoodOpts),
-        % Call item/3 directly without a store, should cause cache write
-        % to fail.
-        Result = dev_bundler:item(#{}, StructuredItem, BadOpts),
-        ?assertMatch({error, #{
-            <<"status">> := 500,
-            <<"error">> := <<"cache-write-failed">>}}, Result),
-        ok
-    after
-        stop_server()
-    end.
+    % Start bundler with a valid store so recovery/init paths succeed.
+    ensure_server(GoodOpts),
+    Item = ar_bundles:sign_item(
+        #tx{
+            data = <<"testdata">>,
+            tags = [{<<"tag1">>, <<"value1">>}]
+        },
+        ar_wallet:new()
+    ),
+    StructuredItem = hb_message:convert(
+        Item, <<"structured@1.0">>, <<"ans104@1.0">>, GoodOpts),
+    % Call item/3 directly without a store, should cause cache write
+    % to fail.
+    Result = dev_bundler:item(#{}, StructuredItem, BadOpts),
+    ?assertMatch({error, #{
+        <<"status">> := 500,
+        <<"error">> := <<"cache-write-failed">>}}, Result),
+    ok.
 
 stop_test_servers(ServerHandle) ->
     stop_test_servers(ServerHandle, #{}).
-stop_test_servers(ServerHandle, Opts) ->
-    hb_mock_server:stop(ServerHandle),
-    stop_server(Opts).
+stop_test_servers(ServerHandle, _Opts) ->
+    hb_mock_server:stop(ServerHandle).
 
 test_bundle(Opts) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
-    {ServerHandle, NodeOpts} = start_mock_gateway(
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
         #{
             price => {200, integer_to_binary(Price)},
             tx_anchor => {200, hb_util:encode(Anchor)}
@@ -1472,7 +1456,7 @@ test_bundle(Opts) ->
     end.
 
 test_api_error(Responses) ->
-    {ServerHandle, NodeOpts} = start_mock_gateway(Responses),
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(Responses),
     try
         ClientOpts = #{},
         Node = hb_http_server:start_node(NodeOpts#{
@@ -1601,10 +1585,10 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
     ?assertEqual(undefined, BundleDeserialized#tx.manifest),
     % Verify that the TX was cached
     SignedTXID = hb_message:id(TXStructured, signed, ClientOpts),
-    CachedTXFromSignedID = dev_cache:read_from_cache(Node, SignedTXID),
+    CachedTXFromSignedID = read_from_cache(Node, SignedTXID),
     ?assert(hb_message:verify(CachedTXFromSignedID, all, ClientOpts)),
     UnsignedTXID = hb_message:id(TXStructured, unsigned, ClientOpts),
-    CachedTXFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedTXID),
+    CachedTXFromUnsignedID = read_from_cache(Node, UnsignedTXID),
     ?assert(hb_message:verify(CachedTXFromUnsignedID, all, ClientOpts)),
     % Verify that the items were cached
     lists:foreach(
@@ -1612,37 +1596,24 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
             ItemStructured = hb_message:convert(
                 Item, <<"structured@1.0">>, <<"ans104@1.0">>, ClientOpts),
             SignedItemID = hb_message:id(ItemStructured, signed, ClientOpts),
-            CachedItemFromSignedID = dev_cache:read_from_cache(Node, SignedItemID),
+            CachedItemFromSignedID = read_from_cache(Node, SignedItemID),
             ?assert(hb_message:verify(CachedItemFromSignedID, all, ClientOpts)),
             UnsignedItemID = hb_message:id(ItemStructured, unsigned, ClientOpts),
-            CachedItemFromUnsignedID = dev_cache:read_from_cache(Node, UnsignedItemID),
+            CachedItemFromUnsignedID = read_from_cache(Node, UnsignedItemID),
             ?assert(hb_message:verify(CachedItemFromUnsignedID, all, ClientOpts))
         end, ExpectedItems),
     ok.
 
-start_mock_gateway(Responses) ->
-    DefaultResponse = {200, <<>>},
-    Endpoints = [
-        {"/chunk", chunk, maps:get(chunk, Responses, DefaultResponse)},
-        {"/tx", tx, maps:get(tx, Responses, DefaultResponse)},
-        {"/price/:size", price, maps:get(price, Responses, DefaultResponse)},
-        {"/tx_anchor", tx_anchor, maps:get(tx_anchor, Responses, DefaultResponse)}
-    ],
-    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
-    NodeOpts = #{
-        <<"gateway">> => MockServer,
-        <<"routes">> => [
-            #{
-                <<"template">> => <<"/arweave">>,
-                <<"node">> => #{
-                    <<"match">> => <<"^/arweave">>,
-                    <<"with">> => MockServer,
-                    <<"opts">> => #{<<"http-client">> => httpc, <<"protocol">> => http2}
-                }
-            }
-        ]
+read_from_cache(Node, Path) ->
+    ReadMsg = #{
+        <<"path">> => <<"/~cache@1.0/read">>,
+        <<"method">> => <<"GET">>,
+        <<"read">> => Path
     },
-    {ServerHandle, NodeOpts}.
+    case hb_http:get(Node, ReadMsg, #{}) of
+        {ok, ReadResponse} -> ReadResponse;
+        {error, Reason} -> {error, Reason}
+    end.
 
 setup_test_counter(Table) ->
     cleanup_test_counter(Table),

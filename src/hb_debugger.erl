@@ -21,10 +21,17 @@ profile_and_stop(Fun) ->
     group_leader(F, self()),
     io:format("profiling-output: started.~n"),
     io:format("Profiling function: ~p.~n", [Fun]),
+    Profile = hb_ao_device:message_to_device(
+        #{ <<"device">> => <<"profile@1.0">> },
+        #{}
+    ),
     Res =
-        dev_profile:eval(
+        Profile:eval(
             Fun,
-            #{ <<"return-mode">> => <<"open">>, <<"engine">> => <<"eflame">> },
+            #{
+                <<"return-mode">> => <<"open">>,
+                <<"engine">> => <<"eflame">>
+            },
             #{}
         ),
     io:format("Profiling complete. Res: ~p~n", [Res]),

@@ -54,7 +54,7 @@ compute_cached(ProcID, RawSlot, Opts) ->
     end.
 
 process_to_group_name(Base, Opts) ->
-    Initialized = dev_process_lib:ensure_process_key(Base, Opts),
+    Initialized = lib_process:ensure_process_key(Base, Opts),
     ProcMsg =
         hb_ao:get(<<"process">>, Initialized, Opts#{ <<"hashpath">> => ignore }),
     ID = hb_message:id(ProcMsg, all),
@@ -194,13 +194,13 @@ test_init() ->
 
 info_test() ->
     test_init(),
-    M1 = dev_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
+    M1 = hb_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
     Res = hb_ao_device:info(M1, #{}),
     ?assertEqual(fun dev_process_worker:group/3, hb_maps:get(grouper, Res, undefined, #{})).
 
 grouper_test() ->
     test_init(),
-    M1 = dev_process_test_vectors:aos_process(),
+    M1 = hb_process_test_vectors:aos_process(),
     M2 = #{ <<"path">> => <<"compute">>, <<"v">> => 1 },
     M3 = #{ <<"path">> => <<"compute">>, <<"v">> => 2 },
     M4 = #{ <<"path">> => <<"not-compute">>, <<"v">> => 3 },
@@ -224,7 +224,7 @@ grouper_skips_when_slot_cached_test() ->
             <<"store">> => hb_test_utils:test_store(hb_store_lmdb),
             <<"priv-wallet">> => ar_wallet:new()
         },
-    M1 = dev_process_test_vectors:aos_process(Opts),
+    M1 = hb_process_test_vectors:aos_process(Opts),
     POpts = Opts#{ <<"process-workers">> => true },
     % With the cache empty, every compute request must group by
     % process so that the worker can do the actual work.

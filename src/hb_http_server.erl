@@ -13,6 +13,7 @@
 -export([start/0, start/1, allowed_methods/2, init/2]).
 -export([set_opts/1, set_opts/2, get_opts/0, get_opts/1]).
 -export([set_default_opts/1, set_proc_server_id/1]).
+-export([static/3, static/4]).
 -export([start_node/0, start_node/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -95,6 +96,53 @@ maybe_greeter(MergedConfig, PrivWallet) ->
             ok
     end.
 
+%% @doc Read a static file from a device's HTML asset directory.
+static(Device, Name, Opts) ->
+    static(Device, Name, #{}, Opts).
+static(Device, Name, Template, _Opts) ->
+    Base = hb_util:bin(code:priv_dir(hb)),
+    Filename = <<Base/binary, "/html/", Device/binary, "/", Name/binary>>,
+    ?event({serving_static, Filename}),
+    case file:read_file(Filename) of
+        {ok, RawBody} ->
+            Body = apply_static_template(RawBody, Template),
+            {ok, #{
+                <<"body">> => Body,
+                <<"content-type">> => content_type(Filename)
+            }};
+        {error, _} ->
+            {error, not_found}
+    end.
+
+%% @doc Return the content type for a static file.
+content_type(Filename) ->
+    case filename:extension(Filename) of
+        <<".html">> -> <<"text/html">>;
+        <<".js">> -> <<"text/javascript">>;
+        <<".css">> -> <<"text/css">>;
+        <<".png">> -> <<"image/png">>;
+        <<".ico">> -> <<"image/x-icon">>;
+        <<".ttf">> -> <<"font/ttf">>;
+        <<".json">> -> <<"application/json">>;
+        _ -> <<"text/plain">>
+    end.
+
+%% @doc Apply a simple binary replacement template to a static file.
+apply_static_template(Body, Template) when is_map(Template) ->
+    apply_static_template(Body, maps:to_list(Template));
+apply_static_template(Body, []) ->
+    Body;
+apply_static_template(Body, [{Key, Value} | Rest]) ->
+    apply_static_template(
+        re:replace(
+            Body,
+            <<"\\{\\{", Key/binary, "\\}\\}">>,
+            hb_util:bin(Value),
+            [global, {return, binary}]
+        ),
+        Rest
+    ).
+
 %% @doc Print the greeter message to the console. Includes the version, operator
 %% address, URL to access the node, and the wider configuration (including the
 %% keys inherited from the default configuration).
@@ -157,7 +205,7 @@ new_server(RawNodeMsg) ->
         ),
     HookMsg = #{ <<"body">> => RawNodeMsgWithDefaults },
     NodeMsg =
-        case dev_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
+        case hb_hook:on(<<"start">>, HookMsg, RawNodeMsgWithDefaults) of
             {ok, #{ <<"body">> := NodeMsgAfterHook }} -> NodeMsgAfterHook;
             Unexpected ->
                 ?event(http,
@@ -410,8 +458,13 @@ handle_request(RawReq, Body, ServerID) ->
                     #{}
                 ),
                 % Invoke the meta@1.0 device to handle the request.
+                Meta =
+                    hb_ao_device:message_to_device(
+                        #{ <<"device">> => <<"meta@1.0">> },
+                        NodeMsg
+                    ),
                 {ok, Res} =
-                    dev_meta:handle(
+                    Meta:handle(
                         NodeMsg#{
                             <<"commitment-device">> => CommitmentCodec
                         },

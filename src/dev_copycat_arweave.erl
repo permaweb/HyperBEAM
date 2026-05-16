@@ -402,12 +402,12 @@ process_txs(ValidTXs, BlockStartOffset, Opts) ->
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
-    dev_arweave_common:type(TX) =/= binary.
+    ar_tx:type(TX) =/= binary.
 
 %% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Size, Opts)
+        lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
 resolve_tx_headers(TXIDs, Opts) ->
@@ -918,7 +918,16 @@ auto_stop_partial_index_test_parallel() ->
             >>,
             NoIndexOpts
         ),
-    {ok, BlockData} = dev_arweave_block_cache:read(Block, Opts),
+    {ok, BlockData} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"block">>,
+                <<"block">> => Block,
+                <<"cache-control">> => [<<"only-if-cached">>]
+            },
+            Opts
+        ),
     TXIDs = hb_maps:get(<<"txs">>, BlockData, [], Opts),
     ?assert(length(TXIDs) > 0),
     [OneTXID | _] = TXIDs,

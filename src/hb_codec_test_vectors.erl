@@ -1,7 +1,7 @@
 %%% @doc A battery of test vectors for message codecs, implementing the 
 %%% `message@1.0' encoding and commitment APIs. Additionally, this module 
 %%% houses tests that ensure the general functioning of the `hb_message' API.
--module(hb_message_test_vectors).
+-module(hb_codec_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -811,7 +811,6 @@ signed_message_encode_decode_verify_test(Codec, Opts) ->
     ?event({decoded, Decoded}),
     ?assertEqual(true, hb_message:verify(Decoded, all, Opts)),
     ?event({matching, {input, SignedMsg}, {encoded, Encoded}, {decoded, Decoded}}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes).
@@ -833,7 +832,6 @@ specific_order_signed_message_test(RawCodec, Opts) ->
             Codec#{ <<"committed">> => [<<"key-3">>, <<"key-1">>, <<"key-2">>] }
         ),
     ?event({signed_msg, SignedMsg}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(SignedMsg, Opts)}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)).
 
 specific_order_deeply_nested_signed_message_test(RawCodec, Opts) ->
@@ -999,21 +997,13 @@ signed_deep_message_test(Codec, Opts) ->
             Codec
         ),
     ?event({signed_msg, SignedMsg}),
-    {ok, Res} = dev_message:verify(SignedMsg, #{ <<"committers">> => <<"all">>}, Opts),
-    ?event({verify_res, Res}),
     ?assertEqual(true, hb_message:verify(SignedMsg, all, Opts)),
     ?event({verified, SignedMsg}),
     Encoded = hb_message:convert(SignedMsg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({decoded, Decoded}),
-    {ok, DecodedRes} =
-        dev_message:verify(
-            Decoded,
-            #{ <<"committers">> => <<"all">>},
-            Opts
-        ),
-    ?event({verify_decoded_res, DecodedRes}),
+    ?assert(hb_message:verify(Decoded, all, Opts)),
     MatchRes = hb_message:match(SignedMsg, Decoded, strict, Opts),
     ?event({match_result, MatchRes}),
     ?assert(MatchRes).
@@ -1034,8 +1024,8 @@ unsigned_id_test(Codec, Opts) ->
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?assertEqual(
-        dev_message:id(Decoded, #{ <<"committers">> => <<"none">>}, Opts),
-        dev_message:id(Msg, #{ <<"committers">> => <<"none">>}, Opts)
+        hb_message:id(Decoded, unsigned, Opts),
+        hb_message:id(Msg, unsigned, Opts)
     ).
 
 % signed_id_test_disabled() ->
@@ -1096,8 +1086,6 @@ hashpath_sign_verify_test(Codec, Opts) ->
     ?event({msg, {explicit, Msg}}),
     SignedMsg = hb_message:commit(Msg, Opts, Codec),
     ?event({signed_msg, {explicit, SignedMsg}}),
-    {ok, Res} = dev_message:verify(SignedMsg, #{ <<"committers">> => <<"all">>}, Opts),
-    ?event({verify_res, {explicit, Res}}),
     ?assert(hb_message:verify(SignedMsg, all, Opts)),
     ?event({verified, {explicit, SignedMsg}}),
     Encoded = hb_message:convert(SignedMsg, Codec, <<"structured@1.0">>, Opts),
@@ -1690,7 +1678,6 @@ bundled_ordering_test(Codec = #{ <<"bundle">> := true }, Opts) ->
     ?event({committed, Msg}),
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
-    ?event({http, {string, dev_codec_httpsig_conv:encode_http_msg(Msg, Opts)}}),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
     ?event({matching, {input, Msg}, {output, Decoded}}),
     MatchRes = hb_message:match(Msg, Decoded, primary, Opts),

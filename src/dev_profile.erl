@@ -337,7 +337,13 @@ test_engine(Type, Engine) ->
 %% simulate some basic compute that is performant.
 test_profiler_exec(function, Engine) ->
     eval(
-        fun() -> dev_meta:build(#{}, #{}, #{}) end,
+        fun() ->
+            hb_ao:raw(
+                #{ <<"device">> => <<"meta@1.0">> },
+                #{ <<"path">> => <<"build">> },
+                #{}
+            )
+        end,
         #{ <<"engine">> => Engine, <<"return-mode">> => <<"message">> },
         #{}
     );

@@ -31,10 +31,14 @@ to(Msg, Req, Opts) ->
             true -> hb_cache:ensure_all_loaded(Restructured, Opts);
             false -> Restructured
         end,
-    {ok, JSONStructured} =
-        dev_codec_structured:from(
+    JSONStructured =
+        hb_message:convert(
             Loaded,
-            Req#{ <<"encode-types">> => [<<"atom">>] },
+            tabm,
+            #{
+                <<"device">> => <<"structured@1.0">>,
+                <<"encode-types">> => [<<"atom">>]
+            },
             Opts
         ),
     {ok, hb_json:encode(JSONStructured)}.
@@ -47,10 +51,11 @@ from(JSON, Req, Opts) ->
     % structured message after decoding, then turn the result back into a TABM.
     % This is resource-intensive and could be improved, but ensures that the
     % results are fully normalized.
-    {ok, Structured} =
-        dev_codec_structured:to(
+    Structured =
+        hb_message:convert(
             json:decode(JSON),
-            #{},
+            <<"structured@1.0">>,
+            tabm,
             Opts
         ),
     ?event(debug_json, {structured, Structured}, Opts),
@@ -58,14 +63,36 @@ from(JSON, Req, Opts) ->
         <<"structured@1.0">> -> {ok, Structured};
         _ ->
             % Re-encode the structured message back to TABM for the caller.
-            {ok, TABM} = dev_codec_structured:from(Structured, Req, Opts),
+            TABM =
+                hb_message:convert(
+                    Structured,
+                    tabm,
+                    Req#{ <<"device">> => <<"structured@1.0">> },
+                    Opts
+                ),
             ?event(debug_json, {tabm, TABM}, Opts),
             {ok, TABM}
     end.
 
-commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
+%% @doc Route commitments through `httpsig@1.0'.
+commit(Msg, Req, Opts) ->
+    {ok,
+        hb_message:commit(
+            Msg,
+            Opts,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        )
+    }.
 
-verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
+%% @doc Route verification through `httpsig@1.0'.
+verify(Msg, Req, Opts) ->
+    {ok,
+        hb_message:verify(
+            Msg,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> },
+            Opts
+        )
+    }.
 
 committed(Msg, Req, Opts) when is_binary(Msg) ->
     committed(hb_util:ok(from(Msg, Req, Opts)), Req, Opts);

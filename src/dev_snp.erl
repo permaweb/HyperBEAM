@@ -138,11 +138,7 @@ generate(_M1, _M2, Opts) ->
         % Generate address and node message components
         Address = hb_util:human_id(ar_wallet:to_address(ValidWallet)),
         NodeMsg = hb_private:reset(LoadedOpts),
-        {ok, PublicNodeMsgID} ?= dev_message:id(
-            NodeMsg,
-            #{ <<"committers">> => <<"none">> },
-            LoadedOpts
-        ),
+        PublicNodeMsgID = hb_message:id(NodeMsg, none, LoadedOpts),
         RawPublicNodeMsgID = hb_util:native_id(PublicNodeMsgID),
         ?event({snp_node_msg, NodeMsg}),
         % Generate the commitment report components
@@ -279,7 +275,7 @@ extract_node_message_id(Msg, NodeOpts) ->
         {undefined, ID} ->
             {ok, ID};
         {NodeMsg, _} ->
-            dev_message:id(NodeMsg, #{}, NodeOpts)
+            {ok, hb_message:id(NodeMsg, none, NodeOpts)}
     end.
 
 %% @doc Verify that the nonce in the report matches the expected value.

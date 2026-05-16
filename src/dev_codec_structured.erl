@@ -17,7 +17,7 @@
 %%% 
 %%% For more details, see the HTTP Structured Fields (RFC-9651) specification.
 -module(dev_codec_structured).
--export([to/3, from/3, commit/3, verify/3]).
+-export([to/3, from/3, commit/3, verify/3, encode_types/3, decode_types/3]).
 -export([encode_ao_types/2, decode_ao_types/2, is_list_from_ao_types/2]).
 -export([decode_value/2, encode_value/1, implicit_keys/2]).
 -include("include/hb.hrl").
@@ -25,9 +25,25 @@
 
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
-%%% Route signature functions to the `dev_codec_httpsig' module
-commit(Msg, Req, Opts) -> dev_codec_httpsig:commit(Msg, Req, Opts).
-verify(Msg, Req, Opts) -> dev_codec_httpsig:verify(Msg, Req, Opts).
+%% @doc Route commitments through `httpsig@1.0'.
+commit(Msg, Req, Opts) ->
+    {ok,
+        hb_message:commit(
+            Msg,
+            Opts,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        )
+    }.
+
+%% @doc Route verification through `httpsig@1.0'.
+verify(Msg, Req, Opts) ->
+    {ok,
+        hb_message:verify(
+            Msg,
+            Req#{ <<"commitment-device">> => <<"httpsig@1.0">> },
+            Opts
+        )
+    }.
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
@@ -194,7 +210,7 @@ to(TABM0, Req, Opts) ->
                     error -> Acc#{ RawKey => BinValue };
                     % Parse according to its type
                     {ok, Type} ->
-                        Acc#{ RawKey => decode_value(Type, BinValue) }
+                        Acc#{ RawKey => hb_util:decode(Type, BinValue) }
                 end;
             (RawKey, ChildTABM, Acc) when is_map(ChildTABM) or is_list(ChildTABM) ->
                 % Decode the child TABM
@@ -217,6 +233,9 @@ to(TABM0, Req, Opts) ->
 
 %% @doc Generate an `ao-types' structured field from a map of keys and their
 %% types.
+encode_types(Base, Req, Opts) ->
+    {ok, encode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
+
 encode_ao_types(Types, _Opts) ->
     iolist_to_binary(hb_structured_fields:dictionary(
         lists:map(
@@ -227,6 +246,10 @@ encode_ao_types(Types, _Opts) ->
             hb_util:to_sorted_keys(Types)
         )
     )).
+
+%% @doc Device key for parsing an `ao-types' field.
+decode_types(Base, Req, Opts) ->
+    {ok, decode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
 
 %% @doc Parse the `ao-types' field of a TABM if present, and return a map of
 %% keys and their types. If the given value is a list, we return an empty map
@@ -315,60 +338,9 @@ encode_value(Value) when is_binary(Value) ->
 encode_value(Value) ->
     Value.
 
-%% @doc Convert non-binary values to binary for serialization.
-decode_value(Type, Value) when is_list(Type) ->
-    decode_value(list_to_binary(Type), Value);
-decode_value(Type, Value) when is_binary(Type) ->
-    ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
-    decode_value(
-        binary_to_existing_atom(
-            list_to_binary(string:to_lower(binary_to_list(Type))),
-            latin1
-        ),
-        Value
-    );
-decode_value(integer, Value) ->
-    {item, Number, _} = hb_structured_fields:parse_item(Value),
-    Number;
-decode_value(float, Value) ->
-    binary_to_float(Value);
-decode_value(atom, Value) ->
-    {item, {_, AtomString}, _} =
-        hb_structured_fields:parse_item(Value),
-    hb_util:atom(AtomString);
-decode_value(list, Value) when is_binary(Value) ->
-    lists:map(
-        fun({item, {string, <<"(ao-type-", Rest/binary>>}, _}) ->
-            [Type, Item] = binary:split(Rest, <<") ">>),
-            decode_value(Type, Item);
-           ({item, Item, _}) -> hb_structured_fields:from_bare_item(Item)
-        end,
-        hb_structured_fields:parse_list(iolist_to_binary(Value))
-    );
-decode_value(list, Value) when is_map(Value) ->
-    hb_util:message_to_ordered_list(Value);
-decode_value(map, Value) ->
-    hb_maps:from_list(
-        lists:map(
-            fun({Key, {item, Item, _}}) ->
-                ?event({decoded_item, {explicit, Key}, Item}),
-                {Key, hb_structured_fields:from_bare_item(Item)}
-            end,
-            hb_structured_fields:parse_dictionary(iolist_to_binary(Value))
-        )
-    );
-decode_value(BinType, Value) when is_binary(BinType) ->
-    decode_value(
-        list_to_existing_atom(
-            string:to_lower(
-                binary_to_list(BinType)
-            )
-        ),
-        Value
-    );
-decode_value(OtherType, Value) ->
-    ?event({unexpected_type, OtherType, Value}),
-    throw({unexpected_type, OtherType, Value}).
+%% @doc Decode a structured field value by AO-Core structured type.
+decode_value(Type, Value) ->
+    hb_util:decode(Type, Value).
 
 %%% Tests
 

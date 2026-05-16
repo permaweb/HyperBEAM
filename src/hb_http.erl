@@ -153,7 +153,8 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                     Opts
                 ),
                 {ok, MsgWithCookies} =
-                    dev_codec_cookie:from(
+                    cookie(
+                        <<"from">>,
                         #{ <<"set-cookie">> => SetCookieLines },
                         #{},
                         Opts
@@ -298,12 +299,17 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
-    % Get the route for the message
-    Res = route_to_request(M, RouteRes = dev_router:route(M, Opts), Opts),
+    % Get the route for the message.
+    RouteRes = hb_ao:raw(<<"router@1.0">>, <<"route">>, #{}, M, Opts),
+    Res = route_to_request(M, RouteRes, Opts),
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
     Res.
 
-%% @doc Parse a `dev_router:route' response and return a tuple of request
+%% @doc Invoke the cookie device directly.
+cookie(Key, Msg, Req, Opts) ->
+    hb_ao:raw(<<"cookie@1.0">>, Key, Msg, Req, Opts).
+
+%% @doc Parse a `~router@1.0/route' response and return a tuple of request
 %% parameters.
 route_to_request(M, {ok, URI}, Opts) when is_binary(URI) ->
     route_to_request(M, {ok, #{ <<"uri">> => URI, <<"opts">> => #{} }}, Opts);
@@ -362,17 +368,18 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % Generate a `cookie' key for the message, if an unencoded cookie is
     % present.
     {MaybeCookie, WithoutCookie} =
-        case dev_codec_cookie:extract(Message, #{}, Opts) of
+        case cookie(<<"extract">>, Message, #{}, Opts) of
             {ok, NoCookies} when map_size(NoCookies) == 0 ->
                 {#{}, Message};
             {ok, _Cookies} ->
                 {ok, #{ <<"cookie">> := CookieLines }} =
-                    dev_codec_cookie:to(
+                    cookie(
+                        <<"to">>,
                         Message,
                         #{ <<"format">> => <<"cookie">> },
                         Opts
                     ),
-                {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+                {ok, CookieReset} = cookie(<<"reset">>, Message, #{}, Opts),
                 ?event(debug_http, {cookie_lines, CookieLines}),
                 {
                     #{ <<"cookie">> => CookieLines },
@@ -554,7 +561,7 @@ should_finalize_stream(_, _EncodedBody) -> false.
 %% new Cowboy `Req` object, and the message with the cookies removed. Both
 %% `set-cookie' and `cookie' fields are treated as viable sources of cookies.
 reply_handle_cookies(Req, Message, Opts) ->
-    {ok, Cookies} = dev_codec_cookie:extract(Message, #{}, Opts),
+    {ok, Cookies} = cookie(<<"extract">>, Message, #{}, Opts),
     ?event(debug_cookie, {encoding_reply_cookies, {explicit, Cookies}}),
     case Cookies of
         NoCookies when map_size(NoCookies) == 0 -> {ok, Req, Message};
@@ -563,7 +570,8 @@ reply_handle_cookies(Req, Message, Opts) ->
             % `priv_store' by default, so we let `dev_codec_cookie:opts/1'
             % reset the options.
             {ok, #{ <<"set-cookie">> := SetCookieLines }} =
-                dev_codec_cookie:to(
+                cookie(
+                    <<"to">>,
                     Message,
                     #{ <<"format">> => <<"set-cookie">> },
                     Opts
@@ -589,7 +597,7 @@ reply_handle_cookies(Req, Message, Opts) ->
                     Req,
                     SetCookieLines
                 ),
-            {ok, CookieReset} = dev_codec_cookie:reset(Message, Opts),
+            {ok, CookieReset} = cookie(<<"reset">>, Message, #{}, Opts),
             {
                 ok,
                 FinalReq,
@@ -655,16 +663,22 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 }
             ),
             {ok, ErrMsg} =
-                dev_hyperbuddy:return_error(Message, Opts),
+                hb_http_server:static(
+                    <<"hyperbuddy@1.0">>,
+                    <<"500.html">>,
+                    #{ <<"error">> => hb_format:error(Message, Opts) },
+                    Opts
+                ),
             {Status,
                 maps:without([<<"body">>], ErrMsg),
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {404, <<"httpsig@1.0">>, false} ->
             {ok, ErrMsg} =
-                dev_hyperbuddy:return_file(
+                hb_http_server:static(
                     <<"hyperbuddy@1.0">>,
-                    <<"404.html">>
+                    <<"404.html">>,
+                    Opts
                 ),
             {Status,
                 maps:without([<<"body">>], ErrMsg),
@@ -678,22 +692,25 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                     <<"structured@1.0">>,
                     Opts#{ <<"topic">> => ao_internal }
                 ),
-            {ok, EncMessage} =
-                dev_codec_httpsig:to(
+            EncMessage =
+                hb_message:convert(
                     TABM,
                     case AcceptBundle of
                         true ->
                             #{
+                                <<"device">> => <<"httpsig@1.0">>,
                                 <<"path">> => <<"to">>,
                                 <<"bundle">> => true
                             };
                         false ->
                             TABMReq#{
+                                <<"device">> => <<"httpsig@1.0">>,
                                 <<"path">> => <<"to">>,
                                 <<"index">> =>
                                     hb_opts:get(generate_index, true, Opts)
                             }
                     end,
+                    tabm,
                     Opts
                 ),
             {
@@ -1070,9 +1087,10 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         case maps:get(<<"cookie">>, RawHeaders, undefined) of
             undefined -> {ok, BaseMsg};
             Cookie ->
-                dev_codec_cookie:from(
+                cookie(
+                    <<"from">>,
                     BaseMsg#{ <<"cookie">> => Cookie },
-                    Req,
+                    #{},
                     Opts
                 )
         end,

@@ -107,13 +107,14 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
-upload(Msg, Opts, CommitmentDevice) ->
+upload(Msg, Opts, _CommitmentDevice) ->
     ?event({uploading_item, Msg}),
-    dev_arweave:post_tx(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        Msg,
-        Opts,
-        CommitmentDevice
+    hb_ao:raw(
+        <<"arweave@2.9">>,
+        <<"tx">>,
+        #{},
+        Msg#{ <<"method">> => <<"POST">> },
+        Opts
     ).
 
 %%% Tests
@@ -126,38 +127,30 @@ upload_test_opts() ->
 
 upload_empty_message_test() ->
     Opts = upload_test_opts(),
-    try
-        Msg = #{ <<"data">> => <<"TEST">> },
-        Committed = 
-            hb_message:commit(
-                Msg,
-                Opts,
-                <<"ans104@1.0">>
-            ),
-        Result = upload(Committed, Opts, <<"ans104@1.0">>),
-        ?event({upload_result, Result}),
-        ?assertMatch({ok, _}, Result)
-    after
-        dev_bundler:stop_server()
-    end.
+    Msg = #{ <<"data">> => <<"TEST">> },
+    Committed =
+        hb_message:commit(
+            Msg,
+            Opts,
+            <<"ans104@1.0">>
+        ),
+    Result = upload(Committed, Opts, <<"ans104@1.0">>),
+    ?event({upload_result, Result}),
+    ?assertMatch({ok, _}, Result).
 
 upload_single_layer_message_test() ->
     Opts = upload_test_opts(),
-    try
-        Msg = #{
-            <<"data">> => <<"TEST">>,
-            <<"basic">> => <<"value">>,
-            <<"integer">> => 1
-        },
-        Committed = 
-            hb_message:commit(
-                Msg,
-                Opts,
-                <<"ans104@1.0">>
-            ),
-        Result = upload(Committed, Opts, <<"ans104@1.0">>),
-        ?event({upload_result, Result}),
-        ?assertMatch({ok, _}, Result)
-    after
-        dev_bundler:stop_server()
-    end.
+    Msg = #{
+        <<"data">> => <<"TEST">>,
+        <<"basic">> => <<"value">>,
+        <<"integer">> => 1
+    },
+    Committed =
+        hb_message:commit(
+            Msg,
+            Opts,
+            <<"ans104@1.0">>
+        ),
+    Result = upload(Committed, Opts, <<"ans104@1.0">>),
+    ?event({upload_result, Result}),
+    ?assertMatch({ok, _}, Result).

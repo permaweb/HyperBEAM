@@ -98,11 +98,27 @@ assignment_to_aos2(Assignment, RawOpts) ->
     Opts = format_opts(RawOpts),
     Message = hb_ao:get(<<"body">>, Assignment, Opts),
     AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
+    {ok, MessageStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => Message
+            },
+            Opts
+        ),
+    {ok, AssignmentStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => AssignmentWithoutBody
+            },
+            Opts
+        ),
     #{
-        <<"message">> =>
-            dev_json_iface:message_to_json_struct(Message, Opts),
-        <<"assignment">> =>
-            dev_json_iface:message_to_json_struct(AssignmentWithoutBody, Opts)
+        <<"message">> => MessageStruct,
+        <<"assignment">> => AssignmentStruct
     }.
 
 %% @doc Convert an AOS2-style JSON structure to a normalized HyperBEAM

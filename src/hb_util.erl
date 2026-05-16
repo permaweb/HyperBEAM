@@ -5,7 +5,7 @@
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
--export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
+-export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
@@ -16,7 +16,8 @@
 -export([is_string_list/1, list_replace/3, list_without/2, list_with/2]).
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
--export([remove_common/2, to_lower/1]).
+-export([remove_common/2, remove_scheme_prefix/1, to_lower/1]).
+-export([secret_key_to_committer/1]).
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, ok_or/2, until/1, until/2, until/3, wait_until/2]).
@@ -275,6 +276,61 @@ encode(Bin) ->
 %% invalid.
 decode(Input) ->
     b64rs:decode(Input).
+
+%% @doc Decode an HTTP structured field value by AO-Core structured type.
+decode(Type, Value) when is_list(Type) ->
+    decode(list_to_binary(Type), Value);
+decode(Type, Value) when is_binary(Type) ->
+    ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
+    decode(
+        binary_to_existing_atom(
+            list_to_binary(string:to_lower(binary_to_list(Type))),
+            latin1
+        ),
+        Value
+    );
+decode(integer, Value) ->
+    {item, Number, _} = hb_structured_fields:parse_item(Value),
+    Number;
+decode(float, Value) ->
+    binary_to_float(Value);
+decode(atom, Value) ->
+    {item, {_, AtomString}, _} =
+        hb_structured_fields:parse_item(Value),
+    atom(AtomString);
+decode(list, Value) when is_binary(Value) ->
+    lists:map(
+        fun({item, {string, <<"(ao-type-", Rest/binary>>}, _}) ->
+            [Type, Item] = binary:split(Rest, <<") ">>),
+            decode(Type, Item);
+           ({item, Item, _}) -> hb_structured_fields:from_bare_item(Item)
+        end,
+        hb_structured_fields:parse_list(iolist_to_binary(Value))
+    );
+decode(list, Value) when is_map(Value) ->
+    message_to_ordered_list(Value);
+decode(map, Value) ->
+    hb_maps:from_list(
+        lists:map(
+            fun({Key, {item, Item, _}}) ->
+                ?event({decoded_item, {explicit, Key}, Item}),
+                {Key, hb_structured_fields:from_bare_item(Item)}
+            end,
+            hb_structured_fields:parse_dictionary(iolist_to_binary(Value))
+        )
+    );
+decode(BinType, Value) when is_binary(BinType) ->
+    decode(
+        list_to_existing_atom(
+            string:to_lower(
+                binary_to_list(BinType)
+            )
+        ),
+        Value
+    );
+decode(OtherType, Value) ->
+    ?event({unexpected_type, OtherType, Value}),
+    throw({unexpected_type, OtherType, Value}).
 
 %% @doc Safely encode a binary to URL safe base64.
 safe_encode(Bin) when is_binary(Bin) ->
@@ -596,6 +652,17 @@ remove_common([X|Rest1], [X|Rest2]) ->
     remove_common(Rest1, Rest2);
 remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
+
+%% @doc Remove the `scheme:' prefix from a binary.
+remove_scheme_prefix(KeyID) ->
+    case binary:split(KeyID, <<":">>) of
+        [_Scheme, Key] -> Key;
+        [Key] -> Key
+    end.
+
+%% @doc Generate a committer value from a secret key.
+secret_key_to_committer(Key) ->
+    human_id(hb_crypto:sha256(Key)).
 
 %% @doc Throw an exception if the Opts map has an `error_strategy' key with the
 %% value `throw'. Otherwise, return the value.
