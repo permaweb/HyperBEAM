@@ -5,7 +5,7 @@
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
--export([encode/1, decode/1, safe_encode/1, safe_decode/1]).
+-export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
 -export([find_value/2, find_value/3]).
 -export([deep_merge/3, deep_set/4, deep_get/3, deep_get/4]).
@@ -276,6 +276,61 @@ encode(Bin) ->
 %% invalid.
 decode(Input) ->
     b64rs:decode(Input).
+
+%% @doc Decode an HTTP structured field value by AO-Core structured type.
+decode(Type, Value) when is_list(Type) ->
+    decode(list_to_binary(Type), Value);
+decode(Type, Value) when is_binary(Type) ->
+    ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
+    decode(
+        binary_to_existing_atom(
+            list_to_binary(string:to_lower(binary_to_list(Type))),
+            latin1
+        ),
+        Value
+    );
+decode(integer, Value) ->
+    {item, Number, _} = hb_structured_fields:parse_item(Value),
+    Number;
+decode(float, Value) ->
+    binary_to_float(Value);
+decode(atom, Value) ->
+    {item, {_, AtomString}, _} =
+        hb_structured_fields:parse_item(Value),
+    atom(AtomString);
+decode(list, Value) when is_binary(Value) ->
+    lists:map(
+        fun({item, {string, <<"(ao-type-", Rest/binary>>}, _}) ->
+            [Type, Item] = binary:split(Rest, <<") ">>),
+            decode(Type, Item);
+           ({item, Item, _}) -> hb_structured_fields:from_bare_item(Item)
+        end,
+        hb_structured_fields:parse_list(iolist_to_binary(Value))
+    );
+decode(list, Value) when is_map(Value) ->
+    message_to_ordered_list(Value);
+decode(map, Value) ->
+    hb_maps:from_list(
+        lists:map(
+            fun({Key, {item, Item, _}}) ->
+                ?event({decoded_item, {explicit, Key}, Item}),
+                {Key, hb_structured_fields:from_bare_item(Item)}
+            end,
+            hb_structured_fields:parse_dictionary(iolist_to_binary(Value))
+        )
+    );
+decode(BinType, Value) when is_binary(BinType) ->
+    decode(
+        list_to_existing_atom(
+            string:to_lower(
+                binary_to_list(BinType)
+            )
+        ),
+        Value
+    );
+decode(OtherType, Value) ->
+    ?event({unexpected_type, OtherType, Value}),
+    throw({unexpected_type, OtherType, Value}).
 
 %% @doc Safely encode a binary to URL safe base64.
 safe_encode(Bin) when is_binary(Bin) ->

@@ -133,7 +133,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
             ),
             case hb_maps:get(<<"type">>, LinkOpts, undefined, Opts) of
                 undefined -> LoadedMsg;
-                Type -> structured_decode_value(Type, LoadedMsg, Opts)
+                Type -> hb_util:decode(Type, LoadedMsg)
             end;
         {error, not_found} ->
             report_ensure_loaded_not_found(Ref, Link, Opts)
@@ -775,19 +775,6 @@ structured_decode_types(Types, Opts) ->
         )
     ).
 
-%% @doc Decode one typed cache value through the structured device.
-structured_decode_value(Type, Value, Opts) ->
-    hb_util:ok(
-        hb_ao:direct(
-            #{ <<"device">> => <<"structured@1.0">> },
-            #{
-                <<"path">> => <<"decode-value">>,
-                <<"type">> => Type,
-                <<"body">> => Value
-            },
-            Opts
-        )
-    ).
 
 %% @doc Read the result of a computation, using heuristics. The supported
 %% heuristics are as follows:

@@ -438,17 +438,7 @@ maybe_typed(Key, Value, Opts) ->
                     Decoded = hb_escape:decode_quotes(RawValue),
                     {typed,
                         OnlyKey,
-                        hb_util:ok(
-                            hb_ao:direct(
-                                #{ <<"device">> => <<"structured@1.0">> },
-                                #{
-                                    <<"path">> => <<"decode-value">>,
-                                    <<"type">> => Type,
-                                    <<"body">> => Decoded
-                                },
-                                Opts
-                            )
-                        )
+                        hb_util:decode(Type, Decoded)
                     }
             end
     end.
