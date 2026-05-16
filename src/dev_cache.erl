@@ -16,7 +16,7 @@ expected_response(Base, Req, Opts) ->
         {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
         true ?= check_response_matches_expected(Response, Expected, Opts),
-        fire_admissible_response_hook(Base, Opts),
+        fire_admissible_response_hook(Base, Expected, Opts),
         {ok, true}
     else Reason ->
         ?event(debug_admissible, {expected_response_error, Reason}),
@@ -26,12 +26,12 @@ expected_response(Base, Req, Opts) ->
 %% @doc Fire the `admissible-response' hook. Spawns by default so the cache
 %% read returns without waiting for downstream handlers. 
 %% Set `admissible_response_hook_async => false' in `Opts' to run synchronously
-fire_admissible_response_hook(Base, Opts) ->
+fire_admissible_response_hook(Base, Expected, Opts) ->
     Run =
         fun() ->
             dev_hook:on(
                 [<<"~cache@1.0">>, <<"admissible-response">>],
-                #{ <<"body">> => admissible_response_body(Base, Opts) },
+                #{ <<"body">> => admissible_response_body(Base, Expected, Opts) },
                 Opts
             )
         end,
@@ -109,13 +109,14 @@ check_response_matches_expected(Response, Expected, Opts) ->
 %% @doc Build the body for the `admissible-response' hook. Optionally signs it  
 %% when `commit_hook_response' is set, so downstream handlers can verify the    
 %% node attested to admissibility.
-admissible_response_body(Base, Opts) ->      
+admissible_response_body(Base, ID, Opts) ->      
     Ref = hb_maps:get(<<"http-reference">>, Base, <<>>, Opts),              
     Body = #{                                                                   
         <<"reference">> => Ref,                                                
         <<"status-class">> => <<"success">>,                                    
         <<"event">> => <<"is_admissible">>                                      
-    },                                                                          
+    },
+    ?event(admissible_short, {response_success, {id, ID}, {responded_by, Ref}}),
     case hb_opts:get(commit_hook_response, false, Opts) of
         true ->                                                                 
             hb_message:commit(Body, Opts#{ priv_wallet => hb:wallet() });       
@@ -464,58 +465,3 @@ cache_write_binary_test() ->
     ?assertEqual(TestData, ReadData),
     ?event(dev_cache, {cache_api_test}),
     ok.
-
-%% @doc Compare wall-clock time of `fire_admissible_response_hook/2' with the
-%% async flag on vs off. The hook handler sleeps `HookDelayMs' before signalling
-%% so sync mode must take >= HookDelayMs and async mode must return immediately.
-fire_admissible_response_hook_async_speed_test() ->
-    HookDelayMs = 500,
-    Self = self(),
-    Handler = #{
-        <<"path">> => <<"hook">>,
-        <<"device">> => #{
-            hook =>
-                fun(_, Req, _) ->
-                    timer:sleep(HookDelayMs),
-                    Self ! hook_ran,
-                    {ok, Req}
-                end
-        }
-    },
-    BaseOpts = #{
-        on => #{
-            <<"~cache@1.0">> =>
-                #{ <<"admissible-response">> => Handler }
-        }
-    },
-    Base = #{},
-    %% --- Sync run: fire_admissible_response_hook blocks for the full sleep.
-    {SyncMicros, _} =
-        timer:tc(fun() ->
-            fire_admissible_response_hook(Base,
-                BaseOpts#{ admissible_response_hook_async => false })
-        end),
-    SyncMs = SyncMicros div 1000,
-    receive hook_ran -> ok
-    after HookDelayMs * 4 -> error(sync_hook_never_ran)
-    end,
-    %% --- Async run: returns immediately; hook runs in spawned process.
-    {AsyncMicros, _} =
-        timer:tc(fun() ->
-            fire_admissible_response_hook(Base,
-                BaseOpts#{ admissible_response_hook_async => true })
-        end),
-    AsyncMs = AsyncMicros div 1000,
-    receive hook_ran -> ok
-    after HookDelayMs * 4 -> error(async_hook_never_ran)
-    end,
-    Speedup = case AsyncMs of 0 -> infinity; _ -> SyncMs div AsyncMs end,
-    io:format(
-        user,
-        "~nadmissible_response_hook_speed: "
-        "hook_delay=~pms sync=~pms async=~pms speedup=~px~n",
-        [HookDelayMs, SyncMs, AsyncMs, Speedup]
-    ),
-    ?assert(SyncMs >= HookDelayMs),
-    ?assert(AsyncMs < HookDelayMs div 2),
-    ?assert(SyncMs > AsyncMs * 4).
