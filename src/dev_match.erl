@@ -101,11 +101,7 @@ match(Key, Base, Opts) ->
 %% of all matches for each key.
 all(Base, _Req, Opts) ->
     IndexBase =
-        hb_maps:without(
-            [<<"device">>],
-            hb_message:uncommitted(hb_private:reset(Base)),
-            Opts
-        ),
+        hb_message:uncommitted(hb_private:reset(Base)),
     Keys =
         hb_maps:keys(
             IndexBase

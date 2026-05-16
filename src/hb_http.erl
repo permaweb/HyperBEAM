@@ -299,32 +299,15 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
-    % Get the route for the message
-    Router =
-        hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"router@1.0">> },
-            Opts
-        ),
-    RouteRes = Router:route(M, Opts),
+    % Get the route for the message.
+    RouteRes = hb_ao:raw(<<"router@1.0">>, <<"route">>, #{}, M, Opts),
     Res = route_to_request(M, RouteRes, Opts),
     ?event(debug_http, {route_res, {route_res, RouteRes}, {full_res, Res}, {msg, M}}),
     Res.
 
 %% @doc Invoke the cookie device directly.
 cookie(Key, Msg, Req, Opts) ->
-    CallReq = Req#{ <<"path">> => Key },
-    {Status, _Dev, Func} =
-        hb_ao_device:message_to_fun(
-            #{ <<"device">> => <<"cookie@1.0">> },
-            Key,
-            Opts
-        ),
-    Args =
-        case Status of
-            add_key -> [Key, Msg, CallReq, Opts];
-            _ -> [Msg, CallReq, Opts]
-        end,
-    apply(Func, hb_ao_device:truncate_args(Func, Args)).
+    hb_ao:raw(<<"cookie@1.0">>, Key, Msg, Req, Opts).
 
 %% @doc Parse a `~router@1.0/route' response and return a tuple of request
 %% parameters.

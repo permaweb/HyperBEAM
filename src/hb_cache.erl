@@ -226,8 +226,10 @@ match(MatchSpec, Opts) ->
             end;
         _ ->
             case hb_ao:raw(
-                NormalizedSpec#{ <<"device">> => <<"match@1.0">> },
-                #{ <<"path">> => <<"all">> },
+                <<"match@1.0">>,
+                <<"all">>,
+                NormalizedSpec,
+                #{},
                 Opts
             ) of
                 {ok, []} -> {error, not_found};
@@ -766,11 +768,10 @@ types_to_implicit(Types) ->
 structured_decode_types(Types, Opts) ->
     hb_util:ok(
         hb_ao:raw(
-            #{ <<"device">> => <<"structured@1.0">> },
-            #{
-                <<"path">> => <<"decode-types">>,
-                <<"body">> => Types
-            },
+            <<"structured@1.0">>,
+            <<"decode-types">>,
+            Types,
+            #{},
             Opts
         )
     ).

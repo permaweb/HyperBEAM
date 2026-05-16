@@ -772,12 +772,13 @@ load_bin(<<"flat@1.0">>, Bin, Opts) ->
             fun(Line) -> string:trim(Line, trailing) end,
             binary:split(Bin, <<"\n">>, [global])
         ),
-    Flat =
-        hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"flat@1.0">> },
-            Opts
-        ),
-    try Flat:deserialize(iolist_to_binary(lists:join(<<"\n">>, Ls)))
+    try hb_ao:raw(
+        <<"flat@1.0">>,
+        <<"deserialize">>,
+        iolist_to_binary(lists:join(<<"\n">>, Ls)),
+        #{},
+        Opts
+    )
     of
         {ok, Map} ->
             {ok, mimic_default_types(Map, false, Opts)}

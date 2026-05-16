@@ -625,19 +625,7 @@ set(Msg, Values, Opts) ->
 
 %% @doc Invoke the message device directly for kernel message helpers.
 message(Key, Msg, Req, Opts) ->
-    CallReq = Req#{ <<"path">> => Key },
-    {Status, _Dev, Func} =
-        hb_ao_device:message_to_fun(
-            #{ <<"device">> => <<"message@1.0">> },
-            Key,
-            Opts
-        ),
-    Args =
-        case Status of
-            add_key -> [Key, Msg, CallReq, Opts];
-            _ -> [Msg, CallReq, Opts]
-        end,
-    apply(Func, hb_ao_device:truncate_args(Func, Args)).
+    hb_ao:raw(<<"message@1.0">>, Key, Msg, Req, Opts).
 
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).
