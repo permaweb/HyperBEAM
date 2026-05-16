@@ -254,12 +254,17 @@ decode_types(Base, Req, Opts) ->
 
 %% @doc Device key for decoding a single typed value.
 decode_value(Base, Req, Opts) ->
-    {ok,
-        decode_value(
-            hb_maps:get(<<"type">>, Req, Req, Opts),
-            hb_maps:get(<<"body">>, Req, Base, Opts)
-        )
-    }.
+    case hb_maps:find(<<"type">>, Req, Opts) of
+        {ok, Type} ->
+            {ok,
+                decode_value(
+                    Type,
+                    hb_maps:get(<<"body">>, Req, Base, Opts)
+                )
+            };
+        error ->
+            {error, <<"Missing required type field.">>}
+    end.
 
 %% @doc Parse the `ao-types' field of a TABM if present, and return a map of
 %% keys and their types. If the given value is a list, we return an empty map
