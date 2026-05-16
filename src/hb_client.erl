@@ -109,7 +109,7 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
     end;
 upload(Msg, Opts, CommitmentDevice) ->
     ?event({uploading_item, Msg}),
-    hb_ao:direct(
+    hb_ao:raw(
         #{ <<"device">> => <<"arweave@2.9">> },
         Msg#{
             <<"path">> => <<"tx">>,

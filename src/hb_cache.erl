@@ -225,7 +225,7 @@ match(MatchSpec, Opts) ->
                 _ -> {error, not_found}
             end;
         _ ->
-            case hb_ao:direct(
+            case hb_ao:raw(
                 NormalizedSpec#{ <<"device">> => <<"match@1.0">> },
                 #{ <<"path">> => <<"all">> },
                 Opts
@@ -765,7 +765,7 @@ types_to_implicit(Types) ->
 %% @doc Decode the `ao-types' field through the structured device.
 structured_decode_types(Types, Opts) ->
     hb_util:ok(
-        hb_ao:direct(
+        hb_ao:raw(
             #{ <<"device">> => <<"structured@1.0">> },
             #{
                 <<"path">> => <<"decode-types">>,

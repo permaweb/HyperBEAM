@@ -95,7 +95,7 @@
 -module(hb_ao).
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3, resolve_many/2]).
--export([direct/3, direct/4, direct/5]).
+-export([raw/3, raw/4, raw/5]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
@@ -170,11 +170,11 @@ resolve(Base, Req, Opts) ->
 %% Critically, the modifiers do _not_ affect the message that the call is
 %% executed upon: `Base`, `Req`, and `Opts` are passed directly to the execution
 %% function as-is, but the chosen function is altered by these modifiers.
-direct(Base, Req, Opts) ->
-    direct(undefined, Base, Req, Opts).
-direct(Device, Base, Req, Opts) ->
-    direct(Device, undefined, Base, Req, Opts).
-direct(ForcedDevice, ForcedKey, Base, Req, Opts) ->
+raw(Base, Req, Opts) ->
+    raw(undefined, Base, Req, Opts).
+raw(Device, Base, Req, Opts) ->
+    raw(Device, undefined, Base, Req, Opts).
+raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
     ExecOpts = execution_opts(Opts),
     % If a forced key is provided, use it; otherwise, extract from the request.
     Key =

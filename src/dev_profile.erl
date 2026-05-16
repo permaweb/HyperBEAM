@@ -338,7 +338,7 @@ test_engine(Type, Engine) ->
 test_profiler_exec(function, Engine) ->
     eval(
         fun() ->
-            hb_ao:direct(
+            hb_ao:raw(
                 #{ <<"device">> => <<"meta@1.0">> },
                 #{ <<"path">> => <<"build">> },
                 #{}

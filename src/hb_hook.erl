@@ -110,7 +110,7 @@ execute_handler(HookName, Handler, Req, Opts) ->
             }
         ),
         {Status, Res} =
-            hb_ao:direct(
+            hb_ao:raw(
                 PreparedBase,
                 PreparedReq,
                 Opts#{ <<"hashpath">> => ignore }
