@@ -52,8 +52,9 @@
 
 %%% Parallel-test auto-wiring. In a test build, every module that includes
 %%% `hb.hrl' has `hb_test_parallel' activated: 0-arity functions whose
-%%% names end in `_test_parallel' or `_test_parallel_' are exported and
-%%% collected into an injected `all_parallel_test_/0' EUnit generator.
+%%% names end in `_parallel_test' or `_parallel_test_' are renamed to
+%%% internal impl names and collected into an injected `all_parallel_test_/0'
+%%% EUnit generator that runs them all concurrently.
 %%% See `hb_test_parallel' for the contract.
 -ifdef(TEST).
 -compile({parse_transform, hb_test_parallel}).

@@ -1050,7 +1050,7 @@ event_request(Path, Method, Status, Extra) ->
 
 %% @doc A fixed bad interior offset from a live TX is rejected by
 %% bundle_header/3 as invalid_bundle_header.
-bundle_header_garbage_guard_test_parallel() ->
+bundle_header_garbage_guard_parallel_test() ->
     ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     _Server = hb_http_server:start_node(ServerOpts),
     ProbeOffset = 376836336327208,
@@ -1061,7 +1061,7 @@ bundle_header_garbage_guard_test_parallel() ->
     ).
 
 
-post_ans104_message_test_parallel() ->
+post_ans104_message_parallel_test() ->
     Port = rand:uniform(10000) + 10000,
     ServerOpts = #{
         <<"store">> => [hb_test_utils:test_store()],
@@ -1117,7 +1117,7 @@ post_ans104_message_test_parallel() ->
         dev_bundler:stop_server()
     end.
 
-post_tx_message_test_parallel() ->
+post_tx_message_parallel_test() ->
     ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts =
@@ -1153,7 +1153,7 @@ post_tx_message_test_parallel() ->
     ?assertEqual(<<"Transaction verification failed.">>, Body),
     ok.
 
-post_tx_json_failure_test_parallel() ->
+post_tx_json_failure_parallel_test() ->
     ServerOpts = #{ <<"store">> => [hb_test_utils:test_store()] },
     Server = hb_http_server:start_node(ServerOpts),
     ClientOpts = post_tx_json_client_opts(),
@@ -1166,7 +1166,7 @@ post_tx_json_failure_test_parallel() ->
     ?assertEqual(<<"Transaction verification failed.">>, Body),
     ok.
 
-post_tx_json_success_test_parallel() ->
+post_tx_json_success_parallel_test() ->
     {Response, Node1Posts, Node2Posts} =
         post_tx_json_two_node_test({200, <<"OK-1">>}, {200, <<"OK-2">>}),
     ?assertMatch({ok, #{ <<"status">> := 200 }}, Response),
@@ -1174,7 +1174,7 @@ post_tx_json_success_test_parallel() ->
     ?assertEqual(1, length(Node2Posts)),
     ok.
 
-post_tx_json_mixed_status_prefers_success_test_parallel() ->
+post_tx_json_mixed_status_prefers_success_parallel_test() ->
     {Response, Node1Posts, Node2Posts} =
         post_tx_json_two_node_test(
             {400, <<"Transaction verification failed.">>},
@@ -1185,7 +1185,7 @@ post_tx_json_mixed_status_prefers_success_test_parallel() ->
     ?assertEqual(1, length(Node2Posts)),
     ok.
 
-best_response_handles_failed_connect_entries_test_parallel() ->
+best_response_handles_failed_connect_entries_parallel_test() ->
     FailedConnect =
         {failed_connect,
             [
@@ -1202,7 +1202,7 @@ best_response_handles_failed_connect_entries_test_parallel() ->
         best_response(Responses)
     ).
 
-best_response_non_map_error_round_trips_test_parallel() ->
+best_response_non_map_error_round_trips_parallel_test() ->
     FailedConnect =
         {failed_connect,
             [
@@ -1367,7 +1367,7 @@ tx_index_block(<<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>) -> 1289677;
 tx_index_block(<<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>) -> 753012;
 tx_index_block(<<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>) -> 1233918.
 
-get_tx_basic_data_test_parallel() ->
+get_tx_basic_data_parallel_test() ->
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1395,7 +1395,7 @@ get_tx_basic_data_test_parallel() ->
     ok.
 
 %% @doc The data for this transaction ends with two smaller chunks.
-get_tx_split_chunk_test_parallel() ->
+get_tx_split_chunk_parallel_test() ->
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
@@ -1424,7 +1424,7 @@ get_tx_split_chunk_test_parallel() ->
         hb_message:id(Child, signed)),
     ok.
 
-get_tx_basic_data_exclude_data_test_parallel() ->
+get_tx_basic_data_exclude_data_parallel_test() ->
     TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
     Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
@@ -1461,7 +1461,7 @@ get_tx_basic_data_exclude_data_test_parallel() ->
     ?assertEqual(<<"PEShWA1ER2jq7CatAPpOZ30TeLrjOSpaf_Po7_hKPo4">>, DataHash),
     ok.
 
-get_tx_data_tag_exclude_data_test_parallel() ->
+get_tx_data_tag_exclude_data_parallel_test() ->
     TXID = <<"jI0A4BASHaUdCCsdv249BxDX6IlE0Ko391TuI6REATw">>,
     Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
@@ -1497,7 +1497,7 @@ get_tx_data_tag_exclude_data_test_parallel() ->
     ?assertEqual(<<"IHyJ9BlQaHLWVwwklMwV1XEYXGjwx2B6HXNJZ4yJXeQ">>, DataHash),
     ok.
 
-head_raw_tx_test_parallel() ->
+head_raw_tx_parallel_test() ->
     TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
     Opts = setup_arweave_index_opts([TXID]),
     {ok, Result} =
@@ -1524,7 +1524,7 @@ head_raw_tx_test_parallel() ->
         hb_maps:find(<<"header-length">>, Result, Opts)
     ).
 
-head_raw_ans104_test_parallel() ->
+head_raw_ans104_parallel_test() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
@@ -1551,7 +1551,7 @@ head_raw_ans104_test_parallel() ->
         hb_maps:find(<<"content-length">>, Result, Opts)
     ).
 
-get_raw_range_tx_test_parallel() ->
+get_raw_range_tx_parallel_test() ->
     DataItemID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
     Opts = setup_arweave_index_opts([DataItemID]),
     {ok, Result} =
@@ -1591,7 +1591,7 @@ get_raw_range_tx_test_parallel() ->
         hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
-get_raw_range_ans104_test_parallel() ->
+get_raw_range_ans104_parallel_test() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
@@ -1636,7 +1636,7 @@ get_raw_range_ans104_test_parallel() ->
         hb_maps:find(<<"body">>, Result2, Opts)
     ).
 
-get_tx_rsa_nested_bundle_test_parallel() ->
+get_tx_rsa_nested_bundle_parallel_test() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     {ok, Root} = hb_http:get(Node, Path, #{}),
@@ -1679,7 +1679,7 @@ get_tx_rsa_large_bundle_test_disabled() ->
         ok
     end}.
 
-get_bad_tx_test_parallel() ->
+get_bad_tx_parallel_test() ->
     Node = hb_http_server:start_node(),
     Path = <<"/~arweave@2.9/tx=INVALID-ID">>,
     Res = hb_http:get(Node, Path, #{}),
@@ -1718,7 +1718,7 @@ serialize_data_item_test_disabled() ->
     ?assert(ar_bundles:verify_item(VerifiedItem)),
     ok.
 
-get_partial_chunk_post_split_test_parallel() ->
+get_partial_chunk_post_split_parallel_test() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399,
@@ -1739,7 +1739,7 @@ get_partial_chunk_post_split_test_parallel() ->
     ),
     ok.
 
-get_full_chunk_post_split_test_parallel() ->
+get_full_chunk_post_split_parallel_test() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399,
@@ -1760,7 +1760,7 @@ get_full_chunk_post_split_test_parallel() ->
     ),
     ok.
 
-get_multi_chunk_post_split_test_parallel() ->
+get_multi_chunk_post_split_parallel_test() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399,
@@ -1783,7 +1783,7 @@ get_multi_chunk_post_split_test_parallel() ->
 
 
 %% @doc Query a chunk range that starts and ends in the middle of a chunk.
-get_mid_chunk_post_split_test_parallel() ->
+get_mid_chunk_post_split_parallel_test() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
     %% 
     Offset = 378092137521399 + 200_000,
@@ -1804,7 +1804,7 @@ get_mid_chunk_post_split_test_parallel() ->
     ),
     ok.
 
-get_partial_chunk_pre_split_test_parallel() ->
+get_partial_chunk_pre_split_parallel_test() ->
     %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
     %% 
     Offset = 30575701172109,
@@ -1825,7 +1825,7 @@ get_partial_chunk_pre_split_test_parallel() ->
     ),
     ok.
 
-get_full_chunk_pre_split_test_parallel() ->
+get_full_chunk_pre_split_parallel_test() ->
     %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
     %% 
     Offset = 30575701172109,
@@ -1846,7 +1846,7 @@ get_full_chunk_pre_split_test_parallel() ->
     ),
     ok.
 
-get_multi_chunk_pre_split_test_parallel() ->
+get_multi_chunk_pre_split_parallel_test() ->
     %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
     %% 
     Offset = 30575701172109,
@@ -1867,7 +1867,7 @@ get_multi_chunk_pre_split_test_parallel() ->
     ),
     ok.
 
-get_mid_chunk_pre_split_test_parallel() ->
+get_mid_chunk_pre_split_parallel_test() ->
     %% https://arweave.net/tx/v4ophPvV-cNp5gkpkjMuUZ-lf-fBfm1Wk-pB4vJb00E/offset
     %% 
     Offset = 30575701172109 + 200_000,
@@ -1888,7 +1888,7 @@ get_mid_chunk_pre_split_test_parallel() ->
     ),
     ok.
 
-get_pre_split_small_chunks_test_parallel() ->
+get_pre_split_small_chunks_parallel_test() ->
     TXID = <<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>,
     Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
@@ -1900,7 +1900,7 @@ get_pre_split_small_chunks_test_parallel() ->
         Opts
     ).
 
-get_post_split_small_chunks_test_parallel() ->
+get_post_split_small_chunks_parallel_test() ->
     TXID = <<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>,
     Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
@@ -1912,7 +1912,7 @@ get_post_split_small_chunks_test_parallel() ->
         Opts
     ).
 
-get_pre_split_gap_test_parallel() ->
+get_pre_split_gap_parallel_test() ->
     TXID = <<"VexuG68KCNpw21fGZw1ycRCYBtQMHhl274zGDBh3kQE">>,
     Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
@@ -1924,7 +1924,7 @@ get_pre_split_gap_test_parallel() ->
         Opts
     ).
 
-get_pre_split_small_tx_test_parallel() ->
+get_pre_split_small_tx_parallel_test() ->
     TXID = <<"K4C4dLZ7V4ffYJcR9JtVQwIXCTLD1mMCUaPbHuUdFgw">>,
     Opts = setup_arweave_index_opts([TXID]),
     assert_chunk_range(
@@ -1938,7 +1938,7 @@ get_pre_split_small_tx_test_parallel() ->
 
 %% @doc Checks an item that begins in the middle of a chunk - without
 %% special handling get_chunk_range() used to leave off the last few bytes
-get_ed25519_item_test_parallel() ->
+get_ed25519_item_parallel_test() ->
     TXID = <<"jTFA8XDI_rqmUB6-hhoJF4Yi7p6ZpS_0AByFLU1OPrU">>,
     DataItemID = <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
     Opts = setup_arweave_index_opts([TXID]),
@@ -1953,7 +1953,7 @@ get_ed25519_item_test_parallel() ->
 
 %% @doc this test fails if the chunks are queried with
 %% the `x-bucket-based-offset' header set.
-bucket_based_offset_fail_test_parallel() ->
+bucket_based_offset_fail_parallel_test() ->
     TXID = <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
     DataItemID = <<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>,
     Opts = setup_arweave_index_opts([TXID]),
@@ -1968,7 +1968,7 @@ bucket_based_offset_fail_test_parallel() ->
 
 %% @doc this dataitem needs the 'x-bucket-based-offset' header set OR
 %% special handling.
-bucket_based_offset_pass_test_parallel() ->
+bucket_based_offset_pass_parallel_test() ->
     DataItemID = <<"cTI07T1OrF0KZEqPmZji1VTdbeKJG7kMAVlLu7KQvyw">>,
     Opts = setup_arweave_index_opts([]),
     assert_chunk_range(
@@ -1980,10 +1980,10 @@ bucket_based_offset_pass_test_parallel() ->
         Opts
     ).
 
-reassemble_bundle1_test_parallel() ->
+reassemble_bundle1_parallel_test() ->
     assert_bundle_tx(<<"c1-FkhQd-Ul-VpIMR5Vs77lK__BlzHzena2zgNh_hME">>).
 
-reassemble_bundle2_test_parallel() ->
+reassemble_bundle2_parallel_test() ->
     assert_bundle_tx(<<"OVjj52NvyIys7u84Rv1uqRG2vswlF95QDVPSmsmlwLk">>).
 
 %% @doc This asserts that a bundle is correctly represented in the weave.

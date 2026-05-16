@@ -1450,7 +1450,7 @@ test_process(Address) ->
         <<"test-random-seed">> => rand:uniform(1337)
     }.
 
-status_test_parallel() ->
+status_parallel_test() ->
     start(),
     ?assertMatch(
         #{<<"processes">> := Processes,
@@ -1459,7 +1459,7 @@ status_test_parallel() ->
         hb_ao:get(status, test_process())
     ).
 
-register_new_process_test_parallel() ->
+register_new_process_parallel_test() ->
     start(),
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Base = hb_message:commit(test_process(Opts), Opts),
@@ -1485,7 +1485,7 @@ register_new_process_test_parallel() ->
         )
     ).
 
-schedule_message_and_get_slot_test_parallel() ->
+schedule_message_and_get_slot_parallel_test() ->
     start(),
     Base = hb_message:commit(test_process(), #{ <<"priv-wallet">> => hb:wallet() }),
     Req = #{
@@ -1510,7 +1510,7 @@ schedule_message_and_get_slot_test_parallel() ->
             when CurrentSlot > 0,
         hb_ao:resolve(Base, Res, #{})).
 
-redirect_to_hint_test_parallel() ->
+redirect_to_hint_parallel_test() ->
     start(),
     RandAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
     TestLoc = <<"http://test.computer">>,
@@ -1536,7 +1536,7 @@ redirect_to_hint_test_parallel() ->
         )
     ).
 
-redirect_from_graphql_test_parallel_() ->
+redirect_from_graphql_parallel_test_() ->
     {timeout, 60, fun redirect_from_graphql/0}.
 redirect_from_graphql() ->
     start(),
@@ -1571,7 +1571,7 @@ redirect_from_graphql() ->
         )
     ).
 
-get_local_schedule_test_parallel() ->
+get_local_schedule_parallel_test() ->
     start(),
     Base = hb_message:commit(test_process(), #{ <<"priv-wallet">> => hb:wallet() }),
     Req = #{
@@ -1664,7 +1664,7 @@ http_get_schedule(N, PMsg, From, To, Format) ->
         <<"accept">> => Format
     }, #{ <<"priv-wallet">> => Wallet }), #{}).
 
-http_get_schedule_redirect_test_parallel_() ->
+http_get_schedule_redirect_parallel_test_() ->
     {timeout, 60, fun http_get_schedule_redirect/0}.
 http_get_schedule_redirect() ->
     Opts =
@@ -1682,7 +1682,7 @@ http_get_schedule_redirect() ->
     Res = hb_http:get(N, <<"/", ProcID/binary, "/schedule">>, Opts),
     ?assertMatch({ok, #{ <<"location">> := Location }} when is_binary(Location), Res).
 
-http_post_schedule_test_parallel_() ->
+http_post_schedule_parallel_test_() ->
     {timeout, 60, fun http_post_schedule/0}.
 http_post_schedule() ->
     start(),
@@ -1704,7 +1704,7 @@ http_post_schedule() ->
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
     ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
 
-http_get_schedule_test_parallel_() ->
+http_get_schedule_parallel_test_() ->
 	{timeout, 20, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1747,7 +1747,7 @@ http_get_schedule_test_parallel_() ->
 			end}.
     
 
-http_get_legacy_schedule_test_parallel_() ->
+http_get_legacy_schedule_parallel_test_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1757,7 +1757,7 @@ http_get_legacy_schedule_test_parallel_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) > 0, LoadedRes)
 	    end}.
 
-http_get_legacy_slot_test_parallel_() ->
+http_get_legacy_slot_parallel_test_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1765,7 +1765,7 @@ http_get_legacy_slot_test_parallel_() ->
         ?assertMatch({ok, #{ <<"current">> := Slot }} when Slot > 0, Res)
     end}.
 
-http_get_legacy_schedule_slot_range_test_parallel_() ->
+http_get_legacy_schedule_slot_range_parallel_test_() ->
 	    {timeout, 60, fun() ->
 	        Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
 	        {Node, Opts} = http_init(),
@@ -1777,7 +1777,7 @@ http_get_legacy_schedule_slot_range_test_parallel_() ->
 	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
 	    end}.
 
-http_get_legacy_schedule_as_aos2_test_parallel_() ->
+http_get_legacy_schedule_as_aos2_parallel_test_() ->
     {timeout, 60, fun() ->
         Target = <<"hGLuIZscb7b_2UBnDE_WoyIJF0sH6BU9u4veyEqE8g4">>,
         {Node, Opts} = http_init(),
@@ -1827,7 +1827,7 @@ http_post_legacy_schedule_test_disabled() ->
         )
     end}.
 
-http_get_json_schedule_test_parallel_() ->
+http_get_json_schedule_parallel_test_() ->
 	{timeout, 60, fun() ->
 		{Node, Opts} = http_init(),
 		PMsg = hb_message:commit(test_process(Opts), Opts),
@@ -1936,7 +1936,7 @@ many_clients(Opts) ->
     ?event(bench, {res, Res}),
     ?assert(Iterations > 10).
 
-benchmark_suite_test_parallel_() ->
+benchmark_suite_parallel_test_() ->
     {timeout, 10, fun() ->
         Bench = [
             {benchmark, "benchmark", fun single_resolution/1},

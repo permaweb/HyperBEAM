@@ -187,7 +187,7 @@ name_from_host(ReqHost, RawNodeHost) ->
 
 %%% Tests.
 
-no_resolvers_test_parallel() ->
+no_resolvers_parallel_test() ->
     ?assertEqual(
         not_found,
         resolve(<<"hello">>, #{}, #{}, #{ <<"only">> => local })
@@ -211,7 +211,7 @@ device_resolver(Msg) ->
         }
     }.
 
-single_resolver_test_parallel() ->
+single_resolver_parallel_test() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -227,7 +227,7 @@ single_resolver_test_parallel() ->
     ).
 
 %% @doc Lookup a name in a message and return it.
-message_lookup_test_parallel() ->
+message_lookup_parallel_test() ->
     ?assertEqual(
         {ok, <<"world">>},
         resolve(
@@ -244,7 +244,7 @@ message_lookup_test_parallel() ->
         )
     ).
 
-multiple_resolvers_test_parallel() ->
+multiple_resolvers_parallel_test() ->
     ?assertEqual(
         {ok, <<"bigger-world">>},
         resolve(
@@ -265,7 +265,7 @@ multiple_resolvers_test_parallel() ->
     ).
 
 %% @doc Test that we can resolve messages from a name loaded with the device.
-load_and_execute_test_parallel() ->
+load_and_execute_parallel_test() ->
     TestKey = <<"test-key", (hb_util:bin(erlang:system_time(millisecond)))/binary>>,
     {ok, ID} = hb_cache:write(
         #{
@@ -314,7 +314,7 @@ test_arns_opts() ->
     }.
 
 %% @doc Names from JSON test.
-arns_json_snapshot_test_parallel() ->
+arns_json_snapshot_parallel_test() ->
     Opts = test_arns_opts(),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -328,7 +328,7 @@ arns_json_snapshot_test_parallel() ->
         )
     ).
 
-arns_host_resolution_test_parallel() ->
+arns_host_resolution_parallel_test() ->
     Opts = test_arns_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
@@ -343,7 +343,7 @@ arns_host_resolution_test_parallel() ->
         )
     ).
 
-arns_host_resolution_with_node_host_test_parallel() ->
+arns_host_resolution_with_node_host_parallel_test() ->
     Opts = (test_arns_opts())#{
         <<"node-host">> => <<"http://localhost">>,
         <<"port">> => 0
@@ -361,7 +361,7 @@ arns_host_resolution_with_node_host_test_parallel() ->
         )
     ).
 
-root_request_skips_name_resolution_test_parallel() ->
+root_request_skips_name_resolution_parallel_test() ->
     BaseOpts =
         #{
             <<"port">> => 0,
@@ -390,7 +390,7 @@ root_request_skips_name_resolution_test_parallel() ->
     Check(<<"127.0.0.1:8734">>, #{}),
     Check(<<"ourweave.net:8734">>, #{ <<"node-host">> => <<"ourweave.net">> }).
 
-name_from_host_test_parallel() ->
+name_from_host_parallel_test() ->
     ?assertMatch({skip, _}, name_from_host(<<"127.0.0.1">>, no_host)),
     ?assertEqual({ok, <<"abc">>}, name_from_host(<<"abc.127.0.0.1">>, no_host)),
     ?assertEqual(
