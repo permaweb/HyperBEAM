@@ -133,7 +133,7 @@ output_prefix(Base, _Req, Opts) ->
 %% `dev_message'.
 router(<<"keys">>, Base, Request, Opts) ->
 	?event({keys_called, {base, Base}, {req, Request}}),
-	hb_message:keys(Base, Opts);
+	hb_ao:raw(<<"message@1.0">>, <<"keys">>, Base, #{}, Opts);
 router(Key, Base, Request, Opts) ->
     case hb_path:matches(Key, <<"transform">>) of
         true -> transformer_message(Base, Opts);
@@ -211,7 +211,9 @@ transform(Base, Key, Opts) ->
                     % - The prefixes for the device.
                     % - The prior prefixes for later restoration.
 					?event({activating_device, DevMsg}),
-					hb_message:set(
+					hb_ao:raw(
+                        <<"message@1.0">>,
+                        <<"set">>,
                         Base,
 						#{
 							<<"device">> => DevMsg,
@@ -270,7 +272,9 @@ resolve_fold(Base, Request, Opts) ->
         {ok, Raw} when not is_map(Raw) ->
             {ok, Raw};
         {ok, Result} ->
-            hb_message:set(
+            hb_ao:raw(
+                <<"message@1.0">>,
+                <<"set">>,
                 Result,
                 #{
                     <<"device">> => InitDevMsg,
@@ -449,7 +453,9 @@ transform_external_call_device_test() ->
 										(Key, MsgX1) ->
 											{ok, Value} =
 												hb_maps:find(Key, MsgX1, #{}),
-											hb_message:set(
+											hb_ao:raw(
+												<<"message@1.0">>,
+												<<"set">>,
 												MsgX1,
 												#{ Key =>
 													<< Value/binary, "-Cool">>

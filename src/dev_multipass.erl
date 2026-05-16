@@ -14,9 +14,9 @@ info(_M1) ->
 %% @doc Forward the keys function to the message device, handle all others
 %% with deduplication. We only act on the first pass.
 handle(<<"keys">>, M1, _M2, Opts) ->
-    hb_message:keys(M1, Opts);
+    hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
 handle(<<"set">>, M1, M2, Opts) ->
-    hb_message:set(M1, M2, Opts);
+    hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
 handle(_Key, M1, _M2, Opts) ->
     Passes = hb_ao:get(<<"passes">>, {as, <<"message@1.0">>, M1}, 1, Opts),
     Pass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts),

@@ -435,7 +435,13 @@ gen_handler_device() ->
                 #{
                     handler =>
                         fun(<<"set">>, M1, M2, Opts) ->
-                            hb_message:set(M1, M2, Opts);
+                            hb_ao:raw(
+                                <<"message@1.0">>,
+                                <<"set">>,
+                                M1,
+                                M2,
+                                Opts
+                            );
                         (_, _, _, _) ->
                             {ok, <<"HANDLER VALUE">>}
                         end

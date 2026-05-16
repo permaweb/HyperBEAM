@@ -66,7 +66,6 @@
 -export([with_only_committed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
--export([keys/1, keys/2, set/3]).
 %%% Helpers:
 -export([default_tx_list/0, filter_default_keys/1]).
 %%% Debugging tools:
@@ -181,7 +180,8 @@ id(Msg) -> id(Msg, uncommitted).
 id(Msg, Opts) when is_map(Opts) -> id(Msg, uncommitted, Opts);
 id(Msg, Committers) -> id(Msg, Committers, #{}).
 id(Msg, Spec, Opts) when is_map(Spec) ->
-    {ok, ID} = message(<<"id">>, Msg, Spec, Opts),
+    {ok, ID} =
+        hb_ao:raw(<<"message@1.0">>, <<"id">>, Msg, Spec, Opts),
     hb_util:human_id(ID);
 id(Msg, RawCommitters, Opts) ->
     CommSpec =
@@ -194,7 +194,8 @@ id(Msg, RawCommitters, Opts) ->
             List when is_list(List) -> #{ <<"committers">> => List }
         end,
     ?event({getting_id, {msg, Msg}, {spec, CommSpec}}),
-    {ok, ID} = message(<<"id">>, Msg, CommSpec, Opts),
+    {ok, ID} =
+        hb_ao:raw(<<"message@1.0">>, <<"id">>, Msg, CommSpec, Opts),
     hb_util:human_id(ID).
 
 %% @doc Normalize the IDs in a message, ensuring that there is at least one
@@ -238,7 +239,8 @@ do_normalize_commitments(Msg, Opts, passive) ->
     case {UnsignedCommitments, SignedCommitments} of
         {[], _} ->
             {ok, #{ <<"commitments">> := NewCommitments }} =
-                message(
+                hb_ao:raw(
+                    <<"message@1.0">>,
                     <<"commit">>,
                     uncommitted(Msg),
                     #{ <<"type">> => <<"unsigned">> },
@@ -261,7 +263,8 @@ do_normalize_commitments(Msg, Opts, verify) ->
             _ -> {undefined, #{}}
         end,
     {ok, #{ <<"commitments">> := NormCommitments }} =
-        message(
+        hb_ao:raw(
+            <<"message@1.0">>,
             <<"commit">>,
             uncommitted(Msg),
             MaybeCommittedSpec#{ <<"type">> => <<"unsigned">> },
@@ -286,7 +289,8 @@ do_normalize_commitments(Msg, Opts, verify) ->
             );
         {_OldID, _NewID} ->
             {ok, #{ <<"commitments">> := NewCommitments }} =
-                message(
+                hb_ao:raw(
+                    <<"message@1.0">>,
                     <<"commit">>,
                     uncommitted(Msg),
                     #{ <<"type">> => <<"unsigned">> },
@@ -433,7 +437,8 @@ commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, Opts, Spec) ->
     {ok, Signed} =
-        message(
+        hb_ao:raw(
+            <<"message@1.0">>,
             <<"commit">>,
             Msg,
             Spec#{
@@ -480,7 +485,13 @@ committed(Msg, CommittersMsg, Opts) ->
         }
     ),
     {ok, CommittedKeys} =
-        message(<<"committed">>, Msg, CommittersMsg, Opts),
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"committed">>,
+            Msg,
+            CommittersMsg,
+            Opts
+        ),
     CommittedKeys.
 
 %% @doc wrapper function to verify a message.
@@ -505,7 +516,8 @@ verify(Msg, Committers, Opts) when not is_map(Committers) ->
     );
 verify(Msg, Spec, Opts) ->
     ?event(verify, {verify, {spec, Spec}}),
-    {ok, Res} = message(<<"verify">>, Msg, Spec, Opts),
+    {ok, Res} =
+        hb_ao:raw(<<"message@1.0">>, <<"verify">>, Msg, Spec, Opts),
     Res.
 
 %% @doc Verify a message recursively, including all nested messages.
@@ -611,21 +623,9 @@ uncommitted_deep(Msg, Opts) ->
 %% @doc Return all of the committers on a message that have 'normal', 256 bit, 
 %% addresses.
 signers(Msg, Opts) ->
-    hb_util:ok(message(<<"committers">>, Msg, #{}, Opts)).
-
-%% @doc Return public keys using the message device.
-keys(Msg) ->
-    keys(Msg, #{}).
-keys(Msg, Opts) ->
-    message(<<"keys">>, Msg, #{}, Opts).
-
-%% @doc Set message keys using the message device.
-set(Msg, Values, Opts) ->
-    message(<<"set">>, Msg, Values, Opts).
-
-%% @doc Invoke the message device directly for kernel message helpers.
-message(Key, Msg, Req, Opts) ->
-    hb_ao:raw(<<"message@1.0">>, Key, Msg, Req, Opts).
+    hb_util:ok(
+        hb_ao:raw(<<"message@1.0">>, <<"committers">>, Msg, #{}, Opts)
+    ).
 
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).

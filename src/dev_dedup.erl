@@ -32,9 +32,9 @@ info(_M1) ->
 %% others with deduplication. This allows the device to be used in any context
 %% where a key is called. If the `dedup-key
 handle(<<"keys">>, M1, _M2, _Opts) ->
-    hb_message:keys(M1);
+    hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, #{});
 handle(<<"set">>, M1, M2, Opts) ->
-    hb_message:set(M1, M2, Opts);
+    hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
 handle(Key, M1, M2, Opts) ->
     ?event({dedup_handle, {key, Key}, {base, M1}, {req, M2}}),
     % Find the relevant parameters from the messages. We search for the

@@ -23,8 +23,10 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
-handler(<<"set">>, Base, Req, Opts) -> hb_message:set(Base, Req, Opts);
-handler(<<"keys">>, Base, _Req, _Opts) -> hb_message:keys(Base);
+handler(<<"set">>, Base, Req, Opts) ->
+    hb_ao:raw(<<"message@1.0">>, <<"set">>, Base, Req, Opts);
+handler(<<"keys">>, Base, _Req, _Opts) ->
+    hb_ao:raw(<<"message@1.0">>, <<"keys">>, Base, #{}, #{});
 handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 

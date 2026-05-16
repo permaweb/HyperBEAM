@@ -148,8 +148,10 @@ throw(_Msg, _Req, Opts) ->
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly
 %% listed in the `routes' field of the `info/1' return value.
-serve(<<"keys">>, M1, _M2, Opts) -> hb_message:keys(M1, Opts);
-serve(<<"set">>, M1, M2, Opts) -> hb_message:set(M1, M2, Opts);
+serve(<<"keys">>, M1, _M2, Opts) ->
+    hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
+serve(<<"set">>, M1, M2, Opts) ->
+    hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
 serve(Key, _, _, Opts) ->
     ?event({hyperbuddy_serving, Key}),
     ServeRoutes = hb_maps:get(serve, info(Opts), #{}, Opts),
