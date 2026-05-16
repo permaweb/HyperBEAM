@@ -436,19 +436,15 @@ maybe_typed(Key, Value, Opts) ->
                     };
                 {_T, RawValue} when is_binary(RawValue) ->
                     Decoded = hb_escape:decode_quotes(RawValue),
-                    Structured =
-                        hb_ao_device:message_to_device(
-                            #{ <<"device">> => <<"structured@1.0">> },
-                            Opts
-                        ),
                     {typed,
                         OnlyKey,
                         hb_util:ok(
-                            Structured:decode_value(
-                                Decoded,
+                            hb_ao:direct(
+                                #{ <<"device">> => <<"structured@1.0">> },
                                 #{
                                     <<"path">> => <<"decode-value">>,
-                                    <<"type">> => Type
+                                    <<"type">> => Type,
+                                    <<"body">> => Decoded
                                 },
                                 Opts
                             )
