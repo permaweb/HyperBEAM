@@ -4,9 +4,9 @@
 %%% match the key against each resolver in turn, and return the value of the
 %%% first resolver that matches.
 -module(dev_name).
--export([info/1, request/3]).
+-export([info/1, request/3, name_from_host/2]).
 %%% Public helpers.
--export([test_arns_opts/0]).
+-export([test_arns_opts/0, name_from_host/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 

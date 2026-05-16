@@ -16,15 +16,37 @@ expected_response(Base, Req, Opts) ->
         {ok, Response} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Expected} ?= hb_maps:find(<<"expected">>, Base, Opts),
         true ?= check_response_matches_expected(Response, Expected, Opts),
-        dev_hook:on(
-            [<<"~cache@1.0">>, <<"admissible-response">>],
-            Response,
-            Opts
-        ),
+        fire_admissible_response_hook(Base, Expected, Opts),
         {ok, true}
     else Reason ->
         ?event(debug_admissible, {expected_response_error, Reason}),
         {ok, false}
+    end.
+
+%% @doc Fire the `admissible-response' hook. Spawns by default so the cache
+%% read returns without waiting for downstream handlers. 
+%% Set `admissible_response_hook_async => false' in `Opts' to run synchronously
+fire_admissible_response_hook(Base, Expected, Opts) ->
+    Run =
+        fun() ->
+            dev_hook:on(
+                [<<"~cache@1.0">>, <<"admissible-response">>],
+                #{ <<"body">> => admissible_response_body(Base, Expected, Opts) },
+                Opts
+            )
+        end,
+    case hb_opts:get(admissible_response_hook_async, true, Opts) of
+        false -> Run();
+        _ ->
+            spawn(fun() ->
+                try Run()
+                catch C:R:S ->
+                    ?event(error,
+                        {admissible_response_hook_async_error,
+                            {class, C}, {reason, R},
+                            {stacktrace, {trace, S}}})
+                end
+            end)
     end.
 
 %% @doc Verify that a response from a remote cache matches the expected ID.
@@ -83,6 +105,24 @@ check_response_matches_expected(Response, Expected, Opts) ->
                 orelse invalid_commitment,
         true
     end.
+
+%% @doc Build the body for the `admissible-response' hook. Optionally signs it  
+%% when `commit_hook_response' is set, so downstream handlers can verify the    
+%% node attested to admissibility.
+admissible_response_body(Base, ID, Opts) ->      
+    Ref = hb_maps:get(<<"http-reference">>, Base, <<>>, Opts),              
+    Body = #{                                                                   
+        <<"reference">> => Ref,                                                
+        <<"status-class">> => <<"success">>,                                    
+        <<"event">> => <<"is_admissible">>                                      
+    },
+    ?event(admissible_short, {response_success, {id, ID}, {responded_by, Ref}}),
+    case hb_opts:get(commit_hook_response, false, Opts) of
+        true ->                                                                 
+            hb_message:commit(Body, Opts#{ priv_wallet => hb:wallet() });       
+        _ ->                                                                    
+            Body
+    end.   
 
 %% @doc Read data from the cache.
 %% Retrieves data corresponding to a key from a local store.
