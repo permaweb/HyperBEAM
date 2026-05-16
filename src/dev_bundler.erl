@@ -49,8 +49,7 @@ item(_Base, Req, Opts) ->
             case cache_item(Item, Opts) of
                 ok ->
                     BundledSize = bundled_item_size(Item, Opts),
-                    {ok, Metering} =
-                        hb_ao_device:load(<<"metering@1.0">>, Opts),
+                    {ok, Metering} = hb_ao_device:load(<<"metering@1.0">>, Opts),
                     Metering:consume(<<"arweave-bytes">>, BundledSize, Opts),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)

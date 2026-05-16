@@ -107,16 +107,13 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
-upload(Msg, Opts, CommitmentDevice) ->
+upload(Msg, Opts, _CommitmentDevice) ->
     ?event({uploading_item, Msg}),
     hb_ao:raw(
         <<"arweave@2.9">>,
         <<"tx">>,
         #{},
-        Msg#{
-            <<"method">> => <<"POST">>,
-            <<"commitment-device">> => CommitmentDevice
-        },
+        Msg#{ <<"method">> => <<"POST">> },
         Opts
     ).
 
