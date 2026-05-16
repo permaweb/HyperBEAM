@@ -279,13 +279,10 @@ strip_sensitive(Request, Opts) ->
 %% @doc Generate a wallet with the key if the `wallet' field is not present in
 %% the provider after normalization.
 generate_wallet(Provider, Request, Opts) ->
-    Secret =
-        hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"secret@1.0">> },
-            Opts
-        ),
     {ok, #{ <<"body">> := WalletID }} =
-        Secret:generate(
+        hb_ao:raw(
+            <<"secret@1.0">>,
+            <<"generate">>,
             Provider,
             Request#{ <<"path">> => <<"generate">> },
             Opts
@@ -305,12 +302,9 @@ sign_request(Provider, Msg, Opts) ->
             IgnoredKeys = ignored_keys(Msg, Opts),
             WithoutIgnored = hb_maps:without(IgnoredKeys, Msg, Opts),
             % Call the wallet to sign the request.
-            Secret =
-                hb_ao_device:message_to_device(
-                    #{ <<"device">> => <<"secret@1.0">> },
-                    Opts
-                ),
-            case Secret:commit(
+            case hb_ao:raw(
+                <<"secret@1.0">>,
+                <<"commit">>,
                 WithoutIgnored,
                 Provider#{ <<"path">> => <<"commit">> },
                 Opts

@@ -18,8 +18,10 @@ normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->
             hb_ao:raw(
-                Msg#{ <<"device">> => <<"delegated-compute@1.0">> },
-                Req#{ <<"path">> => <<"normalize">> },
+                <<"delegated-compute@1.0">>,
+                <<"normalize">>,
+                Msg,
+                Req,
                 Opts
             );
         false ->

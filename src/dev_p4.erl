@@ -297,12 +297,10 @@ is_chargable_req(Req, NodeMsg) ->
         ),
     Matches =
         hb_ao:raw(
-            #{
-                <<"device">> => <<"router@1.0">>,
-                <<"routes">> => NonChargableRoutes
-            },
+            <<"router@1.0">>,
+            <<"match">>,
+            #{ <<"routes">> => NonChargableRoutes },
             Req#{
-                <<"path">> => <<"match">>,
                 <<"route-path">> =>
                     hb_maps:get(<<"path">>, Req, no_path, NodeMsg)
             },

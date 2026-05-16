@@ -449,8 +449,10 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             Wallet = hb_opts:get(priv_wallet, undefined, InitOpts),
             {ok, Report} =
                 hb_ao:raw(
-                    #{ <<"device">> => <<"snp@1.0">> },
-                    #{ <<"path">> => <<"generate">> },
+                    <<"snp@1.0">>,
+                    <<"generate">>,
+                    #{},
+                    #{},
                     InitOpts
                 ),
             WalletPub = element(2, Wallet),
@@ -575,8 +577,10 @@ validate_join(M1, Req, Opts) ->
     ?event(green_zone, {public_key, {explicit, RequesterPubKey}}),
     % Verify the commitment report provided in the join request.
     case hb_ao:raw(
-        M1#{ <<"device">> => <<"snp@1.0">> },
-        Req#{ <<"path">> => <<"verify">> },
+        <<"snp@1.0">>,
+        <<"verify">>,
+        M1,
+        Req,
         Opts
     ) of
         {ok, <<"true">>} ->

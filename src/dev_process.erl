@@ -525,13 +525,11 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
         Opts
     ),
     spawn(fun() ->
-        Push = hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"push@1.0">> },
-            Opts
-        ),
-        Push:push(
+        hb_ao:raw(
+            <<"push@1.0">>,
+            <<"push">>,
             Spec,
-            PushReq#{ <<"path">> => <<"push">> },
+            PushReq,
             Opts
         )
     end),
