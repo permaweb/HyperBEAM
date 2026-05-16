@@ -94,7 +94,8 @@
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2, direct/3]).
+-export([resolve/2, resolve/3, resolve_many/2]).
+-export([direct/3, direct/4, direct/5]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
@@ -163,17 +164,45 @@ resolve(Base, Req, Opts) ->
 
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
+%% This function comes in `/3`-`/5` variants, allowing the caller to optionally
+%% specify that a specific device must be used for the execution (as if
+%% `Base/device: Device` was set), or to force a specific key to be used.
+%% Critically, the modifiers do _not_ affect the message that the call is
+%% executed upon: `Base`, `Req`, and `Opts` are passed directly to the execution
+%% function as-is, but the chosen function is altered by these modifiers.
 direct(Base, Req, Opts) ->
+    direct(undefined, Base, Req, Opts).
+direct(Device, Base, Req, Opts) ->
+    direct(Device, undefined, Base, Req, Opts).
+direct(ForcedDevice, ForcedKey, Base, Req, Opts) ->
     ExecOpts = execution_opts(Opts),
-    Key = hb_path:hd(Req, ExecOpts),
-    {Status, _Dev, Func} =
-        hb_ao_device:message_to_fun(Base, Key, ExecOpts),
-    Args =
-        case Status of
-            add_key -> [Key, Base, Req, ExecOpts];
-            _ -> [Base, Req, ExecOpts]
+    % If a forced key is provided, use it; otherwise, extract from the request.
+    Key =
+        if ForcedKey =/= undefined -> ForcedKey;
+        true -> hb_path:hd(Req, ExecOpts)
         end,
-    apply(Func, hb_ao_device:truncate_args(Func, Args)).
+    % If an explicit device is provided we use it _only on the lookup_ -- not
+    % during execution.
+    BaseWithDevice =
+        case ForcedDevice of
+            undefined -> Base;
+            _ when is_map(Base) -> Base#{ <<"device">> => ForcedDevice };
+            _ -> #{ <<"device">> => ForcedDevice }
+        end,
+    {ExecFun, PrefixArgs} =
+        case hb_ao_device:message_to_fun(BaseWithDevice, Key, ExecOpts) of
+            {add_key, _DevMod, Fun} -> {Fun, [Key]};
+            {_Status, _DevMod, Fun} -> {Fun, []}
+        end,
+    % Apply the function and return the result directly, without any further
+    % processing. We add the `PrefixArgs` to the list of arguments to be passed
+    % to the function to accomodate default handlers, which take the key that
+    % was invoked on the device as the first argument (ahead of `Base`, `Req`,
+    % and `ExecOpts`).
+    apply(
+        ExecFun,
+        hb_ao_device:truncate_args(ExecFun, PrefixArgs ++ [Base, Req, ExecOpts])
+    ).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,

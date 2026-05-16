@@ -4,8 +4,11 @@
 -module(hb_ao_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
--export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
+-export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
+
+%%% The default device is the identity device.
+-define(DEFAULT_DEVICE, dev_message).
 
 %%% All keys in the `message@1.0` device that are not resolved to underlying
 %%% data in the their Erlang map representations.
@@ -52,8 +55,9 @@ truncate_args(Fun, Args) ->
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
 %% indicates that the key should be added to the start of the call's arguments.
 message_to_fun(Msg, Key, Opts) ->
-    % Get the device module from the message.
-	Dev = message_to_device(Msg, Opts),
+    % Get the device module from the message and recurse.
+    message_to_fun(message_to_device(Msg, Opts), Msg, Key, Opts).
+message_to_fun(Dev, Msg, Key, Opts) ->
     Info = info(Dev, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
@@ -89,42 +93,43 @@ message_to_fun(Msg, Key, Opts) ->
 							% Case 4: The device has a default handler.
                             ?event({found_default_handler, {func, DefaultFunc}}),
 							{add_key, Dev, DefaultFunc};
-                        {{ok, DefaultMod}, true} when is_binary(DefaultMod)
-                                orelse is_atom(DefaultMod) ->
+                        {{ok, DefaultDevice}, true} when is_binary(DefaultDevice)
+                                orelse is_atom(DefaultDevice) ->
                             % Case 5: The device gives a specific further device
-                            % to default to.
-							?event({found_default_handler, {mod, DefaultMod}}),
+                            % to default to. Recurse with it and apply the same
+                            % rules.
+							?event({found_default_device, {mod, DefaultDevice}}),
                             message_to_fun(
-                                Msg#{ <<"device">> => DefaultMod },
+                                Msg#{ <<"device">> => DefaultDevice },
                                 Key,
                                 Opts
                             );
 						_ ->
 							% Case 6: The device has no default handler.
-							% We use the default device to handle the key.
-							case default() of
-								Dev ->
-									% We are already using the default device,
-									% so we cannot resolve the key. This should
-									% never actually happen in practice, but it
-									% resolves an infinite loop that can occur
-									% during development.
-									throw({
-										error,
-										default_device_could_not_resolve_key,
-										{key, Key}
-									});
-								DefaultDev ->
-                                    ?event(
-                                        {
-                                            using_default_device,
-                                            {dev, DefaultDev}
-                                        }),
-                                    message_to_fun(
-                                        Msg#{ <<"device">> => DefaultDev },
-                                        Key,
-                                        Opts
-                                    )
+							% We use the default device to handle the key,
+							% unless this is _already_ the node's default device.
+							if Dev =/= ?DEFAULT_DEVICE ->
+								?event(
+                                    {
+                                        using_default_device,
+                                        {dev, ?DEFAULT_DEVICE}
+                                    }),
+                                message_to_fun(
+                                    Msg#{ <<"device">> => ?DEFAULT_DEVICE },
+                                    Key,
+                                    Opts
+                                );
+                            true ->
+								% We are already using the default device,
+								% so we cannot resolve the key. This should
+								% never actually happen in practice, but it
+								% resolves an infinite loop that can occur
+								% during development.
+								throw({
+									error,
+									default_device_could_not_resolve_key,
+									{key, Key}
+								})
 							end
 					end
 			end
@@ -134,7 +139,7 @@ message_to_fun(Msg, Key, Opts) ->
 message_to_device(Msg, Opts) ->
     DevID =
         case hb_maps:get(<<"device">>, Msg, not_found, Opts) of
-            not_found -> default();
+            not_found -> ?DEFAULT_DEVICE;
             ID -> ID
         end,
     case load(DevID, Opts) of
@@ -154,7 +159,7 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 					MsgWithoutDevice =
 						hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
-						MsgWithoutDevice#{ <<"device">> => default() },
+						MsgWithoutDevice#{ <<"device">> => ?DEFAULT_DEVICE },
 						Key,
 						Opts
 					);
@@ -515,9 +520,3 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
             not lists:member(NormKey, Exports ++ ?MESSAGE_KEYS);
         _ -> false
     end.
-
-%% @doc The default device is the identity device, which simply returns the
-%% value associated with any key as it exists in its Erlang map. It should also
-%% implement the `set' key, which returns a `Result' with the values changed
-%% according to the `Request' passed to it.
-default() -> dev_message.
