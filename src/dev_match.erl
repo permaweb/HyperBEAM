@@ -100,7 +100,12 @@ match(Key, Base, Opts) ->
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
 all(Base, _Req, Opts) ->
-    IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+    IndexBase =
+        hb_maps:without(
+            [<<"device">>],
+            hb_message:uncommitted(hb_private:reset(Base)),
+            Opts
+        ),
     Keys =
         hb_maps:keys(
             IndexBase

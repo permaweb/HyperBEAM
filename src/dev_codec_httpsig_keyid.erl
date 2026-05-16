@@ -10,7 +10,6 @@
 %%% schemes in the future.
 -module(dev_codec_httpsig_keyid).
 -export([req_to_key_material/2, keyid_to_committer/1, keyid_to_committer/2]).
--export([secret_key_to_committer/1, remove_scheme_prefix/1]).
 -include_lib("include/hb.hrl").
 
 %%% The supported schemes for HMAC keys.
@@ -138,11 +137,3 @@ keyid_to_committer(secret, KeyID) ->
     hb_util:remove_scheme_prefix(KeyID);
 keyid_to_committer(constant, _KeyID) ->
     undefined.
-
-%% @doc Given a secret key, generate the committer value for a commitment.
-secret_key_to_committer(Key) ->
-    hb_util:secret_key_to_committer(Key).
-
-%% @doc Remove the `scheme:' prefix from a keyid.
-remove_scheme_prefix(KeyID) ->
-    hb_util:remove_scheme_prefix(KeyID).

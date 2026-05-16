@@ -17,13 +17,9 @@ init(Msg, _Req, _Opts) -> {ok, Msg}.
 normalize(Msg, Req, Opts) ->
     case ensure_started(Opts) of
         true ->
-            hb_ao:resolve(
-                Msg,
-                {
-                    as,
-                    <<"delegated-compute@1.0">>,
-                    Req#{ <<"path">> => <<"normalize">> }
-                },
+            hb_ao:direct(
+                Msg#{ <<"device">> => <<"delegated-compute@1.0">> },
+                Req#{ <<"path">> => <<"normalize">> },
                 Opts
             );
         false ->

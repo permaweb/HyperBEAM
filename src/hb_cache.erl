@@ -225,11 +225,11 @@ match(MatchSpec, Opts) ->
                 _ -> {error, not_found}
             end;
         _ ->
-            Match = hb_ao_device:message_to_device(
-                #{ <<"device">> => <<"match@1.0">> },
+            case hb_ao:direct(
+                NormalizedSpec#{ <<"device">> => <<"match@1.0">> },
+                #{ <<"path">> => <<"all">> },
                 Opts
-            ),
-            case Match:all(NormalizedSpec, #{ <<"path">> => <<"all">> }, Opts) of
+            ) of
                 {ok, []} -> {error, not_found};
                 {ok, Matches} -> {ok, Matches};
                 _ -> {error, not_found}
@@ -403,24 +403,13 @@ write_match_index(IDs, Base, Opts) ->
 
 %% @doc Get the store configured for the match index.
 match_store(Opts) ->
-    LocalMatchIndex = maps:get(<<"match-index">>, Opts, undefined),
-    LocalStore = maps:get(<<"store">>, Opts, undefined),
-    GlobalMatchIndex = hb_opts:get(match_index, false, #{ <<"only">> => global }),
-    MatchIndexStore =
-        case {LocalMatchIndex, LocalStore} of
-            {undefined, undefined} -> GlobalMatchIndex;
-            {undefined, _} -> LocalStore;
-            {Local, Store}
-                    when Store =/= undefined andalso
-                        Local =:= GlobalMatchIndex ->
-                Store;
-            {Local, _} -> Local
-        end,
-    case MatchIndexStore of
+    Global = hb_opts:get(match_index, false, #{ <<"only">> => global }),
+    LocalStore = hb_opts:get(store, Global, Opts#{ <<"only">> => local }),
+    case hb_opts:get(match_index, LocalStore, Opts#{ <<"only">> => local }) of
         false -> [];
         true -> hb_opts:get(store, [], Opts);
-        ResolvedStore when not is_list(ResolvedStore) -> [ResolvedStore];
-        ResolvedStore -> ResolvedStore
+        Store when is_list(Store) -> Store;
+        Store -> [Store]
     end.
 
 %% @doc Calculate the address of a key-value pair in the match index.
@@ -775,32 +764,26 @@ types_to_implicit(Types) ->
 
 %% @doc Decode the `ao-types' field through the structured device.
 structured_decode_types(Types, Opts) ->
-    Structured =
-        hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"structured@1.0">> },
-            Opts
-        ),
     hb_util:ok(
-        Structured:decode_types(
-            Types,
-            #{ <<"path">> => <<"decode-types">> },
+        hb_ao:direct(
+            #{ <<"device">> => <<"structured@1.0">> },
+            #{
+                <<"path">> => <<"decode-types">>,
+                <<"body">> => Types
+            },
             Opts
         )
     ).
 
 %% @doc Decode one typed cache value through the structured device.
 structured_decode_value(Type, Value, Opts) ->
-    Structured =
-        hb_ao_device:message_to_device(
-            #{ <<"device">> => <<"structured@1.0">> },
-            Opts
-        ),
     hb_util:ok(
-        Structured:decode_value(
-            Value,
+        hb_ao:direct(
+            #{ <<"device">> => <<"structured@1.0">> },
             #{
                 <<"path">> => <<"decode-value">>,
-                <<"type">> => Type
+                <<"type">> => Type,
+                <<"body">> => Value
             },
             Opts
         )
