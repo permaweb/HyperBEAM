@@ -53,7 +53,6 @@ do(State) ->
     end.
 
 verify_pkg(Output, #{ module_name := Mod, archive := Archive,
-              archive_modules := ArchiveModules,
               root_module := Root, helpers := Helpers,
               exports := DeclaredExports }) ->
     case hb_device_name:is_generated(Mod) of
@@ -61,7 +60,7 @@ verify_pkg(Output, #{ module_name := Mod, archive := Archive,
             {error, {not_generated_atom, Mod}};
         true ->
             % Load the archive. If it is not loadable, return an error.
-            case load_archive(Mod, Archive, ArchiveModules) of
+            case load_archive(Mod, Archive) of
                 ok ->
                     % Ensure that the module exports the expected functions.
                     Loaded = lists:sort(Mod:module_info(exports)),
@@ -79,51 +78,12 @@ verify_pkg(Output, #{ module_name := Mod, archive := Archive,
     end.
 
 %% @doc Load an archive and attempt to load each module in the archive.
-load_archive(Root, Archive, ArchiveModules) ->
-    {ok, Files} = zip:unzip(Archive, [memory]),
-    Beams =
-        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
-    ResourceFiles =
-        [
-            {Rel, Body}
-         ||
-            {Name, Body} <- Files,
-            <<"priv/", Rel/binary>> <- [hb_util:bin(Name)]
-        ],
-    Modules =
-        [
-            begin
-                Path = maps:get(<<"archive-path">>, Meta),
-                ModBin = maps:get(<<"module-name">>, Meta),
-                Mod = binary_to_atom(ModBin, utf8),
-                {Mod, binary_to_list(Path), maps:get(Path, Beams)}
-            end
-          ||
-            Meta <- ArchiveModules
-        ],
-    case write_resources(
-        hb_ao_device:implementation_dir(Root),
-        ResourceFiles
-    ) of
-        ok ->
-            case code:atomic_load(Modules) of
-                ok -> ok;
-                {error, Reason} -> {error, Reason}
-            end;
-        {error, Reason} ->
-            {error, Reason}
-    end.
-
-write_resources(_Dir, []) ->
-    ok;
-write_resources(Dir, [{Rel, Body} | Rest]) ->
-    Path = filename:join(Dir, hb_util:list(Rel)),
-    case filelib:ensure_dir(Path) of
-        ok ->
-            case file:write_file(Path, Body) of
+load_archive(Root, Archive) ->
+    case hb_device_archive:contents(Archive) of
+        {ok, Modules, Resources} ->
+            case hb_device_archive:modules_match_root(Root, Modules) of
                 ok ->
-                    maybe_make_executable(Rel, Path),
-                    write_resources(Dir, Rest);
+                    load_archive_contents(Root, Modules, Resources);
                 {error, Reason} ->
                     {error, Reason}
             end;
@@ -131,12 +91,19 @@ write_resources(Dir, [{Rel, Body} | Rest]) ->
             {error, Reason}
     end.
 
-maybe_make_executable(<<"bin/", _/binary>>, Path) ->
-    file:change_mode(Path, 8#100755);
-maybe_make_executable(Rel, Path) ->
-    case filename:extension(hb_util:list(Rel)) of
-        ".sh" -> file:change_mode(Path, 8#100755);
-        _ -> ok
+load_archive_contents(Root, Modules, Resources) ->
+    case hb_device_archive:write_resources(
+        hb_ao_device:implementation_dir(Root),
+        Resources
+    ) of
+        ok ->
+            case hb_device_archive:load_modules(Modules) of
+                ok -> ok;
+                already_loaded -> ok;
+                {error, Reason} -> {error, Reason}
+            end;
+        {error, Reason} ->
+            {error, Reason}
     end.
 
 default_exports() ->

@@ -31,7 +31,6 @@
 -export([scan/2, scan/1]).
 -export([package/2, package_all/2]).
 -export([spec_message/2, impl_message/3]).
--export([encode_on_loads/1, decode_on_loads/1]).
 -export([base32_lower/1, load_archive/1]).
 -ifdef(TEST).
 -export([test_fixture_dir/0]).
@@ -43,7 +42,6 @@
 -define(VARIANT, <<"ao.N.1">>).
 -define(DEFAULT_DEVICE_VERSION, <<"@1.0">>).
 -define(ARCHIVE_CONTENT_TYPE, <<"application/beam-archive">>).
--define(ON_LOAD_FORMAT, <<"hb-device-on-load-v1">>).
 
 %%% --------------------------------------------------------------------
 %%% Scanning
@@ -655,33 +653,7 @@ source_id_to_hash(SourceID) ->
 
 %% @doc Load a generated package archive into the current code server.
 load_archive(Pkg) ->
-    Archive = maps:get(archive, Pkg),
-    {ok, Files} = zip:unzip(Archive, [memory]),
-    Beams =
-        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
-    Modules =
-        [
-            begin
-                Path = maps:get(<<"archive-path">>, Meta),
-                ModBin = maps:get(<<"module-name">>, Meta),
-                Mod = binary_to_atom(ModBin, utf8),
-                {Mod, binary_to_list(Path), maps:get(Path, Beams)}
-            end
-         ||
-            Meta <- maps:get(archive_modules, Pkg)
-        ],
-    case code:atomic_load(Modules) of
-        ok ->
-            ok;
-        {error, Reason} ->
-            case lists:all(
-                fun({Mod, _, _}) -> code:is_loaded(Mod) =/= false end,
-                Modules
-            ) of
-                true -> ok;
-                false -> {error, {archive_load_failed, Reason}}
-            end
-    end.
+    hb_device_archive:load(maps:get(archive, Pkg)).
 
 %% @doc Package with temporary generated message/codec devices loaded into a
 %% build-local volatile device-store. The temporary packages are never written
@@ -973,47 +945,6 @@ on_load_fun(Attrs) ->
         {on_load, [Fun, 0]} -> Fun;
         _ -> undefined
     end.
-
-%% @doc Encode on-load callback metadata into one binary field. Keeping the
-%% implementation message flat avoids nested cache links for load-time data.
-encode_on_loads(OnLoads) ->
-    iolist_to_binary(
-        [
-            begin
-                ModLen = byte_size(ModBin),
-                FunLen = byte_size(FunBin),
-                <<ModLen:32, ModBin/binary, FunLen:32, FunBin/binary>>
-            end
-         ||
-            #{ <<"module-name">> := ModBin,
-               <<"function">> := FunBin } <- OnLoads
-        ]
-    ).
-
-%% @doc Decode on-load callback metadata produced by {@link encode_on_loads/1}.
-decode_on_loads(Bin) when is_binary(Bin) ->
-    decode_on_loads(Bin, []).
-
-decode_on_loads(<<>>, Acc) ->
-    {ok, lists:reverse(Acc)};
-decode_on_loads(<<ModLen:32, Rest0/binary>>, Acc)
-        when byte_size(Rest0) >= ModLen + 4 ->
-    <<ModBin:ModLen/binary, FunLen:32, Rest1/binary>> = Rest0,
-    case byte_size(Rest1) >= FunLen of
-        true ->
-            <<FunBin:FunLen/binary, Rest2/binary>> = Rest1,
-            decode_on_loads(
-                Rest2,
-                [#{
-                    <<"module-name">> => ModBin,
-                    <<"function">> => FunBin
-                } | Acc]
-            );
-        false ->
-            {error, invalid_on_load_metadata}
-    end;
-decode_on_loads(_Other, _Acc) ->
-    {error, invalid_on_load_metadata}.
 
 compile_renamed_modules(
     RenamedPaths,
@@ -1385,8 +1316,8 @@ impl_message(Pkg, SpecID, _Opts) ->
         [] -> Base;
         _ ->
             Base#{
-                <<"on-load-format">> => ?ON_LOAD_FORMAT,
-                <<"on-load">> => encode_on_loads(OnLoad)
+                <<"on-load-format">> => hb_device_archive:on_load_format(),
+                <<"on-load">> => hb_device_archive:encode_on_loads(OnLoad)
             }
     end.
 
@@ -1572,8 +1503,12 @@ pure_on_load_metadata_is_flat_and_runnable_test() ->
     Pkg = package_for_test(Group),
     Msg = impl_message(Pkg, <<"spec-id">>, #{}),
     ?assert(is_binary(maps:get(<<"on-load">>, Msg))),
-    ?assertEqual(?ON_LOAD_FORMAT, maps:get(<<"on-load-format">>, Msg)),
-    {ok, OnLoads} = decode_on_loads(maps:get(<<"on-load">>, Msg)),
+    ?assertEqual(
+        hb_device_archive:on_load_format(),
+        maps:get(<<"on-load-format">>, Msg)
+    ),
+    {ok, OnLoads} =
+        hb_device_archive:decode_on_loads(maps:get(<<"on-load">>, Msg)),
     ?assertEqual(maps:get(on_load, Pkg), OnLoads),
     ok = load_pkg_archive(Pkg),
     ok = run_pkg_on_loads(OnLoads),

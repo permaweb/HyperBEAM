@@ -8,7 +8,6 @@
 -export([find_exported_function/5, is_exported/4, info/2, info/3, default/0]).
 -include("include/hb.hrl").
 
--define(ON_LOAD_FORMAT, <<"hb-device-on-load-v1">>).
 -define(DEFAULT_IMPLEMENTATION_DIR, "_build/device-implementations").
 
 %%% All keys in the `message@1.0` device that are not resolved to underlying
@@ -546,7 +545,7 @@ load_archive(ModBin, Archive, Msg, Ref, Opts) ->
             )};
         true ->
             ModName = hb_util:key_to_atom(ModBin, new_atoms),
-            case archive_contents(Archive) of
+            case hb_device_archive:contents(Archive) of
                 {ok, Modules, ResourceFiles} ->
                     do_load_archive(ModName, Modules, ResourceFiles, Msg, Opts);
                 {error, Reason} ->
@@ -554,133 +553,23 @@ load_archive(ModBin, Archive, Msg, Ref, Opts) ->
             end
     end.
 
-%% @doc Extract loadable content from a deterministic implementation archive.
-archive_contents(Archive) ->
-    case zip:unzip(Archive, [memory]) of
-        {ok, Files} ->
-            read_archive_entries(Files, [], []);
-        {error, Reason} ->
-            {error, {archive_extract_failed, Reason}}
-    end.
-
-%% @doc Validate archive entries and gather BEAMs and resource files.
-read_archive_entries([], ModulesAcc, ResourceAcc) ->
-    Modules = [Mod || {Mod, _, _} <- ModulesAcc],
-    ResourcePaths = [Path || {Path, _} <- ResourceAcc],
-    case {
-        length(Modules) =:= length(lists:usort(Modules)),
-        length(ResourcePaths) =:= length(lists:usort(ResourcePaths))
-    } of
-        {true, true} ->
-            {ok, lists:reverse(ModulesAcc), lists:reverse(ResourceAcc)};
-        {false, _} -> {error, duplicate_archive_module};
-        {_, false} -> {error, duplicate_archive_file}
-    end;
-read_archive_entries([{Path0, Body} | Rest], ModulesAcc, ResourceAcc) ->
-    Path = hb_util:bin(Path0),
-    case Path of
-        <<"ebin/", _/binary>> ->
-            case archive_beam_module(Path, Body) of
-                {ok, Mod} ->
-                    read_archive_entries(
-                        Rest,
-                        [{Mod, binary_to_list(Path), Body} | ModulesAcc],
-                        ResourceAcc
-                    );
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        <<"priv/", Rel/binary>> ->
-            case safe_archive_resource(Rel) of
-                ok ->
-                    read_archive_entries(
-                        Rest,
-                        ModulesAcc,
-                        [{Rel, Body} | ResourceAcc]
-                    );
-                {error, Reason} ->
-                    {error, Reason}
-            end;
-        _ ->
-            {error, {unsupported_archive_path, Path}}
-    end.
-
-%% @doc Confirm that an archive member is a generated BEAM at its own path.
-archive_beam_module(Path, Beam) ->
-    case beam_lib:chunks(Beam, [exports]) of
-        {ok, {Mod, _Chunks}} ->
-            ModBin = atom_to_binary(Mod, utf8),
-            ExpectedPath = <<"ebin/", ModBin/binary, ".beam">>,
-            case {hb_device_name:is_generated(Mod), Path} of
-                {false, _} ->
-                    {error, {non_generated_module_name, ModBin}};
-                {true, ExpectedPath} ->
-                    {ok, Mod};
-                {true, _} ->
-                    {error, {archive_path_mismatch, Path, ExpectedPath}}
-            end;
-        {error, _Module, Reason} ->
-            {error, {invalid_beam, Path, Reason}}
-    end.
-
 %% @doc Atomically load every module in the archive, then run generated
 %% on-load callbacks in the order recorded by the implementation message.
 do_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts) ->
-    case lists:keymember(RootMod, 1, Modules) of
-        false ->
+    case hb_device_archive:modules_match_root(RootMod, Modules) of
+        {error, archive_missing_root} ->
             {error, load_error(<<"archive-missing-root">>, RootMod)};
-        true ->
-            RootBin = atom_to_binary(RootMod, utf8),
-            case archive_modules_match_root(RootBin, Modules) of
-                ok ->
-                    maybe_load_archive(
-                        RootMod, Modules, ResourceFiles, Msg, Opts
-                    );
-                {error, Reason} ->
-                    {error, load_error(
-                        <<"invalid-archive-namespace">>, RootMod, Reason
-                    )}
-            end
+        {error, Reason} ->
+            {error, load_error(
+                <<"invalid-archive-namespace">>, RootMod, Reason
+            )};
+        ok ->
+            maybe_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts)
     end.
-
-%% @doc Ensure every archive member belongs to the root module namespace.
-archive_modules_match_root(RootBin, Modules) ->
-    Prefix = <<RootBin/binary, "__">>,
-    Bad =
-        [
-            Mod
-        ||
-            {Mod, _, _} <- Modules,
-            not begin
-                ModBin = atom_to_binary(Mod, utf8),
-                ModBin =:= RootBin orelse
-                    binary:match(ModBin, Prefix) =:= {0, byte_size(Prefix)}
-            end
-        ],
-    case Bad of
-        [] -> ok;
-        _ -> {error, {archive_module_outside_namespace, Bad}}
-    end.
-
-safe_archive_resource(<<>>) ->
-    {error, empty_archive_resource_path};
-safe_archive_resource(Rel) ->
-    Parts = binary:split(Rel, <<"/">>, [global]),
-    case binary:match(Rel, <<"\\">>) =/= nomatch orelse
-        lists:any(fun unsafe_archive_resource_part/1, Parts)
-    of
-        true -> {error, {unsafe_archive_resource_path, Rel}};
-        false -> ok
-    end.
-
-unsafe_archive_resource_part(<<>>) -> true;
-unsafe_archive_resource_part(<<".">>) -> true;
-unsafe_archive_resource_part(<<"..">>) -> true;
-unsafe_archive_resource_part(_) -> false.
 
 %% @doc Prepare archive resources and load unless every module is present.
 maybe_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts) ->
-    case archive_loaded(Modules) of
+    case hb_device_archive:loaded(Modules) of
         true ->
             {ok, RootMod};
         false ->
@@ -699,22 +588,18 @@ maybe_load_archive(RootMod, Modules, ResourceFiles, Msg, Opts) ->
     end.
 
 load_archive_modules(RootMod, Modules, Msg, Opts) ->
-    case code:atomic_load(Modules) of
+    case hb_device_archive:load_modules(Modules) of
         ok ->
-            case run_archive_on_loads(Msg, Opts) of
+            case hb_device_archive:run_on_loads(Msg, Opts) of
                 ok -> {ok, RootMod};
                 {error, Reason} ->
                     {error, load_error(
                         <<"on-load-failed">>, RootMod, Reason)}
             end;
+        already_loaded ->
+            {ok, RootMod};
         {error, Reason} ->
-            case archive_loaded(Modules) of
-                true -> {ok, RootMod};
-                false ->
-                    {error, load_error(
-                        <<"archive-load-failed">>, RootMod, Reason
-                    )}
-            end
+            {error, load_error(<<"archive-load-failed">>, RootMod, Reason)}
     end.
 
 %% @doc Build an AO-message-shaped load error.
@@ -731,71 +616,9 @@ reason_bin(Reason) when is_atom(Reason) ->
 reason_bin(Reason) ->
     iolist_to_binary(io_lib:format("~p", [Reason])).
 
-%% @doc Check that every module in an archive is present in the code server.
-archive_loaded(Modules) ->
-    lists:all(fun({Mod, _, _}) -> code:is_loaded(Mod) =/= false end, Modules).
-
-%% @doc Execute the flat on-load metadata embedded in the implementation.
-run_archive_on_loads(Msg, Opts) ->
-    case hb_maps:get(<<"on-load">>, Msg, <<>>, Opts) of
-        <<>> ->
-            ok;
-        OnLoad when is_binary(OnLoad) ->
-            case hb_maps:get(<<"on-load-format">>, Msg, undefined, Opts) of
-                ?ON_LOAD_FORMAT ->
-                    case decode_archive_on_loads(OnLoad) of
-                        {ok, OnLoads} ->
-                            run_archive_on_load_list(OnLoads);
-                        {error, _} = Error ->
-                            Error
-                    end;
-                Other ->
-                    {error, {unsupported_on_load_format, Other}}
-            end;
-        Other ->
-            {error, {invalid_on_load_metadata, Other}}
-    end.
-
-%% @doc Decode `{module,function}' pairs from a length-framed binary.
-decode_archive_on_loads(Bin) when is_binary(Bin) ->
-    decode_archive_on_loads(Bin, []).
-
-decode_archive_on_loads(<<>>, Acc) ->
-    {ok, lists:reverse(Acc)};
-decode_archive_on_loads(<<ModLen:32, Rest0/binary>>, Acc)
-        when byte_size(Rest0) >= ModLen + 4 ->
-    <<ModBin:ModLen/binary, FunLen:32, Rest1/binary>> = Rest0,
-    case byte_size(Rest1) >= FunLen of
-        true ->
-            <<FunBin:FunLen/binary, Rest2/binary>> = Rest1,
-            decode_archive_on_loads(
-                Rest2,
-                [#{
-                    <<"module-name">> => ModBin,
-                    <<"function">> => FunBin
-                } | Acc]
-            );
-        false ->
-            {error, invalid_on_load_metadata}
-    end;
-decode_archive_on_loads(_Other, _Acc) ->
-    {error, invalid_on_load_metadata}.
-
-%% @doc Run decoded on-load callbacks in package order.
-run_archive_on_load_list([]) ->
-    ok;
-run_archive_on_load_list([#{ <<"module-name">> := ModBin,
-                             <<"function">> := FunBin } | Rest]) ->
-    Mod = hb_util:key_to_atom(ModBin, existing),
-    Fun = hb_util:key_to_atom(FunBin, existing),
-    case apply(Mod, Fun, []) of
-        ok -> run_archive_on_load_list(Rest);
-        Other -> {error, {on_load_failed, Mod, Fun, Other}}
-    end.
-
 %% @doc Return the extracted implementation directory for a generated device.
 implementation_dir(Module) when is_atom(Module) ->
-    Root = generated_root(Module),
+    Root = hb_device_name:root(Module),
     persistent_term:get(
         {?MODULE, implementation_dir, Root},
         filename:join(implementation_root(), atom_to_list(Root))
@@ -804,12 +627,12 @@ implementation_dir(Module) when is_atom(Module) ->
 prepare_implementation_dir(_RootMod, _ImplementationID, [], _Opts) ->
     ok;
 prepare_implementation_dir(RootMod, ImplementationID, Files, Opts) ->
-    Root = generated_root(RootMod),
+    Root = hb_device_name:root(RootMod),
     Dir = filename:join(
         implementation_root(Opts),
         hb_util:list(ImplementationID)
     ),
-    case write_implementation_files(Dir, Files) of
+    case hb_device_archive:write_resources(Dir, Files) of
         ok ->
             persistent_term:put({?MODULE, implementation_dir, Root}, Dir),
             ok;
@@ -831,35 +654,6 @@ implementation_root(Opts) ->
             Opts
         )
     ).
-
-write_implementation_files(_Dir, []) ->
-    ok;
-write_implementation_files(Dir, [{Rel, Body} | Rest]) ->
-    Path = filename:join(Dir, hb_util:list(Rel)),
-    case filelib:ensure_dir(Path) of
-        ok ->
-            case file:write_file(Path, Body) of
-                ok ->
-                    maybe_make_executable(Rel, Path),
-                    write_implementation_files(Dir, Rest);
-                {error, Reason} ->
-                    {error, {resource_write_failed, Rel, Reason}}
-            end;
-        {error, Reason} ->
-            {error, {resource_dir_failed, Rel, Reason}}
-    end.
-
-maybe_make_executable(<<"bin/", _/binary>>, Path) ->
-    file:change_mode(Path, 8#100755);
-maybe_make_executable(Rel, Path) ->
-    case filename:extension(hb_util:list(Rel)) of
-        ".sh" -> file:change_mode(Path, 8#100755);
-        _ -> ok
-    end.
-
-generated_root(Module) ->
-    [Root | _] = binary:split(atom_to_binary(Module, utf8), <<"__">>),
-    binary_to_atom(Root, utf8).
 
 %%% --------------------------------------------------------------------
 %%% Compatibility checks
