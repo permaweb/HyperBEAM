@@ -216,7 +216,7 @@ test_compile_opts(Ebin) ->
         {d, 'TEST'},
         {outdir, Ebin},
         {i, "src"},
-        {i, "src/kernel"}
+        {i, "src/core"}
     ].
 
 test_modules_to_run(_Modules, Roots) when Roots =/= all ->
@@ -268,9 +268,9 @@ compile_core_test_modules() ->
 core_test_paths() ->
     Paths =
         filelib:wildcard("src/*.erl") ++
-        filelib:wildcard("src/kernel/*.erl") ++
+        filelib:wildcard("src/core/*.erl") ++
         filelib:wildcard("src/forge/*.erl"),
-    First = "src/kernel/hb_test_parallel.erl",
+    First = "src/core/hb_test_parallel.erl",
     [First || lists:member(First, Paths)] ++ lists:sort(Paths -- [First]).
 
 compile_core_test_module(Path, Ebin) ->

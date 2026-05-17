@@ -46,11 +46,11 @@ A top-level `%%% @doc` block becomes the spec body; alternatively
 The HyperBEAM repository keeps every device source under
 `src/preloaded`. The `compile` step runs the same Forge preload pipeline
 over that directory and emits an LMDB `preloaded-store` plus the index
-ID the kernel default config consumes:
+ID the core default config consumes:
 
 ```bash
-rebar3 compile          # builds kernel + forge, then preloads
-rebar3 eunit            # runs the kernel tests against the bake
+rebar3 compile          # builds core + forge, then preloads
+rebar3 eunit            # runs core tests against the bake
 ```
 
 `hb_ao_device:load/2` resolves every device — including

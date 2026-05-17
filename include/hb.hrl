@@ -1,1 +1,1 @@
--include("../src/kernel/include/hb.hrl").
+-include("../src/core/include/hb.hrl").

@@ -986,8 +986,8 @@ include_dirs(Copied) ->
         [
             "src",
             filename:absname("src"),
-            "src/kernel",
-            filename:absname("src/kernel")
+            "src/core",
+            filename:absname("src/core")
         ] ++
         lists:filtermap(
             fun(#{ source := Source }) -> source_kernel_dir(Source) end,
@@ -1002,7 +1002,7 @@ source_kernel_dir(Source) ->
         Pos ->
             {true,
                 filename:join(
-                    [string:substr(Abs, 1, Pos - 1), "src", "kernel"]
+                    [string:substr(Abs, 1, Pos - 1), "src", "core"]
                 )
             }
     end.

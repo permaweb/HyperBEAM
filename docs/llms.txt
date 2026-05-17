@@ -97,7 +97,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_scheduler_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_server.erl)](./resources/source-code/dev_scheduler_server.html)
 * [[Module dev_simple_pay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_simple_pay.erl)](./resources/source-code/dev_simple_pay.html)
 * [[Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_snp.erl)](./resources/source-code/dev_snp.html)
-* [[Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/kernel/hb_snp_nif.erl)](./resources/source-code/hb_snp_nif.html)
+* [[Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)](./resources/source-code/hb_snp_nif.html)
 * [[Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_stack.erl)](./resources/source-code/dev_stack.html)
 * [[Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_test.erl)](./resources/source-code/dev_test.html)
 * [[Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_wasi.erl)](./resources/source-code/dev_wasi.html)

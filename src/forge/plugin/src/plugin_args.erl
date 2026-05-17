@@ -62,7 +62,7 @@ maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
 
 default_device_src() ->
-    case filelib:is_file("src/kernel/hb_ao_device.erl") of
+    case filelib:is_file("src/core/hb_ao_device.erl") of
         true -> "src/preloaded";
         false -> "src"
     end.
@@ -71,7 +71,7 @@ bootstrap_preloaded_dirs() ->
     bootstrap_preloaded_dirs([]).
 
 bootstrap_preloaded_dirs([]) ->
-    case filelib:is_file("src/kernel/hb_ao_device.erl") of
+    case filelib:is_file("src/core/hb_ao_device.erl") of
         true -> [<<"src/preloaded">>];
         false -> [<<"_build/default/lib/hb/src/preloaded">>]
     end;

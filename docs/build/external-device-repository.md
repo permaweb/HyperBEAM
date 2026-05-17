@@ -70,7 +70,7 @@ identical ensures the provider and kernel APIs match.
 
 ```erlang
 {deps, [
-    %% Pull HyperBEAM in so the kernel modules and Forge are on the
+    %% Pull HyperBEAM in so the core modules and Forge are on the
     %% code path. Pin to a specific branch, tag, or commit for
     %% reproducible builds.
     {hb, {git, "https://github.com/permaweb/hyperbeam.git",
@@ -85,14 +85,14 @@ identical ensures the provider and kernel APIs match.
 ]}.
 ```
 
-`rebar3` will fetch HyperBEAM, place its kernel modules on the path
+`rebar3` will fetch HyperBEAM, place its core modules on the path
 (`hb_ao`, `hb_message`, `hb_cache`, …), and load the Forge plugin. The
 Forge uses that `hb` dependency as the source of the
 default preloaded device library, then adds your project devices to
 the same generated preloaded-store.
 
 If your device uses HyperBEAM macros such as `?event`, include the
-kernel header from your device module and list `hb` in your app:
+core header from your device module and list `hb` in your app:
 
 ```erlang
 -include_lib("hb/include/hb.hrl").
@@ -133,10 +133,10 @@ who trust your wallet can resolve `dev_my_device` either by name (if
 you also publish a `name@1.0` provider message that maps the human
 name to the spec ID) or by quoting the spec ID directly.
 
-## Iterating on HyperBEAM kernel changes
+## Iterating on HyperBEAM core changes
 
 Because `hb` is a regular dependency, your editor and `rebar3 shell`
-can step into kernel sources via `_build/default/lib/hb/src/kernel`.
-When you need a kernel patch your device depends on, ship it as a
+can step into core sources via `_build/default/lib/hb/src/core`.
+When you need a core patch your device depends on, ship it as a
 separate PR against HyperBEAM and bump the `tag` in your
 `rebar.config` to pick it up.

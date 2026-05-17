@@ -63,7 +63,7 @@ recompile_hb_opts() ->
     lists:foreach(
         fun(Ebin) ->
             compile:file(
-                "src/kernel/hb_opts.erl",
+                "src/core/hb_opts.erl",
                 [{outdir, Ebin} | hb_opts_compile_opts(Ebin)]
             )
         end,
@@ -86,5 +86,5 @@ drop_outdir([]) -> [].
 fallback_opts() ->
     [
         debug_info,
-        {i, "src/kernel"}
+        {i, "src/core"}
     ].

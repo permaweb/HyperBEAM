@@ -9,7 +9,7 @@
 %%% On success the provider prints (and returns from `do/1') the path to
 %%% the generated store and the index message ID. The corresponding
 %%% `_build/hb_preloaded_index.hrl' header is regenerated so that the
-%%% kernel default node configuration can pick up the index ID at
+%%% core default node configuration can pick up the index ID at
 %%% compile-time.
 -module(plugin_prv_preload).
 -export([init/1, do/1, format_error/1, run/2]).
@@ -109,7 +109,7 @@ default_preloaded_dirs(Dirs) ->
 
 %% @doc Return true when the provider is running inside the HyperBEAM repo.
 is_hb_checkout() ->
-    filelib:is_file("src/kernel/hb_ao_device.erl").
+    filelib:is_file("src/core/hb_ao_device.erl").
 
 %% @doc Return true when `Dirs' already includes `Dir'.
 source_covers(Dir, Dirs) ->

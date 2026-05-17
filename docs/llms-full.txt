@@ -10156,7 +10156,7 @@ Top up the user's balance in the ledger.
 --- END OF FILE: docs/resources/source-code/dev_simple_pay.md ---
 
 --- START OF FILE: docs/resources/source-code/hb_snp_nif.md ---
-# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/kernel/hb_snp_nif.erl)
+# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)
 
 
 
