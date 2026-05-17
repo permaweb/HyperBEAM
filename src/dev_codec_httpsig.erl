@@ -343,6 +343,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             maps:get(<<"committed">>, Commitment, []),
             Opts
         ),
+    ensure_unique_components(RawInputs),
     % Normalize the keys to their maybe-linked form, adding `+link` if necessary.
     Inputs =
         lists:map(
@@ -472,7 +473,7 @@ signature_base(EncodedMsg, Commitment, Opts) ->
 
 %% @doc Given a list of Component Identifiers and a Request/Response Message
 %% context, create the "signature-base-line" portion of the signature base
-%% TODO: catch duplicate identifier:
+%% catch duplicate identifier:
 %% https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.2.5.2.1
 %%
 %% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.2.1
@@ -497,6 +498,12 @@ signature_components_line(Req, Commitment, _Opts) ->
             maps:get(<<"committed">>, Commitment)
         ),
 	iolist_to_binary(lists:join(<<"\n">>, ComponentsLines)).
+
+ensure_unique_components(Components) ->
+    case length(Components) =:= length(lists:usort(Components)) of
+        true -> ok;
+        false -> throw({duplicate_signature_component, Components})
+    end.
 
 %% @doc construct the "signature-params-line" part of the signature base.
 %%
@@ -671,3 +678,37 @@ sign_and_verify_link_test() ->
     Signed = hb_message:commit(NormMsg, Opts),
     ?event({signed_msg, Signed}),
     ?assert(hb_message:verify(Signed, Opts)).
+
+%% @doc Ensure duplicate committed components error in httpsig commit.
+duplicate_signature_component_test() ->
+    Msg = #{
+        <<"normal">> => <<"typical-value">>,
+        <<"untyped">> => #{ <<"inner-untyped">> => <<"inner-value">> },
+        <<"typed">> => #{ <<"inner-typed">> => 123 }
+    },
+    Opts = #{ priv_wallet => hb:wallet() },
+    Res =
+        catch dev_codec_httpsig:commit(
+            Msg,
+            #{
+                <<"type">> => <<"rsa-pss-sha512">>,
+                <<"committed">> => [<<"normal">>, <<"normal">>]
+            },
+            Opts
+        ),
+    ?assertMatch({duplicate_signature_component, _}, Res).
+
+%% @doc Ensure duplicate committed components error during verify path.
+duplicate_signature_component_verify_test() ->
+    Base = #{ <<"normal">> => <<"typical-value">> },
+    Res =
+        catch dev_codec_httpsig:verify(
+            Base,
+            #{
+                <<"type">> => <<"rsa-pss-sha512">>,
+                <<"signature">> => <<"dummy">>,
+                <<"committed">> => [<<"normal">>, <<"normal">>]
+            },
+            #{}
+        ),
+    ?assertMatch({duplicate_signature_component, _}, Res).
