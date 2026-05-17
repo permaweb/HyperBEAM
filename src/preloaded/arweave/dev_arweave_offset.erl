@@ -232,7 +232,7 @@ bundle_start_offset(ChunkJSON) ->
 message_from_offset(TargetOffset, BundleStartOffset, KnownOffset, KnownChunk, Opts) ->
     maybe
         {ok, HeaderSize, BundleIndex} ?=
-            dev_arweave:bundle_header(
+            lib_arweave_common:bundle_header(
                 BundleStartOffset,
                 Opts
             ),
@@ -443,7 +443,7 @@ bundle_message_offset_from_tx(TXID, Path, Opts) ->
 
 bundled_index_offset(BundleStartOffset, [Index], Opts) ->
     {ok, HeaderSize, BundleIndex} =
-        dev_arweave:bundle_header(
+        lib_arweave_common:bundle_header(
             BundleStartOffset,
             Opts
         ),

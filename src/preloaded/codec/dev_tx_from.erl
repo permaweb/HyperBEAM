@@ -21,55 +21,68 @@ fields(TX, Prefix, Opts) ->
     ).
 
 format_field(TX, Prefix, _Opts) ->
-    case TX#tx.format of
-        1 -> #{
-            <<Prefix/binary, "format">> => <<"1">>
-        };
-        _ -> #{}
-    end.
+    encoded_field(TX#tx.format, 2, Prefix, <<"format">>, fun(_) -> <<"1">> end).
 
 target_field(TX, Prefix, _Opts) ->
-    case TX#tx.target of
-        ?DEFAULT_TARGET -> #{};
-        Target -> #{
-            <<Prefix/binary, "target">> => hb_util:encode(Target)
-        }
-    end.
+    encoded_field(
+        TX#tx.target,
+        ?DEFAULT_TARGET,
+        Prefix,
+        <<"target">>,
+        fun hb_util:encode/1
+    ).
 
 anchor_field(TX, Prefix, _Opts) ->
-    case TX#tx.anchor of
-        ?DEFAULT_ANCHOR -> #{};
-        Anchor -> #{
-            <<Prefix/binary, "anchor">> => hb_util:encode(Anchor)
-        }
-    end.
+    encoded_field(
+        TX#tx.anchor,
+        ?DEFAULT_ANCHOR,
+        Prefix,
+        <<"anchor">>,
+        fun hb_util:encode/1
+    ).
 
 quantity_field(TX, Prefix, _Opts) ->
-    case TX#tx.quantity of
-        ?DEFAULT_QUANTITY -> #{};
-        Quantity -> #{
-            <<Prefix/binary, "quantity">> => integer_to_binary(Quantity)
-        }
-    end.
+    encoded_field(
+        TX#tx.quantity,
+        ?DEFAULT_QUANTITY,
+        Prefix,
+        <<"quantity">>,
+        fun integer_to_binary/1
+    ).
 
 reward_field(TX, Prefix, _Opts) ->
-    case TX#tx.reward of
-        ?DEFAULT_REWARD -> #{};
-        Reward -> #{
-            <<Prefix/binary, "reward">> => integer_to_binary(Reward)
-        }
-    end.
+    encoded_field(
+        TX#tx.reward,
+        ?DEFAULT_REWARD,
+        Prefix,
+        <<"reward">>,
+        fun integer_to_binary/1
+    ).
 
-data_root_field(#tx{data = ?DEFAULT_DATA, data_root = ?DEFAULT_DATA_ROOT}, _Prefix, _Opts) ->
-    #{};
 data_root_field(#tx{data = ?DEFAULT_DATA, data_root = DataRoot}, Prefix, _Opts) ->
-    #{<<Prefix/binary, "data_root">> => hb_util:encode(DataRoot)};
+    encoded_field(
+        DataRoot,
+        ?DEFAULT_DATA_ROOT,
+        Prefix,
+        <<"data_root">>,
+        fun hb_util:encode/1
+    );
 data_root_field(_TX, _Prefix, _Opts) ->
     #{}.
 
-data_size_field(#tx{data = ?DEFAULT_DATA, data_size = ?DEFAULT_DATA_SIZE}, _Prefix, _Opts) ->
-    #{};
 data_size_field(#tx{data = ?DEFAULT_DATA, data_size = DataSize}, Prefix, _Opts) ->
-    #{<<Prefix/binary, "data_size">> => integer_to_binary(DataSize)};
+    encoded_field(
+        DataSize,
+        ?DEFAULT_DATA_SIZE,
+        Prefix,
+        <<"data_size">>,
+        fun integer_to_binary/1
+    );
 data_size_field(_TX, _Prefix, _Opts) ->
     #{}.
+
+encoded_field(Value, Default, Prefix, Key, Encode) ->
+    case Value =:= Default of
+        true -> #{};
+        false -> #{ <<Prefix/binary, Key/binary>> => Encode(Value) }
+    end.

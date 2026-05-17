@@ -5,12 +5,13 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
+-device_libraries([lib_arweave_common]).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
--export([get_chunk/2, bundle_header/2, bundle_header/3]).
+-export([get_chunk/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -684,68 +685,6 @@ get_chunk(Offset, Opts) ->
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
-%% @doc Read and decode the bundle header index at the given global start
-%% offset, returning the header size alongside the decoded index entries.
-bundle_header(BundleStartOffset, Opts) ->
-    bundle_header(BundleStartOffset, infinity, Opts).
-bundle_header(BundleStartOffset, MaxSize, Opts) ->
-    case hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => BundleStartOffset + 1
-        },
-        Opts
-    ) of
-        {ok, FirstChunk} ->
-            case ar_bundles:bundle_header_size(FirstChunk) of
-                invalid_bundle_header ->
-                    {error, invalid_bundle_header};
-                HeaderSize when HeaderSize > MaxSize ->
-                    {error, invalid_bundle_header};
-                HeaderSize ->
-                    case read_bundle_header(
-                        BundleStartOffset, HeaderSize,
-                        FirstChunk, Opts
-                    ) of
-                        {ok, HeaderBin} ->
-                            case ar_bundles:decode_bundle_header(
-                                HeaderBin
-                            ) of
-                                {_Items, BundleIndex} ->
-                                    {ok, HeaderSize, BundleIndex};
-                                invalid_bundle_header ->
-                                    {error, invalid_bundle_header}
-                            end;
-                        Error ->
-                            Error
-                    end
-            end;
-        Error ->
-            Error
-    end.
-
-%% @doc Read exactly the bytes needed to decode a bundle header.
-read_bundle_header(_BundleStartOffset, HeaderSize, FirstChunk, _Opts)
-        when HeaderSize =< byte_size(FirstChunk) ->
-    {ok, binary:part(FirstChunk, 0, HeaderSize)};
-read_bundle_header(BundleStartOffset, HeaderSize, FirstChunk, Opts) ->
-    RemainingSize = HeaderSize - byte_size(FirstChunk),
-    case hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => BundleStartOffset + byte_size(FirstChunk) + 1,
-            <<"length">> => RemainingSize
-        },
-        Opts
-    ) of
-        {ok, RemainingChunk} ->
-            {ok, <<FirstChunk/binary, RemainingChunk/binary>>};
-        Error ->
-            Error
-    end.
-
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
 %% block hash length (43 characters), it is used as an ID. If it is parsable as
@@ -1092,7 +1031,7 @@ bundle_header_garbage_guard_test_parallel() ->
     Size = 121798901,
     ?assertEqual(
         {error, invalid_bundle_header},
-        bundle_header(ProbeOffset - 1, Size, ServerOpts)
+        lib_arweave_common:bundle_header(ProbeOffset - 1, Size, ServerOpts)
     ).
 
 

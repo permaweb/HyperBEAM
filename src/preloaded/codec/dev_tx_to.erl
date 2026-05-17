@@ -15,66 +15,31 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
     }.
 
 format_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "format">>, Map, Opts) of
-        {ok, EncodedFormat} ->
-            case EncodedFormat of
-                <<"1">> -> 1;
-                _ -> 2
-            end;
-        error -> 2
-    end.
+    decoded_field(Prefix, <<"format">>, Map, 2, fun decode_format/1, Opts).
 
 target_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "target">>, Map, Opts) of
-        {ok, EncodedTarget} ->
-            case hb_util:safe_decode(EncodedTarget) of
-                {ok, Target} when ?IS_ID(Target) -> Target;
-                _ -> ?DEFAULT_TARGET
-            end;
-        error -> ?DEFAULT_TARGET
-    end.
+    decoded_field(Prefix, <<"target">>, Map, ?DEFAULT_TARGET, fun decode_id/1, Opts).
 
 anchor_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "anchor">>, Map, Opts) of
-        {ok, EncodedAnchor} ->
-            case hb_util:safe_decode(EncodedAnchor) of
-                {ok, Anchor} -> Anchor;
-                _ -> ?DEFAULT_ANCHOR
-            end;
-        error -> ?DEFAULT_ANCHOR
-    end.
+    decoded_field(Prefix, <<"anchor">>, Map, ?DEFAULT_ANCHOR, fun hb_util:safe_decode/1, Opts).
 
 quantity_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "quantity">>, Map, Opts) of
-        {ok, EncodedQuantity} ->
-            case hb_util:safe_int(EncodedQuantity) of
-                {ok, Quantity} -> Quantity;
-                _ -> ?DEFAULT_QUANTITY
-            end;
-        error -> ?DEFAULT_QUANTITY
-    end.
+    decoded_field(Prefix, <<"quantity">>, Map, ?DEFAULT_QUANTITY, fun hb_util:safe_int/1, Opts).
 
 reward_field(Prefix, Map, Opts) ->
-    case hb_maps:find(<<Prefix/binary, "reward">>, Map, Opts) of
-        {ok, EncodedReward} ->
-            case hb_util:safe_int(EncodedReward) of
-                {ok, Reward} -> Reward;
-                _ -> ?DEFAULT_REWARD
-            end;
-        error -> ?DEFAULT_REWARD
-    end.
+    decoded_field(Prefix, <<"reward">>, Map, ?DEFAULT_REWARD, fun hb_util:safe_int/1, Opts).
 
 data_root_field(Prefix, Map, Opts) ->
     case hb_maps:get(<<"data">>, Map, ?DEFAULT_DATA, Opts) of
         ?DEFAULT_DATA ->
-            case hb_maps:find(<<Prefix/binary, "data_root">>, Map, Opts) of
-                {ok, EncodedDataRoot} ->
-                    case hb_util:safe_decode(EncodedDataRoot) of
-                        {ok, DataRoot} when ?IS_ID(DataRoot) -> DataRoot;
-                        _ -> ?DEFAULT_DATA_ROOT
-                    end;
-                error -> ?DEFAULT_DATA_ROOT
-            end;
+            decoded_field(
+                Prefix,
+                <<"data_root">>,
+                Map,
+                ?DEFAULT_DATA_ROOT,
+                fun decode_id/1,
+                Opts
+            );
         _ ->
             ?DEFAULT_DATA_ROOT
     end.
@@ -82,40 +47,43 @@ data_root_field(Prefix, Map, Opts) ->
 data_size_field(Prefix, Map, Opts) ->
     case hb_maps:get(<<"data">>, Map, ?DEFAULT_DATA, Opts) of
         ?DEFAULT_DATA ->
-            case hb_maps:find(<<Prefix/binary, "data_size">>, Map, Opts) of
-                {ok, EncodedDataSize} ->
-                    case hb_util:safe_int(EncodedDataSize) of
-                        {ok, DataSize} -> DataSize;
-                        _ -> ?DEFAULT_DATA_SIZE
-                    end;
-                error -> ?DEFAULT_DATA_SIZE
-            end;
+            decoded_field(
+                Prefix,
+                <<"data_size">>,
+                Map,
+                ?DEFAULT_DATA_SIZE,
+                fun hb_util:safe_int/1,
+                Opts
+            );
         _ ->
             ?DEFAULT_DATA_SIZE
     end.
 
 excluded_tags(TX, TABM, Opts) ->
-    exclude_target_tag(TX, TABM, Opts) ++
-    exclude_anchor_tag(TX, TABM, Opts) ++
+    lib_arweave_common:excluded_tags(TX, TABM, Opts) ++
     exclude_quantity_tag(TX, TABM, Opts) ++
     exclude_reward_tag(TX, TABM, Opts) ++
     exclude_data_root_tag(TX) ++
     exclude_data_size_tag(TX).
 
-exclude_target_tag(TX, TABM, Opts) ->
-    case {TX#tx.target, hb_maps:get(<<"target">>, TABM, undefined, Opts)} of
-        {?DEFAULT_TARGET, _} -> [];
-        {FieldTarget, TagTarget} when FieldTarget =/= TagTarget -> 
-            [<<"target">>];
-        _ -> []
+decoded_field(Prefix, Key, Map, Default, Decode, Opts) ->
+    case hb_maps:find(<<Prefix/binary, Key/binary>>, Map, Opts) of
+        {ok, Encoded} ->
+            case Decode(Encoded) of
+                {ok, Value} -> Value;
+                _ -> Default
+            end;
+        error ->
+            Default
     end.
 
-exclude_anchor_tag(TX, TABM, Opts) ->
-    case {TX#tx.anchor, hb_maps:get(<<"anchor">>, TABM, undefined, Opts)} of
-        {?DEFAULT_ANCHOR, _} -> [];
-        {FieldAnchor, TagAnchor} when FieldAnchor =/= TagAnchor -> 
-            [<<"anchor">>];
-        _ -> []
+decode_format(<<"1">>) -> {ok, 1};
+decode_format(_) -> {ok, 2}.
+
+decode_id(Encoded) ->
+    case hb_util:safe_decode(Encoded) of
+        {ok, ID} when ?IS_ID(ID) -> {ok, ID};
+        _ -> error
     end.
 
 exclude_quantity_tag(TX, TABM, Opts) ->
