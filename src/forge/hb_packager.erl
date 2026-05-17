@@ -1110,6 +1110,7 @@ compile_renamed_module(Path, Copied, Renamings, OnLoads, IncludeDirs, Opts) ->
     %% attribute in source so the runtime can decide when and how to invoke it.
     strip_on_load(Path, on_load_funs_for(Mod, OnLoads)),
     rewrite_surviving_captures(Path, Renamings),
+    restore_test_parallel_transform(Path, Opts),
     CompileOpts =
         [
             binary,
@@ -1146,6 +1147,28 @@ test_compile_opts(Opts) ->
     case hb_maps:get(<<"test">>, Opts, false, Opts) of
         true -> [{d, 'TEST'}];
         _ -> []
+    end.
+
+restore_test_parallel_transform(Path, Opts) ->
+    case hb_maps:get(<<"test">>, Opts, false, Opts) of
+        true -> inject_test_parallel_transform(Path);
+        _ -> ok
+    end.
+
+inject_test_parallel_transform(Path) ->
+    Source0 = read_file(Path),
+    case binary:match(Source0, <<"_test_parallel">>) of
+        nomatch -> ok;
+        _ ->
+            Attr = <<"-compile({parse_transform, hb_test_parallel}).\n">>,
+            Marker = <<"-compile({parse_transform, eunit_autoexport}).">>,
+            Source1 =
+                binary:replace(
+                    Source0,
+                    Marker,
+                    <<Attr/binary, Marker/binary>>
+                ),
+            ok = file:write_file(Path, Source1)
     end.
 
 source_for_renamed_module(Mod, Copied, Renamings) ->

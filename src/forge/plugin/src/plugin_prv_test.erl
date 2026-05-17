@@ -33,6 +33,7 @@ init(State) ->
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/device-test-store"),
+    CoreTests = maybe_compile_core_test_modules(Args),
     % Build a complete store from the configured source set so selected
     % device tests can resolve their dependencies.
     {ok, Result} =
@@ -67,32 +68,58 @@ do(State) ->
             with_preloaded_test_modules(
                 Roots,
                 fun(TestModules) ->
-                    test_modules(State, Names, Modules ++ TestModules, Result)
+                    with_core_test_modules(
+                        CoreTests,
+                        fun(CoreModules) ->
+                            test_modules(
+                                State,
+                                Names,
+                                CoreModules,
+                                Modules ++ TestModules,
+                                Result
+                            )
+                        end
+                    )
                 end
             )
     end.
 
-test_modules(State, Names, Modules, Result) ->
-    Opts = test_opts(Result),
-    with_preloaded_env(Result, fun() ->
+test_modules(State, Names, CoreModules, DeviceModules, Result) ->
+    Tests = test_order(CoreModules, DeviceModules),
+    rebar_api:info("device test: running EUnit modules ~p", [Tests]),
+    Env = setup_device_tests(Names, Result),
+    EUnitResult =
+        try eunit:test(Tests, [verbose, {scale_timeouts, 10}])
+        after restore_preloaded_env(Env)
+        end,
+    case EUnitResult of
+        ok -> {ok, State};
+        error -> {error, format_error(eunit_failed)};
+        Other -> {error, format_error({eunit_failed, Other})}
+    end.
+
+test_order(CoreModules, DeviceModules) ->
+    CoreFirst = [Mod || Mod <- CoreModules, Mod =/= hb_opts],
+    CoreLast = [Mod || Mod <- CoreModules, Mod =:= hb_opts],
+    CoreFirst ++ DeviceModules ++ CoreLast.
+
+setup_device_tests(Names, Result) ->
+    Env = set_preloaded_env(Result),
+    try
+        Opts = test_opts(Result),
         case load_devices(Names, Opts) of
             ok ->
-                rebar_api:info(
-                    "device test: running generated modules ~p",
-                    [Modules]
-                ),
                 start_apps(),
-                case eunit:test(Modules, [verbose, {scale_timeouts, 10}]) of
-                    ok -> {ok, State};
-                    error -> {error, format_error(eunit_failed)};
-                    Other -> {error, format_error({eunit_failed, Other})}
-                end;
-            {error, Reason} ->
-                {error, format_error(Reason)}
+                Env;
+            {error, LoadError} ->
+                erlang:error(LoadError)
         end
-    end).
+    catch Class:Error:Stacktrace ->
+        restore_preloaded_env(Env),
+        erlang:raise(Class, Error, Stacktrace)
+    end.
 
-with_preloaded_env(Result, Fun) ->
+set_preloaded_env(Result) ->
     StorePath = hb_util:bin(hb_maps:get(<<"name">>, maps:get(store, Result))),
     Index = hb_util:bin(maps:get(index, Result)),
     OldStore = os:getenv("HB_PRELOADED_STORE"),
@@ -100,12 +127,12 @@ with_preloaded_env(Result, Fun) ->
     os:putenv("HB_PRELOADED_STORE", binary_to_list(StorePath)),
     os:putenv("HB_PRELOADED_DEVICES_INDEX", binary_to_list(Index)),
     erase_preloaded_env_cache(),
-    try Fun()
-    after
-        restore_env("HB_PRELOADED_STORE", OldStore),
-        restore_env("HB_PRELOADED_DEVICES_INDEX", OldIndex),
-        erase_preloaded_env_cache()
-    end.
+    {OldStore, OldIndex}.
+
+restore_preloaded_env({OldStore, OldIndex}) ->
+    restore_env("HB_PRELOADED_STORE", OldStore),
+    restore_env("HB_PRELOADED_DEVICES_INDEX", OldIndex),
+    erase_preloaded_env_cache().
 
 restore_env(Name, false) ->
     os:unsetenv(Name);
@@ -206,6 +233,60 @@ purge_test_module(Mod) ->
     code:purge(Mod),
     code:delete(Mod),
     code:purge(Mod).
+
+maybe_compile_core_test_modules(#{ <<"with-core">> := true }) ->
+    compile_core_test_modules();
+maybe_compile_core_test_modules(_Args) ->
+    none.
+
+with_core_test_modules(none, Fun) when is_function(Fun, 1) ->
+    Fun([]);
+with_core_test_modules({Ebin, Modules}, Fun) when is_function(Fun, 1) ->
+    code:add_patha(Ebin),
+    lists:foreach(fun load_core_test_module/1, Modules),
+    rebar_api:info(
+        "device test: running core and packaged-device EUnit together",
+        []
+    ),
+    try Fun(Modules)
+    after
+        code:del_path(Ebin),
+        file:del_dir_r(filename:dirname(Ebin))
+    end.
+
+compile_core_test_modules() ->
+    Ebin = filename:join(["_build", "device-test-core", "ebin"]),
+    file:del_dir_r(filename:dirname(Ebin)),
+    ok = filelib:ensure_dir(filename:join(Ebin, "x")),
+    Modules = lists:usort([
+        compile_core_test_module(Path, Ebin)
+     ||
+        Path <- core_test_paths()
+    ]),
+    {Ebin, Modules}.
+
+core_test_paths() ->
+    Paths =
+        filelib:wildcard("src/*.erl") ++
+        filelib:wildcard("src/kernel/*.erl") ++
+        filelib:wildcard("src/forge/*.erl"),
+    First = "src/kernel/hb_test_parallel.erl",
+    [First || lists:member(First, Paths)] ++ lists:sort(Paths -- [First]).
+
+compile_core_test_module(Path, Ebin) ->
+    case compile:file(Path, test_compile_opts(Ebin)) of
+        {ok, Mod} -> Mod;
+        {ok, Mod, _} -> Mod;
+        Error -> error({core_test_compile_failed, Path, Error})
+    end.
+
+load_core_test_module(Mod) ->
+    code:purge(Mod),
+    code:delete(Mod),
+    case code:load_file(Mod) of
+        {module, Mod} -> ok;
+        {error, Reason} -> error({core_test_load_failed, Mod, Reason})
+    end.
 
 format_error(Reason) ->
     io_lib:format("device test failed: ~p", [Reason]).

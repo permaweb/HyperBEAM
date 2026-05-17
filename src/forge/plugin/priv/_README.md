@@ -19,6 +19,7 @@ rebar3 device verify
 
 ```sh
 rebar3 device test
+rebar3 eunit-all
 ```
 
 ## Publish

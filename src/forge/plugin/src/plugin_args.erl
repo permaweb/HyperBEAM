@@ -2,7 +2,8 @@
 %%%
 %%% The provider namespace exposes a small, consistent flag set:
 %%% <ul>
-%%%   <li>`--device-src dir[,dir2]'  source roots to scan (default: `src')</li>
+%%%   <li>`--device-src dir[,dir2]'  source roots to scan (default:
+%%%        `src/preloaded' in HyperBEAM, `src' elsewhere)</li>
 %%%   <li>`--output-dir dir'         where to write artifacts (default
 %%%        depends on command)</li>
 %%%   <li>`--key path'               path to a wallet keyfile</li>
@@ -24,19 +25,23 @@ opts() ->
         {key, $k, "key", string,
             "Path to wallet keyfile used for signing."},
         {device_roots, $r, "device-roots", string,
-            "Comma-separated list of dev_* roots to operate upon."}
+            "Comma-separated list of dev_* roots to operate upon."},
+        {with_core, undefined, "with-core", {boolean, false},
+            "Also run core HyperBEAM EUnit modules."}
     ].
 
 parse(State, DefaultOutput) ->
     {Args, _Rest} = rebar_state:command_parsed_args(State),
-    SrcRaw = proplists:get_value(device_src, Args, "src"),
+    SrcRaw = proplists:get_value(device_src, Args, default_device_src()),
     OutRaw = proplists:get_value(output_dir, Args, DefaultOutput),
     KeyRaw = proplists:get_value(key, Args, undefined),
     RootsRaw = proplists:get_value(device_roots, Args, undefined),
+    WithCore = proplists:get_value(with_core, Args, false),
     #{
         <<"device-src">> => split_list(SrcRaw),
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
+        <<"with-core">> => WithCore,
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
@@ -55,6 +60,12 @@ to_bin(B) when is_binary(B) -> B.
 
 maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
+
+default_device_src() ->
+    case filelib:is_file("src/kernel/hb_ao_device.erl") of
+        true -> "src/preloaded";
+        false -> "src"
+    end.
 
 bootstrap_preloaded_dirs() ->
     bootstrap_preloaded_dirs([]).
