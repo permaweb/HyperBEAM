@@ -188,7 +188,10 @@ group_by_namespace(Files, _Names, ForcedRoots, LibFiles) ->
                 lists:sort(
                     [H || {R, H} <- Helpers, R =:= Root]
                 ),
-            RootLibraries = library_modules(maps:get(Root, FilesMap), LibFiles),
+            SourceFiles =
+                [maps:get(Root, FilesMap)]
+                ++ [maps:get(H, FilesMap) || H <- RootHelpers],
+            RootLibraries = library_modules(SourceFiles, LibFiles),
             #{
                 root => Root,
                 root_file => maps:get(Root, FilesMap),
@@ -214,17 +217,23 @@ group_by_namespace(Files, _Names, ForcedRoots, LibFiles) ->
         Root <- SortedRoots
     ].
 
-%% @doc Return the lib_* modules explicitly requested by a device root.
-library_modules(RootFile, LibFiles) ->
-    {_Forms, Attrs} = parse_module(RootFile),
+%% @doc Return the lib_* modules requested by a device root or helper.
+library_modules(SourceFiles, LibFiles) ->
+    Libs = lists:usort(lists:flatmap(
+        fun(SourceFile) ->
+            {_Forms, Attrs} = parse_module(SourceFile),
+            lists:flatmap(fun library_attr/1, Attrs)
+        end,
+        SourceFiles
+    )),
     lists:map(
         fun(Mod) ->
             case maps:find(Mod, LibFiles) of
                 {ok, Path} -> {Mod, Path};
-                error -> erlang:error({missing_device_library, Mod, RootFile})
+                error -> erlang:error({missing_device_library, Mod, SourceFiles})
             end
         end,
-        lists:usort(lists:flatmap(fun library_attr/1, Attrs))
+        Libs
     ).
 
 library_attr({device_libraries, Mods}) ->
