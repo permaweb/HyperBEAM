@@ -128,7 +128,7 @@ A Device is essentially an Erlang module (typically named `dev_*.erl`) that proc
 **Steps:**
 
 1.  **Define Purpose:** Clearly define what your device will do. What kind of messages will it process? What state will it manage (if any)? What functions (keys) will it expose?
-2.  **Create Module:** Create a new Erlang module (e.g., `src/dev_my_new_device.erl`).
+2.  **Create Module:** Create a new Erlang module (e.g., `src/preloaded/dev_my_new_device.erl`).
 3.  **Implement `info/0..2` (Optional but Recommended):** Define an `info` function to signal capabilities and requirements to HyperBEAM (e.g., exported keys, variant/version ID).
     ```erlang
     info() ->
@@ -363,7 +363,7 @@ WebAssembly (WASM) allows you to run precompiled code written in languages like 
     [aos]> Send({ Target = "AOS", Action = "Spawn", Module = "<WasmCodeTxID>", Scheduler = "<OptionalSchedulerProcessID>" })
     -- This returns a <ProcessID>
     ```
-    *(Note: The exact spawning mechanism might vary; consult `aos` or relevant SDK documentation. You specify that this process uses WASM.)*
+    *(Note: The exact spawning mechanism might vary; consult `aos` or relevant Forge documentation. You specify that this process uses WASM.)*
 4.  **Send Message to Trigger Execution:**
     ```lua
     [aos]> Send({ Target = "<ProcessID>", Action = "ExecuteFunction", InputData = "Some data for WASM" })
@@ -412,7 +412,7 @@ If a HyperBEAM node performing these computations runs within a supported Truste
 
 This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
 
-*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)).
+*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_httpsig`](../resources/source-code/dev_httpsig.md)).
 *   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
 
 Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
@@ -463,7 +463,7 @@ This retrieves the node configuration from the meta device and serializes it to 
 - [Message Device](../resources/source-code/dev_message.md) - Works well with JSON serialization
 - [Meta Device](../resources/source-code/dev_meta.md) - Can provide configuration data to serialize
 
-[json module](../resources/source-code/dev_codec_json.md)
+[json module](../resources/source-code/dev_json.md)
 --- END OF FILE: docs/devices/json-at-1-0.md ---
 
 --- START OF FILE: docs/devices/lua-at-5-3a.md ---
@@ -552,7 +552,7 @@ This device is particularly useful for:
 *   Creating and modifying transient messages on the fly using query parameters.
 *   Retrieving specific values from a message map.
 *   Inspecting the keys of a message.
-*   Handling message commitments and verification (though often delegated to specialized commitment devices like [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   Handling message commitments and verification (though often delegated to specialized commitment devices like [`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
 
 ## Core Functionality
 
@@ -586,8 +586,8 @@ The `message@1.0` device reserves several keys for specific operations:
 *   **`set_path`**: A special case for setting the `path` key itself, which cannot be done via the standard `set` operation.
 *   **`remove`**: Removes one or more specified keys from the message. Requires an `item` or `items` parameter.
 *   **`keys`**: Returns a list of all public (non-private) keys present in the message map.
-*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
-*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_codec_httpsig.md)).
+*   **`id`**: Calculates and returns the ID (hash) of the message. Considers active commitments based on specified `committers`. May delegate ID calculation to a device specified by the message\'s `id-device` key or the default ([`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
+*   **`commit`**: Creates a commitment (e.g., a signature) for the message. Requires parameters like `commitment-device` and potentially committer information. Delegates the actual commitment generation to the specified device (default [`httpsig@1.0`](../resources/source-code/dev_httpsig.md)).
 *   **`committers`**: Returns a list of committers associated with the commitments in the message. Can be filtered by request parameters.
 *   **`commitments`**: Used internally and in requests to filter or specify which commitments to operate on (e.g., for `id` or `verify`).
 *   **`verify`**: Verifies the commitments attached to the message. Can be filtered by `committers` or specific `commitment` IDs in the request. Delegates verification to the device specified in each commitment (`commitment-device`).
@@ -999,9 +999,9 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_codec_httpsig`](../resources/source-code/dev_codec_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
-*   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md), [`dev_monitor`](../resources/source-code/dev_monitor.md)):** Coordinate complex execution flows, schedule tasks, or monitor process activity.
+*   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md)):** Coordinate complex execution flows or schedule tasks.
 
 ## Using Devices
 
@@ -1087,7 +1087,7 @@ This shows the 'cache' of your process. Each response is:
 Beyond path segments, HyperBEAM URLs can include query parameters that utilize a special type casting syntax. This allows specifying the desired data type for a parameter directly within the URL using the format `key+type=value`.
 
 - **Syntax**: A `+` symbol separates the parameter key from its intended type (e.g., `count+integer=42`, `items+list="apple",7`).
-- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../resources/source-code/hb_singleton.md) and [`dev_codec_structured:decode_value`](../resources/source-code/dev_codec_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
+- **Mechanism**: The HyperBEAM node identifies the `+type` suffix (e.g., `+integer`, `+list`, `+map`, `+float`, `+atom`, `+resolve`). It then uses internal functions ([`hb_singleton:maybe_typed`](../resources/source-code/hb_singleton.md) and [`dev_structured:decode_value`](../resources/source-code/dev_structured.md)) to decode and cast the provided value string into the corresponding Erlang data type before incorporating it into the message.
 - **Supported Types**: Common types include `integer`, `float`, `list`, `map`, `atom`, `binary` (often implicit), and `resolve` (for path resolution). List values often follow the [HTTP Structured Fields format (RFC 8941)](https://www.rfc-editor.org/rfc/rfc8941.html).
 
 This powerful feature enables the expression of complex data structures directly in URLs.
@@ -2754,7 +2754,7 @@ Verify that a signature is correct.
 --- END OF FILE: docs/resources/source-code/ar_wallet.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_cache.md ---
-# [Module dev_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cache.erl)
+# [Module dev_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_cache.erl)
 
 
 
@@ -2888,7 +2888,7 @@ a successful write.
 --- END OF FILE: docs/resources/source-code/dev_cache.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_cacheviz.md ---
-# [Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cacheviz.erl)
+# [Module dev_cacheviz.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_cacheviz.erl)
 
 
 
@@ -2931,8 +2931,8 @@ the cache set by the `target` key in the request.
 
 --- END OF FILE: docs/resources/source-code/dev_cacheviz.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_ans104.md ---
-# [Module dev_codec_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_ans104.erl)
+--- START OF FILE: docs/resources/source-code/dev_ans104.md ---
+# [Module dev_ans104.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_ans104.erl)
 
 
 
@@ -3132,10 +3132,10 @@ a binary, which we return as is.
 Verify an ANS-104 commitment.
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_ans104.md ---
+--- END OF FILE: docs/resources/source-code/dev_ans104.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_flat.md ---
-# [Module dev_codec_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_flat.erl)
+--- START OF FILE: docs/resources/source-code/dev_flat.md ---
+# [Module dev_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_flat.erl)
 
 
 
@@ -3251,10 +3251,10 @@ Convert a TABM to a flat map.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_flat.md ---
+--- END OF FILE: docs/resources/source-code/dev_flat.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_httpsig_conv.md ---
-# [Module dev_codec_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig_conv.erl)
+--- START OF FILE: docs/resources/source-code/dev_httpsig_conv.md ---
+# [Module dev_httpsig_conv.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_httpsig_conv.erl)
 
 
 
@@ -3496,10 +3496,10 @@ that can translated to a given web server Response API
 Decode the `ao-ids` key into a map.
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_httpsig_conv.md ---
+--- END OF FILE: docs/resources/source-code/dev_httpsig_conv.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_httpsig.md ---
-# [Module dev_codec_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig.erl)
+--- START OF FILE: docs/resources/source-code/dev_httpsig.md ---
+# [Module dev_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_httpsig.erl)
 
 
 
@@ -3513,7 +3513,7 @@ This module implements HTTP Message Signatures as described in RFC-9421
 It implements the codec standard (from/1, to/1), as well as the optional
 commitment functions (id/3, sign/3, verify/3). The commitment functions
 are found in this module, while the codec functions are relayed to the
-`dev_codec_httpsig_conv` module.
+`dev_httpsig_conv` module.
 <a name="types"></a>
 
 ## Data Types ##
@@ -4136,10 +4136,10 @@ Given the signature name, and the Request/Response Message Context
 verify the named signature by constructing the signature base and comparing
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_httpsig.md ---
+--- END OF FILE: docs/resources/source-code/dev_httpsig.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_json.md ---
-# [Module dev_codec_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_json.erl)
+--- START OF FILE: docs/resources/source-code/dev_json.md ---
+# [Module dev_json.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_json.erl)
 
 
 
@@ -4222,10 +4222,10 @@ Encode a message to a JSON string.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_json.md ---
+--- END OF FILE: docs/resources/source-code/dev_json.md ---
 
---- START OF FILE: docs/resources/source-code/dev_codec_structured.md ---
-# [Module dev_codec_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_structured.erl)
+--- START OF FILE: docs/resources/source-code/dev_structured.md ---
+# [Module dev_structured.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_structured.erl)
 
 
 
@@ -4332,10 +4332,10 @@ Convert a TABM into a native HyperBEAM message.
 `verify(Msg, Req, Opts) -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_codec_structured.md ---
+--- END OF FILE: docs/resources/source-code/dev_structured.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_cron.md ---
-# [Module dev_cron.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cron.erl)
+# [Module dev_cron.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_cron.erl)
 
 
 
@@ -4465,41 +4465,8 @@ It is used to increment a counter and update the state of the worker.
 
 --- END OF FILE: docs/resources/source-code/dev_cron.md ---
 
---- START OF FILE: docs/resources/source-code/dev_cu.md ---
-# [Module dev_cu.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_cu.erl)
-
-
-
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute-2">execute/2</a></td><td></td></tr><tr><td valign="top"><a href="#push-2">push/2</a></td><td></td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="execute-2"></a>
-
-### execute/2 ###
-
-`execute(CarrierMsg, S) -> any()`
-
-<a name="push-2"></a>
-
-### push/2 ###
-
-`push(Msg, S) -> any()`
-
-
---- END OF FILE: docs/resources/source-code/dev_cu.md ---
-
 --- START OF FILE: docs/resources/source-code/dev_dedup.md ---
-# [Module dev_dedup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_dedup.erl)
+# [Module dev_dedup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_dedup.erl)
 
 
 
@@ -4556,7 +4523,7 @@ with deduplication. We only act on the first pass.
 --- END OF FILE: docs/resources/source-code/dev_dedup.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_delegated_compute.md ---
-# [Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_delegated_compute.erl)
+# [Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_delegated_compute.erl)
 
 
 
@@ -4620,7 +4587,7 @@ need to do anything special here.
 --- END OF FILE: docs/resources/source-code/dev_delegated_compute.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_faff.md ---
-# [Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_faff.erl)
+# [Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_faff.erl)
 
 
 
@@ -4678,7 +4645,7 @@ Check whether all of the signers of the request are in the allow-list.
 --- END OF FILE: docs/resources/source-code/dev_faff.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_genesis_wasm.md ---
-# [Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_genesis_wasm.erl)
+# [Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_genesis_wasm.erl)
 
 
 
@@ -4790,7 +4757,7 @@ endpoint.
 --- END OF FILE: docs/resources/source-code/dev_genesis_wasm.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_green_zone.md ---
-# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_green_zone.erl)
+# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_green_zone.erl)
 
 
 
@@ -4809,7 +4776,7 @@ commitment and encryption.<a name="index"></a>
 
 
 <table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td>Adds a node to the trusted nodes list with its commitment report.</td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td>Clones the identity of a target node in the green zone.</td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td>Generate the node message that should be set prior to joining
-a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#try_mount_encrypted_volume-2">try_mount_encrypted_volume/2*</a></td><td>Attempts to mount an encrypted volume using the green zone AES key.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
+a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
 
 
 <a name="functions"></a>
@@ -5044,7 +5011,7 @@ join_peer(PeerLocation::binary(), PeerID::binary(), M1::term(), M2::term(), Opts
 </code></pre>
 <br />
 
-`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: May contain ShouldMount flag to enable encrypted volume mounting<br />
+`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: Additional request details<br />
 
 returns: `{ok, Map}` on success with confirmation message, or
 `{error, Map|Binary}` on failure with error details
@@ -5059,7 +5026,6 @@ This function handles the client-side join flow when connecting to a peer:
 5. Verifies the response signature
 6. Decrypts the returned AES key
 7. Updates local configuration with the shared key
-8. Optionally mounts an encrypted volume using the shared key
 
 <a name="key-3"></a>
 
@@ -5127,21 +5093,6 @@ from the wallet work correctly. It creates a new wallet, encrypts a test
 message with the RSA public key, and then decrypts it with the RSA private
 key, asserting that the decrypted message matches the original.
 
-<a name="try_mount_encrypted_volume-2"></a>
-
-### try_mount_encrypted_volume/2 * ###
-
-`try_mount_encrypted_volume(AESKey, Opts) -> any()`
-
-Attempts to mount an encrypted volume using the green zone AES key.
-
-This function handles the complete process of secure storage setup by
-delegating to the dev_volume module, which provides a unified interface
-for volume management.
-
-The encryption key used for the volume is the same AES key used for green zone
-communication, ensuring that only nodes in the green zone can access the data.
-
 <a name="validate_join-3"></a>
 
 ### validate_join/3 * ###
@@ -5193,7 +5144,7 @@ This function ensures the peer node meets configuration requirements:
 --- END OF FILE: docs/resources/source-code/dev_green_zone.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_hook.md ---
-# [Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hook.erl)
+# [Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hook.erl)
 
 
 
@@ -5363,7 +5314,7 @@ Test that a single handler is executed correctly
 --- END OF FILE: docs/resources/source-code/dev_hook.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_hyperbuddy.md ---
-# [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)
+# [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hyperbuddy.erl)
 
 
 
@@ -5427,7 +5378,7 @@ listed in the `routes` field of the `info/0` return value.
 --- END OF FILE: docs/resources/source-code/dev_hyperbuddy.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_json_iface.md ---
-# [Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_json_iface.erl)
+# [Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_json_iface.erl)
 
 
 
@@ -5685,7 +5636,7 @@ Convert a message with tags into a map of their key-value pairs.
 --- END OF FILE: docs/resources/source-code/dev_json_iface.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_local_name.md ---
-# [Module dev_local_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_local_name.erl)
+# [Module dev_local_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_local_name.erl)
 
 
 
@@ -5818,64 +5769,8 @@ storage.
 
 --- END OF FILE: docs/resources/source-code/dev_local_name.md ---
 
---- START OF FILE: docs/resources/source-code/dev_lookup.md ---
-# [Module dev_lookup.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lookup.erl)
-
-
-
-
-A device that looks up an ID from a local store and returns it, honoring
-the `accept` key to return the correct format.
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#aos2_message_lookup_test-0">aos2_message_lookup_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#binary_lookup_test-0">binary_lookup_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#http_lookup_test-0">http_lookup_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#message_lookup_test-0">message_lookup_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#read-3">read/3</a></td><td>Fetch a resource from the cache using "target" ID extracted from the message.</td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="aos2_message_lookup_test-0"></a>
-
-### aos2_message_lookup_test/0 * ###
-
-`aos2_message_lookup_test() -> any()`
-
-<a name="binary_lookup_test-0"></a>
-
-### binary_lookup_test/0 * ###
-
-`binary_lookup_test() -> any()`
-
-<a name="http_lookup_test-0"></a>
-
-### http_lookup_test/0 * ###
-
-`http_lookup_test() -> any()`
-
-<a name="message_lookup_test-0"></a>
-
-### message_lookup_test/0 * ###
-
-`message_lookup_test() -> any()`
-
-<a name="read-3"></a>
-
-### read/3 ###
-
-`read(M1, M2, Opts) -> any()`
-
-Fetch a resource from the cache using "target" ID extracted from the message
-
-
---- END OF FILE: docs/resources/source-code/dev_lookup.md ---
-
 --- START OF FILE: docs/resources/source-code/dev_lua_lib.md ---
-# [Module dev_lua_lib.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_lib.erl)
+# [Module dev_lua_lib.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_lua_lib.erl)
 
 
 
@@ -5965,7 +5860,7 @@ Wrapper for `hb_ao`'s `set` functionality.
 --- END OF FILE: docs/resources/source-code/dev_lua_lib.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_lua_test.md ---
-# [Module dev_lua_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_test.erl)
+# [Module dev_lua_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_lua_test.erl)
 
 
 
@@ -6061,7 +5956,7 @@ Check if a string terminates with a given suffix.
 --- END OF FILE: docs/resources/source-code/dev_lua_test.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_lua.md ---
-# [Module dev_lua.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua.erl)
+# [Module dev_lua.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_lua.erl)
 
 
 
@@ -6370,7 +6265,7 @@ state element, then serializes the state to a binary.
 --- END OF FILE: docs/resources/source-code/dev_lua.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_manifest.md ---
-# [Module dev_manifest.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_manifest.erl)
+# [Module dev_manifest.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_manifest.erl)
 
 
 
@@ -6423,7 +6318,7 @@ Route a request to the associated data via its manifest.
 --- END OF FILE: docs/resources/source-code/dev_manifest.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_message.md ---
-# [Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_message.erl)
+# [Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_message.erl)
 
 
 
@@ -6752,7 +6647,7 @@ See `commitment_ids_from_request/3` for more information on the request format.
 --- END OF FILE: docs/resources/source-code/dev_message.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_meta.md ---
-# [Module dev_meta.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_meta.erl)
+# [Module dev_meta.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_meta.erl)
 
 
 
@@ -7047,65 +6942,8 @@ allow them to update the node message.
 
 --- END OF FILE: docs/resources/source-code/dev_meta.md ---
 
---- START OF FILE: docs/resources/source-code/dev_monitor.md ---
-# [Module dev_monitor.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_monitor.erl)
-
-
-
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_monitor-2">add_monitor/2</a></td><td></td></tr><tr><td valign="top"><a href="#end_of_schedule-1">end_of_schedule/1</a></td><td></td></tr><tr><td valign="top"><a href="#execute-2">execute/2</a></td><td></td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td></td></tr><tr><td valign="top"><a href="#signal-2">signal/2*</a></td><td></td></tr><tr><td valign="top"><a href="#uses-0">uses/0</a></td><td></td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="add_monitor-2"></a>
-
-### add_monitor/2 ###
-
-`add_monitor(Mon, State) -> any()`
-
-<a name="end_of_schedule-1"></a>
-
-### end_of_schedule/1 ###
-
-`end_of_schedule(State) -> any()`
-
-<a name="execute-2"></a>
-
-### execute/2 ###
-
-`execute(Message, State) -> any()`
-
-<a name="init-3"></a>
-
-### init/3 ###
-
-`init(State, X2, InitState) -> any()`
-
-<a name="signal-2"></a>
-
-### signal/2 * ###
-
-`signal(State, Signal) -> any()`
-
-<a name="uses-0"></a>
-
-### uses/0 ###
-
-`uses() -> any()`
-
-
---- END OF FILE: docs/resources/source-code/dev_monitor.md ---
-
 --- START OF FILE: docs/resources/source-code/dev_multipass.md ---
-# [Module dev_multipass.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_multipass.erl)
+# [Module dev_multipass.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_multipass.erl)
 
 
 
@@ -7155,7 +6993,7 @@ with deduplication. We only act on the first pass.
 --- END OF FILE: docs/resources/source-code/dev_multipass.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_name.md ---
-# [Module dev_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_name.erl)
+# [Module dev_name.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_name.erl)
 
 
 
@@ -7256,7 +7094,7 @@ pointer and its contents is loaded from the cache. For example,
 --- END OF FILE: docs/resources/source-code/dev_name.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_node_process.md ---
-# [Module dev_node_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_node_process.erl)
+# [Module dev_node_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_node_process.erl)
 
 
 
@@ -7357,7 +7195,7 @@ node message, and register it with the given name.
 --- END OF FILE: docs/resources/source-code/dev_node_process.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_p4.md ---
-# [Module dev_p4.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_p4.erl)
+# [Module dev_p4.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_p4.erl)
 
 
 
@@ -7500,7 +7338,7 @@ Postprocess the request after it has been fulfilled.
 --- END OF FILE: docs/resources/source-code/dev_p4.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_patch.md ---
-# [Module dev_patch.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_patch.erl)
+# [Module dev_patch.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_patch.erl)
 
 
 
@@ -7629,7 +7467,7 @@ request.
 --- END OF FILE: docs/resources/source-code/dev_patch.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_poda.md ---
-# [Module dev_poda.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_poda.erl)
+# [Module dev_poda.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_poda.erl)
 
 
 
@@ -7762,7 +7600,7 @@ outbound message if the computation requests it.
 --- END OF FILE: docs/resources/source-code/dev_poda.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_process_cache.md ---
-# [Module dev_process_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_process_cache.erl)
+# [Module dev_process_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_process_cache.erl)
 
 
 
@@ -7883,7 +7721,7 @@ Write a process computation result to the cache.
 --- END OF FILE: docs/resources/source-code/dev_process_cache.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_process_worker.md ---
-# [Module dev_process_worker.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_process_worker.erl)
+# [Module dev_process_worker.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_process_worker.erl)
 
 
 
@@ -7991,7 +7829,7 @@ Stop a worker process.
 --- END OF FILE: docs/resources/source-code/dev_process_worker.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_process.md ---
-# [Module dev_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_process.erl)
+# [Module dev_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_process.erl)
 
 
 
@@ -8448,7 +8286,7 @@ executor.
 --- END OF FILE: docs/resources/source-code/dev_process.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_push.md ---
-# [Module dev_push.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_push.erl)
+# [Module dev_push.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_push.erl)
 
 
 
@@ -8648,7 +8486,7 @@ Find the target process ID for a message to push.
 --- END OF FILE: docs/resources/source-code/dev_push.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_relay.md ---
-# [Module dev_relay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_relay.erl)
+# [Module dev_relay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_relay.erl)
 
 
 
@@ -8736,7 +8574,7 @@ peers, according to the node's routing table.
 --- END OF FILE: docs/resources/source-code/dev_relay.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_router.md ---
-# [Module dev_router.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_router.erl)
+# [Module dev_router.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_router.erl)
 
 
 
@@ -9171,7 +9009,7 @@ Check if a message matches a message template or path regex.
 --- END OF FILE: docs/resources/source-code/dev_router.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_scheduler_cache.md ---
-# [Module dev_scheduler_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler_cache.erl)
+# [Module dev_scheduler_cache.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_cache.erl)
 
 
 
@@ -9240,7 +9078,7 @@ Write the latest known scheduler location for an address.
 --- END OF FILE: docs/resources/source-code/dev_scheduler_cache.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_scheduler_formats.md ---
-# [Module dev_scheduler_formats.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler_formats.erl)
+# [Module dev_scheduler_formats.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_formats.erl)
 
 
 
@@ -9364,7 +9202,7 @@ perform cache lookups, or await inprogress results.
 --- END OF FILE: docs/resources/source-code/dev_scheduler_formats.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_scheduler_registry.md ---
-# [Module dev_scheduler_registry.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler_registry.erl)
+# [Module dev_scheduler_registry.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_registry.erl)
 
 
 
@@ -9463,7 +9301,7 @@ Return a list of all currently registered ProcID.
 --- END OF FILE: docs/resources/source-code/dev_scheduler_registry.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_scheduler_server.md ---
-# [Module dev_scheduler_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler_server.erl)
+# [Module dev_scheduler_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_server.erl)
 
 
 
@@ -9569,7 +9407,7 @@ Start a scheduling server for a given computation.
 --- END OF FILE: docs/resources/source-code/dev_scheduler_server.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_scheduler.md ---
-# [Module dev_scheduler.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_scheduler.erl)
+# [Module dev_scheduler.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler.erl)
 
 
 
@@ -10125,7 +9963,7 @@ process ID.
 --- END OF FILE: docs/resources/source-code/dev_scheduler.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_simple_pay.md ---
-# [Module dev_simple_pay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_simple_pay.erl)
+# [Module dev_simple_pay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_simple_pay.erl)
 
 
 
@@ -10228,8 +10066,8 @@ Top up the user's balance in the ledger.
 
 --- END OF FILE: docs/resources/source-code/dev_simple_pay.md ---
 
---- START OF FILE: docs/resources/source-code/dev_snp_nif.md ---
-# [Module dev_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_snp_nif.erl)
+--- START OF FILE: docs/resources/source-code/hb_snp_nif.md ---
+# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)
 
 
 
@@ -10313,10 +10151,10 @@ Top up the user's balance in the ledger.
 `verify_signature_test() -> any()`
 
 
---- END OF FILE: docs/resources/source-code/dev_snp_nif.md ---
+--- END OF FILE: docs/resources/source-code/hb_snp_nif.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_snp.md ---
-# [Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_snp.erl)
+# [Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_snp.erl)
 
 
 
@@ -10424,7 +10262,7 @@ measurement, are trusted.
 --- END OF FILE: docs/resources/source-code/dev_snp.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_stack.md ---
-# [Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_stack.erl)
+# [Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_stack.erl)
 
 
 
@@ -10788,7 +10626,7 @@ keyInDevice executed on DeviceName against Msg1.
 --- END OF FILE: docs/resources/source-code/dev_stack.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_test.md ---
-# [Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_test.erl)
+# [Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_test.erl)
 
 
 
@@ -10925,283 +10763,9 @@ Find a test worker's PID and send it an update message.
 
 --- END OF FILE: docs/resources/source-code/dev_test.md ---
 
---- START OF FILE: docs/resources/source-code/dev_volume.md ---
-# [Module dev_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_volume.erl)
-
-
-
-
-Secure Volume Management for HyperBEAM Nodes.
-
-<a name="description"></a>
-
-## Description ##
-
-This module handles encrypted storage operations for HyperBEAM, providing
-a robust and secure approach to data persistence. It manages the complete
-lifecycle of encrypted volumes from detection to creation, formatting, and
-mounting.
-
-Key responsibilities:
-- Volume detection and initialization
-- Encrypted partition creation and formatting
-- Secure mounting using cryptographic keys
-- Store path reconfiguration to use mounted volumes
-- Automatic handling of various system states
-(new device, existing partition, etc.)
-
-The primary entry point is the `mount/3` function, which orchestrates the
-entire process based on the provided configuration parameters. This module
-works alongside `hb_volume` which provides the low-level operations for
-device manipulation.
-
-Security considerations:
-- Ensures data at rest is protected through LUKS encryption
-- Provides proper volume sanitization and secure mounting
-- IMPORTANT: This module only applies configuration set in node options and
-does NOT accept disk operations via HTTP requests. It cannot format arbitrary
-disks as all operations are safeguarded by host operating system permissions
-enforced upon the HyperBEAM environment.<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#check_base_device-8">check_base_device/8*</a></td><td>Check if the base device exists and if it does, check if the partition exists.</td></tr><tr><td valign="top"><a href="#check_partition-8">check_partition/8*</a></td><td>Check if the partition exists.</td></tr><tr><td valign="top"><a href="#create_and_mount_partition-8">create_and_mount_partition/8*</a></td><td>Create, format and mount a new partition.</td></tr><tr><td valign="top"><a href="#decrypt_volume_key-2">decrypt_volume_key/2*</a></td><td>Decrypts an encrypted volume key using the node's private key.</td></tr><tr><td valign="top"><a href="#format_and_mount-6">format_and_mount/6*</a></td><td>Format and mount a newly created partition.</td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Exported function for getting device info, controls which functions are
-exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>HTTP info response providing information about this device.</td></tr><tr><td valign="top"><a href="#mount-3">mount/3</a></td><td>Handles the complete process of secure encrypted volume mounting.</td></tr><tr><td valign="top"><a href="#mount_existing_partition-6">mount_existing_partition/6*</a></td><td>Mount an existing partition.</td></tr><tr><td valign="top"><a href="#mount_formatted_partition-6">mount_formatted_partition/6*</a></td><td>Mount a newly formatted partition.</td></tr><tr><td valign="top"><a href="#public_key-3">public_key/3</a></td><td>Returns the node's public key for secure key exchange.</td></tr><tr><td valign="top"><a href="#update_node_config-2">update_node_config/2*</a></td><td>Update the node's configuration with the new store.</td></tr><tr><td valign="top"><a href="#update_store_path-2">update_store_path/2*</a></td><td>Update the store path to use the mounted volume.</td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="check_base_device-8"></a>
-
-### check_base_device/8 * ###
-
-<pre><code>
-check_base_device(Device::term(), Partition::term(), PartitionType::term(), VolumeName::term(), MountPoint::term(), StorePath::term(), Key::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Device`: The base device to check.<br />`Partition`: The partition to check.<br />`PartitionType`: The type of partition to check.<br />`VolumeName`: The name of the volume to check.<br />`MountPoint`: The mount point to check.<br />`StorePath`: The store path to check.<br />`Key`: The key to check.<br />`Opts`: The options to check.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Check if the base device exists and if it does, check if the partition exists.
-
-<a name="check_partition-8"></a>
-
-### check_partition/8 * ###
-
-<pre><code>
-check_partition(Device::term(), Partition::term(), PartitionType::term(), VolumeName::term(), MountPoint::term(), StorePath::term(), Key::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Device`: The base device to check.<br />`Partition`: The partition to check.<br />`PartitionType`: The type of partition to check.<br />`VolumeName`: The name of the volume to check.<br />`MountPoint`: The mount point to check.<br />`StorePath`: The store path to check.<br />`Key`: The key to check.<br />`Opts`: The options to check.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Check if the partition exists. If it does, attempt to mount it.
-If it doesn't exist, create it, format it with encryption and mount it.
-
-<a name="create_and_mount_partition-8"></a>
-
-### create_and_mount_partition/8 * ###
-
-<pre><code>
-create_and_mount_partition(Device::term(), Partition::term(), PartitionType::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Device`: The device to create the partition on.<br />`Partition`: The partition to create.<br />`PartitionType`: The type of partition to create.<br />`Key`: The key to create the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Create, format and mount a new partition.
-
-<a name="decrypt_volume_key-2"></a>
-
-### decrypt_volume_key/2 * ###
-
-<pre><code>
-decrypt_volume_key(EncryptedKeyBase64::binary(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Opts`: A map of configuration options.<br />
-
-returns: `{ok, DecryptedKey}` on successful decryption, or
-`{error, Binary}` if decryption fails.
-
-Decrypts an encrypted volume key using the node's private key.
-
-This function takes an encrypted key (typically sent by a client who encrypted
-it with the node's public key) and decrypts it using the node's private RSA key.
-
-<a name="format_and_mount-6"></a>
-
-### format_and_mount/6 * ###
-
-<pre><code>
-format_and_mount(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Partition`: The partition to format and mount.<br />`Key`: The key to format and mount the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Format and mount a newly created partition.
-
-<a name="info-1"></a>
-
-### info/1 ###
-
-`info(X1) -> any()`
-
-Exported function for getting device info, controls which functions are
-exposed via the device API.
-
-<a name="info-3"></a>
-
-### info/3 ###
-
-`info(Msg1, Msg2, Opts) -> any()`
-
-HTTP info response providing information about this device
-
-<a name="mount-3"></a>
-
-### mount/3 ###
-
-<pre><code>
-mount(M1::term(), M2::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`M1`: Base message for context.<br />`M2`: Request message with operation details.<br />`Opts`: A map of configuration options for volume operations.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Handles the complete process of secure encrypted volume mounting.
-
-This function performs the following operations depending on the state:
-1. Validates the encryption key is present
-2. Checks if the base device exists
-3. Checks if the partition exists on the device
-4. If the partition exists, attempts to mount it
-5. If the partition doesn't exist, creates it, formats it with encryption
-and mounts it
-6. Updates the node's store configuration to use the mounted volume
-
-Config options in Opts map:
-- volume_key: (Required) The encryption key
-- volume_device: Base device path
-- volume_partition: Partition path
-- volume_partition_type: Filesystem type
-- volume_name: Name for encrypted volume
-- volume_mount_point: Where to mount
-- volume_store_path: Store path on volume
-
-<a name="mount_existing_partition-6"></a>
-
-### mount_existing_partition/6 * ###
-
-<pre><code>
-mount_existing_partition(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Partition`: The partition to mount.<br />`Key`: The key to mount.<br />`MountPoint`: The mount point to mount.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Mount an existing partition.
-
-<a name="mount_formatted_partition-6"></a>
-
-### mount_formatted_partition/6 * ###
-
-<pre><code>
-mount_formatted_partition(Partition::term(), Key::term(), MountPoint::term(), VolumeName::term(), StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`Partition`: The partition to mount.<br />`Key`: The key to mount the partition with.<br />`MountPoint`: The mount point to mount the partition to.<br />`VolumeName`: The name of the volume to mount.<br />`StorePath`: The store path to mount.<br />`Opts`: The options to mount.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Mount a newly formatted partition.
-
-<a name="public_key-3"></a>
-
-### public_key/3 ###
-
-<pre><code>
-public_key(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-`Opts`: A map of configuration options.<br />
-
-returns: `{ok, Map}` containing the node's public key on success, or
-`{error, Binary}` if the node's wallet is not available.
-
-Returns the node's public key for secure key exchange.
-
-This function retrieves the node's wallet and extracts the public key
-for encryption purposes. It allows users to securely exchange encryption keys
-by first encrypting their volume key with the node's public key.
-
-The process ensures that sensitive keys are never transmitted in plaintext.
-The encrypted key can then be securely sent to the node, which will decrypt it
-using its private key before using it for volume encryption.
-
-<a name="update_node_config-2"></a>
-
-### update_node_config/2 * ###
-
-<pre><code>
-update_node_config(NewStore::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`NewStore`: The new store to update the node's configuration with.<br />`Opts`: The options to update the node's configuration with.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Update the node's configuration with the new store.
-
-<a name="update_store_path-2"></a>
-
-### update_store_path/2 * ###
-
-<pre><code>
-update_store_path(StorePath::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
-</code></pre>
-<br />
-
-`StorePath`: The store path to update.<br />`Opts`: The options to update.<br />
-
-returns: `{ok, Binary}` on success with operation result message, or
-`{error, Binary}` on failure with error message.
-
-Update the store path to use the mounted volume.
-
-
---- END OF FILE: docs/resources/source-code/dev_volume.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_wasi.md ---
-# [Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasi.erl)
+# [Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_wasi.erl)
 
 
 
@@ -11354,7 +10918,7 @@ Return the stdout buffer from a state message.
 --- END OF FILE: docs/resources/source-code/dev_wasi.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_wasm.md ---
-# [Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasm.erl)
+# [Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_wasm.erl)
 
 
 
@@ -15488,16 +15052,16 @@ and O(1) access maps), such that operations upon them are efficient.
 The structure of the conversions is as follows:
 
 <pre>
-Arweave TX/ANS-104 ==> dev_codec_ans104:from/1 ==> TABM
-HTTP Signed Message ==> dev_codec_httpsig_conv:from/1 ==> TABM
-Flat Maps ==> dev_codec_flat:from/1 ==> TABM
+Arweave TX/ANS-104 ==> dev_ans104:from/1 ==> TABM
+HTTP Signed Message ==> dev_httpsig_conv:from/1 ==> TABM
+Flat Maps ==> dev_flat:from/1 ==> TABM
 
-TABM ==> dev_codec_structured:to/1 ==> AO-Core Message
-AO-Core Message ==> dev_codec_structured:from/1 ==> TABM
+TABM ==> dev_structured:to/1 ==> AO-Core Message
+AO-Core Message ==> dev_structured:from/1 ==> TABM
 
-TABM ==> dev_codec_ans104:to/1 ==> Arweave TX/ANS-104
-TABM ==> dev_codec_httpsig_conv:to/1 ==> HTTP Signed Message
-TABM ==> dev_codec_flat:to/1 ==> Flat Maps
+TABM ==> dev_ans104:to/1 ==> Arweave TX/ANS-104
+TABM ==> dev_httpsig_conv:to/1 ==> HTTP Signed Message
+TABM ==> dev_flat:to/1 ==> Flat Maps
 ...
 </pre>
 
@@ -20168,155 +19732,6 @@ Return a random element from a list, weighted by the values in the list.
 
 --- END OF FILE: docs/resources/source-code/hb_util.md ---
 
---- START OF FILE: docs/resources/source-code/hb_volume.md ---
-# [Module hb_volume.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb_volume.erl)
-
-
-
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#change_node_store-2">change_node_store/2</a></td><td></td></tr><tr><td valign="top"><a href="#check_for_device-1">check_for_device/1</a></td><td></td></tr><tr><td valign="top"><a href="#create_actual_partition-2">create_actual_partition/2*</a></td><td></td></tr><tr><td valign="top"><a href="#create_mount_info-3">create_mount_info/3*</a></td><td></td></tr><tr><td valign="top"><a href="#create_partition-2">create_partition/2</a></td><td></td></tr><tr><td valign="top"><a href="#format_disk-2">format_disk/2</a></td><td></td></tr><tr><td valign="top"><a href="#get_partition_info-1">get_partition_info/1*</a></td><td></td></tr><tr><td valign="top"><a href="#list_partitions-0">list_partitions/0</a></td><td></td></tr><tr><td valign="top"><a href="#mount_disk-4">mount_disk/4</a></td><td></td></tr><tr><td valign="top"><a href="#mount_opened_volume-3">mount_opened_volume/3*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_disk_info-2">parse_disk_info/2*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_disk_line-2">parse_disk_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_disk_model_line-2">parse_disk_model_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_disk_units_line-2">parse_disk_units_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_io_size_line-2">parse_io_size_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#parse_sector_size_line-2">parse_sector_size_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#process_disk_line-2">process_disk_line/2*</a></td><td></td></tr><tr><td valign="top"><a href="#update_store_config-2">update_store_config/2*</a></td><td></td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="change_node_store-2"></a>
-
-### change_node_store/2 ###
-
-<pre><code>
-change_node_store(StorePath::binary(), CurrentStore::list()) -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-<a name="check_for_device-1"></a>
-
-### check_for_device/1 ###
-
-<pre><code>
-check_for_device(Device::binary()) -&gt; boolean()
-</code></pre>
-<br />
-
-<a name="create_actual_partition-2"></a>
-
-### create_actual_partition/2 * ###
-
-`create_actual_partition(Device, PartType) -> any()`
-
-<a name="create_mount_info-3"></a>
-
-### create_mount_info/3 * ###
-
-`create_mount_info(Partition, MountPoint, VolumeName) -> any()`
-
-<a name="create_partition-2"></a>
-
-### create_partition/2 ###
-
-<pre><code>
-create_partition(Device::binary(), PartType::binary()) -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-<a name="format_disk-2"></a>
-
-### format_disk/2 ###
-
-<pre><code>
-format_disk(Partition::binary(), EncKey::binary()) -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-<a name="get_partition_info-1"></a>
-
-### get_partition_info/1 * ###
-
-`get_partition_info(Device) -> any()`
-
-<a name="list_partitions-0"></a>
-
-### list_partitions/0 ###
-
-<pre><code>
-list_partitions() -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-<a name="mount_disk-4"></a>
-
-### mount_disk/4 ###
-
-<pre><code>
-mount_disk(Partition::binary(), EncKey::binary(), MountPoint::binary(), VolumeName::binary()) -&gt; {ok, map()} | {error, binary()}
-</code></pre>
-<br />
-
-<a name="mount_opened_volume-3"></a>
-
-### mount_opened_volume/3 * ###
-
-`mount_opened_volume(Partition, MountPoint, VolumeName) -> any()`
-
-<a name="parse_disk_info-2"></a>
-
-### parse_disk_info/2 * ###
-
-`parse_disk_info(Device, Lines) -> any()`
-
-<a name="parse_disk_line-2"></a>
-
-### parse_disk_line/2 * ###
-
-`parse_disk_line(Line, Info) -> any()`
-
-<a name="parse_disk_model_line-2"></a>
-
-### parse_disk_model_line/2 * ###
-
-`parse_disk_model_line(Line, Info) -> any()`
-
-<a name="parse_disk_units_line-2"></a>
-
-### parse_disk_units_line/2 * ###
-
-`parse_disk_units_line(Line, Info) -> any()`
-
-<a name="parse_io_size_line-2"></a>
-
-### parse_io_size_line/2 * ###
-
-`parse_io_size_line(Line, Info) -> any()`
-
-<a name="parse_sector_size_line-2"></a>
-
-### parse_sector_size_line/2 * ###
-
-`parse_sector_size_line(Line, Info) -> any()`
-
-<a name="process_disk_line-2"></a>
-
-### process_disk_line/2 * ###
-
-`process_disk_line(Line, X2) -> any()`
-
-<a name="update_store_config-2"></a>
-
-### update_store_config/2 * ###
-
-<pre><code>
-update_store_config(StoreConfig::term(), NewPath::binary()) -&gt; term()
-</code></pre>
-<br />
-
-
---- END OF FILE: docs/resources/source-code/hb_volume.md ---
 
 --- START OF FILE: docs/resources/source-code/hb.md ---
 # [Module hb.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/hb.erl)
@@ -20607,7 +20022,7 @@ HyperBEAM is built with a modular architecture to ensure scalability, maintainab
 - **HyperBEAM Core**: The main framework that orchestrates data processing, storage, and routing.
 - **Compute Unit**: Handles computational tasks and integrates with the HyperBEAM core for distributed processing.
 - **Trusted Execution Environment (TEE)**: Ensures secure execution of sensitive operations.
-- **Client Libraries**: Tools and SDKs for interacting with HyperBEAM, including the JavaScript client.
+- **Client Libraries**: Tools for interacting with HyperBEAM, including the JavaScript client.
 
 ## Getting Started
 
@@ -20638,14 +20053,13 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="ar_wallet.md" class="module">ar_wallet</a></td></tr>
 <tr><td><a href="dev_cache.md" class="module">dev_cache</a></td></tr>
 <tr><td><a href="dev_cacheviz.md" class="module">dev_cacheviz</a></td></tr>
-<tr><td><a href="dev_codec_ans104.md" class="module">dev_codec_ans104</a></td></tr>
-<tr><td><a href="dev_codec_flat.md" class="module">dev_codec_flat</a></td></tr>
-<tr><td><a href="dev_codec_httpsig.md" class="module">dev_codec_httpsig</a></td></tr>
-<tr><td><a href="dev_codec_httpsig_conv.md" class="module">dev_codec_httpsig_conv</a></td></tr>
-<tr><td><a href="dev_codec_json.md" class="module">dev_codec_json</a></td></tr>
-<tr><td><a href="dev_codec_structured.md" class="module">dev_codec_structured</a></td></tr>
+<tr><td><a href="dev_ans104.md" class="module">dev_ans104</a></td></tr>
+<tr><td><a href="dev_flat.md" class="module">dev_flat</a></td></tr>
+<tr><td><a href="dev_httpsig.md" class="module">dev_httpsig</a></td></tr>
+<tr><td><a href="dev_httpsig_conv.md" class="module">dev_httpsig_conv</a></td></tr>
+<tr><td><a href="dev_json.md" class="module">dev_json</a></td></tr>
+<tr><td><a href="dev_structured.md" class="module">dev_structured</a></td></tr>
 <tr><td><a href="dev_cron.md" class="module">dev_cron</a></td></tr>
-<tr><td><a href="dev_cu.md" class="module">dev_cu</a></td></tr>
 <tr><td><a href="dev_dedup.md" class="module">dev_dedup</a></td></tr>
 <tr><td><a href="dev_delegated_compute.md" class="module">dev_delegated_compute</a></td></tr>
 <tr><td><a href="dev_faff.md" class="module">dev_faff</a></td></tr>
@@ -20655,14 +20069,12 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_hyperbuddy.md" class="module">dev_hyperbuddy</a></td></tr>
 <tr><td><a href="dev_json_iface.md" class="module">dev_json_iface</a></td></tr>
 <tr><td><a href="dev_local_name.md" class="module">dev_local_name</a></td></tr>
-<tr><td><a href="dev_lookup.md" class="module">dev_lookup</a></td></tr>
 <tr><td><a href="dev_lua.md" class="module">dev_lua</a></td></tr>
 <tr><td><a href="dev_lua_lib.md" class="module">dev_lua_lib</a></td></tr>
 <tr><td><a href="dev_lua_test.md" class="module">dev_lua_test</a></td></tr>
 <tr><td><a href="dev_manifest.md" class="module">dev_manifest</a></td></tr>
 <tr><td><a href="dev_message.md" class="module">dev_message</a></td></tr>
 <tr><td><a href="dev_meta.md" class="module">dev_meta</a></td></tr>
-<tr><td><a href="dev_monitor.md" class="module">dev_monitor</a></td></tr>
 <tr><td><a href="dev_multipass.md" class="module">dev_multipass</a></td></tr>
 <tr><td><a href="dev_name.md" class="module">dev_name</a></td></tr>
 <tr><td><a href="dev_node_process.md" class="module">dev_node_process</a></td></tr>
@@ -20682,10 +20094,9 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_scheduler_server.md" class="module">dev_scheduler_server</a></td></tr>
 <tr><td><a href="dev_simple_pay.md" class="module">dev_simple_pay</a></td></tr>
 <tr><td><a href="dev_snp.md" class="module">dev_snp</a></td></tr>
-<tr><td><a href="dev_snp_nif.md" class="module">dev_snp_nif</a></td></tr>
+<tr><td><a href="hb_snp_nif.md" class="module">hb_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
-<tr><td><a href="dev_volume.md" class="module">dev_volume</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
 <tr><td><a href="dev_wasm.md" class="module">dev_wasm</a></td></tr>
 <tr><td><a href="hb.md" class="module">hb</a></td></tr>
@@ -20733,7 +20144,6 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="hb_test_utils.md" class="module">hb_test_utils</a></td></tr>
 <tr><td><a href="hb_tracer.md" class="module">hb_tracer</a></td></tr>
 <tr><td><a href="hb_util.md" class="module">hb_util</a></td></tr>
-<tr><td><a href="hb_volume.md" class="module">hb_volume</a></td></tr>
 <tr><td><a href="rsa_pss.md" class="module">rsa_pss</a></td></tr></table>
 
 
@@ -20999,7 +20409,7 @@ These options control how HyperBEAM manages devices.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
-<!-- Complex options like preloaded_devices, devices are omitted -->
+<!-- Complex options like preloaded-store, devices are omitted -->
 
 ### Debug & Development
 
@@ -21421,4 +20831,3 @@ Detailed documentation on the following topics will be added:
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the [HyperBEAM OS repository](https://github.com/permaweb/hb-os) for preliminary details on configuration and deployment. 
 --- END OF FILE: docs/run/tee-nodes.md ---
-

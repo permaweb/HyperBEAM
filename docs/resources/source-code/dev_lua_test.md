@@ -1,4 +1,4 @@
-# [Module dev_lua_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_lua_test.erl)
+# [Module dev_lua_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_lua_test.erl)
 
 
 
