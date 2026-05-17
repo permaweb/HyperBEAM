@@ -14,7 +14,28 @@
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(plugin_args).
 
--export([opts/0, parse/2, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
+-export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0]).
+-export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
+-export([default_preloaded_dirs/1]).
+
+-define(NAMESPACE, device).
+-define(DEPS, [{default, app_discovery}, {default, compile}]).
+
+%% @doc Register a `rebar3 device <provider>' command.
+provider(State, Provider, Module, Example, ShortDesc, Desc) ->
+    ProviderSpec =
+        providers:create([
+            {name, Provider},
+            {namespace, ?NAMESPACE},
+            {module, Module},
+            {bare, true},
+            {deps, ?DEPS},
+            {example, Example},
+            {opts, opts()},
+            {short_desc, ShortDesc},
+            {desc, Desc}
+        ]),
+    {ok, rebar_state:add_provider(State, ProviderSpec)}.
 
 opts() ->
     [
@@ -61,8 +82,25 @@ to_bin(B) when is_binary(B) -> B.
 maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
 
+%% @doc Scan the selected device roots from parsed provider arguments.
+scan_devices(Args) ->
+    hb_packager:scan(
+        maps:get(<<"device-src">>, Args),
+        #{ <<"device-roots">> => maps:get(<<"device-roots">>, Args, all) }
+    ).
+
+%% @doc Common package options for provider commands.
+package_opts() ->
+    #{ <<"bootstrap-device-src">> => bootstrap_preloaded_dirs() }.
+
+%% @doc Load the configured wallet, or the default wallet if omitted.
+load_wallet(undefined) ->
+    hb:wallet();
+load_wallet(Path) ->
+    hb:wallet(binary_to_list(hb_util:bin(Path))).
+
 default_device_src() ->
-    case filelib:is_file("src/core/hb_ao_device.erl") of
+    case is_hb_checkout() of
         true -> "src/preloaded";
         false -> "src"
     end.
@@ -71,9 +109,34 @@ bootstrap_preloaded_dirs() ->
     bootstrap_preloaded_dirs([]).
 
 bootstrap_preloaded_dirs([]) ->
-    case filelib:is_file("src/core/hb_ao_device.erl") of
+    case is_hb_checkout() of
         true -> [<<"src/preloaded">>];
         false -> [<<"_build/default/lib/hb/src/preloaded">>]
     end;
 bootstrap_preloaded_dirs(Dirs) ->
     Dirs.
+
+%% @doc Return dependency preloaded dirs needed outside the HB checkout.
+default_preloaded_dirs(Dirs) ->
+    DefaultDir = <<"_build/default/lib/hb/src/preloaded">>,
+    case is_hb_checkout() orelse source_covers(DefaultDir, Dirs) of
+        true ->
+            {ok, []};
+        false ->
+            case filelib:is_dir(DefaultDir) of
+                true -> {ok, [DefaultDir]};
+                false -> {error, missing_hb_dependency_preloaded_devices}
+            end
+    end.
+
+is_hb_checkout() ->
+    filelib:is_file("src/core/hb_ao_device.erl").
+
+source_covers(Dir, Dirs) ->
+    lists:any(fun(D) -> contains_dir(D, Dir) end, Dirs).
+
+contains_dir(Parent, Child) ->
+    ParentPath = filename:absname(binary_to_list(hb_util:bin(Parent))),
+    ChildPath = filename:absname(binary_to_list(hb_util:bin(Child))),
+    ParentPath =:= ChildPath orelse
+        lists:prefix(ParentPath ++ "/", ChildPath).

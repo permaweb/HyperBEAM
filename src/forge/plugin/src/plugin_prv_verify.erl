@@ -15,36 +15,26 @@
 -module(plugin_prv_verify).
 -export([init/1, do/1, format_error/1]).
 
--define(NAMESPACE, device).
 -define(PROVIDER, verify).
 
 init(State) ->
-    Provider = providers:create([
-        {name, ?PROVIDER},
-        {namespace, ?NAMESPACE},
-        {module, ?MODULE},
-        {bare, true},
-        {deps, [{default, app_discovery}, {default, compile}]},
-        {example, "rebar3 device verify"},
-        {opts, plugin_args:opts()},
-        {short_desc, "Verify packaged device BEAM archives."},
-        {desc,
-            "Re-load each generated _hb_device_* archive and check that "
-            "exports, internal-call rewriting, and source helper non-loading "
-            "invariants hold."
-        }
-    ]),
-    {ok, rebar_state:add_provider(State, Provider)}.
+    plugin_args:provider(
+        State,
+        ?PROVIDER,
+        ?MODULE,
+        "rebar3 device verify",
+        "Verify packaged device BEAM archives.",
+        "Re-load generated _hb_device_* archives and check invariants."
+    ).
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/device-packages"),
-    Dirs = maps:get(<<"device-src">>, Args),
     Output = maps:get(<<"output-dir">>, Args),
-    Roots = maps:get(<<"device-roots">>, Args),
-    % Scan the source directory for all device groups.
-    Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-    % Package each device group.
-    Pkgs = hb_packager:package_all(Groups, package_opts()),
+    Pkgs =
+        hb_packager:package_all(
+            plugin_args:scan_devices(Args),
+            plugin_args:package_opts()
+        ),
     % Verify each package.
     Results = [verify_pkg(Output, P) || P <- Pkgs],
     case [R || R <- Results, R =/= ok] of
@@ -108,9 +98,6 @@ load_archive_contents(Root, Modules, Resources) ->
 
 default_exports() ->
     [{module_info, 0}, {module_info, 1}].
-
-package_opts() ->
-    #{ <<"bootstrap-device-src">> => plugin_args:bootstrap_preloaded_dirs() }.
 
 %% @doc Check that the helpers are not loaded separately from the root module.
 check_helpers_unloaded(Output, Mod, Root, Helpers) ->

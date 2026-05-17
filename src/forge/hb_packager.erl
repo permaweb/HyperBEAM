@@ -32,6 +32,7 @@
 -export([package/2, package_all/2]).
 -export([spec_message/2, impl_message/3]).
 -export([base32_lower/1, load_archive/1]).
+-export([seed_device_names/1, volatile_device_store/1, load_and_cache_devices/3]).
 -ifdef(TEST).
 -export([test_fixture_dir/0]).
 -endif.
@@ -668,7 +669,7 @@ with_bootstrap_package_devices(Groups, Opts, Fun) ->
                 <<"device-store">> => Store
             },
         SeedPkgs = [package(G, BootOpts) || G <- seed_groups(Groups, Opts)],
-        ok = load_and_cache_seed_devices(SeedPkgs, BootOpts),
+        ok = load_and_cache_devices(SeedPkgs, seed_device_names(Opts), BootOpts),
         try Fun(BootOpts)
         after purge_package_modules(SeedPkgs)
         end
@@ -735,18 +736,18 @@ bootstrap_device_dirs(Opts) ->
         Dirs when is_list(Dirs) -> Dirs
     end.
 
-load_and_cache_seed_devices(Pkgs, Opts) ->
+load_and_cache_devices(Pkgs, Names, Opts) ->
     ByName = maps:from_list([{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]),
     lists:foreach(
         fun(Name) ->
             Pkg = maps:get(Name, ByName),
             ok = load_archive(Pkg),
-            cache_seed_device(Name, maps:get(module_name, Pkg), Opts)
+            cache_device(Name, maps:get(module_name, Pkg), Opts)
         end,
-        seed_device_names(Opts)
+        Names
     ).
 
-cache_seed_device(Name, ModName, Opts) ->
+cache_device(Name, ModName, Opts) ->
     Store = hb_maps:get(<<"device-store">>, Opts, undefined, Opts),
     hb_store:write(
         Store,

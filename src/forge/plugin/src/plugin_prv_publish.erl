@@ -7,34 +7,22 @@
 -module(plugin_prv_publish).
 -export([init/1, do/1, format_error/1]).
 
--define(NAMESPACE, device).
 -define(PROVIDER, publish).
 
 init(State) ->
-    % Create the provider.
-    Provider =
-        providers:create([
-            {name, ?PROVIDER},
-            {namespace, ?NAMESPACE},
-            {module, ?MODULE},
-            {bare, true},
-            {deps, [{default, app_discovery}, {default, compile}]},
-            {example, "rebar3 device publish --key wallet.json"},
-            {opts, plugin_args:opts()},
-            {short_desc, "Sign and upload packaged devices to Arweave."},
-            {desc,
-                "Package and sign each device's spec + impl messages, then "
-                "publish them via the configured Arweave bundler."
-            }
-        ]),
-    {ok, rebar_state:add_provider(State, Provider)}.
+    plugin_args:provider(
+        State,
+        ?PROVIDER,
+        ?MODULE,
+        "rebar3 device publish --key wallet.json",
+        "Sign and upload packaged devices to Arweave.",
+        "Package and sign device specs + implementations, then upload them."
+    ).
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/device-publish-store"),
-    Dirs = maps:get(<<"device-src">>, Args),
-    Roots = maps:get(<<"device-roots">>, Args, all),
     KeyPath = maps:get(<<"key">>, Args),
-    Wallet = load_wallet(KeyPath),
+    Wallet = plugin_args:load_wallet(KeyPath),
     {ok, Preload} =
         plugin_prv_preload:run(
             Args#{ <<"device-roots">> => all },
@@ -49,10 +37,7 @@ do(State) ->
             <<"store">> =>
                 [#{ <<"store-module">> => hb_store_arweave }]
         },
-    % Scan the source directory for root device groups.
-    Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
-    % Package each device group.
-    Pkgs = hb_packager:package_all(Groups, NodeOpts),
+    Pkgs = hb_packager:package_all(plugin_args:scan_devices(Args), NodeOpts),
     % Sign and upload each package.
     Results =
         lists:map(
@@ -87,9 +72,6 @@ do(State) ->
         Results
     ),
     {ok, State}.
-
-load_wallet(undefined) -> hb:wallet();
-load_wallet(Path) -> hb:wallet(binary_to_list(hb_util:bin(Path))).
 
 format_error(Reason) ->
     io_lib:format("device publish failed: ~p", [Reason]).

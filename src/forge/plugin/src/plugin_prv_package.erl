@@ -6,27 +6,17 @@
 -module(plugin_prv_package).
 -export([init/1, do/1, format_error/1]).
 
--define(NAMESPACE, device).
 -define(PROVIDER, package).
--define(DEPS, [{default, app_discovery}, {default, compile}]).
 
 init(State) ->
-    Provider = providers:create([
-        {name, ?PROVIDER},
-        {namespace, ?NAMESPACE},
-        {module, ?MODULE},
-        {bare, true},
-        {deps, ?DEPS},
-        {example, "rebar3 device package"},
-        {opts, opts()},
-        {short_desc, "Generate packaged device BEAM archives."},
-        {desc,
-            "Scan dev_* Erlang sources, group root + helpers, and emit "
-            "_hb_device_<name>_<hash> BEAM archives. Output goes to the "
-            "configured --output-dir (default: _build/device-packages)."
-        }
-    ]),
-    {ok, rebar_state:add_provider(State, Provider)}.
+    plugin_args:provider(
+        State,
+        ?PROVIDER,
+        ?MODULE,
+        "rebar3 device package",
+        "Generate packaged device BEAM archives.",
+        "Scan dev_* Erlang sources and emit _hb_device_* BEAM archives."
+    ).
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/device-packages"),
@@ -36,11 +26,7 @@ do(State) ->
     end.
 
 run_with_args(Args) ->
-    Dirs = maps:get(<<"device-src">>, Args),
     Output = maps:get(<<"output-dir">>, Args),
-    Roots = maps:get(<<"device-roots">>, Args, all),
-    % Scan the source directory for all device groups.
-    Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
     OutputBin = hb_util:bin(Output),
     ok = filelib:ensure_dir(filename:join(binary_to_list(OutputBin), ".keep")),
     % Package each device group, and write to the output directory.
@@ -51,7 +37,10 @@ run_with_args(Args) ->
                 write_pkg(OutputBin, Pkg),
                 Pkg
             end,
-            hb_packager:package_all(Groups, package_opts())
+            hb_packager:package_all(
+                plugin_args:scan_devices(Args),
+                plugin_args:package_opts()
+            )
         ),
     rebar_api:info(
         "device package: emitted ~p archives to ~s",
@@ -72,8 +61,3 @@ format_error({Type, Reason}) ->
     io_lib:format("device package failed: ~p — ~p", [Type, Reason]);
 format_error(Reason) ->
     io_lib:format("device package failed: ~p", [Reason]).
-
-opts() -> plugin_args:opts().
-
-package_opts() ->
-    #{ <<"bootstrap-device-src">> => plugin_args:bootstrap_preloaded_dirs() }.

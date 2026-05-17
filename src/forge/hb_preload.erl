@@ -64,7 +64,7 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     %% Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
     hb_store:start(StoreCfg, #{}, Opts),
-    DeviceStore = device_store(<<"preload-normal">>),
+    DeviceStore = hb_packager:volatile_device_store(<<"preload-normal">>),
     hb_store:start(DeviceStore, #{}, Opts),
     LocalOpts =
         Opts#{
@@ -72,7 +72,12 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
             <<"device-store">> => DeviceStore,
             <<"priv-wallet">> => Wallet
         },
-    ok = load_build_devices(Pkgs, LocalOpts),
+    ok =
+        hb_packager:load_and_cache_devices(
+            Pkgs,
+            hb_packager:seed_device_names(Opts),
+            LocalOpts
+        ),
     %% Sign and write each spec + each impl message; collect signed IDs.
     {SpecIDs, ImplIDs} =
         lists:foldl(
@@ -105,48 +110,6 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
             pkgs => Pkgs
         }
     }.
-
-%% @doc Build-local device cache used only while signing final preload
-%% artifacts.
-device_store(Prefix) ->
-    #{
-        <<"store-module">> => hb_store_volatile,
-        <<"name">> =>
-            iolist_to_binary([
-                Prefix,
-                <<"-">>,
-                integer_to_binary(erlang:unique_integer([positive]))
-            ])
-    }.
-
-%% @doc Load the final generated devices needed to sign and write preload
-%% artifacts. These are normal generated packages, never source modules.
-load_build_devices(Pkgs, Opts) ->
-    ByName =
-        maps:from_list([{maps:get(device_name, Pkg), Pkg} || Pkg <- Pkgs]),
-    lists:foreach(
-        fun(Name) ->
-            Pkg = maps:get(Name, ByName),
-            ok = hb_packager:load_archive(Pkg),
-            cache_build_device(Name, maps:get(module_name, Pkg), Opts)
-        end,
-        required_build_devices(Opts)
-    ).
-
-cache_build_device(Name, Mod, Opts) ->
-    Store = hb_maps:get(<<"device-store">>, Opts, undefined, Opts),
-    hb_store:write(
-        Store,
-        #{ <<"devices/", Name/binary>> => atom_to_binary(Mod, utf8) },
-        Opts
-    ).
-
-required_build_devices(Opts) ->
-    lists:usort([
-        <<"message@1.0">>,
-        <<"structured@1.0">>,
-        hb_opts:get(commitment_device, <<"httpsig@1.0">>, Opts)
-    ]).
 
 %% @doc Write a package to the store by writing its spec and implementation messages.
 %% Returns `{SignedSpecID, SignedImplID}'.

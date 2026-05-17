@@ -14,28 +14,17 @@
 -module(plugin_prv_preload).
 -export([init/1, do/1, format_error/1, run/2]).
 
--define(NAMESPACE, device).
 -define(PROVIDER, preload).
 
 init(State) ->
-    % Create the provider.
-    Provider =
-        providers:create([
-            {name, ?PROVIDER},
-            {namespace, ?NAMESPACE},
-            {module, ?MODULE},
-            {bare, true},
-            {deps, [{default, app_discovery}, {default, compile}]},
-            {example, "rebar3 device preload"},
-            {opts, plugin_args:opts()},
-            {short_desc, "Generate a HyperBEAM preloaded-store."},
-            {desc,
-                "Package, sign and index the discovered devices into a "
-                "LMDB-backed preloaded-store. Outputs the store path "
-                "and the index message ID."
-            }
-        ]),
-    {ok, rebar_state:add_provider(State, Provider)}.
+    plugin_args:provider(
+        State,
+        ?PROVIDER,
+        ?MODULE,
+        "rebar3 device preload",
+        "Generate a HyperBEAM preloaded-store.",
+        "Package, sign and index devices into an LMDB preloaded-store."
+    ).
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/preloaded-store"),
@@ -49,10 +38,9 @@ do(State) ->
 run(Args, NodeOpts) ->
     Dirs = maps:get(<<"device-src">>, Args),
     OutputDir = maps:get(<<"output-dir">>, Args),
-    Roots = maps:get(<<"device-roots">>, Args, all),
     KeyPath = maps:get(<<"key">>, Args),
-    Wallet = load_wallet(KeyPath),
-    case default_preloaded_dirs(Dirs) of
+    Wallet = plugin_args:load_wallet(KeyPath),
+    case plugin_args:default_preloaded_dirs(Dirs) of
         {ok, DefaultDirs} ->
             PackageOpts =
                 (package_opts(Args, NodeOpts))#{
@@ -61,7 +49,7 @@ run(Args, NodeOpts) ->
                 },
             Groups =
                 hb_packager:scan(DefaultDirs, #{}) ++
-                hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
+                plugin_args:scan_devices(Args),
             {ok, Result} =
                 hb_preload:build_groups(Groups, Wallet, OutputDir, PackageOpts),
             HeaderPath = header_path(OutputDir),
@@ -82,11 +70,6 @@ run(Args, NodeOpts) ->
 default_node_opts() ->
     #{}.
 
-load_wallet(undefined) ->
-    hb:wallet();
-load_wallet(Path) ->
-    hb:wallet(binary_to_list(hb_util:bin(Path))).
-
 %% @doc Add test compile flags when the caller is building a test store.
 package_opts(Args, NodeOpts) ->
     case maps:get(<<"test">>, Args, false) of
@@ -94,33 +77,6 @@ package_opts(Args, NodeOpts) ->
         _ -> NodeOpts
     end.
 
-%% @doc Return the HyperBEAM dependency's preloaded source directory.
-default_preloaded_dirs(Dirs) ->
-    DefaultDir = <<"_build/default/lib/hb/src/preloaded">>,
-    case is_hb_checkout() orelse source_covers(DefaultDir, Dirs) of
-        true ->
-            {ok, []};
-        false ->
-            case filelib:is_dir(DefaultDir) of
-                true -> {ok, [DefaultDir]};
-                false -> {error, missing_hb_dependency_preloaded_devices}
-            end
-    end.
-
-%% @doc Return true when the provider is running inside the HyperBEAM repo.
-is_hb_checkout() ->
-    filelib:is_file("src/core/hb_ao_device.erl").
-
-%% @doc Return true when `Dirs' already includes `Dir'.
-source_covers(Dir, Dirs) ->
-    lists:any(fun(D) -> contains_dir(D, Dir) end, Dirs).
-
-%% @doc Return true when `Parent' is equal to, or contains, `Child'.
-contains_dir(Parent, Child) ->
-    ParentPath = filename:absname(binary_to_list(hb_util:bin(Parent))),
-    ChildPath = filename:absname(binary_to_list(hb_util:bin(Child))),
-    ParentPath =:= ChildPath orelse
-        lists:prefix(ParentPath ++ "/", ChildPath).
 
 %% @doc Construct the path to the preloaded-store index header.
 header_path(OutputDir) ->

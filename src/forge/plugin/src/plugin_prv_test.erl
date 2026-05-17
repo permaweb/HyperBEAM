@@ -8,28 +8,17 @@
 -module(plugin_prv_test).
 -export([init/1, do/1, format_error/1]).
 
--define(NAMESPACE, device).
 -define(PROVIDER, test).
 
 init(State) ->
-    % Create the provider.
-    Provider =
-        providers:create([
-            {name, ?PROVIDER},
-            {namespace, ?NAMESPACE},
-            {module, ?MODULE},
-            {bare, true},
-            {deps, [{default, app_discovery}, {default, compile}]},
-            {example, "rebar3 device test"},
-            {opts, plugin_args:opts()},
-            {short_desc, "Run device EUnit against a fresh preloaded-store."},
-            {desc,
-                "Package + preload the discovered devices, then run "
-                "the device root EUnit suites with the resulting "
-                "store as the node's preloaded-store."
-            }
-        ]),
-    {ok, rebar_state:add_provider(State, Provider)}.
+    plugin_args:provider(
+        State,
+        ?PROVIDER,
+        ?MODULE,
+        "rebar3 device test",
+        "Run device EUnit against a fresh preloaded-store.",
+        "Package and preload devices, then run their generated EUnit suites."
+    ).
 
 do(State) ->
     Args = plugin_args:parse(State, "_build/device-test-store"),
@@ -41,10 +30,8 @@ do(State) ->
             Args#{ <<"device-roots">> => all, <<"test">> => true },
             #{}
         ),
-    Dirs = maps:get(<<"device-src">>, Args),
     Roots = maps:get(<<"device-roots">>, Args, all),
-    % Scan the source directory for root device groups.
-    Groups = hb_packager:scan(Dirs, #{ <<"device-roots">> => Roots }),
+    Groups = plugin_args:scan_devices(Args),
     % Use the exact packages written to the test preloaded-store.
     SelectedRoots = [maps:get(root, G) || G <- Groups],
     Pkgs =
@@ -185,6 +172,7 @@ start_app(App) ->
 
 with_preloaded_test_modules(Roots, Fun) when is_function(Fun, 1) ->
     {Ebin, Modules} = compile_preloaded_test_modules(),
+    code:add_patha(Ebin),
     try Fun(test_modules_to_run(Modules, Roots))
     after
         code:del_path(Ebin),
@@ -193,22 +181,11 @@ with_preloaded_test_modules(Roots, Fun) when is_function(Fun, 1) ->
     end.
 
 compile_preloaded_test_modules() ->
-    Ebin = filename:join(["_build", "device-test-fixtures", "ebin"]),
-    ok = filelib:ensure_dir(filename:join(Ebin, "x")),
-    code:add_patha(Ebin),
-    Modules =
-        lists:map(
-            fun(Path) ->
-                case compile:file(Path, test_compile_opts(Ebin)) of
-                    {ok, Mod} -> Mod;
-                    {ok, Mod, _} -> Mod;
-                    Error ->
-                        error({preloaded_test_compile_failed, Path, Error})
-                end
-            end,
-            lists:sort(filelib:wildcard("src/preloaded/test/hb_*.erl"))
-        ),
-    {Ebin, Modules}.
+    compile_test_modules(
+        "_build/device-test-fixtures",
+        lists:sort(filelib:wildcard("src/preloaded/test/hb_*.erl")),
+        preloaded_test_compile_failed
+    ).
 
 test_compile_opts(Ebin) ->
     [
@@ -243,7 +220,10 @@ with_core_test_modules(none, Fun) when is_function(Fun, 1) ->
     Fun([]);
 with_core_test_modules({Ebin, Modules}, Fun) when is_function(Fun, 1) ->
     code:add_patha(Ebin),
-    lists:foreach(fun load_core_test_module/1, Modules),
+    lists:foreach(
+        fun(Mod) -> load_test_module(Mod, core_test_load_failed) end,
+        Modules
+    ),
     rebar_api:info(
         "device test: running core and packaged-device EUnit together",
         []
@@ -255,15 +235,11 @@ with_core_test_modules({Ebin, Modules}, Fun) when is_function(Fun, 1) ->
     end.
 
 compile_core_test_modules() ->
-    Ebin = filename:join(["_build", "device-test-core", "ebin"]),
-    file:del_dir_r(filename:dirname(Ebin)),
-    ok = filelib:ensure_dir(filename:join(Ebin, "x")),
-    Modules = lists:usort([
-        compile_core_test_module(Path, Ebin)
-     ||
-        Path <- core_test_paths()
-    ]),
-    {Ebin, Modules}.
+    compile_test_modules(
+        "_build/device-test-core",
+        core_test_paths(),
+        core_test_compile_failed
+    ).
 
 core_test_paths() ->
     Paths =
@@ -273,19 +249,26 @@ core_test_paths() ->
     First = "src/core/hb_test_parallel.erl",
     [First || lists:member(First, Paths)] ++ lists:sort(Paths -- [First]).
 
-compile_core_test_module(Path, Ebin) ->
+compile_test_modules(BuildDir, Paths, ErrorTag) ->
+    Ebin = filename:join([BuildDir, "ebin"]),
+    file:del_dir_r(filename:dirname(Ebin)),
+    ok = filelib:ensure_dir(filename:join(Ebin, "x")),
+    {Ebin, lists:usort([compile_test_module(Path, Ebin, ErrorTag)
+        || Path <- Paths])}.
+
+compile_test_module(Path, Ebin, ErrorTag) ->
     case compile:file(Path, test_compile_opts(Ebin)) of
         {ok, Mod} -> Mod;
         {ok, Mod, _} -> Mod;
-        Error -> error({core_test_compile_failed, Path, Error})
+        Error -> error({ErrorTag, Path, Error})
     end.
 
-load_core_test_module(Mod) ->
+load_test_module(Mod, ErrorTag) ->
     code:purge(Mod),
     code:delete(Mod),
     case code:load_file(Mod) of
         {module, Mod} -> ok;
-        {error, Reason} -> error({core_test_load_failed, Mod, Reason})
+        {error, Reason} -> error({ErrorTag, Mod, Reason})
     end.
 
 format_error(Reason) ->
