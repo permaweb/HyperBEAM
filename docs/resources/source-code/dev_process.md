@@ -1,4 +1,4 @@
-# [Module dev_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_process.erl)
+# [Module dev_process.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_process.erl)
 
 
 

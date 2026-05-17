@@ -22,6 +22,12 @@ rebar3 device test
 rebar3 eunit-all
 ```
 
+## Local Node
+
+```sh
+rebar3 device local
+```
+
 ## Publish
 
 ```sh
