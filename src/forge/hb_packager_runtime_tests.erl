@@ -84,7 +84,7 @@ all_runtime_test_() ->
                 fun() ->
                     Name = maps:get(device_name, Pkg),
                     {ok, Mod} = hb_ao_device:load(Name, Opts),
-                    ?assert(hb_packager:is_generated_module(Mod)),
+                    ?assert(hb_device_name:is_generated(Mod)),
                     ?assertEqual(maps:get(module_name, Pkg), Mod)
                 end
             end,

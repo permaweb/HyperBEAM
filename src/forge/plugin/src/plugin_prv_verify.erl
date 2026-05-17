@@ -56,7 +56,7 @@ verify_pkg(Output, #{ module_name := Mod, archive := Archive,
               archive_modules := ArchiveModules,
               root_module := Root, helpers := Helpers,
               exports := DeclaredExports }) ->
-    case hb_packager:is_generated_module(Mod) of
+    case hb_device_name:is_generated(Mod) of
         false ->
             {error, {not_generated_atom, Mod}};
         true ->

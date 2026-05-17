@@ -31,8 +31,6 @@
 -export([scan/2, scan/1]).
 -export([package/2, package_all/2]).
 -export([spec_message/2, impl_message/3]).
--export([sanitize_device_name/1, generated_module_name/2]).
--export([is_generated_module/1, generated_module_parts/1]).
 -export([encode_on_loads/1, decode_on_loads/1]).
 -export([base32_lower/1, load_archive/1]).
 -ifdef(TEST).
@@ -44,7 +42,6 @@
 
 -define(VARIANT, <<"ao.N.1">>).
 -define(DEFAULT_DEVICE_VERSION, <<"@1.0">>).
--define(GENERATED_MOD_PREFIX, <<"_hb_device_">>).
 -define(ARCHIVE_CONTENT_TYPE, <<"application/beam-archive">>).
 -define(ON_LOAD_FORMAT, <<"hb-device-on-load-v1">>).
 
@@ -363,7 +360,7 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers,
     SourceID = source_id(PackageFiles, Opts),
     SourceHash = source_id_to_hash(SourceID),
     % Generate the module name using the hash of the source set.
-    ModName = generated_module_name(Implements, SourceHash),
+    ModName = hb_device_name:generated(Implements, SourceHash),
     ?event(packager, {packaging, {root, Root}, {SourceHash, SourceHash}, {mod, ModName}}),
     % Compile the rewritten root + helpers into one deterministic archive.
     ArchivePkg =
@@ -825,70 +822,6 @@ encode_chunk(<<I:5, Rest/bitstring>>, Acc, N) ->
 b32_char(I) when I < 26 -> $a + I;
 b32_char(I) when I < 32 -> $2 + (I - 26).
 
-%% @doc Build the generated module atom for a device.
-generated_module_name(DeviceName, Hash) ->
-    Sanitized = sanitize_device_name(DeviceName),
-    Bin = <<?GENERATED_MOD_PREFIX/binary, Sanitized/binary, "_", Hash/binary>>,
-    binary_to_atom(Bin, utf8).
-
-%% @doc Sanitize a device name so it can appear inside an Erlang atom.
-%% `name@1.0' becomes `name_1_0', `~codec/cookie@1.0' becomes
-%% `codec_cookie_1_0', etc.  ID-style device names are passed through
-%% lowercased.
-sanitize_device_name(Name) when is_binary(Name) ->
-    Lower = string:lowercase(Name),
-    list_to_binary(
-        [sanitize_char(C) || <<C>> <= Lower]
-    );
-sanitize_device_name(Name) when is_list(Name) ->
-    sanitize_device_name(hb_util:bin(Name));
-sanitize_device_name(Name) when is_atom(Name) ->
-    sanitize_device_name(atom_to_binary(Name, utf8)).
-
-sanitize_char(C) when C >= $a, C =< $z -> C;
-sanitize_char(C) when C >= $0, C =< $9 -> C;
-sanitize_char(_) -> $_.
-
-%% @doc Recognise a generated `_hb_device_*' module atom.
-is_generated_module(Atom) when is_atom(Atom) ->
-    is_generated_module(atom_to_binary(Atom, utf8));
-is_generated_module(Bin) when is_binary(Bin) ->
-    case Bin of
-        <<"_hb_device_", _/binary>> -> true;
-        _ -> false
-    end;
-is_generated_module(_) -> false.
-
-%% @doc Decompose a generated module name into its sanitized device name
-%% and hash. Returns `not_generated' if the atom is not in generated form.
-generated_module_parts(Atom) when is_atom(Atom) ->
-    generated_module_parts(atom_to_binary(Atom, utf8));
-generated_module_parts(Bin) when is_binary(Bin) ->
-    case Bin of
-        <<"_hb_device_", Rest/binary>> ->
-            [RootPart | HelperParts] = binary:split(Rest, <<"__">>, [global]),
-            case binary:split(RootPart, <<"_">>, [global]) of
-                Parts when length(Parts) >= 2 ->
-                    [Hash | RevName] = lists:reverse(Parts),
-                    Name =
-                        iolist_to_binary(
-                            lists:join(<<"_">>, lists:reverse(RevName))
-                        ),
-                    case HelperParts of
-                        [] ->
-                            {Name, Hash};
-                        _ ->
-                            Helper = iolist_to_binary(
-                                lists:join(<<"__">>, HelperParts)
-                            ),
-                            {Name, Hash, Helper}
-                    end;
-                _ -> not_generated
-            end;
-        _ -> not_generated
-    end;
-generated_module_parts(_) -> not_generated.
-
 %%% --------------------------------------------------------------------
 %%% Igor rename + archive compile
 %%% --------------------------------------------------------------------
@@ -966,7 +899,7 @@ generated_constituent_module_name(RootMod, Root, Mod) ->
         end,
     binary_to_atom(
         <<(atom_to_binary(RootMod, utf8))/binary, "__",
-            (sanitize_device_name(Tail))/binary>>,
+            (hb_device_name:sanitize(Tail))/binary>>,
         utf8
     ).
 
@@ -1584,11 +1517,11 @@ write_module(Dir, Mod, Body) ->
 
 generated_module_name_pattern_test() ->
     Hash = base32_lower(crypto:hash(sha256, <<"abc">>)),
-    Mod = generated_module_name(<<"message@1.0">>, Hash),
+    Mod = hb_device_name:generated(<<"message@1.0">>, Hash),
     Bin = atom_to_binary(Mod, utf8),
     ?assertMatch(<<"_hb_device_message_1_0_", _/binary>>, Bin),
-    ?assert(is_generated_module(Mod)),
-    ?assertMatch({<<"message_1_0">>, _}, generated_module_parts(Mod)).
+    ?assert(hb_device_name:is_generated(Mod)),
+    ?assertMatch({<<"message_1_0">>, _}, hb_device_name:parts(Mod)).
 
 base32_lower_known_vector_test() ->
     %% RFC 4648 §10 vectors, lowercase, unpadded.
@@ -1605,7 +1538,7 @@ package_emits_root_only_exports_test() ->
     [Group] = scan([Dir], #{}),
     Pkg = package_for_test(Group),
     Mod = maps:get(module_name, Pkg),
-    ?assert(is_generated_module(Mod)),
+    ?assert(hb_device_name:is_generated(Mod)),
     ok = load_pkg_archive(Pkg),
     Exports = lists:sort(Mod:module_info(exports)),
     %% Root exports plus module_info.

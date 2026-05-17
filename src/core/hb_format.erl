@@ -1103,7 +1103,7 @@ short_id(_) -> undefined.
 %% debug print path so that long generated atoms do not flood the
 %% output.
 device_atom(Atom) when is_atom(Atom) ->
-    case generated_device_parts(Atom) of
+    case hb_device_name:parts(Atom) of
         not_generated -> Atom;
         {Name, Hash} ->
             Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
@@ -1117,32 +1117,6 @@ device_atom(Atom) when is_atom(Atom) ->
             ])
     end;
 device_atom(Other) -> Other.
-
-%% @doc Split generated runtime device atoms into display components.
-generated_device_parts(Atom) when is_atom(Atom) ->
-    generated_device_parts(atom_to_binary(Atom, utf8));
-generated_device_parts(<<"_hb_device_", Rest/binary>>) ->
-    [RootPart | HelperParts] = binary:split(Rest, <<"__">>, [global]),
-    case binary:split(RootPart, <<"_">>, [global]) of
-        Parts when length(Parts) >= 2 ->
-            [Hash | RevName] = lists:reverse(Parts),
-            Name =
-                iolist_to_binary(
-                    lists:join(<<"_">>, lists:reverse(RevName))
-                ),
-            case HelperParts of
-                [] ->
-                    {Name, Hash};
-                _ ->
-                    Helper =
-                        iolist_to_binary(lists:join(<<"__">>, HelperParts)),
-                    {Name, Hash, Helper}
-            end;
-        _ ->
-            not_generated
-    end;
-generated_device_parts(_) ->
-    not_generated.
 
 %% Determine the maximum number of keys to print for messages, given a node
 %% `Opts`.

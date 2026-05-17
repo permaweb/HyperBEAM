@@ -251,7 +251,7 @@ maybe_normalize_device_key(Key, Mode) ->
 %% runtime devices must resolve to signed `_hb_device_*' modules.
 load(Map, _Opts) when is_map(Map) -> {ok, Map};
 load(Atom, _Opts) when is_atom(Atom) ->
-    case is_generated_module(Atom) of
+    case hb_device_name:is_generated(Atom) of
         true ->
             case loaded_module(Atom) of
                 {ok, _} = Ok -> Ok;
@@ -539,7 +539,7 @@ load_archive(undefined, _Archive, _Msg, Ref, _Opts) ->
 load_archive(_, undefined, _Msg, Ref, _Opts) ->
     {error, load_error(<<"missing-archive">>, Ref)};
 load_archive(ModBin, Archive, Msg, Ref, Opts) ->
-    case is_generated_module(ModBin) of
+    case hb_device_name:is_generated(ModBin) of
         false ->
             {error, load_error(
                 <<"non-generated-module-name">>, Ref, ModBin
@@ -611,7 +611,7 @@ archive_beam_module(Path, Beam) ->
         {ok, {Mod, _Chunks}} ->
             ModBin = atom_to_binary(Mod, utf8),
             ExpectedPath = <<"ebin/", ModBin/binary, ".beam">>,
-            case {is_generated_module(Mod), Path} of
+            case {hb_device_name:is_generated(Mod), Path} of
                 {false, _} ->
                     {error, {non_generated_module_name, ModBin}};
                 {true, ExpectedPath} ->
@@ -948,7 +948,7 @@ lookup_device_store(Ref, Opts) ->
 
 %% @doc Turn a cached generated module binary into a loaded atom.
 lookup_cached_module(ModBin) when is_binary(ModBin) ->
-    case is_generated_module(ModBin) of
+    case hb_device_name:is_generated(ModBin) of
         false -> not_found;
         true ->
             try hb_util:key_to_atom(ModBin, existing) of
@@ -980,14 +980,6 @@ cache_device_module(Ref, ModBin, Opts) when is_binary(Ref), is_binary(ModBin) ->
                 Opts
             )
     end.
-
-%% @doc Recognize the generated device module naming convention.
-is_generated_module(Atom) when is_atom(Atom) ->
-    is_generated_module(hb_util:bin(Atom));
-is_generated_module(<<"_hb_device_", _/binary>>) ->
-    true;
-is_generated_module(_) ->
-    false.
 
 %%% --------------------------------------------------------------------
 %%% Store helpers
