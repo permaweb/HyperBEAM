@@ -13,7 +13,8 @@ info(_M1) ->
 
 %% @doc Forward the keys function to the message device, handle all others
 %% with deduplication. We only act on the first pass.
--spec handle(_, _, _, _) -> _.
+-spec handle(binary(), #{ passes => integer(), pass => integer(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {pass, #{ _ => _ }}.
 handle(<<"keys">>, M1, _M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
 handle(<<"set">>, M1, M2, Opts) ->

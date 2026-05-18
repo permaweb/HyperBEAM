@@ -81,7 +81,7 @@ info(_Base) ->
 %% of the given key.
 -spec as(#{ 'input-prefix' => binary(), _ => _ },
     #{ as => binary(), 'as-device' => binary(), _ => _ },
-    _) -> _.
+    #{ _ => _ }) -> {ok, #{ device := binary(), _ => _ }}.
 as(RawBase, Req, Opts) ->
     {ok, Base} = ensure_loaded(RawBase, Req, Opts),
     Key = maps:get(<<"as">>, Req, maps:get(<<"as-device">>, Req, <<"execution">>)),
@@ -121,16 +121,19 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
--spec default_device(_, _, _) -> _.
+-spec default_device(#{ 'process/variant' => binary(), _ => _ }, binary(), #{ _ => _ }) ->
+    binary().
 default_device(Base, Key, Opts) ->
     lib_process:default_device(Base, Key, Opts).
 
 %% @doc Wraps functions in the Scheduler device.
--spec schedule(_, _, _) -> _.
+-spec schedule(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 schedule(Base, Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
 
--spec slot(_, _, _) -> _.
+-spec slot(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
@@ -138,7 +141,8 @@ slot(Base, Req, Opts) ->
 next(Base, _Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, next, Opts).
 
--spec snapshot(_, _, _) -> _.
+-spec snapshot(#{ execution => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 snapshot(RawBase, _Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
@@ -200,8 +204,8 @@ init(Base, Req, Opts) ->
         async => _,
         'max-depth' => _
     },
-    _
-) -> _.
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _} | {failure, _}.
 compute(Base, Req, Opts) ->
     ProcBase = lib_process:ensure_process_key(Base, Opts),
     ProcID = lib_process:process_id(ProcBase, #{}, Opts),
@@ -692,11 +696,13 @@ should_snapshot_time(Res, Opts) ->
 
 %% @doc Returns the known state of the process at either the current slot, or
 %% the latest slot in the cache depending on the `process_now_from_cache' option.
--spec latest(_, _, _) -> _.
+-spec latest(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {failure, _} | {error, _}.
 latest(Base, Req, Opts) ->
     now(Base, Req, Opts#{ process_now_from_cache => always }).
 
--spec now(_, _, _) -> _.
+-spec now(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {failure, _} | {error, _}.
 now(RawBase, Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     ProcessID = lib_process:process_id(Base, #{}, Opts),
@@ -751,7 +757,8 @@ now(RawBase, Req, Opts) ->
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
--spec push(_, _, _) -> _.
+-spec push(#{ push => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 push(Base, Req, Opts) ->
     lib_process:run_as(
         <<"push">>,

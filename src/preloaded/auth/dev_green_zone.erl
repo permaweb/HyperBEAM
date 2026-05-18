@@ -18,7 +18,9 @@
 %%
 %% @param _ Ignored parameter
 %% @returns A map with the `exports' key containing a list of allowed functions
--spec info(_, _, _) -> _.
+-spec info(#{ _ => _ }) -> #{ exports := [binary()], _ => _ }.
+-spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := #{ _ => _ }, _ => _ }}.
 info(_) -> 
     #{
         exports =>
@@ -93,7 +95,7 @@ info(_Base, _Req, _Opts) ->
 %%
 %% @param Opts A map of configuration options from which to derive defaults
 %% @returns A map of required configuration options for the green zone
--spec default_zone_required_opts(_) -> _.
+-spec default_zone_required_opts(#{ _ => _ }) -> #{ _ => _ }.
 default_zone_required_opts(_Opts) ->
     #{
         % <<"trusted-device-signers">> =>
@@ -115,7 +117,7 @@ default_zone_required_opts(_Opts) ->
 %% @param Config The configuration map to process
 %% @param Opts The options map to fetch replacement values from
 %% @returns A new map with <<"self">> values replaced
--spec replace_self_values(_, _) -> _.
+-spec replace_self_values(#{ _ => _ }, #{ _ => _ }) -> #{ _ => _ }.
 replace_self_values(Config, Opts) ->
     maps:map(
         fun(Key, Value) ->
@@ -130,7 +132,7 @@ replace_self_values(Config, Opts) ->
     ).
 
 %% @doc Returns `true' if the request is signed by a trusted node.
--spec is_trusted(_, _, _) -> _.
+-spec is_trusted(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary()}.
 is_trusted(_M1, Req, Opts) ->
     Signers = hb_message:signers(Req, Opts),
     {ok,
@@ -166,7 +168,7 @@ is_trusted(_M1, Req, Opts) ->
 %% @param Opts A map of configuration options
 %% @returns `{ok, Binary}' on success with confirmation message, or
 %% `{error, Binary}' on failure with error message.
--spec init(_, _, _) -> _.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary()} | {error, binary()}.
 init(_M1, _M2, Opts) ->
     ?event(green_zone, {init, start}),
     case hb_opts:get(green_zone_initialized, false, Opts) of
@@ -237,7 +239,7 @@ init(_M1, _M2, Opts) ->
 %% @param Opts A map of configuration options for join operations
 %% @returns `{ok, Map}' on success with join response details, or
 %% `{error, Binary}' on failure with error message.
--spec join(_, _, _) -> _.
+-spec join(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 join(M1, M2, Opts) ->
     ?event(green_zone, {join, start}),
     PeerLocation = hb_opts:get(<<"green-zone-peer-location">>, undefined, Opts),
@@ -269,7 +271,8 @@ join(M1, M2, Opts) ->
 %% @param Opts A map of configuration options
 %% @returns `{ok, Map}' containing the encrypted key and IV on success, or
 %% `{error, Binary}' if the node is not part of a green zone
--spec key(_, _, _) -> _.
+-spec key(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), encrypted_key := binary(), iv := binary(), _ => _ }} | {error, binary()}.
 key(_M1, _M2, Opts) ->
     ?event(green_zone, {get_key, start}),
     % Retrieve the shared AES key and the node's wallet.
@@ -330,7 +333,7 @@ key(_M1, _M2, Opts) ->
 %% @returns `{ok, Map}' on success with confirmation details, or
 %% `{error, Binary}' if the node is not part of a green zone or
 %% identity adoption fails.
--spec become(_, _, _) -> _.
+-spec become(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, binary()}.
 become(_M1, _M2, Opts) ->
     ?event(green_zone, {become, start}),
     % 1. Retrieve the target node's address from the incoming message.

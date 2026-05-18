@@ -11,12 +11,12 @@
 
 %% @doc Fetch data from a GraphQL endpoint for replication. See 
 %% `dev_copycat_graphql' for implementation details.
--spec graphql(_, _, _) -> _.
+-spec graphql(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, _} | {error, _}.
 graphql(Base, Request, Opts) ->
     dev_copycat_graphql:graphql(Base, Request, Opts).
 
 %% @doc Fetch data from an Arweave node for replication. See `dev_copycat_arweave'
 %% for implementation details.
--spec arweave(_, _, _) -> _.
+-spec arweave(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, _} | {error, _}.
 arweave(Base, Request, Opts) ->
     dev_copycat_arweave:arweave(Base, Request, Opts).

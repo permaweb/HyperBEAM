@@ -71,7 +71,8 @@ parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     ).
 
 %% @doc The default handler for the scheduler device.
--spec router(_, _, _, _) -> _.
+-spec router(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 router(_, Base, Req, Opts) ->
     ?event({scheduler_router_called, {req, Req}, {opts, Opts}}),
     schedule(Base, Req, Opts).
@@ -80,7 +81,8 @@ router(_, Base, Req, Opts) ->
 %% assignment. Assumes that Base is a `dev_process' or similar message, having
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
--spec next(#{ 'at-slot' := integer(), _ => _ }, _, _) -> _.
+-spec next(#{ 'at-slot' := integer(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := #{ _ => _ }, state := #{ _ => _ }, _ => _ }} | {error, _}.
 next(Base, Req, Opts) ->
     ?event(debug_next, {scheduler_next_called, {base, Base}, {req, Req}}),
     ?event(next, started_next),
@@ -341,7 +343,8 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
     end.
 
 %% @doc Returns information about the entire scheduler.
--spec status(_, _, _) -> _.
+-spec status(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ address := binary(), processes := [binary()], 'cache-control' := binary(), _ => _ }}.
 status(_M1, _M2, _Opts) ->
     ?event(getting_scheduler_status),
     Wallet = dev_scheduler_registry:get_wallet(),
@@ -359,9 +362,11 @@ status(_M1, _M2, _Opts) ->
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
--spec schedule(_,
+-spec schedule(
+    #{ _ => _ },
     #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
-    _) -> _.
+    #{ _ => _ }
+) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
     case hb_util:to_lower(maps:get(<<"method">>, Req, <<"GET">>)) of
@@ -714,7 +719,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
     end.
 
 %% @doc Returns information about the current slot for a process.
--spec slot(_, _, _) -> _.
+-spec slot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
     ProcID = find_target_id(M1, M2, Opts),

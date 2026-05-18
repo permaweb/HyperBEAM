@@ -5,6 +5,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(EXTRACT_CACHE_TAG, {hb_types, extract, 2}).
+-define(EXTRACT_CACHE_MISS, '$hb_types_extract_cache_miss').
 
 %% @doc Apply a device's declared base/request schemas to the messages that will
 %% participate in one AO-Core key execution. If no schema is provided, we return
@@ -74,12 +75,21 @@ extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
 cached_extract(Module, Opts) ->
-    Path = extract_cache_path(Module),
-    case read_cached_extract(Path, Opts) of
-        {ok, Res} -> Res;
-        miss ->
-            Res = do_extract(Module),
-            write_cached_extract(Path, Res, Opts),
+    CacheKey = {?EXTRACT_CACHE_TAG, Module, Module:module_info(md5)},
+    case persistent_term:get(CacheKey, ?EXTRACT_CACHE_MISS) of
+        ?EXTRACT_CACHE_MISS ->
+            Path = extract_cache_path(Module),
+            Res =
+                case read_cached_extract(Path, Opts) of
+                    {ok, Cached} -> Cached;
+                    miss ->
+                        Extracted = do_extract(Module),
+                        write_cached_extract(Path, Extracted, Opts),
+                        Extracted
+                end,
+            persistent_term:put(CacheKey, Res),
+            Res;
+        Res ->
             Res
     end.
 

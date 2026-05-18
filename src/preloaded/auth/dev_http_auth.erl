@@ -57,7 +57,8 @@
         'key-length' => integer(),
         _ => _
     },
-    _) -> _.
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
@@ -91,7 +92,8 @@ commit(Base, Req, Opts) ->
         'key-length' => integer(),
         _ => _
     },
-    _) -> _.
+    #{ _ => _ }
+) -> {ok, boolean()}.
 verify(Base, RawReq, Opts) ->
     ?event({verify_invoked, {base, Base}, {req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
@@ -123,7 +125,8 @@ verify(Base, RawReq, Opts) ->
         'key-length' => integer(),
         _ => _
     },
-    _) -> _.
+    #{ _ => _ }
+) -> {ok, binary()} | {error, #{ status := integer(), _ => _ }}.
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
     {ok, Secret};
 generate(_Msg, Req, _Opts) ->

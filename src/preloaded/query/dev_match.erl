@@ -80,7 +80,8 @@ value_path(Other, Opts) ->
 
 %% @doc Write all keys in the base message to the match index. Expects the `Base'
 %% message to already be converted to a TABM.
--spec write(_, _, _) -> _.
+-spec write([binary()], #{ _ => _ }, #{ _ => _ }) ->
+    ok | {skip, binary()}.
 write(IDs, Base, Opts) ->
     case store(Opts) of
         [] -> {skip, <<"No store configured for match index.">>};
@@ -110,7 +111,8 @@ write(IDs, Base, Opts) ->
 
 %% @doc Match a single key-value pair in the index, returning all message IDs that
 %% contain the key-value pair.
--spec match(_, _, _, _) -> _.
+-spec match(binary() | atom(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [binary()]} | {error, not_found}.
 match(Key, Base, _Req, Opts) -> match(Key, Base, Opts).
 match(Key, Base, Opts) ->
     Store = store(Opts),
@@ -129,7 +131,8 @@ match(Key, Base, Opts) ->
 
 %% @doc Match the full base message against the index, returning the intersection
 %% of all matches for each key.
--spec all(_, _, _) -> _.
+-spec all(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [binary()]} | {error, not_found}.
 all(Base, _Req, Opts) ->
     IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
     Keys = maps:keys(IndexBase),
