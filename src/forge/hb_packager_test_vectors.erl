@@ -174,12 +174,6 @@ preloaded_index_matches(_Pkg, Opts, _, _) ->
         hb_store:read(Store, <<Index/binary, "/test-pkg@1.0">>, Opts),
     ?assert(byte_size(Got) == 43).
 
-unpackaged_atom_is_rejected_test() ->
-    ?assertMatch(
-        {error, #{ <<"error">> := <<"device-must-be-packaged">> }},
-        hb_device:load(dev_message, #{})
-    ).
-
 %%% --------------------------------------------------------------------
 %%% Packager unit tests
 %%% --------------------------------------------------------------------
