@@ -1,6 +1,7 @@
 config.*
 .rebar3
 _build
+src/cargo.hrl
 _checkouts
 _vendor
 data
