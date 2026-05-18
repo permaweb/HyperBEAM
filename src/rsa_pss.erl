@@ -185,16 +185,9 @@ ep(B, #'RSAPublicKey'{modulus=N, publicExponent=E}) ->
     crypto:mod_pow(B, E, N).
 
 %% @private
-int_to_bit_size(I) ->
-    int_to_bit_size(I, 0).
+int_to_bit_size(I) -> 
+    bit_size(binary:encode_unsigned(I)).
 
-%% @private
-int_to_bit_size(0, B) ->
-    B;
-int_to_bit_size(I, B) ->
-    int_to_bit_size(I bsr 1, B + 1).
-
-%% @private
 int_to_byte_size(I) ->
     int_to_byte_size(I, 0).
 
