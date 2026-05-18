@@ -4,6 +4,7 @@
 -export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
+-export([secret_key_to_committer/1, remove_scheme_prefix/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
@@ -16,8 +17,7 @@
 -export([is_string_list/1, list_replace/3, list_without/2, list_with/2]).
 -export([to_sorted_list/1, to_sorted_list/2, to_sorted_keys/1, to_sorted_keys/2]).
 -export([hd/1, hd/2, hd/3]).
--export([remove_common/2, remove_scheme_prefix/1, to_lower/1]).
--export([secret_key_to_committer/1]).
+-export([remove_common/2, to_lower/1]).
 -export([maybe_throw/2]).
 -export([is_hb_module/1, is_hb_module/2, all_hb_modules/0]).
 -export([ok/1, ok/2, ok_or/2, until/1, until/2, until/3, wait_until/2]).
@@ -199,6 +199,17 @@ id(Data, Type) when is_list(Data) ->
 %% @doc Convert a binary to a lowercase.
 to_lower(Str) ->
     string:lowercase(Str).
+
+%% @doc Build a committer address from a shared secret.
+secret_key_to_committer(Key) ->
+    human_id(hb_crypto:sha256(Key)).
+
+%% @doc Remove a `scheme:' prefix from a binary key.
+remove_scheme_prefix(KeyID) ->
+    case binary:split(KeyID, <<":">>) of
+        [_Scheme, Key] -> Key;
+        [Key] -> Key
+    end.
 
 %% @doc Is the given term a string list?
 is_string_list(MaybeString) ->
@@ -652,17 +663,6 @@ remove_common([X|Rest1], [X|Rest2]) ->
     remove_common(Rest1, Rest2);
 remove_common([$/|Path], _) -> Path;
 remove_common(Rest, _) -> Rest.
-
-%% @doc Remove the `scheme:' prefix from a binary.
-remove_scheme_prefix(KeyID) ->
-    case binary:split(KeyID, <<":">>) of
-        [_Scheme, Key] -> Key;
-        [Key] -> Key
-    end.
-
-%% @doc Generate a committer value from a secret key.
-secret_key_to_committer(Key) ->
-    human_id(hb_crypto:sha256(Key)).
 
 %% @doc Throw an exception if the Opts map has an `error_strategy' key with the
 %% value `throw'. Otherwise, return the value.

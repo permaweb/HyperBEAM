@@ -680,11 +680,32 @@ is_erlang_generated_fun_name(_) ->
 %% traces, or their raw form for others.
 trace_element(Bin) when is_binary(Bin) -> Bin;
 trace_element({Mod, Line}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pretty_mod(Mod), Line]));
 trace_element({Mod, _, _, [{file, _}, {line, Line}|_]}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Line]));
+    lists:flatten(io_lib:format("~s:~p", [pretty_mod(Mod), Line]));
 trace_element({Mod, Func, _ArityOrTerm, _Extras}) ->
-    lists:flatten(io_lib:format("~p:~p", [Mod, Func])).
+    lists:flatten(io_lib:format("~s:~p", [pretty_mod(Mod), Func])).
+
+%% @doc Render a runtime device atom in human-friendly form. Generated
+%% `_hb_device_<name>_<hash>' atoms become `~<name>+<short-hash>'; any
+%% other atom is returned unchanged. Used by trace formatting and the
+%% debug print path so that long generated atoms do not flood the
+%% output.
+pretty_mod(Atom) when is_atom(Atom) ->
+    case hb_device_name:parts(Atom) of
+        not_generated -> hb_util:bin(Atom);
+        {Name, Hash} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            hb_util:bin([
+                <<"~">>, Name, <<"+">>, Short
+            ]);
+        {Name, Hash, Helper} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            hb_util:bin([
+                <<"~">>, Name, <<"/">>, Helper, <<"+">>, Short
+            ])
+    end;
+pretty_mod(Other) -> hb_util:bin(Other).
 
 %% @doc Utility function to help macro `?trace/0' remove the first frame of the
 %% stack trace.

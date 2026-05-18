@@ -218,23 +218,19 @@ exec_dummy_device(Opts) ->
         ),
     {ok, _SpecUnsignedID} = hb_cache:write(SpecMsg, Opts),
     SpecID = hb_message:id(SpecMsg, signed, Opts),
-    % Compile the test device and store it in an accessible cache to the execution
+    % Package the test device and store it in an accessible cache to the execution
     % environment.
-    {ok, ModName, Bin} = compile:file("test/dev_dummy.erl", [binary]),
+    [DummyGroup] =
+        hb_packager:scan(
+            ["src/forge/test/fixtures"],
+            #{ <<"device-roots">> => [<<"dev_dummy">>] }
+        ),
+    DummyPkg = hb_packager:package(DummyGroup, Opts),
     DevMsg =
         hb_message:commit(
             hb_ao:normalize_keys(
-                #{
-                    <<"data-protocol">> => <<"ao">>,
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"content-type">> => <<"application/beam">>,
-                    <<"implements-device">> => SpecID,
-                    <<"module-name">> => ModName,
-                    <<"requires-otp-release">> =>
-                        hb_util:bin(erlang:system_info(otp_release)),
-                    <<"body">> => Bin
-                },
-				Opts
+                hb_packager:impl_message(DummyPkg, SpecID, Opts),
+                Opts
             ),
             Opts
         ),
@@ -292,11 +288,8 @@ load_device_test() ->
     Opts = #{
         <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
-            [hb_util:human_id(ar_wallet:to_address(Wallet))],
-        <<"store">> => Store = #{
-            <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-TEST/fs">>
-        },
+            [hb:address(), hb_util:human_id(ar_wallet:to_address(Wallet))],
+        <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
         <<"priv-wallet">> => Wallet
     },
     hb_store:reset(Store),
@@ -309,11 +302,8 @@ untrusted_load_device_test() ->
     Opts = #{
         <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
-            [hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
-        <<"store">> => Store = #{
-            <<"store-module">> => hb_store_fs,
-            <<"name">> => <<"cache-TEST/fs">>
-        },
+            [hb:address(), hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
+        <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
         <<"priv-wallet">> => UntrustedWallet
     },
     hb_store:reset(Store),
@@ -810,15 +800,24 @@ device_inheritance_test(Opts) ->
     ?assertEqual(<<"MESSAGE VALUE">>, hb_ao:get(<<"message-key">>, Msg, Opts)).
 
 denormalized_device_name_test(Opts) ->
-    Msg = #{ <<"device">> => dev_test },
-    ?assertEqual(dev_test, hb_ao:get(device, Msg, Opts)),
-    ?assertEqual(dev_test, hb_ao:get(<<"device">>, Msg, Opts)),
+    Dev = #{
+        test_func =>
+            fun(_) ->
+                {ok, <<"GOOD FUNCTION">>}
+            end
+    },
+    Msg = #{ <<"device">> => Dev },
     ?assertEqual(
-        {module, dev_test},
-        erlang:fun_info(
-            element(3, hb_ao_device:message_to_fun(Msg, test_func, Opts)),
-            module
-        )
+        Dev,
+        hb_maps:without([<<"priv">>], hb_ao:get(device, Msg, Opts), Opts)
+    ),
+    ?assertEqual(
+        Dev,
+        hb_maps:without([<<"priv">>], hb_ao:get(<<"device">>, Msg, Opts), Opts)
+    ),
+    ?assertEqual(
+        {ok, Dev, maps:get(test_func, Dev)},
+        hb_ao_device:message_to_fun(Msg, test_func, Opts)
     ).
 
 denormalized_key_test(Opts) ->
