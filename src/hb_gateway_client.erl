@@ -311,11 +311,18 @@ result_to_message(ExpectedID, Item, Opts) ->
             512 -> {rsa, 65537};
             _ -> unsupported_tx_signature_type
         end,
+    ItemAnchor =
+        normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
+    Anchor = 
+        case byte_size(ItemAnchor) of
+            0 -> <<>>;
+            43 when is_binary(ItemAnchor) -> hb_util:decode(ItemAnchor);
+            _ -> ItemAnchor
+        end,
     TX =
         ar_tx:reset_ids(#tx {
             format = ans104,
-            anchor =
-                normalize_null(hb_maps:get(<<"anchor">>, Item, not_found, GQLOpts)),
+            anchor = Anchor,
             signature = Signature,
             signature_type = SignatureType,
             target =
