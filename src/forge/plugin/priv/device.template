@@ -1,0 +1,16 @@
+{description, "HyperBEAM device project"}.
+{variables, [
+    {name, "my_device", "Device and OTP application name"},
+    {hb_dep,
+        "{git, \"https://github.com/permaweb/hyperbeam.git\", {branch, \"edge\"}}",
+        "HyperBEAM dependency term"},
+    {hb_plugin,
+        "{git_subdir, \"https://github.com/permaweb/hyperbeam.git\", {branch, \"edge\"}, \"src/forge\"}",
+        "HyperBEAM Forge plugin term"}
+]}.
+
+{template, "_rebar.config", "{{name}}/rebar.config"}.
+{template, "_src/device.app.src", "{{name}}/src/{{name}}.app.src"}.
+{template, "_src/dev_device.erl.in", "{{name}}/src/dev_{{name}}.erl"}.
+{template, "_README.md", "{{name}}/README.md"}.
+{template, "_.gitignore", "{{name}}/.gitignore"}.

@@ -1,0 +1,179 @@
+%%% @doc End-to-end tests for the device packaging pipeline:
+%%% module source -> packager -> preloaded store -> runtime device resolution.
+%%%
+%%% Each test builds a self-contained `preloaded-store' from a tiny
+%%% in-memory device, points the runtime at that store, and asserts on
+%%% the behaviour of {@link hb_ao_device:load/2}.
+-module(hb_packager_test_vectors).
+-include_lib("eunit/include/eunit.hrl").
+
+%% Build a runtime opts map that uses a freshly-built preloaded-store
+%% and a per-test volatile device-store cache.
+setup() ->
+    SrcDir = hb_packager:test_fixture_dir(),
+    ok =
+        filelib:ensure_dir(
+            filename:join([SrcDir, <<"priv">>, <<"share">>, <<"data">>])
+        ),
+    ok =
+        file:write_file(
+            filename:join([SrcDir, <<"priv">>, <<"share">>, <<"data">>]),
+            <<"runtime-priv">>
+        ),
+    Groups =
+        hb_packager:scan([SrcDir], #{})
+            ++ hb_packager:scan(
+                [<<"src/preloaded">>],
+                #{
+                    <<"device-roots">> =>
+                        [dev_name, dev_message, dev_httpsig, dev_structured]
+                }
+            ),
+    Wallet = ar_wallet:new(),
+    PreloadDir =
+        hb_util:bin(
+            filename:join([
+                <<"/tmp">>,
+                <<"hb_pkg_rt_",
+                    (integer_to_binary(erlang:system_time()))/binary>>
+            ])
+        ),
+    {ok, Result} =
+        hb_preload:build_groups(
+            Groups,
+            Wallet,
+            PreloadDir,
+            #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] }
+        ),
+    Pkgs = maps:get(pkgs, Result),
+    [Pkg] =
+        [
+            Package
+        ||
+            Package <- Pkgs,
+            maps:get(device_name, Package) =:= <<"test-pkg@1.0">>
+        ],
+    % Use the encode/0 form ar_wallet uses internally so this matches
+    % whatever `hb_message:signers/2' returns for impl messages.
+    Address = hb_util:encode(ar_wallet:to_address(Wallet)),
+    Store = maps:get(store, Result),
+    Index = maps:get(index, Result),
+    SpecIDs = maps:get(specs, Result),
+    SpecID = maps:get(<<"test-pkg@1.0">>, SpecIDs),
+    {ok, [ImplID | _]} =
+        hb_cache:match(#{
+            <<"data-protocol">> => <<"ao">>,
+            <<"variant">> => <<"ao.N.1">>,
+            <<"implements-device">> => SpecID
+        }, #{ <<"store">> => Store }),
+    DevStore = hb_test_utils:test_store(),
+    Opts = #{
+        <<"store">> => [Store],
+        <<"preloaded-store">> => Store,
+        <<"preloaded-devices-index">> => Index,
+        <<"device-store">> => DevStore,
+        % The build wallet's address is what the preloaded-store
+        % messages are signed by, and the runtime must enforce that
+        % trust even on the bootstrap/direct load path.
+        <<"trusted-device-signers">> => [Address],
+        <<"priv-wallet">> => Wallet
+    },
+    {Pkg, Opts, SpecIDs, ImplID}.
+
+teardown(_) -> ok.
+
+%% Build the EUnit fixture so each case gets a fresh preloaded-store
+%% and fresh device-store cache; this prevents test-to-test bleed
+%% from earlier setups that signed with different wallets.
+all_runtime_test_() ->
+    {foreach,
+        fun setup/0,
+        fun teardown/1,
+        [
+            runtime_case(Name, Fun)
+        ||
+            {Name, Fun} <- runtime_tests()
+        ]
+    }.
+
+%% @doc Return the runtime assertions shared by the foreach fixture.
+runtime_tests() ->
+    [
+        {"module name matches", fun module_name_matches/4},
+        {"device store cache matches", fun device_store_cache_matches/4},
+        {"priv data matches", fun priv_data_matches/4},
+        {"reject untrusted load", fun reject_untrusted_load/4},
+        {"trusted device id matches", fun trusted_device_id_matches/4},
+        {"preloaded index matches", fun preloaded_index_matches/4}
+    ].
+
+%% @doc Wrap one assertion in the fixture tuple expected by EUnit.
+runtime_case(Name, Fun) ->
+    fun({Pkg, Opts, SpecIDs, ImplID}) ->
+        {Name, fun() -> Fun(Pkg, Opts, SpecIDs, ImplID) end}
+    end.
+
+module_name_matches(Pkg, Opts, _, _) ->
+    Name = maps:get(device_name, Pkg),
+    {ok, Mod} = hb_ao_device:load(Name, Opts),
+    ?assert(hb_device_name:is_generated(Mod)),
+    ?assertEqual(maps:get(module_name, Pkg), Mod).
+
+device_store_cache_matches(Pkg, Opts, _, _) ->
+    Name = maps:get(device_name, Pkg),
+    {ok, Mod1} = hb_ao_device:load(Name, Opts),
+    {ok, Mod2} = hb_ao_device:load(Name, Opts),
+    ?assertEqual(Mod1, Mod2),
+    DevStore = maps:get(<<"device-store">>, Opts),
+    {ok, Cached} =
+        hb_store:read(DevStore, <<"devices/", Name/binary>>, Opts),
+    ?assertEqual(atom_to_binary(maps:get(module_name, Pkg), utf8), Cached).
+
+priv_data_matches(Pkg, Opts, _, _) ->
+    Name = maps:get(device_name, Pkg),
+    {ok, Mod} = hb_ao_device:load(Name, Opts),
+    Dir = hb_ao_device:implementation_dir(Mod),
+    {ok, Body} =
+        file:read_file(
+            filename:join([Dir, <<"share">>, <<"data">>])
+        ),
+    ?assertEqual(<<"runtime-priv">>, Body).
+
+reject_untrusted_load(Pkg, Opts, _, _) ->
+    % Trust enforcement applies on the bootstrap/direct
+    % load path too. With trust restricted to an
+    % unrelated signer the load must fail.
+    Name = maps:get(device_name, Pkg),
+    Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    BadOpts = Opts#{
+        <<"trusted-device-signers">> => [Other],
+        <<"device-store">> => hb_test_utils:test_store()
+    },
+    ?assertMatch(
+        {error, _},
+        hb_ao_device:load(Name, BadOpts)
+    ).
+
+trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
+    SpecID = maps:get(<<"test-pkg@1.0">>, SpecIDs),
+    Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    IDOpts = Opts#{
+        <<"trusted-device-signers">> => [Other],
+        <<"trusted-devices">> => [ImplID],
+        <<"device-store">> => hb_test_utils:test_store()
+    },
+    {ok, Mod} = hb_ao_device:load(SpecID, IDOpts),
+    ?assertEqual(maps:get(module_name, Pkg), Mod).
+
+preloaded_index_matches(_Pkg, Opts, _, _) ->
+    Index = maps:get(<<"preloaded-devices-index">>, Opts),
+    Store = maps:get(<<"preloaded-store">>, Opts),
+    {ok, Got} =
+        hb_store:read(Store, <<Index/binary, "/test-pkg@1.0">>, Opts),
+    ?assert(byte_size(Got) == 43).
+
+unpackaged_atom_is_rejected_test() ->
+    ?assertMatch(
+        {error, #{ <<"error">> := <<"device-must-be-packaged">> }},
+        hb_ao_device:load(dev_message, #{})
+    ).
