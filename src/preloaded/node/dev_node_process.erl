@@ -18,7 +18,8 @@ info(_Opts) ->
     }.
 
 %% @doc Lookup a process by name.
--spec lookup(_, _, #{ spawn => boolean(), _ => _ }, _) -> _.
+-spec lookup(binary(), #{ _ => _ }, #{ spawn => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 lookup(Name, _Base, Req, Opts) ->
     ?event(node_process, {lookup, {name, Name}}),
     LookupRes =

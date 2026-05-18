@@ -50,7 +50,8 @@ verify(Msg, Req, Opts) ->
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
 -spec from(_,
     #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
-    _) -> _.
+    #{ _ => _ }
+) -> {ok, binary() | [_] | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
     % Encode the list as a map, then -- if our request indicates that we are
@@ -220,7 +221,8 @@ linkify_mode(Req, Opts) ->
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.
--spec to(_, _, _) -> _.
+-spec to(binary() | [_] | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | [_] | #{ _ => _ }}.
 to(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 to(TABM0, Req, Opts) when is_list(TABM0) ->
     % If we receive a list, we convert it to a message and run `to/3' on it. 

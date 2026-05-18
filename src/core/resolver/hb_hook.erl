@@ -57,7 +57,8 @@
 %% @doc Execute a named hook with the provided request and options
 %% This function finds all handlers for the hook and evaluates them in sequence.
 %% The result of each handler is used as input to the next handler.
--spec on(_, _, _) -> _.
+-spec on(binary() | atom(), #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 on(HookName, Req, Opts) ->
     ?event(hook, {attempting_execution_for_hook, HookName}),
     % Get all handlers for this hook from the options

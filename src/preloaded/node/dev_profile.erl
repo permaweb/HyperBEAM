@@ -34,7 +34,7 @@ info(_) ->
 %% is the result of the function or resolution. In `return-mode: message' mode,
 %% the return format will be `{ok, EngineMessage}' where `EngineMessage' is the
 %% output from the engine formatted as an AO-Core message.
--spec eval(_, _, _) -> _.
+-spec eval(function() | #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _} | {_, _}.
 eval(Fun) -> eval(Fun, #{}).
 eval(Fun, Opts) -> eval(Fun, #{}, Opts).
 eval(Fun, Req, Opts) when is_function(Fun) ->
@@ -49,7 +49,7 @@ eval(Fun, Req, Opts) when is_function(Fun) ->
 eval(Base, Request, Opts) ->
     eval(<<"eval">>, Base, Request, Opts).
 
--spec eval(_, _, _, _) -> _.
+-spec eval(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _} | {_, _}.
 eval(PathKey, Base, Req, Opts) when not is_function(Base) ->
     case hb_ao:get(PathKey, Req, undefined, Opts) of
         undefined ->

@@ -8,7 +8,8 @@
 %% containting a gzip-encoded payload. Returns the rest of the base message 
 %% unchanged, with the `content-encoding' key unset.
 %% 
--spec unzip(#{ body => binary(), 'content-encoding' => binary(), _ => _ }, _, _) -> _.
+-spec unzip(#{ body => binary(), 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body => binary(), _ => _ }}.
 unzip(Base, _Req, Opts) ->
     case maps:get(<<"content-encoding">>, Base, <<"gzip">>) of
         <<"gzip">> ->
@@ -43,7 +44,8 @@ unzip(Base, _Req, Opts) ->
 
 %% @doc Take a base message with a `body' key and return it zipped, in-place.
 %% Add a `content-encoding' key with the value `gzip'.
--spec zip(#{ body => binary(), _ => _ }, _, _) -> _.
+-spec zip(#{ body => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), 'content-encoding' := binary(), _ => _ }} | {error, binary()}.
 zip(Base, _Req, _Opts) ->
     case maps:find(<<"body">>, Base) of
         {ok, Body} ->

@@ -9,13 +9,15 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Return the calculated host information for the requester.
--spec echo(_, #{ 'ao-peer' => binary(), _ => _ }, _) -> _.
+-spec echo(#{ _ => _ }, #{ 'ao-peer' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary()}.
 echo(_, Req, _Opts) ->
     {ok, maps:get(<<"ao-peer">>, Req, <<"unknown">>)}.
 
 %% @doc Return the host information for the node. Sets the `host' key in the
 %% node message if it is not already set.
--spec node(_, _, _) -> _.
+-spec node(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, binary()} | {error, _}.
 node(_, _, Opts) ->
     case ensure_host(Opts) of
         {ok, NewOpts} ->

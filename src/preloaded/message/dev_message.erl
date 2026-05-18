@@ -47,7 +47,8 @@ info() ->
 %%    was a device name.
 %% 3. Execute the `default_index_path` (base: `index') upon the message,
 %%    giving the rest of the request unchanged.
--spec index(_, _, _) -> _.
+-spec index(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 index(Msg, Req, Opts) ->
     case hb_opts:get(default_index, not_found, Opts) of
         not_found ->
@@ -83,7 +84,14 @@ index(Msg, Req, Opts) ->
 %% Note: This function _does not_ use AO-Core's `get/3' function, as it
 %% would require significant computation. We may want to change this
 %% if/when non-map message structures are created.
--spec id(_, _, _) -> _.
+-spec id(binary() | [#{ _ => _ }] | #{ commitments => #{ _ => _ }, _ => _ },
+    #{ committers => _,
+        'commitment-ids' => _,
+        'id-device' => binary(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, binary()}.
 id(Base) -> id(Base, #{}).
 id(Base, Req) -> id(Base, Req, #{}).
 id(Base, _, NodeOpts) when is_binary(Base) ->
@@ -221,7 +229,8 @@ id_device(_, _) ->
     {ok, ?DEFAULT_ID_DEVICE}.
 
 %% @doc Return the committers of a message that are present in the given request.
--spec committers(_, _, _) -> _.
+-spec committers(#{ commitments => #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, [_]}.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
 committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
@@ -246,7 +255,10 @@ committers(_, _, _) ->
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
 %% the default device (`httpsig@1.0') is used.
--spec commit(_, _, _) -> _.
+-spec commit(#{ _ => _ },
+    #{ 'commitment-device' => binary(), type => binary(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ commitments := #{ _ => _ }, _ => _ }}.
 commit(Self, Req, Opts) ->
     {ok, Base} = hb_message:find_target(Self, Req, Opts),
     AttDev =
@@ -294,7 +306,10 @@ commit(Self, Req, Opts) ->
 %% `committers' key in the request can be used to specify that only the 
 %% commitments from specific committers should be verified. Similarly, specific
 %% commitments can be specified using the `commitments' key.
--spec verify(_, _, _) -> _.
+-spec verify(#{ _ => _ },
+    #{ committers => _, 'commitment-ids' => _, commitments => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, boolean()}.
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
@@ -380,7 +395,10 @@ verify_commitment(Base, Commitment, Opts) ->
     hb_ao:raw(AttDev, <<"verify">>, Base, Commitment, Opts).
 
 %% @doc Return the list of committed keys from a message.
--spec committed(_, _, _) -> _.
+-spec committed(#{ _ => _ },
+    #{ raw => boolean(), committers => _, 'commitment-ids' => _, _ => _ },
+    #{ _ => _ }
+) -> {ok, [binary()]}.
 committed(Self, Req, Opts) ->
     % Get the target message of the verification request and ensure its 
     % commitments are loaded.
@@ -607,7 +625,8 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
--spec set(_, _, _) -> _.
+-spec set(#{ _ => _ }, #{ 'set-mode' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
 	% Filter keys that are in the default device (this one).
@@ -796,7 +815,8 @@ do_deep_merge(BaseValues, NewValues, Opts) ->
 %% transmit the present key that is being executed. Subsequently, to call `path'
 %% we would need to set `path' to `set', removing the ability to specify its 
 %% new value.
--spec set_path(_, _, _) -> _.
+-spec set_path(#{ path => _, _ => _ }, #{ value => _, _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | #{ _ => _ }.
 set_path(Base, #{ <<"value">> := Value }, Opts) ->
     set_path(Base, Value, Opts);
 set_path(Base, Value, Opts) when not is_map(Value) ->
@@ -823,7 +843,8 @@ set_path(Base, Value, Opts) when not is_map(Value) ->
     end.
 
 %% @doc Remove a key or keys from a message.
--spec remove(_, _, _) -> _.
+-spec remove(#{ _ => _ }, #{ item => _, items => [_], _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 remove(Base, #{ <<"item">> := Key }, Opts) ->
     remove(Base, #{ <<"items">> => [Key] }, Opts);
 remove(Base, #{ <<"items">> := Keys }, Opts) ->

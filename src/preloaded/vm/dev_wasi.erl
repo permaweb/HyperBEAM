@@ -41,7 +41,7 @@
 %% - Empty stdio files
 %% - WASI-preview-1 compatible functions for accessing the filesystem
 %% - File descriptors for those files.
--spec init(_, _, _) -> _.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 init(M1, _M2, Opts) ->
     ?event(running_init),
     MsgWithLib =
@@ -78,7 +78,8 @@ stdout(M) ->
 
 %% @doc Adds a file descriptor to the state message.
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
--spec path_open(_, _, _) -> _.
+-spec path_open(#{ _ => _ }, #{ args := [integer()], _ => _ }, #{ _ => _ }) ->
+    {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 path_open(Base, Req, Opts) ->
     FDs = hb_ao:get(<<"file-descriptors">>, Base, Opts),
     Instance = hb_private:get(<<"instance">>, Base, Opts),
@@ -113,7 +114,8 @@ path_open(Base, Req, Opts) ->
 
 %% @doc WASM stdlib implementation of `fd_write', using the WASI-p1 standard
 %% interface.
--spec fd_write(_, _, _) -> _.
+-spec fd_write(#{ state := #{ _ => _ }, _ => _ }, #{ args := [integer()], 'func-sig' => _, _ => _ }, #{ _ => _ }) ->
+    {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 fd_write(Base, Req, Opts) ->
     State = hb_ao:get(<<"state">>, Base, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
@@ -168,7 +170,8 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     ).
 
 %% @doc Read from a file using the WASI-p1 standard interface.
--spec fd_read(_, _, _) -> _.
+-spec fd_read(#{ state := #{ _ => _ }, _ => _ }, #{ args := [integer()], 'func-sig' => _, _ => _ }, #{ _ => _ }) ->
+    {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 fd_read(Base, Req, Opts) ->
     State = hb_ao:get(<<"state">>, Base, Opts),
     Instance = hb_private:get(<<"wasm/instance">>, State, Opts),
@@ -222,7 +225,8 @@ parse_iovec(Instance, Ptr) ->
     {BinPtr, Len}.
 
 %%% Misc WASI-preview-1 handlers.
--spec clock_time_get(_, _, _) -> _.
+-spec clock_time_get(#{ state := #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 clock_time_get(Base, _Req, Opts) ->
     ?event({clock_time_get, {returning, 1}}),
     State = hb_ao:get(<<"state">>, Base, Opts),

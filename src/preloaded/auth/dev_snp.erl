@@ -56,7 +56,7 @@
 %% @param NodeOpts A map of configuration options for verification
 %% @returns `{ok, Binary}' with "true" on successful verification, or
 %% `{error, Reason}' on failure with specific error details
--spec verify(_, _, _) -> _.
+-spec verify(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary()} | {error, _}.
 verify(M1, M2, NodeOpts) ->
     ?event(snp_verify, verify_called),
     maybe
@@ -122,7 +122,7 @@ verify(M1, M2, NodeOpts) ->
 %% @param Opts A map of configuration options for report generation
 %% @returns `{ok, Map}' on success with the complete report message, or
 %% `{error, Reason}' on failure with error details
--spec generate(_, _, _) -> _.
+-spec generate(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 generate(_M1, _M2, Opts) ->
     maybe
         LoadedOpts = hb_cache:ensure_all_loaded(Opts, Opts),
@@ -403,7 +403,8 @@ verify_measurement(Msg, ReportJSON, NodeOpts) ->
 %% @param Msg The normalized SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
 %% @returns A map of measurement arguments with atom keys
--spec extract_measurement_args(_, _) -> _.
+-spec extract_measurement_args(#{ 'local-hashes' => #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+    #{ _ => _ }.
 extract_measurement_args(Msg, NodeOpts) ->
     LocalHashes =
         hb_cache:ensure_all_loaded(
@@ -496,7 +497,8 @@ execute_is_trusted(_M1, Msg, NodeOpts) ->
 %% @param Msg The SNP message containing local hashes
 %% @param NodeOpts A map of configuration options
 %% @returns A map of filtered local hashes with only enforced keys
--spec get_filtered_local_hashes(_, _) -> _.
+-spec get_filtered_local_hashes(#{ 'local-hashes' => #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+    #{ _ => _ }.
 get_filtered_local_hashes(Msg, NodeOpts) ->
     LocalHashes = hb_ao:get(<<"local-hashes">>, Msg, NodeOpts),
     EnforcedKeys = get_enforced_keys(NodeOpts),

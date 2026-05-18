@@ -18,7 +18,8 @@
 
 %% @doc Exports a default_handler function that can be used to test the
 %% handler resolution mechanism.
--spec info(_, _, _) -> _.
+-spec info(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ status := integer(), body := #{ _ => _ } }}.
 info(_) ->
 	#{
         <<"default">> => <<"message@1.0">>,
@@ -51,7 +52,8 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Example index handler.
--spec index(_, _, _) -> _.
+-spec index(#{ name => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ body := binary(), 'content-type' := binary(), _ => _ }}.
 index(Msg, _Req, Opts) ->
     Name = hb_ao:get(<<"name">>, Msg, <<"turtles">>, Opts),
     {ok,
@@ -62,7 +64,8 @@ index(Msg, _Req, Opts) ->
     }.
 
 %% @doc Return a message with the device set to this module.
--spec load(_, _, _) -> _.
+-spec load(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ device := binary(), _ => _ }}.
 load(Base, _, _Opts) ->
     {ok, Base#{ <<"device">> => <<"test-device@1.0">> }}.
 
@@ -80,7 +83,8 @@ varied_request(_Base, #{ <<"x">> := X }, _Opts) ->
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new
 %% slot number in the results key.
--spec compute(#{ 'already-seen' => [integer()], _ => _ }, #{ slot := integer() }, _) -> _.
+-spec compute(#{ 'already-seen' => [integer()], _ => _ }, #{ slot := integer() }, #{ _ => _ }) ->
+    {ok, #{ 'already-seen' := [integer()], results := #{ 'assignment-slot' := integer() }, _ => _ }}.
 compute(Base, Req, Opts) ->
     AssignmentSlot = maps:get(<<"slot">>, Req),
     Seen = maps:get(<<"already-seen">>, Base, []),
@@ -98,7 +102,11 @@ compute(Base, Req, Opts) ->
         )
     }.
 
--spec compute_nested(#{ 'already-seen' => [integer()], _ => _ }, #{ outer := #{ slot := integer() } }, _) -> _.
+-spec compute_nested(
+    #{ 'already-seen' => [integer()], _ => _ },
+    #{ outer := #{ slot := integer() } },
+    #{ _ => _ }
+) -> {ok, #{ 'already-seen' := [integer()], results := #{ 'assignment-slot' := integer() }, _ => _ }}.
 compute_nested(Base, Req, Opts) ->
         AssignmentSlot = maps:get(<<"slot">>, maps:get(<<"outer">>, Req)),
         Seen = maps:get(<<"already-seen">>, Base, []),
@@ -116,22 +124,29 @@ compute_nested(Base, Req, Opts) ->
             )
         }.
 
--spec compute_all(#{ a => integer(), _ => _ }, #{ slot := integer(), _ => _ }, _) -> _.
+-spec compute_all(#{ a => integer(), _ => _ }, #{ slot := integer(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ all := binary(), _ => _ }}.
 compute_all(Base, Req, Opts) ->
     {ok, Base#{ <<"all">> => <<"done">> }}.
 
--spec compute_all_nested(#{ nested := #{ a := integer() }, _ => _ }, #{ slot := integer(), _ => _ }, _) -> _.
+-spec compute_all_nested(
+    #{ nested := #{ a := integer() }, _ => _ },
+    #{ slot := integer(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ nested := #{ all := binary() }, _ => _ }}.
 compute_all_nested(Base, Req, Opts) ->
     {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
--spec init(_, _, _) -> _.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ 'already-seen' := list(), _ => _ }}.
 init(Msg, _Req, Opts) ->
     ?event({init_called_on_dev_test, Msg}),
     {ok, hb_ao:set(Msg, #{ <<"already-seen">> => [] }, Opts)}.
 
 %% @doc Example `restore/3' handler. Sets the hidden key `Test/Started' to the
 %% value of `Current-Slot' and checks whether the `Already-Seen' key is valid.
--spec restore(_, _, _) -> _.
+-spec restore(#{ 'already-seen' => list(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, binary()}.
 restore(Msg, _Req, Opts) ->
     ?event({restore_called_on_dev_test, Msg}),
     case hb_ao:get(<<"already-seen">>, Msg, Opts) of
@@ -159,7 +174,7 @@ mul(Base, Req) ->
     {ok, #{ <<"state">> => State, <<"results">> => [Arg1 * Arg2] }}.
 
 %% @doc Do nothing when asked to snapshot.
--spec snapshot(_, _, _) -> _.
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{}}.
 snapshot(Base, Req, _Opts) ->
     ?event({snapshot_called, {base, Base}, {req, Req}}),
     {ok, #{}}.
@@ -174,14 +189,16 @@ append(Base, Req, Opts) ->
     {ok, Base#{ <<"result">> => <<Existing/binary, Prefix/binary, Bin/binary>> }}.
 
 %% @doc Set the `postprocessor-called' key to true in the HTTP server.
--spec postprocess(_, _, _) -> _.
+-spec postprocess(#{ _ => _ }, #{ body := _, _ => _ }, #{ _ => _ }) ->
+    {ok, _}.
 postprocess(_Msg, #{ <<"body">> := Msgs }, Opts) ->
     ?event({postprocess_called, Opts}),
     hb_http_server:set_opts(Opts#{ <<"postprocessor-called">> => true }),
     {ok, Msgs}.
 
 %% @doc Find a test worker's PID and send it an update message.
--spec update_state(_, _, _) -> _.
+-spec update_state(#{ _ => _ }, #{ 'test-id' => _, _ => _ }, #{ _ => _ }) ->
+    {ok, ok} | {error, binary()}.
 update_state(_Msg, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -198,7 +215,8 @@ update_state(_Msg, Req, _Opts) ->
     end.
 
 %% @doc Find a test worker's PID and send it an increment message.
--spec increment_counter(_, _, _) -> _.
+-spec increment_counter(#{ _ => _ }, #{ 'test-id' => _, _ => _ }, #{ _ => _ }) ->
+    {ok, ok} | {error, binary()}.
 increment_counter(_Base, Req, _Opts) ->
     case hb_ao:get(<<"test-id">>, Req) of
         not_found ->
@@ -218,7 +236,8 @@ increment_counter(_Base, Req, _Opts) ->
 
 %% @doc Does nothing, just sleeps `Req/duration or 750' ms and returns the 
 %% appropriate form in order to be used as a hook.
--spec delay(_, _, _) -> _.
+-spec delay(#{ _ => _ }, #{ duration => integer(), result => _, body => _, _ => _ }, #{ _ => _ }) ->
+    {ok, _}.
 delay(Base, Req, Opts) ->
     Duration =
         hb_ao:get_first(
@@ -248,7 +267,8 @@ delay(Base, Req, Opts) ->
 %% 
 %% Caution: This function is not safe to use in production, as it may cause
 %% state inconsistencies.
--spec mangle(_, _, _) -> _.
+-spec mangle(#{ commitments => #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, binary()}.
 mangle(Base, _Req, Opts) ->
     case hb_opts:get(mode, prod, Opts) of
         prod -> {error, <<"`mangle' unavailable in `prod` mode.">>};
