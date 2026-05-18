@@ -90,7 +90,8 @@ do_compute(State, Req, Opts) ->
                 {as, <<"dedup@1.0">>, Req},
                 Opts
             ),
-        ?event(dedup_short,
+        ?event(
+            debug_genesis,
             {continue,
                 {path, hb_maps:get(<<"path">>, Req, no_path, Opts)},
                 {assignment_slot, hb_maps:get(<<"slot">>, Req, no_slot, Opts)},
@@ -114,9 +115,7 @@ do_compute(State, Req, Opts) ->
                 },
                 Opts
             ),
-        ?event(dedup_short,
-            {result, hb_ao:get(<<"results/data">>, State4, no_data, Opts)}
-        ),
+        ?event(debug_genesis, {computed_result, State4}, Opts),
         {ok, State4}
     else
         {error, Error} ->

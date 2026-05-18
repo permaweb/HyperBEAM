@@ -422,11 +422,12 @@ normalize_results(Msg) ->
 %% signing node needs to add some tags to each message and spawn such that
 %% the target process knows these messages are created by a process.
 preprocess_results(Msg, Opts) ->
-    Tags = tags_to_map(Msg, Opts),
+    NormMsg = hb_util:lower_case_keys(hb_ao:normalize_keys(Msg, Opts), Opts),
+    Tags = tags_to_map(NormMsg, Opts),
     FilteredMsg =
         hb_maps:without(
             [<<"from-process">>, <<"from-image">>, <<"anchor">>, <<"tags">>],
-            Msg,
+            NormMsg,
             Opts
         ),
     convert_unset_values(
@@ -446,15 +447,19 @@ preprocess_results(Msg, Opts) ->
 
 %% @doc Convert a message with tags into a map of their key-value pairs.
 tags_to_map(Msg, Opts) ->
-    NormMsg = hb_util:lower_case_keys(hb_ao:normalize_keys(Msg, Opts), Opts),
-    RawTags = hb_maps:get(<<"tags">>, NormMsg, [], Opts),
+    RawTags = hb_maps:get(<<"tags">>, Msg, [], Opts),
     TagList =
         [
-            {hb_maps:get(<<"name">>, Tag, Opts), hb_maps:get(<<"value">>, Tag, Opts)}
+            {
+                hb_util:to_lower(hb_maps:get(<<"name">>, Tag, Opts)),
+                hb_maps:get(<<"value">>, Tag, Opts)
+            }
         ||
             Tag <- RawTags
         ],
-    hb_maps:from_list(TagList).
+    Res = hb_maps:from_list(TagList),
+    ?event({tags_to_map, {input, Msg}, {result, Res}}),
+    Res.
 
 %% @doc Recursively convert <<"__ao-unset__">> binary values to the `unset'
 %% atom, so that dev_message:set/3 will remove those keys during patch
