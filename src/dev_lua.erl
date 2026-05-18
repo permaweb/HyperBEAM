@@ -517,6 +517,20 @@ simple_invocation_test() ->
     },
     ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
 
+ao_unset_reference_bug_test() ->
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Script
+        },
+        <<"parameters">> => []
+    },
+    {ok, Res} = hb_ao:resolve(Base, <<"ao_unset_reference_bug">>, #{}),
+    ?assertEqual(not_found, hb_ao:get(<<"shared/wallet1">>, Res, #{})),
+    ?assertEqual(<<"__ao-unset__">>, hb_ao:get(<<"targeted/wallet1">>, Res, #{})).
+
 post_invocation_message_validation_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
