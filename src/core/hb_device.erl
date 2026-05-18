@@ -255,8 +255,8 @@ maybe_normalize_device_key(Key, Mode) ->
 %%       Only the Forge sets it, supplying the seed codecs under their
 %%       ordinary module names so it can compute IDs and sign the
 %%       preloaded messages.</li>
-%%   <li><b>Runtime.</b> Otherwise the name resolves purely through the
-%%       preloaded store: `name@1.0' maps it to a specification ID, the
+%%   <li><b>Runtime.</b> Otherwise a direct, trusted read of the flat
+%%       preloaded index maps the name to a specification ID, the
 %%       matching signed `application/beam-archive' implementation is
 %%       trust- and compatibility-checked, and its archive is loaded.
 %%       The resolved module is memoised by name and by spec ID.</li>
@@ -310,56 +310,38 @@ is_admissible(Ref, Opts) ->
         _ -> true
     end.
 
-%% @doc IDs resolve to themselves; `name@1.0' bootstraps from the
-%% preloaded resolver message; every other name resolves through the
-%% `~name@1.0' device with the preloaded resolver prepended.
+%% @doc An ID resolves to itself. A name maps to its specification ID
+%% via a single direct read of the flat preloaded index -- `<IndexID>/
+%% <Name>' is a leaf holding the spec ID, so no `name@1.0', codec or
+%% resolver device is needed (which would recurse: the codecs are
+%% themselves preloaded packages).
 resolve_spec_id(Ref, _Opts) when ?IS_ID(Ref) ->
     {ok, Ref};
-resolve_spec_id(<<"name@1.0">>, Opts) ->
-    case preloaded_resolver(Opts) of
-        {Resolver, ROpts} ->
-            spec_result(
-                hb_ao:resolve(
-                    Resolver,
-                    #{ <<"path">> => <<"name@1.0">> },
-                    resolve_opts(ROpts)));
-        not_found ->
-            not_found
-    end;
 resolve_spec_id(Ref, Opts) ->
-    try
-        spec_result(
-            hb_ao:resolve(
-                #{ <<"device">> => <<"name@1.0">> },
-                #{ <<"path">> => Ref, <<"load">> => false },
-                resolve_opts(with_preloaded_name_resolver(Opts))))
-    catch
-        throw:{error, {device_not_loadable, _Dev, Msg = #{}}} -> {error, Msg}
+    case preloaded(Opts) of
+        {Store, IndexID} ->
+            case
+                hb_store:read(
+                    Store, <<IndexID/binary, "/", Ref/binary>>, Opts)
+            of
+                {ok, SpecID} when ?IS_ID(SpecID) -> {ok, SpecID};
+                _ -> not_found
+            end;
+        undefined ->
+            not_found
     end.
 
-spec_result({ok, ID}) when ?IS_ID(ID) -> {ok, ID};
-spec_result({error, Msg = #{}}) -> {error, Msg};
-spec_result(_) -> not_found.
-
-resolve_opts(Opts) ->
-    Opts#{
-        <<"error-strategy">> => return,
-        <<"force-message">> => false,
-        <<"paranoid-verify">> => false
-    }.
-
 %% @doc Find the first trusted, compatible signed implementation of
-%% `SpecID': the preloaded store, then the configured stores (preloaded
-%% prepended), then a remote gateway when enabled. An `{error, _}' from
-%% an earlier source short-circuits the later ones.
+%% `SpecID': the trusted preloaded store, then the configured stores,
+%% then a remote gateway when enabled. An `{error, _}' from an earlier
+%% source short-circuits the later ones.
 load_implementation(Ref, SpecID, Opts) ->
     Trusted = trusted_devices(Opts),
     maybe
         not_found ?= from_preloaded(Ref, SpecID, Trusted, Opts),
         not_found ?=
             from_store(
-                Ref, SpecID, Trusted,
-                (with_preloaded_store(Opts))#{ <<"match-index">> => false }),
+                Ref, SpecID, Trusted, Opts#{ <<"match-index">> => false }),
         true ?= hb_opts:get(load_remote_devices, false, Opts),
         from_remote(Ref, SpecID, Trusted, Opts)
     else
@@ -368,13 +350,14 @@ load_implementation(Ref, SpecID, Opts) ->
         false -> not_found
     end.
 
-%% @doc Search the preloaded store in raw mode so no codec device is
-%% needed to read the implementation links.
+%% @doc The trusted preloaded read: the preloaded store is build-signed,
+%% so read it directly and codec-free -- its messages (including the
+%% codecs' own archives) must be read before any codec is loadable.
 from_preloaded(Ref, SpecID, Trusted, Opts) ->
-    case preloaded_store(Opts) of
+    case preloaded(Opts) of
         undefined ->
             not_found;
-        Store ->
+        {Store, _IndexID} ->
             from_store(
                 Ref, SpecID, Trusted,
                 Opts#{
@@ -604,75 +587,24 @@ memoise(Ref, Mod, Opts) when is_atom(Mod) ->
 device_store(Opts) ->
     hb_opts:get(device_store, undefined, Opts).
 
-preloaded_store(Opts) ->
-    hb_opts:get(preloaded_store, undefined, node_config_opts(Opts)).
-
-%% @doc Read node configuration even from request-local resolver opts.
-node_config_opts(Opts) ->
-    maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts).
-
-%% @doc The signed name->spec resolver message read straight from the
-%% preloaded store via a minimal in-memory lookup device, so resolving
-%% a device name needs no other device.
-preloaded_resolver(Opts) ->
-    NodeOpts = node_config_opts(Opts),
-    Store = preloaded_store(NodeOpts),
-    IndexID = hb_opts:get(preloaded_devices_index, undefined, NodeOpts),
-    maybe
-        true ?= Store =/= undefined andalso IndexID =/= undefined,
-        ROpts =
-            NodeOpts#{ <<"store">> => Store, <<"cache-read-mode">> => raw },
-        {ok, Resolver} ?= hb_cache:read(IndexID, ROpts),
+%% @doc The preloaded store and its signed index ID, from node config
+%% (request-local cache keys stripped so it is visible even inside a
+%% request-scoped resolution). This is the only place the preloaded
+%% store is named: a device name resolves via a direct read of the
+%% index, and the matching package is read codec-free from this store.
+preloaded(Opts) ->
+    Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
+    case
         {
-            Resolver#{ <<"device">> => primitive_name_resolver(ROpts) },
-            with_preloaded_store(NodeOpts)
+            hb_opts:get(preloaded_store, undefined, Node),
+            hb_opts:get(preloaded_devices_index, undefined, Node)
         }
-    else
-        _ -> not_found
+    of
+        {Store, IndexID} when Store =/= undefined, IndexID =/= undefined ->
+            {Store, IndexID};
+        _ ->
+            undefined
     end.
-
-with_preloaded_name_resolver(Opts) ->
-    case preloaded_resolver(Opts) of
-        {Resolver, ROpts} ->
-            ROpts#{
-                <<"name-resolvers">> =>
-                    [Resolver | listify(hb_opts:get(name_resolvers, [], ROpts))]
-            };
-        not_found ->
-            Opts
-    end.
-
-primitive_name_resolver(ROpts) ->
-    #{
-        info =>
-            fun() ->
-                #{
-                    default =>
-                        fun(Key, Base, _Req, _Opts) ->
-                            case hb_maps:get(Key, Base, not_found, ROpts) of
-                                not_found -> not_found;
-                                Value -> {ok, Value}
-                            end
-                        end
-                }
-            end
-    }.
-
-with_preloaded_store(Opts) ->
-    case preloaded_store(Opts) of
-        undefined ->
-            Opts;
-        Pre ->
-            Opts#{
-                <<"store">> =>
-                    [Pre | listify(hb_opts:get(store, [], Opts))]
-            }
-    end.
-
-listify(L) when is_list(L) -> L;
-listify(M) when is_map(M) -> [M];
-listify(undefined) -> [];
-listify(X) -> [X].
 
 trusted_devices(Opts) ->
     case hb_opts:get(trusted_devices, [], Opts) of
