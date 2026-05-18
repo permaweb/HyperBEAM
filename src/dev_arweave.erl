@@ -384,12 +384,6 @@ get_chunk(_Base, Request, Opts) ->
             {error, Reason}
     end.
 
-%% @doc Fetch a range of chunks in parallel. Determines the appropriate algorithm
-%% to use to get the chunks based on offset, length, and an optional relative
-%% transaction ID. Notably, this function returns the binary for all of the
-%% chunks that were fetched, not just the requested length. This allows callers
-%% to avoid wasted additional requests in some circumstances, but also requires
-%% them to handle truncation themselves.
 fetch_chunk_range(Offset, Length, undefined, Opts)
         when (Offset >= ?STRICT_DATA_SPLIT_THRESHOLD) andalso
         ((Offset + Length - 1) >= ?STRICT_DATA_SPLIT_THRESHOLD) ->
@@ -404,15 +398,10 @@ fetch_chunk_range(Offset, Length, RelativeTXID, Opts)
         when is_binary(RelativeTXID) ->
     get_chunk_range_relative(Offset, Length, RelativeTXID, Opts).
 
-%% @doc Post-threshold: chunks occupy fixed 256KiB buckets. Query at
-%% DATA_CHUNK_SIZE increments up to EndOffset, and if the assembled data is
-%% still short, fetch exactly one additional tail chunk. This can happen
-%% when a dataitem starts in the middle of a chunk, the initial set of
-%% offsets generated doesn't know this and so leaves off a single chunk at
-%% the end.
-%% 
-%% Note: we don't want to *always* query an extra chunk because if it doesn't
-%% exist, dev_arweave will consider the dataitem missing.
+%% @doc Post-threshold: chunks occupy fixed 256KiB buckets aligned to
+%% absolute weave offsets, which need not coincide with Offset. Query at
+%% DATA_CHUNK_SIZE increments and let fill_gaps iteratively cover any
+%% remaining holes until the range is contiguous.
 get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
     hb_prometheus:observe(
         EndOffset - Offset,
@@ -420,29 +409,7 @@ get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
         []),
     Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
     case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} ->
-            % Check for one additional tail chunk if needed.
-            Sorted = sort_chunks(ChunkInfos),
-            {ok, Binaries} = assemble_chunks(Sorted, Offset),
-            ExpectedLength = EndOffset - Offset + 1,
-            BinarySize = iolist_size(Binaries),
-            case BinarySize < ExpectedLength of
-                false ->
-                    {ok, Binaries};
-                true ->
-                    ExtraOffset = min(
-                        lists:last(Offsets) + ?DATA_CHUNK_SIZE, EndOffset),
-                    ?event(debug_arweave, {fetching_extra_chunk,
-                        {binary_size, BinarySize},
-                        {expected_length, ExpectedLength},
-                        {extra_offset, ExtraOffset}}),
-                    case fetch_and_collect([ExtraOffset], Opts) of
-                        {ok, ExtraInfos} ->
-                            assemble_chunks(Sorted ++ ExtraInfos, Offset);
-                        Error ->
-                            Error
-                    end
-            end;
+        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
         Error -> Error
     end.
 
@@ -505,9 +472,6 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
         [] ->
             assemble_chunks(Sorted, Offset);
         Gaps ->
-            % WARNING: the find_gaps logic is untested in production and may not
-            % be needed. We have yet to find an L1 TX that is chunked in such
-            % a way as to create gaps when using our naive 256KiB chunking.
             GapOffsets = [Start || {Start, _End} <- Gaps],
             ?event(debug_arweave,
                 {fill_gaps, 
@@ -523,9 +487,6 @@ fill_gaps(ChunkInfos, Offset, EndOffset, Opts) ->
                     {gap_offsets, GapOffsets}
                 }
             ),
-            ?event(warning,
-                {fetch_chunk_gap_handling_untested,
-                    {gap_offsets, GapOffsets}}),
             case fetch_and_collect(GapOffsets, Opts) of
                 {ok, NewInfos} ->
                     ?event(debug_arweave, {fill_gaps, NewInfos}),
@@ -1072,6 +1033,9 @@ post_ans104_message_test_parallel() ->
         )
     },
     Server = hb_http_server:start_node(ServerOpts),
+    %% For some reason if we wait 1500ms before the request this test doesn't fail
+    %% with connect_timeout when runnning in parallel.
+    timer:sleep(1500),
     ClientOpts =
         #{
             <<"store">> => [hb_test_utils:test_store()],
@@ -2156,3 +2120,17 @@ assert_chunk_range(Type, ID, StartOffset, ExpectedLength, ExpectedHash, Opts) ->
     ?event(debug_test, {data, {explicit,  hb_util:encode(crypto:hash(sha256, Data))}}),
     ?assertEqual(ExpectedHash, hb_util:encode(crypto:hash(sha256, Data))),
     ok.
+
+get_post_split_mid_chunk_large_module_test_parallel() ->
+    Offset = 194_794_421_495_003,
+    ExpectedLength = 732_228,
+    {ok, Data} = hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"offset">> => Offset + 1,
+            <<"length">> => ExpectedLength
+        },
+        #{}
+    ),
+    ?assertEqual(ExpectedLength, byte_size(Data)).
