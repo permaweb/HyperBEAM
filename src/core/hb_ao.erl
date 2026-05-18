@@ -190,7 +190,7 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
             _ -> #{ <<"device">> => ForcedDevice }
         end,
     {ExecFun, PrefixArgs} =
-        case hb_ao_device:message_to_fun(BaseWithDevice, Key, ExecOpts) of
+        case hb_device:message_to_fun(BaseWithDevice, Key, ExecOpts) of
             {add_key, _DevMod, Fun} -> {Fun, [Key]};
             {_Status, _DevMod, Fun} -> {Fun, []}
         end,
@@ -201,7 +201,7 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
     % and `ExecOpts`).
     apply(
         ExecFun,
-        hb_ao_device:truncate_args(ExecFun, PrefixArgs ++ [Base, Req, ExecOpts])
+        hb_device:truncate_args(ExecFun, PrefixArgs ++ [Base, Req, ExecOpts])
     ).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
@@ -531,7 +531,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
                     {opts, Opts}
                 }
             ),
-			{Status, Device, Func} = hb_ao_device:message_to_fun(Base, Key, UserOpts),
+			{Status, Device, Func} = hb_device:message_to_fun(Base, Key, UserOpts),
 			?event(
 				{found_func_for_exec,
                     {key, Key},
@@ -592,7 +592,7 @@ resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
     % Try to execute the function.
     Res = 
         try
-            TruncatedArgs = hb_ao_device:truncate_args(Func, Args),
+            TruncatedArgs = hb_device:truncate_args(Func, Args),
             MsgRes = maybe_profiled_apply(Func, TruncatedArgs, Base, Req, Opts),
             ?event(
                 debug_ao_result,

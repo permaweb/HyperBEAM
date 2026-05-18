@@ -1,7 +1,7 @@
 %%% @doc A library for working with HyperBEAM-compatible AO-Core devices.
 %%% Offers services for loading, verifying executability, and extracting Erlang
 %%% functions from a device.
--module(hb_ao_device).
+-module(hb_device).
 -export([truncate_args/2, message_to_fun/3, message_to_device/2, load/2]).
 -export([implementation_dir/1]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
@@ -238,42 +238,43 @@ maybe_normalize_device_key(Key, Mode) ->
     catch _:_ -> Key
     end.
 
+%%% --------------------------------------------------------------------
+%%% Device loading
+%%% --------------------------------------------------------------------
+
 %% @doc Resolve a device reference to its Erlang module.
 %%
-%% Three direct forms are handled first: an inline device map, an
-%% already-loaded generated module atom, and a binary device name/ID.
-%%
-%% A binary name takes one of two paths that never intermingle:
+%% Inline device maps and already-resolved generated module atoms pass
+%% through directly. A binary name or ID takes one of two paths that
+%% never intermingle:
 %%
 %% <ul>
 %%   <li><b>Forge build.</b> If `forge-bootstrap' is set in `Opts' the
-%%       device search <em>is</em> a `maps:find' in that map and
-%%       nothing else -- no store, resolver, archive, or cache. Only
-%%       the Forge sets it, supplying the seed codecs under their
-%%       ordinary module names so it can compute message IDs and sign
-%%       the preloaded messages.</li>
-%%   <li><b>Runtime.</b> Otherwise the name is resolved through the
+%%       device search <em>is</em> a `maps:find' in that seed map and
+%%       nothing else -- no store, resolver, archive, cache or trust.
+%%       Only the Forge sets it, supplying the seed codecs under their
+%%       ordinary module names so it can compute IDs and sign the
+%%       preloaded messages.</li>
+%%   <li><b>Runtime.</b> Otherwise the name resolves purely through the
 %%       preloaded store: `name@1.0' maps it to a specification ID, the
 %%       matching signed `application/beam-archive' implementation is
 %%       trust- and compatibility-checked, and its archive is loaded.
-%%       The resolved module is memoised in the device-store cache.</li>
+%%       The resolved module is memoised by name and by spec ID.</li>
 %% </ul>
 load(Map, _Opts) when is_map(Map) ->
     {ok, Map};
 load(Atom, _Opts) when is_atom(Atom) ->
-    case hb_device_name:is_generated(Atom) of
-        false -> {error, load_error(<<"device-must-be-packaged">>, Atom)};
-        true ->
-            case loaded_module(Atom) of
-                {ok, _} = Ok -> Ok;
-                not_found -> {error, load_error(<<"device-not-loaded">>, Atom)}
-            end
+    case {hb_device_name:is_generated(Atom), code:is_loaded(Atom)} of
+        {true, {file, _}} -> {ok, Atom};
+        {true, false} ->
+            {error, load_error(<<"device-mod-not-loadable">>, Atom)};
+        {false, _} ->
+            {error, load_error(<<"device-must-be-packaged">>, Atom)}
     end;
 load(Ref, Opts) when is_binary(Ref) ->
     NormRef = hb_ao:normalize_key(Ref),
     case hb_opts:get(forge_bootstrap, undefined, Opts) of
         Seeds when is_map(Seeds) ->
-            % Forge build path: the seed map is the whole device search.
             case maps:find(NormRef, Seeds) of
                 {ok, Mod} -> {ok, Mod};
                 error -> {error, load_error(<<"forge-seed-missing">>, NormRef)}
@@ -282,29 +283,26 @@ load(Ref, Opts) when is_binary(Ref) ->
             load_runtime(NormRef, Opts)
     end.
 
-%%% --------------------------------------------------------------------
-%%% Runtime device loading (pure preloaded store)
-%%% --------------------------------------------------------------------
-
-%% @doc Resolve a device name through the preloaded store, memoising the
-%% loaded module under both its name and specification ID.
-load_runtime(NormRef, Opts) ->
+%% @doc The runtime path: a memoised lookup, name->spec resolution via
+%% the preloaded `name@1.0' resolver, then the first trusted, compatible
+%% signed implementation archive.
+load_runtime(Ref, Opts) ->
     maybe
-        true ?= is_admissible(NormRef, Opts),
-        not_found ?= lookup_device_cache(NormRef, Opts),
-        {ok, SpecID} ?= resolve_to_spec_id(NormRef, Opts),
-        {ok, Mod} ?= load_implementation(NormRef, SpecID, Opts),
-        cache_device_module(NormRef, Mod, Opts),
-        cache_device_module(SpecID, Mod, Opts),
+        true ?= is_admissible(Ref, Opts),
+        not_found ?= cached_module(Ref, Opts),
+        {ok, SpecID} ?= resolve_spec_id(Ref, Opts),
+        {ok, Mod} ?= load_implementation(Ref, SpecID, Opts),
+        memoise(Ref, Mod, Opts),
+        memoise(SpecID, Mod, Opts),
         {ok, Mod}
     else
-        false -> {error, load_error(<<"device-not-admissible">>, NormRef)};
-        {ok, _} = Cached -> Cached;
-        not_found -> {error, load_error(<<"device-not-found">>, NormRef)};
+        false -> {error, load_error(<<"device-not-admissible">>, Ref)};
+        {ok, _} = Hit -> Hit;
+        not_found -> {error, load_error(<<"device-not-found">>, Ref)};
         {error, _} = Error -> Error
     end.
 
-%% @doc Optional operator allow-list for runtime-loadable devices.
+%% @doc Optional operator allow-list of runtime-loadable device names.
 is_admissible(Ref, Opts) ->
     case hb_opts:get(admissible_devices, all, Opts) of
         Names when is_list(Names) ->
@@ -312,32 +310,29 @@ is_admissible(Ref, Opts) ->
         _ -> true
     end.
 
-%% @doc Resolve an ID to itself, or a name to its specification ID via
-%% the `name@1.0' resolver bootstrapped from the preloaded store.
-resolve_to_spec_id(Ref, _Opts) when ?IS_ID(Ref) ->
+%% @doc IDs resolve to themselves; `name@1.0' bootstraps from the
+%% preloaded resolver message; every other name resolves through the
+%% `~name@1.0' device with the preloaded resolver prepended.
+resolve_spec_id(Ref, _Opts) when ?IS_ID(Ref) ->
     {ok, Ref};
-resolve_to_spec_id(<<"name@1.0">>, Opts) ->
+resolve_spec_id(<<"name@1.0">>, Opts) ->
     case preloaded_resolver(Opts) of
         {Resolver, ROpts} ->
             spec_result(
                 hb_ao:resolve(
                     Resolver,
                     #{ <<"path">> => <<"name@1.0">> },
-                    resolve_opts(ROpts)
-                )
-            );
+                    resolve_opts(ROpts)));
         not_found ->
             not_found
     end;
-resolve_to_spec_id(Ref, Opts) ->
+resolve_spec_id(Ref, Opts) ->
     try
         spec_result(
             hb_ao:resolve(
                 #{ <<"device">> => <<"name@1.0">> },
                 #{ <<"path">> => Ref, <<"load">> => false },
-                resolve_opts(with_preloaded_name_resolver(Opts))
-            )
-        )
+                resolve_opts(with_preloaded_name_resolver(Opts))))
     catch
         throw:{error, {device_not_loadable, _Dev, Msg = #{}}} -> {error, Msg}
     end.
@@ -353,104 +348,119 @@ resolve_opts(Opts) ->
         <<"paranoid-verify">> => false
     }.
 
-%% @doc Find and load a device's signed implementation: the preloaded
-%% store first, then any other configured stores (preloaded prepended),
-%% then a gateway when remote device loading is enabled.
+%% @doc Find the first trusted, compatible signed implementation of
+%% `SpecID': the preloaded store, then the configured stores (preloaded
+%% prepended), then a remote gateway when enabled. An `{error, _}' from
+%% an earlier source short-circuits the later ones.
 load_implementation(Ref, SpecID, Opts) ->
     Trusted = trusted_devices(Opts),
     maybe
+        not_found ?= from_preloaded(Ref, SpecID, Trusted, Opts),
         not_found ?=
-            match_and_load(
+            from_store(
                 Ref, SpecID, Trusted,
-                preloaded_opts(Opts),
-                fun(ID, O) -> hb_cache:read(ID, O) end
-            ),
-        not_found ?=
-            match_and_load(
-                Ref, SpecID, Trusted,
-                (with_preloaded_store(Opts))#{ <<"match-index">> => false },
-                fun(ID, O) -> hb_cache:read(ID, O) end
-            ),
-        false ?= hb_opts:get(load_remote_devices, false, Opts),
-        not_found
+                (with_preloaded_store(Opts))#{ <<"match-index">> => false }),
+        true ?= hb_opts:get(load_remote_devices, false, Opts),
+        from_remote(Ref, SpecID, Trusted, Opts)
     else
         {ok, _} = Ok -> Ok;
         {error, _} = Error -> Error;
-        true -> load_remote(Ref, SpecID, Trusted, Opts)
+        false -> not_found
     end.
 
-preloaded_opts(Opts) ->
+%% @doc Search the preloaded store in raw mode so no codec device is
+%% needed to read the implementation links.
+from_preloaded(Ref, SpecID, Trusted, Opts) ->
     case preloaded_store(Opts) of
-        undefined -> Opts#{ <<"store">> => [] };
-        Store -> Opts#{ <<"store">> => Store, <<"cache-read-mode">> => raw }
+        undefined ->
+            not_found;
+        Store ->
+            from_store(
+                Ref, SpecID, Trusted,
+                Opts#{
+                    <<"store">> => Store,
+                    <<"cache-read-mode">> => raw
+                })
     end.
 
-%% @doc Match the implementation message(s) for `SpecID' in the given
-%% store and load the first whose trust and metadata check out.
-match_and_load(Ref, SpecID, Trusted, Opts, Read) ->
+%% @doc Match the implementation messages for `SpecID' in one store
+%% context and load the first that verifies; trusted IDs are appended
+%% so an explicitly-trusted implementation is tried even if unmatched.
+from_store(Ref, SpecID, Trusted, Opts) ->
     Matched =
-        case
-            hb_cache:match(
-                #{
-                    <<"data-protocol">> => <<"ao">>,
-                    <<"variant">> => <<"ao.N.1">>,
-                    <<"content-type">> => <<"application/beam-archive">>,
-                    <<"implements-device">> => SpecID
-                },
-                Opts
-            )
-        of
+        case hb_cache:match(impl_query(SpecID), Opts) of
             {ok, IDs} -> IDs;
             _ -> []
         end,
-    load_ids(Matched ++ Trusted, Ref, SpecID, Opts, Read).
+    try_ids(
+        Matched ++ Trusted, Ref, SpecID, Opts,
+        fun(ID) -> hb_cache:read(ID, Opts) end).
 
-load_remote(Ref, SpecID, Trusted, Opts) ->
-    maybe
-        not_found ?=
-            load_ids(
-                Trusted, Ref, SpecID, Opts,
-                fun(ID, O) -> hb_gateway_client:read(ID, O) end
-            ),
-        case hb_gateway_client:device(SpecID, Opts) of
-            {ok, Msg} -> verify_implementation(Msg, Ref, SpecID, undefined, Opts);
-            _ -> {error, load_error(<<"remote-device-not-found">>, Ref, SpecID)}
-        end
+%% @doc Remote fallback: trusted IDs via the gateway, then the gateway's
+%% own device lookup for the specification ID.
+from_remote(Ref, SpecID, Trusted, Opts) ->
+    case
+        try_ids(
+            Trusted, Ref, SpecID, Opts,
+            fun(ID) -> hb_gateway_client:read(ID, Opts) end)
+    of
+        not_found ->
+            case hb_gateway_client:device(SpecID, Opts) of
+                {ok, Msg} -> verify(Msg, Ref, SpecID, undefined, Opts);
+                _ ->
+                    {error,
+                        load_error(<<"remote-device-not-found">>, Ref, SpecID)}
+            end;
+        Other ->
+            Other
     end.
 
-load_ids([], _Ref, _SpecID, _Opts, _Read) ->
+impl_query(SpecID) ->
+    #{
+        <<"data-protocol">> => <<"ao">>,
+        <<"variant">> => <<"ao.N.1">>,
+        <<"content-type">> => <<"application/beam-archive">>,
+        <<"implements-device">> => SpecID
+    }.
+
+%% @doc Read each candidate in order and load the first that verifies.
+%% A verification error is only surfaced once the candidates run out.
+try_ids([], _Ref, _SpecID, _Opts, _Read) ->
     not_found;
-load_ids([ID | IDs], Ref, SpecID, Opts, Read) ->
-    case Read(ID, Opts) of
+try_ids([ID | IDs], Ref, SpecID, Opts, Read) ->
+    case Read(ID) of
         {ok, Msg} ->
-            case verify_implementation(Msg, Ref, SpecID, ID, Opts) of
+            case verify(Msg, Ref, SpecID, ID, Opts) of
                 {ok, _} = Ok -> Ok;
-                {error, _} = Error when IDs =:= [] -> Error;
-                {error, _} -> load_ids(IDs, Ref, SpecID, Opts, Read)
+                {error, _} = Error when IDs == [] -> Error;
+                {error, _} -> try_ids(IDs, Ref, SpecID, Opts, Read)
             end;
         _ ->
-            load_ids(IDs, Ref, SpecID, Opts, Read)
+            try_ids(IDs, Ref, SpecID, Opts, Read)
     end.
 
-%% @doc Verify an implementation message's trust and metadata, then load
-%% its archive. The implementation is trusted if its ID is explicitly
-%% trusted or one of its signers is.
-verify_implementation(RawMsg, Ref, SpecID, ID, Opts) ->
-    Msg = load_implementation_message(RawMsg, Opts),
+%% @doc Verify trust, then metadata, then machine compatibility, then
+%% load the archive. An implementation is trusted if its message ID is
+%% explicitly trusted or one of its commitment signers is.
+verify(RawMsg, Ref, SpecID, ID, Opts) ->
+    Msg = load_links(RawMsg, Opts),
     Trusted =
         is_trusted_device(ID, Opts)
             orelse is_signer_trusted(
-                implementation_signers(Msg, Opts), trusted_signers(Opts)),
+                signers(Msg, Opts), trusted_signers(Opts)),
+    ?event(device_load,
+        {verifying_device_trust, {ref, Ref}, {impl, ID}, {trusted, Trusted}},
+        Opts),
     maybe
         true ?= Trusted,
         {SpecID, <<"ao">>, <<"ao.N.1">>, <<"application/beam-archive">>} ?=
             {
-                hb_maps:get(<<"implements-device">>, Msg, undefined, Opts),
-                hb_maps:get(<<"data-protocol">>, Msg, undefined, Opts),
-                hb_maps:get(<<"variant">>, Msg, undefined, Opts),
-                hb_maps:get(<<"content-type">>, Msg, undefined, Opts)
+                field(<<"implements-device">>, Msg, Opts),
+                field(<<"data-protocol">>, Msg, Opts),
+                field(<<"variant">>, Msg, Opts),
+                field(<<"content-type">>, Msg, Opts)
             },
-        ok ?= verify_device_compatibility(Msg, Opts),
+        ok ?= compatible(Msg, Opts),
         load_archive(Ref, Msg, Opts)
     else
         false ->
@@ -464,14 +474,15 @@ verify_implementation(RawMsg, Ref, SpecID, ID, Opts) ->
             {error, load_error(<<"wrong-device-message">>, Ref)}
     end.
 
-%% @doc Load implementation links without bootstrapping codec devices.
-load_implementation_message(Msg, Opts) ->
+%% @doc Load the message's links without bootstrapping a codec device:
+%% raw reads only resolve commitments, normal reads load everything.
+load_links(Msg, Opts) ->
     case hb_opts:get(cache_read_mode, normal, Opts) of
         raw -> hb_cache:ensure_all_loaded(Msg, Opts);
         _ -> hb_cache:read_all_commitments(Msg, Opts)
     end.
 
-implementation_signers(Msg, Opts) ->
+signers(Msg, Opts) ->
     hb_maps:values(
         hb_maps:filtermap(
             fun(_ID, C) ->
@@ -481,30 +492,27 @@ implementation_signers(Msg, Opts) ->
                 end
             end,
             hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-            Opts
-        ),
-        Opts
-    ).
+            Opts),
+        Opts).
 
-%% @doc Load the verified implementation's BEAM archive.
 load_archive(Ref, Msg, Opts) ->
-    ModBin = hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
     Archive =
         hb_maps:get(
             <<"body">>,
             Msg,
             hb_maps:get(<<"data">>, Msg, undefined, Opts),
-            Opts
-        ),
-    case hb_device_archive:load(ModBin, Archive, Msg, Opts) of
+            Opts),
+    case
+        hb_device_archive:load(
+            field(<<"module-name">>, Msg, Opts), Archive, Msg, Opts)
+    of
         {ok, Mod} -> {ok, Mod};
         {error, Reason} ->
             {error, load_error(<<"device-archive-load-failed">>, Ref, Reason)}
     end.
 
-%% @doc Verify that an implementation's `requires-*' keys match the
-%% running machine.
-verify_device_compatibility(Msg, Opts) ->
+%% @doc Every `requires-*' key must match this machine's `system_info'.
+compatible(Msg, Opts) ->
     Failed =
         lists:filtermap(
             fun
@@ -523,48 +531,50 @@ verify_device_compatibility(Msg, Opts) ->
                 (_) ->
                     false
             end,
-            hb_maps:to_list(Msg, Opts)
-        ),
+            hb_maps:to_list(Msg, Opts)),
     case Failed of
         [] -> ok;
         _ -> {error, {failed_requirements, Failed}}
     end.
 
-%% @doc Return the extracted implementation directory for a device.
+%% @doc The extracted implementation directory for a generated device.
 implementation_dir(Module) when is_atom(Module) ->
     hb_device_archive:implementation_dir(Module).
 
 %%% --------------------------------------------------------------------
-%%% Device-store cache, store + trust helpers
+%%% Memoisation, stores, resolver and trust
 %%% --------------------------------------------------------------------
 
 -define(DEV_CACHE_PREFIX, <<"devices/">>).
 
-%% @doc Look up a previously-resolved generated module for a name or
-%% spec ID, in the process dictionary then the device store.
-lookup_device_cache(Ref, Opts) ->
+%% @doc A name or spec ID -> loaded generated module, from the process
+%% dictionary then the persistent device store. A cached module that is
+%% no longer loaded is a miss.
+cached_module(Ref, Opts) ->
     case erlang:get({?MODULE, device_cache, Ref}) of
         Mod when is_atom(Mod), Mod =/= undefined ->
-            case loaded_module(Mod) of
-                {ok, _} = Ok -> Ok;
-                not_found -> lookup_device_store(Ref, Opts)
+            case code:is_loaded(Mod) of
+                {file, _} -> {ok, Mod};
+                false -> cached_in_store(Ref, Opts)
             end;
         _ ->
-            lookup_device_store(Ref, Opts)
+            cached_in_store(Ref, Opts)
     end.
 
-lookup_device_store(Ref, Opts) ->
+cached_in_store(Ref, Opts) ->
     case device_store(Opts) of
         undefined ->
             not_found;
         Store ->
             maybe
-                {ok, ModBin} ?=
+                {ok, Bin} ?=
                     hb_store:read(
-                        Store, <<?DEV_CACHE_PREFIX/binary, Ref/binary>>, Opts),
-                true ?= hb_device_name:is_generated(ModBin),
-                {ok, Mod} ?= existing_atom(ModBin),
-                {ok, _} ?= loaded_module(Mod),
+                        Store,
+                        <<?DEV_CACHE_PREFIX/binary, Ref/binary>>,
+                        Opts),
+                true ?= hb_device_name:is_generated(Bin),
+                {ok, Mod} ?= existing_atom(Bin),
+                {file, _} ?= code:is_loaded(Mod),
                 erlang:put({?MODULE, device_cache, Ref}, Mod),
                 {ok, Mod}
             else
@@ -572,58 +582,49 @@ lookup_device_store(Ref, Opts) ->
             end
     end.
 
-%% @doc `{ok, Atom}' for an existing atom of `Bin', else `not_found'
-%% (so a stale cache entry never crashes resolution).
 existing_atom(Bin) ->
     try {ok, hb_util:key_to_atom(Bin, existing)}
     catch _:_ -> not_found
     end.
 
-%% @doc Whether a generated module atom is loaded in the code server.
-loaded_module(ModName) ->
-    case code:is_loaded(ModName) of
-        {file, _} -> {ok, ModName};
-        false -> not_found
-    end.
-
-%% @doc Memoise a name or spec ID -> generated module.
-cache_device_module(Ref, Mod, Opts) when is_atom(Mod) ->
+%% @doc Memoise a name or spec ID -> generated module in both caches.
+memoise(Ref, Mod, Opts) when is_atom(Mod) ->
     erlang:put({?MODULE, device_cache, Ref}, Mod),
     case device_store(Opts) of
-        undefined -> ok;
+        undefined ->
+            ok;
         Store ->
             hb_store:write(
                 Store,
-                #{
-                    <<?DEV_CACHE_PREFIX/binary, Ref/binary>> =>
-                        hb_util:bin(Mod)
-                },
-                Opts
-            )
+                #{ <<?DEV_CACHE_PREFIX/binary, Ref/binary>> =>
+                    hb_util:bin(Mod) },
+                Opts)
     end.
 
-device_store(Opts) -> hb_opts:get(device_store, undefined, Opts).
+device_store(Opts) ->
+    hb_opts:get(device_store, undefined, Opts).
 
 preloaded_store(Opts) ->
     hb_opts:get(preloaded_store, undefined, node_config_opts(Opts)).
 
+%% @doc Read node configuration even from request-local resolver opts.
 node_config_opts(Opts) ->
     maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts).
 
 %% @doc The signed name->spec resolver message read straight from the
-%% preloaded store via a minimal in-memory lookup device (so resolving
-%% device names needs no other device).
+%% preloaded store via a minimal in-memory lookup device, so resolving
+%% a device name needs no other device.
 preloaded_resolver(Opts) ->
     NodeOpts = node_config_opts(Opts),
     Store = preloaded_store(NodeOpts),
     IndexID = hb_opts:get(preloaded_devices_index, undefined, NodeOpts),
     maybe
         true ?= Store =/= undefined andalso IndexID =/= undefined,
-        ReadOpts =
+        ROpts =
             NodeOpts#{ <<"store">> => Store, <<"cache-read-mode">> => raw },
-        {ok, Resolver} ?= hb_cache:read(IndexID, ReadOpts),
+        {ok, Resolver} ?= hb_cache:read(IndexID, ROpts),
         {
-            Resolver#{ <<"device">> => primitive_name_resolver(ReadOpts) },
+            Resolver#{ <<"device">> => primitive_name_resolver(ROpts) },
             with_preloaded_store(NodeOpts)
         }
     else
@@ -641,14 +642,14 @@ with_preloaded_name_resolver(Opts) ->
             Opts
     end.
 
-primitive_name_resolver(ReadOpts) ->
+primitive_name_resolver(ROpts) ->
     #{
         info =>
             fun() ->
                 #{
                     default =>
                         fun(Key, Base, _Req, _Opts) ->
-                            case hb_maps:get(Key, Base, not_found, ReadOpts) of
+                            case hb_maps:get(Key, Base, not_found, ROpts) of
                                 not_found -> not_found;
                                 Value -> {ok, Value}
                             end
@@ -659,7 +660,8 @@ primitive_name_resolver(ReadOpts) ->
 
 with_preloaded_store(Opts) ->
     case preloaded_store(Opts) of
-        undefined -> Opts;
+        undefined ->
+            Opts;
         Pre ->
             Opts#{
                 <<"store">> =>
@@ -668,6 +670,7 @@ with_preloaded_store(Opts) ->
     end.
 
 listify(L) when is_list(L) -> L;
+listify(M) when is_map(M) -> [M];
 listify(undefined) -> [];
 listify(X) -> [X].
 
@@ -703,6 +706,8 @@ load_error(Code, Ref, Reason) ->
 reason_bin(Reason) when is_binary(Reason) -> Reason;
 reason_bin(Reason) when is_atom(Reason) -> hb_util:bin(Reason);
 reason_bin(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
+
+field(Key, Msg, Opts) -> hb_maps:get(Key, Msg, undefined, Opts).
 
 %% @doc Get the info map for a device, optionally giving it a message if the
 %% device's info function is parameterized by one.

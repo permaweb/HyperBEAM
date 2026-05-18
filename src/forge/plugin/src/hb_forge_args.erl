@@ -188,7 +188,7 @@ default_preloaded_dirs(Dirs) ->
 
 %% @doc Return true when the current checkout is HyperBEAM itself.
 is_hb_checkout() ->
-    filelib:is_file(<<"src/core/hb_ao_device.erl">>).
+    filelib:is_file(<<"src/core/hb_device.erl">>).
 
 %% @doc Return true when any configured source dir contains `Dir'.
 source_covers(Dir, Dirs) ->

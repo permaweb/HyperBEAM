@@ -153,7 +153,7 @@ until(Condition, Count) ->
 until(Condition, Fun, Count) ->
     case Condition() of
         false ->
-            case apply(Fun, hb_ao_device:truncate_args(Fun, [Count])) of
+            case apply(Fun, hb_device:truncate_args(Fun, [Count])) of
                 {count, AddToCount} ->
                     until(Condition, Fun, Count + AddToCount);
                 _ ->

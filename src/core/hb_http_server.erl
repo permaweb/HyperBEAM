@@ -457,7 +457,7 @@ handle_request(RawReq, Body, ServerID) ->
                 ),
                 % Invoke the meta@1.0 device to handle the request.
                 Meta =
-                    hb_ao_device:message_to_device(
+                    hb_device:message_to_device(
                         #{ <<"device">> => <<"meta@1.0">> },
                         NodeMsg
                     ),

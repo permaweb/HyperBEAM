@@ -3,7 +3,7 @@
 %%%
 %%% Each test builds a self-contained `preloaded-store' from a tiny
 %%% in-memory device, points the runtime at that store, and asserts on
-%%% the behaviour of {@link hb_ao_device:load/2}.
+%%% the behaviour of {@link hb_device:load/2}.
 -module(hb_packager_test_vectors).
 -export([test_fixture_dir/0]).
 -include("include/hb.hrl").
@@ -117,14 +117,14 @@ runtime_case(Name, Fun) ->
 
 module_name_matches(Pkg, Opts, _, _) ->
     Name = maps:get(device_name, Pkg),
-    {ok, Mod} = hb_ao_device:load(Name, Opts),
+    {ok, Mod} = hb_device:load(Name, Opts),
     ?assert(hb_device_name:is_generated(Mod)),
     ?assertEqual(maps:get(module_name, Pkg), Mod).
 
 device_store_cache_matches(Pkg, Opts, _, _) ->
     Name = maps:get(device_name, Pkg),
-    {ok, Mod1} = hb_ao_device:load(Name, Opts),
-    {ok, Mod2} = hb_ao_device:load(Name, Opts),
+    {ok, Mod1} = hb_device:load(Name, Opts),
+    {ok, Mod2} = hb_device:load(Name, Opts),
     ?assertEqual(Mod1, Mod2),
     DevStore = maps:get(<<"device-store">>, Opts),
     {ok, Cached} =
@@ -133,8 +133,8 @@ device_store_cache_matches(Pkg, Opts, _, _) ->
 
 priv_data_matches(Pkg, Opts, _, _) ->
     Name = maps:get(device_name, Pkg),
-    {ok, Mod} = hb_ao_device:load(Name, Opts),
-    Dir = hb_ao_device:implementation_dir(Mod),
+    {ok, Mod} = hb_device:load(Name, Opts),
+    Dir = hb_device:implementation_dir(Mod),
     {ok, Body} =
         file:read_file(
             filename:join([Dir, <<"share">>, <<"data">>])
@@ -153,7 +153,7 @@ reject_untrusted_load(Pkg, Opts, _, _) ->
     },
     ?assertMatch(
         {error, _},
-        hb_ao_device:load(Name, BadOpts)
+        hb_device:load(Name, BadOpts)
     ).
 
 trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
@@ -164,7 +164,7 @@ trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
         <<"trusted-devices">> => [ImplID],
         <<"device-store">> => hb_test_utils:test_store()
     },
-    {ok, Mod} = hb_ao_device:load(SpecID, IDOpts),
+    {ok, Mod} = hb_device:load(SpecID, IDOpts),
     ?assertEqual(maps:get(module_name, Pkg), Mod).
 
 preloaded_index_matches(_Pkg, Opts, _, _) ->
@@ -177,7 +177,7 @@ preloaded_index_matches(_Pkg, Opts, _, _) ->
 unpackaged_atom_is_rejected_test() ->
     ?assertMatch(
         {error, #{ <<"error">> := <<"device-must-be-packaged">> }},
-        hb_ao_device:load(dev_message, #{})
+        hb_device:load(dev_message, #{})
     ).
 
 %%% --------------------------------------------------------------------

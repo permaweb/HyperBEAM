@@ -709,10 +709,10 @@ deep_set_with_device_test(Opts) ->
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
-	?assert(hb_ao_device:is_exported(Msg, dev_message, info, Opts)),
-	?assert(hb_ao_device:is_exported(Msg, dev_message, set, Opts)),
+	?assert(hb_device:is_exported(Msg, dev_message, info, Opts)),
+	?assert(hb_device:is_exported(Msg, dev_message, set, Opts)),
 	?assert(
-        hb_ao_device:is_exported(
+        hb_device:is_exported(
             Msg,
             dev_message,
             not_explicitly_exported,
@@ -724,9 +724,9 @@ device_exports_test(Opts) ->
 		set => fun(_, _) -> {ok, <<"SET">>} end
 	},
 	Req = #{ <<"device">> => Dev },
-	?assert(hb_ao_device:is_exported(Req, Dev, info, Opts)),
-	?assert(hb_ao_device:is_exported(Req, Dev, set, Opts)),
-	?assert(not hb_ao_device:is_exported(Req, Dev, not_exported, Opts)),
+	?assert(hb_device:is_exported(Req, Dev, info, Opts)),
+	?assert(hb_device:is_exported(Req, Dev, set, Opts)),
+	?assert(not hb_device:is_exported(Req, Dev, not_exported, Opts)),
     Dev2 = #{
         info =>
             fun() ->
@@ -770,8 +770,8 @@ device_excludes_test(Opts) ->
             end
     },
     Msg = #{ <<"device">> => Dev, <<"Test-Key">> => <<"Test-Value">> },
-    ?assert(hb_ao_device:is_exported(Msg, Dev, <<"test-key2">>, Opts)),
-    ?assert(not hb_ao_device:is_exported(Msg, Dev, set, Opts)),
+    ?assert(hb_device:is_exported(Msg, Dev, <<"test-key2">>, Opts)),
+    ?assert(not hb_device:is_exported(Msg, Dev, set, Opts)),
     ?assertEqual(<<"Handler-Value">>, hb_ao:get(<<"test-key2">>, Msg, Opts)),
     ?assertMatch(#{ <<"test-key2">> := <<"2">> },
         hb_ao:set(Msg, <<"test-key2">>, <<"2">>, Opts)).
@@ -817,7 +817,7 @@ denormalized_device_name_test(Opts) ->
     ),
     ?assertEqual(
         {ok, Dev, maps:get(test_func, Dev)},
-        hb_ao_device:message_to_fun(Msg, test_func, Opts)
+        hb_device:message_to_fun(Msg, test_func, Opts)
     ).
 
 denormalized_key_test(Opts) ->

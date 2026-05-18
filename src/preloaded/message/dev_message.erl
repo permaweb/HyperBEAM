@@ -147,7 +147,7 @@ calculate_id(RawBase, Req, NodeOpts) ->
     % If the ID device resolves to this device, use the default commitment
     % device instead to avoid recursing through `message@1.0/commit'.
     CommitDev =
-        case hb_ao_device:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
+        case hb_device:message_to_device(#{ <<"device">> => IDMod }, NodeOpts) of
             ?MODULE -> ?DEFAULT_ID_DEVICE;
             _ -> IDMod
         end,

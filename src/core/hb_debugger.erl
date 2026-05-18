@@ -21,7 +21,7 @@ profile_and_stop(Fun) ->
     group_leader(F, self()),
     io:format("profiling-output: started.~n"),
     io:format("Profiling function: ~p.~n", [Fun]),
-    Profile = hb_ao_device:message_to_device(
+    Profile = hb_device:message_to_device(
         #{ <<"device">> => <<"profile@1.0">> },
         #{}
     ),

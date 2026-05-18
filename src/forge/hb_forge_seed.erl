@@ -8,7 +8,7 @@
 %%% module names, loads them, and exposes a `Name => RootModule' map.
 %%%
 %%% The packager threads that map as the `forge-bootstrap' option.
-%%% When present, {@link hb_ao_device:load/2} resolves a device name
+%%% When present, {@link hb_device:load/2} resolves a device name
 %%% with a single `maps:find' in it and nothing else; the runtime never
 %%% sets `forge-bootstrap', so production resolution is the pure
 %%% preloaded store. The two paths cannot intermingle. There is no

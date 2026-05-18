@@ -195,7 +195,7 @@ test_init() ->
 info_test() ->
     test_init(),
     M1 = hb_process_test_vectors:wasm_process(<<"test/aos-2-pure-xs.wasm">>),
-    Res = hb_ao_device:info(M1, #{}),
+    Res = hb_device:info(M1, #{}),
     Grouper = hb_maps:get(grouper, Res, undefined, #{}),
     ?assert(is_function(Grouper, 3)),
     {module, Mod} = erlang:fun_info(Grouper, module),

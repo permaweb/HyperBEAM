@@ -139,7 +139,7 @@ test_opts(Result) ->
 load_devices([], _Opts) ->
     ok;
 load_devices([Name | Names], Opts) ->
-    case hb_ao_device:load(Name, Opts) of
+    case hb_device:load(Name, Opts) of
         {ok, Mod} ->
             rebar_api:info("device test: loaded ~s as ~p", [Name, Mod]),
             load_devices(Names, Opts);

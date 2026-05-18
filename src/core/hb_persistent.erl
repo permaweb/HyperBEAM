@@ -147,13 +147,13 @@ group(Base, Req, Opts) ->
     Grouper =
         hb_maps:get(
             grouper,
-            hb_ao_device:info(Base, Opts),
+            hb_device:info(Base, Opts),
             fun default_grouper/3,
             Opts
         ),
     apply(
         Grouper,
-        hb_ao_device:truncate_args(Grouper, [Base, Req, Opts])
+        hb_device:truncate_args(Grouper, [Base, Req, Opts])
     ).
 
 %% @doc Register for performing an AO-Core resolution.
@@ -177,7 +177,7 @@ await(Worker, Base, Req, Opts) ->
     AwaitFun =
         hb_maps:get(
             await,
-            hb_ao_device:info(Base, Opts),
+            hb_device:info(Base, Opts),
             fun default_await/5,
 			Opts
         ),
@@ -280,7 +280,7 @@ start_worker(GroupName, Msg, Opts) ->
             WorkerFun =
                 hb_maps:get(
                     worker,
-                    hb_ao_device:info(Msg, Opts),
+                    hb_device:info(Msg, Opts),
                     Def = fun default_worker/3,
 					Opts
                 ),
@@ -298,7 +298,7 @@ start_worker(GroupName, Msg, Opts) ->
             register_groupname(GroupName, Opts),
             apply(
                 WorkerFun,
-                hb_ao_device:truncate_args(
+                hb_device:truncate_args(
                     WorkerFun,
                     [
                         GroupName,

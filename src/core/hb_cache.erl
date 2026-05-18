@@ -844,7 +844,7 @@ read_resolved({link, ID, LinkOpts}, Req, Opts) ->
 read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     NormKey = hb_ao:normalize_key(Key, Opts),
-    case hb_ao_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
+    case hb_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
         unknown -> miss;
         false ->
             ?event(read_cached,
@@ -875,7 +875,7 @@ read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) 
     % The base message is loaded, so we determine if it has an explicit device
     % and perform a direct lookup if it does not.
     NormKey = hb_ao:normalize_key(Key, Opts),
-    case hb_ao_device:is_direct_key_access(BaseMsg, Req, Opts) of
+    case hb_device:is_direct_key_access(BaseMsg, Req, Opts) of
         false -> read_hashpath(BaseMsg, Req, Opts);
         true ->
             ?event(read_cached,
