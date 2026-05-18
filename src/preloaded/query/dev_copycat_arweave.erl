@@ -947,9 +947,10 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
             #{items_count => 0, bundle_count => 0, skipped_count => 1, achieved_depth => 0}
     end.
 
+%% @doc Download and decode a bundle header from chunk data.
 download_bundle_header(EndOffset, Size, Opts) ->
     observe_event(<<"bundle_header">>, fun() ->
-        dev_arweave:bundle_header(EndOffset - Size, Opts)
+        lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
 %% @doc Process transactions: spawn workers and manage the worker pool.

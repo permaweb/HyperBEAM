@@ -92,9 +92,9 @@ behavior_info(callbacks) ->
 
 %% @doc Store access policies to function names.
 -define(STORE_ACCESS_POLICIES, #{
-    <<"read">> => [read, resolve, list, type, match, scope, start, stop],
-    <<"write">> => [write, link, group, reset, scope, start, stop],
-    <<"admin">> => [start, stop, reset, scope]
+    <<"read">> => [read, resolve, list, type, match] ++ ?COMMON_POLICIES,
+    <<"write">> => [write, link, group, reset] ++ ?COMMON_POLICIES,
+    <<"admin">> => [reset] ++ ?COMMON_POLICIES
 }).
 
 %%% Store named terms registry functions.
