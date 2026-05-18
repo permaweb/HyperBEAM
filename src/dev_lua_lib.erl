@@ -22,11 +22,19 @@
 %%% execution that is able to perform AO-Core resolutions. Without the following
 %%% devices, all resolutions will fail.
 -define(MINIMAL_AO_CORE_DEVICES, [<<"structured@1.0">>]).
+-define(LIBRARY_FUNCTIONS, [
+    {get, fun get/3},
+    {resolve, fun resolve/3},
+    {set, fun set/3},
+    {event, fun event/3}
+]).
 
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
-    % Calculate and set the new `preloaded-devices' option.
-    AllDevs = hb_opts:get(preloaded_devices, Opts),
+    % Compute the device-name allowlist for the Lua sandbox. When the
+    % caller provides a `device-sandbox' field, only those names plus
+    % the minimal-AO-Core set are admissible; otherwise we leave the
+    % allowlist undefined (no restriction).
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
@@ -34,30 +42,18 @@ install(Base, State, Opts) ->
             false,
             Opts
         ),
-    AdmissibleDevs =
+    AdmissibleNames =
         case DevSandboxDef of
-            false -> AllDevs;
+            false -> all;
             DevNames ->
-                lists:map(
-                    fun(Name) ->
-                        [Dev] =
-                            lists:filter(
-                                fun(X) ->
-                                    hb_ao:get(<<"name">>, X, Opts) == Name
-                                end,
-                                AllDevs
-                            ),
-                        Dev
-                    end,
-                    hb_util:message_to_ordered_list(
-                        hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
-                    )
+                hb_util:message_to_ordered_list(
+                    hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
                 )
         end,
-    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleDevs}}),
+    ?event({adding_ao_core_resolver, {device_sandbox, AdmissibleNames}}),
     ExecOpts =
         Opts#{
-            <<"preloaded-devices">> => AdmissibleDevs,
+            <<"admissible-devices">> => AdmissibleNames,
             <<"hashpath">> => ignore
         },
     % Initialize the AO-Core resolver.
@@ -80,7 +76,7 @@ install(Base, State, Opts) ->
     {
         ok,
         lists:foldl(
-            fun(FuncName, StateIn) ->
+            fun({FuncName, Func}, StateIn) ->
                 {ok, StateOut} =
                     luerl:set_table_keys_dec(
                         [ao, FuncName],
@@ -99,7 +95,7 @@ install(Base, State, Opts) ->
                                 ),
                             % Call the function with the decoded arguments.
                             {Res, ResState} =
-                                ?MODULE:FuncName(Args, ImportState, ExecOpts),
+                                Func(Args, ImportState, ExecOpts),
                             % Encode the response for return to Lua
                             return(Res, ResState, Opts)
                         end,
@@ -108,13 +104,7 @@ install(Base, State, Opts) ->
                 StateOut
             end,
             State2,
-            [
-                FuncName
-            ||
-                {FuncName, _} <- dev_lua_lib:module_info(exports),
-                FuncName /= module_info,
-                FuncName /= ?FUNCTION_NAME
-            ]
+            ?LIBRARY_FUNCTIONS
         )
     }.
 
@@ -191,7 +181,7 @@ event([Event], ExecState, Opts) ->
     event([global, Event], ExecState, Opts);
 event([Group, Event], State, Opts) when is_list(Event) ->
     event([Group, list_to_tuple(Event)], State, Opts);
-event([Group, Event], ExecState, Opts) ->
+event([Group, Event], ExecState, _Opts) ->
     ?event(
         lua_event,
         {event,

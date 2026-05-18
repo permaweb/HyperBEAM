@@ -25,8 +25,10 @@
 %% `Opts' argument to use for all AO-Core resolution requests downstream.
 start() ->
     ?event(http, {start_store, <<"cache-mainnet">>}),
+    EnvConfig = hb_opts:default_message_with_env(),
+    Loc = hb_opts:get(hb_config_location, <<"config.flat">>, EnvConfig),
     Loaded =
-        case hb_opts:load(Loc = hb_opts:get(hb_config_location, <<"config.flat">>)) of
+        case hb_opts:load(Loc, EnvConfig) of
             {ok, Conf} ->
                 ?event(boot, {loaded_config, {path, Loc}, {config, Conf}}),
                 Conf;
@@ -34,11 +36,7 @@ start() ->
                 ?event(boot, {failed_to_load_config, Loc, Reason}),
                 #{}
         end,
-    MergedConfig =
-        hb_maps:merge(
-            hb_opts:default_message_with_env(),
-            Loaded
-        ),
+    MergedConfig = hb_maps:merge(EnvConfig, Loaded),
     hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),

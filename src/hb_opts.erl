@@ -20,6 +20,16 @@
 -include("include/hb.hrl").
 -include("include/hb_opts.hrl").
 -include("include/hb_arweave_nodes.hrl").
+-include("../../_build/hb_preloaded_index.hrl").
+
+-ifndef(PRELOADED_DEVICES_INDEX_MESSAGE_ID).
+-define(PRELOADED_DEVICES_INDEX_MESSAGE_ID, undefined).
+-endif.
+
+%%% @doc Returns the build-time-generated preloaded-store index ID, or
+%%% `undefined' if the preloaded store has not yet been built.
+preloaded_index_default() ->
+    ?PRELOADED_DEVICES_INDEX_MESSAGE_ID.
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
@@ -46,7 +56,7 @@
         #{ <<"device">> => <<"arweave@2.9">> },
         #{ <<"device">> => <<"b32-name@1.0">> },
         <<
-            "fG_Tr0H7xI64xTXVq9-O9YvUefht-gW30gtOHGRMhb8",
+            "G_gb7SAgogHMtmqycwaHaC6uC-CZ3akACdFv5PUaEE8",
                 "~json@1.0/deserialize&target=data"
         >>
     ]
@@ -74,6 +84,10 @@
     #{
         <<"priv-key-location">> => {"HB_KEY", "hyperbeam-key.json"},
         <<"hb-config-location">> => {"HB_CONFIG", "config.flat"},
+        <<"preloaded-store">> =>
+            {"HB_PRELOADED_STORE", fun preloaded_store_from_env/1},
+        <<"preloaded-devices-index">> =>
+            {"HB_PRELOADED_DEVICES_INDEX", fun hb_util:bin/1},
         <<"port">> => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         <<"mode">> => {"HB_MODE", fun list_to_existing_atom/1},
         <<"paranoid-verify">> =>
@@ -103,7 +117,7 @@
             {"HB_LOG_MAX_BYTES", fun hb_util:int/1, "52428800"},
         <<"lua-scripts">> => {"LUA_SCRIPTS", "scripts"},
         <<"lua-tests">> =>
-            {"LUA_TESTS", fun hb_lua_test_utils:parse_spec/1, tests},
+            {"LUA_TESTS", fun lua_tests_from_env/1, tests},
         <<"default-index">> =>
             {
                 "HB_INDEX",
@@ -139,6 +153,16 @@ topic_list_to_atoms("true") -> true;
 topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
     lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
+
+preloaded_store_from_env(Path) ->
+    #{
+        <<"store-module">> => hb_store_lmdb,
+        <<"name">> => hb_util:bin(Path)
+    }.
+
+%% @doc Keep the raw Lua test selector in opts; the Lua test device parses it.
+lua_tests_from_env(tests) -> tests;
+lua_tests_from_env(Spec) -> hb_util:bin(Spec).
 
 %% @doc Convert an opts key to lower-case binary dash form.
 canonical_key(Key) when is_atom(Key) ->
@@ -208,72 +232,27 @@ raw_default_message() ->
         %% ourselves as a scheduler on the network.
         %% Default: 7 days.
         <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
-        %% Preloaded devices for the node to use. These names override
-        %% resolution of devices via ID to the default implementations.
-        <<"preloaded-devices">> => [
-            #{<<"name">> => <<"arweave@2.9">>, <<"module">> => dev_arweave},
-            #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
-            #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
-            #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
-            #{<<"name">> => <<"b32-name@1.0">>, <<"module">> => dev_b32_name},
-            #{<<"name">> => <<"blacklist@1.0">>, <<"module">> => dev_blacklist},
-            #{<<"name">> => <<"bundler@1.0">>, <<"module">> => dev_bundler},
-            #{<<"name">> => <<"compute@1.0">>, <<"module">> => dev_cu},
-            #{<<"name">> => <<"cache@1.0">>, <<"module">> => dev_cache},
-            #{<<"name">> => <<"cacheviz@1.0">>, <<"module">> => dev_cacheviz},
-            #{<<"name">> => <<"cookie@1.0">>, <<"module">> => dev_codec_cookie},
-            #{<<"name">> => <<"cron@1.0">>, <<"module">> => dev_cron},
-            #{<<"name">> => <<"dedup@1.0">>, <<"module">> => dev_dedup},
-            #{<<"name">> => <<"delegated-compute@1.0">>, <<"module">> => dev_delegated_compute},
-            #{<<"name">> => <<"faff@1.0">>, <<"module">> => dev_faff},
-            #{<<"name">> => <<"flat@1.0">>, <<"module">> => dev_codec_flat},
-            #{<<"name">> => <<"genesis-wasm@1.0">>, <<"module">> => dev_genesis_wasm},
-            #{<<"name">> => <<"gzip@1.0">>, <<"module">> => dev_gzip},
-            #{<<"name">> => <<"greenzone@1.0">>, <<"module">> => dev_green_zone},
-            #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
-            #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
-            #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
-            #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
-            #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
-            #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
-            #{<<"name">> => <<"json-iface@1.0">>, <<"module">> => dev_json_iface},
-            #{<<"name">> => <<"local-name@1.0">>, <<"module">> => dev_local_name},
-            #{<<"name">> => <<"location@1.0">>, <<"module">> => dev_location},
-            #{<<"name">> => <<"lookup@1.0">>, <<"module">> => dev_lookup},
-            #{<<"name">> => <<"lua@5.3a">>, <<"module">> => dev_lua},
-            #{<<"name">> => <<"manifest@1.0">>, <<"module">> => dev_manifest},
-            #{<<"name">> => <<"match@1.0">>, <<"module">> => dev_match},
-            #{<<"name">> => <<"message@1.0">>, <<"module">> => dev_message},
-            #{<<"name">> => <<"metering@1.0">>, <<"module">> => dev_metering},
-            #{<<"name">> => <<"meta@1.0">>, <<"module">> => dev_meta},
-            #{<<"name">> => <<"monitor@1.0">>, <<"module">> => dev_monitor},
-            #{<<"name">> => <<"multipass@1.0">>, <<"module">> => dev_multipass},
-            #{<<"name">> => <<"name@1.0">>, <<"module">> => dev_name},
-            #{<<"name">> => <<"node-process@1.0">>, <<"module">> => dev_node_process},
-            #{<<"name">> => <<"p4@1.0">>, <<"module">> => dev_p4},
-            #{<<"name">> => <<"patch@1.0">>, <<"module">> => dev_patch},
-            #{<<"name">> => <<"poda@1.0">>, <<"module">> => dev_poda},
-            #{<<"name">> => <<"process@1.0">>, <<"module">> => dev_process},
-            #{<<"name">> => <<"profile@1.0">>, <<"module">> => dev_profile},
-            #{<<"name">> => <<"push@1.0">>, <<"module">> => dev_push},
-            #{<<"name">> => <<"query@1.0">>, <<"module">> => dev_query},
-            #{<<"name">> => <<"rate-limit@1.0">>, <<"module">> => dev_rate_limit},
-            #{<<"name">> => <<"relay@1.0">>, <<"module">> => dev_relay},
-            #{<<"name">> => <<"router@1.0">>, <<"module">> => dev_router},
-            #{<<"name">> => <<"scheduler@1.0">>, <<"module">> => dev_scheduler},
-            #{<<"name">> => <<"simple-pay@1.0">>, <<"module">> => dev_simple_pay},
-            #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
-            #{<<"name">> => <<"stack@1.0">>, <<"module">> => dev_stack},
-            #{<<"name">> => <<"structured@1.0">>, <<"module">> => dev_codec_structured},
-            #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
-            #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
-            #{<<"name">> => <<"tx@1.0">>, <<"module">> => dev_codec_tx},
-            #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
-            #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
-            #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois}
-        ],
+        %% Generated LMDB store of preloaded device artifacts.
+        <<"preloaded-store">> =>
+            #{
+                <<"store-module">> => hb_store_lmdb,
+                <<"name">> => <<"_build/preloaded-store">>,
+                <<"capacity">> => 1024 * 1024 * 1024,
+                <<"read-only">> => true
+            },
+        %% Build-time ID of the preloaded name resolver message.
+        <<"preloaded-devices-index">> => preloaded_index_default(),
+        %% Volatile cache of resolved name/spec-ID -> loaded module
+        %% atom. A named volatile store is shared across every
+        %% process in this VM, so once any caller has loaded a
+        %% generated `_hb_device_*' atom every other caller finds it
+        %% here. Tests that build their own per-test main store still
+        %% share this device cache.
+        <<"device-store">> =>
+            #{
+                <<"store-module">> => hb_store_volatile,
+                <<"name">> => <<"hb-device-cache">>
+            },
         %% Default execution cache control options
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"cache-lookup-hueristics">> => false,
@@ -287,6 +266,9 @@ raw_default_message() ->
         <<"load-remote-devices">> => false,
         %% The list of device signers that the node should trust.
         <<"trusted-device-signers">> => [],
+        %% Specific device implementation message IDs trusted without
+        %% requiring a matching signer.
+        <<"trusted-devices">> => [],
         %% What should the node do if a client error occurs?
         <<"client-error-strategy">> => throw,
         %% HTTP client request options
@@ -750,14 +732,25 @@ path_to_device(Path) ->
         _ -> {ok, <<"flat@1.0">>}
     end.
 
-%% @doc Convert a file extension to a device name.
+%% @doc Convert a file extension to a device name. Configuration files
+%% are loaded by extension, so the kernel needs to know about a small,
+%% fixed set of codecs ahead of any device-store lookup. Adding new
+%% codec extensions here is a kernel-level change, not a configuration
+%% one.
 extension_to_device(Ext) ->
-    extension_to_device(Ext, ?MODULE:get(preloaded_devices, [], default_message())).
-extension_to_device(_, []) -> {error, not_found};
-extension_to_device(Ext, [#{ <<"name">> := Name }|Rest]) ->
-    case binary:match(Name, Ext) of
-        nomatch -> extension_to_device(Ext, Rest);
-        {0, _} -> {ok, Name}
+    NormExt = hb_util:bin(Ext),
+    Map = #{
+        <<"flat">> => <<"flat@1.0">>,
+        <<"json">> => <<"json@1.0">>,
+        <<"tabm">> => <<"flat@1.0">>,
+        <<"httpsig">> => <<"httpsig@1.0">>,
+        <<"ans104">> => <<"ans104@1.0">>,
+        <<"tx">> => <<"tx@1.0">>,
+        <<"structured">> => <<"structured@1.0">>
+    },
+    case maps:find(NormExt, Map) of
+        {ok, Name} -> {ok, Name};
+        error -> {error, not_found}
     end.
 
 %% @doc Parse a given binary with a device (defaulting to `flat@1.0') into a
@@ -1105,6 +1098,36 @@ load_multi_mixed_extensions_test() ->
         [#{ <<"store-module">> := hb_store_fs }|_],
         hb_maps:get(<<"store">>, Conf)
     ).
+
+preloaded_env_override_test() ->
+    StorePath = "/tmp/hb-preloaded-env-test",
+    Index = "abc123",
+    os:putenv("HB_PRELOADED_STORE", StorePath),
+    os:putenv("HB_PRELOADED_DEVICES_INDEX", Index),
+    erase({os_env, "HB_PRELOADED_STORE"}),
+    erase({os_env, "HB_PRELOADED_DEVICES_INDEX"}),
+    erase({processed_env, <<"preloaded-store">>}),
+    erase({processed_env, <<"preloaded-devices-index">>}),
+    try
+            ?assertEqual(
+                #{
+                    <<"store-module">> => hb_store_lmdb,
+                    <<"name">> => hb_util:bin(StorePath)
+                },
+            ?MODULE:get(preloaded_store, undefined, #{})
+        ),
+        ?assertEqual(
+            hb_util:bin(Index),
+            ?MODULE:get(preloaded_devices_index, undefined, #{})
+        )
+    after
+        os:unsetenv("HB_PRELOADED_STORE"),
+        os:unsetenv("HB_PRELOADED_DEVICES_INDEX"),
+        erase({os_env, "HB_PRELOADED_STORE"}),
+        erase({os_env, "HB_PRELOADED_DEVICES_INDEX"}),
+        erase({processed_env, <<"preloaded-store">>}),
+        erase({processed_env, <<"preloaded-devices-index">>})
+    end.
 
 as_identity_test() ->
     DefaultWallet = ar_wallet:new(),
