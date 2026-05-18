@@ -537,16 +537,6 @@ index_ids_test_parallel() ->
     assert_item_read(
         <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
         Opts),
-    % Another bundle with an unsupported avro codec should be indexed even if
-    % it can't be deserialized.
-    ?assertException(
-        error,
-        {badmatch,<<"\"address\":\"0x124e64C9Ed898d4A8B130F6ACb76b33E21CD711c\"", _/binary>>},
-        hb_store_arweave:read(
-            StoreOpts,
-            #{ <<"read">> => <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">> },
-            Opts)
-    ),
     assert_bundle_read(
         <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
         [
@@ -554,7 +544,28 @@ index_ids_test_parallel() ->
         ],
         Opts
     ),
-   ok.
+    ok.
+
+index_unsupported_tx_test_parallel() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    BlockHeight = 1774740,
+    BlockHeightBin = integer_to_binary(BlockHeight),
+        {ok, BlockHeight} =
+        hb_ao:resolve(
+            <<"~copycat@1.0/arweave&from=", BlockHeightBin/binary,"&to=", BlockHeightBin/binary>>,
+            Opts
+        ),
+    % Another bundle with an unsupported avro codec should be indexed even if
+    % it can't be deserialized.
+    ?assertException(
+        error,
+        {badmatch, {-5125, _}},
+        hb_store_arweave:read(
+            StoreOpts,
+            #{ <<"read">> => <<"S6FB8v4gliQNcam2hEQM36xtWdgcD-fPIyjL2Otjcns">> },
+            Opts)
+    ),
+    ok.
 
 %% @doc Test a bundle header that fits in a single chunk.
 small_bundle_header_test_parallel() ->
