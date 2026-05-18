@@ -34,20 +34,19 @@ do(State) ->
         ),
     Roots = maps:get(<<"device-roots">>, Args, all),
     Groups = hb_forge_args:scan_devices(Args),
-    % Use the exact packages written to the test preloaded-store.
-    SelectedRoots = [maps:get(root, G) || G <- Groups],
+    % Correlate the selected source groups with their packages by the
+    % device name they implement, then take the generated modules to
+    % EUnit from each archive itself (not packager internals).
+    SelectedNames =
+        lists:usort([hb_packager:group_device_name(G) || G <- Groups]),
     Pkgs =
         [
             Pkg
          ||
             Pkg <- maps:get(pkgs, Result),
-            lists:member(maps:get(root_module, Pkg), SelectedRoots)
+            lists:member(maps:get(device_name, Pkg), SelectedNames)
         ],
-    Modules = lists:usort(lists:append([
-        maps:get(module_names, Pkg)
-     ||
-        Pkg <- Pkgs
-    ])),
+    Modules = lists:usort(lists:append([archive_modules(Pkg) || Pkg <- Pkgs])),
     Names = [maps:get(device_name, Pkg) || Pkg <- Pkgs],
     case Names of
         [] ->
@@ -72,6 +71,12 @@ do(State) ->
                 end
             )
     end.
+
+%% @doc The generated module atoms inside a package's archive.
+archive_modules(Pkg) ->
+    {ok, Modules, _Resources} =
+        hb_device_archive:contents(maps:get(archive, Pkg)),
+    [Mod || {Mod, _File, _Beam} <- Modules].
 
 %% @doc Run EUnit with the generated device-store environment installed.
 test_modules(State, Names, CoreModules, DeviceModules, Result) ->

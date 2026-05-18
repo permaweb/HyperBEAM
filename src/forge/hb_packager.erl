@@ -29,9 +29,8 @@
 -module(hb_packager).
 
 -export([scan/2, scan/1]).
--export([package/2, package_all/2]).
+-export([package/2, package_all/2, group_device_name/1]).
 -export([spec_message/2, impl_message/3]).
--export([base32_lower/1]).
 
 -include("include/hb.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -277,32 +276,14 @@ read_file(Path) ->
 %%% Packaging
 %%% --------------------------------------------------------------------
 
-%% @doc Package every device returned by {@link scan/2}. Normal package
-%% identity uses the AO-Core message ID of the source-file message. The
-%% packager privately bootstraps the devices needed to calculate that ID.
+%% @doc Package every device group. A device's identity is the unsigned
+%% AO-Core message ID of its source-file message; computing it (and
+%% signing the preloaded messages) needs the seed codecs, which the
+%% caller makes reachable through the `forge-bootstrap' option (see
+%% {@link hb_forge_seed}). The runtime never sets it.
 package_all(Groups, Opts) ->
-    PackageGroups = package_groups(Groups, Opts),
-    ?event(packager, {package_groups, {count, length(PackageGroups)}}),
-    case package_id_mode(Opts) of
-        bootstrap ->
-            [package(G, Opts) || G <- PackageGroups];
-        normal ->
-            hb_forge_bootstrap:with_package_devices(
-                PackageGroups,
-                Opts,
-                fun(BootOpts) ->
-                    NormalOpts = BootOpts#{ <<"package-id-mode">> => normal },
-                    [package(G, NormalOpts) || G <- PackageGroups]
-                end
-            )
-    end.
-
-%% @doc Include the seed devices in a group list when requested.
-package_groups(Groups, Opts) ->
-    case hb_maps:get(<<"include-build-seeds">>, Opts, false, Opts) of
-        true -> hb_forge_bootstrap:include_seed_groups(Groups, Opts);
-        false -> Groups
-    end.
+    ?event(packager, {package_groups, {count, length(Groups)}}),
+    [package(G, Opts) || G <- Groups].
 
 %% @doc Package one device group. Returns a map containing the generated
 %% root module name, BEAM archive, source, declared `implements' name
@@ -315,43 +296,36 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers,
     Implements = derived_or_declared_implements(Root, RootAttrs),
     {SpecBody, SpecContentType} = derive_spec(RootFile, RootAttrs, Opts),
     PrivFiles = priv_files(Root, RootFile),
-    PackageFiles = maps:merge(Files, PrivFiles),
-    SourceID = source_id(PackageFiles, Opts),
-    SourceHash = source_id_to_hash(SourceID),
-    ModName = hb_device_name:generated(Implements, SourceHash),
+    SourceID = source_id(maps:merge(Files, PrivFiles), Opts),
+    ModName =
+        hb_device_name:generated(Implements, source_id_to_hash(SourceID)),
     ?event(
         packager,
-        {packaging, {root, Root}, {hash, SourceHash}, {mod, ModName}}
+        {packaging, {root, Root}, {id, SourceID}, {mod, ModName}}
     ),
-    ArchivePkg =
+    Archive =
         compile_archive(
-            ModName, Root, RootFile, Helpers, Libraries, SourceHash,
-            PrivFiles, Opts
+            ModName, Root, RootFile, Helpers, Libraries, PrivFiles, Opts
         ),
-    Exports = root_exports(RootAttrs),
     #{
-        module_name => ModName,
-        module_names => maps:get(module_names, ArchivePkg),
         device_name => Implements,
-        hash => SourceHash,
         source_id => SourceID,
-        archive => maps:get(archive, ArchivePkg),
-        archive_modules => maps:get(archive_modules, ArchivePkg),
-        beams => maps:get(beams, ArchivePkg),
+        module_name => ModName,
+        archive => Archive,
         spec_body => SpecBody,
         spec_content_type => SpecContentType,
-        implements => declared_implements(RootAttrs),
-        exports => Exports,
         requires_otp_release =>
             hb_util:bin(erlang:system_info(otp_release)),
         requires_system_architecture =>
-            hb_util:bin(erlang:system_info(system_architecture)),
-        root_module => Root,
-        helpers => [H || {H, _} <- Helpers],
-        libraries => [L || {L, _} <- Libraries],
-        files => Files,
-        priv_files => PrivFiles
+            hb_util:bin(erlang:system_info(system_architecture))
     }.
+
+%% @doc The device name (`name@version') a scanned group implements,
+%% without packaging it. Build tooling uses this to correlate a source
+%% group with its package.
+group_device_name(#{ root := Root, root_file := RootFile }) ->
+    {_Forms, Attrs} = parse_module(RootFile),
+    derived_or_declared_implements(Root, Attrs).
 
 %%% Source parsing. We use `epp_dodger' so we do not need include paths
 %%% or macro definitions to read a module's attributes (`-export',
@@ -416,15 +390,6 @@ derived_implements(Root) ->
     Hyphenated = binary:replace(Tail, <<"_">>, <<"-">>, [global]),
     <<Hyphenated/binary, ?DEFAULT_DEVICE_VERSION/binary>>.
 
-root_exports(Attrs) ->
-    lists:flatten(
-        [
-            E
-          ||
-            {export, ExportList} <- Attrs,
-            E <- ExportList
-        ]
-    ).
 
 %%% Specification body extraction.
 derive_spec(RootFile, Attrs, _Opts) ->
@@ -550,78 +515,19 @@ reverse_concat(Lines) ->
 %%% Hashing & module naming
 %%% --------------------------------------------------------------------
 
-%% @doc Compute the normal package ID of a device's file set. The source
-%% set is represented as a normal AO-Core message whose keys are bare source
-%% filenames and whose values are the complete file contents.
+%% @doc A device's identity is the unsigned AO-Core message ID of the
+%% message whose keys are the bare source filenames and whose values
+%% are the file contents -- the cryptographic anchor linking the source
+%% set to its compiled archive. The seed codecs needed to compute it
+%% are supplied by the caller via `forge-bootstrap'.
 source_id(FilesMap, Opts) ->
     SourceMsg = maps:from_list(lists:sort(maps:to_list(FilesMap))),
-    case package_id_mode(Opts) of
-        normal -> hb_message:id(SourceMsg, unsigned, Opts);
-        bootstrap -> bootstrap_source_id(SourceMsg)
-    end.
+    hb_message:id(SourceMsg, unsigned, Opts).
 
-%% @doc Return the package identity mode for the current build.
-package_id_mode(Opts) ->
-    case hb_maps:get(<<"package-id-mode">>, Opts, normal, Opts) of
-        normal -> normal;
-        <<"normal">> -> normal;
-        bootstrap -> bootstrap;
-        <<"bootstrap">> -> bootstrap
-    end.
-
-%% @doc Build a forge-private source ID for first-phase bootstrap packages.
-bootstrap_source_id(FilesMap) ->
-    <<"bootstrap_", (base32_lower(crypto:hash(
-        sha256,
-        source_id_stream(FilesMap)
-    )))/binary>>.
-
-%% @doc Return a deterministic byte stream for bootstrap package identity.
-source_id_stream(FilesMap) ->
-    [
-        <<"hyperbeam-bootstrap-device-source-v1">>,
-        [
-            [<<(byte_size(Name)):32>>, Name, <<(byte_size(Body)):64>>, Body]
-         ||
-            {Name, Body} <- lists:sort(maps:to_list(FilesMap))
-        ]
-    ].
-
-%% @doc Convert package source identity to the suffix used in module names.
-source_id_to_hash(<<"bootstrap_", _/binary>> = SourceID) ->
-    SourceID;
+%% @doc The atom-safe hash embedded in generated module names: the
+%% native (32-byte) form of the source ID as lowercase unpadded base32.
 source_id_to_hash(SourceID) ->
-    base32_lower(hb_util:native_id(SourceID)).
-
-%% @doc Encode bytes as lowercase, unpadded base32 (RFC 4648 alphabet).
-base32_lower(Bin) when is_binary(Bin) ->
-    base32_encode_lower(Bin, <<>>).
-
-base32_encode_lower(<<>>, Acc) -> Acc;
-base32_encode_lower(<<A, B, C, D, E, Rest/binary>>, Acc) ->
-    % Encode 5 input bytes into 8 base32 characters.
-    Bits = <<A, B, C, D, E>>,
-    Acc1 = encode_chunk(Bits, Acc, 8),
-    base32_encode_lower(Rest, Acc1);
-base32_encode_lower(Tail, Acc) ->
-    % Tail is 1..4 bytes, so emit only the meaningful base32 chars.
-    Bytes = byte_size(Tail),
-    Bits = <<Tail/binary, 0:((5 - Bytes) * 8)>>,
-    OutChars =
-        case Bytes of
-            1 -> 2;
-            2 -> 4;
-            3 -> 5;
-            4 -> 7
-        end,
-    encode_chunk(Bits, Acc, OutChars).
-
-encode_chunk(_Bits, Acc, 0) -> Acc;
-encode_chunk(<<I:5, Rest/bitstring>>, Acc, N) ->
-    encode_chunk(Rest, <<Acc/binary, (b32_char(I))>>, N - 1).
-
-b32_char(I) when I < 26 -> $a + I;
-b32_char(I) when I < 32 -> $2 + (I - 26).
+    base32:encode(hb_util:native_id(SourceID), [lower, nopad]).
 
 %%% --------------------------------------------------------------------
 %%% Namespace rename + archive compile
@@ -634,10 +540,9 @@ b32_char(I) when I < 32 -> $2 + (I - 26).
 %% `hb_device_rename' transform, which rewrites intra-package module atoms
 %% on the compiler's preprocessed forms.
 compile_archive(
-        RootMod, Root, RootFile, Helpers, Libraries, Hash, PrivFiles, Opts) ->
+        RootMod, Root, RootFile, Helpers, Libraries, PrivFiles, Opts) ->
     Entries = [{Root, RootFile} | Helpers ++ Libraries],
-    Renamings = module_renamings(RootMod, Root, Entries),
-    RenameMap = maps:from_list(Renamings),
+    RenameMap = maps:from_list(module_renamings(RootMod, Root, Entries)),
     IncludeDirs = include_dirs(Entries),
     Compiled =
         [
@@ -645,19 +550,7 @@ compile_archive(
          ||
             {Old, Path} <- Entries
         ],
-    #{
-        archive => hb_device_archive:create(Compiled, PrivFiles),
-        archive_modules => hb_device_archive:module_metadata(Compiled),
-        beams => maps:from_list(
-            [
-                {atom_to_binary(Mod, utf8), Beam}
-              ||
-                #{ module := Mod, beam := Beam } <- Compiled
-            ]
-        ),
-        module_names => [New || {_Old, New} <- Renamings],
-        hash => Hash
-    }.
+    hb_device_archive:create(Compiled, PrivFiles).
 
 %% @doc Compile one source module into its generated module name.
 compile_module(Old, Path, RenameMap, IncludeDirs, Opts) ->

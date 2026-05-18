@@ -297,22 +297,12 @@ write_module(Dir, Mod, Body) ->
     ).
 
 generated_module_name_pattern_test() ->
-    Hash = hb_packager:base32_lower(crypto:hash(sha256, <<"abc">>)),
+    Hash = base32:encode(crypto:hash(sha256, <<"abc">>), [lower, nopad]),
     Mod = hb_device_name:generated(<<"message@1.0">>, Hash),
     Bin = atom_to_binary(Mod, utf8),
     ?assertMatch(<<"_hb_device_message_1_0_", _/binary>>, Bin),
     ?assert(hb_device_name:is_generated(Mod)),
     ?assertMatch({<<"message_1_0">>, _}, hb_device_name:parts(Mod)).
-
-base32_lower_known_vector_test() ->
-    % RFC 4648 section 10 vectors, lowercase, unpadded.
-    ?assertEqual(<<>>, hb_packager:base32_lower(<<>>)),
-    ?assertEqual(<<"my">>, hb_packager:base32_lower(<<"f">>)),
-    ?assertEqual(<<"mzxq">>, hb_packager:base32_lower(<<"fo">>)),
-    ?assertEqual(<<"mzxw6">>, hb_packager:base32_lower(<<"foo">>)),
-    ?assertEqual(<<"mzxw6yq">>, hb_packager:base32_lower(<<"foob">>)),
-    ?assertEqual(<<"mzxw6ytb">>, hb_packager:base32_lower(<<"fooba">>)),
-    ?assertEqual(<<"mzxw6ytboi">>, hb_packager:base32_lower(<<"foobar">>)).
 
 package_emits_root_only_exports_test() ->
     Dir = test_fixture_dir(),
@@ -333,7 +323,8 @@ package_helper_not_loaded_separately_test() ->
     [Group] = hb_packager:scan([Dir], #{}),
     Pkg = package_for_test(Group),
     Mod = maps:get(module_name, Pkg),
-    [Mod, HelperMod] = maps:get(module_names, Pkg),
+    {ok, Modules, _} = hb_device_archive:contents(maps:get(archive, Pkg)),
+    [HelperMod] = [M || {M, _, _} <- Modules, M =/= Mod],
     % Ensure helper isn't loaded yet.
     code:purge(dev_test_pkg_helper),
     code:delete(dev_test_pkg_helper),
@@ -381,56 +372,47 @@ archive_contains_ebin_and_priv_entries_test() ->
 derived_implements_uses_module_name_test() ->
     Dir = test_fixture_dir(),
     [Group] = hb_packager:scan([Dir], #{}),
-    Pkg = package_for_test(Group),
-    % No `-implements' attribute, so derived from module name.
-    ?assertEqual(<<"test-pkg@1.0">>, maps:get(device_name, Pkg)).
+    % No `-implements' attribute, so the device name is derived from the
+    % module name -- a pure property of the scanned group.
+    ?assertEqual(<<"test-pkg@1.0">>, hb_packager:group_device_name(Group)).
 
-hash_changes_with_content_test() ->
+%% A device's identity is the unsigned AO-Core message ID of its source
+%% set. Changing any source byte must change that ID.
+source_id_changes_with_content_test() ->
     Dir = test_fixture_dir(),
     [Group] = hb_packager:scan([Dir], #{}),
-    Pkg1 = package_for_test(Group),
-    Hash1 = maps:get(hash, Pkg1),
-    % Mutate the helper file slightly and re-scan.
+    ID1 = maps:get(source_id, package_for_test(Group)),
     HelperPath = filename:join(Dir, <<"dev_test_pkg_helper.erl">>),
     {ok, Old} = file:read_file(HelperPath),
-    ok = file:write_file(HelperPath,
-        <<Old/binary, "%% noise\n">>),
+    ok = file:write_file(HelperPath, <<Old/binary, "%% noise\n">>),
     [Group2] = hb_packager:scan([Dir], #{}),
-    Pkg2 = package_for_test(Group2),
-    Hash2 = maps:get(hash, Pkg2),
-    ?assertNotEqual(Hash1, Hash2).
+    ID2 = maps:get(source_id, package_for_test(Group2)),
+    ?assert(?IS_ID(ID1)),
+    ?assert(?IS_ID(ID2)),
+    ?assertNotEqual(ID1, ID2).
 
-package_hash_is_source_message_id_test() ->
+%% The cryptographic anchor: the generated module name embeds the
+%% lowercase-base32 of the source ID's native bytes, so the loaded
+%% module is provably bound to the exact source it was built from.
+module_name_embeds_source_id_test() ->
     Dir = test_fixture_dir(),
     [Group] = hb_packager:scan([Dir], #{}),
-    [Pkg] = hb_packager:package_all(
-        [Group],
-        #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] }
-    ),
+    Pkg = package_for_test(Group),
     SourceID = maps:get(source_id, Pkg),
     ?assert(?IS_ID(SourceID)),
-    ?assertEqual(
-        hb_packager:base32_lower(hb_util:native_id(SourceID)),
-        maps:get(hash, Pkg)
+    Hash = base32:encode(hb_util:native_id(SourceID), [lower, nopad]),
+    Expected =
+        hb_device_name:generated(maps:get(device_name, Pkg), Hash),
+    ?assertEqual(Expected, maps:get(module_name, Pkg)).
+
+%% Package through the real forge path: the seed codecs are loaded under
+%% their natural names so `hb_message:id/3' can compute the source ID.
+package_for_test(Group) ->
+    hb_forge_seed:with_forge_bootstrap(
+        #{ <<"bootstrap-device-src">> => [<<"src/preloaded">>] },
+        fun(Opts) -> hb_packager:package(Group, Opts) end
     ).
 
-package_for_test(Group) ->
-    hb_packager:package(Group, #{ <<"package-id-mode">> => bootstrap }).
-
+%% Load an archive exactly as the runtime does (sans signature checks).
 load_pkg_archive(Pkg) ->
-    Archive = maps:get(archive, Pkg),
-    {ok, Files} = zip:unzip(Archive, [memory]),
-    Beams =
-        maps:from_list([{hb_util:bin(Name), Beam} || {Name, Beam} <- Files]),
-    Modules =
-        [
-            begin
-                Path = maps:get(<<"archive-path">>, Meta),
-                ModBin = maps:get(<<"module-name">>, Meta),
-                Mod = binary_to_atom(ModBin, utf8),
-                {Mod, hb_util:list(Path), maps:get(Path, Beams)}
-            end
-          ||
-            Meta <- maps:get(archive_modules, Pkg)
-        ],
-    hb_device_archive:load_modules(Modules).
+    ok = hb_device_archive:load(maps:get(archive, Pkg)).

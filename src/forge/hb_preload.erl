@@ -41,12 +41,16 @@ build(Pkgs, Wallet, Opts) ->
 
 %% @doc Package source groups and build a preloaded-store in `OutputDir'.
 build_groups(Groups, Wallet, OutputDir, Opts) ->
-    PackageOpts = Opts#{ <<"include-build-seeds">> => true },
-    build_dir(
-        hb_packager:package_all(Groups, PackageOpts),
-        Wallet,
-        OutputDir,
-        Opts
+    hb_forge_seed:with_forge_bootstrap(
+        Opts,
+        fun(SeedOpts) ->
+            build_dir(
+                hb_packager:package_all(Groups, SeedOpts),
+                Wallet,
+                OutputDir,
+                SeedOpts
+            )
+        end
     ).
 
 %% @doc Write a complete signed preloaded-store from already-built packages.
@@ -67,21 +71,11 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     % Reset store before building for deterministic re-builds.
     hb_store:reset(StoreCfg, #{ <<"reset">> => <<"all">> }, Opts),
     hb_store:start(StoreCfg, #{}, Opts),
-    DeviceStore =
-        hb_forge_bootstrap:volatile_device_store(<<"preload-normal">>),
-    hb_store:start(DeviceStore, #{}, Opts),
     LocalOpts =
         Opts#{
             <<"store">> => [StoreCfg],
-            <<"device-store">> => DeviceStore,
             <<"priv-wallet">> => Wallet
         },
-    ok =
-        hb_forge_bootstrap:load_and_cache_devices(
-            Pkgs,
-            hb_forge_bootstrap:seed_device_names(Opts),
-            LocalOpts
-        ),
     % Sign and write each spec + each impl message; collect signed IDs.
     {SpecIDs, ImplIDs} =
         lists:foldl(
@@ -100,7 +94,6 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
     IndexID = persist_signed(IndexMsg, LocalOpts),
     ?event(preload, {build_complete, {output, OutputBin}, {index, IndexID}}),
     ok = hb_store:stop(StoreCfg, #{}, Opts),
-    ok = hb_store:stop(DeviceStore, #{}, Opts),
     {
         ok,
         #{
