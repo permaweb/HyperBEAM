@@ -21,7 +21,7 @@ start() ->
 %% @doc Spawn a new server and its refresher.
 spawn_server() ->
     TSServer =
-        spawn(fun() -> cache(hb_client:arweave_timestamp()) end),
+        spawn(fun() -> cache(hb_client_remote:arweave_timestamp()) end),
     spawn(fun() -> refresher(TSServer) end),
     register(?MODULE, TSServer),
     TSServer.
@@ -57,6 +57,6 @@ cache(Current) ->
 %% @doc Refresh the timestamp cache periodically.
 refresher(TSServer) ->
     timer:sleep(?TIMEOUT),
-    TS = hb_client:arweave_timestamp(),
+    TS = hb_client_remote:arweave_timestamp(),
     TSServer ! {refresh, TS},
     refresher(TSServer).

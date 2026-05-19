@@ -401,7 +401,7 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
                 ){
                 edges {
             """>>/binary,
-            (hb_gateway_client:item_spec())/binary,
+            (hb_client_gateway:item_spec())/binary,
             """
                 }
             }}
@@ -411,14 +411,14 @@ latest_checkpoint(ProcID, TrustedSigners, Opts) ->
             <<"ProcID">> => ProcID,
             <<"TrustedSigners">> => TrustedSigners
         },
-    case hb_gateway_client:query(Query, Variables, Opts) of
+    case hb_client_gateway:query(Query, Variables, Opts) of
         {error, Reason} ->
             {error, Reason};
         {ok, GqlMsg} ->
             ?event(debug_proc_id, {gql_msg, GqlMsg}),
             case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
                 not_found -> {error, not_found};
-                Item -> hb_gateway_client:result_to_message(Item, Opts)
+                Item -> hb_client_gateway:result_to_message(Item, Opts)
             end
     end.
 

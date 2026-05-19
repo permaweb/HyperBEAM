@@ -186,7 +186,7 @@ from_low_trust(Ref, Opts) ->
                 end,
                 fun() ->
                     hb_util:ok_or(
-                        hb_gateway_client:device(
+                        hb_client_gateway:device(
                             SpecID,
                             trusted_signers(Opts),
                             Opts

@@ -1,4 +1,4 @@
--module(hb_client).
+-module(hb_client_remote).
 %% AO-Core API and HyperBEAM Built-In Devices
 -export([resolve/4, routes/2, add_route/3]).
 %% Arweave node API

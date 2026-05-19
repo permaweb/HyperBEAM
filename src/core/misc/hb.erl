@@ -211,7 +211,7 @@ deploy_scripts(Dir) ->
                 wallet(),
                 <<"ans104@1.0">>
             ),
-        {Status, _} = hb_client:upload(Msg, #{}, <<"ans104@1.0">>),
+        {Status, _} = hb_client_remote:upload(Msg, #{}, <<"ans104@1.0">>),
         io:format(
             "~s: ~s (upload status: ~p)~n",
             [File, hb_util:id(Msg), Status]

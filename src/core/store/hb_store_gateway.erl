@@ -67,7 +67,7 @@ read(BaseStoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
                 {error, not_found} ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
-                    try hb_gateway_client:read(ID, GatewayReadOpts) of
+                    try hb_client_gateway:read(ID, GatewayReadOpts) of
                         {error, _} ->
                             ?event({read_not_found, {key, ID}}),
                             {error, not_found};
