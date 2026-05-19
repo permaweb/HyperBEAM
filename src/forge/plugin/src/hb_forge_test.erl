@@ -85,7 +85,7 @@ test_modules(State, Names, CoreModules, DeviceModules, Result) ->
     Env = setup_device_tests(Names, Result),
     EUnitResult =
         try eunit:test(Tests, [verbose, {scale_timeouts, 10}])
-        after hb_forge_args:restore_preloaded_env(Env)
+        after restore_test_env(Env)
         end,
     case EUnitResult of
         ok -> {ok, State};
@@ -101,7 +101,7 @@ test_order(CoreModules, DeviceModules) ->
 
 %% @doc Load packaged devices and start apps needed by device test modules.
 setup_device_tests(Names, Result) ->
-    Env = hb_forge_args:set_preloaded_env(Result),
+    Env = setup_test_env(Result),
     try
         Opts = test_opts(Result),
         case load_devices(Names, Opts) of
@@ -112,9 +112,45 @@ setup_device_tests(Names, Result) ->
                 erlang:error(LoadError)
         end
     catch Class:Error:Stacktrace ->
-        hb_forge_args:restore_preloaded_env(Env),
+        restore_test_env(Env),
         erlang:raise(Class, Error, Stacktrace)
     end.
+
+%% @doc Point this VM at the generated store and use normal test print
+%% defaults unless the caller explicitly asked for noisy events.
+setup_test_env(Result) ->
+    {hb_forge_args:set_preloaded_env(Result), set_test_print_env()}.
+
+%% @doc Restore test-only environment changes.
+restore_test_env({PreloadedEnv, PrintEnv}) ->
+    hb_forge_args:restore_preloaded_env(PreloadedEnv),
+    restore_test_print_env(PrintEnv).
+
+%% @doc Use the same quiet event set as normal EUnit test builds.
+set_test_print_env() ->
+    case os:getenv("HB_PRINT") of
+        false ->
+            os:putenv(
+                "HB_PRINT",
+                "error,http_error,cron_error,hook_error"
+            ),
+            erase_print_env_cache(),
+            false;
+        Old -> Old
+    end.
+
+%% @doc Restore `HB_PRINT' after a device test run.
+restore_test_print_env(false) ->
+    os:unsetenv("HB_PRINT"),
+    erase_print_env_cache();
+restore_test_print_env(Old) ->
+    os:putenv("HB_PRINT", Old),
+    erase_print_env_cache().
+
+%% @doc Clear hb_opts' cached view of `HB_PRINT'.
+erase_print_env_cache() ->
+    erase({os_env, "HB_PRINT"}),
+    erase({processed_env, <<"debug-print">>}).
 
 %% @doc Build runtime opts pointing at the freshly-built preloaded
 %% store; its devices resolve through the high-trust preloaded path.
@@ -230,9 +266,9 @@ compile_core_test_modules() ->
 core_test_paths() ->
     Paths =
         filelib:wildcard("src/*.erl") ++
-        filelib:wildcard("src/core/*.erl") ++
+        filelib:wildcard("src/core/**/*.erl") ++
         filelib:wildcard("src/forge/*.erl"),
-    First = "src/core/hb_test_parallel.erl",
+    First = "src/core/test/hb_test_parallel.erl",
     [First || lists:member(First, Paths)] ++ lists:sort(Paths -- [First]).
 
 %% @doc Compile a group of test modules to a temporary ebin.

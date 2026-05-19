@@ -71,10 +71,11 @@ newest_beam_time(Path) ->
 recompile_hb_opts() ->
     lists:foreach(
         fun(Ebin) ->
-            compile:file(
-                "src/core/hb_opts.erl",
-                [{outdir, Ebin} | hb_opts_compile_opts(Ebin)]
-            )
+            {ok, hb_opts} =
+                compile:file(
+                    "src/core/resolver/hb_opts.erl",
+                    [{outdir, Ebin} | hb_opts_compile_opts(Ebin)]
+                )
         end,
         filelib:wildcard("_build/*/lib/hb/ebin")
     ).
