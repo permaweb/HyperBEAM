@@ -47,6 +47,7 @@ do(State) ->
             lists:member(maps:get(device_name, Pkg), SelectedNames)
         ],
     Modules = lists:usort(lists:append([archive_modules(Pkg) || Pkg <- Pkgs])),
+    ModuleLabels = device_module_labels(Pkgs),
     Names = [maps:get(device_name, Pkg) || Pkg <- Pkgs],
     case Names of
         [] ->
@@ -64,6 +65,8 @@ do(State) ->
                                 Names,
                                 CoreModules,
                                 Modules ++ TestModules,
+                                ModuleLabels,
+                                Args,
                                 Result
                             )
                         end
@@ -79,12 +82,20 @@ archive_modules(Pkg) ->
     [Mod || {Mod, _File, _Beam} <- Modules].
 
 %% @doc Run EUnit with the generated preloaded-store environment installed.
-test_modules(State, Names, CoreModules, DeviceModules, Result) ->
-    Tests = test_order(CoreModules, DeviceModules),
-    rebar_api:info("device test: running EUnit modules ~p", [Tests]),
+test_modules(State, Names, CoreModules, DeviceModules, ModuleLabels, Args, Result) ->
+    ShowHash = maps:get(<<"show-hash">>, Args, false),
     Env = setup_device_tests(Names, Result),
     EUnitResult =
-        try eunit:test(Tests, [verbose, {scale_timeouts, 10}])
+        try
+            Tests = test_order(
+                CoreModules,
+                device_tests(DeviceModules, ModuleLabels, ShowHash)
+            ),
+            rebar_api:info(
+                "device test: running EUnit modules ~p",
+                [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash)]
+            ),
+            eunit:test(Tests, [verbose, {scale_timeouts, 10}])
         after restore_test_env(Env)
         end,
     case EUnitResult of
@@ -98,6 +109,162 @@ test_order(CoreModules, DeviceModules) ->
     CoreFirst = [Mod || Mod <- CoreModules, Mod =/= hb_opts],
     CoreLast = [Mod || Mod <- CoreModules, Mod =:= hb_opts],
     CoreFirst ++ DeviceModules ++ CoreLast.
+
+%% @doc Convert generated device modules to readable EUnit descriptors.
+device_tests(DeviceModules, _ModuleLabels, true) ->
+    DeviceModules;
+device_tests(DeviceModules, ModuleLabels, false) ->
+    [
+        case maps:find(Mod, ModuleLabels) of
+            {ok, Label} -> readable_module_tests(Mod, Label);
+            error -> Mod
+        end
+    ||
+        Mod <- DeviceModules
+    ].
+
+%% @doc Names used in the provider log line before EUnit starts.
+test_names(CoreModules, DeviceModules, _ModuleLabels, true) ->
+    test_order(CoreModules, DeviceModules);
+test_names(CoreModules, DeviceModules, ModuleLabels, false) ->
+    test_order(
+        CoreModules,
+        [maps:get(Mod, ModuleLabels, Mod) || Mod <- DeviceModules]
+    ).
+
+%% @doc Map generated archive module atoms back to device-name labels.
+device_module_labels(Pkgs) ->
+    maps:from_list(lists:append([pkg_module_labels(Pkg) || Pkg <- Pkgs])).
+
+pkg_module_labels(Pkg) ->
+    Root = maps:get(module_name, Pkg),
+    Device = maps:get(device_name, Pkg),
+    [{Mod, module_label(Device, Root, Mod)} || Mod <- archive_modules(Pkg)].
+
+module_label(Device, Root, Root) ->
+    binary_to_atom(Device, utf8);
+module_label(Device, Root, Mod) ->
+    RootBin = atom_to_binary(Root, utf8),
+    ModBin = atom_to_binary(Mod, utf8),
+    Prefix = <<RootBin/binary, "__">>,
+    PrefixSize = byte_size(Prefix),
+    Tail =
+        case ModBin of
+            <<Prefix:PrefixSize/binary, Rest/binary>> -> Rest;
+            _ -> ModBin
+        end,
+    binary_to_atom(<<Device/binary, " [", Tail/binary, "]">>, utf8).
+
+%% @doc Return EUnit descriptors with readable source locations.
+readable_module_tests(Mod, Label) ->
+    Exports = Mod:module_info(exports),
+    lists:foldr(fun(Export, Acc) -> readable_export(Export, Mod, Label, Acc) end, [], Exports).
+
+readable_export({Fun, 0}, Mod, Label, Acc) ->
+    Name = atom_to_list(Fun),
+    case {lists:suffix("_test", Name), lists:suffix("_test_", Name)} of
+        {true, _} ->
+            [{{Label, Fun, 0}, {test, Mod, Fun}} | Acc];
+        {_, true} ->
+            [
+                {generator,
+                    fun() -> rewrite_test_term(apply(Mod, Fun, []), Mod, Label) end,
+                    {Label, Fun, 0}}
+             | Acc
+            ];
+        _ ->
+            Acc
+    end;
+readable_export(_Export, _Mod, _Label, Acc) ->
+    Acc.
+
+rewrite_test_term({Line, Test}, Mod, Label) when is_integer(Line), Line >= 0 ->
+    {Line, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({{Mod, Name, Arity}, Test}, Mod, Label) ->
+    {{Label, Name, Arity}, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({test, Mod, Fun}, Mod, Label) ->
+    {{Label, Fun, 0}, {test, Mod, Fun}};
+rewrite_test_term({Mod, Fun}, Mod, Label) when is_atom(Fun) ->
+    {{Label, Fun, 0}, {test, Mod, Fun}};
+rewrite_test_term({generator, Mod, Fun}, Mod, Label) ->
+    {
+        generator,
+        fun() -> rewrite_test_term(apply(Mod, Fun, []), Mod, Label) end,
+        {Label, Fun, 0}
+    };
+rewrite_test_term({generator, Fun}, Mod, Label) when is_function(Fun, 0) ->
+    {module, SourceMod} = erlang:fun_info(Fun, module),
+    case SourceMod of
+        Mod ->
+            {name, Name} = erlang:fun_info(Fun, name),
+            {arity, Arity} = erlang:fun_info(Fun, arity),
+            {
+                generator,
+                fun() -> rewrite_test_term(Fun(), Mod, Label) end,
+                {Label, Name, Arity}
+            };
+        _ ->
+            {generator, Fun}
+    end;
+rewrite_test_term({generator, Fun, {Mod, Name, Arity}}, Mod, Label)
+        when is_function(Fun, 0) ->
+    {
+        generator,
+        fun() -> rewrite_test_term(Fun(), Mod, Label) end,
+        {Label, Name, Arity}
+    };
+rewrite_test_term({Desc, Test}, Mod, Label)
+        when is_list(Desc); is_binary(Desc) ->
+    {Desc, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({timeout, N, Test}, Mod, Label) ->
+    {timeout, N, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({inorder, Test}, Mod, Label) ->
+    {inorder, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({inparallel, Test}, Mod, Label) ->
+    {inparallel, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({inparallel, N, Test}, Mod, Label) ->
+    {inparallel, N, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({spawn, Test}, Mod, Label) ->
+    {spawn, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({spawn, Node, Test}, Mod, Label) ->
+    {spawn, Node, rewrite_test_term(Test, Mod, Label)};
+rewrite_test_term({setup, Setup, Test}, Mod, Label) ->
+    {setup, Setup, rewrite_instantiator(Test, Mod, Label)};
+rewrite_test_term({setup, Where, Setup, Test}, Mod, Label)
+        when Where =:= local; Where =:= spawn; is_tuple(Where) ->
+    {setup, Where, Setup, rewrite_instantiator(Test, Mod, Label)};
+rewrite_test_term({setup, Setup, Cleanup, Test}, Mod, Label) ->
+    {setup, Setup, Cleanup, rewrite_instantiator(Test, Mod, Label)};
+rewrite_test_term({setup, Where, Setup, Cleanup, Test}, Mod, Label) ->
+    {setup, Where, Setup, Cleanup, rewrite_instantiator(Test, Mod, Label)};
+rewrite_test_term({foreach, Setup, Tests}, Mod, Label) ->
+    {foreach, Setup, rewrite_test_term(Tests, Mod, Label)};
+rewrite_test_term({foreach, Where, Setup, Tests}, Mod, Label)
+        when Where =:= local; Where =:= spawn; is_tuple(Where) ->
+    {foreach, Where, Setup, rewrite_test_term(Tests, Mod, Label)};
+rewrite_test_term({foreach, Setup, Cleanup, Tests}, Mod, Label) ->
+    {foreach, Setup, Cleanup, rewrite_test_term(Tests, Mod, Label)};
+rewrite_test_term({foreach, Where, Setup, Cleanup, Tests}, Mod, Label) ->
+    {foreach, Where, Setup, Cleanup, rewrite_test_term(Tests, Mod, Label)};
+rewrite_test_term(Fun, Mod, Label) when is_function(Fun, 0) ->
+    {module, SourceMod} = erlang:fun_info(Fun, module),
+    case SourceMod of
+        Mod ->
+            {name, Name} = erlang:fun_info(Fun, name),
+            {arity, Arity} = erlang:fun_info(Fun, arity),
+            {{Label, Name, Arity}, Fun};
+        _ ->
+            Fun
+    end;
+rewrite_test_term(Tests, Mod, Label) when is_list(Tests) ->
+    [rewrite_test_term(Test, Mod, Label) || Test <- Tests];
+rewrite_test_term(Test, _Mod, _Label) ->
+    Test.
+
+rewrite_instantiator(Fun, Mod, Label) when is_function(Fun, 1) ->
+    fun(Value) -> rewrite_test_term(Fun(Value), Mod, Label) end;
+rewrite_instantiator(Test, Mod, Label) ->
+    rewrite_test_term(Test, Mod, Label).
 
 %% @doc Load packaged devices and start apps needed by device test modules.
 setup_device_tests(Names, Result) ->
@@ -187,6 +354,10 @@ start_app(App) ->
 with_preloaded_test_modules(Roots, Fun) when is_function(Fun, 1) ->
     {Ebin, Modules} = compile_preloaded_test_modules(),
     code:add_patha(hb_util:list(Ebin)),
+    lists:foreach(
+        fun(Mod) -> load_test_module(Mod, preloaded_test_load_failed) end,
+        Modules
+    ),
     try Fun(test_modules_to_run(Modules, Roots))
     after
         code:del_path(hb_util:list(Ebin)),
@@ -197,7 +368,7 @@ with_preloaded_test_modules(Roots, Fun) when is_function(Fun, 1) ->
 %% @doc Compile `src/preloaded/test' modules into an isolated ebin.
 compile_preloaded_test_modules() ->
     compile_test_modules(
-        <<"_build/device-test-fixtures">>,
+        unique_build_dir("device-test-fixtures"),
         lists:sort(filelib:wildcard("src/preloaded/test/hb_*.erl")),
         preloaded_test_compile_failed
     ).
@@ -257,7 +428,7 @@ with_core_test_modules({Ebin, Modules}, Fun) when is_function(Fun, 1) ->
 %% @doc Compile core test modules into an isolated ebin.
 compile_core_test_modules() ->
     compile_test_modules(
-        <<"_build/device-test-core">>,
+        unique_build_dir("device-test-core"),
         core_test_paths(),
         core_test_compile_failed
     ).
@@ -270,6 +441,18 @@ core_test_paths() ->
         filelib:wildcard("src/forge/*.erl"),
     First = "src/core/test/hb_test_parallel.erl",
     [First || lists:member(First, Paths)] ++ lists:sort(Paths -- [First]).
+
+%% @doc Return a per-run temporary build directory.
+unique_build_dir(Name) ->
+    hb_util:bin(
+        filename:join(
+            [
+                "_build",
+                Name ++ "-" ++ os:getpid() ++ "-" ++
+                    integer_to_list(erlang:unique_integer([positive]))
+            ]
+        )
+    ).
 
 %% @doc Compile a group of test modules to a temporary ebin.
 compile_test_modules(BuildDir, Paths, ErrorTag) ->
