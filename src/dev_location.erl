@@ -264,10 +264,14 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     ?event(location,
         {uploading_signed_scheduler_location, Signed}
     ),
-    % Asynchronously upload the location record to Arweave.
+    % Asynchronously upload the location record to Arweave. We build the
+    % ANS-104 item directly with CamelCase tags so that the record is
+    % discoverable via GQL queries used by the AO ecosystem
+    % (e.g. `Type: "Scheduler-Location"`). The internal TABM representation
+    % keeps lowercase keys per HyperBEAM convention.
     spawn(
         fun() ->
-            hb_client:upload(Signed, Opts)
+            upload_to_arweave(URL, Nonce, TTL, Opts)
         end
     ),
     % Post the new scheduler location to the peers specified in the
@@ -295,6 +299,40 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
         }
     ),
     {ok, Signed}.
+
+%% @doc Build an ANS-104 data item with the CamelCase Arweave tags expected by
+%% the AO ecosystem and upload it to the configured bundler. This is separate
+%% from the signed TABM stored in the local cache, which uses lowercase keys
+%% per HyperBEAM convention.
+upload_to_arweave(URL, Nonce, TTL, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    TX = #tx{
+        tags = [
+            {<<"Data-Protocol">>, <<"ao">>},
+            {<<"Variant">>,       <<"ao.N.1">>},
+            {<<"Type">>,          <<"Scheduler-Location">>},
+            {<<"Url">>,           URL},
+            {<<"nonce">>,         hb_util:bin(Nonce)},
+            {<<"time-to-live">>,  hb_util:bin(TTL)}
+        ],
+        data = <<>>
+    },
+    SignedTX = ar_bundles:sign_item(TX, Wallet),
+    Serialized = ar_bundles:serialize(SignedTX),
+    Bundler =
+        case hb_opts:get(bundler_httpsig, not_found, Opts) of
+            not_found -> hb_opts:get(bundler_ans104, not_found, Opts);
+            B -> B
+        end,
+    case Bundler of
+        not_found ->
+            ?event(location, {arweave_upload_skipped, no_bundler_configured});
+        _ ->
+            dev_arweave:post_binary_ans104(
+                Serialized,
+                Opts#{ bundler_ans104 => Bundler }
+            )
+    end.
 
 %% @doc Verify and write a location record for a foreign peer to the cache.
 write_foreign(Base, RawReq, Opts) ->
