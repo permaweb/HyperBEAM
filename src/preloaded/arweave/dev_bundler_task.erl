@@ -79,12 +79,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
     try
         ?event(debug_bundler, log_task(executing_task, Task, [])),
         % Calculate chunks and proofs
-        TX = hb_message:convert(
-            CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
-        Data = TX#tx.data,
-        DataRoot = TX#tx.data_root,
-        DataSize = TX#tx.data_size,
-        Mode = ar_tx:chunking_mode(TX#tx.format),
+        {Data, DataRoot, DataSize, Mode} = proof_data(CommittedTX, Opts),
         Chunks = ar_tx:chunk_binary(Mode, ?DATA_CHUNK_SIZE, Data),
         ?event(bundler_short, {building_proofs,
             {bundle, Task#task.bundle_id},
@@ -199,6 +194,57 @@ data_items_to_tx(Items, Opts) ->
         data = List
     }).
 
+proof_data(CommittedTX, Opts) ->
+    case bundle_data(CommittedTX, Opts) of
+        {ok, Data} ->
+            Mode = ar_tx:chunking_mode(2),
+            {Data, ar_tx:data_root(Mode, Data), byte_size(Data), Mode};
+        not_found ->
+            TX = hb_message:convert(
+                CommittedTX, <<"tx@1.0">>, <<"structured@1.0">>, Opts),
+            Mode = ar_tx:chunking_mode(TX#tx.format),
+            {TX#tx.data, TX#tx.data_root, TX#tx.data_size, Mode}
+    end.
+
+bundle_data(CommittedTX, Opts) when is_map(CommittedTX) ->
+    case numbered_items(CommittedTX) of
+        [] ->
+            not_found;
+        Items ->
+            TXs = [
+                hb_message:convert(
+                    Item,
+                    <<"ans104@1.0">>,
+                    <<"structured@1.0">>,
+                    Opts
+                )
+            || Item <- Items],
+            {undefined, Data} = ar_bundles:serialize_bundle(list, TXs, false),
+            {ok, Data}
+    end;
+bundle_data(_CommittedTX, _Opts) ->
+    not_found.
+
+numbered_items(Message) ->
+    [
+        maps:get(Key, Message)
+    ||
+        Key <- lists:sort(
+            fun(A, B) -> binary_to_integer(A) =< binary_to_integer(B) end,
+            lists:filter(
+                fun(Key) ->
+                    try
+                        _ = binary_to_integer(Key),
+                        true
+                    catch
+                        _:_ -> false
+                    end
+                end,
+                maps:keys(hb_private:reset(Message))
+            )
+        )
+    ].
+
 get_price(DataSize, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -312,6 +358,82 @@ build_signed_tx_test() ->
         || Item <- BundledItems],
         ?assertEqual(lists:reverse(Items), BundledStructuredItems),
         ok
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+post_tx_and_build_proofs_bytes_match_for_nested_body_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
+    },
+    try
+        Item = hb_message:commit(
+            #{
+                <<"body">> => #{
+                    <<"event">> => <<"is_admissible">>,
+                    <<"reference">> => <<"ref">>,
+                    <<"status-class">> => <<"success">>
+                },
+                <<"data-protocol">> => <<"ao">>,
+                <<"path">> => <<"compute">>,
+                <<"type">> => <<"Assignment">>,
+                <<"variant">> => <<"ao.N.1">>
+            },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }
+        ),
+        {ok, SignedTX} = build_signed_tx([Item], TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        CommittedTX = hb_message:convert(
+            SignedTX,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+            TestOpts
+        ),
+        ok = dev_bundler_cache:write_tx(CommittedTX, [Item], TestOpts),
+        TXID = hb_message:id(CommittedTX, signed, TestOpts),
+        CachedTX = dev_bundler_cache:load_tx(TXID, TestOpts),
+        {ProofData, ProofRoot, ProofSize, _Mode} =
+            proof_data(CachedTX, TestOpts),
+        ProofTX = SignedTX#tx{
+            data = ProofData,
+            data_size = ProofSize,
+            data_root = ProofRoot
+        },
+        ?assertEqual(SignedTX#tx.data_size, ProofTX#tx.data_size),
+        ?assertEqual(SignedTX#tx.data_root, ProofTX#tx.data_root),
+        ?assertEqual(SignedTX#tx.data, ProofTX#tx.data),
+        SignedBundle = ar_bundles:deserialize(SignedTX),
+        ProofBundle = ar_bundles:deserialize(ProofTX),
+        [SignedChild] =
+            hb_util:numbered_keys_to_list(SignedBundle#tx.data, TestOpts),
+        [ProofChild] =
+            hb_util:numbered_keys_to_list(ProofBundle#tx.data, TestOpts),
+        ?assert(ar_bundles:verify_item(SignedChild)),
+        ?assert(ar_bundles:verify_item(ProofChild)),
+        ?assertEqual(SignedChild, ProofChild),
+        ProofStructuredChild = hb_message:convert(
+            ProofChild, <<"structured@1.0">>, <<"ans104@1.0">>, TestOpts),
+        ?assertEqual(
+            maps:get(<<"commitments">>, Item),
+            maps:get(<<"commitments">>, ProofStructuredChild)
+        ),
+        {ok, Proofs} = execute_task(#task{
+            bundle_id = make_ref(),
+            type = build_proofs,
+            data = CachedTX,
+            opts = TestOpts
+        }),
+        [FirstProof | _] = Proofs,
+        ?assertEqual(SignedTX#tx.data_size, maps:get(data_size, FirstProof)),
+        ?assertEqual(SignedTX#tx.data_root, maps:get(data_root, FirstProof))
     after
         hb_mock_server:stop(ServerHandle)
     end.
