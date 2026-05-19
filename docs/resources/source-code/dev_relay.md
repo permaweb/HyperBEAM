@@ -1,4 +1,4 @@
-# [Module dev_relay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_relay.erl)
+# [Module dev_relay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_relay.erl)
 
 
 

@@ -24,6 +24,8 @@ nav:
       - Exposing process state: 'build/exposing-process-state.md'
       - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
       - Extending HyperBEAM: 'build/extending-hyperbeam.md'
+      - Device packaging: 'build/device-packaging.md'
+      - External device repository: 'build/external-device-repository.md'
   - Devices:
       - Overview: 'devices/overview.md'
       - '~meta@1.0': 'devices/meta-at-1-0.md'
@@ -49,14 +51,13 @@ nav:
         - ar_wallet: 'resources/source-code/ar_wallet.md'
         - dev_cache: 'resources/source-code/dev_cache.md'
         - dev_cacheviz: 'resources/source-code/dev_cacheviz.md'
-        - dev_codec_ans104: 'resources/source-code/dev_codec_ans104.md'
-        - dev_codec_flat: 'resources/source-code/dev_codec_flat.md'
-        - dev_codec_httpsig_conv: 'resources/source-code/dev_codec_httpsig_conv.md'
-        - dev_codec_httpsig: 'resources/source-code/dev_codec_httpsig.md'
-        - dev_codec_json: 'resources/source-code/dev_codec_json.md'
-        - dev_codec_structured: 'resources/source-code/dev_codec_structured.md'
+        - dev_ans104: 'resources/source-code/dev_ans104.md'
+        - dev_flat: 'resources/source-code/dev_flat.md'
+        - dev_httpsig_conv: 'resources/source-code/dev_httpsig_conv.md'
+        - dev_httpsig: 'resources/source-code/dev_httpsig.md'
+        - dev_json: 'resources/source-code/dev_json.md'
+        - dev_structured: 'resources/source-code/dev_structured.md'
         - dev_cron: 'resources/source-code/dev_cron.md'
-        - dev_cu: 'resources/source-code/dev_cu.md'
         - dev_dedup: 'resources/source-code/dev_dedup.md'
         - dev_delegated_compute: 'resources/source-code/dev_delegated_compute.md'
         - dev_faff: 'resources/source-code/dev_faff.md'
@@ -65,7 +66,6 @@ nav:
         - dev_hyperbuddy: 'resources/source-code/dev_hyperbuddy.md'
         - dev_json_iface: 'resources/source-code/dev_json_iface.md'
         - dev_local_name: 'resources/source-code/dev_local_name.md'
-        - dev_lookup: 'resources/source-code/dev_lookup.md'
         - dev_lua_lib: 'resources/source-code/dev_lua_lib.md'
         - dev_lua_test: 'resources/source-code/dev_lua_test.md'
         - dev_lua: 'resources/source-code/dev_lua.md'
@@ -91,7 +91,7 @@ nav:
         - dev_scheduler_server: 'resources/source-code/dev_scheduler_server.md'
         - dev_scheduler: 'resources/source-code/dev_scheduler.md'
         - dev_simple_pay: 'resources/source-code/dev_simple_pay.md'
-        - dev_snp_nif: 'resources/source-code/dev_snp_nif.md'
+        - hb_snp_nif: 'resources/source-code/hb_snp_nif.md'
         - dev_snp: 'resources/source-code/dev_snp.md'
         - dev_stack: 'resources/source-code/dev_stack.md'
         - dev_test: 'resources/source-code/dev_test.md'
@@ -249,4 +249,3 @@ extra:
       link: https://github.com/permaweb/hyperBEAM
       name: GitHub
   generator: false
-

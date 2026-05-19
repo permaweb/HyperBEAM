@@ -1,4 +1,4 @@
-# [Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_wasm.erl)
+# [Module dev_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_wasm.erl)
 
 
 

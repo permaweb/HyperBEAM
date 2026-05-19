@@ -1,4 +1,4 @@
-# [Module dev_multipass.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_multipass.erl)
+# [Module dev_multipass.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_multipass.erl)
 
 
 

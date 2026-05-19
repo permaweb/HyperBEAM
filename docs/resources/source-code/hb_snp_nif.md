@@ -1,4 +1,4 @@
-# [Module dev_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_snp_nif.erl)
+# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)
 
 
 

@@ -185,13 +185,13 @@ If a `message` does not explicitly specify a `device`, its implied `device` is a
 ## Devices
 
 HyperBeam supports a number of different devices, each of which enable different
-services to be offered by the node. There are presently 25 different devices
-included in the `preloaded_devices` of a HyperBEAM node, although it is possible
-to add and remove devices as necessary.
+services to be offered by the node. HyperBEAM ships with a preloaded store of
+packaged devices, although it is possible to add and remove devices as
+necessary.
 
 ### Preloaded Devices
 
-The following devices are included in the `preloaded_devices` of a HyperBEAM node:
+The following devices are included in HyperBEAM's preloaded store:
 
 - `~meta@1.0`: The `~meta@1.0` device is used to configure the node's hardware,
 supported devices, metering and payments information, amongst other configuration options.

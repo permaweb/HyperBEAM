@@ -1,4 +1,4 @@
-# [Module dev_codec_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_httpsig.erl)
+# [Module dev_httpsig.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_httpsig.erl)
 
 
 
@@ -12,7 +12,7 @@ This module implements HTTP Message Signatures as described in RFC-9421
 It implements the codec standard (from/1, to/1), as well as the optional
 commitment functions (id/3, sign/3, verify/3). The commitment functions
 are found in this module, while the codec functions are relayed to the
-`dev_codec_httpsig_conv` module.
+`dev_httpsig_conv` module.
 <a name="types"></a>
 
 ## Data Types ##

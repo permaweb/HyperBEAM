@@ -1,4 +1,4 @@
-# [Module dev_router.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_router.erl)
+# [Module dev_router.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_router.erl)
 
 
 

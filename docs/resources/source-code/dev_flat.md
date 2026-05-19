@@ -1,4 +1,4 @@
-# [Module dev_codec_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_codec_flat.erl)
+# [Module dev_flat.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_flat.erl)
 
 
 
