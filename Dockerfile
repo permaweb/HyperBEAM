@@ -7,7 +7,9 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     ncurses-dev \
     libssl-dev \
-    sudo
+    sudo \
+    curl \
+    ca-certificates
 
 RUN git clone https://github.com/erlang/otp.git && \
     cd otp && \
@@ -21,11 +23,8 @@ RUN git clone https://github.com/erlang/rebar3.git && \
     ./bootstrap && \
     sudo mv rebar3 /usr/local/bin/
 
-RUN git clone https://github.com/rust-lang/rust.git && \
-    cd rust && \
-    ./configure && \
-    make && \
-    sudo make install
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 COPY . /app
 

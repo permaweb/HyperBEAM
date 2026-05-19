@@ -213,6 +213,7 @@ raw_default_message() ->
         <<"preloaded-devices">> => [
             #{<<"name">> => <<"arweave@2.9">>, <<"module">> => dev_arweave},
             #{<<"name">> => <<"apply@1.0">>, <<"module">> => dev_apply},
+            #{<<"name">> => <<"attestation@1.0">>, <<"module">> => dev_attestation},
             #{<<"name">> => <<"auth-hook@1.0">>, <<"module">> => dev_auth_hook},
             #{<<"name">> => <<"ans104@1.0">>, <<"module">> => dev_codec_ans104},
             #{<<"name">> => <<"b32-name@1.0">>, <<"module">> => dev_b32_name},
