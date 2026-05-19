@@ -235,24 +235,40 @@ head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
         {error, Error} -> {error, Error}
     end.
 do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
-    {ok, HeaderSize, HeaderTX} = ar_bundles:deserialize_header(Data),
-    ContentType =
-        list_find(
-            <<"content-type">>,
-            HeaderTX#tx.tags,
-            <<"application/octet-stream">>
-        ),
-    {ok,
-        #{
-            <<"raw-id">> => TXID,
-            <<"offset">> => ArweaveOffset,
-            <<"data-offset">> => ArweaveOffset + HeaderSize,
-            <<"content-type">> => ContentType,
-            <<"header-length">> => HeaderSize,
-            <<"content-length">> => Length - HeaderSize,
-            <<"accept-ranges">> => <<"bytes">>
-        }
-    }.
+    case deserialize_ans104_header(Data) of
+        {ok, HeaderSize, HeaderTX} ->
+            ContentType =
+                list_find(
+                    <<"content-type">>,
+                    HeaderTX#tx.tags,
+                    <<"application/octet-stream">>
+                ),
+            {ok,
+                #{
+                    <<"raw-id">> => TXID,
+                    <<"offset">> => ArweaveOffset,
+                    <<"data-offset">> => ArweaveOffset + HeaderSize,
+                    <<"content-type">> => ContentType,
+                    <<"header-length">> => HeaderSize,
+                    <<"content-length">> => Length - HeaderSize,
+                    <<"accept-ranges">> => <<"bytes">>
+                }
+            };
+        Error ->
+            Error
+    end.
+
+deserialize_ans104_header(Data) ->
+    try ar_bundles:deserialize_header(Data)
+    catch
+        throw:{invalid_ans104_tags, _Reason} ->
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Invalid ANS-104 tag encoding.">>
+                }
+            }
+    end.
 
 %% @doc Get raw transaction *data* and `content-type` of an Arweave message.
 %% Does not deserialize the message, nor return signature information. Included
@@ -1510,6 +1526,28 @@ head_raw_ans104_test_parallel() ->
     ?assertEqual(
         {ok, 575},
         hb_maps:find(<<"content-length">>, Result, Opts)
+    ).
+
+head_raw_ans104_invalid_tags_test() ->
+    Tags = [{<<"Content-Type">>, <<"application/json">>}],
+    EncodedTags = ar_bundles:encode_tags(Tags),
+    TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
+    Body = <<"{\"$schema\":\"https://example.invalid/schema\"}">>,
+    DataItem =
+        <<
+            1, 0,
+            0:4096,
+            0:4096,
+            0,
+            0,
+            (length(Tags)):64/little,
+            (byte_size(TagsWithoutTerminator)):64/little,
+            TagsWithoutTerminator/binary,
+            Body/binary
+        >>,
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        do_head_raw_ans104(<<0:256>>, 0, byte_size(DataItem), DataItem, #{})
     ).
 
 get_raw_range_tx_test_parallel() ->
