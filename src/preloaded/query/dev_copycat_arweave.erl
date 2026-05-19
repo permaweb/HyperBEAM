@@ -313,7 +313,7 @@ maybe_exclude_tag(TX, ExcludeTag) ->
     end.
 
 has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
-    TagValue = dev_arweave_common:tagfind(Name, Tags, not_found),
+    TagValue = ar_tx:tagfind(Name, Tags, not_found),
     case TagValue of
         not_found ->
             false;

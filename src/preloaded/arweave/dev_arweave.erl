@@ -1021,15 +1021,15 @@ parent(Base, Request, Opts) ->
                     {error, not_found}
             catch
                 error:Reason:Stacktrace ->
-                    ?event(error, 
-                        {parent_read_error, 
+                    ?event(error,
+                        {parent_read_error,
                             {id, ID},
                             {reason, Reason},
                             {stacktrace, Stacktrace}
                         }),
-                    {failure, 
+                    {failure,
                         #{
-                            <<"status">> => 500, 
+                            <<"status">> => 500,
                             <<"type">> => <<"parent_read_error">>
                          }
                     }
