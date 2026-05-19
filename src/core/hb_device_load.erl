@@ -113,7 +113,8 @@ from_preloaded(Ref, Opts) ->
         undefined ->
             {error, not_found};
         {Store, IndexID} ->
-            PreOpts = Opts#{ store => [Store], <<"cache-read-mode">> => raw },
+            PreOpts =
+                Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
             maybe
                 {ok, SpecID} ?= preloaded_spec(Ref, Store, IndexID, PreOpts),
                 lazy_first(
@@ -209,7 +210,7 @@ lazy_first(F, Iterators) ->
     lazy_first(F, [], Iterators).
 
 lazy_first(_F, [], []) ->
-    {error, <<"no-viable-implementation">>};
+    {error, not_found};
 lazy_first(F, [], [Next | Rest]) ->
     lazy_first(F, Next(), Rest);
 lazy_first(F, [X | Xs], Iterators) ->
