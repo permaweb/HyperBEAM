@@ -191,7 +191,8 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
 list(Path, Store) ->
     list(Path, Store, #{}).
 list(Path, Store, Opts) ->
-    case hb_store:read(Store, Path, Opts) of
+    case hb_store:list(Store, Path, Opts) of
+        {ok, Names} -> Names;
         {composite, Names} -> Names;
         _ -> []
     end.
