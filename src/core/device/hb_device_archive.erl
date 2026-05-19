@@ -1,6 +1,6 @@
 %%% @doc Helpers for packaged-device implementation archives.
 -module(hb_device_archive).
--export([create/2, module_metadata/1, contents/1]).
+-export([create/2, module_metadata/1, contents/1, object_code/1]).
 -export([load/1, load/4, load_modules/1, loaded/1]).
 -export([implementation_dir/1]).
 -export([modules_match_root/2, write_resources/2]).
@@ -206,17 +206,34 @@ unsafe_resource_part(_) -> false.
 %% on-load devices fall back to ordinary Erlang loading semantics.
 load_modules(Modules) ->
     case code:atomic_load(Modules) of
-        ok -> ok;
+        ok -> remember_object_code(Modules);
         {error, Reason} ->
             case atomic_load_rejected_on_load(Reason) of
-                true -> load_modules_naturally(Modules);
+                true ->
+                    case load_modules_naturally(Modules) of
+                        ok -> remember_object_code(Modules);
+                        Error -> Error
+                    end;
                 false ->
                     case loaded(Modules) of
-                        true -> ok;
+                        true -> remember_object_code(Modules);
                         false -> {error, Reason}
                     end
             end
     end.
+
+%% @doc Return the BEAM bytes for a module loaded from a device archive.
+object_code(Module) ->
+    persistent_term:get({?MODULE, object_code, Module}, undefined).
+
+remember_object_code(Modules) ->
+    lists:foreach(
+        fun({Mod, _File, Beam}) ->
+            persistent_term:put({?MODULE, object_code, Mod}, Beam)
+        end,
+        Modules
+    ),
+    ok.
 
 %% @doc Return true if `code:atomic_load/1' rejected module on-load callbacks.
 atomic_load_rejected_on_load(Reason) when is_list(Reason) ->

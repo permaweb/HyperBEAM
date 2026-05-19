@@ -561,7 +561,7 @@ result_edge_path(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hb_path:hashpath(BaseMsg, Req, Opts).
 
 result_hashpath(BaseID, Req, Opts) when ?IS_ID(BaseID) and is_map(Req) ->
-    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    ReqID = hb_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
     result_edge_path_from_id(BaseID, ReqID, Opts).
 
 result_edge_path_from_id(BaseID, Suffix, _Opts) ->
@@ -958,7 +958,7 @@ read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) -
     ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
     read_result_edge(BaseMsgID, ReqID, Opts);
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
-    {ok, ReqID} = dev_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
+    ReqID = hb_message:id(Req, #{ <<"committers">> => <<"all">> }, Opts),
     read_result_edge(BaseMsgID, ReqID, Opts);
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
@@ -1292,7 +1292,7 @@ test_write_result_edges(Store) ->
     LatestReq = #{ <<"path">> => <<"latest">> },
     Res = #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => 7 },
     {ok, WrittenID} = write_result([{BaseID, SlotReq}, {BaseID, LatestReq}], Res, Opts),
-    {ok, SlotReqID} = dev_message:id(SlotReq, #{ <<"committers">> => <<"all">> }, Opts),
+    SlotReqID = hb_message:id(SlotReq, #{ <<"committers">> => <<"all">> }, Opts),
     {ok, ReadBase} = read(BaseID, Opts),
     ?assertEqual(false, maps:is_key(SlotReqID, ReadBase)),
     {ok, WrittenRes} = read(WrittenID, Opts),

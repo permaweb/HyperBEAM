@@ -125,12 +125,7 @@ write_cached_extract(_Path, _Res, _Opts) ->
     ok.
 
 do_extract(Module) ->
-    Beam =
-        case code:get_object_code(Module) of
-            {Module, Binary, _Filename} -> Binary;
-            _ -> code:which(Module)
-        end,
-    case beam_lib:chunks(Beam, [abstract_code]) of
+    case beam_lib:chunks(module_beam(Module), [abstract_code]) of
         {ok, {_, [{abstract_code, {_, Forms}}]}} ->
             TypeEnv = build_type_env(Forms),
             Specs = [ Attr || Attr = {attribute, _, spec, _} <- Forms ],
@@ -154,6 +149,17 @@ do_extract(Module) ->
             };
         Error ->
             {error, {abstract_code_unavailable, Module, Error}}
+    end.
+
+module_beam(Module) ->
+    case code:get_object_code(Module) of
+        {Module, Binary, _Filename} ->
+            Binary;
+        _ ->
+            case hb_device_archive:object_code(Module) of
+                undefined -> code:which(Module);
+                Binary -> Binary
+            end
     end.
 
 build_type_env(Forms) ->
