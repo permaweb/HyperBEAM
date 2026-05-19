@@ -2,7 +2,21 @@
   <<"append">> =>
       <<"aaf13c9ed2e821ea8c82fcc7981c73a14dc2d01c855f09262d42090fa0424422">>,
   <<"commitments">> =>
-      #{<<"MqW5d_PDowgYc-J3Z8RCPLP3YCRtlBoXGovShrPOtdM">> =>
+      #{<<"MQx8321dwmqyEKYEsqjEx2Dsbe4HPVsWfvbaFqYdIK0">> =>
+            #{<<"commitment-device">> => <<"httpsig@1.0">>,
+              <<"committed">> =>
+                  [<<"address">>,<<"ao-types">>,<<"append">>,<<"firmware">>,
+                   <<"guest_features">>,<<"initrd">>,<<"kernel">>,
+                   <<"node-message">>,<<"nonce">>,<<"public-key">>,
+                   <<"report">>,<<"vcpu_type">>,<<"vcpus">>,<<"vmm_type">>],
+              <<"committer">> =>
+                  <<"OJrwrd8hDgkD_Q6OPMsJgD-6qYpw3oJIuirkUQQ9pDs">>,
+              <<"keyid">> =>
+                  <<"publickey:jJLzEg1598eudgNvXFKsQPnmeN2pi8b1fD08lMiFdngEnZuHKTRxhM4CbGIN7dpq0VypILDY9Ok2+0lJ6F4GUyP7mZY5iqiaoNNMPUepZ4L3Eaf0H6ccteft1UDhwVtynM27YzFkYhSL44ifLwSHz+TrisUTiC0VLLFXta9h7AlfvGO9VoI0kxTXMLdc2zyvV2hhFEamaP5W5vVKGUbM+gYoh7SCC0lju2EEqk3vZnDq9Zbah4damBMM1IdN37uhK+uRMAnlybhHOBukZ8335xdyB6vF3VZY3V7YBtnOZrlIjw4G5kEJhY6tky5kIZxPbB2jrcVxeCmcfcizAPo1MsLOEANP0Sg1tZ2kNI5mRhRpHNki22eerdse3TxYjuAUcAZnrxfA+N2NuxrC3BZek5l/WMErRvZWYF/49sirNqxUe4iiDEm3COQkfGvpAFajyOVKQF/g5bnUeHp8ZfG6BWoXnNqSQd+U5J5YNG3pLW6EA3wIYgHOoWh0ucATrJN3CpdrZiTzGNmkCTlQwxyukR91T857FnizL5JicDXngsKVxISBJMXmJ6/nyb7Fk/B+pi6STn/hWj8Bou7eWvDwpX3RNVcArv/GhumklHtwGR/EXatB7Wn3A8SKStEEsoV4dBrcKFu4a/D8wS6f8Xm4HgBXPHJNN5meMuDIXGgsuME=">>,
+              <<"signature">> =>
+                  <<"M-BESIm3g_fNXeL-9Hwm2cTwccok0XCigOp4jYOB-3_c0uznL-iieSf39Wx-tTX6hZi7Y1iQTNcwpLP_ltkTdOzlcXjeQB9yaR-B5jj1U0-3HuQKBaKMOJEyasRKF3-41keXmvX75fgQ0ydw9wnqIigyXyv6CH4_FTBJs7_81hRGknKlNS8W-kkDJY8m8FOxd_Woj4I2K_kIMfhv3rx3wPjmH0NxZr2yIGf9-mNMsc5e2heEzqYawraCavxVxMdNnEUdQi5O7Mk4t6-NWqdBWlZvj3zPRhzxWu54mB4F6rIDhoBwHot3cxZgyQh7tgcK8L1pS0gNawMF3qywPFN3fJrbNO0G8N8a0i1A2EHY1hFydbFXJKL6kP569fkE2POgvIs90g_wip7eAM36Xf7TZBx44Kz8AqIJ9rDZA27Pc4ly0kbMpqQQEdEyTl614rp9wvl0RNRh8asbtBVQ53YDBFVm_Az6i4Ux9riGYvz7UPwIwHjRLbrs51Jbqpz9-hVQujnbO83qLBy00L48UGzEUNWdePbKbZTrTO0-lld-DqU8A5VdbB3aZlMFLofOYPtH5-9Djl2tjKxB2aVwpQNKEwrySGeUpSBCgAFklRr-D8gc2sCdMK4Abkemi_w7lGhpVUsn7GInOUgGI8W-eQ2F7mkrvvE9hYuF-5o1yrc38P8">>,
+              <<"type">> => <<"rsa-pss-sha512">>},
+        <<"MqW5d_PDowgYc-J3Z8RCPLP3YCRtlBoXGovShrPOtdM">> =>
             #{<<"commitment-device">> => <<"httpsig@1.0">>,
               <<"committed">> =>
                   [<<"address">>,<<"ao-types">>,<<"append">>,<<"firmware">>,
@@ -12,21 +26,7 @@
               <<"keyid">> => <<"constant:ao">>,
               <<"signature">> =>
                   <<"MqW5d_PDowgYc-J3Z8RCPLP3YCRtlBoXGovShrPOtdM">>,
-              <<"type">> => <<"hmac-sha256">>},
-        <<"stapNTb5icwDufTHLDKiuYbIdFGDPor4gY3XHg1Kl94">> =>
-            #{<<"commitment-device">> => <<"httpsig@1.0">>,
-              <<"committed">> =>
-                  [<<"address">>,<<"ao-types">>,<<"append">>,<<"firmware">>,
-                   <<"guest_features">>,<<"initrd">>,<<"kernel">>,
-                   <<"node-message">>,<<"nonce">>,<<"public-key">>,
-                   <<"report">>,<<"vcpu_type">>,<<"vcpus">>,<<"vmm_type">>],
-              <<"committer">> =>
-                  <<"gsSeubkDDeQZgCrCYer2F8OBhYsyOR6LfGOx7OVtFFM">>,
-              <<"keyid">> =>
-                  <<"publickey:30g0HJIeY/XRKHqW6zEn5hMHxckzKPh+aCX5s0NFPfJwlADt4Py7hx6YbGOVu1oOs+PhiUkVReFqF/vjgqwME4gBmrBvDc7gWdKwI8E5ZtVxz6kDC5Z+Cti/vYqklFWPZz2411NL/jlLVzVacGQiHBoFT3Jom28Np+R0okBaqChQOs1ZMXHvXIpB10BrHri19TLQoNGHShilIPTfoxwmS7LDEOQqniiW2G6fF09wUeqTOKQIr+CFZFyvgjlEALMtqXiSwHiITANhBijEG4R36/PJt2HVz7aYTEC8Azgc8QfMHBcQ4oVtnQLiET0ZBx9mCwv/O8O85qFL1cy03GO+Rhpg/xCTP+XLsUly7WQtUPJU33SrKciJLGxDLE8tlJhTjEpfmLItVztooMJ1dIX0SMS1CWPhTzogA30nBhd4vROaJKMsg4xjomdfLcWtTzScdlvmRU8aBnVPAUuIdMqCHNnNi3czyi89u3sM8fVPEMGQ+IAqSmIb6x4J9dOaykIX7cxHUVeW7xL33QNtQ8SctIbcQdWqylVFs5JkwZg8tPFnbxmVod3Wt4OHLoRQE5p0Q8pYv3QSKlh+8AKUCuTryC94miFU6GfC5cVKKbjoLCAGpR2Rf2dHfetNNLgAkjxeZKvo5nOYjKm+t7EAvhpMt21CuG7eJ6tErY5k0UxTT3s=">>,
-              <<"signature">> =>
-                  <<"KoX1nDJaUESD6c3H0WFnFB1pe3Q6405ZAdsiQINpSrfoOQBYpLYQfoiONsr4F_wMWwJFX5ZwyqQ7HrNq9kjvT6WmDDcExskXZXZj9ZKzmr8dWimum3HF8VsO-yJQ_RE2AEfsUqvw0tXyFU_MNfIuIkH8gPIMV5j8DNVGAWLXbOW61--MQdE4yQtP4681xLSUG9gntRUlw5FApk0P5qpqerNNcYYZ5xrx0ALUZvzLu-APZuIqNdLG49q0msW1XOfDD2NJbwQbtcvrP0YHlatiu73A5v8vN_uOx_gvjLP3a6eaxTCT-bMwa4mBepYM8C6oe4-gpbSgyV5j6ma6ZD-fcBzyuixsKX0rINDICL0bEiynr5PVu7cej-24vAP3yjOjJssKtnvBtcP3Qy3jiLx0RjJ3dS2q5-wYJ5brvayjJ7CjsQbj31OWEzIxO--x2tbp5ZRbn0tx8rd2-sDxdLJQY9E_9Blp1t4weXxI4pYJQgu5Z0SgNRtnnv6iL3HfCY23ETwBjj-g9OcKZd_yGDm4W8N0NXz5G5ZokajAmuMtAxWev07np_VcGzhs5ZGbA26UWvI_lvQtIYC7kNw2ofRXk5_n1i4gtVuDPCk_nGs2IPogogKCqhTxBoV-UbBj7x5T-LWUCLgM4wAMpOzIvbGab_bXObPBOJNWNarwktPRjG4">>,
-              <<"type">> => <<"rsa-pss-sha512">>}},
+              <<"type">> => <<"hmac-sha256">>}},
   <<"firmware">> =>
       <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
   <<"guest_features">> => 1,
@@ -93,8 +93,6 @@
         <<"debug-stack-depth">> => 40,<<"http-client">> => gun,
         <<"store-all-signed">> => true,<<"load-remote-devices">> => false,
         <<"scheduling-mode">> => disabled,
-        <<"content-type">> =>
-            <<"multipart/form-data; boundary=\"5zd5yKhUfgSnCzBVlt29-Vs4rQQeUBGuVqNJubt07jI\"">>,
         <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
         <<"initialized">> => <<"permanent">>,<<"only">> => local,
         <<"debug-show-priv">> => false,
@@ -323,18 +321,7 @@
                            <<"signature">> =>
                                <<"WgIzKrNLjvfranqsPVzdqcVhW61gZ6CvUK8cM2Hjlf0">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_ans104,
-               <<"name">> => <<"ans104@1.0">>},
-             #{<<"commitments">> =>
-                   #{<<"FcIKZVDaj6jjASFoRSKL-9-2--Q75U6CovN9tmBb5A0">> =>
-                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
-                           <<"committed">> =>
-                               [<<"ao-types">>,<<"module">>,<<"name">>],
-                           <<"keyid">> => <<"constant:ao">>,
-                           <<"signature">> =>
-                               <<"FcIKZVDaj6jjASFoRSKL-9-2--Q75U6CovN9tmBb5A0">>,
-                           <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_cu,<<"name">> => <<"compute@1.0">>},
+               <<"module">> => dev_ans104,<<"name">> => <<"ans104@1.0">>},
              #{<<"commitments">> =>
                    #{<<"MBwxX7BmdGt0UWgHjqo3mzUWYgraJwDUChK0egHJgXc">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -405,7 +392,7 @@
                            <<"signature">> =>
                                <<"_EROxMzToy7QMM2tZHDrdYQEuIgD6f6sn264OOM8RUI">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_flat,<<"name">> => <<"flat@1.0">>},
+               <<"module">> => dev_flat,<<"name">> => <<"flat@1.0">>},
              #{<<"commitments">> =>
                    #{<<"o_LFfTewcdOZtjQqsaSbkyJJyCReaBVNXyN5JF3DHwc">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -437,8 +424,7 @@
                            <<"signature">> =>
                                <<"Ke3l-wYMmmhEZC6g8GjkQxjFF9l7MMseiyFK4qLSWww">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_httpsig,
-               <<"name">> => <<"httpsig@1.0">>},
+               <<"module">> => dev_httpsig,<<"name">> => <<"httpsig@1.0">>},
              #{<<"commitments">> =>
                    #{<<"Z1uH51_5UslDULbQx4OUQMxTx5D1PJch0j6VK7uKz3I">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -459,7 +445,7 @@
                            <<"signature">> =>
                                <<"enaoJxvYh3qZn6fAf7E6rsJqlKR5TxvTnfnenQMfMwY">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_json,<<"name">> => <<"json@1.0">>},
+               <<"module">> => dev_json,<<"name">> => <<"json@1.0">>},
              #{<<"commitments">> =>
                    #{<<"0WQCR2q340Pmz1E-6V6wgTwge5Lh07OE8QOQ6a6T4Wo">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -471,16 +457,6 @@
                            <<"type">> => <<"hmac-sha256">>}},
                <<"module">> => dev_json_iface,
                <<"name">> => <<"json-iface@1.0">>},
-             #{<<"commitments">> =>
-                   #{<<"qSvA69gK4G1U0eza9scaCqXGpSEfG3-uNohX6o5_vhc">> =>
-                         #{<<"commitment-device">> => <<"httpsig@1.0">>,
-                           <<"committed">> =>
-                               [<<"ao-types">>,<<"module">>,<<"name">>],
-                           <<"keyid">> => <<"constant:ao">>,
-                           <<"signature">> =>
-                               <<"qSvA69gK4G1U0eza9scaCqXGpSEfG3-uNohX6o5_vhc">>,
-                           <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_lookup,<<"name">> => <<"lookup@1.0">>},
              #{<<"commitments">> =>
                    #{<<"i5Ld6UHNtumohVmFG-wQgWXaMqLlcYwp6qcxZPlUPRw">> =>
                          #{<<"commitment-device">> => <<"httpsig@1.0">>,
@@ -653,7 +629,7 @@
                            <<"signature">> =>
                                <<"_1ifdzLNTYmiwcyI4ngVRUg1drZBoeJL7V5ZOWE4U8E">>,
                            <<"type">> => <<"hmac-sha256">>}},
-               <<"module">> => dev_codec_structured,
+               <<"module">> => dev_structured,
                <<"name">> => <<"structured@1.0">>},
              #{<<"commitments">> =>
                    #{<<"0Mfbtdi2Zv3OT5zAr0TJMbM9wgYM5E50696tzNehfMY">> =>

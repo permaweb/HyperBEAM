@@ -1,0 +1,195 @@
+#!/usr/bin/env sh
+set -eu
+
+usage() {
+    cat <<'EOF'
+Usage:
+  install-template [--template-dir PATH]
+  install-template --local [PATH] [--template-dir PATH]
+  install-template --branch BRANCH [--repo URL] [--template-dir PATH]
+  install-template --commit COMMIT [--repo URL] [--template-dir PATH]
+
+Installs the HyperBEAM Forge `rebar3 new device' template.
+
+Options:
+  --local [PATH]       Use a local HyperBEAM git checkout.
+                       Defaults to the current working directory.
+  --branch NAME        Use a branch from the HyperBEAM git repository.
+                       Defaults to edge when no source option is given.
+  --commit SHA         Use a commit from the HyperBEAM git repository.
+  --repo URL           Git repository for --branch or --commit.
+                       Defaults to https://github.com/permaweb/hyperbeam.git.
+  --template-dir PATH  Rebar3 template directory.
+                       Defaults to Rebar's user template directory.
+  -h, --help           Show this help.
+EOF
+}
+
+die() {
+    printf '%s\n' "$*" >&2
+    exit 1
+}
+
+quote() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+git_url() {
+    case "$1" in
+        /*) printf 'file://%s' "$1" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+local_ref() {
+    root="$1"
+    commit="$(git -C "$root" rev-parse HEAD)"
+    printf '{ref, "%s"}' "$(quote "$commit")"
+}
+
+script_dir() {
+    cd "$(dirname "$0")" && pwd
+}
+
+default_template_dir() {
+    if [ "${REBAR_GLOBAL_CONFIG_DIR:-}" ]; then
+        printf '%s/.config/rebar3/templates' "$REBAR_GLOBAL_CONFIG_DIR"
+    elif [ "${REBAR_CACHE_DIR:-}" ]; then
+        printf '%s/.config/rebar3/templates' "$REBAR_CACHE_DIR"
+    elif [ "$(uname -s)" = "Darwin" ]; then
+        printf '%s/Library/Application Support/rebar3/templates' "$HOME"
+    elif [ "${XDG_CONFIG_HOME:-}" ]; then
+        printf '%s/rebar3/templates' "$XDG_CONFIG_HOME"
+    else
+        printf '%s/.config/rebar3/templates' "$HOME"
+    fi
+}
+
+write_device_template() {
+    path="$1"
+    hb_dep="$2"
+    hb_plugin="$3"
+    prefix="$4"
+    cat > "$path" <<EOF
+{description, "HyperBEAM device project"}.
+{variables, [
+    {name, "my_device", "Device and OTP application name"},
+    {hb_dep,
+        "$(quote "$hb_dep")",
+        "HyperBEAM dependency term"},
+    {hb_plugin,
+        "$(quote "$hb_plugin")",
+        "HyperBEAM Forge plugin term"}
+]}.
+
+{template, "${prefix}_rebar.config", "{{name}}/rebar.config"}.
+{template, "${prefix}_src/device.app.src", "{{name}}/src/{{name}}.app.src"}.
+{template, "${prefix}_src/dev_device.erl.in", "{{name}}/src/dev_{{name}}.erl"}.
+{template, "${prefix}_README.md", "{{name}}/README.md"}.
+{template, "${prefix}_.gitignore", "{{name}}/.gitignore"}.
+EOF
+}
+
+install_template() {
+    template_dir="$1"
+    hb_dep="$2"
+    hb_plugin="$3"
+    src="$(script_dir)/priv"
+    support="$template_dir/hyperbeam-device"
+    tmp="$support.tmp.$$"
+    template="$template_dir/device.template"
+    template_tmp="$template.tmp.$$"
+
+    rm -rf "$tmp"
+    mkdir -p "$tmp"
+    cp -R "$src/." "$tmp"
+    rm -f "$tmp/device.template"
+    write_device_template \
+        "$template_tmp" \
+        "$hb_dep" \
+        "$hb_plugin" \
+        "hyperbeam-device/"
+    rm -rf "$support"
+    mv "$tmp" "$support"
+    mv "$template_tmp" "$template"
+}
+
+repo_url="https://github.com/permaweb/hyperbeam.git"
+template_dir="$(default_template_dir)"
+mode="branch"
+value="edge"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --local)
+            mode="local"
+            if [ "${2:-}" ] && [ "${2#--}" = "$2" ]; then
+                value="$2"
+                shift
+            else
+                value="$(pwd)"
+            fi
+            ;;
+        --branch)
+            [ "$#" -ge 2 ] || die "--branch requires a value"
+            mode="branch"
+            value="$2"
+            shift
+            ;;
+        --commit)
+            [ "$#" -ge 2 ] || die "--commit requires a value"
+            mode="commit"
+            value="$2"
+            shift
+            ;;
+        --repo)
+            [ "$#" -ge 2 ] || die "--repo requires a value"
+            repo_url="$2"
+            shift
+            ;;
+        --template-dir)
+            [ "$#" -ge 2 ] || die "--template-dir requires a value"
+            template_dir="$2"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            die "unknown option: $1"
+            ;;
+    esac
+    shift
+done
+
+case "$mode" in
+    local)
+        root="$(cd "$value" && pwd)"
+        [ -d "$root/src/forge/plugin" ] ||
+            die "could not find $root/src/forge/plugin"
+        if ! git -C "$root" diff --quiet ||
+            ! git -C "$root" diff --cached --quiet; then
+            printf 'warning: --local uses committed HEAD; '
+            printf 'uncommitted changes are not included\n'
+        fi
+        source_url="$(git_url "$root")"
+        source_ref="$(local_ref "$root")"
+        ;;
+    branch)
+        source_url="$repo_url"
+        source_ref="{branch, \"$(quote "$value")\"}"
+        ;;
+    commit)
+        source_url="$repo_url"
+        source_ref="{ref, \"$(quote "$value")\"}"
+        ;;
+esac
+
+hb_dep="{git, \"$(quote "$source_url")\", $source_ref}"
+hb_plugin="{git_subdir, \"$(quote "$source_url")\", $source_ref, \"src/forge\"}"
+
+install_template "$template_dir" "$hb_dep" "$hb_plugin"
+printf 'Installed HyperBEAM Forge template in %s\n' "$template_dir"
+printf 'Generated projects will use %s at %s\n' "$source_url" "$source_ref"
+printf 'Try: rebar3 new device name=my_device\n'

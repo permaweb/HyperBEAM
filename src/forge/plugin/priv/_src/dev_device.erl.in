@@ -1,0 +1,25 @@
+%%% @doc Example HyperBEAM device.
+%%%
+%%% Replace this text with the public device specification. The Forge
+%%% uses this top-level doc block as the default Device-Specification
+%%% body when packaging the device.
+-module(dev_{{name}}).
+-export([info/1, echo/3]).
+
+%% @doc Return the public device API.
+info(_Opts) ->
+    #{ exports => [<<"echo">>] }.
+
+%% @doc Echo the request's `input' field, or `body' if no input is set.
+echo(_Base, Req, Opts) ->
+    Default = hb_maps:get(<<"body">>, Req, <<>>, Opts),
+    {ok, hb_maps:get(<<"input">>, Req, Default, Opts)}.
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+echo_test() ->
+    Req = #{ <<"input">> => <<"hello">> },
+    ?assertEqual({ok, <<"hello">>}, echo(#{}, Req, #{})).
+
+-endif.
