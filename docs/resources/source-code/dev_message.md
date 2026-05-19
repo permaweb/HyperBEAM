@@ -1,4 +1,4 @@
-# [Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_message.erl)
+# [Module dev_message.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_message.erl)
 
 
 

@@ -1,4 +1,4 @@
-# [Module dev_p4.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_p4.erl)
+# [Module dev_p4.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_p4.erl)
 
 
 

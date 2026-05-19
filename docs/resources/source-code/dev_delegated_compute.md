@@ -1,4 +1,4 @@
-# [Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_delegated_compute.erl)
+# [Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_delegated_compute.erl)
 
 
 

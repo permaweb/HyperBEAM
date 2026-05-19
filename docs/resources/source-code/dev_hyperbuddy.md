@@ -1,4 +1,4 @@
-# [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/dev_hyperbuddy.erl)
+# [Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hyperbuddy.erl)
 
 
 
