@@ -242,17 +242,12 @@ raw_default_message() ->
             },
         %% Build-time ID of the preloaded name resolver message.
         <<"preloaded-devices-index">> => preloaded_index_default(),
-        %% Volatile cache of resolved name/spec-ID -> loaded module
-        %% atom. A named volatile store is shared across every
-        %% process in this VM, so once any caller has loaded a
-        %% generated `_hb_device_*' atom every other caller finds it
-        %% here. Tests that build their own per-test main store still
-        %% share this device cache.
-        <<"device-store">> =>
-            #{
-                <<"store-module">> => hb_store_volatile,
-                <<"name">> => <<"hb-device-cache">>
-            },
+        %% Store for resolved device reference -> loaded module atom,
+        %% shared across processes so the first caller to resolve a
+        %% device spares the rest the index read and archive
+        %% extraction. Defaults to `[]' (no viable store): the
+        %% per-process dictionary still memoises within a process.
+        <<"loaded-device-store">> => [],
         %% Default execution cache control options
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"cache-lookup-hueristics">> => false,
@@ -266,9 +261,9 @@ raw_default_message() ->
         <<"load-remote-devices">> => false,
         %% The list of device signers that the node should trust.
         <<"trusted-device-signers">> => [],
-        %% Specific device implementation message IDs trusted without
-        %% requiring a matching signer.
-        <<"trusted-devices">> => [],
+        %% Map of device name/spec ID -> a trusted module atom or
+        %% implementation archive ID, loaded without a signer check.
+        <<"trusted-devices">> => #{},
         %% What should the node do if a client error occurs?
         <<"client-error-strategy">> => throw,
         %% HTTP client request options
@@ -734,7 +729,7 @@ path_to_device(Path) ->
 
 %% @doc Convert a file extension to a device name. Configuration files
 %% are loaded by extension, so the kernel needs to know about a small,
-%% fixed set of codecs ahead of any device-store lookup. Adding new
+%% fixed set of codecs ahead of any device resolution. Adding new
 %% codec extensions here is a kernel-level change, not a configuration
 %% one.
 extension_to_device(Ext) ->

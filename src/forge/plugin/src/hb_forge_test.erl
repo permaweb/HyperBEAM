@@ -78,7 +78,7 @@ archive_modules(Pkg) ->
         hb_device_archive:contents(maps:get(archive, Pkg)),
     [Mod || {Mod, _File, _Beam} <- Modules].
 
-%% @doc Run EUnit with the generated device-store environment installed.
+%% @doc Run EUnit with the generated preloaded-store environment installed.
 test_modules(State, Names, CoreModules, DeviceModules, Result) ->
     Tests = test_order(CoreModules, DeviceModules),
     rebar_api:info("device test: running EUnit modules ~p", [Tests]),
@@ -116,30 +116,19 @@ setup_device_tests(Names, Result) ->
         erlang:raise(Class, Error, Stacktrace)
     end.
 
-%% @doc Build runtime opts that trust the just-written implementation IDs.
+%% @doc Build runtime opts pointing at the freshly-built preloaded
+%% store; its devices resolve through the high-trust preloaded path.
 test_opts(Result) ->
     #{
         <<"preloaded-store">> => maps:get(store, Result),
-        <<"preloaded-devices-index">> => maps:get(index, Result),
-        <<"trusted-devices">> => maps:get(impls, Result),
-        <<"device-store">> =>
-            #{
-                <<"store-module">> => hb_store_volatile,
-                <<"name">> =>
-                    iolist_to_binary([
-                        <<"device-test-">>,
-                        integer_to_binary(
-                            erlang:unique_integer([positive])
-                        )
-                    ])
-            }
+        <<"preloaded-devices-index">> => maps:get(index, Result)
     }.
 
 %% @doc Resolve each device name through the freshly-built preloaded-store.
 load_devices([], _Opts) ->
     ok;
 load_devices([Name | Names], Opts) ->
-    case hb_device:load(Name, Opts) of
+    case hb_device_load:reference(Name, Opts) of
         {ok, Mod} ->
             rebar_api:info("device test: loaded ~s as ~p", [Name, Mod]),
             load_devices(Names, Opts);

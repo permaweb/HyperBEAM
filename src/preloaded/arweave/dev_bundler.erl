@@ -50,7 +50,7 @@ item(_Base, Req, Opts) ->
                 ok ->
                     BundledSize = bundled_item_size(Item, Opts),
                     {ok, Metering} =
-                        hb_device:load(<<"metering@1.0">>, Opts),
+                        hb_device_load:reference(<<"metering@1.0">>, Opts),
                     Metering:consume(<<"arweave-bytes">>, BundledSize, Opts),
                     % Queue the item for bundling
                     % (fire-and-forget, ignore errors)

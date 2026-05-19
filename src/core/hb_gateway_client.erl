@@ -193,22 +193,29 @@ device(SpecID, Opts) ->
             {error, Reason};
         {ok, GqlMsg} ->
             ?event({device_query_success, {query, Query}, {response, GqlMsg}}),
-            case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
-                not_found ->
+            case hb_ao:get(<<"data/transactions/edges">>, GqlMsg, Opts) of
+                X when X =:= not_found orelse X =:= [] ->
                     ?event(
                         device_load,
                         {no_viable_device_implementations, {device, SpecID}}
                     ),
                     {error, not_found};
-                Item = #{ <<"id">> := ID } ->
+                Items ->
                     ?event(
                         device_load,
-                        {implementation_found_via_graphql,
+                        {implementations_found_via_graphql,
                             {device, SpecID},
-                            {id, ID}
+                            {implementations, length(Items)}
                         }
                     ),
-                    result_to_message(ID, Item, Opts)
+                    {
+                        ok,
+                        [
+                            ID
+                        ||
+                            #{ <<"node">> := #{ <<"id">> := ID } } <- Items
+                        ]
+                    }
             end
     end.
 

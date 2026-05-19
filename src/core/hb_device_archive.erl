@@ -88,10 +88,8 @@ archive_file_mode(Path) ->
 %% @doc Load every BEAM in an archive into the current code server.
 load(Archive) ->
     case contents(Archive) of
-        {ok, Modules, _Resources} ->
-            load_modules(Modules);
-        {error, _} = Error ->
-            Error
+        {ok, Modules, _Resources} -> load_modules(Modules);
+        {error, _} = Error -> Error
     end.
 
 %% @doc Validate and load a signed implementation archive.

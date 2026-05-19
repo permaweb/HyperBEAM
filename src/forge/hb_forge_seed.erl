@@ -12,8 +12,7 @@
 %%% with a single `maps:find' in it and nothing else; the runtime never
 %%% sets `forge-bootstrap', so production resolution is the pure
 %%% preloaded store. The two paths cannot intermingle. There is no
-%%% multi-phase bootstrap, no temporary archives, no volatile
-%%% device-store.
+%%% multi-phase bootstrap and no temporary archives.
 -module(hb_forge_seed).
 -export([seed_names/1, with_forge_bootstrap/2]).
 -include("include/hb.hrl").

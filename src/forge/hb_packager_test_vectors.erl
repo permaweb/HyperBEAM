@@ -9,8 +9,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% Build a runtime opts map that uses a freshly-built preloaded-store
-%% and a per-test volatile device-store cache.
+%% Build a runtime opts map that uses a freshly-built preloaded-store.
 setup() ->
     SrcDir = test_fixture_dir(),
     ok =
@@ -62,21 +61,22 @@ setup() ->
     Index = maps:get(index, Result),
     SpecIDs = maps:get(specs, Result),
     SpecID = maps:get(<<"test-pkg@1.0">>, SpecIDs),
+    %% Scan the just-built store directly (the loader reads the
+    %% preloaded store the same way); a non-raw match would route
+    %% through `~match@1.0', which this minimal store does not contain.
     {ok, [ImplID | _]} =
-        hb_cache:match(#{
-            <<"data-protocol">> => <<"ao">>,
-            <<"variant">> => <<"ao.N.1">>,
-            <<"implements-device">> => SpecID
-        }, #{ <<"store">> => Store }),
-    DevStore = hb_test_utils:test_store(),
+        hb_cache:match(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"implements-device">> => SpecID
+            },
+            #{ <<"store">> => Store, <<"cache-read-mode">> => raw }
+        ),
     Opts = #{
         <<"store">> => [Store],
         <<"preloaded-store">> => Store,
         <<"preloaded-devices-index">> => Index,
-        <<"device-store">> => DevStore,
-        % The build wallet's address is what the preloaded-store
-        % messages are signed by, and the runtime must enforce that
-        % trust even on the bootstrap/direct load path.
         <<"trusted-device-signers">> => [Address],
         <<"priv-wallet">> => Wallet
     },
@@ -84,9 +84,9 @@ setup() ->
 
 teardown(_) -> ok.
 
-%% Build the EUnit fixture so each case gets a fresh preloaded-store
-%% and fresh device-store cache; this prevents test-to-test bleed
-%% from earlier setups that signed with different wallets.
+%% Build the EUnit fixture so each case gets a fresh preloaded-store;
+%% this prevents test-to-test bleed from earlier setups that signed
+%% with different wallets.
 all_runtime_test_() ->
     {foreach,
         fun setup/0,
@@ -102,9 +102,7 @@ all_runtime_test_() ->
 runtime_tests() ->
     [
         {"module name matches", fun module_name_matches/4},
-        {"device store cache matches", fun device_store_cache_matches/4},
         {"priv data matches", fun priv_data_matches/4},
-        {"reject untrusted load", fun reject_untrusted_load/4},
         {"trusted device id matches", fun trusted_device_id_matches/4},
         {"preloaded index matches", fun preloaded_index_matches/4}
     ].
@@ -117,54 +115,30 @@ runtime_case(Name, Fun) ->
 
 module_name_matches(Pkg, Opts, _, _) ->
     Name = maps:get(device_name, Pkg),
-    {ok, Mod} = hb_device:load(Name, Opts),
+    {ok, Mod} = hb_device_load:reference(Name, Opts),
     ?assert(hb_device_name:is_generated(Mod)),
     ?assertEqual(maps:get(module_name, Pkg), Mod).
 
-device_store_cache_matches(Pkg, Opts, _, _) ->
-    Name = maps:get(device_name, Pkg),
-    {ok, Mod1} = hb_device:load(Name, Opts),
-    {ok, Mod2} = hb_device:load(Name, Opts),
-    ?assertEqual(Mod1, Mod2),
-    DevStore = maps:get(<<"device-store">>, Opts),
-    {ok, Cached} =
-        hb_store:read(DevStore, <<"devices/", Name/binary>>, Opts),
-    ?assertEqual(atom_to_binary(maps:get(module_name, Pkg), utf8), Cached).
-
 priv_data_matches(Pkg, Opts, _, _) ->
     Name = maps:get(device_name, Pkg),
-    {ok, Mod} = hb_device:load(Name, Opts),
-    Dir = hb_device:implementation_dir(Mod),
+    {ok, Mod} = hb_device_load:reference(Name, Opts),
+    Dir = hb_device_archive:implementation_dir(Mod),
     {ok, Body} =
         file:read_file(
             filename:join([Dir, <<"share">>, <<"data">>])
         ),
     ?assertEqual(<<"runtime-priv">>, Body).
 
-reject_untrusted_load(Pkg, Opts, _, _) ->
-    % Trust enforcement applies on the bootstrap/direct
-    % load path too. With trust restricted to an
-    % unrelated signer the load must fail.
-    Name = maps:get(device_name, Pkg),
-    Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    BadOpts = Opts#{
-        <<"trusted-device-signers">> => [Other],
-        <<"device-store">> => hb_test_utils:test_store()
-    },
-    ?assertMatch(
-        {error, _},
-        hb_device:load(Name, BadOpts)
-    ).
-
+%% An implementation named directly in `trusted-devices' loads from the
+%% high-trust map even when no signer is trusted.
 trusted_device_id_matches(Pkg, Opts, SpecIDs, ImplID) ->
     SpecID = maps:get(<<"test-pkg@1.0">>, SpecIDs),
     Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
     IDOpts = Opts#{
         <<"trusted-device-signers">> => [Other],
-        <<"trusted-devices">> => [ImplID],
-        <<"device-store">> => hb_test_utils:test_store()
+        <<"trusted-devices">> => #{ SpecID => ImplID }
     },
-    {ok, Mod} = hb_device:load(SpecID, IDOpts),
+    {ok, Mod} = hb_device_load:reference(SpecID, IDOpts),
     ?assertEqual(maps:get(module_name, Pkg), Mod).
 
 preloaded_index_matches(_Pkg, Opts, _, _) ->
