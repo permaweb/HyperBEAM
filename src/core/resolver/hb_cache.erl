@@ -191,7 +191,8 @@ list(Path, Opts) when is_map(Opts) and not is_map_key(<<"store-module">>, Opts) 
 list(Path, Store) ->
     list(Path, Store, #{}).
 list(Path, Store, Opts) ->
-    case hb_store:read(Store, Path, Opts) of
+    case hb_store:list(Store, Path, Opts) of
+        {ok, Names} -> Names;
         {composite, Names} -> Names;
         _ -> []
     end.
@@ -1274,6 +1275,18 @@ write_with_only_read_only_store_test() ->
     Opts = #{ <<"store">> => [ReadOnlyStore] },
     ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
     ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
+
+list_lmdb_children_without_group_marker_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb, <<"legacy-list">>),
+    Opts = #{ <<"store">> => Store },
+    try
+        hb_store:reset(Store),
+        ok = hb_store:write(Store, #{ <<"legacy/1">> => <<"one">> }, Opts),
+        ok = hb_store:write(Store, #{ <<"legacy/2">> => <<"two">> }, Opts),
+        ?assertEqual([<<"1">>, <<"2">>], lists:sort(list(<<"legacy">>, Opts)))
+    after
+        hb_store:reset(Store)
+    end.
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
