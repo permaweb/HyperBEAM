@@ -574,12 +574,18 @@ decode_signature(Other) ->
 %% @doc Decode tags from a binary format using Apache Avro.
 decode_tags(<<0:64/little-integer, 0:64/little-integer, Rest/binary>>) ->
     {[], Rest};
-decode_tags(<<_TagCount:64/little-integer, _TagSize:64/little-integer, Binary/binary>>) ->
-    {Count, BlocksBinary} = decode_zigzag(Binary),
-    {Tags, Rest} = decode_avro_tags(BlocksBinary, Count),
-    %% Pull out the terminating zero
-    {0, Rest2} = decode_zigzag(Rest),
-    {Tags, Rest2}.
+decode_tags(<<TagCount:64/little-integer, TagSize:64/little-integer, Binary/binary>>)
+        when byte_size(Binary) >= TagSize ->
+    <<TagsBinary:TagSize/binary, Rest/binary>> = Binary,
+    Tags = decode_avro_tag_section(TagsBinary),
+    case length(Tags) of
+        TagCount -> {Tags, Rest};
+        _ -> throw({invalid_ans104_tags, tag_count_mismatch})
+    end;
+decode_tags(<<_TagCount:64/little-integer, _TagSize:64/little-integer, _/binary>>) ->
+    throw({invalid_ans104_tags, truncated_tag_section});
+decode_tags(_) ->
+    throw({invalid_ans104_tags, truncated_tag_header}).
 
 decode_optional_field(<<0, Rest/binary>>) ->
     {<<>>, Rest};
@@ -587,16 +593,54 @@ decode_optional_field(<<1:8/little-integer, Field:32/binary, Rest/binary>>) ->
     {Field, Rest}.
 
 %% @doc Decode Avro blocks (for tags) from binary.
-decode_avro_tags(<<>>, _) ->
-    {[], <<>>};
+decode_avro_tag_section(TagsBinary) ->
+    case decode_avro_tag_array(TagsBinary, []) of
+        {Tags, <<>>} -> Tags;
+        {_Tags, _Residue} -> throw({invalid_ans104_tags, residue_in_tag_section})
+    end.
+
+decode_avro_tag_array(<<>>, _Acc) ->
+    throw({invalid_ans104_tags, missing_avro_array_terminator});
+decode_avro_tag_array(Binary, Acc) ->
+    {Count, Rest} = decode_zigzag(Binary),
+    decode_avro_tag_array_block(Count, Rest, Acc).
+
+decode_avro_tag_array_block(0, Rest, Acc) ->
+    {lists:reverse(Acc), Rest};
+decode_avro_tag_array_block(Count, Rest, Acc) when Count > 0 ->
+    {Tags, Rest2} = decode_avro_tags(Rest, Count),
+    decode_avro_tag_array(Rest2, lists:reverse(Tags, Acc));
+decode_avro_tag_array_block(Count, Rest, Acc) when Count < 0 ->
+    {BlockSize, BlockRest} = decode_zigzag(Rest),
+    case BlockSize >= 0 andalso byte_size(BlockRest) >= BlockSize of
+        true ->
+            <<Block:BlockSize/binary, Rest2/binary>> = BlockRest,
+            Tags = decode_avro_tag_block(Block, -Count),
+            decode_avro_tag_array(Rest2, lists:reverse(Tags, Acc));
+        false ->
+            throw({invalid_ans104_tags, invalid_avro_block_size})
+    end.
+
+decode_avro_tag_block(Block, Count) ->
+    case decode_avro_tags(Block, Count) of
+        {Tags, <<>>} -> Tags;
+        {_Tags, _Residue} -> throw({invalid_ans104_tags, residue_in_avro_block})
+    end.
+
 decode_avro_tags(Binary, Count) when Count =:= 0 ->
     {[], Binary};
+decode_avro_tags(<<>>, _Count) ->
+    throw({invalid_ans104_tags, truncated_avro_tag_item});
 decode_avro_tags(Binary, Count) ->
     {NameSize, Rest} = decode_zigzag(Binary),
     decode_avro_name(NameSize, Rest, Count).
 
 decode_avro_name(0, Rest, _) ->
     {[], Rest};
+decode_avro_name(NameSize, _Rest, _Count) when NameSize < 0 ->
+    throw({invalid_ans104_tags, invalid_avro_name_size});
+decode_avro_name(NameSize, Rest, _Count) when byte_size(Rest) < NameSize ->
+    throw({invalid_ans104_tags, truncated_avro_name});
 decode_avro_name(NameSize, Rest, Count) ->
     <<Name:NameSize/binary, Rest2/binary>> = Rest,
     {ValueSize, Rest3} = decode_zigzag(Rest2),
@@ -605,6 +649,10 @@ decode_avro_name(NameSize, Rest, Count) ->
 decode_avro_value(0, Name, Rest, Count) ->
     {DecodedTags, NonAvroRest} = decode_avro_tags(Rest, Count - 1),
     {[{Name, <<>>} | DecodedTags], NonAvroRest};
+decode_avro_value(ValueSize, _Name, _Rest, _Count) when ValueSize < 0 ->
+    throw({invalid_ans104_tags, invalid_avro_value_size});
+decode_avro_value(ValueSize, _Name, Rest, _Count) when byte_size(Rest) < ValueSize ->
+    throw({invalid_ans104_tags, truncated_avro_value});
 decode_avro_value(ValueSize, Name, Rest, Count) ->
     <<Value:ValueSize/binary, Rest2/binary>> = Rest,
     {DecodedTags, NonAvroRest} = decode_avro_tags(Rest2, Count - 1),
@@ -666,6 +714,59 @@ encode_tags_test() ->
     ?assertEqual(<<>>, EncodedEmpty),
     WrappedEmpty = <<0:64/little, 0:64/little>>,
     {[], <<>>} = decode_tags(WrappedEmpty).
+
+tag_size_boundary_test() ->
+    Tags = [{<<"Content-Type">>, <<"application/json">>}],
+    Body = <<"{\"ok\":true}">>,
+    EncodedTags = encode_tags(Tags),
+    Wrapped =
+        <<
+            (length(Tags)):64/little,
+            (byte_size(EncodedTags)):64/little,
+            EncodedTags/binary,
+            Body/binary
+        >>,
+    ?assertEqual({Tags, Body}, decode_tags(Wrapped)).
+
+missing_avro_tag_terminator_test() ->
+    Tags = [{<<"Content-Type">>, <<"application/json">>}],
+    EncodedTags = encode_tags(Tags),
+    TagsWithoutTerminator = binary:part(EncodedTags, 0, byte_size(EncodedTags) - 1),
+    Body = <<"{\"$schema\":\"https://example.invalid/schema\"}">>,
+    Wrapped =
+        <<
+            (length(Tags)):64/little,
+            (byte_size(TagsWithoutTerminator)):64/little,
+            TagsWithoutTerminator/binary,
+            Body/binary
+        >>,
+    ?assertThrow(
+        {invalid_ans104_tags, missing_avro_array_terminator},
+        decode_tags(Wrapped)
+    ).
+
+tag_count_mismatch_test() ->
+    Tags = [{<<"Content-Type">>, <<"application/json">>}],
+    EncodedTags = encode_tags(Tags),
+    Wrapped =
+        <<
+            (length(Tags) + 1):64/little,
+            (byte_size(EncodedTags)):64/little,
+            EncodedTags/binary
+        >>,
+    ?assertThrow({invalid_ans104_tags, tag_count_mismatch}, decode_tags(Wrapped)).
+
+residue_in_tag_section_test() ->
+    Tags = [{<<"Content-Type">>, <<"application/json">>}],
+    EncodedTags = encode_tags(Tags),
+    Wrapped =
+        <<
+            (length(Tags)):64/little,
+            (byte_size(EncodedTags) + 1):64/little,
+            EncodedTags/binary,
+            0
+        >>,
+    ?assertThrow({invalid_ans104_tags, residue_in_tag_section}, decode_tags(Wrapped)).
 
 no_tags_test() ->
     {Priv, Pub} = ar_wallet:new(),
