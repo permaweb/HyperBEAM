@@ -45,6 +45,9 @@ address(Key, Value) ->
     KeyBin = to_match_bin(Key),
     ValueBin = to_match_bin(Value),
     iolist_to_binary([?CACHE_PREFIX, "&", KeyBin, "=", ValueBin]).
+address(Key, Value, ID) ->
+    IDBin = to_match_bin(ID),
+    <<(address(Key, Value))/binary, "/", IDBin/binary>>.
 
 to_match_bin(Bin) when is_binary(Bin) -> Bin;
 to_match_bin(Atom) when is_atom(Atom) -> atom_to_binary(Atom);

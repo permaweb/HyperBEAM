@@ -54,12 +54,24 @@ info(_Base, _Opts) ->
     #{ _ => _ },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
-init(M1, M2, Opts) ->
+init(M1, _M2, Opts) ->
     ?event(running_init),
     % Where we should read initial parameters from.
-    InPrefix = dev_stack:input_prefix(M1, M2, Opts),
+    InPrefix =
+        hb_ao:get(
+            <<"input-prefix">>,
+            {as, <<"message@1.0">>, M1},
+            <<"">>,
+            Opts
+        ),
     % Where we should read/write our own state to.
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+    Prefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, M1},
+            <<"">>,
+            Opts
+        ),
     ?event({in_prefix, InPrefix}),
     ImageBin =
         case hb_ao:get(<<InPrefix/binary, "/image">>, M1, Opts) of
@@ -339,8 +351,14 @@ terminate(M1, M2, Opts) ->
 %% such that other devices can use it, but it is excluded from calls from AO-Core
 %% resolution directly.
 -spec instance(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> pid() | not_found | _.
-instance(M1, M2, Opts) ->
-    Prefix = dev_stack:prefix(M1, M2, Opts),
+instance(M1, _M2, Opts) ->
+    Prefix =
+        hb_ao:get(
+            <<"output-prefix">>,
+            {as, <<"message@1.0">>, M1},
+            <<"">>,
+            Opts
+        ),
     Path = <<Prefix/binary, "/instance">>,
     ?event({searching_for_instance, Path, M1}),
     hb_private:get(Path, M1, Opts#{ <<"hashpath">> => ignore }).
