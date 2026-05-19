@@ -40,7 +40,7 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
                 {variables, Vars}
             }
         ),
-        {ok, RawRes} ?= hb_gateway_client:query(Query, Vars, Node, OpName, Opts),
+        {ok, RawRes} ?= hb_client_gateway:query(Query, Vars, Node, OpName, Opts),
         Res = hb_util:deep_get(<<"data/transactions">>, RawRes, #{}, Opts),
         NodeStructs = hb_util:deep_get(<<"edges">>, Res, [], Opts),
         ?event({graphql_request_returned_items, length(NodeStructs)}),
@@ -57,7 +57,7 @@ index_graphql(Total, Query, Vars, Node, OpName, Opts) ->
                     Struct = hb_maps:get(<<"node">>, NodeStruct, not_found, Opts),
                     try
                         {ok, ParsedMsg} =
-                            hb_gateway_client:result_to_message(
+                            hb_client_gateway:result_to_message(
                                 Struct,
                                 Opts
                             ),
@@ -257,13 +257,13 @@ build_filter_part(FilterName, Values) ->
 %% @doc Build final GraphQL query for empty vs non-empty
 default_query([]) ->
     {ok, <<"query($after: String) { transactions(after: $after) { edges { ", 
-            (hb_gateway_client:item_spec())/binary, 
+            (hb_client_gateway:item_spec())/binary,
         " } pageInfo { hasNextPage } } }">>};
 default_query(Parts) ->
     CombinedFilters = iolist_to_binary(lists:join(<<", ">>, Parts)),
     {ok, <<"query($after: String) { transactions(after: $after, ", 
             CombinedFilters/binary, 
-            ") { edges { ", (hb_gateway_client:item_spec())/binary, 
+            ") { edges { ", (hb_client_gateway:item_spec())/binary,
         " } pageInfo { hasNextPage } } }">>}.
 
 %%% Tests

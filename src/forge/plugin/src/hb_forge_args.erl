@@ -50,7 +50,9 @@ opts() ->
         {device_roots, $r, "device-roots", string,
             "Comma-separated list of dev_* roots to operate upon."},
         {with_core, undefined, "with-core", {boolean, false},
-            "Also run core HyperBEAM EUnit modules."}
+            "Also run core HyperBEAM EUnit modules."},
+        {show_hash, undefined, "show-hash", {boolean, false},
+            "Show generated device module hashes in EUnit output."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -61,11 +63,13 @@ parse(State, DefaultOutput) ->
     KeyRaw = proplists:get_value(key, Args, undefined),
     RootsRaw = proplists:get_value(device_roots, Args, undefined),
     WithCore = proplists:get_value(with_core, Args, false),
+    ShowHash = proplists:get_value(show_hash, Args, false),
     #{
         <<"device-src">> => split_list(SrcRaw),
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
         <<"with-core">> => WithCore,
+        <<"show-hash">> => ShowHash,
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
@@ -188,7 +192,7 @@ default_preloaded_dirs(Dirs) ->
 
 %% @doc Return true when the current checkout is HyperBEAM itself.
 is_hb_checkout() ->
-    filelib:is_file(<<"src/core/hb_device.erl">>).
+    filelib:is_file(<<"src/core/device/hb_device.erl">>).
 
 %% @doc Return true when any configured source dir contains `Dir'.
 source_covers(Dir, Dirs) ->

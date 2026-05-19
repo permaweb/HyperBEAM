@@ -163,7 +163,7 @@ aos2_to_assignment(A, RawOpts) ->
     AssignmentData = hb_maps:get(<<"assignment">>, Node, undefined, Opts),
     ?event({assignment_data, AssignmentData}),
     {ok, Assignment} =
-        hb_gateway_client:result_to_message(
+        hb_client_gateway:result_to_message(
             aos2_normalize_data(AssignmentData),
             Opts
         ),
@@ -189,7 +189,7 @@ aos2_to_assignment(A, RawOpts) ->
                         )
                 end;
             Body ->
-                hb_gateway_client:result_to_message(
+                hb_client_gateway:result_to_message(
                     aos2_normalize_data(Body),
                     Opts
                 )
@@ -197,7 +197,7 @@ aos2_to_assignment(A, RawOpts) ->
     ?event({message, Message}),
     NormalizedAssignment#{ <<"body">> => Message }.
 
-%% @doc The `hb_gateway_client' module expects all JSON structures to at least
+%% @doc The `hb_client_gateway' module expects all JSON structures to at least
 %% have a `data' field. This function ensures that.
 aos2_normalize_data(JSONStruct) ->
     case JSONStruct of

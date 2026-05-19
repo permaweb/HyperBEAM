@@ -6,7 +6,7 @@
 %%% expose all necessary fields to retrieve this information outside of the
 %%% GraphQL API. When gateways integrate serving in `httpsig@1.0' form, this
 %%% module will be deprecated.
--module(hb_gateway_client).
+-module(hb_client_gateway).
 %% Raw access primitives:
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).

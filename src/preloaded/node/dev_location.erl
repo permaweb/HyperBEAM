@@ -54,7 +54,7 @@ read(Address, Opts) ->
     case dev_location_cache:read(Address, Opts) of
         {ok, Location} -> {ok, Location};
         _ ->
-            case hb_gateway_client:location(Address, Opts) of
+            case hb_client_gateway:location(Address, Opts) of
                 {ok, Location} ->
                     dev_location_cache:write(Location, Opts),
                     {ok, Location};
@@ -267,7 +267,7 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
     % Asynchronously upload the location record to Arweave.
     spawn(
         fun() ->
-            hb_client:upload(Signed, Opts)
+            hb_client_remote:upload(Signed, Opts)
         end
     ),
     % Post the new scheduler location to the peers specified in the
