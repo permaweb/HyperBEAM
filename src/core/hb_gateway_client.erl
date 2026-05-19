@@ -11,7 +11,7 @@
 -export([query/2, query/3, query/4, query/5]).
 -export([read/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
--export([device/2, location/2]).
+-export([device/3, location/2]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -172,8 +172,7 @@ location(Address, Opts) ->
 %% @doc AO-Core devices are defined primarily by their specification IDs. To find
 %% compatible device implementations we must query for messages with the
 %% appropriate tags and signatures.
-device(SpecID, Opts) ->
-    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
+device(SpecID, TrustedSigners, Opts) ->
     Query =
         <<"query($specid: [String!], $trusted: [String!]) { ",
                 "transactions(",

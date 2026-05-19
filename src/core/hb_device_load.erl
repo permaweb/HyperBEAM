@@ -133,7 +133,7 @@ from_preloaded(Ref, Opts) ->
                     [
                         fun() ->
                             hb_util:ok_or(
-                                hb_cache:match(impl_query(SpecID), PreOpts),
+                                hb_cache:match(implementation_query(SpecID), PreOpts),
                                 []
                             )
                         end
@@ -180,11 +180,19 @@ from_low_trust(Ref, Opts) ->
             [
                 fun() ->
                     hb_util:ok_or(
-                        hb_cache:match(impl_query(SpecID), Opts), [])
+                        hb_cache:match(implementation_query(SpecID), Opts),
+                        []
+                    )
                 end,
                 fun() ->
                     hb_util:ok_or(
-                        hb_gateway_client:device(SpecID, Opts), [])
+                        hb_gateway_client:device(
+                            SpecID,
+                            trusted_signers(Opts),
+                            Opts
+                        ),
+                        []
+                    )
                 end
             ]
         )
@@ -209,7 +217,15 @@ resolve_spec(Ref, Opts) ->
 verify_and_load(SpecID, ID, Opts) ->
     maybe
         {ok, Msg} ?= hb_cache:read(ID, Opts),
-        ok ?= signed(Msg, Opts),
+        Signers = signers(Msg, Opts),
+        true ?=
+            hb_message:verify(Msg, Signers, Opts)
+                orelse {error, <<"implementation-signature-invalid">>},
+        true ?=
+            lists:any(
+                fun(S) -> lists:member(S, trusted_signers(Opts)) end,
+                Signers
+            ) orelse {error, <<"device-signer-untrusted">>},
         ok ?= implements(SpecID, Msg, Opts),
         ok ?= compatible(Msg, Opts),
         load_archive_message(Msg, Opts)
@@ -250,19 +266,13 @@ load_archive_message(Msg, Opts) ->
         Opts
     ).
 
-impl_query(SpecID) ->
+implementation_query(SpecID) ->
     #{
         <<"data-protocol">> => <<"ao">>,
         <<"variant">> => <<"ao.N.1">>,
         <<"content-type">> => <<"application/beam-archive">>,
         <<"implements-device">> => SpecID
     }.
-
-signed(Msg, Opts) ->
-    case is_signer_trusted(signers(Msg, Opts), trusted_signers(Opts)) of
-        true -> ok;
-        false -> {error, <<"device-signer-untrusted">>}
-    end.
 
 implements(SpecID, Msg, Opts) ->
     case hb_maps:get(<<"implements-device">>, Msg, undefined, Opts) of
@@ -286,19 +296,12 @@ signers(Msg, Opts) ->
         ),
         Opts
     ).
-
-is_signer_trusted([], _) -> false;
-is_signer_trusted(_Signers, all) -> true;
-is_signer_trusted(Signers, List) when is_list(List) ->
-    lists:any(fun(S) -> lists:member(S, List) end, Signers);
-is_signer_trusted(_Signers, _) -> false.
-
 %% @doc Trusted signers, defaulting to the node's own address.
 %% Computed lazily so the default config need not call `hb:address/0'.
 trusted_signers(Opts) ->
     case hb_opts:get(trusted_device_signers, [], Opts) of
         [] -> [hb:address()];
-        Configured -> Configured
+        Signers when is_list(Signers) -> Signers
     end.
 
 %% @doc Every `requires-*' key must match this machine's `system_info'.
