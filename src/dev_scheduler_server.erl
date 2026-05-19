@@ -80,6 +80,12 @@ start(ProcID, Proc, Opts) ->
                             remote_confirmation,
                             Opts
                         ),
+                    bundling_mode =>
+                        hb_util:atom(hb_opts:get(
+                            scheduler_bundling_mode,
+                            remote,
+                            Opts
+                        )),
                     opts => Opts
                 }
             )
@@ -264,8 +270,7 @@ do_assign(State, Message, ReplyPID) ->
             ),
             ?event(writes_complete),
             ?event(uploading_message),
-            hb_client:upload(Message, Opts),
-            hb_client:upload(Assignment, Opts),
+            upload(Message, Assignment, Opts),
             ?event(uploads_complete),
             maybe_inform_recipient(
                 remote_confirmation,
@@ -304,6 +309,19 @@ commit_assignment(BaseAssignment, State) ->
         BaseAssignment,
         Wallets
     ).
+
+%% @doc Determine if the assignment should be uploaded via our local bundling
+%% node, or whether we should use the `hb_client:upload/2' function to relay it
+%% to our preferred bundling peer.
+upload(Message, Assignment, Opts) ->
+    case maps:get(bundling_mode, Opts) of
+        local ->
+            dev_bundler:tx(#{}, Assignment, Opts),
+            dev_bundler:tx(#{}, Message, Opts);
+        remote ->
+            hb_client:upload(Message, Opts),
+            hb_client:upload(Assignment, Opts)
+    end.
 
 %% @doc Potentially inform the caller that the assignment has been scheduled.
 %% The main assignment loop calls this function repeatedly at different stages
