@@ -1200,6 +1200,18 @@ write_with_only_read_only_store_test() ->
     ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
     ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
 
+list_lmdb_children_without_group_marker_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb, <<"legacy-list">>),
+    Opts = #{ <<"store">> => Store },
+    try
+        hb_store:reset(Store),
+        ok = hb_store:write(Store, #{ <<"legacy/1">> => <<"one">> }, Opts),
+        ok = hb_store:write(Store, #{ <<"legacy/2">> => <<"two">> }, Opts),
+        ?assertEqual([<<"1">>, <<"2">>], lists:sort(list(<<"legacy">>, Opts)))
+    after
+        hb_store:reset(Store)
+    end.
+
 %% @doc Run a specific test with a given store module.
 run_test() ->
     Store = hb_test_utils:test_store(),
