@@ -537,11 +537,13 @@ index_ids_test_parallel() ->
     assert_item_read(
         <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
         Opts),
-    % Another bundle with an unsupported avro codec should be indexed even if
-    % it can't be deserialized.
-    ?assertException(
-        error,
-        {badmatch,<<"\"address\":\"0x124e64C9Ed898d4A8B130F6ACb76b33E21CD711c\"", _/binary>>},
+    % This bundle previously triggered the ANS-104 tag-section boundary bug:
+    % the decoder ran past the declared tag bytes into the JSON body and
+    % crashed with a badmatch on the body content (the `"address":"0x..."'
+    % string). With the strict tag-section boundary enforced, the item is
+    % decoded and indexed correctly.
+    ?assertMatch(
+        {ok, _},
         hb_store_arweave:read(
             StoreOpts,
             #{ <<"read">> => <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">> },
