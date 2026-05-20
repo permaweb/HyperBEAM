@@ -182,13 +182,13 @@ authors. Install it into the user-level rebar3 template directory from
 a HyperBEAM checkout:
 
 ```bash
-./src/forge/plugin/install-template --branch edge
+./install-template --branch edge
 ```
 
 Development checkouts can be used directly:
 
 ```bash
-./src/forge/plugin/install-template --local /path/to/hyperbeam
+./install-template --local /path/to/hyperbeam
 ```
 
 For reproducible scaffolding, use `--commit COMMIT_SHA`; for a

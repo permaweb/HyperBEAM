@@ -37,13 +37,13 @@ From a HyperBEAM checkout, install the Forge template into your user
 rebar3 template directory:
 
 ```bash
-./src/forge/plugin/install-template --branch edge
+./install-template --branch edge
 ```
 
 Use a local checkout while developing HyperBEAM itself:
 
 ```bash
-./src/forge/plugin/install-template --local /path/to/hyperbeam
+./install-template --local /path/to/hyperbeam
 ```
 
 `--local` pins the checkout's committed `HEAD`. Commit or switch to the
@@ -53,7 +53,7 @@ template to move.
 Pin to an exact commit for reproducible local scaffolding:
 
 ```bash
-./src/forge/plugin/install-template --commit COMMIT_SHA
+./install-template --commit COMMIT_SHA
 ```
 
 The script writes only template files under

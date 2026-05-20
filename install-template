@@ -107,7 +107,7 @@ install_template() {
     template_dir="$1"
     hb_dep="$2"
     hb_plugin="$3"
-    src="$(script_dir)/priv"
+    src="$(script_dir)/src/forge/plugin/priv"
     support="$template_dir/hyperbeam-device"
     tmp="$support.tmp.$$"
     template="$template_dir/device.template"
