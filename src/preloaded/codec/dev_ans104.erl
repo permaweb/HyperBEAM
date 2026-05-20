@@ -814,17 +814,18 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
         Label),
     
-    Encoded = hb_message:convert(Committed, 
+    Encoded = hb_message:convert(Committed,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
-        <<"structured@1.0">>, Opts),
+        <<"structured@1.0">>,
+        Opts),
     ?event(debug_test, {encoded, Label, {explicit, Encoded}}),
     ?assert(ar_bundles:verify_item(Encoded), Label),
     %% IF the input message is unbundled, #tx.data should be empty.
     ?assertEqual(ToBool(Commit), Encoded#tx.data /= <<>>, Label),
 
-    Decoded = hb_message:convert(Encoded, 
+    Decoded = hb_message:convert(Encoded,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => ToBool(Decode) },
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
+        <<"ans104@1.0">>,
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
@@ -857,16 +858,17 @@ test_bundle_uncommitted(Encode, Decode) ->
     ToBool = fun(unbundled) -> false; (bundled) -> true end,
     Label = lists:flatten(io_lib:format("~p -> ~p", [Encode, Decode])),
 
-    Encoded = hb_message:convert(Structured, 
+    Encoded = hb_message:convert(Structured,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
-        <<"structured@1.0">>, Opts),
+        <<"structured@1.0">>,
+        Opts),
     ?event(debug_test, {encoded, Label, {explicit, Encoded}}),
     %% IF the input message is unbundled, #tx.data should be empty.
     ?assertEqual(ToBool(Encode), Encoded#tx.data /= <<>>, Label),
 
-    Decoded = hb_message:convert(Encoded, 
+    Decoded = hb_message:convert(Encoded,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => ToBool(Decode) },
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
+        <<"ans104@1.0">>,
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     case Encode of
@@ -876,3 +878,4 @@ test_bundle_uncommitted(Encode, Decode) ->
             ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label)
     end,
     ok.
+

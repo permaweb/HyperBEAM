@@ -283,14 +283,14 @@ build_signed_tx_on_arbundles_js_test() ->
         ?assert(ar_bundles:verify_item(BundledItem)),
         % Convert both dataitems to structured messages
         ItemStructured = hb_message:convert(Item,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             TestOpts),
         ?event(debug_test, {item_structured, ItemStructured}),
         ?assert(hb_message:verify(ItemStructured, all, TestOpts)),
         BundledItemStructured = hb_message:convert(BundledItem,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             TestOpts),
         ?event(debug_test, {bundled_item_structured, BundledItemStructured}),
         ?assert(hb_message:verify(BundledItemStructured, all, TestOpts)),
@@ -303,15 +303,15 @@ build_signed_tx_on_arbundles_js_test() ->
         ?assert(ar_tx:verify(SignedTX)),
         % Convert the signed TX to a structured message
         StructuredTX = hb_message:convert(SignedTX,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
             TestOpts),
         % ?event(debug_test, {structured_tx, StructuredTX}),
         ?assert(hb_message:verify(StructuredTX, all, TestOpts)),
         % Convert back to an L1 TX
         SignedTXRoundtrip = hb_message:convert(StructuredTX,
-            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            <<"tx@1.0">>,
+            #{ <<"device">> => <<"structured@1.0">>, <<"hint-device">> => <<"tx@1.0">> },
             TestOpts),
         ?event(debug_test, {signed_tx_roundtrip, SignedTXRoundtrip}),
         ?assert(ar_tx:verify(SignedTXRoundtrip)),
@@ -403,6 +403,79 @@ bundle_convert_minimal_test() ->
               recovered_size => RecoveredSize,
               delta_bytes => Delta,
               multiple_of_2500 => Multiple}
+        })
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+%% @doc Drive a nested tree of items signed in mixed bundle states through
+%% the bundler flow: each child is signed with bundle=true OR bundle=false,
+%% then we build the bundle TX, sign it, convert through structured@1.0 and
+%% back to tx@1.0, and assert nothing was inflated and every commitment
+%% still verifies. This exercises the full `hint-device' plumbing across a
+%% mixed tree, mirroring the production scenario that motivated the fix.
+bundle_convert_mixed_tree_verify_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
+    },
+    try
+        %% Build three items. The first carries a child signed bundle=false,
+        %% the second a child signed bundle=true, the third has no nested
+        %% child at all. The L1 bundle TX therefore contains items that
+        %% would individually each round-trip with a different bundle state.
+        InnerFalse = hb_message:commit(
+            #{ <<"leaf-tag">> => <<"leaf-false">>,
+               <<"leaf-list">> => [1, 2, 3] },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(InnerFalse, all, TestOpts)),
+        InnerTrue = hb_message:commit(
+            #{ <<"leaf-tag">> => <<"leaf-true">>,
+               <<"leaf-list">> => [4, 5, 6] },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+        ?assert(hb_message:verify(InnerTrue, all, TestOpts)),
+        ItemA = hb_message:commit(
+            #{ <<"item-tag">> => <<"a">>, <<"inner">> => InnerFalse },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+        ?assert(hb_message:verify(ItemA, all, TestOpts)),
+        ItemB = hb_message:commit(
+            #{ <<"item-tag">> => <<"b">>, <<"inner">> => InnerTrue },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(ItemB, all, TestOpts)),
+        ItemC = hb_message:commit(
+            #{ <<"item-tag">> => <<"c">> },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(ItemC, all, TestOpts)),
+        {ok, SignedTX} = build_signed_tx([ItemA, ItemB, ItemC], TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        Committed = hb_message:convert(
+            SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, TestOpts),
+        ?event(debug_test, {committed, {explicit, Committed}}),
+        ?assert(hb_message:verify(Committed, all, TestOpts)),
+        %% Convert back to TX (same path build_proofs uses) and check that
+        %% the data did not inflate.
+        TX = hb_message:convert(
+            Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
+        ?assert(ar_tx:verify(TX)),
+        SignedSize = byte_size(SignedTX#tx.data),
+        RecoveredSize = byte_size(TX#tx.data),
+        Delta = RecoveredSize - SignedSize,
+        ?assertEqual(0, Delta, {
+            inflation_detected_on_mixed_tree,
+            #{signed_size => SignedSize,
+              recovered_size => RecoveredSize,
+              delta_bytes => Delta}
         })
     after
         hb_mock_server:stop(ServerHandle)
