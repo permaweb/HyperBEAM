@@ -90,6 +90,8 @@ hb_opts_compile_opts(Ebin) ->
     end.
 
 drop_outdir([{outdir, _} | Rest]) -> drop_outdir(Rest);
+drop_outdir([{d, Name, Value} | Rest]) when is_list(Name) ->
+    [{d, list_to_atom(Name), Value} | drop_outdir(Rest)];
 drop_outdir([Opt | Rest]) -> [Opt | drop_outdir(Rest)];
 drop_outdir([]) -> [].
 

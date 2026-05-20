@@ -56,7 +56,14 @@ lookup(Base, Req, Opts) ->
                     Opts,
                     hb_opts:get(store_scope_resolved, local, Opts)
                 ),
-            case hb_cache:read_resolved(Base, Req, OutputScopedOpts) of
+            CacheRead =
+                try hb_cache:read_resolved(Base, Req, OutputScopedOpts) of
+                    ReadRes -> ReadRes
+                catch
+                    throw:{necessary_message_not_found, _, _} ->
+                        miss
+                end,
+            case CacheRead of
                 {hit, not_found} ->
                     {error, not_found};
                 {hit, {ok, Res}} ->

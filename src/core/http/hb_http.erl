@@ -638,9 +638,15 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             end,
 			Opts
         ),
+    DefaultAcceptBundle =
+        case {Codec, hb_maps:get(<<"require-codec">>, TABMReq, not_found, Opts)} of
+            {<<"json@1.0">>, not_found} -> false;
+            {<<"json@1.0">>, _} -> true;
+            _ -> false
+        end,
     AcceptBundle =
         hb_util:atom(
-            hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
+            hb_maps:get(<<"accept-bundle">>, TABMReq, DefaultAcceptBundle, Opts)
         ),
     ?event(debug_http,
         {encoding_reply,
@@ -1053,6 +1059,16 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         ),
     FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
     FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
+    DefaultAcceptBundle =
+        case maps:get(
+            <<"require-codec">>,
+            Msg,
+            maps:get(<<"require-codec">>, PrimMsg, not_found)
+        ) of
+            <<"application/json">> -> true;
+            <<"json@1.0">> -> true;
+            _ -> maps:get(<<"accept-bundle">>, RawHeaders, false)
+        end,
     BaseMsg =
         FilteredMsg#{
             <<"method">> => Method,
@@ -1064,7 +1080,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     maps:get(
                         <<"accept-bundle">>,
                         PrimMsg,
-                        maps:get(<<"accept-bundle">>, RawHeaders, false)
+                        DefaultAcceptBundle
                     )
                 ),
             <<"accept">> =>

@@ -44,7 +44,7 @@ push(Base, Req, Opts) ->
         no_slot ->
             case schedule_initial_message(Process, Req, Opts) of
                 {ok, Assignment} ->
-                    case find_type(hb_ao:get(<<"body">>, Assignment, Opts), Opts) of
+                    case find_type(Req, Opts) of
                         <<"Process">> ->
                             ?event(push,
                                 {initializing_process,
@@ -459,12 +459,15 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
             {origin, Origin}
         }
     ),
+    ResultDepth =
+        decrement_result_depth(
+            hb_maps:get(<<"result-depth">>, Origin, 1, Opts)
+        ),
     BaseReq =
         #{
             <<"path">> => <<"push">>,
             <<"slot">> => NextSlotOnProc,
-            <<"result-depth">> =>
-                hb_maps:get(<<"result-depth">>, Origin, 1, Opts) - 1
+            <<"result-depth">> => ResultDepth
         },
     Req =
         case parse_max_depth(hb_maps:get(<<"max-depth">>, Origin, undefined, Opts)) of
@@ -491,6 +494,15 @@ parse_max_depth(Bin) when is_binary(Bin) ->
         _:_ -> undefined
     end;
 parse_max_depth(_) -> undefined.
+
+decrement_result_depth(Depth) when is_integer(Depth), Depth > 0 -> Depth - 1;
+decrement_result_depth(Depth) when is_binary(Depth) ->
+    try hb_util:int(Depth) of
+        N -> decrement_result_depth(N)
+    catch
+        _:_ -> 0
+    end;
+decrement_result_depth(_) -> 0.
 
 %% @doc Augment the message with from-* keys, if it doesn't already have them.
 normalize_message(MsgToPush, Opts) ->

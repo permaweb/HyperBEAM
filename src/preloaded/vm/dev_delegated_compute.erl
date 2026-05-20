@@ -3,7 +3,7 @@
 %%% bring trusted results into the local node, or as the `Execution-Device' of
 %%% an AO process.
 -module(dev_delegated_compute).
--device_libraries([lib_process]).
+-device_libraries([lib_process, lib_scheduler_formats]).
 -export([init/3, compute/3, normalize/3, snapshot/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -83,7 +83,7 @@ do_compute(ProcID, Req, Opts) ->
     ?event({do_compute_msg, {req, Req}}),
     Slot = hb_ao:get(<<"slot">>, Req, Opts),
     {ok, AOS2 = #{ <<"body">> := Body }} =
-        dev_scheduler_formats:assignments_to_aos2(
+        lib_scheduler_formats:assignments_to_aos2(
             ProcID,
             #{
                 Slot => Req
@@ -151,6 +151,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
         Headers#{
             <<"path">> => <<"call">>,
             <<"target">> => <<"payload">>,
+            <<"peer">> => genesis_wasm_peer(Opts),
             <<"payload">> =>
                 Headers#{
                     <<"path">> => Path,
@@ -233,6 +234,7 @@ snapshot(Msg, Req, Opts) ->
             },
             #{
                 <<"path">> => <<"call">>,
+                <<"peer">> => genesis_wasm_peer(Opts),
                 <<"relay-method">> => <<"POST">>,
                 <<"relay-path">> => <<"/snapshot/", ProcID/binary>>,
                 <<"content-type">> => <<"application/json">>,
@@ -254,3 +256,10 @@ snapshot(Msg, Req, Opts) ->
                     <<"error-details">> => Error
                 }}
     end.
+
+genesis_wasm_peer(Opts) ->
+    Port =
+        integer_to_binary(
+            hb_opts:get(genesis_wasm_port, 6363, Opts)
+        ),
+    <<"http://localhost:", Port/binary>>.

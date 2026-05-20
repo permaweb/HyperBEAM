@@ -515,7 +515,9 @@ original_tags_to_tags(TagMap) ->
     ?event({ordered_tagmap, {explicit, OrderedList}, {input, {explicit, TagMap}}}),
     lists:map(
         fun(#{ <<"name">> := Key, <<"value">> := Value }) ->
-            {Key, Value}
+            {Key, Value};
+           (#{ <<"name">> := Key }) ->
+            {Key, <<>>}
         end,
         OrderedList
     ).

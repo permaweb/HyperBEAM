@@ -1,12 +1,12 @@
-%%% @doc This module is used by dev_scheduler in order to produce outputs that
-%%% are compatible with various forms of AO clients. It features two main formats:
+%%% @doc Shared scheduler response format helpers for devices that need outputs
+%%% compatible with various forms of AO clients. It features two main formats:
 %%%
 %%% - `application/json'
 %%% - `application/http'
 %%%
 %%% The `application/json' format is a legacy format that is not recommended for
 %%% new integrations of the AO protocol.
--module(dev_scheduler_formats).
+-module(lib_scheduler_formats).
 -export([assignments_to_bundle/4, assignments_to_aos2/4]).
 -export([aos2_to_assignments/3, aos2_to_assignment/2]).
 -export([aos2_normalize_types/1]).

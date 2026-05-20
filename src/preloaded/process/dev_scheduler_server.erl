@@ -264,8 +264,8 @@ do_assign(State, Message, ReplyPID) ->
             ),
             ?event(writes_complete),
             ?event(uploading_message),
-            hb_client_remote:upload(Message, Opts),
-            hb_client_remote:upload(Assignment, Opts),
+            maybe_upload(Message, Opts),
+            maybe_upload(Assignment, Opts),
             ?event(uploads_complete),
             maybe_inform_recipient(
                 remote_confirmation,
@@ -313,6 +313,20 @@ maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
     case maps:get(mode, State) of
         Mode -> ReplyPID ! {scheduled, Message, Assignment};
         _ -> ok
+    end.
+
+maybe_upload(Message, Opts) ->
+    try hb_client_remote:upload(Message, Opts) of
+        Res -> Res
+    catch Class:Reason:Stack ->
+        ?event(warning,
+            {scheduler_upload_failed,
+                {class, Class},
+                {reason, Reason},
+                {trace, Stack}
+            }
+        ),
+        {error, Reason}
     end.
 
 %% @doc Find the hashpath of the base state upon which a new assignment should
