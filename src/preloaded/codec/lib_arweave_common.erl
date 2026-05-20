@@ -1,10 +1,10 @@
 %%% @doc Shared Arweave codec helpers.
 -module(lib_arweave_common).
--export([from/3, to/3]).
+-export([from/3]).
 -export([fields/3, tags/2, data/5, committed/6, base/5]).
 -export([with_commitments/8]).
--export([is_bundle/3, maybe_load/3, data/4, tags/5, excluded_tags/3]).
--export([siginfo/4, fields_to_tx/4]).
+-export([bundle_hint/4, data/4, tags/5, excluded_tags/3]).
+-export([to/7, siginfo/4, fields_to_tx/4]).
 -export([bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 
@@ -34,35 +34,42 @@ from_item(RawTX, Req, Opts) ->
         )
     }.
 
-%% @doc Convert a message into its ANS-104 item form.
-to(Binary, _Req, _Opts) when is_binary(Binary) ->
-    {ok, #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Binary }};
-to(TX, _Req, _Opts) when is_record(TX, tx) ->
-    {ok, TX};
-to(RawTABM, Req, Opts) when is_map(RawTABM) ->
+%% @doc Prepare a TABM as a #tx record using codec-specific field
+%% extraction and tag exclusion rules.
+to(Device, TABM, Req, ToFun, FieldsFun, ExcludedTagsFun, Opts) ->
     MaybeCommitment =
         hb_message:commitment(
-            #{ <<"commitment-device">> => <<"ans104@1.0">> },
-            RawTABM,
+            #{ <<"commitment-device">> => Device },
+            TABM,
             Opts
         ),
-    IsBundle = is_bundle(MaybeCommitment, Req, Opts),
-    MaybeBundle = maybe_load(RawTABM, IsBundle, Opts),
-    Data = data(MaybeBundle, Req, fun lib_arweave_common:to/3, Opts),
-    TX0 =
-        siginfo(
-            MaybeBundle, MaybeCommitment,
-            fun lib_arweave_common:fields_to_tx/4, Opts
-        ),
+    Data = data(TABM, Req, ToFun, Opts),
+    ?event({calculated_data, Data}),
+    TX0 = siginfo(TABM, MaybeCommitment, FieldsFun, Opts),
+    ?event({found_siginfo, TX0}),
     TX1 = TX0#tx{ data = Data },
-    Tags =
-        tags(
-            TX1, MaybeCommitment, MaybeBundle,
-            excluded_tags(TX1, MaybeBundle, Opts), Opts
-        ),
-    {ok, ar_tx:normalize(TX1#tx{ tags = Tags })};
-to(Other, _Req, _Opts) ->
-    throw({invalid_tx, Other}).
+    Tags = tags(
+        TX1,
+        MaybeCommitment,
+        TABM,
+        ExcludedTagsFun(TX1, TABM, Opts),
+        Opts
+    ),
+    ?event({calculated_tags, Tags}),
+    TX = TX1#tx{ tags = Tags },
+    ?event({tx_before_id_gen, TX}),
+    try ar_tx:normalize(TX)
+    catch
+        Type:Error:Stacktrace ->
+            ?event({
+                {reset_ids_error, Error},
+                {tx_without_data, {explicit, TX}}}),
+            ?event({prepared_tx_before_ids,
+                {tags, {explicit, TX#tx.tags}},
+                {data, TX#tx.data}
+            }),
+            erlang:raise(Type, Error, Stacktrace)
+    end.
 
 %% @doc Return a TABM message containing the fields of the given decoded
 %% ANS-104 data item that should be included in the base message.
@@ -429,65 +436,24 @@ deduplicating_from_list(Tags, Opts) ->
 
 %%% Encoding helpers.
 
-is_bundle({ok, _, Commitment}, _Req, Opts) ->
-    hb_util:atom(hb_ao:get(<<"bundle">>, Commitment, false, Opts));
-is_bundle(_, Req, Opts) ->
-    case hb_maps:is_key(<<"bundle">>, Req, Opts) of
-        true -> hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts));
-        false -> hb_util:atom(hb_ao:get(<<"bundle">>, Opts, false, Opts))
-    end.
-
-%% @doc Determine if the message should be loaded from the cache and re-converted
-%% to the TABM format. We do this if the `bundle' key is set to true.
-maybe_load(RawTABM, true, Opts) ->
-    % Convert back to the fully loaded structured@1.0 message, then
-    % convert to TABM with bundling enabled.
-    Structured = hb_message:convert(RawTABM, <<"structured@1.0">>, Opts),
-    Loaded = hb_cache:ensure_all_loaded(Structured, Opts),
-    % Convert to TABM with bundling enabled.
-    LoadedTABM =
-        hb_message:convert(
-            Loaded,
-            tabm,
+%% @doc Apply the `bundle' hint from a signed commitment for `Device'.
+%% Returns `not_found' when no signed commitment for `Device' exists.
+bundle_hint(Device, Msg, Req, Opts) ->
+    case hb_message:commitment(
             #{
-                <<"device">> => <<"structured@1.0">>,
-                <<"bundle">> => true
+                <<"commitment-device">> => Device,
+                <<"committer">> => '_'
             },
-            Opts
-        ),
-    % Ensure the commitments from the original message are the only
-    % ones in the fully loaded message, recursively for nested maps.
-    replace_commitments_recursive(LoadedTABM, RawTABM);
-maybe_load(RawTABM, false, _Opts) ->
-    RawTABM.
-
-%% @doc Recursively replace commitments from RawTABM into LoadedTABM.
-replace_commitments_recursive(LoadedTABM, RawTABM)
-        when is_map(LoadedTABM), is_map(RawTABM) ->
-    LoadedTABM2 =
-        case maps:find(<<"commitments">>, RawTABM) of
-            {ok, RawCommitments} ->
-                LoadedTABM#{ <<"commitments">> => RawCommitments };
-            error ->
-                maps:remove(<<"commitments">>, LoadedTABM)
-        end,
-    maps:map(
-        fun(<<"commitments">>, Value) ->
-            Value;
-           (Key, Value) when is_map(Value) ->
-            case maps:get(Key, RawTABM, undefined) of
-                RawValue when is_map(RawValue) ->
-                    replace_commitments_recursive(Value, RawValue);
-                _ ->
-                    Value
+            Msg,
+            Opts) of
+        {ok, _, Commitment} ->
+            case hb_util:atom(
+                    hb_maps:get(<<"bundle">>, Commitment, not_found, Opts)) of
+                not_found -> {ok, Req};
+                Value -> {ok, Req#{ <<"bundle">> => Value }}
             end;
-           (_Key, Value) ->
-            Value
-        end,
-        LoadedTABM2
-    );
-replace_commitments_recursive(LoadedTABM, _RawTABM) ->
-    LoadedTABM.
+        _ -> not_found
+    end.
 
 %% @doc Calculate the fields for a message, returning an initial TX record.
 siginfo(_Message, {ok, _, Commitment}, FieldsFun, Opts) ->
