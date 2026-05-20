@@ -3,6 +3,22 @@
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%% HyperBEAM AO mint checkpoints for the current millisecond-based pot curve.
+-define(AO_TOKEN_DENOMINATION, 1_000_000_000_000).
+-define(AO_TOTAL_SUPPLY, 21_000_000 * ?AO_TOKEN_DENOMINATION).
+-define(AO_MINT_PROP_DENOMINATOR, 1_000_000_000_000_000).
+-define(AO_ONE_DAY_MS, 86_400_000).
+-define(AO_MS_STEP_NUMERATOR, 5_492).
+-define(AO_CURRENT_MS_FIRST_DAY_MINTED, 9_962_321_008_608_663).
+%% Daily flooring means the lazy curve becomes unable to mint the final
+%% 2,107 raw units when evaluated once per day.
+-define(AO_CURRENT_MS_EFFECTIVE_CAP_DAYS, 93_762).
+-define(AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER, 2_107).
+-define(POT_QUANTITY_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(POT_REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(POT_PRICE_SCALE, 1_000_000). % 1e6
+-define(POT_ACCUMULATOR_SCALE, (?POT_REWARD_SCALE * ?POT_PRICE_SCALE)).
+
 %%% Test Helper Functions
 
 %% @doc Create a pot state with one user
@@ -116,6 +132,82 @@ mint_quantity_test() ->
     Period2 = dev_pot_math:minted_between(Period1, 100, 1, 2, 2, 3),
     ?assertEqual(87, Period1 + Period2).
 
+mint3_current_ms_day_test() ->
+    Opts = #{},
+    S0 =
+        (pot_state_empty(
+            [],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ))#{
+            <<"t-source">> => <<"timestamp">>
+        },
+    {ok, S1} = dev_pot:mint(S0, #{<<"timestamp">> => ?AO_ONE_DAY_MS}, Opts),
+    ?assertEqual(
+        ?AO_CURRENT_MS_FIRST_DAY_MINTED,
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+    ),
+    ?assertEqual(?AO_ONE_DAY_MS, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
+
+mint3_current_ms_256_year_inactive_gap_test() ->
+    Opts = #{},
+    InactiveT = 256 * 365 * ?AO_ONE_DAY_MS,
+    S0 =
+        (pot_state_empty(
+            [],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ))#{
+            <<"t-source">> => <<"timestamp">>
+        },
+    {ok, S1} = dev_pot:mint(S0, #{<<"timestamp">> => InactiveT}, Opts),
+    ?assertEqual(2, ?AO_TOTAL_SUPPLY - hb_maps:get(<<"minted">>, S1, 0, Opts)),
+    ?assertEqual(InactiveT, hb_maps:get(<<"last-drip">>, S1, 0, Opts)).
+
+mint3_current_ms_day_by_day_effective_cap_test() ->
+    FinalMinted = simulate_mint3_days(?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS),
+    ?assertEqual(
+        ?AO_CURRENT_MS_DAY_BY_DAY_FINAL_REMAINDER,
+        ?AO_TOTAL_SUPPLY - FinalMinted
+    ),
+    NextT = (?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS + 1) * ?AO_ONE_DAY_MS,
+    LastT = ?AO_CURRENT_MS_EFFECTIVE_CAP_DAYS * ?AO_ONE_DAY_MS,
+    ?assertEqual(
+        0,
+        dev_pot_math:minted_between(
+            FinalMinted,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            LastT,
+            NextT
+        )
+    ).
+
+simulate_mint3_days(Days) ->
+    simulate_mint3_days(0, 1, Days).
+
+simulate_mint3_days(Minted, Day, Days) when Day > Days ->
+    Minted;
+simulate_mint3_days(Minted, Day, Days) ->
+    LastT = (Day - 1) * ?AO_ONE_DAY_MS,
+    T = Day * ?AO_ONE_DAY_MS,
+    ToMint =
+        dev_pot_math:minted_between(
+            Minted,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            LastT,
+            T
+        ),
+    simulate_mint3_days(Minted + ToMint, Day + 1, Days).
+
+scaled_accumulator(Numerator, Denominator) ->
+    (Numerator * ?POT_ACCUMULATOR_SCALE) div Denominator.
+
 %% @doc Demonstrate minting using the proportional model and a single resource.
 single_resource_test() ->
     Addr1 = <<"addr1">>,
@@ -128,23 +220,21 @@ single_resource_test() ->
     report(S2, Opts),
     S3 = dev_pot:test_drip(S2, #{ <<"t">> => 1 }, Opts),
     report(S3, Opts),
-    % At t=1, there are 20 pot units and 50 minted to distribute, 50 div 20 = 2,
-    % so it's 20 to each address with 10 undistributed
-    ?assertEqual(20, dev_pot:balance(Addr1, S3, Opts)),
-    ?assertEqual(20, dev_pot:balance(Addr2, S3, Opts)),
+    % At t=1, there are 20 pot units and 50 minted to distribute. The scaled
+    % accumulator preserves 50 / 20 = 2.5, so each address receives 25.
+    ?assertEqual(25, dev_pot:balance(Addr1, S3, Opts)),
+    ?assertEqual(25, dev_pot:balance(Addr2, S3, Opts)),
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
-    % At t=2, there are 20 pot units and 25 + 10 minted to distribute, 35 div 20 = 1,
-    % so it's 10 to each address with 15 undistributed
-    ?assertEqual(30, dev_pot:balance(Addr1, S4, Opts)),
-    ?assertEqual(30, dev_pot:balance(Addr2, S4, Opts)),
+    % At t=2, cumulative distribution per address is floor((50 + 25) / 2) = 37.
+    ?assertEqual(37, dev_pot:balance(Addr1, S4, Opts)),
+    ?assertEqual(37, dev_pot:balance(Addr2, S4, Opts)),
     % Set Addr1 to have 75% of the total deposits.
     S5 = dev_pot:deposit(Addr1, ResourceID, 20, S4, Opts),
     report(S5, Opts),
-    % Calculate the expected balance for Addr1. At this step we mint 12 and have
-    % 15 undistributed, and there are 40 total pot units. 27 div 40 = 0, and
-    % we advance 27 undistributed.
-    NewExpectedB1 = 30,
+    % Addr1 materializes 37 before increasing its deposit. At t=3 it receives
+    % floor(12 * 30 / 40) = 9 more.
+    NewExpectedB1 = 46,
     S6 = dev_pot:test_drip(S5, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
@@ -192,13 +282,14 @@ multiple_resources_test() ->
     ?assertEqual(250, dev_pot:balance(Addr2, S3, Opts)),
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 2 }, Opts),
     report(S4, Opts),
-    % 20 pot units, 250 minted. 250 div 20 = 12. Each user: +120 yield
-    ?assertEqual(370, dev_pot:balance(Addr1, S4, Opts)),
-    ?assertEqual(370, dev_pot:balance(Addr2, S4, Opts)),
+    % 20 pot units, 250 minted. The scaled accumulator preserves 250 / 20 = 12.5.
+    % Each user receives floor(37.5) from resource1 and floor(337.5) from resource2.
+    ?assertEqual(374, dev_pot:balance(Addr1, S4, Opts)),
+    ?assertEqual(374, dev_pot:balance(Addr2, S4, Opts)),
     % Withdraw to make Addr1 have 1/10 of pot units
     S5a = dev_pot:withdraw(Addr1, Resource2, 1, S4, Opts),
     S5b = dev_pot:withdraw(Addr2, Resource1, 1, S5a, Opts),
-    NewExpectedB1 = 13 + 370,  % 135 div 10 = 13, Addr1 has 1 unit
+    NewExpectedB1 = 387,
     S6 = dev_pot:test_drip(S5b, #{ <<"t">> => 3 }, Opts),
     report(S6, Opts),
     ?assertEqual(NewExpectedB1, dev_pot:balance(Addr1, S6, Opts)),
@@ -224,10 +315,11 @@ single_resource_modified_weight_test() ->
     S3 = dev_pot:test_drip(S1, #{}, Opts),
     S4 = dev_pot:register_resource(<<"oxygen">>, 10, S3, Opts),
     report(S4, Opts),
-    % There's 10 pot units and 25 minted, alice accumulates 20.
+    % There's 10 pot units and 25 minted, and the scaled accumulator preserves
+    % 25 / 10 = 2.5 across Alice's weighted units.
     S5 = dev_pot:test_drip(S4, #{}, Opts),
     report(S5, Opts),
-    ?assertEqual(70, dev_pot:balance(Alice, S5, Opts)),
+    ?assertEqual(75, dev_pot:balance(Alice, S5, Opts)),
     ok.
 
 multiresource_modified_weight_test() ->
@@ -256,6 +348,162 @@ multiresource_modified_weight_test() ->
     ?assertEqual(62, dev_pot:balance(Alice, S5, Opts)),
     ?assertEqual(12, dev_pot:balance(Bob, S5, Opts)),
     ok.
+
+weight_authority_match_requires_multiple_signers_test() ->
+    Admin = <<"admin">>,
+    WeightA = <<"weight-a">>,
+    WeightB = <<"weight-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"weight-authority">> => [WeightA, WeightB],
+                    <<"weight-authority-match">> => 2
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => WeightA
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(100, hb_ao:get(<<"/resources/oxygen/weight">>, S1, 0, Opts)),
+    S2 =
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 200,
+                    <<"from">> => [WeightA, WeightB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(200, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)).
+
+weight_authority_can_update_quantity_scale_test() ->
+    Admin = <<"admin">>,
+    WeightAuthority = <<"weight-authority">>,
+    Alice = <<"alice">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    Weight = 100,
+    Quantity = 10,
+    AssetScale = 100_000_000, % 1e8
+    S0 =
+        (pot_state(Alice, Resource, Quantity, Weight, 100, 1, 2))#{
+            <<"mint-authority">> => Admin
+        },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => Weight,
+                    <<"from">> => Admin,
+                    <<"weight-authority">> => WeightAuthority
+                }
+            },
+            Opts
+        ),
+    InitialTWU = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+    S2 =
+        dev_pot:register(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => WeightAuthority
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(<<"/resources/oxygen/quantity-scale">>, S2, 0, Opts)
+    ),
+    ?assertEqual(Weight, hb_ao:get(<<"/resources/oxygen/weight">>, S2, 0, Opts)),
+    ?assertEqual(InitialTWU, hb_maps:get(<<"total-weighted-units">>, S2, 0, Opts)).
+
+resource_authority_required_signer_is_enforced_test() ->
+    Admin = <<"admin">>,
+    Alice = <<"alice">>,
+    ResourceA = <<"resource-a">>,
+    ResourceB = <<"resource-b">>,
+    Resource = <<"oxygen">>,
+    Opts = #{},
+    S0 = (pot_state_empty([Resource]))#{ <<"mint-authority">> => Admin },
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"weight">> => 100,
+                    <<"from">> => Admin,
+                    <<"resource-authority">> => [ResourceA, ResourceB],
+                    <<"resource-authority-required">> => [ResourceA],
+                    <<"resource-authority-match">> => 1
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertMatch(
+        {error, _},
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => ResourceB
+                }
+            },
+            Opts
+        )
+    ),
+    ?assertEqual(0, dev_pot:get_deposit(Alice, Resource, S1, Opts)),
+    S2 =
+        dev_pot:deposit(
+            S1,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource,
+                    <<"quantity">> => 10,
+                    <<"from">> => [ResourceA, ResourceB]
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S2)),
+    ?assertEqual(10, dev_pot:get_deposit(Alice, Resource, S2, Opts)).
 
 simple_delegation_test() ->
     Alice = <<"alice">>,
@@ -636,6 +884,28 @@ drip_user_with_zero_quantity_test() ->
     ?assertEqual(0, dev_pot:balance(Bob, S1_claim, Opts)),
     ?assert(dev_pot:balance(Alice, S1_claim, Opts) > 0).
 
+raw_18_decimal_price_weight_deposit_distributes_scaled_reward_test() ->
+    Alice = <<"alice">>,
+    Resource18Decimal = <<"18-decimal-asset">>,
+    Opts = #{},
+    Quantity = 10_000_000_000_000_000, % 0.01 at 1e18 scale
+    Weight = 2300 * ?POT_PRICE_SCALE, % $2300
+    S0 =
+        pot_state_empty(
+            [Resource18Decimal],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ),
+    S1 = dev_pot:register_resource(Resource18Decimal, Weight, S0, Opts),
+    S2 = dev_pot:deposit(Alice, Resource18Decimal, Quantity, S1, Opts),
+    S3 = dev_pot:test_drip(S2, #{ <<"t">> => ?AO_ONE_DAY_MS }, Opts),
+    Minted = hb_maps:get(<<"minted">>, S3, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts),
+    ?assertEqual(0, Minted div TotalWeightedUnits),
+    ?assert(hb_maps:get(<<"accumulator">>, S3, 0, Opts) > 0),
+    ?assert(dev_pot:balance(Alice, S3, Opts) > 0).
+
 %%% Minting Boundary Condition Tests
 
 minting_with_zero_proportion_test() ->
@@ -672,8 +942,8 @@ deposit_zero_amount_test() ->
     % Depositing 0 should be a no-op
     S0 = pot_state(Alice, ResourceOxygen, 10),
     % deposit/5 has guard `when Amount > 0`, so calling with 0 should not match
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         dev_pot:deposit(Alice, ResourceOxygen, 0, S0, Opts)
     ).
 
@@ -695,8 +965,8 @@ delegate_zero_amount_test() ->
     Opts = #{},
     % Delegating 0 should not match the function guard
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _}, 
         delegate(Alice, Bob, ResourceOxygen, 0, S0, Opts)
     ).
 
@@ -722,6 +992,52 @@ delegate_to_self_test() ->
         Opts
     ),
     ?assertEqual(0, Delegation).
+
+%% @doc Regression test: public `delegate/3` must use assignment time, not
+%% caller-controlled `body.t`.
+public_delegate_uses_assignment_timestamp_not_body_t_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
+    Assignment =
+        #{
+            <<"timestamp">> => 1,
+            <<"body">> =>
+                #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => ResourceOxygen,
+                    <<"quantity">> => 1,
+                    <<"t">> => 100
+                }
+        },
+    {ok, S1} = dev_pot:delegate(S0, Assignment, Opts),
+    TotalMinted =
+        hb_maps:get(<<"minted">>, S1, 0, Opts)
+        + hb_maps:get(<<"undistributed-mint">>, S1, 0, Opts),
+    ?assertEqual(1, hb_maps:get(<<"t">>, S1, undefined, Opts)),
+    ?assertEqual(1, hb_maps:get(<<"last-drip">>, S1, undefined, Opts)),
+    ?assertEqual(9, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
+    ?assertEqual(1, dev_pot:get_deposit(Bob, ResourceOxygen, S1, Opts)),
+    ?assertEqual(
+        1,
+        hb_ao:get(
+            <<
+                "/resources/",
+                ResourceOxygen/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S1,
+            0,
+            Opts
+        )
+    ),
+    ?assertEqual(50, TotalMinted).
 
 delegate_entire_balance_test() ->
     Alice = <<"alice">>,
@@ -1046,6 +1362,17 @@ drip_same_timestamp_idempotent_test() ->
     % Should not mint additional tokens
     ?assertEqual(Minted1, Minted2).
 
+drip_backward_timestamp_does_not_remint_test() ->
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    S0 = pot_state_empty([ResourceOxygen], 100, 1, 2),
+    S1 = dev_pot:test_drip(S0, #{<<"t">> => 100}, Opts),
+    Minted1 = hb_maps:get(<<"minted">>, S1, 0, Opts),
+    {ok, S2} = dev_pot:mint(S1, #{<<"timestamp">> => 50}, Opts),
+    ?assertEqual(Minted1, hb_maps:get(<<"minted">>, S2, 0, Opts)),
+    ?assertEqual(100, hb_maps:get(<<"last-drip">>, S2, 0, Opts)),
+    ?assertEqual(50, hb_maps:get(<<"t">>, S2, 0, Opts)).
+
 %%% Accumulator Precision Tests
 
 accumulator_over_many_periods_test() ->
@@ -1093,6 +1420,40 @@ very_small_deposit_yield_test() ->
     ?assert(BobBalance >= 49900),
     ?assert(BobBalance < 50000).
 
+frequent_materialization_drops_sub_raw_yield_test() ->
+    Alice = <<"alice">>,
+    ResourceDust = <<"dust-resource">>,
+    Opts = #{},
+    S0 = dev_pot:deposit(Alice, ResourceDust, 1, pot_state_empty([ResourceDust]), Opts),
+    SPassive =
+        hb_ao:set(
+            S0,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE,
+            Opts
+        ),
+    ?assertEqual(1, dev_pot:balance(Alice, SPassive, Opts)),
+    SHalf =
+        hb_ao:set(
+            S0,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE div 2,
+            Opts
+        ),
+    {ok, SMaterializedHalf} =
+        dev_pot:mint(SHalf, #{<<"subject">> => Alice}, Opts),
+    ?assertEqual(0, dev_pot:balance(Alice, SMaterializedHalf, Opts)),
+    SFull =
+        hb_ao:set(
+            SMaterializedHalf,
+            <<"/resources/", ResourceDust/binary, "/accumulator">>,
+            ?POT_ACCUMULATOR_SCALE,
+            Opts
+        ),
+    {ok, SMaterializedFull} =
+        dev_pot:mint(SFull, #{<<"subject">> => Alice}, Opts),
+    ?assertEqual(0, dev_pot:balance(Alice, SMaterializedFull, Opts)).
+
 %%% Yield Claiming Tests
 
 deposit_then_immediate_withdraw_test() ->
@@ -1125,8 +1486,8 @@ deposit_with_negative_amount_test() ->
     Opts = #{},
     % Negative deposits should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:deposit(Alice, ResourceOxygen, -10, S0, Opts)
     ).
 
@@ -1136,8 +1497,8 @@ withdraw_with_negative_amount_test() ->
     Opts = #{},
     % Negative withdrawals should be rejected
     S0 = pot_state(Alice, ResourceOxygen, 10),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         dev_pot:withdraw(Alice, ResourceOxygen, -5, S0, Opts)
     ).
 
@@ -1147,17 +1508,17 @@ deposit_non_integer_quantity_test() ->
     Opts = #{},
     % Non-integer quantities should be rejected
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, 10.5, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, ten, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(Alice, ResourceOxygen, "10", S0, Opts)).
 
 deposit_non_binary_address_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     % Non-binary addresses should fail
     S0 = pot_state_empty([ResourceOxygen]),
-    ?assertError(_, dev_pot:deposit(12345, ResourceOxygen, 10, S0, Opts)),
-    ?assertError(_, dev_pot:deposit(alice, ResourceOxygen, 10, S0, Opts)).
+    ?assertMatch({error, _}, dev_pot:deposit(12345, ResourceOxygen, 10, S0, Opts)),
+    ?assertMatch({error, _}, dev_pot:deposit(alice, ResourceOxygen, 10, S0, Opts)).
 
 delegate_negative_amount_test() ->
     Alice = <<"alice">>,
@@ -1166,8 +1527,8 @@ delegate_negative_amount_test() ->
     Opts = #{},
     % Negative delegation amount should be rejected
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
-    ?assertError(
-        function_clause, 
+    ?assertMatch(
+        {error, _},
         delegate(Alice, Bob, ResourceOxygen, -5, S0, Opts)
     ).
 
@@ -1207,12 +1568,13 @@ delegation_notice_message_format_test() ->
     ?assertEqual(5, hb_maps:get(<<"quantity">>, Notice, not_found, Opts)),
     ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, Notice, not_found, Opts)).
 
-undelegate_notice_has_negative_quantity_test() ->
+undelegate_notice_has_positive_quantity_test() ->
     Alice = <<"alice">>,
     Bob = <<"bob">>,
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
-    % Undelegation notice should have negative or zero quantity
+    % Undelegation notice should encode direction via `action', with a
+    % positive quantity so downstream `withdraw` handlers can accept it.
     S0 = pot_state_multi(ResourceOxygen, [{Alice, 10}, {Bob, 0}]),
     S0WithOutbox = S0#{ <<"results">> => #{ <<"outbox">> => [] } },
     S1 = delegate(Alice, Bob, ResourceOxygen, 5, S0WithOutbox, Opts),
@@ -1221,8 +1583,11 @@ undelegate_notice_has_negative_quantity_test() ->
     ?assertEqual(2, length(Outbox)),
     % Outbox is newest first, so undelegate notice is first
     [UndelegateNotice, _] = Outbox,
-    Quantity = hb_maps:get(<<"quantity">>, UndelegateNotice, Opts),
-    ?assert(Quantity =< 0).
+    ?assertEqual(Bob, hb_maps:get(<<"target">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(<<"withdraw">>, hb_maps:get(<<"action">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(Alice, hb_maps:get(<<"address">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(5, hb_maps:get(<<"quantity">>, UndelegateNotice, not_found, Opts)),
+    ?assertEqual(ResourceOxygen, hb_maps:get(<<"resource">>, UndelegateNotice, not_found, Opts)).
 
 multiple_delegations_outbox_order_test() ->
     Alice = <<"alice">>,
@@ -1241,6 +1606,145 @@ multiple_delegations_outbox_order_test() ->
     [Notice1, Notice2] = Outbox,
     ?assertEqual(Charlie, hb_maps:get(<<"target">>, Notice1, not_found, Opts)),
     ?assertEqual(Bob, hb_maps:get(<<"target">>, Notice2, not_found, Opts)).
+
+notify_rejects_non_parent_source_test() ->
+    Parent = <<"parent">>,
+    Mallory = <<"mallory">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Mallory,
+                    <<"x-action">> => <<"register">>,
+                    <<"x-resource">> => ResourceOxygen,
+                    <<"x-weight">> => 2
+                }
+        },
+    ?assertMatch(
+        {error, <<"Invalid notification source">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
+
+notify_rejects_non_register_forward_action_test() ->
+    Parent = <<"parent">>,
+    ResourceOxygen = <<"oxygen">>,
+    Opts = #{},
+    State = (pot_state_empty([ResourceOxygen]))#{ <<"parent">> => Parent },
+    Assignment =
+        #{
+            <<"body">> =>
+                #{
+                    <<"from">> => Parent,
+                    <<"x-action">> => <<"deposit">>
+                }
+        },
+    ?assertMatch(
+        {error, <<"Unsupported notification action">>},
+        dev_pot:notify(State, Assignment, Opts)
+    ).
+
+quantity_scale_register_update_and_notify_test() ->
+    Admin = <<"admin">>,
+    Parent = <<"parent">>,
+    Alice = <<"alice">>,
+    Resource = <<"scale-config-resource">>,
+    Opts = #{},
+    Weight = 7,
+    Quantity = 10,
+    AssetScale = 100_000_000, % 1e8
+    S0 =
+        (pot_state(Alice, Resource, Quantity, Weight, 100, 1, 2))#{
+            <<"mint-authority">> => Admin
+        },
+    InitialTWU = hb_maps:get(<<"total-weighted-units">>, S0, 0, Opts),
+    S1 =
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Admin
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S1)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(<<"/resources/", Resource/binary, "/quantity-scale">>, S1, 0, Opts)
+    ),
+    ?assertEqual(Weight, hb_ao:get(<<"/resources/", Resource/binary, "/weight">>, S1, 0, Opts)),
+    ?assertEqual(InitialTWU, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)),
+    ChildState = (pot_state_empty([Resource]))#{ <<"parent">> => Parent },
+    ForwardedRegister =
+        dev_process_outbox:original_from_forwarded(
+            #{
+                <<"x-action">> => <<"register">>,
+                <<"x-resource">> => Resource,
+                <<"x-weight">> => Weight,
+                <<"x-quantity-scale">> => AssetScale
+            },
+            Opts
+        ),
+    ChildAfterNotify =
+        dev_pot:register(
+            ChildState,
+            #{
+                <<"type">> => <<"notification">>,
+                <<"body">> =>
+                    maps:merge(
+                        ForwardedRegister,
+                        #{
+                            <<"from">> => Parent,
+                            <<"resource-authority">> => Parent,
+                            <<"weight-authority">> => Parent
+                        }
+                    )
+            },
+            Opts
+        ),
+    ?assert(is_map(ChildAfterNotify)),
+    ?assertEqual(
+        AssetScale,
+        hb_ao:get(
+            <<"/resources/", Resource/binary, "/quantity-scale">>,
+            ChildAfterNotify,
+            0,
+            Opts
+        )
+    ),
+    ?assertEqual(
+        Weight,
+        hb_ao:get(<<"/resources/", Resource/binary, "/weight">>, ChildAfterNotify, 0, Opts)
+    ).
+
+quantity_scale_above_pot_scale_is_rejected_test() ->
+    Admin = <<"admin">>,
+    Resource = <<"scale-too-large-resource">>,
+    Opts = #{},
+    TooLargeScale = ?POT_QUANTITY_SCALE * 10,
+    S0 =
+        (pot_state_empty([Resource]))#{
+            <<"mint-authority">> => Admin
+        },
+    ?assertMatch(
+        {error, <<"QuantityScale must be a positive integer <= POT_QUANTITY_SCALE.">>},
+        dev_pot:register(
+            S0,
+            #{
+                <<"body">> => #{
+                    <<"resource">> => Resource,
+                    <<"quantity-scale">> => TooLargeScale,
+                    <<"from">> => Admin
+                }
+            },
+            Opts
+        )
+    ).
 
 %%% Empty/Zero State Tests
 
@@ -1342,6 +1846,459 @@ very_large_deposit_test() ->
     ?assertEqual(LargeAmount, dev_pot:get_deposit(Alice, ResourceOxygen, S1, Opts)),
     ?assertEqual(LargeAmount, hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts)).
 
+quantity_scale_normalizes_very_large_deposit_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    ResourceLarge8Decimal = <<"large-8-decimal-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    FullAssetSupply = 21_000_000 * AssetScale, % 21M supply
+    LargePriceWeight = 1_000_000 * ?POT_PRICE_SCALE, % $1M
+    NormalizedFullAssetSupply = 21_000_000 * ?POT_QUANTITY_SCALE,
+    NormalizedOneAsset = ?POT_QUANTITY_SCALE,
+    S0 = pot_state_empty([ResourceLarge8Decimal]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/large-8-decimal-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 =
+        dev_pot:register_resource(
+            ResourceLarge8Decimal,
+            LargePriceWeight,
+            AssetScale,
+            S1,
+            Opts
+        ),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceLarge8Decimal,
+                    <<"quantity">> => FullAssetSupply,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertEqual(
+        NormalizedFullAssetSupply,
+        dev_pot:get_deposit(Alice, ResourceLarge8Decimal, S3, Opts)
+    ),
+    ?assertEqual(
+        NormalizedFullAssetSupply * LargePriceWeight,
+        hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts)
+    ),
+    S4 =
+        dev_pot:withdraw(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceLarge8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S4)),
+    ?assertEqual(
+        NormalizedFullAssetSupply - NormalizedOneAsset,
+        dev_pot:get_deposit(Alice, ResourceLarge8Decimal, S4, Opts)
+    ),
+    ?assertEqual(
+        (NormalizedFullAssetSupply - NormalizedOneAsset) * LargePriceWeight,
+        hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts)
+    ).
+
+inline_quantity_scale_is_rejected_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    Resource8Decimal = <<"inline-scale-rejected-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    S0 = pot_state_empty([Resource8Decimal]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/inline-scale-rejected-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 =
+        dev_pot:register_resource(
+            Resource8Decimal,
+            ?POT_PRICE_SCALE,
+            AssetScale,
+            S1,
+            Opts
+        ),
+    ?assertMatch(
+        {error, <<"quantity-scale must be configured on the resource.">>},
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        )
+    ),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertMatch(
+        {error, <<"quantity-scale must be configured on the resource.">>},
+        dev_pot:withdraw(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => AssetScale,
+                    <<"quantity-scale">> => AssetScale,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        )
+    ).
+
+quantity_scale_delegation_uses_normalized_units_test() ->
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    Oracle = <<"oracle">>,
+    Resource8Decimal = <<"delegated-8-decimal-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    RawTenAssets = 10 * AssetScale,
+    NormalizedTenAssets = 10 * ?POT_QUANTITY_SCALE,
+    NormalizedThreeAssets = 3 * ?POT_QUANTITY_SCALE,
+    NormalizedPointOneAsset = ?POT_QUANTITY_SCALE div 10,
+    NormalizedOneAsset = ?POT_QUANTITY_SCALE,
+    S0 = pot_state_empty([Resource8Decimal]),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/delegated-8-decimal-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 =
+        dev_pot:register_resource(
+            Resource8Decimal,
+            ?POT_PRICE_SCALE,
+            AssetScale,
+            S1,
+            Opts
+        ),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => RawTenAssets,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S3, Opts)
+    ),
+    {ok, S4} =
+        dev_pot:delegate(
+            S3,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedThreeAssets
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets - NormalizedThreeAssets,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S4, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S4, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S4,
+            0,
+            Opts
+        )
+    ),
+    {ok, S5} =
+        dev_pot:delegate(
+            S4,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedPointOneAsset
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets - NormalizedThreeAssets - NormalizedPointOneAsset,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S5, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S5, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S5,
+            0,
+            Opts
+        )
+    ),
+    {ok, S6} =
+        dev_pot:undelegate(
+            S5,
+            #{
+                <<"body">> => #{
+                    <<"from">> => Alice,
+                    <<"address">> => Bob,
+                    <<"resource">> => Resource8Decimal,
+                    <<"quantity">> => NormalizedOneAsset
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        NormalizedTenAssets
+            - NormalizedThreeAssets
+            - NormalizedPointOneAsset
+            + NormalizedOneAsset,
+        dev_pot:get_deposit(Alice, Resource8Decimal, S6, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset - NormalizedOneAsset,
+        dev_pot:get_deposit(Bob, Resource8Decimal, S6, Opts)
+    ),
+    ?assertEqual(
+        NormalizedThreeAssets + NormalizedPointOneAsset - NormalizedOneAsset,
+        hb_ao:get(
+            <<
+                "/resources/",
+                Resource8Decimal/binary,
+                "/deposits/",
+                Alice/binary,
+                "/delegations/",
+                Bob/binary
+            >>,
+            S6,
+            0,
+            Opts
+        )
+    ).
+
+sub_unit_price_8_decimal_asset_distributes_reward_test() ->
+    Alice = <<"alice">>,
+    Oracle = <<"oracle">>,
+    ResourceSubUnit8Decimal = <<"sub-unit-8-decimal-asset">>,
+    Opts = #{},
+    AssetScale = 100_000_000, % 1e8
+    LargeSupply = 150_000_000_000 * AssetScale, % 150B supply
+    SubUnitPriceWeight = 1_500, % $0.0015
+    NormalizedLargeSupply = 150_000_000_000 * ?POT_QUANTITY_SCALE,
+    S0 =
+        pot_state_empty(
+            [ResourceSubUnit8Decimal],
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR
+        ),
+    S1 =
+        hb_ao:set(
+            S0,
+            <<"/resources/sub-unit-8-decimal-asset/authority">>,
+            [Oracle],
+            Opts
+        ),
+    S2 =
+        dev_pot:register_resource(
+            ResourceSubUnit8Decimal,
+            SubUnitPriceWeight,
+            AssetScale,
+            S1,
+            Opts
+        ),
+    S3 =
+        dev_pot:deposit(
+            S2,
+            #{
+                <<"body">> => #{
+                    <<"address">> => Alice,
+                    <<"resource">> => ResourceSubUnit8Decimal,
+                    <<"quantity">> => LargeSupply,
+                    <<"from">> => Oracle
+                }
+            },
+            Opts
+        ),
+    ?assert(is_map(S3)),
+    ?assertEqual(
+        NormalizedLargeSupply,
+        dev_pot:get_deposit(Alice, ResourceSubUnit8Decimal, S3, Opts)
+    ),
+    ?assertEqual(
+        NormalizedLargeSupply * SubUnitPriceWeight,
+        hb_maps:get(<<"total-weighted-units">>, S3, 0, Opts)
+    ),
+    S4 = dev_pot:test_drip(S3, #{ <<"t">> => ?AO_ONE_DAY_MS }, Opts),
+    Minted = hb_maps:get(<<"minted">>, S4, 0, Opts),
+    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S4, 0, Opts),
+    ?assertEqual(0, Minted div TotalWeightedUnits),
+    ?assert(hb_maps:get(<<"accumulator">>, S4, 0, Opts) > 0),
+    ?assert(dev_pot:balance(Alice, S4, Opts) > 0).
+
+ten_million_user_billion_tvl_aggregate_math_test() ->
+    %% This intentionally does not allocate 10M deposit records. It validates
+    %% the equivalent aggregate TWU and per-user arithmetic for an even split.
+    Users = 10_000_000,
+
+    %% Scenario:
+    %% - 1M units of a high-price 18-decimal asset at $2,300.
+    %% - 5B units of stable asset A at $1.
+    %% - 2B units of stable asset B at $1.
+    %% All quantities are normalized to POT_QUANTITY_SCALE and prices use
+    %% POT_PRICE_SCALE, so the aggregate TVL is $9.3B:
+    %%   (1M * 2300) + 5B + 2B = 9.3B USD.
+    HighPriceTotalQty = 1_000_000 * ?POT_QUANTITY_SCALE,
+    StableATotalQty = 5_000_000_000 * ?POT_QUANTITY_SCALE,
+    StableBTotalQty = 2_000_000_000 * ?POT_QUANTITY_SCALE,
+    HighPriceWeight = 2_300 * ?POT_PRICE_SCALE,
+    StableWeight = ?POT_PRICE_SCALE,
+    ExpectedTotalWeightedUnits = 9_300_000_000 * ?POT_QUANTITY_SCALE * ?POT_PRICE_SCALE,
+    TotalWeightedUnits =
+        (HighPriceTotalQty * HighPriceWeight)
+            + (StableATotalQty * StableWeight)
+            + (StableBTotalQty * StableWeight),
+
+    %% First-day AO mint under the millisecond curve. This is the same checkpoint
+    %% asserted in mint3_current_ms_day_test/0.
+    ToMint =
+        dev_pot_math:minted_between(
+            0,
+            ?AO_TOTAL_SUPPLY,
+            ?AO_MS_STEP_NUMERATOR,
+            ?AO_MINT_PROP_DENOMINATOR,
+            0,
+            ?AO_ONE_DAY_MS
+        ),
+    ?assertEqual(?AO_CURRENT_MS_FIRST_DAY_MINTED, ToMint),
+    ?assertEqual(ExpectedTotalWeightedUnits, TotalWeightedUnits),
+
+    %% GlobalAcc is the scaled per-weighted-unit reward delta for the day:
+    %%   floor(ToMint * POT_ACCUMULATOR_SCALE / TotalWeightedUnits).
+    %% The non-zero remainder proves sub-accumulator dust is carried forward
+    %% globally instead of being treated as raw AO supply.
+    {GlobalAcc, 0, AccumulatorRemainder} =
+        dev_pot_math:drip_global(0, ToMint, 0, TotalWeightedUnits),
+    ?assertEqual(1_071_217, GlobalAcc),
+    ?assert(AccumulatorRemainder > 0),
+
+    %% Even split across 10M users:
+    %% - each user gets 0.1 high-price asset
+    %% - each user gets 500 stable A
+    %% - each user gets 200 stable B
+    HighPriceUserQty = HighPriceTotalQty div Users,
+    StableAUserQty = StableATotalQty div Users,
+    StableBUserQty = StableBTotalQty div Users,
+
+    %% Resource accumulators multiply the global accumulator by the resource's
+    %% price weight. User yield then converts the scaled accumulator back to raw
+    %% AO units with drip_user/3.
+    HighPriceResAcc =
+        dev_pot_math:drip_resource(0, GlobalAcc, 0, HighPriceWeight),
+    StableResAcc =
+        dev_pot_math:drip_resource(0, GlobalAcc, 0, StableWeight),
+    HighPriceYield = dev_pot_math:drip_user(HighPriceResAcc, 0, HighPriceUserQty),
+    StableAYield = dev_pot_math:drip_user(StableResAcc, 0, StableAUserQty),
+    StableBYield = dev_pot_math:drip_user(StableResAcc, 0, StableBUserQty),
+    ?assertEqual(246_379_910, HighPriceYield),
+    ?assertEqual(535_608_500, StableAYield),
+    ?assertEqual(214_243_400, StableBYield),
+
+    %% Aggregate all representative users and verify no inflation. The gap below
+    %% ToMint is raw AO dust/rounding and remains below one AO.
+    PerUserYield = HighPriceYield + StableAYield + StableBYield,
+    AggregateUserYield = PerUserYield * Users,
+    ?assertEqual(996_231_810, PerUserYield),
+    ?assertEqual(9_962_318_100_000_000, AggregateUserYield),
+    ?assert(AggregateUserYield =< ToMint),
+    ?assert(ToMint - AggregateUserYield < ?AO_TOKEN_DENOMINATION),
+
+    %% Tiny user edge case: a $0.10 stable position (deposit) passively accrues raw AO over
+    %% the full day, but if materialized at each single global accumulator tick
+    %% it floors to zero each time. This documents the current no per-user
+    %% remainder tradeoff.
+    TinyUserQty = ?POT_QUANTITY_SCALE div 10,
+    TinyPassiveYield = dev_pot_math:drip_user(StableResAcc, 0, TinyUserQty),
+    TinySingleTickYield =
+        dev_pot_math:drip_user(
+            dev_pot_math:drip_resource(0, 1, 0, StableWeight),
+            0,
+            TinyUserQty
+        ),
+    ?assertEqual(107_121, TinyPassiveYield),
+    ?assertEqual(0, TinySingleTickYield),
+    ?assertEqual(1_071_210_000_000, TinyPassiveYield * Users).
+
 very_large_minted_amount_test() ->
     Alice = <<"alice">>,
     ResourceOxygen = <<"oxygen">>,
@@ -1402,89 +2359,95 @@ mint_distribution_test() ->
     ResourceOxygen = <<"oxygen">>,
     Opts = #{},
     S0 = pot_state(Alice, ResourceOxygen, 20),
-    % Tick 0: mint = 50, pot units = 20, accumulate 2 with an undistributed mint of 10
+    % Tick 0: mint = 50, pot units = 20, accumulate 2.5 scaled with no
+    % undistributed mint.
     S1 = dev_pot:test_drip(S0, #{ <<"t">> => 1 }, Opts),
     ?assertEqual(
         50,
         hb_maps:get(<<"minted">>, S1, not_found, Opts)
     ),
     ?assertEqual(
-        10,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S1, not_found, Opts)
     ),
     ?assertEqual(
-        2,
+        scaled_accumulator(5, 2),
         hb_maps:get(<<"accumulator">>, S1, not_found, Opts)
     ),
-    % Tick 1: mint = 25 + 10, pot units = 20, accumulate 1 with an undistributed mint of 15
+    % Tick 1: mint = 25, pot units = 20, accumulate 1.25 scaled with no
+    % undistributed mint.
     S2 = dev_pot:test_drip(S1, #{ <<"t">> => 2 }, Opts),
     ?assertEqual(
         75,
         hb_maps:get(<<"minted">>, S2, not_found, Opts)
     ),
     ?assertEqual(
-        15,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S2, not_found, Opts)
     ),
     ?assertEqual(
-        3,
+        scaled_accumulator(15, 4),
         hb_maps:get(<<"accumulator">>, S2, not_found, Opts)
     ),
-    % Tick 3: mint = 12 + 15, pot units = 20, accumulate 1 with an undistributed mint of 7
+    % Tick 3: mint = 12, pot units = 20, accumulate 0.6 scaled with no
+    % undistributed mint.
     S3 = dev_pot:test_drip(S2, #{ <<"t">> => 3 }, Opts),
     ?assertEqual(
         87,
         hb_maps:get(<<"minted">>, S3, not_found, Opts)
     ),
     ?assertEqual(
-        7,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S3, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        scaled_accumulator(87, 20),
         hb_maps:get(<<"accumulator">>, S3, not_found, Opts)
     ),
-    % Tick 4: mint = 6 + 7, pot units = 20, accumulate 0 with an undistributed mint of 13
+    % Tick 4: mint = 6, pot units = 20, accumulate 0.3 scaled with no
+    % undistributed mint.
     S4 = dev_pot:test_drip(S3, #{ <<"t">> => 4 }, Opts),
     ?assertEqual(
         93,
         hb_maps:get(<<"minted">>, S4, not_found, Opts)
     ),
     ?assertEqual(
-        13,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S4, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        scaled_accumulator(93, 20),
         hb_maps:get(<<"accumulator">>, S4, not_found, Opts)
     ),
-    % Tick 5: mint = 3 + 13, pot units = 20, accumulate 0 with an undistributed mint of 16
+    % Tick 5: mint = 3, pot units = 20, accumulate 0.15 scaled with no
+    % undistributed mint.
     S5 = dev_pot:test_drip(S4, #{ <<"t">> => 5 }, Opts),
     ?assertEqual(
         96,
         hb_maps:get(<<"minted">>, S5, not_found, Opts)
     ),
     ?assertEqual(
-        16,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S5, not_found, Opts)
     ),
     ?assertEqual(
-        4,
+        scaled_accumulator(24, 5),
         hb_maps:get(<<"accumulator">>, S5, not_found, Opts)
     ),
     S6 = dev_pot:withdraw(Alice, ResourceOxygen, 10, S5, Opts),
-    % Tick 6: mint 2 + 16, pot units = 10, accumulate 1 with an undistributed mint of 8
+    % Tick 6: mint 2, pot units = 10, accumulate 0.2 scaled with no
+    % undistributed mint.
     S7 = dev_pot:test_drip(S6, #{ <<"t">> => 6 }, Opts),
     ?assertEqual(
         98,
         hb_maps:get(<<"minted">>, S7, not_found, Opts)
     ),
     ?assertEqual(
-        8,
+        0,
         hb_maps:get(<<"undistributed-mint">>, S7, not_found, Opts)
     ),
     ?assertEqual(
-        5,
+        scaled_accumulator(5, 1),
         hb_maps:get(<<"accumulator">>, S7, not_found, Opts)
     ).
 

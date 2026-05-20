@@ -15,6 +15,7 @@
 %%% 4 children!)
 -module(dev_trie).
 -export([info/0, keys/2, set/3, get/3, get/4]).
+-export([reserved_keys/0, is_reserved_key/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -34,14 +35,12 @@ keys(Trie, Opts) ->
 
 collect_keys(TrieNode, Prefix, Opts, Acc) ->
     EdgeLabels = edges(TrieNode, Opts),
-    IsLeafTerminal = length(EdgeLabels) =:= 0,
     NodeValue = hb_maps:find(<<"node-value">>, TrieNode, Opts),
-    IsInteriorTerminal =
+    IsTerminal =
         case NodeValue of
             error -> false;
             _ -> true
         end,
-    IsTerminal = IsLeafTerminal orelse IsInteriorTerminal,
     NewAcc =
         case IsTerminal of
             true -> [Prefix|Acc];
@@ -304,6 +303,17 @@ edges(TrieNode, Opts) ->
         Opts
     ),
     hb_maps:keys(Filtered).
+%% @doc Returns a list of the modules's edge labels for trie node.
+reserved_keys() ->
+    [   <<"node-value">>,
+        <<"device">>,
+        <<"commitments">>,
+        <<"priv">>,
+        <<"hashpath">>
+    ].
+%% @doc Checks if the passed Key is a reserved dev_trie trie node label.
+is_reserved_key(Key) ->
+    lists:member(Key, reserved_keys()).
 
 %% @doc Compute the longest common binary prefix of A and B, comparing chunks of
 %% N bits.
@@ -511,6 +521,10 @@ basic_key_collection_test() ->
         ],
         keys(Trie, #{})
     ).
+
+initial_balances_trie_has_no_keys_test() ->
+    Trie = #{<<"device">> => <<"trie@1.0">>},
+    ?assertEqual([], keys(Trie, #{})).
 
 verify_test() ->
     Trie = hb_ao:set(

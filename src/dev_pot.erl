@@ -23,10 +23,29 @@
 %%% their own mints using the same `pot` functionality as the parent, depositors
 %%% in the original process can earn their yield in the form of `child` mints.
 %%% Each mint can operate asynchronously and in real-time.
+%%%
+%%% Authority model:
+%%% - `deposit` / `withdraw` are authorized per resource by that resource's
+%%%   `authority` security policy.
+%%% - `weight` and `quantity-scale` updates may be
+%%%    delegated per resource via `weight-authority`.
+%%% - resource config changes (`authority*`, `weight-authority*`) remain
+%%%   guarded by the pot-wide `mint-authority` policy, or by the configured
+%%%   `parent` when the pot is acting as a child mint.
+%%% - child mints trust their direct `parent` process for inherited resource
+%%%   config and writes; forwarded parent `register` notifications set both
+%%%   `resource-authority` and `weight-authority` to that parent process.
+%%%
+%%% Quantity model:
+%%% - `deposit` / `withdraw` request bodies are normalized from source-token raw
+%%%   units using the resource's configured `quantity-scale`. If unset, the
+%%%   quantity is interpreted as already normalized pot units.
+%%% - direct `deposit/5` and `withdraw/5` calls already expect normalized pot
+%%%   units.
+%%% - `delegate` / `undelegate` always move existing normalized pot units and do
+%%%   not apply `quantity-scale`.
 %%% 
-%%% TODO:
-%%% - Add `secure-set` (set guarded by address) for resource-weights and 
-%%%   supported resources.
+%%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -35,10 +54,25 @@
 -export([register/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
--export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4, register_resource/5]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
+%%% `~pot@1.0` dev_token:validate_address custom denylist
+-define(RESERVED_KEYS, [
+    <<"balances">>,
+    <<"resources">>,
+    <<"users">>,
+    <<"total-supply">>,
+    <<"minted">>,
+    <<"accumulator">>,
+    <<"last-drip">>,
+    <<"t">>,
+    <<"total-weighted-units">>,
+    <<"undistributed-mint">>,
+    <<"accumulator-remainder">>
+]).
+-define(POT_QUANTITY_SCALE, 1_000_000_000_000_000_000). % 1e18
 
 %%% Pot Model Functions.
 
@@ -96,9 +130,10 @@ drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, Opts)
     );
 drip_global(S = #{ <<"t">> := T, <<"last-drip">> := Last }, _) when T == Last -> S;
 drip_global(S, Opts) ->
-    T = hb_ao:get(<<"t">>, S, 0, Opts),
+    RawT = hb_ao:get(<<"t">>, S, 0, Opts),
     AlreadyMinted = hb_maps:get(<<"minted">>, S, 0, Opts),
     LastT = hb_maps:get(<<"last-drip">>, S, 0, Opts),
+    T = max(RawT, LastT),
     MintCap = hb_ao:get(<<"mint-cap">>, S, 0, Opts),
     TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S, 0, Opts),
     GlobalAcc = hb_maps:get(<<"accumulator">>, S, 0, Opts),
@@ -114,20 +149,24 @@ drip_global(S, Opts) ->
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    AccumulatorRemainder =
+        hb_maps:get(<<"accumulator-remainder">>, S, 0, Opts),
     ?event(debug_test,
         {drip_global,
             {t, T},
             {last_drip, LastT},
             {minted, AlreadyMinted},
             {undistributed_mint, UndistributedMint},
+            {accumulator_remainder, AccumulatorRemainder},
             {total_weighted_units, TotalWeightedUnits},
             {global_accumulator, GlobalAcc},
             {to_mint, ToMint}
         }, Opts),
-    {NewGlobalAcc, NewUndistributedMint} =
+    {NewGlobalAcc, NewUndistributedMint, NewAccumulatorRemainder} =
         dev_pot_math:drip_global(
             GlobalAcc,
             ToMint + UndistributedMint,
+            AccumulatorRemainder,
             TotalWeightedUnits
         ),
     ?event(debug_test,
@@ -143,7 +182,8 @@ drip_global(S, Opts) ->
             <<"accumulator">> => NewGlobalAcc,
             <<"last-drip">> => T,
             <<"minted">> => AlreadyMinted + ToMint,
-            <<"undistributed-mint">> => NewUndistributedMint
+            <<"undistributed-mint">> => NewUndistributedMint,
+            <<"accumulator-remainder">> => NewAccumulatorRemainder
         },
         Opts
     ).
@@ -256,7 +296,7 @@ maybe_initialize_subscriptions(Base, Req, Opts) ->
     end.
 
 %% @doc If the process has a `parent' mint set, send a subscription request to
-%% the parent process for all `set-weight' messages.
+%% the parent process for all `register' messages.
 initialize_subscriptions(Base, _Req, Opts) ->
     case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
         not_found -> Base;
@@ -272,48 +312,58 @@ initialize_subscriptions(Base, _Req, Opts) ->
 %% @doc Get the balance of a specific address in the pot by combining the base
 %% balance with the unclaimed yield.
 balance(Addr, S, Opts) ->
-    hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}, Opts), 0, Opts)
-        + unclaimed_yield(Addr, S, Opts).
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        hb_maps:get(Addr, hb_maps:get(<<"balances">>, S, #{}, Opts), 0, Opts)
+            + unclaimed_yield(Addr, S, Opts)
+    end.
 
 %% @doc Return the unclaimed yield across all resources for a specific address.
 unclaimed_yield(Addr, S, Opts) ->
-    ResourceIDs =
-        hb_maps:keys(
-            hb_private:reset(
-                hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        ResourceIDs =
+            hb_maps:keys(
+                hb_private:reset(
+                    hb_ao:get(<<"users/", Addr/binary, "/deposits">>, S, #{}, Opts)
+                ),
+                Opts
             ),
-            Opts
-        ),
-    lists:sum(
-        lists:map(
-            fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
-            ResourceIDs
+        lists:sum(
+            lists:map(
+                fun(ResID) -> unclaimed_yield(Addr, ResID, S, Opts) end,
+                ResourceIDs
+            )
         )
-    ).
+end.
 
 %% @doc Return the unclaimed yield for a specific address in a specific resource.
 unclaimed_yield(Addr, ResourceID, UndrippedS, Opts) ->
-    GlobalDrippedS = drip_global(UndrippedS, Opts),
-    ?event(debug_pot,
-        {unclaimed_yield,
-            {resource_id, ResourceID},
-            {global_dripped_state, GlobalDrippedS},
-            {undripped_state, UndrippedS}
-        },
-        Opts
-    ),
-    S = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
-    ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
-    Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
-    case hb_maps:find(Addr, Deposits) of
-        error -> 0;
-        {ok, #{
-                <<"quantity">> := Qty,
-                <<"last-resource-accumulator">> := LastResourceAcc
-            }} ->
-            ?no_prod("Remove all floating point arithmetic."),
-            dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        GlobalDrippedS = drip_global(UndrippedS, Opts),
+        ?event(debug_pot,
+            {unclaimed_yield,
+                {resource_id, ResourceID},
+                {global_dripped_state, GlobalDrippedS},
+                {undripped_state, UndrippedS}
+            },
+            Opts
+        ),
+        S = drip_resource(ResourceID, GlobalDrippedS, Opts),
+        Res = hb_ao:get(<<"resources/", ResourceID/binary>>, S, #{}, Opts),
+        ResourceAcc = hb_maps:get(<<"accumulator">>, Res, 0, Opts),
+        Deposits = hb_maps:get(<<"deposits">>, Res, #{}, Opts),
+        case hb_maps:find(Addr, Deposits) of
+            error -> 0;
+            {ok, #{
+                    <<"quantity">> := Qty,
+                    <<"last-resource-accumulator">> := LastResourceAcc
+                }} ->
+                ?no_prod("Remove all floating point arithmetic."),
+                dev_pot_math:drip_user(ResourceAcc, LastResourceAcc, Qty)
+            end
     end.
 
 %% @doc Deposit a quantity of a resource for a given address.
@@ -322,16 +372,21 @@ deposit(State, Assignment, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(State, Assignment, Opts),
-        Body = hb_maps:get(<<"body">>, Assignment),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{<<"t">> := NewT},
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
+        {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
--spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map().
+-spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
 deposit(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts).
+    modify_deposit_state(Addr, ResourceID, Amount, S0, Opts);
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Deposit amount must be positive Integer.">>};
+deposit(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Deposit amount must be a non-zero positive Integer.">>};
+deposit(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Deposit amount must be Integer.">>}.
 
 %% @doc Withdraw a quantity of a resource for a given address. If the quantity
 %% is insufficient, we'll revoke delegations until the withdrawal can be completed.
@@ -340,23 +395,33 @@ withdraw(Base, Req, Opts) ->
     maybe
         {ok, {Address, ResourceID, Amount}} ?=
             parse_deposit_modification(Base, Req, Opts),
-        Body = hb_maps:get(<<"body">>, Req),
-        NewT = hb_maps:get(<<"t">>, Body, hb_maps:get(<<"t">>, Base)),
-        BaseWithT = Base#{<<"t">> := NewT},
+        BaseWithT = ensure_initialized(Base, Req, Opts),
         withdraw(Address, ResourceID, Amount, BaseWithT, Opts)
     end.
 -spec withdraw(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
 withdraw(Addr, ResourceID, Amount, S0, Opts) when is_integer(Amount), Amount > 0 ->
-    ExistingDeposit = get_deposit(Addr, ResourceID, S0, Opts),
     maybe
+        ExistingDepositOrError = get_deposit(Addr, ResourceID, S0, Opts),
+        true ?= is_integer(ExistingDepositOrError) orelse ExistingDepositOrError,
+        ExistingDeposit = ExistingDepositOrError,
         {ok, S1} ?= liquidate(Addr, ResourceID, Amount - ExistingDeposit, S0, Opts),
         modify_deposit_state(Addr, ResourceID, -Amount, S1, Opts)
     else
         {error, _} = WithdrawErr -> WithdrawErr
-    end.
+    end;
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error,  <<"Withdraw amount must be a positive Integer.">>};
+withdraw(_, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Withdraw amount must be a non-zero positive Integer.">>};
+withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
+    {error, <<"Withdraw amount must be an Integer.">>}.
+
 %% @doc Parse a request to modify a deposit and verify that it originates from
-%% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
-%% if the request is valid, otherwise returns `{error, Reason}'.
+%% the valid resource authority. Returns `{ok, {Address, ResourceID,
+%% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
+%% Reason}'. `quantity-scale` is resource configuration only. Requests that
+%% carry it inline are rejected; otherwise the resource's configured scale is
+%% used, falling back to already-normalized pot units (POT_QUANTITY_SCALE).
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -367,6 +432,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No `address' provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(Address, ?RESERVED_KEYS),
         {ok, ResourceID} ?=
             hb_maps:find(
                 <<"resource">>,
@@ -374,6 +440,7 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 <<"No resource ID provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         {ok, Amount} ?=
             hb_maps:find(
                 <<"quantity">>,
@@ -382,10 +449,24 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 Opts
             ),
         true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
-        {ok, {Address, ResourceID, Amount}}
+        no_inline_quantity_scale ?=
+            case hb_maps:find(<<"quantity-scale">>, Req, Opts) of
+                error -> no_inline_quantity_scale;
+                {ok, _} -> inline_quantity_scale
+            end,
+        Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, Base, #{}, Opts),
+        QuantityScale = hb_maps:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
+        {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
+        {ok, {Address, ResourceID, NormalizedAmount}}
+    else
+        inline_quantity_scale ->
+            {error, <<"quantity-scale must be configured on the resource.">>};
+        Other -> Other
     end.
 
-%% @doc Verify a request against the authority for a specific resource.
+%% @doc Verify a request against the resource-local `authority` policy for a
+%% specific resource. In prod mode, requests fail closed if the resource has no
+%% explicit authority policy configured.
 verify_resource_authority(ResourceID, Base, Req, Opts) ->
     maybe
         {ok, From} ?=
@@ -395,25 +476,35 @@ verify_resource_authority(ResourceID, Base, Req, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
-        {ok, Resources} =
+        {ok, Resources} ?=
             hb_maps:find(
                 <<"resources">>,
                 Base,
                 <<"No resources found in mint state.">>,
                 Opts
             ),
-        {ok, Resource} = 
+        {ok, Resource} ?= 
             hb_maps:find(
                 ResourceID,
                 Resources,
                 <<"Requested resource not initialized in mint state.">>,
                 Opts
             ),
-        true ?= dev_security:validate(<<"authority">>, Resource, Req, From, Opts)
+        true ?=
+            dev_security:validate(
+                <<"authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
     end.
 
-%% @doc Interpret `notify' messages as if they were direct deposit/withdrawal
-%% requests, if they are sent `from' our `parent' mint process (if set).
+%% @doc Interpret forwarded `register' notifications from the configured
+%% `parent' mint process. Notifications from any other sender, or notifications
+%% forwarding a non-`register' action, are rejected. Child mints trust their
+%% direct parent for inherited resource config, so forwarded notifications set
+%% both `resource-authority' and `weight-authority' to the parent process ID.
 notify(State, Assignment, Opts) ->
     maybe
         {ok, Req} ?=
@@ -430,6 +521,16 @@ notify(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        {ok, Parent} ?=
+            hb_maps:find(
+                <<"parent">>,
+                State,
+                <<"No `parent` configured for notifications">>,
+                Opts
+            ),
+        true ?= dev_token:validate_address(NotifyFrom, ?RESERVED_KEYS),
+        true ?= (NotifyFrom =:= Parent) orelse
+            {error, <<"Invalid notification source">>},
         ForwardedMsg = dev_process_outbox:original_from_forwarded(Req, Opts),
         {ok, Action} ?=
             hb_maps:find(
@@ -437,15 +538,22 @@ notify(State, Assignment, Opts) ->
                 ForwardedMsg,
                 Opts
             ),
+        true ?= (Action =:= <<"register">>) orelse
+            {error, <<"Unsupported notification action">>},
         OriginalFrom = hb_maps:get(<<"from">>, ForwardedMsg, <<"unknown">>, Opts),
         dev_token:handle_action(
-            Action, 
-            State, 
+            Action,
+            State,
             #{
                 <<"type">> => <<"notification">>,
                 <<"original-from">> => OriginalFrom,
-                <<"body">> => ForwardedMsg#{ <<"from">> => NotifyFrom }
-            }, 
+                <<"body">> =>
+                    ForwardedMsg#{
+                        <<"from">> => NotifyFrom,
+                        <<"resource-authority">> => NotifyFrom,
+                        <<"weight-authority">> => NotifyFrom
+                    }
+            },
             Opts)
     end.
 
@@ -490,7 +598,8 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
             end
     end.
 
-%% @doc Delegate some quantity of a resource from one address to another.
+%% @doc Delegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec delegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -502,6 +611,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
         {ok, ToAddr} ?=
             hb_maps:find(
                 <<"address">>,
@@ -509,6 +619,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No recipient `address' to delegate to provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
         {ok, ResourceID} ?=
             hb_maps:find(
                 <<"resource">>,
@@ -516,6 +627,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `resource' ID to delegate on provided.">>,
                 Opts
             ),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
         {ok, Amount} ?=
             hb_maps:find(
                 <<"quantity">>,
@@ -523,8 +635,7 @@ delegate(State, Assignment, Opts) ->
                 <<"No `quantity' to delegate provided.">>,
                 Opts
             ),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         {ok, NewState} ?=
             delegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}
@@ -533,132 +644,144 @@ delegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec delegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
-    ?event(
-        {delegating,
-            {from_addr, FromAddr},
-            {to_addr, ToAddr},
-            {resource_id, ResourceID},
-            {amount, Amount}
-        }
-    ),
-    GlobalDrippedS = drip_global(S, Opts),
-    S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    S1 = drip_user(FromAddr, S0, Opts),
-    S2 = drip_user(ToAddr, S1, Opts),
-    % Self-delegation is a noop
-    case FromAddr =:= ToAddr of
-        true -> {ok, S2};
-        false ->
-            DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
-            case DelegatorDeposit >= Amount of
-                false ->
-                    {error, <<"Delegation amount exceeds available deposit.">>};
-                true ->
-                    S3 =
-                        hb_ao:set(
-                            S2,
-                            <<
-                                "/resources/",
-                                ResourceID/binary,
-                                "/deposits/",
-                                FromAddr/binary,
-                                "/quantity"
-                            >>,
-                            DelegatorDeposit - Amount,
-                            Opts
-                        ),
-                    ExistingDelegation =
-                        hb_ao:get(
-                            <<
-                                "/resources/",
-                                ResourceID/binary,
-                                "/deposits/",
-                                FromAddr/binary,
-                                "/delegations/",
-                                ToAddr/binary
-                            >>,
-                            S3,
-                            0,
-                            Opts
-                        ),
-                    S4 =
-                        hb_ao:set(
-                            S3,
-                            <<
-                                "/resources/",
-                                ResourceID/binary,
-                                "/deposits/",
-                                FromAddr/binary,
-                                "/delegations/",
-                                ToAddr/binary
-                            >>,
-                            ExistingDelegation + Amount,
-                            Opts
-                        ),
-                    ResourceAcc =
-                        hb_ao:get(
-                            <<"resources/", ResourceID/binary, "/accumulator">>,
-                            S4,
-                            0,
-                            Opts
-                        ),
-                    RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
-                    S5 =
-                        hb_ao:set(
-                            S4,
-                            <<
-                                "/resources/", 
-                                ResourceID/binary,
-                                "/deposits/",
-                                ToAddr/binary,
-                                "/quantity"
-                            >>,
-                            RecipientDeposit + Amount,
-                            Opts
-                        ),
-                    S6 =
-                        hb_ao:set(
-                            S5,
-                            <<
-                                "/resources/", 
-                                ResourceID/binary,
-                                "/deposits/",
-                                ToAddr/binary,
-                                "/last-resource-accumulator"
-                            >>,
-                            ResourceAcc,
-                            Opts
-                        ),
-                    S7 =
-                        update_deposit_index(
-                            FromAddr,
-                            ResourceID,
-                            get_deposit(FromAddr, ResourceID, S6, Opts),
-                            S6,
-                            Opts
-                        ),
-                    S8 =
-                        update_deposit_index(
-                            ToAddr,
-                            ResourceID,
-                            get_deposit(ToAddr, ResourceID, S7, Opts),
-                            S7,
-                            Opts
-                        ),
-                    {ok,
-                        send_delegation_notice(
-                            FromAddr,
-                            ToAddr,
-                            ResourceID,
-                            Amount,
-                            S8,
-                            Opts
-                        )}
-            end
-    end.
+delegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
+    maybe
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        ?event(
+            {delegating,
+                {from_addr, FromAddr},
+                {to_addr, ToAddr},
+                {resource_id, ResourceID},
+                {amount, Amount}
+            }
+        ),
+        GlobalDrippedS = drip_global(S, Opts),
+        S0 = drip_resource(ResourceID, GlobalDrippedS, Opts),
+        S1 = drip_user(FromAddr, S0, Opts),
+        S2 = drip_user(ToAddr, S1, Opts),
+        % Self-delegation is a noop
+        case FromAddr =:= ToAddr of
+            true -> {ok, S2};
+            false ->
+                DelegatorDeposit = get_deposit(FromAddr, ResourceID, S2, Opts),
+                case DelegatorDeposit >= Amount of
+                    false ->
+                        {error, <<"Delegation amount exceeds available deposit.">>};
+                    true ->
+                        S3 =
+                            hb_ao:set(
+                                S2,
+                                <<
+                                    "/resources/",
+                                    ResourceID/binary,
+                                    "/deposits/",
+                                    FromAddr/binary,
+                                    "/quantity"
+                                >>,
+                                DelegatorDeposit - Amount,
+                                Opts
+                            ),
+                        ExistingDelegation =
+                            hb_ao:get(
+                                <<
+                                    "/resources/",
+                                    ResourceID/binary,
+                                    "/deposits/",
+                                    FromAddr/binary,
+                                    "/delegations/",
+                                    ToAddr/binary
+                                >>,
+                                S3,
+                                0,
+                                Opts
+                            ),
+                        S4 =
+                            hb_ao:set(
+                                S3,
+                                <<
+                                    "/resources/",
+                                    ResourceID/binary,
+                                    "/deposits/",
+                                    FromAddr/binary,
+                                    "/delegations/",
+                                    ToAddr/binary
+                                >>,
+                                ExistingDelegation + Amount,
+                                Opts
+                            ),
+                        ResourceAcc =
+                            hb_ao:get(
+                                <<"resources/", ResourceID/binary, "/accumulator">>,
+                                S4,
+                                0,
+                                Opts
+                            ),
+                        RecipientDeposit = get_deposit(ToAddr, ResourceID, S4, Opts),
+                        S5 =
+                            hb_ao:set(
+                                S4,
+                                <<
+                                    "/resources/", 
+                                    ResourceID/binary,
+                                    "/deposits/",
+                                    ToAddr/binary,
+                                    "/quantity"
+                                >>,
+                                RecipientDeposit + Amount,
+                                Opts
+                            ),
+                        S6 =
+                            hb_ao:set(
+                                S5,
+                                <<
+                                    "/resources/", 
+                                    ResourceID/binary,
+                                    "/deposits/",
+                                    ToAddr/binary,
+                                    "/last-resource-accumulator"
+                                >>,
+                                ResourceAcc,
+                                Opts
+                            ),
+                        S7 =
+                            update_deposit_index(
+                                FromAddr,
+                                ResourceID,
+                                get_deposit(FromAddr, ResourceID, S6, Opts),
+                                S6,
+                                Opts
+                            ),
+                        S8 =
+                            update_deposit_index(
+                                ToAddr,
+                                ResourceID,
+                                get_deposit(ToAddr, ResourceID, S7, Opts),
+                                S7,
+                                Opts
+                            ),
+                        {ok,
+                            send_delegation_notice(
+                                FromAddr,
+                                ToAddr,
+                                ResourceID,
+                                Amount,
+                                S8,
+                                Opts
+                            )}
+                end
+        end
+end;
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Delegate Amount must be a non-negative integer">>};
+delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Delegate amount must be a non-zero positive Integer.">>};
+delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Delegate Amount must be of integer type">>}.
 
-%% @doc Undelegate some quantity of a resource from one address to another.
+%% @doc Undelegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -667,8 +790,10 @@ undelegate(State, Assignment, Opts) ->
         {ok, ToAddr} ?= hb_maps:find(<<"address">>, Req, Opts),
         {ok, ResourceID} ?= hb_maps:find(<<"resource">>, Req, Opts),
         {ok, Amount} ?= hb_maps:find(<<"quantity">>, Req, Opts),
-        NewT = hb_maps:get(<<"t">>, Req, hb_maps:get(<<"t">>, State)),
-        StateWithT = State#{ <<"t">> := NewT },
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        StateWithT = ensure_initialized(State, Assignment, Opts),
         {ok, NewState} ?=
             undelegate(FromAddr, ToAddr, ResourceID, Amount, StateWithT, Opts),
         {ok, NewState}
@@ -677,8 +802,157 @@ undelegate(State, Assignment, Opts) ->
         Reason -> {error, Reason}
     end.
 -spec undelegate(binary(), binary(), binary(), pos_integer(), map(), map()) -> {ok, map()} | {error, term()}.
-undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
-    ExistingDelegationBefore =
+undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when is_integer(Amount), Amount > 0 ->
+    maybe
+        true ?= dev_token:validate_address(FromAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ToAddr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        ExistingDelegationBefore =
+            case FromAddr =:= ToAddr of
+                true -> 0;
+                false ->
+                    hb_ao:get(
+                        <<
+                            "/resources/",
+                            ResourceID/binary,
+                            "/deposits/",
+                            FromAddr/binary,
+                            "/delegations/",
+                            ToAddr/binary
+                        >>,
+                        S,
+                        0,
+                        Opts
+                    )
+            end,
+        Validation =
+            case FromAddr =:= ToAddr of
+                true -> ok;
+                false ->
+                    case ExistingDelegationBefore >= Amount of
+                        true -> ok;
+                        false ->
+                            {error, <<"Undelegation amount exceeds existing delegation.">>}
+                    end
+            end,
+        case Validation of
+            {error, _} = Err -> Err;
+            ok ->
+                case ensure_undelegation_cover(
+                    FromAddr,
+                    ToAddr,
+                    ResourceID,
+                    Amount,
+                    S,
+                    Opts
+                ) of
+                    {error, _} = Err -> Err;
+                    {ok, Prepared} ->
+                        GlobalDrippedS = drip_global(Prepared, Opts),
+                        DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
+                        S0 = drip_user(FromAddr, DrippedS, Opts),
+                        S1 = drip_user(ToAddr, S0, Opts),
+                        % Self-undelegation is a noop
+                        case FromAddr =:= ToAddr of
+                            true -> {ok, S1};
+                            false ->
+                                NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S1, Opts),
+                                S2 =
+                                    hb_ao:set(
+                                        S1,
+                                        <<
+                                            "/resources/",
+                                            ResourceID/binary,
+                                            "/deposits/",
+                                            ToAddr/binary,
+                                            "/quantity"
+                                        >>,
+                                        NewRecipientDeposit - Amount,
+                                        Opts
+                                    ),
+                                DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1, Opts),
+                                S3 =
+                                    hb_ao:set(
+                                        S2,
+                                        <<
+                                            "/resources/",
+                                            ResourceID/binary,
+                                            "/deposits/",
+                                            FromAddr/binary,
+                                            "/quantity"
+                                        >>,
+                                        DelegatorDeposit + Amount,
+                                        Opts
+                                    ),
+                                ExistingDelegation =
+                                    hb_ao:get(
+                                        <<
+                                            "/resources/",
+                                            ResourceID/binary,
+                                            "/deposits/",
+                                            FromAddr/binary,
+                                            "/delegations/",
+                                            ToAddr/binary
+                                        >>,
+                                        S1,
+                                        0,
+                                        Opts
+                                    ),
+                                S4 =
+                                    hb_ao:set(
+                                        S3,
+                                        <<
+                                            "/resources/",
+                                            ResourceID/binary,
+                                            "/deposits/",
+                                            FromAddr/binary,
+                                            "/delegations/",
+                                            ToAddr/binary
+                                        >>,
+                                        ExistingDelegation - Amount,
+                                        Opts
+                                    ),
+                                S5 =
+                                    update_deposit_index(
+                                        FromAddr,
+                                        ResourceID,
+                                        get_deposit(FromAddr, ResourceID, S3, Opts),
+                                        S4,
+                                        Opts
+                                    ),
+                                S6 =
+                                    update_deposit_index(
+                                        ToAddr,
+                                        ResourceID,
+                                        get_deposit(ToAddr, ResourceID, S4, Opts),
+                                        S5,
+                                        Opts
+                                    ),
+                                {ok,
+                                    send_delegation_notice(
+                                        FromAddr,
+                                        ToAddr,
+                                        ResourceID,
+                                        -Amount,
+                                        S6,
+                                        Opts
+                                    )}
+                        end
+                end
+        end
+end;
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount < 0 ->
+    {error, <<"Undelegate Amount must be a non-negative integer">>};
+undelegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
+    {error, <<"Undelegate amount must be a non-zero positive Integer.">>};
+undelegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
+    {error, <<"Undelegate Amount must be of integer type">>}.
+
+%% @doc Repeatedly liquidate the recipient until the requested undelegation is
+%% directly coverable, or fail if the outer delegation edge has already been
+%% consumed by recursive unwind.
+ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
+    ExistingDelegation =
         case FromAddr =:= ToAddr of
             true -> 0;
             false ->
@@ -696,121 +970,42 @@ undelegate(FromAddr, ToAddr, ResourceID, Amount, S, Opts) when Amount > 0 ->
                     Opts
                 )
         end,
-    Validation =
-        case FromAddr =:= ToAddr of
-            true -> ok;
-            false ->
-                case ExistingDelegationBefore >= Amount of
-                    true -> ok;
-                    false ->
-                        {error, <<"Undelegation amount exceeds existing delegation.">>}
-                end
-        end,
-    case Validation of
-        {error, _} = Err -> Err;
-        ok ->
-            RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+    RecipientDeposit = get_deposit(ToAddr, ResourceID, S, Opts),
+    case FromAddr =:= ToAddr of
+        true ->
+            {ok, S};
+        false when ExistingDelegation < Amount ->
+            {error, <<"Undelegation amount exceeds existing delegation.">>};
+        false when RecipientDeposit >= Amount ->
+            {ok, S};
+        false ->
             case liquidate(ToAddr, ResourceID, Amount - RecipientDeposit, S, Opts) of
-                {error, _} = Err -> Err;
+                {error, _} = Err ->
+                    Err;
                 {ok, Liquidated} ->
-                    GlobalDrippedS = drip_global(Liquidated, Opts),
-                    DrippedS = drip_resource(ResourceID, GlobalDrippedS, Opts),
-                    S0 = drip_user(FromAddr, DrippedS, Opts),
-                    S1 = drip_user(ToAddr, S0, Opts),
-                    % Self-undelegation is a noop
-                    case FromAddr =:= ToAddr of
-                        true -> {ok, S1};
-                        false ->
-                            NewRecipientDeposit = get_deposit(ToAddr, ResourceID, S1, Opts),
-                            S2 =
-                                hb_ao:set(
-                                    S1,
-                                    <<
-                                        "/resources/",
-                                        ResourceID/binary,
-                                        "/deposits/",
-                                        ToAddr/binary,
-                                        "/quantity"
-                                    >>,
-                                    NewRecipientDeposit - Amount,
-                                    Opts
-                                ),
-                            DelegatorDeposit = get_deposit(FromAddr, ResourceID, S1, Opts),
-                            S3 =
-                                hb_ao:set(
-                                    S2,
-                                    <<
-                                        "/resources/",
-                                        ResourceID/binary,
-                                        "/deposits/",
-                                        FromAddr/binary,
-                                        "/quantity"
-                                    >>,
-                                    DelegatorDeposit + Amount,
-                                    Opts
-                                ),
-                            ExistingDelegation =
-                                hb_ao:get(
-                                    <<
-                                        "/resources/",
-                                        ResourceID/binary,
-                                        "/deposits/",
-                                        FromAddr/binary,
-                                        "/delegations/",
-                                        ToAddr/binary
-                                    >>,
-                                    S1,
-                                    0,
-                                    Opts
-                                ),
-                            S4 =
-                                hb_ao:set(
-                                    S3,
-                                    <<
-                                        "/resources/",
-                                        ResourceID/binary,
-                                        "/deposits/",
-                                        FromAddr/binary,
-                                        "/delegations/",
-                                        ToAddr/binary
-                                    >>,
-                                    ExistingDelegation - Amount,
-                                    Opts
-                                ),
-                            S5 =
-                                update_deposit_index(
-                                    FromAddr,
-                                    ResourceID,
-                                    get_deposit(FromAddr, ResourceID, S3, Opts),
-                                    S4,
-                                    Opts
-                                ),
-                            S6 =
-                                update_deposit_index(
-                                    ToAddr,
-                                    ResourceID,
-                                    get_deposit(ToAddr, ResourceID, S4, Opts),
-                                    S5,
-                                    Opts
-                                ),
-                            {ok,
-                                send_delegation_notice(
-                                    FromAddr,
-                                    ToAddr,
-                                    ResourceID,
-                                    -Amount,
-                                    S6,
-                                    Opts
-                                )}
-                    end
+                    ensure_undelegation_cover(
+                        FromAddr,
+                        ToAddr,
+                        ResourceID,
+                        Amount,
+                        Liquidated,
+                        Opts
+                    )
             end
     end.
 
-%% @doc Set the weight of a specific resource in the pot. Valid requesters to
-%% change resource parameters are:
-%% - The `State/parent' address, if set.
-%% - The `mint-authority' address, if set.
-%% - The `resource-authority' address for the resource.
+%% @doc Resource configuration entrypoint. Validates the target resource and
+%% caller, then applies supported resource-scoped config mutations.
+%% 
+%% Authorization model:
+%% - `weight` / `quantity-scale` updates may be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
+%%   - the resource-local `weight-authority`
+%% - updates touching `resource-authority*` or `weight-authority*` are treated
+%%   as admin mutations and may only be performed by:
+%%   - the configured `parent`
+%%   - the pot-wide `mint-authority`
 register(State, Assignment, Opts) ->
     ?event(debug_pot, {register, Assignment}, Opts),
     maybe
@@ -822,6 +1017,7 @@ register(State, Assignment, Opts) ->
                 <<"No `resource' provided to register.">>, 
                 Opts
             ),
+        true ?= dev_token:validate_address(ResID, ?RESERVED_KEYS),
         {ok, From} ?= 
             hb_maps:find(
                 <<"from">>, 
@@ -829,66 +1025,345 @@ register(State, Assignment, Opts) ->
                 <<"No `from' address provided.">>, 
                 Opts
             ),
+        true ?= validate_signer_config(From, Opts),
+        HasAdminMutation =
+            hb_maps:find(<<"resource-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"resource-authority-match">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-required">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"weight-authority-match">>, Req, Opts) =/= error,
+        HasResourceConfigMutation = 
+            hb_maps:find(<<"weight">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"quantity-scale">>, Req, Opts) =/= error,
         true ?=
-            (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) orelse
-            dev_security:validate(<<"mint-authority">>, State, Req, From, Opts) orelse
-                verify_resource_authority(ResID, State, Req, Opts),
+            case {HasAdminMutation, HasResourceConfigMutation} of
+                {true, _} ->
+                    enforce_resource_config_authority(From, State, Req, Opts);
+                {false, true} ->
+                    enforce_resource_weight_authority(ResID, From, State, Req, Opts);
+                _ ->
+                    true
+            end,
+        ResourceConfigMutations = {
+            hb_maps:find(<<"weight">>, Req, Opts), 
+            hb_maps:find(<<"quantity-scale">>, Req, Opts)
+        },
         State2 =
-            case hb_maps:find(<<"weight">>, Req, Opts) of
-                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
+            case ResourceConfigMutations of
+                {{ok, Weight}, {ok, QuantityScale}} ->
+                    register_resource(ResID, Weight, QuantityScale, State, Opts);
+                {{ok, Weight}, _} -> register_resource(ResID, Weight, State, Opts);
+                {_, {ok, QuantityScale}} -> register_resource(ResID, keep_existing, QuantityScale, State, Opts);
                 _ -> State
             end,
-        case hb_maps:find(<<"resource-authority">>, Req, Opts) of
-            {ok, ResAuth} ->
-                register_resource_authority(ResID, ResAuth, State2, Opts);
-            _ -> State2
+        true ?= is_map(State2) orelse State2,
+        State3 =
+            case hb_maps:find(<<"weight-authority">>, Req, Opts) of
+                {ok, WeightAuth} ->
+                    register_resource_weight_authority(
+                        ResID,
+                        WeightAuth,
+                        State2,
+                        Opts
+                    );
+                _ -> State2
+            end,
+        true ?= is_map(State3) orelse State3,
+        State4 =
+            case hb_maps:find(<<"weight-authority-required">>, Req, Opts) of
+                {ok, WeightRequired} ->
+                    register_resource_weight_authority_required(
+                        ResID,
+                        WeightRequired,
+                        State3,
+                        Opts
+                    );
+                _ -> State3
+            end,
+        true ?= is_map(State4) orelse State4,
+        State5 =
+            case hb_maps:find(<<"weight-authority-match">>, Req, Opts) of
+                {ok, WeightMatch} ->
+                    register_resource_weight_authority_match(
+                        ResID,
+                        WeightMatch,
+                        State4,
+                        Opts
+                    );
+                _ -> State4
+            end,
+        true ?= is_map(State5) orelse State5,
+        State6 =
+            case hb_maps:find(<<"resource-authority">>, Req, Opts) of
+                {ok, ResAuth} ->
+                    register_resource_authority(ResID, ResAuth, State5, Opts);
+                _ -> State5
+            end,
+        true ?= is_map(State6) orelse State6,
+        State7 =
+            case hb_maps:find(<<"resource-authority-required">>, Req, Opts) of
+                {ok, ResRequired} ->
+                    register_resource_authority_required(
+                        ResID,
+                        ResRequired,
+                        State6,
+                        Opts
+                    );
+                _ -> State6
+            end,
+        true ?= is_map(State7) orelse State7,
+        case hb_maps:find(<<"resource-authority-match">>, Req, Opts) of
+            {ok, ResMatch} ->
+                register_resource_authority_match(ResID, ResMatch, State7, Opts);
+            _ -> State7
         end
-    else
-        Reason -> 
-            ?event(debug_pot, {error, Reason}, Opts),
-            Reason
     end.
-
+%% @doc Enforce authorization for resource configuration updates.
+%% Authorization is evaluated against:
+%% - `State/parent`, if set and equal to `from`
+%% - `mint-authority` security policy on the pot state, if configured
+%% Resource-level write or weight authorities do not grant config authority.
+enforce_resource_config_authority(From, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_config_authority, Req}, Opts),
+    maybe
+        AuthRes = case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+            true -> true;
+            false -> 
+                case dev_security:validate(<<"mint-authority">>, State, Req, From, Opts#{dev_security_mode => prod}) of
+                    true -> true;
+                    {error, _} ->
+                        {error, <<"Caller is not authorized to configure resources.">>}
+                end  
+        end,
+        true ?= AuthRes
+    end.
+%% @doc Enforce authorization for reward config updates. Parent may always
+%% reconfigure its children, explicit per-resource `weight-authority` can
+%% update `weight` / `quantity-scale`, and `mint-authority` remains the global override.
+enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
+    ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
+    maybe
+        AuthRes =
+            case (hb_maps:get(<<"parent">>, State, no_parent, Opts) =:= From) of
+                true -> true;
+                false ->
+                    case verify_weight_authority(ResourceID, State, Req, Opts) of
+                        true -> true;
+                        {error, _} ->
+                            case dev_security:validate(
+                                <<"mint-authority">>,
+                                State,
+                                Req,
+                                From,
+                                Opts#{ dev_security_mode => prod }
+                            ) of
+                                true -> true;
+                                {error, _} ->
+                                    {error, <<"Caller is not authorized to update resource reward config.">>}
+                            end
+                    end
+            end,
+        true ?= AuthRes
+    end.
+%% @doc Verify a request against the resource-local `weight-authority` policy
+%% for a specific resource. In prod mode, requests fail closed if the resource
+%% has no explicit weight-authority policy configured.
+verify_weight_authority(ResourceID, Base, Req, Opts) ->
+    maybe
+        {ok, From} ?=
+            hb_maps:find(
+                <<"from">>,
+                Req,
+                <<"No `from' address provided.">>,
+                Opts
+            ),
+        {ok, Resources} ?=
+            hb_maps:find(
+                <<"resources">>,
+                Base,
+                <<"No resources found in mint state.">>,
+                Opts
+            ),
+        {ok, Resource} ?=
+            hb_maps:find(
+                ResourceID,
+                Resources,
+                <<"Requested resource not initialized in mint state.">>,
+                Opts
+            ),
+        true ?=
+            dev_security:validate(
+                <<"weight-authority">>,
+                Resource,
+                Req,
+                From,
+                Opts#{ dev_security_mode => prod }
+            )
+    end.
 %% @doc Update the authority record for a specific resource in the pot.
 register_resource_authority(ResourceID, Authority, S, Opts) ->
-    hb_ao:set(
-        S,
-        <<"/resources/", ResourceID/binary, "/authority">>,
-        Authority,
-        Opts
-    ).
-
-%% @doc Set the weight of a specific resource in the pot, updating the pot state
-%% as necessary.
-register_resource(ResourceID, Weight, S, Opts) ->
-    % Run the global drip to ensure the state is up to date.
-    S0 = drip_global(S, Opts),
-    S1 = drip_resource(ResourceID, S0, Opts),
-    % Calculate the new total deposited units for the weighted global counter
-    % (`/total-weighted-units').
-    Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
-    OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
-    ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
-    % Update the total weighted units counter. Subtract the deposits at the old
-    % weight first, then add the deposits at the new weight.
-    LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
-    NewTotalWeightedUnits =
-        LastTotalWeightedUnits
-            - (OldWeight * ResourceDeposits)
-            + (Weight * ResourceDeposits),
-    % Update the resource and the global weighted units counter.
-    AfterSet =
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
         hb_ao:set(
-            S1,
-            #{
-                <<"resources">> => #{
-                    ResourceID => Resource#{ <<"weight">> => Weight }
-                },
-                <<"total-weighted-units">> => NewTotalWeightedUnits
-            },
+            S,
+            <<"/resources/", ResourceID/binary, "/authority">>,
+            Authority,
             Opts
-        ),
-    send_weight_notice(ResourceID, Weight, AfterSet, Opts).
+        )
+end.
+register_resource_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/authority-match">>,
+            Match,
+            Opts
+        )
+end.
+%% @doc Update the weight-authority record for a specific resource in the pot.
+register_resource_weight_authority(ResourceID, Authority, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Authority, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority">>,
+            Authority,
+            Opts
+        )
+end.
+register_resource_weight_authority_required(ResourceID, Required, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_signer_config(Required, Opts),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-required">>,
+            Required,
+            Opts
+        )
+end.
+register_resource_weight_authority_match(ResourceID, Match, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= validate_match_config(Match),
+        hb_ao:set(
+            S,
+            <<"/resources/", ResourceID/binary, "/weight-authority-match">>,
+            Match,
+            Opts
+        )
+end.
+validate_signer_config(Value, Opts) when is_binary(Value) ->
+    try validate_signer_config(hb_util:binary_to_strings(Value), Opts)
+    catch
+        _:_ -> {error, <<"Signer config must be a valid binary or list.">>}
+    end;
+validate_signer_config(Value, _Opts) when is_list(Value) ->
+    case Value of
+        [] ->
+            {error, <<"Signer config list must not be empty.">>};
+        _ ->
+            case lists:all(fun is_binary/1, Value) of
+                false ->
+                    {error, <<"Signer config list must contain binary addresses.">>};
+                true ->
+                    lists:foldl(
+                        fun(Signer, true) ->
+                            dev_token:validate_address(Signer, ?RESERVED_KEYS);
+                           (_Signer, {error, _} = Err) ->
+                            Err
+                        end,
+                        true,
+                        Value
+                    )
+            end
+    end;
+validate_signer_config(_, _) ->
+    {error, <<"Signer config must be a binary or a list.">>}.
+validate_match_config(Match) when is_integer(Match), Match >= 0 -> true;
+validate_match_config(Match) when is_binary(Match) ->
+    try binary_to_integer(Match) of
+        Int when is_integer(Int), Int >= 0 -> true;
+        _ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    catch
+        _:_ -> {error, <<"Match threshold must be a non-negative integer.">>}
+    end;
+validate_match_config(_) ->
+    {error, <<"Match threshold must be a non-negative integer.">>}.
+
+%% @doc Set the reward config of a specific resource in the pot, updating the pot
+%% state as necessary.
+register_resource(ResourceID, Weight, S, Opts) ->
+    register_resource(ResourceID, Weight, keep_existing, S, Opts).
+register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= is_valid_quantity_scale(QuantityScale),
+        true ?= is_valid_weight(Weight),
+        % Run the global drip to ensure the state is up to date.
+        S0 = drip_global(S, Opts),
+        S1 = drip_resource(ResourceID, S0, Opts),
+        % Calculate the new total deposited units for the weighted global counter
+        % (`/total-weighted-units').
+        Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
+        ExistingWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ReqWeight = case Weight of
+            keep_existing -> ExistingWeight;
+            _ -> Weight
+        end,
+        % Denomination may be changed on case the assets undergo a redomination
+        ExistingQuantityScale = hb_ao:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
+        NewQuantityScale = case QuantityScale of
+            keep_existing -> ExistingQuantityScale;
+            _ -> QuantityScale
+        end,
+        ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
+        % Update the total weighted units counter. Subtract the deposits at the old
+        % weight first, then add the deposits at the new weight.
+        LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
+        NewTotalWeightedUnits =
+            LastTotalWeightedUnits
+                - (ExistingWeight * ResourceDeposits)
+                + (ReqWeight * ResourceDeposits),
+        % Update the resource and the global weighted units counter.
+        AfterSet =
+            hb_ao:set(
+                S1,
+                #{
+                    <<"resources">> => #{
+                        ResourceID => Resource#{ <<"weight">> => ReqWeight, <<"quantity-scale">> => NewQuantityScale }
+                    },
+                    <<"total-weighted-units">> => NewTotalWeightedUnits
+                },
+                Opts
+            ),
+        send_resource_config_notice(ResourceID, ReqWeight, NewQuantityScale, AfterSet, Opts)
+end.
+
+is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0, Scale =< ?POT_QUANTITY_SCALE -> true;
+is_valid_quantity_scale(keep_existing) -> true;
+is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer <= POT_QUANTITY_SCALE.">>}.
+
+is_valid_weight(W) when is_integer(W), W >= 0 -> true;
+is_valid_weight(keep_existing) -> true;
+is_valid_weight(_) -> {error, <<"Weight must be a non-negative integer.">>}.
+
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
@@ -925,24 +1400,25 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
                 true -> <<"withdraw">>
                 end,
             <<"address">> => FromAddr,
-            <<"quantity">> => Amount,
+            <<"quantity">> => abs(Amount),
             <<"resource">> => ResourceID
         },
         S,
         Opts
     ).
 
-%% @doc Send a `set-weight' update message to all subscribed listeners. We use
+%% @doc Send a `register' update message to all subscribed listeners. We use
 %% `notify/3' instead of `send/3' to do this as (by default) there is nobody that
 %% will be listening for this message. Clients can call `subscribe' with a
-%% `subscribe-target' of `broadcast' and an `subscribe-action' of `set-weight'
+%% `subscribe-target' of `broadcast' and an `subscribe-action' of `register'
 %% to be notified of these events.
-send_weight_notice(ResourceID, Weight, S, Opts) ->
+send_resource_config_notice(ResourceID, Weight, QuantityScale, S, Opts) ->
     dev_process_outbox:notify(
         #{
             <<"action">> => <<"register">>,
             <<"resource">> => ResourceID,
-            <<"weight">> => Weight
+            <<"weight">> => Weight,
+            <<"quantity-scale">> => QuantityScale
         },
         S,
         Opts
@@ -955,103 +1431,113 @@ send_weight_notice(ResourceID, Weight, S, Opts) ->
 %% modify_deposit_state() includes negative numbers as well.
 modify_deposit_state(Addr, ResourceID, Amount, S0, Opts) ->
     % Drip the global state and the resource, then extract necessary components.
-    GlobalDrippedS = drip_global(S0, Opts),
-    DrippedS = #{
-        <<"balances">> := Balances,
-        <<"resources">> := Resources
-    } = drip_resource(ResourceID, GlobalDrippedS, Opts),
-    ?event(
-        debug_drip,
-        {modify_deposit_state,
-            {addr, Addr},
-            {resource_id, ResourceID},
-            {amount, Amount},
-            {resources, Resources},
-            {balances, Balances}
-        },
-        Opts
-    ),
-    ExistingDeposit = get_deposit(Addr, ResourceID, DrippedS, Opts),
-    BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
-    CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
-    Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
-    NewBalance = BaseBalance + Yield,
-    ResourceAcc =
-        hb_ao:get(
-            <<ResourceID/binary, "/accumulator">>,
-            Resources,
-            0,
-            Opts
-        ),
-    NewResources =
-        hb_ao:set(
-            Resources,
-            #{
-                ResourceID =>
-                    #{
-                        <<"total-deposits">> =>
-                            Amount +
-                                hb_ao:get(
-                                    <<ResourceID/binary, "/total-deposits">>,
-                                    Resources,
-                                    0,
-                                    Opts
-                                ),
-                        <<"deposits">> =>
-                            #{
-                                Addr =>
-                                    #{
-                                        <<"quantity">> => ExistingDeposit + Amount,
-                                        <<"last-resource-accumulator">> =>
-                                            ResourceAcc
-                                    }
-                            }
-                    }
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        GlobalDrippedS = drip_global(S0, Opts),
+        DrippedS = #{
+            <<"balances">> := Balances,
+            <<"resources">> := Resources
+        } = drip_resource(ResourceID, GlobalDrippedS, Opts),
+        ?event(
+            debug_drip,
+            {modify_deposit_state,
+                {addr, Addr},
+                {resource_id, ResourceID},
+                {amount, Amount},
+                {resources, Resources},
+                {balances, Balances}
             },
             Opts
         ),
-    ?event(debug_drip, {resources_after_modify_deposit, NewResources}, Opts),
-    WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
-    TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
-    NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
-    {ok, NewBalances} =
-        hb_ao:resolve(
-            Balances,
+        ExistingDepositOrError = get_deposit(Addr, ResourceID, DrippedS, Opts),
+        true ?= is_integer(ExistingDepositOrError) orelse ExistingDepositOrError,
+        ExistingDeposit = ExistingDepositOrError,
+        BaseBalance = hb_ao:get(Addr, Balances, 0, Opts),
+        CurrentSupply = hb_ao:get(<<"total-supply">>, S0, 0, Opts),
+        Yield = unclaimed_yield(Addr, ResourceID, DrippedS, Opts),
+        NewBalance = BaseBalance + Yield,
+        ResourceAcc =
+            hb_ao:get(
+                <<ResourceID/binary, "/accumulator">>,
+                Resources,
+                0,
+                Opts
+            ),
+        NewResources =
+            hb_ao:set(
+                Resources,
+                #{
+                    ResourceID =>
+                        #{
+                            <<"total-deposits">> =>
+                                Amount +
+                                    hb_ao:get(
+                                        <<ResourceID/binary, "/total-deposits">>,
+                                        Resources,
+                                        0,
+                                        Opts
+                                    ),
+                            <<"deposits">> =>
+                                #{
+                                    Addr =>
+                                        #{
+                                            <<"quantity">> => ExistingDeposit + Amount,
+                                            <<"last-resource-accumulator">> =>
+                                                ResourceAcc
+                                        }
+                                }
+                        }
+                },
+                Opts
+            ),
+        ?event(debug_drip, {resources_after_modify_deposit, NewResources}, Opts),
+        WeightR = hb_ao:get(<<ResourceID/binary, "/weight">>, NewResources, 0, Opts),
+        TotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, DrippedS, 0, Opts),
+        NewTotalWeightedUnits = TotalWeightedUnits + (WeightR * Amount),
+        {ok, NewBalances} =
+            hb_ao:resolve(
+                Balances,
+                #{
+                    <<"path">> => <<"set">>,
+                    Addr => NewBalance
+                },
+                Opts
+            ),
+        UpdateValues = 
             #{
-                <<"path">> => <<"set">>,
-                Addr => NewBalance
+                <<"resources">> => NewResources,
+                <<"total-weighted-units">> => NewTotalWeightedUnits,
+                <<"balances">> => NewBalances,
+                <<"total-supply">> => CurrentSupply + Yield
             },
+        {ok, UpdatedDepositS} =
+            hb_ao:resolve(
+                DrippedS,
+                UpdateValues#{ <<"path">> => <<"set">> },
+                Opts
+            ),
+        update_deposit_index(
+            Addr,
+            ResourceID,
+            get_deposit(Addr, ResourceID, UpdatedDepositS, Opts),
+            UpdatedDepositS,
             Opts
-        ),
-    UpdateValues = 
-        #{
-            <<"resources">> => NewResources,
-            <<"total-weighted-units">> => NewTotalWeightedUnits,
-            <<"balances">> => NewBalances,
-            <<"total-supply">> => CurrentSupply + Yield
-        },
-    {ok, UpdatedDepositS} =
-        hb_ao:resolve(
-            DrippedS,
-            UpdateValues#{ <<"path">> => <<"set">> },
-            Opts
-        ),
-    update_deposit_index(
-        Addr,
-        ResourceID,
-        get_deposit(Addr, ResourceID, UpdatedDepositS, Opts),
-        UpdatedDepositS,
-        Opts
-    ).
+        )
+end.
 
 %% @doc Get the deposit quantity for a specific address in a specific resource.
 get_deposit(Addr, ResourceID, S, Opts) ->
-    hb_ao:get(
-        <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
-        S,
-        0,
-        Opts
-    ).
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        hb_ao:get(
+            <<"/resources/", ResourceID/binary, "/deposits/", Addr/binary, "/quantity">>,
+            S,
+            0,
+            Opts
+        )
+    end.
 
 %% @doc Get the balances submessage from the state.
 balances(S) -> balances(S, #{}).
@@ -1065,19 +1551,37 @@ get_deposits(S = #{ <<"resources">> := Resources }, Opts) ->
         Resources,
         Opts
     ).
+%% @doc Return deposits for a specific resource, filtering out malformed
+%% deposit-address keys from state.
 get_deposits(ResourceID, S, Opts) ->
-    Ds = hb_ao:get(
-        <<"/resources/", ResourceID/binary, "/deposits">>,
-        S,
-        #{},
-        Opts
-    ),
-    hb_maps:map(
-        fun(Addr, _) -> get_deposit(Addr, ResourceID, S, Opts) end,
-        Ds,
-        Opts
-    ).
+    maybe
+        true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        Ds = hb_ao:get(
+            <<"/resources/", ResourceID/binary, "/deposits">>,
+            S,
+            #{},
+            Opts
+        ),
+        hb_maps:filtermap(
+            fun(Addr, _) -> 
+                case get_deposit(Addr, ResourceID, S, Opts) of
+                    Qty when is_integer(Qty) -> {true, Qty};
+                    _ -> false
+                end
+            end,
+            Ds,
+            Opts
+        )
+end.
 
 %% @doc Return the contents of the inverted index for a specific address.
 user(Addr, S, Opts) ->
-    hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts).
+    maybe
+        true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
+        hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts)
+    end.
+normalize_quantity(Qty, QuantityScale)
+        when is_integer(Qty), is_integer(QuantityScale), QuantityScale > 0 ->
+    {ok, (Qty * ?POT_QUANTITY_SCALE) div QuantityScale};
+normalize_quantity(_, _) ->
+    {error, invalid_quantity_or_scale}.

@@ -7,7 +7,7 @@
 %%% excluding in an `info/1` response.
 -export([handle_action/4]).
 %%% Public helpers.
--export([validate_address/1]).
+-export([validate_address/2]).
 -include_lib("include/hb.hrl").
 
 %% @doc `Action' values that should be handled by the `mint-device'.
@@ -22,6 +22,50 @@
         <<"register">>
     ]
 ).
+%% @doc `validate_address/2` built-in reserved keys list
+-define(AO_RESERVED_ADDRESS_KEYS,
+    [
+        <<"path">>,
+        <<"get">>,
+        <<"set">>,
+        <<"remove">>,
+        <<"verify">>,
+        <<"keys">>,
+        <<"id">>,
+        <<"commit">>,
+        <<"committed">>,
+        <<"committers">>,
+        <<"index">>,
+        <<"info">>,
+        <<"set_path">>,
+        <<"reserved_keys">>,
+        <<"is_reserved_key">>,
+        <<"dedup">>,
+        <<"dedup-subject">>
+    ]
+).
+
+%% @doc Return the configured `set` field whitelist. Defaults to open policy
+%% via wildcard unless `whitelisted-fields` is explicitly restricted.
+whitelisted_auth_fields(Base, Opts) ->
+    maybe
+        WhitelistedFields = hb_ao:get(
+            <<"whitelisted-fields">>,
+            Base,
+            [<<"*">>],
+            Opts
+        ),
+        ValidList = case WhitelistedFields of
+            V when is_list(V) -> V;
+            _ -> {error, <<"Invalid `whitelisted-fields` type.">>}
+        end,
+        true ?= is_list(ValidList),
+        
+        lists:filter(
+            fun(X) -> is_binary(X) andalso byte_size(X) > 0 end,
+            ValidList
+        )
+end.
 
 %%% `~process@1.0' interface implementation.
 
@@ -37,24 +81,49 @@ normalize(Base, _Req, _Opts) ->
 snapshot(Base, _Req, _Opts) ->
     {ok, Base}.
 
-%% @doc Entrypoint for computations on token processes. Expects the `action'
-%% key to hold the `path' to execute after enforcing the token's security
-%% constraints. Always returns the base state unmodified in the event of 
-%% downstream device errors, such that invalid interactions do not result in
-%% invalid `~process@1.0' states.
+%% @doc Entrypoint for computations on token processes. Deduplicates by signed
+%% assignment body, then expects the `action' key to hold the `path' to execute
+%% after enforcing the token's security constraints. Always returns the base
+%% state unmodified in the event of downstream device errors, such that invalid
+%% interactions do not result in invalid `~process@1.0' states.
 compute(Base, Assignment, Opts) ->
     ?event({token_call, Assignment}),
-    maybe
-        {ok, SecureReq} ?= enforce_security(Base, Assignment, Opts),
-        {ok, Action} ?= hb_ao:resolve(Assignment, <<"body/action">>, Opts),
-        {ok, Res} ?= handle_action(Action, Base, SecureReq, Opts),
-        ?event(debug_token, {route_result, Res}, Opts),
-        {ok, Res}
-    else
+    case deduplicate(Base, Assignment, Opts) of
+        {skip, DedupedBase} ->
+            ?event(token_short, {skipping_duplicate_assignment, Assignment}, Opts),
+            {ok, DedupedBase};
+        {ok, DedupedBase} ->
+            maybe
+                {ok, SecureReq} ?= enforce_security(DedupedBase, Assignment, Opts),
+                {ok, Action} ?= hb_ao:resolve(Assignment, <<"body/action">>, Opts),
+                {ok, Res} ?= handle_action(Action, DedupedBase, SecureReq, Opts),
+                ?event(debug_token, {route_result, Res}, Opts),
+                {ok, Res}
+            else
+                {error, Reason} ->
+                    ?event(token_short, {error_during_token_call, Reason}, Opts),
+                    send_error(Base, Assignment, Reason, Opts)
+            end;
         {error, Reason} ->
-            ?event(token_short, {error_during_token_call, Reason}, Opts),
+            ?event(token_short, {error_during_token_dedup, Reason}, Opts),
             send_error(Base, Assignment, Reason, Opts)
     end.
+
+%% @doc Deduplicate token computations by the signed assignment body. Replayed
+%% assignments get fresh slots, so the assignment itself cannot be the subject.
+deduplicate(Base, Assignment, Opts) ->
+    BaseDevice = hb_maps:get(<<"device">>, Base, not_found, Opts),
+    case hb_ao:resolve(Base, {as, <<"dedup@1.0">>, Assignment}, Opts) of
+        {Status, DedupedBase} when Status =:= ok; Status =:= skip ->
+            {Status, restore_device(BaseDevice, DedupedBase, Opts)};
+        Error ->
+            Error
+    end.
+
+restore_device(not_found, Base, _Opts) ->
+    Base;
+restore_device(Device, Base, Opts) ->
+    hb_ao:set(Base, <<"device">>, Device, Opts).
 
 %% @doc Enforce the security constraints of the base state upon the request.
 enforce_security(Base, Req, Opts) ->
@@ -79,39 +148,46 @@ handle_action(Action, Base, Req, Opts) ->
 %% @doc Get the balance for an account. Normalize the minting state for that
 %% account before returning.
 balance(Base, Req, Opts) ->
-    {ok, Account} = hb_ao:resolve(Req, <<"balance">>, Opts),
-    ?event(
-        debug_token,
-        {balance_request,
-            {account, Account},
-            {base, Base}
-        },
-        Opts
-    ),
-    {ok, NormBase} =
-        normalize_mint(
-            Base,
-            hb_ao:set(Req, <<"subject">>, Account, Opts),
+    maybe
+        {ok, Account} ?= hb_ao:resolve(Req, <<"balance">>, Opts),
+        true ?= validate_address(Account, []),
+        ?event(
+            debug_token,
+            {balance_request,
+                {account, Account},
+                {base, Base}
+            },
             Opts
         ),
-    Balances =
-        hb_ao:resolve_many(
-            [
-                NormBase,
-                <<"balances">>,
-                Account
-            ],
+        {ok, NormBase} ?=
+            normalize_mint(
+                Base,
+                hb_ao:set(Req, <<"subject">>, Account, Opts),
+                Opts
+            ),
+        BalanceRes =
+            hb_ao:resolve_many(
+                [
+                    NormBase,
+                    <<"balances">>,
+                    Account
+                ],
+                Opts
+            ),
+        ?event(
+            debug_token,
+            {balance_after_mint_normalization,
+                {account, Account},
+                {balance, BalanceRes}
+            },
             Opts
         ),
-    ?event(
-        debug_token,
-        {balance_after_mint_normalization,
-            {account, Account},
-            {balances, Balances}
-        },
-        Opts
-    ),
-    {ok, Balances}.
+        case BalanceRes of
+            {ok, Balance} -> {ok, Balance};
+            {error, not_found} -> {ok, 0};
+            {error, Reason} -> {error, Reason}
+        end
+    end.
 
 transfer(Base, Assignment, Opts) ->
     maybe
@@ -120,6 +196,9 @@ transfer(Base, Assignment, Opts) ->
         {ok, From} ?= hb_ao:resolve(Req, <<"from">>, Opts),
         {ok, Recipient} ?= hb_ao:resolve(Req, <<"recipient">>, Opts),
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
+        % validate From/Recipient sanity
+        true ?= validate_address(From, []),
+        true ?= validate_address(Recipient, []),
         % Normalize the base's minting state for the sender.
         {ok, NormBase} ?=
             normalize_mint(
@@ -144,13 +223,13 @@ transfer(Base, Assignment, Opts) ->
             Opts
         ),
         % Sanity check the transfer request.
-        true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance))
-            orelse {error, <<"Invalid balance types.">>},
+        true ?= (is_integer(SenderBalance) and is_integer(RecipientBalance)
+                and (SenderBalance >= 0) and (RecipientBalance >= 0))
+            orelse {error, <<"Invalid balance values.">>},
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
         true ?= (SenderBalance >= Quantity) 
             orelse {error, <<"Insufficient balance.">>},
-        true ?= validate_address(Recipient),
         % Handle self-transfer: skip balance updates
         NewBaseAfterTransfer =
             case From =:= Recipient of
@@ -185,7 +264,7 @@ transfer(Base, Assignment, Opts) ->
                 },
                 Opts
             ),
-            {ok, send_error(Base, Assignment, Reason, Opts)}
+            send_error(Base, Assignment, Reason, Opts)
     end.
 
 transfer_notices(From, Recipient, Quantity, Req, Opts) ->
@@ -210,10 +289,26 @@ transfer_notices(From, Recipient, Quantity, Req, Opts) ->
 %%% Mint device orchestration.
 
 %% @doc Call the mint device's main entrypoint, allowing it to handle explicit
-%% mint requests, normalize its state (prior to `transfer's, etc), or ignore
-%% the request altogether.
+%% mint requests, normalize its state (prior to `transfer`s, etc), or ignore
+%% the request altogether. If a public token `mint` request includes
+%% `body.subject`, hoist it to the top-level request shape expected by the mint
+%% device before dispatch.
 mint(Base, Assignment, Opts) ->
-    as_mint_device(<<"mint">>, Base, Assignment, Opts).
+    case hb_ao:resolve(Assignment, <<"body">>, Opts) of
+        {error, _} ->
+            as_mint_device(<<"mint">>, Base, Assignment, Opts);
+        {ok, Req} ->
+            case hb_maps:find(<<"subject">>, Req, Opts) of
+                error ->
+                    as_mint_device(<<"mint">>, Base, Assignment, Opts);
+                {ok, Subject} ->
+                    maybe
+                        true ?= validate_address(Subject, []),
+                        MintReq1 = hb_ao:set(Assignment, <<"subject">>, Subject, Opts),
+                        as_mint_device(<<"mint">>, Base, MintReq1, Opts)
+                    end
+            end
+    end.
 
 %% @doc Execute the mint device's main key, but return the state in its 
 %% unmodified form if the execution returns an error.
@@ -227,15 +322,17 @@ normalize_mint(Base, Assignment, Opts) ->
 is_supported_mint_action(Action) ->
     lists:member(Action, ?MINT_ACTIONS).
 
-%% @doc Verify if the action is a supported path on the mint device interdface,
-%% and if so, switch to the mint device and run it.
+%% @doc Verify if the action is a supported path on the mint device interface,
+%% and if so, switch to the mint device and run it. Unsupported actions fall through
+%% send_error/4 codepath.
 action_as_mint_device(Action, Base, Req, Opts) ->
     case is_supported_mint_action(Action) of
+        true when Action =:= <<"mint">> -> mint(Base, Req, Opts);
         true -> as_mint_device(Action, Base, Req, Opts);
         false ->
             ?event(error, {unsupported_token_action, Action}, Opts),
-            {ok, Base}
-    end.
+            send_error(Base, Req, <<"unsupported action: ", Action/binary>>, Opts)
+        end.
 
 %% @doc Run a given `path' on the mint device.
 as_mint_device(Path, Base, Req, Opts) ->
@@ -265,56 +362,148 @@ ensure_mint_device(Base, Opts) ->
 %%% Secure `set' call orchestration.
 
 %% @doc Ensure that the caller is the `set' authority, and apply changes to the
-%% base state if so.
+%% base state if so. The setter can only mutate whitelisted fields.
 secure_set(Base, Assignment, Opts) ->
     maybe
         {ok, Req} ?= hb_ao:resolve(Assignment, <<"body">>, Opts),
         true ?= enforce_set_authority(Base, Req, Opts),
-        % Apply updates to base state
+        RawBody = hb_maps:get(<<"body">>, Assignment, #{}, Opts),
+        SetReq =
+            hb_maps:without(
+                [<<"from">>, <<"action">>, <<"path">>],
+                RawBody,
+                Opts
+            ),
+        % Check the auth is touching whitelisted fields only.
+        true ?= enforce_whitelisted_fields(Base, SetReq, Opts),
+        % Apply updates to base state.
         hb_ao:resolve(Base, Req#{ <<"path">> => <<"set">> }, Opts)
     end.
+enforce_whitelisted_fields(Base, Req, Opts) ->
+    maybe
+        Keys = hb_maps:keys(Req, Opts),
+        WhitelistedFields = whitelisted_auth_fields(Base, Opts),
+        true ?= is_list(WhitelistedFields) orelse
+                    {error, <<"Invalid `whitelisted-fields` type.">>},
+        case lists:member(<<"*">>, WhitelistedFields) of
+            true ->
+                true;
+            false ->
+                case lists:all(
+                    fun(Key) -> lists:member(Key, WhitelistedFields) end,
+                    Keys
+                ) of
+                    true -> true;
+                    false -> {error, <<"Attempted to set non-whitelisted fields.">>}
+                end
+            end
+    end.
 
-%% @doc Enforce that the caller is the `set' authority.
+%% @doc Enforce that the caller is the `set` authority. If `Base` configures
+%% either `set-authority-required` or `set-authority-match`, this function
+%% delegates authorization to `dev_security:validate/5` for `set-authority`.
+%% Otherwise it falls back to legacy exact-match semantics:
+%% `Req/from =:= Base/set-authority`.
 enforce_set_authority(Base, Req, Opts) ->
-    Setter = hb_ao:get(<<"from">>, Req, Opts),
-    case hb_ao:get(<<"set-authority">>, Base, Opts) of
-        Setter -> true;
-        not_found -> {error, <<"No set-authority found in `Base' state.">>};
-        _ -> {error, <<"Caller is not the `set-authority'.">>}
+    maybe
+        Setter = hb_ao:get(<<"from">>, Req, Opts),
+        true ?= (Setter =/= not_found) orelse
+                {error, <<"Setter not found.">>},
+        SetAuthorityRequired =
+            hb_ao:get(<<"set-authority-required">>, Base, not_found, Opts),
+        SetAuthorityMatch =
+            hb_ao:get(<<"set-authority-match">>, Base, not_found, Opts),
+        AuthRes = case
+            (SetAuthorityRequired =/= not_found)
+            orelse
+            (SetAuthorityMatch =/= not_found)
+        of
+            true ->
+                dev_security:validate(
+                    <<"set-authority">>,
+                    Base,
+                    Req,
+                    Setter,
+                    Opts
+                );
+            false ->
+                enforce_legacy_set_authority(Setter, Base, Opts)
+        end,
+        true ?= AuthRes
+    end.
+
+enforce_legacy_set_authority(Setter, Base, Opts) ->
+    case validate_address(Setter, []) of
+        true ->
+            SetAuthority = hb_ao:get(<<"set-authority">>, Base, Opts),
+            case SetAuthority of
+                not_found ->
+                    {error, <<"SetAuthority not found.">>};
+                _ ->
+                    case {Setter, SetAuthority} of
+                        {S, S} ->
+                            true;
+                        _ ->
+                            {error, <<"Caller is not the `set-authority'.">>}
+                    end
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 %%% Helper functions.
 
-%% @doc Validate address format for security
-validate_address(Address) when is_binary(Address) ->
+%% @doc Validate address format for security. the validation
+%% allows binary addresses up to 128 bytes and prevent invalid
+%% addresses such as dev_trie reserved keys.
+validate_address(Address, CustomList) when is_binary(Address), is_list(CustomList) ->
+    ReservedKeys = ?AO_RESERVED_ADDRESS_KEYS ++ CustomList,
     case byte_size(Address) of
-        0 -> {error, <<"Recipient address cannot be empty.">>};
+        0 -> {error, <<"Address cannot be empty.">>};
+        N when N > 128 -> {error, <<"Address is too long.">>};
         _ ->
-            % Check for path separators (security: prevent path traversal)
-            case binary:match(Address, [<<"/">>, <<"\\">>]) of
-                nomatch -> true; 
-                _ -> 
-                    {
-                        error, 
-                        <<"Recipient address cannot contain path separators.">>
-                    }
+            maybe
+                true ?= (not dev_trie:is_reserved_key(Address))
+                    orelse {error, <<"Address uses a reserved trie internal key.">>},
+                true ?= (not is_reserved_custom_key(Address, ReservedKeys))
+                    orelse {error, <<"Address is a reserved ao/custom key">>},
+                % Check for path separators (security: prevent path traversal) and whitespaces.
+                case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
+                    nomatch -> true;
+                    _ -> {error, <<"Address cannot contain path separators or whitespaces">>}
+                end
             end
     end;
-validate_address(_) ->
-    {error, <<"Recipient address must be a binary.">>}.
-
+validate_address(_, _) ->
+    {error, <<"Address must be a binary.">>}.
+%% @doc Check if the given Key exists in the passed List
+is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
+    lists:member(Key, List);
+is_reserved_custom_key(_, _) -> 
+    false.
+send_error(Base, Assignment, Reason, Opts) when is_atom(Reason) ->
+    send_error(Base, Assignment, atom_to_binary(Reason), Opts);
+send_error(Base, Assignment, Reason, Opts) when not is_binary(Reason) ->
+    send_error(
+        Base,
+        Assignment,
+        iolist_to_binary(io_lib:format("~0p", [Reason])),
+        Opts
+    );
 send_error(Base, Assignment, Reason, Opts) when is_binary(Reason) ->
     case hb_ao:resolve(Assignment, <<"body/from">>, Opts) of
         {error, Error} ->
             ?event(token_short, {skipping_error_report, Error}, Opts),
             {ok, Base};
         {ok, Target} ->
-            dev_process_outbox:send(
-                #{
-                    <<"target">> => Target,       
-                    <<"reason">> => Reason
-                },
-                Base,
-                Opts
-            )
+            {ok,
+                dev_process_outbox:send(
+                    #{
+                        <<"target">> => Target,       
+                        <<"reason">> => Reason
+                    },
+                    Base,
+                    Opts
+                )
+            }
     end.

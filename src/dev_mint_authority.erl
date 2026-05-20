@@ -17,11 +17,21 @@ mint(Base, Assignment, Opts) ->
     end.
 
 enforce_mint_authority(Base, Req, Opts) ->
-    Minter = hb_ao:get(<<"from">>, Req, Opts),
-    case hb_ao:get(<<"mint-authority">>, Base, Opts) of
-        Minter -> true;
-        not_found -> {error, <<"Mint authority not found.">>};
-        _ -> {error, <<"Mint authority mismatch.">>}
+    maybe
+        Minter = hb_ao:get(<<"from">>, Req, Opts),
+        MintAuthority = hb_ao:get(<<"mint-authority">>, Base, Opts),
+        true ?= (Minter =/= not_found) orelse
+                {error, <<"Minter not found.">>},
+        true ?= (MintAuthority =/= not_found) orelse    
+                {error, <<"MintAuthority not found.">>},
+
+        true ?= dev_token:validate_address(Minter, []),
+        true ?= dev_token:validate_address(MintAuthority, []),
+        case {Minter, MintAuthority} of
+            {M, M} -> 
+                true;
+            _ -> {error, <<"Minter MintAuthority mismatch.">>}
+        end
     end.
     
 mint_single(Base, Req, Opts) ->
@@ -31,7 +41,7 @@ mint_single(Base, Req, Opts) ->
         {ok, Quantity} ?= hb_ao:resolve(Req, <<"quantity">>, Opts),
         true ?= (is_integer(Quantity) and (Quantity >= 0))
             orelse {error, <<"Quantity must be a non-negative integer.">>},
-        true ?= dev_token:validate_address(To),
+        true ?= dev_token:validate_address(To, []),
         ?event(debug_mint, {before_perform_mint, {to, To}, {quantity, Quantity}}),
         perform_mint(Base, #{ To => Quantity }, Opts)
     end.
@@ -42,7 +52,7 @@ mint_batch(Base, Req, Opts) ->
         perform_mint(Base, Quantities, Opts)
     end.
 
-perform_mint(Base, RawQuantities, Opts) ->
+perform_mint(Base, RawQuantities, Opts) when is_map(RawQuantities) ->
     maybe
         % Filter to only account-quantity pairs
         Quantities = maps:filter(
@@ -50,6 +60,13 @@ perform_mint(Base, RawQuantities, Opts) ->
             RawQuantities
         ),
         ?event({filtered_quantities, Quantities}),
+        % validate address
+        true ?= 
+            lists:all(
+                fun(Addr) -> true =:= dev_token:validate_address(Addr, []) end,
+                maps:keys(Quantities)
+            )
+            orelse {error, <<"Mint recipients must be valid addresses">>},
         true ?=
             lists:all(
                 fun(Q) -> is_integer(Q) andalso (Q >= 0) end,
@@ -110,5 +127,7 @@ perform_mint(Base, RawQuantities, Opts) ->
                 end,
                 maps:to_list(Quantities)
             ),
-        dev_process_lib:send(Notices, NewBaseWithBalAndSupply, Opts)
-    end.
+        {ok, dev_process_outbox:send(Notices, NewBaseWithBalAndSupply, Opts)}
+    end;
+perform_mint(_, RawQuantities, _) when not is_map(RawQuantities) ->
+    {error, <<"RawQuantities must be of type map.">>}.

@@ -68,6 +68,7 @@ generate_process(Params, Opts) ->
             <<"device">> => <<"process@1.0">>,
             <<"type">> => <<"Process">>,
             <<"execution-device">> => <<"token@1.0">>,
+            <<"dedup-subject">> => <<"body">>,
             <<"scheduler-device">> => <<"scheduler@1.0">>,
             <<"push-device">> => <<"push@1.0">>,
             <<"scheduler">> => Addr,
@@ -177,38 +178,28 @@ generate_pot_fields(Params, Opts) ->
     Resources = hb_maps:get(resources, Params, #{}, Opts),
     T = hb_maps:get(t, Params, 0, Opts),
     LastDrip = hb_maps:get(last_drip, Params, T, Opts),
-    % Normalize all user deposits in all resources by folding over each in turn
-    % and calling the `modify_deposit_state` function to update the state. This
-    % ensures that all values are tracked correctly.
-    hb_maps:fold(
-        fun(ResourceID, Resource, ResourceLevelState) ->
-            hb_maps:fold(
-                fun(User, Quantity, UserLevelState) ->
-                    dev_pot:modify_deposit_state(
-                        User,
-                        ResourceID,
-                        0,
-                        UserLevelState,
-                        Opts
-                    )
-                end,
-                hb_maps:get(<<"deposits">>, Resource, #{}, Opts),
-                ResourceLevelState,
-                Opts
-            )
-        end,
-        0,
-        #{
-            <<"mint-device">> => <<"pot@1.0">>,
-            <<"mint-cap">> => MintCap,
-            <<"mint-prop-numerator">> => MintPropNumerator,
-            <<"mint-prop-denominator">> => MintPropDenominator,
-            <<"resources">> => Resources,
-            <<"t">> => T,
-            <<"last-drip">> => LastDrip
-        },
-        Opts
-    ).
+    TotalWeightedUnits =
+        hb_maps:fold(
+            fun(_ResourceID, Resource, Acc) ->
+                Weight = hb_maps:get(<<"weight">>, Resource, 0, Opts),
+                TotalDeposits = hb_maps:get(<<"total-deposits">>, Resource, 0, Opts),
+                Acc + (Weight * TotalDeposits)
+            end,
+            0,
+            Resources,
+            Opts
+        ),
+    #{
+        <<"mint-device">> => <<"pot@1.0">>,
+        <<"mint-cap">> => MintCap,
+        <<"mint-prop-numerator">> => MintPropNumerator,
+        <<"mint-prop-denominator">> => MintPropDenominator,
+        <<"t-source">> => <<"slot">>,
+        <<"total-weighted-units">> => TotalWeightedUnits,
+        <<"resources">> => Resources,
+        <<"t">> => T,
+        <<"last-drip">> => LastDrip
+    }.
 
 %% @doc Helper to create a pot resource with deposits
 %% Example: pot_resource(100, [{?ALICE, 10}, {?BOB, 5}])
@@ -387,6 +378,235 @@ transfer_basic_test() ->
     % % Verify total supply unchanged
     % ?assertEqual(1000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
 
+mint_authority_mismatch_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    NotMinter = ar_wallet:new(),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Minter MintAuthority mismatch.">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(NotMinter),
+                    <<"recipient">> => Recipient,
+                    <<"quantity">> => 1
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
+batch_mint_reserved_recipient_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Mint recipients must be valid addresses">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Minter),
+                    <<"mode">> => <<"batch">>,
+                    <<"quantities">> => #{
+                        <<"device">> => 1,
+                        Recipient => 5
+                    }
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
+batch_mint_reserved_ao_recipient_rejected_test() ->
+    Opts = opts(),
+    Minter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Recipient = id(ar_wallet:new()),
+    {Base, _} =
+        generate_base_state(
+            #{
+                total_supply => 0,
+                initial_balances => #{},
+                extra => #{
+                    <<"mint-authority">> => id(Minter)
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Mint recipients must be valid addresses">>},
+        dev_mint_authority:mint(
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Minter),
+                    <<"mode">> => <<"batch">>,
+                    <<"quantities">> => #{
+                        <<"get">> => 1,
+                        Recipient => 5
+                    }
+                }
+            },
+            Opts
+        )
+    ),
+    Balances = hb_ao:get(<<"balances">>, Base, Opts),
+    ?assertEqual(0, hb_ao:get(Recipient, Balances, 0, Opts)),
+    ?assertEqual(<<"trie@1.0">>, maps:get(<<"device">>, Balances)),
+    ?assertEqual(0, hb_ao:get(<<"total-supply">>, Base, Opts)).
+
+non_whitelisted_set_field_rejected_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => id(Setter),
+                    <<"whitelisted-fields">> => [
+                        <<"set-authority">>,
+                        <<"set-authority-required">>,
+                        <<"set-authority-match">>,
+                        <<"name">>,
+                        <<"ticker">>,
+                        <<"denomination">>,
+                        <<"logo">>
+                    ]
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        {error, <<"Attempted to set non-whitelisted fields.">>},
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Setter),
+                    <<"balances">> => #{ <<"fake">> => 1 }
+                }
+            },
+            Opts
+        )
+    ).
+
+default_whitelist_wildcard_allows_set_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => id(Setter)
+                }
+            },
+            Opts
+        ),
+    {ok, Updated} =
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => id(Setter),
+                    <<"balances">> => #{ <<"fake">> => 1 }
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(
+        1,
+        hb_ao:get(<<"fake">>, hb_ao:get(<<"balances">>, Updated, #{}, Opts), 0, Opts)
+    ).
+
+set_authority_required_uses_dev_security_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    SetterID = id(Setter),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => [SetterID],
+                    <<"set-authority-required">> => [SetterID]
+                }
+            },
+            Opts
+        ),
+    {ok, Updated} =
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => SetterID,
+                    <<"logo">> => <<"logo-a">>
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(<<"logo-a">>, hb_ao:get(<<"logo">>, Updated, Opts)).
+
+set_authority_match_uses_dev_security_test() ->
+    Opts = opts(),
+    Setter = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    SetterID = id(Setter),
+    Base =
+        generate_process(
+            #{
+                extra => #{
+                    <<"set-authority">> => [SetterID],
+                    <<"set-authority-match">> => 1
+                }
+            },
+            Opts
+        ),
+    {ok, Updated} =
+        dev_token:handle_action(
+            <<"set">>,
+            Base,
+            #{
+                <<"body">> => #{
+                    <<"from">> => SetterID,
+                    <<"logo">> => <<"logo-a">>
+                }
+            },
+            Opts
+        ),
+    ?assertEqual(<<"logo-a">>, hb_ao:get(<<"logo">>, Updated, Opts)).
+
 simple_process_test() ->
     Opts = opts(),
     Alice = ar_wallet:new(),
@@ -419,6 +639,86 @@ simple_process_test() ->
         ),
     ?assertEqual(999_999_999, get_balance(Base, id(Alice), Opts)),
     ?assertEqual(1, get_balance(Base, id(Bob), Opts)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
+
+reserved_recipient_transfer_rejected_test() ->
+    Opts = opts(),
+    Alice = ar_wallet:new(),
+    AliceID = id(Alice),
+    Base =
+        generate_process(
+            #{
+                initial_balances => #{ AliceID => 1_000_000_000 }
+            },
+            Opts
+        ),
+    _SchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceID,
+                <<"recipient">> => <<"device">>,
+                <<"quantity">> => 1
+            },
+            Alice,
+            Opts
+        ),
+    {ok, BalancesLink} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                <<"now">>,
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                <<"balances">>
+            ],
+            Opts
+        ),
+    ?assertEqual(1_000_000_000, get_balance(Base, AliceID, Opts)),
+    ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, BalancesLink, undefined, Opts)),
+    ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
+
+reserved_ao_recipient_transfer_rejected_test() ->
+    Opts = opts(),
+    Alice = ar_wallet:new(),
+    AliceID = id(Alice),
+    Base =
+        generate_process(
+            #{
+                initial_balances => #{ AliceID => 1_000_000_000 }
+            },
+            Opts
+        ),
+    _SchedRes =
+        schedule_request(
+            Base,
+            <<"transfer">>,
+            #{
+                <<"from">> => AliceID,
+                <<"recipient">> => <<"path">>,
+                <<"quantity">> => 1
+            },
+            Alice,
+            Opts
+        ),
+    {ok, BalancesLink} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                <<"now">>,
+                #{
+                    <<"path">> => <<"as">>,
+                    <<"as">> => <<"execution">>
+                },
+                <<"balances">>
+            ],
+            Opts
+        ),
+    ?assertEqual(1_000_000_000, get_balance(Base, AliceID, Opts)),
+    ?assertEqual(<<"trie@1.0">>, hb_maps:get(<<"device">>, BalancesLink, undefined, Opts)),
     ?assertEqual(1_000_000_000, hb_ao:get(<<"now/total-supply">>, Base, Opts)).
 
 simple_pot_process_test() ->
