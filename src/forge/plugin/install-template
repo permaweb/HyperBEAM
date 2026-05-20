@@ -51,17 +51,30 @@ script_dir() {
     cd "$(dirname "$0")" && pwd
 }
 
+rebar3_config_dir() {
+    if [ "${XDG_CONFIG_HOME:-}" ]; then
+        printf '%s/rebar3' "$XDG_CONFIG_HOME"
+    else
+        printf '%s/.config/rebar3' "$HOME"
+    fi
+}
+
+rebar3_env_config_dir() {
+    case "$1" in
+        */.config/rebar3) printf '%s' "$1" ;;
+        *) printf '%s/.config/rebar3' "$1" ;;
+    esac
+}
+
 default_template_dir() {
-    if [ "${REBAR_GLOBAL_CONFIG_DIR:-}" ]; then
-        printf '%s/.config/rebar3/templates' "$REBAR_GLOBAL_CONFIG_DIR"
+    if [ "${REBAR_TEMPLATE_DIR:-}" ]; then
+        printf '%s' "$REBAR_TEMPLATE_DIR"
+    elif [ "${REBAR_GLOBAL_CONFIG_DIR:-}" ]; then
+        printf '%s/templates' "$(rebar3_env_config_dir "$REBAR_GLOBAL_CONFIG_DIR")"
     elif [ "${REBAR_CACHE_DIR:-}" ]; then
         printf '%s/.config/rebar3/templates' "$REBAR_CACHE_DIR"
-    elif [ "$(uname -s)" = "Darwin" ]; then
-        printf '%s/Library/Application Support/rebar3/templates' "$HOME"
-    elif [ "${XDG_CONFIG_HOME:-}" ]; then
-        printf '%s/rebar3/templates' "$XDG_CONFIG_HOME"
     else
-        printf '%s/.config/rebar3/templates' "$HOME"
+        printf '%s/templates' "$(rebar3_config_dir)"
     fi
 }
 
