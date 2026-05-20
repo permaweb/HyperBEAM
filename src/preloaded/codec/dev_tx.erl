@@ -2,7 +2,7 @@
 %%% records to and from TABMs.
 -module(dev_tx).
 -device_libraries([lib_arweave_common]).
--export([from/3, to/3, commit/3, verify/3]).
+-export([from/3, to/3, to_hint/3, commit/3, verify/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -102,6 +102,20 @@ do_from(RawTX, Req, Opts) ->
     ?event({from, {parsed_message, hb_util:human_id(TX#tx.id)}}),
     {ok, WithCommitments}.
 
+%% @doc Inspect a message's signed tx@1.0 commitment and, if the commitment
+%% carries an explicit `bundle' field, mirror that value onto the request `Req'.
+%% If no matching commitment exists, we might be dealing with a nested 
+%% message (i.e. tx@1.0 root, with one ore more bundled ans104@1.0 children),
+%% so delegate to ans104@1.0.
+to_hint(Msg, Req, Opts) ->
+    case lib_arweave_common:bundle_hint(<<"tx@1.0">>, Msg, Req, Opts) of
+        not_found ->
+            case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
+                not_found -> {ok, Req};
+                Hint -> Hint
+            end;
+        Hint -> Hint
+    end.
 %% @doc Internal helper to translate a message to its #tx record representation,
 %% which can then be used by ar_tx to serialize the message. We call the 
 %% message's device in order to get the keys that we will be checkpointing. We 
@@ -119,39 +133,17 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
         })
     };
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
-to(RawTABM, Req, Opts) when is_map(RawTABM) ->
-    % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    ?event({to, {inbound, RawTABM}, {req, Req}}),
-    MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"tx@1.0">> },
-        RawTABM,
+to(TABM, Req, Opts) when is_map(TABM) ->
+    ?event({to, {inbound, TABM}, {req, Req}}),
+    TX = lib_arweave_common:to(
+        <<"tx@1.0">>, TABM, Req,
+        fun dev_tx_to:fields_to_tx/4,
+        fun dev_tx_to:excluded_tags/3,
         Opts
     ),
-    IsBundle = lib_arweave_common:is_bundle(MaybeCommitment, Req, Opts),
-    MaybeBundle = lib_arweave_common:maybe_load(RawTABM, IsBundle, Opts),
-    ?event({to, {raw_tabm, RawTABM}, {is_bundle, IsBundle}, {maybe_bundle, MaybeBundle}, {req, Req}, {opts, Opts}}),
-    % Calculate and normalize the `data', if applicable.
-    Data =
-        lib_arweave_common:data(
-            MaybeBundle, Req, fun lib_arweave_common:to/3, Opts),
-    ?event({calculated_data, Data}),
-    TX0 = lib_arweave_common:siginfo(
-        MaybeBundle, MaybeCommitment,
-        fun dev_tx_to:fields_to_tx/4, Opts),
-    ?event({found_siginfo, TX0}),
-    TX1 = TX0#tx { data = Data },
-    % Calculate the tags for the TX.
-    Tags = lib_arweave_common:tags(
-        TX1, MaybeCommitment, MaybeBundle,
-        dev_tx_to:excluded_tags(TX1, MaybeBundle, Opts),
-        Opts),
-    ?event({calculated_tags, Tags}),
-    TX2 = TX1#tx { tags = Tags },
-    ?event({tx_before_id_gen, TX2}),
-    FinalTX = ar_tx:normalize(TX2),
-    enforce_valid_tx(FinalTX),
-    ?event({to_result, FinalTX}),
-    {ok, FinalTX};
+    enforce_valid_tx(TX),
+    ?event({to_result, TX}),
+    {ok, TX};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
     
