@@ -2221,7 +2221,7 @@ tx_with_no_data_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
                 "to=", BlockBin/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2290,7 +2290,7 @@ list_index_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
                 "to=", BlockBin/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2338,7 +2338,7 @@ auto_stop_on_indexed_block_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock))/binary, "&"
                 "to=", (hb_util:bin(IndexedBlock))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2347,7 +2347,7 @@ auto_stop_on_indexed_block_test_parallel() ->
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(Higher2))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2370,7 +2370,7 @@ explicit_to_reindexes_all_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock))/binary, "&"
                 "to=", (hb_util:bin(IndexedBlock))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2381,7 +2381,7 @@ explicit_to_reindexes_all_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock+1))/binary, "&"
                 "to=", (hb_util:bin(LowerBlock))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2404,7 +2404,7 @@ auto_stop_partial_index_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(Block))/binary, "&"
                 "to=", (hb_util:bin(Block))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             NoIndexOpts
         ),
@@ -2427,7 +2427,7 @@ auto_stop_partial_index_test_parallel() ->
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(HigherBlock))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2540,7 +2540,7 @@ negative_from_index_test_parallel() ->
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(StopBlock))/binary, "&"
                 "to=", (hb_util:bin(StopBlock))/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
@@ -2549,7 +2549,7 @@ negative_from_index_test_parallel() ->
             <<
                 "~copycat@1.0/arweave&"
                 "from=", NegativeFrom/binary, "&"
-                "mode=write"
+                "mode=write&depth=2"
             >>,
             Opts
         ),
