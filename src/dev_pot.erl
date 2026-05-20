@@ -27,13 +27,23 @@
 %%% Authority model:
 %%% - `deposit` / `withdraw` are authorized per resource by that resource's
 %%%   `authority` security policy.
-%%% - `weight` updates may be delegated per resource via `weight-authority`.
+%%% - `weight` and `quantity-scale` updates may be
+%%%    delegated per resource via `weight-authority`.
 %%% - resource config changes (`authority*`, `weight-authority*`) remain
 %%%   guarded by the pot-wide `mint-authority` policy, or by the configured
 %%%   `parent` when the pot is acting as a child mint.
 %%% - child mints trust their direct `parent` process for inherited resource
 %%%   config and writes; forwarded parent `register` notifications set both
 %%%   `resource-authority` and `weight-authority` to that parent process.
+%%%
+%%% Quantity model:
+%%% - `deposit` / `withdraw` request bodies are normalized from source-token raw
+%%%   units using the resource's configured `quantity-scale`. If unset, the
+%%%   quantity is interpreted as already normalized pot units.
+%%% - direct `deposit/5` and `withdraw/5` calls already expect normalized pot
+%%%   units.
+%%% - `delegate` / `undelegate` always move existing normalized pot units and do
+%%%   not apply `quantity-scale`.
 %%% 
 %%% TODO: Add `secure-set` (set guarded by address) for resource-scoped config.
 -module(dev_pot).
@@ -44,7 +54,7 @@
 -export([register/3, notify/3]).
 %%% `~pot@1.0` Private Utilities.
 -export([test_drip/3]).
--export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4]).
+-export([deposit/5, withdraw/5, delegate/6, undelegate/6, register_resource/4, register_resource/5]).
 -export([update_deposit_index/5]).
 -export([user/3, balance/3, balances/1, balances/2]).
 -export([get_deposit/4, get_deposits/2, get_deposits/3]).
@@ -59,8 +69,10 @@
     <<"last-drip">>,
     <<"t">>,
     <<"total-weighted-units">>,
-    <<"undistributed-mint">>
+    <<"undistributed-mint">>,
+    <<"accumulator-remainder">>
 ]).
+-define(POT_QUANTITY_SCALE, 1_000_000_000_000_000_000). % 1e18
 
 %%% Pot Model Functions.
 
@@ -137,20 +149,24 @@ drip_global(S, Opts) ->
             T
         ),
     UndistributedMint = hb_maps:get(<<"undistributed-mint">>, S, 0, Opts),
+    AccumulatorRemainder =
+        hb_maps:get(<<"accumulator-remainder">>, S, 0, Opts),
     ?event(debug_test,
         {drip_global,
             {t, T},
             {last_drip, LastT},
             {minted, AlreadyMinted},
             {undistributed_mint, UndistributedMint},
+            {accumulator_remainder, AccumulatorRemainder},
             {total_weighted_units, TotalWeightedUnits},
             {global_accumulator, GlobalAcc},
             {to_mint, ToMint}
         }, Opts),
-    {NewGlobalAcc, NewUndistributedMint} =
+    {NewGlobalAcc, NewUndistributedMint, NewAccumulatorRemainder} =
         dev_pot_math:drip_global(
             GlobalAcc,
             ToMint + UndistributedMint,
+            AccumulatorRemainder,
             TotalWeightedUnits
         ),
     ?event(debug_test,
@@ -166,7 +182,8 @@ drip_global(S, Opts) ->
             <<"accumulator">> => NewGlobalAcc,
             <<"last-drip">> => T,
             <<"minted">> => AlreadyMinted + ToMint,
-            <<"undistributed-mint">> => NewUndistributedMint
+            <<"undistributed-mint">> => NewUndistributedMint,
+            <<"accumulator-remainder">> => NewAccumulatorRemainder
         },
         Opts
     ).
@@ -279,7 +296,7 @@ maybe_initialize_subscriptions(Base, Req, Opts) ->
     end.
 
 %% @doc If the process has a `parent' mint set, send a subscription request to
-%% the parent process for all `set-weight' messages.
+%% the parent process for all `register' messages.
 initialize_subscriptions(Base, _Req, Opts) ->
     case hb_maps:get(<<"parent">>, Base, not_found, Opts) of
         not_found -> Base;
@@ -358,6 +375,7 @@ deposit(State, Assignment, Opts) ->
         StateWithT = ensure_initialized(State, Assignment, Opts),
         deposit(Address, ResourceID, Amount, StateWithT, Opts)
     else
+        {error, _} = Err -> Err;
         Reason -> {error, Reason}
     end.
 -spec deposit(binary(), binary(), pos_integer(), map(), map()) -> map() | {error, term()}.
@@ -399,8 +417,11 @@ withdraw(_, _, Amount, _, _) when not is_integer(Amount) ->
     {error, <<"Withdraw amount must be an Integer.">>}.
 
 %% @doc Parse a request to modify a deposit and verify that it originates from
-%% the valid resource authority. Returns `{ok, {Address, ResourceID, Amount}}'
-%% if the request is valid, otherwise returns `{error, Reason}'.
+%% the valid resource authority. Returns `{ok, {Address, ResourceID,
+%% NormalizedAmount}}' if the request is valid, otherwise returns `{error,
+%% Reason}'. `quantity-scale` is resource configuration only. Requests that
+%% carry it inline are rejected; otherwise the resource's configured scale is
+%% used, falling back to already-normalized pot units (POT_QUANTITY_SCALE).
 parse_deposit_modification(Base, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
     maybe
@@ -428,7 +449,19 @@ parse_deposit_modification(Base, Assignment, Opts) ->
                 Opts
             ),
         true ?= verify_resource_authority(ResourceID, Base, Req, Opts),
-        {ok, {Address, ResourceID, Amount}}
+        no_inline_quantity_scale ?=
+            case hb_maps:find(<<"quantity-scale">>, Req, Opts) of
+                error -> no_inline_quantity_scale;
+                {ok, _} -> inline_quantity_scale
+            end,
+        Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, Base, #{}, Opts),
+        QuantityScale = hb_maps:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
+        {ok, NormalizedAmount} ?= normalize_quantity(Amount, QuantityScale),
+        {ok, {Address, ResourceID, NormalizedAmount}}
+    else
+        inline_quantity_scale ->
+            {error, <<"quantity-scale must be configured on the resource.">>};
+        Other -> Other
     end.
 
 %% @doc Verify a request against the resource-local `authority` policy for a
@@ -565,7 +598,8 @@ liquidate(Addr, ResourceID, Amount, S, Opts) ->
             end
     end.
 
-%% @doc Delegate some quantity of a resource from one address to another.
+%% @doc Delegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec delegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 delegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -746,7 +780,8 @@ delegate(_, _, _, Amount, _, _) when is_integer(Amount), Amount =:= 0 ->
 delegate(_, _, _, Amount, _, _) when not is_integer(Amount)->
     {error, <<"Delegate Amount must be of integer type">>}.
 
-%% @doc Undelegate some quantity of a resource from one address to another.
+%% @doc Undelegate normalized pot units of a resource from one address to another.
+%% `quantity-scale` is resource configuration only and is not applied here.
 -spec undelegate(map(), map(), map()) -> {ok, map()} | {error, term()}.
 undelegate(State, Assignment, Opts) ->
     Req = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -963,7 +998,7 @@ ensure_undelegation_cover(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
 %% caller, then applies supported resource-scoped config mutations.
 %% 
 %% Authorization model:
-%% - `weight`-only updates may be performed by:
+%% - `weight` / `quantity-scale` updates may be performed by:
 %%   - the configured `parent`
 %%   - the pot-wide `mint-authority`
 %%   - the resource-local `weight-authority`
@@ -998,18 +1033,28 @@ register(State, Assignment, Opts) ->
             hb_maps:find(<<"weight-authority">>, Req, Opts) =/= error orelse
             hb_maps:find(<<"weight-authority-required">>, Req, Opts) =/= error orelse
             hb_maps:find(<<"weight-authority-match">>, Req, Opts) =/= error,
+        HasResourceConfigMutation = 
+            hb_maps:find(<<"weight">>, Req, Opts) =/= error orelse
+            hb_maps:find(<<"quantity-scale">>, Req, Opts) =/= error,
         true ?=
-            case {HasAdminMutation, hb_maps:find(<<"weight">>, Req, Opts)} of
+            case {HasAdminMutation, HasResourceConfigMutation} of
                 {true, _} ->
                     enforce_resource_config_authority(From, State, Req, Opts);
-                {false, {ok, _}} ->
+                {false, true} ->
                     enforce_resource_weight_authority(ResID, From, State, Req, Opts);
                 _ ->
                     true
             end,
+        ResourceConfigMutations = {
+            hb_maps:find(<<"weight">>, Req, Opts), 
+            hb_maps:find(<<"quantity-scale">>, Req, Opts)
+        },
         State2 =
-            case hb_maps:find(<<"weight">>, Req, Opts) of
-                {ok, Weight} -> register_resource(ResID, Weight, State, Opts);
+            case ResourceConfigMutations of
+                {{ok, Weight}, {ok, QuantityScale}} ->
+                    register_resource(ResID, Weight, QuantityScale, State, Opts);
+                {{ok, Weight}, _} -> register_resource(ResID, Weight, State, Opts);
+                {_, {ok, QuantityScale}} -> register_resource(ResID, keep_existing, QuantityScale, State, Opts);
                 _ -> State
             end,
         true ?= is_map(State2) orelse State2,
@@ -1093,9 +1138,9 @@ enforce_resource_config_authority(From, State, Req, Opts) ->
         end,
         true ?= AuthRes
     end.
-%% @doc Enforce authorization for weight-only updates. Parent may always
+%% @doc Enforce authorization for reward config updates. Parent may always
 %% reconfigure its children, explicit per-resource `weight-authority` can
-%% update the weight, and `mint-authority` remains the global override.
+%% update `weight` / `quantity-scale`, and `mint-authority` remains the global override.
 enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
     ?event(debug_pot, {enforce_resource_weight_authority, Req}, Opts),
     maybe
@@ -1115,7 +1160,7 @@ enforce_resource_weight_authority(ResourceID, From, State, Req, Opts) ->
                             ) of
                                 true -> true;
                                 {error, _} ->
-                                    {error, <<"Caller is not authorized to update resource weight.">>}
+                                    {error, <<"Caller is not authorized to update resource reward config.">>}
                             end
                     end
             end,
@@ -1229,7 +1274,7 @@ validate_signer_config(Value, Opts) when is_binary(Value) ->
     catch
         _:_ -> {error, <<"Signer config must be a valid binary or list.">>}
     end;
-validate_signer_config(Value, Opts) when is_list(Value) ->
+validate_signer_config(Value, _Opts) when is_list(Value) ->
     case Value of
         [] ->
             {error, <<"Signer config list must not be empty.">>};
@@ -1262,45 +1307,63 @@ validate_match_config(Match) when is_binary(Match) ->
 validate_match_config(_) ->
     {error, <<"Match threshold must be a non-negative integer.">>}.
 
-%% @doc Set the weight of a specific resource in the pot, updating the pot state
-%% as necessary.
-register_resource(ResourceID, Weight, S, Opts) when is_integer(Weight), Weight >= 0 ->
+%% @doc Set the reward config of a specific resource in the pot, updating the pot
+%% state as necessary.
+register_resource(ResourceID, Weight, S, Opts) ->
+    register_resource(ResourceID, Weight, keep_existing, S, Opts).
+register_resource(ResourceID, Weight, QuantityScale, S, Opts) ->
     maybe
         true ?= dev_token:validate_address(ResourceID, ?RESERVED_KEYS),
+        true ?= is_valid_quantity_scale(QuantityScale),
+        true ?= is_valid_weight(Weight),
         % Run the global drip to ensure the state is up to date.
         S0 = drip_global(S, Opts),
         S1 = drip_resource(ResourceID, S0, Opts),
         % Calculate the new total deposited units for the weighted global counter
         % (`/total-weighted-units').
         Resource = hb_ao:get(<<"/resources/", ResourceID/binary>>, S1, #{}, Opts),
-        OldWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ExistingWeight = hb_ao:get(<<"weight">>, Resource, 0, Opts),
+        ReqWeight = case Weight of
+            keep_existing -> ExistingWeight;
+            _ -> Weight
+        end,
+        % Denomination may be changed on case the assets undergo a redomination
+        ExistingQuantityScale = hb_ao:get(<<"quantity-scale">>, Resource, ?POT_QUANTITY_SCALE, Opts),
+        NewQuantityScale = case QuantityScale of
+            keep_existing -> ExistingQuantityScale;
+            _ -> QuantityScale
+        end,
         ResourceDeposits = hb_ao:get(<<"total-deposits">>, Resource, 0, Opts),
         % Update the total weighted units counter. Subtract the deposits at the old
         % weight first, then add the deposits at the new weight.
         LastTotalWeightedUnits = hb_maps:get(<<"total-weighted-units">>, S1, 0, Opts),
         NewTotalWeightedUnits =
             LastTotalWeightedUnits
-                - (OldWeight * ResourceDeposits)
-                + (Weight * ResourceDeposits),
+                - (ExistingWeight * ResourceDeposits)
+                + (ReqWeight * ResourceDeposits),
         % Update the resource and the global weighted units counter.
         AfterSet =
             hb_ao:set(
                 S1,
                 #{
                     <<"resources">> => #{
-                        ResourceID => Resource#{ <<"weight">> => Weight }
+                        ResourceID => Resource#{ <<"weight">> => ReqWeight, <<"quantity-scale">> => NewQuantityScale }
                     },
                     <<"total-weighted-units">> => NewTotalWeightedUnits
                 },
                 Opts
             ),
-        send_weight_notice(ResourceID, Weight, AfterSet, Opts)
-end;
+        send_resource_config_notice(ResourceID, ReqWeight, NewQuantityScale, AfterSet, Opts)
+end.
 
-register_resource(_, Weight, _, _) when not is_integer(Weight) ->
-    {error, <<"Invalid Weight type.">>};
-register_resource(_, Weight, _, _) when is_integer(Weight), Weight < 0 ->
-    {error, <<"Weight must be a non-negative integer.">>}.
+is_valid_quantity_scale(Scale) when is_integer(Scale), Scale > 0, Scale =< ?POT_QUANTITY_SCALE -> true;
+is_valid_quantity_scale(keep_existing) -> true;
+is_valid_quantity_scale(_) -> {error, <<"QuantityScale must be a positive integer <= POT_QUANTITY_SCALE.">>}.
+
+is_valid_weight(W) when is_integer(W), W >= 0 -> true;
+is_valid_weight(keep_existing) -> true;
+is_valid_weight(_) -> {error, <<"Weight must be a non-negative integer.">>}.
+
 
 %% @doc Update the inverted index for a specific address in a specific resource.
 update_deposit_index(Addr, ResourceID, Quantity, S, Opts) ->
@@ -1344,17 +1407,18 @@ send_delegation_notice(FromAddr, ToAddr, ResourceID, Amount, S, Opts) ->
         Opts
     ).
 
-%% @doc Send a `set-weight' update message to all subscribed listeners. We use
+%% @doc Send a `register' update message to all subscribed listeners. We use
 %% `notify/3' instead of `send/3' to do this as (by default) there is nobody that
 %% will be listening for this message. Clients can call `subscribe' with a
-%% `subscribe-target' of `broadcast' and an `subscribe-action' of `set-weight'
+%% `subscribe-target' of `broadcast' and an `subscribe-action' of `register'
 %% to be notified of these events.
-send_weight_notice(ResourceID, Weight, S, Opts) ->
+send_resource_config_notice(ResourceID, Weight, QuantityScale, S, Opts) ->
     dev_process_outbox:notify(
         #{
             <<"action">> => <<"register">>,
             <<"resource">> => ResourceID,
-            <<"weight">> => Weight
+            <<"weight">> => Weight,
+            <<"quantity-scale">> => QuantityScale
         },
         S,
         Opts
@@ -1516,3 +1580,8 @@ user(Addr, S, Opts) ->
         true ?= dev_token:validate_address(Addr, ?RESERVED_KEYS),
         hb_ao:get(<<"/users/", Addr/binary>>, S, #{}, Opts)
     end.
+normalize_quantity(Qty, QuantityScale)
+        when is_integer(Qty), is_integer(QuantityScale), QuantityScale > 0 ->
+    {ok, (Qty * ?POT_QUANTITY_SCALE) div QuantityScale};
+normalize_quantity(_, _) ->
+    {error, invalid_quantity_or_scale}.

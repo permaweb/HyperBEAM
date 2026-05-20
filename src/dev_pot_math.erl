@@ -1,7 +1,10 @@
 %% @doc Math functions for the dev_pot module. Expresses a model as follows:
 %%% ```
+%%% Scale:      AccumulatorScale = RewardScale * PriceScale.
+%%%
 %%% Initialization:
 %%%   Global:     Acc = 0,
+%%%               AccRemainder = 0,
 %%%               TWU = 0.
 %%%   Resource:   Acc = 0,
 %%%               LastGlobal = Global.Acc.
@@ -10,10 +13,13 @@
 %%%               Global.TWU += Qty * Resource.Weight.
 %%%            
 %%% Drip:
-%%%   Global:     Acc += ToMint / Global.TWU.
+%%%   Global:     Numerator = ToMint * AccumulatorScale + AccRemainder,
+%%%               Acc += Numerator div Global.TWU,
+%%%               AccRemainder = Numerator rem Global.TWU.
 %%%   Resource:   Acc += (Global.Acc - LastGlobal) * Weight,
 %%%               LastGlobal = Global.Acc.
-%%%   User:       Balance += (Resource.Acc - LastResource) * Qty.
+%%%   User:       Balance += ((Resource.Acc - LastResource) * Qty)
+%%%                          div AccumulatorScale.
 %%% 
 %%% Modify:
 %%%   Weight:     Global.drip(),
@@ -35,11 +41,14 @@
 %%% '''
 -module(dev_pot_math).
 -export([minted_between/6]).
--export([drip_global/3, drip_resource/4, drip_user/3, drip_user/4]).
+-export([drip_global/4, drip_resource/4, drip_user/3, drip_user/4]).
 -export([bignum_exp/2]).
 
 -define(MAX_EXACT_POWER_DIGITS, 1000).
 -define(FIXED_SCALE_DIGITS, [40, 60, 80]).
+-define(REWARD_SCALE, 1_000_000_000_000_000_000). % 1e18
+-define(PRICE_SCALE, 1_000_000). % 1e6
+-define(ACCUMULATOR_SCALE, (?REWARD_SCALE * ?PRICE_SCALE)).
 
 minted_between(Minted, Max, PropN, PropD, LastT, T)
     when not is_integer(Minted) orelse not is_integer(Max)
@@ -167,12 +176,15 @@ do_bignum_exp(X, Y, Acc) when Y rem 2 =:= 1 ->
 do_bignum_exp(X, Y, Acc) ->
     do_bignum_exp(X * X, Y div 2, Acc).
 
-drip_global(Acc, ToMint, TotalWeightedUnits) when TotalWeightedUnits =:= 0 ->
-    {Acc, ToMint};
-drip_global(Acc, ToMint, TotalWeightedUnits) ->
-    NewAcc = Acc + (ToMint div TotalWeightedUnits),
-    UndistributedMint = ToMint rem TotalWeightedUnits,
-    {NewAcc, UndistributedMint}.
+drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits)
+        when TotalWeightedUnits =:= 0 ->
+    {Acc, ToMint, AccumulatorRemainder};
+drip_global(Acc, ToMint, AccumulatorRemainder, TotalWeightedUnits) ->
+    Numerator = (ToMint * ?ACCUMULATOR_SCALE) + AccumulatorRemainder,
+    AccDelta = Numerator div TotalWeightedUnits,
+    NewAccumulatorRemainder = Numerator rem TotalWeightedUnits,
+    NewAcc = Acc + AccDelta,
+    {NewAcc, 0, NewAccumulatorRemainder}.
 
 drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
     ResourceAcc + ((GlobalAcc - LastGlobalAcc) * Weight).
@@ -180,4 +192,4 @@ drip_resource(ResourceAcc, GlobalAcc, LastGlobalAcc, Weight) ->
 drip_user(ResourceAcc, LastResourceAcc, UserQty) ->
     drip_user(0, ResourceAcc, LastResourceAcc, UserQty).
 drip_user(Balance, ResourceAcc, LastResourceAcc, UserQty) ->
-    Balance + ((ResourceAcc - LastResourceAcc) * UserQty).
+    Balance + (((ResourceAcc - LastResourceAcc) * UserQty) div ?ACCUMULATOR_SCALE).
