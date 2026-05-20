@@ -304,7 +304,8 @@ compute_native_cache_ignores_request_noise_test_parallel() ->
             Opts
         ),
     schedule_test_message(Base, <<"TEST TEXT">>, Opts),
-    ProcID = lib_process:process_id(Base, #{}, Opts),
+    {ok, Process} = hb_message:with_only_committed(Base, Opts),
+    ProcID = hb_message:id(Process, signed, Opts),
     Req1 = #{
         <<"path">> => <<"compute">>,
         <<"slot">> => <<"0">>,
