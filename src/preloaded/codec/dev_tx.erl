@@ -109,8 +109,8 @@ do_from(RawTX, Req, Opts) ->
 %% so delegate to ans104@1.0.
 to_hint(Msg, Req, Opts) ->
     case lib_arweave_common:bundle_hint(<<"tx@1.0">>, Msg, Req, Opts) of
-        not_found -> dev_codec_ans104:to_hint(Msg, Req, Opts);
-        Hint -> Hint    
+        not_found -> hb_ao:raw(<<"ans104@1.0">>, <<"to-hint">>, Msg, Req, Opts);
+        Hint -> Hint
     end.
 %% @doc Internal helper to translate a message to its #tx record representation,
 %% which can then be used by ar_tx to serialize the message. We call the 
@@ -133,7 +133,9 @@ to(TABM, Req, Opts) when is_map(TABM) ->
     ?event({to, {inbound, TABM}, {req, Req}}),
     TX = lib_arweave_common:to(
         <<"tx@1.0">>, TABM, Req,
-        fun dev_ans104:to/3,
+        fun(Msg, MsgReq, MsgOpts) ->
+            hb_ao:raw(<<"ans104@1.0">>, <<"to">>, Msg, MsgReq, MsgOpts)
+        end,
         fun dev_tx_to:fields_to_tx/4,
         fun dev_tx_to:excluded_tags/3,
         Opts

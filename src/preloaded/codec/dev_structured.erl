@@ -188,14 +188,12 @@ apply_bundle_hint(Msg, Req, Opts) ->
     case hb_maps:get(<<"hint-device">>, Req, undefined, Opts) of
         undefined -> Req;
         DeviceBin ->
-            TargetCodecMod =
-                hb_device:message_to_device(
-                    #{ <<"device">> => DeviceBin },
-                    Opts
-                ),
             % May add a `bundle` key to the request
-            try hb_util:ok(TargetCodecMod:to_hint(Msg, Req, Opts))
-            catch _:_ -> Req
+            try hb_util:ok(
+                hb_ao:raw(DeviceBin, <<"to-hint">>, Msg, Req, Opts)
+            )
+            catch _:_ ->
+                Req
             end
     end.
 
