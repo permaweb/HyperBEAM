@@ -109,11 +109,7 @@ do_from(RawTX, Req, Opts) ->
 %% so delegate to ans104@1.0.
 to_hint(Msg, Req, Opts) ->
     case lib_arweave_common:bundle_hint(<<"tx@1.0">>, Msg, Req, Opts) of
-        not_found ->
-            case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
-                not_found -> {ok, Req};
-                Hint -> Hint
-            end;
+        not_found -> hb_ao:raw(<<"ans104@1.0">>, <<"to-hint">>, Msg, Req, Opts);
         Hint -> Hint
     end.
 %% @doc Internal helper to translate a message to its #tx record representation,
