@@ -900,7 +900,12 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
         hb_message:convert(
             Body,
             <<"structured@1.0">>,
-            <<"json@1.0">>,
+            % `convert/4' asks the source codec to produce TABM first; put
+            % `bundle' on json@1.0 so that step does not linkify block fields.
+            #{
+                <<"device">> => <<"json@1.0">>,
+                <<"bundle">> => true
+            },
             Opts
         ),
     CacheRes =
@@ -940,7 +945,10 @@ to_message(Path, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         hb_message:convert(
             Body,
             <<"structured@1.0">>,
-            <<"json@1.0">>,
+            #{
+                <<"device">> => <<"json@1.0">>,
+                <<"bundle">> => true
+            },
             Opts
         )
     }.
