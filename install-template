@@ -103,11 +103,25 @@ write_device_template() {
 EOF
 }
 
+render_shared_dep_overrides() {
+    path="$1"
+    overrides="$2"
+    out="$3"
+    while IFS= read -r line; do
+        case "$line" in
+            *"{{hb_dep_overrides}}"*) cat "$overrides" ;;
+            *) printf '%s\n' "$line" ;;
+        esac
+    done < "$path" > "$out"
+    mv "$out" "$path"
+}
+
 install_template() {
     template_dir="$1"
     hb_dep="$2"
     hb_plugin="$3"
     src="$(script_dir)/src/forge/plugin/priv"
+    shared_dep_overrides="$src/shared_dep_overrides.config"
     support="$template_dir/hyperbeam-device"
     tmp="$support.tmp.$$"
     template="$template_dir/device.template"
@@ -117,6 +131,10 @@ install_template() {
     mkdir -p "$tmp"
     cp -R "$src/." "$tmp"
     rm -f "$tmp/device.template"
+    render_shared_dep_overrides \
+        "$tmp/_rebar.config" \
+        "$shared_dep_overrides" \
+        "$tmp/_rebar.config.rendered"
     write_device_template \
         "$template_tmp" \
         "$hb_dep" \

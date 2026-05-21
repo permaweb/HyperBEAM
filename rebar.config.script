@@ -1,0 +1,10 @@
+%% -*- erlang -*-
+ScriptDir = filename:dirname(SCRIPT),
+{ok, [{overrides, SharedOverrides}]} =
+    file:consult(
+        filename:join(
+            [ScriptDir, "src", "forge", "plugin", "priv",
+                "shared_dep_overrides.config"]
+        )
+    ),
+lists:keystore(overrides, 1, CONFIG, {overrides, SharedOverrides}).
