@@ -103,13 +103,15 @@ write_device_template() {
 EOF
 }
 
-render_shared_dep_overrides() {
+render_shared_rebar_config() {
     path="$1"
-    overrides="$2"
+    shared_config="$2"
     out="$3"
+    # reason: generated device repos cannot read files from this repo when their
+    # rebar.config loads, so render shared_rebar.config inline.
     while IFS= read -r line; do
         case "$line" in
-            *"{{hb_dep_overrides}}"*) cat "$overrides" ;;
+            *"{{hb_shared_rebar_config}}"*) cat "$shared_config" ;;
             *) printf '%s\n' "$line" ;;
         esac
     done < "$path" > "$out"
@@ -120,8 +122,9 @@ install_template() {
     template_dir="$1"
     hb_dep="$2"
     hb_plugin="$3"
-    src="$(script_dir)/src/forge/plugin/priv"
-    shared_dep_overrides="$src/shared_dep_overrides.config"
+    root="$(script_dir)"
+    src="$root/src/forge/plugin/priv"
+    shared_rebar_config="$root/shared_rebar.config"
     support="$template_dir/hyperbeam-device"
     tmp="$support.tmp.$$"
     template="$template_dir/device.template"
@@ -131,9 +134,9 @@ install_template() {
     mkdir -p "$tmp"
     cp -R "$src/." "$tmp"
     rm -f "$tmp/device.template"
-    render_shared_dep_overrides \
+    render_shared_rebar_config \
         "$tmp/_rebar.config" \
-        "$shared_dep_overrides" \
+        "$shared_rebar_config" \
         "$tmp/_rebar.config.rendered"
     write_device_template \
         "$template_tmp" \
