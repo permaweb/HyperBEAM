@@ -98,7 +98,13 @@ upload(Msg, Opts) ->
             end,
             hb_message:commitment_devices(Msg, Opts)
         ),
-    {ok, UploadResults}.
+    case lists:filter(fun upload_failed/1, UploadResults) of
+        [] -> {ok, UploadResults};
+        Errors -> {error, Errors}
+    end.
+upload_failed({error, _}) -> true;
+upload_failed({failure, _}) -> true;
+upload_failed(_) -> false.
 upload(Msg, Opts, <<"httpsig@1.0">>) ->
     case hb_opts:get(bundler_httpsig, not_found, Opts) of
         not_found ->
@@ -107,13 +113,17 @@ upload(Msg, Opts, <<"httpsig@1.0">>) ->
             ?event({uploading_item, Msg}),
             hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
     end;
-upload(Msg, Opts, _CommitmentDevice) ->
+upload(Msg, Opts, CommitmentDevice) ->
     ?event({uploading_item, Msg}),
     hb_ao:raw(
         <<"arweave@2.9">>,
         <<"tx">>,
-        #{},
-        Msg#{ <<"method">> => <<"POST">> },
+        Msg,
+        #{
+            <<"method">> => <<"POST">>,
+            <<"target">> => <<"base">>,
+            <<"commitment-device">> => CommitmentDevice
+        },
         Opts
     ).
 

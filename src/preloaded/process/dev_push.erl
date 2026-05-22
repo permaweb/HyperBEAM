@@ -1002,7 +1002,7 @@ test_push_as_identity() ->
 
 test_multi_process_push() ->
     {Sender, _Receiver, MsgSlot, Opts} = setup_two_process_message(),
-    %% Install a catch-all `Pong' handler on the Sender so the Receiver's
+    %% Install a `Pong' handler on the Sender so the Receiver's
     %% reply (the helper's `reply_script' fires on `Action = "Ping"' and
     %% sends back `Action = "Reply"') is observable as `GOT PONG' in the
     %% Sender's `now/results/data'.
@@ -1011,7 +1011,9 @@ test_multi_process_push() ->
             Sender,
             <<
                 "Handlers.add(\"Pong\",\n"
-                "   function (test) return true end,\n"
+                "   function (test)\n"
+                "       return (test.Action or test.action) == \"Reply\"\n"
+                "   end,\n"
                 "   function(m)\n"
                 "       print(\"GOT PONG\")\n"
                 "   end\n"
@@ -1597,9 +1599,11 @@ test_nested_push_prompts_encoding_change() ->
 ping_pong_script(Limit) ->
     <<
         "Handlers.add(\"Ping\",\n"
-        "   function (test) return true end,\n"
+        "   function (test)\n"
+        "       return (test.Action or test.action) == \"Ping\"\n"
+        "   end,\n"
         "   function(m)\n"
-        "       C = tonumber(m.Count)\n"
+        "       C = tonumber(m.Count or m.count)\n"
         "       if C <= ", (integer_to_binary(Limit))/binary, " then\n"
         "           Send({ Target = ao.id, Action = \"Ping\", Count = C + 1 })\n"
         "           print(\"Ping\", C + 1)\n"
@@ -1615,11 +1619,14 @@ reply_script() ->
     <<
         """
         Handlers.add("Reply",
-           { Action = "Ping" },
            function(m)
+               return (m.Action or m.action) == "Ping"
+           end,
+           function(m)
+               local from = m.From or m.from
                print("Replying to...")
-               print(m.From)
-               Send({ Target = m.From, Action = "Reply", Message = "Pong!" })
+               print(from)
+               Send({ Target = from, Action = "Reply", Message = "Pong!" })
                print("Done.")
            end
         )

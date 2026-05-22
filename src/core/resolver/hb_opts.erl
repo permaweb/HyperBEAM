@@ -531,7 +531,7 @@ raw_default_message() ->
                     }
                 ]
         },
-        <<"scheduler-default-commitment-spec">> => <<"httpsig@1.0">>,
+        <<"scheduler-default-commitment-spec">> => <<"ans104@1.0">>,
         <<"genesis-wasm-import-authorities">> =>
             [
                 <<"WjnS-s03HWsDSdMnyTdzB1eHZB2QheUWP_FVRVYxkXk">>

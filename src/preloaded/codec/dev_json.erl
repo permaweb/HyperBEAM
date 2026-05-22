@@ -27,7 +27,7 @@ to(Msg, Req, Opts) ->
             tabm,
             ConvOpts
         ),
-    Bundle = maps:get(<<"bundle">>, Req, false),
+    Bundle = hb_maps:get(<<"bundle">>, Req, false, Opts),
     Loaded =
         case Bundle of
             true -> load_available_links(hb_link:decode_all_links(Restructured), Opts);

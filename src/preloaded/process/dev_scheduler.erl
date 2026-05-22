@@ -494,14 +494,6 @@ post_local_schedule(ProcID, PID, Req, Opts) ->
             };
         {true, <<"Process">>} ->
             {ok, _} = hb_cache:write(Req, Opts),
-            spawn(
-                fun() ->
-                    {ok, Results} = hb_client_remote:upload(Req, Opts),
-                    ?event(
-                        {uploaded_process, {proc_id, ProcID}, {results, Results}}
-                    )
-                end
-            ),
             ?event(
                 {registering_new_process,
                     {proc_id, ProcID},

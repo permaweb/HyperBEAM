@@ -119,11 +119,25 @@ function count_common(a, b)
     if type(a) ~= "table" then a = { a } end
     if type(b) ~= "table" then b = { b } end
 
+    -- local count = 0
+    -- for _, v in ipairs(a) do
+    --     for _, w in ipairs(b) do
+    --         if v == w then
+    --             count = count + 1
+    --         end
+    --     end
+    -- end
+
+    local seen = {}
     local count = 0
     for _, v in ipairs(a) do
-        for _, w in ipairs(b) do
-            if v == w then
-                count = count + 1
+        if not seen[v] then
+            seen[v] = true
+            for _, w in ipairs(b) do
+                if v == w then
+                    count = count + 1
+                    break
+                end
             end
         end
     end
