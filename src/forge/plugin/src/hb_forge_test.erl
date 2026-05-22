@@ -23,6 +23,12 @@ init(State) ->
 
 %% @doc Build a test preloaded-store and run selected package EUnit modules.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-test-store">>),
     CoreTests = maybe_compile_core_test_modules(Args),
     % Build a complete store from the configured source set so selected
