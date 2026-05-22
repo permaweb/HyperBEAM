@@ -91,10 +91,16 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                     {Types, [{Key, Value} | Values]};
                 {ok, Nested} when is_map(Nested) orelse is_list(Nested) ->
                     ?event({from_recursing, {nested, Nested}}),
+                    % Strip out the `bundle' flag on reqursive calls - bundle
+                    % status will be redetermined by the hint device for each
+                    % message.
                     {Types,
                         [{
                             Key,
-                            hb_util:ok(from(Nested, HintedReq, Opts))
+                            hb_util:ok(from(
+                                Nested, 
+                                hb_maps:without([<<"bundle">>], Req, Opts), 
+                                Opts))
                         } | Values]};
                 {ok, Value} when
                         is_atom(Value)

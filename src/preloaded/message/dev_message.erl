@@ -143,10 +143,14 @@ calculate_id(RawBase, Req, NodeOpts) ->
             {ok, Device} -> Device;
             {error, Error} -> throw({id, Error})
         end,
+    % Encode to a TABM. The `bundle' flag (when set on the request) is the
+    % caller's intent for the top-level commit. We don't specify a
+    % `hint-device' - as we're building a commitment there is no
+    % existing commitment that we want to pull a `bundle' flag from.
     SourceSpec =
         hb_message:add_bundle_hint(
             #{ <<"device">> => <<"structured@1.0">> },
-            Req#{ <<"device">> => IDDev },
+            Req,
             NodeOpts
         ),
     Base = hb_message:convert(RawBase, tabm, SourceSpec, NodeOpts),
@@ -164,28 +168,22 @@ calculate_id(RawBase, Req, NodeOpts) ->
                 );
             Module -> Module
         end,
-    % Apply the function's default `commit' function with the appropriate arguments.
-    % If it doesn't exist, error.
-    case hb_device:find_exported_function(Base, DevMod, commit, 3, NodeOpts) of
-        {ok, Fun} ->
-            ?event(debug_id, {called_id_device, IDDev}, NodeOpts),
-            {ok, #{ <<"commitments">> := Comms} } = 
-                apply(
-                    Fun,
-                    hb_device:truncate_args(
-                        Fun,
-                        [Base, Req#{ <<"type">> => <<"unsigned">> }, NodeOpts]
-                    )
-                ),
-            ?event(debug_id,
-                {generated_id,
-                    {type, unsigned},
-                    {commitments, maps:keys(Comms)}
-                }
-            ),
-            {ok, hd(maps:keys(Comms))};
-        not_found -> throw({id, id_resolver_not_found_for_device, DevMod})
-    end.
+    ?event(debug_id, {called_id_device, CommitDev}, NodeOpts),
+    {ok, #{ <<"commitments">> := Comms} } =
+        hb_ao:raw(
+            CommitDev,
+            <<"commit">>,
+            Base,
+            Req#{ <<"type">> => <<"unsigned">> },
+            NodeOpts
+        ),
+    ?event(debug_id,
+        {generated_id,
+            {type, unsigned},
+            {commitments, maps:keys(Comms)}
+        }
+    ),
+    {ok, hd(maps:keys(Comms))}.
 
 %% @doc Locate the ID device of a message. The ID device is determined the
 %% `device' set in _all_ of the commitments. If no commitments are present,
@@ -265,27 +263,14 @@ commit(Self, Req, Opts) ->
             _ ->
                 Opts#{ <<"linkify-mode">> => offload }
         end,
-    AttMod =
-        hb_device:message_to_device(
-            #{ <<"device">> => AttDev },
-            CommitOpts
-        ),
-    {ok, AttFun} =
-        hb_device:find_exported_function(
-            Base,
-            AttMod,
-            commit,
-            3,
-            CommitOpts
-        ),
     % Encode to a TABM. The `bundle' flag (when set on the request) is the
-    % caller's intent for the top-level commit and flows through on the
-    % source spec; `hint-device' lets the structured codec preserve any
-    % matching nested commitment's own bundle state per-node.
+    % caller's intent for the top-level commit. We don't specify a
+    % `hint-device' - as we're building a commitment there is no
+    % existing commitment that we want to pull a `bundle' flag from.
     SourceSpec =
         hb_message:add_bundle_hint(
             #{ <<"device">> => <<"structured@1.0">> },
-            Req#{ <<"device">> => AttDev },
+            Req,
             CommitOpts
         ),
     Loaded =
@@ -310,9 +295,18 @@ commit(Self, Req, Opts) ->
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
-    CommitmentBase = ensure_commitments_loaded(RawBase, Opts),
-    Commitments = maps:get(<<"commitments">>, CommitmentBase, #{}),
-    IDsToVerify = commitment_ids_from_request(CommitmentBase, Req, Opts),
+    Base =
+        hb_message:convert(
+            ensure_commitments_loaded(
+                RawBase,
+                Opts
+            ),
+            tabm,
+            Opts
+        ),
+    ?event(verify, {verify, {base_found, Base}}),
+    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    IDsToVerify = commitment_ids_from_request(Base, Req, Opts),
     % Generate the new commitment request base messsage by removing the keys
     % used by this function (path, committers, commitments) and returning the
     % remaining keys. This message will then be merged with each commitment
@@ -332,34 +326,13 @@ verify(Self, Req, Opts) ->
     Res =
         lists:all(
             fun(CommitmentID) ->
-                Commitment = maps:merge(
-                    ReqBase,
-                    maps:get(CommitmentID, Commitments)
-                ),
-                % Build the source spec exactly as commit/3 does: derive a
-                % `hint-device' from the commitment device so the structured
-                % codec verifies each subtree in the bundle state it was
-                % committed in, and mirror any `bundle' from the request.
-                SourceSpec =
-                    hb_message:add_bundle_hint(
-                        #{ <<"device">> => <<"structured@1.0">> },
-                        Req#{
-                            <<"device">> =>
-                                maps:get(
-                                    <<"commitment-device">>,
-                                    Commitment,
-                                    undefined
-                                )
-                        },
-                        Opts
-                    ),
-                Base = hb_message:convert(
-                    CommitmentBase, tabm, SourceSpec, Opts),
-                ?event(verify, {verify, {base_found, Base}}),
                 {ok, Res} =
                     verify_commitment(
                         Base,
-                        Commitment,
+                        maps:merge(
+                            ReqBase,
+                            maps:get(CommitmentID, Commitments)
+                        ),
                         Opts
                     ),
                 ?event(verify,
