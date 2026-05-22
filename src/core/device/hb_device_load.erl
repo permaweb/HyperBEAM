@@ -170,7 +170,7 @@ preloaded(Opts) ->
 
 %% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
 %% already loaded via the high-trust path), then load the first signed,
-%% compatible implementation. Local caches are always searched; gateway
+%% compatible implementation. Local caches are always searched -- gateway
 %% lookup is gated by `load-remote-devices'.
 from_low_trust(Ref, Opts) ->
     maybe
