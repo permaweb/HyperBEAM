@@ -131,7 +131,7 @@ test_modules(
                 ModuleNames,
                 TestSpecs
             ),
-            eunit:test(Tests, [verbose, {scale_timeouts, 10}])
+            eunit:test(timeout_tests(Tests, Args), eunit_opts(Args))
         after restore_test_env(Env)
         end,
     case EUnitResult of
@@ -286,6 +286,27 @@ log_run(CoreModules, DeviceModules, ModuleLabels, ShowHash, _ModuleNames, TestSp
         "device test: running modules ~p tests ~p",
         [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash), TestSpecs]
     ).
+
+%% @doc Apply a caller-supplied timeout to each top-level EUnit descriptor.
+timeout_tests(Tests, #{ <<"timeout">> := undefined }) ->
+    Tests;
+timeout_tests(Tests, #{ <<"timeout">> := Timeout })
+        when is_number(Timeout), Timeout >= 0 ->
+    [{timeout, Timeout, Test} || Test <- Tests];
+timeout_tests(_Tests, #{ <<"timeout">> := Timeout }) ->
+    error({invalid_timeout, Timeout}).
+
+%% @doc EUnit options, preserving the historical timeout multiplier by default.
+eunit_opts(#{ <<"timeout-multiplier">> := Multiplier })
+        when is_number(Multiplier), Multiplier >= 0 ->
+    [verbose, {scale_timeouts, Multiplier}];
+eunit_opts(#{ <<"timeout-multiplier">> := Multiplier })
+        when Multiplier =/= undefined ->
+    error({invalid_timeout_multiplier, Multiplier});
+eunit_opts(#{ <<"timeout">> := Timeout }) when Timeout =/= undefined ->
+    [verbose, {scale_timeouts, 1}];
+eunit_opts(_Args) ->
+    [verbose, {scale_timeouts, 10}].
 
 %% @doc Run core tests first, but defer `hb_opts' until env vars are set.
 test_order(CoreModules, DeviceModules) ->
