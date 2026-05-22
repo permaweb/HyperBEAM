@@ -659,30 +659,17 @@ nested_bundle_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-%% @doc End-to-end bundler test for a nested item structured like the
-%% broken production bundle that motivated the per-subtree `bundle' fix:
-%% the parent is signed with `ans104@1.0' and `bundle' => false (so its
-%% child is offloaded as a link in the committed form) and the child is
-%% signed with `httpsig@1.0'. The child is posted on its own first, so it
-%% is also a top-level bundle item and the parent's offloaded link resolves
-%% to a separately-uploaded item.
-nested_inlined_bundle_child_posted_test_parallel() ->
-    run_nested_inlined_bundle_test(child_posted).
+%% @doc End-to-end bundler test for a nested dataitem where the parent
+%% has bundle=false. The chile is posted on its own first.
+nested_unbundled_bundle_child_posted_test_parallel() ->
+    run_nested_unbundled_bundle_test(child_posted).
 
-%% @doc As `nested_inlined_bundle_child_posted_test_parallel/0', but the
-%% child is never posted on its own -- an unrelated plain data item fills
-%% its bundle slot instead. The child therefore reaches the cache only via
-%% the parent's inline body, exercising the offload path without a
-%% separately-uploaded link target.
-nested_inlined_bundle_child_not_posted_test_parallel() ->
-    run_nested_inlined_bundle_test(child_not_posted).
+%% @doc Like `nested_inlined_bundle_child_posted_test_parallel/0', but the
+%% child is never posted on its own.
+nested_unbundled_bundle_child_not_posted_test_parallel() ->
+    run_nested_unbundled_bundle_test(child_not_posted).
 
-%% @doc Shared body for the nested-inlined-bundle variants. Builds the
-%% httpsig child and its `bundle' => false ans104 parent, posts three items
-%% (the first chosen by `Variant'), then asserts the resulting bundle TX
-%% verifies, carries three valid items, and round-trips through
-%% `structured@1.0' without inflating.
-run_nested_inlined_bundle_test(Variant) ->
+run_nested_unbundled_bundle_test(Variant) ->
     Anchor = rand:bytes(32),
     Price = 12345,
     % NodeOpts redirects arweave gateway requests to the mock server.
@@ -770,9 +757,6 @@ run_nested_inlined_bundle_test(Variant) ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
-%% @doc Post the first of the three bundled items. The `child_posted'
-%% variant uploads the httpsig child on its own; `child_not_posted' fills
-%% the slot with an unrelated plain data item.
 post_first_item(Node, child_posted, Child, ClientOpts) ->
     post_structured_item(Node, Child, ClientOpts);
 post_first_item(Node, child_not_posted, _Child, ClientOpts) ->

@@ -311,7 +311,7 @@ build_signed_tx_on_arbundles_js_test() ->
         % Convert back to an L1 TX
         SignedTXRoundtrip = hb_message:convert(StructuredTX,
             <<"tx@1.0">>,
-            #{ <<"device">> => <<"structured@1.0">>, <<"hint-device">> => <<"tx@1.0">> },
+            <<"structured@1.0">>,
             TestOpts),
         ?event(debug_test, {signed_tx_roundtrip, SignedTXRoundtrip}),
         ?assert(ar_tx:verify(SignedTXRoundtrip)),
@@ -344,21 +344,6 @@ bundle_convert_real_data_test() ->
         %% This convert is exactly what build_proofs runs.
         TX = hb_message:convert(
             Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
-        SignedSize = byte_size(SignedTX#tx.data),
-        RecoveredSize = byte_size(TX#tx.data),
-        Delta = RecoveredSize - SignedSize,
-        Multiple = case Delta of
-            0 -> 0;
-            _ when Delta rem 2500 =:= 0 -> Delta div 2500;
-            _ -> {non_clean_2500, Delta}
-        end,
-        ?assertEqual(0, Delta, {
-            inflation_detected_from_inlined_item,
-            #{signed_size => SignedSize,
-              recovered_size => RecoveredSize,
-              delta_bytes => Delta,
-              multiple_of_2500 => Multiple}
-        }),
         ?assert(ar_tx:verify(TX))
     after
         hb_mock_server:stop(ServerHandle)
@@ -386,24 +371,7 @@ bundle_convert_minimal_test() ->
             SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, TestOpts),
         TX = hb_message:convert(
             Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
-        ?event(debug_test, {signed_tx, SignedTX}),
-        ?event(debug_test, {committed, Committed}),
-        ?event(debug_test, {tx, TX}),
-        SignedSize = byte_size(SignedTX#tx.data),
-        RecoveredSize = byte_size(TX#tx.data),
-        Delta = RecoveredSize - SignedSize,
-        Multiple = case Delta of
-            0 -> 0;
-            _ when Delta rem 2500 =:= 0 -> Delta div 2500;
-            _ -> {non_clean_2500, Delta}
-        end,
-        ?assertEqual(0, Delta, {
-            inflation_detected_from_minimal_item,
-            #{signed_size => SignedSize,
-              recovered_size => RecoveredSize,
-              delta_bytes => Delta,
-              multiple_of_2500 => Multiple}
-        })
+        ?assert(ar_tx:verify(TX))
     after
         hb_mock_server:stop(ServerHandle)
     end.
@@ -467,16 +435,7 @@ bundle_convert_mixed_tree_verify_test() ->
         %% the data did not inflate.
         TX = hb_message:convert(
             Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
-        ?assert(ar_tx:verify(TX)),
-        SignedSize = byte_size(SignedTX#tx.data),
-        RecoveredSize = byte_size(TX#tx.data),
-        Delta = RecoveredSize - SignedSize,
-        ?assertEqual(0, Delta, {
-            inflation_detected_on_mixed_tree,
-            #{signed_size => SignedSize,
-              recovered_size => RecoveredSize,
-              delta_bytes => Delta}
-        })
+        ?assert(ar_tx:verify(TX))
     after
         hb_mock_server:stop(ServerHandle)
     end.

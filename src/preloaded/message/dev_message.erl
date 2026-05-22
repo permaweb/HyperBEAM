@@ -144,29 +144,27 @@ calculate_id(RawBase, Req, NodeOpts) ->
             {error, Error} -> throw({id, Error})
         end,
     % Encode to a TABM. The `bundle' flag (when set on the request) is the
-    % caller's intent for the top-level commit. We don't specify a
-    % `hint-device' - as we're building a commitment there is no
-    % existing commitment that we want to pull a `bundle' flag from.
+    % caller's intent for the top-level message and applies only to the root;
+    % `hint-device' lets the structured codec reproduce each nested
+    % commitment's own bundle state per-node, so the id is computed over the
+    % same shape `commit/3' and `verify/3' would produce.
     SourceSpec =
         hb_message:add_bundle_hint(
             #{ <<"device">> => <<"structured@1.0">> },
-            Req,
+            Req#{ <<"device">> => IDDev },
             NodeOpts
         ),
     Base = hb_message:convert(RawBase, tabm, SourceSpec, NodeOpts),
     ?event(debug_id, {calculate_ids, {base, Base}}),
     ?event(debug_id, {generating_id, {id_device, IDDev}, {base, Base}}),
-    % Get the device module from the message, or use the default if it is not
-    % set. We can tell if the device is not set (or is the default) by checking 
-    % whether the device module is the same as this module.
-    DevMod =
+    % Get the commitment device name from the message, or use the default if
+    % it is not set. We can tell if the device is not set (or is the default)
+    % by checking whether the resolved device module is this module itself.
+    % `hb_ao:raw/5' expects a device name, not a resolved module.
+    CommitDev =
         case hb_device:message_to_device(#{ <<"device">> => IDDev }, NodeOpts) of
-            ?MODULE ->
-                hb_device:message_to_device(
-                    #{ <<"device">> => ?DEFAULT_ID_DEVICE },
-                    NodeOpts
-                );
-            Module -> Module
+            ?MODULE -> ?DEFAULT_ID_DEVICE;
+            _ -> IDDev
         end,
     ?event(debug_id, {called_id_device, CommitDev}, NodeOpts),
     {ok, #{ <<"commitments">> := Comms} } =
@@ -264,13 +262,13 @@ commit(Self, Req, Opts) ->
                 Opts#{ <<"linkify-mode">> => offload }
         end,
     % Encode to a TABM. The `bundle' flag (when set on the request) is the
-    % caller's intent for the top-level commit. We don't specify a
-    % `hint-device' - as we're building a commitment there is no
-    % existing commitment that we want to pull a `bundle' flag from.
+    % caller's intent for the top-level commit and applies only to the root
+    % message; `hint-device' lets the structured codec preserve each nested
+    % commitment's own bundle state per-node.
     SourceSpec =
         hb_message:add_bundle_hint(
             #{ <<"device">> => <<"structured@1.0">> },
-            Req,
+            Req#{ <<"device">> => AttDev },
             CommitOpts
         ),
     Loaded =
@@ -295,22 +293,13 @@ commit(Self, Req, Opts) ->
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
-    Base =
-        hb_message:convert(
-            ensure_commitments_loaded(
-                RawBase,
-                Opts
-            ),
-            tabm,
-            Opts
-        ),
-    ?event(verify, {verify, {base_found, Base}}),
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
-    IDsToVerify = commitment_ids_from_request(Base, Req, Opts),
+    CommitmentBase = ensure_commitments_loaded(RawBase, Opts),
+    Commitments = maps:get(<<"commitments">>, CommitmentBase, #{}),
+    IDsToVerify = commitment_ids_from_request(CommitmentBase, Req, Opts),
     % Generate the new commitment request base messsage by removing the keys
     % used by this function (path, committers, commitments) and returning the
     % remaining keys. This message will then be merged with each commitment
-    % message to generate the final request, allowing the caller to pass 
+    % message to generate the final request, allowing the caller to pass
     % additional keys to the commitment device.
     ReqBase =
         maps:without(
@@ -326,13 +315,36 @@ verify(Self, Req, Opts) ->
     Res =
         lists:all(
             fun(CommitmentID) ->
+                Commitment = maps:merge(
+                    ReqBase,
+                    maps:get(CommitmentID, Commitments)
+                ),
+                % Build the source spec from the commitment device alone: a
+                % `hint-device' lets the structured codec reproduce each
+                % subtree in the bundle state it was committed in. The verify
+                % request's `bundle' is deliberately *not* propagated -- a
+                % commitment is always verified in the state it was signed
+                % in, so any `bundle' passed by the caller is irrelevant.
+                SourceSpec =
+                    hb_message:add_bundle_hint(
+                        #{ <<"device">> => <<"structured@1.0">> },
+                        #{
+                            <<"device">> =>
+                                maps:get(
+                                    <<"commitment-device">>,
+                                    Commitment,
+                                    undefined
+                                )
+                        },
+                        Opts
+                    ),
+                Base = hb_message:convert(
+                    CommitmentBase, tabm, SourceSpec, Opts),
+                ?event(verify, {verify, {base_found, Base}}),
                 {ok, Res} =
                     verify_commitment(
                         Base,
-                        maps:merge(
-                            ReqBase,
-                            maps:get(CommitmentID, Commitments)
-                        ),
+                        Commitment,
                         Opts
                     ),
                 ?event(verify,

@@ -130,8 +130,6 @@ do_from(RawTX, Req, Opts) ->
 
 %% @doc Inspect a message's signed ans104 commitment and, if it carries an
 %% explicit `bundle' field, mirror that value onto the request `Req'.
-%% If there is no ans104 commitment, or the commitment does not carry
-%% a `bundle' field, the `Req' is returned unchanged.
 to_hint(Msg, Req, Opts) ->
     case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
         not_found -> {ok, Req};

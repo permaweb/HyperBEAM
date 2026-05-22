@@ -1,65 +1,65 @@
 %%% @doc A battery of test vectors exercising the `bundle' / `hint-device'
 %%% machinery of the `message@1.0' device across a three-level message tree.
 %%%
-%%% The tree is built bottom-up; each level is a committed (signed) message
-%%% holding the level below it as a sub-message:
+%%% The tree is built bottom-up; each level holds the level below it as a
+%%% sub-message:
 %%%
 %%% <pre>
-%%%     L1 (root) -- l2 --> L2 (middle) -- l3 --> L3 (leaf) -- inner --> #{}
+%%%     L1 (root) --> L2 (middle) --> L3 (leaf) --> #{}
 %%% </pre>
 %%%
-%%% Each level is committed with its own `bundle' choice -- `true', `false'
-%%% or `none' (committed with no `bundle' flag at all). The flag decides
-%%% whether that level's sub-message is held inline (loaded) or as a link
-%%% (offloaded) in the level's signed TABM form:
+%%% Each level is built with one of four choices:
 %%%
-%%%   - L1's flag controls `l2', L2's flag controls `l3', and L3's flag
-%%%     controls L3's plain sub-map `inner'.
+%%%   - `bundle_true'  -- committed (`ans104@1.0') with `bundle' => true
+%%%   - `bundle_false' -- committed with `bundle' => false
+%%%   - `no_bundle'    -- committed with no `bundle' flag
+%%%   - `uncommitted'  -- not committed at all; a plain, unsigned map
+%%% 
+%%% For every 4x4x4 permutation of build choices the suite checks:
 %%%
-%%% `none' is observably identical to `false': committing with no flag
-%%% offloads children exactly as `false' does.
-%%%
-%%% For every 3x3x3 permutation of build flags the suite checks:
-%%%
-%%%   - verify/3 with no forced bundle: the reliable path -- every level
-%%%     verifies in the state it was committed in.
-%%%   - verify/3 with a forced bundle (`true'|`false'): the edge case -- a
-%%%     `bundle' on the verify request is harmless. verify builds its
-%%%     source spec like commit/3 (mirroring the request `bundle' but also
-%%%     setting `hint-device'), so the per-node hints override the forced
-%%%     value and the tree still verifies. Tested for completeness.
-%%%   - id/3: the root's id equals its sole commitment's key.
-%%%   - convert/4: the tree round-trips through the `ans104@1.0' codec --
-%%%     the standard structured<->codec path -- and still verifies at every
-%%%     level. A `bundle' on the request is per-node-overridden, so the
+%%%   - verify/3: every level verifies in the state it was committed in.
+%%%   - id/3: the root's id equals its sole commitment's key (or, for an
+%%%     uncommitted root, the content-addressed unsigned id).
+%%%   - convert/4 with target `bundle' none/true/false: the tree
+%%%     round-trips through the `ans104@1.0' codec -- the standard
+%%%     structured<->codec path -- and still verifies at every level. A
+%%%     `bundle' on the conversion target applies only to the root; nested
+%%%     subtrees follow their own commitments via `hint-device', so the
 %%%     committed shape survives the round-trip.
 -module(dev_message_bundle_test_vectors).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-%% @doc Fresh, isolated options for a single vector: a new wallet and a new
-%% in-memory store, so vectors cannot interfere with one another.
 fresh_opts() ->
     #{
         <<"priv-wallet">> => hb:wallet(),
         <<"store">> => hb_test_utils:test_store()
     }.
 
-%% @doc Commit a message with the `ans104@1.0' codec. `Bundle' is `true',
-%% `false', or `none' to commit with no `bundle' flag at all.
-commit(Msg, none, Opts) ->
+%% @doc Build one tree level from its build choice: commit the message with
+%% the `ans104@1.0' codec (with `bundle' => true, `bundle' => false, or no
+%% `bundle' flag), or -- for `uncommitted' -- leave it as a plain map.
+build_level(Msg, uncommitted, _Opts) ->
+    Msg;
+build_level(Msg, no_bundle, Opts) ->
     hb_message:commit(Msg, Opts, #{ <<"device">> => <<"ans104@1.0">> });
-commit(Msg, Bundle, Opts) ->
+build_level(Msg, bundle_true, Opts) ->
     hb_message:commit(
         Msg,
         Opts,
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => Bundle }
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
+    );
+build_level(Msg, bundle_false, Opts) ->
+    hb_message:commit(
+        Msg,
+        Opts,
+        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }
     ).
 
-%% @doc Build a signed three-level tree with the given per-level flags.
+%% @doc Build a three-level tree with the given per-level build choices.
 build_tree(B1, B2, B3, Opts) ->
     L3 =
-        commit(
+        build_level(
             #{
                 <<"l3-tag">> => <<"l3-value">>,
                 <<"inner">> => #{ <<"deep">> => <<"deep-value">> }
@@ -67,8 +67,9 @@ build_tree(B1, B2, B3, Opts) ->
             B3,
             Opts
         ),
-    L2 = commit(#{ <<"l2-tag">> => <<"l2-value">>, <<"l3">> => L3 }, B2, Opts),
-    commit(#{ <<"l1-tag">> => <<"l1-value">>, <<"l2">> => L2 }, B1, Opts).
+    L2 =
+        build_level(#{ <<"l2-tag">> => <<"l2-value">>, <<"l3">> => L3 }, B2, Opts),
+    build_level(#{ <<"l1-tag">> => <<"l1-value">>, <<"l2">> => L2 }, B1, Opts).
 
 %%% Test vector generator.
 
@@ -76,26 +77,28 @@ build_tree(B1, B2, B3, Opts) ->
 operations() ->
     [
         {verify, none},
-        {verify, true},
-        {verify, false},
         {id, none},
         {convert, none},
         {convert, true},
         {convert, false}
     ].
 
-%% @doc Generate the full grid: 3x3x3 tree shapes x the operation list.
+%% @doc The per-level build choices a tree level can take.
+build_choices() ->
+    [bundle_true, bundle_false, no_bundle, uncommitted].
+
+%% @doc Generate the full grid: 4x4x4 tree shapes x the operation list.
 bundle_vectors_test_() ->
-    {timeout, 240,
+    {timeout, 600,
         [
             {
                 test_label(B1, B2, B3, Api, ReqBundle),
                 fun() -> run(B1, B2, B3, Api, ReqBundle) end
             }
         ||
-            B1 <- [true, false, none],
-            B2 <- [true, false, none],
-            B3 <- [true, false, none],
+            B1 <- build_choices(),
+            B2 <- build_choices(),
+            B3 <- build_choices(),
             {Api, ReqBundle} <- operations()
         ]
     }.
@@ -108,44 +111,52 @@ test_label(B1, B2, B3, Api, ReqBundle) ->
         )
     ).
 
-%% @doc Build the tree and exercise the chosen API.
+%% @doc Build the tree and run_test the chosen API.
 run(B1, B2, B3, Api, ReqBundle) ->
     Opts = fresh_opts(),
     Tree = build_tree(B1, B2, B3, Opts),
+    ?event(debug_test, {tree,
+        {label, test_label(B1, B2, B3, Api, ReqBundle)},
+        {built, Tree}}),
     % Every freshly built tree must verify via the reliable per-node path,
     % whatever per-level bundle permutation it was signed with.
     ?assert(hb_message:verify(Tree, all, Opts)),
-    exercise(Api, ReqBundle, B1, B2, B3, Tree, Opts).
+    run_test(Api, ReqBundle, B1, B2, B3, Tree, Opts).
 
-%%% Per-API exercises.
+%%% Per-API run_tests.
 
-%% `verify': verification always uses the per-node path -- each subtree is
-%% checked in the bundle state it was committed in. A `bundle' on the
-%% request is mirrored as commit/3 does, but `hint-device' is set too, so
-%% the per-node hints override it. A validly-built tree therefore always
-%% verifies at every level, with or without a forced request bundle.
-exercise(verify, ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
-    Spec = verify_spec(ReqBundle),
-    ?assert(hb_message:verify(Tree, Spec, Opts)),
+%% `verify': every level of a validly-built tree verifies. The bundle
+%% state each subtree was committed in is reproduced per-node via
+%% `hint-device', so the verify request carries no `bundle'. (`run/3'
+%% already verifies the root, so this only adds the nested levels.)
+run_test(verify, _ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
     L2 = hb_maps:get(<<"l2">>, Tree, undefined, Opts),
-    ?assert(hb_message:verify(L2, Spec, Opts)),
+    ?assert(hb_message:verify(L2, all, Opts)),
     L3 = hb_maps:get(<<"l3">>, L2, undefined, Opts),
-    ?assert(hb_message:verify(L3, Spec, Opts));
+    ?assert(hb_message:verify(L3, all, Opts));
 
-%% `id': the root was committed exactly once, so `id/3' with `all'
-%% committers accumulates to that single commitment -- the id must equal
-%% the key under which it is stored in the root's commitments map.
-exercise(id, _ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
+%% `id':
+%%   - committed root: `id/3' with `all' committers accumulates to the
+%%     single commitment -- the id must equal the key under which it is
+%%     stored in the root's commitments map.
+%%   - uncommitted root: there are no commitments, so `id/3' falls back to
+%%     the (content-addressed) unsigned id -- `all' committers must give
+%%     the same result as the bare unsigned-id call.
+run_test(id, _ReqBundle, uncommitted, _B2, _B3, Tree, Opts) ->
+    ?assertEqual(
+        hb_message:id(Tree, none, Opts),
+        hb_message:id(Tree, all, Opts)
+    );
+run_test(id, _ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
     Id = hb_message:id(Tree, all, Opts),
     Commitments = hb_maps:get(<<"commitments">>, Tree, #{}, Opts),
     ?assertEqual([Id], maps:keys(Commitments));
 
-%% `convert': round-trip the tree through the `ans104@1.0' codec -- the
-%% standard structured<->codec path. Each subtree converts in the state its
-%% own commitment dictates (per-node), so a `bundle' flag on the request is
-%% overridden and the committed shape is preserved. The round-tripped tree
-%% must therefore still verify at every level.
-exercise(convert, ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
+%% `convert': round-trip the tree through the `ans104@1.0' codec. Each subtree 
+%% converts in the state its own commitment dictates (per-node) via
+%% `hint-device', so the `bundle' on the conversion target applies only to the
+%% root and the committed shape is preserved.
+run_test(convert, ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
     Encoded = hb_message:convert(Tree, convert_target(ReqBundle), Opts),
     Restored =
         hb_message:convert(
@@ -159,13 +170,6 @@ exercise(convert, ReqBundle, _B1, _B2, _B3, Tree, Opts) ->
     ?assert(hb_message:verify(L2, all, Opts)),
     L3 = hb_maps:get(<<"l3">>, L2, undefined, Opts),
     ?assert(hb_message:verify(L3, all, Opts)).
-
-%% @doc The verify spec for a request-bundle value: `all' committers, plus
-%% the forced `bundle' flag when one is given.
-verify_spec(none) ->
-    all;
-verify_spec(ReqBundle) ->
-    #{ <<"committers">> => <<"all">>, <<"bundle">> => ReqBundle }.
 
 %% @doc The convert target for a request-bundle value: the bare `ans104@1.0'
 %% codec, plus a forced `bundle' flag when one is given.

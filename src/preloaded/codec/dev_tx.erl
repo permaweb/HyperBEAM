@@ -104,9 +104,6 @@ do_from(RawTX, Req, Opts) ->
 
 %% @doc Inspect a message's signed tx@1.0 commitment and, if the commitment
 %% carries an explicit `bundle' field, mirror that value onto the request `Req'.
-%% If no matching commitment exists, we might be dealing with a nested 
-%% message (i.e. tx@1.0 root, with one ore more bundled ans104@1.0 children),
-%% so delegate to ans104@1.0.
 to_hint(Msg, Req, Opts) ->
     case lib_arweave_common:bundle_hint(<<"tx@1.0">>, Msg, Req, Opts) of
         not_found -> hb_ao:raw(<<"ans104@1.0">>, <<"to-hint">>, Msg, Req, Opts);

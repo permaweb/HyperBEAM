@@ -91,16 +91,14 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                     {Types, [{Key, Value} | Values]};
                 {ok, Nested} when is_map(Nested) orelse is_list(Nested) ->
                     ?event({from_recursing, {nested, Nested}}),
-                    % Strip out the `bundle' flag on reqursive calls - bundle
-                    % status will be redetermined by the hint device for each
-                    % message.
+                    % We pass the HintedReq to the recursive call rather than
+                    % Req so that this message's bundle status serves as the
+                    % default for any children that don't explicitly set the
+                    % `bundle' flag on the hinted commitment.
                     {Types,
                         [{
                             Key,
-                            hb_util:ok(from(
-                                Nested, 
-                                hb_maps:without([<<"bundle">>], Req, Opts), 
-                                Opts))
+                            hb_util:ok(from(Nested, HintedReq, Opts))
                         } | Values]};
                 {ok, Value} when
                         is_atom(Value)
@@ -187,7 +185,7 @@ type(List) when is_list(List) -> <<"list">>;
 type(Other) -> Other.
 
 %% @doc If a `hint-device` key is present it indicates the desired
-%% terminal fomat (after being converted via an intermediate `tabm`
+%% terminal format (after being converted via an intermediate `tabm`
 %% format). In that case dev_structured defers to the target codec
 %% to determine whether child messages should be loaded or unloaded.
 apply_bundle_hint(Msg, Req, Opts) ->

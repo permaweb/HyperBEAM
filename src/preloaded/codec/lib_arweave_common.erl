@@ -35,10 +35,6 @@ from_item(RawTX, Req, Opts) ->
     }.
 
 %% @doc Recursively encode a nested message as an `ans104@1.0' #tx record.
-%% Codecs that bundle nested ans104 data items (e.g. `tx@1.0') recurse
-%% through this shared-library entry point rather than calling the
-%% `ans104@1.0' device module directly, which is not reachable across
-%% device boundaries.
 to(Binary, _Req, _Opts) when is_binary(Binary) ->
     {ok, #tx{ tags = [{<<"ao-type">>, <<"binary">>}], data = Binary }};
 to(TX, _Req, _Opts) when is_record(TX, tx) ->
@@ -54,9 +50,6 @@ to(TABM, Req, Opts) when is_map(TABM) ->
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
 
-%% @doc Prepare a TABM as a #tx record using codec-specific field
-%% extraction and tag exclusion rules. Nested messages are always encoded
-%% as `ans104@1.0' data items, via to/3.
 to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
     MaybeCommitment =
         hb_message:commitment(
