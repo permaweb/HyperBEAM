@@ -6,7 +6,7 @@
 %%% impl message is signed and indexed, and then its generated EUnit
 %%% suites run against the just-built store.
 -module(hb_forge_test).
--export([init/1, do/1, format_error/1]).
+-export([init/1, do/1, run/2, format_error/1]).
 
 -define(PROVIDER, test).
 
@@ -23,7 +23,11 @@ init(State) ->
 
 %% @doc Build a test preloaded-store and run selected package EUnit modules.
 do(State) ->
-    Args = hb_forge_args:parse(State, <<"_build/device-test-store">>),
+    run(hb_forge_args:parse(State, <<"_build/device-test-store">>), State).
+
+%% @doc Build the preloaded-store described by `Args' and run the EUnit
+%% suite it implies. Shared by `rebar3 device test' and `rebar3 eunit-one'.
+run(Args, State) ->
     CoreTests = maybe_compile_core_test_modules(Args),
     % Build a complete store from the configured source set so selected
     % device tests can resolve their dependencies.
@@ -84,16 +88,19 @@ archive_modules(Pkg) ->
 %% @doc Run EUnit with the generated preloaded-store environment installed.
 test_modules(State, Names, CoreModules, DeviceModules, ModuleLabels, Args, Result) ->
     ShowHash = maps:get(<<"show-hash">>, Args, false),
+    ModuleNames = maps:get(<<"module-names">>, Args, all),
+    TestNames = maps:get(<<"test-names">>, Args, all),
     Env = setup_device_tests(Names, Result),
     EUnitResult =
         try
-            Tests = test_order(
-                CoreModules,
-                device_tests(DeviceModules, ModuleLabels, ShowHash)
-            ),
-            rebar_api:info(
-                "device test: running EUnit modules ~p",
-                [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash)]
+            Tests =
+                selected_tests(
+                    CoreModules, DeviceModules, ModuleLabels, ShowHash,
+                    ModuleNames, TestNames
+                ),
+            log_run(
+                CoreModules, DeviceModules, ModuleLabels, ShowHash,
+                ModuleNames, TestNames
             ),
             eunit:test(Tests, [verbose, {scale_timeouts, 10}])
         after restore_test_env(Env)
@@ -103,6 +110,99 @@ test_modules(State, Names, CoreModules, DeviceModules, ModuleLabels, Args, Resul
         error -> {error, format_error(eunit_failed)};
         Other -> {error, format_error({eunit_failed, Other})}
     end.
+
+%% @doc Build the EUnit descriptor list, narrowed by the optional `--module'
+%% and `--test' filters. With neither, every selected module runs in full;
+%% with `--test', only the named zero-arity test functions run.
+selected_tests(CoreModules0, DeviceModules0, ModuleLabels, ShowHash,
+        ModuleNames, TestNames) ->
+    {CoreModules, DeviceModules} =
+        filter_modules(CoreModules0, DeviceModules0, ModuleLabels, ModuleNames),
+    case TestNames of
+        all ->
+            test_order(
+                CoreModules,
+                device_tests(DeviceModules, ModuleLabels, ShowHash)
+            );
+        _ ->
+            Descriptors =
+                [
+                    named_test_descriptor(
+                        Mod, Fun, maps:get(Mod, ModuleLabels, Mod)
+                    )
+                ||
+                    Mod <- CoreModules ++ DeviceModules,
+                    Fun <- TestNames,
+                    test_function_exported(Mod, Fun)
+                ],
+            case Descriptors of
+                [] ->
+                    rebar_api:warn(
+                        "device test: no test matched --module ~p --test ~p",
+                        [ModuleNames, TestNames]
+                    );
+                _ ->
+                    ok
+            end,
+            Descriptors
+    end.
+
+%% @doc Narrow the core and device module lists to those whose module atom
+%% or readable label matches the `--module' filter.
+filter_modules(CoreModules, DeviceModules, _ModuleLabels, all) ->
+    {CoreModules, DeviceModules};
+filter_modules(CoreModules, DeviceModules, ModuleLabels, ModuleNames) ->
+    Keep =
+        fun(Mod) ->
+            lists:member(Mod, ModuleNames) orelse
+                lists:member(maps:get(Mod, ModuleLabels, Mod), ModuleNames)
+        end,
+    Filtered =
+        {
+            [Mod || Mod <- CoreModules, Keep(Mod)],
+            [Mod || Mod <- DeviceModules, Keep(Mod)]
+        },
+    case Filtered of
+        {[], []} ->
+            rebar_api:warn(
+                "device test: no module matched --module ~p", [ModuleNames]
+            );
+        _ ->
+            ok
+    end,
+    Filtered.
+
+%% @doc EUnit descriptor for one explicitly-named, zero-arity test function.
+%% A `_test_' generator is expanded with readable labels; any other function
+%% (e.g. a `_test_parallel' case) is run directly as a single test.
+named_test_descriptor(Mod, Fun, Label) ->
+    case lists:suffix("_test_", atom_to_list(Fun)) of
+        true ->
+            {generator,
+                fun() -> rewrite_test_term(apply(Mod, Fun, []), Mod, Label) end,
+                {Label, Fun, 0}};
+        false ->
+            {{Label, Fun, 0}, {test, Mod, Fun}}
+    end.
+
+%% @doc Whether `Mod' exports `Fun/0' once loaded -- the candidate set a
+%% `--test' filter selects from.
+test_function_exported(Mod, Fun) ->
+    _ = code:ensure_loaded(Mod),
+    erlang:function_exported(Mod, Fun, 0).
+
+%% @doc Log what this run will execute before EUnit starts.
+log_run(CoreModules, DeviceModules, ModuleLabels, ShowHash, all, all) ->
+    rebar_api:info(
+        "device test: running EUnit modules ~p",
+        [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash)]
+    );
+log_run(_CoreModules, _DeviceModules, _ModuleLabels, _ShowHash,
+        ModuleNames, TestNames) ->
+    rebar_api:info(
+        "device test: running modules ~p tests ~p",
+        [ModuleNames, TestNames]
+    ).
 
 %% @doc Run core tests first, but defer `hb_opts' until env vars are set.
 test_order(CoreModules, DeviceModules) ->

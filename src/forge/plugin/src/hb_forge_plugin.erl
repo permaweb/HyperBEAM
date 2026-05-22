@@ -15,6 +15,10 @@
 %%%   <li>`test'     - run device EUnit tests against the preloaded store</li>
 %%%   <li>`publish'  - package, sign, and upload to Arweave</li>
 %%% </ul>
+%%%
+%%% The plugin also registers one top-level command, `rebar3 eunit-all',
+%%% which runs the full EUnit suite (core and devices) and accepts
+%%% optional `--module'/`--test' filters.
 -module(hb_forge_plugin).
 -export([init/1]).
 
@@ -25,6 +29,7 @@ init(State) ->
         hb_forge_preload,
         hb_forge_local,
         hb_forge_test,
+        hb_forge_eunit,
         hb_forge_publish
     ],
     % Initialize each module.
