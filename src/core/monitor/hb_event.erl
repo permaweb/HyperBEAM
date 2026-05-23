@@ -42,6 +42,16 @@ log(Topic, X, Mod, Func) -> log(Topic, X, Mod, Func, undefined).
 log(Topic, X, Mod, Func, Line) -> log(Topic, X, Mod, Func, Line, #{}).
 log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
+log(Topic, X, Mod, Func, Line, Opts = #{ <<"on">> := #{ <<"event">> := _ }}) ->
+    debug_print(Topic, X, Mod, Func, Line, Opts),
+    try hb_hook:on(<<"event">>, event_hook_req(Topic, X, Mod, Func, Line), Opts)
+    catch _:_ -> ok
+    end,
+    try increment(Topic, X, Opts) catch _:_ -> ok end,
+    % Return the logged value to the caller. This allows callers to insert
+    % `?event(...)' macros into the flow of other executions, without having to
+    % break functional style.
+    X;
 log(Topic, X, Mod, Func, Line, Opts) ->
     debug_print(Topic, X, Mod, Func, Line, Opts),
     try increment(Topic, X, Opts) catch _:_ -> ok end,
@@ -49,6 +59,16 @@ log(Topic, X, Mod, Func, Line, Opts) ->
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
+
+event_hook_req(Topic, X, Mod, Func, Line) ->
+    #{
+        <<"body">> => X,
+        <<"event">> => X,
+        <<"topic">> => Topic,
+        <<"module">> => Mod,
+        <<"function">> => Func,
+        <<"line">> => Line
+    }.
 
 debug_print(X, Mod, Func, Line) ->
     debug_print(X, Mod, Func, Line, #{}).
@@ -455,6 +475,53 @@ should_log_test() ->
     ?assertEqual(false, should_print(log, topic_b, #{ <<"debug-log">> => [topic_a] })),
     ?assertEqual(true, should_print(log, topic_c, #{ <<"debug-log">> => true })),
     ?assertEqual(false, should_print(log, topic_d, #{ <<"debug-log">> => false })).
+
+-ifndef(NO_EVENTS).
+event_hook_receives_log_metadata_test() ->
+    Parent = self(),
+    Handler = #{
+        <<"device">> => #{
+            event =>
+                fun(_, Req, _) ->
+                    Parent ! {event_hook_req, Req},
+                    {ok, Req#{ <<"changed">> => true }}
+                end
+        }
+    },
+    Opts = #{ <<"on">> => #{ <<"event">> => Handler }},
+    Event = {example_event, ok},
+    ?assertEqual(
+        Event,
+        log(test_topic, Event, ?MODULE, test_fun, 123, Opts)
+    ),
+    receive
+        {event_hook_req, Req} ->
+            ?assertEqual(Event, maps:get(<<"body">>, Req)),
+            ?assertEqual(Event, maps:get(<<"event">>, Req)),
+            ?assertEqual(test_topic, maps:get(<<"topic">>, Req)),
+            ?assertEqual(?MODULE, maps:get(<<"module">>, Req)),
+            ?assertEqual(test_fun, maps:get(<<"function">>, Req)),
+            ?assertEqual(123, maps:get(<<"line">>, Req))
+    after 1000 ->
+        error(event_hook_not_called)
+    end.
+
+event_hook_exception_is_swallowed_test() ->
+    Handler = #{
+        <<"device">> => #{
+            event =>
+                fun(_, Req, _) ->
+                    {ok, Req}
+                end
+        }
+    },
+    Opts = #{ <<"on">> => #{ <<"event">> => [Handler | invalid_tail] }},
+    Event = {example_event, ok},
+    ?assertEqual(
+        Event,
+        log(test_topic, Event, ?MODULE, test_fun, 123, Opts)
+    ).
+-endif.
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
