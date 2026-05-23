@@ -60,8 +60,7 @@
 on(HookName, Req, Opts) ->
     case find(HookName, Opts) of
         [] -> {ok, Req};
-        Handlers ->
-            execute_handlers(HookName, Handlers, Req, Opts)
+        Handlers -> execute_handlers(HookName, Handlers, Req, Opts)
     end.
 
 %% @doc Get all handlers for a specific hook from the node message options.
@@ -214,21 +213,15 @@ execute_handler(HookName, Handler, Req, Opts) ->
             >>}
     end.
 
-%% @doc Remove the hook that is currently being executed from handler context.
+%% @doc Remove the current hook from handler context to avoid recursion.
 without_current_hook(HookName, Handler, Opts = #{ <<"on">> := On })
         when is_map(On) ->
     {
-        without_handler_hook(HookName, Handler),
+        maps:remove(HookName, Handler),
         Opts#{ <<"on">> => maps:remove(HookName, On) }
     };
-without_current_hook(HookName, Handler, Opts) ->
-    {without_handler_hook(HookName, Handler), Opts}.
-
-without_handler_hook(<<"step">>, Handler) ->
-    % The `step' hook also removed the key from the handler message.
-    maps:remove(<<"step">>, Handler);
-without_handler_hook(_HookName, Handler) ->
-    Handler.
+without_current_hook(_HookName, Handler, Opts) ->
+    {Handler, Opts}.
 
 %%% Tests
 
@@ -312,16 +305,23 @@ halt_on_error_test() ->
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).
 
-%% @doc Test that handlers run without their own hook in the node message.
-current_hook_removed_from_handler_opts_test() ->
+%% @doc Test that handlers do not recursively run their own hook.
+current_hook_recursion_guard_test() ->
+    Parent = self(),
     Handler = #{
         <<"device">> => #{
             test_hook =>
                 fun(_, Req, HandlerOpts) ->
+                    Parent ! handler_executed,
+                    {ok, Recursed} =
+                        hb_hook:on(
+                            <<"test-hook">>,
+                            Req#{ <<"recursive">> => true },
+                            HandlerOpts
+                        ),
                     {ok,
                         Req#{
-                            <<"handler-on">> =>
-                                maps:get(<<"on">>, HandlerOpts, #{})
+                            <<"recursed">> => Recursed
                         }
                     }
                 end
@@ -337,6 +337,6 @@ current_hook_removed_from_handler_opts_test() ->
                 }
         },
     {ok, Result} = on(<<"test-hook">>, Req, Opts),
-    HandlerOn = maps:get(<<"handler-on">>, Result),
-    ?assertNot(maps:is_key(<<"test-hook">>, HandlerOn)),
-    ?assert(maps:is_key(<<"other-hook">>, HandlerOn)).
+    ?assertMatch(#{ <<"recursive">> := true }, maps:get(<<"recursed">>, Result)),
+    receive handler_executed -> ok after 100 -> error(handler_not_executed) end,
+    receive handler_executed -> error(recursive_handler_executed) after 100 -> ok end.
