@@ -58,45 +58,38 @@
 %% This function finds all handlers for the hook and evaluates them in sequence.
 %% The result of each handler is used as input to the next handler.
 on(HookName, Req, Opts) ->
-    ?event(hook, {attempting_execution_for_hook, HookName}),
-    % Get all handlers for this hook from the options
-    Handlers = find(HookName, Opts),
-    % If no handlers are found, return the original request with ok status
-    case Handlers of
-        [] -> 
-            ?event(hook, {no_handlers_for_hook, HookName}),
-            {ok, Req};
-        _ -> 
-            % Execute each handler in sequence, passing the result of each to
-            % the next as input.
+    case find(HookName, Opts) of
+        [] -> {ok, Req};
+        Handlers ->
             execute_handlers(HookName, Handlers, Req, Opts)
     end.
 
 %% @doc Get all handlers for a specific hook from the node message options.
 %% Handlers are stored in the `on' key of this message.
-find(HookName, Opts) ->
-    find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
+find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
+    handlers(maps:get(HookName, On, []), Opts);
+find(_HookName, _Opts) ->
+    [].
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
-    case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
-        Handler when is_map(Handler) -> 
-            case hb_util:is_ordered_list(Handler, Opts) of
-                true ->
-                    % If the term is an ordered list message (containing only
-                    % numbered map keys sequentially), convert it to a list.
-                    hb_util:message_to_ordered_list(Handler, Opts);
-                false ->
-                    % If a single handler is found, wrap it in a list.
-                    [Handler]
-            end;
-        Handlers when is_list(Handlers) -> 
-            % If multiple handlers are found, return them as is
-            Handlers;
-        _ -> 
-            % If no handlers are found or the value is invalid, return an empty
-            % list.
-            []
-    end.
+    find(HookName, Opts).
+
+handlers(Handler, Opts) when is_map(Handler) ->
+    case hb_util:is_ordered_list(Handler, Opts) of
+        true ->
+            % If the term is an ordered list message (containing only
+            % numbered map keys sequentially), convert it to a list.
+            hb_util:message_to_ordered_list(Handler, Opts);
+        false ->
+            % If a single handler is found, wrap it in a list.
+            [Handler]
+    end;
+handlers(Handlers, _Opts) when is_list(Handlers) ->
+    % If multiple handlers are found, return them as is.
+    Handlers;
+handlers(_Handler, _Opts) ->
+    % If no handlers are found or the value is invalid, return an empty list.
+    [].
 
 %% @doc Execute a list of handlers in sequence.
 %% The result of each handler is used as input to the next handler.
@@ -105,13 +98,10 @@ execute_handlers(_HookName, [], Req, _Opts) ->
     % If no handlers remain, return the final request with ok status
     {ok, Req};
 execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
-    % Execute the current handler
-    ?event(hook, {executing_handler, HookName, Handler, Req}),
     % Check the status of the execution
     case execute_handler(HookName, Handler, Req, Opts) of
         {ok, NewReq} ->
             % If status is ok, continue with the next handler
-            ?event(hook, {handler_executed_successfully, HookName, NewReq}),
             execute_handlers(HookName, Rest, NewReq, Opts);
         {Status, Res} ->
             % If status is error, halt execution and return the error
@@ -128,25 +118,11 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             }
     end.
 
-%% @doc Execute a single handler
+%% @doc Execute a single handler.
 %% Handlers are expressed as messages that can be resolved via AO.
-execute_handler(
-    <<"step">>,
-    Handler,
-    Req,
-    Opts = #{ <<"on">> := On = #{ <<"step">> := _ }}
-) ->
-    % The `step' hook is a special case: It is executed during the course of
-    % a resolution, and as such, the key must be removed from the node message
-    % before execution of the handler. Failure to do so will result in infinite
-    % recursion.
-    execute_handler(
-        <<"step">>,
-        maps:remove(<<"step">>, Handler),
-        Req,
-        Opts#{ <<"on">> => maps:remove(<<"step">>, On) }
-    );
 execute_handler(HookName, Handler, Req, Opts) ->
+    {HandlerWithoutHook, OptsWithoutHook} =
+        without_current_hook(HookName, Handler, Opts),
     try
         % Resolve the handler message, setting the path to the handler name if
         % it is not already set. We ensure to ignore the hashpath such that the
@@ -156,53 +132,64 @@ execute_handler(HookName, Handler, Req, Opts) ->
         BaseReq =
             Req#{
                 <<"path">> =>
-                    hb_maps:get(<<"path">>, Handler, HookName, Opts),
+                    hb_maps:get(
+                        <<"path">>,
+                        HandlerWithoutHook,
+                        HookName,
+                        OptsWithoutHook
+                    ),
                 <<"method">> =>
-                    hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
+                    hb_maps:get(
+                        <<"method">>,
+                        HandlerWithoutHook,
+                        <<"GET">>,
+                        OptsWithoutHook
+                    )
             },
         CommitReqBin = 
             hb_util:bin(
                 hb_util:deep_get(
                     <<"hook/commit-request">>,
-                    Handler,
+                    HandlerWithoutHook,
                     <<"false">>,
-                    Opts
+                    OptsWithoutHook
                 )
             ),
         {PreparedBase, PreparedReq} =
             case CommitReqBin of
                 <<"true">> ->
                     {
-                        case hb_message:signers(Handler, Opts) of
-                            [] -> hb_message:commit(Handler, Opts);
-                            _ -> Handler
+                        case hb_message:signers(
+                            HandlerWithoutHook,
+                            OptsWithoutHook
+                        ) of
+                            [] ->
+                                hb_message:commit(
+                                    HandlerWithoutHook,
+                                    OptsWithoutHook
+                                );
+                            _ -> HandlerWithoutHook
                         end,
-                        hb_message:commit(BaseReq, Opts)
+                        hb_message:commit(BaseReq, OptsWithoutHook)
                     };
-                <<"false">> -> {Handler, BaseReq}
+                <<"false">> -> {HandlerWithoutHook, BaseReq}
             end,
-        ?event(hook,
-            {resolving_handler, 
-                {name, HookName},
-                {handler, Handler},
-                {req, {explicit, PreparedReq}}
-            }
-        ),
         % Execute the prepared request upon the handler.
         {Status, Res} =
             hb_ao:raw(
                 PreparedBase,
                 PreparedReq,
-                Opts#{ <<"hashpath">> => ignore }
+                OptsWithoutHook#{ <<"hashpath">> => ignore }
             ),
-        ?event(hook,
-            {handler_result,
-                {name, HookName},
-                {status, Status},
-                {res, Res}
-            }
-        ),
-        case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
+        case {
+            Status,
+            hb_util:deep_get(
+                <<"hook/result">>,
+                HandlerWithoutHook,
+                <<"return">>,
+                OptsWithoutHook
+            )
+        } of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
             {ok, <<"error">>} -> {error, Res};
@@ -226,6 +213,22 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 (iolist_to_binary(io_lib:format("~p:~p", [Error, Reason])))/binary
             >>}
     end.
+
+%% @doc Remove the hook that is currently being executed from handler context.
+without_current_hook(HookName, Handler, Opts = #{ <<"on">> := On })
+        when is_map(On) ->
+    {
+        without_handler_hook(HookName, Handler),
+        Opts#{ <<"on">> => maps:remove(HookName, On) }
+    };
+without_current_hook(HookName, Handler, Opts) ->
+    {without_handler_hook(HookName, Handler), Opts}.
+
+without_handler_hook(<<"step">>, Handler) ->
+    % The `step' hook also removed the key from the handler message.
+    maps:remove(<<"step">>, Handler);
+without_handler_hook(_HookName, Handler) ->
+    Handler.
 
 %%% Tests
 
@@ -308,3 +311,32 @@ halt_on_error_test() ->
     Opts = #{ <<"on">> => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).
+
+%% @doc Test that handlers run without their own hook in the node message.
+current_hook_removed_from_handler_opts_test() ->
+    Handler = #{
+        <<"device">> => #{
+            test_hook =>
+                fun(_, Req, HandlerOpts) ->
+                    {ok,
+                        Req#{
+                            <<"handler-on">> =>
+                                maps:get(<<"on">>, HandlerOpts, #{})
+                        }
+                    }
+                end
+        }
+    },
+    Req = #{ <<"test">> => <<"value">> },
+    Opts =
+        #{
+            <<"on">> =>
+                #{
+                    <<"test-hook">> => Handler,
+                    <<"other-hook">> => #{ <<"device">> => <<"test@1.0">> }
+                }
+        },
+    {ok, Result} = on(<<"test-hook">>, Req, Opts),
+    HandlerOn = maps:get(<<"handler-on">>, Result),
+    ?assertNot(maps:is_key(<<"test-hook">>, HandlerOn)),
+    ?assert(maps:is_key(<<"other-hook">>, HandlerOn)).
