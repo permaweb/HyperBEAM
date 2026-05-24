@@ -122,8 +122,7 @@ with_event_hook(Opts) ->
                         <<"path">> => <<"new">>,
                         <<"hook/result">> => <<"ignore">>
                     }
-            },
-        <<"process-dictionary-transfer">> => ?RECORDING_KEYS
+            }
     }.
 
 resolve_recorded(Target, Opts) ->
