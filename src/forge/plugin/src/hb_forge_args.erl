@@ -14,6 +14,7 @@
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(hb_forge_args).
 -export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0]).
+-export([maybe_help/2]).
 -export([set_preloaded_env/1, restore_preloaded_env/1, with_preloaded_env/2]).
 -export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
 -export([default_preloaded_dirs/1]).
@@ -49,10 +50,20 @@ opts() ->
             "Path to wallet keyfile used for signing."},
         {device_roots, $r, "device-roots", string,
             "Comma-separated list of dev_* roots to operate upon."},
+        {module, $m, "module", string,
+            "Comma-separated module names to run."},
+        {test, $t, "test", string,
+            "Comma-separated tests to run, optionally Module:Func1+Func2."},
+        {timeout, undefined, "timeout", string,
+            "Per-test timeout, in seconds."},
+        {timeout_multiplier, undefined, "timeout-multiplier", string,
+            "Multiplier for EUnit timeouts."},
         {with_core, undefined, "with-core", {boolean, false},
             "Also run core HyperBEAM EUnit modules."},
         {show_hash, undefined, "show-hash", {boolean, false},
-            "Show generated device module hashes in EUnit output."}
+            "Show generated device module hashes in EUnit output."},
+        {help, $h, "help", {boolean, false},
+            "Show command help."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -62,6 +73,11 @@ parse(State, DefaultOutput) ->
     OutRaw = proplists:get_value(output_dir, Args, DefaultOutput),
     KeyRaw = proplists:get_value(key, Args, undefined),
     RootsRaw = proplists:get_value(device_roots, Args, undefined),
+    ModuleRaw = proplists:get_value(module, Args, undefined),
+    TestRaw = proplists:get_value(test, Args, undefined),
+    TimeoutRaw = proplists:get_value(timeout, Args, undefined),
+    TimeoutMultiplierRaw =
+        proplists:get_value(timeout_multiplier, Args, undefined),
     WithCore = proplists:get_value(with_core, Args, false),
     ShowHash = proplists:get_value(show_hash, Args, false),
     #{
@@ -70,12 +86,67 @@ parse(State, DefaultOutput) ->
         <<"key">> => maybe_bin(KeyRaw),
         <<"with-core">> => WithCore,
         <<"show-hash">> => ShowHash,
+        <<"module-names">> => parse_atom_list(ModuleRaw),
+        <<"test-specs">> => parse_test_specs(TestRaw),
+        <<"timeout">> => parse_number(TimeoutRaw),
+        <<"timeout-multiplier">> => parse_number(TimeoutMultiplierRaw),
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
                 _ -> [to_bin(Root) || Root <- split_list(RootsRaw)]
             end
     }.
+
+%% @doc Print the current provider's generated help if `--help' was given.
+maybe_help(State, Module) ->
+    {Args, _Rest} = rebar_state:command_parsed_args(State),
+    case proplists:get_value(help, Args, false) of
+        true ->
+            Provider =
+                providers:get_provider_by_module(
+                    Module,
+                    rebar_state:providers(State)
+                ),
+            providers:help(Provider),
+            true;
+        false ->
+            false
+    end.
+
+%% @doc Parse a comma-separated provider option into atoms, or `all'.
+parse_atom_list(undefined) ->
+    all;
+parse_atom_list(Raw) ->
+    [binary_to_atom(Name, utf8) || Name <- split_list(Raw)].
+
+%% @doc Parse `--test' specs. Supports `Module:Fun1+Fun2' and bare funcs.
+parse_test_specs(undefined) ->
+    all;
+parse_test_specs(Raw) ->
+    lists:flatmap(fun parse_test_spec/1, split_list(Raw)).
+
+parse_test_spec(Spec) ->
+    case binary:split(Spec, <<":">>) of
+        [Funs] ->
+            [{all, parse_test_funs(Funs)}];
+        [Mod, Funs] ->
+            [{binary_to_atom(Mod, utf8), parse_test_funs(Funs)}]
+    end.
+
+parse_test_funs(Funs) ->
+    [binary_to_atom(Fun, utf8)
+        || Fun <- binary:split(Funs, <<"+">>, [global]),
+           Fun =/= <<>>].
+
+%% @doc Parse a numeric provider option, preserving `undefined'.
+parse_number(undefined) ->
+    undefined;
+parse_number(Raw) ->
+    Bin = to_bin(Raw),
+    try binary_to_integer(Bin)
+    catch
+        error:badarg -> binary_to_float(Bin)
+    end.
 
 %% @doc Split a comma-separated provider option into trimmed binary values.
 split_list(List) when is_list(List) ->

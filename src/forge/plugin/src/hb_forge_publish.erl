@@ -22,6 +22,12 @@ init(State) ->
 
 %% @doc Package, sign, and upload selected devices through the Arweave store.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-publish-store">>),
     KeyPath = maps:get(<<"key">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
@@ -35,7 +41,8 @@ do(State) ->
             <<"priv-wallet">> => Wallet,
             <<"preloaded-store">> => maps:get(store, Preload),
             <<"preloaded-devices-index">> => maps:get(index, Preload),
-            <<"bootstrap-device-src">> => hb_forge_args:bootstrap_preloaded_dirs(),
+            <<"bootstrap-device-src">> =>
+                hb_forge_args:bootstrap_preloaded_dirs(),
             <<"store">> =>
                 [#{ <<"store-module">> => hb_store_arweave }]
         },
@@ -61,7 +68,10 @@ do(State) ->
                 [maps:get(device_name, Pkg), SpecID, ImplID]
             )
         end,
-        hb_packager:package_all(hb_forge_args:scan_devices(Args), NodeOpts)
+        hb_packager:package_all(
+            hb_forge_args:scan_devices(Args),
+            NodeOpts
+        )
     ),
     {ok, State}.
 

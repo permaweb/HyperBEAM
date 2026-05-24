@@ -23,8 +23,13 @@ init(State) ->
 
 %% @doc Build a test preloaded-store and run selected package EUnit modules.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-test-store">>),
-    CoreTests = maybe_compile_core_test_modules(Args),
     % Build a complete store from the configured source set so selected
     % device tests can resolve their dependencies.
     {ok, Result} =
@@ -48,6 +53,8 @@ do(State) ->
         ],
     Modules = lists:usort(lists:append([archive_modules(Pkg) || Pkg <- Pkgs])),
     ModuleLabels = device_module_labels(Pkgs),
+    SourceLabels = device_source_labels(Groups, Pkgs),
+    CoreTests = maybe_compile_core_test_modules(Args, ModuleLabels, SourceLabels),
     Names = [maps:get(device_name, Pkg) || Pkg <- Pkgs],
     case Names of
         [] ->
@@ -66,6 +73,7 @@ do(State) ->
                                 CoreModules,
                                 Modules ++ TestModules,
                                 ModuleLabels,
+                                SourceLabels,
                                 Args,
                                 Result
                             )
@@ -82,20 +90,48 @@ archive_modules(Pkg) ->
     [Mod || {Mod, _File, _Beam} <- Modules].
 
 %% @doc Run EUnit with the generated preloaded-store environment installed.
-test_modules(State, Names, CoreModules, DeviceModules, ModuleLabels, Args, Result) ->
+test_modules(
+    State,
+    Names,
+    CoreModules,
+    DeviceModules,
+    ModuleLabels,
+    SourceLabels,
+    Args,
+    Result
+) ->
     ShowHash = maps:get(<<"show-hash">>, Args, false),
+    ModuleNames = maps:get(<<"module-names">>, Args, all),
+    TestSpecs = maps:get(<<"test-specs">>, Args, all),
     Env = setup_device_tests(Names, Result),
     EUnitResult =
         try
-            Tests = test_order(
-                CoreModules,
-                device_tests(DeviceModules, ModuleLabels, ShowHash)
+            {SelectedCoreModules, SelectedDeviceModules} =
+                filter_modules(
+                    CoreModules,
+                    DeviceModules,
+                    ModuleLabels,
+                    SourceLabels,
+                    module_filter(ModuleNames, TestSpecs)
+                ),
+            Tests = selected_tests(
+                SelectedCoreModules,
+                SelectedDeviceModules,
+                ModuleLabels,
+                SourceLabels,
+                ShowHash,
+                ModuleNames,
+                TestSpecs
             ),
-            rebar_api:info(
-                "device test: running EUnit modules ~p",
-                [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash)]
+            log_run(
+                SelectedCoreModules,
+                SelectedDeviceModules,
+                ModuleLabels,
+                ShowHash,
+                ModuleNames,
+                TestSpecs
             ),
-            eunit:test(Tests, [verbose, {scale_timeouts, 10}])
+            eunit:test(timeout_tests(Tests, Args), eunit_opts(Args))
         after restore_test_env(Env)
         end,
     case EUnitResult of
@@ -103,6 +139,174 @@ test_modules(State, Names, CoreModules, DeviceModules, ModuleLabels, Args, Resul
         error -> {error, format_error(eunit_failed)};
         Other -> {error, format_error({eunit_failed, Other})}
     end.
+
+%% @doc Build the EUnit descriptor list, narrowed by `--module'/`--test'.
+selected_tests(
+    CoreModules,
+    DeviceModules,
+    ModuleLabels,
+    SourceLabels,
+    ShowHash,
+    ModuleNames,
+    TestSpecs
+) ->
+    case TestSpecs of
+        all ->
+            test_order(
+                CoreModules,
+                device_tests(DeviceModules, ModuleLabels, ShowHash)
+            );
+        _ ->
+            Descriptors =
+                [
+                    named_test_descriptor(Mod, Fun, Label, Type)
+                ||
+                    Mod <- CoreModules ++ DeviceModules,
+                    Fun0 <- matching_test_funs(
+                        Mod, ModuleLabels, SourceLabels, TestSpecs
+                    ),
+                    {Fun, Type} <- resolve_test_fun(Mod, Fun0),
+                    Label <- [test_label(Mod, ModuleLabels, ShowHash)]
+                ],
+            case Descriptors of
+                [] ->
+                    rebar_api:warn(
+                        "device test: no test matched --module ~p --test ~p",
+                        [ModuleNames, TestSpecs]
+                    );
+                _ ->
+                    ok
+            end,
+            Descriptors
+    end.
+
+%% @doc Apply `--module', or module-qualified `--test' when no module was given.
+module_filter(all, all) ->
+    all;
+module_filter(all, TestSpecs) ->
+    case [Mod || {Mod, _Funs} <- TestSpecs, Mod =/= all] of
+        [] -> all;
+        Mods -> lists:usort(Mods)
+    end;
+module_filter(ModuleNames, _TestSpecs) ->
+    ModuleNames.
+
+%% @doc Narrow core and device module lists using generated/source/label names.
+filter_modules(CoreModules, DeviceModules, _ModuleLabels, _SourceLabels, all) ->
+    {CoreModules, DeviceModules};
+filter_modules(CoreModules, DeviceModules, ModuleLabels, SourceLabels, Names) ->
+    Keep =
+        fun(Mod) ->
+            lists:any(
+                fun(Name) -> module_matches(Mod, Name, ModuleLabels, SourceLabels) end,
+                Names
+            )
+        end,
+    Filtered =
+        {
+            [Mod || Mod <- CoreModules, Keep(Mod)],
+            [Mod || Mod <- DeviceModules, Keep(Mod)]
+        },
+    case Filtered of
+        {[], []} ->
+            rebar_api:warn(
+                "device test: no module matched --module ~p", [Names]
+            );
+        _ ->
+            ok
+    end,
+    Filtered.
+
+matching_test_funs(Mod, ModuleLabels, SourceLabels, TestSpecs) ->
+    lists:usort(
+        lists:flatmap(
+            fun
+                ({all, Funs}) ->
+                    Funs;
+                ({Name, Funs}) ->
+                    case module_matches(Mod, Name, ModuleLabels, SourceLabels) of
+                        true -> Funs;
+                        false -> []
+                    end
+            end,
+            TestSpecs
+        )
+    ).
+
+module_matches(Mod, Name, ModuleLabels, SourceLabels) ->
+    Name =:= Mod orelse
+        Name =:= maps:get(Mod, ModuleLabels, undefined) orelse
+        Name =:= maps:get(Mod, SourceLabels, undefined).
+
+%% @doc EUnit descriptor for an explicitly named test or generator.
+named_test_descriptor(Mod, Fun, Label, generator) ->
+    {
+        generator,
+        fun() -> rewrite_test_term(apply(Mod, Fun, []), Mod, Label) end,
+        {Label, Fun, 0}
+    };
+named_test_descriptor(Mod, Fun, Label, test) ->
+    {{Label, Fun, 0}, {test, Mod, Fun}}.
+
+%% @doc Resolve a requested `-t' name, treating matching `_test_' as generator.
+resolve_test_fun(Mod, Fun) ->
+    code:ensure_loaded(Mod),
+    case erlang:function_exported(Mod, Fun, 0) of
+        true ->
+            [
+                {
+                    Fun,
+                    case lists:suffix("_test_", atom_to_list(Fun)) of
+                        true -> generator;
+                        false -> test
+                    end
+                }
+            ];
+        false ->
+            Gen = binary_to_atom(<<(atom_to_binary(Fun, utf8))/binary, "_">>, utf8),
+            case erlang:function_exported(Mod, Gen, 0) of
+                true -> [{Gen, generator}];
+                false -> []
+            end
+    end.
+
+test_label(Mod, _ModuleLabels, true) ->
+    Mod;
+test_label(Mod, ModuleLabels, false) ->
+    maps:get(Mod, ModuleLabels, Mod).
+
+%% @doc Log what this run will execute before EUnit starts.
+log_run(CoreModules, DeviceModules, ModuleLabels, ShowHash, all, all) ->
+    rebar_api:info(
+        "device test: running EUnit modules ~p",
+        [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash)]
+    );
+log_run(CoreModules, DeviceModules, ModuleLabels, ShowHash, _ModuleNames, TestSpecs) ->
+    rebar_api:info(
+        "device test: running modules ~p tests ~p",
+        [test_names(CoreModules, DeviceModules, ModuleLabels, ShowHash), TestSpecs]
+    ).
+
+%% @doc Apply a caller-supplied timeout to each top-level EUnit descriptor.
+timeout_tests(Tests, #{ <<"timeout">> := undefined }) ->
+    Tests;
+timeout_tests(Tests, #{ <<"timeout">> := Timeout })
+        when is_number(Timeout), Timeout >= 0 ->
+    [{timeout, Timeout, Test} || Test <- Tests];
+timeout_tests(_Tests, #{ <<"timeout">> := Timeout }) ->
+    error({invalid_timeout, Timeout}).
+
+%% @doc EUnit options, preserving the historical timeout multiplier by default.
+eunit_opts(#{ <<"timeout-multiplier">> := Multiplier })
+        when is_number(Multiplier), Multiplier >= 0 ->
+    [verbose, {scale_timeouts, Multiplier}];
+eunit_opts(#{ <<"timeout-multiplier">> := Multiplier })
+        when Multiplier =/= undefined ->
+    error({invalid_timeout_multiplier, Multiplier});
+eunit_opts(#{ <<"timeout">> := Timeout }) when Timeout =/= undefined ->
+    [verbose, {scale_timeouts, 1}];
+eunit_opts(_Args) ->
+    [verbose, {scale_timeouts, 10}].
 
 %% @doc Run core tests first, but defer `hb_opts' until env vars are set.
 test_order(CoreModules, DeviceModules) ->
@@ -140,6 +344,49 @@ pkg_module_labels(Pkg) ->
     Root = maps:get(module_name, Pkg),
     Device = maps:get(device_name, Pkg),
     [{Mod, module_label(Device, Root, Mod)} || Mod <- archive_modules(Pkg)].
+
+%% @doc Map generated archive module atoms back to original source modules.
+device_source_labels(Groups, Pkgs) ->
+    maps:from_list(
+        lists:flatmap(fun(Group) -> group_source_labels(Group, Pkgs) end, Groups)
+    ).
+
+group_source_labels(Group, Pkgs) ->
+    Device = hb_packager:group_device_name(Group),
+    case [Pkg || Pkg <- Pkgs, maps:get(device_name, Pkg) =:= Device] of
+        [Pkg] ->
+            RootMod = maps:get(module_name, Pkg),
+            Root = maps:get(root, Group),
+            Entries =
+                [{Root, maps:get(root_file, Group)}] ++
+                maps:get(helpers, Group, []) ++
+                maps:get(libraries, Group, []),
+            [
+                {generated_module(RootMod, Root, Mod), Mod}
+             ||
+                {Mod, _Path} <- Entries
+            ];
+        [] ->
+            []
+    end.
+
+generated_module(RootMod, Root, Root) ->
+    RootMod;
+generated_module(RootMod, Root, Mod) ->
+    "dev_" ++ RootTail = atom_to_list(Root),
+    RootPrefix = "dev_" ++ RootTail ++ "_",
+    ModStr = atom_to_list(Mod),
+    Tail =
+        case {lists:prefix(RootPrefix, ModStr), lists:prefix("lib_", ModStr)} of
+            {true, _} -> lists:nthtail(length(RootPrefix), ModStr);
+            {_, true} -> lists:nthtail(length("lib_"), ModStr);
+            _ -> ModStr
+        end,
+    binary_to_atom(
+        <<(atom_to_binary(RootMod, utf8))/binary, "__",
+            (hb_device_name:sanitize(Tail))/binary>>,
+        utf8
+    ).
 
 module_label(Device, Root, Root) ->
     binary_to_atom(Device, utf8);
@@ -400,11 +647,37 @@ purge_test_module(Mod) ->
     code:delete(Mod),
     code:purge(Mod).
 
-%% @doc Compile core tests only when the caller opts into `--with-core'.
-maybe_compile_core_test_modules(#{ <<"with-core">> := true }) ->
+%% @doc Compile core tests when requested, or when filters name core modules.
+maybe_compile_core_test_modules(
+    #{ <<"with-core">> := true },
+    _ModuleLabels,
+    _SourceLabels
+) ->
     compile_core_test_modules();
-maybe_compile_core_test_modules(_Args) ->
-    none.
+maybe_compile_core_test_modules(Args, ModuleLabels, SourceLabels) ->
+    case filter_needs_core(Args, ModuleLabels, SourceLabels) of
+        true -> compile_core_test_modules();
+        false -> none
+    end.
+
+filter_needs_core(Args, ModuleLabels, SourceLabels) ->
+    ModuleNames = maps:get(<<"module-names">>, Args, all),
+    TestSpecs = maps:get(<<"test-specs">>, Args, all),
+    case module_filter(ModuleNames, TestSpecs) of
+        all ->
+            TestSpecs =/= all;
+        Names ->
+            lists:any(
+                fun(Name) -> not device_module_name(Name, ModuleLabels, SourceLabels) end,
+                Names
+            )
+    end.
+
+device_module_name(Name, ModuleLabels, SourceLabels) ->
+    lists:any(
+        fun(Mod) -> module_matches(Mod, Name, ModuleLabels, SourceLabels) end,
+        maps:keys(ModuleLabels) ++ maps:keys(SourceLabels)
+    ).
 
 %% @doc Run `Fun' with core test modules available when requested.
 with_core_test_modules(none, Fun) when is_function(Fun, 1) ->
