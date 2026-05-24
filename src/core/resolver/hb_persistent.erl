@@ -186,13 +186,17 @@ await(Worker, Base, Req, Opts) ->
     GroupName = group(Base, Req, Opts),
     % set monitor to a worker, so we know if it exits
     _Ref = erlang:monitor(process, Worker),
-    Worker ! {resolve, self(), GroupName, Req, Opts},
+    Worker ! {resolve, self(), GroupName, Req, listener_opts(Opts)},
     AwaitFun(Worker, GroupName, Base, Req, Opts).
 
 %% @doc Default await function that waits for a resolution from a worker.
 default_await(Worker, GroupName, Base, Req, Opts) ->
     % Wait for the result.
     receive
+        {resolved, _, GroupName, Req, Res, Transfer} ->
+            put_process_dictionary_transfer(Transfer),
+            worker_event(GroupName, {resolved_await, Res}, Base, Req, Opts),
+            Res;
         {resolved, _, GroupName, Req, Res} ->
             worker_event(GroupName, {resolved_await, Res}, Base, Req, Opts),
             Res;
@@ -254,13 +258,20 @@ forward_work(NewPID, Opts) ->
 
 %% @doc Helper function that wraps responding with a new Res.
 send_response(Listener, GroupName, Req, Res) ->
+    send_response(Listener, GroupName, Req, Res, []).
+
+send_response(Listener, GroupName, Req, Res, Transfer) ->
     ?event(worker,
         {send_response,
             {listener, Listener},
             {group, GroupName}
         }
     ),
-    Listener ! {resolved, self(), GroupName, Req, Res}.
+    Listener !
+        case Transfer of
+            [] -> {resolved, self(), GroupName, Req, Res};
+            _ -> {resolved, self(), GroupName, Req, Res, Transfer}
+        end.
 
 %% @doc Start a worker process that will hold a message in memory for
 %% future executions.
@@ -328,13 +339,18 @@ default_worker(GroupName, Base, Opts) ->
                     {group, GroupName}
                 }
             ),
-            Res =
-                hb_ao:resolve(
-                    Base,
-                    Req,
-                    hb_maps:merge(ListenerOpts, Opts, Opts)
-                ),
-            send_response(Listener, GroupName, Req, Res),
+            {ResolveOpts, Transfer} = listener_worker_opts(ListenerOpts, Opts),
+            {Res, NewTransfer} =
+                case Transfer of
+                    [] ->
+                        {hb_ao:resolve(Base, Req, ResolveOpts), []};
+                    _ ->
+                        with_process_dictionary_transfer(
+                            Transfer,
+                            fun() -> hb_ao:resolve(Base, Req, ResolveOpts) end
+                        )
+                end,
+            send_response(Listener, GroupName, Req, Res, NewTransfer),
             notify(GroupName, Req, Res, Opts),
             case hb_opts:get(static_worker, false, Opts) of
                 true ->
@@ -344,10 +360,10 @@ default_worker(GroupName, Base, Opts) ->
                 false ->
                     % Register for the new (Base) group.
                     case Res of
-                        {ok, Res} ->
-                            NewGroupName = group(Res, undefined, Opts),
+                        {ok, ResMsg} ->
+                            NewGroupName = group(ResMsg, undefined, Opts),
                             register_groupname(NewGroupName, Opts),
-                            default_worker(NewGroupName, Res, Opts);
+                            default_worker(NewGroupName, ResMsg, Opts);
                         _ ->
                             % If the result is not ok, we should either ignore
                             % the error and stay on the existing group,
@@ -365,6 +381,56 @@ default_worker(GroupName, Base, Opts) ->
         % device has shutdown procedures (for example, writing in-memory
         % state to the cache).
         unregister(Base, undefined, Opts)
+    end.
+
+listener_opts(Opts) ->
+    case process_dictionary_transfer(Opts) of
+        [] -> Opts;
+        Transfer -> Opts#{ <<"process-dictionary-transfer-values">> => Transfer }
+    end.
+
+listener_worker_opts(ListenerOpts, Opts) ->
+    {
+        hb_maps:merge(
+            maps:remove(<<"process-dictionary-transfer-values">>, ListenerOpts),
+            Opts,
+            Opts
+        ),
+        maps:get(<<"process-dictionary-transfer-values">>, ListenerOpts, [])
+    }.
+
+process_dictionary_transfer(Opts) ->
+    process_dictionary_transfer_from_keys(
+        hb_opts:get(process_dictionary_transfer, [], Opts)
+    ).
+
+process_dictionary_transfer_from_keys(Keys) ->
+    [
+        {Key, Value}
+    ||
+        Key <- Keys,
+        Value <- [erlang:get(Key)]
+    ].
+
+put_process_dictionary_transfer(Transfer) ->
+    lists:foreach(
+        fun
+            ({Key, undefined}) -> erlang:erase(Key);
+            ({Key, Value}) -> erlang:put(Key, Value)
+        end,
+        Transfer
+    ).
+
+with_process_dictionary_transfer(Transfer, Fun) ->
+    Keys = [Key || {Key, _Value} <- Transfer],
+    Old = process_dictionary_transfer_from_keys(Keys),
+    put_process_dictionary_transfer(Transfer),
+    try
+        Res = Fun(),
+        {Res, process_dictionary_transfer_from_keys(Keys)}
+    after
+        put_process_dictionary_transfer([{Key, undefined} || Key <- Keys]),
+        put_process_dictionary_transfer(Old)
     end.
 
 %% @doc Create a group name from a Base and Req pair as a tuple.
