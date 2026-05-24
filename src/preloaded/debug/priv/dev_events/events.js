@@ -29,6 +29,7 @@
   };
 
   const decoder = new TextDecoder();
+  const numberFormatter = new Intl.NumberFormat("en-US");
   const maxFilterOptions = 80;
   const clearFilterValue = "Clear";
   const hopHeaders = new Set([
@@ -839,6 +840,14 @@
     render({ centerSelected: true });
   }
 
+  function formatInteger(value) {
+    return numberFormatter.format(value);
+  }
+
+  function formatEventCount(value) {
+    return `${formatInteger(value)} ${value === 1 ? "event" : "events"}`;
+  }
+
   function formatDurationUs(us) {
     if (!Number.isFinite(us)) return "";
     if (Math.abs(us) >= 1000000) return `${(us / 1000000).toFixed(2)}s`;
@@ -916,11 +925,11 @@
   }
 
   function renderStats() {
-    els.count.textContent = state.report.events.length;
-    els.topics.textContent = unique("topic").length;
-    els.modules.textContent = unique("module").length;
+    els.count.textContent = formatInteger(state.report.events.length);
+    els.topics.textContent = formatInteger(unique("topic").length);
+    els.modules.textContent = formatInteger(unique("module").length);
     els.duration.textContent = formatDurationUs(reportDuration()) || "0us";
-    els.visibleCount.textContent = `${state.filtered.length} shown`;
+    els.visibleCount.textContent = formatEventCount(state.filtered.length);
   }
 
   function renderList() {
