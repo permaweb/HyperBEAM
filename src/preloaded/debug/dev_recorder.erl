@@ -1,17 +1,17 @@
 %%% @doc Process-local AO-Core event recorder and viewer.
 %%%
-%%% `~events@1.0/log=start' enables event recording in the current Erlang
-%%% process and returns the base message so the rest of the path can continue.
-%%% `~events@1.0/new' is intended to be installed as an `on/event' hook
-%%% handler. It appends the hook request to the process-local recording if
-%%% recording is active. A later `log~events@1.0' call returns the captured
-%%% events as an AO-Core message, JSON, text, or embedded HTML.
--module(dev_events).
--export([info/1, new/3, log/3, record/3, index/3]).
+%%% `~recorder@1.0/record' resolves a target request with a process-local
+%%% flight recorder enabled, then returns the captured telemetry as an AO-Core
+%%% message, JSON, text, or embedded HTML.
+%%% `~recorder@1.0/maybe-append' is intended to be installed as an `on/event'
+%%% hook handler. It appends the hook request only while a flight is active.
+-module(dev_recorder).
+-export([info/1, maybe_append/3, record/3, index/3]).
+-export([takeoff/3, land/3, clear/0]).
 -include_lib("hb/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(DEVICE, <<"events@1.0">>).
+-define(DEVICE, <<"recorder@1.0">>).
 -define(NO_CACHE, [<<"no-cache">>, <<"no-store">>]).
 -define(RECORDING_KEY, {?DEVICE, recording}).
 -define(RECORDING_EVENTS_KEY, {?DEVICE, events}).
@@ -34,34 +34,31 @@
 info(_) ->
     #{
         exports => [
-            <<"new">>,
-            <<"log">>,
+            <<"maybe-append">>,
             <<"record">>,
             <<"index">>
         ]
     }.
 
 %% @doc Append one event hook request if recording is active.
-new(_Base, Req, Opts) ->
+maybe_append(_Base, Req, Opts) ->
     maybe_record(Req, Opts),
     {ok, Req}.
 
-%% @doc Start, clear, stop, or read process-local events.
-log(Base, Req, Opts) ->
-    case action(Req, Opts) of
-        <<"start">> ->
-            start_recording(recording_opts(Req, Opts)),
-            {ok, pass_through(Base, Opts)};
-        <<"clear">> ->
-            clear_recording(),
-            {ok, report()};
-        <<"stop">> ->
-            Report = report(),
-            clear_recording(),
-            response(Report#{ <<"recording">> => false }, Req, Opts);
-        _ ->
-            response(report(), Req, Opts)
-    end.
+%% @doc Start a process-local flight. Intended for Erlang callers that wrap
+%% non-AO work, such as `rebar3 device test --record'.
+takeoff(_Base, Req, Opts) ->
+    start_recording(recording_opts(Req, Opts)),
+    {ok, report()}.
+
+%% @doc Return and clear the current process-local flight.
+land(_Base, Req, Opts) ->
+    Report = report(),
+    clear_recording(),
+    response(Report#{ <<"recording">> => false }, Req, Opts).
+
+clear() ->
+    clear_recording().
 
 %% @doc Resolve a target request with process-local event recording enabled.
 %% Returns the recorded event report in the requested render format.
@@ -69,16 +66,23 @@ record(_Base, Req, Opts) ->
     case record_target(Req, Opts) of
         {ok, Target} ->
             RecOpts = recording_opts(Req, Opts),
+            HookOpts = with_event_hook(Opts),
+            OldEventOpts = erlang:get({hb_event, event_opts}),
             start_recording(RecOpts),
-            Res = resolve_recorded(Target, with_event_hook(Opts)),
-            Report0 = report(),
-            clear_recording(),
-            Report1 =
-                Report0#{
-                    <<"result">> => Res,
-                    <<"target">> => Target
-                },
-            response(Report1, Req, Opts, <<"html">>);
+            try
+                erlang:put({hb_event, event_opts}, HookOpts),
+                Res = resolve_recorded(Target, HookOpts),
+                Report0 = report(),
+                Report1 =
+                    Report0#{
+                        <<"result">> => Res,
+                        <<"target">> => Target
+                    },
+                response(Report1, Req, Opts, <<"html">>)
+            after
+                restore_event_opts(OldEventOpts),
+                clear_recording()
+            end;
         {error, Reason} ->
             response(
                 #{
@@ -93,12 +97,9 @@ record(_Base, Req, Opts) ->
             )
     end.
 
-%% @doc Return the browser UI with the current process log embedded.
+%% @doc Return the browser UI with the current process flight embedded.
 index(_Base, Req, Opts) ->
     html_response(report(), Opts).
-
-action(Req, Opts) ->
-    hb_ao:normalize_key(hb_maps:get(<<"log">>, Req, <<"read">>, Opts)).
 
 response(Report, Req, Opts) ->
     response(Report, Req, Opts, <<"raw">>).
@@ -119,14 +120,14 @@ with_event_hook(Opts) ->
                 <<"event">> =>
                     #{
                         <<"device">> => ?DEVICE,
-                        <<"path">> => <<"new">>,
+                        <<"path">> => <<"maybe-append">>,
                         <<"hook/result">> => <<"ignore">>
                     }
             }
     }.
 
 resolve_recorded(Target, Opts) ->
-    try hb_ao:resolve(Target, Opts) of
+    try hb_ao:resolve(record_base(Target, Opts), record_req(Target, Opts), Opts) of
         Res -> Res
     catch Class:Reason:Stack ->
         {
@@ -138,6 +139,20 @@ resolve_recorded(Target, Opts) ->
             }
         }
     end.
+
+record_base(Target, Opts) ->
+    case hb_maps:find(<<"device">>, Target, Opts) of
+        {ok, Device} -> #{ <<"device">> => Device };
+        error -> #{}
+    end.
+
+record_req(Target, Opts) ->
+    hb_maps:without([<<"device">>], Target, Opts).
+
+restore_event_opts(undefined) ->
+    erlang:erase({hb_event, event_opts});
+restore_event_opts(Opts) ->
+    erlang:put({hb_event, event_opts}, Opts).
 
 record_target(Req, Opts) ->
     case record_target_value(Req, Opts) of
@@ -198,7 +213,6 @@ record_request_base(Req, Opts) ->
     hb_maps:without(
         [
             <<"format">>,
-            <<"log">>,
             <<"request">>,
             <<"target">>,
             <<"record-path">>,
@@ -245,7 +259,7 @@ html_response(Report, Opts) ->
                         <<"body">> =>
                             inline_asset(
                                 Body2,
-                                <<"events.js">>,
+                                <<"recorder.js">>,
                                 <<"{{EVENTS_JS}}">>,
                                 fun escape_script/1,
                                 Opts
@@ -319,17 +333,12 @@ static(Name, _Opts) ->
     end.
 
 content_type(<<"index.html">>) -> <<"text/html">>;
-content_type(<<"events.js">>) -> <<"text/javascript">>;
+content_type(<<"recorder.js">>) -> <<"text/javascript">>;
 content_type(<<"styles.css">>) -> <<"text/css">>;
 content_type(_) -> <<"application/octet-stream">>.
 
 json_report_body(Report, Opts) ->
     hb_json:encode(json_value(Report, Opts)).
-
-pass_through(Base, Opts) when is_map(Base) ->
-    hb_maps:without([<<"device">>], Base, Opts);
-pass_through(Base, _Opts) ->
-    Base.
 
 start_recording(Opts) ->
     Now = erlang:monotonic_time(microsecond),
@@ -633,24 +642,19 @@ utf8_prefix(Bin, Keep) ->
 
 %%% Tests
 
-log_start_passes_through_without_device_test() ->
+takeoff_land_test() ->
     clear_recording(),
-    {ok, Out} =
-        log(
-            #{ <<"device">> => ?DEVICE, <<"keep">> => <<"yes">> },
-            #{ <<"log">> => <<"start">> },
-            #{}
-        ),
-    ?assertEqual(<<"yes">>, maps:get(<<"keep">>, Out)),
-    ?assertNot(maps:is_key(<<"device">>, Out)),
+    ?assertEqual(false, recording()),
+    {ok, #{ <<"recording">> := true }} = takeoff(#{}, #{}, #{}),
     ?assertEqual(true, recording()),
-    clear_recording().
+    {ok, []} = land(#{}, #{}, #{}),
+    ?assertEqual(false, recording()).
 
-new_records_started_event_test() ->
+maybe_append_records_started_event_test() ->
     clear_recording(),
     start_recording(#{ <<"stack">> => true }),
     {ok, _} =
-        new(
+        maybe_append(
             #{},
             #{
                 <<"event">> => {generating_id, #{ <<"a">> => 1 }},
@@ -669,41 +673,25 @@ new_records_started_event_test() ->
     ?assert(maps:is_key(<<"stack">>, Event)),
     clear_recording().
 
-ao_start_hook_read_test() ->
+record_installs_hook_test() ->
     clear_recording(),
-    Opts =
-        #{
-            <<"on">> =>
-                #{
-                    <<"event">> =>
-                        #{
-                            <<"device">> => ?DEVICE,
-                            <<"path">> => <<"new">>,
-                            <<"hook/result">> => <<"ignore">>
-                        }
-                }
-        },
-    {ok, _} =
-        hb_ao:resolve(
-            #{
-                <<"device">> => ?DEVICE,
-                <<"path">> => <<"log">>,
-                <<"log">> => <<"start">>
-            },
-            Opts
-        ),
-    hb_event:log(test_events, {generating_id, ok}, ?MODULE, ?FUNCTION_NAME, ?LINE, Opts),
     {ok, Events} =
-        hb_ao:resolve(
-            #{ <<"device">> => ?DEVICE, <<"path">> => <<"log">> },
-            Opts
+        record(
+            #{},
+            #{
+                <<"format">> => <<"raw">>,
+                <<"request">> =>
+                    #{
+                        <<"path">> => <<"keys">>
+                    }
+            },
+            #{ <<"forge-bootstrap">> => #{ ?DEVICE => ?MODULE } }
         ),
     ?assert(length(Events) > 0),
     ?assert(
         lists:any(
             fun(Event) ->
-                maps:get(<<"topic">>, Event, <<>>) =:= <<"test_events">>
-                    andalso maps:get(<<"name">>, Event, <<>>) =:= <<"generating_id">>
+                maps:get(<<"name">>, Event, <<>>) =:= <<"resolving_key">>
             end,
             Events
         )

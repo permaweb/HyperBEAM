@@ -517,12 +517,12 @@ rewrite_instantiator(Fun, Mod, Label) when is_function(Fun, 1) ->
 rewrite_instantiator(Test, Mod, Label) ->
     rewrite_test_term(Test, Mod, Label).
 
-%% @doc Build process-local event recording context when requested.
+%% @doc Build process-local recorder context when requested.
 maybe_record_context(#{ <<"record">> := none }, _Result) ->
     none;
 maybe_record_context(#{ <<"record">> := Report }, Result) ->
-    EventMod = ensure_events_device(Result),
-    rebar_api:info("device test: recording event logs for ~s", [
+    RecorderMod = ensure_recorder_device(Result),
+    rebar_api:info("device test: recording test flights for ~s", [
         case Report of
             all -> "every test";
             errors -> "failing tests"
@@ -530,7 +530,7 @@ maybe_record_context(#{ <<"record">> := Report }, Result) ->
     ]),
     #{
         result => Result,
-        event_mod => EventMod,
+        recorder_mod => RecorderMod,
         report => Report,
         parent => self(),
         ref => make_ref()
@@ -544,7 +544,7 @@ maybe_record_tests(Tests, none) ->
 maybe_record_tests(Tests, Ctx) ->
     event_test_term(Tests, Ctx).
 
-%% @doc Print collected event report links outside EUnit's captured output.
+%% @doc Print collected recorder links outside EUnit's captured output.
 print_record_reports(none) ->
     ok;
 print_record_reports(#{ ref := Ref }) ->
@@ -553,7 +553,7 @@ print_record_reports(#{ ref := Ref }) ->
             ok;
         Reports ->
             rebar_api:info(
-                "device test: event logs~n~s",
+                "device test: recorder@1.0 test flights~n~s",
                 [format_event_reports(lists:keysort(1, Reports))]
             )
     end.
@@ -605,12 +605,12 @@ event_report_name({name, Name}) when is_atom(Name) ->
 event_report_name(Name) ->
     hb_util:list(hb_util:bin(io_lib:format("~0tp", [Name]))).
 
-ensure_events_device(Result) ->
-    case hb_device_load:reference(<<"events@1.0">>, test_opts(Result)) of
+ensure_recorder_device(Result) ->
+    case hb_device_load:reference(<<"recorder@1.0">>, test_opts(Result)) of
         {ok, Mod} ->
             Mod;
         {error, Reason} ->
-            erlang:error({events_device_unavailable, Reason})
+            erlang:error({recorder_device_unavailable, Reason})
     end.
 
 event_test_term(Mod, Result) when is_atom(Mod) ->
@@ -707,11 +707,10 @@ record_errors_only(Ctx) ->
 
 setup_event_recording(Result) ->
     OldEventOpts = erlang:get({hb_event, event_opts}),
-    event_log(
+    recorder_call(
         Result,
+        takeoff,
         #{
-            <<"path">> => <<"log">>,
-            <<"log">> => <<"start">>,
             <<"stack">> => true
         }
     ),
@@ -727,13 +726,7 @@ restore_process_value(Key, Value) ->
     erlang:put(Key, Value).
 
 clear_event_recording(Result) ->
-    event_log(
-        Result,
-        #{
-            <<"path">> => <<"log">>,
-            <<"log">> => <<"clear">>
-        }
-    ).
+    apply(recorder_mod(Result), clear, []).
 
 maybe_write_event_success(Name, #{ report := all } = Result) ->
     safe_write_event_report(Name, ok, Result);
@@ -741,10 +734,10 @@ maybe_write_event_success(_Name, _Result) ->
     ok.
 
 write_event_report(Name, Status, Result) ->
-    case event_log(
+    case recorder_call(
         Result,
+        land,
         #{
-            <<"path">> => <<"log">>,
             <<"format">> => <<"html">>
         }
     ) of
@@ -796,23 +789,30 @@ event_opts(Result) ->
             #{
                 <<"event">> =>
                     #{
-                        <<"device">> => <<"events@1.0">>,
-                        <<"path">> => <<"new">>,
+                        <<"device">> => <<"recorder@1.0">>,
+                        <<"path">> => <<"maybe-append">>,
                         <<"hook/result">> => <<"ignore">>
                     }
             }
     }.
 
-event_plain_opts(#{ result := Result, event_mod := EventMod }) ->
+event_plain_opts(#{ result := Result, recorder_mod := RecorderMod }) ->
     (test_opts(Result))#{
-        <<"forge-bootstrap">> => #{ <<"events@1.0">> => EventMod }
+        <<"forge-bootstrap">> => #{ <<"recorder@1.0">> => RecorderMod }
     }.
 
-event_log(Result, Req) ->
-    hb_ao:resolve(
-        #{ <<"device">> => <<"events@1.0">> },
-        Req,
-        event_plain_opts(Result)
+recorder_mod(#{ recorder_mod := RecorderMod }) ->
+    RecorderMod.
+
+recorder_call(Result, Fun, Req) ->
+    apply(
+        recorder_mod(Result),
+        Fun,
+        [
+            #{ <<"device">> => <<"recorder@1.0">> },
+            Req,
+            event_plain_opts(Result)
+        ]
     ).
 
 event_report_path(Name, _Status) ->

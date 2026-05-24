@@ -2,7 +2,7 @@
 Agents: this report embeds its events as base64 JSON in the script tag with
 id="embedded-log". To extract them from a saved report:
 
-REPORT=/tmp/hb_event-1234567890.html
+REPORT=/tmp/recorder-test-flight.html
 python3 - "$REPORT" <<'PY'
 import base64, json, re, sys
 html = open(sys.argv[1], encoding="utf-8").read()
@@ -15,7 +15,7 @@ PY
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>flight-recorder</title>
+  <title>recorder@1.0/test-flight</title>
   <link rel="icon" href="data:,">
   <style>{{EVENTS_CSS}}</style>
 </head>
@@ -23,10 +23,10 @@ PY
   <main class="shell">
     <header class="topbar">
       <div class="title-lockup">
-        <div class="title-mark" aria-hidden="true">HB</div>
+        <div class="title-mark" aria-hidden="true">REC</div>
         <div>
-          <p class="eyebrow">HyperBEAM</p>
-          <h1>flight-recorder</h1>
+          <p class="eyebrow">HyperBEAM telemetry</p>
+          <h1><span>recorder@1.0/</span><span class="flight-name">test-flight</span></h1>
         </div>
       </div>
     </header>

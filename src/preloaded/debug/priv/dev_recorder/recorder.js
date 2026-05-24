@@ -366,7 +366,7 @@
     const params = new URLSearchParams(window.location.search);
     const src = params.get("src");
     if (src) return src;
-    return hashSource() || "log?format=json";
+    return hashSource() || "record?format=json";
   }
 
   async function fetchReport() {

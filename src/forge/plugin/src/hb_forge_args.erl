@@ -63,7 +63,7 @@ opts() ->
         {show_hash, undefined, "show-hash", {boolean, false},
             "Show generated device module hashes in EUnit output."},
         {record, undefined, "record", string,
-            "Enable events@1.0 HTML logs (errors or all); omitted means off."},
+            "Write recorder@1.0 test flights; --record means errors, --record=all means every test."},
         {help, $h, "help", {boolean, false},
             "Show command help."}
     ].

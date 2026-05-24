@@ -94,15 +94,16 @@ button:hover {
 .title-mark {
   display: grid;
   place-items: center;
-  width: 42px;
+  width: 46px;
   height: 42px;
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  background: var(--surface);
+  border-radius: 4px;
+  background: #0d0d0d;
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffffff;
 }
 
 .eyebrow {
@@ -127,6 +128,10 @@ h1 {
   font-size: 32px;
   font-weight: 500;
   line-height: 1.08;
+}
+
+h1 .flight-name {
+  color: var(--muted);
 }
 
 h2 {
