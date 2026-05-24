@@ -706,8 +706,7 @@ record_errors_only(Ctx) ->
     Ctx#{ report => errors }.
 
 setup_event_recording(Result) ->
-    OldDefault = erlang:get(default_message),
-    erlang:erase(default_message),
+    OldEventOpts = erlang:get({hb_event, event_opts}),
     event_log(
         Result,
         #{
@@ -716,18 +715,11 @@ setup_event_recording(Result) ->
             <<"stack">> => true
         }
     ),
-    EventOpts = event_opts(Result),
-    erlang:put(
-        default_message,
-        maps:merge(
-            hb_opts:default_message(),
-            maps:remove(<<"forge-bootstrap">>, EventOpts)
-        )
-    ),
-    OldDefault.
+    erlang:put({hb_event, event_opts}, event_opts(Result)),
+    OldEventOpts.
 
-restore_event_recording_env(OldDefault) ->
-    restore_process_value(default_message, OldDefault).
+restore_event_recording_env(OldEventOpts) ->
+    restore_process_value({hb_event, event_opts}, OldEventOpts).
 
 restore_process_value(Key, undefined) ->
     erlang:erase(Key);
