@@ -62,8 +62,8 @@ opts() ->
             "Also run core HyperBEAM EUnit modules."},
         {show_hash, undefined, "show-hash", {boolean, false},
             "Show generated device module hashes in EUnit output."},
-        {record, undefined, "record", {string, "errors"},
-            "Record events@1.0 HTML logs: errors or all (default: errors)."},
+        {record, undefined, "record", string,
+            "Enable events@1.0 HTML logs (errors or all); omitted means off."},
         {help, $h, "help", {boolean, false},
             "Show command help."}
     ].
@@ -155,7 +155,7 @@ parse_record_mode(Raw) ->
         <<"errors">> -> errors;
         Mode ->
             rebar_api:abort(
-                "--record must be either errors or all, got ~s",
+                "--record accepts errors or all; omit it to disable recording. Got ~s",
                 [hb_util:list(Mode)]
             )
     end.

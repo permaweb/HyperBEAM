@@ -815,32 +815,25 @@ event_log(Result, Req) ->
         event_plain_opts(Result)
     ).
 
-event_report_path(Name, Status) ->
+event_report_path(Name, _Status) ->
     Filename =
         io_lib:format(
-            "~s-~s-~s-~p.html",
+            "~s-~B.html",
             [
-                event_report_prefix(Status),
-                timestamp(),
-                safe_filename(hb_util:bin(io_lib:format("~0tp", [Name]))),
-                erlang:unique_integer([positive])
+                hb_util:list(event_report_module_name(Name)),
+                erlang:system_time(nanosecond)
             ]
         ),
     filename:join("/tmp", lists:flatten(Filename)).
 
-event_report_prefix(failed) ->
-    "test-failure";
-event_report_prefix(ok) ->
-    "test-events".
-
-timestamp() ->
-    {{Year, Month, Day}, {Hour, Minute, Second}} = calendar:universal_time(),
-    lists:flatten(
-        io_lib:format(
-            "~4..0B~2..0B~2..0B-~2..0B~2..0B~2..0B",
-            [Year, Month, Day, Hour, Minute, Second]
-        )
-    ).
+event_report_module_name({Label, _Fun, _Arity}) ->
+    event_report_module_name(Label);
+event_report_module_name({name, Name}) ->
+    event_report_module_name(Name);
+event_report_module_name(Name) when is_atom(Name) ->
+    safe_filename(atom_to_binary(Name, utf8));
+event_report_module_name(Name) ->
+    safe_filename(hb_util:bin(io_lib:format("~0tp", [Name]))).
 
 safe_filename(Bin) ->
     << <<(safe_filename_char(Byte))>> || <<Byte>> <= Bin >>.

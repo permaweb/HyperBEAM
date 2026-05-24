@@ -15,10 +15,6 @@
     moduleOptions: document.getElementById("module-options"),
     func: document.getElementById("function-filter"),
     funcOptions: document.getElementById("function-options"),
-    stackOnly: document.getElementById("stack-only"),
-    recordForm: document.getElementById("record-form"),
-    recordInput: document.getElementById("record-input"),
-    recordStack: document.getElementById("record-stack"),
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
     detailGrid: document.getElementById("detail-grid"),
@@ -376,17 +372,6 @@
       return JSON.parse(bytesToText(body));
     }
     return parseMessage(headers, body);
-  }
-
-  async function recordRequest() {
-    const request = els.recordInput.value.trim();
-    if (!request) return;
-    const params = new URLSearchParams({
-      request,
-      stack: els.recordStack.checked ? "true" : "false",
-      format: "html"
-    });
-    window.location.href = `record?${params.toString()}`;
   }
 
   function asList(value) {
@@ -819,8 +804,7 @@
       fieldMatches(event.topic, els.topic.value) &&
       fieldMatches(event.name, els.name.value) &&
       fieldMatches(event.module, els.module.value) &&
-      fieldMatches(event.function, els.func.value) &&
-      (!els.stackOnly.checked || (event.stack && event.stack.length > 0));
+      fieldMatches(event.function, els.func.value);
   }
 
   function fieldMatches(value, filter) {
@@ -1010,16 +994,8 @@
       }
     });
 
-    [els.search, els.stackOnly].forEach((el) => {
-      el.addEventListener("input", render);
-      el.addEventListener("change", render);
-    });
-
-    els.recordForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      recordRequest();
-    });
-
+    els.search.addEventListener("input", render);
+    els.search.addEventListener("change", render);
   }
 
   wire();

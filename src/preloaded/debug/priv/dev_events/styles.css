@@ -102,7 +102,6 @@ h3 {
 }
 
 .stats article,
-.record-bar,
 .filters,
 .timeline,
 .detail {
@@ -115,15 +114,6 @@ h3 {
 .stats article {
   min-height: 78px;
   padding: 15px 16px;
-}
-
-.record-bar {
-  display: grid;
-  grid-template-columns: minmax(320px, 1fr) 96px 96px;
-  align-items: center;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 12px;
 }
 
 .stats span {
@@ -142,7 +132,7 @@ h3 {
 
 .filters {
   display: grid;
-  grid-template-columns: repeat(4, minmax(130px, 0.7fr)) minmax(260px, 1.6fr) 112px;
+  grid-template-columns: repeat(4, minmax(130px, 0.7fr)) minmax(260px, 1.6fr);
   align-items: center;
   gap: 10px;
   padding: 12px;
@@ -219,25 +209,6 @@ select:focus {
 input::placeholder {
   color: var(--muted);
   font-style: italic;
-}
-
-.toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.toggle input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--blue);
-}
-
-.toggle span {
-  margin: 0;
-  color: var(--ink);
-  text-transform: none;
 }
 
 .workspace {

@@ -426,13 +426,26 @@ maybe_add_stack(Event, #{ stack := true }) ->
     case erlang:process_info(self(), current_stacktrace) of
         {current_stacktrace, Stack} ->
             Event#{
-                <<"stack">> => Stack
+                <<"stack">> => trim_stack(Stack)
             };
         _ ->
             Event
     end;
 maybe_add_stack(Event, _RecOpts) ->
     Event.
+
+trim_stack(Stack) ->
+    case trim_stack(Stack, not_found) of
+        not_found -> Stack;
+        Trimmed -> Trimmed
+    end.
+
+trim_stack([{hb_event, log, 6, _} | Rest], _NotFound) ->
+    Rest;
+trim_stack([_ | Rest], NotFound) ->
+    trim_stack(Rest, NotFound);
+trim_stack([], NotFound) ->
+    NotFound.
 
 normalize_recording_opts(Opts) ->
     #{

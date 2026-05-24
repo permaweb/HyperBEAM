@@ -1,9 +1,21 @@
+<!--
+Agents: this report embeds its events as base64 JSON in the script tag with
+id="embedded-log". To extract them from a saved report:
+
+REPORT=/tmp/hb_event-1234567890.html
+python3 - "$REPORT" <<'PY'
+import base64, json, re, sys
+html = open(sys.argv[1], encoding="utf-8").read()
+body = re.search(r'<script type="application/octet-stream" id="embedded-log">([^<]*)</script>', html, re.S).group(1)
+print(json.dumps(json.loads(base64.b64decode(body)), indent=2))
+PY
+-->
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>HyperBEAM Events</title>
+  <title>flight-recorder</title>
   <link rel="icon" href="data:,">
   <style>{{EVENTS_CSS}}</style>
 </head>
@@ -12,18 +24,9 @@
     <header class="topbar">
       <div>
         <p class="eyebrow">HyperBEAM</p>
-        <h1>Event Stream</h1>
+        <h1>flight-recorder</h1>
       </div>
     </header>
-
-    <form id="record-form" class="record-bar">
-      <input id="record-input" type="text" autocomplete="off" spellcheck="false" placeholder="/~relay@1.0/call?relay-path=https://icanhazip.com/&method=GET">
-      <label class="toggle">
-        <input id="record-stack" type="checkbox">
-        <span>Stack</span>
-      </label>
-      <button type="submit">Record</button>
-    </form>
 
     <section class="stats" aria-label="Event summary">
       <article>
@@ -62,10 +65,6 @@
         <div id="function-options" class="filter-options" role="listbox" hidden></div>
       </div>
       <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Contains string...">
-      <label class="toggle">
-        <input id="stack-only" type="checkbox">
-        <span>Stacks only</span>
-      </label>
     </section>
 
     <section class="workspace">
