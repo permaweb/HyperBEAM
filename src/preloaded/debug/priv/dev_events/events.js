@@ -8,12 +8,16 @@
     list: document.getElementById("event-list"),
     search: document.getElementById("search"),
     topic: document.getElementById("topic-filter"),
+    topicSelected: document.getElementById("topic-selected"),
     topicOptions: document.getElementById("topic-options"),
     name: document.getElementById("name-filter"),
+    nameSelected: document.getElementById("name-selected"),
     nameOptions: document.getElementById("name-options"),
     module: document.getElementById("module-filter"),
+    moduleSelected: document.getElementById("module-selected"),
     moduleOptions: document.getElementById("module-options"),
     func: document.getElementById("function-filter"),
+    funcSelected: document.getElementById("function-selected"),
     funcOptions: document.getElementById("function-options"),
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
@@ -25,7 +29,6 @@
   };
 
   const decoder = new TextDecoder();
-  const maxRenderedEvents = 1000;
   const maxFilterOptions = 80;
   const clearFilterValue = "Clear";
   const hopHeaders = new Set([
@@ -44,7 +47,13 @@
     report: { events: [] },
     filtered: [],
     selected: null,
-    openFilter: null
+    openFilter: null,
+    filters: {
+      topic: [],
+      name: [],
+      module: [],
+      function: []
+    }
   };
   const messageKeyOrder = new Map([
     "event",
@@ -729,10 +738,34 @@
 
   function filterEntries() {
     return [
-      { input: els.topic, options: els.topicOptions, values: unique("topic") },
-      { input: els.name, options: els.nameOptions, values: unique("name") },
-      { input: els.module, options: els.moduleOptions, values: unique("module") },
-      { input: els.func, options: els.funcOptions, values: unique("function") }
+      {
+        field: "topic",
+        input: els.topic,
+        selected: els.topicSelected,
+        options: els.topicOptions,
+        values: unique("topic")
+      },
+      {
+        field: "name",
+        input: els.name,
+        selected: els.nameSelected,
+        options: els.nameOptions,
+        values: unique("name")
+      },
+      {
+        field: "module",
+        input: els.module,
+        selected: els.moduleSelected,
+        options: els.moduleOptions,
+        values: unique("module")
+      },
+      {
+        field: "function",
+        input: els.func,
+        selected: els.funcSelected,
+        options: els.funcOptions,
+        values: unique("function")
+      }
     ];
   }
 
@@ -747,23 +780,48 @@
     return option;
   }
 
-  function fillFilterOptions({ input, options, values }) {
+  function filterPill(field, value) {
+    const pill = document.createElement("span");
+    pill.className = "filter-pill";
+    const label = document.createElement("span");
+    label.textContent = value;
+
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "x";
+    remove.title = `Remove ${value}`;
+    remove.addEventListener("click", () => removeFilterValue(field, value));
+    pill.append(label, remove);
+    return pill;
+  }
+
+  function fillFilterOptions({ field, input, selected, options, values }) {
     const current = input.value;
     const needle = current.trim().toLowerCase();
+    const chosen = state.filters[field];
+    selected.innerHTML = "";
+    chosen.forEach((value) => selected.appendChild(filterPill(field, value)));
     options.innerHTML = "";
-    if (current.trim()) {
+    if (chosen.length > 0) {
       options.appendChild(filterOption(clearFilterValue, () => {
+        state.filters[field] = [];
         input.value = "";
         state.openFilter = null;
-        render();
+        render({ centerSelected: true });
       }, "clear"));
     }
     values
-      .filter((value) => !needle || value.toLowerCase().startsWith(needle))
+      .filter((value) =>
+        !chosen.includes(value) &&
+        (!needle || value.toLowerCase().startsWith(needle))
+      )
       .slice(0, maxFilterOptions)
       .forEach((value) => {
         options.appendChild(filterOption(value, () => {
-          input.value = value;
+          if (!state.filters[field].includes(value)) {
+            state.filters[field] = [...state.filters[field], value];
+          }
+          input.value = "";
           state.openFilter = null;
           render();
         }));
@@ -774,6 +832,11 @@
 
   function fillFilters() {
     filterEntries().forEach(fillFilterOptions);
+  }
+
+  function removeFilterValue(field, value) {
+    state.filters[field] = state.filters[field].filter((item) => item !== value);
+    render({ centerSelected: true });
   }
 
   function formatDurationUs(us) {
@@ -801,15 +864,15 @@
       ...(event.stack || [])
     ].join(" ").toLowerCase();
     return (!q || haystack.includes(q)) &&
-      fieldMatches(event.topic, els.topic.value) &&
-      fieldMatches(event.name, els.name.value) &&
-      fieldMatches(event.module, els.module.value) &&
-      fieldMatches(event.function, els.func.value);
+      fieldMatches("topic", event.topic) &&
+      fieldMatches("name", event.name) &&
+      fieldMatches("module", event.module) &&
+      fieldMatches("function", event.function);
   }
 
-  function fieldMatches(value, filter) {
-    const needle = filter.trim().toLowerCase();
-    return !needle || String(value).toLowerCase().startsWith(needle);
+  function fieldMatches(field, value) {
+    const selected = state.filters[field];
+    return selected.length === 0 || selected.includes(String(value));
   }
 
   function filterInput(field) {
@@ -824,7 +887,10 @@
   function setStructuredFilter(field, value) {
     const input = filterInput(field);
     if (!input) return;
-    input.value = value;
+    if (!state.filters[field].includes(value)) {
+      state.filters[field] = [...state.filters[field], value];
+    }
+    input.value = "";
     syncFilterOptions();
     render();
   }
@@ -833,7 +899,7 @@
     fillFilters();
   }
 
-  function render() {
+  function render(opts = {}) {
     syncFilterOptions();
     state.filtered = state.report.events.filter(matches);
     if (!state.selected && state.filtered.length > 0) {
@@ -844,6 +910,9 @@
     renderStats();
     renderList();
     renderDetail();
+    if (opts.centerSelected) {
+      requestAnimationFrame(centerSelectedEvent);
+    }
   }
 
   function renderStats() {
@@ -851,9 +920,7 @@
     els.topics.textContent = unique("topic").length;
     els.modules.textContent = unique("module").length;
     els.duration.textContent = formatDurationUs(reportDuration()) || "0us";
-    els.visibleCount.textContent = state.filtered.length > maxRenderedEvents ?
-      `${maxRenderedEvents} of ${state.filtered.length} shown` :
-      `${state.filtered.length} shown`;
+    els.visibleCount.textContent = `${state.filtered.length} shown`;
   }
 
   function renderList() {
@@ -867,7 +934,7 @@
     }
 
     const frag = document.createDocumentFragment();
-    state.filtered.slice(0, maxRenderedEvents).forEach((event) => {
+    state.filtered.forEach((event) => {
       const row = document.createElement("button");
       row.className = `event-row${event === state.selected ? " active" : ""}`;
       row.type = "button";
@@ -909,6 +976,16 @@
     els.list.appendChild(frag);
   }
 
+  function centerSelectedEvent() {
+    if (!state.selected) return;
+    const row = els.list.querySelector(".event-row.active");
+    if (!row) return;
+    const listRect = els.list.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    els.list.scrollTop +=
+      rowRect.top - listRect.top - ((els.list.clientHeight - rowRect.height) / 2);
+  }
+
   function renderDetail() {
     const event = state.selected;
     els.detailEmpty.hidden = !!event;
@@ -918,7 +995,14 @@
       return;
     }
 
-    els.selectedSequence.textContent = `#${event.sequence}`;
+    els.selectedSequence.innerHTML = "";
+    const anchor = document.createElement("button");
+    anchor.className = "selection-anchor";
+    anchor.type = "button";
+    anchor.textContent = `#${event.sequence}`;
+    anchor.title = "Center selected event";
+    anchor.addEventListener("click", centerSelectedEvent);
+    els.selectedSequence.appendChild(anchor);
     els.detailGrid.innerHTML = "";
     detailCell("Topic", event.topic);
     detailCell("Name", event.name);
@@ -974,15 +1058,20 @@
       });
       el.addEventListener("input", () => {
         state.openFilter = el.id;
-        render();
+        syncFilterOptions();
       });
       el.addEventListener("change", () => {
-        render();
+        syncFilterOptions();
       });
       el.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
+          el.value = "";
           state.openFilter = null;
           syncFilterOptions();
+        } else if (event.key === "Enter") {
+          const list = document.getElementById(el.getAttribute("aria-controls"));
+          const option = list && list.querySelector(".filter-option:not(.clear)");
+          if (option) option.click();
         }
       });
     });

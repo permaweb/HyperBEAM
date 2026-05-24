@@ -142,6 +142,59 @@ h3 {
 .filter-combo {
   position: relative;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfe;
+  padding: 4px 7px;
+}
+
+.filter-combo:focus-within {
+  outline: 2px solid rgba(47, 111, 237, 0.20);
+  border-color: var(--blue);
+}
+
+.selected-filters {
+  display: contents;
+}
+
+.filter-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  gap: 5px;
+  min-height: 25px;
+  border-radius: 999px;
+  background: #eaf7f2;
+  color: var(--green);
+  padding: 2px 4px 2px 8px;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.filter-pill span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-pill button {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(19, 138, 109, 0.12);
+  color: var(--green);
+  font-size: 11px;
+  line-height: 1;
 }
 
 .filter-options {
@@ -199,11 +252,26 @@ select {
   padding: 0 10px;
 }
 
+.filter-combo input[type="text"] {
+  flex: 1 1 92px;
+  min-width: 72px;
+  width: auto;
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  padding: 0 3px;
+}
+
 input[type="search"]:focus,
 input[type="text"]:focus,
 select:focus {
   outline: 2px solid rgba(47, 111, 237, 0.20);
   border-color: var(--blue);
+}
+
+.filter-combo input[type="text"]:focus {
+  outline: 0;
+  border-color: transparent;
 }
 
 input::placeholder {
@@ -238,6 +306,20 @@ input::placeholder {
 .section-head span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.selection-anchor {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+}
+
+.selection-anchor:hover {
+  color: var(--blue);
 }
 
 .event-list {
