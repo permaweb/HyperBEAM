@@ -7,7 +7,7 @@
 %%%   <li>`--output-dir dir'         where to write artifacts (default
 %%%        depends on command)</li>
 %%%   <li>`--key path'               path to a wallet keyfile</li>
-%%%   <li>`--device-roots p[,p2]'   restrict to specific `dev_*' roots</li>
+%%%   <li>`--devices p[,p2]'        restrict to specific `dev_*' roots</li>
 %%% </ul>
 %%%
 %%% Each provider re-uses {@link opts/0} for the rebar3 spec and
@@ -48,7 +48,7 @@ opts() ->
             "Output directory for generated artifacts."},
         {key, $k, "key", string,
             "Path to wallet keyfile used for signing."},
-        {device_roots, $r, "device-roots", string,
+        {devices, $d, "devices", string,
             "Comma-separated list of dev_* roots to operate upon."},
         {module, $m, "module", string,
             "Comma-separated module names to run."},
@@ -62,6 +62,8 @@ opts() ->
             "Also run core HyperBEAM EUnit modules."},
         {show_hash, undefined, "show-hash", {boolean, false},
             "Show generated device module hashes in EUnit output."},
+        {record, undefined, "record", {string, "errors"},
+            "Record events@1.0 HTML logs: errors or all (default: errors)."},
         {help, $h, "help", {boolean, false},
             "Show command help."}
     ].
@@ -72,7 +74,7 @@ parse(State, DefaultOutput) ->
     SrcRaw = proplists:get_value(device_src, Args, default_device_src()),
     OutRaw = proplists:get_value(output_dir, Args, DefaultOutput),
     KeyRaw = proplists:get_value(key, Args, undefined),
-    RootsRaw = proplists:get_value(device_roots, Args, undefined),
+    RootsRaw = proplists:get_value(devices, Args, undefined),
     ModuleRaw = proplists:get_value(module, Args, undefined),
     TestRaw = proplists:get_value(test, Args, undefined),
     TimeoutRaw = proplists:get_value(timeout, Args, undefined),
@@ -80,12 +82,18 @@ parse(State, DefaultOutput) ->
         proplists:get_value(timeout_multiplier, Args, undefined),
     WithCore = proplists:get_value(with_core, Args, false),
     ShowHash = proplists:get_value(show_hash, Args, false),
+    RecordRaw =
+        case record_requested(rebar_state:command_args(State)) of
+            true -> proplists:get_value(record, Args, "errors");
+            false -> undefined
+        end,
     #{
         <<"device-src">> => split_list(SrcRaw),
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
         <<"with-core">> => WithCore,
         <<"show-hash">> => ShowHash,
+        <<"record">> => parse_record_mode(RecordRaw),
         <<"module-names">> => parse_atom_list(ModuleRaw),
         <<"test-specs">> => parse_test_specs(TestRaw),
         <<"timeout">> => parse_number(TimeoutRaw),
@@ -138,6 +146,28 @@ parse_test_funs(Funs) ->
         || Fun <- binary:split(Funs, <<"+">>, [global]),
            Fun =/= <<>>].
 
+%% @doc Parse `--record=all|errors'.
+parse_record_mode(undefined) ->
+    none;
+parse_record_mode(Raw) ->
+    case string:lowercase(to_bin(Raw)) of
+        <<"all">> -> all;
+        <<"errors">> -> errors;
+        Mode ->
+            rebar_api:abort(
+                "--record must be either errors or all, got ~s",
+                [hb_util:list(Mode)]
+            )
+    end.
+
+record_requested(Args) ->
+    lists:any(fun record_arg/1, Args).
+
+record_arg(Arg) ->
+    Bin = hb_util:bin(Arg),
+    Bin =:= <<"--record">>
+        orelse binary:match(Bin, <<"--record=">>) =:= {0, 9}.
+
 %% @doc Parse a numeric provider option, preserving `undefined'.
 parse_number(undefined) ->
     undefined;
@@ -163,7 +193,7 @@ to_bin(V) -> hb_util:bin(V).
 maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
 
-%% @doc Scan the selected device roots from parsed provider arguments.
+%% @doc Scan the selected devices from parsed provider arguments.
 scan_devices(Args) ->
     hb_packager:scan(
         maps:get(<<"device-src">>, Args),

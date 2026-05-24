@@ -123,6 +123,8 @@ test_modules(
                 ModuleNames,
                 TestSpecs
             ),
+            RecordCtx = maybe_record_context(Args, Result),
+            RecordTests = maybe_record_tests(Tests, RecordCtx),
             log_run(
                 SelectedCoreModules,
                 SelectedDeviceModules,
@@ -131,7 +133,9 @@ test_modules(
                 ModuleNames,
                 TestSpecs
             ),
-            eunit:test(timeout_tests(Tests, Args), eunit_opts(Args))
+            Res = eunit:test(timeout_tests(RecordTests, Args), eunit_opts(Args)),
+            print_record_reports(RecordCtx),
+            Res
         after restore_test_env(Env)
         end,
     case EUnitResult of
@@ -512,6 +516,352 @@ rewrite_instantiator(Fun, Mod, Label) when is_function(Fun, 1) ->
     fun(Value) -> rewrite_test_term(Fun(Value), Mod, Label) end;
 rewrite_instantiator(Test, Mod, Label) ->
     rewrite_test_term(Test, Mod, Label).
+
+%% @doc Build process-local event recording context when requested.
+maybe_record_context(#{ <<"record">> := none }, _Result) ->
+    none;
+maybe_record_context(#{ <<"record">> := Report }, Result) ->
+    EventMod = ensure_events_device(Result),
+    rebar_api:info("device test: recording event logs for ~s", [
+        case Report of
+            all -> "every test";
+            errors -> "failing tests"
+        end
+    ]),
+    #{
+        result => Result,
+        event_mod => EventMod,
+        report => Report,
+        parent => self(),
+        ref => make_ref()
+    };
+maybe_record_context(_Args, _Result) ->
+    none.
+
+%% @doc Optionally wrap leaf EUnit tests with process-local event recording.
+maybe_record_tests(Tests, none) ->
+    Tests;
+maybe_record_tests(Tests, Ctx) ->
+    event_test_term(Tests, Ctx).
+
+%% @doc Print collected event report links outside EUnit's captured output.
+print_record_reports(none) ->
+    ok;
+print_record_reports(#{ ref := Ref }) ->
+    case collect_event_reports(Ref, []) of
+        [] ->
+            ok;
+        Reports ->
+            rebar_api:info(
+                "device test: event logs~n~s",
+                [format_event_reports(lists:keysort(1, Reports))]
+            )
+    end.
+
+collect_event_reports(Ref, Acc) ->
+    receive
+        {hb_forge_event_report, Ref, Seq, Status, Name, Path} ->
+            collect_event_reports(Ref, [{Seq, Status, Name, Path} | Acc]);
+        {hb_forge_event_report_error, Ref, Seq, Name, Error} ->
+            collect_event_reports(Ref, [{Seq, error, Name, Error} | Acc])
+    after 0 ->
+        Acc
+    end.
+
+format_event_reports(Reports) ->
+    lists:flatten(
+        [
+            io_lib:format(
+                "  ~-7s ~s~n          ~s~n",
+                [
+                    event_report_status(Status),
+                    event_report_name(Name),
+                    event_report_link(Status, PathOrError)
+                ]
+            )
+        ||
+            {_Seq, Status, Name, PathOrError} <- Reports
+        ]
+    ).
+
+event_report_status(Status) ->
+    atom_to_list(Status).
+
+event_report_link(error, Error) ->
+    hb_util:list(hb_util:bin(io_lib:format("failed to write: ~0tp", [Error])));
+event_report_link(_Status, Path) ->
+    "file://" ++ Path.
+
+event_report_name({Label, Fun, Arity})
+        when is_atom(Label), is_atom(Fun), is_integer(Arity) ->
+    lists:flatten(
+        io_lib:format(
+            "~s:~s/~B",
+            [atom_to_list(Label), atom_to_list(Fun), Arity]
+        )
+    );
+event_report_name({name, Name}) when is_atom(Name) ->
+    atom_to_list(Name);
+event_report_name(Name) ->
+    hb_util:list(hb_util:bin(io_lib:format("~0tp", [Name]))).
+
+ensure_events_device(Result) ->
+    case hb_device_load:reference(<<"events@1.0">>, test_opts(Result)) of
+        {ok, Mod} ->
+            Mod;
+        {error, Reason} ->
+            erlang:error({events_device_unavailable, Reason})
+    end.
+
+event_test_term(Mod, Result) when is_atom(Mod) ->
+    event_test_term(readable_module_tests(Mod, Mod), Result);
+event_test_term({Line, Test}, Result) when is_integer(Line), Line >= 0 ->
+    {Line, event_test_term(Test, Result)};
+event_test_term({Name, {test, Mod, Fun}}, Result) ->
+    {Name, event_test_fun(Name, fun() -> Mod:Fun() end, Result)};
+event_test_term({test, Mod, Fun}, Result) ->
+    Name = {Mod, Fun, 0},
+    {Name, event_test_fun(Name, fun() -> Mod:Fun() end, Result)};
+event_test_term({Mod, Fun}, Result) when is_atom(Mod), is_atom(Fun) ->
+    Name = {Mod, Fun, 0},
+    {Name, event_test_fun(Name, fun() -> Mod:Fun() end, Result)};
+event_test_term({generator, Fun, Name}, Result) when is_function(Fun, 0) ->
+    {
+        generator,
+        fun() ->
+            event_run(
+                Name,
+                fun() -> event_test_term(Fun(), Result) end,
+                record_errors_only(Result)
+            )
+        end,
+        Name
+    };
+event_test_term({generator, Fun}, Result) when is_function(Fun, 0) ->
+    {generator, fun() -> event_test_term(Fun(), Result) end};
+event_test_term({timeout, N, Test}, Result) ->
+    {timeout, N, event_test_term(Test, Result)};
+event_test_term({inorder, Test}, Result) ->
+    {inorder, event_test_term(Test, Result)};
+event_test_term({inparallel, Test}, Result) ->
+    {inparallel, event_test_term(Test, Result)};
+event_test_term({inparallel, N, Test}, Result) ->
+    {inparallel, N, event_test_term(Test, Result)};
+event_test_term({spawn, Test}, Result) ->
+    {spawn, event_test_term(Test, Result)};
+event_test_term({spawn, Node, Test}, Result) ->
+    {spawn, Node, event_test_term(Test, Result)};
+event_test_term({setup, Setup, Test}, Result) ->
+    {setup, Setup, event_test_instantiator(Test, Result)};
+event_test_term({setup, Where, Setup, Test}, Result)
+        when Where =:= local; Where =:= spawn; is_tuple(Where) ->
+    {setup, Where, Setup, event_test_instantiator(Test, Result)};
+event_test_term({setup, Setup, Cleanup, Test}, Result) ->
+    {setup, Setup, Cleanup, event_test_instantiator(Test, Result)};
+event_test_term({setup, Where, Setup, Cleanup, Test}, Result) ->
+    {setup, Where, Setup, Cleanup, event_test_instantiator(Test, Result)};
+event_test_term({foreach, Setup, Tests}, Result) ->
+    {foreach, Setup, event_test_term(Tests, Result)};
+event_test_term({foreach, Where, Setup, Tests}, Result)
+        when Where =:= local; Where =:= spawn; is_tuple(Where) ->
+    {foreach, Where, Setup, event_test_term(Tests, Result)};
+event_test_term({foreach, Setup, Cleanup, Tests}, Result) ->
+    {foreach, Setup, Cleanup, event_test_term(Tests, Result)};
+event_test_term({foreach, Where, Setup, Cleanup, Tests}, Result) ->
+    {foreach, Where, Setup, Cleanup, event_test_term(Tests, Result)};
+event_test_term({Desc, Test}, Result) when is_list(Desc); is_binary(Desc) ->
+    {Desc, event_test_term(Test, Result)};
+event_test_term(Fun, Result) when is_function(Fun, 0) ->
+    event_test_fun(erlang:fun_info(Fun, name), Fun, Result);
+event_test_term(Tests, Result) when is_list(Tests) ->
+    [event_test_term(Test, Result) || Test <- Tests];
+event_test_term(Test, _Result) ->
+    Test.
+
+event_test_instantiator(Fun, Result) when is_function(Fun, 1) ->
+    fun(Value) -> event_test_term(Fun(Value), Result) end;
+event_test_instantiator(Test, Result) ->
+    event_test_term(Test, Result).
+
+event_test_fun(Name, Fun, Result) ->
+    fun() -> event_run(Name, Fun, Result) end.
+
+event_run(Name, Fun, Result) ->
+    Env = setup_event_recording(Result),
+    try
+        Res = Fun(),
+        maybe_write_event_success(Name, Result),
+        Res
+    catch Class:Reason:Stack ->
+        safe_write_event_report(Name, failed, Result),
+        erlang:raise(Class, Reason, Stack)
+    after
+        safe_clear_event_recording(Result),
+        restore_event_recording_env(Env)
+    end.
+
+record_errors_only(none) ->
+    none;
+record_errors_only(Ctx) ->
+    Ctx#{ report => errors }.
+
+setup_event_recording(Result) ->
+    OldDefault = erlang:get(default_message),
+    erlang:erase(default_message),
+    event_log(
+        Result,
+        #{
+            <<"path">> => <<"log">>,
+            <<"log">> => <<"start">>,
+            <<"stack">> => true
+        }
+    ),
+    EventOpts = event_opts(Result),
+    erlang:put(
+        default_message,
+        maps:merge(
+            hb_opts:default_message(),
+            maps:remove(<<"forge-bootstrap">>, EventOpts)
+        )
+    ),
+    OldDefault.
+
+restore_event_recording_env(OldDefault) ->
+    restore_process_value(default_message, OldDefault).
+
+restore_process_value(Key, undefined) ->
+    erlang:erase(Key);
+restore_process_value(Key, Value) ->
+    erlang:put(Key, Value).
+
+clear_event_recording(Result) ->
+    event_log(
+        Result,
+        #{
+            <<"path">> => <<"log">>,
+            <<"log">> => <<"clear">>
+        }
+    ).
+
+maybe_write_event_success(Name, #{ report := all } = Result) ->
+    safe_write_event_report(Name, ok, Result);
+maybe_write_event_success(_Name, _Result) ->
+    ok.
+
+write_event_report(Name, Status, Result) ->
+    case event_log(
+        Result,
+        #{
+            <<"path">> => <<"log">>,
+            <<"format">> => <<"html">>
+        }
+    ) of
+        {ok, #{ <<"body">> := Body }} ->
+            Path = event_report_path(Name, Status),
+            ok = file:write_file(Path, Body),
+            send_event_report(Name, Status, Path, Result);
+        Error ->
+            send_event_report_error(Name, Error, Result)
+    end.
+
+safe_write_event_report(Name, Status, Result) ->
+    try write_event_report(Name, Status, Result)
+    catch Class:Reason ->
+        send_event_report_error(Name, {Class, Reason}, Result)
+    end.
+
+send_event_report(Name, Status, Path, #{ parent := Parent, ref := Ref }) ->
+    Parent !
+        {
+            hb_forge_event_report,
+            Ref,
+            erlang:unique_integer([monotonic, positive]),
+            Status,
+            Name,
+            Path
+        },
+    ok.
+
+send_event_report_error(Name, Error, #{ parent := Parent, ref := Ref }) ->
+    Parent !
+        {
+            hb_forge_event_report_error,
+            Ref,
+            erlang:unique_integer([monotonic, positive]),
+            Name,
+            Error
+        },
+    ok.
+
+safe_clear_event_recording(Result) ->
+    try clear_event_recording(Result)
+    catch _:_ -> ok
+    end.
+
+event_opts(Result) ->
+    (event_plain_opts(Result))#{
+        <<"on">> =>
+            #{
+                <<"event">> =>
+                    #{
+                        <<"device">> => <<"events@1.0">>,
+                        <<"path">> => <<"new">>,
+                        <<"hook/result">> => <<"ignore">>
+                    }
+            }
+    }.
+
+event_plain_opts(#{ result := Result, event_mod := EventMod }) ->
+    (test_opts(Result))#{
+        <<"forge-bootstrap">> => #{ <<"events@1.0">> => EventMod }
+    }.
+
+event_log(Result, Req) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"events@1.0">> },
+        Req,
+        event_plain_opts(Result)
+    ).
+
+event_report_path(Name, Status) ->
+    Filename =
+        io_lib:format(
+            "~s-~s-~s-~p.html",
+            [
+                event_report_prefix(Status),
+                timestamp(),
+                safe_filename(hb_util:bin(io_lib:format("~0tp", [Name]))),
+                erlang:unique_integer([positive])
+            ]
+        ),
+    filename:join("/tmp", lists:flatten(Filename)).
+
+event_report_prefix(failed) ->
+    "test-failure";
+event_report_prefix(ok) ->
+    "test-events".
+
+timestamp() ->
+    {{Year, Month, Day}, {Hour, Minute, Second}} = calendar:universal_time(),
+    lists:flatten(
+        io_lib:format(
+            "~4..0B~2..0B~2..0B-~2..0B~2..0B~2..0B",
+            [Year, Month, Day, Hour, Minute, Second]
+        )
+    ).
+
+safe_filename(Bin) ->
+    << <<(safe_filename_char(Byte))>> || <<Byte>> <= Bin >>.
+
+safe_filename_char(Byte)
+        when Byte >= $a, Byte =< $z;
+             Byte >= $A, Byte =< $Z;
+             Byte >= $0, Byte =< $9;
+             Byte =:= $-;
+             Byte =:= $_ ->
+    Byte;
+safe_filename_char(_) ->
+    $_.
 
 %% @doc Load packaged devices and start apps needed by device test modules.
 setup_device_tests(Names, Result) ->
