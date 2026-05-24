@@ -66,29 +66,30 @@ on(HookName, Req, Opts) ->
 %% @doc Get all handlers for a specific hook from the node message options.
 %% Handlers are stored in the `on' key of this message.
 find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
-    handlers(maps:get(HookName, On, []), Opts);
+    case maps:get(HookName, On, []) of
+        Handler when is_map(Handler) ->
+            case hb_util:is_ordered_list(Handler, Opts) of
+                true ->
+                    % If the term is an ordered list message (containing only
+                    % numbered map keys sequentially), convert it to a list.
+                    hb_util:message_to_ordered_list(Handler, Opts);
+                false ->
+                    % If a single handler is found, wrap it in a list.
+                    [Handler]
+            end;
+        Handlers when is_list(Handlers) ->
+            % If multiple handlers are found, return them as is.
+            Handlers;
+        _ ->
+            % If no handlers are found or the value is invalid, return an empty
+            % list.
+            []
+    end;
 find(_HookName, _Opts) ->
     [].
 find(_Base, Req, Opts) ->
     HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
     find(HookName, Opts).
-
-handlers(Handler, Opts) when is_map(Handler) ->
-    case hb_util:is_ordered_list(Handler, Opts) of
-        true ->
-            % If the term is an ordered list message (containing only
-            % numbered map keys sequentially), convert it to a list.
-            hb_util:message_to_ordered_list(Handler, Opts);
-        false ->
-            % If a single handler is found, wrap it in a list.
-            [Handler]
-    end;
-handlers(Handlers, _Opts) when is_list(Handlers) ->
-    % If multiple handlers are found, return them as is.
-    Handlers;
-handlers(_Handler, _Opts) ->
-    % If no handlers are found or the value is invalid, return an empty list.
-    [].
 
 %% @doc Execute a list of handlers in sequence.
 %% The result of each handler is used as input to the next handler.
@@ -117,11 +118,25 @@ execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
             }
     end.
 
-%% @doc Execute a single handler.
+%% @doc Execute a single handler
 %% Handlers are expressed as messages that can be resolved via AO.
+execute_handler(
+    <<"step">>,
+    Handler,
+    Req,
+    Opts = #{ <<"on">> := On = #{ <<"step">> := _ }}
+) ->
+    % The `step' hook is a special case: It is executed during the course of
+    % a resolution, and as such, the key must be removed from the node message
+    % before execution of the handler. Failure to do so will result in infinite
+    % recursion.
+    execute_handler(
+        <<"step">>,
+        maps:remove(<<"step">>, Handler),
+        Req,
+        Opts#{ <<"on">> => maps:remove(<<"step">>, On) }
+    );
 execute_handler(HookName, Handler, Req, Opts) ->
-    {HandlerWithoutHook, OptsWithoutHook} =
-        without_current_hook(HookName, Handler, Opts),
     try
         % Resolve the handler message, setting the path to the handler name if
         % it is not already set. We ensure to ignore the hashpath such that the
@@ -131,64 +146,39 @@ execute_handler(HookName, Handler, Req, Opts) ->
         BaseReq =
             Req#{
                 <<"path">> =>
-                    hb_maps:get(
-                        <<"path">>,
-                        HandlerWithoutHook,
-                        HookName,
-                        OptsWithoutHook
-                    ),
+                    hb_maps:get(<<"path">>, Handler, HookName, Opts),
                 <<"method">> =>
-                    hb_maps:get(
-                        <<"method">>,
-                        HandlerWithoutHook,
-                        <<"GET">>,
-                        OptsWithoutHook
-                    )
+                    hb_maps:get(<<"method">>, Handler, <<"GET">>, Opts)
             },
         CommitReqBin = 
             hb_util:bin(
                 hb_util:deep_get(
                     <<"hook/commit-request">>,
-                    HandlerWithoutHook,
+                    Handler,
                     <<"false">>,
-                    OptsWithoutHook
+                    Opts
                 )
             ),
         {PreparedBase, PreparedReq} =
             case CommitReqBin of
                 <<"true">> ->
                     {
-                        case hb_message:signers(
-                            HandlerWithoutHook,
-                            OptsWithoutHook
-                        ) of
-                            [] ->
-                                hb_message:commit(
-                                    HandlerWithoutHook,
-                                    OptsWithoutHook
-                                );
-                            _ -> HandlerWithoutHook
+                        case hb_message:signers(Handler, Opts) of
+                            [] -> hb_message:commit(Handler, Opts);
+                            _ -> Handler
                         end,
-                        hb_message:commit(BaseReq, OptsWithoutHook)
+                        hb_message:commit(BaseReq, Opts)
                     };
-                <<"false">> -> {HandlerWithoutHook, BaseReq}
+                <<"false">> -> {Handler, BaseReq}
             end,
         % Execute the prepared request upon the handler.
         {Status, Res} =
             hb_ao:raw(
                 PreparedBase,
                 PreparedReq,
-                OptsWithoutHook#{ <<"hashpath">> => ignore }
+                Opts#{ <<"hashpath">> => ignore }
             ),
-        case {
-            Status,
-            hb_util:deep_get(
-                <<"hook/result">>,
-                HandlerWithoutHook,
-                <<"return">>,
-                OptsWithoutHook
-            )
-        } of
+        case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
             {ok, <<"error">>} -> {error, Res};
@@ -212,16 +202,6 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 (iolist_to_binary(io_lib:format("~p:~p", [Error, Reason])))/binary
             >>}
     end.
-
-%% @doc Remove the current hook from handler context to avoid recursion.
-without_current_hook(HookName, Handler, Opts = #{ <<"on">> := On })
-        when is_map(On) ->
-    {
-        maps:remove(HookName, Handler),
-        Opts#{ <<"on">> => maps:remove(HookName, On) }
-    };
-without_current_hook(_HookName, Handler, Opts) ->
-    {Handler, Opts}.
 
 %%% Tests
 
@@ -304,39 +284,3 @@ halt_on_error_test() ->
     Opts = #{ <<"on">> => #{ <<"test-hook">> => [Handler1, Handler2, Handler3] }},
     {error, Result} = on(<<"test-hook">>, Req, Opts),
     ?assertEqual(<<"Error in handler2">>, Result).
-
-%% @doc Test that handlers do not recursively run their own hook.
-current_hook_recursion_guard_test() ->
-    Parent = self(),
-    Handler = #{
-        <<"device">> => #{
-            test_hook =>
-                fun(_, Req, HandlerOpts) ->
-                    Parent ! handler_executed,
-                    {ok, Recursed} =
-                        hb_hook:on(
-                            <<"test-hook">>,
-                            Req#{ <<"recursive">> => true },
-                            HandlerOpts
-                        ),
-                    {ok,
-                        Req#{
-                            <<"recursed">> => Recursed
-                        }
-                    }
-                end
-        }
-    },
-    Req = #{ <<"test">> => <<"value">> },
-    Opts =
-        #{
-            <<"on">> =>
-                #{
-                    <<"test-hook">> => Handler,
-                    <<"other-hook">> => #{ <<"device">> => <<"test@1.0">> }
-                }
-        },
-    {ok, Result} = on(<<"test-hook">>, Req, Opts),
-    ?assertMatch(#{ <<"recursive">> := true }, maps:get(<<"recursed">>, Result)),
-    receive handler_executed -> ok after 100 -> error(handler_not_executed) end,
-    receive handler_executed -> error(recursive_handler_executed) after 100 -> ok end.
