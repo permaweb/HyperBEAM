@@ -3,11 +3,13 @@
 %%% `~recorder@1.0/record' resolves a target request with a process-local
 %%% flight recorder enabled, then returns the captured telemetry as an AO-Core
 %%% message, JSON, text, or embedded HTML.
+%%% `~recorder@1.0/take-off' starts a process-local flight and passes the
+%%% current base onward. A later `land~recorder@1.0' returns and clears it.
 %%% `~recorder@1.0/maybe-append' is intended to be installed as an `on/event'
 %%% hook handler. It appends the hook request only while a flight is active.
 -module(dev_recorder).
 -export([info/1, maybe_append/3, record/3, index/3]).
--export([takeoff/3, land/3, clear/0]).
+-export([take_off/3, land/3, clear/0]).
 -include_lib("hb/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -18,12 +20,14 @@
 -define(RECORDING_SEQUENCE_KEY, {?DEVICE, sequence}).
 -define(RECORDING_START_KEY, {?DEVICE, start_time}).
 -define(RECORDING_LAST_KEY, {?DEVICE, last_time}).
+-define(RECORDING_OLD_EVENT_OPTS_KEY, {?DEVICE, old_event_opts}).
 -define(RECORDING_KEYS, [
     ?RECORDING_KEY,
     ?RECORDING_EVENTS_KEY,
     ?RECORDING_SEQUENCE_KEY,
     ?RECORDING_START_KEY,
-    ?RECORDING_LAST_KEY
+    ?RECORDING_LAST_KEY,
+    ?RECORDING_OLD_EVENT_OPTS_KEY
 ]).
 -define(RECORDING_OPT_KEYS, [
     <<"stack">>,
@@ -34,6 +38,8 @@
 info(_) ->
     #{
         exports => [
+            <<"take-off">>,
+            <<"land">>,
             <<"maybe-append">>,
             <<"record">>,
             <<"index">>
@@ -45,11 +51,11 @@ maybe_append(_Base, Req, Opts) ->
     maybe_record(Req, Opts),
     {ok, Req}.
 
-%% @doc Start a process-local flight. Intended for Erlang callers that wrap
-%% non-AO work, such as `rebar3 device test --record'.
-takeoff(_Base, Req, Opts) ->
+%% @doc Start a process-local flight and pass the base onward.
+take_off(Base, Req, Opts) ->
     start_recording(recording_opts(Req, Opts)),
-    {ok, report()}.
+    arm_event_opts(with_event_hook(Opts)),
+    {ok, pass_through(Base, Opts)}.
 
 %% @doc Return and clear the current process-local flight.
 land(_Base, Req, Opts) ->
@@ -67,10 +73,9 @@ record(_Base, Req, Opts) ->
         {ok, Target} ->
             RecOpts = recording_opts(Req, Opts),
             HookOpts = with_event_hook(Opts),
-            OldEventOpts = erlang:get({hb_event, event_opts}),
             start_recording(RecOpts),
             try
-                erlang:put({hb_event, event_opts}, HookOpts),
+                arm_event_opts(HookOpts),
                 Res = resolve_recorded(Target, HookOpts),
                 Report0 = report(),
                 Report1 =
@@ -80,7 +85,6 @@ record(_Base, Req, Opts) ->
                     },
                 response(Report1, Req, Opts, <<"html">>)
             after
-                restore_event_opts(OldEventOpts),
                 clear_recording()
             end;
         {error, Reason} ->
@@ -340,6 +344,11 @@ content_type(_) -> <<"application/octet-stream">>.
 json_report_body(Report, Opts) ->
     hb_json:encode(json_value(Report, Opts)).
 
+pass_through(Base, Opts) when is_map(Base) ->
+    hb_maps:without([<<"device">>], Base, Opts);
+pass_through(Base, _Opts) ->
+    Base.
+
 start_recording(Opts) ->
     Now = erlang:monotonic_time(microsecond),
     erlang:put(?RECORDING_KEY, normalize_recording_opts(Opts)),
@@ -349,7 +358,23 @@ start_recording(Opts) ->
     erlang:put(?RECORDING_LAST_KEY, Now),
     ok.
 
+arm_event_opts(HookOpts) ->
+    case erlang:get(?RECORDING_OLD_EVENT_OPTS_KEY) of
+        undefined ->
+            erlang:put(
+                ?RECORDING_OLD_EVENT_OPTS_KEY,
+                {old, erlang:get({hb_event, event_opts})}
+            );
+        _ ->
+            ok
+    end,
+    erlang:put({hb_event, event_opts}, HookOpts).
+
 clear_recording() ->
+    case erlang:get(?RECORDING_OLD_EVENT_OPTS_KEY) of
+        {old, OldEventOpts} -> restore_event_opts(OldEventOpts);
+        _ -> ok
+    end,
     lists:foreach(fun erlang:erase/1, ?RECORDING_KEYS),
     ok.
 
@@ -642,13 +667,31 @@ utf8_prefix(Bin, Keep) ->
 
 %%% Tests
 
-takeoff_land_test() ->
+take_off_land_test() ->
     clear_recording(),
     ?assertEqual(false, recording()),
-    {ok, #{ <<"recording">> := true }} = takeoff(#{}, #{}, #{}),
+    {ok, #{ <<"keep">> := true }} =
+        take_off(#{ <<"device">> => ?DEVICE, <<"keep">> => true }, #{}, #{}),
     ?assertEqual(true, recording()),
+    ?assertMatch(
+        #{ <<"on">> := #{ <<"event">> := _ }},
+        erlang:get({hb_event, event_opts})
+    ),
     {ok, []} = land(#{}, #{}, #{}),
-    ?assertEqual(false, recording()).
+    ?assertEqual(false, recording()),
+    ?assertEqual(undefined, erlang:get({hb_event, event_opts})).
+
+ao_take_off_land_test() ->
+    clear_recording(),
+    {ok, Events} =
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"/~recorder@1.0/take-off/keys/land~recorder@1.0&format=raw">>
+            },
+            #{ <<"forge-bootstrap">> => #{ ?DEVICE => ?MODULE } }
+        ),
+    ?assert(length(Events) > 0),
+    clear_recording().
 
 maybe_append_records_started_event_test() ->
     clear_recording(),

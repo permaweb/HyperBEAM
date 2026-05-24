@@ -709,7 +709,7 @@ setup_event_recording(Result) ->
     OldEventOpts = erlang:get({hb_event, event_opts}),
     recorder_call(
         Result,
-        takeoff,
+        take_off,
         #{
             <<"stack">> => true
         }
