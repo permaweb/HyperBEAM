@@ -114,7 +114,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
             SizeTaggedChunks
         ),
         % -1 because the `?event(...)' macro increments the counter by 1.
-        hb_event:record(bundler_short, built_proofs, length(Proofs) - 1),
+        hb_event:increment(bundler_short, built_proofs, length(Proofs) - 1),
         ?event(
             bundler_short,
             {built_proofs,
