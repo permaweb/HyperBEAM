@@ -61,7 +61,7 @@ take_off(Base, Req, Opts) ->
 land(_Base, Req, Opts) ->
     Report = report(),
     clear_recording(),
-    response(Report#{ <<"recording">> => false }, Req, Opts).
+    response(Report#{ <<"recording">> => false }, Req, Opts, <<"html">>).
 
 clear() ->
     clear_recording().
@@ -677,9 +677,16 @@ take_off_land_test() ->
         #{ <<"on">> := #{ <<"event">> := _ }},
         erlang:get({hb_event, event_opts})
     ),
-    {ok, []} = land(#{}, #{}, #{}),
+    {ok, []} = land(#{}, #{ <<"format">> => <<"raw">> }, #{}),
     ?assertEqual(false, recording()),
     ?assertEqual(undefined, erlang:get({hb_event, event_opts})).
+
+land_defaults_to_html_test() ->
+    clear_recording(),
+    {ok, _} = take_off(#{}, #{}, #{}),
+    {ok, #{ <<"body">> := Body, <<"content-type">> := <<"text/html">> }} =
+        land(#{}, #{}, #{}),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"recorder@1.0">>)).
 
 ao_take_off_land_test() ->
     clear_recording(),
