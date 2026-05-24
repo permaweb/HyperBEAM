@@ -22,6 +22,7 @@
 -define(DEFAULT_PRINT_HANDLER_FILTER, hb_drop_hb_print_logs).
 -define(DEFAULT_FILE_HANDLER_FILTER, hb_drop_hb_file_logs).
 -define(EVENT_HOOK_KEY, {?MODULE, event_hook}).
+-define(EVENT_OPTS_KEY, {?MODULE, event_opts}).
 
 -ifdef(NO_EVENTS).
 debug_print(_X, _Mod, _Func, _Line) -> ok.
@@ -53,7 +54,7 @@ log(Topic, X, Mod, Func, Line, Opts) ->
     X.
 
 default_event_opts() ->
-    case erlang:get(default_message) of
+    case erlang:get(?EVENT_OPTS_KEY) of
         #{ <<"on">> := #{ <<"event">> := _ }} = Opts -> Opts;
         _ -> #{}
     end.
