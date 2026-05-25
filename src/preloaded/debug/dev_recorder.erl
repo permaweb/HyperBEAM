@@ -82,8 +82,8 @@ record(_Base, Req, Opts) ->
                 Report0 = report(),
                 Report1 =
                     Report0#{
-                        <<"result">> => Res,
-                        <<"target">> => Target
+                        <<"result">> => redact_private(Res),
+                        <<"target">> => redact_private(Target)
                     },
                 response(Report1, Req, Opts, <<"html">>)
             after
@@ -95,7 +95,7 @@ record(_Base, Req, Opts) ->
                     <<"recording">> => false,
                     <<"count">> => 0,
                     <<"events">> => [],
-                    <<"error">> => Reason
+                    <<"error">> => redact_private(Reason)
                 },
                 Req,
                 Opts,
@@ -109,8 +109,7 @@ index(_Base, Req, Opts) ->
 
 response(Report, Req, Opts) ->
     response(Report, Req, Opts, <<"raw">>).
-response(RawReport, Req, Opts, Default) ->
-    Report = without_private(RawReport),
+response(Report, Req, Opts, Default) ->
     case hb_ao:normalize_key(hb_maps:get(<<"format">>, Req, Default, Opts)) of
         <<"html">> -> html_response(Report, Opts);
         <<"json">> -> json_response(Report, Opts);
@@ -345,7 +344,7 @@ content_type(<<"styles.css">>) -> <<"text/css">>;
 content_type(_) -> <<"application/octet-stream">>.
 
 json_report_body(Report, Opts) ->
-    hb_json:encode(json_value(without_private(Report), Opts)).
+    hb_json:encode(json_value(Report, Opts)).
 
 pass_through(Base, Opts) when is_map(Base) ->
     hb_maps:without([<<"device">>], Base, Opts);
@@ -526,18 +525,12 @@ record_name(Term) ->
 redact_private(?PRIVATE_DROP) ->
     ?PRIVATE_REDACTED;
 redact_private(Term) ->
-    case without_private(Term, drop) of
+    case without_private(Term) of
         ?PRIVATE_DROP -> ?PRIVATE_REDACTED;
         SafeTerm -> SafeTerm
     end.
 
-without_private(Term) ->
-    case without_private(Term, keep) of
-        ?PRIVATE_DROP -> ?PRIVATE_REDACTED;
-        SafeTerm -> SafeTerm
-    end.
-
-without_private(Term, _Mode) when is_map(Term) ->
+without_private(Term) when is_map(Term) ->
     maps:from_list(
         lists:filtermap(
             fun({Key, Value}) ->
@@ -545,7 +538,7 @@ without_private(Term, _Mode) when is_map(Term) ->
                     true ->
                         false;
                     false ->
-                        case without_private(Value, drop) of
+                        case without_private(Value) of
                             ?PRIVATE_DROP -> false;
                             SafeValue -> {true, {Key, SafeValue}}
                         end
@@ -554,19 +547,19 @@ without_private(Term, _Mode) when is_map(Term) ->
             maps:to_list(Term)
         )
     );
-without_private(Term, _Mode) when is_tuple(Term), tuple_size(Term) =:= 2 ->
+without_private(Term) when is_tuple(Term), tuple_size(Term) =:= 2 ->
     case hb_private:is_private(element(1, Term)) of
         true -> ?PRIVATE_DROP;
         false -> without_private_tuple(Term)
     end;
-without_private(Term, _Mode) when is_tuple(Term) ->
+without_private(Term) when is_tuple(Term) ->
     without_private_tuple(Term);
-without_private(Term, _Mode) when is_list(Term) ->
+without_private(Term) when is_list(Term) ->
     case lists:any(fun hb_private:is_private/1, Term) of
         true -> [];
         false -> without_private_list(Term)
     end;
-without_private(Term, _Mode) ->
+without_private(Term) ->
     Term.
 
 without_private_tuple(Tuple) ->
@@ -577,7 +570,7 @@ without_private_list(List) ->
         Safe
     ||
         Item <- List,
-        Safe <- [without_private(Item, drop)],
+        Safe <- [without_private(Item)],
         Safe =/= ?PRIVATE_DROP
     ].
 
@@ -832,10 +825,10 @@ private_data_redacted_test() ->
         json_report_body(
             Report#{
                 <<"result">> =>
-                    #{
+                    redact_private(#{
                         <<"priv-result">> => Secret,
                         <<"public">> => <<"ok">>
-                    }
+                    })
             },
             #{}
         ),
