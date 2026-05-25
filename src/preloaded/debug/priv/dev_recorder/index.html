@@ -15,7 +15,7 @@ PY
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>recorder@1.0/test-flight</title>
+  <title>~recorder@1.0/test-flight</title>
   <link rel="icon" href="data:,">
   <style>{{EVENTS_CSS}}</style>
 </head>
@@ -26,7 +26,7 @@ PY
         <div class="title-mark" aria-hidden="true">REC</div>
         <div>
           <p class="eyebrow">HyperBEAM telemetry</p>
-          <h1><span>recorder@1.0/</span><span class="flight-name">test-flight</span></h1>
+          <h1><span>~recorder@1.0/</span><span class="flight-name">test-flight</span></h1>
         </div>
       </div>
     </header>
@@ -74,7 +74,7 @@ PY
       <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Contains string...">
     </section>
 
-    <section class="workspace">
+    <section class="workspace" id="workspace">
       <aside class="timeline">
         <div class="section-head">
           <h2>Timeline</h2>
@@ -82,6 +82,8 @@ PY
         </div>
         <div id="event-list" class="event-list" role="list"></div>
       </aside>
+
+      <div class="splitter" data-splitter="timeline"></div>
 
       <section class="detail">
         <div class="section-head">
@@ -91,8 +93,9 @@ PY
         <div id="detail-empty" class="empty">Select an event</div>
         <div id="detail-view" class="detail-view" hidden>
           <div class="detail-grid" id="detail-grid"></div>
-          <div class="detail-panels">
+          <div class="detail-panels" id="detail-panels">
             <div id="message-view" class="message-browser" aria-label="Event details"></div>
+            <div class="splitter splitter-inner" data-splitter="stack"></div>
             <div id="stack-view" class="message-browser stack-browser" aria-label="Stack trace"></div>
           </div>
         </div>

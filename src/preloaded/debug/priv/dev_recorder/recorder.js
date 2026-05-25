@@ -49,6 +49,7 @@
     filtered: [],
     selected: null,
     openFilter: null,
+    stackFilter: null,
     filters: {
       topic: [],
       name: [],
@@ -56,7 +57,25 @@
       function: []
     }
   };
+  const splitterKeyPrefix = `recorder:${window.location.pathname}:`;
+  const splitters = [
+    {
+      el: document.querySelector("[data-splitter='timeline']"),
+      variable: "--timeline-width",
+      storageKey: `${splitterKeyPrefix}timeline-split`,
+      minBefore: 280,
+      minAfter: 360
+    },
+    {
+      el: document.querySelector("[data-splitter='stack']"),
+      variable: "--message-width",
+      storageKey: `${splitterKeyPrefix}message-split`,
+      minBefore: 260,
+      minAfter: 260
+    }
+  ].filter((splitter) => splitter.el);
   const messageKeyOrder = new Map([
+    "commitments",
     "event",
     "topic",
     "name",
@@ -423,6 +442,9 @@
   }
 
   function shortId(value) {
+    if (typeof value !== "string") return String(value);
+    if (value.length === 43) return `${value.slice(0, 5)}..${value.slice(-5)}`;
+    if (value.length === 87) return `${value.slice(0, 5)}..${value.slice(-5)}`;
     return value.length > 10 ? `${value.slice(0, 10)}...` : value;
   }
 
@@ -436,7 +458,7 @@
 
   function valueType(value, key) {
     if (isTupleForm(value)) {
-      const type = `tuple (length: ${value.length - 1})`;
+      const type = `tuple (elements: ${value.length - 1})`;
       const tag = scalarText(value[0]);
       return key === tag ? type : `${tag} ${type}`;
     }
@@ -477,14 +499,20 @@
     });
   }
 
-  function nodeEntries(value) {
+  function hiddenMessageKey(value, key, options) {
+    if (Array.isArray(value) || !value || typeof value !== "object") return false;
+    if ((key === "device" || key === "path") && messageHeadline(value)) return true;
+    return false;
+  }
+
+  function nodeEntries(value, options = {}) {
     if (!Array.isArray(value)) return orderedEntries(value);
     if (!isTupleForm(value)) return value.map((item, idx) => [String(idx + 1), item]);
     return value.slice(1).map((item, idx) => {
       if (Array.isArray(item) && item.length === 2 && isAtomText(item[0])) {
         return [scalarText(item[0]), item[1]];
       }
-      return [`arg ${idx + 1}`, item];
+      return [null, item];
     });
   }
 
@@ -493,32 +521,245 @@
     return typeof value;
   }
 
-  function messageNode(key, value, depth) {
+  function isIdText(value) {
+    return typeof value === "string" && /^[A-Za-z0-9_-]{43}$|^[A-Za-z0-9_-]{87}$/.test(value);
+  }
+
+  function messageHeadline(value) {
+    if (Array.isArray(value) || !value || typeof value !== "object") return "";
+    const device = value.device ? displayValue(value.device) : "";
+    const path = value.path ? displayValue(value.path) : "";
+    if (!device && !path) return "";
+    if (device && path) return `${device.startsWith("~") ? device : `~${device}`}${path.startsWith("/") ? "" : "/"}${path}`;
+    if (device) return device.startsWith("~") ? device : `~${device}`;
+    return `Path: ${path}`;
+  }
+
+  function commitmentEntryList(commitments) {
+    if (!commitments || Array.isArray(commitments) || typeof commitments !== "object") return [];
+    return Object.entries(commitments)
+      .filter(([id, commitment]) =>
+        isIdText(id) &&
+        commitment &&
+        typeof commitment === "object"
+      )
+      .sort(([left], [right]) => left.localeCompare(right));
+  }
+
+  function commitmentEntries(value) {
+    if (Array.isArray(value) || !value || typeof value !== "object") return [];
+    return commitmentEntryList(value.commitments);
+  }
+
+  function commitmentMetaLabel(commitment) {
+    const parts = [];
+    if (commitment["commitment-device"]) {
+      parts.push(` ~${displayValue(commitment["commitment-device"])}`);
+    }
+    if (commitment.type) parts.push(`/${displayValue(commitment.type)}`);
+    if (commitment.committer) parts.push(` (Sig: ${shortId(displayValue(commitment.committer))})`);
+    return parts.join("");
+  }
+
+  function commitmentLabel(id, commitment) {
+    return `${shortId(id)}${commitmentMetaLabel(commitment)}`;
+  }
+
+  function addInlineButton(parent, className, text, title, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = text;
+    button.title = title;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    parent.appendChild(button);
+    return button;
+  }
+
+  function messageKeyCount(value, key, options) {
+    if (key === "commitments") return commitmentEntryList(value).length;
+    if (options.hideCommitmentBookkeeping) {
+      return Object.keys(value).filter((childKey) =>
+        childKey !== "priv" && childKey !== "commitments"
+      ).length;
+    }
+    return Object.keys(value).length;
+  }
+
+  function appendType(summary, value, key, details, options) {
+    const typeEl = document.createElement("span");
+    typeEl.className = "tree-type";
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const commitments = commitmentEntries(value);
+      typeEl.append(`message (keys: ${messageKeyCount(value, key, options)}`);
+      if (!options.hideCommitmentBookkeeping && key !== "commitments" && commitments.length > 0) {
+        typeEl.append(", ");
+        addInlineButton(
+          typeEl,
+          "reserved-link",
+          commitments.length === 1 ? "comm.:" : "comms.:",
+          "Open commitments",
+          () => openCommitments(details)
+        );
+        commitments.forEach(([id], idx) => {
+          typeEl.append(idx === 0 ? " " : ", ");
+          addInlineButton(
+            typeEl,
+            "reserved-link commitment-ref",
+            shortId(id),
+            id,
+            () => openCommitments(details, id)
+          );
+        });
+      }
+      typeEl.append(")");
+    } else {
+      typeEl.textContent = valueType(value, key);
+    }
+    summary.appendChild(typeEl);
+  }
+
+  function appendCommitmentMeta(summary, commitment) {
+    if (!commitment || Array.isArray(commitment) || typeof commitment !== "object") return;
+    const meta = commitmentMetaLabel(commitment).trim();
+    if (!meta) return;
+    const pill = document.createElement("span");
+    pill.className = "commitment-meta-pill";
+    pill.textContent = meta;
+    summary.appendChild(pill);
+  }
+
+  function appendMessageHeadline(summary, value, details, depth) {
+    const headline = messageHeadline(value);
+    if (!headline) return;
+
+    const meta = document.createElement("span");
+    meta.className = "message-meta";
+    const route = document.createElement("span");
+    route.className = "message-route";
+    route.textContent = headline;
+    meta.appendChild(route);
+    summary.appendChild(meta);
+  }
+
+  function openCommitments(details, selectedId) {
+    details.open = true;
+    const nodes = Array.from(details.querySelectorAll(":scope > .tree-children details.tree-node"));
+    const commitmentsNode = nodes.find((node) => node.dataset.fullKey === "commitments");
+    if (!commitmentsNode) return;
+    commitmentsNode.open = true;
+    if (!selectedId) return;
+    const selectedNode = Array.from(commitmentsNode.querySelectorAll("details.tree-node"))
+      .find((node) => node.dataset.fullKey === selectedId);
+    if (selectedNode) {
+      selectedNode.open = true;
+      selectedNode.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function childOptions(options, displayKey) {
+    if (displayKey === "commitments") {
+      return {
+        ...options,
+        inCommitments: true,
+        hideCommitmentBookkeeping: true,
+        showHeadline: false,
+        showHeadlineKeys: true
+      };
+    }
+    if (options.inCommitments) {
+      return {
+        ...options,
+        inCommitments: false,
+        hideCommitmentBookkeeping: true,
+        showHeadline: false
+      };
+    }
+    return options;
+  }
+
+  function renderKey(key, value, options) {
+    if (options.inCommitments && typeof key === "string") return shortId(key);
+    if (key === null && isTupleForm(value)) return scalarText(value[0]);
+    return key;
+  }
+
+  function isReservedKey(key, options) {
+    return key === "commitments" || options.inCommitments;
+  }
+
+  function markNode(node, key) {
+    if (key === null || key === undefined) return;
+    node.dataset.fullKey = String(key);
+  }
+
+  function appendKey(summary, key, options, title) {
+    if (key === null || key === "") {
+      summary.className = "tree-summary-unlabeled";
+      return;
+    }
+    const keyEl = document.createElement("span");
+    keyEl.className = "tree-key";
+    if (isReservedKey(key, options)) keyEl.classList.add("reserved-key");
+    if (title) keyEl.title = title;
+    keyEl.textContent = key;
+    summary.appendChild(keyEl);
+  }
+
+  function entryList(value, options) {
+    const entries = nodeEntries(value, options)
+      .filter(([childKey]) =>
+        !hiddenMessageKey(value, childKey, options) ||
+        options.showHeadlineKeys
+      );
+    if (options.inCommitments) {
+      return entries.filter(([childKey, childValue]) =>
+        isIdText(childKey) &&
+        childValue &&
+        typeof childValue === "object"
+      );
+    }
+    if (options.hideCommitmentBookkeeping) {
+      return entries.filter(([childKey]) => childKey !== "priv" && childKey !== "commitments");
+    }
+    return entries;
+  }
+
+  function appendChildren(children, entries, depth, options) {
+    if (entries.length === 0) {
+      children.appendChild(messageLeaf("(empty)", ""));
+      return;
+    }
+    entries.forEach(([childKey, childValue]) => {
+      children.appendChild(messageNode(childKey, childValue, depth + 1, options));
+    });
+  }
+
+  function messageNode(key, value, depth, options = {}) {
     if (value && typeof value === "object") {
       const details = document.createElement("details");
       details.className = "tree-node";
       details.open = depth === 0 || (depth === 1 && key === "event");
+      markNode(details, key);
 
       const summary = document.createElement("summary");
-      const keyEl = document.createElement("span");
-      keyEl.className = "tree-key";
-      keyEl.textContent = key;
-      const typeEl = document.createElement("span");
-      typeEl.className = "tree-type";
-      typeEl.textContent = valueType(value, key);
-      summary.append(keyEl, typeEl);
+      const displayKey = renderKey(key, value, options);
+      appendKey(summary, displayKey, options, key !== displayKey ? key : "");
+      appendType(summary, value, displayKey, details, options);
+      if (options.inCommitments) appendCommitmentMeta(summary, value);
+      if (options.showHeadline !== false) {
+        appendMessageHeadline(summary, value, details, depth);
+      }
       details.appendChild(summary);
 
       const children = document.createElement("div");
       children.className = "tree-children";
-      const entries = nodeEntries(value);
-      if (entries.length === 0) {
-        children.appendChild(messageLeaf("(empty)", ""));
-      } else {
-        entries.forEach(([childKey, childValue]) => {
-          children.appendChild(messageNode(childKey, childValue, depth + 1));
-        });
-      }
+      const nextOptions = childOptions(options, displayKey);
+      appendChildren(children, entryList(value, nextOptions), depth, nextOptions);
       details.appendChild(children);
       return details;
     }
@@ -531,13 +772,18 @@
       const details = document.createElement("details");
       details.className = "tree-node scalar-node";
       const summary = document.createElement("summary");
-      const keyEl = document.createElement("span");
-      keyEl.className = "tree-key";
-      keyEl.textContent = key;
+      if (key !== null && key !== "") {
+        const keyEl = document.createElement("span");
+        keyEl.className = "tree-key";
+        keyEl.textContent = key;
+        summary.appendChild(keyEl);
+      } else {
+        summary.className = "tree-summary-unlabeled";
+      }
       const typeEl = document.createElement("span");
       typeEl.className = "tree-type";
       typeEl.textContent = scalarType(value, text);
-      summary.append(keyEl, typeEl);
+      summary.appendChild(typeEl);
       const valueEl = document.createElement("div");
       valueEl.className = "tree-scalar";
       valueEl.textContent = text;
@@ -547,9 +793,10 @@
 
     const row = document.createElement("div");
     row.className = "tree-leaf";
+    if (key === null || key === "") row.classList.add("unlabeled");
     const keyEl = document.createElement("span");
     keyEl.className = "tree-key";
-    keyEl.textContent = key;
+    keyEl.textContent = key || "";
     const valueEl = document.createElement("span");
     valueEl.className = "tree-value";
     valueEl.textContent = text;
@@ -595,21 +842,46 @@
     if (stack.length === 0) {
       children.appendChild(messageLeaf("(empty)", ""));
     } else {
-      stack.forEach((frame, idx) => children.appendChild(stackFrameNode(frame, idx + 1)));
+      const activeDepth = activeStackDepth(stack);
+      stack.forEach((frame, idx) =>
+        children.appendChild(stackFrameNode(frame, idx + 1, stack, activeDepth))
+      );
     }
     root.appendChild(children);
     els.stackView.appendChild(root);
   }
 
-  function stackFrameNode(frame, idx) {
+  function stackFrameNode(frame, idx, stack, activeDepth) {
     if (!Array.isArray(frame) || frame.length < 2) return messageNode(String(idx), frame, 1);
     const row = document.createElement("div");
-    row.className = "tree-leaf";
+    const depth = idx - 1;
+    row.className = `tree-leaf stack-frame${
+      activeDepth !== null && depth >= activeDepth ? " stack-active" : ""
+    }${depth === activeDepth ? " stack-active-top" : ""}`;
+    row.title = "Filter timeline to this stack window";
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.addEventListener("click", (event) => {
+      if (event.target.closest(".stack-filter")) return;
+      event.preventDefault();
+      selectStackWindow(stack, depth);
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectStackWindow(stack, depth);
+      }
+    });
     const parts = stackFrameParts(frame);
 
     const keyEl = document.createElement("span");
-    keyEl.className = "tree-key";
+    keyEl.className = "tree-key stack-depth";
     keyEl.textContent = `#${idx}`;
+    keyEl.title = "Filter timeline to this stack window";
+    keyEl.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectStackWindow(stack, depth);
+    });
 
     const valueEl = document.createElement("span");
     valueEl.className = "tree-value";
@@ -655,6 +927,64 @@
     return "";
   }
 
+  function stackFrameKey(frame) {
+    if (!Array.isArray(frame) || frame.length < 2) return searchableText(frame);
+    const parts = stackFrameParts(frame);
+    return [parts.module, parts.func, parts.arity, parts.line].join("\u001f");
+  }
+
+  function stackSignature(stack, depth) {
+    return stack.slice(depth).map(stackFrameKey);
+  }
+
+  function sameSignature(left, right) {
+    return left.length === right.length && left.every((item, idx) => item === right[idx]);
+  }
+
+  function stackMatchesSignature(stack, signature) {
+    if (stack.length < signature.length) return false;
+    const offset = stack.length - signature.length;
+    return signature.every((item, idx) => stackFrameKey(stack[offset + idx]) === item);
+  }
+
+  function eventStack(event) {
+    const raw = rawMessage(event);
+    return asList(raw && raw.stack);
+  }
+
+  function activeStackDepth(stack) {
+    if (!state.stackFilter || !stackMatchesSignature(stack, state.stackFilter.signature)) {
+      return null;
+    }
+    return stack.length - state.stackFilter.signature.length;
+  }
+
+  function selectStackWindow(stack, depth) {
+    const signature = stackSignature(stack, depth);
+    if (state.stackFilter && sameSignature(state.stackFilter.signature, signature)) {
+      state.stackFilter = null;
+      render({ centerSelected: true });
+      return;
+    }
+
+    let start = state.selected.eventIndex;
+    let end = start;
+    while (
+      start > 0 &&
+      stackMatchesSignature(eventStack(state.report.events[start - 1]), signature)
+    ) {
+      start -= 1;
+    }
+    while (
+      end < state.report.events.length - 1 &&
+      stackMatchesSignature(eventStack(state.report.events[end + 1]), signature)
+    ) {
+      end += 1;
+    }
+    state.stackFilter = { signature, start, end };
+    render({ centerSelected: true });
+  }
+
   function rawMessage(event) {
     return event && event.rawMessage ? event.rawMessage : event;
   }
@@ -677,8 +1007,24 @@
         value: event,
         enumerable: false
       });
+      Object.defineProperty(normalized, "eventIndex", {
+        value: idx,
+        enumerable: false
+      });
       Object.defineProperty(normalized, "searchText", {
         value: searchableText(event),
+        enumerable: false
+      });
+      Object.defineProperty(normalized, "filterText", {
+        value: [
+          normalized.topic,
+          normalized.name,
+          normalized.module,
+          normalized.function,
+          normalized.line,
+          normalized.searchText,
+          ...normalized.stack
+        ].join(" ").toLowerCase(),
         enumerable: false
       });
       return normalized;
@@ -699,6 +1045,98 @@
       ...report,
       events: normalizedEvents
     };
+  }
+
+  function storedSplitterRatio(splitter) {
+    try {
+      const ratio = Number.parseFloat(localStorage.getItem(splitter.storageKey));
+      return Number.isFinite(ratio) && ratio > 0 && ratio < 1 ? ratio : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function saveSplitterRatio(splitter, ratio) {
+    if (!Number.isFinite(ratio)) return;
+    try {
+      localStorage.setItem(splitter.storageKey, String(ratio));
+    } catch (_err) {}
+  }
+
+  function splitterMetrics(splitter) {
+    const container = splitter.el.parentElement;
+    if (!container || container.clientWidth === 0) return null;
+    const splitterWidthPx = splitter.el.getBoundingClientRect().width || 10;
+    const available = container.clientWidth - splitterWidthPx;
+    return available > 0 ? { container, available } : null;
+  }
+
+  function setSplitterRatio(splitter, ratio, metrics = splitterMetrics(splitter)) {
+    if (!metrics) return;
+    const maxBefore = Math.max(
+      splitter.minBefore,
+      metrics.available - splitter.minAfter
+    );
+    const minRatio = splitter.minBefore / metrics.available;
+    const maxRatio = maxBefore / metrics.available;
+    const next = Math.max(minRatio, Math.min(ratio, maxRatio));
+    metrics.container.style.setProperty(splitter.variable, `${(next * 100).toFixed(3)}%`);
+    return next;
+  }
+
+  function restoreSplitters() {
+    splitters.forEach((splitter) => {
+      const ratio = storedSplitterRatio(splitter);
+      if (ratio) {
+        setSplitterRatio(splitter, ratio);
+      }
+    });
+  }
+
+  function beginResize(splitter, event) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const metrics = splitterMetrics(splitter);
+    if (!metrics) return;
+    const rect = metrics.container.getBoundingClientRect();
+    const beforeRect = splitter.el.previousElementSibling.getBoundingClientRect();
+    const initialRatio = beforeRect.width / metrics.available;
+    const minRatio = splitter.minBefore / metrics.available;
+    const maxRatio = (metrics.available - splitter.minAfter) / metrics.available;
+    let nextRatio = initialRatio;
+    splitter.el.classList.add("active");
+    document.body.classList.add("resizing");
+    splitter.el.setPointerCapture(event.pointerId);
+
+    const move = (moveEvent) => {
+      const rawRatio = (moveEvent.clientX - rect.left) / metrics.available;
+      nextRatio = Math.max(minRatio, Math.min(rawRatio, maxRatio));
+      splitter.el.style.transform =
+        `translateX(${(nextRatio - initialRatio) * metrics.available}px)`;
+    };
+    const stop = () => {
+      splitter.el.style.transform = "";
+      saveSplitterRatio(splitter, setSplitterRatio(splitter, nextRatio));
+      splitter.el.classList.remove("active");
+      document.body.classList.remove("resizing");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", stop);
+      window.removeEventListener("pointercancel", stop);
+      try {
+        splitter.el.releasePointerCapture(event.pointerId);
+      } catch (_err) {}
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", stop);
+    window.addEventListener("pointercancel", stop);
+  }
+
+  function wireSplitters() {
+    splitters.forEach((splitter) => {
+      splitter.el.addEventListener("pointerdown", (event) => beginResize(splitter, event));
+    });
+    restoreSplitters();
   }
 
   async function loadInitial() {
@@ -862,17 +1300,20 @@
   }
 
   function matches(event) {
+    return stackWindowMatches(event) && nonStackFiltersMatch(event);
+  }
+
+  function stackWindowMatches(event) {
+    return !state.stackFilter ||
+      (
+        event.eventIndex >= state.stackFilter.start &&
+        event.eventIndex <= state.stackFilter.end
+      );
+  }
+
+  function nonStackFiltersMatch(event) {
     const q = els.search.value.trim().toLowerCase();
-    const haystack = [
-      event.topic,
-      event.name,
-      event.module,
-      event.function,
-      event.line,
-      event.searchText,
-      ...(event.stack || [])
-    ].join(" ").toLowerCase();
-    return (!q || haystack.includes(q)) &&
+    return (!q || event.filterText.includes(q)) &&
       fieldMatches("topic", event.topic) &&
       fieldMatches("name", event.name) &&
       fieldMatches("module", event.module) &&
@@ -904,6 +1345,11 @@
     render();
   }
 
+  function clearStackFilter() {
+    state.stackFilter = null;
+    render({ centerSelected: true });
+  }
+
   function syncFilterOptions() {
     fillFilters();
   }
@@ -928,8 +1374,48 @@
     els.count.textContent = formatInteger(state.report.events.length);
     els.topics.textContent = formatInteger(unique("topic").length);
     els.modules.textContent = formatInteger(unique("module").length);
-    els.duration.textContent = formatDurationUs(reportDuration()) || "0us";
-    els.visibleCount.textContent = formatEventCount(state.filtered.length);
+    renderDurationStat();
+    renderVisibleCount();
+  }
+
+  function renderDurationStat() {
+    els.duration.innerHTML = "";
+    const totalDuration = formatDurationUs(reportDuration()) || "0us";
+    const selectedDuration = selectedStackDuration();
+    if (selectedDuration === null) {
+      els.duration.append(document.createTextNode(totalDuration));
+      return;
+    }
+    els.duration.append(document.createTextNode(formatDurationUs(selectedDuration) || "0us"));
+    const total = document.createElement("button");
+    total.type = "button";
+    total.className = "stat-total";
+    total.textContent = `(total: ${totalDuration})`;
+    total.title = "Clear stack filter";
+    total.addEventListener("click", clearStackFilter);
+    els.duration.appendChild(total);
+  }
+
+  function selectedStackDuration() {
+    if (!state.stackFilter) return null;
+    const start = state.report.events[state.stackFilter.start];
+    const end = state.report.events[state.stackFilter.end];
+    if (!start || !end || start.time === null || end.time === null) return null;
+    return Math.max(0, end.time - start.time);
+  }
+
+  function renderVisibleCount() {
+    els.visibleCount.innerHTML = "";
+    els.visibleCount.append(document.createTextNode(formatEventCount(state.filtered.length)));
+    if (!state.stackFilter) return;
+    const total = state.report.events.filter(nonStackFiltersMatch).length;
+    const totalButton = document.createElement("button");
+    totalButton.type = "button";
+    totalButton.className = "timeline-total";
+    totalButton.textContent = `(total: ${formatInteger(total)})`;
+    totalButton.title = "Clear stack filter";
+    totalButton.addEventListener("click", clearStackFilter);
+    els.visibleCount.append(document.createTextNode(" "), totalButton);
   }
 
   function renderList() {
@@ -948,10 +1434,8 @@
       row.className = `event-row${event === state.selected ? " active" : ""}`;
       row.type = "button";
       row.setAttribute("role", "listitem");
-      row.addEventListener("click", () => {
-        state.selected = event;
-        render();
-      });
+      row.dataset.eventIndex = event.eventIndex;
+      row.addEventListener("click", () => selectEvent(event));
 
       const seq = document.createElement("div");
       seq.className = "seq";
@@ -983,6 +1467,21 @@
       frag.appendChild(row);
     });
     els.list.appendChild(frag);
+  }
+
+  function selectEvent(event) {
+    if (state.selected === event) return;
+    const previous = state.selected;
+    state.selected = event;
+    setEventRowActive(previous, false);
+    setEventRowActive(event, true);
+    renderDetail();
+  }
+
+  function setEventRowActive(event, active) {
+    if (!event) return;
+    const row = els.list.querySelector(`[data-event-index="${event.eventIndex}"]`);
+    if (row) row.classList.toggle("active", active);
   }
 
   function centerSelectedEvent() {
@@ -1056,6 +1555,7 @@
   }
 
   function wire() {
+    wireSplitters();
     [els.topic, els.name, els.module, els.func].forEach((el) => {
       el.addEventListener("focus", () => {
         state.openFilter = el.id;
