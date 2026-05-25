@@ -3,6 +3,10 @@
 Set up a HyperBEAM node that indexes and serves Arweave data through your own
 Arweave node.
 
+> **Note**
+> The NASA gateway can currently only serve unpacked data from the Arweave
+> miner.
+
 You need:
 - An Arweave node address (e.g. `http://mynode.com:1984`)
 - The HyperBEAM repo cloned locally
