@@ -39,10 +39,11 @@ test_store(Mod, Tag) ->
 %% Each element may also contain a `skip' key with a list of test names to skip.
 %% They can also contain a `desc' key with a description of the options.
 suite_with_opts(Suite, OptsList) ->
-    {inparallel,
+    Tests =
         lists:filtermap(
             fun(OptSpec = #{ name := _Name, opts := Opts, desc := ODesc}) ->
                 Skip = hb_maps:get(skip, OptSpec, [], Opts),
+                Timeout = hb_maps:get(timeout, OptSpec, no_timeout, Opts),
                 case satisfies_requirements(OptSpec) of
                     true ->
                         Tests =
@@ -78,12 +79,15 @@ suite_with_opts(Suite, OptsList) ->
                                 end,
                                 [
                                     fun(FreshOpts) ->
-                                        {
+                                        Desc =
                                             hb_util:list(ODesc)
                                                 ++ ": "
                                                 ++ hb_util:list(TestDesc),
-                                            fun() -> Test(FreshOpts) end
-                                        }
+                                        TestFun = fun() -> Test(FreshOpts) end,
+                                        case Timeout of
+                                            no_timeout -> {Desc, TestFun};
+                                            _ -> {Desc, {timeout, Timeout, TestFun}}
+                                        end
                                     end
                                 ||
                                     {TestDesc, Test} <- Tests
@@ -97,8 +101,16 @@ suite_with_opts(Suite, OptsList) ->
                 end
             end,
             OptsList
-        )
-    }.
+        ),
+    Serial =
+        lists:any(
+            fun(OptSpec) -> maps:get(parallel, OptSpec, true) == false end,
+            OptsList
+        ),
+    case Serial of
+        true -> Tests;
+        false -> {inparallel, Tests}
+    end.
 
 %% @doc Derive a fresh store for a single test based on the options' store
 %% template. For `hb_store_volatile' stores (the default test store), each
@@ -233,7 +245,6 @@ benchmark_iterations(Fun, N) ->
 %% @doc Run multiple instances of a function in parallel for a given amount of time.
 benchmark(Fun, TLen, Procs) ->
     Parent = self(),
-    receive _ -> worker_synchronized end,
     StartWorker =
         fun(_) ->
             Ref = make_ref(),
