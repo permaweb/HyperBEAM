@@ -21,6 +21,8 @@
 -define(RECORDING_START_KEY, {?DEVICE, start_time}).
 -define(RECORDING_LAST_KEY, {?DEVICE, last_time}).
 -define(RECORDING_OLD_EVENT_OPTS_KEY, {?DEVICE, old_event_opts}).
+-define(PRIVATE_REDACTED, <<"redacted">>).
+-define(PRIVATE_DROP, {?MODULE, private_drop}).
 -define(RECORDING_KEYS, [
     ?RECORDING_KEY,
     ?RECORDING_EVENTS_KEY,
@@ -107,7 +109,8 @@ index(_Base, Req, Opts) ->
 
 response(Report, Req, Opts) ->
     response(Report, Req, Opts, <<"raw">>).
-response(Report, Req, Opts, Default) ->
+response(RawReport, Req, Opts, Default) ->
+    Report = without_private(RawReport),
     case hb_ao:normalize_key(hb_maps:get(<<"format">>, Req, Default, Opts)) of
         <<"html">> -> html_response(Report, Opts);
         <<"json">> -> json_response(Report, Opts);
@@ -342,7 +345,7 @@ content_type(<<"styles.css">>) -> <<"text/css">>;
 content_type(_) -> <<"application/octet-stream">>.
 
 json_report_body(Report, Opts) ->
-    hb_json:encode(json_value(Report, Opts)).
+    hb_json:encode(json_value(without_private(Report), Opts)).
 
 pass_through(Base, Opts) when is_map(Base) ->
     hb_maps:without([<<"device">>], Base, Opts);
@@ -425,11 +428,11 @@ next_recording_sequence() ->
     Seq.
 
 event_record(Seq, HookReq, RecOpts) ->
-    Event = hb_maps:get(<<"event">>, HookReq, undefined, #{}),
-    Topic = hb_maps:get(<<"topic">>, HookReq, global, #{}),
-    Mod = hb_maps:get(<<"module">>, HookReq, "", #{}),
-    Func = hb_maps:get(<<"function">>, HookReq, "", #{}),
-    Line = hb_maps:get(<<"line">>, HookReq, "", #{}),
+    Event = redact_private(hb_maps:get(<<"event">>, HookReq, undefined, #{})),
+    Topic = redact_private(hb_maps:get(<<"topic">>, HookReq, global, #{})),
+    Mod = redact_private(hb_maps:get(<<"module">>, HookReq, "", #{})),
+    Func = redact_private(hb_maps:get(<<"function">>, HookReq, "", #{})),
+    Line = redact_private(hb_maps:get(<<"line">>, HookReq, "", #{})),
     Now = erlang:monotonic_time(microsecond),
     Last =
         case erlang:get(?RECORDING_LAST_KEY) of
@@ -519,6 +522,64 @@ record_name(Term) when is_binary(Term), byte_size(Term) =< 100 ->
     text_name(Term);
 record_name(Term) ->
     format_term(Term, 100).
+
+redact_private(?PRIVATE_DROP) ->
+    ?PRIVATE_REDACTED;
+redact_private(Term) ->
+    case without_private(Term, drop) of
+        ?PRIVATE_DROP -> ?PRIVATE_REDACTED;
+        SafeTerm -> SafeTerm
+    end.
+
+without_private(Term) ->
+    case without_private(Term, keep) of
+        ?PRIVATE_DROP -> ?PRIVATE_REDACTED;
+        SafeTerm -> SafeTerm
+    end.
+
+without_private(Term, _Mode) when is_map(Term) ->
+    maps:from_list(
+        lists:filtermap(
+            fun({Key, Value}) ->
+                case hb_private:is_private(Key) of
+                    true ->
+                        false;
+                    false ->
+                        case without_private(Value, drop) of
+                            ?PRIVATE_DROP -> false;
+                            SafeValue -> {true, {Key, SafeValue}}
+                        end
+                end
+            end,
+            maps:to_list(Term)
+        )
+    );
+without_private(Term, _Mode) when is_tuple(Term), tuple_size(Term) =:= 2 ->
+    case hb_private:is_private(element(1, Term)) of
+        true -> ?PRIVATE_DROP;
+        false -> without_private_tuple(Term)
+    end;
+without_private(Term, _Mode) when is_tuple(Term) ->
+    without_private_tuple(Term);
+without_private(Term, _Mode) when is_list(Term) ->
+    case lists:any(fun hb_private:is_private/1, Term) of
+        true -> [];
+        false -> without_private_list(Term)
+    end;
+without_private(Term, _Mode) ->
+    Term.
+
+without_private_tuple(Tuple) ->
+    list_to_tuple(without_private_list(tuple_to_list(Tuple))).
+
+without_private_list(List) ->
+    [
+        Safe
+    ||
+        Item <- List,
+        Safe <- [without_private(Item, drop)],
+        Safe =/= ?PRIVATE_DROP
+    ].
 
 json_value(Term, Opts) when ?IS_LINK(Term) ->
     try json_value(hb_cache:ensure_loaded(Term, Opts), Opts)
@@ -721,6 +782,66 @@ maybe_append_records_started_event_test() ->
     ?assertEqual(<<"debug_id">>, maps:get(<<"topic">>, Event)),
     ?assertEqual(<<"generating_id">>, maps:get(<<"name">>, Event)),
     ?assert(maps:is_key(<<"stack">>, Event)),
+    clear_recording().
+
+private_data_redacted_test() ->
+    clear_recording(),
+    Secret = <<"secret-flight-value">>,
+    start_recording(#{}),
+    {ok, _} =
+        maybe_append(
+            #{},
+            #{
+                <<"event">> =>
+                    {
+                        public_event,
+                        {priv_wallet, Secret},
+                        {<<"priv-token">>, Secret},
+                        {visible, <<"ok">>},
+                        #{
+                            <<"priv-map">> => Secret,
+                            <<"shown">> => <<"ok">>
+                        },
+                        [<<"priv-list">>, Secret]
+                    },
+                <<"topic">> => debug_id,
+                <<"module">> => hb_message,
+                <<"function">> => id,
+                <<"line">> => 123
+            },
+            #{}
+        ),
+    {ok, _} =
+        maybe_append(
+            #{},
+            #{
+                <<"event">> => {<<"priv-event">>, Secret},
+                <<"topic">> => debug_id,
+                <<"module">> => hb_message,
+                <<"function">> => id,
+                <<"line">> => 124
+            },
+            #{}
+        ),
+    Report = report(),
+    ?assertEqual(nomatch, binary:match(term_to_binary(Report), Secret)),
+    [PublicEvent, PrivateEvent] = maps:get(<<"events">>, Report),
+    ?assertEqual(<<"public_event">>, maps:get(<<"name">>, PublicEvent)),
+    ?assertEqual(?PRIVATE_REDACTED, maps:get(<<"event">>, PrivateEvent)),
+    Json =
+        json_report_body(
+            Report#{
+                <<"result">> =>
+                    #{
+                        <<"priv-result">> => Secret,
+                        <<"public">> => <<"ok">>
+                    }
+            },
+            #{}
+        ),
+    ?assertEqual(nomatch, binary:match(Json, Secret)),
+    ?assertEqual(nomatch, binary:match(Json, <<"priv-wallet">>)),
+    ?assertEqual(nomatch, binary:match(Json, <<"priv-result">>)),
     clear_recording().
 
 record_installs_hook_test() ->
