@@ -210,7 +210,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),
-    ?event({req_to_key_material, {req, Req}}),
+    ?event({req_to_key_material, {priv_req, Req}}),
     {ok, Scheme, Key, KeyID} = dev_httpsig_keyid:req_to_key_material(Req, Opts),
     Committer = dev_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
     % Remove any existing hmac commitments with the given keyid before adding
@@ -366,7 +366,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
             Msg
         ),
-    ?event({msg_with_only_inputs, maps:without([<<"commitments">>], MsgWithOnlyInputs)}),
+    ?event({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
     {ok, EncodedWithSigInfo} =
         to(
             maps:without([<<"commitments">>], MsgWithOnlyInputs),
@@ -460,7 +460,7 @@ signature_base(EncodedMsg, Commitment, Opts) ->
             Commitment,
             Opts
         ),
-    ?event({component_identifiers_for_sig_base, ComponentsLines}),
+    ?event({component_identifiers_for_sig_base, {priv_components, ComponentsLines}}),
 	ParamsLine = signature_params_line(Commitment, Opts),
     SignatureBase = 
         <<
