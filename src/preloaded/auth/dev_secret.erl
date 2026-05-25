@@ -304,7 +304,7 @@ register_wallet(Wallet, Base, Request, Opts) ->
                     <<"secret">> => Secret
                 }
         end,
-    ?event({register_wallet, {access_control, AccessControl}, {request, AuthRequest}}),
+    ?event({register_wallet, {access_control, AccessControl}, {priv_request, AuthRequest}}),
     case hb_ao:resolve(AccessControl, AuthRequest, Opts) of
         {ok, InitializedAuthMsg} ->
             ?event({register_wallet_success, {initialized_auth_msg, InitializedAuthMsg}}),
@@ -393,13 +393,13 @@ list(_Base, _Request, Opts) ->
 
 %% @doc Sign a message with a wallet.
 commit(Base, Request, Opts) ->
-    ?event({commit_invoked, {base, Base}, {request, Request}}),
+    ?event({commit_invoked, {base, Base}, {priv_request, Request}}),
     case request_to_wallets(Base, Request, Opts) of
         [] -> {error, <<"No wallets found to sign with.">>};
         WalletDetailsList ->
             ?event(
                 {commit_signing,
-                    {request, Request},
+                    {priv_request, Request},
                     {priv_wallet_list, WalletDetailsList}
                 }
             ),
@@ -425,7 +425,7 @@ commit(Base, Request, Opts) ->
 %% of access rights for the wallets before returning them.
 request_to_wallets(Base, Request, Opts) ->
     % Get the wallet references or keys from the request or cookie.
-    ?event({request_to_wallets, {base, Base}, {request, Request}}),
+    ?event({request_to_wallets, {base, Base}, {priv_request, Request}}),
     Keys =
         hb_ao:get_first(
             [
@@ -435,7 +435,7 @@ request_to_wallets(Base, Request, Opts) ->
             <<"all">>,
             Opts
         ),
-    ?event({request_to_wallets, {keys, Keys}}),
+    ?event({request_to_wallets, {priv_keys, Keys}}),
     WalletKeyIDs =
         case hb_maps:get(<<"keyids">>, Request, not_found, Opts) of
             not_found ->
@@ -450,7 +450,7 @@ request_to_wallets(Base, Request, Opts) ->
                     {secret, KeyID, hb_maps:get(<<"wallet">>, Wallet, Opts) }
                 end, KeyIDs)
     end,
-    ?event({attempting_to_load_wallets, {keyids, WalletKeyIDs}, {request, Request}}),
+    ?event({attempting_to_load_wallets, {priv_keyids, WalletKeyIDs}, {priv_request, Request}}),
     lists:filtermap(
         fun(WalletKeyID) ->
             case load_and_verify(WalletKeyID, Base, Request, Opts) of
@@ -460,7 +460,7 @@ request_to_wallets(Base, Request, Opts) ->
                 {error, Reason} ->
                     ?event(
                         {failed_to_load_wallet,
-                            {keyid, WalletKeyID},
+                            {priv_keyid, WalletKeyID},
                             {reason, Reason}
                         }
                     ),
@@ -532,7 +532,7 @@ verify_auth(WalletDetails, Req, Opts) ->
             <<"committer">> =>
                 hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts)
         },
-    ?event({verify_wallet, {auth_base, AuthBase}, {request, AuthRequest}}),
+    ?event({verify_wallet, {auth_base, AuthBase}, {priv_request, AuthRequest}}),
     hb_ao:resolve(AuthBase, AuthRequest, Opts).
 
 %% @doc Parse cookie from a message to extract wallets.
@@ -547,17 +547,17 @@ wallets_from_cookie(Msg, Opts) ->
             {ok, CookieMsg} -> CookieMsg
         catch _:_ -> {error, <<"Invalid cookie format.">>}
         end,
-        ?event({parsed_cookie, ParsedCookie}),
+        ?event({parsed_cookie, {priv_cookie, ParsedCookie}}),
     % Get the wallets that we should be able to access from the parsed cookie.
     % We determine their type from the `type-' prefix of the key.
     lists:flatten(lists:filtermap(
         fun({<<"secret-", Address/binary >>, Key}) ->
             DecodedKey = hb_escape:decode_quotes(Key),
-            ?event({wallet_from_cookie, {key, DecodedKey},{ address, Address}}),
+            ?event({wallet_from_cookie, {priv_key, DecodedKey},{ address, Address}}),
             {true, secrets_to_keyids(DecodedKey)};
            ({<<"wallet-", Address/binary >>, Key}) ->
             DecodedKey = hb_escape:decode_quotes(Key),
-            ?event({wallet_from_cookie, {key, DecodedKey}, {address, Address}}),
+            ?event({wallet_from_cookie, {priv_key, DecodedKey}, {address, Address}}),
             {true, [{wallet, DecodedKey}]};
            ({_Irrelevant, _}) -> false
         end,
@@ -586,7 +586,7 @@ export(Base, Request, Opts) ->
                 Request#{ <<"keyids">> => AllLocalWallets };
             _ -> Request
         end,
-    ?event({export, {base, Base}, {request, ModReq}}),
+    ?event({export, {base, Base}, {priv_request, ModReq}}),
     case request_to_wallets(Base, ModReq, Opts) of
         [] -> {error, <<"No wallets found to export.">>};
         Wallets ->
