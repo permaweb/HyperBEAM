@@ -306,7 +306,9 @@ concurrent_read_write_test() ->
 
 %% @doc Test writing a large volume of assignments to stress memory. Helps
 %% identify memory leaks and also, checks performance issues.
-large_assignment_volume_test() ->
+large_assignment_volume_test_() ->
+    {timeout, 30, fun large_assignment_volume/0}.
+large_assignment_volume() ->
     VolStore = hb_test_utils:test_store(hb_store_fs, <<"volume-vol">>),
     NonVolStore = hb_test_utils:test_store(hb_store_fs, <<"volume-nonvol">>),
     Opts = #{

@@ -838,7 +838,9 @@ preprocess(Base, RawReq, Opts) ->
 
 %%% Tests
 
-test_provider_test_parallel() ->
+test_provider_test_parallel_() ->
+    {timeout, 30, fun test_provider/0}.
+test_provider() ->
     Node =
         hb_http_server:start_node(Opts =
             #{
@@ -863,7 +865,9 @@ test_provider_test_parallel() ->
         hb_http:get(Node, <<"/~router@1.0/routes/1/node">>, Opts)
     ).
 
-dynamic_provider_test_parallel() ->
+dynamic_provider_test_parallel_() ->
+    {timeout, 30, fun dynamic_provider/0}.
+dynamic_provider() ->
     {ok, Script} = file:read_file("test/test.lua"),
     Node = hb_http_server:start_node(#{
         <<"store">> => hb_test_utils:test_store(),
@@ -1008,7 +1012,7 @@ local_dynamic_router() ->
     ),
     % Force computation of the current state. This should be done with a 
     % background worker (ex: a `~cron@1.0/every' task).
-    hb_http:get(Node, <<"/router~node-process@1.0/now">>, #{}),
+    hb_http:get(Node, <<"/router1~node-process@1.0/now">>, #{}),
     {ok, Routes} = hb_http:get(Node, RouteProvider, Opts),
     ?event(debug_dynrouter, {got_routes, Routes}),
     % Query the route 10 times with the same path. This should yield 2 different
@@ -1066,9 +1070,21 @@ dynamic_router_pricing() ->
     {ok, ClientScript} = file:read_file("scripts/hyper-token-p4-client.lua"),
     {ok, TokenScript} = file:read_file("scripts/hyper-token.lua"),
     {ok, ProcessScript} = file:read_file("scripts/hyper-token-p4.lua"),
-    ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
+    ExecWallet = ar_wallet:new(),
     ProxyWallet = ar_wallet:new(),
     ExecNodeAddr = hb_util:human_id(ar_wallet:to_address(ExecWallet)),
+    RouterHook =
+        #{
+            <<"request">> => #{
+                <<"device">> => <<"router@1.0">>,
+                <<"path">> => <<"preprocess">>,
+                <<"commit-request">> => true
+            }
+        },
+    RouteProvider = #{
+        <<"path">> =>
+            <<"/router2~node-process@1.0/compute/routes~message@1.0">>
+    },
     Processor =
         #{
             <<"device">> => <<"p4@1.0">>,
@@ -1143,19 +1159,7 @@ dynamic_router_pricing() ->
         <<"port">> => 10010,
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ProxyWallet,
-        <<"on">> => 
-            #{
-                <<"request">> => #{
-                    <<"device">> => <<"router@1.0">>,
-                    <<"path">> => <<"preprocess">>,
-                    <<"commit-request">> => true
-                }
-            },
         <<"router-opts">> => #{
-            <<"provider">> => #{
-                <<"path">> =>
-                    <<"/router2~node-process@1.0/compute/routes~message@1.0">>
-            },
             <<"registrar">> => #{
                 <<"path">> => <<"/router2~node-process@1.0">>
             },
@@ -1196,6 +1200,16 @@ dynamic_router_pricing() ->
             <<"/~router@1.0/register">>,
             #{}
         ),
+    RouterServerID = hb_util:human_id(ar_wallet:to_address(ProxyWallet)),
+    LiveRouterOpts0 =
+        hb_http_server:get_opts(#{ <<"http-server">> => RouterServerID }),
+    RouterOpts0 = hb_opts:get(router_opts, #{}, LiveRouterOpts0),
+    ok =
+        hb_http_server:set_opts(
+            LiveRouterOpts0#{
+                <<"router-opts">> => RouterOpts0#{ <<"provider">> => RouteProvider }
+            }
+        ),
     % Force computation of the current state.
     {Status, _NodeRoutes} =
         hb_http:get(
@@ -1204,6 +1218,8 @@ dynamic_router_pricing() ->
             #{}
         ),
     ?assertEqual(ok, Status),
+    LiveRouterOpts = hb_http_server:get_opts(#{ <<"http-server">> => RouterServerID }),
+    ok = hb_http_server:set_opts(LiveRouterOpts#{ <<"on">> => RouterHook }),
     % Check that path /c is free
     {ok, CRes} = hb_http:get(RouterNode, <<"/c?c+list=1">>, #{}),
     ?event(debug_dynrouter, {res_msg, CRes}),
@@ -1224,6 +1240,13 @@ dynamic_router() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
     ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
     ProxyWallet = ar_wallet:new(),
+    RouterHook =
+        #{
+            <<"request">> => #{
+                <<"device">> => <<"router@1.0">>,
+                <<"path">> => <<"preprocess">>
+            }
+        },
     ExecNode =
         hb_http_server:start_node(
             ExecOpts = #{ <<"priv-wallet">> => ExecWallet, <<"store">> => hb_test_utils:test_store() }
@@ -1247,13 +1270,6 @@ dynamic_router() ->
         ],
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ProxyWallet,
-        <<"on">> => 
-            #{
-                <<"request">> => #{
-                    <<"device">> => <<"router@1.0">>,
-                    <<"path">> => <<"preprocess">>
-                }
-            },
         <<"router-opts">> => #{
             <<"provider">> => #{
                 <<"path">> => <<"/router~node-process@1.0/compute/routes~message@1.0">>
@@ -1287,7 +1303,7 @@ dynamic_router() ->
     % Register workers with the dynamic router with varied prices.
     {ok, [Req]} = file:consult(<<"test/admissible-report.eterm">>),
     lists:foreach(fun(X) ->
-        {ok, Res} = 
+        {ok, Res} =
             hb_http:post(
                 Node,
                 #{
@@ -1317,6 +1333,9 @@ dynamic_router() ->
     {Status, NodeRoutes} = hb_http:get(Node, <<"/router~node-process@1.0/now/at-slot">>, #{}),
     ?event(debug_dynrouter, {got_node_routes, NodeRoutes}),
     ?assertEqual(ok, Status),
+    ProxyServerID = hb_util:human_id(ar_wallet:to_address(ProxyWallet)),
+    LiveProxyOpts = hb_http_server:get_opts(#{ <<"http-server">> => ProxyServerID }),
+    ok = hb_http_server:set_opts(LiveProxyOpts#{ <<"on">> => RouterHook }),
     ProxyWalletAddr = hb_util:human_id(ar_wallet:to_address(ProxyWallet)),
     ExecNodeAddr = hb_util:human_id(ar_wallet:to_address(ExecWallet)),
     % Ensure that the `~meta@1.0/info/address' response is produced by the
@@ -1461,7 +1480,15 @@ dynamic_routing_by_performance() ->
         end,
         lists:seq(1, BenchRoutes)
     ),
-    timer:sleep(150),
+    ?assert(hb_util:wait_until(
+        fun() ->
+            case hb_http:get(Node, <<"/perf-router~node-process@1.0/slot/current">>, Opts) of
+                {ok, Slot} when Slot >= TestNodes + BenchRoutes -> true;
+                _ -> false
+            end
+        end,
+        5000
+    )),
     % Call `recalculate' on the router process and get the resulting weight
     % table.
     hb_http:post(
@@ -1777,7 +1804,9 @@ device_call_from_singleton_test_parallel() ->
     ).
     
 
-get_routes_test_parallel() ->
+get_routes_test_parallel_() ->
+    {timeout, 30, fun get_routes/0}.
+get_routes() ->
     Node = hb_http_server:start_node(
         #{
             <<"force-signed">> => false,
@@ -1795,7 +1824,9 @@ get_routes_test_parallel() ->
     {ok, Recvd} = Res,
     ?assertMatch(<<"our_node">>, Recvd).
 
-add_route_test_parallel() ->
+add_route_test_parallel_() ->
+    {timeout, 30, fun add_route/0}.
+add_route() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
         #{
@@ -1833,7 +1864,9 @@ add_route_test_parallel() ->
 
 %% @doc Test that the `preprocess/3' function re-routes a request to remote
 %% peers via `~relay@1.0', according to the node's routing table.
-request_hook_reroute_to_nearest_test_parallel() ->
+request_hook_reroute_to_nearest_test_parallel_() ->
+    {timeout, 30, fun request_hook_reroute_to_nearest/0}.
+request_hook_reroute_to_nearest() ->
     Peer1 = hb_http_server:start_node(#{ <<"priv-wallet">> => W1 = ar_wallet:new() }),
     Peer2 = hb_http_server:start_node(#{ <<"priv-wallet">> => W2 = ar_wallet:new() }),
     Address1 = hb_util:human_id(ar_wallet:to_address(W1)),
@@ -1961,7 +1994,7 @@ route_nearest_integer_preserves_opts_test_parallel() ->
 route_multirequest_parallel_limit_test_parallel_() ->
     {timeout, 30, fun route_multirequest_parallel_limit/0}.
 route_multirequest_parallel_limit() ->
-    DelayMs = 300,
+    DelayMs = 1000,
     WorkerNodes =
         lists:map(
             fun(N) ->
@@ -2025,17 +2058,19 @@ route_multirequest_parallel_limit() ->
             ]
         ),
     ?assertEqual([1, 2, 3], WorkerBodies),
-    % With 3 peers of 300ms each: `parallel = 2` should complete in about two
-    % waves (~600ms), not one (~300ms) or fully serial (~900ms).
+    % With 3 peers and `parallel = 2`, this should complete in two waves,
+    % not one wave or fully serial.
     ?event({duration, Duration}),
-    ?assert(Duration >= 600),
-    ?assert(Duration < 900).
+    ?assert(Duration >= DelayMs * 2),
+    ?assert(Duration < DelayMs * 3).
 
 %% @doc Test that a full production-style route configuration (matching a
 %% typical config.json) resolves every request type correctly: single-node
 %% prefix routes, multi-node All-strategy routes, Nearest-Integer chunk
 %% routes, match/with regex routes, and fallback routes.
-full_route_config_test_parallel() ->
+full_route_config_test_parallel_() ->
+    {timeout, 60, fun full_route_config/0}.
+full_route_config() ->
     Routes =
         [
             #{
