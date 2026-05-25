@@ -138,9 +138,9 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 restore_priv(Msg, EmptyPriv, _Opts) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv, Opts) ->
     MsgPriv = hb_maps:get(<<"priv">>, Msg, #{}, Opts),
-    ?event({restoring_priv, {msg_priv, MsgPriv}, {old_priv, OldPriv}}),
+    ?event({restoring_priv, {priv_msg, MsgPriv}, {priv_old, OldPriv}}),
     NewPriv = hb_util:deep_merge(MsgPriv, OldPriv, Opts),
-    ?event({new_priv, NewPriv}),
+    ?event({priv_new, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
 %% @doc Get a codec device and request params from the given conversion request. 

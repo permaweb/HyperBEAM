@@ -602,7 +602,7 @@ set_default_opts(Opts) ->
         {given, TempOpts},
         {port, Port},
         {store, Store},
-        {wallet, Wallet}
+        {priv_wallet, Wallet}
     }),
     Opts#{
         <<"port">> => Port,

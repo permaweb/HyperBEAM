@@ -102,11 +102,11 @@ extract(Msg, Req, Opts) ->
 %% cookies.
 store(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
-    ?event({store, {base, Base}, {req, Req}}),
+    ?event({store, {priv_base, Base}, {priv_req, Req}}),
     {ok, ExistingCookies} = extract(Base, Req, Opts),
-    ?event({store, {existing_cookies, ExistingCookies}}),
+    ?event({store, {priv_existing_cookies, ExistingCookies}}),
     {ok, ResetBase} = reset(Base, Opts),
-    ?event({store, {reset_base, ResetBase}}),
+    ?event({store, {priv_reset_base, ResetBase}}),
     MsgToSet =
         hb_maps:without(
             [
@@ -120,7 +120,7 @@ store(Base, Req, RawOpts) ->
             hb_private:reset(Req),
             Opts
         ),
-    ?event({store, {msg_to_set, MsgToSet}}),
+    ?event({store, {priv_msg_to_set, MsgToSet}}),
     NewCookies = hb_maps:merge(ExistingCookies, MsgToSet, Opts),
     NewBase = hb_private:set(ResetBase, <<"cookie">>, NewCookies, Opts),
     {ok, NewBase}.
@@ -159,13 +159,13 @@ reset(Base, _Req, Opts) ->
 %% Note that the `format: cookie' form is information lossy: All provided
 %% attributes and flags are discarded.
 to(Msg, Req, Opts) ->
-    ?event({to, {msg, Msg}, {req, Req}}),
+    ?event({to, {priv_msg, Msg}, {priv_req, Req}}),
     CookieOpts = opts(Opts),
     LoadedMsg = hb_cache:ensure_all_loaded(Msg, CookieOpts),
-    ?event({to, {loaded_msg, LoadedMsg}}),
+    ?event({to, {priv_loaded_msg, LoadedMsg}}),
     do_to(LoadedMsg, Req, CookieOpts).
 do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) ->
-    ?event({to_set_cookie, {msg, Msg}, {req, Req}}),
+    ?event({to_set_cookie, {priv_msg, Msg}, {priv_req, Req}}),
     {ok, ExtractedParsedCookies} = extract(Msg, Req, Opts),
     {ok, ResetBase} = reset(Msg, Opts),
     SetCookieLines =
@@ -181,7 +181,7 @@ do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) -
         },
     {ok, MsgWithSetCookie};
 do_to(Msg, Req = #{ <<"format">> := <<"cookie">> }, Opts) when is_map(Msg) ->
-    ?event({to_cookie, {msg, Msg}, {req, Req}}),
+    ?event({to_cookie, {priv_msg, Msg}, {priv_req, Req}}),
     {ok, ExtractedParsedCookies} = extract(Msg, Req, Opts),
     {ok, ResetBase} = reset(Msg, Opts),
     CookieLines =
@@ -193,7 +193,7 @@ do_to(Msg, Req = #{ <<"format">> := <<"cookie">> }, Opts) when is_map(Msg) ->
             ),
             Opts
         ),
-    ?event({to_cookie, {cookie_lines, CookieLines}}),
+    ?event({to_cookie, {priv_cookie_lines, CookieLines}}),
     CookieLine = join(CookieLines, <<"; ">>),
     {ok, ResetBase#{ <<"cookie">> => CookieLine }};
 do_to(Msg, _Req, _Opts) when is_map(Msg) ->
@@ -223,14 +223,14 @@ to_set_cookie_line(Key, RawCookie) ->
         >>,
     % Encode the cookie attributes as key-value (non-quoted) pairs, separated
     % by `;'.
-    ?event({to_line, {key, Key}, {cookie, {explicit, Cookie}}, {value, ValueBin}}),
+    ?event({to_line, {priv_key, Key}, {priv_cookie, Cookie}, {priv_value, ValueBin}}),
     AttributesBin =
         case maps:get(<<"attributes">>, Cookie, #{}) of
             EmptyAttributes when map_size(EmptyAttributes) == 0 ->
-                ?event({attributes, {none_in, Cookie}}),
+                ?event({attributes, {priv_none_in, Cookie}}),
                 <<>>;
             Attributes ->
-                ?event({attributes, Attributes}),
+                ?event({priv_attributes, Attributes}),
                 JointAttributes =
                     join(
                         [
@@ -313,7 +313,7 @@ from_cookie(_MsgWithoutCookie, _Req, _Opts) ->
 %% header has a `key=value' pair, and possibly attributes and flags. The form
 %% looks as follows: `key=value; attr1=value1; attr2=value2; flag1; flag2'.
 from_set_cookie(#{ <<"set-cookie">> := Cookie }, Req, Opts) ->
-    ?event({from_set_cookie, {cookie, Cookie}}),
+    ?event({from_set_cookie, {priv_cookie, Cookie}}),
     from_set_cookie(Cookie, Req, Opts);
 from_set_cookie(MsgWithoutSet, _Req, _Opts) when is_map(MsgWithoutSet) ->
     % The set-cookie key is not present in the message, so we return an empty map.
@@ -357,10 +357,10 @@ from_set_cookie(Line, _Req, Opts) when is_binary(Line) ->
             UnquotedFlags = lists:map(fun unquote/1, SortedFlags),
             ?event(
                 {from_line,
-                    {key, Key},
-                    {value, {explicit, Value}},
-                    {attrs, AttrPairs},
-                    {flags, UnquotedFlags}
+                    {priv_key, Key},
+                    {priv_value, {explicit, Value}},
+                    {priv_attrs, AttrPairs},
+                    {priv_flags, UnquotedFlags}
                 }
             ),
             Attributes =

@@ -25,14 +25,14 @@
 %% @doc Extract the key and keyid from a request, returning
 %% `{ok, Scheme, Key, KeyID}' or `{error, Reason}'.
 req_to_key_material(Req, Opts) ->
-    ?event({req_to_key_material, {req, Req}}),
+    ?event({req_to_key_material, {priv_req, Req}}),
     KeyID = maps:get(<<"keyid">>, Req, undefined),
     ?event({keyid_to_key_material, {keyid, KeyID}}),
     case find_scheme(KeyID, Req, Opts) of
         {ok, Scheme} ->
             ?event({scheme_found, {scheme, Scheme}}),
             ApplyRes = apply_scheme(Scheme, KeyID, Req),
-            ?event({apply_scheme_result, {apply_res, ApplyRes}}),
+            ?event({apply_scheme_result, {priv_apply_res, ApplyRes}}),
             case ApplyRes of
                 {ok, _, CalcKeyID} when KeyID /= undefined, CalcKeyID /= KeyID ->
                     {error, key_mismatch};
