@@ -363,7 +363,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                             {tx_id, {string, TXID}},
                             {items_count, ItemsCount}
                         }),
-                    % Single event increment for the batch
+                    % Single event record for the batch
                     record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
                     #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
                 {error, Reason} ->
@@ -473,12 +473,12 @@ resolve_tx_header(TXID, Opts) ->
             error
     end.
 
-%% @doc Record event metrics (count and duration) using hb_event:increment.
+%% @doc Record event metrics (count and duration) using hb_event:record.
 record_event_metrics(MetricName, Count, Duration) ->
-    hb_event:increment(<<"arweave_block_count">>, MetricName, #{}, Count),
-    hb_event:increment(<<"arweave_block_duration">>, MetricName, #{}, Duration).
+    hb_event:record(<<"arweave_block_count">>, MetricName, #{}, Count),
+    hb_event:record(<<"arweave_block_duration">>, MetricName, #{}, Duration).
 
-%% @doc Track an operation's execution time and count using hb_event:increment.
+%% @doc Track an operation's execution time and count using hb_event:record.
 %% Always tracks both count and duration, regardless of success/failure.
 observe_event(MetricName, Fun) ->
     {Time, Result} = timer:tc(Fun),

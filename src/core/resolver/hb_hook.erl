@@ -58,28 +58,16 @@
 %% This function finds all handlers for the hook and evaluates them in sequence.
 %% The result of each handler is used as input to the next handler.
 on(HookName, Req, Opts) ->
-    ?event(hook, {attempting_execution_for_hook, HookName}),
-    % Get all handlers for this hook from the options
-    Handlers = find(HookName, Opts),
-    % If no handlers are found, return the original request with ok status
-    case Handlers of
-        [] -> 
-            ?event(hook, {no_handlers_for_hook, HookName}),
-            {ok, Req};
-        _ -> 
-            % Execute each handler in sequence, passing the result of each to
-            % the next as input.
-            execute_handlers(HookName, Handlers, Req, Opts)
+    case find(HookName, Opts) of
+        [] -> {ok, Req};
+        Handlers -> execute_handlers(HookName, Handlers, Req, Opts)
     end.
 
 %% @doc Get all handlers for a specific hook from the node message options.
 %% Handlers are stored in the `on' key of this message.
-find(HookName, Opts) ->
-    find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
-find(_Base, Req, Opts) ->
-    HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
-    case maps:get(HookName, hb_opts:get(on, #{}, Opts), []) of
-        Handler when is_map(Handler) -> 
+find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
+    case maps:get(HookName, On, []) of
+        Handler when is_map(Handler) ->
             case hb_util:is_ordered_list(Handler, Opts) of
                 true ->
                     % If the term is an ordered list message (containing only
@@ -89,14 +77,19 @@ find(_Base, Req, Opts) ->
                     % If a single handler is found, wrap it in a list.
                     [Handler]
             end;
-        Handlers when is_list(Handlers) -> 
-            % If multiple handlers are found, return them as is
+        Handlers when is_list(Handlers) ->
+            % If multiple handlers are found, return them as is.
             Handlers;
-        _ -> 
+        _ ->
             % If no handlers are found or the value is invalid, return an empty
             % list.
             []
-    end.
+    end;
+find(_HookName, _Opts) ->
+    [].
+find(_Base, Req, Opts) ->
+    HookName = maps:get(maps:get(<<"target">>, Req, <<"body">>), Req),
+    find(HookName, Opts).
 
 %% @doc Execute a list of handlers in sequence.
 %% The result of each handler is used as input to the next handler.
@@ -105,13 +98,10 @@ execute_handlers(_HookName, [], Req, _Opts) ->
     % If no handlers remain, return the final request with ok status
     {ok, Req};
 execute_handlers(HookName, [Handler|Rest], Req, Opts) ->
-    % Execute the current handler
-    ?event(hook, {executing_handler, HookName, Handler, Req}),
     % Check the status of the execution
     case execute_handler(HookName, Handler, Req, Opts) of
         {ok, NewReq} ->
             % If status is ok, continue with the next handler
-            ?event(hook, {handler_executed_successfully, HookName, NewReq}),
             execute_handlers(HookName, Rest, NewReq, Opts);
         {Status, Res} ->
             % If status is error, halt execution and return the error
@@ -181,13 +171,6 @@ execute_handler(HookName, Handler, Req, Opts) ->
                     };
                 <<"false">> -> {Handler, BaseReq}
             end,
-        ?event(hook,
-            {resolving_handler, 
-                {name, HookName},
-                {handler, Handler},
-                {req, {explicit, PreparedReq}}
-            }
-        ),
         % Execute the prepared request upon the handler.
         {Status, Res} =
             hb_ao:raw(
@@ -195,13 +178,6 @@ execute_handler(HookName, Handler, Req, Opts) ->
                 PreparedReq,
                 Opts#{ <<"hashpath">> => ignore }
             ),
-        ?event(hook,
-            {handler_result,
-                {name, HookName},
-                {status, Status},
-                {res, Res}
-            }
-        ),
         case {Status, hb_util:deep_get(<<"hook/result">>, Handler, <<"return">>, Opts)} of
             {ok, <<"ignore">>} -> {Status, Req};
             {ok, <<"return">>} -> {Status, Res};
