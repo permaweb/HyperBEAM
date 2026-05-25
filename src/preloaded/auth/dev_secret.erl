@@ -628,7 +628,7 @@ sync(_Base, Request, Opts) ->
                     % Import each wallet. Ignore wallet imports that fail.
                         lists:filtermap(
                             fun(Wallet) ->
-                                ?event({sync, {importing, {wallet, Wallet}}}),
+                                ?event({sync, {importing, {priv_wallet, Wallet}}}),
                                 case persist_registered_wallet(Wallet, SignAsOpts) of
                                     {ok, #{ <<"body">> := Address }} ->
                                         ?event({sync, {imported, Address}}),
@@ -653,7 +653,7 @@ sync(_Base, Request, Opts) ->
 secrets_to_keyids(Secrets) when is_list(Secrets) ->
     [ hd(secrets_to_keyids(Secret)) || Secret <- Secrets ];
 secrets_to_keyids(Secret) when is_binary(Secret) ->
-    ?event({secrets_to_keyids, {secret, Secret}}),
+    ?event({secrets_to_keyids, {priv_secret, Secret}}),
     KeyID = hb_util:secret_key_to_committer(Secret),
     [ {secret, <<"secret:", KeyID/binary>>, Secret} ].
 
