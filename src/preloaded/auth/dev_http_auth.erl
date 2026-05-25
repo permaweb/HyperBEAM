@@ -69,9 +69,9 @@ commit(Base, Req, Opts) ->
 %% @doc Verify a given `Base' message with a derived `Key' using the
 %% `~httpsig@1.0' secret key HMAC commitment scheme.
 verify(Base, RawReq, Opts) ->
-    ?event({verify_invoked, {base, Base}, {req, RawReq}}),
+    ?event({verify_invoked, {priv_base, Base}, {priv_req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
-    ?event({verify_found_key, {key, Key}, {base, Base}, {req, RawReq}}),
+    ?event({verify_found_key, {priv_key, Key}, {priv_base, Base}, {priv_req, RawReq}}),
     {ok, VerifyRes} =
         hb_ao:resolve(
             #{ <<"device">> => <<"httpsig@1.0">> },
@@ -96,7 +96,7 @@ generate(_Msg, Req, Opts) ->
     case hb_maps:get(<<"authorization">>, Req, undefined, Opts) of
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
-            ?event(key_gen, {generated_key, {auth, Auth}, {decoded, Decoded}}),
+            ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
             case hb_maps:get(<<"raw">>, Req, false, Opts) of
                 true -> {ok, Decoded};
                 false -> derive_key(Decoded, Req, Opts)
