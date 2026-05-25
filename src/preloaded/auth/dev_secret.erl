@@ -181,7 +181,7 @@ generate(Base, Request, Opts) ->
             Wallet = ar_wallet:new(),
             register_wallet(Wallet, Base, Request, Opts);
         [WalletDetails] ->
-            ?event({details, WalletDetails}),
+            ?event({priv_details, WalletDetails}),
             % Wallets found, return them.
             {
                 ok,
@@ -337,7 +337,7 @@ persist_registered_wallet(WalletDetails, Opts) ->
 persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     % Add the wallet address as the body of the response.
     Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
-    ?event({resp_base, RespBase, WalletDetails}),
+    ?event({resp_base, {auth_resp, RespBase}, {priv_wallet_details, WalletDetails}}),
     AccessControl = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
     {ok, _, Commitment} = 
         hb_message:commitment(
@@ -357,7 +357,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
         <<"client">> ->
-            ?event({wallet_details, WalletDetails}),
+            ?event({priv_wallet_details, WalletDetails}),
             % Find the necessary wallet details to set the cookie on the client.
             JSONKey = hb_maps:get(<<"wallet">>, WalletDetails, undefined, Opts),
             % Don't store, set the cookie in the response.
@@ -380,7 +380,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             ?event(
                 {stored_and_returning,
                     {auth_response, Base},
-                    {wallet_details, WalletDetails}
+                    {priv_wallet_details, WalletDetails}
                 }
             ),
             % Return auth response with wallet info added.
@@ -400,7 +400,7 @@ commit(Base, Request, Opts) ->
             ?event(
                 {commit_signing,
                     {request, Request},
-                    {wallet_list, WalletDetailsList}
+                    {priv_wallet_list, WalletDetailsList}
                 }
             ),
             {
@@ -410,7 +410,7 @@ commit(Base, Request, Opts) ->
                         ?event(
                             {invoking_commit_message,
                                 {message, Acc},
-                                {wallet, WalletDetails}
+                                {priv_wallet, WalletDetails}
                             }
                         ),
                         commit_message(Acc, WalletDetails, Opts)
@@ -455,7 +455,7 @@ request_to_wallets(Base, Request, Opts) ->
         fun(WalletKeyID) ->
             case load_and_verify(WalletKeyID, Base, Request, Opts) of
                 {ok, WalletDetails} ->
-                    ?event({request_to_wallets, {loaded_wallet, WalletDetails}}),
+                    ?event({request_to_wallets, {priv_loaded_wallet, WalletDetails}}),
                     {true, WalletDetails};
                 {error, Reason} ->
                     ?event(
@@ -571,7 +571,7 @@ commit_message(Message, NonMap, Opts) when not is_map(NonMap) ->
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) when is_binary(Key) ->
     commit_message(Message, ar_wallet:from_json(Key), Opts);
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
-    ?event({committing_with_proxy, {message, Message}, {wallet, Key}}),
+    ?event({committing_with_proxy, {message, Message}, {priv_wallet, Key}}),
     hb_message:commit(Message, Opts#{ <<"priv-wallet">> => Key }).
 
 %% @doc Export wallets from a request. The request should contain a source of
@@ -595,7 +595,7 @@ export(Base, Request, Opts) ->
                 lists:map(
                     fun(Wallet) ->
                         Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
-                        ?event({exported, {wallet, Loaded}}),
+                        ?event({exported, {priv_wallet, Loaded}}),
                         Loaded
                     end,
                     Wallets
@@ -624,7 +624,7 @@ sync(_Base, Request, Opts) ->
             case hb_http:get(Node, ExportRequest, SignAsOpts) of
                 {ok, ExportResponse} ->
                     ExportedWallets = export_response_to_list(ExportResponse, #{}),
-                    ?event({sync, {received_wallets, ExportedWallets}}),
+                    ?event({sync, {priv_received_wallets, ExportedWallets}}),
                     % Import each wallet. Ignore wallet imports that fail.
                         lists:filtermap(
                             fun(Wallet) ->
@@ -680,7 +680,7 @@ store_wallet(in_memory, KeyID, Details, Opts) ->
     CurrentWallets = hb_opts:get(priv_wallet_hosted, #{}, Opts),
     % Add new wallet
     UpdatedWallets = CurrentWallets#{ KeyID => Details },
-    ?event({wallet_store, {updated_wallets, UpdatedWallets}}),
+    ?event({wallet_store, {priv_updated_wallets, UpdatedWallets}}),
     % Update the node's options with the new wallets.
     hb_http_server:set_opts(Opts#{ <<"priv-wallet-hosted">> => UpdatedWallets }),
     ok;
@@ -708,7 +708,7 @@ find_wallet(KeyID, Opts) ->
 %% @doc Loop over the wallets and find the reference to the wallet.
 find_wallet(in_memory, KeyID, Opts) ->
     Wallets = hb_opts:get(priv_wallet_hosted, #{}, Opts),
-    ?event({find_wallet, {keyid, KeyID}, {wallets, Wallets}}),
+    ?event({find_wallet, {keyid, KeyID}, {priv_wallets, Wallets}}),
     case hb_maps:find(KeyID, Wallets, Opts) of
         {ok, Wallet} -> Wallet;
         error -> not_found
