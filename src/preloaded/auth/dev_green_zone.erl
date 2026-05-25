@@ -385,7 +385,7 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
     OldWalletAddr = hb_util:human_id(ar_wallet:to_address(OldWallet)),
     ?event(green_zone, {become, old_wallet, OldWalletAddr}),
     % Print the decrypted binary
-    ?event(green_zone, {become, decrypted_bin, DecryptedBin}),
+    ?event(green_zone, {become, {priv_decrypted_bin, DecryptedBin}}),
     % 7. Convert the decrypted binary into the target node's keypair.
     {KeyType, Priv, Pub} = binary_to_term(DecryptedBin),
     % Print the keypair
@@ -581,7 +581,7 @@ validate_join(M1, Req, Opts) ->
             ?event(green_zone, {join, commitment, verified}),
             % Retrieve the shared AES key used for encryption.
             GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
-            ?event(green_zone, {green_zone_aes, {explicit, GreenZoneAES}}),
+            ?event(green_zone, {green_zone_aes, {priv_explicit, GreenZoneAES}}),
             % Retrieve the local node's wallet to extract its public key.
             {WalletPubKey, _} = hb_opts:get(priv_wallet, undefined, Opts),
             % Add the joining node's details to the trusted nodes list.
