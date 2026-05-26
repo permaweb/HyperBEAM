@@ -327,20 +327,20 @@ compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
         Opts = test_opts(#{
-            port => 10000 + rand:uniform(10000),
-            priv_wallet => Wallet,
-            cache_control => <<"always">>,
-            process_async_cache => false,
-            on =>
+            <<"port">> => 10000 + rand:uniform(10000),
+            <<"priv-wallet">> => Wallet,
+            <<"cache-control">> => <<"always">>,
+            <<"async-cache">> => false,
+            <<"on">> =>
                 #{
                     <<"request">> =>
                         #{
                             <<"device">> => <<"rate-limit@1.0">>
                         }
                 },
-            rate_limit_requests => 100,
-            rate_limit_period => 1_000_000,
-            rate_limit_max => 100
+            <<"rate-limit-requests">> => 100,
+            <<"rate-limit-period">> => 1_000_000,
+            <<"rate-limit-max">> => 100
         }),
         Node = hb_http_server:start_node(Opts),
         Base =
@@ -348,7 +348,7 @@ compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
                 hb_message:uncommitted(test_process(Opts), Opts),
                 Opts
             ),
-        ok = hb_cache:write(Base, Opts),
+        {ok, _} = hb_cache:write(Base, Opts),
         schedule_test_message(Base, <<"TEST TEXT">>, Opts),
         ProcID = hb_util:human_id(hb_message:id(Base, all, Opts)),
         Req1 = #{
@@ -359,11 +359,22 @@ compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
         },
         Req2 = Req1#{ <<"accept">> := <<"application/json">> },
         {ok, Res1} = hb_http:get(Node, Req1, Opts),
-        ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
-        NodeOpts = hb_http_server:get_opts(#{ http_server => ServerID }),
-        ok = hb_http_server:set_opts(NodeOpts#{ cache_control => <<"only-if-cached">> }),
+        {ok, Info} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
+        ServerID = hb_ao:get(<<"http-server">>, Info, Opts),
+        NodeOpts = hb_http_server:get_opts(#{ <<"http-server">> => ServerID }),
+        ok = hb_http_server:set_opts(NodeOpts#{ <<"cache-control">> => <<"only-if-cached">> }),
         {ok, Res2} = hb_http:get(Node, Req2, Opts),
-        RateLimitPID = hb_name:lookup({dev_rate_limit, ServerID}),
+        RateLimitID =
+            hb_util:human_id(hb_opts:get(priv_wallet, undefined, NodeOpts)),
+        [RateLimitPID] =
+            [
+                PID
+            ||
+                {{Module, ID}, PID} <- hb_name:all(),
+                is_atom(Module),
+                ID =:= RateLimitID,
+                binary:match(atom_to_binary(Module, utf8), <<"rate_limit">>) =/= nomatch
+            ],
         RateLimitPID ! {balance, self(), <<"1.2.3.4">>},
         Balance =
             receive
