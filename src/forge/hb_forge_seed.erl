@@ -2,12 +2,12 @@
 %%%
 %%% Computing a device's identity (the unsigned AO-Core message ID of
 %%% its source-file message) and signing the preloaded spec/impl
-%%% messages requires the `message@1.0', `structured@1.0' and
-%%% commitment codec devices. At build time the Forge simply compiles
-%%% those few device groups from `src/preloaded' under their ordinary
-%%% module names, loads them, and exposes a `Name => RootModule' map.
+%%% messages requires the `message@1.0', `structured@1.0',
+%%% `httpsig@1.0' and commitment codec devices. At build time the Forge
+%%% compiles those few device groups from `src/preloaded' under their
+%%% ordinary module names, loads them, and exposes a `Name => RootModule' message.
 %%%
-%%% The packager threads that map as the `forge-bootstrap' option.
+%%% The packager threads that message through the `forge-bootstrap' option.
 %%% When present, {@link hb_device:load/2} resolves a device name
 %%% with a single `maps:find' in it and nothing else; the runtime never
 %%% sets `forge-bootstrap', so production resolution is the pure
@@ -22,6 +22,7 @@ seed_names(Opts) ->
     lists:usort([
         <<"message@1.0">>,
         <<"structured@1.0">>,
+        <<"httpsig@1.0">>,
         hb_opts:get(commitment_device, <<"httpsig@1.0">>, Opts)
     ]).
 

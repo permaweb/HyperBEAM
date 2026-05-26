@@ -35,6 +35,7 @@ do_run(State) ->
         #{
             <<"priv-wallet">> => Wallet,
             <<"prometheus">> => false,
+            <<"commitment-device">> => PublishCodec,
             <<"bootstrap-device-src">> =>
                 hb_forge_args:bootstrap_preloaded_dirs()
         },
