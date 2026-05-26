@@ -145,9 +145,7 @@ schedule(ErlangProcID, Message) ->
     ErlangProcID ! {schedule, Message, self(), AbortTime},
     receive
         {scheduled, Message, Assignment} ->
-            Assignment;
-        {schedule_failed, Message, Reason} ->
-            throw({scheduler_error, {proc_id, ErlangProcID}, {reason, Reason}})
+            Assignment
     after ?DEFAULT_TIMEOUT ->
         throw({scheduler_timeout, {proc_id, ErlangProcID}, {message, Message}})
     end.
@@ -196,9 +194,8 @@ assign(State, Message, ReplyPID) ->
     try
         do_assign(State, Message, ReplyPID)
     catch
-        Class:Reason:Stack ->
+        _Class:Reason:Stack ->
             ?event({error_scheduling, {reason, Reason}, {trace, Stack}}),
-            ReplyPID ! {schedule_failed, Message, {Class, Reason, Stack}},
             State
     end.
 
@@ -256,18 +253,6 @@ do_assign(State, Message, ReplyPID) ->
                 Assignment,
                 State
             ),
-            CommitmentSpec = maps:get(committment_spec, State),
-            CommitmentDevice = commitment_device(CommitmentSpec),
-            UploadOpts = upload_opts(State),
-            ?event(
-                {uploading_message,
-                    {commitment_spec, CommitmentSpec},
-                    {commitment_device, CommitmentDevice}
-                }
-            ),
-            ok = upload_with_commitment(Message, UploadOpts, CommitmentSpec),
-            ok = upload_assignment(Assignment, State, UploadOpts, CommitmentSpec),
-            ?event(uploads_complete),
             ?event(starting_message_write),
             ok = dev_scheduler_cache:write(Assignment, Opts),
             maybe_inform_recipient(
@@ -278,13 +263,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             ),
             ?event(writes_complete),
-            maybe_inform_recipient(
-                remote_confirmation,
-                ReplyPID,
-                Message,
-                Assignment,
-                State
-            )
+            dispatch_uploads(Message, Assignment, ReplyPID, State)
         end,
     case hb_opts:get(scheduling_mode, sync, Opts) of
         aggressive ->
@@ -327,92 +306,6 @@ merge_commitments(Base, Signed) ->
             )
     }.
 
-%% @doc Ensure an upload target is committed with the scheduler's commitment
-%% spec before asking the remote uploader to publish it using that spec.
-ensure_committed(Msg, Opts, CommitmentSpec) ->
-    Device = commitment_device(CommitmentSpec),
-    case lists:member(Device, hb_message:commitment_devices(Msg, Opts)) of
-        true -> Msg;
-        false -> hb_message:commit(Msg, Opts, CommitmentSpec)
-    end.
-
-commitment_device(CommitmentSpec) when is_binary(CommitmentSpec) ->
-    CommitmentSpec;
-commitment_device(CommitmentSpec) ->
-    maps:get(<<"commitment-device">>, CommitmentSpec).
-
-upload_opts(#{ opts := Opts, wallets := [Wallet | _] }) ->
-    case maps:is_key(<<"priv-wallet">>, Opts) of
-        true -> Opts;
-        false -> Opts#{ <<"priv-wallet">> => Wallet }
-    end;
-upload_opts(#{ opts := Opts }) ->
-    Opts.
-
-upload_with_commitment(Msg, Opts, CommitmentSpec) ->
-    Device = commitment_device(CommitmentSpec),
-    Committed = ensure_committed(Msg, Opts, CommitmentSpec),
-    Results =
-        lists:map(
-            fun(UploadMsg) ->
-                hb_client_remote:upload(UploadMsg, Opts, Device)
-            end,
-            upload_variants(Committed, Device, Opts)
-        ),
-    case lists:filter(fun upload_failed/1, Results) of
-        [] -> ok;
-        Errors -> {error, Errors}
-    end.
-
-upload_variants(Msg = #{ <<"commitments">> := Commitments }, Device, Opts) ->
-    DeviceCommitments =
-        maps:filter(
-            fun(_ID, Commitment) ->
-                hb_ao:get(<<"commitment-device">>, Commitment, Opts) =:= Device
-            end,
-            Commitments
-        ),
-    case maps:to_list(DeviceCommitments) of
-        [] -> [Msg];
-        [_] -> [Msg#{ <<"commitments">> => DeviceCommitments }];
-        DeviceCommitmentsList ->
-            [
-                Msg#{ <<"commitments">> => #{ ID => Commitment } }
-            ||
-                {ID, Commitment} <- DeviceCommitmentsList
-            ]
-    end;
-upload_variants(Msg, _Device, _Opts) ->
-    [Msg].
-
-upload_failed({ok, _}) -> false;
-upload_failed(_) -> true.
-
-upload_assignment(Assignment, #{ wallets := [] }, Opts, CommitmentSpec) ->
-    upload_with_commitment(Assignment, Opts, CommitmentSpec);
-upload_assignment(Assignment, #{ wallets := Wallets }, Opts, CommitmentSpec) ->
-    Device = commitment_device(CommitmentSpec),
-    BaseAssignment = hb_message:uncommitted(Assignment, Opts),
-    Results =
-        lists:map(
-            fun(Wallet) ->
-                hb_client_remote:upload(
-                    hb_message:commit(
-                        BaseAssignment,
-                        Opts#{ <<"priv-wallet">> => Wallet },
-                        CommitmentSpec
-                    ),
-                    Opts,
-                    Device
-                )
-            end,
-            Wallets
-        ),
-    case lists:filter(fun upload_failed/1, Results) of
-        [] -> ok;
-        Errors -> {error, Errors}
-    end.
-
 %% @doc Potentially inform the caller that the assignment has been scheduled.
 %% The main assignment loop calls this function repeatedly at different stages
 %% of the assignment process. The scheduling mode determines which stages
@@ -421,6 +314,42 @@ maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
     case maps:get(mode, State) of
         Mode -> ReplyPID ! {scheduled, Message, Assignment};
         _ -> ok
+    end.
+
+dispatch_uploads(Message, Assignment, ReplyPID, State) ->
+    Opts = maps:get(opts, State),
+    UploadOpts = Opts#{ <<"http-monitor">> => not_found },
+    UploadFun =
+        fun() ->
+            ?event(uploading_message),
+            hb_client_remote:upload(Message, UploadOpts),
+            hb_client_remote:upload(Assignment, UploadOpts),
+            ?event(uploads_complete),
+            maybe_inform_recipient(
+                remote_confirmation,
+                ReplyPID,
+                Message,
+                Assignment,
+                State
+            )
+        end,
+    case maps:get(mode, State) of
+        remote_confirmation -> UploadFun();
+        _ ->
+            spawn(
+                fun() ->
+                    try UploadFun()
+                    catch Class:Reason:Stack ->
+                        ?event(warning,
+                            {scheduler_upload_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {trace, Stack}
+                            }
+                        )
+                    end
+                end
+            )
     end.
 
 %% @doc Find the hashpath of the base state upon which a new assignment should
