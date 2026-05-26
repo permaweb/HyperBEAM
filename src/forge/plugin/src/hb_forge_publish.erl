@@ -1,8 +1,8 @@
 %%% @doc `rebar3 device publish' - package, sign and upload device
 %%% specifications and implementations to Arweave.
 %%%
-%%% Publishing reuses the same packaging pipeline as `device preload',
-%%% then uploads the signed messages through HyperBEAM's Arweave client.
+%%% Publishing reuses the packager, then uploads the signed messages through
+%%% HyperBEAM's Arweave client.
 -module(hb_forge_publish).
 -export([init/1, do/1, format_error/1]).
 
@@ -31,19 +31,19 @@ do_run(State) ->
     KeyPath = maps:get(<<"key">>, Args),
     PublishCodec = maps:get(<<"publish-codec">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
-    {ok, Preload} =
-        hb_forge_preload:run(
-            Args#{ <<"device-roots">> => all },
-            #{}
-        ),
-    NodeOpts =
+    Opts =
         #{
             <<"priv-wallet">> => Wallet,
-            <<"preloaded-store">> => maps:get(store, Preload),
-            <<"preloaded-devices-index">> => maps:get(index, Preload),
+            <<"prometheus">> => false,
             <<"bootstrap-device-src">> =>
                 hb_forge_args:bootstrap_preloaded_dirs()
         },
+    {ok, _} = application:ensure_all_started(hackney),
+    case hb_http_client:start_link(Opts) of
+        {ok, _} -> ok;
+        {error, {already_started, _}} -> ok
+    end,
+    NodeOpts = hb_forge_seed:with_forge_bootstrap(Opts, fun(Seed) -> Seed end),
     % Sign and upload each package.
     lists:foreach(
         fun(Pkg) ->
