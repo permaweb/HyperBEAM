@@ -2,8 +2,7 @@
 %%% node-hosted wallets, in accordance with the node operator's configuration.
 %%% It is intended for deployment in environments where a node's users have
 %%% intrinsic reasons for trusting the node outside of the scope of this device.
-%%% For example, if executed on a node running in a Trusted Execution Environment
-%%% with `~snp@1.0', or a node they operate or is operated by a trusted
+%%% For example, if executed on a node they operate or is operated by a trusted
 %%% third-party.
 %%% 
 %%% This device utilizes the `generator' interface type which other devices may

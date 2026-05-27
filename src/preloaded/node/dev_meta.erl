@@ -452,7 +452,7 @@ is(initiator, Request, NodeMsg) ->
     % Check if node-history exists and is not empty
     case NodeHistory of
         [] ->
-            ?event(green_zone, {init, node_history, empty}),
+            ?event(meta, {is_initiator, node_history, empty}),
             false;
         [InitializationRequest | _] ->
             % Extract signature from first entry

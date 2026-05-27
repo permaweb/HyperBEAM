@@ -5,7 +5,7 @@
 %%% 
 %%% This device is intended for use in situations in which the node is trusted
 %%% by the user, for example if it is running on their own machine or in a
-%%% TEE-protected environment that they deem to be secure.
+%%% protected environment that they deem to be secure.
 %%% 
 %%% # Authentication Flow
 %%% 
