@@ -21,6 +21,8 @@
 -include("include/hb.hrl").
 
 %% @doc Decide whether or not to service a request from a given address.
+-spec estimate(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+    {ok, integer() | binary()}.
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
     % Check if the address is in the allow-list.
@@ -32,7 +34,7 @@ estimate(_, Msg, NodeMsg) ->
 %% @doc Check whether all of the signers of the request are in the allow-list.
 is_admissible(Msg, NodeMsg) ->
     AllowList = hb_opts:get(faff_allow_list, [], NodeMsg),
-    Req = hb_ao:get(<<"request">>, Msg, NodeMsg),
+    Req = maps:get(<<"request">>, Msg),
     Signers = hb_message:signers(Req, NodeMsg),
     ?event(payment, {is_admissible, {signers, Signers}, {allow_list, AllowList}}),
     lists:all(
@@ -41,6 +43,7 @@ is_admissible(Msg, NodeMsg) ->
     ).
 
 %% @doc Charge the user's account if the request is allowed.
+-spec charge(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, boolean()}.
 charge(_, Req, _NodeMsg) ->
     ?event(payment, {charge, Req}),
     {ok, true}.

@@ -94,7 +94,15 @@ upload(Msg, Opts) ->
     UploadResults = 
         lists:map(
             fun(Device) ->
-                upload(Msg, Opts, Device)
+                upload(
+                    hb_message:with_commitments(
+                        #{ <<"commitment-device">> => Device },
+                        Msg,
+                        Opts
+                    ),
+                    Opts,
+                    Device
+                )
             end,
             hb_message:commitment_devices(Msg, Opts)
         ),

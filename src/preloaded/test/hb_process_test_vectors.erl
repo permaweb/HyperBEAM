@@ -296,6 +296,97 @@ wasm_compute_from_id_test_parallel() ->
     ?event(process_compute, {computed_message, {res, Res}}),
     ?assertEqual([120.0], hb_ao:get(<<"results/output">>, Res, Opts)).
 
+compute_native_cache_ignores_request_noise_test_parallel() ->
+    Opts = test_opts(#{ cache_control => <<"always">>, process_async_cache => false }),
+    Base =
+        hb_message:commit(
+            hb_message:uncommitted(test_process(Opts), Opts),
+            Opts
+        ),
+    schedule_test_message(Base, <<"TEST TEXT">>, Opts),
+    {ok, Process} = hb_message:with_only_committed(Base, Opts),
+    ProcID = hb_message:id(Process, signed, Opts),
+    Req1 = #{
+        <<"path">> => <<"compute">>,
+        <<"slot">> => <<"0">>,
+        <<"accept">> => <<"text/html">>
+    },
+    Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+    {ok, Res1} = hb_ao:resolve(ProcID, Req1, Opts),
+    {ok, Res2} =
+        hb_ao:resolve(
+            ProcID,
+            Req2,
+            Opts#{ cache_control => <<"only-if-cached">> }
+        ),
+    ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res1, Opts)),
+    ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res2, Opts)).
+
+compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
+    {timeout, 30, fun() ->
+        rand:seed(default),
+        Wallet = ar_wallet:new(),
+        Opts = test_opts(#{
+            <<"port">> => 10000 + rand:uniform(10000),
+            <<"priv-wallet">> => Wallet,
+            <<"cache-control">> => <<"always">>,
+            <<"async-cache">> => false,
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => <<"rate-limit@1.0">>
+                        }
+                },
+            <<"rate-limit-requests">> => 100,
+            <<"rate-limit-period">> => 1_000_000,
+            <<"rate-limit-max">> => 100
+        }),
+        Node = hb_http_server:start_node(Opts),
+        Base =
+            hb_message:commit(
+                hb_message:uncommitted(test_process(Opts), Opts),
+                Opts
+            ),
+        {ok, _} = hb_cache:write(Base, Opts),
+        schedule_test_message(Base, <<"TEST TEXT">>, Opts),
+        ProcID = hb_util:human_id(hb_message:id(Base, all, Opts)),
+        Req1 = #{
+            <<"path">> => << ProcID/binary, "/compute">>,
+            <<"slot">> => <<"0">>,
+            <<"accept">> => <<"text/html">>,
+            <<"x-real-ip">> => <<"1.2.3.4">>
+        },
+        Req2 = Req1#{ <<"accept">> := <<"application/json">> },
+        {ok, Res1} = hb_http:get(Node, Req1, Opts),
+        {ok, Info} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
+        ServerID = hb_ao:get(<<"http-server">>, Info, Opts),
+        NodeOpts = hb_http_server:get_opts(#{ <<"http-server">> => ServerID }),
+        ok = hb_http_server:set_opts(NodeOpts#{ <<"cache-control">> => <<"only-if-cached">> }),
+        {ok, Res2} = hb_http:get(Node, Req2, Opts),
+        RateLimitID =
+            hb_util:human_id(hb_opts:get(priv_wallet, undefined, NodeOpts)),
+        [RateLimitPID] =
+            [
+                PID
+            ||
+                {{Module, ID}, PID} <- hb_name:all(),
+                is_atom(Module),
+                ID =:= RateLimitID,
+                binary:match(atom_to_binary(Module, utf8), <<"rate_limit">>) =/= nomatch
+            ],
+        RateLimitPID ! {balance, self(), <<"1.2.3.4">>},
+        Balance =
+            receive
+                {balance, CurrentBalance} -> CurrentBalance
+            after 1000 ->
+                timeout
+            end,
+        ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res1, Opts)),
+        ?assertEqual(0, hb_ao:get(<<"results/assignment-slot">>, Res2, Opts)),
+        ?assert(Balance < 99)
+    end}.
+
 http_wasm_process_by_id_test_parallel() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),
@@ -495,7 +586,8 @@ do_test_restore() ->
     % 2. Return the variable.
     % Execute the first computation, then the second as a disconnected process.
     Opts = test_opts(#{
-        <<"process-cache-frequency">> => 1
+        process_snapshot_slots => 1,
+        process_async_cache => false
     }),
     Base = aos_process(Opts),
     schedule_aos_call(Base, <<"X = 42">>, Opts),

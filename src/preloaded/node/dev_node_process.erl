@@ -18,6 +18,8 @@ info(_Opts) ->
     }.
 
 %% @doc Lookup a process by name.
+-spec lookup(binary(), #{ _ => _ }, #{ spawn => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, _}.
 lookup(Name, _Base, Req, Opts) ->
     ?event(node_process, {lookup, {name, Name}}),
     LookupRes =
@@ -158,7 +160,8 @@ generate_test_opts() ->
 generate_test_opts(Name, Def) ->
     #{
         <<"node-processes">> => #{ Name => Def },
-        <<"priv-wallet">> => ar_wallet:new()
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
     }.
 
 lookup_no_spawn_test() ->

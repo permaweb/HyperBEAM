@@ -31,11 +31,15 @@
 %%% Public interface.
 
 %% @doc An alias for `item/3'.
+-spec tx(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ id := binary(), timestamp := integer(), _ => _ }} | {error, #{ _ => _ }}.
 tx(Base, Req, Opts) ->
     item(Base, Req, Opts).
 
 %% @doc Implements an `up.arweave.net'-compatible endpoint for
 %% bundling messages.
+-spec item(#{ _ => _ }, #{ 'bundler-subject' => binary(), _ => _ }, #{ _ => _ }) ->
+    {ok, #{ id := binary(), timestamp := integer(), _ => _ }} | {error, #{ _ => _ }}.
 item(_Base, Req, Opts) ->
     ServerPID = ensure_server(Opts),
     ItemToProcess =
@@ -1542,10 +1546,10 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
         fun(ChunkRequest) ->
             ProofBinary = maps:get(<<"body">>, ChunkRequest),
             ProofJSON = hb_json:decode(ProofBinary),
-            Offset = binary_to_integer(maps:get(<<"offset">>, ProofJSON)),
+            Offset = hb_util:int(maps:get(<<"offset">>, ProofJSON)),
             Chunk = hb_util:decode(maps:get(<<"chunk">>, ProofJSON)),
             DataRoot = hb_util:decode(maps:get(<<"data_root">>, ProofJSON)),
-            DataSize = binary_to_integer(maps:get(<<"data_size">>, ProofJSON)),
+            DataSize = hb_util:int(maps:get(<<"data_size">>, ProofJSON)),
             DataPath = hb_util:decode(maps:get(<<"data_path">>, ProofJSON)),
             Valid = ar_merkle:validate_path(DataRoot, Offset, DataSize, DataPath),
             ?assertNotEqual(false, Valid),

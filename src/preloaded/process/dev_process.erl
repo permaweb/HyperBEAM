@@ -8,10 +8,9 @@
 %%% device is (by default) a single device.
 %%% 
 %%% This allows the devices to share state as needed. Additionally, after each
-%%% computation step the device caches the result at a path relative to the
-%%% process definition itself, such that the process message's ID can act as an
-%%% immutable reference to the process's growing list of interactions. See 
-%%% `dev_process_cache' for details.
+%%% computation step the device caches the result as AO-Core result edges, such
+%%% that the process message's ID can act as an immutable reference to the
+%%% process's growing list of interactions.
 %%% 
 %%% The external API of the device is as follows:
 %%% <pre>
@@ -35,14 +34,14 @@
 %%% </pre>
 %%%
 %%% Runtime options:
-%%%     Cache-Frequency: The number of assignments that will be computed 
-%%%                      before the full (restorable) state should be cached.
-%%%     Cache-Keys:      A list of the keys that should be cached for all 
-%%%                      assignments, in addition to `/Results'.
+%%%     Process-Snapshot-Slots: The number of slots between full restorable
+%%%                             state snapshots.
+%%%     Process-Snapshot-Time:  The number of seconds between full restorable
+%%%                             state snapshots.
 -module(dev_process).
 -device_libraries([lib_process]).
 %%% Public API
--export([info/1, as/3, compute/3, schedule/3, slot/3, now/3, push/3, snapshot/3]).
+-export([info/1, as/3, compute/3, schedule/3, slot/3, latest/3, now/3, push/3, snapshot/3]).
 -export([target_slot/2]).
 -export([default_device/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -69,6 +68,7 @@ info(_Base) ->
                 <<"info">>,
                 <<"as">>,
                 <<"compute">>,
+                <<"latest">>,
                 <<"now">>,
                 <<"schedule">>,
                 <<"slot">>,
@@ -79,17 +79,12 @@ info(_Base) ->
 
 %% @doc Return the process state with the device swapped out for the device
 %% of the given key.
+-spec as(#{ 'input-prefix' => binary(), _ => _ },
+    #{ as => binary(), 'as-device' => binary(), _ => _ },
+    #{ _ => _ }) -> {ok, #{ device := binary(), _ => _ }}.
 as(RawBase, Req, Opts) ->
     {ok, Base} = ensure_loaded(RawBase, Req, Opts),
-    Key = 
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Req}, <<"as">>},
-                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
-            ],
-            <<"execution">>,
-            Opts
-        ),
+    Key = maps:get(<<"as">>, Req, maps:get(<<"as-device">>, Req, <<"execution">>)),
     {ok,
         hb_util:deep_merge(
             lib_process:ensure_process_key(Base, Opts),
@@ -104,7 +99,7 @@ as(RawBase, Req, Opts) ->
                 % Configure input prefix for proper message routing within the
                 % device
                 <<"input-prefix">> =>
-                    case hb_maps:get(<<"input-prefix">>, Base, not_found, Opts) of
+                    case maps:get(<<"input-prefix">>, Base, not_found) of
                         not_found -> <<"process">>;
                         Prefix -> Prefix
                     end,
@@ -126,13 +121,19 @@ as(RawBase, Req, Opts) ->
 %% _must_ be set in all processes aside those marked with `ao.TN.1' variant.
 %% This is in order to ensure that post-mainnet processes do not default to
 %% using infrastructure that should not be present on nodes in the future.
+-spec default_device(#{ 'process/variant' => binary(), _ => _ }, binary(), #{ _ => _ }) ->
+    binary().
 default_device(Base, Key, Opts) ->
     lib_process:default_device(Base, Key, Opts).
 
 %% @doc Wraps functions in the Scheduler device.
+-spec schedule(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 schedule(Base, Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
 
+-spec slot(#{ scheduler => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 slot(Base, Req, Opts) ->
     ?event({slot_called, {base, Base}, {req, Req}}),
     lib_process:run_as(<<"scheduler">>, Base, Req, Opts).
@@ -140,6 +141,8 @@ slot(Base, Req, Opts) ->
 next(Base, _Req, Opts) ->
     lib_process:run_as(<<"scheduler">>, Base, next, Opts).
 
+-spec snapshot(#{ execution => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }}.
 snapshot(RawBase, _Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     {ok, SnapshotMsg} =
@@ -190,6 +193,19 @@ init(Base, Req, Opts) ->
 %%   handlers and previewing results. The POST method is the key entry point
 %%   for the dryrun functionality that allows external clients to test
 %%   message processing without side effects.
+-spec compute(
+    #{ initialized => binary(), 'at-slot' => integer(), _ => _ },
+    #{
+        compute => integer(),
+        slot => integer(),
+        init => binary(),
+        push => _,
+        'result-depth' => _,
+        async => _,
+        'max-depth' => _
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _} | {failure, _}.
 compute(Base, Req, Opts) ->
     ProcBase = lib_process:ensure_process_key(Base, Opts),
     ProcID = lib_process:process_id(ProcBase, #{}, Opts),
@@ -198,16 +214,15 @@ compute(Base, Req, Opts) ->
         not_found ->
             % The slot is not set, so we need to serve the latest known state
             % unless the `init' key is set to a value aside from `now'.
-            % We do this by setting the `process-now-from-cache' option to `true'.
-            case hb_maps:get(<<"init">>, Req, <<"now">>, Opts) of
+            % We do this by setting the `process_now_from_cache' option to `true'.
+            case maps:get(<<"init">>, Req, <<"now">>) of
                 <<"now">> ->
-                    now(Base, Req, Opts#{ <<"process-now-from-cache">> => true });
+                    now(Base, Req, Opts#{ process_now_from_cache => true });
                 _ ->
                     {error, not_found}
             end;
-        RawSlot ->
-            Slot = hb_util:int(RawSlot),
-            case dev_process_cache:read(ProcID, Slot, Opts) of
+        Slot ->
+            case read_process_slot(ProcID, Slot, Opts) of
                 {ok, Result} ->
                     % The result is already cached, so we can return it.
                     ?event(
@@ -217,7 +232,7 @@ compute(Base, Req, Opts) ->
                             {result, Result}
                         }
                     ),
-                    {ok, without_snapshot(Result, Opts)};
+                    {ok, compute_response(Result, Req, Opts)};
                 {error, not_found} ->
                     {ok, Loaded} = ensure_loaded(ProcBase, Req, Opts),
                     ?event(compute,
@@ -236,14 +251,11 @@ compute(Base, Req, Opts) ->
     end.
 
 %% @doc Return the slot requested by a `compute' request, or `not_found'.
-target_slot(Req, Opts) ->
-    hb_ao:get_first(
-        [
-            {{as, <<"message@1.0">>, Req}, <<"compute">>},
-            {{as, <<"message@1.0">>, Req}, <<"slot">>}
-        ],
-        Opts
-    ).
+target_slot(Req, _Opts) ->
+    case maps:get(<<"compute">>, Req, not_found) of
+        not_found -> maps:get(<<"slot">>, Req, not_found);
+        ComputeSlot -> ComputeSlot
+    end.
 
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
@@ -259,7 +271,7 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 Opts
             ),
             store_result(true, ProcID, TargetSlot, Base, Req, Opts),
-            {ok, without_snapshot(lib_process:as_process(Base, Opts), Opts)};
+            {ok, compute_response(lib_process:as_process(Base, Opts), Req, Opts)};
         CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -387,11 +399,10 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {store_ms, StoreTimeMicroSecs div 1000},
                     {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
-                        hb_ao:get(
-                            <<"body/action">>,
-                            Req,
-                            no_action_set,
-                            Opts#{ <<"hashpath">> => ignore }
+                        maps:get(
+                            <<"action">>,
+                            maps:get(<<"body">>, Req, #{}),
+                            no_action_set
                         )
                     }
                 }
@@ -438,7 +449,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
 
 %% @doc Prepare the process state message for computing the next slot.
 prepare_next_slot(ProcID, State, RawReq, Opts) ->
-    Slot = hb_util:int(hb_ao:get(<<"slot">>, RawReq, Opts)),
+    Slot = hb_util:int(maps:get(<<"slot">>, RawReq)),
     ?event(compute, {next_slot, Slot}),
     % If the input message does not have a path, set it to `compute'.
     Req =
@@ -566,11 +577,73 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
                     }
                 ),
                 WithLastSnapshot
-    end,
+        end,
+    PublicResult = without_snapshot(ResMaybeWithSnapshot, Opts),
     ?event(compute, {caching_result, {proc_id, ProcID}, {slot, Slot}}, Opts),
-    dev_process_cache:write(ProcID, Slot, ResMaybeWithSnapshot, Opts),
+    CacheEdges = [{ProcID, slot_req(Slot)}, {ProcID, latest_req()}],
+    PublicCacheResult = hb_private:reset(PublicResult),
+    {ok, _} = hb_cache:write_result(CacheEdges, PublicCacheResult, Opts),
+    {ok, _} =
+        write_restore_edges(
+            ProcID,
+            Slot,
+            ResMaybeWithSnapshot,
+            maps:is_key(<<"snapshot">>, ResMaybeWithSnapshot),
+            Opts
+        ),
     ?event(compute, {caching_completed, {proc_id, ProcID}, {slot, Slot}}, Opts),
-    hb_maps:without([<<"snapshot">>], ResMaybeWithSnapshot, Opts).
+    PublicResult.
+
+read_process_slot(ProcID, Slot, Opts) ->
+    read_process_edge(ProcID, slot_req(Slot), Opts).
+
+read_process_edge(ProcID, Req, Opts) ->
+    case hb_cache:read_resolved(ProcID, Req, Opts) of
+        {hit, {ok, Msg}} -> {ok, Msg};
+        {hit, Other} -> Other;
+        miss -> {error, not_found}
+    end.
+
+slot_req(Slot) ->
+    #{ <<"path">> => <<"compute">>, <<"slot">> => hb_util:int(Slot) }.
+
+latest_req() ->
+    #{ <<"path">> => <<"latest">> }.
+
+restore_req() ->
+    #{ <<"path">> => <<"restore">> }.
+
+restore_req(Slot) ->
+    #{ <<"path">> => <<"restore">>, <<"slot">> => hb_util:int(Slot) }.
+
+write_restore_edges(ProcID, Slot, Checkpoint, true, Opts) ->
+    hb_cache:write_result(
+        [{ProcID, restore_req(Slot)}, {ProcID, restore_req()}],
+        hb_private:reset(Checkpoint),
+        Opts
+    );
+write_restore_edges(_ProcID, _Slot, _Res, false, _Opts) ->
+    {ok, skipped}.
+
+read_restore_checkpoint(ProcID, undefined, Opts) ->
+    read_restore_checkpoint(ProcID, restore_req(), Opts);
+read_restore_checkpoint(ProcID, Req, Opts) when is_map(Req) ->
+    case read_process_edge(ProcID, Req, hb_store:scope(Opts, local)) of
+        {ok, Msg = #{ <<"at-slot">> := Slot }} -> {ok, hb_util:int(Slot), Msg};
+        {ok, _} -> {error, not_found};
+        Other -> Other
+    end;
+read_restore_checkpoint(ProcID, TargetSlot, Opts) ->
+    TargetSlotInt = hb_util:int(TargetSlot),
+    case read_restore_checkpoint(ProcID, restore_req(TargetSlotInt), Opts) of
+        {error, not_found} ->
+            case read_restore_checkpoint(ProcID, restore_req(), Opts) of
+                {ok, Slot, Msg} when Slot =< TargetSlotInt -> {ok, Slot, Msg};
+                _ -> {error, not_found}
+            end;
+        Other ->
+            Other
+    end.
 
 %% @doc Should we snapshot a new full state result? First, we check if the 
 %% `process_snapshot_time' option is set. If it is, we check if the elapsed time
@@ -622,7 +695,14 @@ should_snapshot_time(Res, Opts) ->
     end.
 
 %% @doc Returns the known state of the process at either the current slot, or
-%% the latest slot in the cache depending on the `process-now-from-cache' option.
+%% the latest slot in the cache depending on the `process_now_from_cache' option.
+-spec latest(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {failure, _} | {error, _}.
+latest(Base, Req, Opts) ->
+    now(Base, Req, Opts#{ process_now_from_cache => always }).
+
+-spec now(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {failure, _} | {error, _}.
 now(RawBase, Req, Opts) ->
     Base = lib_process:ensure_process_key(RawBase, Opts),
     ProcessID = lib_process:process_id(Base, #{}, Opts),
@@ -643,10 +723,10 @@ now(RawBase, Req, Opts) ->
         CacheParam ->
             % We are serving the latest known state from the cache, rather
             % than computing it.
-            LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
+            LatestKnown = read_process_edge(ProcessID, latest_req(), Opts),
             case LatestKnown of
-                {ok, LatestSlot, RawLatestMsg} ->
-                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
+                {ok, RawLatestMsg = #{ <<"at-slot">> := LatestSlot }} ->
+                    LatestMsg = compute_response(RawLatestMsg, Req, Opts),
                     ?event(compute_cache,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
@@ -666,7 +746,7 @@ now(RawBase, Req, Opts) ->
                         % The node is configured to use the cache if possible,
                         % but forcing computation is also admissible. Subsequently,
                         % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ <<"process-now-from-cache">> => false });
+                        now(Base, Req, Opts#{ process_now_from_cache => false });
                     true ->
                         % The node is configured to only serve the latest known
                         % state from the cache, so we return the latest slot.
@@ -677,6 +757,8 @@ now(RawBase, Req, Opts) ->
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
+-spec push(#{ push => _, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 push(Base, Req, Opts) ->
     lib_process:run_as(
         <<"push">>,
@@ -692,20 +774,14 @@ ensure_loaded(Base, Req, Opts) ->
     TargetSlot = hb_ao:get(<<"slot">>, Req, undefined, Opts),
     ProcID = lib_process:process_id(Base, #{}, Opts),
     ?event({ensure_loaded, {base, Base}, {req, Req}}),
-    case hb_ao:get(<<"initialized">>, Base, Opts) of
+    case maps:get(<<"initialized">>, Base, undefined) of
         <<"true">> ->
             ?event(already_initialized),
             {ok, Base};
         _ ->
             ?event(not_initialized),
             % Try to load the latest complete state from disk.
-            LoadRes =
-                dev_process_cache:latest(
-                    ProcID,
-                    [<<"snapshot+link">>],
-                    TargetSlot,
-                    Opts
-                ),
+            LoadRes = read_restore_checkpoint(ProcID, TargetSlot, Opts),
             ?event(compute,
                 {snapshot_load_res,
                     {proc_id, ProcID},
@@ -738,23 +814,19 @@ ensure_loaded(Base, Req, Opts) ->
                     #{ <<"commitments">> := SignCommits } =
                         hb_message:with_commitments(ProcID, Process, Opts),
                     UpdateProcess =
-                        hb_maps:put(
-                            <<"commitments">>,
-                            hb_maps:merge(HmacCommits, SignCommits),
-                            Process,
-                            Opts
-                        ),
+                        Process#{
+                            <<"commitments">> =>
+                                maps:merge(HmacCommits, SignCommits)
+                        },
                     SnapshotReq =
                         SnapshotMsg#{
                             <<"process">> => UpdateProcess,
                             <<"initialized">> => <<"true">>
                         },
-                    LoadedSlot =
-                        hb_cache:ensure_all_loaded(MaybeLoadedSlot, Opts),
                     ?event(compute,
                         {found_state_checkpoint,
                             {proc_id, ProcID},
-                            {slot, LoadedSlot}
+                            {slot, MaybeLoadedSlot}
                         },
                         Opts
                     ),
@@ -770,7 +842,7 @@ ensure_loaded(Base, Req, Opts) ->
                     ?event(snapshot,
                         {loaded_state_checkpoint_result,
                             {proc_id, ProcID},
-                            {slot, LoadedSlot},
+                            {slot, MaybeLoadedSlot},
                             {after_normalization, NormalizedWithoutSnapshot}
                         }
                     ),
@@ -791,3 +863,17 @@ ensure_loaded(Base, Req, Opts) ->
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
     hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
+
+%% @doc Format a compute response for the caller with its result payload inline.
+compute_response(Msg, _Req, Opts) ->
+    with_loaded_results(without_snapshot(Msg, Opts), Opts).
+
+with_loaded_results(Msg, Opts) ->
+    Decoded = hb_link:decode_all_links(Msg),
+    case hb_maps:get(<<"results">>, Decoded, not_found, Opts) of
+        not_found -> Msg;
+        Results ->
+            (maps:remove(<<"results+link">>, Msg))#{
+                <<"results">> => hb_cache:ensure_all_loaded(Results, Opts)
+            }
+    end.

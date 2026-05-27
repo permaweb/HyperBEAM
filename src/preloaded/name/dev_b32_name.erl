@@ -12,6 +12,8 @@ info(_Opts) ->
     }.
 
 %% @doc Try to resolve 52char subdomain back to its original TX ID
+-spec get(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+    {ok, binary()} | {error, not_found}.
 get(Key, _, _HookMsg, _Opts) ->
     ?event({resolve_52char, {key, Key}}),
     case decode(Key) of

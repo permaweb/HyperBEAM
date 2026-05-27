@@ -46,6 +46,19 @@
 
 %% @doc Generate or extract a new secret and commit to the message with the
 %% `~httpsig@1.0/commit?type=hmac-sha256&scheme=secret' commitment mechanism.
+-spec commit(_,
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 commit(Base, Req, Opts) ->
     case generate(Base, Req, Opts) of
         {ok, Key} ->
@@ -68,10 +81,23 @@ commit(Base, Req, Opts) ->
 
 %% @doc Verify a given `Base' message with a derived `Key' using the
 %% `~httpsig@1.0' secret key HMAC commitment scheme.
+-spec verify(_,
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, boolean()}.
 verify(Base, RawReq, Opts) ->
-    ?event({verify_invoked, {priv_base, Base}, {priv_req, RawReq}}),
+    ?event({verify_invoked, {base, Base}, {req, RawReq}}),
     {ok, Key} = generate(Base, RawReq, Opts),
-    ?event({verify_found_key, {priv_key, Key}, {priv_base, Base}, {priv_req, RawReq}}),
+    ?event({verify_found_key, {key, Key}, {base, Base}, {req, RawReq}}),
     {ok, VerifyRes} =
         hb_ao:resolve(
             #{ <<"device">> => <<"httpsig@1.0">> },
@@ -88,18 +114,29 @@ verify(Base, RawReq, Opts) ->
 %% @doc Collect authentication information from the client. If the `raw' flag
 %% is set to `true', return the raw authentication information. Otherwise,
 %% derive a key from the authentication information and return it.
-generate(_Msg, ReqLink, Opts) when ?IS_LINK(ReqLink) ->
-    generate(_Msg, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
+-spec generate(_,
+    #{
+        secret => binary(),
+        authorization => binary(),
+        raw => boolean(),
+        alg => atom(),
+        salt => binary(),
+        iterations => integer(),
+        'key-length' => integer(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, binary()} | {error, #{ status := integer(), _ => _ }}.
 generate(_Msg, #{ <<"secret">> := Secret }, _Opts) ->
     {ok, Secret};
-generate(_Msg, Req, Opts) ->
-    case hb_maps:get(<<"authorization">>, Req, undefined, Opts) of
+generate(_Msg, Req, _Opts) ->
+    case maps:get(<<"authorization">>, Req, undefined) of
         <<"Basic ", Auth/binary>> ->
             Decoded = base64:decode(Auth),
-            ?event(key_gen, {generated_key, {priv_auth, Auth}, {priv_decoded, Decoded}}),
-            case hb_maps:get(<<"raw">>, Req, false, Opts) of
+            ?event(key_gen, {generated_key, {auth, Auth}, {decoded, Decoded}}),
+            case maps:get(<<"raw">>, Req, false) of
                 true -> {ok, Decoded};
-                false -> derive_key(Decoded, Req, Opts)
+                false -> derive_key(Decoded, Req, _Opts)
             end;
         undefined ->
             {error,
@@ -121,17 +158,11 @@ generate(_Msg, Req, Opts) ->
 
 %% @doc Derive a key from the authentication information using the PBKDF2
 %% algorithm and user specified parameters.
-derive_key(Decoded, Req, Opts) ->
-    Alg = hb_util:atom(hb_maps:get(<<"alg">>, Req, <<"sha256">>, Opts)),
-    Salt =
-        hb_maps:get(
-            <<"salt">>,
-            Req,
-            hb_crypto:sha256(?DEFAULT_SALT),
-            Opts
-        ),
-    Iterations = hb_maps:get(<<"iterations">>, Req, 2 * 600_000, Opts),
-    KeyLength = hb_maps:get(<<"key-length">>, Req, 64, Opts),
+derive_key(Decoded, Req, _Opts) ->
+    Alg = maps:get(<<"alg">>, Req, sha256),
+    Salt = maps:get(<<"salt">>, Req, hb_crypto:sha256(?DEFAULT_SALT)),
+    Iterations = maps:get(<<"iterations">>, Req, 2 * 600_000),
+    KeyLength = maps:get(<<"key-length">>, Req, 64),
     ?event(key_gen,
         {derive_key,
             {alg, Alg},

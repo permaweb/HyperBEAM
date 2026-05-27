@@ -29,10 +29,12 @@ info(_) ->
 %% @doc The default handler. If the `base' and `request' keys are present in
 %% the given request, then the `pair' function is called. Otherwise, the `eval'
 %% key is used to resolve the request.
+-spec default(binary(), #{ _ => _ }, #{ base => _, request => _, source => _, _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 default(Key, Base, Request, Opts) ->
     ?event(debug_apply, {req, {key, Key}, {base, Base}, {request, Request}}),
-    FoundBase = hb_maps:get(<<"base">>, Request, not_found, Opts),
-    FoundRequest = hb_maps:get(<<"request">>, Request, not_found, Opts),
+    FoundBase = maps:get(<<"base">>, Request, not_found),
+    FoundRequest = maps:get(<<"request">>, Request, not_found),
     case {FoundBase, FoundRequest} of
         {B, R} when B =/= not_found andalso R =/= not_found ->
             pair(Key, Base, Request, Opts);
@@ -55,7 +57,7 @@ eval(Base, Request, Opts) ->
                     % If the base is not found, we return the base for this 
                     % request, minus the device (which will, inherently, be
                     % `apply@1.0' and cause recursion).
-                    {ok, hb_maps:without([<<"device">>], Base, Opts)}
+                    {ok, maps:remove(<<"device">>, Base)}
             end,
         ?event({eval, {apply_base, ApplyBase}}),
         case find_path(<<"apply-path">>, Base, Request, Opts) of
@@ -85,6 +87,8 @@ eval(Base, Request, Opts) ->
     end.
 
 %% @doc Apply the message found at `request' to the message found at `base'.
+-spec pair(#{ _ => _ }, #{ base => _, request => _, _ => _ }, #{ _ => _ }) ->
+    {ok, _} | {error, _}.
 pair(Base, Request, Opts) ->
     pair(<<"undefined">>, Base, Request, Opts).
 pair(PathToSet, Base, Request, Opts) ->
