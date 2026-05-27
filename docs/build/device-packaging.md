@@ -56,6 +56,7 @@ same flag set:
 | `--device-src dir[,dir2]` | Source roots to scan | `src/preloaded` in HyperBEAM, `src` elsewhere |
 | `--output-dir dir` | Where to write artifacts | command-specific |
 | `--key path` | Wallet keyfile used for signing | `hyperbeam-key.json` |
+| `--external-signer cmd` | External signer command for `tx@1.0` publish JSON | off |
 | `--requires-system-architecture` | Include host architecture requirement metadata | off |
 | `-d, --devices p[,p2]` | Restrict to specific `dev_*` roots | (all) |
 | `--record[=all\|errors]` | For `device test`, write recorder@1.0 test flights | off |

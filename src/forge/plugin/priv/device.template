@@ -12,5 +12,6 @@
 {template, "_rebar.config", "{{name}}/rebar.config"}.
 {template, "_src/device.app.src", "{{name}}/src/{{name}}.app.src"}.
 {template, "_src/dev_device.erl.in", "{{name}}/src/dev_{{name}}.erl"}.
+{template, "_scripts/ledger-sign-arweave.mjs", "{{name}}/scripts/ledger-sign-arweave.mjs"}.
 {template, "_README.md", "{{name}}/README.md"}.
 {template, "_.gitignore", "{{name}}/.gitignore"}.

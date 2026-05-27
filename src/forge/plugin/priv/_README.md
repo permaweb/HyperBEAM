@@ -32,4 +32,6 @@ rebar3 device local
 
 ```sh
 rebar3 device publish --key wallet.json
+npm install --no-save @zondax/ledger-arweave @ledgerhq/hw-transport-node-hid
+rebar3 device publish --publish-codec tx@1.0 --external-signer 'node ./scripts/ledger-sign-arweave.mjs "$IN" "$OUT"'
 ```
