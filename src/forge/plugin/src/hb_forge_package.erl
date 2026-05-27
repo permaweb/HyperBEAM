@@ -41,7 +41,7 @@ run_with_args(Args) ->
     % Package each device group, and write to the output directory.
     Pkgs =
         hb_forge_seed:with_forge_bootstrap(
-            hb_forge_args:package_opts(),
+            hb_forge_args:package_opts(Args),
             fun(Opts) ->
                 lists:map(
                     fun(Pkg) ->

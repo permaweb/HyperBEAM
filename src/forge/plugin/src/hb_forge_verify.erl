@@ -33,7 +33,7 @@ do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-packages">>),
     Failures =
         hb_forge_seed:with_forge_bootstrap(
-            hb_forge_args:package_opts(),
+            hb_forge_args:package_opts(Args),
             fun(Opts) ->
                 Pkgs =
                     hb_packager:package_all(

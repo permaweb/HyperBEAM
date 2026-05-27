@@ -13,7 +13,7 @@
 %%% Each provider re-uses {@link opts/0} for the rebar3 spec and
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(hb_forge_args).
--export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0]).
+-export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0, package_opts/1]).
 -export([maybe_help/2]).
 -export([set_preloaded_env/1, restore_preloaded_env/1, with_preloaded_env/2]).
 -export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
@@ -50,6 +50,9 @@ opts() ->
             "Path to wallet keyfile used for signing."},
         {publish_codec, undefined, "publish-codec", string,
             "Commitment codec used when publishing."},
+        {requires_system_architecture, undefined,
+            "requires-system-architecture", {boolean, false},
+            "Include the host system architecture in implementation metadata."},
         {devices, $d, "devices", string,
             "Comma-separated list of dev_* roots to operate upon."},
         {module, $m, "module", string,
@@ -82,6 +85,8 @@ parse(State, DefaultOutput) ->
     TimeoutRaw = proplists:get_value(timeout, Args, undefined),
     TimeoutMultiplierRaw =
         proplists:get_value(timeout_multiplier, Args, undefined),
+    RequiresSystemArchitecture =
+        proplists:get_value(requires_system_architecture, Args, false),
     WithCore = proplists:get_value(with_core, Args, false),
     ShowHash = proplists:get_value(show_hash, Args, false),
     RecordRaw =
@@ -94,6 +99,7 @@ parse(State, DefaultOutput) ->
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
         <<"publish-codec">> => to_bin(proplists:get_value(publish_codec, Args, "ans104@1.0")),
+        <<"requires-system-architecture">> => RequiresSystemArchitecture,
         <<"with-core">> => WithCore,
         <<"show-hash">> => ShowHash,
         <<"record">> => parse_record_mode(RecordRaw),
@@ -205,7 +211,14 @@ scan_devices(Args) ->
 
 %% @doc Common package options for provider commands.
 package_opts() ->
-    #{ <<"bootstrap-device-src">> => bootstrap_preloaded_dirs() }.
+    package_opts(#{}).
+
+package_opts(Args) ->
+    #{
+        <<"bootstrap-device-src">> => bootstrap_preloaded_dirs(),
+        <<"requires-system-architecture">> =>
+            maps:get(<<"requires-system-architecture">>, Args, false)
+    }.
 
 %% @doc Run `Fun' with `HB_PRELOADED_*' pointed at a preload result.
 with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->

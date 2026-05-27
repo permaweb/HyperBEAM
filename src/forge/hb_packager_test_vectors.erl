@@ -322,9 +322,19 @@ archive_contains_ebin_and_priv_entries_test() ->
     [Group] = hb_packager:scan([Dir], #{}),
     Pkg = package_for_test(Group),
     Msg = hb_packager:impl_message(Pkg, <<"spec-id">>, #{}),
+    ?assertEqual(false, maps:is_key(<<"requires-system-architecture">>, Msg)),
+    ArchPkg =
+        hb_forge_seed:with_forge_bootstrap(
+            #{
+                <<"bootstrap-device-src">> => [<<"src/preloaded">>],
+                <<"requires-system-architecture">> => true
+            },
+            fun(Opts) -> hb_packager:package(Group, Opts) end
+        ),
+    ArchMsg = hb_packager:impl_message(ArchPkg, <<"spec-id">>, #{}),
     ?assertEqual(
         hb_util:bin(erlang:system_info(system_architecture)),
-        maps:get(<<"requires-system-architecture">>, Msg)
+        maps:get(<<"requires-system-architecture">>, ArchMsg)
     ),
     {ok, Files} = zip:unzip(maps:get(archive, Pkg), [memory]),
     ByPath =

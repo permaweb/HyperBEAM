@@ -32,12 +32,10 @@ do_run(State) ->
     PublishCodec = maps:get(<<"publish-codec">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
     Opts =
-        #{
+        (hb_forge_args:package_opts(Args))#{
             <<"priv-wallet">> => Wallet,
             <<"prometheus">> => false,
-            <<"commitment-device">> => PublishCodec,
-            <<"bootstrap-device-src">> =>
-                hb_forge_args:bootstrap_preloaded_dirs()
+            <<"commitment-device">> => PublishCodec
         },
     {ok, _} = application:ensure_all_started(hackney),
     case hb_http_client:start_link(Opts) of
