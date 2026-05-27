@@ -61,7 +61,6 @@ nav:
         - dev_delegated_compute: 'resources/source-code/dev_delegated_compute.md'
         - dev_faff: 'resources/source-code/dev_faff.md'
         - dev_genesis_wasm: 'resources/source-code/dev_genesis_wasm.md'
-        - dev_green_zone: 'resources/source-code/dev_green_zone.md'
         - dev_hyperbuddy: 'resources/source-code/dev_hyperbuddy.md'
         - dev_json_iface: 'resources/source-code/dev_json_iface.md'
         - dev_local_name: 'resources/source-code/dev_local_name.md'

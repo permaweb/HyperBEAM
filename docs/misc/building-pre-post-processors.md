@@ -19,8 +19,7 @@ This pseudo-code illustrates the flow:
 ```erlang
 -define(DEFAULT_EXEMPT_ROUTES, [
   % Default routes that should bypass preprocessing
-  #{ <<"template">> => <<"/~meta@1.0/.*">> },
-  #{ <<"template">> => <<"/~greenzone@1.0/.*">> }
+  #{ <<"template">> => <<"/~meta@1.0/.*">> }
   % ... other default exempt routes
 ]).
 
@@ -88,4 +87,4 @@ preprocess(Msg1, Msg2, Opts) ->
 *   **Configuration:** The `exempt-routes` and the optional `is-exempt` message should be configured in the node's options (accessible via `Msg1` or `Opts`).
 *   **Error Handling:** Ensure proper error handling, especially when resolving the `is-exempt` message.
 
-By following this pattern, you can create flexible preprocessors that selectively apply logic based on configurable rules and request paths. 
+By following this pattern, you can create flexible preprocessors that selectively apply logic based on configurable rules and request paths.

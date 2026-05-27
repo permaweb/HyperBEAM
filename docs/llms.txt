@@ -64,7 +64,6 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_delegated_compute.erl)](./resources/source-code/dev_delegated_compute.html)
 * [[Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_faff.erl)](./resources/source-code/dev_faff.html)
 * [[Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_genesis_wasm.erl)](./resources/source-code/dev_genesis_wasm.html)
-* [[Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_green_zone.erl)](./resources/source-code/dev_green_zone.html)
 * [[Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hook.erl)](./resources/source-code/dev_hook.html)
 * [[Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hyperbuddy.erl)](./resources/source-code/dev_hyperbuddy.html)
 * [[Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_json_iface.erl)](./resources/source-code/dev_json_iface.html)
