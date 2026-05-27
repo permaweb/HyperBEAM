@@ -26,6 +26,7 @@
 <tr><td><a href="dev_delegated_compute.md" class="module">dev_delegated_compute</a></td></tr>
 <tr><td><a href="dev_faff.md" class="module">dev_faff</a></td></tr>
 <tr><td><a href="dev_genesis_wasm.md" class="module">dev_genesis_wasm</a></td></tr>
+<tr><td><a href="dev_green_zone.md" class="module">dev_green_zone</a></td></tr>
 <tr><td><a href="dev_hook.md" class="module">dev_hook</a></td></tr>
 <tr><td><a href="dev_hyperbuddy.md" class="module">dev_hyperbuddy</a></td></tr>
 <tr><td><a href="dev_json_iface.md" class="module">dev_json_iface</a></td></tr>
@@ -54,6 +55,8 @@
 <tr><td><a href="dev_scheduler_registry.md" class="module">dev_scheduler_registry</a></td></tr>
 <tr><td><a href="dev_scheduler_server.md" class="module">dev_scheduler_server</a></td></tr>
 <tr><td><a href="dev_simple_pay.md" class="module">dev_simple_pay</a></td></tr>
+<tr><td><a href="dev_snp.md" class="module">dev_snp</a></td></tr>
+<tr><td><a href="hb_snp_nif.md" class="module">hb_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>

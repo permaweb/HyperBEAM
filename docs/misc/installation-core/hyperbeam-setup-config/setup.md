@@ -2,6 +2,9 @@
 
 This guide provides step-by-step instructions for setting up and testing HyperBEAM.
 
+!!! info "TEE-based Computation"
+    If you intend to offer TEE-based computation of AO-Core devices, please see the [HyperBEAM OS repository](https://github.com/permaweb/hb-os) for details on configuration and deployment. Additional documentation on TEE setup and configuration will be added here in future updates.
+
 ## **Prerequisites**
 
 Before you begin, ensure you have the following installed:
@@ -117,4 +120,5 @@ After setting up HyperBEAM, you should:
 1. [Configure your installation](configuration.md) to match your requirements
 2. [Run tests](testing.md) to verify everything is working correctly
 3. [Connect to the Compute Unit](../compute-unit/setup.md) to complete your setup
+
 

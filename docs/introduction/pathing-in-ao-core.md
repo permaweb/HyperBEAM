@@ -14,7 +14,7 @@ https://router-1.forward.computer/<procId>~process@1.0/now
 
 ### Node URL (`router-1.forward.computer`)
 
-The HTTP response from this node includes a signature from the host's key. You can replace `router-1.forward.computer` with any HyperBEAM node operated by any party while maintaining the same AO-Core path semantics.
+The HTTP response from this node includes a signature from the host's key. By accessing the [`~snp@1.0`](../resources/source-code/dev_snp.md) device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `router-1.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
 
 ### Process Path (`/<procId>~process@1.0`)
 
@@ -129,4 +129,4 @@ HyperBEAM processes this as follows:
 2. Use appropriate caching strategies for frequently accessed data
 3. Implement proper error handling for network requests
 4. Consider rate limits and performance implications
-5. Keep sensitive data secure and use appropriate authentication methods
+5. Keep sensitive data secure and use appropriate authentication methods 

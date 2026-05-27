@@ -19,6 +19,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [Configuring Your HyperBEAM Node](./run/configuring-your-machine.html)
 * [Joining or Running a Router Node](./run/joining-running-a-router.html)
 * [Running a HyperBEAM Node](./run/running-a-hyperbeam-node.html)
+* [Trusted Execution Environment (TEE)](./run/tee-nodes.html)
 
 ### uuild
 
@@ -64,6 +65,7 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_delegated_compute.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_delegated_compute.erl)](./resources/source-code/dev_delegated_compute.html)
 * [[Module dev_faff.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_faff.erl)](./resources/source-code/dev_faff.html)
 * [[Module dev_genesis_wasm.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_genesis_wasm.erl)](./resources/source-code/dev_genesis_wasm.html)
+* [[Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_green_zone.erl)](./resources/source-code/dev_green_zone.html)
 * [[Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hook.erl)](./resources/source-code/dev_hook.html)
 * [[Module dev_hyperbuddy.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hyperbuddy.erl)](./resources/source-code/dev_hyperbuddy.html)
 * [[Module dev_json_iface.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_json_iface.erl)](./resources/source-code/dev_json_iface.html)
@@ -92,6 +94,8 @@ Key sections include: Getting Started (begin), Running HyperBEAM (run), Develope
 * [[Module dev_scheduler_registry.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_registry.erl)](./resources/source-code/dev_scheduler_registry.html)
 * [[Module dev_scheduler_server.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_scheduler_server.erl)](./resources/source-code/dev_scheduler_server.html)
 * [[Module dev_simple_pay.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_simple_pay.erl)](./resources/source-code/dev_simple_pay.html)
+* [[Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_snp.erl)](./resources/source-code/dev_snp.html)
+* [[Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)](./resources/source-code/hb_snp_nif.html)
 * [[Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_stack.erl)](./resources/source-code/dev_stack.html)
 * [[Module dev_test.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_test.erl)](./resources/source-code/dev_test.html)
 * [[Module dev_wasi.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_wasi.erl)](./resources/source-code/dev_wasi.html)

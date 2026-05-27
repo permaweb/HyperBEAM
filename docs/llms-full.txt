@@ -338,7 +338,7 @@ This is just the beginning. To dive deeper:
 --- START OF FILE: docs/build/serverless-decentralized-compute.md ---
 # Serverless Decentralized Compute on AO
 
-AO enables powerful "serverless" computation patterns by allowing you to run code (WASM, Lua) directly within decentralized processes, triggered by messages.
+AO enables powerful "serverless" computation patterns by allowing you to run code (WASM, Lua) directly within decentralized processes, triggered by messages. Furthermore, if computations are performed on nodes running in Trusted Execution Environments (TEEs), you can obtain cryptographic attestations verifying the execution integrity.
 
 ## Core Concept: Compute Inside Processes
 
@@ -400,7 +400,24 @@ Lua provides a lightweight scripting environment directly within AO.
     ```
     The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`. -->
 
-By leveraging WASM and Lua, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
+## TEE Attestations (via [`~snp@1.0`](../resources/source-code/dev_snp.md))
+
+If a HyperBEAM node performing these computations runs within a supported Trusted Execution Environment (like AMD SEV-SNP), it can provide cryptographic proof of execution.
+
+*   **How it works:** The [`~snp@1.0`](../resources/source-code/dev_snp.md) device interacts with the TEE hardware.
+*   **Signed Responses:** When a TEE-enabled node processes your message (e.g., executes your WASM function), the HTTP response containing the result can be cryptographically signed by a key that *provably* only exists inside the TEE.
+*   **Verification:** Clients receiving this response can verify the signature against the TEE platform's attestation mechanism (e.g., AMD's KDS) to gain high confidence that the computation was performed correctly and confidentially within the secure environment, untampered by the node operator.
+
+**Obtaining Attested Responses:**
+
+This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
+
+*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_httpsig`](../resources/source-code/dev_httpsig.md)).
+*   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
+
+Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
+
+By leveraging WASM, Lua, and optional TEE attestations, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
 
 --- END OF FILE: docs/build/serverless-decentralized-compute.md ---
 
@@ -960,7 +977,7 @@ Think of Devices as specialized engines or services that can be plugged into the
 ## Purpose of Devices
 
 *   **Define Computation:** Devices dictate *how* a message's instructions are executed. One device might run WASM code, another might manage process state, and yet another might simply relay data.
-*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute or storage-focused tasks).
+*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute tasks, storage-focused tasks, secure TEE operations).
 *   **Promote Modularity:** New functionalities can be added to AO by creating new Devices, without altering the core protocol.
 *   **Distribute Workload:** Different Devices can handle different parts of a complex task, enabling parallel processing and efficient resource utilization across the network.
 
@@ -982,7 +999,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to message signing, adding layers of security and verification.
+*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md)):** Coordinate complex execution flows or schedule tasks.
 
@@ -1031,7 +1048,7 @@ https://router-1.forward.computer/<procId>~process@1.0/now
 
 ### Node URL (`router-1.forward.computer`)
 
-The HTTP response from this node includes a signature from the host's key. You can replace `router-1.forward.computer` with any HyperBEAM node operated by any party while maintaining the same AO-Core path semantics.
+The HTTP response from this node includes a signature from the host's key. By accessing the [`~snp@1.0`](../resources/source-code/dev_snp.md) device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `router-1.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
 
 ### Process Path (`/<procId>~process@1.0`)
 
@@ -1436,11 +1453,17 @@ A device used to relay messages between nodes and the wider HTTP network. It off
 ## ~simple-pay@1.0
 A simple, flexible pricing device that can be used in conjunction with p4@1.0 to offer flat-fees for the execution of AO-Core messages.
 
+## ~snp@1.0
+A device used to generate and validate proofs that a node is executing inside a Trusted Execution Environment (TEE).
+
 ## ~wasm64@1.0
 A device used to execute WebAssembly code, using the Web Assembly Micro-Runtime (WAMR) under-the-hood.
 
 ## ~stack@1.0
 A device used to execute an ordered set of devices over the same inputs, allowing users to create complex combinations of other devices.
+
+## Trusted Execution Environment (TEE)
+A secure area inside a processor that ensures the confidentiality and integrity of code and data loaded within it. Used in HyperBEAM for trust-minimized computation.
 
 ## WebAssembly (WASM)
 A binary instruction format that serves as a portable compilation target for programming languages, enabling deployment on the web and other environments.
@@ -4733,6 +4756,392 @@ endpoint.
 
 --- END OF FILE: docs/resources/source-code/dev_genesis_wasm.md ---
 
+--- START OF FILE: docs/resources/source-code/dev_green_zone.md ---
+# [Module dev_green_zone.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_green_zone.erl)
+
+
+
+
+The green zone device, which provides secure communication and identity
+management between trusted nodes.
+
+<a name="description"></a>
+
+## Description ##
+It handles node initialization, joining existing green zones, key exchange,
+and node identity cloning. All operations are protected by hardware
+commitment and encryption.<a name="index"></a>
+
+## Function Index ##
+
+
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#add_trusted_node-4">add_trusted_node/4*</a></td><td>Adds a node to the trusted nodes list with its commitment report.</td></tr><tr><td valign="top"><a href="#become-3">become/3</a></td><td>Clones the identity of a target node in the green zone.</td></tr><tr><td valign="top"><a href="#calculate_node_message-3">calculate_node_message/3*</a></td><td>Generate the node message that should be set prior to joining
+a green zone.</td></tr><tr><td valign="top"><a href="#decrypt_zone_key-2">decrypt_zone_key/2*</a></td><td>Decrypts an AES key using the node's RSA private key.</td></tr><tr><td valign="top"><a href="#default_zone_required_opts-1">default_zone_required_opts/1*</a></td><td>Provides the default required options for a green zone.</td></tr><tr><td valign="top"><a href="#encrypt_payload-2">encrypt_payload/2*</a></td><td>Encrypts an AES key with a node's RSA public key.</td></tr><tr><td valign="top"><a href="#finalize_become-5">finalize_become/5*</a></td><td></td></tr><tr><td valign="top"><a href="#info-1">info/1</a></td><td>Controls which functions are exposed via the device API.</td></tr><tr><td valign="top"><a href="#info-3">info/3</a></td><td>Provides information about the green zone device and its API.</td></tr><tr><td valign="top"><a href="#init-3">init/3</a></td><td>Initialize the green zone for a node.</td></tr><tr><td valign="top"><a href="#join-3">join/3</a></td><td>Initiates the join process for a node to enter an existing green zone.</td></tr><tr><td valign="top"><a href="#join_peer-5">join_peer/5*</a></td><td>Processes a join request to a specific peer node.</td></tr><tr><td valign="top"><a href="#key-3">key/3</a></td><td>Encrypts and provides the node's private key for secure sharing.</td></tr><tr><td valign="top"><a href="#maybe_set_zone_opts-4">maybe_set_zone_opts/4*</a></td><td>Adopts configuration from a peer when joining a green zone.</td></tr><tr><td valign="top"><a href="#rsa_wallet_integration_test-0">rsa_wallet_integration_test/0*</a></td><td>Test RSA operations with the existing wallet structure.</td></tr><tr><td valign="top"><a href="#validate_join-3">validate_join/3*</a></td><td>Validates an incoming join request from another node.</td></tr><tr><td valign="top"><a href="#validate_peer_opts-2">validate_peer_opts/2*</a></td><td>Validates that a peer's configuration matches required options.</td></tr></table>
+
+
+<a name="functions"></a>
+
+## Function Details ##
+
+<a name="add_trusted_node-4"></a>
+
+### add_trusted_node/4 * ###
+
+<pre><code>
+add_trusted_node(NodeAddr::binary(), Report::map(), RequesterPubKey::term(), Opts::map()) -&gt; ok
+</code></pre>
+<br />
+
+`NodeAddr`: The joining node's address<br />`Report`: The commitment report provided by the joining node<br />`RequesterPubKey`: The joining node's public key<br />`Opts`: A map of configuration options<br />
+
+returns: ok
+
+Adds a node to the trusted nodes list with its commitment report.
+
+This function updates the trusted nodes configuration:
+1. Retrieves the current trusted nodes map
+2. Adds the new node with its report and public key
+3. Updates the node configuration with the new trusted nodes list
+
+<a name="become-3"></a>
+
+### become/3 ###
+
+<pre><code>
+become(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` on success with confirmation details, or
+`{error, Binary}` if the node is not part of a green zone or
+identity adoption fails.
+
+Clones the identity of a target node in the green zone.
+
+This function performs the following operations:
+1. Retrieves target node location and ID from the configuration
+2. Verifies that the local node has a valid shared AES key
+3. Requests the target node's encrypted key via its key endpoint
+4. Verifies the response is from the expected peer
+5. Decrypts the target node's private key using the shared AES key
+6. Updates the local node's wallet with the target node's identity
+
+Required configuration in Opts map:
+- green_zone_peer_location: Target node's address
+- green_zone_peer_id: Target node's unique identifier
+- priv_green_zone_aes: The shared AES key for the green zone
+
+<a name="calculate_node_message-3"></a>
+
+### calculate_node_message/3 * ###
+
+`calculate_node_message(RequiredOpts, Req, List) -> any()`
+
+Generate the node message that should be set prior to joining
+a green zone.
+
+This function takes a required opts message, a request message, and an
+`adopt-config` value. The `adopt-config` value can be a boolean, a list of
+fields that should be included in the node message from the request, or a
+binary string of fields to include, separated by commas.
+
+<a name="decrypt_zone_key-2"></a>
+
+### decrypt_zone_key/2 * ###
+
+<pre><code>
+decrypt_zone_key(EncZoneKey::binary(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`EncZoneKey`: The encrypted zone AES key (Base64 encoded or binary)<br />`Opts`: A map of configuration options<br />
+
+returns: {ok, DecryptedKey} on success with the decrypted AES key
+
+Decrypts an AES key using the node's RSA private key.
+
+This function handles decryption of the zone key:
+1. Decodes the encrypted key if it's in Base64 format
+2. Extracts the RSA private key components from the wallet
+3. Creates an RSA private key record
+4. Performs private key decryption on the encrypted key
+
+<a name="default_zone_required_opts-1"></a>
+
+### default_zone_required_opts/1 * ###
+
+<pre><code>
+default_zone_required_opts(Opts::map()) -&gt; map()
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options from which to derive defaults<br />
+
+returns: A map of required configuration options for the green zone
+
+Provides the default required options for a green zone.
+
+This function defines the baseline security requirements for nodes in a green zone:
+1. Restricts loading of remote devices and only allows trusted signers
+2. Limits to preloaded devices from the initiating machine
+3. Enforces specific store configuration
+4. Prevents route changes from the defaults
+5. Requires matching hooks across all peers
+6. Disables message scheduling to prevent conflicts
+7. Enforces a permanent state to prevent further configuration changes
+
+<a name="encrypt_payload-2"></a>
+
+### encrypt_payload/2 * ###
+
+<pre><code>
+encrypt_payload(AESKey::binary(), RequesterPubKey::term()) -&gt; binary()
+</code></pre>
+<br />
+
+`AESKey`: The shared AES key (256-bit binary)<br />`RequesterPubKey`: The node's public RSA key<br />
+
+returns: The encrypted AES key
+
+Encrypts an AES key with a node's RSA public key.
+
+This function securely encrypts the shared key for transmission:
+1. Extracts the RSA public key components
+2. Creates an RSA public key record
+3. Performs public key encryption on the AES key
+
+<a name="finalize_become-5"></a>
+
+### finalize_become/5 * ###
+
+`finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) -> any()`
+
+<a name="info-1"></a>
+
+### info/1 ###
+
+`info(X1) -> any()`
+
+Controls which functions are exposed via the device API.
+
+This function defines the security boundary for the green zone device by
+explicitly listing which functions are available through the API.
+
+<a name="info-3"></a>
+
+### info/3 ###
+
+`info(Msg1, Msg2, Opts) -> any()`
+
+Provides information about the green zone device and its API.
+
+This function returns detailed documentation about the device, including:
+1. A high-level description of the device's purpose
+2. Version information
+3. Available API endpoints with their parameters and descriptions
+
+<a name="init-3"></a>
+
+### init/3 ###
+
+<pre><code>
+init(M1::term(), M2::term(), Opts::map()) -&gt; {ok, binary()} | {error, binary()}
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Binary}` on success with confirmation message, or
+`{error, Binary}` on failure with error message.
+
+Initialize the green zone for a node.
+
+This function performs the following operations:
+1. Validates the node's history to ensure this is a valid initialization
+2. Retrieves or creates a required configuration for the green zone
+3. Ensures a wallet (keypair) exists or creates a new one
+4. Generates a new 256-bit AES key for secure communication
+5. Updates the node's configuration with these cryptographic identities
+
+Config options in Opts map:
+- green_zone_required_config: (Optional) Custom configuration requirements
+- priv_wallet: (Optional) Existing wallet to use instead of creating a new one
+- priv_green_zone_aes: (Optional) Existing AES key, if already part of a zone
+
+<a name="join-3"></a>
+
+### join/3 ###
+
+<pre><code>
+join(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`M1`: The join request message with target peer information<br />`M2`: Additional request details, may include adoption preferences<br />`Opts`: A map of configuration options for join operations<br />
+
+returns: `{ok, Map}` on success with join response details, or
+`{error, Binary}` on failure with error message.
+
+Initiates the join process for a node to enter an existing green zone.
+
+This function performs the following operations depending on the state:
+1. Validates the node's history to ensure proper initialization
+2. Checks for target peer information (location and ID)
+3. If target peer is specified:
+a. Generates a commitment report for the peer
+b. Prepares and sends a POST request to the target peer
+c. Verifies the response and decrypts the returned zone key
+d. Updates local configuration with the shared AES key
+4. If no peer is specified, processes the join request locally
+
+Config options in Opts map:
+- green_zone_peer_location: Target peer's address
+- green_zone_peer_id: Target peer's unique identifier
+- green_zone_adopt_config:
+(Optional) Whether to adopt peer's configuration (default: true)
+
+<a name="join_peer-5"></a>
+
+### join_peer/5 * ###
+
+<pre><code>
+join_peer(PeerLocation::binary(), PeerID::binary(), M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, map() | binary()}
+</code></pre>
+<br />
+
+`PeerLocation`: The target peer's address<br />`PeerID`: The target peer's unique identifier<br />`M2`: Additional request details<br />
+
+returns: `{ok, Map}` on success with confirmation message, or
+`{error, Map|Binary}` on failure with error details
+
+Processes a join request to a specific peer node.
+
+This function handles the client-side join flow when connecting to a peer:
+1. Verifies the node is not already in a green zone
+2. Optionally adopts configuration from the target peer
+3. Generates a hardware-backed commitment report
+4. Sends a POST request to the peer's join endpoint
+5. Verifies the response signature
+6. Decrypts the returned AES key
+7. Updates local configuration with the shared key
+
+<a name="key-3"></a>
+
+### key/3 ###
+
+<pre><code>
+key(M1::term(), M2::term(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` containing the encrypted key and IV on success, or
+`{error, Binary}` if the node is not part of a green zone
+
+Encrypts and provides the node's private key for secure sharing.
+
+This function performs the following operations:
+1. Retrieves the shared AES key and the node's wallet
+2. Verifies that the node is part of a green zone (has a shared AES key)
+3. Generates a random initialization vector (IV) for encryption
+4. Encrypts the node's private key using AES-256-GCM with the shared key
+5. Returns the encrypted key and IV for secure transmission
+
+Required configuration in Opts map:
+- priv_green_zone_aes: The shared AES key for the green zone
+- priv_wallet: The node's wallet containing the private key to encrypt
+
+<a name="maybe_set_zone_opts-4"></a>
+
+### maybe_set_zone_opts/4 * ###
+
+<pre><code>
+maybe_set_zone_opts(PeerLocation::binary(), PeerID::binary(), Req::map(), InitOpts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`PeerLocation`: The location of the peer node to join<br />`PeerID`: The ID of the peer node to join<br />`Req`: The request message with adoption preferences<br />`InitOpts`: A map of initial configuration options<br />
+
+returns: `{ok, Map}` with updated configuration on success, or
+`{error, Binary}` if configuration retrieval fails
+
+Adopts configuration from a peer when joining a green zone.
+
+This function handles the conditional adoption of peer configuration:
+1. Checks if adoption is enabled (default: true)
+2. Requests required configuration from the peer
+3. Verifies the authenticity of the configuration
+4. Creates a node message with appropriate settings
+5. Updates the local node configuration
+
+Config options:
+- green_zone_adopt_config: Controls configuration adoption (boolean, list, or binary)
+
+<a name="rsa_wallet_integration_test-0"></a>
+
+### rsa_wallet_integration_test/0 * ###
+
+`rsa_wallet_integration_test() -> any()`
+
+Test RSA operations with the existing wallet structure.
+
+This test function verifies that encryption and decryption using the RSA keys
+from the wallet work correctly. It creates a new wallet, encrypts a test
+message with the RSA public key, and then decrypts it with the RSA private
+key, asserting that the decrypted message matches the original.
+
+<a name="validate_join-3"></a>
+
+### validate_join/3 * ###
+
+<pre><code>
+validate_join(M1::term(), Req::map(), Opts::map()) -&gt; {ok, map()} | {error, binary()}
+</code></pre>
+<br />
+
+`M1`: Ignored parameter<br />`Req`: The join request containing commitment report and public key<br />`Opts`: A map of configuration options<br />
+
+returns: `{ok, Map}` on success with encrypted AES key, or
+`{error, Binary}` on failure with error message
+
+Validates an incoming join request from another node.
+
+This function handles the server-side join flow when receiving a connection
+request:
+1. Validates the peer's configuration meets required standards
+2. Extracts the commitment report and public key from the request
+3. Verifies the hardware-backed commitment report
+4. Adds the joining node to the trusted nodes list
+5. Encrypts the shared AES key with the peer's public key
+6. Returns the encrypted key to the requesting node
+
+<a name="validate_peer_opts-2"></a>
+
+### validate_peer_opts/2 * ###
+
+<pre><code>
+validate_peer_opts(Req::map(), Opts::map()) -&gt; boolean()
+</code></pre>
+<br />
+
+`Req`: The request message containing the peer's configuration<br />`Opts`: A map of the local node's configuration options<br />
+
+returns: true if the peer's configuration is valid, false otherwise
+
+Validates that a peer's configuration matches required options.
+
+This function ensures the peer node meets configuration requirements:
+1. Retrieves the local node's required configuration
+2. Gets the peer's options from its message
+3. Adds required configuration to peer's required options list
+4. Verifies the peer's node history is valid
+5. Checks that the peer's options match the required configuration
+
+
+--- END OF FILE: docs/resources/source-code/dev_green_zone.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_hook.md ---
 # [Module dev_hook.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_hook.erl)
@@ -9656,6 +10065,201 @@ Top up the user's balance in the ledger.
 
 
 --- END OF FILE: docs/resources/source-code/dev_simple_pay.md ---
+
+--- START OF FILE: docs/resources/source-code/hb_snp_nif.md ---
+# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)
+
+
+
+
+<a name="index"></a>
+
+## Function Index ##
+
+
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#check_snp_support-0">check_snp_support/0</a></td><td></td></tr><tr><td valign="top"><a href="#compute_launch_digest-1">compute_launch_digest/1</a></td><td></td></tr><tr><td valign="top"><a href="#compute_launch_digest_test-0">compute_launch_digest_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_attestation_report-2">generate_attestation_report/2</a></td><td></td></tr><tr><td valign="top"><a href="#generate_attestation_report_test-0">generate_attestation_report_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-0">init/0*</a></td><td></td></tr><tr><td valign="top"><a href="#not_loaded-1">not_loaded/1*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_measurement-2">verify_measurement/2</a></td><td></td></tr><tr><td valign="top"><a href="#verify_measurement_test-0">verify_measurement_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_signature-1">verify_signature/1</a></td><td></td></tr><tr><td valign="top"><a href="#verify_signature_test-0">verify_signature_test/0*</a></td><td></td></tr></table>
+
+
+<a name="functions"></a>
+
+## Function Details ##
+
+<a name="check_snp_support-0"></a>
+
+### check_snp_support/0 ###
+
+`check_snp_support() -> any()`
+
+<a name="compute_launch_digest-1"></a>
+
+### compute_launch_digest/1 ###
+
+`compute_launch_digest(Args) -> any()`
+
+<a name="compute_launch_digest_test-0"></a>
+
+### compute_launch_digest_test/0 * ###
+
+`compute_launch_digest_test() -> any()`
+
+<a name="generate_attestation_report-2"></a>
+
+### generate_attestation_report/2 ###
+
+`generate_attestation_report(UniqueData, VMPL) -> any()`
+
+<a name="generate_attestation_report_test-0"></a>
+
+### generate_attestation_report_test/0 * ###
+
+`generate_attestation_report_test() -> any()`
+
+<a name="init-0"></a>
+
+### init/0 * ###
+
+`init() -> any()`
+
+<a name="not_loaded-1"></a>
+
+### not_loaded/1 * ###
+
+`not_loaded(Line) -> any()`
+
+<a name="verify_measurement-2"></a>
+
+### verify_measurement/2 ###
+
+`verify_measurement(Report, Expected) -> any()`
+
+<a name="verify_measurement_test-0"></a>
+
+### verify_measurement_test/0 * ###
+
+`verify_measurement_test() -> any()`
+
+<a name="verify_signature-1"></a>
+
+### verify_signature/1 ###
+
+`verify_signature(Report) -> any()`
+
+<a name="verify_signature_test-0"></a>
+
+### verify_signature_test/0 * ###
+
+`verify_signature_test() -> any()`
+
+
+--- END OF FILE: docs/resources/source-code/hb_snp_nif.md ---
+
+--- START OF FILE: docs/resources/source-code/dev_snp.md ---
+# [Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_snp.erl)
+
+
+
+
+This device offers an interface for validating AMD SEV-SNP commitments,
+as well as generating them, if called in an appropriate environment.
+
+<a name="index"></a>
+
+## Function Index ##
+
+
+<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_is_trusted-3">execute_is_trusted/3*</a></td><td>Ensure that all of the software hashes are trusted.</td></tr><tr><td valign="top"><a href="#generate-3">generate/3</a></td><td>Generate an commitment report and emit it as a message, including all of
+the necessary data to generate the nonce (ephemeral node address + node
+message ID), as well as the expected measurement (firmware, kernel, and VMSAs
+hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
+remote node, its ephemeral private address, and the integrity of the report.</td></tr></table>
+
+
+<a name="functions"></a>
+
+## Function Details ##
+
+<a name="execute_is_trusted-3"></a>
+
+### execute_is_trusted/3 * ###
+
+`execute_is_trusted(M1, Msg, NodeOpts) -> any()`
+
+Ensure that all of the software hashes are trusted. The caller may set
+a specific device to use for the `is-trusted` key. The device must then
+implement the `trusted` resolver.
+
+<a name="generate-3"></a>
+
+### generate/3 ###
+
+`generate(M1, M2, Opts) -> any()`
+
+Generate an commitment report and emit it as a message, including all of
+the necessary data to generate the nonce (ephemeral node address + node
+message ID), as well as the expected measurement (firmware, kernel, and VMSAs
+hashes).
+
+<a name="generate_nonce-2"></a>
+
+### generate_nonce/2 * ###
+
+`generate_nonce(RawAddress, RawNodeMsgID) -> any()`
+
+Generate the nonce to use in the commitment report.
+
+<a name="is_debug-1"></a>
+
+### is_debug/1 * ###
+
+`is_debug(Report) -> any()`
+
+Ensure that the node's debug policy is disabled.
+
+<a name="real_node_test-0"></a>
+
+### real_node_test/0 * ###
+
+`real_node_test() -> any()`
+
+<a name="report_data_matches-3"></a>
+
+### report_data_matches/3 * ###
+
+`report_data_matches(Address, NodeMsgID, ReportData) -> any()`
+
+Ensure that the report data matches the expected report data.
+
+<a name="trusted-3"></a>
+
+### trusted/3 ###
+
+`trusted(Msg1, Msg2, NodeOpts) -> any()`
+
+Validates if a given message parameter matches a trusted value from the SNP trusted list
+Returns {ok, true} if the message is trusted, {ok, false} otherwise
+
+<a name="verify-3"></a>
+
+### verify/3 ###
+
+`verify(M1, M2, NodeOpts) -> any()`
+
+Verify an commitment report message; validating the identity of a
+remote node, its ephemeral private address, and the integrity of the report.
+The checks that must be performed to validate the report are:
+1. Verify the address and the node message ID are the same as the ones
+used to generate the nonce.
+2. Verify the address that signed the message is the same as the one used
+to generate the nonce.
+3. Verify that the debug flag is disabled.
+4. Verify that the firmware, kernel, and OS (VMSAs) hashes, part of the
+measurement, are trusted.
+5. Verify the measurement is valid.
+6. Verify the report's certificate chain to hardware root of trust.
+
+
+--- END OF FILE: docs/resources/source-code/dev_snp.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_stack.md ---
 # [Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_stack.erl)
@@ -19417,6 +20021,7 @@ HyperBEAM is built with a modular architecture to ensure scalability, maintainab
 
 - **HyperBEAM Core**: The main framework that orchestrates data processing, storage, and routing.
 - **Compute Unit**: Handles computational tasks and integrates with the HyperBEAM core for distributed processing.
+- **Trusted Execution Environment (TEE)**: Ensures secure execution of sensitive operations.
 - **Client Libraries**: Tools for interacting with HyperBEAM, including the JavaScript client.
 
 ## Getting Started
@@ -19459,6 +20064,7 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_delegated_compute.md" class="module">dev_delegated_compute</a></td></tr>
 <tr><td><a href="dev_faff.md" class="module">dev_faff</a></td></tr>
 <tr><td><a href="dev_genesis_wasm.md" class="module">dev_genesis_wasm</a></td></tr>
+<tr><td><a href="dev_green_zone.md" class="module">dev_green_zone</a></td></tr>
 <tr><td><a href="dev_hook.md" class="module">dev_hook</a></td></tr>
 <tr><td><a href="dev_hyperbuddy.md" class="module">dev_hyperbuddy</a></td></tr>
 <tr><td><a href="dev_json_iface.md" class="module">dev_json_iface</a></td></tr>
@@ -19487,6 +20093,8 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_scheduler_registry.md" class="module">dev_scheduler_registry</a></td></tr>
 <tr><td><a href="dev_scheduler_server.md" class="module">dev_scheduler_server</a></td></tr>
 <tr><td><a href="dev_simple_pay.md" class="module">dev_simple_pay</a></td></tr>
+<tr><td><a href="dev_snp.md" class="module">dev_snp</a></td></tr>
+<tr><td><a href="hb_snp_nif.md" class="module">hb_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
@@ -20060,7 +20668,7 @@ Installation methods:
 
 ### Rust
 
-Rust is needed if you intend to work with or build components involving WebAssembly (WASM).
+Rust is needed if you intend to work with or build components involving WebAssembly (WASM) or certain Native Implemented Functions (NIFs) used by some devices (like `~snp@1.0`).
 
 The recommended way to install Rust on **all platforms** is via `rustup`:
 
@@ -20185,6 +20793,41 @@ To stop the node running *within the `rebar3 shell`*, press `Ctrl+C` twice or us
 ## Next Steps
 
 *   **Configure Your Node:** Deep dive into [configuration options](./configuring-your-machine.md).
+*   **TEE Nodes:** Learn about running nodes in [Trusted Execution Environments](./tee-nodes.md) for enhanced security.
 *   **Routers:** Understand how to configure and run a [router node](./joining-running-a-router.md).
 
 --- END OF FILE: docs/run/running-a-hyperbeam-node.md ---
+
+--- START OF FILE: docs/run/tee-nodes.md ---
+# Trusted Execution Environment (TEE)
+
+!!! info "Documentation Coming Soon"
+    Detailed documentation about Trusted Execution Environment support in HyperBEAM is currently being developed and will be available soon.
+
+## Overview
+
+HyperBEAM supports Trusted Execution Environments (TEEs) through the `~snp@1.0` device, which enables secure, trust-minimized computation on remote machines. TEEs provide hardware-level isolation and attestation capabilities that allow users to verify that their code is running in a protected environment, exactly as intended, even on untrusted hardware.
+
+The `~snp@1.0` device in HyperBEAM is used to generate and validate proofs that a node is executing inside a Trusted Execution Environment. Nodes executing inside these environments use an ephemeral key pair that provably only exists inside the TEE, and can sign attestations of AO-Core executions in a trust-minimized way.
+
+## Key Features
+
+- Hardware-level isolation for secure computation
+- Remote attestation capabilities
+- Protected execution state
+- Confidential computing support
+- Compatibility with AMD SEV-SNP technology
+
+## Coming Soon
+
+Detailed documentation on the following topics will be added:
+
+- TEE setup and configuration
+- Using the `~snp@1.0` device
+- Verifying TEE attestations
+- Developing for TEEs
+- Security considerations
+- Performance characteristics
+
+If you intend to offer TEE-based computation of AO-Core devices, please see the [HyperBEAM OS repository](https://github.com/permaweb/hb-os) for preliminary details on configuration and deployment. 
+--- END OF FILE: docs/run/tee-nodes.md ---

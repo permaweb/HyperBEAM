@@ -17,6 +17,7 @@ nav:
   - Run a Node:
       - Running a HyperBEAM node: 'run/running-a-hyperbeam-node.md'
       - Configuring your machine: 'run/configuring-your-machine.md'
+      - TEE nodes: 'run/tee-nodes.md'
       - Joining/running a router: 'run/joining-running-a-router.md'
   - Build on HyperBEAM:
       - Get started building on AO-Core: 'build/get-started-building-on-ao-core.md'
@@ -61,6 +62,7 @@ nav:
         - dev_delegated_compute: 'resources/source-code/dev_delegated_compute.md'
         - dev_faff: 'resources/source-code/dev_faff.md'
         - dev_genesis_wasm: 'resources/source-code/dev_genesis_wasm.md'
+        - dev_green_zone: 'resources/source-code/dev_green_zone.md'
         - dev_hyperbuddy: 'resources/source-code/dev_hyperbuddy.md'
         - dev_json_iface: 'resources/source-code/dev_json_iface.md'
         - dev_local_name: 'resources/source-code/dev_local_name.md'
@@ -89,6 +91,8 @@ nav:
         - dev_scheduler_server: 'resources/source-code/dev_scheduler_server.md'
         - dev_scheduler: 'resources/source-code/dev_scheduler.md'
         - dev_simple_pay: 'resources/source-code/dev_simple_pay.md'
+        - hb_snp_nif: 'resources/source-code/hb_snp_nif.md'
+        - dev_snp: 'resources/source-code/dev_snp.md'
         - dev_stack: 'resources/source-code/dev_stack.md'
         - dev_test: 'resources/source-code/dev_test.md'
         - dev_wasi: 'resources/source-code/dev_wasi.md'

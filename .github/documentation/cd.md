@@ -7,7 +7,7 @@
 - [Credentials](#credentials)
 
 ### Description 
-This workflow is triggered when a push is made to the `main` branch and is responsible for building and deploying AO/HyperBEAM to a VM in GCP.
+This workflow is triggered when a push is made to the `main` branch and is responsible for building and deploying AO/HyperBEAM to a confidential VM in GCP.
 
 ### Variables
 
@@ -28,7 +28,7 @@ The workflow consists of four main jobs:
    - Tags the image with workflow run ID and commit SHA
 
 2. **deploy**:
-   - Creates a VM using the built image
+   - Creates a confidential AMD SEV-SNP VM using the built image
    - Configures the VM with secure boot, vTPM, and integrity monitoring
 
 3. **test**:

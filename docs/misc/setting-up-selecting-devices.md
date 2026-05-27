@@ -55,6 +55,7 @@ If you want to monetize your node's services:
 
 If security is a priority:
 
+- **~snp@1.0**: For generating and validating proofs that a node is executing inside a Trusted Execution Environment (TEE)
 - **dev_httpsig**: Implements HTTP Message Signatures as described in RFC-9421
 
 ### Legacynet Compatibility
@@ -149,6 +150,10 @@ A "friends and family" pricing policy that allows users to process requests only
 
 ### Security Devices
 
+### ~snp@1.0
+
+Generates and validates proofs that a node is executing inside a Trusted Execution Environment (TEE). Nodes executing inside TEEs use an ephemeral key pair that provably exists only inside the TEE.
+
 ### dev_httpsig
 
 Implements HTTP Message Signatures as described in RFC-9421, providing a way to authenticate and verify the integrity of HTTP messages.
@@ -191,11 +196,11 @@ This simple stack handles scheduling and WASM execution for basic process needs.
 ```
 
 Execution-Device: Stack/1.0
-Execution-Stack: "Scheduler/1.0", "WASM/1.0", "PoDA/1.0"
+Execution-Stack: "Scheduler/1.0", "WASM/1.0", "PoDA/1.0", "~snp@1.0"
 
 ```
 
-Adds proof-of-authority consensus for enhanced security.
+Adds proof-of-authority consensus and TEE validation for enhanced security.
 
 ### Automated Process Stack
 
@@ -250,6 +255,23 @@ rebar3 shell --eval "hb:start_mainnet(#{
   p4_ledger-device => '~simple-pay@1.0',
   simple_pay_price => 0.01,
   admissible-devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler']
+})."
+
+```
+
+### Setting Up a Secure TEE Node
+
+For a node running in a Trusted Execution Environment:
+
+```bash
+
+rebar3 shell --eval "hb:start_mainnet(#{
+  port => 9001,
+  key_location => 'path/to/my/wallet.key',
+  p4_pricing-device => '~simple-pay@1.0',
+  p4_ledger-device => '~simple-pay@1.0',
+  simple_pay_price => 0.05,
+  admissible-devices => ['~wasm64@1.0', '~process@1.0', 'dev_stack', 'dev_scheduler', '~snp@1.0']
 })."
 
 ```
