@@ -7,7 +7,7 @@ Think of Devices as specialized engines or services that can be plugged into the
 ## Purpose of Devices
 
 *   **Define Computation:** Devices dictate *how* a message's instructions are executed. One device might run WASM code, another might manage process state, and yet another might simply relay data.
-*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute tasks, storage-focused tasks, secure TEE operations).
+*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute or storage-focused tasks).
 *   **Promote Modularity:** New functionalities can be added to AO by creating new Devices, without altering the core protocol.
 *   **Distribute Workload:** Different Devices can handle different parts of a complex task, enabling parallel processing and efficient resource utilization across the network.
 
@@ -29,7 +29,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security Devices ([`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md)):** Coordinate complex execution flows or schedule tasks.
 

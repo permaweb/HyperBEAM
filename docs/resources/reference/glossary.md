@@ -71,17 +71,11 @@ A device used to relay messages between nodes and the wider HTTP network. It off
 ## ~simple-pay@1.0
 A simple, flexible pricing device that can be used in conjunction with p4@1.0 to offer flat-fees for the execution of AO-Core messages.
 
-## ~snp@1.0
-A device used to generate and validate proofs that a node is executing inside a Trusted Execution Environment (TEE).
-
 ## ~wasm64@1.0
 A device used to execute WebAssembly code, using the Web Assembly Micro-Runtime (WAMR) under-the-hood.
 
 ## ~stack@1.0
 A device used to execute an ordered set of devices over the same inputs, allowing users to create complex combinations of other devices.
-
-## Trusted Execution Environment (TEE)
-A secure area inside a processor that ensures the confidentiality and integrity of code and data loaded within it. Used in HyperBEAM for trust-minimized computation.
 
 ## WebAssembly (WASM)
 A binary instruction format that serves as a portable compilation target for programming languages, enabling deployment on the web and other environments.

@@ -308,11 +308,6 @@ raw_default_message() ->
         <<"debug-resolve-links">> => false,
         <<"debug-print-fail-mode">> => long,
 		<<"trusted">> => #{},
-        <<"snp-enforced-keys">> => [
-            firmware, kernel, 
-            initrd, append,
-            vmm_type, guest_features
-        ],
         <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
         <<"routes">> => [
             %% Local CU routes.

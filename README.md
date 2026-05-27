@@ -62,9 +62,6 @@ can use the provided Dockerfile to build a container image.
 docker build -t hyperbeam .
 ```
 
-If you intend to offer TEE-based computation of AO-Core devices, please see the
-[`HyperBEAM OS`](https://github.com/permaweb/hb-os) repo for details on configuration and deployment.
-
 ## Running HyperBEAM
 
 Once the code is compiled, you can start HyperBEAM with:
@@ -215,13 +212,6 @@ native HTTP message format.
 a local WASM executor, used for executing legacynet AO processes inside HyperBEAM.
 See the [HyperBEAM OS](https://github.com/permaweb/hb-os) repository for an 
 example setup with co-executing HyperBEAM and legacy-CU nodes.
-
-- `~snp@1.0`: The `~snp@1.0` device is used to generate and validate proofs that 
-the local node, or another node in the network, is executing inside a [Trusted Execution
-Environment (TEE)](https://en.wikipedia.org/wiki/Trusted_execution_environment).
-Nodes executing inside these environments use an ephemeral key pair, provably
-only existing inside the TEE, and can be signed commitments of AO-Core executions
-in a trust-minimized way.
 
 - `p4@1.0`: The `p4@1.0` device runs as a `pre-processor` and `post-processor` in
 the framework provided by `~meta@1.0`, enabling a framework for node operators to

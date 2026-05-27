@@ -121,7 +121,7 @@ Installation methods:
 
 ### Rust
 
-Rust is needed if you intend to work with or build components involving WebAssembly (WASM) or certain Native Implemented Functions (NIFs) used by some devices (like `~snp@1.0`).
+Rust is needed if you intend to work with or build components involving WebAssembly (WASM).
 
 The recommended way to install Rust on **all platforms** is via `rustup`:
 
@@ -246,5 +246,4 @@ To stop the node running *within the `rebar3 shell`*, press `Ctrl+C` twice or us
 ## Next Steps
 
 *   **Configure Your Node:** Deep dive into [configuration options](./configuring-your-machine.md).
-*   **TEE Nodes:** Learn about running nodes in [Trusted Execution Environments](./tee-nodes.md) for enhanced security.
 *   **Routers:** Understand how to configure and run a [router node](./joining-running-a-router.md).

@@ -338,7 +338,7 @@ This is just the beginning. To dive deeper:
 --- START OF FILE: docs/build/serverless-decentralized-compute.md ---
 # Serverless Decentralized Compute on AO
 
-AO enables powerful "serverless" computation patterns by allowing you to run code (WASM, Lua) directly within decentralized processes, triggered by messages. Furthermore, if computations are performed on nodes running in Trusted Execution Environments (TEEs), you can obtain cryptographic attestations verifying the execution integrity.
+AO enables powerful "serverless" computation patterns by allowing you to run code (WASM, Lua) directly within decentralized processes, triggered by messages.
 
 ## Core Concept: Compute Inside Processes
 
@@ -400,24 +400,7 @@ Lua provides a lightweight scripting environment directly within AO.
     ```
     The node executes the `Calculate` handler within the Lua script associated with `MyLuaProcess`. -->
 
-## TEE Attestations (via [`~snp@1.0`](../resources/source-code/dev_snp.md))
-
-If a HyperBEAM node performing these computations runs within a supported Trusted Execution Environment (like AMD SEV-SNP), it can provide cryptographic proof of execution.
-
-*   **How it works:** The [`~snp@1.0`](../resources/source-code/dev_snp.md) device interacts with the TEE hardware.
-*   **Signed Responses:** When a TEE-enabled node processes your message (e.g., executes your WASM function), the HTTP response containing the result can be cryptographically signed by a key that *provably* only exists inside the TEE.
-*   **Verification:** Clients receiving this response can verify the signature against the TEE platform's attestation mechanism (e.g., AMD's KDS) to gain high confidence that the computation was performed correctly and confidentially within the secure environment, untampered by the node operator.
-
-**Obtaining Attested Responses:**
-
-This usually involves interacting with nodes specifically advertised as TEE-enabled. The exact mechanism for requesting and verifying attestations depends on the specific TEE technology and node configuration.
-
-*   The HTTP response headers might contain specific signature or attestation data (e.g., using HTTP Message Signatures RFC-9421 via [`dev_httpsig`](../resources/source-code/dev_httpsig.md)).
-*   You might query the [`~snp@1.0`](../resources/source-code/dev_snp.md) device directly on the node to get its attestation report.
-
-Refer to documentation on [TEE Nodes](./run/tee-nodes.md) and the [`~snp@1.0`](../resources/source-code/dev_snp.md) device for details.
-
-By leveraging WASM, Lua, and optional TEE attestations, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
+By leveraging WASM and Lua, AO provides a powerful platform for building complex, verifiable, and truly decentralized serverless applications.
 
 --- END OF FILE: docs/build/serverless-decentralized-compute.md ---
 
@@ -977,7 +960,7 @@ Think of Devices as specialized engines or services that can be plugged into the
 ## Purpose of Devices
 
 *   **Define Computation:** Devices dictate *how* a message's instructions are executed. One device might run WASM code, another might manage process state, and yet another might simply relay data.
-*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute tasks, storage-focused tasks, secure TEE operations).
+*   **Enable Specialization:** Nodes running HyperBEAM can choose which Devices to support, allowing them to specialize in certain tasks (e.g., high-compute or storage-focused tasks).
 *   **Promote Modularity:** New functionalities can be added to AO by creating new Devices, without altering the core protocol.
 *   **Distribute Workload:** Different Devices can handle different parts of a complex task, enabling parallel processing and efficient resource utilization across the network.
 
@@ -999,7 +982,7 @@ HyperBEAM includes many preloaded devices that provide core functionality. Some 
 
 Devices aren't limited to just computation or state management. They can represent more abstract concepts:
 
-*   **Security Devices ([`~snp@1.0`](../resources/source-code/dev_snp.md), [`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to Trusted Execution Environments (TEEs) or message signing, adding layers of security and verification.
+*   **Security Devices ([`dev_httpsig`](../resources/source-code/dev_httpsig.md)):** Handle tasks related to message signing, adding layers of security and verification.
 *   **Payment/Access Control Devices ([`~p4@1.0`](../resources/source-code/dev_p4.md), [`~faff@1.0`](../resources/source-code/dev_faff.md)):** Manage metering, billing, or access control for node services.
 *   **Workflow/Utility Devices ([`dev_cron`](../resources/source-code/dev_cron.md), [`dev_stack`](../resources/source-code/dev_stack.md)):** Coordinate complex execution flows or schedule tasks.
 
@@ -1048,7 +1031,7 @@ https://router-1.forward.computer/<procId>~process@1.0/now
 
 ### Node URL (`router-1.forward.computer`)
 
-The HTTP response from this node includes a signature from the host's key. By accessing the [`~snp@1.0`](../resources/source-code/dev_snp.md) device, you can verify that the node is running in a genuine Trusted Execution Environment (TEE), ensuring computation integrity. You can replace `router-1.forward.computer` with any HyperBEAM TEE node operated by any party while maintaining trustless guarantees.
+The HTTP response from this node includes a signature from the host's key. You can replace `router-1.forward.computer` with any HyperBEAM node operated by any party while maintaining the same AO-Core path semantics.
 
 ### Process Path (`/<procId>~process@1.0`)
 
@@ -1453,17 +1436,11 @@ A device used to relay messages between nodes and the wider HTTP network. It off
 ## ~simple-pay@1.0
 A simple, flexible pricing device that can be used in conjunction with p4@1.0 to offer flat-fees for the execution of AO-Core messages.
 
-## ~snp@1.0
-A device used to generate and validate proofs that a node is executing inside a Trusted Execution Environment (TEE).
-
 ## ~wasm64@1.0
 A device used to execute WebAssembly code, using the Web Assembly Micro-Runtime (WAMR) under-the-hood.
 
 ## ~stack@1.0
 A device used to execute an ordered set of devices over the same inputs, allowing users to create complex combinations of other devices.
-
-## Trusted Execution Environment (TEE)
-A secure area inside a processor that ensures the confidentiality and integrity of code and data loaded within it. Used in HyperBEAM for trust-minimized computation.
 
 ## WebAssembly (WASM)
 A binary instruction format that serves as a portable compilation target for programming languages, enabling deployment on the web and other environments.
@@ -10065,201 +10042,6 @@ Top up the user's balance in the ledger.
 
 
 --- END OF FILE: docs/resources/source-code/dev_simple_pay.md ---
-
---- START OF FILE: docs/resources/source-code/hb_snp_nif.md ---
-# [Module hb_snp_nif.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/core/hb_snp_nif.erl)
-
-
-
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#check_snp_support-0">check_snp_support/0</a></td><td></td></tr><tr><td valign="top"><a href="#compute_launch_digest-1">compute_launch_digest/1</a></td><td></td></tr><tr><td valign="top"><a href="#compute_launch_digest_test-0">compute_launch_digest_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#generate_attestation_report-2">generate_attestation_report/2</a></td><td></td></tr><tr><td valign="top"><a href="#generate_attestation_report_test-0">generate_attestation_report_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#init-0">init/0*</a></td><td></td></tr><tr><td valign="top"><a href="#not_loaded-1">not_loaded/1*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_measurement-2">verify_measurement/2</a></td><td></td></tr><tr><td valign="top"><a href="#verify_measurement_test-0">verify_measurement_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#verify_signature-1">verify_signature/1</a></td><td></td></tr><tr><td valign="top"><a href="#verify_signature_test-0">verify_signature_test/0*</a></td><td></td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="check_snp_support-0"></a>
-
-### check_snp_support/0 ###
-
-`check_snp_support() -> any()`
-
-<a name="compute_launch_digest-1"></a>
-
-### compute_launch_digest/1 ###
-
-`compute_launch_digest(Args) -> any()`
-
-<a name="compute_launch_digest_test-0"></a>
-
-### compute_launch_digest_test/0 * ###
-
-`compute_launch_digest_test() -> any()`
-
-<a name="generate_attestation_report-2"></a>
-
-### generate_attestation_report/2 ###
-
-`generate_attestation_report(UniqueData, VMPL) -> any()`
-
-<a name="generate_attestation_report_test-0"></a>
-
-### generate_attestation_report_test/0 * ###
-
-`generate_attestation_report_test() -> any()`
-
-<a name="init-0"></a>
-
-### init/0 * ###
-
-`init() -> any()`
-
-<a name="not_loaded-1"></a>
-
-### not_loaded/1 * ###
-
-`not_loaded(Line) -> any()`
-
-<a name="verify_measurement-2"></a>
-
-### verify_measurement/2 ###
-
-`verify_measurement(Report, Expected) -> any()`
-
-<a name="verify_measurement_test-0"></a>
-
-### verify_measurement_test/0 * ###
-
-`verify_measurement_test() -> any()`
-
-<a name="verify_signature-1"></a>
-
-### verify_signature/1 ###
-
-`verify_signature(Report) -> any()`
-
-<a name="verify_signature_test-0"></a>
-
-### verify_signature_test/0 * ###
-
-`verify_signature_test() -> any()`
-
-
---- END OF FILE: docs/resources/source-code/hb_snp_nif.md ---
-
---- START OF FILE: docs/resources/source-code/dev_snp.md ---
-# [Module dev_snp.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_snp.erl)
-
-
-
-
-This device offers an interface for validating AMD SEV-SNP commitments,
-as well as generating them, if called in an appropriate environment.
-
-<a name="index"></a>
-
-## Function Index ##
-
-
-<table width="100%" border="1" cellspacing="0" cellpadding="2" summary="function index"><tr><td valign="top"><a href="#execute_is_trusted-3">execute_is_trusted/3*</a></td><td>Ensure that all of the software hashes are trusted.</td></tr><tr><td valign="top"><a href="#generate-3">generate/3</a></td><td>Generate an commitment report and emit it as a message, including all of
-the necessary data to generate the nonce (ephemeral node address + node
-message ID), as well as the expected measurement (firmware, kernel, and VMSAs
-hashes).</td></tr><tr><td valign="top"><a href="#generate_nonce-2">generate_nonce/2*</a></td><td>Generate the nonce to use in the commitment report.</td></tr><tr><td valign="top"><a href="#is_debug-1">is_debug/1*</a></td><td>Ensure that the node's debug policy is disabled.</td></tr><tr><td valign="top"><a href="#real_node_test-0">real_node_test/0*</a></td><td></td></tr><tr><td valign="top"><a href="#report_data_matches-3">report_data_matches/3*</a></td><td>Ensure that the report data matches the expected report data.</td></tr><tr><td valign="top"><a href="#trusted-3">trusted/3</a></td><td>Validates if a given message parameter matches a trusted value from the SNP trusted list
-Returns {ok, true} if the message is trusted, {ok, false} otherwise.</td></tr><tr><td valign="top"><a href="#verify-3">verify/3</a></td><td>Verify an commitment report message; validating the identity of a
-remote node, its ephemeral private address, and the integrity of the report.</td></tr></table>
-
-
-<a name="functions"></a>
-
-## Function Details ##
-
-<a name="execute_is_trusted-3"></a>
-
-### execute_is_trusted/3 * ###
-
-`execute_is_trusted(M1, Msg, NodeOpts) -> any()`
-
-Ensure that all of the software hashes are trusted. The caller may set
-a specific device to use for the `is-trusted` key. The device must then
-implement the `trusted` resolver.
-
-<a name="generate-3"></a>
-
-### generate/3 ###
-
-`generate(M1, M2, Opts) -> any()`
-
-Generate an commitment report and emit it as a message, including all of
-the necessary data to generate the nonce (ephemeral node address + node
-message ID), as well as the expected measurement (firmware, kernel, and VMSAs
-hashes).
-
-<a name="generate_nonce-2"></a>
-
-### generate_nonce/2 * ###
-
-`generate_nonce(RawAddress, RawNodeMsgID) -> any()`
-
-Generate the nonce to use in the commitment report.
-
-<a name="is_debug-1"></a>
-
-### is_debug/1 * ###
-
-`is_debug(Report) -> any()`
-
-Ensure that the node's debug policy is disabled.
-
-<a name="real_node_test-0"></a>
-
-### real_node_test/0 * ###
-
-`real_node_test() -> any()`
-
-<a name="report_data_matches-3"></a>
-
-### report_data_matches/3 * ###
-
-`report_data_matches(Address, NodeMsgID, ReportData) -> any()`
-
-Ensure that the report data matches the expected report data.
-
-<a name="trusted-3"></a>
-
-### trusted/3 ###
-
-`trusted(Msg1, Msg2, NodeOpts) -> any()`
-
-Validates if a given message parameter matches a trusted value from the SNP trusted list
-Returns {ok, true} if the message is trusted, {ok, false} otherwise
-
-<a name="verify-3"></a>
-
-### verify/3 ###
-
-`verify(M1, M2, NodeOpts) -> any()`
-
-Verify an commitment report message; validating the identity of a
-remote node, its ephemeral private address, and the integrity of the report.
-The checks that must be performed to validate the report are:
-1. Verify the address and the node message ID are the same as the ones
-used to generate the nonce.
-2. Verify the address that signed the message is the same as the one used
-to generate the nonce.
-3. Verify that the debug flag is disabled.
-4. Verify that the firmware, kernel, and OS (VMSAs) hashes, part of the
-measurement, are trusted.
-5. Verify the measurement is valid.
-6. Verify the report's certificate chain to hardware root of trust.
-
-
---- END OF FILE: docs/resources/source-code/dev_snp.md ---
 
 --- START OF FILE: docs/resources/source-code/dev_stack.md ---
 # [Module dev_stack.erl](https://github.com/permaweb/HyperBEAM/blob/main/src/preloaded/dev_stack.erl)
@@ -20021,7 +19803,6 @@ HyperBEAM is built with a modular architecture to ensure scalability, maintainab
 
 - **HyperBEAM Core**: The main framework that orchestrates data processing, storage, and routing.
 - **Compute Unit**: Handles computational tasks and integrates with the HyperBEAM core for distributed processing.
-- **Trusted Execution Environment (TEE)**: Ensures secure execution of sensitive operations.
 - **Client Libraries**: Tools for interacting with HyperBEAM, including the JavaScript client.
 
 ## Getting Started
@@ -20093,8 +19874,6 @@ Use the navigation menu to dive into specific parts of the codebase. Each module
 <tr><td><a href="dev_scheduler_registry.md" class="module">dev_scheduler_registry</a></td></tr>
 <tr><td><a href="dev_scheduler_server.md" class="module">dev_scheduler_server</a></td></tr>
 <tr><td><a href="dev_simple_pay.md" class="module">dev_simple_pay</a></td></tr>
-<tr><td><a href="dev_snp.md" class="module">dev_snp</a></td></tr>
-<tr><td><a href="hb_snp_nif.md" class="module">hb_snp_nif</a></td></tr>
 <tr><td><a href="dev_stack.md" class="module">dev_stack</a></td></tr>
 <tr><td><a href="dev_test.md" class="module">dev_test</a></td></tr>
 <tr><td><a href="dev_wasi.md" class="module">dev_wasi</a></td></tr>
@@ -20668,7 +20447,7 @@ Installation methods:
 
 ### Rust
 
-Rust is needed if you intend to work with or build components involving WebAssembly (WASM) or certain Native Implemented Functions (NIFs) used by some devices (like `~snp@1.0`).
+Rust is needed if you intend to work with or build components involving WebAssembly (WASM).
 
 The recommended way to install Rust on **all platforms** is via `rustup`:
 
@@ -20793,41 +20572,6 @@ To stop the node running *within the `rebar3 shell`*, press `Ctrl+C` twice or us
 ## Next Steps
 
 *   **Configure Your Node:** Deep dive into [configuration options](./configuring-your-machine.md).
-*   **TEE Nodes:** Learn about running nodes in [Trusted Execution Environments](./tee-nodes.md) for enhanced security.
 *   **Routers:** Understand how to configure and run a [router node](./joining-running-a-router.md).
 
 --- END OF FILE: docs/run/running-a-hyperbeam-node.md ---
-
---- START OF FILE: docs/run/tee-nodes.md ---
-# Trusted Execution Environment (TEE)
-
-!!! info "Documentation Coming Soon"
-    Detailed documentation about Trusted Execution Environment support in HyperBEAM is currently being developed and will be available soon.
-
-## Overview
-
-HyperBEAM supports Trusted Execution Environments (TEEs) through the `~snp@1.0` device, which enables secure, trust-minimized computation on remote machines. TEEs provide hardware-level isolation and attestation capabilities that allow users to verify that their code is running in a protected environment, exactly as intended, even on untrusted hardware.
-
-The `~snp@1.0` device in HyperBEAM is used to generate and validate proofs that a node is executing inside a Trusted Execution Environment. Nodes executing inside these environments use an ephemeral key pair that provably only exists inside the TEE, and can sign attestations of AO-Core executions in a trust-minimized way.
-
-## Key Features
-
-- Hardware-level isolation for secure computation
-- Remote attestation capabilities
-- Protected execution state
-- Confidential computing support
-- Compatibility with AMD SEV-SNP technology
-
-## Coming Soon
-
-Detailed documentation on the following topics will be added:
-
-- TEE setup and configuration
-- Using the `~snp@1.0` device
-- Verifying TEE attestations
-- Developing for TEEs
-- Security considerations
-- Performance characteristics
-
-If you intend to offer TEE-based computation of AO-Core devices, please see the [HyperBEAM OS repository](https://github.com/permaweb/hb-os) for preliminary details on configuration and deployment. 
---- END OF FILE: docs/run/tee-nodes.md ---

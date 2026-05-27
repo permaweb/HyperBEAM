@@ -43,7 +43,7 @@ This documentation is organized into the following main sections accessible via 
 
 - **[Home](.)**: This page - overview and starting points.
 - **[Installation & Core](getting-started/installation/index.md)**: Detailed steps for system dependencies and HyperBEAM setup/configuration.
-- **[Components](compute-unit/index.md)**: Information on related components like the Compute Unit and TEE.
+- **[Components](compute-unit/index.md)**: Information on related components like the Compute Unit.
 - **[Usage](guides/index.md)**: Practical guides and examples for using HyperBEAM.
 - **[Resources](source-code-docs/index.md)**: Source code documentation and reference materials (Troubleshooting, Glossary, FAQ).
 - **[Community](contribute/guidelines.md)**: How to contribute and get involved.

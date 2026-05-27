@@ -33,7 +33,6 @@ HyperBEAM supports numerous devices, each enabling different services. There are
 - **~wasm64@1.0**: Used to execute WebAssembly code via WAMR
 - **~json-iface@1.0**: Provides translation between JSON-encoded and HTTP message formats
 - **~compute-lite@1.0**: A lightweight WASM executor wrapper for legacy AO processes
-- **~snp@1.0**: Used for Trusted Execution Environment (TEE) operations
 - **~p4@1.0**: Framework for node operators to sell usage of their hardware
 - **~simple-pay@1.0**: Simple pricing device for flat-fee execution
 - **~process@1.0**: Enables persistent, shared executions accessible by multiple users
@@ -59,4 +58,4 @@ Each HyperBEAM node is configured using the `~meta@1.0` device, which provides a
 
 - [Setup HyperBEAM](setup.md): Instructions for installing and running HyperBEAM
 - [Configuration](configuration.md): How to configure your HyperBEAM installation
-- [Testing](testing.md): Run tests to verify your installation 
+- [Testing](testing.md): Run tests to verify your installation

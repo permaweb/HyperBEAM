@@ -1238,7 +1238,7 @@ dynamic_router_test_parallel_() ->
     {timeout, 30, fun dynamic_router/0}.
 dynamic_router() ->
     {ok, Module} = file:read_file(<<"scripts/dynamic-router.lua">>),
-    ExecWallet = hb:wallet(<<"test/admissible-report-wallet.json">>),
+    ExecWallet = ar_wallet:new(),
     ProxyWallet = ar_wallet:new(),
     RouterHook =
         #{
@@ -1252,22 +1252,6 @@ dynamic_router() ->
             ExecOpts = #{ <<"priv-wallet">> => ExecWallet, <<"store">> => hb_test_utils:test_store() }
         ),
     Node = hb_http_server:start_node(ProxyOpts = #{
-        <<"snp-trusted">> => [
-            #{
-                <<"vcpus">> => 32,
-                <<"vcpu-type">> => 5, 
-                <<"vmm-type">> => 1,
-                <<"guest-features">> => 1,
-                <<"firmware">> =>
-                    <<"b8c5d4082d5738db6b0fb0294174992738645df70c44cdecf7fad3a62244b788e7e408c582ee48a74b289f3acec78510">>,
-                <<"kernel">> =>
-                    <<"69d0cd7d13858e4fcef6bc7797aebd258730f215bc5642c4ad8e4b893cc67576">>,
-                <<"initrd">> =>
-                    <<"544045560322dbcd2c454bdc50f35edf0147829ec440e6cb487b4a1503f923c1">>,
-                <<"append">> =>
-                    <<"95a34faced5e487991f9cc2253a41cbd26b708bf00328f98dddbbf6b3ea2892e">>
-            }
-        ],
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ProxyWallet,
         <<"router-opts">> => #{
@@ -1289,11 +1273,7 @@ dynamic_router() ->
                 % Set module-specific factors for the test
                 <<"pricing-weight">> => 9,
                 <<"performance-weight">> => 1,
-                <<"score-preference">> => 4,
-                <<"is-admissible">> => #{ 
-                    <<"device">> => <<"snp@1.0">>,
-                    <<"path">> => <<"verify">>
-                }
+                <<"score-preference">> => 4
             }
         }
     }),    % mergeRight this takes our defined Opts and merges them into the
@@ -1301,7 +1281,6 @@ dynamic_router() ->
     Store = hb_opts:get(store, no_store, ProxyOpts),
     ?event(debug_dynrouter, {store, Store}),
     % Register workers with the dynamic router with varied prices.
-    {ok, [Req]} = file:consult(<<"test/admissible-report.eterm">>),
     lists:foreach(fun(X) ->
         {ok, Res} =
             hb_http:post(
@@ -1319,7 +1298,11 @@ dynamic_router() ->
                                         <<"template">> => <<"/c">>,
                                         <<"price">> => X * 250
                                     },
-                                <<"body">> => hb_message:commit(Req, ExecOpts)
+                                <<"body">> =>
+                                    hb_message:commit(
+                                        #{ <<"status">> => 200 },
+                                        ExecOpts
+                                    )
                             },
                             ExecOpts
                         )

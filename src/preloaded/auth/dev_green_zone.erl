@@ -2,8 +2,8 @@
 %%% management between trusted nodes.
 %%%
 %%% It handles node initialization, joining existing green zones, key exchange,
-%%% and node identity cloning. All operations are protected by hardware 
-%%% commitment and encryption.
+%%% and node identity cloning. All operations are protected by signed messages
+%%% and encryption.
 -module(dev_green_zone).
 -implements(<<"greenzone@1.0">>).
 -export([info/1, info/3, join/3, init/3, become/3, key/3, is_trusted/3]).
@@ -218,7 +218,7 @@ init(_M1, _M2, Opts) ->
 %% 1. Validates the node's history to ensure proper initialization
 %% 2. Checks for target peer information (location and ID)
 %% 3. If target peer is specified:
-%%    a. Generates a commitment report for the peer
+%%    a. Generates a signed join request for the peer
 %%    b. Prepares and sends a POST request to the target peer
 %%    c. Verifies the response and decrypts the returned zone key
 %%    d. Updates local configuration with the shared AES key
@@ -419,7 +419,7 @@ finalize_become(KeyResp, NodeLocation, NodeID, GreenZoneAES, Opts) ->
 %% This function handles the client-side join flow when connecting to a peer:
 %% 1. Verifies the node is not already in a green zone
 %% 2. Optionally adopts configuration from the target peer
-%% 3. Generates a hardware-backed commitment report
+%% 3. Generates a signed join request
 %% 4. Sends a POST request to the peer's join endpoint
 %% 5. Verifies the response signature
 %% 6. Decrypts the returned AES key
@@ -444,20 +444,14 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
     case GreenZoneAES == undefined of
         true ->
             Wallet = hb_opts:get(priv_wallet, undefined, InitOpts),
-            {ok, Report} =
-                hb_ao:resolve(
-                    #{ <<"device">> => <<"snp@1.0">> },
-                    <<"generate">>,
-                    InitOpts
-                ),
             WalletPub = element(2, Wallet),
-            ?event(green_zone, {remove_uncommitted, Report}),
-            MergedReq = hb_ao:set(
-                Report, 
-                <<"public_key">>,
-                base64:encode(term_to_binary(WalletPub)),
-                InitOpts
-            ),
+            NodeMsg = hb_private:reset(hb_cache:ensure_all_loaded(InitOpts, InitOpts)),
+            NodeAddr = hb_util:human_id(ar_wallet:to_address(Wallet)),
+            MergedReq = #{
+                <<"address">> => NodeAddr,
+                <<"node-message">> => NodeMsg,
+                <<"public_key">> => base64:encode(term_to_binary(WalletPub))
+            },
             % Create an committed join request using the wallet.
             % hb_message:commit expects Opts map (which contains priv-wallet), not wallet tuple
             Req = hb_cache:ensure_all_loaded(
@@ -466,8 +460,8 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
             ),
             ?event({join_req, {explicit, Req}}),
             ?event({verify_res, hb_message:verify(Req)}),
-            % Log that the commitment report is being sent to the peer.
-            ?event(green_zone, {join, sending_commitment, PeerLocation, PeerID, Req}),
+            % Log that the join request is being sent to the peer.
+            ?event(green_zone, {join, sending_request, PeerLocation, PeerID, Req}),
             case hb_http:post(PeerLocation, <<"/~greenzone@1.0/join">>, Req, InitOpts) of
                 {ok, Resp} ->
                     % Log the response received from the peer.
@@ -537,31 +531,29 @@ join_peer(PeerLocation, PeerID, _M1, _M2, InitOpts) ->
 %% This function handles the server-side join flow when receiving a connection
 %% request:
 %% 1. Validates the peer's configuration meets required standards
-%% 2. Extracts the commitment report and public key from the request
-%% 3. Verifies the hardware-backed commitment report
+%% 2. Extracts the peer address and public key from the request
+%% 3. Verifies the join request signature
 %% 4. Adds the joining node to the trusted nodes list
 %% 5. Encrypts the shared AES key with the peer's public key
 %% 6. Returns the encrypted key to the requesting node
 %%
 %% @param M1 Ignored parameter
-%% @param Req The join request containing commitment report and public key
+%% @param Req The join request containing peer details and public key
 %% @param Opts A map of configuration options
 %% @returns `{ok, Map}' on success with encrypted AES key, or
 %% `{error, Binary}' on failure with error message
 -spec validate_join(M1 :: term(), Req :: map(), Opts :: map()) ->
         {ok, map()} | {error, binary()}.
-validate_join(M1, Req, Opts) ->
+validate_join(_M1, Req, Opts) ->
     case validate_peer_opts(Req, Opts) of
         true -> do_nothing;
         false -> throw(invalid_join_request)
     end,
     ?event(green_zone, {join, start}),
-    % Retrieve the commitment report and address from the join request.
-    Report = hb_ao:get(<<"report">>, Req, Opts),
+    % Retrieve the address from the join request.
     NodeAddr = hb_ao:get(<<"address">>, Req, Opts),
     ?event(green_zone, {join, extract, {node_addr, NodeAddr}}),
     % Retrieve and decode the joining node's public key.
-    ?event(green_zone, {m1, {explicit, M1}}),
     ?event(green_zone, {req, {explicit, Req}}),
     EncodedPubKey = hb_ao:get(<<"public_key">>, Req, Opts),
     ?event(green_zone, {encoded_pub_key, {explicit, EncodedPubKey}}),
@@ -570,22 +562,19 @@ validate_join(M1, Req, Opts) ->
         Encoded -> binary_to_term(base64:decode(Encoded))
     end,
     ?event(green_zone, {public_key, {explicit, RequesterPubKey}}),
-    % Verify the commitment report provided in the join request.
-    case hb_ao:resolve(
-        {as, <<"snp@1.0">>, M1},
-        Req#{ <<"path">> => <<"verify">> },
-        Opts
-    ) of
-        {ok, <<"true">>} ->
-            % Commitment verified.
-            ?event(green_zone, {join, commitment, verified}),
+    Signers = hb_message:signers(Req, Opts),
+    IsVerified = hb_message:verify(Req, Signers, Opts),
+    IsNodeSigner = lists:member(NodeAddr, Signers),
+    ?event(green_zone, {join, verify, {IsVerified, IsNodeSigner, Signers}}),
+    case IsVerified andalso IsNodeSigner of
+        true ->
             % Retrieve the shared AES key used for encryption.
             GreenZoneAES = hb_opts:get(priv_green_zone_aes, undefined, Opts),
             ?event(green_zone, {green_zone_aes, {priv_explicit, GreenZoneAES}}),
             % Retrieve the local node's wallet to extract its public key.
             {WalletPubKey, _} = hb_opts:get(priv_wallet, undefined, Opts),
             % Add the joining node's details to the trusted nodes list.
-            add_trusted_node(NodeAddr, Report, RequesterPubKey, Opts),
+            add_trusted_node(NodeAddr, RequesterPubKey, Opts),
             % Log the update of trusted nodes.
             ?event(green_zone, {join, update, trusted_nodes, ok}),
             % Encrypt the shared AES key with the joining node's public key.
@@ -598,14 +587,9 @@ validate_join(M1, Req, Opts) ->
                 <<"zone-key">>     => base64:encode(EncryptedPayload),
                 <<"public_key">>   => WalletPubKey
             }};
-        {ok, <<"false">>} ->
-            % Commitment failed.
-            ?event(green_zone, {join, commitment, failed}),
-            {error, <<"Received invalid commitment report.">>};
-        Error ->
-            % Error during commitment verification.
-            ?event(green_zone, {join, commitment, error, Error}),
-            Error
+        false ->
+            ?event(green_zone, {join, signature, failed}),
+            {error, <<"Received invalid join request.">>}
     end.
 
 %% @doc Validates that a peer's configuration matches required options.
@@ -657,28 +641,25 @@ validate_peer_opts(Req, Opts) ->
     ?event(green_zone, {validate_peer_opts, final_result, Result}),
     Result.
 
-%% @doc Adds a node to the trusted nodes list with its commitment report.
+%% @doc Adds a node to the trusted nodes list.
 %%
 %% This function updates the trusted nodes configuration:
 %% 1. Retrieves the current trusted nodes map
-%% 2. Adds the new node with its report and public key
+%% 2. Adds the new node with its public key
 %% 3. Updates the node configuration with the new trusted nodes list
 %%
 %% @param NodeAddr The joining node's address
-%% @param Report The commitment report provided by the joining node
 %% @param RequesterPubKey The joining node's public key
 %% @param Opts A map of configuration options
 %% @returns ok
 -spec add_trusted_node(
     NodeAddr :: binary(),
-    Report :: map(),
     RequesterPubKey :: term(), Opts :: map()) -> ok.
-add_trusted_node(NodeAddr, Report, RequesterPubKey, Opts) ->
+add_trusted_node(NodeAddr, RequesterPubKey, Opts) ->
     % Retrieve the current trusted nodes map.
     TrustedNodes = hb_opts:get(trusted_nodes, #{}, Opts),
     % Add the joining node's details to the trusted nodes.
     UpdatedTrustedNodes = maps:put(NodeAddr, #{
-        <<"report">> => Report,
         <<"public-key">> => RequesterPubKey
     }, TrustedNodes),
     % Update configuration with the new trusted nodes and AES key.
