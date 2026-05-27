@@ -1,7 +1,6 @@
 config.*
 .rebar3
 _build
-src/cargo.hrl
 _checkouts
 _vendor
 data
@@ -44,6 +43,4 @@ mkdocs-site/
 mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
-!test/admissible-report-wallet.json
-!test/admissible-report.json
 !test/config.json

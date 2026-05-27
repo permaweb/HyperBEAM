@@ -115,8 +115,7 @@ register(_M1, M2, Opts) ->
                     AsID -> hb_opts:as(AsID, Opts)
                 end,
             % Post registration request to the router node
-            % The message includes our route details and attestation
-            % for verification
+            % The message includes our signed route details for verification.
             {ok, Res} =
                 hb_http:post(
                     RouterNode,
