@@ -659,7 +659,8 @@ match(Map1, Map2) ->
 match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
-    try unsafe_match(Map1, Map2, Mode, [], Opts)
+    try
+        unsafe_match(hb_ao:normalize_keys(Map1, Opts), Map2, Mode, [], Opts)
     catch
         throw:{mismatch, Type, Path, Val1, Val2} ->
             {mismatch, Type, Path, Val1, Val2};
@@ -668,6 +669,19 @@ match(Map1, Map2, Mode, Opts) ->
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
 %% if they do not.
+unsafe_match(#{ <<"match-type">> := Type, <<"body">> := Inner } = RawMap1,
+        RawMap2, _Mode, Path, Opts) when map_size(RawMap1) == 2 ->
+    case catch hb_util:key_to_atom(Type) of
+        Mode when Mode == strict; Mode == primary; Mode == only_present ->
+            unsafe_match(
+                hb_ao:normalize_keys(Inner, Opts),
+                hb_ao:normalize_keys(RawMap2, Opts),
+                Mode,
+                Path,
+                Opts
+            );
+        _ -> throw(invalid_match_type)
+    end;
 unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
     {_, SignedCommitments1} = 
         lists:partition(
