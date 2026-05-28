@@ -36,7 +36,9 @@ reference(Ref, Opts) when is_binary(Ref) ->
         {ok, _} = Ok ->
             Ok;
         {error, not_found} ->
-            resolve_cached(NormRef, Opts)
+            resolve_cached(NormRef, Opts);
+        {error, _} = Error ->
+            Error
     end.
 
 resolve_cached(Ref, Opts) ->
@@ -103,6 +105,8 @@ from_high_trust(Ref, Opts) ->
 from_forge_bootstrap(Ref, Opts) ->
     case hb_opts:get(forge_bootstrap, #{}, Opts) of
         #{ Ref := Mod } when is_atom(Mod) -> {ok, Mod};
+        Seeds when is_map(Seeds), map_size(Seeds) > 0 ->
+            {error, {forge_bootstrap_device_not_found, Ref}};
         _ -> {error, not_found}
     end.
 
