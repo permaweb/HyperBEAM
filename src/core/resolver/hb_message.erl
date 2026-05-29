@@ -259,8 +259,15 @@ id(Msg, RawCommitters, Opts) ->
 %% call.
 normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
-normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
-    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
+normalize_commitments(RawMsg, Opts, Mode) when is_map(RawMsg) ->
+    ?event(debug_normalize_commitments, {normalize_commitments, {msg, RawMsg}}),
+    % Collapse any message extension (`...') to its concrete content first. The
+    % commitments are computed over -- and must match -- the flattened message; a
+    % message built by `set' atop a signed base carries that base (and its
+    % commitments) under `...', so `uncommitted'/`commit' over the layered form
+    % would regenerate against the inherited commitments and yield more than one.
+    % A no-op for non-extended messages.
+    Msg = hb_maps:flatten(RawMsg, Opts),
     NormMsg =
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -390,7 +397,13 @@ attach_phash2(Msg, ExpectedHash, Opts) ->
 %% ...before using the output of this function as the 'canonical' message. This
 %% is such that expensive operations like signature verification are not
 %% performed unless necessary.
-with_only_committed(Msg, Opts) when is_map(Msg) ->
+with_only_committed(RawMsg, Opts) when is_map(RawMsg) ->
+    % Collapse any message extension (`...') to its concrete content first: the
+    % committed keys are filtered from this map, and they may be inherited through
+    % `...' (e.g. a signed message wrapped by a `set' that only touched `device').
+    % Filtering the layered structure would keep just the keys held at the top
+    % layer and drop the committed content. A no-op for non-extended messages.
+    Msg = hb_maps:flatten(RawMsg, Opts),
     ?event({with_only_committed, {msg, Msg}, {opts, Opts}}),
     Comms = hb_maps:get(<<"commitments">>, Msg, not_found, Opts),
     case is_map(Msg) andalso Comms /= not_found of
