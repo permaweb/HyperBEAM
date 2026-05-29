@@ -20,7 +20,7 @@
 -export([get/2, get/3, get/4, get_first/2, get_first/3, put/3, put/4, find/2, find/3]).
 -export([is_key/2, is_key/3, keys/1, keys/2, values/1, values/2]).
 -export([map/2, map/3, filter/2, filter/3, filtermap/2, filtermap/3]).
--export([fold/3, fold/4, take/2, take/3, size/1, size/2]).
+-export([fold/3, fold/4, take/2, take/3, size/1, size/2, flatten/2]).
 -export([merge/2, merge/3, remove/2, remove/3]).
 -export([with/2, with/3, without/2, without/3, update_with/3, update_with/4]).
 -export([from_list/1, to_list/1, to_list/2]).
@@ -110,6 +110,28 @@ find(Key, Map, Opts) when is_map(Map) ->
 find(Key, Map, Opts) ->
     hb_cache:ensure_loaded(maps:find(Key, hb_cache:ensure_loaded(Map, Opts)), Opts).
 
+%% @doc Collapse a message extension chain into a single concrete map: the
+%% reserved `...' key is followed to the parent (loading it if it is a link) and
+%% merged underneath this layer, with the nearer layer winning on conflict. The
+%% `...' pointer itself is dropped. A map without `...' (the common case) is
+%% returned unchanged, so this is a no-op for non-extended messages. Value-level
+%% links are left intact for callers to resolve as they iterate, matching the
+%% other iteration helpers.
+-spec flatten(Map :: map(), Opts :: map()) -> map().
+flatten(Map, Opts) ->
+    case hb_cache:ensure_loaded(Map, Opts) of
+        Loaded when is_map(Loaded) ->
+            case maps:find(<<"...">>, Loaded) of
+                error -> Loaded;
+                {ok, Ext} ->
+                    maps:merge(
+                        flatten(Ext, Opts),
+                        maps:remove(<<"...">>, Loaded)
+                    )
+            end;
+        Loaded -> Loaded
+    end.
+
 -spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
 put(Key, Value, Map) ->
 	put(Key, Value, Map, #{}).
@@ -165,7 +187,7 @@ values(Map) -> values(Map, #{}).
 
 -spec values(Map :: map(), Opts :: map()) -> [term()].
 values(Map, Opts) ->
-    maps:values(hb_cache:ensure_loaded(Map, Opts)).
+    maps:values(flatten(Map, Opts)).
 
 -spec size(Map :: map()) -> non_neg_integer().
 size(Map) ->
@@ -173,7 +195,7 @@ size(Map) ->
 
 -spec size(Map :: map(), Opts :: map()) -> non_neg_integer().
 size(Map, Opts) ->
-    maps:size(hb_cache:ensure_loaded(Map, Opts)).
+    maps:size(flatten(Map, Opts)).
 
 -spec map(
     Fun :: fun((Key :: term(), Value :: term()) -> term()),
@@ -190,7 +212,7 @@ map(Fun, Map) ->
 map(Fun, Map, Opts) ->
     maps:map(
         fun(K, V) -> Fun(K, hb_cache:ensure_loaded(V, Opts)) end,
-        hb_cache:ensure_loaded(Map, Opts)
+        flatten(Map, Opts)
     ).
 
 -spec merge(Map1 :: map(), Map2 :: map()) -> map().
@@ -245,7 +267,7 @@ filter(Fun, Map, Opts) ->
                 false -> false
             end
         end,
-        hb_cache:ensure_loaded(Map, Opts)
+        flatten(Map, Opts)
     ).
 
 -spec filtermap(
@@ -263,7 +285,7 @@ filtermap(Fun, Map) ->
 filtermap(Fun, Map, Opts) ->
     maps:filtermap(
         fun(K, V) -> Fun(K, hb_cache:ensure_loaded(V, Opts)) end,
-        hb_cache:ensure_loaded(Map, Opts)
+        flatten(Map, Opts)
     ).
 
 -spec fold(
@@ -284,7 +306,7 @@ fold(Fun, Acc, Map, Opts) ->
     maps:fold(
         fun(K, V, CurrAcc) -> Fun(K, hb_cache:ensure_loaded(V, Opts), CurrAcc) end,
         Acc,
-        hb_cache:ensure_loaded(Map, Opts)
+        flatten(Map, Opts)
     ).
 
 -spec take(N :: non_neg_integer(), Map :: map()) -> map().
@@ -322,7 +344,7 @@ to_list(Map) ->
 
 -spec to_list(Map :: map(), Opts :: map()) -> [{Key :: term(), Value :: term()}].
 to_list(Map, Opts) ->
-    maps:to_list(hb_cache:ensure_loaded(Map, Opts)).
+    maps:to_list(flatten(Map, Opts)).
 
 %%% Tests
 
@@ -454,3 +476,18 @@ keys_with_extension_test() ->
         lists:sort([<<"a">>, <<"b">>, <<"c">>]),
         lists:sort(keys(Ext, #{}))
     ).
+
+flatten_extension_test() ->
+    L0 = #{ <<"a">> => 1, <<"b">> => 2 },
+    L1 = #{ <<"b">> => 20, <<"c">> => 3, <<"...">> => L0 },
+    % Nearer layer wins; the `...' pointer is dropped.
+    ?assertEqual(
+        #{ <<"a">> => 1, <<"b">> => 20, <<"c">> => 3 },
+        flatten(L1, #{})
+    ),
+    % No-op for a map without `...'.
+    ?assertEqual(L0, flatten(L0, #{})),
+    % Iteration ops see the flattened view.
+    ?assertEqual(lists:sort([1, 20, 3]), lists:sort(values(L1, #{}))),
+    ?assertEqual(24, fold(fun(_, V, Acc) -> V + Acc end, 0, L1, #{})),
+    ?assertEqual(3, size(L1, #{})).
