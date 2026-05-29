@@ -871,11 +871,15 @@ finalize_result(OldBase, OldReq, Base, Req, {ok, Res}, Overlay, Opts) when is_ma
             base -> {OldBase, OldBase, Req};
             request -> {OldReq, Base, OldReq}
         end,
-    Merged = set(OverlayBase, Patch, internal_opts(Opts)),
+    % The computed result EXTENDS the base via the reserved `...' key rather than
+    % being merged over it: the overlay sits atop the (unchanged) base and key
+    % lookups fall through. This keeps the base message intact -- preserving its
+    % identity and commitments -- and avoids copying its keys.
+    Extended = Patch#{ <<"...">> => OverlayBase },
     update_hashpath(
         HashBase,
         HashReq,
-        hb_message:normalize_commitments(Merged, Opts, fast),
+        hb_message:normalize_commitments(Extended, Opts, fast),
         Opts
     );
 finalize_result(_OldBase, _OldReq, _Base, _Req, Res, _Overlay, _Opts) ->

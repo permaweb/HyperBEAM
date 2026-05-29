@@ -343,7 +343,9 @@ varied_overlay_cache_test() ->
         },
     {ok, Res1} = hb_ao:resolve(Base1, Req, Opts),
     ?assertEqual(2, maps:get(<<"x">>, Res1)),
-    ?assertEqual(<<"first">>, maps:get(<<"keep">>, Res1)),
+    % `keep' is inherited from the base, which the result now extends via `...',
+    % so it resolves through the extension-aware accessor rather than directly.
+    ?assertEqual(<<"first">>, hb_maps:get(<<"keep">>, Res1, undefined, Opts)),
     Base2 = Base1#{ <<"keep">> => <<"second">> },
     {ok, Res2} =
         hb_ao:resolve(
@@ -352,7 +354,7 @@ varied_overlay_cache_test() ->
             Opts#{ cache_control => [<<"only-if-cached">>] }
         ),
     ?assertEqual(2, maps:get(<<"x">>, Res2)),
-    ?assertEqual(<<"second">>, maps:get(<<"keep">>, Res2)).
+    ?assertEqual(<<"second">>, hb_maps:get(<<"keep">>, Res2, undefined, Opts)).
 
 varied_request_overlay_hashpath_test() ->
     Opts =
@@ -369,7 +371,8 @@ varied_request_overlay_hashpath_test() ->
         },
     {ok, Res} = hb_ao:resolve(Base, Req, Opts),
     ?assertEqual(2, maps:get(<<"y">>, Res)),
-    ?assertEqual(<<"request">>, maps:get(<<"keep">>, Res)),
+    % `keep' is inherited from the request, which the result now extends via `...'.
+    ?assertEqual(<<"request">>, hb_maps:get(<<"keep">>, Res, undefined, Opts)),
     VariedBase = hb_message:normalize_commitments(Base, Opts, fast),
     ?assertEqual(
         hb_path:hashpath(VariedBase, Req, Opts),
