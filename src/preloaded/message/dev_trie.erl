@@ -24,9 +24,19 @@
 %%% but cannot be properly normalized.
 -define(RADIX, 256).
 
+%%% @doc Trie node metadata keys that must not be treated as edge labels.
+-define(RESERVED_KEYS, [
+    <<"node-value">>,
+    <<"device">>,
+    <<"commitments">>,
+    <<"priv">>,
+    <<"hashpath">>
+]).
+
 info() ->
     #{
-        default => fun get/4
+        default => fun get/4,
+        reserved => ?RESERVED_KEYS
      }.
 
 keys(Trie, Opts) ->
@@ -240,16 +250,10 @@ retrieve(TrieNode, Key, Opts, KeyPrefixSizeAcc) ->
     end.
 
 %% @doc Get a list of edge labels for a given trie node.
-edges(TrieNode, Opts) when not is_map(TrieNode) -> [];
+edges(TrieNode, _Opts) when not is_map(TrieNode) -> [];
 edges(TrieNode, Opts) ->
     Filtered = hb_maps:without(
-        [
-            <<"node-value">>,
-            <<"device">>,
-            <<"commitments">>,
-            <<"priv">>,
-            <<"hashpath">>
-        ],
+        ?RESERVED_KEYS,
         TrieNode,
         Opts
     ),
@@ -286,7 +290,7 @@ test_opts() ->
         <<"store">> => [hb_test_utils:test_store()],
         <<"priv-wallet">> => hb:wallet()
     }.
-count_nodes(TrieNode, Opts) when not is_map(TrieNode) -> 0;
+count_nodes(TrieNode, _Opts) when not is_map(TrieNode) -> 0;
 count_nodes(TrieNode, Opts) ->
     EdgeLabels = edges(TrieNode, Opts),
     CountsChildren =
@@ -297,7 +301,7 @@ count_nodes(TrieNode, Opts) ->
         ],
     1 + lists:sum(CountsChildren).
 
-verify_nodes(TrieNode, Opts) when not is_map(TrieNode) -> true;
+verify_nodes(TrieNode, _Opts) when not is_map(TrieNode) -> true;
 verify_nodes(TrieNode, Opts) ->
     ThisNode = hb_message:verify(TrieNode, all, Opts),
     EdgeLabels = edges(TrieNode, Opts),
