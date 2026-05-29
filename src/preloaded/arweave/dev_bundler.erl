@@ -659,6 +659,109 @@ nested_bundle_test_parallel() ->
         stop_test_servers(ServerHandle, NodeOpts)
     end.
 
+%% @doc End-to-end bundler test for a nested dataitem where the parent
+%% has bundle=false. The chile is posted on its own first.
+nested_unbundled_bundle_child_posted_test_parallel() ->
+    run_nested_unbundled_bundle_test(child_posted).
+
+%% @doc Like `nested_inlined_bundle_child_posted_test_parallel/0', but the
+%% child is never posted on its own.
+nested_unbundled_bundle_child_not_posted_test_parallel() ->
+    run_nested_unbundled_bundle_test(child_not_posted).
+
+run_nested_unbundled_bundle_test(Variant) ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    % NodeOpts redirects arweave gateway requests to the mock server.
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(
+        #{
+            price => {200, integer_to_binary(Price)},
+            tx_anchor => {200, hb_util:encode(Anchor)}
+        }
+    ),
+    try
+        ClientOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+        NodeOpts2 = maps:merge(NodeOpts, #{ <<"bundler-max-items">> => 3 }),
+        Node = hb_http_server:start_node(NodeOpts2#{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
+        }),
+        %% Child: an `httpsig@1.0'-signed message
+        Child = hb_message:commit(
+            #{
+                <<"event">> => <<"is_admissible">>,
+                <<"reference">> => <<"ref-value">>,
+                <<"status-class">> => <<"success">>
+            },
+            ClientOpts,
+            #{ <<"device">> => <<"httpsig@1.0">> }
+        ),
+        ?assert(hb_message:verify(Child, all, ClientOpts)),
+        %% Parent: signed with `ans104@1.0' and `bundle' => false, so the
+        %% child is offloaded as a link in the parent's committed form.
+        Parent = hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"type">> => <<"Assignment">>,
+                <<"body">> => Child
+            },
+            ClientOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }
+        ),
+        ?assert(hb_message:verify(Parent, all, ClientOpts)),
+        %% Post the first bundle slot (per `Variant'), then the nested
+        %% parent, then a plain data item.
+        ?assertMatch({ok, _}, post_first_item(Node, Variant, Child, ClientOpts)),
+        ?assertMatch({ok, _}, post_structured_item(Node, Parent, ClientOpts)),
+        ?assertMatch({ok, _},
+            post_data_item(Node, new_data_item(2, 10), ClientOpts)),
+        %% The three items bundle into a single transaction.
+        TXs = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(1, length(TXs)),
+        Proofs = hb_mock_server:get_requests(chunk, 1, ServerHandle),
+        ?assert(length(Proofs) >= 1),
+        %% Reconstitute the bundle TX and verify it carries three valid items.
+        TX = reconstitute_tx(hd(TXs), Proofs),
+        ?event(debug_test, {tx, TX}),
+        ?assert(ar_tx:verify(TX)),
+        ?assertEqual(Anchor, TX#tx.anchor),
+        ?assertEqual(Price, TX#tx.reward),
+        Bundle = ar_bundles:deserialize(TX),
+        ?assertEqual(3, maps:size(Bundle#tx.data)),
+        %% Each bundled item must still verify once decoded back to
+        %% `structured@1.0'.
+        maps:foreach(
+            fun(_Key, BundledItem) ->
+                Structured = hb_message:convert(
+                    BundledItem,
+                    <<"structured@1.0">>,
+                    <<"ans104@1.0">>,
+                    ClientOpts
+                ),
+                ?assert(hb_message:verify(Structured, all, ClientOpts))
+            end,
+            Bundle#tx.data
+        ),
+        %% The bundle TX must convert to `structured@1.0' and verify, then
+        %% round-trip back to `tx@1.0' without inflating its data.
+        TXStructured = hb_message:convert(
+            TX, <<"structured@1.0">>, <<"tx@1.0">>, ClientOpts),
+        ?assert(hb_message:verify(TXStructured, all, ClientOpts)),
+        TXRoundtrip = hb_message:convert(
+            TXStructured, <<"tx@1.0">>, <<"structured@1.0">>, ClientOpts),
+        ?assertEqual(byte_size(TX#tx.data), byte_size(TXRoundtrip#tx.data)),
+        ?assert(ar_tx:verify(TXRoundtrip)),
+        ok
+    after
+        %% Always cleanup, even if test fails
+        stop_test_servers(ServerHandle, NodeOpts)
+    end.
+
+post_first_item(Node, child_posted, Child, ClientOpts) ->
+    post_structured_item(Node, Child, ClientOpts);
+post_first_item(Node, child_not_posted, _Child, ClientOpts) ->
+    post_data_item(Node, new_data_item(1, 10), ClientOpts).
+
 price_error_test_parallel() ->
     test_api_error(#{
         price => {500, <<"error">>},
@@ -1522,6 +1625,10 @@ post_data_item(Node, Item, Opts) ->
         <<"ans104@1.0">>,
         Opts
     ),
+    post_structured_item(Node, StructuredItem, Opts).
+
+%% @doc Post an already-`structured@1.0' message to the bundler endpoint.
+post_structured_item(Node, StructuredItem, Opts) ->
     hb_http:post(
         Node,
         #{
@@ -1532,8 +1639,11 @@ post_data_item(Node, Item, Opts) ->
         Opts
     ).
 
-assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
-    %% Reconstitute the transaction with its data from the POSTed payloads.
+%% @doc Reconstitute a bundle transaction from a captured `tx' request and
+%% its `chunk' proof requests: decode the header, validate every chunk's
+%% merkle path, then concatenate the chunks in offset order to recover the
+%% transaction data.
+reconstitute_tx(TXRequest, Proofs) ->
     TXBinary = maps:get(<<"body">>, TXRequest),
     TXJSON = hb_json:decode(TXBinary),
     TXHeader = ar_tx:json_struct_to_tx(TXJSON),
@@ -1558,8 +1668,11 @@ assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts)
     ),
     SortedChunks = lists:sort(fun({O1, _}, {O2, _}) -> O1 =< O2 end, ChunksWithOffsets),
     Chunks = [Chunk || {_Offset, Chunk} <- SortedChunks],
-    DataBinary = iolist_to_binary(Chunks),
-    TX = TXHeader#tx{ data = DataBinary },
+    TXHeader#tx{ data = iolist_to_binary(Chunks) }.
+
+assert_bundle(Node, ExpectedItems, Anchor, Price, TXRequest, Proofs, ClientOpts) ->
+    %% Reconstitute the transaction with its data from the POSTed payloads.
+    TX = reconstitute_tx(TXRequest, Proofs),
     ?event(debug_test, {tx, TX}),
     ?assert(ar_tx:verify(TX)),
     ?assertEqual(Anchor, TX#tx.anchor),

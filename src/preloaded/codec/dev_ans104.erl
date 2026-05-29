@@ -2,7 +2,7 @@
 %%% records to and from TABMs.
 -module(dev_ans104).
 -device_libraries([lib_arweave_common]).
--export([to/3, from/3, commit/3, verify/3, content_type/1]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3, content_type/1]).
 -export([serialize/3, deserialize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -128,6 +128,14 @@ do_from(RawTX, Req, Opts) ->
     ?event({from, {parsed_message, WithCommitments}}),
     {ok, WithCommitments}.
 
+%% @doc Inspect a message's signed ans104 commitment and, if it carries an
+%% explicit `bundle' field, mirror that value onto the request `Req'.
+to_hint(Msg, Req, Opts) ->
+    case lib_arweave_common:bundle_hint(<<"ans104@1.0">>, Msg, Req, Opts) of
+        not_found -> {ok, Req};
+        Hint -> Hint
+    end.
+
 %% @doc Internal helper to translate a message to its #tx record representation,
 %% which can then be used by ar_bundles to serialize the message. We call the 
 %% message's device in order to get the keys that we will be checkpointing. We 
@@ -144,55 +152,19 @@ to(Binary, _Req, _Opts) when is_binary(Binary) ->
         }
     };
 to(TX, _Req, _Opts) when is_record(TX, tx) -> {ok, TX};
-to(RawTABM, Req, Opts) when is_map(RawTABM) ->
+to(TABM, Req, Opts) when is_map(TABM) ->
     % Ensure that the TABM is fully loaded if the `bundle` key is set to true.
-    ?event(ans104_to, {to, {inbound, RawTABM}, {req, Req}},
+    ?event(ans104_to, {to, {inbound, TABM}, {req, Req}},
         #{debug_print_verify => false}),
-    MaybeCommitment = hb_message:commitment(
-        #{ <<"commitment-device">> => <<"ans104@1.0">> },
-        RawTABM,
+    TX = lib_arweave_common:to(
+        <<"ans104@1.0">>, TABM, Req,
+        fun lib_arweave_common:fields_to_tx/4,
+        fun lib_arweave_common:excluded_tags/3,
         Opts
     ),
-    IsBundle = lib_arweave_common:is_bundle(MaybeCommitment, Req, Opts),
-    MaybeBundle = lib_arweave_common:maybe_load(RawTABM, IsBundle, Opts),
-    ?event(ans104_to, {to, {maybe_bundle, MaybeBundle}},
+    ?event(ans104_to, {to, {result, TX}},
         #{debug_print_verify => false}),
-
-    % Calculate and normalize the `data', if applicable.
-    Data = lib_arweave_common:data(
-        MaybeBundle, Req, fun dev_ans104:to/3, Opts),
-    ?event(ans104_to, {to, {calculated_data, Data}},
-        #{debug_print_verify => false}),
-    TX0 = lib_arweave_common:siginfo(
-        MaybeBundle, MaybeCommitment,
-        fun lib_arweave_common:fields_to_tx/4, Opts
-    ),
-    ?event(ans104_to, {to, {found_siginfo, TX0}},
-        #{debug_print_verify => false}),
-    TX1 = TX0#tx { data = Data },
-    % Calculate the tags for the TX.
-    Tags = lib_arweave_common:tags(
-        TX1, MaybeCommitment, MaybeBundle,
-        lib_arweave_common:excluded_tags(TX1, MaybeBundle, Opts), Opts),
-    ?event(ans104_to, {to, {calculated_tags, Tags}},
-        #{debug_print_verify => false}),
-    TX2 = TX1#tx { tags = Tags },
-    Res =
-        try ar_tx:normalize(TX2)
-        catch
-            Type:Error:Stacktrace ->
-                ?event({
-                    {reset_ids_error, Error},
-                    {tx_without_data, {explicit, TX2}}}),
-                ?event({prepared_tx_before_ids,
-                    {tags, {explicit, TX2#tx.tags}},
-                    {data, TX2#tx.data}
-                }),
-                erlang:raise(Type, Error, Stacktrace)
-        end,
-    ?event(ans104_to, {to, {result, Res}},
-        #{debug_print_verify => false}),
-    {ok, Res};
+    {ok, TX};
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
 
@@ -840,17 +812,18 @@ test_bundle_commitment(Commit, Encode, Decode) ->
         hb_util:atom(hb_ao:get(<<"bundle">>, CommittedCommitment, false, Opts)),
         Label),
     
-    Encoded = hb_message:convert(Committed, 
+    Encoded = hb_message:convert(Committed,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
-        <<"structured@1.0">>, Opts),
+        <<"structured@1.0">>,
+        Opts),
     ?event(debug_test, {encoded, Label, {explicit, Encoded}}),
     ?assert(ar_bundles:verify_item(Encoded), Label),
     %% IF the input message is unbundled, #tx.data should be empty.
     ?assertEqual(ToBool(Commit), Encoded#tx.data /= <<>>, Label),
 
-    Decoded = hb_message:convert(Encoded, 
+    Decoded = hb_message:convert(Encoded,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => ToBool(Decode) },
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
+        <<"ans104@1.0">>,
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     ?assert(hb_message:verify(Decoded, all, Opts), Label),
@@ -883,16 +856,17 @@ test_bundle_uncommitted(Encode, Decode) ->
     ToBool = fun(unbundled) -> false; (bundled) -> true end,
     Label = lists:flatten(io_lib:format("~p -> ~p", [Encode, Decode])),
 
-    Encoded = hb_message:convert(Structured, 
+    Encoded = hb_message:convert(Structured,
         #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
-        <<"structured@1.0">>, Opts),
+        <<"structured@1.0">>,
+        Opts),
     ?event(debug_test, {encoded, Label, {explicit, Encoded}}),
     %% IF the input message is unbundled, #tx.data should be empty.
     ?assertEqual(ToBool(Encode), Encoded#tx.data /= <<>>, Label),
 
-    Decoded = hb_message:convert(Encoded, 
+    Decoded = hb_message:convert(Encoded,
         #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => ToBool(Decode) },
-        #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => ToBool(Encode) },
+        <<"ans104@1.0">>,
         Opts),
     ?event(debug_test, {decoded, Label, {explicit, Decoded}}),
     case Encode of
@@ -902,3 +876,4 @@ test_bundle_uncommitted(Encode, Decode) ->
             ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label)
     end,
     ok.
+
