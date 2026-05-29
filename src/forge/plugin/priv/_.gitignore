@@ -2,6 +2,8 @@ _build/
 _checkouts/
 ebin/
 .eunit/
+logs/
+cache-*/
 *.beam
 *.crashdump
 erl_crash.dump
