@@ -225,6 +225,14 @@ from_message(hashpath, Msg, Opts) -> hashpath(Msg, Opts);
 from_message(request, #{ path := Path }, Opts) -> term_to_path_parts(Path, Opts);
 from_message(request, #{ <<"path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
 from_message(request, #{ <<"Path">> := Path }, Opts) -> term_to_path_parts(Path, Opts);
+from_message(request, Msg, Opts) when is_map(Msg) ->
+    % The path was not present at the top level, but a `set' onto a message that
+    % already held `path' lays it under the `...' extension. Fall through to it
+    % so the reserved key remains reachable (a no-op for non-extended messages).
+    case hb_maps:find(<<"path">>, Msg, Opts) of
+        {ok, Path} -> term_to_path_parts(Path, Opts);
+        error -> undefined
+    end;
 from_message(request, _, _Opts) -> undefined.
 
 %% @doc Convert a term into an executable path. Supports binaries, lists, and
