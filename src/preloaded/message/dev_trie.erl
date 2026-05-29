@@ -15,7 +15,6 @@
 %%% 4 children!)
 -module(dev_trie).
 -export([info/0, keys/2, set/3, get/3, get/4]).
--export([reserved_keys/0, is_reserved_key/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -36,17 +35,12 @@
 
 info() ->
     #{
-        default => fun get/4
+        default => fun get/4,
+        reserved => ?RESERVED_KEYS
      }.
 
 keys(Trie, Opts) ->
     collect_keys(Trie, <<>>, Opts, []).
-
-reserved_keys() ->
-    ?RESERVED_KEYS.
-
-is_reserved_key(Key) ->
-    lists:member(Key, ?RESERVED_KEYS).
 
 collect_keys(TrieNode, Prefix, Opts, Acc) ->
     EdgeLabels = edges(TrieNode, Opts),
