@@ -841,8 +841,13 @@ update_hashpath(Base, Req, Res, Opts) ->
             end
     end.
 
-normalize_varied(Original, Original, _Opts) ->
-    Original;
+normalize_varied(Original, Original, Opts) ->
+    % No schema varied the message, so the device function receives it directly.
+    % Flatten any message extension so functions that pattern-match keys (rather
+    % than reading via `hb_ao'/`hb_maps') see a concrete map. A no-op for messages
+    % without `...'. Typed functions instead receive the schema-varied (already
+    % concrete) message via the clause below.
+    hb_maps:flatten(Original, normalize_opts(Opts));
 normalize_varied(_Original, Varied, Opts) ->
     hb_message:normalize_commitments(Varied, normalize_opts(Opts), fast).
 

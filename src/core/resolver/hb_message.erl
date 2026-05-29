@@ -110,8 +110,17 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
         _ -> from_tabm(TABM, TargetFormat, OldPriv, Opts)
     end.
 
-to_tabm(Msg, SourceFormat, Opts) ->
+to_tabm(RawMsg, SourceFormat, Opts) ->
     {SourceCodecMod, Params} = conversion_spec_to_req(SourceFormat, Opts),
+    % Flatten any message extension (`...') to its concrete content before
+    % serialization: a message's serialized form is its flattened form, and the
+    % `...' key is a purely in-memory representation that must not appear on the
+    % wire (or in a commitment). Flattening is a no-op for non-extended messages.
+    Msg =
+        case is_map(RawMsg) of
+            true -> hb_maps:flatten(RawMsg, Opts);
+            false -> RawMsg
+        end,
     % We use _from_ here because the codecs are labelled from the perspective
     % of their own format. `dev_codec_ans104:from/1' will convert _from_
     % an ANS-104 message _into_ a TABM.
@@ -206,7 +215,7 @@ normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
 normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
     ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
-    NormMsg = 
+    NormMsg =
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
                 Val;
