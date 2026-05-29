@@ -509,10 +509,9 @@ simple_stack_execute_test() ->
 		<<"result">> => <<"INIT">>
 	},
 	?event({stack_executing, test, {explicit, Msg}}),
-	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT!D1!2_D2_2">> }},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
-	).
+	{ok, Res} =
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
+	?assertEqual(<<"INIT!D1!2_D2_2">>, hb_ao:get(<<"result">>, Res, #{})).
 
 many_devices_test() ->
 	Msg = #{
@@ -530,14 +529,11 @@ many_devices_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-	?assertMatch(
-		{ok,
-			#{
-				<<"result">> :=
-					<<"INIT+D12+D22+D32+D42+D52+D62+D72+D82">>
-			}
-		},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
+	{ok, Res} =
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
+	?assertEqual(
+		<<"INIT+D12+D22+D32+D42+D52+D62+D72+D82">>,
+		hb_ao:get(<<"result">>, Res, #{})
 	).
 
 benchmark_test() ->
@@ -677,17 +673,12 @@ reinvocation_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-	Res1 = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
-	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT+D12+D22">> }},
-		Res1
-	),
-	{ok, Req} = Res1,
-	Res2 = hb_ao:resolve(Req, #{ <<"path">> => <<"append">>, <<"bin">> => <<"3">> }, #{}),
-	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT+D12+D22+D13+D23">> }},
-		Res2
-	).
+	{ok, Req} =
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{}),
+	?assertEqual(<<"INIT+D12+D22">>, hb_ao:get(<<"result">>, Req, #{})),
+	{ok, Res2} =
+		hb_ao:resolve(Req, #{ <<"path">> => <<"append">>, <<"bin">> => <<"3">> }, #{}),
+	?assertEqual(<<"INIT+D12+D22+D13+D23">>, hb_ao:get(<<"result">>, Res2, #{})).
 
 skip_test() ->
 	Base = #{
@@ -699,14 +690,13 @@ skip_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT+D12">> }},
+	{ok, Res} =
 		hb_ao:resolve(
 			Base,
 			#{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> },
             #{}
-		)
-	).
+		),
+	?assertEqual(<<"INIT+D12">>, hb_ao:get(<<"result">>, Res, #{})).
 
 pass_test() ->
     % The append device will return `ok' after 2 passes, so this test
@@ -720,10 +710,9 @@ pass_test() ->
 			},
 		<<"result">> => <<"INIT">>
 	},
-	?assertMatch(
-		{ok, #{ <<"result">> := <<"INIT+D1_+D1_">> }},
-		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{})
-	).
+	{ok, Res} =
+		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
+	?assertEqual(<<"INIT+D1_+D1_">>, hb_ao:get(<<"result">>, Res, #{})).
 
 not_found_test() ->
     % Ensure that devices not exposing a key are safely skipped.
@@ -743,10 +732,7 @@ not_found_test() ->
 		<<"result">> => <<"INIT">>
 	},
     {ok, Res} = hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"_">> }, #{}),
-    ?assertMatch(
-		#{ <<"result">> := <<"INIT+D1_+D2_">> },
-		Res
-	),
+    ?assertEqual(<<"INIT+D1_+D2_">>, hb_ao:get(<<"result">>, Res, #{})),
     ?event({ex3, Res}),
     ?assertEqual(1337, hb_ao:get(<<"special/output">>, Res, #{})).
 
