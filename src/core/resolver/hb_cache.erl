@@ -265,13 +265,7 @@ generate_binary_path(Bin, Opts) ->
 %% outer message (which does not include its commitments) will be built upon
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
-write(RawExtMsg, Opts) when is_map(RawExtMsg) ->
-    % Collapse any message extension (`...') to its concrete content before
-    % writing: a message's stored form is its flattened form, and the keys it
-    % commits to may be inherited through `...'. Filtering to the committed keys
-    % over the raw (layered) structure would drop those inherited keys (keeping
-    % only the few held at the top layer). A no-op for non-extended messages.
-    RawMsg = hb_maps:flatten(RawExtMsg, Opts),
+write(RawMsg, Opts) when is_map(RawMsg) ->
     hb_message:paranoid_verify(cache_write, RawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
