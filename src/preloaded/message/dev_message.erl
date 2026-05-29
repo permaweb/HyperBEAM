@@ -709,11 +709,15 @@ set(Base, NewValuesMsg, Opts) ->
             CommittedKeys
         ),
     ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
-    % Combine with deep merge or if `set-mode` is `explicit' then just merge.
+    % Combine the new values with the base. The result EXTENDS the base via the
+    % reserved `...' key rather than copying its keys: an `explicit' set lays the
+    % new values directly atop the base, while a `deep' set additionally merges
+    % nested submessages (see do_deep_merge/3). Either way the base is left intact
+    % under `...' and key lookups fall through to it.
     Merged =
         hb_private:set_priv(
             case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
-                <<"explicit">> -> maps:merge(BaseValues, NewValues);
+                <<"explicit">> -> NewValues#{ <<"...">> => BaseValues };
                 _ -> do_deep_merge(BaseValues, NewValues, Opts)
             end,
             OriginalPriv

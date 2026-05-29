@@ -729,22 +729,28 @@ unsafe_match(#{ <<"match-type">> := Type, <<"body">> := Inner } = RawMap1,
         _ -> throw(invalid_match_type)
     end;
 unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
-    {_, SignedCommitments1} = 
+    % Collapse any message extension first, so matching compares resolved content
+    % rather than the layered structure (and so the `...' key never reaches the
+    % key-set comparison or normalisation below). Nested extensions are handled by
+    % the recursive `unsafe_match' call on submessage values.
+    Map1Flat = hb_maps:flatten(RawMap1, Opts),
+    Map2Flat = hb_maps:flatten(RawMap2, Opts),
+    {_, SignedCommitments1} =
         lists:partition(
             fun({_, #{ <<"committer">> := _Committer }}) -> false;
                ({_, _}) -> true
             end,
-            hb_maps:to_list(hb_maps:get(<<"commitments">>, RawMap1, #{}, Opts))
+            hb_maps:to_list(hb_maps:get(<<"commitments">>, Map1Flat, #{}, Opts))
         ),
-    {_, SignedCommitments2} = 
+    {_, SignedCommitments2} =
         lists:partition(
             fun({_, #{ <<"committer">> := _Committer }}) -> false;
                ({_, _}) -> true
             end,
-            hb_maps:to_list(hb_maps:get(<<"commitments">>, RawMap1, #{}, Opts))
+            hb_maps:to_list(hb_maps:get(<<"commitments">>, Map1Flat, #{}, Opts))
         ),
-    Map1 = RawMap1#{ <<"commitments">> => SignedCommitments1 },
-    Map2 = RawMap2#{ <<"commitments">> => SignedCommitments2 },
+    Map1 = Map1Flat#{ <<"commitments">> => SignedCommitments1 },
+    Map2 = Map2Flat#{ <<"commitments">> => SignedCommitments2 },
     Keys1 =
         hb_maps:keys(
             NormMap1 =
