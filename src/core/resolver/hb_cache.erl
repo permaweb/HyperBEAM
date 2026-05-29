@@ -942,9 +942,11 @@ read_resolved(Base, Req, Opts) ->
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').
-read_in_memory_key(BaseMsg, NormKey, _Opts) ->
-    % For now, just wrap maps:find.
-    case maps:find(NormKey, BaseMsg) of
+read_in_memory_key(BaseMsg, NormKey, Opts) ->
+    % Use `hb_maps:find' so the lookup falls through a message extension (`...')
+    % to inherited keys -- matching what executing the `message@1.0' device would
+    % return, which is required when a cached-only read cannot fall back to exec.
+    case hb_maps:find(NormKey, BaseMsg, Opts) of
         error ->
             ?event(read_cached, {key_not_found, {key, NormKey}}),
             {error, not_found};

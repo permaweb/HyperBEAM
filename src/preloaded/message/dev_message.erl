@@ -562,13 +562,18 @@ commitment_ids_from_request(Base, Req, Opts) ->
     Res.
 
 %% @doc Ensure that the `commitments` submessage of a base message is fully
-%% loaded into local memory.
-ensure_commitments_loaded(M = #{ <<"commitments">> := L}, Opts) when ?IS_LINK(L) ->
-    M#{
-        <<"commitments">> => hb_cache:ensure_all_loaded(L, Opts)
-    };
-ensure_commitments_loaded(M, _Opts) ->
-    M.
+%% present and loaded into local memory. We first flatten any message extension
+%% (`...') so that commitments held by an extended base surface to the top, where
+%% the commitment functions read them -- a message that merely extends a signed
+%% base must show that base's commitments. We then load the commitments link if
+%% one is present. Flattening is a no-op for the (common) non-extended message.
+ensure_commitments_loaded(RawM, Opts) ->
+    case hb_maps:flatten(RawM, Opts) of
+        M = #{ <<"commitments">> := L } when ?IS_LINK(L) ->
+            M#{ <<"commitments">> => hb_cache:ensure_all_loaded(L, Opts) };
+        M ->
+            M
+    end.
 
 %% @doc Returns a list of commitment IDs in a commitments map that are relevant
 %% for a list of given committer addresses.
@@ -728,9 +733,21 @@ set(Base, NewValuesMsg, Opts) ->
             {ok, Merged};
         _ ->
             % We did overwrite some keys, but do their values match the original?
-            % If not, we must remove the commitments.
-            ChangedBaseKeys = hb_maps:with(OverwrittenCommittedKeys, Base, Opts),
-            ChangedMergedKeys = hb_maps:with(OverwrittenCommittedKeys, Merged, Opts),
+            % If not, we must remove the commitments. Both the base and the result
+            % may be `...' extensions, so we compare their flattened (concrete)
+            % views -- an overwritten key's value may be inherited through `...'.
+            ChangedBaseKeys =
+                hb_maps:with(
+                    OverwrittenCommittedKeys,
+                    hb_maps:flatten(Base, Opts),
+                    Opts
+                ),
+            ChangedMergedKeys =
+                hb_maps:with(
+                    OverwrittenCommittedKeys,
+                    hb_maps:flatten(Merged, Opts),
+                    Opts
+                ),
             Matches = hb_message:match(ChangedMergedKeys, ChangedBaseKeys, strict, Opts),
             case Matches of
                 true ->
@@ -750,69 +767,60 @@ set(Base, NewValuesMsg, Opts) ->
                 %         }
                 %     ),
                 _ ->
-                    {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
+                    % A committed key changed value, so the base's commitments
+                    % no longer hold. Flatten the extension to a concrete message
+                    % before dropping `commitments', as the commitments may be
+                    % held by the base under `...' and would otherwise survive.
+                    {ok,
+                        hb_maps:without(
+                            [<<"commitments">>],
+                            hb_maps:flatten(Merged, Opts),
+                            Opts
+                        )
+                    }
             end
     end.
 
-%% @doc Deep merge keys in a message, utilizing the set device of any child
-%% keys that are themselves messages.
+%% @doc Deep merge keys into a message, producing a `...' EXTENSION of the base
+%% rather than a flat copy. For each new value we either:
+%%   - deep-set it onto the base's submessage, when both the new value and the
+%%     base's value at that key are messages -- recursing through `set' so the
+%%     nested result is itself a `...' extension; or
+%%   - lay it directly atop the base (scalars, and keys the base does not hold as
+%%     a submessage).
+%% The changed keys are then laid over the (unchanged) base via `...'. An empty
+%% change set returns the base unchanged. The base is found via `hb_maps:find',
+%% which resolves both links and any `...' extension on the base itself.
 do_deep_merge(BaseValues, NewValues, Opts) ->
-    {WithNestedMerges, StillToDeepMerge} =
+    Changed =
         maps:fold(
-            fun(Key, NewValue, {Acc, ToDeepMerge})
-                    when is_map(NewValue)
-                    andalso is_map(map_get(Key, Acc)) ->
-                        BaseValue = map_get(Key, Acc),
-                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
-                        {
-                            Acc#{
-                                Key =>
-                                    hb_util:ok(
-                                        hb_ao:resolve(
-                                            BaseValue,
-                                            NewValueSet,
-                                            Opts
-                                        ),
+            fun(Key, NewValue, Acc) when is_map(NewValue) ->
+                case hb_maps:find(Key, BaseValues, Opts) of
+                    {ok, BaseValue} when is_map(BaseValue) ->
+                        Acc#{
+                            Key =>
+                                hb_util:ok(
+                                    hb_ao:resolve(
+                                        BaseValue,
+                                        NewValue#{ <<"path">> => <<"set">> },
                                         Opts
-                                    )
-                            },
-                            ToDeepMerge
+                                    ),
+                                    Opts
+                                )
                         };
-            (Key, NewValue, {Acc, ToDeepMerge})
-                    when is_map(NewValue) 
-                    andalso ?IS_LINK(map_get(Key, Acc)) ->
-                LoadedBaseValue = hb_cache:ensure_loaded(map_get(Key, Acc), Opts),
-                case is_map(LoadedBaseValue) of
-                    true ->
-                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
-                        {
-                            Acc#{
-                                Key =>
-                                    hb_util:ok(
-                                        hb_ao:resolve(
-                                            LoadedBaseValue,
-                                            NewValueSet,
-                                            Opts
-                                        ),
-                                        Opts
-                                    )
-                            },
-                            ToDeepMerge
-                        };
-                    false -> 
-                        {Acc, [Key | ToDeepMerge]}
+                    _ ->
+                        Acc#{ Key => NewValue }
                 end;
-            (Key, _, {Acc, ToDeepMerge}) ->
-                {Acc, [Key | ToDeepMerge]}
+               (Key, NewValue, Acc) ->
+                Acc#{ Key => NewValue }
             end,
-            {BaseValues, []},
+            #{},
             NewValues
         ),
-    hb_util:deep_merge(
-        WithNestedMerges,
-        maps:with(StillToDeepMerge, NewValues),
-        Opts
-    ).
+    case map_size(Changed) of
+        0 -> BaseValues;
+        _ -> Changed#{ <<"...">> => BaseValues }
+    end.
 
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, used to
@@ -985,21 +993,25 @@ deep_unset_test() ->
         }
     },
     Req = hb_ao:set(Base, #{ <<"deep/test-key2">> => unset }, Opts),
-    ?assertEqual(#{
+    ?assert(hb_message:match(#{
             <<"test-key1">> => <<"Value1">>,
             <<"deep">> => #{ <<"test-key3">> => <<"Value3">> }
         },
-        Req
-    ),
+        Req,
+        strict,
+        Opts
+    )),
     Res = hb_ao:set(Req, <<"deep/test-key3">>, unset, Opts),
-    ?assertEqual(#{
+    ?assert(hb_message:match(#{
             <<"test-key1">> => <<"Value1">>,
             <<"deep">> => #{}
         },
-        Res
-    ),
+        Res,
+        strict,
+        Opts
+    )),
     Msg4 = hb_ao:set(Res, #{ <<"deep">> => unset }, Opts),
-    ?assertEqual(#{ <<"test-key1">> => <<"Value1">> }, Msg4).
+    ?assert(hb_message:match(#{ <<"test-key1">> => <<"Value1">> }, Msg4, strict, Opts)).
 
 set_ignore_undefined_test() ->
 	Base = #{ <<"test-key">> => <<"Value1">> },
