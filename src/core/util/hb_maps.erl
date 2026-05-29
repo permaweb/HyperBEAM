@@ -68,9 +68,18 @@ get(Key, Map, Default) ->
     Opts :: map()
 ) -> term().
 get(Key, Map, Default, Opts) when is_map(Map) ->
-    case maps:get(Key, Map, Default) of
-        V when not ?IS_LINK(V) -> V;
-        Link -> hb_cache:ensure_loaded(Link, Opts)
+    case maps:find(Key, Map) of
+        {ok, V} when not ?IS_LINK(V) -> V;
+        {ok, Link} -> hb_cache:ensure_loaded(Link, Opts);
+        error ->
+            % The key is absent from this layer. If the message extends another
+            % via the reserved `...' key, fall through to the parent so that
+            % inherited keys resolve. The nearest layer always wins.
+            case maps:find(<<"...">>, Map) of
+                error -> Default;
+                {ok, Ext} ->
+                    get(Key, hb_cache:ensure_loaded(Ext, Opts), Default, Opts)
+            end
     end;
 get(Key, Map, Default, Opts) ->
     hb_cache:ensure_loaded(
@@ -90,7 +99,12 @@ find(Key, Map) ->
 find(Key, Map, Opts) when is_map(Map) ->
     case maps:find(Key, Map) of
         {ok, V} when not ?IS_LINK(V) -> {ok, V};
-        error -> error;
+        error ->
+            % Fall through a message extension (`...') to the parent, if present.
+            case maps:find(<<"...">>, Map) of
+                error -> error;
+                {ok, Ext} -> find(Key, hb_cache:ensure_loaded(Ext, Opts), Opts)
+            end;
         Result -> hb_cache:ensure_loaded(Result, Opts)
     end;
 find(Key, Map, Opts) ->
@@ -114,8 +128,16 @@ is_key(Key, Map) ->
     is_key(Key, Map, #{}).
 
 -spec is_key(Key :: term(), Map :: map(), Opts :: map()) -> boolean().
-is_key(Key, Map, _Opts) when is_map(Map) ->
-    maps:is_key(Key, Map);
+is_key(Key, Map, Opts) when is_map(Map) ->
+    case maps:is_key(Key, Map) of
+        true -> true;
+        false ->
+            % Fall through a message extension (`...') to the parent, if present.
+            case maps:find(<<"...">>, Map) of
+                error -> false;
+                {ok, Ext} -> is_key(Key, hb_cache:ensure_loaded(Ext, Opts), Opts)
+            end
+    end;
 is_key(Key, Map, Opts) ->
     maps:is_key(Key, hb_cache:ensure_loaded(Map, Opts)).
 
@@ -124,8 +146,17 @@ keys(Map) ->
 	keys(Map, #{}).
 
 -spec keys(Map :: map(), Opts :: map()) -> [term()].
-keys(Map, _Opts) when is_map(Map) ->
-    maps:keys(Map);
+keys(Map, Opts) when is_map(Map) ->
+    case maps:find(<<"...">>, Map) of
+        error -> maps:keys(Map);
+        {ok, Ext} ->
+            % A message extension: the visible keys are this layer's own keys
+            % (excluding the `...' pointer) unioned with the parent's keys, with
+            % the nearer layer winning on conflict.
+            OwnKeys = maps:keys(maps:remove(<<"...">>, Map)),
+            ParentKeys = keys(hb_cache:ensure_loaded(Ext, Opts), Opts),
+            OwnKeys ++ [ K || K <- ParentKeys, not lists:member(K, OwnKeys) ]
+    end;
 keys(Map, Opts) ->
     maps:keys(hb_cache:ensure_loaded(Map, Opts)).
 
@@ -372,4 +403,54 @@ filtermap_passively_loads_test() ->
     ?assertEqual(
         #{ 1 => 1, 2 => <<"TEST DATA">>, 3 => 3 },
         filtermap(fun(_, V) -> {true, V} end, Map)
+    ).
+
+%%% Message extension (`...') tests. A message may extend another by holding it
+%%% under the reserved `...' key; key lookups fall through to the parent, with
+%%% the nearest layer winning.
+
+get_with_extension_test() ->
+    Base = #{ <<"a">> => 1, <<"b">> => 2 },
+    Ext = #{ <<"b">> => 20, <<"...">> => Base },
+    ?assertEqual(20, get(<<"b">>, Ext, undefined)),
+    ?assertEqual(1, get(<<"a">>, Ext, undefined)),
+    ?assertEqual(default, get(<<"c">>, Ext, default)).
+
+find_with_extension_test() ->
+    Base = #{ <<"a">> => 1 },
+    Ext = #{ <<"b">> => 2, <<"...">> => Base },
+    ?assertEqual({ok, 1}, find(<<"a">>, Ext, #{})),
+    ?assertEqual({ok, 2}, find(<<"b">>, Ext, #{})),
+    ?assertEqual(error, find(<<"c">>, Ext, #{})).
+
+is_key_with_extension_test() ->
+    Base = #{ <<"a">> => 1 },
+    Ext = #{ <<"b">> => 2, <<"...">> => Base },
+    ?assert(is_key(<<"a">>, Ext, #{})),
+    ?assert(is_key(<<"b">>, Ext, #{})),
+    ?assertNot(is_key(<<"c">>, Ext, #{})).
+
+nested_extension_test() ->
+    L0 = #{ <<"a">> => 1 },
+    L1 = #{ <<"b">> => 2, <<"...">> => L0 },
+    L2 = #{ <<"c">> => 3, <<"...">> => L1 },
+    ?assertEqual(1, get(<<"a">>, L2, undefined)),
+    ?assertEqual(2, get(<<"b">>, L2, undefined)),
+    ?assertEqual(3, get(<<"c">>, L2, undefined)).
+
+extension_through_link_test() ->
+    Opts = #{},
+    {ok, Location} = hb_cache:write(#{ <<"a">> => 1 }, Opts),
+    Ext = #{ <<"b">> => 2, <<"...">> => {link, Location, #{}} },
+    ?assertEqual(1, get(<<"a">>, Ext, undefined, Opts)),
+    ?assertEqual(2, get(<<"b">>, Ext, undefined, Opts)),
+    ?assertEqual({ok, 1}, find(<<"a">>, Ext, Opts)).
+
+keys_with_extension_test() ->
+    Base = #{ <<"a">> => 1, <<"b">> => 2 },
+    Ext = #{ <<"b">> => 20, <<"c">> => 3, <<"...">> => Base },
+    % Union of own and inherited keys; the `...' pointer is not itself a key.
+    ?assertEqual(
+        lists:sort([<<"a">>, <<"b">>, <<"c">>]),
+        lists:sort(keys(Ext, #{}))
     ).
