@@ -5,7 +5,9 @@
 %%% `_test_parallel_' is treated as a parallel test: the transform
 %%% auto-exports it and -- when the module does not already define one --
 %%% injects an `all_parallel_test_/0' generator that runs all such
-%%% functions in a single `{inparallel, ...}' EUnit batch.
+%%% functions in a single `{inparallel, ...}' EUnit batch. A generator
+%%% may return `{serial, Test}' to run after that batch when it uses
+%%% shared global state that would make the benchmark/test meaningless.
 %%%
 %%% Because the `_test_parallel' suffix does not match EUnit's own
 %%% `_test'/`_test_' auto-discovery, the original function names are not
@@ -48,13 +50,34 @@ all(Module) ->
                     is_parallel_test_name(F)
             ]
         ),
-    {inparallel,
-        [
-            {atom_to_list(F), fun Module:F/0}
-        ||
-            F <- Funs
-        ]
-    }.
+    {Parallel, Serial} =
+        lists:foldr(
+            fun(F, {ParallelAcc, SerialAcc}) ->
+                Name = atom_to_list(F),
+                case parallel_test(Module, F, Name) of
+                    {serial, Test} -> {ParallelAcc, [Test | SerialAcc]};
+                    Test -> {[Test | ParallelAcc], SerialAcc}
+                end
+            end,
+            {[], []},
+            Funs
+        ),
+    case {Parallel, Serial} of
+        {_, []} -> {inparallel, Parallel};
+        {[], _} -> {inorder, Serial};
+        _ -> {inorder, [{inparallel, Parallel} | Serial]}
+    end.
+
+parallel_test(Module, F, Name) ->
+    case lists:suffix(?GENERATOR_SUFFIX, Name) of
+        true ->
+            case Module:F() of
+                {serial, Test} -> {serial, {Name, Test}};
+                Test -> {Name, Test}
+            end;
+        false ->
+            {Name, fun Module:F/0}
+    end.
 
 %%% Compiler entry point.
 

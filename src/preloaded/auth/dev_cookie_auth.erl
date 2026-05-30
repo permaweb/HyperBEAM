@@ -21,7 +21,7 @@ generate(Base, Request, Opts) ->
             FoundSecrets ->
                 {Request, FoundSecrets}
         end,
-    ?event({normalized_cookies_found, {secrets, Secrets}}),
+    ?event({normalized_cookies_found, {priv_secrets, Secrets}}),
     {
         ok,
         WithCookie#{
@@ -116,7 +116,7 @@ verify(Base, ReqLink, RawOpts) when ?IS_LINK(ReqLink) ->
     verify(Base, hb_cache:ensure_loaded(ReqLink, Opts), Opts);
 verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     Opts = dev_cookie:opts(RawOpts),
-    ?event({verify_with_explicit_key, {base, Base}, {request, Req}}),
+    ?event({verify_with_explicit_key, {priv_base, Base}, {priv_request, Req}}),
     hb_ao:resolve(
         #{ <<"device">> => <<"httpsig@1.0">> },
         Req#{
@@ -128,7 +128,7 @@ verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
     );
 verify(Base, Request, RawOpts) ->
     Opts = dev_cookie:opts(RawOpts),
-    ?event({verify_finding_key, {base, Base}, {request, Request}}),
+    ?event({verify_finding_key, {priv_base, Base}, {priv_request, Request}}),
     case find_secret(Request, Opts) of
         {ok, Secret} ->
             hb_ao:resolve(

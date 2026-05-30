@@ -45,7 +45,7 @@ async function uploadDataItem(itemPath, gatewayUrl = "https://up.arweave.net") {
         
         // Upload to the gateway
         console.log("Uploading to gateway...");
-        const uploadUrl = `${gatewayUrl}/tx`;
+        const uploadUrl = `${gatewayUrl}/~bundler@1.0/tx`;
         
         const response = await axios.post(uploadUrl, itemBuffer, {
             headers: {

@@ -80,20 +80,30 @@ from(List, Req, Opts) when is_list(List) ->
             {ok, hb_util:numbered_keys_to_list(DecodedAsMap, Opts)}
     end;
 from(Msg, Req, Opts) when is_map(Msg) ->
-    % Normalize the message, offloading links to the cache.
-    NormLinks = hb_link:normalize(Msg, linkify_mode(Req, Opts), Opts),
+    HintedReq = apply_bundle_hint(Msg, Req, Opts),
+    NormLinks = hb_link:normalize(Msg, linkify_mode(HintedReq, Opts), Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
-    EncodeTypes = find_encode_types(Req, Opts),
+    EncodeTypes = find_encode_types(HintedReq, Opts),
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
                 {ok, Value} when is_binary(Value) ->
                     {Types, [{Key, Value} | Values]};
-                {ok, Nested} when is_map(Nested) or is_list(Nested) ->
+                {ok, Nested} when is_map(Nested) orelse is_list(Nested) ->
                     ?event({from_recursing, {nested, Nested}}),
-                    {Types, [{Key, hb_util:ok(from(Nested, Req, Opts))} | Values]};
+                    % We pass the HintedReq to the recursive call rather than
+                    % Req so that this message's bundle status serves as the
+                    % default for any children that don't explicitly set the
+                    % `bundle' flag on the hinted commitment.
+                    {Types,
+                        [{
+                            Key,
+                            hb_util:ok(from(Nested, HintedReq, Opts))
+                        } | Values]};
                 {ok, Value} when
-                        is_atom(Value) or is_integer(Value) or is_float(Value) ->
+                        is_atom(Value)
+                        orelse is_integer(Value)
+                        orelse is_float(Value) ->
                     BinKey = hb_ao:normalize_key(Key),
                     ?event({encode_value, Value}),
                     case maybe_encode_value(Value, EncodeTypes) of
@@ -136,7 +146,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
     % Encode the AoTypes as a structured dictionary
     % And include as a field on the produced TABM
     WithTypes =
-        hb_maps:from_list(case Types of 
+        hb_maps:from_list(case Types of
             [] -> Values;
             T ->
                 AoTypes = iolist_to_binary(hb_structured_fields:dictionary(
@@ -174,16 +184,33 @@ type(Atom) when is_atom(Atom) -> <<"atom">>;
 type(List) when is_list(List) -> <<"list">>;
 type(Other) -> Other.
 
+%% @doc If a `hint-device` key is present it indicates the desired
+%% terminal format (after being converted via an intermediate `tabm`
+%% format). In that case dev_structured defers to the target codec
+%% to determine whether child messages should be loaded or unloaded.
+apply_bundle_hint(Msg, Req, Opts) ->
+    case hb_maps:get(<<"hint-device">>, Req, undefined, Opts) of
+        undefined -> Req;
+        DeviceBin ->
+            % May add a `bundle` key to the request
+            try hb_util:ok(
+                hb_ao:raw(DeviceBin, <<"to-hint">>, Msg, Req, Opts)
+            )
+            catch _:_ ->
+                Req
+            end
+    end.
+
 %% @doc Discern the linkify mode from the request and the options.
 linkify_mode(Req, Opts) ->
     case hb_maps:get(<<"bundle">>, Req, not_found, Opts) of
-        not_found -> hb_opts:get(linkify_mode, offload, Opts);
     	true ->
             % The request is asking for a bundle, so we should _not_ linkify.
             false;
-        false ->
-            % The request is asking for a flat message, so we should linkify.
-            true
+        _ ->
+            % The request is either asking for a flat message or has not
+            % specified. In both cases we should linkify.
+            hb_opts:get(linkify_mode, offload, Opts)
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.

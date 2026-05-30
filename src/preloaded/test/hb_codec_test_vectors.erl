@@ -402,7 +402,71 @@ match_modes_test() ->
     ?assert(hb_message:match(Base, Req, only_present)),
     ?assert(hb_message:match(Req, Base, strict) =/= true),
     ?assert(hb_message:match(Base, Res, primary)),
-    ?assert(hb_message:match(Res, Base, primary) =/= true).
+    ?assert(hb_message:match(Res, Base, primary) =/= true),
+    StrictMap =
+        #{
+            <<"x">> => #{
+                <<"match-type">> => <<"strict">>,
+                <<"body">> => #{}
+            }
+        },
+    ?assert(
+        hb_message:match(
+            StrictMap,
+            #{ <<"x">> => #{ <<"y">> => true } },
+            primary
+        ) =/= true
+    ),
+    ?assert(hb_message:match(StrictMap, #{ <<"x">> => #{} }, primary)),
+    StrictList =
+        #{
+            <<"x">> => #{
+                'match-type' => <<"strict">>,
+                body => [<<"a">>]
+            }
+        },
+    ?assert(
+        hb_message:match(
+            StrictList,
+            #{ <<"x">> => [<<"a">>, <<"b">>] },
+            primary
+        ) =/= true
+    ),
+    ?assert(hb_message:match(StrictList, #{ <<"x">> => [<<"a">>] }, primary)),
+    PrimaryMap =
+        #{
+            <<"x">> => #{
+                <<"match-type">> => <<"primary">>,
+                <<"body">> => #{ <<"a">> => true }
+            }
+        },
+    ?assert(
+        hb_message:match(
+            PrimaryMap,
+            #{ <<"x">> => #{ <<"a">> => true, <<"b">> => true } },
+            strict
+        )
+    ),
+    ?assert(
+        hb_message:match(
+            #{ <<"x">> => #{ <<"a">> => true } },
+            #{ <<"x">> => #{ <<"a">> => true, <<"b">> => true } },
+            primary
+        )
+    ),
+    ?assertMatch(
+        {error, {invalid_match_type, {trace, _}}},
+        hb_message:match(
+            StrictMap#{
+                <<"x">> := #{
+                    <<"match-type">> => <<"bogus">>,
+                    <<"body">> => #{}
+                }
+            },
+            #{ <<"x">> => #{} },
+            primary
+        )
+    ).
 
 basic_message_codec_test(Codec, Opts) ->
     Msg = #{ <<"normal_key">> => <<"NORMAL_VALUE">> },

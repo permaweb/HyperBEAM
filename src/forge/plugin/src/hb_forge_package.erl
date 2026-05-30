@@ -21,6 +21,12 @@ init(State) ->
 
 %% @doc Parse CLI args and emit generated package archives.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-packages">>),
     case run_with_args(Args) of
         {ok, _Pkgs} -> {ok, State};
@@ -35,7 +41,7 @@ run_with_args(Args) ->
     % Package each device group, and write to the output directory.
     Pkgs =
         hb_forge_seed:with_forge_bootstrap(
-            hb_forge_args:package_opts(),
+            hb_forge_args:package_opts(Args),
             fun(Opts) ->
                 lists:map(
                     fun(Pkg) ->

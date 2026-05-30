@@ -1,4 +1,4 @@
-%%% @doc Wrapper for incrementing prometheus counters.
+%%% @doc Wrapper for recording prometheus counters.
 -module(hb_event).
 -export([counters/0, diff/1, diff/2]).
 -export([debug_print/4, debug_print/5, debug_print/6]).
@@ -6,7 +6,7 @@
 -export([log/1, log/2, log/3, log/4, log/5, log/6]).
 -export([log_event/6]).
 -export([setup_logger/0]).
--export([increment/3, increment/4, increment_callers/1]).
+-export([record/3, record/4, record_callers/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -21,6 +21,8 @@
 -define(FILE_LOGGER_DOMAIN, [hb_log]).
 -define(DEFAULT_PRINT_HANDLER_FILTER, hb_drop_hb_print_logs).
 -define(DEFAULT_FILE_HANDLER_FILTER, hb_drop_hb_file_logs).
+-define(EVENT_HOOK_KEY, {?MODULE, event_hook}).
+-define(EVENT_OPTS_KEY, {?MODULE, event_opts}).
 
 -ifdef(NO_EVENTS).
 debug_print(_X, _Mod, _Func, _Line) -> ok.
@@ -39,16 +41,23 @@ log(X) -> log(global, X).
 log(Topic, X) -> log(Topic, X, "").
 log(Topic, X, Mod) -> log(Topic, X, Mod, undefined).
 log(Topic, X, Mod, Func) -> log(Topic, X, Mod, Func, undefined).
-log(Topic, X, Mod, Func, Line) -> log(Topic, X, Mod, Func, Line, #{}).
+log(Topic, X, Mod, Func, Line) ->
+    log(Topic, X, Mod, Func, Line, default_event_opts()).
 log(Topic, X, Mod, undefined, Line, Opts) -> log(Topic, X, Mod, "", Line, Opts);
 log(Topic, X, Mod, Func, undefined, Opts) -> log(Topic, X, Mod, Func, "", Opts);
 log(Topic, X, Mod, Func, Line, Opts) ->
     debug_print(Topic, X, Mod, Func, Line, Opts),
-    try increment(Topic, X, Opts) catch _:_ -> ok end,
+    try record(Topic, X, Mod, Func, Line, Opts) catch _:_ -> ok end,
     % Return the logged value to the caller. This allows callers to insert 
     % `?event(...)' macros into the flow of other executions, without having to
     % break functional style.
     X.
+
+default_event_opts() ->
+    case erlang:get(?EVENT_OPTS_KEY) of
+        #{ <<"on">> := #{ <<"event">> := _ }} = Opts -> Opts;
+        _ -> #{}
+    end.
 
 debug_print(X, Mod, Func, Line) ->
     debug_print(X, Mod, Func, Line, #{}).
@@ -228,56 +237,89 @@ format_file_log(
 ) ->
     hb_format:format_debug(X, Mod, Func, Line, Opts).
 
-%% @doc Increment the counter for the given topic and message. Registers the
-%% counter if it doesn't exist. If the topic is `global', the message is ignored.
-%% This means that events must specify a topic if they want to be counted,
-%% filtering debug messages.
+%% @doc Record the counter for the given topic and message. Registers the
+%% counter if it doesn't exist. If the topic is `global', the message is ignored
+%% unless event recording is explicitly enabled. This means that events must
+%% specify a topic if they want to be counted, filtering debug messages.
 %% 
 %% This function uses a series of hard-coded topics to ignore explicitly in
 %% order to quickly filter events that are executed so frequently that they
 %% would otherwise cause heavy performance costs.
-increment(Topic, Message, Opts) ->
-    increment(Topic, Message, Opts, 1).
-increment(ids, _Message, _Opts, _Count) -> ignored;
-increment(global, _Message, _Opts, _Count) -> ignored;
-increment(linkify, _Message, _Opts, _Count) -> ignored;
-increment(debug_linkify, _Message, _Opts, _Count) -> ignored;
-increment(debug_id, _Message, _Opts, _Count) -> ignored;
-increment(debug_enc, _Message, _Opts, _Count) -> ignored;
-increment(debug_commitments, _Message, _Opts, _Count) -> ignored;
-increment(message_set, _Message, _Opts, _Count) -> ignored;
-increment(read_cached, _Message, _Opts, _Count) -> ignored;
-increment(ao_core, _Message, _Opts, _Count) -> ignored;
-increment(ao_internal, _Message, _Opts, _Count) -> ignored;
-increment(ao_devices, _Message, _Opts, _Count) -> ignored;
-increment(ao_subresolution, _Message, _Opts, _Count) -> ignored;
-increment(signature_base, _Message, _Opts, _Count) -> ignored;
-increment(id_base, _Message, _Opts, _Count) -> ignored;
-increment(parsing, _Message, _Opts, _Count) -> ignored;
-increment(Topic, Message, _Opts, Count) ->
+record(Topic, Message, Opts) ->
+    record(Topic, Message, Opts, 1).
+record(Topic, Message, Opts, Count) ->
+    record(Topic, Message, "", "", "", Opts, Count).
+record(Topic, Message, Mod, Func, Line, Opts) ->
+    record(Topic, Message, Mod, Func, Line, Opts, 1).
+record(ids, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(global, Message, Mod, Func, Line, #{ <<"on">> := #{ <<"event">> := _ }} = Opts, _Count) ->
+    record_event(global, Message, Mod, Func, Line, Opts),
+    ignored;
+record(global, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(linkify, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(debug_linkify, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(debug_id, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(debug_enc, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(debug_commitments, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(message_set, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(read_cached, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(ao_core, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(ao_internal, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(ao_devices, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(ao_subresolution, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(signature_base, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(id_base, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(parsing, _Message, _Mod, _Func, _Line, _Opts, _Count) -> ignored;
+record(Topic, Message, Mod, Func, Line, Opts, Count) ->
     case parse_name(Topic) of
         no_event_name -> ignored;
         <<"debug", _/binary>> -> ignored;
         TopicBin ->
-            find_event_server() ! {increment, TopicBin, parse_name(Message), Count}
+            record_event(Topic, Message, Mod, Func, Line, Opts),
+            find_event_server() ! {record, TopicBin, parse_name(Message), Count}
     end.
 
-%% @doc Increment the call paths and individual upstream calling functions of
+record_event(Topic, Message, Mod, Func, Line, #{ <<"on">> := #{ <<"event">> := _ }} = Opts) ->
+    case erlang:get(?EVENT_HOOK_KEY) of
+        true ->
+            ok;
+        _ ->
+            erlang:put(?EVENT_HOOK_KEY, true),
+            try hb_hook:on(
+                <<"event">>,
+                #{
+                    <<"body">> => Message,
+                    <<"event">> => Message,
+                    <<"topic">> => Topic,
+                    <<"module">> => Mod,
+                    <<"function">> => Func,
+                    <<"line">> => Line
+                },
+                Opts
+            )
+            catch _:_ -> ok
+            after erlang:erase(?EVENT_HOOK_KEY)
+            end
+    end;
+record_event(_Topic, _Message, _Mod, _Func, _Line, _Opts) ->
+    ok.
+
+%% @doc Record the call paths and individual upstream calling functions of
 %% the current execution. This function generates the stacktrace itself. It is
 %% **extremely** expensive, so it should only be used in very specific cases.
 %% Do not ship code that calls this function to prod.
-increment_callers(Topic) ->
-    increment_callers(Topic, erlang).
-increment_callers(Topic, Type) ->
+record_callers(Topic) ->
+    record_callers(Topic, erlang).
+record_callers(Topic, Type) ->
     BinTopic = hb_util:bin(Topic),
-    increment(
+    record(
         <<BinTopic/binary, "-call-paths">>,
         hb_format:trace_short(Type),
         #{}
     ),
     lists:foreach(
         fun(Caller) ->
-            increment(<<BinTopic/binary, "-callers">>, Caller, #{})
+            record(<<BinTopic/binary, "-callers">>, Caller, #{})
         end,
         hb_format:trace_to_list(hb_format:get_trace(Type))
     ).
@@ -350,7 +392,7 @@ handle_events() ->
     handle_events(0).
 handle_events(N) ->
     receive
-        {increment, Topic, Event, Count} ->
+        {record, Topic, Event, Count} ->
             BatchCount = 0,
             prometheus_counter:inc(<<"event">>, [Topic, Event], Count + BatchCount),
             check_overload({Topic, Event}, N),
@@ -439,14 +481,14 @@ benchmark_print_lookup_test() ->
     ?assert(Iterations >= 1000),
     ok.
 
-%% @doc Benchmark the performance of incrementing an event.
-benchmark_increment_test() ->
+%% @doc Benchmark the performance of recording an event.
+benchmark_record_test() ->
     Iterations =
         hb_test_utils:benchmark(
-            fun() -> increment(test_module, {test, 1}, #{}) end,
+            fun() -> record(test_module, {test, 1}, #{}) end,
             ?BENCHMARK_DURATION
         ),
-    hb_test_utils:benchmark_print(<<"Incremented">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
+    hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
     ?assert(Iterations >= 1000),
     ok.
 
@@ -455,6 +497,59 @@ should_log_test() ->
     ?assertEqual(false, should_print(log, topic_b, #{ <<"debug-log">> => [topic_a] })),
     ?assertEqual(true, should_print(log, topic_c, #{ <<"debug-log">> => true })),
     ?assertEqual(false, should_print(log, topic_d, #{ <<"debug-log">> => false })).
+
+-ifndef(NO_EVENTS).
+event_hook_receives_log_metadata_test() ->
+    Parent = self(),
+    Handler = #{
+        <<"device">> => #{
+            event =>
+                fun(_, Req, HandlerOpts) ->
+                    Parent ! {event_hook_req, Req},
+                    log(test_topic, nested_event, ?MODULE, nested_fun, 456, HandlerOpts),
+                    {ok, Req#{ <<"changed">> => true }}
+                end
+        }
+    },
+    Opts = #{ <<"on">> => #{ <<"event">> => Handler }},
+    Event = {example_event, ok},
+    ?assertEqual(
+        Event,
+        log(test_topic, Event, ?MODULE, test_fun, 123, Opts)
+    ),
+    receive
+        {event_hook_req, Req} ->
+            ?assertEqual(Event, maps:get(<<"body">>, Req)),
+            ?assertEqual(Event, maps:get(<<"event">>, Req)),
+            ?assertEqual(test_topic, maps:get(<<"topic">>, Req)),
+            ?assertEqual(?MODULE, maps:get(<<"module">>, Req)),
+            ?assertEqual(test_fun, maps:get(<<"function">>, Req)),
+            ?assertEqual(123, maps:get(<<"line">>, Req))
+    after 1000 ->
+        error(event_hook_not_called)
+    end,
+    receive
+        {event_hook_req, _} -> error(recursive_event_hook)
+    after 100 ->
+        ok
+    end.
+
+event_hook_exception_is_swallowed_test() ->
+    Handler = #{
+        <<"device">> => #{
+            event =>
+                fun(_, Req, _) ->
+                    {ok, Req}
+                end
+        }
+    },
+    Opts = #{ <<"on">> => #{ <<"event">> => [Handler | invalid_tail] }},
+    Event = {example_event, ok},
+    ?assertEqual(
+        Event,
+        log(test_topic, Event, ?MODULE, test_fun, 123, Opts)
+    ).
+-endif.
 
 -ifdef(NO_EVENTS).
 benchmark_drain_rate_test() -> ok.
@@ -511,7 +606,7 @@ batch_correctness_test() ->
     erlang:suspend_process(EventPid),
     lists:foreach(fun(I) ->
         {T, E} = lists:nth((I rem NumKeys) + 1, Keys),
-        EventPid ! {increment, T, E, 1}
+        EventPid ! {record, T, E, 1}
     end, lists:seq(1, N)),
     erlang:resume_process(EventPid),
     wait_drain(EventPid, 30000),
@@ -537,7 +632,7 @@ overload_checks_past_first_thousand_test() ->
     Event = lists:duplicate(256, $b),
     lists:foreach(
         fun(_) ->
-            EventPid ! {increment, Topic, Event, 1}
+            EventPid ! {record, Topic, Event, 1}
         end,
         lists:seq(1, ?OVERLOAD_QUEUE_LENGTH + 100)
     ),
@@ -568,7 +663,7 @@ deep_get([Group, Name], Map, Default) ->
 %% types of event.
 fill_mailbox(_Pid, 0, _Keys) -> ok;
 fill_mailbox(Pid, N, Keys = [{Topic, Event}|_]) ->
-    Pid ! {increment, Topic, Event, 1},
+    Pid ! {record, Topic, Event, 1},
     fill_mailbox(Pid, N - 1, hb_util:shuffle(Keys)).
 
 wait_drain(Pid, Timeout) ->

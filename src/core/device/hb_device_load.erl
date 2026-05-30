@@ -36,7 +36,9 @@ reference(Ref, Opts) when is_binary(Ref) ->
         {ok, _} = Ok ->
             Ok;
         {error, not_found} ->
-            resolve_cached(NormRef, Opts)
+            resolve_cached(NormRef, Opts);
+        {error, _} = Error ->
+            Error
     end.
 
 resolve_cached(Ref, Opts) ->
@@ -103,6 +105,8 @@ from_high_trust(Ref, Opts) ->
 from_forge_bootstrap(Ref, Opts) ->
     case hb_opts:get(forge_bootstrap, #{}, Opts) of
         #{ Ref := Mod } when is_atom(Mod) -> {ok, Mod};
+        Seeds when is_map(Seeds), map_size(Seeds) > 0 ->
+            {error, {forge_bootstrap_device_not_found, Ref}};
         _ -> {error, not_found}
     end.
 
@@ -169,32 +173,42 @@ preloaded(Opts) ->
 %%% --------------------------------------------------------------------
 
 %% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
-%% already loaded via the high-trust path), then load the first
-%% implementation -- from the wider caches, then a gateway -- that is
-%% signed by a trusted signer and compatible with this machine.
+%% already loaded via the high-trust path), then load the first signed,
+%% compatible implementation. Local caches are always searched -- gateway
+%% lookup is gated by `load-remote-devices'.
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
-        lazy_first(
-            fun(ID) -> verify_and_load(SpecID, ID, Opts) end,
+        LocalIterators =
             [
                 fun() ->
                     hb_util:ok_or(
                         hb_cache:match(implementation_query(SpecID), Opts),
                         []
                     )
-                end,
-                fun() ->
-                    hb_util:ok_or(
-                        hb_client_gateway:device(
-                            SpecID,
-                            trusted_signers(Opts),
-                            Opts
-                        ),
-                        []
-                    )
                 end
-            ]
+            ],
+        RemoteIterators =
+            case hb_opts:get(<<"load-remote-devices">>, false, Opts) of
+                true ->
+                    [
+                        fun() ->
+                            hb_util:ok_or(
+                                hb_client_gateway:device(
+                                    SpecID,
+                                    trusted_signers(Opts),
+                                    Opts
+                                ),
+                                []
+                            )
+                        end
+                    ];
+                false ->
+                    []
+            end,
+        lazy_first(
+            fun(ID) -> verify_and_load(SpecID, ID, Opts) end,
+            LocalIterators ++ RemoteIterators
         )
     end.
 

@@ -74,5 +74,5 @@ verify(Secret, Base, RawReq, Opts) ->
             <<"path">> => <<"verify">>,
             <<"secret">> => Secret
         },
-    ?event({proxy_request, ProxyRequest}),
+    ?event({proxy_request, {priv_request, ProxyRequest}}),
     {ok, hb_message:verify(Base, ProxyRequest, Opts)}.

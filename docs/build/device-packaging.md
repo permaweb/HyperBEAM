@@ -29,7 +29,7 @@ optional `dev_<name>_*` helpers):
    (markdown derived from the root module's `%%% @doc` block) and an
    `Device-Implementation` (the BEAM archive, with `module-name`,
    `archive-format`, `implements-device`, `requires-otp-release`, and
-   `requires-system-architecture` keys) — and sign them with the
+   optional `requires-system-architecture` keys) — and sign them with the
    configured wallet.
 
 At load time, `priv/` archive entries are materialized under the
@@ -56,7 +56,9 @@ same flag set:
 | `--device-src dir[,dir2]` | Source roots to scan | `src/preloaded` in HyperBEAM, `src` elsewhere |
 | `--output-dir dir` | Where to write artifacts | command-specific |
 | `--key path` | Wallet keyfile used for signing | `hyperbeam-key.json` |
-| `--device-roots p[,p2]` | Restrict to specific `dev_*` roots | (all) |
+| `--requires-system-architecture` | Include host architecture requirement metadata | off |
+| `-d, --devices p[,p2]` | Restrict to specific `dev_*` roots | (all) |
+| `--record[=all\|errors]` | For `device test`, write recorder@1.0 test flights | off |
 
 ### `rebar3 device package`
 
@@ -114,6 +116,9 @@ rebar3 device test
 Use `rebar3 device test --with-core` to include the normal core
 `rebar3 eunit` modules in the same EUnit run. The `rebar3 eunit-all`
 alias is shorthand for that full local check.
+
+Use `--record` or `--record=errors` to write `~recorder@1.0` test flights
+for failures, or `--record=all` to write one HTML archive for every test.
 
 ### `rebar3 device local`
 

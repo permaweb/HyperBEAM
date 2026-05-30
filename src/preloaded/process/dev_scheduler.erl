@@ -1875,14 +1875,20 @@ http_get_json_schedule_test_parallel_() ->
 
 single_resolution(Opts) ->
     start(),
-    BenchTime = 0.25,
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Base = test_process(Opts#{ <<"priv-wallet">> => Wallet }),
+    SignedOpts = Opts#{ <<"priv-wallet">> => Wallet },
+    BenchTime =
+        case hb_opts:get(scheduling_mode, local_confirmation, SignedOpts) of
+            aggressive -> 1.0;
+            _ -> 2.0
+        end,
+    Base = hb_message:commit(test_process(SignedOpts), SignedOpts),
     ?event({benchmark_start, ?MODULE}),
     MsgToSchedule = hb_message:commit(#{
         <<"type">> => <<"Message">>,
         <<"test-key">> => <<"test-val">>
-    }, Opts),
+    }, SignedOpts),
+    {ok, _} = hb_cache:write(MsgToSchedule, SignedOpts),
     Iterations = hb_test_utils:benchmark(
         fun(_) ->
             MsgX = #{
@@ -1890,7 +1896,11 @@ single_resolution(Opts) ->
                 <<"method">> => <<"POST">>,
                 <<"body">> => MsgToSchedule
             },
-            ?assertMatch({ok, _}, hb_ao:resolve(Base, MsgX, Opts))
+            ?assertMatch({ok, _}, hb_ao:resolve(Base, MsgX, SignedOpts)),
+            case hb_opts:get(scheduling_mode, local_confirmation, SignedOpts) of
+                aggressive -> timer:sleep(50);
+                _ -> ok
+            end
         end,
         BenchTime
     ),
@@ -1898,11 +1908,11 @@ single_resolution(Opts) ->
     Res = #{
         <<"path">> => <<"slot">>,
         <<"method">> => <<"GET">>,
-        <<"process">> => hb_util:human_id(hb_message:id(Base, all, Opts))
+        <<"process">> => hb_util:human_id(hb_message:id(Base, all, SignedOpts))
     },
     ?assertMatch({ok, #{ <<"current">> := CurrentSlot }}
             when CurrentSlot == Iterations - 1,
-        hb_ao:resolve(Base, Res, Opts)),
+        hb_ao:resolve(Base, Res, SignedOpts)),
     ?event(bench, {res, Iterations - 1}),
     hb_test_utils:benchmark_print(
         <<"Scheduled through AO-Core:">>,
@@ -1915,18 +1925,18 @@ single_resolution(Opts) ->
 many_clients(Opts) ->
     BenchTime = 0.25,
     Processes = hb_opts:get(workers, 25, Opts),
-    {Node, Opts} = http_init(Opts),
-    PMsg = hb_message:commit(test_process(Opts), Opts),
+    {Node, HTTPOpts} = http_init(Opts),
+    PMsg = hb_message:commit(test_process(HTTPOpts), HTTPOpts),
     Base = hb_message:commit(#{
         <<"path">> => <<"/~scheduler@1.0/schedule">>,
         <<"method">> => <<"POST">>,
         <<"process">> => PMsg,
-        <<"body">> => hb_message:commit(#{ <<"inner">> => <<"test">> }, Opts)
-    }, Opts),
-    {ok, _} = hb_http:post(Node, Base, Opts),
-	    Iterations = hb_test_utils:benchmark(
+        <<"body">> => hb_message:commit(#{ <<"inner">> => <<"test">> }, HTTPOpts)
+    }, HTTPOpts),
+    {ok, _} = hb_http:post(Node, Base, HTTPOpts),
+    Iterations = hb_test_utils:benchmark(
         fun(X) ->
-            {ok, _} = hb_http:post(Node, Base, Opts),
+            {ok, _} = hb_http:post(Node, Base, HTTPOpts),
             ?event(bench, {iteration, X, self()})
         end,
         BenchTime,
@@ -1942,19 +1952,19 @@ many_clients(Opts) ->
     ?assert(Iterations > 10).
 
 benchmark_suite_test_parallel_() ->
-    {timeout, 10, fun() ->
-        Bench = [
-            {benchmark, "benchmark", fun single_resolution/1},
-            {multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
-        ],
-        hb_test_utils:suite_with_opts(Bench, benchmark_suite())
-    end}.
+    Bench = [
+        {benchmark, "benchmark", fun single_resolution/1},
+        {multihttp_benchmark, "multihttp_benchmark", fun many_clients/1}
+    ],
+    {serial, hb_test_utils:suite_with_opts(Bench, benchmark_suite())}.
 
 benchmark_suite() ->
     [
         #{
             name => fs,
             requires => [hb_store_fs],
+            parallel => false,
+            timeout => 30,
             opts => #{
                 <<"store">> => hb_test_utils:test_store(hb_store_fs),
                 <<"scheduling-mode">> => local_confirmation,
@@ -1965,9 +1975,12 @@ benchmark_suite() ->
         #{
             name => fs_aggressive,
             requires => [hb_store_fs],
+            parallel => false,
+            timeout => 30,
             opts => #{
                 <<"store">> => hb_test_utils:test_store(hb_store_fs),
                 <<"scheduling-mode">> => aggressive,
+                <<"scheduler-default-commitment-spec">> => <<"httpsig@1.0">>,
                 <<"port">> => 0
             },
             desc => <<"FS store, aggressive conf.">>
@@ -1975,6 +1988,8 @@ benchmark_suite() ->
         #{
             name => rocksdb,
             requires => [hb_store_rocksdb],
+            parallel => false,
+            timeout => 30,
             opts => #{
                 <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
                 <<"scheduling-mode">> => local_confirmation,
@@ -1985,9 +2000,12 @@ benchmark_suite() ->
         #{
             name => rocksdb_aggressive,
             requires => [hb_store_rocksdb],
+            parallel => false,
+            timeout => 30,
             opts => #{
                 <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
                 <<"scheduling-mode">> => aggressive,
+                <<"scheduler-default-commitment-spec">> => <<"httpsig@1.0">>,
                 <<"port">> => 0
             },
             desc => <<"RocksDB store, aggressive conf.">>
@@ -1995,9 +2013,12 @@ benchmark_suite() ->
         #{
             name => rocksdb_extreme_aggressive_h3,
             requires => [http3],
+            parallel => false,
+            timeout => 30,
             opts => #{
                 <<"store">> => hb_test_utils:test_store(hb_store_rocksdb),
                 <<"scheduling-mode">> => aggressive,
+                <<"scheduler-default-commitment-spec">> => <<"httpsig@1.0">>,
                 <<"protocol">> => http3,
                 <<"workers">> => 100
             },

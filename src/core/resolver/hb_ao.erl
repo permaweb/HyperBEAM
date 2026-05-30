@@ -873,12 +873,12 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
     ),
     {ExecMicroSecs, Res} = timer:tc(fun() -> apply(Func, Args) end),
     put(ao_stack, CallStack),
-    hb_event:increment(<<"ao-call-counts">>, Key, Opts),
-    hb_event:increment(<<"ao-total-durations">>, Key, Opts, ExecMicroSecs),
+    hb_event:record(<<"ao-call-counts">>, Key, Opts),
+    hb_event:record(<<"ao-total-durations">>, Key, Opts, ExecMicroSecs),
     case CallStack of
         undefined -> ok;
         [Caller|_] ->
-            hb_event:increment(
+            hb_event:record(
                 <<"ao-callers:", Key/binary>>,
                 hb_util:bin(
                     [
@@ -889,7 +889,7 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
                 Opts,
                 ExecMicroSecs
             ),
-            hb_event:increment(
+            hb_event:record(
                 <<"ao-callers:", Key/binary>>,
                 hb_util:bin(
                     [

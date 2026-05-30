@@ -3,19 +3,20 @@ const path = require("path");
 const { ArweaveSigner, createData } = require("@dha-team/arbundles");
 
 // Configuration
-const BUNDLER_URL = "http://localhost:8734";
+const BUNDLER_URL = process.env.BUNDLER_URL || "http://localhost:8734";
+const ENDPOINT_PATH = process.env.ENDPOINT_PATH || "/~bundler@1.0/item?codec-device=ans104@1.0";
 const DEFAULT_WALLET = "../../hyperbeam-key.json";
 const CONCURRENT_UPLOADS = 100; // Number of parallel uploads
 
 async function performanceTest(walletPath, itemCount, bytesPerItem = 0) {
   const wallet = require(path.resolve(walletPath));
   const signer = new ArweaveSigner(wallet);
-  const endpoint = `${BUNDLER_URL}/~bundler@1.0/item?codec-device=ans104@1.0`;
+  const endpoint = `${BUNDLER_URL}${ENDPOINT_PATH}`;
 
   console.log("\n" + "=".repeat(70));
   console.log("ANS-104 Bundle Upload Performance Test");
   console.log("=".repeat(70));
-  console.log(`Target:     ${BUNDLER_URL}`);
+  console.log(`Target:     ${endpoint}`);
   console.log(`Items:      ${itemCount}`);
   console.log(`Item Size:  ${bytesPerItem > 0 ? `~${bytesPerItem} bytes` : 'default'}`);
   console.log(`Concurrent: ${CONCURRENT_UPLOADS}`);
@@ -147,10 +148,20 @@ if (require.main === module) {
     console.error("  number_of_items  - Number of data items to create and upload");
     console.error("  bytes_per_item   - Minimum size of each item in bytes (optional)");
     console.error("");
+    console.error("Environment variables:");
+    console.error("  BUNDLER_URL      - Gateway base URL (default: http://localhost:8734)");
+    console.error("  ENDPOINT_PATH    - Path appended to gateway (default: /~bundler@1.0/item?codec-device=ans104@1.0)");
+    console.error("");
     console.error("Examples:");
     console.error("  node upload-items.js 100");
     console.error("  node upload-items.js 100 1024");
     console.error("  node upload-items.js /path/to/wallet.json 100 1024");
+    console.error("  BUNDLER_URL=https://forward.computer node upload-items.js 100");
+    console.error("  BUNDLER_URL=https://forward.computer ENDPOINT_PATH='/~bundler@1.0/tx?codec-device=ans104@1.0' node upload-items.js 1");
+    console.error("");
+    console.error("Note: when posting raw ANS-104 bytes, ENDPOINT_PATH must include");
+    console.error("      ?codec-device=ans104@1.0 — otherwise the server will reject");
+    console.error("      the body as 'unsigned-item' (no signers visible).");
     process.exit(1);
   }
 

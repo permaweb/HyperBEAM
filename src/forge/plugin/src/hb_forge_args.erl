@@ -7,13 +7,14 @@
 %%%   <li>`--output-dir dir'         where to write artifacts (default
 %%%        depends on command)</li>
 %%%   <li>`--key path'               path to a wallet keyfile</li>
-%%%   <li>`--device-roots p[,p2]'   restrict to specific `dev_*' roots</li>
+%%%   <li>`--devices p[,p2]'        restrict to specific `dev_*' roots</li>
 %%% </ul>
 %%%
 %%% Each provider re-uses {@link opts/0} for the rebar3 spec and
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(hb_forge_args).
--export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0]).
+-export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0, package_opts/1]).
+-export([maybe_help/2]).
 -export([set_preloaded_env/1, restore_preloaded_env/1, with_preloaded_env/2]).
 -export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
 -export([default_preloaded_dirs/1]).
@@ -47,12 +48,29 @@ opts() ->
             "Output directory for generated artifacts."},
         {key, $k, "key", string,
             "Path to wallet keyfile used for signing."},
-        {device_roots, $r, "device-roots", string,
+        {publish_codec, undefined, "publish-codec", string,
+            "Commitment codec used when publishing."},
+        {requires_system_architecture, undefined,
+            "requires-system-architecture", {boolean, false},
+            "Include the host system architecture in implementation metadata."},
+        {devices, $d, "devices", string,
             "Comma-separated list of dev_* roots to operate upon."},
+        {module, $m, "module", string,
+            "Comma-separated module names to run."},
+        {test, $t, "test", string,
+            "Comma-separated tests to run, optionally Module:Func1+Func2."},
+        {timeout, undefined, "timeout", string,
+            "Per-test timeout, in seconds."},
+        {timeout_multiplier, undefined, "timeout-multiplier", string,
+            "Multiplier for EUnit timeouts."},
         {with_core, undefined, "with-core", {boolean, false},
             "Also run core HyperBEAM EUnit modules."},
         {show_hash, undefined, "show-hash", {boolean, false},
-            "Show generated device module hashes in EUnit output."}
+            "Show generated device module hashes in EUnit output."},
+        {record, undefined, "record", string,
+            "Write recorder@1.0 test flights; --record means errors, --record=all means every test."},
+        {help, $h, "help", {boolean, false},
+            "Show command help."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -61,21 +79,113 @@ parse(State, DefaultOutput) ->
     SrcRaw = proplists:get_value(device_src, Args, default_device_src()),
     OutRaw = proplists:get_value(output_dir, Args, DefaultOutput),
     KeyRaw = proplists:get_value(key, Args, undefined),
-    RootsRaw = proplists:get_value(device_roots, Args, undefined),
+    RootsRaw = proplists:get_value(devices, Args, undefined),
+    ModuleRaw = proplists:get_value(module, Args, undefined),
+    TestRaw = proplists:get_value(test, Args, undefined),
+    TimeoutRaw = proplists:get_value(timeout, Args, undefined),
+    TimeoutMultiplierRaw =
+        proplists:get_value(timeout_multiplier, Args, undefined),
+    RequiresSystemArchitecture =
+        proplists:get_value(requires_system_architecture, Args, false),
     WithCore = proplists:get_value(with_core, Args, false),
     ShowHash = proplists:get_value(show_hash, Args, false),
+    RecordRaw =
+        case record_requested(rebar_state:command_args(State)) of
+            true -> proplists:get_value(record, Args, "errors");
+            false -> undefined
+        end,
     #{
         <<"device-src">> => split_list(SrcRaw),
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
+        <<"publish-codec">> => to_bin(proplists:get_value(publish_codec, Args, "ans104@1.0")),
+        <<"requires-system-architecture">> => RequiresSystemArchitecture,
         <<"with-core">> => WithCore,
         <<"show-hash">> => ShowHash,
+        <<"record">> => parse_record_mode(RecordRaw),
+        <<"module-names">> => parse_atom_list(ModuleRaw),
+        <<"test-specs">> => parse_test_specs(TestRaw),
+        <<"timeout">> => parse_number(TimeoutRaw),
+        <<"timeout-multiplier">> => parse_number(TimeoutMultiplierRaw),
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
                 _ -> [to_bin(Root) || Root <- split_list(RootsRaw)]
             end
     }.
+
+%% @doc Print the current provider's generated help if `--help' was given.
+maybe_help(State, Module) ->
+    {Args, _Rest} = rebar_state:command_parsed_args(State),
+    case proplists:get_value(help, Args, false) of
+        true ->
+            Provider =
+                providers:get_provider_by_module(
+                    Module,
+                    rebar_state:providers(State)
+                ),
+            providers:help(Provider),
+            true;
+        false ->
+            false
+    end.
+
+%% @doc Parse a comma-separated provider option into atoms, or `all'.
+parse_atom_list(undefined) ->
+    all;
+parse_atom_list(Raw) ->
+    [binary_to_atom(Name, utf8) || Name <- split_list(Raw)].
+
+%% @doc Parse `--test' specs. Supports `Module:Fun1+Fun2' and bare funcs.
+parse_test_specs(undefined) ->
+    all;
+parse_test_specs(Raw) ->
+    lists:flatmap(fun parse_test_spec/1, split_list(Raw)).
+
+parse_test_spec(Spec) ->
+    case binary:split(Spec, <<":">>) of
+        [Funs] ->
+            [{all, parse_test_funs(Funs)}];
+        [Mod, Funs] ->
+            [{binary_to_atom(Mod, utf8), parse_test_funs(Funs)}]
+    end.
+
+parse_test_funs(Funs) ->
+    [binary_to_atom(Fun, utf8)
+        || Fun <- binary:split(Funs, <<"+">>, [global]),
+           Fun =/= <<>>].
+
+%% @doc Parse `--record=all|errors'.
+parse_record_mode(undefined) ->
+    none;
+parse_record_mode(Raw) ->
+    case string:lowercase(to_bin(Raw)) of
+        <<"all">> -> all;
+        <<"errors">> -> errors;
+        Mode ->
+            rebar_api:abort(
+                "--record accepts errors or all; omit it to disable recording. Got ~s",
+                [hb_util:list(Mode)]
+            )
+    end.
+
+record_requested(Args) ->
+    lists:any(fun record_arg/1, Args).
+
+record_arg(Arg) ->
+    Bin = hb_util:bin(Arg),
+    Bin =:= <<"--record">>
+        orelse binary:match(Bin, <<"--record=">>) =:= {0, 9}.
+
+%% @doc Parse a numeric provider option, preserving `undefined'.
+parse_number(undefined) ->
+    undefined;
+parse_number(Raw) ->
+    Bin = to_bin(Raw),
+    try binary_to_integer(Bin)
+    catch
+        error:badarg -> binary_to_float(Bin)
+    end.
 
 %% @doc Split a comma-separated provider option into trimmed binary values.
 split_list(List) when is_list(List) ->
@@ -92,7 +202,7 @@ to_bin(V) -> hb_util:bin(V).
 maybe_bin(undefined) -> undefined;
 maybe_bin(V) -> to_bin(V).
 
-%% @doc Scan the selected device roots from parsed provider arguments.
+%% @doc Scan the selected devices from parsed provider arguments.
 scan_devices(Args) ->
     hb_packager:scan(
         maps:get(<<"device-src">>, Args),
@@ -101,7 +211,14 @@ scan_devices(Args) ->
 
 %% @doc Common package options for provider commands.
 package_opts() ->
-    #{ <<"bootstrap-device-src">> => bootstrap_preloaded_dirs() }.
+    package_opts(#{}).
+
+package_opts(Args) ->
+    #{
+        <<"bootstrap-device-src">> => bootstrap_preloaded_dirs(),
+        <<"requires-system-architecture">> =>
+            maps:get(<<"requires-system-architecture">>, Args, false)
+    }.
 
 %% @doc Run `Fun' with `HB_PRELOADED_*' pointed at a preload result.
 with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->

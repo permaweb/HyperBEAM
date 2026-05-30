@@ -21,6 +21,12 @@ init(State) ->
 
 %% @doc Build a preloaded-store and start a shell pointed at it.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-local-store">>),
     case hb_forge_preload:run(Args, #{}) of
         {ok, Result} ->

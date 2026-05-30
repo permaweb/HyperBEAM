@@ -16,6 +16,7 @@ Below is a list of documented built-in devices. Each page details the device's p
 *   **[`~lua@5.3a`](./lua-at-5-3a.md):** Lua script execution engine.
 *   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
 *   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
+*   **[`~recorder@1.0`](./recorder-at-1-0.md):** Process-local flight recorder for AO-Core event telemetry.
 
 *(More devices will be documented here as specifications are finalized and reviewed.)*
 

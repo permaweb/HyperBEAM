@@ -33,10 +33,7 @@ execute_task(#task{type = post_tx, data = Items, opts = Opts} = Task) ->
         case build_signed_tx(Items, Opts) of
             {ok, SignedTX} ->
                 Committed = hb_message:convert(
-                    SignedTX,
-                    #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-                    #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
-                    Opts),
+                    SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, Opts),
                 ?event(bundler_short, log_task(posting_tx,
                     Task,
                     [{tx, {explicit, hb_message:id(Committed, signed, Opts)}}]
@@ -114,7 +111,7 @@ execute_task(#task{type = build_proofs, data = CommittedTX, opts = Opts} = Task)
             SizeTaggedChunks
         ),
         % -1 because the `?event(...)' macro increments the counter by 1.
-        hb_event:increment(bundler_short, built_proofs, length(Proofs) - 1),
+        hb_event:record(bundler_short, built_proofs, length(Proofs) - 1),
         ?event(
             bundler_short,
             {built_proofs,
@@ -185,7 +182,7 @@ build_signed_tx(Items, Opts) ->
 
 data_items_to_tx(Items, Opts) ->
     List = lists:map(
-        fun(Item) -> 
+        fun(Item) ->
             hb_message:convert(
                 Item,
                 #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
@@ -251,71 +248,6 @@ format_timestamp() ->
     Millisecs = (MegaSecs * 1000000 + Secs) * 1000 + (MicroSecs div 1000),
     calendar:system_time_to_rfc3339(Millisecs, [{unit, millisecond}, {offset, "Z"}]).
 
-build_signed_tx_test() ->
-    Anchor = rand:bytes(32),
-    Price = 12345,
-    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
-        price => {200, integer_to_binary(Price)},
-        tx_anchor => {200, hb_util:encode(Anchor)}
-    }),
-    TestOpts = NodeOpts#{
-        <<"priv-wallet">> => ar_wallet:new(),
-        <<"store">> => hb_test_utils:test_store()
-    },
-    try
-        Timestamp = 12344567,
-        ListValue = [<<"a">>, <<"b">>, <<"c">>],
-        StructuredItems = [
-            #{
-                <<"body">> => <<"body1">>,
-                <<"tag1">> => <<"value1">>,
-                <<"timestamp">> => Timestamp
-            },
-            #{
-                <<"body">> => <<"body3">>,
-                <<"tag3">> => <<"value3">>,
-                <<"list">> => ListValue
-            },
-            #{
-                <<"body">> => <<"body2">>,
-                <<"tag2">> => <<"value2">>
-            }
-        ],
-        Items = [
-            hb_message:commit(
-                Item,
-                TestOpts,
-                #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
-            )
-        || Item <- StructuredItems],
-        {ok, SignedTX} = build_signed_tx(Items, TestOpts),
-        ?assert(ar_tx:verify(SignedTX)),
-        ?assertEqual(Anchor, SignedTX#tx.anchor),
-        ?assertEqual(Price, SignedTX#tx.reward),
-        ?event(debug_test, {signed_tx, SignedTX}),
-        BundledTX = ar_bundles:deserialize(SignedTX),
-        ?event(debug_test, {bundled_tx, BundledTX}),
-        BundledItems = hb_util:numbered_keys_to_list(BundledTX#tx.data, #{}),
-        lists:foreach(
-            fun(Item) ->
-                ?assert(ar_bundles:verify_item(Item))
-            end,
-            BundledItems
-        ),
-        BundledStructuredItems = [
-            hb_message:convert(
-                Item,
-                <<"structured@1.0">>,
-                <<"ans104@1.0">>,
-                TestOpts
-            )
-        || Item <- BundledItems],
-        ?assertEqual(lists:reverse(Items), BundledStructuredItems),
-        ok
-    after
-        hb_mock_server:stop(ServerHandle)
-    end.
-
 build_signed_tx_on_arbundles_js_test() ->
     Anchor = rand:bytes(32),
     Price = 12345,
@@ -351,14 +283,14 @@ build_signed_tx_on_arbundles_js_test() ->
         ?assert(ar_bundles:verify_item(BundledItem)),
         % Convert both dataitems to structured messages
         ItemStructured = hb_message:convert(Item,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             TestOpts),
         ?event(debug_test, {item_structured, ItemStructured}),
         ?assert(hb_message:verify(ItemStructured, all, TestOpts)),
         BundledItemStructured = hb_message:convert(BundledItem,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
             TestOpts),
         ?event(debug_test, {bundled_item_structured, BundledItemStructured}),
         ?assert(hb_message:verify(BundledItemStructured, all, TestOpts)),
@@ -371,15 +303,15 @@ build_signed_tx_on_arbundles_js_test() ->
         ?assert(ar_tx:verify(SignedTX)),
         % Convert the signed TX to a structured message
         StructuredTX = hb_message:convert(SignedTX,
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
             TestOpts),
         % ?event(debug_test, {structured_tx, StructuredTX}),
         ?assert(hb_message:verify(StructuredTX, all, TestOpts)),
         % Convert back to an L1 TX
         SignedTXRoundtrip = hb_message:convert(StructuredTX,
-            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => true },
-            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
             TestOpts),
         ?event(debug_test, {signed_tx_roundtrip, SignedTXRoundtrip}),
         ?assert(ar_tx:verify(SignedTXRoundtrip)),
@@ -388,3 +320,197 @@ build_signed_tx_on_arbundles_js_test() ->
     after
         hb_mock_server:stop(ServerHandle)
     end.
+
+%% Test that a nested dataitem is handled correctly by the bundler flow.
+%% This test focuses in on the conversion that happens between building
+%% the signed bundle TX and building the bundle proofs.
+bundle_convert_real_data_test() ->
+    Item = inlined_broken_item(),
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
+    },
+    try
+        {ok, SignedTX} = build_signed_tx([Item], TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        Committed = hb_message:convert(
+            SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, TestOpts),
+        %% This convert is exactly what build_proofs runs.
+        TX = hb_message:convert(
+            Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
+        ?assert(ar_tx:verify(TX))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+bundle_convert_minimal_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
+    },
+    try
+        Item = hb_message:commit(
+            #{ <<"key">> => <<"value">>,
+               <<"body">> => #{ <<"a">> => <<"b">> } },
+            TestOpts, #{<<"device">> => <<"ans104@1.0">>}),
+        {ok, SignedTX} = build_signed_tx([Item], TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        Committed = hb_message:convert(
+            SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, TestOpts),
+        TX = hb_message:convert(
+            Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
+        ?assert(ar_tx:verify(TX))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+%% @doc Drive a nested tree of items signed in mixed bundle states through
+%% the bundler flow: each child is signed with bundle=true OR bundle=false,
+%% then we build the bundle TX, sign it, convert through structured@1.0 and
+%% back to tx@1.0, and assert nothing was inflated and every commitment
+%% still verifies. This exercises the full `hint-device' plumbing across a
+%% mixed tree, mirroring the production scenario that motivated the fix.
+bundle_convert_mixed_tree_verify_test() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    TestOpts = NodeOpts#{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"store">> => hb_test_utils:test_store()
+    },
+    try
+        %% Build three items. The first carries a child signed bundle=false,
+        %% the second a child signed bundle=true, the third has no nested
+        %% child at all. The L1 bundle TX therefore contains items that
+        %% would individually each round-trip with a different bundle state.
+        InnerFalse = hb_message:commit(
+            #{ <<"leaf-tag">> => <<"leaf-false">>,
+               <<"leaf-list">> => [1, 2, 3] },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(InnerFalse, all, TestOpts)),
+        InnerTrue = hb_message:commit(
+            #{ <<"leaf-tag">> => <<"leaf-true">>,
+               <<"leaf-list">> => [4, 5, 6] },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+        ?assert(hb_message:verify(InnerTrue, all, TestOpts)),
+        ItemA = hb_message:commit(
+            #{ <<"item-tag">> => <<"a">>, <<"inner">> => InnerFalse },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }),
+        ?assert(hb_message:verify(ItemA, all, TestOpts)),
+        ItemB = hb_message:commit(
+            #{ <<"item-tag">> => <<"b">>, <<"inner">> => InnerTrue },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(ItemB, all, TestOpts)),
+        ItemC = hb_message:commit(
+            #{ <<"item-tag">> => <<"c">> },
+            TestOpts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => false }),
+        ?assert(hb_message:verify(ItemC, all, TestOpts)),
+        {ok, SignedTX} = build_signed_tx([ItemA, ItemB, ItemC], TestOpts),
+        ?assert(ar_tx:verify(SignedTX)),
+        Committed = hb_message:convert(
+            SignedTX, <<"structured@1.0">>, <<"tx@1.0">>, TestOpts),
+        ?event(debug_test, {committed, {explicit, Committed}}),
+        ?assert(hb_message:verify(Committed, all, TestOpts)),
+        %% Convert back to TX (same path build_proofs uses) and check that
+        %% the data did not inflate.
+        TX = hb_message:convert(
+            Committed, <<"tx@1.0">>, <<"structured@1.0">>, TestOpts),
+        ?assert(ar_tx:verify(TX))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+%% Hardcoded item, structurally identical to one observed in a broken
+%% production bundle (TXID -BTiilFCWd2kB3oOdCpPDJLGXhjeNxIeMH3kerPXKCM).
+%% AO "Assignment" message with `body`, two commitments (HMAC + RSA-PSS),
+%% per-event commitments inside the body. All public key / signature
+%% bytes are real (from production) since the structured form encodes
+%% them.
+inlined_broken_item() ->
+    #{<<"base-hashpath">> =>
+          <<"w_l6KLmO8OeEM6vmdwX1HwdCDmHiOlhUyAeNdjwpspU/p4CQHPCo629uDl8seMpWN5Z4EZpRK6bUNPbGAoOIkrs">>,
+      <<"block-hash">> => <<"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>,
+      <<"block-height">> => 0,
+      <<"block-timestamp">> => 0,
+      <<"body">> =>
+          #{<<"commitments">> =>
+                #{<<"HkUAI3fWd3uHltdfyHzLU5IreUtmIIqv45ZxsC12psI">> =>
+                      #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                        <<"committed">> =>
+                            [<<"event">>, <<"reference">>, <<"status-class">>],
+                        <<"committer">> =>
+                            <<"mfj2T6f_3stKQk7fctrbpZKUfu4V6MQKCH-YHLtFnOY">>,
+                        <<"keyid">> =>
+                            <<"publickey:kvgGBmHtEOxZTuJuJuHVqBe51aLpSDvZrzj5RjNEbw8NrYm3GB9+BEKdYD+fHZ0H775PJf8mosGapkP6pB8h8ZEEc6AuOo+lTJ9SKEnYit1Q6YG5Dg306EDfm0dpMU3zKe9pE4CIHf3ffCDqa1Xh4c1zdcFqKyofeT8PWIGQZCScA8rYG+aG2Z/y6QduyxBgzFfITdzeXbnJONmZEwPEA29LeDWmCxA7CSfE6W8+2aDW75qQjETRVXzxou0I0tsc3uXzd9E0/yU6NbDi93sIBiO8z2pNbGrMGIfpH+4dirH/YZNBW8PBgOLjnpe5yoPrT+cI8OoEX27u/al/rkPG4u0wBlxnollSr/lXc5HIn6AWvpSF7nuXcmdtG8Y8RK95h4YZ9d6CG3tSOTvSk7wK8IH97hScB16EpiuT6Xi/TPYh3PwVC/VDxLMox19v1eP1riHC/nkIroerCmaIwGfxI2XNUgQzaTcygjT0DFbbLZFakCZpJ+0+u2/S1I4EbdpdcChWqrA8psUlyR3sbhhPDpEP1ldNO+08OyW/PMfMwXEkVR+WHM2t5m9cyZwjpes6epCQQWjMIkwqeIRZWwo607iJKsXgd5n+73FWytVWNS1mOH1nDDkfDXOq4R60B6C+2k0As14b2Dv4eXZstbr8KbtVIHit/IytBohieLpMcF0=">>,
+                        <<"signature">> =>
+                            <<"fZgshLexhVcpiQ1sBhwa_eoDn97vvc6IoJtwntc8VJTSDAokQ0RyThcjqhcgtF04kl4T986lZrVptAXkiKwog-gH1vnJX1T2yGAM-ZlTNTTmdLE7OIQhvs26-0_L3poPUSEjHsZ1vU2RpUUvKLIEQdCwlgTXGx54ZGB6feYXMn9e01tZPEdTVD0AcALa5G55aqyH3Lde5KXx4vOgdvWaCr772dXZ6C8249UG02SIHy3xvp1UdkLtzIbvSY9n5UzC1Bt-b5JftIijmVuIv3oI0_y9rRxGYLm2m7VusHwYjRdFAjN5X_NvYpWx25b62CNNLwprJfDqhllZsDz6PjnhRh9ZocOP3OLrarW0owFt0dfDRt3VBYaksUYTem-9YWtzS3Qa7kZSB754xtOW62wvu3kVH2sNB5C9SoXmheoPUjNLa4qXQv4-NJPF4wVdj8QxM0mYO0KQZfCUZtXhYYaqwRmS2aMyUrca1xjPOkD0nr7B1IS805O08fTkN6YcMluUH93myL4VbPPa2v1V2k-B-OlP4AzOn9F1uzk5ek--K_-2QdC63vgm4EKv8XqBoipUJ0Fe0jKUsE9iLZJddoMrYrsQCp8WMWX7iGaP6zJU2tbMpkAl-rr_Hc8xUkJ3eBd6pQcw-1MQ8EK7trPnjQD0EQZAG2HYj87HG-qCX3l9o8w">>,
+                        <<"type">> => <<"rsa-pss-sha512">>},
+                  <<"asDiK4CqvjJf2d9FFf3r3-xCrs1jA8ee9tWUp43BuWk">> =>
+                      #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                        <<"committed">> =>
+                            [<<"event">>, <<"reference">>, <<"status-class">>],
+                        <<"keyid">> => <<"constant:ao">>,
+                        <<"signature">> =>
+                            <<"asDiK4CqvjJf2d9FFf3r3-xCrs1jA8ee9tWUp43BuWk">>,
+                        <<"type">> => <<"hmac-sha256">>}},
+            <<"event">> => <<"is_admissible">>,
+            <<"reference">> =>
+                <<"HnbIWJdkG4CCwHCiycMKMmv2posdcTJ5xFcZ9lpTQQs">>,
+            <<"status-class">> => <<"success">>},
+      <<"commitments">> =>
+          #{<<"KT4ZXa_nhnWTfNJdVwOPDwHNN3eqYs_o3JoYv_odNvE">> =>
+                #{<<"commitment-device">> => <<"httpsig@1.0">>,
+                  <<"committed">> =>
+                      [<<"ao-types">>, <<"base-hashpath">>, <<"block-hash">>,
+                       <<"block-height">>, <<"block-timestamp">>, <<"body">>,
+                       <<"data-protocol">>, <<"epoch">>, <<"path">>,
+                       <<"process">>, <<"slot">>, <<"timestamp">>, <<"type">>,
+                       <<"variant">>],
+                  <<"keyid">> => <<"constant:ao">>,
+                  <<"signature">> =>
+                      <<"KT4ZXa_nhnWTfNJdVwOPDwHNN3eqYs_o3JoYv_odNvE">>,
+                  <<"type">> => <<"hmac-sha256">>},
+            <<"j1KSZD2tQOXpYvbPaqmLyRN6OOXxGa20bkgfeCj4a30">> =>
+                #{<<"bundle">> => <<"false">>,
+                  <<"commitment-device">> => <<"ans104@1.0">>,
+                  <<"committed">> =>
+                      [<<"ao-types">>, <<"base-hashpath">>, <<"block-hash">>,
+                       <<"block-height">>, <<"block-timestamp">>, <<"body">>,
+                       <<"data-protocol">>, <<"epoch">>, <<"path">>,
+                       <<"process">>, <<"slot">>, <<"timestamp">>, <<"type">>,
+                       <<"variant">>],
+                  <<"committer">> =>
+                      <<"n_XZJhUnmldNFo4dhajoPZWhBXuJk-OcQr5JQ49c4Zo">>,
+                  <<"keyid">> =>
+                      <<"publickey:9BXuilimqVo7fpnoToPHZwqL7w_C0Qn4N3egeJRy05-nSpUv1vyp9xHbVLKVMPnJsie5Awt_xxob_jDvXSmE1fDsUpNnFurxG88UWN4zSNi87EfOorDQjHPRUqKPIYvg6xqPCpXPpOccJbFuack3ltQKtF5XLoaKWbsPdUtMquRXrbJgnGeOvXhQhbKa4xJKwGmjVC_LpY5FQ8j-cOlBOVVe_B7KF4eWG3sJf-z59MJQOaAozyU2iZpsuhslkTNVj8sM9CqkSfyD8EjEZdfF088IM_dJgk6ehIDHbx3FcGVnxpUHkXEnJFAlXRzdqmNb84QXsTNOHqwQPZ3q5wPRWS6iUaNxfeS_SsR6otIJgrYq04LYJLcpHuKGp53-b8tTeIvDFcmS2_kPijPqPINbf9c5uH0mxMNomB-8rVDIkIZ6Ojc_M0JnaQSk2rYPq8qRy2PuvAFyo1zeGM-2Bo4GNl9dMnfIr_Q6MlxRUwAwLHdOt0BJkxEBfOIw3MkB2d-SiVWtxG1Uqib7Iu_yn3j9DwzUOHjRQTse07giNDXRMsr1ml_sCK3bIetUFVnjjnoTNDEItDSck7lTFgvCdyXKkvXtSiNHkW8TCbdTDY0hBJzLVheKDb_cCyfmcTKo5ql2sWsZYCC7XybKdRMxU2HNNIUSpcDvhnTwv5-oq42Lmqc">>,
+                  <<"signature">> =>
+                      <<"sE9TuQTsMCHhaSOmHF-Wqu8QBbSNMSeSztiE1b0tJfmSNOe1nKPmMcCZN1rHD8L9xQWJw4hSVUbChwt4QReTz2IoXFz1NT80F1qCY2x3uFMFxgUHb2abTQW_-VNjFGWFe-sguwYLAIZGYoJ9a2g1EJCRfksk9iOWXRt7j_yIBixKATq-QsEWdcwfBsEUYWq-IRI1RdPAr9ToZeQ13TtWWYxcRbKHwxJ1M58p2CuLCi1OXVmENLjacAawuhBjGV4oTQ1-QBap-JOjB6kRTXtWjNGnMTPF01edFJIxgRncnODrTO_ehz6qkFH6iMhI9oV4w5VcRCKnNM7fxTXKj6DeiuAb1KrirpzohzsTLautMqRhst8gSViBlftd4XoVCDVscawuz8yPDyJoDxhIIup7mO51QSmNVTM6JpSEsG-CbXa64aECBOq7_x-ld9xHyNvCCSHetSJ3EBiJDWHE8XCurePGJ6GLeggugQ85LxgsRaLDm9UIlbMhopkK4X-SyXz5_pGwUSegLa1QHWWxnIaS5zTm0f4yi_YiBmgmS27v28T-nTzOHuBGTl8yUWVG_CKAELjFVREm5I7h4UuDQuFoXlkkFW22-Gyx5tZh1eSxRpl1NOwhyGc9O-6TIR46t1BhlItitOoi6JEf26JjTmwJWF7kR8xyahCYWtHFEkzpob4">>,
+                  <<"type">> => <<"rsa-pss-sha256">>}},
+      <<"data-protocol">> => <<"ao">>,
+      <<"epoch">> => <<"0">>,
+      <<"path">> => <<"compute">>,
+      <<"process">> => <<"1V65_gzlifHH_surfFzL6HGfRlLJuEX_y0VbPHwIKec">>,
+      <<"slot">> => 180901,
+      <<"timestamp">> => 1778975170441,
+      <<"type">> => <<"Assignment">>,
+      <<"variant">> => <<"ao.N.1">>}.

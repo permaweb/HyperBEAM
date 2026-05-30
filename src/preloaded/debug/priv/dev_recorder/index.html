@@ -1,0 +1,109 @@
+<!--
+Agents: this report embeds its events as base64 JSON in the script tag with
+id="embedded-log". To extract them from a saved report:
+
+REPORT=/tmp/recorder-test-flight.html
+python3 - "$REPORT" <<'PY'
+import base64, json, re, sys
+html = open(sys.argv[1], encoding="utf-8").read()
+body = re.search(r'<script type="application/octet-stream" id="embedded-log">([^<]*)</script>', html, re.S).group(1)
+print(json.dumps(json.loads(base64.b64decode(body)), indent=2))
+PY
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>~recorder@1.0/test-flight</title>
+  <link rel="icon" href="data:,">
+  <style>{{EVENTS_CSS}}</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="title-lockup">
+        <div class="title-mark" aria-hidden="true">REC</div>
+        <div>
+          <p class="eyebrow">HyperBEAM telemetry</p>
+          <h1><span>~recorder@1.0/</span><span class="flight-name">test-flight</span></h1>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats" aria-label="Event summary">
+      <article>
+        <span>Events</span>
+        <strong id="stat-count">0</strong>
+      </article>
+      <article>
+        <span>Topics</span>
+        <strong id="stat-topics">0</strong>
+      </article>
+      <article>
+        <span>Modules</span>
+        <strong id="stat-modules">0</strong>
+      </article>
+      <article>
+        <span>Duration</span>
+        <strong id="stat-duration">0us</strong>
+      </article>
+    </section>
+
+    <section class="filters" aria-label="Filter">
+      <div class="filter-combo">
+        <div class="selected-filters" id="topic-selected"></div>
+        <input id="topic-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Topic: all" aria-haspopup="listbox" aria-controls="topic-options">
+        <div id="topic-options" class="filter-options" role="listbox" hidden></div>
+      </div>
+      <div class="filter-combo">
+        <div class="selected-filters" id="name-selected"></div>
+        <input id="name-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Name: all" aria-haspopup="listbox" aria-controls="name-options">
+        <div id="name-options" class="filter-options" role="listbox" hidden></div>
+      </div>
+      <div class="filter-combo">
+        <div class="selected-filters" id="module-selected"></div>
+        <input id="module-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Module: all" aria-haspopup="listbox" aria-controls="module-options">
+        <div id="module-options" class="filter-options" role="listbox" hidden></div>
+      </div>
+      <div class="filter-combo">
+        <div class="selected-filters" id="function-selected"></div>
+        <input id="function-filter" type="text" autocomplete="off" spellcheck="false" placeholder="Function: all" aria-haspopup="listbox" aria-controls="function-options">
+        <div id="function-options" class="filter-options" role="listbox" hidden></div>
+      </div>
+      <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Contains string...">
+    </section>
+
+    <section class="workspace" id="workspace">
+      <aside class="timeline">
+        <div class="section-head">
+          <h2>Timeline</h2>
+          <span id="visible-count">0 events</span>
+        </div>
+        <div id="event-list" class="event-list" role="list"></div>
+      </aside>
+
+      <div class="splitter" data-splitter="timeline"></div>
+
+      <section class="detail">
+        <div class="section-head">
+          <h2>Detail</h2>
+          <span id="selected-sequence">No selection</span>
+        </div>
+        <div id="detail-empty" class="empty">Select an event</div>
+        <div id="detail-view" class="detail-view" hidden>
+          <div class="detail-grid" id="detail-grid"></div>
+          <div class="detail-panels" id="detail-panels">
+            <div id="message-view" class="message-browser" aria-label="Event details"></div>
+            <div class="splitter splitter-inner" data-splitter="stack"></div>
+            <div id="stack-view" class="message-browser stack-browser" aria-label="Stack trace"></div>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script type="application/octet-stream" id="embedded-log">{{EVENT_LOG_JSON_BASE64}}</script>
+  <script>{{EVENTS_JS}}</script>
+</body>
+</html>

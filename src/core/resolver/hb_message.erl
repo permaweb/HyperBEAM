@@ -58,6 +58,7 @@
 -module(hb_message).
 -export([id/1, id/2, id/3]).
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
+-export([add_bundle_hint/2, add_bundle_hint/3]).
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
@@ -102,6 +103,7 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
                 true -> hb_maps:without([<<"priv">>], Msg, Opts);
                 false -> Msg
             end,
+            TargetFormat,
             SourceFormat,
             Opts
         ),
@@ -110,8 +112,9 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
         _ -> from_tabm(TABM, TargetFormat, OldPriv, Opts)
     end.
 
-to_tabm(Msg, SourceFormat, Opts) ->
-    {SourceCodecMod, Params} = conversion_spec_to_req(SourceFormat, Opts),
+to_tabm(Msg, TargetFormat, SourceFormat, Opts) ->
+    {SourceCodecMod, Params0} = conversion_spec_to_req(SourceFormat, Opts),
+    Params = add_bundle_hint(Params0, TargetFormat, Opts),
     % We use _from_ here because the codecs are labelled from the perspective
     % of their own format. `dev_codec_ans104:from/1' will convert _from_
     % an ANS-104 message _into_ a TABM.
@@ -119,6 +122,51 @@ to_tabm(Msg, SourceFormat, Opts) ->
         {ok, TypicalMsg} when is_map(TypicalMsg) ->
             TypicalMsg;
         {ok, OtherTypeRes} -> OtherTypeRes
+    end.
+
+%% @doc Extract the device value from a conversion spec.
+conversion_spec_device(Spec, _Default, _Opts)
+        when is_binary(Spec) orelse (Spec == tabm) ->
+    Spec;
+conversion_spec_device(Spec, Default, Opts) when is_map(Spec) ->
+    hb_maps:get(<<"device">>, Spec, Default, Opts);
+conversion_spec_device(_Spec, Default, _Opts) ->
+    Default.
+
+%% @doc Extend a structured->tabm source spec with the `bundle' flag and
+%% `hint-device' implied by a hint spec, so the structured codec can decide
+%% whether to load or offload children and can call the target codec's
+%% `to_hint/3' callback at each node of the tree.
+%%
+%% `Spec' is the spec being extended (the source spec when converting).
+%% `HintSpec' is the spec from which we should infer bundling
+%% (target spec when converting).
+add_bundle_hint(Spec, Opts) ->
+    add_bundle_hint(Spec, Spec, Opts).
+add_bundle_hint(Spec, HintSpec, Opts) ->
+    WithBundle =
+        case maps:is_key(<<"bundle">>, Spec) of
+            true ->
+                Spec;
+            false ->
+                case
+                    is_map(HintSpec)
+                        andalso hb_maps:find(<<"bundle">>, HintSpec, Opts)
+                of
+                    {ok, Bundle} -> Spec#{ <<"bundle">> => Bundle };
+                    _ -> Spec
+                end
+        end,
+    case maps:is_key(<<"hint-device">>, WithBundle) of
+        true ->
+            WithBundle;
+        false ->
+            case conversion_spec_device(HintSpec, undefined, Opts) of
+                HintDevice when is_binary(HintDevice) ->
+                    WithBundle#{ <<"hint-device">> => HintDevice };
+                _ ->
+                    WithBundle
+            end
     end.
 
 from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
@@ -138,26 +186,24 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 restore_priv(Msg, EmptyPriv, _Opts) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv, Opts) ->
     MsgPriv = hb_maps:get(<<"priv">>, Msg, #{}, Opts),
-    ?event({restoring_priv, {msg_priv, MsgPriv}, {old_priv, OldPriv}}),
+    ?event({restoring_priv, {priv_msg, MsgPriv}, {priv_old, OldPriv}}),
     NewPriv = hb_util:deep_merge(MsgPriv, OldPriv, Opts),
-    ?event({new_priv, NewPriv}),
+    ?event({priv_new, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
 %% @doc Get a codec device and request params from the given conversion request. 
 %% Expects conversion spec to either be a binary codec name, or a map with a
 %% `device' key and other parameters. Additionally honors the `always_bundle'
 %% key in the node message if present.
-conversion_spec_to_req(Spec, Opts) when is_binary(Spec) or (Spec == tabm) ->
+conversion_spec_to_req(Spec, Opts) when is_binary(Spec) orelse (Spec == tabm) ->
     conversion_spec_to_req(#{ <<"device">> => Spec }, Opts);
 conversion_spec_to_req(Spec, Opts) ->
     try
-        Device =
-            hb_maps:get(
-                <<"device">>,
-                Spec,
-                no_codec_device_in_conversion_spec,
-                Opts
-            ),
+        Device = conversion_spec_device(
+            Spec,
+            no_codec_device_in_conversion_spec,
+            Opts
+        ),
         {
             case Device of
                 tabm -> tabm;
@@ -659,7 +705,8 @@ match(Map1, Map2) ->
 match(Map1, Map2, Mode) ->
     match(Map1, Map2, Mode, #{}).
 match(Map1, Map2, Mode, Opts) ->
-    try unsafe_match(Map1, Map2, Mode, [], Opts)
+    try
+        unsafe_match(hb_ao:normalize_keys(Map1, Opts), Map2, Mode, [], Opts)
     catch
         throw:{mismatch, Type, Path, Val1, Val2} ->
             {mismatch, Type, Path, Val1, Val2};
@@ -668,6 +715,19 @@ match(Map1, Map2, Mode, Opts) ->
 
 %% @doc Match two maps, returning `true' if they match, or throwing an error
 %% if they do not.
+unsafe_match(#{ <<"match-type">> := Type, <<"body">> := Inner } = RawMap1,
+        RawMap2, _Mode, Path, Opts) when map_size(RawMap1) == 2 ->
+    case catch hb_util:key_to_atom(Type) of
+        Mode when Mode == strict; Mode == primary; Mode == only_present ->
+            unsafe_match(
+                hb_ao:normalize_keys(Inner, Opts),
+                hb_ao:normalize_keys(RawMap2, Opts),
+                Mode,
+                Path,
+                Opts
+            );
+        _ -> throw(invalid_match_type)
+    end;
 unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
     {_, SignedCommitments1} = 
         lists:partition(

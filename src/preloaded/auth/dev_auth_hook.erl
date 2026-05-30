@@ -2,8 +2,7 @@
 %%% node-hosted wallets, in accordance with the node operator's configuration.
 %%% It is intended for deployment in environments where a node's users have
 %%% intrinsic reasons for trusting the node outside of the scope of this device.
-%%% For example, if executed on a node running in a Trusted Execution Environment
-%%% with `~snp@1.0', or a node they operate or is operated by a trusted
+%%% For example, if executed on a node they operate or is operated by a trusted
 %%% third-party.
 %%% 
 %%% This device utilizes the `generator' interface type which other devices may
@@ -105,7 +104,7 @@
 %% </pre>
 %% 
 request(Base, HookReq, Opts) ->
-    ?event({auth_hook_request, {base, Base}, {hook_req, HookReq}}),
+    ?event({auth_hook_request, {base, Base}, {priv_hook_req, HookReq}}),
     maybe
         % Get the key provider from options and short-circuit if none is
         % provided.
@@ -125,9 +124,9 @@ request(Base, HookReq, Opts) ->
             generate_wallet(IntermediateProvider, NormReq, Opts),
         ?event(
             {auth_hook_normalized,
-                {intermediate_provider, IntermediateProvider},
-                {norm_provider, NormProvider},
-                {norm_req, NormReq}
+                {priv_intermediate_provider, IntermediateProvider},
+                {priv_norm_provider, NormProvider},
+                {priv_norm_req, NormReq}
             }
         ),
         % Sign the full request  
@@ -149,7 +148,7 @@ request(Base, HookReq, Opts) ->
                 MessageSequence,
                 NewOpts
             ),
-        ?event({auth_hook_returning, FinalSequence}),
+        ?event({auth_hook_returning, {priv_final_sequence, FinalSequence}}),
         {ok, #{ <<"body">> => FinalSequence, <<"request">> => SignedReq }}
     else
         {error, AuthError} ->
@@ -242,7 +241,7 @@ is_relevant_from_keys(Base, Request, Opts) ->
 generate_secret(Provider, Request, Opts) ->
     case call_provider(<<"generate">>, Provider, Request, Opts) of
         {error, not_found} ->
-            ?event({no_generate_handler, Provider}),
+            ?event({no_generate_handler, {priv_provider, Provider}}),
             {ok, Provider, strip_sensitive(Request, Opts)};
         {error, Err} ->
             % Forward the error. The main handler will fail to match this and
@@ -252,22 +251,22 @@ generate_secret(Provider, Request, Opts) ->
         {ok, Secret} when is_binary(Secret) ->
             % The provider returned a direct key, calculate the committer and
             % generate a wallet for it, if needed.
-            ?event({secret_from_provider, Secret}),
+            ?event({priv_secret_from_provider, Secret}),
             {ok, Provider#{ <<"secret">> => Secret }, strip_sensitive(Request, Opts)};
         {ok, NormalizedReq} when is_map(NormalizedReq) ->
             % If there is a `wallet' field in the request, we move it to the
             % provider, else continue with the existing provider.
-            ?event({normalized_req, NormalizedReq}),
+            ?event({priv_normalized_req, NormalizedReq}),
             case hb_maps:find(<<"secret">>, NormalizedReq, Opts) of
                 {ok, Key} ->
-                    ?event({key_found_in_normalized_req, Key}),
+                    ?event({priv_key_found_in_normalized_req, Key}),
                     {
                         ok,
                         Provider#{ <<"secret">> => Key },
                         strip_sensitive(NormalizedReq, Opts)
                     };
                 error ->
-                    ?event({no_key_in_normalized_req, NormalizedReq}),
+                    ?event({no_key_in_normalized_req, {priv_normalized_req, NormalizedReq}}),
                     {ok, Provider, strip_sensitive(NormalizedReq, Opts)}
             end
     end.
@@ -294,7 +293,7 @@ sign_request(Provider, Msg, Opts) ->
     case hb_maps:get(<<"skip-commit">>, Provider, true, Opts) of
         false ->
             % Skip signing and return the normalized message.
-            ?event({provider_requested_signing_skip, Provider}),
+            ?event({provider_requested_signing_skip, {priv_provider, Provider}}),
             {ok, Msg};
         true ->
             % Wallet signs without ignored keys
@@ -363,7 +362,7 @@ finalize(KeyProvider, SignedReq, MessageSequence, Opts) ->
         },
     case call_provider(<<"finalize">>, KeyProvider, Req, Opts) of
         {ok, Finalized} ->
-            ?event({auth_hook_finalized, Finalized}),
+            ?event({auth_hook_finalized, {priv_finalized, Finalized}}),
             {ok, Finalized};
         {error, not_found} ->
             ?event(auth_hook_no_finalize_handler),
@@ -407,7 +406,7 @@ find_provider(Base, Opts) ->
 
 %% @doc Find the appropriate handler for a key in the key provider.
 call_provider(Key, Provider, Request, Opts) ->
-    ?event({call_provider, {key, Key}, {provider, Provider}, {req, Request}}),
+    ?event({call_provider, {priv_key, Key}, {priv_provider, Provider}, {priv_req, Request}}),
     ExecKey = hb_maps:get(<< Key/binary, "-path">>, Provider, Key, Opts),
     ?event({call_provider, {exec_key, ExecKey}}),
     case hb_ao:resolve(Provider, Request#{ <<"path">> => ExecKey }, Opts) of

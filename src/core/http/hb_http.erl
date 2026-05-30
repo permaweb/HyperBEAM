@@ -1330,25 +1330,30 @@ ans104_wasm_test() ->
     skip.
 
 send_large_signed_request_test() ->
-    % Note: If the signature scheme ever changes, we will need to run the 
-    % following to get a freshly signed request.
-    %    file:write_file(
-    %        "test/large-message.eterm",
-    %        hb_util:bin(
-    %            io_lib:format(
-    %               "~p.", 
-    %                [
-    %                    hb_cache:ensure_all_loaded(hb_message:commit(
-    %                        hb_message:uncommitted(hd(hb_util:ok(
-    %                            file:consult(<<"test/large-message.eterm">>)
-    %                       ))),
-    %                        #{ <<"priv-wallet">> => hb:wallet() }
-    %                    ))
-    %                ]
-    %            )
-    %        )
-    %    ).
-    {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
+    Opts = #{ <<"priv-wallet">> => hb:wallet() },
+    Req =
+        hb_cache:ensure_all_loaded(
+            hb_message:commit(
+                #{
+                    <<"node-message">> => #{
+                        <<"short-trace-len">> => 5,
+                        <<"large-payload">> =>
+                            maps:from_list(
+                                [
+                                    {
+                                        <<"key-", (integer_to_binary(N))/binary>>,
+                                        crypto:strong_rand_bytes(1024)
+                                    }
+                                ||
+                                    N <- lists:seq(1, 64)
+                                ]
+                            )
+                    }
+                },
+                Opts
+            ),
+            Opts
+        ),
     % Get the short trace length from the node message in the large, stored
     % request. 
     ?assertMatch(

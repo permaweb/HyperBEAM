@@ -29,6 +29,12 @@ init(State) ->
 
 %% @doc Parse CLI args and build a signed preloaded-store.
 do(State) ->
+    case hb_forge_args:maybe_help(State, ?MODULE) of
+        true -> {ok, State};
+        false -> do_run(State)
+    end.
+
+do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/preloaded-store">>),
     case run(Args, default_node_opts()) of
         {ok, _Result} -> {ok, State};
@@ -75,10 +81,14 @@ default_node_opts() ->
 
 %% @doc Add test compile flags when the caller is building a test store.
 package_opts(Args, NodeOpts) ->
-    case maps:get(<<"test">>, Args, false) of
+    Base = case maps:get(<<"test">>, Args, false) of
         true -> NodeOpts#{ <<"test">> => true };
         _ -> NodeOpts
-    end.
+    end,
+    Base#{
+        <<"requires-system-architecture">> =>
+            maps:get(<<"requires-system-architecture">>, Args, false)
+    }.
 
 %% @doc Construct the path to the preloaded-store index header.
 header_path(OutputDir) ->

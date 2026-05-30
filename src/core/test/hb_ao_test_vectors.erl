@@ -312,6 +312,29 @@ untrusted_load_device_test() ->
         exec_dummy_device(Opts)
     ).
 
+load_remote_devices_false_skips_gateway_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"load-remote-devices">> => false,
+        <<"routes">> => invalid,
+        <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
+        <<"priv-wallet">> => Wallet
+    },
+    hb_store:reset(Store),
+    SpecMsg =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"name">> => <<"dummy@1.0">>
+            },
+            Opts
+        ),
+    SpecID = hb_message:id(SpecMsg, signed, Opts),
+    ?assertEqual(
+        {error, not_found},
+        hb_device_load:reference(SpecID, Opts)
+    ).
+
 %%% Test vector suite
 
 resolve_simple_test(Opts) ->

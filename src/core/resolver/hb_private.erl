@@ -51,15 +51,15 @@ get(InputPath, Msg, Default, Opts) ->
 set(Msg, InputPath, Value, Opts) ->
     Path = remove_private_specifier(InputPath, Opts),
     Priv = from_message(Msg),
-    ?event({set_private, {in, Path}, {out, Path}, {value, Value}, {opts, Opts}}),
+    ?event({set_private, {priv_in, Path}, {priv_out, Path}, {priv_value, Value}, {priv_opts, Opts}}),
     NewPriv = hb_util:deep_set(Path, Value, Priv, opts(Opts)),
-    ?event({set_private_res, {out, NewPriv}}),
+    ?event({set_private_res, {priv_out, NewPriv}}),
     set_priv(Msg, NewPriv).
 set(Msg, PrivMap, Opts) ->
     CurrentPriv = from_message(Msg),
-    ?event({set_private, {in, PrivMap}, {opts, Opts}}),
+    ?event({set_private, {priv_in, PrivMap}, {priv_opts, Opts}}),
     NewPriv = hb_util:deep_merge(CurrentPriv, PrivMap, opts(Opts)),
-    ?event({set_private_res, {out, NewPriv}}),
+    ?event({set_private_res, {priv_out, NewPriv}}),
     set_priv(Msg, NewPriv).
 
 %% @doc Merge the private elements of two messages into one. The keys in the

@@ -121,8 +121,8 @@ set(StoreMod, Name, InstanceTerm) ->
 -ifdef(STORE_EVENTS).
 find(StoreOpts) ->
     {Time, Result} = timer:tc(fun() -> do_find(StoreOpts) end),
-    hb_event:increment(<<"store_duration">>, <<"find">>, #{}, Time),
-    hb_event:increment(<<"store">>, <<"find">>, #{}, 1),
+    hb_event:record(<<"store_duration">>, <<"find">>, #{}, Time),
+    hb_event:record(<<"store">>, <<"find">>, #{}, 1),
     Result.
 -else.
 find(StoreOpts) ->
@@ -371,7 +371,7 @@ match(Modules, Match, Opts) ->
 
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
-%% this function will also time the call and increment the appropriate event
+%% this function will also time the call and record the appropriate event
 %% counter.
 -ifdef(STORE_EVENTS).
 call_function(X, Function, Args) ->
@@ -391,8 +391,8 @@ call_function(X, Function, Args) ->
             {result, Result}
         }
     ),
-    hb_event:increment(<<"store_duration">>, hb_util:bin(Function), #{}, Time),
-    hb_event:increment(<<"store">>, hb_util:bin(Function), #{}, 1),
+    hb_event:record(<<"store_duration">>, hb_util:bin(Function), #{}, Time),
+    hb_event:record(<<"store">>, hb_util:bin(Function), #{}, 1),
     Result.
 -else.
 call_function(X, Function, Args) ->

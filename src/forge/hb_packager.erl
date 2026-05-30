@@ -307,7 +307,7 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers,
         compile_archive(
             ModName, Root, RootFile, Helpers, Libraries, PrivFiles, Opts
         ),
-    #{
+    Pkg = #{
         device_name => Implements,
         source_id => SourceID,
         module_name => ModName,
@@ -315,10 +315,17 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers,
         spec_body => SpecBody,
         spec_content_type => SpecContentType,
         requires_otp_release =>
-            hb_util:bin(erlang:system_info(otp_release)),
-        requires_system_architecture =>
-            hb_util:bin(erlang:system_info(system_architecture))
-    }.
+            hb_util:bin(erlang:system_info(otp_release))
+    },
+    case maps:get(<<"requires-system-architecture">>, Opts, false) of
+        true ->
+            Pkg#{
+                requires_system_architecture =>
+                    hb_util:bin(erlang:system_info(system_architecture))
+            };
+        false ->
+            Pkg
+    end.
 
 %% @doc The device name (`name@version') a scanned group implements,
 %% without packaging it. Build tooling uses this to correlate a source
@@ -682,11 +689,10 @@ impl_message(Pkg, SpecID, _Opts) ->
     #{
         module_name := ModName,
         archive := Archive,
-        requires_otp_release := OtpRel,
-        requires_system_architecture := Arch
+        requires_otp_release := OtpRel
     } = Pkg,
     % Keep archive bytes and loader metadata flat in the implementation message.
-    #{
+    Msg = #{
         <<"data-protocol">> => <<"ao">>,
         <<"variant">> => ?VARIANT,
         <<"content-type">> => ?ARCHIVE_CONTENT_TYPE,
@@ -694,6 +700,9 @@ impl_message(Pkg, SpecID, _Opts) ->
         <<"implements-device">> => SpecID,
         <<"module-name">> => atom_to_binary(ModName, utf8),
         <<"requires-otp-release">> => OtpRel,
-        <<"requires-system-architecture">> => Arch,
         <<"body">> => Archive
-    }.
+    },
+    case maps:get(requires_system_architecture, Pkg, undefined) of
+        undefined -> Msg;
+        Arch -> Msg#{ <<"requires-system-architecture">> => Arch }
+    end.
