@@ -1,0 +1,14 @@
+%% -*- erlang -*-
+%% sequence: rebar3 reads rebar.config before Forge plugins run.
+%% load shared_rebar.config here, then install-template render the same file into
+%% `rebar3 new device`.
+ScriptDir = filename:dirname(SCRIPT),
+{ok, SharedConfig} =
+    file:consult(
+        filename:join(ScriptDir, "shared_rebar.config")
+    ),
+lists:foldl(
+    fun({Key, _} = Term, Acc) -> lists:keystore(Key, 1, Acc, Term) end,
+    CONFIG,
+    SharedConfig
+).
