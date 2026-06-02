@@ -161,7 +161,7 @@ reset(Base, _Req, Opts) ->
 to(Msg, Req, Opts) ->
     ?event({to, {priv_msg, Msg}, {priv_req, Req}}),
     CookieOpts = opts(Opts),
-    LoadedMsg = hb_cache:ensure_all_loaded(Msg, CookieOpts),
+    LoadedMsg = ensure_cookie_loaded(Msg, CookieOpts),
     ?event({to, {priv_loaded_msg, LoadedMsg}}),
     do_to(LoadedMsg, Req, CookieOpts).
 do_to(Msg, Req = #{ <<"format">> := <<"set-cookie">> }, Opts) when is_map(Msg) ->
@@ -260,7 +260,7 @@ to_cookie_line(Key, Cookie) ->
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
 from(Msg, Req, Opts) ->
     CookieOpts = opts(Opts),
-    LoadedMsg = hb_cache:ensure_all_loaded(Msg, Opts),
+    LoadedMsg = ensure_cookie_loaded(Msg, CookieOpts),
     do_from(LoadedMsg, Req, CookieOpts).
 do_from(Msg, Req, Opts) when is_map(Msg) ->
     {ok, ResetBase} = reset(Msg, Opts),
@@ -388,6 +388,43 @@ from_set_cookie(Line, _Req, Opts) when is_binary(Line) ->
     end.
 
 %%% Internal helpers
+
+%% @doc Load only the parts of the message needed by the cookie codec.
+ensure_cookie_loaded(Msg, Opts) ->
+    LoadedMsg = hb_cache:ensure_loaded(Msg, Opts),
+    load_private_cookie(
+        load_cookie_source(
+            <<"set-cookie">>,
+            load_cookie_source(<<"cookie">>, LoadedMsg, Opts),
+            Opts
+        ),
+        Opts
+    ).
+
+%% @doc Load a public cookie source, if present, without loading sibling keys.
+load_cookie_source(Key, Msg, Opts) when is_map(Msg) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Value} -> Msg#{ Key => hb_cache:ensure_all_loaded(Value, Opts) };
+        error -> Msg
+    end;
+load_cookie_source(_Key, Msg, _Opts) ->
+    Msg.
+
+%% @doc Load a private cookie map, if present, without loading sibling keys.
+load_private_cookie(Msg, Opts) when is_map(Msg) ->
+    case hb_private:get(<<"cookie">>, Msg, not_found, Opts) of
+        not_found ->
+            Msg;
+        Cookie ->
+            hb_private:set(
+                Msg,
+                <<"cookie">>,
+                hb_cache:ensure_all_loaded(Cookie, Opts),
+                Opts
+            )
+    end;
+load_private_cookie(Msg, _Opts) ->
+    Msg.
 
 %% @doc Takes a message or list of binaries and returns a sorted list of key-
 %% value pairs. Assumes that the message has been loaded from the cache fully.

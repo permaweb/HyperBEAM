@@ -46,6 +46,10 @@ from_string(String) ->
     {ok, Cookie} = dev_cookie:extract(BaseMsg, #{}, #{}),
     Cookie.
 
+%% @doc Make an unresolved link for tests that should not load the field.
+missing_link() ->
+    {link, <<"missing">>, #{}}.
+
 %%% Tests
 
 %% @doc returns a map of tuples of the form `testset_name => {[before], after}'.
@@ -762,3 +766,37 @@ to_string_admin_and_upload_test() ->
 
 to_string_search_and_tags_test() ->
     assert_set(to_string_search_and_tags, fun to_string/1).
+
+extract_without_cookies_does_not_load_body_test() ->
+    ?assertEqual(
+        {ok, #{}},
+        dev_cookie:extract(#{ <<"body">> => missing_link() }, #{}, #{})
+    ).
+
+extract_linked_cookie_field_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    {ok, CookieID} = hb_cache:write(<<"sid=v1; theme=dark">>, Opts),
+    ?assertEqual(
+        {ok, #{ <<"sid">> => <<"v1">>, <<"theme">> => <<"dark">> }},
+        dev_cookie:extract(
+            #{
+                <<"body">> => missing_link(),
+                <<"cookie">> => {link, CookieID, #{}}
+            },
+            #{},
+            Opts
+        )
+    ).
+
+to_with_private_cookies_does_not_load_body_test() ->
+    Msg =
+        hb_private:set(
+            #{ <<"body">> => missing_link() },
+            <<"cookie">>,
+            #{ <<"sid">> => <<"v1">> },
+            #{}
+        ),
+    ?assertMatch(
+        {ok, #{ <<"set-cookie">> := [<<"sid=\"v1\"">>] }},
+        dev_cookie:to(Msg, #{ <<"format">> => <<"set-cookie">> }, #{})
+    ).
