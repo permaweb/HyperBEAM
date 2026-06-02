@@ -42,7 +42,7 @@ scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_) -> scope().
 
 %% @doc Resolve a key path in the Arweave store, ignoring other paths.
-resolve(_Store, #{ <<"resolve">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+resolve(_Store, #{ <<"resolve">> := ID }, _NodeOpts) when ?IS_STRING_ID(ID) ->
     {ok, ID};
 resolve(_Store, #{ <<"resolve">> := _ID }, _NodeOpts) ->
     {error, not_found}.
@@ -60,8 +60,8 @@ group(_, _, _) -> {error, not_found}.
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, #{ <<"type">> := ID }, NodeOpts)
-        when ?IS_ID(ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), NodeOpts) of
+        when ?IS_STRING_ID(ID) ->
+    case hb_store:read(IndexStore, raw_read_req(ID), NodeOpts) of
         {ok, _Offset} ->
             {ok, simple};
         _ ->
@@ -75,7 +75,7 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), StoreOpts)
+                hb_store:read(IndexStore, raw_read_req(ID), StoreOpts)
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
@@ -96,7 +96,7 @@ read_offset(_, _, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_STRING_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID, StoreOpts) of
         {ok, Message} ->
             ?event(
@@ -264,6 +264,22 @@ read_chunks(StartOffset, Length, Opts) ->
         Opts
     ).
 
+%% @doc Raw (non-path-normalized) read/write requests for the opaque offset key.
+%% The index is keyed by the raw `native_id', which may contain `/' (0x2F)
+%% bytes; the `raw' flag tells the store to use the key verbatim instead of
+%% splitting it on `/' via hb_path:to_binary. Stores with no verbatim key
+%% representation (e.g. `hb_store_fs', where `/' is the path separator) degrade
+%% the flag to a normalized path -- consistently on both read and write -- so
+%% the request can always carry `raw' without per-store gating.
+raw_read_req(ID) ->
+    #{ <<"read">> => hb_store_arweave_offset:path(ID), <<"raw">> => true }.
+
+write_offset_req(ID, Value) ->
+    #{
+        <<"write">> => {hb_store_arweave_offset:path(ID), Value},
+        <<"raw">> => true
+    }.
+
 %% @doc Write offset information to the index store.
 write_offset(
         StoreOpts = #{ <<"index-store">> := IndexStore },
@@ -283,11 +299,7 @@ write_offset(
             {value, {explicit, Value}}
         }
     ),
-    hb_store:write(
-        IndexStore,
-        #{ hb_store_arweave_offset:path(ID) => Value },
-        StoreOpts
-    ).
+    hb_store:write(IndexStore, write_offset_req(ID, Value), StoreOpts).
 
 %% @doc Record the partition that data is found in when it is requested.
 record_partition_metric(Offset, Result, StoreOpts) when is_integer(Offset) ->
@@ -340,7 +352,7 @@ init_prometheus() ->
 %%% Tests
 
 write_read_tx_test() ->
-    Store = [hb_test_utils:test_store()],
+    Store = [hb_test_utils:test_store(hb_store_lmdb)],
     Opts = #{ 
         <<"index-store">> => Store 
     },
@@ -383,7 +395,7 @@ write_read_tx_test() ->
 %% @doc Stale ANS-104 offset: fake ID pointing to a known bundle TX's
 %% data range. The deserialized item's ID won't match the fake ID.
 stale_ans104_offset_returns_error_test() ->
-    Store = [hb_test_utils:test_store()],
+    Store = [hb_test_utils:test_store(hb_store_lmdb)],
     Opts = #{<<"index-store">> => Store},
     FakeID = <<"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">>,
     RealEndOffset = 363524457284025,
@@ -395,7 +407,7 @@ stale_ans104_offset_returns_error_test() ->
 
 %% @doc The L1 TX has bundle tags, but data is not a valid bundle.
 write_read_fake_bundle_tx_test() ->
-    Store = [hb_test_utils:test_store()],
+    Store = [hb_test_utils:test_store(hb_store_lmdb)],
     Opts = #{ 
         <<"index-store">> => Store 
     },
@@ -406,3 +418,36 @@ write_read_fake_bundle_tx_test() ->
     {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
+
+%% @doc Regression: a `native_id' beginning with `/' (0x2F) must round-trip
+%% verbatim through the raw index read. The id is seeded under the raw (verbatim)
+%% key, as the prebuilt index shards are, and the raw read path must resolve it.
+%% A read that normalizes the key via hb_path:to_binary drops the leading `/' and
+%% misses -- the failure mode behind the index `404's for ~11% of ids.
+slash_edge_id_offset_roundtrip_test() ->
+    Store = [hb_test_utils:test_store(hb_store_lmdb)],
+    Opts = #{ <<"index-store">> => Store },
+    % Real mainnet tx whose native_id starts with 0x2F.
+    ID = <<"LwPn27rdIHwdXIHovfUODwZ7xngCzRyjgL7JiefuG64">>,
+    StartOffset = 363524457284025 - 8387,
+    V = hb_store_arweave_offset:encode(<<"tx@1.0">>, StartOffset, 8387),
+    Path = hb_store_arweave_offset:path(ID),
+    % Seed under the RAW (verbatim) key, as the prebuilt index shards are.
+    ok = hb_store:write(Store, #{ <<"write">> => {Path, V}, <<"raw">> => true }, Opts),
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := StartOffset }},
+        read_offset(Opts, ID, Opts)
+    ).
+
+fs_index_store_offset_roundtrip_test() ->
+    Store = hb_test_utils:test_store(hb_store_fs, <<"arweave-fs-index">>),
+    Opts = #{ <<"index-store">> => Store },
+    ID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    StartOffset = 363524457284025 - 8387,
+    ok = hb_store:start(Store),
+    ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, 8387),
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := StartOffset }},
+        read_offset(Opts, ID, Opts)
+    ),
+    ok = hb_store:stop(Store).

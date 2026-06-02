@@ -7,6 +7,10 @@
 %% @doc Macro usable in guards that validates whether a term is a
 %% human-readable ID encoding.
 -define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% @doc Macro usable in guards that validates whether a term is a 43-byte
+%% base64url-encoded Arweave ID (the string form), excluding the 32-byte native
+%% and 42-byte encodings. Use where only the string-encoded ID is acceptable.
+-define(IS_STRING_ID(X), (is_binary(X) andalso byte_size(X) == 43)).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.

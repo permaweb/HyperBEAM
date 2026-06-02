@@ -45,6 +45,13 @@ reset(#{ <<"name">> := DataDir }, _Req, _Opts) ->
     ?event({reset_store, {path, DataDir}}).
 
 %% @doc Read a key from the store, following symlinks as needed.
+%% A `raw' request targets an opaque binary key verbatim. The filesystem store
+%% has no verbatim representation -- `/' (0x2F) is the path separator -- so the
+%% raw protocol degrades to the normalized path. Read and write both normalize,
+%% so they stay symmetric.
+read(Opts, #{ <<"read">> := Key, <<"raw">> := true }, NodeOpts)
+        when is_binary(Key) ->
+    read(Opts, #{ <<"read">> => Key }, NodeOpts);
 read(Opts, #{ <<"read">> := Key }, NodeOpts) ->
     case resolve(Opts, #{ <<"resolve">> => Key }, NodeOpts) of
         {ok, ResolvedPath} ->
@@ -75,6 +82,13 @@ read_path(Path) ->
 	end.
 
 %% @doc Write a value to the specified path in the store.
+%% The `raw' write envelope is handled explicitly so it is not folded in as
+%% literal request keys; the filesystem store has no verbatim key representation
+%% (`/' is the path separator), so it degrades to the normalized path -- mirror
+%% of the `raw' read clause above.
+write(Opts, #{ <<"write">> := {Path, Value}, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    write_path(Opts, Path, Value);
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
         fun(PathComponents, Value, ok) ->

@@ -100,6 +100,14 @@ reset_store(Opts) ->
 %% marker (raw/link entries have no descendants, so no subtree purge is
 %% needed). If the target key previously held a group, its descendants are
 %% deleted first.
+%%
+%% The explicit raw write-request used by the Arweave index store
+%% (`#{<<"write">> => {Path, Value}, <<"raw">> => true}') stores `Value' at
+%% `Path' rather than folding the request keys in as literal entries -- mirrors
+%% the `raw' clause in `hb_store_lmdb'.
+write(Opts, #{ <<"write">> := {Path, Value}, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    put_entry(Opts, Path, {raw, Value});
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
         fun(Path, Value, ok) ->
@@ -113,6 +121,12 @@ write(Opts, Req, _NodeOpts) when is_map(Req) ->
 
 %% @doc Read a value, following links when needed. Group paths return
 %% `{composite, Children}` with the immediate child names.
+read(Opts, #{ <<"read">> := Path, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    case lookup_entry(Opts, Path) of
+        {raw, Value} -> {ok, Value};
+        _ -> {error, not_found}
+    end;
 read(Opts, #{ <<"read">> := RawKey }, _NodeOpts) ->
     read_resolved(Opts, resolve_path(Opts, RawKey), 0).
 

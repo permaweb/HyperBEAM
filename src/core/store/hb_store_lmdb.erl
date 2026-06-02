@@ -133,6 +133,10 @@ type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
 %% @returns `ok` immediately on success, or an error tuple on failure
 write(#{ <<"read-only">> := true }, _Req, _NodeOpts) when is_map(_Req) ->
     {error, not_found};
+write(Opts, #{ <<"write">> := {Path, Value}, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    % Opaque binary key (raw Arweave ID) written verbatim so a raw read matches.
+    write(Opts, Path, Value);
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
         fun(Path, Value, ok) ->
@@ -181,6 +185,13 @@ write(Opts, Path, Value) ->
 %% @param PathReq Request of the form `#{<<"read">> => Path}`.
 %% @returns `{ok, Value}` on success, `{composite, Keys}` for groups, or
 %%          `{error, not_found}` on failure
+read(Opts, #{ <<"read">> := Path, <<"raw">> := true }, _NodeOpts) ->
+    % Opaque binary keys (raw Arweave IDs) are read verbatim: hb_path:to_binary
+    % would drop their `/' (0x2F) bytes and miss the raw-keyed index shards.
+    case read_direct(Opts, Path) of
+        {ok, Value} -> {ok, Value};
+        _ -> {error, not_found}
+    end;
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
     case read_resolved(Opts, hb_path:to_binary(Path)) of
         {ok, ResolvedPath, <<"group">>} ->
@@ -865,6 +876,15 @@ cache_style_test() ->
     Result = hb_store:read(StoreOpts, <<"test-key">>, #{}),
     ?event({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
+    hb_store:stop(StoreOpts).
+
+single_key_write_normalizes_binary_path_test() ->
+    hb:init(),
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    hb_store:start(StoreOpts),
+    ok = hb_store:write(StoreOpts, #{ <<"/a//b/">> => <<"value">> }, #{}),
+    ?assertEqual({ok, <<"value">>}, hb_store:read(StoreOpts, <<"a/b">>, #{})),
     hb_store:stop(StoreOpts).
 
 %% @doc Test nested map storage with cache-like linking behavior

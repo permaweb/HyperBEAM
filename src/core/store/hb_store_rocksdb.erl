@@ -85,6 +85,12 @@ scope(_) -> local.
     Req :: map(),
     NodeOpts :: map(),
     Result :: {ok, value()} | {composite, [binary()]} | {error, any()}.
+read(Opts, #{ <<"read">> := Path, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    case do_read(Opts, Path) of
+        {ok, {raw, Result}} -> {ok, Result};
+        _ -> {error, not_found}
+    end;
 read(Opts, #{ <<"read">> := RawPath }, _NodeOpts) ->
     Path = resolve_path(Opts, RawPath),
     case do_read(Opts, Path) of
@@ -107,6 +113,11 @@ read(Opts, #{ <<"read">> := RawPath }, _NodeOpts) ->
     Key :: key(),
     Value :: value(),
     Result :: ok | {error, any()}.
+write(Opts, #{ <<"write">> := {Path, Value}, <<"raw">> := true }, _NodeOpts)
+        when is_binary(Path) ->
+    EncodedValue = encode_value(raw, Value),
+    ?event({writing, Path, byte_size(EncodedValue)}),
+    do_write(Opts, Path, EncodedValue);
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
         fun(Key, Value, ok) ->
