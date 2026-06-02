@@ -82,7 +82,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
             {Status, Dev, Func};
 		_ ->
 			?event(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
-			case {find_exported_function(Msg, Dev, Key, 3, Opts), Exported} of
+			case {find_exported_function(Msg, Dev, Key, 3, 1, Opts), Exported} of
 				{{ok, Func}, true} ->
 					% Case 3: The device has a function of the name `Key'.
 					{ok, Dev, Func};
@@ -165,19 +165,21 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 %% If the device is a map, we look for a key in the map. First we try to find
 %% the key using its literal value. If that fails, we cast the key to an atom
 %% and try again.
-find_exported_function(Msg, Mod, Key, Arity, Opts) when not is_atom(Key) ->
+find_exported_function(Msg, Mod, Key, Arity, Opts) ->
+    find_exported_function(Msg, Mod, Key, Arity, 0, Opts).
+find_exported_function(Msg, Mod, Key, Arity, MinArity, Opts) when not is_atom(Key) ->
 	try hb_util:key_to_atom(Key, false) of
-		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, Opts)
+		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, MinArity, Opts)
 	catch _:_ -> not_found
 	end;
-find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
+find_exported_function(Msg, Dev, Key, MaxArity, MinArity, Opts) when is_map(Dev) ->
     NormKey = hb_ao:normalize_key(Key),
     NormDev = hb_ao:normalize_keys(Dev, Opts),
 	case hb_maps:get(NormKey, NormDev, not_found, Opts) of
 		not_found -> not_found;
 		Fun when is_function(Fun) ->
 			case erlang:fun_info(Fun, arity) of
-				{arity, Arity} when Arity =< MaxArity ->
+				{arity, Arity} when Arity >= MinArity andalso Arity =< MaxArity ->
 					case is_exported(Msg, Dev, Key, Opts) of
 						true -> {ok, Fun};
 						false -> not_found
@@ -185,9 +187,9 @@ find_exported_function(Msg, Dev, Key, MaxArity, Opts) when is_map(Dev) ->
 				_ -> not_found
 			end
 	end;
-find_exported_function(_Msg, _Mod, _Key, Arity, _Opts) when Arity < 0 ->
+find_exported_function(_Msg, _Mod, _Key, Arity, MinArity, _Opts) when Arity < MinArity ->
     not_found;
-find_exported_function(Msg, Mod, Key, Arity, Opts) ->
+find_exported_function(Msg, Mod, Key, Arity, MinArity, Opts) ->
 	case erlang:function_exported(Mod, Key, Arity) of
 		true ->
 			case is_exported(Msg, Mod, Key, Opts) of
@@ -195,7 +197,7 @@ find_exported_function(Msg, Mod, Key, Arity, Opts) ->
 				false -> not_found
 			end;
 		false ->
-			find_exported_function(Msg, Mod, Key, Arity - 1, Opts)
+			find_exported_function(Msg, Mod, Key, Arity - 1, MinArity, Opts)
 	end.
 
 %% @doc Check if a device is guarding a key via its `exports' list. Defaults to
