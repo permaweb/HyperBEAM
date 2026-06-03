@@ -108,7 +108,11 @@ handle(_Base, RawReq, Opts) ->
         end,
     ?event({request, {processed, Req}}),
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
-    OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
+    OpName =
+        case hb_maps:get(<<"operationName">>, Req, undefined, Opts) of
+            Name when is_binary(Name) -> Name;
+            _ -> undefined
+        end,
     Vars =
         case hb_maps:get(<<"variables">>, Req, #{}, Opts) of
             V when is_map(V) -> hb_message:uncommitted_deep(V, Opts);

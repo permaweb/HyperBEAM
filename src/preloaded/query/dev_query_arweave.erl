@@ -54,7 +54,15 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches = match_args(Args, Opts),
+    Matches =
+        case has_set_filter(Args, Opts) of
+            true -> match_args(Args, Opts);
+            false ->
+                enumerate_block_range(
+                    hb_maps:get(<<"block">>, Args, undefined, Opts),
+                    Opts
+                )
+        end,
     WithExplicit =
         case explicit_ids(Args, Opts) of
             [] -> Matches;
@@ -78,9 +86,16 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     ?event({transactions_matches, Matches}),
     {ok, connection(Ordered, Args, Opts)};
 query(Obj, <<"block">>, Args, Opts) ->
-    case query(Obj, <<"blocks">>, Args, Opts) of
-        {ok, []} -> {ok, null};
-        {ok, [Msg|_]} -> {ok, Msg}
+    case hb_maps:get(<<"id">>, Args, undefined, Opts) of
+        undefined ->
+            %% `block' field on a transaction node: resolve its containing
+            %% block by walking the parent index up to the L1 block.
+            tx_containing_block(Obj, Opts);
+        _ ->
+            case query(Obj, <<"blocks">>, Args, Opts) of
+                {ok, []} -> {ok, null};
+                {ok, [Msg|_]} -> {ok, Msg}
+            end
     end;
 query(Obj, <<"blocks">>, Args, Opts) ->
     ?event({blocks, 
@@ -93,7 +108,7 @@ query(Obj, <<"blocks">>, Args, Opts) ->
     Blocks =
         lists:filtermap(
             fun(Match) ->
-                case hb_cache:read(Match, Opts) of
+                case hb_cache:read(Match, local_opts(Opts)) of
                     {ok, Msg} -> {true, Msg};
                     _ -> false
                 end
@@ -110,35 +125,20 @@ query(Block, <<"height">>, _Args, Opts) ->
 query(Block, <<"timestamp">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"timestamp">>, Block, null, Opts)};
 query(Msg, <<"signature">>, _Args, Opts) ->
-    % Return the signature of the transaction.
-    % Other TX access methods are defined below.
-    case hb_message:commitments(#{ <<"committer">> => '_' }, Msg, Opts) of
+    case first_commitment(<<"committer">>, Msg, Opts) of
         not_found -> {ok, null};
-        Commitments ->
-            case hb_maps:keys(Commitments) of
-                [] -> {ok, null};
-                [CommID | _] ->
-                    {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
-                    hb_maps:find(<<"signature">>, Commitment, Opts)
-            end
+        {ok, Commitment} -> hb_maps:find(<<"signature">>, Commitment, Opts)
     end;
 query(Msg, <<"owner">>, _Args, Opts) ->
-    ?event({query_owner, Msg}),
-    case hb_message:commitments(#{ <<"committer">> => '_' }, Msg, Opts) of
+    case first_commitment(<<"committer">>, Msg, Opts) of
         not_found -> {ok, null};
-        Commitments ->
-            case hb_maps:keys(Commitments) of
-                [] -> {ok, null};
-                [CommID | _] ->
-                    {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
-                    {ok, Address} = hb_maps:find(<<"committer">>, Commitment, Opts),
-                    {ok, KeyID} = hb_maps:find(<<"keyid">>, Commitment, Opts),
-                    Key = hb_util:remove_scheme_prefix(KeyID),
-                    {ok, #{
-                        <<"address">> => Address,
-                        <<"key">> => Key
-                    }}
-            end
+        {ok, Commitment} ->
+            {ok, Address} = hb_maps:find(<<"committer">>, Commitment, Opts),
+            {ok, KeyID} = hb_maps:find(<<"keyid">>, Commitment, Opts),
+            {ok, #{
+                <<"address">> => Address,
+                <<"key">> => hb_util:remove_scheme_prefix(KeyID)
+            }}
     end;
 query(#{ <<"key">> := Key }, <<"key">>, _Args, _Opts) ->
     {ok, Key};
@@ -203,20 +203,26 @@ encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 43 -> {ok, Bin};
 encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 64 -> {ok, Bin};
 encode_anchor(Other) -> {error, <<"invalid_anchor: ", Other/binary>>}.
 
-%% @doc Find and return a value from the fields of a message (from its
-%% commitments).
-find_field_key(Field, Msg, Opts) ->
-    case hb_message:commitments(#{ Field => '_' }, Msg, Opts) of
-        not_found -> {ok, null};
+%% @doc Return the first commitment of a message matching `MatchField', or
+%% `not_found'. Centralizes the commitments lookup used by the field accessors.
+first_commitment(MatchField, Msg, Opts) ->
+    case hb_message:commitments(#{ MatchField => '_' }, Msg, Opts) of
+        not_found -> not_found;
         Commitments ->
             case hb_maps:keys(Commitments) of
-                [] -> {ok, null};
-                [CommID | _] ->
-                    {ok, Commitment} = hb_maps:find(CommID, Commitments, Opts),
-                    case hb_maps:find(Field, Commitment, Opts) of
-                        {ok, Value} -> {ok, Value};
-                        error -> {ok, null}
-                    end
+                [] -> not_found;
+                [CommID | _] -> hb_maps:find(CommID, Commitments, Opts)
+            end
+    end.
+
+%% @doc Find and return a committed field value from a message, or null.
+find_field_key(Field, Msg, Opts) ->
+    case first_commitment(Field, Msg, Opts) of
+        not_found -> {ok, null};
+        {ok, Commitment} ->
+            case hb_maps:find(Field, Commitment, Opts) of
+                {ok, Value} -> {ok, Value};
+                error -> {ok, null}
             end
     end.
 
@@ -226,7 +232,7 @@ connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
     {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
+    ResultsPage = read_ids(Remaining, CountToReturn, local_opts(Opts)),
     #{
         <<"count">> => hb_util:bin(ResultsCount),
         <<"edges">> => ResultsPage,
@@ -293,8 +299,9 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
         ),
     Ascending =
         lists:sort(
-            fun(#{ <<"offset">> := OffsetA }, #{ <<"offset">> := OffsetB }) ->
-                OffsetA < OffsetB
+            fun(#{ <<"offset">> := OffsetA, <<"id">> := IdA },
+                #{ <<"offset">> := OffsetB, <<"id">> := IdB }) ->
+                {OffsetA, IdA} =< {OffsetB, IdB}
             end,
             WithOffset
         ),
@@ -310,7 +317,12 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
             {without_offset, length(WithoutOffset)}
         }
     ),
-    UserOrderSorted ++ WithoutOffset.
+    StableWithout =
+        lists:sort(
+            fun(#{ <<"id">> := IdA }, #{ <<"id">> := IdB }) -> IdA =< IdB end,
+            WithoutOffset
+        ),
+    UserOrderSorted ++ StableWithout.
 
 %% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
 %% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
@@ -361,18 +373,7 @@ block_range_to_offset_range(Heights, Opts) ->
 read_block(Height, Opts) ->
     case read_cached_block(Height, Opts) of
         {ok, Block} -> {ok, Block};
-        {error, not_found} ->
-            case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
-                true ->
-                    ?event({read_block_remote, {height, Height}}),
-                    hb_ao:resolve(
-                        #{ <<"device">> => <<"arweave@2.9">> },
-                        #{ <<"path">> => <<"block">>, <<"block">> => Height },
-                        Opts
-                    );
-                _ -> not_found
-            end;
-        not_found ->
+        _NotCached ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
                 true ->
                     ?event({read_block_remote, {height, Height}}),
@@ -487,7 +488,10 @@ match(<<"id">>, ID, _Opts) ->
 match(<<"ids">>, IDs, _Opts) ->
     {ok, IDs};
 match(<<"tags">>, Tags, Opts) ->
-    hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+    case lists:any(fun(T) -> is_multi_value_tag(T, Opts) end, Tags) of
+        false -> hb_cache:match(dev_query_graphql:keys_to_template(Tags), Opts);
+        true -> {ok, intersect_id_sets([tag_filter_ids(T, Opts) || T <- Tags])}
+    end;
 match(<<"owners">>, Owners, Opts) ->
     {ok, matching_commitments(<<"committer">>, Owners, Opts)};
 match(<<"owner">>, Owner, Opts) ->
@@ -498,6 +502,44 @@ match(<<"recipients">>, Recipients, Opts) ->
     {ok, matching_commitments(<<"field-target">>, Recipients, Opts)};
 match(UnsupportedFilter, _, _) ->
     throw({unsupported_query_filter, UnsupportedFilter}).
+
+%% @doc True if a tag filter supplies more than one value (Arweave OR match).
+is_multi_value_tag(Tag, Opts) ->
+    case hb_maps:get(<<"values">>, Tag, undefined, Opts) of
+        Values when is_list(Values) -> length(Values) > 1;
+        _ -> false
+    end.
+
+%% @doc The IDs matching a single tag filter: the union over its values.
+tag_filter_ids(Tag, Opts) ->
+    Name = hb_maps:get(<<"name">>, Tag, undefined, Opts),
+    NormName = hb_util:to_lower(hb_ao:normalize_key(Name)),
+    lists:foldl(
+        fun(Value, Acc) ->
+            case hb_cache:match(#{ NormName => Value }, Opts) of
+                {ok, IDs} -> hb_util:unique(IDs ++ Acc);
+                _ -> Acc
+            end
+        end,
+        [],
+        tag_filter_values(Tag, Opts)
+    ).
+
+%% @doc The values of a tag filter, accepting either `values' or singular `value'.
+tag_filter_values(Tag, Opts) ->
+    case hb_maps:get(<<"values">>, Tag, undefined, Opts) of
+        Values when is_list(Values) -> Values;
+        _ ->
+            case hb_maps:get(<<"value">>, Tag, undefined, Opts) of
+                undefined -> [];
+                Value -> [Value]
+            end
+    end.
+
+%% @doc Intersect a list of ID sets (AND across tag filters).
+intersect_id_sets([]) -> [];
+intersect_id_sets([First | Rest]) ->
+    lists:foldl(fun(Set, Acc) -> hb_util:list_with(Set, Acc) end, First, Rest).
 
 %%% Block range post-filter
 
@@ -588,13 +630,24 @@ matching_commitments(Field, Value, Opts) when is_binary(Value) ->
                     {ids, IDs}
                 }
             ),
-            lists:map(fun(ID) -> commitment_id_to_base_id(ID, Opts) end, IDs);
+            lists:filtermap(
+                fun(ID) ->
+                    case commitment_id_to_base_id(ID, Opts) of
+                        not_found -> false;
+                        BaseID -> {true, BaseID}
+                    end
+                end,
+                IDs
+            );
         _ -> not_found
     end.
 
 %% @doc Convert a commitment message's ID to a base ID.
 commitment_id_to_base_id(ID, Opts) ->
-    Store = hb_opts:get(store, no_store, Opts),
+    %% Read the matched commitment's signature from the local-scoped store only.
+    %% Using the full store here cascades to the gateway/arweave stores
+    %% on a local miss, adding seconds per matched owner/recipient.
+    Store = scoped_store(Opts),
     ?event({commitment_id_to_base_id, ID}),
     case hb_store:read(Store, << ID/binary, "/signature">>, Opts) of
         {ok, EncSig} ->
@@ -637,11 +690,16 @@ all_signed_ids(ID, Store, Opts) ->
             [ID]
     end.
 
+%% @doc Opts with the store scoped to the local stores (per `query_arweave_scope',
+%% default `[local]'), so query result reads never cascade to the gateway/arweave
+%% network stores. Keeps the query path self-contained.
+local_opts(Opts) ->
+    hb_store:scope(Opts, hb_opts:get(query_arweave_scope, [local], Opts)).
+
 %% @doc Scope the stores used for block matching. The searched stores can be
 %% scoped by setting the `query_arweave_scope' option.
 scoped_store(Opts) ->
-    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
-    hb_opts:get(store, no_store, hb_store:scope(Opts, Scope)).
+    hb_opts:get(store, no_store, local_opts(Opts)).
 
 %% @doc Return the explicit IDs from the arguments, if given. Searches for
 %% both `ids' and `id' keys.
@@ -656,6 +714,92 @@ explicit_ids(Args, Opts) ->
             _ -> []
         end
     ).
+
+%% @doc True if the args contain any filter that produces a candidate ID set.
+%% When false, a `transactions' query enumerates from the block range instead
+%% of intersecting matchers.
+has_set_filter(Args, Opts) ->
+    lists:any(
+        fun(Key) ->
+            case hb_maps:get(Key, Args, undefined, Opts) of
+                undefined -> false;
+                null -> false;
+                _ -> true
+            end
+        end,
+        [<<"ids">>, <<"id">>, <<"owners">>, <<"recipients">>, <<"tags">>]
+    ).
+
+%% @doc Enumerate all indexed transaction IDs within a block height range, using
+%% the per-block item index written by the copycat at index time. Returns `[]'
+%% when no range is given (an unbounded, unfiltered transactions query).
+enumerate_block_range(undefined, _Opts) -> [];
+enumerate_block_range(null, _Opts) -> [];
+enumerate_block_range(Heights, Opts) ->
+    Min = hb_util:int(hb_maps:get(<<"min">>, Heights, 0, Opts)),
+    Max =
+        case hb_maps:get(<<"max">>, Heights, undefined, Opts) of
+            undefined -> hb_util:ok_or(latest_cached_block(Opts), Min);
+            RawMax -> hb_util:int(RawMax)
+        end,
+    HeightRange =
+        case Max >= Min of
+            true -> lists:seq(Min, Max);
+            false -> []
+        end,
+    lists:flatmap(
+        fun(Height) ->
+            maps:fold(
+                fun(_Depth, IDs, Acc) -> IDs ++ Acc end,
+                [],
+                hb_store_arweave:read_block_item_ids(Height, Opts)
+            )
+        end,
+        HeightRange
+    ).
+
+%% @doc Resolve the block that contains a transaction node, for the `block'
+%% field of a `Transaction'. Walks the parent index from the item up to its L1
+%% block, then loads the block message. Returns `{ok, null}' when unknown.
+tx_containing_block(Msg, Opts) ->
+    try hb_message:id(Msg, all, Opts) of
+        ID when is_binary(ID) ->
+            case tx_block_height(ID, Opts) of
+                {ok, Height} ->
+                    case read_block(Height, Opts) of
+                        {ok, Block} -> {ok, Block};
+                        _ -> {ok, null}
+                    end;
+                not_found -> {ok, null}
+            end;
+        _ -> {ok, null}
+    catch _:_ -> {ok, null}
+    end.
+
+%% @doc Find the L1 block height containing an item by following the parent
+%% index: a `block' entry resolves directly; a `bundle' entry recurses into the
+%% parent. Bounded to guard against cyclic/corrupt parent chains.
+tx_block_height(ID, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> not_found;
+        Store -> walk_parent_to_block(ID, Store, Opts, 0)
+    end.
+
+walk_parent_to_block(_ID, _Store, _Opts, Depth) when Depth > 8 -> not_found;
+walk_parent_to_block(ID, Store, Opts, Depth) ->
+    case hb_store_arweave:read_parent(Store, ID, Opts) of
+        {ok, Entries} ->
+            case lists:keyfind(block, 2, Entries) of
+                {Height, block} -> {ok, Height};
+                false ->
+                    case [Parent || {Parent, bundle} <- Entries] of
+                        [ParentID | _] ->
+                            walk_parent_to_block(ParentID, Store, Opts, Depth + 1);
+                        [] -> not_found
+                    end
+            end;
+        _ -> not_found
+    end.
 
 winston_to_ar(W) when is_integer(W), W >= 0 ->                                         
     case {W div 1000000000000, W rem 1000000000000} of                                    
