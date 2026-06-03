@@ -11,7 +11,8 @@
         cowboy,
         os_mon,
         gun,
-        hackney
+        hackney,
+        graphql
     ]},
     {env, []},
     {modules, []},
