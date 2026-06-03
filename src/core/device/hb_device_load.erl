@@ -33,18 +33,16 @@ reference(Loaded, _Opts) when is_map(Loaded) ->
 reference(Ref, Opts) when is_binary(Ref) ->
     NormRef = hb_ao:normalize_key(Ref),
     case from_forge_bootstrap(NormRef, Opts) of
-        {ok, _} = Ok ->
-            Ok;
-        {error, not_found} ->
-            resolve_cached(NormRef, Opts);
-        {error, _} = Error ->
-            Error
+        {ok, Mod} -> {ok, Mod};
+        {error, not_found} -> resolve_cached(NormRef, Opts);
+        {error, Err} -> {error, Err}
     end.
 
 resolve_cached(Ref, Opts) ->
     case resolve(Ref, Opts) of
+        {cached, Mod} -> {ok, Mod};
         {ok, Mod} = Ok -> put_resolved_device(Ref, Mod, Opts), Ok;
-        {error, _} = Error -> Error
+        {error, Err} -> {error, Err}
     end.
 
 %% @doc The resolved-device store, then the high-trust sources, then the
@@ -65,15 +63,20 @@ resolve(Ref, Opts) ->
 get_resolved_device(Ref, Opts) ->
     case erlang:get({?MODULE, Ref}) of
         Mod when is_atom(Mod), Mod =/= undefined ->
-            {ok, Mod};
+            {cached, Mod};
         _ ->
             maybe
                 {ok, Bin} ?=
                     hb_store:read(
-                        loaded_device_store(Opts), store_key(Ref), Opts),
+                        loaded_device_store(Opts),
+                        store_key(Ref),
+                        Opts
+                    ),
                 Mod = hb_util:atom(Bin),
+                % We always stash in the process dictionary, despite the fact
+                % the reference was already in the global store.
                 erlang:put({?MODULE, Ref}, Mod),
-                {ok, Mod}
+                {cached, Mod}
             end
     end.
 

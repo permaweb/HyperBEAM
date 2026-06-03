@@ -6,7 +6,7 @@
 %%% Unused Store API:
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
--export([store_from_opts/1, write_offset/5, read_offset/2, read_chunks/3]).
+-export([store_from_opts/1, write_offset/5, read_offset/3, read_chunks/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -71,7 +71,7 @@ type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
     {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
+read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
@@ -92,16 +92,17 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
         _ ->
             not_found
     end;
-read_offset(_, _) -> not_found.
+read_offset(_, _, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
-    case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+read(StoreOpts, #{ <<"read">> := ID }, NodeOpts) when ?IS_ID(ID) ->
+    MergedOpts = maps:merge(NodeOpts, StoreOpts),
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID, MergedOpts) of
         {ok, Message} ->
             {ok, Message};
         {error, not_found} ->
-            case do_read(StoreOpts, ID) of
+            case do_read(StoreOpts, ID, MergedOpts) of
                 not_found -> {error, not_found};
                 Result -> Result
             end;
@@ -116,8 +117,8 @@ read(_StoreOpts, #{ <<"read">> := _ID }, _NodeOpts) ->
 %% @doc Read the data at the given key, reading the provided Arweave index store
 %% as a source of offsets. After offsets have been found, the data is loaded
 %% through the `~arweave@2.9` device -- either as an ANS-104 item or a TX.
-do_read(StoreOpts, ID) ->
-    case read_offset(StoreOpts, ID) of
+do_read(StoreOpts, ID, Opts) ->
+    case read_offset(StoreOpts, ID, Opts) of
         {ok,
             #{
                 <<"version">> := Version,
@@ -127,10 +128,8 @@ do_read(StoreOpts, ID) ->
             }} ->
             Loaded =
                 case CodecName of
-                    <<"ans104@1.0">> ->
-                        load_item(ID, StartOffset, Length, StoreOpts);
-                    <<"tx@1.0">> ->
-                        load_tx(ID, StartOffset, Length, StoreOpts)
+                    <<"ans104@1.0">> -> load_item(ID, StartOffset, Length, Opts);
+                    <<"tx@1.0">> -> load_tx(ID, StartOffset, Length, Opts)
                 end,
             case Loaded of
                 {ok, Message} ->
@@ -145,7 +144,7 @@ do_read(StoreOpts, ID) ->
                             {length, Length}
                         }
                     ),
-                    record_partition_metric(StartOffset, ok, StoreOpts),
+                    record_partition_metric(StartOffset, ok, Opts),
                     Loaded;
                 {error, Reason} ->
                     ?event(
@@ -159,7 +158,7 @@ do_read(StoreOpts, ID) ->
                             {reason, Reason}
                         }
                     ),
-                    record_partition_metric(StartOffset, not_found, StoreOpts),
+                    record_partition_metric(StartOffset, not_found, Opts),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end

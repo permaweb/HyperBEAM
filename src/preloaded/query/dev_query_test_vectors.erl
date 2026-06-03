@@ -680,7 +680,7 @@ transactions_query_filter_by_block_excludes_unknown_offsets_test_parallel() ->
         ),
     ?assertEqual(
         not_found,
-        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
         {ok, #{
@@ -741,7 +741,7 @@ transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
         {ok, #{ <<"start-offset">> := _ }},
-        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID)
+        hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
         {ok, #{
@@ -773,9 +773,9 @@ transactions_query_cursor_by_offset_test_parallel() ->
     LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
     StoreOpts = hb_store_arweave:store_from_opts(Opts),
     {ok, #{ <<"start-offset">> := EarlierOffset }} =
-        hb_store_arweave:read_offset(StoreOpts, EarlierID),
+        hb_store_arweave:read_offset(StoreOpts, EarlierID, Opts),
     {ok, #{ <<"start-offset">> := LaterOffset }} =
-        hb_store_arweave:read_offset(StoreOpts, LaterID),
+        hb_store_arweave:read_offset(StoreOpts, LaterID, Opts),
     Query =
         <<"""
             query($ids: [ID!], $sort: SortOrder, $first: Int, $after: String) {

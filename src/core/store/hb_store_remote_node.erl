@@ -6,7 +6,7 @@
 -module(hb_store_remote_node).
 -export([scope/1, type/3, read/3, write/3, link/3, group/3, resolve/3]).
 %%% Public utilities.
--export([maybe_cache/2, maybe_cache/3, read_local_cache/2]).
+-export([maybe_cache/2, maybe_cache/3, read_local_cache/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -132,12 +132,14 @@ maybe_cache(StoreOpts, Data, Links) ->
         ignored
     end.
 
-%% @doc Read local store cached value.
-read_local_cache(StoreOpts, ID) ->
+%% @doc Read local store cached value. Maintains the `Opts` for the recursive
+%% `hb_cache:read` call, but uses the `StoreOpts` as the source of the
+%% `local-store` value.
+read_local_cache(StoreOpts, ID, Opts) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};
-        Store -> hb_cache:read(ID, #{ <<"store">> => Store })
+        Store -> hb_cache:read(ID, Opts#{ <<"store">> => Store })
     end.
 
 %% @doc Write a key to the remote node.
