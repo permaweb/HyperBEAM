@@ -320,10 +320,7 @@ has_tag_pair(#tx{tags = Tags}, #{name := Name, value := Value}) ->
         _ ->
             LowerTagValue = hb_util:to_lower(TagValue),
             LowerValue = hb_util:to_lower(Value),
-            case LowerTagValue of
-                LowerValue -> true;
-                _ -> false
-            end
+            LowerTagValue =:= LowerValue
     end;
 has_tag_pair(_, _) ->
     false.
@@ -388,17 +385,10 @@ latest_height(Opts) ->
 list_index(From, undefined, Opts) ->
     list_index(From, 0, Opts);
 list_index(From, To, _Opts) when From < To ->
-    {ok, #{
-        <<"content-type">> => <<"application/json">>,
-        <<"body">> => hb_json:encode(#{})
-    }};
+    json_response(#{});
 list_index(From, To, Opts) ->
     Result = list_index_blocks(From, To, Opts, #{}),
-    JSON = hb_json:encode(Result),
-    {ok, #{
-        <<"content-type">> => <<"application/json">>,
-        <<"body">> => JSON
-    }}.
+    json_response(Result).
 
 %% @doc Iterate through blocks and check index status for each transaction.
 list_index_blocks(Current, To, _Opts, Acc) when Current < To ->
@@ -457,16 +447,16 @@ assemble_block_info(Height, Block, Opts) ->
 inventory_index(From, undefined, Opts) ->
     inventory_index(From, 0, Opts);
 inventory_index(From, To, _Opts) when From < To ->
-    {ok, #{
-        <<"content-type">> => <<"application/json">>,
-        <<"body">> => hb_json:encode(#{})
-    }};
+    json_response(#{});
 inventory_index(From, To, Opts) ->
     Result = inventory_local(From, To, Opts, #{}),
-    JSON = hb_json:encode(Result),
+    json_response(Result).
+
+%% @doc Wrap a map as an `application/json' HTTP response with encoded body.
+json_response(Map) ->
     {ok, #{
         <<"content-type">> => <<"application/json">>,
-        <<"body">> => JSON
+        <<"body">> => hb_json:encode(Map)
     }}.
 
 inventory_local(Current, To, _Opts, Acc) when Current < To -> Acc;
@@ -830,11 +820,19 @@ parallel_map(Items, Fun, Opts) ->
     MaxWorkers = max(1, hb_opts:get(arweave_index_workers, 1, Opts)),
     hb_pmap:parallel_map(Items, Fun, MaxWorkers).
 
+%% @doc Build the standard 4-key indexing counters result map.
+counters(Items, Bundles, Skipped, Depth) ->
+    #{
+        items_count => Items,
+        bundle_count => Bundles,
+        skipped_count => Skipped,
+        achieved_depth => Depth
+    }.
+
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
 process_block_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, TargetDepth, _BlockHeight, _Opts) ->
-    #{items_count => 0, bundle_count => 0, skipped_count => 0,
-        achieved_depth => max(2, TargetDepth)};
+    counters(0, 0, 0, max(2, TargetDepth));
 process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, BlockHeight, Opts) ->
     ArweaveStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
@@ -860,8 +858,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
     ok = write_item_header(TX, <<"tx@1.0">>, Opts),
     try is_bundle_tx(TX, Opts) of
         false ->
-            #{items_count => 0, bundle_count => 0, skipped_count => 0,
-                achieved_depth => max(2, TargetDepth)};
+            counters(0, 0, 0, max(2, TargetDepth));
         true when TargetDepth > 2 ->
             %% Retry to preserve bundle count
             try 
@@ -879,8 +876,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                             {tx, {explicit, TX#tx.id}},
                             {reason, Reason},
                             {stacktrace, Stacktrace}}),
-                    #{items_count => 0, bundle_count => 1,
-                        skipped_count => 1, achieved_depth => 0}
+                    counters(0, 1, 1, 0)
             end;
         true ->
             % Lightweight processing of block transactions to depth 2. We
@@ -934,8 +930,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                             {reason, Reason}
                         }
                     ),
-                    #{items_count => 0, bundle_count => 1,
-                        skipped_count => 1, achieved_depth => 0}
+                    counters(0, 1, 1, 0)
             end
     catch
         _:Reason:Stacktrace ->
@@ -944,7 +939,7 @@ process_block_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, 
                     {tx, {explicit, TX#tx.id}},
                     {reason, Reason},
                     {stacktrace, Stacktrace}}),
-            #{items_count => 0, bundle_count => 0, skipped_count => 1, achieved_depth => 0}
+            counters(0, 0, 1, 0)
     end.
 
 %% @doc Download and decode a bundle header from chunk data.
@@ -984,8 +979,7 @@ process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, BlockHeight, Opts) ->
                     )
             }
         end,
-        #{items_count => 0, bundle_count => 0, skipped_count => 0,
-            achieved_depth => ?DEPTH_SENTINEL},
+        counters(0, 0, 0, ?DEPTH_SENTINEL),
         Results
     ),
     MergedIDs = merge_all_item_ids(
@@ -1000,8 +994,7 @@ process_block_txs(ValidTXs, BlockStartOffset, TargetDepth, BlockHeight, Opts) ->
 
 %% @doc Process a single indexed L1 TX candidate after lightweight filter checks.
 maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
-    Skipped = #{items_count => 0, bundle_count => 0, skipped_count => 1,
-        achieved_depth => 0},
+    Skipped = counters(0, 0, 1, 0),
     NormalizedTXID = hb_util:native_id(TXID),
     EncodedTXID = hb_util:encode(NormalizedTXID),
     IndexStore = hb_store_arweave:store_from_opts(Opts),
@@ -1084,12 +1077,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
                     {reason, effective_cap_exceeded}
                 }
             ),
-            #{
-                items_count => 0,
-                bundle_count => 1,
-                skipped_count => 1,
-                achieved_depth => 0
-            };
+            counters(0, 1, 1, 0);
         FilterReason ->
             ?event(
                 copycat_short,
@@ -1113,8 +1101,7 @@ process_l1_tx_direct(StartOffset, Length, Depth, IndexStore, EncodedTXID, Parent
                     {reason, effective_cap_exceeded}
                 }
             ),
-            #{items_count => 0, bundle_count => 1,
-                skipped_count => 1, achieved_depth => 0};
+            counters(0, 1, 1, 0);
         false ->
             ok = hb_copycat_budget:lease(Length),
             try
@@ -1173,12 +1160,7 @@ process_l1_tx(
                             {reason, Reason}
                         }
                     ),
-                    #{
-                        items_count => 0,
-                        bundle_count => 1,
-                        skipped_count => 1,
-                        achieved_depth => 0
-                    }
+                    counters(0, 1, 1, 0)
             end;
         {error, Reason} ->
             ?event(
@@ -1188,12 +1170,7 @@ process_l1_tx(
                     {reason, Reason}
                 }
             ),
-            #{
-                items_count => 0,
-                bundle_count => 1,
-                skipped_count => 1,
-                achieved_depth => 0
-            };
+            counters(0, 1, 1, 0);
         not_found ->
             ?event(
                 copycat_short,
@@ -1202,12 +1179,7 @@ process_l1_tx(
                     {reason, not_found}
                 }
             ),
-            #{
-                items_count => 0,
-                bundle_count => 1,
-                skipped_count => 1,
-                achieved_depth => 0
-            }
+            counters(0, 1, 1, 0)
     end.
 %% @doc Ensure the root L1 TX offset exists locally before `id=...` indexing.
 %% if the offset is missing and `query_l1_offset` is enabled, fetches the TX
@@ -2145,34 +2117,6 @@ empty_block_test_parallel() ->
             Opts
         ),
     ok.
-
-% ecdsa_no_data_test() ->
-%     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-%     {ok, 1827904} =
-%         hb_ao:resolve(
-%             <<"~copycat@1.0/arweave&from=1827904&to=1827904">>,
-%             Opts
-%         ),
-%     assert_bundle_read(
-%         Opts,
-%         <<"VNhX_pSANk_8j0jZBR5bh_5jr-lkfbHDjtHd8FKqx7U">>,
-%         [
-%             {<<"3xDKhrCQcPuBtcm1ipZS5C9gAfFYClgHuHOHAXGfchM">>, <<"1">>},
-%             {<<"JantC8f89VE-RidArHnU9589gY5T37NDXnWpI7H_psc">>, <<"7">>}
-%         ]
-%     ),
-%     ok.
-
-% ecdsa_with_data_test() ->
-%     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-%     Block = 1720431,
-%     fetch_and_process_block(Block, Block, Opts),
-%     {ok, Block} =
-%         hb_ao:resolve(
-%             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
-%             Opts
-%         ),
-%     ok.
 
 %% @doc Disabled because the test takes ~30 seconds to run.
 %% dev_arweave:get_tx_data_tag_exclude_data_test has some test coverage for
