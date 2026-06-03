@@ -751,18 +751,17 @@ encode_reply(Status, TABMReq, Message, Opts) ->
         _ ->
             % Other codecs are already in binary format, so we can just convert
             % the message to the codec. We also include all of the top-level 
-            % fields, except for maps and lists, in the message and return them 
-            % as headers.
+            % scalar fields in the message and return them as headers.
             ExtraHdrs =
-                hb_maps:filter(
-                    fun(Key, V) ->
-                        not is_map(V)
-                            andalso not is_list(V)
-                            andalso Key =/= <<"body">>
-                            andalso Key =/= <<"data">>
+                maps:filter(
+                    fun(<<"body">>, _V) -> false;
+                       (<<"data">>, _V) -> false;
+                       (_Key, V) ->
+                            not ?IS_LINK(V)
+                                andalso not is_map(V)
+                                andalso not is_list(V)
                     end,
-                    Message,
-                    Opts
+                    Message
                 ),
             % Encode all header values as strings.
             EncodedExtraHdrs =
