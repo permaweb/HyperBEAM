@@ -189,7 +189,7 @@ manifest(Base, _Req, Opts) ->
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ scope => [local, remote]},
+    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ <<"scope">> => [local, remote]},
     {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(
