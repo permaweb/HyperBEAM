@@ -171,7 +171,7 @@ head_raw(Base, Request, Opts) ->
         TXID when ?IS_ID(TXID) ->
             % Read the data from the local cache.
             IndexStore = hb_store_arweave:store_from_opts(Opts),
-            case hb_store_arweave:read_offset(IndexStore, TXID) of
+            case hb_store_arweave:read_offset(IndexStore, TXID, Opts) of
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,
@@ -1317,7 +1317,7 @@ index_test_tx(TXID, IndexStore, Opts) ->
             StartOffset,
             Size
         ),
-    ?assertMatch({ok, _}, hb_store_arweave:read_offset(IndexStore, TXID)),
+    ?assertMatch({ok, _}, hb_store_arweave:read_offset(IndexStore, TXID, Opts)),
     ok.
 
 tx_index_block(<<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>) -> 1749502;

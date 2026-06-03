@@ -59,12 +59,12 @@ extract_path_value(Message, Rest, StoreOpts) ->
 
 %% @doc Read the data at the given key from the GraphQL route. Will only attempt
 %% to read the data if the key is an ID.
-read(BaseStoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
+read(BaseStoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
     StoreOpts = opts(BaseStoreOpts),
     GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
     case hb_path:term_to_path_parts(Key, StoreOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
-            case hb_store_remote_node:read_local_cache(StoreOpts, ID) of
+            case hb_store_remote_node:read_local_cache(StoreOpts, ID, NodeOpts) of
                 {error, not_found} ->
                     ?event({gateway_read, {opts, StoreOpts}, {id, ID}, {subpath, Rest}}),
                     try hb_client_gateway:read(ID, GatewayReadOpts) of
