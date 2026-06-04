@@ -12,7 +12,7 @@
 -export([is_tx_indexed/2 ]).
 -export([write_block_item_ids/4, read_block_marker_depth/2]).
 -export([decode_item_ids/1, is_block_indexed/3, mark_block_indexed/3 ]).
--export([root_offset/2]).
+-export([root_offset/3]).
 -include("include/hb.hrl").
 -include("core/include/hb_store_arweave.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -78,11 +78,11 @@ type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
     {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
+read_offset(#{ <<"index-store">> := IndexStore }, ID, Opts) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), StoreOpts)
+                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), Opts)
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
@@ -92,7 +92,7 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
                 hb_store_arweave_offset:decode(OffsetBinary),
             {ok, #{
                 <<"codec-device">> => CodecName,
-                <<"offset">> => Offset,
+                <<"start-offset">> => Offset,
                 <<"length">> => Length
             }};
         _ ->
@@ -174,7 +174,7 @@ do_read(StoreOpts, ID, Opts) ->
         {ok,
             #{
                 <<"codec-device">> := Codec,
-                <<"offset">> := Offset,
+                <<"start-offset">> := Offset,
                 <<"length">> := Length
             }
         } ->
@@ -182,7 +182,7 @@ do_read(StoreOpts, ID, Opts) ->
                 load_message(
                     Codec,
                     ID,
-                    root_offset(Offset, StoreOpts),
+                    root_offset(Offset, StoreOpts, Opts),
                     Length,
                     StoreOpts
                 ),
@@ -223,19 +223,19 @@ do_read(StoreOpts, ID, Opts) ->
 
 %% @doc Takes a `read_offset/2' result and returns it, normalized to the
 %% outer-most root that is known: Either the mempool or a global byte offset.
-root_offset(relative, _Store) -> relative;
-root_offset(GlobalOffset, _Store) when is_integer(GlobalOffset) -> GlobalOffset;
-root_offset(Offset, Store) -> root_offset(Offset, 0, Store).
-root_offset(#{ <<"relative">> := P, <<"offset">> := Off }, Acc, Store) ->
-    case read_offset(Store, P) of
-        {ok, #{ <<"offset">> := Next = #{ <<"relative">> := _, <<"offset">> := _ } }} ->
+root_offset(relative, _Store, _Opts) -> relative;
+root_offset(GlobalOffset, _Store, _Opts) when is_integer(GlobalOffset) -> GlobalOffset;
+root_offset(Offset, Store, Opts) -> root_offset(Offset, 0, Store, Opts).
+root_offset(#{ <<"relative">> := P, <<"offset">> := Off }, Acc, Store, Opts) ->
+    case read_offset(Store, P, Opts) of
+        {ok, #{ <<"start-offset">> := Next = #{ <<"relative">> := _, <<"offset">> := _ } }} ->
             % We have another relative offset. Continue.
-            root_offset(Next, Acc + Off, Store);
-        {ok, #{ <<"offset">> := relative }} ->
+            root_offset(Next, Acc + Off, Store, Opts);
+        {ok, #{ <<"start-offset">> := relative }} ->
             % We have reached an unconfirmed TX as the root of the relative offset
             % chain, so we return an offset against that.
             #{ <<"relative">> => P, <<"offset">> => Acc + Off };
-        {ok, #{ <<"offset">> := GlobalOffset }} when is_integer(GlobalOffset) ->
+        {ok, #{ <<"start-offset">> := GlobalOffset }} when is_integer(GlobalOffset) ->
             % We have reached a confirmed TX as the root of the relative offset
             % chain, so we return a global offset.
             GlobalOffset + Acc + Off;
@@ -244,7 +244,7 @@ root_offset(#{ <<"relative">> := P, <<"offset">> := Off }, Acc, Store) ->
             % and return it with the `relative` key intact.
             #{ <<"relative">> => P, <<"offset">> => Acc + Off }
     end;
-root_offset(Other, _, _) -> Other.
+root_offset(Other, _, _, _) -> Other.
 
 %% @doc Load a TX from Arweave. Supports either confirmed or pending TXs.
 load_message(<<"tx@1.0">>, ID, Type, _Length, Opts) ->
@@ -652,7 +652,8 @@ root_offset_confirmed_parent_test() ->
         12352,
         root_offset(
             #{ <<"relative">> => ParentID, <<"offset">> => 7 },
-            ArweaveStoreOpts
+            ArweaveStoreOpts,
+            Opts
         )
     ).
 

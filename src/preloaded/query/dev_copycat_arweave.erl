@@ -993,7 +993,7 @@ maybe_process_l1_tx(TXID, Filters, Depth, QueryL1Offset, Opts) ->
         {ok,
             #{
                 <<"codec-device">> := <<"tx@1.0">>,
-                <<"offset">> := StartOffset,
+                <<"start-offset">> := StartOffset,
                 <<"length">> := Length
             }} ?=
             observe_copycat_l1_stage(
@@ -1175,7 +1175,7 @@ ensure_l1_tx_offset(_TXID, _EncodedTXID, IndexStore, _LoadL1Offset, _Opts)
         when is_map(IndexStore) =:= false ->
     {error, missing_offset};
 ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, QueryL1Offset, Opts) ->
-    case hb_store_arweave:read_offset(IndexStore, TXID) of
+    case hb_store_arweave:read_offset(IndexStore, TXID, Opts) of
         {ok, _} = OffsetRes ->
             OffsetRes;
         not_found when QueryL1Offset ->
@@ -1188,7 +1188,7 @@ ensure_l1_tx_offset(TXID, EncodedTXID, IndexStore, QueryL1Offset, Opts) ->
             ),
             case query_l1_tx_offset(EncodedTXID, IndexStore, Opts) of
                 ok ->
-                    case hb_store_arweave:read_offset(IndexStore, TXID) of
+                    case hb_store_arweave:read_offset(IndexStore, TXID, Opts) of
                         {ok, _} = OffsetRes ->
                             OffsetRes;
                         not_found ->

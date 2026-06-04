@@ -170,15 +170,15 @@ head_raw(Base, Request, Opts) ->
     case find_key(<<"raw">>, Base, Request, Opts) of
         TXID when ?IS_ID(TXID) ->
             % Read the data from the local cache.
-            IndexStore = hb_store_arweave:store_from_opts(Opts),
-            case hb_store_arweave:read_offset(IndexStore, TXID, Opts) of
+            ArweaveStore = hb_store_arweave:store_from_opts(Opts),
+            case hb_store_arweave:read_offset(ArweaveStore, TXID, Opts) of
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,
-                        <<"offset">> := RawOffset,
+                        <<"start-offset">> := RawOffset,
                         <<"length">> := Length
                     }} ->
-                        StartOffset = hb_store_arweave:root_offset(RawOffset, Opts),
+                        StartOffset = hb_store_arweave:root_offset(RawOffset, ArweaveStore, Opts),
                         CodecFun =
                             case CodecDevice of
                                 <<"ans104@1.0">> -> fun head_raw_ans104/4;
