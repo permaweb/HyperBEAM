@@ -9,16 +9,15 @@
 -export([store_from_opts/1, write_offset/6, write_parent/5, read_offset/3, read_parent/3, decode_parent_entries/1, read_chunks/3]).
 -export([block_indexed_path/1, block_items_path/2]).
 -export([read_block_item_counts/2, read_block_item_ids/2]).
--export([ensure_cutover_height/2, read_cutover_height/1, is_tx_indexed/2 ]).
+-export([is_tx_indexed/2 ]).
 -export([write_block_item_ids/4, read_block_marker_depth/2]).
--export([decode_item_ids/1, is_block_indexed/3, is_post_cutover/2, mark_block_indexed/3 ]).
+-export([decode_item_ids/1, is_block_indexed/3, mark_block_indexed/3 ]).
 -export([root_offset/2]).
 -include("include/hb.hrl").
--include("include/hb_store_arweave.hrl").
+-include("core/include/hb_store_arweave.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(PARTITION_SIZE, 3_600_000_000_000).
--define(CUTOVER_KEY, <<"block/marker-cutover-height">>).
 
 %% @doc Find the first Arweave store from the given node message. Searches first
 %% for the `arweave_index_store' option, and if not found, searches the main
@@ -496,37 +495,12 @@ mark_block_indexed(Height, Depth, Opts) ->
         Opts
     ).
 
-%% @doc Read the persisted cutover height from the index store.
-read_cutover_height(Opts) ->
-    Store = get_index_store(Opts),
-    case hb_store:read(Store, ?CUTOVER_KEY, Opts) of
-        {ok, Bin} -> hb_util:int(Bin);
-        {error, not_found} -> undefined
-    end.
-
-%% @doc Write the cutover height if not already set.
-ensure_cutover_height(Height, Opts) ->
-    case read_cutover_height(Opts) of
-        undefined ->
-            Store = get_index_store(Opts),
-            hb_store:write(Store, #{?CUTOVER_KEY => hb_util:bin(Height)}, Opts),
-            ?event(copycat_short, {marker_cutover_initialized, {height, Height}});
-        _ -> ok
-    end.
-
 %% @doc Check if a transaction ID is indexed in the arweave index store.
 is_tx_indexed(TXID, Opts) ->
     Store = get_index_store(Opts),
     case hb_store:read(Store, hb_store_arweave_offset:path(TXID), Opts) of
         {ok, _} -> true;
         {error, not_found} -> false
-    end.
-
-is_post_cutover(undefined, _Opts) -> false;
-is_post_cutover(Height, Opts) ->
-    case read_cutover_height(Opts) of
-        undefined -> false;
-        Cutover -> Height >= Cutover
     end.
 
 get_index_store(Opts) ->
@@ -725,4 +699,3 @@ decode_item_ids_validation_test() ->
     BadBin = <<0:240>>,
     ?assertEqual({error, invalid_item_ids_binary}, decode_item_ids(BadBin)),
     ok.
-

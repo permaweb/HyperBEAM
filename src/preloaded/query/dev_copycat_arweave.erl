@@ -482,9 +482,10 @@ write_item_header(TX, Codec, Opts) ->
             maybe
                 Msg = hb_message:convert(TX, <<"structured@1.0">>, Codec, LocalOpts),
                 {ok, _Path} ?= hb_cache:write(Msg, LocalOpts),
-                ?event(copycat_short,
+                ?event(debug_copycat,
                     {header_inline_written,
                         {id, {explicit, hb_util:encode(TX#tx.id)}},
+                        {tx, TX},
                         {codec, Codec}
                     }
                 ),
@@ -621,11 +622,6 @@ fetch_blocks_open_ended(Current, TargetDepth, Workers, Opts) ->
         Workers
     ),
     case find_indexed_prefix(HeaderResults, TargetDepth, Opts) of
-        {all_unindexed, ToProcess} ->
-            process_prefetched_blocks(
-                ToProcess, TargetDepth, Workers, Opts),
-            fetch_blocks_open_ended(
-                BatchEnd - 1, TargetDepth, Workers, Opts);
         {stop_at, StopHeight, ToProcess} ->
             process_prefetched_blocks(
                 ToProcess, TargetDepth, Workers, Opts),
@@ -634,7 +630,12 @@ fetch_blocks_open_ended(Current, TargetDepth, Workers, Opts) ->
                     {stop_at_indexed_block, StopHeight}
                 }
             ),
-            {ok, StopHeight}
+            {ok, StopHeight};
+        {all_unindexed, ToProcess} ->
+            process_prefetched_blocks(
+                ToProcess, TargetDepth, Workers, Opts),
+            fetch_blocks_open_ended(
+                BatchEnd - 1, TargetDepth, Workers, Opts)
     end.
 
 %% @doc Walk header results in order, return the unindexed prefix and
@@ -671,21 +672,7 @@ process_prefetched_blocks(Blocks, TargetDepth, Workers, Opts) ->
 %% the cutover, falls back to legacy per-TX check.
 is_already_indexed({ok, Block}, TargetDepth, Opts) ->
     Height = hb_maps:get(<<"height">>, Block, undefined, Opts),
-    case hb_store_arweave:is_block_indexed(Height, TargetDepth, Opts) of
-        true ->
-            true;
-        false ->
-            case hb_store_arweave:is_post_cutover(Height, Opts) of
-                true ->
-                    false;
-                false ->
-                    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-                    lists:any(
-                        fun(TXID) -> hb_store_arweave:is_tx_indexed(TXID, Opts) end,
-                        TXIDs
-                    )
-            end
-    end;
+    hb_store_arweave:is_block_indexed(Height, TargetDepth, Opts);
 is_already_indexed({error, _}, _TargetDepth, _Opts) ->
     false.
 
@@ -724,7 +711,6 @@ process_block(BlockRes, Current, To, TargetDepth, Opts) ->
                             Current, AchievedDepth, ItemIDs, Opts),
                         ok ?= hb_store_arweave:mark_block_indexed(
                             Current, AchievedDepth, Opts),
-                        hb_store_arweave:ensure_cutover_height(Current, Opts),
                         ?event(
                             copycat_short,
                             {arweave_block_indexed,
@@ -2335,12 +2321,13 @@ explicit_to_reindexes_all_test_parallel() ->
 %% @doc Manually write to the index to simulate a partially indexed block.
 %% This should also trigger a stop when the `to` option is omitted.
 auto_stop_partial_index_test_parallel() ->
-    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    {IndexStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1826700,
     HigherBlock = Block + 1,
     NoIndexOpts = Opts#{
         <<"arweave-index-ids">> => false,
-        <<"arweave-index-blocks">> => true
+        <<"arweave-index-blocks">> => true,
+        <<"index-headers">> => false
     },
     {ok, Block} =
         hb_ao:resolve(
@@ -2366,6 +2353,12 @@ auto_stop_partial_index_test_parallel() ->
     ?assert(length(TXIDs) > 0),
     [OneTXID | _] = TXIDs,
     ok = hb_store_arweave:write_offset(StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0, Opts),
+    %% Write block depth maker, to indicate the block was previously indexed.
+    hb_store:write(
+        IndexStore,
+        #{hb_store_arweave:block_indexed_path(Block) => integer_to_binary(2)},
+        Opts
+    ),
     {ok, Block} =
         hb_ao:resolve(
             <<
@@ -2379,7 +2372,7 @@ auto_stop_partial_index_test_parallel() ->
     ?assert(has_any_indexed_tx(Block, Opts)),
     ?assertNot(has_any_indexed_tx(Block-1, Opts)),
     ?assert(hb_store_arweave:is_block_indexed(HigherBlock, 2, Opts)),
-    ?assertNot(hb_store_arweave:is_block_indexed(Block, 2, Opts)),
+    ?assert(hb_store_arweave:is_block_indexed(Block, 2, Opts)),
     ok.
 
 negative_parse_range_test_parallel() ->
@@ -2867,7 +2860,8 @@ setup_index_opts() ->
     Opts = #{
         <<"store">> => Store,
         <<"arweave-index-ids">> => true,
-        <<"arweave-index-store">> => StoreOpts
+        <<"arweave-index-store">> => StoreOpts,
+        <<"index-headers">> => false
     },
     {TestStore, StoreOpts, Opts}.
 
@@ -2987,23 +2981,6 @@ depth_1_normalizes_to_2_test() ->
     ?assert(hb_store_arweave:is_block_indexed(Height, 1, Opts)),
     ?assert(hb_store_arweave:is_block_indexed(Height, 2, Opts)),
     ?assertNot(hb_store_arweave:is_block_indexed(Height, 3, Opts)),
-    ok.
-
-block_marker_cutover_test() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    LowerBlock = 1827941,
-    UpperBlock = 1827942,
-    {ok, UpperBlock} =
-        hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=",
-                (hb_util:bin(UpperBlock))/binary, "&to=",
-                (hb_util:bin(UpperBlock))/binary>>,
-            Opts
-        ),
-    Cutover = hb_store_arweave:read_cutover_height(Opts),
-    ?assertNotEqual(undefined, Cutover),
-    ?assert(hb_store_arweave:is_block_indexed(UpperBlock, 2, Opts)),
-    ?assertNot(hb_store_arweave:is_block_indexed(LowerBlock, 2, Opts)),
     ok.
 
 achieved_depth_block_depth_2_test() ->
@@ -3423,7 +3400,9 @@ parent_endpoint_not_found_test() ->
     ok.
 
 strip_preserves_verify_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {_TestStore, _StoreOpts, DefaultOpts} = setup_index_opts(),
+    Opts = DefaultOpts#{<<"index-headers">> => true},
+
     {ok, 1827942} =
         hb_ao:resolve(
             <<"~copycat@1.0/arweave&from=1827942&to=1827942&mode=write&depth=3">>,
