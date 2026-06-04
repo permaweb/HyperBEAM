@@ -211,28 +211,28 @@ raw_default_message() ->
         %%%%%%%% Functional options %%%%%%%%
         <<"hb-config-location">> => <<"config.flat">>,
         <<"initialized">> => true,
-        %% What HTTP client should the node use?
-        %% Options: gun, httpc, hackney
+        % What HTTP client should the node use?
+        % Options: gun, httpc, hackney
         <<"http-client">> => ?DEFAULT_HTTP_CLIENT,
-        %% Scheduling mode: Determines when the SU should inform the recipient
-        %% that an assignment has been scheduled for a message.
-        %% Options: aggressive(!), local_confirmation, remote_confirmation,
-        %%          disabled
+        % Scheduling mode: Determines when the SU should inform the recipient
+        % that an assignment has been scheduled for a message.
+        % Options: aggressive(!), local_confirmation, remote_confirmation,
+        %          disabled
         <<"scheduling-mode">> => local_confirmation,
-        %% Compute mode: Determines whether the process device should attempt to 
-        %% execute more messages on a process after it has returned a result.
-        %% Options: aggressive, lazy
+        % Compute mode: Determines whether the process device should attempt to 
+        % execute more messages on a process after it has returned a result.
+        % Options: aggressive, lazy
         <<"compute-mode">> => lazy,
-        %% Choice of remote nodes for tasks that are not local to hyperbeam.
+        % Choice of remote nodes for tasks that are not local to hyperbeam.
         <<"gateway">> => ?DEFAULT_GATEWAY,
         <<"bundler-ans104">> => <<"https://up.arweave.net:443">>,
-        %% Location of the wallet keyfile on disk that this node will use.
+        % Location of the wallet keyfile on disk that this node will use.
         <<"priv-key-location">> => <<"hyperbeam-key.json">>,
-        %% The time-to-live that should be specified when we register
-        %% ourselves as a scheduler on the network.
-        %% Default: 7 days.
+        % The time-to-live that should be specified when we register
+        % ourselves as a scheduler on the network.
+        % Default: 7 days.
         <<"scheduler-location-ttl">> => (60 * 60 * 24 * 7) * 1000,
-        %% Generated LMDB store of preloaded device artifacts.
+        % Generated LMDB store of preloaded device artifacts.
         <<"preloaded-store">> =>
             #{
                 <<"store-module">> => hb_store_lmdb,
@@ -240,13 +240,13 @@ raw_default_message() ->
                 <<"capacity">> => 1024 * 1024 * 1024,
                 <<"read-only">> => true
             },
-        %% Build-time ID of the preloaded name resolver message.
+        % Build-time ID of the preloaded name resolver message.
         <<"preloaded-devices-index">> => preloaded_index_default(),
-        %% Store for resolved device reference -> loaded module atom,
-        %% shared across processes so the first caller to resolve a
-        %% device spares the rest the index read and archive
-        %% extraction. Defaults to `[]' (no viable store): the
-        %% per-process dictionary still memoises within a process.
+        % Store for resolved device reference -> loaded module atom,
+        % shared across processes so the first caller to resolve a
+        % device spares the rest the index read and archive
+        % extraction. Defaults to a `hb_store_volatile`.
+        <<"loaded-device-store">> =>
         <<"loaded-device-store">> => [],
         %% Default execution cache control options
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
@@ -254,19 +254,19 @@ raw_default_message() ->
         % Should we await in-progress executions, rather than re-running?
         % Has three settings: false, only `named' executions, or all executions.
         <<"await-inprogress">> => named,
-        %% Should the node attempt to access data from remote caches for
-        %% client requests?
+        % Should the node attempt to access data from remote caches for
+        % client requests?
         <<"access-remote-cache-for-client">> => false,
-        %% Should the node attempt to load devices from remote signers?
+        % Should the node attempt to load devices from remote signers?
         <<"load-remote-devices">> => false,
-        %% The list of device signers that the node should trust.
+        % The list of device signers that the node should trust.
         <<"trusted-device-signers">> => [],
-        %% Map of device name/spec ID -> trusted implementation ID,
-        %% loaded without a signer check.
+        % Map of device name/spec ID -> trusted implementation ID,
+        % loaded without a signer check.
         <<"trusted-devices">> => #{},
-        %% What should the node do if a client error occurs?
+        % What should the node do if a client error occurs?
         <<"client-error-strategy">> => throw,
-        %% HTTP client request options
+        % HTTP client request options
         <<"http-client-connect-timeout">> => 5000,
         <<"http-client-keepalive">> => 120000,
         <<"http-client-send-timeout">> => 300_000,
@@ -274,11 +274,11 @@ raw_default_message() ->
         <<"process-sampler">> => true,
         <<"process-sampler-interval">> => 15000,
         <<"wasm-allow-aot">> => false,
-        %% Options for the relay device
+        % Options for the relay device
         <<"relay-http-client">> => httpc,
-        %% The default codec to use for commitment signatures.
+        % The default codec to use for commitment signatures.
         <<"commitment-device">> => <<"httpsig@1.0">>,
-        %% Dev options
+        % Dev options
         <<"mode">> => debug,
         <<"profiling">> => true,
         % Every modification to `Opts' called directly by the node operator
@@ -310,7 +310,7 @@ raw_default_message() ->
 		<<"trusted">> => #{},
         <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
         <<"routes">> => [
-            %% Local CU routes.
+            % Local CU routes.
             #{
                 <<"template">> => <<"/result/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
@@ -327,7 +327,7 @@ raw_default_message() ->
                 <<"template">> => <<"/state.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
             },
-            %% GraphQL: race all gateways, take the first 200.
+            % GraphQL: race all gateways, take the first 200.
             #{
                 <<"template">> => <<"/graphql">>,
                 <<"nodes">> =>
@@ -346,8 +346,8 @@ raw_default_message() ->
                         }
                     ]
             },
-            %% chunk requests: route to the nearest data nodes by
-            %% partition midpoint (byte offset).
+            % chunk requests: route to the nearest data nodes by
+            % partition midpoint (byte offset).
             #{
                 <<"template">> => 
                     #{
@@ -419,8 +419,8 @@ raw_default_message() ->
                         <<"opts">> => ?DEFAULT_HTTP_OPTS
                     }
             },
-            %% General Arweave requests: race all chain nodes, take
-            %% the first 200.
+            % General Arweave requests: race all chain nodes, take
+            % the first 200.
             #{
                 <<"template">> => <<"^/arweave">>,
                 <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
@@ -428,7 +428,7 @@ raw_default_message() ->
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
-            %% Raw data requests via arweave.net gateway. TODO: Update later.
+            % Raw data requests via arweave.net gateway. TODO: Update later.
             #{
                 <<"template">> => <<"/raw">>,
                 <<"node">> =>
@@ -474,7 +474,7 @@ raw_default_message() ->
                     <<"name">> => <<"cache-priv">>
                 }
             ],
-        %default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
+        % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         <<"process-now-from-cache">> => false,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
