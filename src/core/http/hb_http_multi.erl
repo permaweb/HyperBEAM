@@ -282,12 +282,18 @@ parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message},
     receive
         {Ref, Pid, {Status, NewRes}} ->
             WorkersWithoutPid = lists:delete(Pid, Procs),
-            {RefilledWorkers, NewQueue} =
-                start_workers(1, Ref, Queue, Method, Path, Message, Opts),
-            NewProcs = RefilledWorkers ++ WorkersWithoutPid,
             NewAllRes = [{Status, NewRes} | AllRes],
             case is_admissible(Status, NewRes, Admissible, Statuses, Opts) of
                 true ->
+                    NewAwaiting = Awaiting - 1,
+                    {NewProcs, NewQueue} =
+                        case NewAwaiting of
+                            0 -> {WorkersWithoutPid, Queue};
+                            _ ->
+                                {RefilledWorkers, RemainingQueue} =
+                                    start_workers(1, Ref, Queue, Method, Path, Message, Opts),
+                                {RefilledWorkers ++ WorkersWithoutPid, RemainingQueue}
+                        end,
                     parallel_responses(
                         [{Status, NewRes} | AdmissibleRes],
                         NewAllRes,
@@ -295,17 +301,19 @@ parallel_responses(AdmissibleRes, AllRes, Procs, Queue, {Method, Path, Message},
                         NewQueue,
                         {Method, Path, Message},
                         Ref,
-                        Awaiting - 1,
+                        NewAwaiting,
                         StopAfter,
                         Admissible,
                         Statuses,
                         Opts
                 );
             false ->
+                {RefilledWorkers, NewQueue} =
+                    start_workers(1, Ref, Queue, Method, Path, Message, Opts),
                 parallel_responses(
                     AdmissibleRes,
                     NewAllRes,
-                    NewProcs,
+                    RefilledWorkers ++ WorkersWithoutPid,
                     NewQueue,
                     {Method, Path, Message},
                     Ref,
