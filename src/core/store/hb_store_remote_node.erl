@@ -139,7 +139,7 @@ read_local_cache(StoreOpts, ID, Opts) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};
-        Store -> hb_cache:read(ID, Opts#{ <<"store">> => Store })
+        Store -> hb_cache:read(ID, StoreOpts#{ <<"store">> => Store })
     end.
 
 %% @doc Write a key to the remote node.

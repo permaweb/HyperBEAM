@@ -96,20 +96,15 @@ read_offset(_, _, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, #{ <<"read">> := ID }, NodeOpts) when ?IS_ID(ID) ->
-    MergedOpts = maps:merge(NodeOpts, StoreOpts),
-    case hb_store_remote_node:read_local_cache(StoreOpts, ID, MergedOpts) of
+read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+    case hb_store_remote_node:read_local_cache(StoreOpts, ID, StoreOpts) of
         {ok, Message} ->
             {ok, Message};
-        {error, not_found} ->
-            case do_read(StoreOpts, ID, MergedOpts) of
+        _ ->
+            case do_read(StoreOpts, ID, StoreOpts) of
                 not_found -> {error, not_found};
                 Result -> Result
-            end;
-        {failure, _} = Failure ->
-            Failure;
-        {error, _} = Error ->
-            Error
+            end
     end;
 read(_StoreOpts, #{ <<"read">> := _ID }, _NodeOpts) ->
     {error, not_found}.
