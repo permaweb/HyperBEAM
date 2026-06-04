@@ -247,8 +247,13 @@ raw_default_message() ->
         % device spares the rest the index read and archive
         % extraction. Defaults to a `hb_store_volatile`.
         <<"loaded-device-store">> =>
-        <<"loaded-device-store">> => [],
-        %% Default execution cache control options
+            [
+                #{
+                    <<"store-module">> => hb_store_volatile,
+                    <<"name">> => <<"loaded-device-volatile-store">>
+                }
+            ],
+        % Default execution cache control options
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
         <<"cache-lookup-hueristics">> => false,
         % Should we await in-progress executions, rather than re-running?
