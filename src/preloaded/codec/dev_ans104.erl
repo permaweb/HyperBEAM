@@ -92,11 +92,51 @@ verify(Msg, Req, Opts) ->
                 Opts
             )
         ),
-    ?event({verify, {only_with_commitment, OnlyWithCommitment}}),
-    {ok, TX} = to(OnlyWithCommitment, Req, Opts),
+    {ok, OnlyCommitted} = hb_message:with_only_committed(OnlyWithCommitment, Opts),
+    ?event({verify, {only_with_commitment, OnlyCommitted}}),
+    {ok, TX} = to(OnlyCommitted, Req, Opts),
     ?event({verify, {encoded, TX}}),
-    Res = ar_bundles:verify_item(TX),
+    Res =
+        case maps:get(<<"type">>, Req, undefined) of
+            <<"unsigned-sha256">> ->
+                unsigned_id_matches(TX, OnlyCommitted, Opts);
+            _ ->
+                ar_bundles:verify_item(TX) orelse
+                    trusted_gql_commitment_matches(TX, OnlyCommitted, Opts)
+        end,
     {ok, Res}.
+
+unsigned_id_matches(TX, Msg, Opts) ->
+    case hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) of
+        [CommitmentID] -> CommitmentID =:= hb_util:human_id(TX#tx.unsigned_id);
+        _ -> false
+    end.
+
+trusted_gql_commitment_matches(TX, Msg, Opts) ->
+    case hb_opts:get(ans104_trust_gql, false, Opts) of
+        true ->
+            case hb_maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) of
+                [{CommitmentID, Commitment = #{ <<"trusted-keys">> := TrustedKeys }}] ->
+                    Committed =
+                        hb_util:message_to_ordered_list(
+                            hb_maps:get(<<"committed">>, Commitment, [], Opts),
+                            Opts
+                        ),
+                    Trusted =
+                        lists:map(
+                            fun(Key) -> hb_util:to_lower(hb_ao:normalize_key(Key)) end,
+                            hb_util:message_to_ordered_list(TrustedKeys, Opts)
+                        ),
+                    Trusted =/= [] andalso
+                        hb_util:human_id(TX#tx.id) =:= CommitmentID andalso
+                        TX#tx.id =:= crypto:hash(sha256, TX#tx.signature) andalso
+                        lists:all(fun(Key) -> lists:member(Key, Committed) end, Trusted);
+                _ ->
+                    false
+            end;
+        false ->
+            false
+    end.
 
 %% @doc Convert a #tx record into a message map recursively.
 -spec from(binary() | #tx{}, #{ _ => _ }, #{ _ => _ }) -> {ok, binary() | #{ _ => _ }}.

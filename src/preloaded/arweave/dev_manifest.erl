@@ -71,7 +71,7 @@ route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
     {ok, Manifest} = manifest(M1, M2, Opts),
     {ok, Res} = maps:find(<<"paths">>, Manifest),
-    case maps:get(Key, Res, no_path_match) of
+    case lookup_path(Key, Res, Opts) of
         no_path_match ->
             % Support materialized view in some JavaScript frameworks.
             case hb_opts:get(manifest_404, fallback, Opts) of
@@ -84,7 +84,7 @@ route(Key, M1, M2, Opts) ->
             end;
         Result ->
             ?event({manifest_lookup_success, {key, Key}, {result, Result}}),
-            try {ok, hb_cache:ensure_loaded(Result, Opts)}
+            try {ok, load_result(Result, Opts)}
             catch _:_:_ -> {error, not_found}
             end
     end.
@@ -137,6 +137,31 @@ request(Base, Req, Opts) ->
             {ok, Req}
     end.
 
+lookup_path(Key, Paths, Opts) ->
+    case hb_maps:find(Key, Paths, Opts) of
+        {ok, Result} ->
+            Result;
+        error ->
+            lookup_path_parts(hb_path:term_to_path_parts(Key, Opts), Paths, Opts)
+    end.
+
+lookup_path_parts([], Result, _Opts) ->
+    Result;
+lookup_path_parts([Part|Rest], Paths, Opts) when is_map(Paths) ->
+    case hb_maps:find(Part, Paths, Opts) of
+        {ok, Next} -> lookup_path_parts(Rest, Next, Opts);
+        error -> no_path_match
+    end;
+lookup_path_parts(_, _, _Opts) ->
+    no_path_match.
+
+load_result(#{ <<"id">> := _ } = Result, Opts) ->
+    hb_cache:ensure_loaded(linkify(Result, Opts), Opts);
+load_result(Result, _Opts) when is_map(Result) ->
+    #{ <<"device">> => <<"manifest@1.0">>, <<"paths">> => Result };
+load_result(Result, _Opts) ->
+    Result.
+
 maybe_no_cache_404(Rest, Opts) ->
     case hb_opts:get(manifest_404, fallback, Opts) of
         error ->
@@ -186,26 +211,30 @@ maybe_cast_manifest(Msg, Opts) ->
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
 manifest(Base, _Req, Opts) ->
-    JSON =
-        hb_maps:get_first(
-            [
-                {Base, <<"data">>},
-                {Base, <<"body">>}
-            ],
-            not_found,
-            Opts
-    ),
-    FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    DeepPaths =
-        hb_message:convert(
-            FlatPaths,
-            <<"structured@1.0">>,
-            <<"flat@1.0">>,
-            Opts
-        ),
-    LinkifiedPaths = linkify(DeepPaths, Opts),
-    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
-    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+    case hb_maps:find(<<"paths">>, Base, Opts) of
+        {ok, _} ->
+            {ok, Base};
+        error ->
+            JSON =
+                hb_maps:get_first(
+                    [
+                        {Base, <<"data">>},
+                        {Base, <<"body">>}
+                    ],
+                    not_found,
+                    Opts
+                ),
+            FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
+            DeepPaths =
+                hb_message:convert(
+                    FlatPaths,
+                    <<"structured@1.0">>,
+                    <<"flat@1.0">>,
+                    Opts
+                ),
+            Structured = FlatManifest#{ <<"paths">> => DeepPaths },
+            {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}
+    end.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.

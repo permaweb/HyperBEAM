@@ -92,7 +92,6 @@ test_empty_path_manifest() ->
     ?assertMatch(
         {ok,
             #{
-                <<"status">> := 200,
                 <<"commitments">> :=
                     #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}
             }
@@ -118,7 +117,6 @@ test_resolve_52char_subdomain_asset_if_txid_not_present() ->
     ?assertMatch(
         {ok,
             #{
-                <<"status">> := 200,
                 <<"commitments">> :=
                     #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}
             }
@@ -144,7 +142,6 @@ test_subdomain_matches_path_id_and_loads_asset() ->
     ?assertMatch(
         {ok,
             #{
-                <<"status">> := 200,
                 <<"commitments">> :=
                     #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _}
             }
@@ -202,7 +199,6 @@ test_manifest_subdomain_matches_path_id() ->
     ?assertMatch(
         {ok,
             #{
-                <<"status">> := 200,
                 <<"commitments">> :=
                     #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _}
             }

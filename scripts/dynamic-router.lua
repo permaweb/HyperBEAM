@@ -40,6 +40,26 @@ local function ensure_defaults(state)
     return state
 end
 
+local function ao_ipairs(table)
+    local ix = 0
+    return function()
+        ix = ix + 1
+        local value = table[ix]
+        if value == nil then
+            return nil
+        end
+        return ix, value
+    end
+end
+
+local function ao_len(table)
+    local count = 0
+    for _ in ao_ipairs(table) do
+        count = count + 1
+    end
+    return count
+end
+
 -- Find the current route message for a template.
 local function current_route(routes, template, opts)
     -- Find the existing route that matches the template, if it exists.
@@ -80,7 +100,7 @@ local function calculate_stats(nodes, key)
         values = {}
     }
 
-    for _, n in ipairs(nodes) do
+    for _, n in ao_ipairs(nodes) do
         stats.count = stats.count + 1
         stats.total = stats.total + n[key]
         if n[key] > stats.max then
@@ -128,7 +148,7 @@ local function recalculate_scores(state, route, opts)
     local pricing_weight = state["pricing-weight"] / total_weight
 
     -- Calculate the score per node.
-    for ix, node in ipairs(route.nodes) do
+    for ix, node in ao_ipairs(route.nodes) do
         -- The performance score for the node on the route should be scaled by
         -- moderated by the sampling rate. The sampling rate is used to ensure 
         -- that new/improving nodes (and improving nodes) are given a chance to
@@ -147,8 +167,9 @@ local function recalculate_scores(state, route, opts)
         -- Calculate the final weight. In order to do this we:
         -- 1. Apply the factor weights to the calculated scores.
         -- 2. Sum them.
-        node.weight =
+        local weight =
             ((perf_score * perf_weight) + (price_score * pricing_weight))
+        route = ao.set(route, "nodes/" .. tostring(ix) .. "/weight", weight)
 
         ao.event("debug_scores",
             {
@@ -163,7 +184,7 @@ local function recalculate_scores(state, route, opts)
                     price_percentile = price_percentile,
                     pricing_weight = pricing_weight,
                     price_score = price_score,
-                    result = node.weight
+                    result = weight
                 }
             }
         )
@@ -181,7 +202,7 @@ local function add_node(state, req, opts)
         topup = req.route.topup,
         performance = state["initial-performance"],
         reference = reference,
-        opts = { http_reference = reference }
+        opts = { ["http-reference"] = reference }
     })
 
     local new_state = ao.set(state, route.reference, route)
@@ -193,8 +214,8 @@ end
 function recalculate(state, _, opts)
     state = ensure_defaults(state)
 
-    for _, r in ipairs(state.routes) do
-        r = recalculate_scores(state, r, opts)
+    for _, r in ao_ipairs(state.routes) do
+        state = ao.set(state, r.reference, recalculate_scores(state, r, opts))
     end
 
     return "ok", state
@@ -313,8 +334,8 @@ function register_test()
     _, state = register(state, { body = req }, {})
 
     -- We must now have exactly one route in state.routes.
-    if #state.routes ~= 1 then
-      error("Expected 1 route after register, got "..tostring(#state.routes))
+    if ao_len(state.routes) ~= 1 then
+      error("Expected 1 route after register, got "..tostring(ao_len(state.routes)))
     end
   
     -- Verify the node, price and default performance.
@@ -346,9 +367,9 @@ function register_test()
 
     ao.event("debug_router", {"state after second registration", state})
 
-    if #state.routes[1].nodes ~= 2 then
+    if ao_len(state.routes[1].nodes) ~= 2 then
         error("Expected 2 nodes after second registration, got "
-            .. tostring(#state.routes[1].nodes))
+            .. tostring(ao_len(state.routes[1].nodes)))
     end
 
     return "ok"

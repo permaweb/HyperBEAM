@@ -54,7 +54,8 @@ relay_with_payments() ->
                 <<"recipient">> => ClientAddress,
                 <<"amount">> => 100
             },
-            #{ <<"priv-wallet">> => HostWallet }
+            #{ <<"priv-wallet">> => HostWallet },
+            #{ <<"committed">> => [<<"recipient">>, <<"amount">>] }
         ),
     ?assertMatch({ok, _}, hb_http:get(HostNode, TopupMessage, #{})),
     % Relay the message again.
@@ -118,11 +119,7 @@ paid_wasm() ->
     % Now we have the results, we can verify them.
     ?assertMatch(6.0, hb_ao:get(<<"output/1">>, Res, Opts)),
     % Check that the client's balance has been deducted.
-    ClientRequest =
-        hb_message:commit(
-            #{<<"path">> => <<"/~p4@1.0/balance">>},
-            #{ <<"priv-wallet">> => ClientWallet }
-        ),
+    ClientRequest = bundle_payment_balance_request(ClientWallet),
     {ok, Res2} = hb_http:get(HostNode, ClientRequest, Opts),
     ?assertMatch(60, Res2).
 
@@ -425,13 +422,21 @@ bundle_payment_balance(Node, Wallet) ->
     {ok, Balance} =
         hb_http:get(
             Node,
-            hb_message:commit(
-                #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                #{ <<"priv-wallet">> => Wallet }
-            ),
+            bundle_payment_balance_request(Wallet),
             #{}
         ),
     Balance.
+
+bundle_payment_balance_request(Wallet) ->
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    hb_message:commit(
+        #{
+            <<"path">> => <<"/~p4@1.0/balance">>,
+            <<"target">> => Address
+        },
+        #{ <<"priv-wallet">> => Wallet },
+        #{ <<"committed">> => [<<"target">>] }
+    ).
 
 create_schedule_aos2_test_disabled() ->
     % The legacy process format, according to the ao.tn.1 spec:
@@ -663,9 +668,9 @@ relay_schedule_ans104_test() ->
                 <<"codec-device">> => <<"ans104@1.0">>
             },
             ClientOpts
-        ),
+    ),
     ?event(debug_test, {post_result, ScheduleRes}),
-    ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 0 }}, ScheduleRes),
+    ?assertMatch({ok, #{ <<"slot">> := 0 }}, ScheduleRes),
     % Push another message via the compute node.
     ProcID = hb_message:id(Process, signed, ClientOpts),
     ToPush =
@@ -686,6 +691,6 @@ relay_schedule_ans104_test() ->
                 <<"body">> => ToPush
             },
             ClientOpts
-        ),
+    ),
     ?event(debug_test, {post_result, PushRes}),
-    ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 1 }}, PushRes).
+    ?assertMatch({ok, #{ <<"slot">> := 1 }}, PushRes).

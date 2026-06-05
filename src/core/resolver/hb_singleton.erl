@@ -140,9 +140,12 @@ from(RawMsg, Opts) ->
     {ok, Path, Query} = from_path(RawPath),
     ?event(parsing, {parsed_path, Path, Query}),
     MsgWithoutBasePath =
-        hb_maps:merge(
-            hb_maps:remove(<<"path">>, RawMsg),
-            Query
+        message_set(RawMsg, <<"path">>, unset, Opts),
+    Typed =
+        message_set(
+            apply_types(MsgWithoutBasePath, Opts),
+            apply_types(Query, Opts),
+            Opts
         ),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
     RawMsgs =
@@ -156,7 +159,6 @@ from(RawMsg, Opts) ->
     Msgs = normalize_base(RawMsgs),
     ?event(parsing, {normalized_messages, Msgs}),
     % 3. Type keys and values
-    Typed = apply_types(MsgWithoutBasePath, Opts),
     ?event(parsing, {typed_messages, Typed}),
     % 4. Group keys by N-scope and global scope
     ScopedModifications = group_scoped(Typed, Msgs),
@@ -300,8 +302,8 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
                 % messages. AO-Core will then simply set the device specifier
                 % and not execute a subresolve.
                 {
-                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
-                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
+                    message_set(RawMsg, <<"path">>, unset, Opts),
+                    message_set(RawAdditional, <<"path">>, unset, Opts)
                 };
             _BasePath ->
                 % When we have a non-empty path, we merge the messages in
@@ -328,6 +330,29 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     ),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
+
+message_set(Base, <<"path">>, Value, Opts) ->
+    hb_util:ok(
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"set_path">>,
+            Base,
+            #{ <<"value">> => Value },
+            Opts
+        ),
+        Opts
+    ).
+message_set(Base, NewValues, Opts) ->
+    hb_util:ok(
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"set">>,
+            Base,
+            NewValues,
+            Opts
+        ),
+        Opts
+    ).
 
 %% @doc Parse a path part into a message or an ID.
 %% Applies the syntax rules outlined in the module doc, in the following order:

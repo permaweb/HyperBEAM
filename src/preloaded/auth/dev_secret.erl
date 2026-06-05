@@ -322,7 +322,7 @@ register_wallet(Wallet, Base, Request, Opts) ->
                     <<"wallet">> => ar_wallet:to_json(PrivKey),
                     <<"address">> => hb_util:human_id(Address),
                     <<"persist">> => PersistMode,
-                    <<"access-control">> => hb_private:reset(InitializedAuthMsg),
+                    <<"access-control">> => InitializedAuthMsg,
                     <<"committer">> => Committer,
                     <<"controllers">> => parse_controllers(Controllers, Opts),
                     <<"required-controllers">> => RequiredControllers
@@ -343,8 +343,8 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
     Address = hb_maps:get(<<"address">>, WalletDetails, undefined, Opts),
     ?event({resp_base, {auth_resp, RespBase}, {priv_wallet_details, WalletDetails}}),
     AccessControl = hb_maps:get(<<"access-control">>, WalletDetails, #{}, Opts),
-    {ok, _, Commitment} = 
-        hb_message:commitment(
+    KeyID =
+        case hb_message:commitment(
             #{},
             hb_message:without_commitments(
                 #{
@@ -355,8 +355,13 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
                 Opts
             ),
             Opts
-        ),
-    KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
+        ) of
+            {ok, _, Commitment} ->
+                hb_maps:get(<<"keyid">>, Commitment, Opts);
+            not_found ->
+                Committer = hb_maps:get(<<"committer">>, WalletDetails, Opts),
+                <<"secret:", Committer/binary>>
+        end,
     Base = RespBase#{ <<"body">> => KeyID },
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
@@ -539,7 +544,10 @@ verify_auth(WalletDetails, Req, Opts) ->
                 hb_maps:get(<<"committer">>, WalletDetails, undefined, Opts)
         },
     ?event({verify_wallet, {auth_base, AuthBase}, {priv_request, AuthRequest}}),
-    hb_ao:resolve(AuthBase, AuthRequest, Opts).
+    case hb_maps:get(<<"auth-disabled">>, AuthBase, false, Opts) of
+        true -> {ok, false};
+        _ -> hb_ao:resolve(AuthBase, AuthRequest, Opts)
+    end.
 
 %% @doc Parse cookie from a message to extract wallets.
 wallets_from_cookie(Msg, Opts) ->
@@ -604,7 +612,7 @@ export(Base, Request, Opts) ->
                     fun(Wallet) ->
                         Loaded = hb_cache:ensure_all_loaded(Wallet, PrivOpts),
                         ?event({exported, {priv_wallet, Loaded}}),
-                        Loaded
+                        sanitize_exported_wallet(Loaded, PrivOpts)
                     end,
                     Wallets
                 )
@@ -625,17 +633,18 @@ sync(_Base, Request, Opts) ->
                     undefined -> Opts;
                     SignAs -> hb_opts:as(SignAs, Opts)
                 end,
-            ExportRequest =
-                (hb_message:commit(
-                    #{ <<"keyids">> => Wallets },
-                    SignAsOpts
-                ))#{ <<"path">> => <<"/~secret@1.0/export">> },
-            ?event({sync, {export_req, ExportRequest}}),
-            case hb_http:get(Node, ExportRequest, SignAsOpts) of
-                {ok, ExportResponse} ->
-                    ExportedWallets = export_response_to_list(ExportResponse, #{}),
+            case exported_wallets(Node, Wallets, SignAsOpts) of
+                {ok, RawExportedWallets} ->
+                    ExportedWallets =
+                        lists:map(
+                            fun(Wallet) ->
+                                sanitize_exported_wallet(Wallet, SignAsOpts)
+                            end,
+                            RawExportedWallets
+                        ),
                     ?event({sync, {priv_received_wallets, ExportedWallets}}),
                     % Import each wallet. Ignore wallet imports that fail.
+                    ImportedWallets =
                         lists:filtermap(
                             fun(Wallet) ->
                                 ?event({sync, {importing, {priv_wallet, Wallet}}}),
@@ -650,7 +659,7 @@ sync(_Base, Request, Opts) ->
                             end,
                             ExportedWallets
                         ),
-                    {ok, ExportedWallets};
+                    {ok, ImportedWallets};
                 {error, Reason} ->
                     ?event({sync, {error, Reason}}),
                     {error, Reason}
@@ -696,8 +705,9 @@ store_wallet(in_memory, KeyID, Details, Opts) ->
     ok;
 store_wallet(non_volatile, KeyID, Details, Opts) ->
     % Find the private store of the node.
-    PrivOpts = priv_store_opts(Opts),
-    {ok, Msg} = hb_cache:write(#{ KeyID => Details }, PrivOpts),
+    PrivOpts = (priv_store_opts(Opts))#{ <<"linkify-mode">> => false },
+    StoredDetails = stored_wallet_details(Details, PrivOpts),
+    {ok, Msg} = hb_cache:write(#{ KeyID => StoredDetails }, PrivOpts),
     PrivStore = hb_opts:get(priv_store, undefined, PrivOpts),
     % Link the wallet to the store.
     ok =
@@ -707,6 +717,21 @@ store_wallet(non_volatile, KeyID, Details, Opts) ->
             PrivOpts
         ),
     ok.
+
+stored_wallet_details(Details, Opts) ->
+    case hb_maps:find(<<"access-control">>, Details, Opts) of
+        {ok, AccessControl} ->
+            (hb_maps:flatten(Details, Opts))#{
+                <<"access-control">> =>
+                    hb_message:without_commitments(
+                        #{ <<"commitment-device">> => <<"cookie@1.0">> },
+                        hb_maps:flatten(AccessControl, Opts),
+                        Opts
+                    )
+            };
+        error ->
+            Details
+    end.
 
 %% @doc Find the wallet by name or address in the node's options.
 find_wallet(KeyID, Opts) ->
@@ -759,6 +784,75 @@ priv_store_opts(Opts) ->
 %% also additional keys for the commitment etc.
 export_response_to_list(ExportResponse, Opts) ->
     hb_util:numbered_keys_to_list(ExportResponse, Opts).
+
+exported_wallets(Node, <<"all">>, Opts) ->
+    case hb_http:get(Node, <<"/~secret@1.0/list">>, Opts) of
+        {ok, WalletList} ->
+            exported_wallets(
+                Node,
+                lists:map(
+                    fun normalize_listed_wallet/1,
+                    export_response_to_list(WalletList, Opts)
+                ),
+                Opts
+            );
+        {error, Reason} ->
+            {error, Reason}
+    end;
+exported_wallets(Node, Wallets, Opts) when is_list(Wallets) ->
+    {ok,
+        lists:filtermap(
+            fun(Wallet) ->
+                ExportRequest =
+                    (hb_message:commit(
+                        #{ <<"keyids">> => [Wallet] },
+                        Opts
+                    ))#{ <<"path">> => <<"/~secret@1.0/export/1">> },
+                ?event({sync, {export_req, ExportRequest}}),
+                case hb_http:get(Node, ExportRequest, Opts) of
+                    {ok, ExportedWallet} -> {true, ExportedWallet};
+                    {error, Reason} ->
+                        ?event({sync, {export_error, Reason}}),
+                        false
+                end
+            end,
+            Wallets
+        )
+    };
+exported_wallets(Node, Wallet, Opts) ->
+    exported_wallets(Node, [Wallet], Opts).
+
+normalize_listed_wallet(<<"wallet@1.0/", Wallet/binary>>) -> Wallet;
+normalize_listed_wallet(Wallet) -> Wallet.
+
+sanitize_exported_wallet(Wallet, Opts) ->
+    case hb_maps:find(<<"access-control">>, Wallet, Opts) of
+        {ok, AccessControl} ->
+            ConcreteAccessControl = hb_maps:flatten(AccessControl, Opts),
+            SanitizedAccessControl =
+                (maps:without(
+                    [<<"commitments">>, <<"...">>],
+                    ConcreteAccessControl
+                ))#{ <<"auth-disabled">> => true },
+            WalletWithoutAuth =
+                hb_ao:set(
+                    Wallet,
+                    #{ <<"access-control">> => unset },
+                    Opts
+                ),
+            hb_cache:ensure_all_loaded(
+                hb_maps:flatten(
+                    hb_ao:set(
+                        WalletWithoutAuth,
+                        #{ <<"access-control">> => SanitizedAccessControl },
+                        Opts
+                    ),
+                    Opts
+                ),
+                Opts
+            );
+        error -> Wallet
+    end.
 
 %% @doc Convert a list of addresses to a binary string. If the input is a
 %% binary already, it is returned as-is.

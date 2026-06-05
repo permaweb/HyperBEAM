@@ -163,10 +163,10 @@ dedup_test() ->
     {ok, Msg5} = hb_ao:resolve(Msg4,
         #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
-    ?assertMatch(
-		#{ <<"result">> := <<"INIT+D2_+D3_+D2/+D3/">> },
-		Msg5
-	).
+    ?assertEqual(
+        <<"INIT+D2_+D3_+D2/+D3/">>,
+        hb_ao:get(<<"result">>, Msg5, #{})
+    ).
 
 dedup_with_multipass_test() ->
     % Create a stack with a dedup device and 2 devices that will append to a
@@ -193,9 +193,9 @@ dedup_with_multipass_test() ->
     {ok, Msg4} = hb_ao:resolve(Res, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     {ok, Msg5} = hb_ao:resolve(Msg4, #{ <<"path">> => <<"append">>, <<"bin">> => <<"/">> }, #{}),
     % Ensure that downstream devices have only seen each message once.
-	?assertMatch(
-		#{ <<"result">> := <<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">> },
-		Msg5
+	?assertEqual(
+		<<"INIT+D2_+D3_+D2_+D3_+D2/+D3/+D2/+D3/">>,
+		hb_ao:get(<<"result">>, Msg5, #{})
 	).
 
 generate_append_device(Separator) ->

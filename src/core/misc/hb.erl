@@ -230,7 +230,8 @@ topup(Node, Amount, Recipient, Wallet) ->
             <<"amount">> => Amount,
             <<"recipient">> => Recipient
         },
-        Wallet
+        #{ <<"priv-wallet">> => Wallet },
+        #{ <<"committed">> => [<<"amount">>, <<"recipient">>] }
     ),
     hb_http:get(Node, Message, #{}).
 

@@ -497,7 +497,7 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
     ErrorMsg =
         #{
-            <<"status">> => 500,
+            <<"status">> => error_status(Details),
             <<"type">> => hb_util:bin(hb_format:message(Type)),
             <<"details">> => DetailsStr,
             <<"stacktrace">> => StacktraceStr
@@ -525,6 +525,12 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
             <<"details">> => hb_format:truncate(hb_util:bin(hb_format:remove_noise(DetailsStr)), ErrorDetailsMaxSize)
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
+
+error_status({invalid_ans104_signature, _}) -> 400;
+error_status({invalid_tx_signature, _}) -> 400;
+error_status({invalid_commitment, _}) -> 400;
+error_status({invalid_commitments, _}) -> 400;
+error_status(_) -> 500.
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->

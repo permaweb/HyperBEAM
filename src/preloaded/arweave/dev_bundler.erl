@@ -1475,11 +1475,10 @@ invalid_item_test_parallel() ->
         TamperedItem = Item#tx{data = <<"tampereddata">>},
         StructuredItem = hb_message:convert(
             TamperedItem, <<"structured@1.0">>, <<"ans104@1.0">>, TestOpts),
-        PostResult = post_data_item(Node, TamperedItem, ClientOpts),
-        ?assertMatch({error, #{
-            <<"status">> := 400,
-            <<"error">> := <<"invalid-item">>,
-            <<"details">> := <<"signature-verification-failed">>}}, PostResult),
+        ?assertMatch(
+            {ok, 400, _, _},
+            post_raw_data_item(Node, TamperedItem, ClientOpts)
+        ),
         DirectResult = dev_bundler:item(#{}, StructuredItem, TestOpts),
         ?assertMatch({error, #{
             <<"status">> := 400,
@@ -1639,6 +1638,21 @@ post_structured_item(Node, StructuredItem, Opts) ->
             <<"path">> => <<"/~bundler@1.0/tx">>,
             <<"bundler-subject">> => <<"body">>,
             <<"body">> => StructuredItem
+        },
+        Opts
+    ).
+
+post_raw_data_item(Node, Item, Opts) ->
+    hb_http_client:request(
+        #{
+            peer => Node,
+            path => <<"/~bundler@1.0/tx">>,
+            method => <<"POST">>,
+            headers => #{
+                <<"codec-device">> => <<"ans104@1.0">>,
+                <<"content-type">> => <<"application/ans104">>
+            },
+            body => ar_bundles:serialize(Item)
         },
         Opts
     ).

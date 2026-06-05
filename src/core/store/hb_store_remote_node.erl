@@ -200,7 +200,7 @@ remote_write_value(Opts = #{ <<"node">> := Node }, Value) ->
         <<"method">> => <<"POST">>,
         <<"body">> => Value
     },
-    SignedMsg = hb_message:commit(Msg, Opts),
+    SignedMsg = commit_cache_request(Msg, [<<"body">>], Opts),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of
@@ -223,7 +223,11 @@ remote_link(Opts = #{ <<"node">> := Node }, Source, Destination) ->
         <<"source">> => Source,
         <<"destination">> => Destination
     },
-    SignedMsg = hb_message:commit(Msg, Opts),
+    SignedMsg = commit_cache_request(
+        Msg,
+        [<<"source">>, <<"destination">>],
+        Opts
+    ),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of
@@ -240,7 +244,7 @@ remote_group(Opts = #{ <<"node">> := Node }, Path) ->
         <<"method">> => <<"POST">>,
         <<"group">> => Path
     },
-    SignedMsg = hb_message:commit(Msg, Opts),
+    SignedMsg = commit_cache_request(Msg, [<<"group">>], Opts),
     case hb_http:post(Node, SignedMsg, Opts) of
         {ok, Response} ->
             case hb_ao:get(<<"status">>, Response, 0, #{}) of
@@ -250,6 +254,9 @@ remote_group(Opts = #{ <<"node">> := Node }, Path) ->
         {error, Err} ->
             {error, Err}
     end.
+
+commit_cache_request(Msg, CommittedKeys, Opts) ->
+    hb_message:commit(Msg, Opts, #{ <<"committed">> => CommittedKeys }).
 
 %%%--------------------------------------------------------------------
 %%% Tests

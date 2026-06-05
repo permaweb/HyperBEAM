@@ -581,8 +581,9 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
     PublicResult = without_snapshot(ResMaybeWithSnapshot, Opts),
     ?event(compute, {caching_result, {proc_id, ProcID}, {slot, Slot}}, Opts),
     CacheEdges = [{ProcID, slot_req(Slot)}, {ProcID, latest_req()}],
-    PublicCacheResult = hb_private:reset(PublicResult),
-    {ok, _} = hb_cache:write_result(CacheEdges, PublicCacheResult, Opts),
+    PublicCacheResult =
+        hb_message:uncommitted(hb_private:reset(PublicResult), Opts),
+    {ok, _} = write_process_result(CacheEdges, PublicCacheResult, Opts),
     {ok, _} =
         write_restore_edges(
             ProcID,
@@ -624,6 +625,16 @@ write_restore_edges(ProcID, Slot, Checkpoint, true, Opts) ->
     );
 write_restore_edges(_ProcID, _Slot, _Res, false, _Opts) ->
     {ok, skipped}.
+
+write_process_result(Edges, Res, Opts) ->
+    {ok, Path} = hb_cache:write(Res, Opts),
+    lists:foreach(
+        fun({Base, Req}) ->
+            ok = hb_cache:link_result(Base, Req, Path, Opts)
+        end,
+        Edges
+    ),
+    {ok, Path}.
 
 read_restore_checkpoint(ProcID, undefined, Opts) ->
     read_restore_checkpoint(ProcID, restore_req(), Opts);
@@ -862,7 +873,10 @@ ensure_loaded(Base, Req, Opts) ->
 
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
-    hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
+    hb_maps:flatten(
+        hb_ao:set(Msg, <<"snapshot">>, unset, Opts#{ <<"hashpath">> => ignore }),
+        Opts
+    ).
 
 %% @doc Format a compute response for the caller with its result payload inline.
 compute_response(Msg, _Req, Opts) ->

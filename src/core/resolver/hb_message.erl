@@ -958,14 +958,12 @@ commitment(ID, Msg) ->
     commitment(ID, Msg, #{}).
 commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
-commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
-        when is_binary(ID), is_map_key(ID, Commitments) ->
-    hb_maps:get(
-        ID,
-        Commitments,
-        not_found,
-        Opts
-    );
+commitment(ID, Msg, Opts) when is_binary(ID), is_map(Msg) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    case hb_maps:find(ID, Commitments, Opts) of
+        {ok, Commitment} -> Commitment;
+        error -> commitment(#{ <<"committer">> => ID }, Msg, Opts)
+    end;
 commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     UnsignedCommitments =
@@ -1003,7 +1001,8 @@ commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
-commitments(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
+commitments(Spec, Msg, Opts) when is_map(Msg) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     hb_maps:filtermap(
         fun(_ID, CommMsg) ->
             case match(Spec, CommMsg, primary, Opts) of

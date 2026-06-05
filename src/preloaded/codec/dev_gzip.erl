@@ -27,11 +27,14 @@ unzip(Base, _Req, Opts) ->
                         {unzipping_body, {size, byte_size(Body)}},
                         Opts
                     ),
-                    {ok,
-                        maps:remove(
-                            <<"content-encoding">>,
-                            Base#{ <<"body">> => zlib:gunzip(Body) }
-                        )}
+                    hb_ao:set(
+                        Base,
+                        #{
+                            <<"body">> => zlib:gunzip(Body),
+                            <<"content-encoding">> => unset
+                        },
+                        Opts
+                    )
             end;
         _ ->
             ?event(
@@ -46,14 +49,17 @@ unzip(Base, _Req, Opts) ->
 %% Add a `content-encoding' key with the value `gzip'.
 -spec zip(#{ body => binary(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ body := binary(), 'content-encoding' := binary(), _ => _ }} | {error, binary()}.
-zip(Base, _Req, _Opts) ->
+zip(Base, _Req, Opts) ->
     case maps:find(<<"body">>, Base) of
         {ok, Body} ->
-            {ok,
-                Base#{
+            hb_ao:set(
+                Base,
+                #{
                     <<"body">> => zlib:gzip(Body),
                     <<"content-encoding">> => <<"gzip">>
-                }};
+                },
+                Opts
+            );
         error ->
             {error, <<"No `body' key to zip found in message.">>}
     end.

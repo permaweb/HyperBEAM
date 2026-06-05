@@ -290,6 +290,9 @@ tabm_conversion_is_idempotent_test(_Codec, Opts) ->
     From = fun(M) -> hb_message:convert(M, <<"structured@1.0">>, tabm, Opts) end,
     To = fun(M) -> hb_message:convert(M, tabm, <<"structured@1.0">>, Opts) end,
     SimpleMsg = #{ <<"a">> => <<"x">>, <<"b">> => <<"y">>, <<"c">> => <<"z">> },
+    % This fixture is signed with `structured@1.0'/HTTPSig, so use an RSA
+    % wallet even when the surrounding codec matrix uses ANS-104 key types.
+    StructuredCommitOpts = Opts#{ <<"priv-wallet">> => hb:wallet() },
     ComplexMsg =
         #{
             <<"path">> => <<"schedule">>,
@@ -312,7 +315,7 @@ tabm_conversion_is_idempotent_test(_Codec, Opts) ->
                                     """
                                 >>
                         },
-                        Opts,
+                        StructuredCommitOpts,
                         <<"structured@1.0">>
                     )
             },
@@ -1331,7 +1334,7 @@ signed_with_inner_signed_message_test(Codec, Opts) ->
                         % For now, only `httpsig@1.0' supports stripping
                         % non-committed keys.
                         case is_device_codec(<<"httpsig@1.0">>, NestedCodec) of
-                            true -> #{ <<"f">> => 6, <<"g">> => 7};
+                            true -> #{ <<"f">> => <<"6">>, <<"g">> => <<"7">>};
                             false -> #{}
                         end
                     )

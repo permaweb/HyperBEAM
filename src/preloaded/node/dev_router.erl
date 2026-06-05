@@ -839,6 +839,28 @@ preprocess(Base, RawReq, Opts) ->
 
 %%% Tests
 
+all_parallel_test_() ->
+    SerialFuns = [
+        local_dynamic_router_test_parallel_,
+        dynamic_router_pricing_test_parallel_,
+        dynamic_router_test_parallel_,
+        dynamic_routing_by_performance_test_parallel_,
+        local_process_provider_test_parallel_
+    ],
+    SerialNames = [atom_to_list(Fun) || Fun <- SerialFuns],
+    SerialTests = [{Name, apply(?MODULE, Fun, [])}
+        || Fun <- SerialFuns,
+           Name <- [atom_to_list(Fun)]
+    ],
+    {inparallel, Tests} = hb_test_parallel:all(?MODULE),
+    ParallelTests = [
+        Test
+    ||
+        Test = {Name, _} <- Tests,
+        not lists:member(Name, SerialNames)
+    ],
+    {inorder, SerialTests ++ [{inparallel, ParallelTests}]}.
+
 test_provider_test_parallel_() ->
     {timeout, 30, fun test_provider/0}.
 test_provider() ->
@@ -1217,7 +1239,7 @@ dynamic_router_pricing() ->
             RouterNode,
             <<"/router2~node-process@1.0/now/at-slot">>,
             #{}
-        ),
+    ),
     ?assertEqual(ok, Status),
     LiveRouterOpts = hb_http_server:get_opts(#{ <<"http-server">> => RouterServerID }),
     ok = hb_http_server:set_opts(LiveRouterOpts#{ <<"on">> => RouterHook }),
@@ -1828,15 +1850,14 @@ add_route() ->
     Res =
         hb_http:post(
             Node,
-            hb_message:commit(
+            (hb_message:commit(
                 #{
-                    <<"path">> => <<"/~router@1.0/routes">>,
                     <<"template">> => <<"/some/new/path">>,
                     <<"node">> => <<"new">>,
                     <<"priority">> => 15
                 },
                 #{ <<"priv-wallet">> => Owner }
-            ),
+            ))#{ <<"path">> => <<"/~router@1.0/routes">> },
             #{}
         ),
     ?event({post_res, Res}),
@@ -1894,12 +1915,7 @@ request_hook_reroute_to_nearest() ->
             end,
             lists:seq(1, 3)
         ),
-    ?event(debug_test,
-        {res, {
-            {response, Res},
-            {signers, hb_message:signers(Res, Opts)}
-        }}
-    ),
+    ?event(debug_test, {res, {response, Res}}),
     HasValidSigner = lists:any(
         fun(Peer) ->
             lists:member(Peer, Res)

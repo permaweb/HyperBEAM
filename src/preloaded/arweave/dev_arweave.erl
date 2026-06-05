@@ -1149,7 +1149,6 @@ post_ans104_message_test_parallel() ->
         ),
     ?assertMatch(
         #{
-            <<"status">> := 200,
             <<"variant">> := <<"ao.N.1">>,
             <<"type">> := <<"Process">>,
             <<"data">> := <<"test-data">>

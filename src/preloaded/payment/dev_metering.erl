@@ -243,8 +243,12 @@ p4_response_charge_test() ->
             hb_http:get(
                 Node,
                 hb_message:commit(
-                    #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                    Opts#{ <<"priv-wallet">> => Wallet }
+                    #{
+                        <<"path">> => <<"/~p4@1.0/balance">>,
+                        <<"target">> => Address
+                    },
+                    Opts#{ <<"priv-wallet">> => Wallet },
+                    #{ <<"committed">> => [<<"target">>] }
                 ),
                 Opts
             ),

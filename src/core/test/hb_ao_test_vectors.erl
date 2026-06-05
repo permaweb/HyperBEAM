@@ -41,6 +41,12 @@ test_suite() ->
             fun continue_as_test/1},
         {as_commitments, "as commitment normalization",
             fun as_commitments_test/1},
+        {singleton_rewritten_path_commitments,
+            "singleton rewritten path commitments",
+            fun singleton_rewritten_path_commitments_test/1},
+        {singleton_rewritten_query_commitments,
+            "singleton rewritten query commitments",
+            fun singleton_rewritten_query_commitments_test/1},
         {multiple_as_subresolutions, "multiple as subresolutions",
             fun multiple_as_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
@@ -997,6 +1003,123 @@ as_commitments_test(RawOpts) ->
             OptsWithWallet
         )
     ).
+
+singleton_rewritten_path_commitments_test(RawOpts) ->
+    Opts = RawOpts#{ <<"priv-wallet">> => ar_wallet:new() },
+    Msg =
+        #{
+            <<"path">> => <<"/~simple-pay@1.0/topup">>,
+            <<"recipient">> => <<"alice">>,
+            <<"amount">> => 100
+        },
+    PathSigned =
+        hb_message:commit(
+            Msg,
+            Opts#{ <<"priv-wallet">> => ar_wallet:new() },
+            #{ <<"committed">> => [<<"path">>, <<"recipient">>] }
+        ),
+    Signed =
+        hb_message:commit(
+            PathSigned,
+            Opts#{ <<"priv-wallet">> => ar_wallet:new() },
+            #{ <<"committed">> => [<<"amount">>] }
+        ),
+    Parsed = singleton_messages(hb_singleton:from(Signed, Opts)),
+    ?assert(length(Parsed) > 0),
+    lists:foreach(
+        fun(ParsedMsg) ->
+            ?assertEqual([], commitments_with_key(<<"path">>, ParsedMsg, Opts)),
+            ?assertNotEqual([], commitments_with_key(<<"amount">>, ParsedMsg, Opts)),
+            ?assert(not has_nested_key(<<"original-request">>, ParsedMsg)),
+            ?assertMatch(
+                {ok, _},
+                hb_cache:write(
+                    ParsedMsg,
+                    Opts#{ <<"paranoid-verify">> => [cache_write] }
+                )
+            )
+        end,
+        Parsed
+    ).
+
+singleton_rewritten_query_commitments_test(RawOpts) ->
+    Opts = RawOpts#{ <<"priv-wallet">> => ar_wallet:new() },
+    Msg =
+        #{
+            <<"path">> => <<"/pay?amount+integer=200">>,
+            <<"recipient">> => <<"alice">>,
+            <<"amount">> => 100
+        },
+    AmountSigned =
+        hb_message:commit(
+            Msg,
+            Opts#{ <<"priv-wallet">> => ar_wallet:new() },
+            #{ <<"committed">> => [<<"amount">>] }
+        ),
+    Signed =
+        hb_message:commit(
+            AmountSigned,
+            Opts#{ <<"priv-wallet">> => ar_wallet:new() },
+            #{ <<"committed">> => [<<"recipient">>] }
+        ),
+    Parsed = singleton_messages(hb_singleton:from(Signed, Opts)),
+    ?assert(length(Parsed) > 0),
+    lists:foreach(
+        fun(ParsedMsg) ->
+            ?assertEqual(200, hb_maps:get(<<"amount">>, ParsedMsg, undefined, Opts)),
+            ?assertEqual([], commitments_with_key(<<"amount">>, ParsedMsg, Opts)),
+            ?assertNotEqual([], commitments_with_key(<<"recipient">>, ParsedMsg, Opts)),
+            ?assert(not has_nested_key(<<"original-request">>, ParsedMsg)),
+            ?assertMatch(
+                {ok, _},
+                hb_cache:write(
+                    ParsedMsg,
+                    Opts#{ <<"paranoid-verify">> => [cache_write] }
+                )
+            )
+        end,
+        Parsed
+    ).
+
+singleton_messages(Msgs) ->
+    lists:filtermap(
+        fun
+            ({as, _Dev, Msg}) when is_map(Msg) -> {true, Msg};
+            (Msg) when is_map(Msg) -> {true, Msg};
+            (_) -> false
+        end,
+        Msgs
+    ).
+
+commitments_with_key(Key, Msg, Opts) ->
+    NormKey = hb_ao:normalize_key(Key),
+    [
+        ID
+    ||
+        {ID, Commitment} <-
+            maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts)),
+        lists:member(NormKey, commitment_keys(Commitment, Opts))
+    ].
+
+commitment_keys(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, [], Opts),
+            Opts
+        )
+    ).
+
+has_nested_key(Key, Msg) when is_map(Msg) ->
+    maps:is_key(Key, Msg) orelse
+        lists:any(
+            fun({_K, Value}) -> has_nested_key(Key, Value) end,
+            maps:to_list(Msg)
+        );
+has_nested_key(Key, List) when is_list(List) ->
+    lists:any(fun(Value) -> has_nested_key(Key, Value) end, List);
+has_nested_key(_Key, _Value) ->
+    false.
 
 multiple_as_subresolutions_test(Opts) ->
     % Test that multiple as subresolutions in a sequence are handled correctly.
