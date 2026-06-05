@@ -660,24 +660,7 @@ get_chunk(Offset, Opts) ->
     % leaeve the header out and continue to search for a case where it is
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    case hb_store_arweave:store_from_opts(Opts) of
-        StoreOpts when is_map(StoreOpts) ->
-            CacheKey = <<"~arweave@2.9/chunk=", (hb_util:bin(Offset))/binary>>,
-            case hb_store_remote_node:read_local_cache(StoreOpts, CacheKey, Opts) of
-                {ok, Chunk} ->
-                    ?event(arweave_offsets, {chunk_cache_hit, {offset, Offset}}),
-                    {ok, hb_cache:ensure_all_loaded(Chunk, Opts)};
-                _ ->
-                    case request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts) of
-                        {ok, Chunk} = Res ->
-                            hb_store_remote_node:maybe_cache(StoreOpts, Chunk, [CacheKey]),
-                            Res;
-                        Res -> Res
-                    end
-            end;
-        _ ->
-            request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts)
-    end.
+    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
