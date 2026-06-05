@@ -1326,25 +1326,31 @@ find_target_id(Base, Req, Opts) ->
             % ID found at Req/target
             Target;
         _ ->
-            case hb_ao:resolve(Req, <<"type">>, TempOpts) of
-                {ok, <<"Process">>} ->
-                    % Req is a Process, so the ID is at Req/id
-                    lib_process:process_id(Req, #{}, Opts);
+            case hb_ao:resolve(Req, <<"process-id">>, TempOpts) of
+                {ok, ProcID} ->
+                    % ID found at Req/process-id
+                    ProcID;
                 _ ->
-                    case hb_ao:resolve(Base, <<"process">>, TempOpts) of
-                        {ok, _Process} ->
-                            lib_process:process_id(Base, #{}, Opts);
+                    case hb_ao:resolve(Req, <<"type">>, TempOpts) of
+                        {ok, <<"Process">>} ->
+                            % Req is a Process, so the ID is at Req/id
+                            lib_process:process_id(Req, #{}, Opts);
                         _ ->
-                            % Does the message have a type of process?
-                            case hb_ao:get(<<"type">>, Base, TempOpts) of
-                                <<"Process">> ->
-                                    % Yes: Base is the process.
+                            case hb_ao:resolve(Base, <<"process">>, TempOpts) of
+                                {ok, _Process} ->
                                     lib_process:process_id(Base, #{}, Opts);
                                 _ ->
-                                    % No: Req is the target process.
-                                    lib_process:process_id(Req, #{}, Opts)
+                                    % Does the message have a type of process?
+                                    case hb_ao:get(<<"type">>, Base, TempOpts) of
+                                        <<"Process">> ->
+                                            % Yes: Base is the process.
+                                            lib_process:process_id(Base, #{}, Opts);
+                                        _ ->
+                                            % No: Req is the target process.
+                                            lib_process:process_id(Req, #{}, Opts)
+                                    end
                             end
-                end
+                    end
             end
     end,
     ?event({found_id, {id, Res}, {base, Base}, {req, Req}}),

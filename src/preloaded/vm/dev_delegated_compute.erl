@@ -20,11 +20,11 @@ init(Base, _Req, _Opts) ->
 -spec normalize(#{ snapshot => #{ type => binary(), data => _, _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | #{ _ => _ }.
 normalize(Base, _Req, Opts) ->
-    case maps:find(<<"snapshot">>, Base) of
+    case hb_maps:find(<<"snapshot">>, Base, Opts) of
         error -> {ok, Base};
         {ok, Snapshot} ->
-            Unset = maps:remove(<<"snapshot">>, Base),
-            case maps:get(<<"type">>, Snapshot, undefined) == <<"Checkpoint">> of
+            Unset = hb_ao:set(Base, #{ <<"snapshot">> => unset }, Opts),
+            case hb_maps:get(<<"type">>, Snapshot, Opts) == <<"Checkpoint">> of
                 false -> Unset;
                 true ->
                     load_state(Snapshot, Opts),
@@ -35,8 +35,8 @@ normalize(Base, _Req, Opts) ->
 %% @doc Attempt to load a snapshot into the delegated compute server.
 load_state(Snapshot, Opts) ->
     ?event(debug_load_snapshot, {loading_snapshot, {snapshot, Snapshot}}),
-    Body = maps:get(<<"data">>, Snapshot),
-    Headers = maps:remove(<<"data">>, Snapshot),
+    Body = hb_maps:get(<<"data">>, Snapshot, Opts),
+    Headers = hb_maps:without([<<"data">>], Snapshot, Opts),
     Res = do_relay(
         <<"POST">>,
         <<"/state">>,
@@ -71,14 +71,14 @@ compute(Base, Req, Opts) ->
     ProcessID = get_process_id(Base, Req, Opts),
     % If request is an assignment, we will compute the result
     % Otherwise, it is a dryrun
-    Type = maps:get(<<"type">>, Req, not_found),
+    Type = hb_ao:get(<<"type">>, Req, not_found, Opts),
     ?event({doing_delegated_compute, {req, Req}, {type, Type}}),
     % Execute the compute via external CU
     {Slot, Res} =
         case Type of
             <<"Assignment">> ->
                 {
-                    maps:get(<<"slot">>, Req),
+                    hb_ao:get(<<"slot">>, Req, Opts),
                     do_compute(ProcessID, Req, Opts)
                 };
             _ ->
@@ -89,7 +89,7 @@ compute(Base, Req, Opts) ->
 %% @doc Execute computation on a remote machine via relay and the JSON-Iface.
 do_compute(ProcID, Req, Opts) ->
     ?event({do_compute_msg, {req, Req}}),
-    Slot = maps:get(<<"slot">>, Req),
+    Slot = hb_ao:get(<<"slot">>, Req, Opts),
     {ok, AOS2 = #{ <<"body">> := Body }} =
         assignment_to_aos2(ProcID, Req, false, Opts),
     ?event({do_compute_body, {aos2, {string, Body}}}),
@@ -199,7 +199,12 @@ do_dryrun(ProcID, Req, Opts) ->
 
 do_relay(Method, Path, Body, Headers, Opts) ->
     ContentType =
-        maps:get(<<"content-type">>, Headers, <<"application/json">>),
+        hb_maps:get(
+            <<"content-type">>,
+            Headers,
+            <<"application/json">>,
+            Opts
+        ),
     hb_ao:resolve(
         #{
             <<"device">> => <<"relay@1.0">>,
@@ -210,6 +215,7 @@ do_relay(Method, Path, Body, Headers, Opts) ->
             <<"target">> => <<"payload">>,
             <<"payload">> =>
                 Headers#{
+                    <<"peer">> => genesis_wasm_peer(Opts),
                     <<"path">> => Path,
                     <<"method">> => Method,
                     <<"body">> => Body,
@@ -219,6 +225,10 @@ do_relay(Method, Path, Body, Headers, Opts) ->
         Opts
     ).
 
+genesis_wasm_peer(Opts) ->
+    Port = hb_util:int(hb_opts:get(genesis_wasm_port, 6363, Opts)),
+    <<"http://localhost:", (integer_to_binary(Port))/binary>>.
+
 %% @doc Extract the JSON response from the delegated compute response.
 extract_json_res(Response, Opts) ->
     case Response of 
@@ -226,7 +236,7 @@ extract_json_res(Response, Opts) ->
             JSONRes = hb_ao:get(<<"body">>, Res, Opts),
             ?event({
                 delegated_compute_res_metadata,
-                {req, maps:remove(<<"body">>, Res)}
+                {req, hb_maps:without([<<"body">>], Res, Opts)}
             }),
             {ok, JSONRes};
         {Err, Error} when Err == error; Err == failure ->
@@ -236,7 +246,7 @@ extract_json_res(Response, Opts) ->
 get_process_id(Base, Req, Opts) ->
     RawProcessID = lib_process:process_id(Base, #{}, Opts),
     case RawProcessID of
-        not_found -> maps:get(<<"process-id">>, Req);
+        not_found -> hb_ao:get(<<"process-id">>, Req, Opts);
         ProcID -> ProcID
     end.
 
@@ -292,6 +302,7 @@ snapshot(Msg, Req, Opts) ->
             #{
                 <<"path">> => <<"call">>,
                 <<"relay-method">> => <<"POST">>,
+                <<"peer">> => genesis_wasm_peer(Opts),
                 <<"relay-path">> => <<"/snapshot/", ProcID/binary>>,
                 <<"content-type">> => <<"application/json">>,
                 <<"body">> => <<"{}">>
