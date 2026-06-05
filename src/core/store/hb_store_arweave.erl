@@ -71,7 +71,7 @@ type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
     {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, Opts) ->
+read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
@@ -99,6 +99,10 @@ read_offset(_, _, _) -> not_found.
 read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID, StoreOpts) of
         {ok, Message} ->
+            ?event(
+                arweave_offsets,
+                {local_store_hit, {id, {explicit, ID}}}
+            ),
             {ok, Message};
         _ ->
             case do_read(StoreOpts, ID, StoreOpts) of
