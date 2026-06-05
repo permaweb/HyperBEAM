@@ -665,6 +665,7 @@ get_chunk(Offset, Opts) ->
             CacheKey = <<"~arweave@2.9/chunk=", (hb_util:bin(Offset))/binary>>,
             case hb_store_remote_node:read_local_cache(StoreOpts, CacheKey, Opts) of
                 {ok, Chunk} ->
+                    ?event(arweave_offsets, {chunk_cache_hit, {offset, Offset}}),
                     {ok, hb_cache:ensure_all_loaded(Chunk, Opts)};
                 _ ->
                     case request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts) of
