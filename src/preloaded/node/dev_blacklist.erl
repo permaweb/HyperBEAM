@@ -208,17 +208,14 @@ collect_ids(Msg, Opts) -> lists:usort(collect_ids(Msg, [], Opts)).
 collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
 collect_ids(Bin, Acc, _Opts) when is_binary(Bin) -> Acc;
 collect_ids({as, _, Msg}, Acc, Opts) -> collect_ids(Msg, Acc, Opts);
-collect_ids({link, ID, _}, Acc, _Opts) when ?IS_ID(ID) ->
-    [hb_util:human_id(ID) | Acc];
+collect_ids({link, Path, _}, Acc, _Opts) ->
+    collect_path_id(Path, Acc);
 collect_ids(Msg, Acc, Opts) when is_map(Msg) ->
-    case hb_maps:get(<<"path">>, Msg, undefined, Opts) of
-        Path when ?IS_ID(Path) -> [hb_util:human_id(Path)];
-        _ -> []
-    end ++
-    hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) ++
-    hb_maps:fold(
+    Acc1 = collect_ids(maps:get(<<"path">>, Msg, undefined), Acc, Opts),
+    Acc2 = collect_commitment_ids(maps:get(<<"commitments">>, Msg, #{}), Acc1, Opts),
+    maps:fold(
         fun(_Key, Value, AccIn) -> collect_ids(Value, AccIn, Opts) end,
-        Acc,
+        Acc2,
         Msg
     );
 collect_ids(List, Acc, Opts) when is_list(List) ->
@@ -228,6 +225,25 @@ collect_ids(List, Acc, Opts) when is_list(List) ->
         List
     );
 collect_ids(_Other, Acc, _Opts) -> Acc.
+
+collect_path_id(Path, Acc) when ?IS_ID(Path) ->
+    [hb_util:human_id(Path) | Acc];
+collect_path_id(Path, Acc) when is_binary(Path) ->
+    case binary:split(Path, <<"/">>) of
+        [ID | _] when ?IS_ID(ID) -> [hb_util:human_id(ID) | Acc];
+        _ -> Acc
+    end;
+collect_path_id(_Path, Acc) ->
+    Acc.
+
+collect_commitment_ids(Commitments, Acc, _Opts) when is_map(Commitments) ->
+    lists:foldl(
+        fun(Key, AccIn) -> collect_path_id(Key, AccIn) end,
+        Acc,
+        maps:keys(Commitments)
+    );
+collect_commitment_ids(Commitments, Acc, Opts) ->
+    collect_ids(Commitments, Acc, Opts).
 
 %% @doc Insert a list of IDs into the cache table, returning the number of new IDs
 %% inserted. Each ID is inserted as a key with the current timestamp as the value.
