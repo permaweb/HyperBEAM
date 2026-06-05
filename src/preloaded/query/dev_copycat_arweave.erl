@@ -595,13 +595,9 @@ fetch_blocks_ranged(Current, To, TargetDepth, Workers, Opts) ->
     hb_pmap:parallel_map(
         Heights,
         fun(H) ->
-                case hb_store_arweave:is_block_indexed(H, TargetDepth, Opts) of
-                true -> ok;
-                false ->
-                    observe_event(<<"block_indexed">>, fun() ->
-                        fetch_and_process_block(H, To, TargetDepth, Opts)
-                    end)
-            end
+            observe_event(<<"block_indexed">>, fun() ->
+                fetch_and_process_block(H, To, TargetDepth, Opts)
+            end)
         end,
         Workers
     ),
