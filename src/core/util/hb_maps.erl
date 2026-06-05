@@ -124,13 +124,76 @@ flatten(Map, Opts) ->
             case maps:find(<<"...">>, Loaded) of
                 error -> Loaded;
                 {ok, Ext} ->
+                    FlatExt = flatten(Ext, Opts),
+                    Own = maps:remove(<<"...">>, Loaded),
+                    ChangedKeys = changed_extension_keys(FlatExt, Own, Opts),
                     maps:merge(
-                        flatten(Ext, Opts),
-                        maps:remove(<<"...">>, Loaded)
+                        drop_commitments_for_keys(FlatExt, ChangedKeys, Opts),
+                        drop_commitments_for_keys(Own, ChangedKeys, Opts)
                     )
             end;
         Loaded -> Loaded
     end.
+
+changed_extension_keys(FlatBase, Own, Opts) ->
+    lists:filter(
+        fun(Key) ->
+            case maps:find(Key, FlatBase) of
+                error ->
+                    false;
+                {ok, BaseValue} ->
+                    OwnValue = maps:get(Key, Own),
+                    materialized_message_link(BaseValue, OwnValue)
+                        orelse not equivalent_value(BaseValue, OwnValue, Opts)
+            end
+        end,
+        maps:keys(maps:without([<<"commitments">>, <<"priv">>], Own))
+    ).
+
+materialized_message_link(
+    {link, _ID, #{ <<"type">> := <<"link">> }},
+    Value
+) when is_map(Value); is_list(Value) ->
+    true;
+materialized_message_link(_BaseValue, _OwnValue) ->
+    false.
+
+equivalent_value(BaseValue, OwnValue, Opts) ->
+    try
+        hb_cache:ensure_loaded(BaseValue, Opts)
+            =:= hb_cache:ensure_loaded(OwnValue, Opts)
+    catch
+        _:_ -> BaseValue =:= OwnValue
+    end.
+
+drop_commitments_for_keys(Msg, [], _Opts) ->
+    Msg;
+drop_commitments_for_keys(Msg, Keys, Opts) ->
+    case maps:find(<<"commitments">>, Msg) of
+        error ->
+            Msg;
+        {ok, Commitments} ->
+            Filtered =
+                maps:filter(
+                    fun(_ID, Commitment) ->
+                        not intersects(committed_keys(Commitment, Opts), Keys)
+                    end,
+                    Commitments
+                ),
+            Msg#{ <<"commitments">> => Filtered }
+    end.
+
+committed_keys(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            maps:get(<<"committed">>, Commitment, []),
+            Opts
+        )
+    ).
+
+intersects(A, B) ->
+    lists:any(fun(Item) -> lists:member(Item, B) end, A).
 
 -spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
 put(Key, Value, Map) ->

@@ -43,7 +43,11 @@
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _} | pid().
 push(Base, Req, Opts) ->
-    Process = lib_process:as_process(Base, Opts),
+    Process =
+        lib_process:as_process(
+            lib_process:ensure_process_key(Base, Opts),
+            Opts
+        ),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
     case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
         no_slot ->
@@ -114,10 +118,10 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     {Status, Result} =
         try
             hb_ao:resolve(
-                {as, <<"process@1.0">>, PrimaryProcess},
-                    #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
-                    Opts#{ <<"hashpath">> => ignore }
-                )
+                PrimaryProcess,
+                #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
+                Opts#{ <<"hashpath">> => ignore }
+            )
         catch
             Class:Reason:Trace ->
                 ?event(
@@ -183,7 +187,13 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     case {Status, hb_ao:get(<<"outbox">>, Result, #{}, Opts)} of
         {ok, NoResults} when ?IS_EMPTY_MESSAGE(NoResults) ->
             ?event(push_short, {done, {process, {string, ID}}, {slot, Slot}}),
-            {ok, AdditionalRes#{ <<"slot">> => Slot, <<"process">> => ID }};
+            {ok,
+                push_response(
+                    AdditionalRes,
+                    #{ <<"slot">> => Slot, <<"process">> => ID },
+                    Opts
+                )
+            };
         {ok, Outbox} ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
@@ -249,14 +259,28 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                     ),
                     Opts
                 ),
-            {ok, maps:merge(Downstream, AdditionalRes#{
-                <<"slot">> => Slot,
-                <<"process">> => ID
-            })};
+            {ok,
+                push_response(
+                    AdditionalRes,
+                    maps:merge(
+                        Downstream,
+                        #{ <<"slot">> => Slot, <<"process">> => ID }
+                    ),
+                    Opts
+                )
+            };
         {Err, Error} when Err == error; Err == failure ->
             ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
             {error, Error}
     end.
+
+push_response(Base, Extra, Opts) ->
+    BaseWithoutCommitments =
+        maps:remove(
+            <<"commitments">>,
+            hb_maps:flatten(hb_message:uncommitted(Base, Opts), Opts)
+        ),
+    hb_message:uncommitted(maps:merge(BaseWithoutCommitments, Extra), Opts).
 
 target_process_not_found(Target) ->
     #{
@@ -542,7 +566,7 @@ calculate_base_id(GivenProcess, Opts) ->
             )
         of
             not_found -> GivenProcess;
-            Proc -> Proc
+            Proc -> canonical_process(Proc, Opts)
         end,
     BaseProcess =
         hb_ao:set(
@@ -558,6 +582,14 @@ calculate_base_id(GivenProcess, Opts) ->
         ),
     ?event(debug_base, {push_generated_base, {id, BaseID}, {base, BaseProcess}}),
     BaseID.
+
+canonical_process(Process = #{ <<"...">> := Parent }, Opts) ->
+    case hb_message:verify(Process, all, Opts) of
+        true -> Process;
+        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
+    end;
+canonical_process(Process, _Opts) ->
+    Process.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
 %% If the remote scheduler does not support the given codec, it will be
@@ -662,19 +694,22 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
 augment_message(Origin, ToSched, Opts) ->
     ?event(push, {adding_keys, {origin, Origin}, {to, ToSched}}, Opts),
     hb_message:uncommitted(
-        hb_ao:set(
-            ToSched,
-            #{
-                <<"data-protocol">> => <<"ao">>,
-                <<"variant">> => <<"ao.N.1">>,
-                <<"type">> => <<"Message">>,
-                <<"from-process">> => maps:get(<<"process">>, Origin),
-                <<"from-uncommitted">> => maps:get(<<"from-uncommitted">>, Origin),
-                <<"from-base">> => maps:get(<<"from-base">>, Origin),
-                <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
-                <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
-            },
-            Opts#{ <<"hashpath">> => ignore }
+        hb_maps:flatten(
+            hb_ao:set(
+                ToSched,
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"Message">>,
+                    <<"from-process">> => maps:get(<<"process">>, Origin),
+                    <<"from-uncommitted">> => maps:get(<<"from-uncommitted">>, Origin),
+                    <<"from-base">> => maps:get(<<"from-base">>, Origin),
+                    <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
+                    <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
+                },
+                Opts#{ <<"hashpath">> => ignore }
+            ),
+            Opts
         )
     ).
 
@@ -778,7 +813,21 @@ commit_result(Msg, Committers, Codec, Opts) ->
 
 %% @doc Push a message or a process, prior to pushing the resulting slot number.
 schedule_initial_message(Base, Req, Opts) ->
-    ModReq = Req#{ <<"path">> => <<"schedule">>, <<"method">> => <<"POST">> },
+    ToSchedule =
+        case hb_ao:get(<<"body">>, Req, not_found, Opts#{ <<"hashpath">> => ignore }) of
+            Body when is_map(Body) ->
+                case is_signed_message(Body, Opts) of
+                    true -> Body;
+                    false -> Req
+                end;
+            _ -> Req
+        end,
+    ModReq =
+        #{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> => ToSchedule
+        },
     ?event(push, {initial_push, {base, Base}, {req, ModReq}}, Opts),
     case hb_ao:resolve(Base, ModReq, Opts) of
         {ok, Res} ->
@@ -794,6 +843,14 @@ schedule_initial_message(Base, Req, Opts) ->
         {error, Res} ->
             ?event(push, {initial_push_error, {error, Res}}, Opts),
             {error, Res}
+    end.
+
+is_signed_message(Msg, Opts) ->
+    try
+        length(hb_message:signers(Msg, Opts)) > 0
+            andalso hb_message:verify(Msg, signers, Opts)
+    catch _:_ ->
+        false
     end.
 
 remote_schedule_result(Location, SignedReq, Opts) ->

@@ -135,18 +135,29 @@ verify(Base, Request, RawOpts) ->
     ?event({verify_finding_key, {priv_base, Base}, {priv_request, Request}}),
     case find_secret(Request, Opts) of
         {ok, Secret} ->
-            hb_ao:resolve(
-                #{ <<"device">> => <<"httpsig@1.0">> },
-                Request#{
-                    <<"path">> => <<"proxy-verify">>,
-                    <<"secret">> => hb_util:decode(Secret),
-                    <<"message">> => Base
-                },
-                Opts
-            );
-        {error, Err} ->
-            {error, Err}
+            verify_with_secret(Secret, Base, Request, Opts);
+        {error, _} ->
+            SecretRes =
+                case maps:find(<<"committer">>, Request) of
+                    {ok, Committer} -> find_secret(Committer, Base, Opts);
+                    error -> find_secret(Base, Opts)
+                end,
+            case SecretRes of
+                {ok, Secret} -> verify_with_secret(Secret, Base, Request, Opts);
+                {error, Err} -> {error, Err}
+            end
     end.
+
+verify_with_secret(Secret, Base, Request, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"httpsig@1.0">> },
+        Request#{
+            <<"path">> => <<"proxy-verify">>,
+            <<"secret">> => hb_util:decode(Secret),
+            <<"message">> => Base
+        },
+        Opts
+    ).
 
 %% @doc Generate a new secret key for the given request. The user may specify
 %% a generator function in the request, which will be executed to generate the

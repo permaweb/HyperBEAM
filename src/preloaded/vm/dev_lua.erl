@@ -3,7 +3,7 @@
 -implements(<<"lua@5.3a">>).
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
--export([encode/2, decode/2]).
+-export([encode/2, decode/2, encode_value/3]).
 -export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -305,20 +305,15 @@ compute(Key, RawBase, RawReq, Opts) ->
             Opts#{ <<"hashpath">> => ignore }
         ),
     ?event(debug_lua, function_found),
-    Params =
-        hb_ao:get_first(
-            [
-                {Req, <<"body/parameters">>},
-                {Req, <<"parameters">>},
-                {{as, <<"message@1.0">>, Base}, <<"parameters">>}
-            ],
-            [
-                hb_private:reset(Base),
-                Req,
-                #{}
-            ],
-            Opts#{ <<"hashpath">> => ignore }
-        ),
+    ParamSources =
+        [
+            {Req, <<"body/parameters">>},
+            {Req, <<"parameters">>},
+            {{as, <<"message@1.0">>, Base}, <<"parameters">>}
+        ],
+    DefaultParams = [hb_private:reset(Base), Req, #{}],
+    Params = hb_ao:get_first(ParamSources, DefaultParams, Opts#{ <<"hashpath">> => ignore }),
+    ExplicitParams = has_explicit_params(Req, Base),
     ?event(debug_lua, parameters_found),
     % Resolve all hyperstate links
     ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
@@ -330,18 +325,107 @@ compute(Key, RawBase, RawReq, Opts) ->
             {req, Req}
         }
     ),
-    process_response(
-        try luerl:call_function_dec(
-            [Function],
-            encode(ResolvedParams, Opts),
-            State
-        )
-        catch
-            _:Reason:Stacktrace -> {error, Reason, Stacktrace}
+    Response =
+        case ExplicitParams of
+            false ->
+                try luerl:call_function_dec(
+                    [Function],
+                    encode(ResolvedParams, Opts),
+                    State
+                )
+                catch
+                    _:Reason:Stacktrace -> {error, Reason, Stacktrace}
+                end;
+            true ->
+                call_lua_function(Function, ResolvedParams, State, Opts)
         end,
+    process_response(
+        Response,
         OldPriv,
 		Opts
     ).
+
+%% @doc Check whether Lua parameters were explicitly supplied.
+has_explicit_params(Req, Base) ->
+    has_body_params(Req)
+        orelse (is_map(Req) andalso maps:is_key(<<"parameters">>, Req))
+        orelse (is_map(Base) andalso maps:is_key(<<"parameters">>, Base)).
+
+has_body_params(Req) when is_map(Req) ->
+    case maps:get(<<"body">>, Req, not_found) of
+        Body when is_map(Body) -> maps:is_key(<<"parameters">>, Body);
+        _ -> false
+    end;
+has_body_params(_Req) ->
+    false.
+
+%% @doc Call a Lua function with AO-aware explicit-parameter encoding.
+call_lua_function(Function, Params, State, Opts) ->
+    {EncodedParams, State2} = encode_params(Params, State, Opts),
+    ?event(debug_lua, {encoded_args, {luerl_args, EncodedParams}, {state, State2}}),
+    try
+        case luerl:call_function([Function], EncodedParams, State2) of
+            {ok, Res, State3} ->
+                {ok, luerl:decode_list(Res, State3), State3};
+            LuaError ->
+                LuaError
+        end
+    catch
+        _:Reason:Stacktrace -> {error, Reason, Stacktrace}
+    end.
+
+%% @doc Encode a list of parameters for a Lua function call.
+encode_params([], State, _Opts) ->
+    {[], State};
+encode_params([Base | Rest], State, Opts) ->
+    {EncodedBase, State1} = encode_value(Base, State, Opts),
+    {EncodedRest, State2} =
+        lists:mapfoldl(
+            fun(Param, AccState) -> encode_plain_value(Param, AccState, Opts) end,
+            State1,
+            Rest
+        ),
+    {[EncodedBase | EncodedRest], State2}.
+
+%% @doc Encode a value with ordinary Lua table semantics.
+encode_plain_value(Value, State, Opts) ->
+    luerl:encode(do_encode(Value, Opts), State).
+
+%% @doc Recursively encode a single Erlang value for Lua.
+encode_value(Value, State, Opts) when is_list(Value) ->
+    encode_list(Value, State, Opts);
+encode_value(Value, State, Opts) when is_map(Value) ->
+    encode_table(Value, State, Opts);
+encode_value(Value, State, Opts) ->
+    luerl:encode(do_encode(Value, Opts), State).
+
+%% @doc Encode a list of values as a Lua table.
+encode_list(List, State, Opts) ->
+    {EncodedElems, State1} =
+        lists:mapfoldl(
+            fun(Elem, AccState) -> encode_value(Elem, AccState, Opts) end,
+            State,
+            List
+        ),
+    Indexed = lists:zip(lists:seq(1, length(EncodedElems)), EncodedElems),
+    luerl_heap:alloc_table(Indexed, State1).
+
+%% @doc Encode a map as a Lua table with AO-Core metatable semantics.
+encode_table(Table, State, Opts) ->
+    LoadedTable = hb_cache:ensure_all_loaded(hb_maps:flatten(Table, Opts), Opts),
+    {Entries, State1} =
+        lists:mapfoldl(
+            fun({K, V}, AccState) ->
+                {EncodedK, KeyState} = luerl:encode(do_encode(K, Opts), AccState),
+                {EncodedV, NextState} = encode_value(V, KeyState, Opts),
+                {{EncodedK, EncodedV}, NextState}
+            end,
+            State,
+            maps:to_list(LoadedTable)
+        ),
+    {TableRef, State2} = luerl_heap:alloc_table(Entries, State1),
+    {MetaRef, State3} = dev_lua_lib:make_table_meta(State2, Opts),
+    {TableRef, luerl_heap:set_metatable(TableRef, MetaRef, State3)}.
 
 %% @doc Process a response to a Luerl invocation. Returns the typical AO-Core
 %% HyperBEAM response format.
@@ -680,6 +764,109 @@ direct_benchmark_test() ->
         Iterations,
         BenchTime
     ).
+
+lua_trie_metatable_test() ->
+    Opts = #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    },
+    {ok, Script} = file:read_file("test/test.lua"),
+    Trie = hb_ao:set(
+        #{ <<"device">> => <<"trie@1.0">> },
+        #{
+            <<"toronto">> => 42,
+            <<"to">> => 1,
+            <<"tor">> => 2,
+            <<"torrent">> => 3
+        },
+        Opts
+    ),
+    LuaMsg =
+        #{
+            <<"device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        },
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                LuaMsg,
+                #{
+                    <<"path">> => <<"trie_metatable_test">>,
+                    <<"parameters">> => [Trie, #{}, #{}]
+                }
+            ],
+            Opts
+        ),
+    ?assertEqual(1, hb_ao:get(<<"to">>, Res, Opts)),
+    ?assertEqual(2, hb_ao:get(<<"tor">>, Res, Opts)),
+    ?assertEqual(3, hb_ao:get(<<"torrent">>, Res, Opts)),
+    % "toro" was set to the fetched toronto value.
+    ?assertEqual(42, hb_ao:get(<<"toro">>, Res, Opts)),
+    % "toronto" was set to 100, overwriting the original.
+    ?assertEqual(100, hb_ao:get(<<"toronto">>, Res, Opts)),
+    % Assert that the table is still in trie form. Toro will be nested.
+    ?assertNot(maps:is_key(<<"toro">>, Res)).
+
+lua_map_metatable_overwrite_test() ->
+    Opts = #{
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    },
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base =
+        #{
+            <<"device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        },
+    Params =
+        [
+            #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 3 },
+            #{},
+            #{}
+        ],
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                #{
+                    <<"path">> => <<"map_metatable_overwrite_test">>,
+                    <<"parameters">> => Params
+                }
+            ],
+            Opts
+        ),
+    ?assertEqual(100, hb_ao:get(<<"a">>, Res, Opts)),
+    ?assertEqual(2, hb_ao:get(<<"b">>, Res, Opts)),
+    ?assertEqual(3, hb_ao:get(<<"c">>, Res, Opts)),
+    ?assertEqual(4, hb_ao:get(<<"d">>, Res, Opts)).
+
+lua_metatable_get_now_test() ->
+    Process = generate_lua_process("test/test.lua", #{}),
+    {ok, _} = hb_cache:write(Process, #{}),
+    Message = generate_test_message(Process, #{}, <<"return 1+1">>),
+    lists:foreach(
+        fun(_) -> hb_ao:resolve(Process, Message, #{}) end,
+        lists:seq(1, 15)
+    ),
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                Process#{ <<"device">> => <<"lua@5.3a">> },
+                #{
+                    <<"path">> => <<"get_now_test">>,
+                    <<"parameters">> => [Process, #{}, #{}]
+                }
+            ],
+            #{}
+        ),
+    ?assert(hb_ao:get(<<"executed_now">>, Res, #{})),
+    ?assertMatch(14, hb_ao:get(<<"found_now/at-slot">>, Res, #{})).
 
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.

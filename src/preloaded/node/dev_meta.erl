@@ -323,11 +323,14 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
 
 %% @doc Wrap the result of a device call in a status.
 embed_status({ErlStatus, Res}, NodeMsg) when is_map(Res) ->
-    case lists:member(<<"status">>, hb_message:committed(Res, all, NodeMsg)) of
-        false ->
+    Committed = hb_message:committed(Res, all, NodeMsg),
+    case {lists:member(<<"status">>, Committed), Committed} of
+        {true, _} ->
+            {ok, Res};
+        {false, []} ->
             HTTPCode = status_code({ErlStatus, Res}, NodeMsg),
             {ok, Res#{ <<"status">> => HTTPCode }};
-        true ->
+        {false, _} ->
             {ok, Res}
     end;
 embed_status({ErlStatus, Res}, NodeMsg) ->
@@ -545,13 +548,10 @@ authorized_set_node_msg_succeeds_test() ->
     {ok, SetRes} =
         hb_http:post(
             Node,
-            hb_message:commit(
-                #{
-                    <<"path">> => <<"/~meta@1.0/info">>,
-                    <<"test-config-item">> => <<"test2">>
-                },
+            (hb_message:commit(
+                #{ <<"test-config-item">> => <<"test2">> },
                 Opts#{ <<"priv-wallet">> => Owner }
-            ),
+            ))#{ <<"path">> => <<"/~meta@1.0/info">> },
             Opts
         ),
     ?event({res, SetRes}),
@@ -629,13 +629,10 @@ claim_node_test() ->
     {ok, SetRes} =
         hb_http:post(
             Node,
-            hb_message:commit(
-                #{
-                    <<"path">> => <<"/~meta@1.0/info">>,
-                    <<"operator">> => hb_util:human_id(Address)
-                },
+            (hb_message:commit(
+                #{ <<"operator">> => hb_util:human_id(Address) },
                 Opts#{ <<"priv-wallet">> => Owner}
-            ),
+            ))#{ <<"path">> => <<"/~meta@1.0/info">> },
             Opts
         ),
     ?event({res, SetRes}),
@@ -645,13 +642,10 @@ claim_node_test() ->
     {ok, SetRes2} =
         hb_http:post(
             Node,
-            hb_message:commit(
-                #{
-                    <<"path">> => <<"/~meta@1.0/info">>,
-                    <<"test-config-item">> => <<"test2">>
-                },
+            (hb_message:commit(
+                #{ <<"test-config-item">> => <<"test2">> },
                 Opts#{ <<"priv-wallet">> => Owner }
-            ),
+            ))#{ <<"path">> => <<"/~meta@1.0/info">> },
             Opts
         ),
     ?event({res, SetRes2}),

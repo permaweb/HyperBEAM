@@ -12,6 +12,16 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
+-define(DEFAULT_RESPONSE_FILTER_KEYS, [
+    <<"access-control-allow-headers">>,
+    <<"access-control-allow-methods">>,
+    <<"access-control-allow-origin">>,
+    <<"access-control-expose-headers">>,
+    <<"content-length">>,
+    <<"date">>,
+    <<"server">>,
+    <<"transfer-encoding">>
+]).
 
 start() ->
     init_prometheus(),
@@ -279,23 +289,67 @@ outbound_result_to_message(Codec, Status, Headers, Body, Opts) ->
 
 %% @doc Convert a HTTP response to a httpsig message.
 http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
-    BinStatus = hb_util:bin(Status),
     BodyMap = case byte_size(Body) of
         0 -> #{};
         _ -> #{ <<"body">> => Body }
     end,
     ConvertFrom = 
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => BinStatus },
+            HeaderMap,
             BodyMap,
 			Opts
         ),
-    (hb_message:convert(
-        ConvertFrom,
-        #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
-        <<"httpsig@1.0">>,
-        Opts
-    ))#{ <<"status">> => hb_util:int(Status) }.
+    Decoded =
+        hb_message:convert(
+            ConvertFrom,
+            #{ <<"device">> => <<"structured@1.0">>, <<"bundle">> => true },
+            <<"httpsig@1.0">>,
+            Opts
+        ),
+    with_http_status(Decoded, Status, Opts).
+
+%% @doc Return a decoded HTTP response with the transport status attached.
+with_http_status(Msg, Status, Opts) ->
+    CleanMsg = remove_http_response_metadata(Msg, Opts),
+    case hb_message:is_signed_key(<<"status">>, CleanMsg, Opts) of
+        true ->
+            CleanMsg;
+        false ->
+            case hb_message:signers(CleanMsg, Opts) of
+                [] -> CleanMsg#{ <<"status">> => hb_util:int(Status) };
+                _ -> CleanMsg
+            end
+    end.
+
+%% @doc Remove unsigned HTTP transport metadata from a decoded response.
+remove_http_response_metadata(Msg, Opts) ->
+    WithoutHeaders =
+        hb_message:without_unless_signed(?DEFAULT_RESPONSE_FILTER_KEYS, Msg, Opts),
+    case hb_message:is_signed_key(<<"status">>, WithoutHeaders, Opts) of
+        true -> WithoutHeaders;
+        false -> remove_http_status(WithoutHeaders, Opts)
+    end.
+
+%% @doc Remove unsigned HTTP status metadata from a decoded response body.
+remove_http_status(Msg, Opts) ->
+    WithoutStatus = hb_maps:remove(<<"status">>, Msg, Opts),
+    case hb_maps:find(<<"ao-types">>, WithoutStatus, Opts) of
+        {ok, AOTypes} when is_binary(AOTypes) ->
+            Types = maps:remove(
+                <<"status">>,
+                dev_structured:decode_ao_types(AOTypes, Opts)
+            ),
+            case map_size(Types) of
+                0 -> hb_maps:remove(<<"ao-types">>, WithoutStatus, Opts);
+                _ ->
+                    WithoutStatus#{
+                        <<"ao-types">> =>
+                            dev_structured:encode_ao_types(Types, Opts)
+                    }
+            end;
+        _ ->
+            WithoutStatus
+    end.
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -498,11 +552,12 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             ?event(warning, {reply_handle_cookies_error, {error, Error}}, Opts),
             {ok, InitReq, KeyNormMessage}
         end,
+    EncodableMessage = signed_reply_message(Message, Opts),
     {Status, HeadersBeforeCors, EncodedBody} =
         encode_reply(
             RawStatus,
             TABMReq,
-            Message,
+            EncodableMessage,
             Opts
         ),
     % Get the CORS request headers from the message, if they exist.
@@ -552,6 +607,14 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         }
     ),
     {ok, PostStreamReq, no_state}.
+
+%% @doc Remove unsigned transport status before re-encoding signed replies.
+signed_reply_message(Msg, Opts) ->
+    case {hb_message:is_signed_key(<<"status">>, Msg, Opts), hb_message:signers(Msg, Opts)} of
+        {true, _} -> Msg;
+        {false, []} -> Msg;
+        {false, _} -> remove_http_status(Msg, Opts)
+    end.
 
 %% @doc Determine if the stream should be finalized.
 should_finalize_stream(429, _EncodedBody) -> true;
@@ -1001,11 +1064,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
                     {ok, _} =
                         hb_cache:write(Decoded,
                             Opts#{
-                                <<"store">> =>
-                                    #{
-                                        <<"store-module">> => hb_store_fs,
-                                        <<"name">> => <<"cache-http">>
-                                    }
+                                <<"store">> => cache_http_store(Opts)
                             }
                         );
                 false ->
@@ -1021,6 +1080,19 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
             ),
             throw({invalid_commitments, Decoded})
     end.
+
+cache_http_store(Opts) ->
+    [
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> => <<"cache-http">>
+        }
+        | store_list(hb_opts:get(store, [], Opts))
+    ].
+
+store_list(Store) when is_list(Store) -> Store;
+store_list(Store) when is_map(Store) -> [Store];
+store_list(_) -> [].
 
 %% @doc Add the method and path to a message, if they are not already present.
 %% Remove browser-added fields that are unhelpful during processing (for example,
@@ -1278,10 +1350,20 @@ get_deep_signed_wasm_state_test() ->
 cors_get_test() ->
     URL = hb_http_server:start_node(),
     LocalOpts = test_opts(),
-    {ok, Res} = get(URL, <<"/~meta@1.0/info">>, LocalOpts),
+    {ok, 200, Headers, _Body} =
+        hb_http_client:request(
+            #{
+                peer => URL,
+                path => <<"/~meta@1.0/info">>,
+                method => <<"GET">>,
+                headers => #{},
+                body => <<>>
+            },
+            LocalOpts
+        ),
     ?assertEqual(
         <<"*">>,
-        hb_ao:get(<<"access-control-allow-origin">>, Res, LocalOpts)
+        proplists:get_value(<<"access-control-allow-origin">>, Headers)
     ).
 
 ans104_wasm_test() ->
@@ -1348,7 +1430,12 @@ send_large_signed_request_test() ->
     %            )
     %        )
     %    ).
-    {ok, [Req]} = file:consult(<<"test/large-message.eterm">>),
+    {ok, [RawReq]} = file:consult(<<"test/large-message.eterm">>),
+    Req =
+        hb_message:commit(
+            hb_message:uncommitted_deep(RawReq, #{}),
+            #{ <<"priv-wallet">> => hb:wallet() }
+        ),
     % Get the short trace length from the node message in the large, stored
     % request. 
     ?assertMatch(

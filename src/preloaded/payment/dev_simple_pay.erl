@@ -346,8 +346,12 @@ get_balance_and_top_up_test() ->
         hb_http:get(
             Node,
             Req = hb_message:commit(
-                #{<<"path">> => <<"/~simple-pay@1.0/balance">>},
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                #{
+                    <<"path">> => <<"/~simple-pay@1.0/balance">>,
+                    <<"target">> => ClientAddress
+                },
+                Opts#{ <<"priv-wallet">> => ClientWallet },
+                #{ <<"committed">> => [<<"target">>] }
             ),
             Opts
         ),
@@ -365,7 +369,8 @@ get_balance_and_top_up_test() ->
                     <<"amount">> => 100,
                     <<"recipient">> => ClientAddress
                 },
-                Opts#{ <<"priv-wallet">> => HostWallet }
+                Opts#{ <<"priv-wallet">> => HostWallet },
+                #{ <<"committed">> => [<<"amount">>, <<"recipient">>] }
             ),
             Opts
         ),
@@ -377,8 +382,12 @@ get_balance_and_top_up_test() ->
         hb_http:get(
             Node,
             hb_message:commit(
-                #{<<"path">> => <<"/~p4@1.0/balance">>},
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                #{
+                    <<"path">> => <<"/~p4@1.0/balance">>,
+                    <<"target">> => ClientAddress
+                },
+                Opts#{ <<"priv-wallet">> => ClientWallet },
+                #{ <<"committed">> => [<<"target">>] }
             ),
             Opts
         ),
@@ -411,8 +420,12 @@ apply_price_test() ->
         hb_http:get(
             Node,
             hb_message:commit(
-                #{ <<"path">> => <<"/~p4@1.0/balance">> },
-                Opts#{ <<"priv-wallet">> => ClientWallet }
+                #{
+                    <<"path">> => <<"/~p4@1.0/balance">>,
+                    <<"target">> => ClientAddress
+                },
+                Opts#{ <<"priv-wallet">> => ClientWallet },
+                #{ <<"committed">> => [<<"target">>] }
             ),
             Opts
         ),

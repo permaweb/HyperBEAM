@@ -218,24 +218,27 @@ id_device(_, _) ->
     {ok, [_]}.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
-committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
-    {ok,
-        hb_maps:values(
-            hb_maps:filtermap(
-                fun(_ID, Commitment) ->
-                    case maps:get(<<"committer">>, Commitment, undefined) of
-                        undefined -> false;
-                        Committer -> {true, Committer}
-                    end
-                end,
-                Commitments,
-                NodeOpts
-            ),
-            NodeOpts
-        )
-    };
-committers(_, _, _) ->
-    {ok, []}.
+committers(Base, _, NodeOpts) ->
+    case hb_maps:get(<<"commitments">>, Base, not_found, NodeOpts) of
+        not_found ->
+            {ok, []};
+        Commitments ->
+            {ok,
+                hb_maps:values(
+                    hb_maps:filtermap(
+                        fun(_ID, Commitment) ->
+                            case hb_maps:get(<<"committer">>, Commitment, undefined, NodeOpts) of
+                                undefined -> false;
+                                Committer -> {true, Committer}
+                            end
+                        end,
+                        Commitments,
+                        NodeOpts
+                    ),
+                    NodeOpts
+                )
+            }
+    end.
 
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
@@ -624,7 +627,7 @@ set(Base, NewValuesMsg, Opts) ->
             hb_maps:keys(Base, Opts)
         ),
     % Base message with keys-to-unset removed
-    BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
+    BaseValues = hb_private:reset(hb_maps:without(UnsetKeys, Base, Opts)),
     ?event(debug_message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
@@ -647,14 +650,7 @@ set(Base, NewValuesMsg, Opts) ->
         )
     ),
     % Calculate if the keys to be set conflict with any committed keys.
-    {ok, CommittedKeys} =
-        committed(
-            Base,
-            #{
-                <<"committers">> => <<"all">>
-            },
-            Opts
-        ),
+    CommittedKeys = committed_keys_for_any(Base, Opts),
     ?event(message_set,
         {setting,
             {committed_keys, CommittedKeys},
@@ -662,12 +658,12 @@ set(Base, NewValuesMsg, Opts) ->
             {message, Base}
         }
     ),
-    OverwrittenCommittedKeys =
+    TouchedCommittedKeys =
         lists:filtermap(
             fun(Key) ->
                 NormKey = hb_ao:normalize_key(Key),
                 ?event({checking_committed_key, {key, Key}, {norm_key, NormKey}}),
-                Res = case lists:member(NormKey, KeysToSet) of
+                Res = case lists:member(NormKey, KeysToSet ++ UnsetKeys) of
                     true -> {true, NormKey};
                     false -> false
                 end,
@@ -675,7 +671,6 @@ set(Base, NewValuesMsg, Opts) ->
             end,
             CommittedKeys
         ),
-    ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
     % Combine the new values with the base. The result EXTENDS the base via the
     % reserved `...' key rather than copying its keys: an `explicit' set lays the
     % new values directly atop the base, while a `deep' set additionally merges
@@ -683,12 +678,20 @@ set(Base, NewValuesMsg, Opts) ->
     % under `...' and key lookups fall through to it.
     Merged =
         hb_private:set_priv(
-            case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
-                <<"explicit">> -> NewValues#{ <<"...">> => BaseValues };
-                _ -> do_deep_merge(BaseValues, NewValues, Opts)
+            case {CommittedKeys, maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>)} of
+                {[], <<"explicit">>} ->
+                    maps:merge(base_values_map(BaseValues), NewValues);
+                {[], _} -> do_flat_deep_merge(BaseValues, NewValues, Opts);
+                {_, <<"explicit">>} -> NewValues#{ <<"...">> => BaseValues };
+                {_, _} -> do_deep_merge(BaseValues, NewValues, Opts)
             end,
             OriginalPriv
         ),
+    ChangedAOTypeKeys =
+        changed_ao_types_key(Base, Merged, CommittedKeys, Opts),
+    OverwrittenCommittedKeys =
+        lists:usort(TouchedCommittedKeys ++ ChangedAOTypeKeys),
+    ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
     case OverwrittenCommittedKeys of
         [] ->
             ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
@@ -698,21 +701,13 @@ set(Base, NewValuesMsg, Opts) ->
             % If not, we must remove the commitments. Both the base and the result
             % may be `...' extensions, so we compare their flattened (concrete)
             % views -- an overwritten key's value may be inherited through `...'.
-            ChangedBaseKeys =
-                hb_maps:with(
-                    OverwrittenCommittedKeys,
-                    hb_maps:flatten(Base, Opts),
-                    Opts
+            ChangedCommittedKeys =
+                lists:usort(
+                    changed_keys(Base, Merged, TouchedCommittedKeys, Opts)
+                        ++ ChangedAOTypeKeys
                 ),
-            ChangedMergedKeys =
-                hb_maps:with(
-                    OverwrittenCommittedKeys,
-                    hb_maps:flatten(Merged, Opts),
-                    Opts
-                ),
-            Matches = hb_message:match(ChangedMergedKeys, ChangedBaseKeys, strict, Opts),
-            case Matches of
-                true ->
+            case ChangedCommittedKeys of
+                [] ->
                     ?event(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
                 % {error, {Details, {trace, Stacktrace}}} ->
@@ -729,19 +724,88 @@ set(Base, NewValuesMsg, Opts) ->
                 %         }
                 %     ),
                 _ ->
-                    % A committed key changed value, so the base's commitments
-                    % no longer hold. Flatten the extension to a concrete message
-                    % before dropping `commitments', as the commitments may be
-                    % held by the base under `...' and would otherwise survive.
-                    {ok,
-                        hb_maps:without(
-                            [<<"commitments">>],
-                            hb_maps:flatten(Merged, Opts),
-                            Opts
-                        )
-                    }
+                    % A committed key changed value, so any commitment covering
+                    % that key no longer holds.
+                    {ok, drop_commitments_for_keys(Merged, ChangedCommittedKeys, Opts)}
             end
     end.
+
+committed_keys_for_any(Base, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
+    lists:usort(
+        lists:flatten(
+            [
+                committed_keys_for_commitment(Commitment, Opts)
+            ||
+                {_ID, Commitment} <- maps:to_list(Commitments)
+            ]
+        )
+    ).
+
+committed_keys_for_commitment(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, [], Opts),
+            Opts
+        )
+    ).
+
+changed_keys(Base, Merged, Keys, Opts) ->
+    FlatBase = hb_maps:flatten(Base, Opts),
+    FlatMerged = hb_maps:flatten(Merged, Opts),
+    lists:filter(
+        fun(Key) ->
+            BaseKey = hb_maps:with([Key], FlatBase, Opts),
+            MergedKey = hb_maps:with([Key], FlatMerged, Opts),
+            hb_message:match(MergedKey, BaseKey, strict, Opts) =/= true
+        end,
+        Keys
+    ).
+
+changed_ao_types_key(Base, Merged, CommittedKeys, Opts) ->
+    case lists:member(<<"ao-types">>, CommittedKeys) of
+        false ->
+            [];
+        true ->
+            case ao_types(Base, Opts) =:= ao_types(Merged, Opts) of
+                true -> [];
+                false -> [<<"ao-types">>]
+            end
+    end.
+
+ao_types(Msg, Opts) ->
+    TABM =
+        hb_message:convert(
+            hb_message:uncommitted(hb_private:reset(Msg), Opts),
+            tabm,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    hb_maps:get(<<"ao-types">>, TABM, <<>>, Opts).
+
+drop_commitments_for_keys(Msg, Keys, Opts) ->
+    case hb_maps:get(<<"commitments">>, Msg, not_found, Opts) of
+        not_found ->
+            Msg;
+        Commitments ->
+            NormKeys = lists:usort(lists:map(fun hb_ao:normalize_key/1, Keys)),
+            FilteredCommitments =
+                hb_maps:filter(
+                    fun(_ID, Commitment) ->
+                        not intersects(
+                            committed_keys_for_commitment(Commitment, Opts),
+                            NormKeys
+                        )
+                    end,
+                    Commitments,
+                    Opts
+                ),
+            Msg#{ <<"commitments">> => FilteredCommitments }
+    end.
+
+intersects(A, B) ->
+    lists:any(fun(Item) -> lists:member(Item, B) end, A).
 
 %% @doc Deep merge keys into a message, producing a `...' EXTENSION of the base
 %% rather than a flat copy. For each new value we either:
@@ -754,6 +818,11 @@ set(Base, NewValuesMsg, Opts) ->
 %% change set returns the base unchanged. The base is found via `hb_maps:find',
 %% which resolves both links and any `...' extension on the base itself.
 do_deep_merge(BaseValues, NewValues, Opts) ->
+    do_deep_merge(BaseValues, NewValues, is_list(BaseValues), Opts).
+
+do_deep_merge(BaseValues, NewValues, true, Opts) ->
+    hb_maps:merge(hb_util:list_to_numbered_message(BaseValues), NewValues, Opts);
+do_deep_merge(BaseValues, NewValues, false, Opts) ->
     Changed =
         maps:fold(
             fun(Key, NewValue, Acc) when is_map(NewValue) ->
@@ -784,6 +853,80 @@ do_deep_merge(BaseValues, NewValues, Opts) ->
         _ -> Changed#{ <<"...">> => BaseValues }
     end.
 
+%% @doc Deep merge keys into an uncommitted message. With no commitments to
+%% preserve, keep the result concrete instead of creating a `...' extension.
+do_flat_deep_merge(BaseValues, NewValues, Opts) ->
+    do_flat_deep_merge(BaseValues, NewValues, is_list(BaseValues), Opts).
+
+do_flat_deep_merge(BaseValues, NewValues, true, Opts) ->
+    hb_util:deep_merge(
+        hb_util:list_to_numbered_message(BaseValues),
+        NewValues,
+        Opts
+    );
+do_flat_deep_merge(BaseValues, NewValues, false, Opts) ->
+    {WithNestedMerges, StillToDeepMerge} =
+        maps:fold(
+            fun(Key, NewValue, {Acc, ToDeepMerge})
+                    when is_map(NewValue)
+                    andalso is_map(map_get(Key, Acc)) ->
+                        BaseValue = map_get(Key, Acc),
+                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
+                        {
+                            Acc#{
+                                Key =>
+                                    hb_util:ok(
+                                        hb_ao:resolve(
+                                            BaseValue,
+                                            NewValueSet,
+                                            Opts
+                                        ),
+                                        Opts
+                                    )
+                            },
+                            ToDeepMerge
+                        };
+            (Key, NewValue, {Acc, ToDeepMerge})
+                    when is_map(NewValue)
+                    andalso ?IS_LINK(map_get(Key, Acc)) ->
+                LoadedBaseValue = hb_cache:ensure_loaded(map_get(Key, Acc), Opts),
+                case is_map(LoadedBaseValue) of
+                    true ->
+                        NewValueSet = NewValue#{ <<"path">> => <<"set">> },
+                        {
+                            Acc#{
+                                Key =>
+                                    hb_util:ok(
+                                        hb_ao:resolve(
+                                            LoadedBaseValue,
+                                            NewValueSet,
+                                            Opts
+                                        ),
+                                        Opts
+                                    )
+                            },
+                            ToDeepMerge
+                        };
+                    false ->
+                        {Acc, [Key | ToDeepMerge]}
+                end;
+            (Key, _, {Acc, ToDeepMerge}) ->
+                {Acc, [Key | ToDeepMerge]}
+            end,
+            {BaseValues, []},
+            NewValues
+        ),
+    hb_util:deep_merge(
+        WithNestedMerges,
+        maps:with(StillToDeepMerge, NewValues),
+        Opts
+    ).
+
+base_values_map(BaseValues) when is_list(BaseValues) ->
+    hb_util:list_to_numbered_message(BaseValues);
+base_values_map(BaseValues) ->
+    BaseValues.
+
 %% @doc Special case of `set/3' for setting the `path' key. This cannot be set
 %% using the normal `set' function, as the `path' is a reserved key, used to
 %% transmit the present key that is being executed. Subsequently, to call `path'
@@ -804,10 +947,7 @@ set_path(Base, Value, Opts) when not is_map(Value) ->
             _ ->
                 % The new value is different, but is it committed? If so, we
                 % must remove the commitments.
-                case hb_message:is_signed_key(<<"path">>, Base, Opts) of
-                  true -> hb_message:uncommitted(Base, Opts);
-                  false -> Base
-                end
+                drop_commitments_for_keys(Base, [<<"path">>], Opts)
         end,
     case Value of
         unset ->

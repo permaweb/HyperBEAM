@@ -62,8 +62,20 @@ verify(Msg, Req, Opts) ->
     ?event({verify, {only_with_commitment, {explicit, OnlyWithCommitment}}}),
     {ok, TX} = to(OnlyWithCommitment, Req, Opts),
     ?event({verify, {encoded, {explicit, TX}}}),
-    Res = ar_tx:verify(TX),
+    Res =
+        case maps:get(<<"type">>, Req, undefined) of
+            <<"unsigned-sha256">> ->
+                unsigned_id_matches(TX, OnlyWithCommitment, Opts);
+            _ ->
+                ar_tx:verify(TX)
+        end,
     {ok, Res}.
+
+unsigned_id_matches(TX, Msg, Opts) ->
+    case hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) of
+        [CommitmentID] -> CommitmentID =:= hb_util:human_id(TX#tx.unsigned_id);
+        _ -> false
+    end.
 
 %% @doc Convert a #tx record into a message map recursively.
 -spec from(binary() | #tx{}, #{ _ => _ }, #{ _ => _ }) -> {ok, binary() | #{ _ => _ }}.

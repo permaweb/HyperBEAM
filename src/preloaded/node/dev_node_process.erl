@@ -48,11 +48,20 @@ spawn_register(Name, Opts) ->
             % We have found the base process definition. Augment it with the 
             % node's address as necessary, then commit to the result.
             ?event(node_process, {registering, {name, Name}, {base_def, BaseDef}}),
+            Augmented = augment_definition(BaseDef, Opts),
             Signed =
                 hb_message:commit(
-                    augment_definition(BaseDef, Opts),
+                    Augmented,
                     Opts,
-                    hb_opts:get(node_process_spawn_codec, <<"httpsig@1.0">>, Opts)
+                    #{
+                        <<"commitment-device">> =>
+                            hb_opts:get(
+                                node_process_spawn_codec,
+                                <<"httpsig@1.0">>,
+                                Opts
+                            ),
+                        <<"committed">> => public_keys(Augmented, Opts)
+                    }
                 ),
             ?event(node_process, {signed, {name, Name}, {signed, Signed}}),
             ID = hb_message:id(Signed, signed, Opts),
@@ -133,6 +142,14 @@ augment_definition(BaseDef, Opts) ->
         Opts
     ).
 
+public_keys(Msg, Opts) ->
+    lists:filter(
+        fun(Key) ->
+            Key =/= <<"commitments">> andalso not hb_private:is_private(Key)
+        end,
+        hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
+    ).
+
 %%% Tests
 
 %%% The name that should be used for the singleton process during tests.
@@ -198,7 +215,9 @@ lookup_spawn_test() ->
             hb_cache:ensure_all_loaded(Process2, Opts),
             Opts
         ),
-    ?assertEqual(LoadedProcess1, LoadedProcess2).
+    {ok, CommittedProcess1} = hb_message:with_only_committed(LoadedProcess1, Opts),
+    {ok, CommittedProcess2} = hb_message:with_only_committed(LoadedProcess2, Opts),
+    ?assertEqual(CommittedProcess1, CommittedProcess2).
 
 %% @doc Test that a process can be spawned, executed upon, and its result retrieved.
 lookup_execute_test() ->

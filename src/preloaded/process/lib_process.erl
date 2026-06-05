@@ -16,9 +16,11 @@ process_id(Base, Req, Opts) ->
     case hb_ao:get(<<"process">>, Base, Opts#{ <<"hashpath">> => ignore }) of
         not_found ->
             process_id(ensure_process_key(Base, Opts), Req, Opts);
-        Process ->
+        RawProcess ->
+            Process = canonical_process(RawProcess, Opts),
             Signers = hb_message:signers(Process, Opts),
-            case {hb_message:verify(Process, all, Opts), Signers} of
+            Verify = hb_message:verify(Process, all, Opts),
+            case {Verify, Signers} of
                 {false, _} ->
                     ?event({process_not_verified, {process, Process}}),
                     throw({process_not_verified, Process});
@@ -34,6 +36,14 @@ process_id(Base, Req, Opts) ->
             end
     end.
 
+canonical_process(Process = #{ <<"...">> := Parent }, Opts) ->
+    case hb_message:verify(Process, all, Opts) of
+        true -> Process;
+        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
+    end;
+canonical_process(Process, _Opts) ->
+    Process.
+
 %% @doc Run a message against Base, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
 %% to the original device if the device is the same as we left it.
@@ -43,13 +53,13 @@ run_as(Key, Base, Req, Opts) ->
     % Store the original device so we can restore it after execution
     BaseDevice = hb_maps:get(<<"device">>, Base, not_found, Opts),
     ?event({running_as, {key, {explicit, Key}}, {req, Req}}),
+    ProcessBase = ensure_process_key(Base, Opts),
     % Prepare the message with the specialized device configuration.
     % This sets up the device context for the specific operation type.
     {ok, PreparedMsg} =
-        hb_ao:resolve(
-            ensure_process_key(Base, Opts),
+        set_process_keys(
+            ProcessBase,
             #{
-                <<"path">> => <<"set">>,
                 <<"device">> =>
                     DeviceSet =
                         hb_maps:get(
@@ -89,10 +99,28 @@ run_as(Key, Base, Req, Opts) ->
     % This ensures the process maintains its identity after device delegation.
     case {Status, BaseResult} of
         {ok, #{ <<"device">> := DeviceSet }} ->
-            {ok, hb_ao:set(BaseResult, #{ <<"device">> => BaseDevice }, Opts)};
+            set_process_keys(BaseResult, #{ <<"device">> => BaseDevice }, Opts);
         _ ->
             ?event({returning_base_result, BaseResult}),
             {Status, BaseResult}
+    end.
+
+set_process_keys(Base, Values, Opts) ->
+    CleanValues = maps:filter(fun(_Key, Value) -> Value =/= undefined end, Values),
+    case can_direct_set(Base, Opts) of
+        true -> {ok, maps:merge(Base, CleanValues)};
+        false -> hb_ao:resolve(Base, CleanValues#{ <<"path">> => <<"set">> }, Opts)
+    end.
+
+can_direct_set(Msg, Opts) ->
+    is_map(Msg)
+        andalso not maps:is_key(<<"...">>, Msg)
+        andalso not has_commitments(Msg, Opts).
+
+has_commitments(Msg, Opts) ->
+    case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
+        Commitments when is_map(Commitments) -> map_size(Commitments) > 0;
+        _ -> true
     end.
 
 %% @doc Change the message to for that has the device set as this module.

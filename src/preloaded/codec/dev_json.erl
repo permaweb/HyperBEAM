@@ -39,6 +39,7 @@ to(Msg, Req, Opts) ->
             tabm,
             #{
                 <<"device">> => <<"structured@1.0">>,
+                <<"bundle">> => hb_maps:get(<<"bundle">>, Req, false, Opts),
                 <<"encode-types">> => [<<"atom">>]
             },
             ConvOpts

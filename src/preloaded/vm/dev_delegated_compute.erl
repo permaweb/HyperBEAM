@@ -91,14 +91,7 @@ do_compute(ProcID, Req, Opts) ->
     ?event({do_compute_msg, {req, Req}}),
     Slot = maps:get(<<"slot">>, Req),
     {ok, AOS2 = #{ <<"body">> := Body }} =
-        dev_scheduler_formats:assignments_to_aos2(
-            ProcID,
-            #{
-                Slot => Req
-            },
-            false,
-            Opts
-        ),
+        assignment_to_aos2(ProcID, Req, false, Opts),
     ?event({do_compute_body, {aos2, {string, Body}}}),
     % Send to external CU via relay using /result endpoint
     Response =
@@ -113,6 +106,67 @@ do_compute(ProcID, Req, Opts) ->
             }
         ),
     extract_json_res(Response, Opts).
+
+assignment_to_aos2(ProcID, Assignment, More, RawOpts) ->
+    Opts = format_opts(RawOpts),
+    {Timestamp, Height, Hash} = ar_timestamp:get(),
+    Message = hb_ao:get(<<"body">>, Assignment, Opts),
+    AssignmentWithoutBody = hb_maps:without([<<"body">>], Assignment, Opts),
+    {ok, MessageStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => Message
+            },
+            Opts
+        ),
+    {ok, AssignmentStruct} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"json-iface@1.0">> },
+            #{
+                <<"path">> => <<"to">>,
+                <<"message">> => AssignmentWithoutBody
+            },
+            Opts
+        ),
+    {ok,
+        #{
+            <<"content-type">> => <<"application/json">>,
+            <<"body">> =>
+                hb_json:encode(
+                    #{
+                        <<"page_info">> =>
+                            #{
+                                <<"process">> => hb_util:human_id(ProcID),
+                                <<"has_next_page">> => More,
+                                <<"timestamp">> => hb_util:bin(Timestamp),
+                                <<"block-height">> => hb_util:bin(Height),
+                                <<"block-hash">> => hb_util:human_id(Hash)
+                            },
+                        <<"edges">> =>
+                            [
+                                #{
+                                    <<"cursor">> =>
+                                        hb_ao:get(<<"slot">>, Assignment, Opts),
+                                    <<"node">> =>
+                                        #{
+                                            <<"message">> => MessageStruct,
+                                            <<"assignment">> => AssignmentStruct
+                                        }
+                                }
+                            ]
+                    }
+                )
+        }
+    }.
+
+format_opts(Opts) ->
+    Opts#{
+        <<"hashpath">> => ignore,
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"await-inprogress">> => false
+    }.
 
 %% @doc Execute dry-run computation on a remote machine via relay and use
 %% the JSON-Iface to decode the response.

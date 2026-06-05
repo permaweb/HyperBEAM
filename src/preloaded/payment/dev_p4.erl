@@ -399,10 +399,17 @@ non_chargable_route_test() ->
             <<"operator">> => hb:address()
         }
     ),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Req = #{
-        <<"path">> => <<"/~p4@1.0/balance">>
+        <<"path">> => <<"/~p4@1.0/balance">>,
+        <<"target">> => Address
     },
-    GoodSignedReq = hb_message:commit(Req, #{ <<"priv-wallet">> => Wallet }),
+    GoodSignedReq =
+        hb_message:commit(
+            Req,
+            #{ <<"priv-wallet">> => Wallet },
+            #{ <<"committed">> => [<<"target">>] }
+        ),
     Res = hb_http:get(Node, GoodSignedReq, #{}),
     ?event({res1, Res}),
     ?assertMatch({ok, 0}, Res),
@@ -522,21 +529,18 @@ hyper_token_ledger() ->
     {ok, TopupRes} =
         hb_http:post(
             Node,
-            hb_message:commit(
-                #{
-                    <<"path">> => <<LedgerPath/binary, "/schedule">>,
-                    <<"body">> =>
-                        hb_message:commit(
-                            #{
-                                <<"path">> => <<"transfer">>,
-                                <<"quantity">> => 50,
-                                <<"recipient">> => BobAddress
-                            },
-                            #{ <<"priv-wallet">> => AliceWallet }
-                        )
-                },
-                #{ <<"priv-wallet">> => HostWallet }
-            ),
+            #{
+                <<"path">> => <<LedgerPath/binary, "/schedule">>,
+                <<"body">> =>
+                    hb_message:commit(
+                        #{
+                            <<"path">> => <<"transfer">>,
+                            <<"quantity">> => 50,
+                            <<"recipient">> => BobAddress
+                        },
+                        #{ <<"priv-wallet">> => AliceWallet }
+                    )
+            },
             #{}
         ),
     % We now attempt Bob's request again, which should succeed.

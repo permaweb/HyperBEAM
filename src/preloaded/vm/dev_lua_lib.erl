@@ -16,6 +16,7 @@
 %%% Lua environment, except for the `install/3' function, which is used to
 %%% install the library in the first place.
 -export([get/3, resolve/3, set/3, event/3, install/3]).
+-export([make_table_meta/2]).
 -include("include/hb.hrl").
 
 %%% The set of devices that must be included in the device sandbox for an
@@ -73,8 +74,7 @@ install(Base, State, Opts) ->
             dev_lua:encode(BaseAOTable, Opts),
             State
         ),
-    {
-        ok,
+    State3 =
         lists:foldl(
             fun({FuncName, Func}, StateIn) ->
                 {ok, StateOut} =
@@ -96,7 +96,7 @@ install(Base, State, Opts) ->
                             % Call the function with the decoded arguments.
                             {Res, ResState} =
                                 Func(Args, ImportState, ExecOpts),
-                            % Encode the response for return to Lua
+                            % Encode the response for return to Lua.
                             return(Res, ResState, Opts)
                         end,
                         StateIn
@@ -105,21 +105,97 @@ install(Base, State, Opts) ->
             end,
             State2,
             ?LIBRARY_FUNCTIONS
-        )
-    }.
+        ),
+    {ok, State3}.
+
+%% @doc Build the __index/__newindex metatable that maps table access to
+%% AO-Core get/set semantics.
+make_table_meta(State0, Opts) ->
+    GetFun =
+        fun([RawTable, Key], State) ->
+            Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+            case hb_ao:get(Key, Table, Opts) of
+                not_found ->
+                    {[nil], State};
+                Res ->
+                    Encodable =
+                        if is_map(Res) -> hb_private:reset(Res);
+                           true -> Res
+                        end,
+                    {Encoded, State2} = dev_lua:encode_value(Encodable, State, Opts),
+                    {[Encoded], State2}
+            end
+        end,
+    SetFun =
+        fun([RawTable, Key, RawValue], State) ->
+            State2 =
+                case luerl_heap:raw_get_table_key(RawTable, <<"device">>, State) of
+                    <<"trie@1.0">> ->
+                        Value = dev_lua:decode(luerl:decode(RawValue, State), Opts),
+                        Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+                        SetResult =
+                            hb_cache:ensure_all_loaded(
+                                hb_ao:set(Table, #{ Key => Value }, Opts),
+                                Opts
+                            ),
+                        update_table(RawTable, Key, Value, Table, SetResult, State, Opts);
+                    _ ->
+                        luerl_heap:raw_set_table_key(RawTable, Key, RawValue, State)
+                end,
+            ?event(debug_lua, {set_result_encoded}),
+            {[], State2}
+        end,
+    {GetFunRef, State1} = luerl:encode(GetFun, State0),
+    {SetFunRef, State2} = luerl:encode(SetFun, State1),
+    luerl_heap:alloc_table(
+        [{<<"__index">>, GetFunRef}, {<<"__newindex">>, SetFunRef}],
+        State2
+    ).
+
+%% @doc Reflect an AO set result back into the Lua table.
+update_table(RawTable, _Key, _Value, #{ <<"device">> := <<"trie@1.0">> }, SetResult, State, Opts) ->
+    replace_table(RawTable, SetResult, State, Opts);
+update_table(RawTable, Key, Value, _Table, SetResult, State, Opts) ->
+    NewValue = maps:get(Key, SetResult, Value),
+    State1 = raw_set_encoded(RawTable, Key, NewValue, State, Opts),
+    case maps:find(<<"commitments">>, SetResult) of
+        {ok, Commitments} ->
+            raw_set_encoded(RawTable, <<"commitments">>, Commitments, State1, Opts);
+        error ->
+            luerl_heap:raw_set_table_key(RawTable, <<"commitments">>, nil, State1)
+    end.
+
+replace_table(RawTable, SetResult, State, Opts) ->
+    State1 =
+        luerl_heap:upd_table(
+            RawTable,
+            fun({table, _Array, _Dict, Meta}) ->
+                {table, array:new([{default, nil}]), ttdict:new(), Meta}
+            end,
+            State
+        ),
+    maps:fold(
+        fun(K, V, AccState) ->
+            raw_set_encoded(RawTable, K, V, AccState, Opts)
+        end,
+        State1,
+        SetResult
+    ).
+
+raw_set_encoded(RawTable, Key, Value, State, Opts) ->
+    {EncodedV, State1} = dev_lua:encode_value(Value, State, Opts),
+    luerl_heap:raw_set_table_key(RawTable, Key, EncodedV, State1).
 
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->
     ?event(lua_import, {import_returning, {result, Result}}),
-    TableEncoded = dev_lua:encode(hb_cache:ensure_all_loaded(Result, Opts), Opts),
     {ReturnParams, ResultingState} =
-        lists:foldr(
-            fun(LuaEncoded, {Params, StateIn}) ->
-                {NewParam, NewState} = luerl:encode(LuaEncoded, StateIn),
-                {[NewParam | Params], NewState}
+        lists:mapfoldl(
+            fun(Term, StateIn) ->
+                dev_lua:encode_value(Term, StateIn, Opts)
             end,
-            {[], ExecState},
-            TableEncoded
+            ExecState,
+            hb_cache:ensure_all_loaded(Result, Opts)
         ),
     ?event({lua_encoded, ReturnParams}),
     {ReturnParams, ResultingState}.
