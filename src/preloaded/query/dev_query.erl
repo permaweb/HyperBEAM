@@ -44,8 +44,17 @@ info(_Opts) ->
     }.
 
 %% @doc Execute the query via GraphQL.
-graphql(Req, Base, Opts) ->
-    dev_query_graphql:handle(Req, Base, Opts).
+graphql(Base, Req, Opts) ->
+    case hb_maps:get(<<"method">>, Req, <<"GET">>, Opts) of
+        <<"GET">> ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"hyperbuddy@1.0">> },
+                <<"index">>,
+                Opts
+            );
+        _ ->
+            dev_query_graphql:handle(Base, Req, Opts)
+    end.
 
 %% @doc Return whether a GraphQL esponse in a message has transaction results.
 %% This key is used in HB's gateway client multirequest configuration to
@@ -354,6 +363,15 @@ return_types_test() ->
         )
     ),
     ok.
+
+graphql_get_serves_hyperbuddy_test() ->
+    {ok, #{ <<"body">> := Body, <<"content-type">> := <<"text/html">> }} =
+        graphql(#{}, #{ <<"method">> => <<"GET">> }, #{}),
+    ?assertNotEqual(nomatch, binary:match(Body, <<"<div id=\"root\"></div>">>)),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(Body, <<"/~hyperbuddy@1.0/bundle.js">>)
+    ).
 
 http_test() ->
     {ok, Opts, _} = test_setup(),

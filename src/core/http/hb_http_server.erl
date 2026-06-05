@@ -119,6 +119,8 @@ content_type(Filename) ->
         <<".js">> -> <<"text/javascript">>;
         <<".css">> -> <<"text/css">>;
         <<".png">> -> <<"image/png">>;
+        <<".svg">> -> <<"image/svg+xml">>;
+        <<".webp">> -> <<"image/webp">>;
         <<".ico">> -> <<"image/x-icon">>;
         <<".ttf">> -> <<"font/ttf">>;
         <<".json">> -> <<"application/json">>;
