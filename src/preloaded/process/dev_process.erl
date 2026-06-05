@@ -532,7 +532,7 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
 store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
     % Cache the `Snapshot' key as frequently as the node is configured to.
     ResMaybeWithSnapshot =
-        case ForceSnapshot orelse should_snapshot(Slot, Res, Opts) of
+        case should_store_snapshot(ForceSnapshot, Slot, Res, Opts) of
             false -> Res;
             true ->
                 ?event(
@@ -664,10 +664,30 @@ read_restore_checkpoint(ProcID, TargetSlot, Opts) ->
 should_snapshot(Slot, Res, Opts) ->
     should_snapshot_slots(Slot, Opts) orelse should_snapshot_time(Res, Opts).
 
+should_store_snapshot(ForceSnapshot, Slot, Res, Opts) ->
+    (ForceSnapshot andalso snapshots_configured(Opts)) orelse
+        should_snapshot(Slot, Res, Opts).
+
+snapshots_configured(Opts) ->
+    not is_snapshot_disabled(
+        hb_opts:get(process_snapshot_slots, ?DEFAULT_SNAPSHOT_SLOTS, Opts)
+    ) orelse
+        not is_snapshot_disabled(
+            hb_opts:get(process_snapshot_time, ?DEFAULT_SNAPSHOT_TIME, Opts)
+        ).
+
+is_snapshot_disabled(undefined) -> true;
+is_snapshot_disabled(false) -> true;
+is_snapshot_disabled(<<"false">>) -> true;
+is_snapshot_disabled(_) -> false.
+
 %% @doc Calculate if we should snapshot based on the number of slots.
 should_snapshot_slots(Slot, Opts) ->
     case hb_opts:get(process_snapshot_slots, ?DEFAULT_SNAPSHOT_SLOTS, Opts) of
-        Undef when (Undef == undefined) or (Undef == <<"false">>) ->
+        Undef when
+                (Undef == undefined)
+                or (Undef == false)
+                or (Undef == <<"false">>) ->
             false;
         RawSnapshotSlots ->
             SnapshotSlots = hb_util:int(RawSnapshotSlots),
@@ -678,7 +698,10 @@ should_snapshot_slots(Slot, Opts) ->
 %% snapshot.
 should_snapshot_time(Res, Opts) ->
     case hb_opts:get(process_snapshot_time, ?DEFAULT_SNAPSHOT_TIME, Opts) of
-        Undef when (Undef == undefined) or (Undef == <<"false">>) ->
+        Undef when
+                (Undef == undefined)
+                or (Undef == false)
+                or (Undef == <<"false">>) ->
             false;
         RawSecs ->
             Secs = hb_util:int(RawSecs),
