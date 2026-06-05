@@ -287,7 +287,7 @@ new_server(RawNodeMsg) ->
     % Update the node message with the actual port that was used, in the event
     % that the OS assigned a different port. This happens, for example, when we
     % use port 0.
-    set_opts(NodeMsg#{ <<"port">> => Port }),
+    set_opts(NodeMsgWithID#{ <<"port">> => Port }),
     ?event(http,
         {http_server_started,
             {listener, Listener},

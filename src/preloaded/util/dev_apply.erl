@@ -77,7 +77,7 @@ eval(Base, Request, Opts) ->
                             >>
                         };
                     {ok, ApplyPath} ->
-                        ApplyMsg = ApplyBase#{ <<"path">> => ApplyPath },
+                        ApplyMsg = hb_ao:set(ApplyBase, <<"path">>, ApplyPath, Opts),
                         ?event({executing, ApplyMsg}),
                         hb_ao:resolve(ApplyMsg, Opts)
                 end
@@ -101,7 +101,7 @@ pair(PathToSet, Base, Request, Opts) ->
         PreparedRequest =
             case PathToSet of
                 <<"undefined">> -> RequestSource;
-                _ -> RequestSource#{ <<"path">> => PathToSet }
+                _ -> hb_ao:set(RequestSource, <<"path">>, PathToSet, Opts)
             end,
         ?event({eval_pair, {base, BaseSource}, {request, PreparedRequest}}),
         hb_ao:resolve(BaseSource, PreparedRequest, Opts)

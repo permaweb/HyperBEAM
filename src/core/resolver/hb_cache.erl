@@ -893,7 +893,20 @@ read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
     read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);
 read_resolved({link, ID, LinkOpts}, Req, Opts) ->
     read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
-read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
+read_resolved(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID), is_map(Req) ->
+    case hb_maps:find(<<"path">>, Req, Opts) of
+        {ok, Key} -> read_resolved_id(BaseMsgID, Req, Key, Opts);
+        error -> read_hashpath(BaseMsgID, Req, Opts)
+    end;
+read_resolved(BaseMsg, Req, Opts) when is_map(BaseMsg), is_map(Req) ->
+    case hb_maps:find(<<"path">>, Req, Opts) of
+        {ok, Key} -> read_resolved_msg(BaseMsg, Req, Key, Opts);
+        error -> read_hashpath(BaseMsg, Req, Opts)
+    end;
+read_resolved(Base, Req, Opts) ->
+    read_hashpath(Base, Req, Opts).
+
+read_resolved_id(BaseMsgID, Req, Key, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     NormKey = hb_ao:normalize_key(Key, Opts),
     case hb_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
@@ -922,8 +935,9 @@ read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsg
                 {error, not_found} -> miss;
                 Other -> {hit, Other}
             end
-    end;
-read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) ->
+    end.
+
+read_resolved_msg(BaseMsg, Req, Key, Opts) ->
     % The base message is loaded, so we determine if it has an explicit device
     % and perform a direct lookup if it does not.
     NormKey = hb_ao:normalize_key(Key, Opts),
@@ -936,9 +950,7 @@ read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) 
                 }
             ),
             {hit, read_in_memory_key(BaseMsg, NormKey, Opts)}
-    end;
-read_resolved(Base, Req, Opts) ->
-    read_hashpath(Base, Req, Opts).
+    end.
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').

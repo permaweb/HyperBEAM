@@ -66,17 +66,33 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         % its IDs by proxy.
                         NormChild = normalize(V, Mode, Opts),
                         NormKey = hb_util:bin(Key),
-                        % Generate the ID of the normalized child message.
-                        ID = hb_message:id(NormChild, all, Opts),
+                        MaterializeDiscard =
+                            should_materialize_discard_link(NormKey, Msg, Opts),
+                        LinkedChild =
+                            case {Mode, MaterializeDiscard} of
+                                {discard, true} ->
+                                    hb_message:normalize_commitments(
+                                        NormChild,
+                                        Opts,
+                                        verify
+                                    );
+                                _ ->
+                                    normalize_extension_child(NormChild, Opts)
+                            end,
                         % If we are in `offload' mode, we write the message to the
                         % cache. If we are in `discard' mode, we simply drop the 
                         % nested message.
-                        case Mode of
-                            discard -> do_nothing;
-                            offload ->
+                        ID = case {Mode, MaterializeDiscard} of
+                            {discard, true} ->
+                                {ok, WrittenID} = hb_cache:write(LinkedChild, Opts),
+                                offloaded_link_id(LinkedChild, WrittenID, Opts);
+                            {discard, false} ->
+                                hb_message:id(LinkedChild, all, Opts);
+                            {offload, _} ->
                                 % Write the child to the store to ensure its
                                 % storage and availability.
-                                hb_cache:write(NormChild, Opts)
+                                {ok, WrittenID} = hb_cache:write(LinkedChild, Opts),
+                                offloaded_link_id(LinkedChild, WrittenID, Opts)
                         end,
                         ?event(debug_linkify, {generated_link, {key, Key}, {id, ID}}),
                         {<<NormKey/binary, "+link">>, ID};
@@ -98,6 +114,59 @@ normalize(OtherVal, Mode, Opts) when is_list(OtherVal) ->
     lists:map(fun(X) -> normalize(X, Mode, Opts) end, OtherVal);
 normalize(OtherVal, _Mode, _Opts) ->
     OtherVal.
+
+should_materialize_discard_link(<<"...">>, _Msg, _Opts) -> true;
+should_materialize_discard_link(<<"committed">>, _Msg, _Opts) -> true;
+should_materialize_discard_link(Key, Msg, Opts) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(Key, committed_keys(Commitment, Opts))
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    ).
+
+committed_keys(Commitment, Opts) ->
+    lists:map(
+        fun remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            maps:get(<<"committed">>, Commitment, []),
+            Opts
+        )
+    ).
+
+offloaded_link_id(LinkedChild, WrittenID, Opts) when is_map(LinkedChild) ->
+    case has_commitment_view(LinkedChild) of
+        true ->
+            case hb_message:signers(LinkedChild, Opts) of
+                [] -> WrittenID;
+                _ ->
+                    LinkID = hb_message:id(LinkedChild, all, Opts),
+                    ensure_resolvable_link_id(WrittenID, LinkID, Opts),
+                    LinkID
+            end;
+        false ->
+            WrittenID
+    end;
+offloaded_link_id(_LinkedChild, WrittenID, _Opts) ->
+    WrittenID.
+
+has_commitment_view(Msg) ->
+    maps:is_key(<<"commitments">>, Msg)
+        orelse maps:is_key(<<"...">>, Msg)
+        orelse maps:is_key(<<"...+link">>, Msg).
+
+normalize_extension_child(Child, Opts) when is_map(Child) ->
+    case maps:is_key(<<"...">>, Child) orelse maps:is_key(<<"...+link">>, Child) of
+        true -> hb_message:normalize_commitments(Child, Opts, verify);
+        false -> Child
+    end;
+normalize_extension_child(Child, _Opts) ->
+    Child.
+
+ensure_resolvable_link_id(ID, ID, _Opts) ->
+    ok;
+ensure_resolvable_link_id(WrittenID, LinkID, Opts) ->
+    ok = hb_cache:link(WrittenID, LinkID, Opts).
 
 %% @doc Decode links embedded in the headers of a message.
 decode_all_links(Msg) when is_map(Msg) ->

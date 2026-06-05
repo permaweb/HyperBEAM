@@ -847,9 +847,50 @@ normalize_varied(Original, Original, Opts) ->
     % than reading via `hb_ao'/`hb_maps') see a concrete map. A no-op for messages
     % without `...'. Typed functions instead receive the schema-varied (already
     % concrete) message via the clause below.
-    hb_maps:flatten(Original, normalize_opts(Opts));
+    NormOpts = normalize_opts(Opts),
+    case has_extension_commitment(Original, NormOpts) of
+        true -> Original;
+        false -> hb_maps:flatten(Original, NormOpts)
+    end;
 normalize_varied(_Original, Varied, Opts) ->
-    hb_message:normalize_commitments(Varied, normalize_opts(Opts), fast).
+    NormOpts = normalize_opts(Opts),
+    case has_message_extension(Varied) of
+        true -> hb_message:normalize_commitments(Varied, NormOpts, verify);
+        false -> hb_message:normalize_commitments(Varied, NormOpts, fast)
+    end.
+
+has_message_extension(Msg) when is_map(Msg) ->
+    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg);
+has_message_extension(_Msg) ->
+    false.
+
+has_extension_commitment(Msg = #{ <<"...">> := _ }, Opts) ->
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(<<"...">>, committed_keys(Commitment, Opts))
+        end,
+        maps:to_list(Commitments)
+    );
+has_extension_commitment(Msg = #{ <<"...+link">> := _ }, Opts) ->
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(<<"...">>, committed_keys(Commitment, Opts))
+        end,
+        maps:to_list(Commitments)
+    );
+has_extension_commitment(_Msg, _Opts) ->
+    false.
+
+committed_keys(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            maps:get(<<"committed">>, Commitment, []),
+            Opts
+        )
+    ).
 
 normalize_opts(Opts) when is_map(Opts) ->
     Opts;
@@ -884,7 +925,7 @@ finalize_result(OldBase, OldReq, Base, Req, {ok, Res}, Overlay, Opts) when is_ma
     update_hashpath(
         HashBase,
         HashReq,
-        hb_message:normalize_commitments(Extended, Opts, fast),
+        hb_message:normalize_commitments(Extended, Opts, verify),
         Opts
     );
 finalize_result(_OldBase, _OldReq, _Base, _Req, Res, _Overlay, _Opts) ->
@@ -1207,7 +1248,7 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
         ),
     ?event(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
     % Get the next key to set. 
-    case keys(Req, internal_opts(Opts)) of
+    case set_keys(Req, internal_opts(Opts)) of
         [] -> Base;
         [Key|_] ->
             % Get the value to set. Use AO-Core by default, but fall back to
@@ -1225,6 +1266,16 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
                 Opts
             )
     end.
+
+set_keys(Req = #{ <<"...">> := _ }, _Opts) ->
+    maps:keys(
+        maps:without(
+            [<<"...">>, <<"commitments">>, <<"priv">>, <<"hashpath">>],
+            Req
+        )
+    );
+set_keys(Req, Opts) ->
+    keys(Req, Opts).
 set(Base, Key, Value, Opts) ->
     % For an individual key, we run deep_set with the key as the path.
     % This handles both the case that the key is a path as well as the case

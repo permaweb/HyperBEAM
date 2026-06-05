@@ -397,25 +397,26 @@ post_schedule(Base, Req, Opts) ->
     end.
 
 do_post_schedule(Base, Req, ToSched, Opts) ->
-    ?event({to_sched, ToSched}),
+    CanonicalToSched = canonical_to_schedule(ToSched, Opts),
+    ?event({to_sched, CanonicalToSched}),
     % Find the ProcessID of the target message:
     % - If it is a Process, use the ID of the message.
     % - If not, use the target as the ProcessID.
-    ProcID = find_target_id(Base, Req, ToSched, Opts),
+    ProcID = find_target_id(Base, Req, CanonicalToSched, Opts),
     ?event({proc_id, ProcID}),
     % Filter all unsigned keys from the source message.
-    case hb_message:with_only_committed(ToSched, Opts) of
+    case hb_message:with_only_committed(CanonicalToSched, Opts) of
         {ok, OnlyCommitted} ->
             ?event(
                 {post_schedule,
                     {schedule_id, ProcID},
-                    {message, ToSched}
+                    {message, CanonicalToSched}
                 }
             ),
             % Find the relevant scheduler server for the given process and
             % message, start a new one if necessary, or return a redirect to the
             % correct remote scheduler.
-            case find_server(ProcID, Base, ToSched, Opts) of
+            case find_server(ProcID, Base, CanonicalToSched, Opts) of
                 {local, PID} ->
                     ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
                     post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
@@ -448,6 +449,12 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
                     <<"reason">> => Err
                 }
             }
+    end.
+
+canonical_to_schedule(Msg, Opts) ->
+    case hb_ao:get(<<"type">>, Msg, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        <<"Process">> -> lib_process:canonical_process(Msg, Opts);
+        _ -> Msg
     end.
 
 %% @doc Post schedule the message. `Req' by this point has been refined to only

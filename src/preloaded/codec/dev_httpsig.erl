@@ -378,9 +378,10 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     ?event({inputs, {list, Inputs}}),
     % Filter the message down to only the requested keys, then encode it.
     MsgWithOnlyInputs =
-        maps:with(
+        with_only_inputs(
             Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
-            Msg
+            Msg,
+            Opts
         ),
     ?event({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
     {ok, EncodedWithSigInfo} =
@@ -398,7 +399,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     % Transform the list of requested keys to their `httpsig@1.0' equivalents.
     EncodedKeys = maps:keys(Encoded),
     EncodedKeysWithBodyKey =
-        case hb_maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
+        case maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
             not_found ->
                 EncodedKeys;
             AOBodyKey ->
@@ -463,6 +464,31 @@ key_present(TryEncoded, Key, Msg) ->
     true ->
         false
     end.
+
+with_only_inputs(Inputs, Msg, Opts) ->
+    lists:foldl(
+        fun(Input, Acc) ->
+            case key_present(false, Input, Acc) of
+                true ->
+                    Acc;
+                false ->
+                    case hb_maps:find(Input, Msg, Opts) of
+                        {ok, Value} ->
+                            {EncKey, EncValue} = encode_input(Input, Value, Opts),
+                            Acc#{ EncKey => EncValue };
+                        error -> Acc
+                    end
+            end
+        end,
+        maps:with(Inputs, Msg),
+        Inputs
+    ).
+
+encode_input(Input, Value, _Opts) when is_binary(Value) orelse is_map(Value) ->
+    {Input, Value};
+encode_input(Input, Value, Opts) ->
+    Encoded = hb_message:convert(#{ Input => Value }, tabm, Opts),
+    {Input, maps:get(Input, Encoded, Value)}.
 
 %% @doc create the signature base that will be signed in order to create the
 %% Signature and SignatureInput.

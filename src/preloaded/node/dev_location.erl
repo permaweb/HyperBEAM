@@ -141,7 +141,18 @@ node(Base, RawReq, RawOpts) ->
             % so return that instead.
             case dev_location_cache:read(Self, Opts) of
                 {ok, Location} ->
-                    {ok, Location};
+                    case has_zero_port(Location, Opts) of
+                        true ->
+                            generate_new_location(
+                                default_url(Opts),
+                                erlang:system_time(millisecond),
+                                hb_opts:get(location_ttl, ?DEFAULT_TTL, Opts),
+                                hb_opts:get(location_codec, ?DEFAULT_CODEC, Opts),
+                                Opts
+                            );
+                        false ->
+                            {ok, Location}
+                    end;
                 {error, not_found} ->
                     case hb_opts:get(location_open_generation, true, Opts) of
                         true ->
@@ -218,6 +229,12 @@ default_url(Opts) ->
                 end,
             <<ProtoStr/binary, "://", Host/binary, ":", Port/binary>>;
         GivenURL -> GivenURL
+    end.
+
+has_zero_port(Location, Opts) ->
+    case uri_string:parse(hb_maps:get(<<"url">>, Location, <<>>, Opts)) of
+        #{port := 0} -> true;
+        _ -> false
     end.
 
 %% @doc We have been asked to generate a new location record, given the nonce,
