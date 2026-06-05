@@ -99,10 +99,15 @@ call(M1, RawM2, Opts) ->
         },
     TargetMod3 =
         case RelayDevice of
-            not_found -> maps:remove(<<"device">>, TargetMod2);
-            _ -> TargetMod2#{<<"device">> => RelayDevice}
+            not_found -> hb_ao:remove(TargetMod2, <<"device">>, Opts);
+            _ -> hb_ao:set(TargetMod2, <<"device">>, RelayDevice, Opts)
         end,
-    TargetMod4 = maps:remove(<<"commitments">>, TargetMod3),
+    TargetMod4 =
+        hb_maps:without(
+            [<<"commitments">>],
+            hb_maps:flatten(TargetMod3, Opts),
+            Opts
+        ),
     Commit =
         hb_ao:get_first(
             [

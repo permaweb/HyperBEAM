@@ -322,7 +322,7 @@ to(TABM, Req = #{ <<"index">> := true }, _FormatOpts, Opts) ->
         {<<>>, <<>>} ->
             % The message has no body or content-type set. Resolve the `index`
             % key upon it to derive it.
-            Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
+            Structured = hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts),
             try hb_ao:resolve(Structured, Req#{ <<"path">> => <<"index">> }, Opts) of
                 {ok, IndexMsg} ->
                     % The index message has been calculated successfully. Convert
@@ -375,7 +375,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
             true ->
                 % Convert back to the fully loaded structured@1.0 message, then
                 % convert to TABM with bundling enabled.
-                Structured = hb_message:convert(TABM, <<"structured@1.0">>, Opts),
+                Structured = hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts),
                 Loaded = load_bundle_message(Structured, Opts),
                 encode_ids(
                     hb_message:convert(
@@ -609,7 +609,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
     % Add the content-digest to the HTTP message. `add_content_digest/1'
     % will return a map with the `content-digest' key set, but the body removed,
     % so we merge the two maps together to maintain the body and the content-digest.
-    Enc2 = case hb_maps:get(<<"body">>, Enc1, <<>>, Opts) of
+    Enc2 = case maps:get(<<"body">>, Enc1, <<>>) of
         <<>> -> Enc1;
         _ ->
             ?event({adding_content_digest, {msg, Enc1}}),

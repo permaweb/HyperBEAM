@@ -182,20 +182,22 @@ request(State, Raw, NodeMsg) ->
 response(State, RawResponse, NodeMsg) ->
     PricingDevice = hb_ao:get(<<"pricing-device">>, State, false, NodeMsg),
     LedgerDevice = hb_ao:get(<<"ledger-device">>, State, false, NodeMsg),
-    Response =
-        hb_ao:get(
-            <<"body">>,
-            RawResponse,
-            NodeMsg#{ <<"hashpath">> => ignore }
-        ),
-    Request = hb_ao:get(<<"request">>, RawResponse, NodeMsg),
+    Request = maps:get(<<"request">>, RawResponse),
     ?event(payment, {post_processing_with_devices, PricingDevice, LedgerDevice}),
-    ?event({response_hook, {request, Request}, {response, Response}}),
     case ((PricingDevice =/= false) and (LedgerDevice =/= false)) andalso
             is_chargable_req(Request, NodeMsg) of
         false ->
+            Response = maps:get(<<"body">>, RawResponse),
+            ?event({response_hook, {request, Request}, {response, Response}}),
             {ok, #{ <<"body">> => Response }};
         true ->
+            Response =
+                hb_ao:get(
+                    <<"body">>,
+                    RawResponse,
+                    NodeMsg#{ <<"hashpath">> => ignore }
+                ),
+            ?event({response_hook, {request, Request}, {response, Response}}),
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
             PricingReq = #{
@@ -284,10 +286,15 @@ balance(_, Req, NodeMsg) ->
             LedgerDevice =
                 hb_ao:get(<<"ledger-device">>, Handler, false, NodeMsg),
             LedgerMsg = Handler#{ <<"device">> => LedgerDevice },
-            LedgerReq = #{
+            BaseLedgerReq = #{
                 <<"path">> => <<"balance">>,
                 <<"request">> => Req
             },
+            LedgerReq =
+                case maps:find(<<"target">>, Req) of
+                    {ok, Target} -> BaseLedgerReq#{ <<"target">> => Target };
+                    error -> BaseLedgerReq
+                end,
             ?event({ledger_message, {ledger_msg, LedgerMsg}}),
             case hb_ao:resolve(LedgerMsg, LedgerReq, NodeMsg) of
                 {ok, Balance} ->
@@ -306,12 +313,10 @@ is_chargable_req(Req, NodeMsg) ->
             ?DEFAULT_NON_CHARGABLE_ROUTES,
             NodeMsg
         ),
+    Router = hb_device:message_to_device(#{ <<"device">> => <<"router@1.0">> }, NodeMsg),
     Matches =
-        hb_ao:raw(
-            #{
-                <<"device">> => <<"router@1.0">>,
-                <<"routes">> => NonChargableRoutes
-            },
+        Router:match(
+            #{ <<"routes">> => NonChargableRoutes },
             Req#{
                 <<"path">> => <<"match">>,
                 <<"route-path">> => hb_maps:get(<<"path">>, Req, no_path, NodeMsg)

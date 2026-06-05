@@ -276,8 +276,11 @@ fallback_direct_key_access(Store, Base, Req, Opts) ->
         {ok, _} -> do_is_direct_key_access(<<"message@1.0">>, Req, Opts)
     end.
 
-do_is_direct_key_access(DevRes, #{ <<"path">> := Key }, Opts) ->
-    do_is_direct_key_access(DevRes, Key, Opts);
+do_is_direct_key_access(DevRes, Req, Opts) when is_map(Req) ->
+    case hb_maps:find(<<"path">>, Req, Opts) of
+        {ok, Key} -> do_is_direct_key_access(DevRes, Key, Opts);
+        error -> false
+    end;
 do_is_direct_key_access({_Status, DevRes}, Key, Opts) ->
     do_is_direct_key_access(DevRes, Key, Opts);
 do_is_direct_key_access(not_found, Key, Opts) ->

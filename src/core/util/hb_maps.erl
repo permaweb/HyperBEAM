@@ -75,10 +75,9 @@ get(Key, Map, Default, Opts) when is_map(Map) ->
             % The key is absent from this layer. If the message extends another
             % via the reserved `...' key, fall through to the parent so that
             % inherited keys resolve. The nearest layer always wins.
-            case maps:find(<<"...">>, Map) of
+            case loaded_extension(Map, Opts) of
                 error -> Default;
-                {ok, Ext} ->
-                    get(Key, hb_cache:ensure_loaded(Ext, Opts), Default, Opts)
+                {ok, Ext} -> get(Key, Ext, Default, Opts)
             end
     end;
 get(Key, Map, Default, Opts) ->
@@ -101,9 +100,9 @@ find(Key, Map, Opts) when is_map(Map) ->
         {ok, V} when not ?IS_LINK(V) -> {ok, V};
         error ->
             % Fall through a message extension (`...') to the parent, if present.
-            case maps:find(<<"...">>, Map) of
+            case loaded_extension(Map, Opts) of
                 error -> error;
-                {ok, Ext} -> find(Key, hb_cache:ensure_loaded(Ext, Opts), Opts)
+                {ok, Ext} -> find(Key, Ext, Opts)
             end;
         Result -> hb_cache:ensure_loaded(Result, Opts)
     end;
@@ -121,18 +120,30 @@ find(Key, Map, Opts) ->
 flatten(Map, Opts) ->
     case hb_cache:ensure_loaded(Map, Opts) of
         Loaded when is_map(Loaded) ->
-            case maps:find(<<"...">>, Loaded) of
+            case loaded_extension(Loaded, Opts) of
                 error -> Loaded;
                 {ok, Ext} ->
                     FlatExt = flatten(Ext, Opts),
-                    Own = maps:remove(<<"...">>, Loaded),
+                    Own = without_extension(Loaded),
                     ChangedKeys = changed_extension_keys(FlatExt, Own, Opts),
-                    maps:merge(
+                    OwnChangedKeys = lists:usort([<<"...">> | ChangedKeys]),
+                    merge_flattened_layers(
                         drop_commitments_for_keys(FlatExt, ChangedKeys, Opts),
-                        drop_commitments_for_keys(Own, ChangedKeys, Opts)
+                        drop_commitments_for_keys(Own, OwnChangedKeys, Opts)
                     )
             end;
         Loaded -> Loaded
+    end.
+
+merge_flattened_layers(Base, Own) ->
+    Merged = maps:merge(Base, Own),
+    case {maps:find(<<"commitments">>, Base), maps:find(<<"commitments">>, Own)} of
+        {{ok, BaseCommitments}, {ok, OwnCommitments}} ->
+            Merged#{
+                <<"commitments">> => maps:merge(BaseCommitments, OwnCommitments)
+            };
+        _ ->
+            Merged
     end.
 
 changed_extension_keys(FlatBase, Own, Opts) ->
@@ -180,8 +191,13 @@ drop_commitments_for_keys(Msg, Keys, Opts) ->
                     end,
                     Commitments
                 ),
-            Msg#{ <<"commitments">> => Filtered }
+            maybe_update_commitments(Msg, Filtered)
     end.
+
+maybe_update_commitments(Msg, Commitments) when map_size(Commitments) == 0 ->
+    maps:remove(<<"commitments">>, Msg);
+maybe_update_commitments(Msg, Commitments) ->
+    Msg#{ <<"commitments">> => Commitments }.
 
 committed_keys(Commitment, Opts) ->
     lists:map(
@@ -194,6 +210,32 @@ committed_keys(Commitment, Opts) ->
 
 intersects(A, B) ->
     lists:any(fun(Item) -> lists:member(Item, B) end, A).
+
+extension(Map) ->
+    case maps:find(<<"...">>, Map) of
+        {ok, Ext} -> {ok, Ext};
+        error -> maps:find(<<"...+link">>, Map)
+    end.
+
+loaded_extension(Map, Opts) ->
+    case extension(Map) of
+        error -> error;
+        {ok, Ext} -> load_extension(Ext, Opts)
+    end.
+
+load_extension(Ext, Opts) ->
+    case hb_cache:ensure_loaded(Ext, Opts) of
+        Loaded when is_map(Loaded) -> {ok, Loaded};
+        ID when is_binary(ID) ->
+            case hb_cache:read(ID, hb_store:scope(Opts, local)) of
+                {ok, Loaded} when is_map(Loaded) -> {ok, Loaded};
+                _ -> error
+            end;
+        _ -> error
+    end.
+
+without_extension(Map) ->
+    maps:without([<<"...">>, <<"...+link">>], Map).
 
 -spec put(Key :: term(), Value :: term(), Map :: map()) -> map().
 put(Key, Value, Map) ->
@@ -218,9 +260,9 @@ is_key(Key, Map, Opts) when is_map(Map) ->
         true -> true;
         false ->
             % Fall through a message extension (`...') to the parent, if present.
-            case maps:find(<<"...">>, Map) of
+            case loaded_extension(Map, Opts) of
                 error -> false;
-                {ok, Ext} -> is_key(Key, hb_cache:ensure_loaded(Ext, Opts), Opts)
+                {ok, Ext} -> is_key(Key, Ext, Opts)
             end
     end;
 is_key(Key, Map, Opts) ->
@@ -232,14 +274,14 @@ keys(Map) ->
 
 -spec keys(Map :: map(), Opts :: map()) -> [term()].
 keys(Map, Opts) when is_map(Map) ->
-    case maps:find(<<"...">>, Map) of
+    case loaded_extension(Map, Opts) of
         error -> maps:keys(Map);
         {ok, Ext} ->
             % A message extension: the visible keys are this layer's own keys
             % (excluding the `...' pointer) unioned with the parent's keys, with
             % the nearer layer winning on conflict.
-            OwnKeys = maps:keys(maps:remove(<<"...">>, Map)),
-            ParentKeys = keys(hb_cache:ensure_loaded(Ext, Opts), Opts),
+            OwnKeys = maps:keys(without_extension(Map)),
+            ParentKeys = keys(Ext, Opts),
             OwnKeys ++ [ K || K <- ParentKeys, not lists:member(K, OwnKeys) ]
     end;
 keys(Map, Opts) ->

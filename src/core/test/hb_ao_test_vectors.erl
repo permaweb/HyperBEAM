@@ -98,6 +98,8 @@ test_suite() ->
             fun list_transform_test/1},
         {step_hook, "step hook",
             fun step_hook_test/1},
+        {extension_commitment, "extension commitment",
+            fun extension_commitment_test/1},
         {paranoid_message_verification, "paranoid message verification",
             fun paranoid_message_verification_test/1},
         {paranoid_input_verification, "paranoid input verification",
@@ -1018,6 +1020,7 @@ singleton_rewritten_path_commitments_test(RawOpts) ->
             Opts#{ <<"priv-wallet">> => ar_wallet:new() },
             #{ <<"committed">> => [<<"path">>, <<"recipient">>] }
         ),
+    OriginalPathCommitments = commitments_with_key(<<"path">>, PathSigned, Opts),
     Signed =
         hb_message:commit(
             PathSigned,
@@ -1028,7 +1031,11 @@ singleton_rewritten_path_commitments_test(RawOpts) ->
     ?assert(length(Parsed) > 0),
     lists:foreach(
         fun(ParsedMsg) ->
-            ?assertEqual([], commitments_with_key(<<"path">>, ParsedMsg, Opts)),
+            ParsedPathCommitments = commitments_with_key(<<"path">>, ParsedMsg, Opts),
+            ?assertEqual(
+                [],
+                shared_commitments(ParsedPathCommitments, OriginalPathCommitments)
+            ),
             ?assertNotEqual([], commitments_with_key(<<"amount">>, ParsedMsg, Opts)),
             ?assert(not has_nested_key(<<"original-request">>, ParsedMsg)),
             ?assertMatch(
@@ -1056,6 +1063,7 @@ singleton_rewritten_query_commitments_test(RawOpts) ->
             Opts#{ <<"priv-wallet">> => ar_wallet:new() },
             #{ <<"committed">> => [<<"amount">>] }
         ),
+    OriginalAmountCommitments = commitments_with_key(<<"amount">>, AmountSigned, Opts),
     Signed =
         hb_message:commit(
             AmountSigned,
@@ -1066,8 +1074,14 @@ singleton_rewritten_query_commitments_test(RawOpts) ->
     ?assert(length(Parsed) > 0),
     lists:foreach(
         fun(ParsedMsg) ->
+            ParsedAmountCommitments =
+                commitments_with_key(<<"amount">>, ParsedMsg, Opts),
             ?assertEqual(200, hb_maps:get(<<"amount">>, ParsedMsg, undefined, Opts)),
-            ?assertEqual([], commitments_with_key(<<"amount">>, ParsedMsg, Opts)),
+            ?assertEqual(
+                [],
+                shared_commitments(ParsedAmountCommitments, OriginalAmountCommitments)
+            ),
+            ?assertNotEqual([], ParsedAmountCommitments),
             ?assertNotEqual([], commitments_with_key(<<"recipient">>, ParsedMsg, Opts)),
             ?assert(not has_nested_key(<<"original-request">>, ParsedMsg)),
             ?assertMatch(
@@ -1080,6 +1094,31 @@ singleton_rewritten_query_commitments_test(RawOpts) ->
         end,
         Parsed
     ).
+
+extension_commitment_test(RawOpts) ->
+    Opts = RawOpts#{ <<"priv-wallet">> => ar_wallet:new() },
+    Parent =
+        hb_message:commit(
+            #{ <<"a">> => 1 },
+            Opts,
+            #{ <<"committed">> => [<<"a">>] }
+        ),
+    Overlay =
+        hb_message:normalize_commitments(
+            #{ <<"b">> => 2, <<"...">> => Parent },
+            Opts
+        ),
+    OverlayCommitted = hb_message:committed(Overlay, all, Opts),
+    ?assert(lists:member(<<"...">>, OverlayCommitted)),
+    ?assert(lists:member(<<"b">>, OverlayCommitted)),
+    ?assert(hb_message:verify(Overlay, all, Opts)),
+    ?assert(hb_message:paranoid_verify(Overlay, paranoid_opts(Opts))),
+    Flat = hb_maps:flatten(Overlay, Opts),
+    FlatCommitted = hb_message:committed(Flat, all, Opts),
+    ?assertNot(lists:member(<<"...">>, FlatCommitted)),
+    ?assertNot(lists:member(<<"b">>, FlatCommitted)),
+    ?assertNotEqual([], commitments_with_key(<<"a">>, Flat, Opts)),
+    ?assert(hb_message:verify(Flat, all, Opts)).
 
 singleton_messages(Msgs) ->
     lists:filtermap(
@@ -1100,6 +1139,9 @@ commitments_with_key(Key, Msg, Opts) ->
             maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts)),
         lists:member(NormKey, commitment_keys(Commitment, Opts))
     ].
+
+shared_commitments(Left, Right) ->
+    [ID || ID <- Left, lists:member(ID, Right)].
 
 commitment_keys(Commitment, Opts) ->
     lists:map(

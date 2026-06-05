@@ -116,12 +116,16 @@ to_tabm(RawMsg, TargetFormat, SourceFormat, Opts) ->
     {SourceCodecMod, Params0} = conversion_spec_to_req(SourceFormat, Opts),
     Params = add_bundle_hint(Params0, TargetFormat, Opts),
     % Flatten any message extension (`...') to its concrete content before
-    % serialization: a message's serialized form is its flattened form, and the
-    % `...' key is a purely in-memory representation that must not appear on the
-    % wire (or in a commitment). Flattening is a no-op for non-extended messages.
+    % serialization: a message's normal serialized form is its flattened form.
+    % Commitment generation/verification may explicitly preserve the extension
+    % edge in order to attest to the derivation itself.
     Msg =
         case is_map(RawMsg) of
-            true -> hb_maps:flatten(RawMsg, Opts);
+            true ->
+                case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+                    true -> RawMsg;
+                    false -> hb_maps:flatten(RawMsg, Opts)
+                end;
             false -> RawMsg
         end,
     % We use _from_ here because the codecs are labelled from the perspective
@@ -194,7 +198,7 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 %% any existing `priv' sub-map that may already be present.
 restore_priv(Msg, EmptyPriv, _Opts) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv, Opts) ->
-    MsgPriv = hb_maps:get(<<"priv">>, Msg, #{}, Opts),
+    MsgPriv = maps:get(<<"priv">>, Msg, #{}),
     ?event({restoring_priv, {priv_msg, MsgPriv}, {priv_old, OldPriv}}),
     NewPriv = hb_util:deep_merge(MsgPriv, OldPriv, Opts),
     ?event({priv_new, NewPriv}),
@@ -261,13 +265,11 @@ normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
 normalize_commitments(RawMsg, Opts, Mode) when is_map(RawMsg) ->
     ?event(debug_normalize_commitments, {normalize_commitments, {msg, RawMsg}}),
-    % Collapse any message extension (`...') to its concrete content first. The
-    % commitments are computed over -- and must match -- the flattened message; a
-    % message built by `set' atop a signed base carries that base (and its
-    % commitments) under `...', so `uncommitted'/`commit' over the layered form
-    % would regenerate against the inherited commitments and yield more than one.
-    % A no-op for non-extended messages.
-    Msg = hb_maps:flatten(RawMsg, Opts),
+    % Preserve message extensions for commitment normalization: the child layer
+    % can then carry an unsigned commitment over its own keys and the `...' edge
+    % to its parent. A concrete/flattened view is still used by callers that ask
+    % for concrete message equality or non-commitment serialization.
+    Msg = normalize_commitment_view(RawMsg, Opts),
     NormMsg =
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -286,7 +288,12 @@ normalize_commitments(Msg, _Opts, _Mode) ->
 do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
     Msg;
 do_normalize_commitments(Msg, Opts, passive) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    Commitments = filter_commitments_for_visible_keys(
+        Msg,
+        maps:get(<<"commitments">>, Msg, #{}),
+        Opts
+    ),
+    MsgWithVisibleCommitments = Msg#{ <<"commitments">> => Commitments },
     {UnsignedCommitments, SignedCommitments} = 
         lists:partition(
             fun({_, #{ <<"committer">> := _Committer }}) -> false;
@@ -296,25 +303,26 @@ do_normalize_commitments(Msg, Opts, passive) ->
         ),
     ?event({do_normalize_commitments,
         {unsigned_commitments, UnsignedCommitments},
-        {maybe_signed_commitment, SignedCommitments}
+            {maybe_signed_commitment, SignedCommitments}
     }),
-    case {UnsignedCommitments, SignedCommitments} of
-        {[], _} ->
+    case needs_unsigned_commitment(Msg, UnsignedCommitments, Opts) of
+        true ->
             {ok, #{ <<"commitments">> := NewCommitments }} =
                 hb_ao:raw(
                     <<"message@1.0">>,
                     <<"commit">>,
-                    uncommitted(Msg),
+                    uncommitted(MsgWithVisibleCommitments),
                     #{ <<"type">> => <<"unsigned">> },
                     Opts
                 ),
             MergedCommitments = hb_maps:merge(
                 NewCommitments,
-                hb_maps:from_list(SignedCommitments),
+                Commitments,
                 Opts
-            ),
-            Msg#{ <<"commitments">> => MergedCommitments };
-        _ -> Msg
+                ),
+            MsgWithVisibleCommitments#{ <<"commitments">> => MergedCommitments };
+        false ->
+            MsgWithVisibleCommitments
     end;
 do_normalize_commitments(Msg, Opts, verify) ->
     UnsignedCommitment = commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts),
@@ -344,7 +352,7 @@ do_normalize_commitments(Msg, Opts, verify) ->
                     <<"commitments">> =>
                         hb_maps:merge(
                             NormCommitments,
-                            hb_maps:get(<<"commitments">>, Msg, #{}, Opts)
+                            maps:get(<<"commitments">>, Msg, #{})
                         )
                 },
                 Opts
@@ -398,12 +406,9 @@ attach_phash2(Msg, ExpectedHash, Opts) ->
 %% is such that expensive operations like signature verification are not
 %% performed unless necessary.
 with_only_committed(RawMsg, Opts) when is_map(RawMsg) ->
-    % Collapse any message extension (`...') to its concrete content first: the
-    % committed keys are filtered from this map, and they may be inherited through
-    % `...' (e.g. a signed message wrapped by a `set' that only touched `device').
-    % Filtering the layered structure would keep just the keys held at the top
-    % layer and drop the committed content. A no-op for non-extended messages.
-    Msg = hb_maps:flatten(RawMsg, Opts),
+    % If the top layer has its own commitment over the extension edge, filter the
+    % layered structure. Otherwise collapse to the inherited concrete content.
+    Msg = committed_filter_view(RawMsg, Opts),
     ?event({with_only_committed, {msg, Msg}, {opts, Opts}}),
     Comms = hb_maps:get(<<"commitments">>, Msg, not_found, Opts),
     case is_map(Msg) andalso Comms /= not_found of
@@ -418,13 +423,19 @@ with_only_committed(RawMsg, Opts) when is_map(RawMsg) ->
                 % Add the ao-body-key to the committed list if it is not
                 % already present.
                 ?event(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
-                {ok,
+                OnlyCommitted =
                     with_links(
                         [<<"commitments">> | CommittedKeys],
                         Msg,
                         Opts
-                    )
-                }
+                    ),
+                VisibleCommitments =
+                    filter_commitments_for_visible_keys(
+                        OnlyCommitted,
+                        hb_maps:get(<<"commitments">>, OnlyCommitted, #{}, Opts),
+                        Opts
+                    ),
+                {ok, OnlyCommitted#{ <<"commitments">> => VisibleCommitments }}
             catch Class:Reason:St ->
                 {error,
                     {could_not_normalize,
@@ -440,6 +451,108 @@ with_only_committed(RawMsg, Opts) when is_map(RawMsg) ->
 with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
+
+normalize_commitment_view(Msg, Opts) ->
+    case has_message_extension(Msg) of
+        true -> Msg;
+        false -> hb_maps:flatten(Msg, Opts)
+    end.
+
+committed_filter_view(Msg, Opts) ->
+    case has_extension_commitment(Msg, Opts) of
+        true -> Msg;
+        false -> hb_maps:flatten(Msg, Opts)
+    end.
+
+has_extension_commitment(Msg, Opts) ->
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(
+                <<"...">>,
+                committed_keys_for_commitment(Commitment, Opts)
+            )
+        end,
+        hb_maps:to_list(Commitments, Opts)
+    ).
+
+has_message_extension(Msg) ->
+    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg).
+
+filter_commitments_for_visible_keys(_Msg, Commitments, _Opts)
+        when map_size(Commitments) == 0 ->
+    Commitments;
+filter_commitments_for_visible_keys(Msg, Commitments, Opts) ->
+    hb_maps:filter(
+        fun(_ID, Commitment) ->
+            lists:all(
+                fun(Key) -> has_committed_key_view(Key, Msg, Opts)
+                end,
+                committed_keys_for_commitment(Commitment, Opts)
+            )
+        end,
+        Commitments,
+        Opts
+    ).
+
+has_committed_key_view(<<"...">>, Msg, _Opts) ->
+    has_message_extension(Msg);
+has_committed_key_view(<<"ao-types">>, Msg, Opts) when is_map(Msg) ->
+    hb_maps:is_key(<<"ao-types">>, Msg, Opts)
+        orelse has_implicit_ao_types(Msg, Opts);
+has_committed_key_view(Key, Msg, _Opts) when is_binary(Key), is_map(Msg) ->
+    maps:is_key(Key, Msg) orelse
+        maps:is_key(<<Key/binary, "+link">>, Msg);
+has_committed_key_view(Key, Msg, Opts) ->
+    hb_maps:is_key(Key, Msg, Opts).
+
+has_implicit_ao_types(Msg, Opts) ->
+    lists:any(
+        fun({Key, Value}) ->
+            not hb_private:is_private(Key)
+                andalso Key =/= <<"commitments">>
+                andalso has_implicit_ao_type_value(Value)
+        end,
+        hb_maps:to_list(Msg, Opts)
+    ).
+
+has_implicit_ao_type_value(Value) ->
+    is_integer(Value)
+        orelse is_float(Value)
+        orelse is_atom(Value)
+        orelse has_typed_link_value(Value).
+
+has_typed_link_value({link, _ID, LinkOpts}) when is_map(LinkOpts) ->
+    case maps:get(<<"type">>, LinkOpts, undefined) of
+        undefined -> false;
+        <<"link">> -> false;
+        _ -> true
+    end;
+has_typed_link_value(_Value) ->
+    false.
+
+needs_unsigned_commitment(_Msg, [], _Opts) ->
+    true;
+needs_unsigned_commitment(Msg, UnsignedCommitments, Opts) ->
+    has_message_extension(Msg)
+        andalso not lists:any(
+            fun({_ID, Commitment}) ->
+                lists:member(
+                    <<"...">>,
+                    committed_keys_for_commitment(Commitment, Opts)
+                )
+            end,
+            UnsignedCommitments
+        ).
+
+committed_keys_for_commitment(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, [], Opts),
+            Opts
+        )
+    ).
 
 %% @doc Filter keys from a map that do not match either the list of keys or
 %% their relative `+link` variants.
@@ -646,13 +759,7 @@ do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
 do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
-    hb_maps:map(
-        fun(Key, Value) ->
-            do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
-        end,
-        uncommitted(hb_private:reset(Msg), Opts),
-        Opts
-    ),
+    do_paranoid_verify_children(Topic, Path, Msg, Opts),
     try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
     catch
         _:Details:St ->
@@ -660,6 +767,25 @@ do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
     end;
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
+
+do_paranoid_verify_children(Topic, Path, Msg, Opts) ->
+    VerifyChild =
+        fun(Key, Value) ->
+            do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
+        end,
+    case has_message_extension(Msg) of
+        true ->
+            maps:map(
+                VerifyChild,
+                maps:remove(<<"commitments">>, hb_private:reset(Msg))
+            );
+        false ->
+            hb_maps:map(
+                VerifyChild,
+                uncommitted(hb_private:reset(Msg), Opts),
+                Opts
+            )
+    end.
 
 %% @doc Return the unsigned version of a message in AO-Core format.
 uncommitted(Msg) -> uncommitted(Msg, #{}).
@@ -959,13 +1085,13 @@ commitment(ID, Msg) ->
 commitment(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitment(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitment(ID, Msg, Opts) when is_binary(ID), is_map(Msg) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
     case hb_maps:find(ID, Commitments, Opts) of
         {ok, Commitment} -> Commitment;
         error -> commitment(#{ <<"committer">> => ID }, Msg, Opts)
     end;
 commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
     UnsignedCommitments =
         hb_maps:filter(
             fun(_, #{ <<"committer">> := _Committer }) -> false;

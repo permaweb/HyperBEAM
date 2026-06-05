@@ -164,7 +164,11 @@ from(RawMsg, Opts) ->
     ScopedModifications = group_scoped(Typed, Msgs),
     ?event(parsing, {scoped_modifications, ScopedModifications}),
     % 5. Generate the list of messages (plus-notation, device, typed keys).
-    Result = build_messages(Msgs, ScopedModifications, Opts),
+    Result = anchor_messages(
+        build_messages(Msgs, ScopedModifications, Opts),
+        RawMsg,
+        Opts
+    ),
     ?event(parsing, {result, Result}),
     Result.
 
@@ -331,28 +335,61 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
+anchor_messages(Messages, RawMsg, Opts) ->
+    case hb_maps:get(<<"commitments">>, RawMsg, not_found, Opts) of
+        not_found -> Messages;
+        _ ->
+            AnchorMsg = maps:remove(<<"ao-types">>, hb_message:minimize(RawMsg)),
+            [anchor_message(Msg, AnchorMsg, Opts) || Msg <- Messages]
+    end.
+
+anchor_message({as, DevID, Msg}, RawMsg, Opts) when is_map(Msg) ->
+    {as, DevID, anchor_message(Msg, RawMsg, Opts)};
+anchor_message(Msg, RawMsg, Opts) when is_map(Msg) ->
+    BaseWithPath =
+        case maps:find(<<"path">>, Msg) of
+            {ok, Path} -> message_set(RawMsg, <<"path">>, Path, Opts);
+            error -> message_set(RawMsg, <<"path">>, unset, Opts)
+        end,
+    Anchored =
+        case maps:remove(<<"path">>, Msg) of
+            Empty when map_size(Empty) == 0 -> BaseWithPath;
+            Rest -> message_set(BaseWithPath, Rest, Opts)
+        end,
+    hb_message:normalize_commitments(
+        Anchored,
+        Opts#{
+            commitment_device => <<"httpsig@1.0">>,
+            <<"commitment-device">> => <<"httpsig@1.0">>
+        },
+        verify
+    );
+anchor_message(Msg, _RawMsg, _Opts) ->
+    Msg.
+
 message_set(Base, <<"path">>, Value, Opts) ->
-    hb_util:ok(
+    set_result(
         hb_ao:raw(
             <<"message@1.0">>,
             <<"set_path">>,
             Base,
             #{ <<"value">> => Value },
             Opts
-        ),
-        Opts
+        )
     ).
 message_set(Base, NewValues, Opts) ->
-    hb_util:ok(
+    set_result(
         hb_ao:raw(
             <<"message@1.0">>,
             <<"set">>,
             Base,
             NewValues,
             Opts
-        ),
-        Opts
+        )
     ).
+
+set_result({ok, Msg}) -> Msg;
+set_result(Msg) when is_map(Msg) -> Msg.
 
 %% @doc Parse a path part into a message or an ID.
 %% Applies the syntax rules outlined in the module doc, in the following order:

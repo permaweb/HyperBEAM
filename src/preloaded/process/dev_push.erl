@@ -70,6 +70,7 @@ push(Base, Req, Opts) ->
                                 },
                                 Opts
                             ),
+                            ok = cache_scheduled_assignment(Assignment, Opts),
                             push_with_mode(Process, Assignment, Opts)
                     end;
                 {error, Res} -> {error, Res}
@@ -348,6 +349,7 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
             ),
             case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
                 {ok, Assignment} ->
+                    ok = cache_scheduled_assignment(Assignment, Opts),
                     % Analyze the result of the message push.
                     NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
                     PushedMsg = hb_ao:get(<<"body">>, Assignment, Opts),
@@ -385,6 +387,50 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                     }
             end
     end.
+
+cache_scheduled_assignment(Assignment, Opts) ->
+    case hb_ao:get(<<"type">>, Assignment, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        <<"Assignment">> -> write_scheduled_assignment(Assignment, Opts);
+        _ -> ok
+    end.
+
+write_scheduled_assignment(RawAssignment, RawOpts) ->
+    Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
+    Opts =
+        RawOpts#{
+            <<"store">> =>
+                hb_opts:get(
+                    scheduler_store,
+                    hb_opts:get(store, no_viable_store, RawOpts),
+                    RawOpts
+                )
+        },
+    ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
+    Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
+    AssignmentPath =
+        hb_path:to_binary([
+            <<"~scheduler@1.0">>,
+            <<"assignments">>,
+            hb_util:human_id(ProcID),
+            hb_ao:normalize_key(Slot)
+        ]),
+    ToWrite =
+        Assignment#{
+            <<"priv">> =>
+                maps:merge(
+                    maps:get(<<"priv">>, Assignment, #{}),
+                    #{ <<"hashpath">> => AssignmentPath }
+                )
+        },
+    {ok, WrittenID} =
+        hb_cache:write_hashpath(
+            ToWrite,
+            Opts
+        ),
+    SignedID = hb_message:id(ToWrite, signed, Opts),
+    AllID = hb_message:id(ToWrite, all, Opts),
+    ok = hb_cache:link(WrittenID, SignedID, Opts),
+    hb_cache:link(WrittenID, AllID, Opts).
 
 %% @doc Push a downstream resultant message that has already been scheduled.
 %% We determine whether to push the message locally or remotely based on the
@@ -584,12 +630,25 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseID.
 
 canonical_process(Process = #{ <<"...">> := Parent }, Opts) ->
-    case hb_message:verify(Process, all, Opts) of
+    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
+        true -> Process;
+        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
+    end;
+canonical_process(Process = #{ <<"...+link">> := Parent }, Opts) ->
+    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
         true -> Process;
         false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
     end;
 canonical_process(Process, _Opts) ->
     Process.
+
+has_top_signer(Process, Opts) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_maps:is_key(<<"committer">>, Commitment, Opts)
+        end,
+        hb_maps:to_list(maps:get(<<"commitments">>, Process, #{}), Opts)
+    ).
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
 %% If the remote scheduler does not support the given codec, it will be

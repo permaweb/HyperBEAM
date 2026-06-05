@@ -90,6 +90,11 @@ from(Msg, Req, Opts) when is_map(Msg) ->
     NormLinks = hb_link:normalize(Msg, linkify_mode(HintedReq, Opts), Opts),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
+    Keys =
+        case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+            true -> hb_util:to_sorted_keys(maps:keys(NormKeysMap), Opts);
+            false -> hb_util:to_sorted_keys(NormKeysMap, Opts)
+        end,
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
             case hb_maps:find(Key, NormKeysMap, Opts) of
@@ -146,7 +151,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                     not hb_private:is_private(Key) andalso
                     not (Key == <<"commitments">>)
             end,
-            hb_util:to_sorted_keys(NormKeysMap, Opts)
+            Keys
         )
     ),
     % Encode the AoTypes as a structured dictionary
@@ -292,7 +297,12 @@ decode_types(Base, Req, Opts) ->
 %% as there can be no `ao-types'.
 decode_ao_types(List, _Opts) when is_list(List) -> #{};
 decode_ao_types(Msg, Opts) when is_map(Msg) ->
-    decode_ao_types(hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts), Opts);
+    AOTypes =
+        case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+            true -> maps:get(<<"ao-types">>, Msg, <<>>);
+            false -> hb_maps:get(<<"ao-types">>, Msg, <<>>, Opts)
+        end,
+    decode_ao_types(AOTypes, Opts);
 decode_ao_types(Bin, _Opts) when is_binary(Bin) ->
     hb_maps:from_list(
         lists:map(

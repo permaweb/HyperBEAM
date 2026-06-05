@@ -203,19 +203,19 @@ charge(_, RawReq, NodeMsg) ->
     {ok, integer()}.
 balance(_, RawReq, NodeMsg) ->
     Target =
-        case
-            hb_ao:get(
-                <<"request">>,
-                RawReq,
-                NodeMsg#{ <<"hashpath">> => ignore }
-            )
-        of
-            not_found ->
-                case hb_message:signers(RawReq, NodeMsg) of
-                    [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
-                    [Signer] -> Signer
-                end;
-            Req -> hd(hb_message:signers(Req, NodeMsg))
+        case maps:find(<<"target">>, RawReq) of
+            {ok, ExplicitTarget} ->
+                ExplicitTarget;
+            error ->
+                case maps:find(<<"request">>, RawReq) of
+                    error ->
+                        case hb_message:signers(RawReq, NodeMsg) of
+                            [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
+                            [Signer] -> Signer
+                        end;
+                    {ok, Req} ->
+                        hd(hb_message:signers(Req, NodeMsg))
+                end
         end,
     {ok, get_balance(Target, NodeMsg)}.
 

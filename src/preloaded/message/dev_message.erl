@@ -103,8 +103,14 @@ id(List, Req, NodeOpts) when is_list(List) ->
     id(hb_message:convert(List, tabm, NodeOpts), Req, NodeOpts);
 id(RawBase, Req, NodeOpts) ->
     % Ensure that the base message is normalized before proceeding.
-    IDOpts = NodeOpts#{ <<"linkify-mode">> => discard },
-    Base = ensure_commitments_loaded(RawBase, NodeOpts),
+    IDOpts =
+        maybe_preserve_message_extension(
+            RawBase,
+            Req,
+            NodeOpts#{ <<"linkify-mode">> => discard },
+            true
+        ),
+    Base = ensure_commitments_loaded(RawBase, IDOpts),
     % Remove the commitments from the base message if there are none, after
     % filtering for the committers specified in the request.
     #{ <<"commitments">> := Commitments }
@@ -233,27 +239,49 @@ id_device(_, _) ->
     {ok, [_]}.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
-committers(Base, _, NodeOpts) ->
-    case hb_maps:get(<<"commitments">>, Base, not_found, NodeOpts) of
+committers(Base, Req, NodeOpts) ->
+    case maps:get(<<"commitments">>, Base, not_found) of
         not_found ->
-            {ok, []};
+            case commitment_lookup_mode(NodeOpts) of
+                top -> {ok, []};
+                inherited ->
+                    case hb_maps:get(<<"commitments">>, Base, not_found, NodeOpts) of
+                        not_found -> {ok, []};
+                        Commitments -> {ok, committers_from_commitments(Commitments, NodeOpts)}
+                    end
+            end;
         Commitments ->
+            ParentCommitters =
+                case map_size(Req) == 0 andalso has_extension_commitment(Base, NodeOpts) of
+                    true ->
+                        case extension_parent(Base, NodeOpts) of
+                            {ok, Parent} -> hb_message:signers(Parent, NodeOpts);
+                            error -> []
+                        end;
+                    false -> []
+                end,
             {ok,
-                hb_maps:values(
-                    hb_maps:filtermap(
-                        fun(_ID, Commitment) ->
-                            case hb_maps:get(<<"committer">>, Commitment, undefined, NodeOpts) of
-                                undefined -> false;
-                                Committer -> {true, Committer}
-                            end
-                        end,
-                        Commitments,
-                        NodeOpts
-                    ),
-                    NodeOpts
+                lists:usort(
+                    committers_from_commitments(Commitments, NodeOpts)
+                        ++ ParentCommitters
                 )
             }
     end.
+
+committers_from_commitments(Commitments, NodeOpts) ->
+    hb_maps:values(
+        hb_maps:filtermap(
+            fun(_ID, Commitment) ->
+                case hb_maps:get(<<"committer">>, Commitment, undefined, NodeOpts) of
+                    undefined -> false;
+                    Committer -> {true, Committer}
+                end
+            end,
+            Commitments,
+            NodeOpts
+        ),
+        NodeOpts
+    ).
 
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
@@ -273,13 +301,14 @@ commit(Self, Req, Opts) ->
     % We _do not_ set the `device' key in the message, as the device will be
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
-    CommitOpts =
+    BaseCommitOpts =
         case hb_maps:get(<<"type">>, Req, <<"signed">>) of
             <<"unsigned">> ->
                 Opts#{ <<"linkify-mode">> => discard };
             _ ->
                 Opts#{ <<"linkify-mode">> => offload }
         end,
+    CommitOpts = maybe_preserve_message_extension(Base, Req, BaseCommitOpts, true),
     % Encode to a TABM. The `bundle' flag (when set on the request) is the
     % caller's intent for the top-level commit and applies only to the root
     % message; `hint-device' lets the structured codec preserve each nested
@@ -293,14 +322,20 @@ commit(Self, Req, Opts) ->
     Loaded =
         ensure_commitments_loaded(
             hb_message:convert(Base, tabm, SourceSpec, CommitOpts),
-            Opts
+            CommitOpts
+        ),
+    CommitReq =
+        maybe_extension_commit_request(
+            Loaded,
+            Req#{ <<"type">> => maps:get(<<"type">>, Req, <<"signed">>) },
+            CommitOpts
         ),
     {ok, Committed} =
         hb_ao:raw(
             AttDev,
             <<"commit">>,
             Loaded,
-            Req#{ <<"type">> => maps:get(<<"type">>, Req, <<"signed">>) },
+            CommitReq,
             CommitOpts
         ),
     {ok, hb_message:convert(Committed, <<"structured@1.0">>, tabm, CommitOpts)}.
@@ -316,9 +351,16 @@ commit(Self, Req, Opts) ->
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
-    CommitmentBase = ensure_commitments_loaded(RawBase, Opts),
-    Commitments = maps:get(<<"commitments">>, CommitmentBase, #{}),
-    IDsToVerify = commitment_ids_from_request(CommitmentBase, Req, Opts),
+    VerifyOpts =
+        maybe_preserve_message_extension(
+            RawBase,
+            Req,
+            Opts#{ <<"linkify-mode">> => discard },
+            false
+        ),
+    CommitmentBase = ensure_commitments_loaded(RawBase, VerifyOpts),
+    Commitments = commitments(CommitmentBase, VerifyOpts),
+    IDsToVerify = commitment_ids_from_request(CommitmentBase, Req, VerifyOpts),
     % Generate the new commitment request base messsage by removing the keys
     % used by this function (path, committers, commitments) and returning the
     % remaining keys. This message will then be merged with each commitment
@@ -359,16 +401,16 @@ verify(Self, Req, Opts) ->
                                     undefined
                                 )
                         },
-                        Opts
+                        VerifyOpts
                     ),
                 Base = hb_message:convert(
-                    CommitmentBase, tabm, SourceSpec, Opts),
+                    CommitmentBase, tabm, SourceSpec, VerifyOpts),
                 ?event(verify, {verify, {base_found, Base}}),
                 {ok, Res} =
                     verify_commitment(
                         Base,
                         Commitment,
-                        Opts
+                        VerifyOpts
                     ),
                 ?event(verify,
                     {verify_commitment_res,
@@ -411,15 +453,16 @@ committed(Self, Req, Opts) ->
             Req,
             Opts
         ),
-    Base = ensure_commitments_loaded(RawBase, Opts),
-    CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
+    CommittedOpts = maybe_preserve_message_extension(RawBase, Req, Opts, false),
+    Base = ensure_commitments_loaded(RawBase, CommittedOpts),
+    CommitmentIDs = commitment_ids_from_request(Base, Req, CommittedOpts),
     ?event(debug_commitments,
         {calculating_committed,
             {commitment_ids, CommitmentIDs},
             {req, Req}
         }
     ),
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = commitments(Base, CommittedOpts),
     % Get the list of committed keys from each committer.
     CommitmentKeys =
         lists:map(
@@ -430,7 +473,7 @@ committed(Self, Req, Opts) ->
                 % for comparison purposes.
                 hb_util:message_to_ordered_list(
                     maps:get(<<"committed">>, Commitment),
-                    Opts
+                    CommittedOpts
                 )
             end,
             CommitmentIDs
@@ -480,7 +523,7 @@ committed(Self, Req, Opts) ->
 %% @doc Return a message with only the relevant commitments for a given request.
 %% See `commitment_ids_from_request/3' for more information on the request format.
 with_relevant_commitments(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = commitments(Base, Opts),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
     Base#{ <<"commitments">> => maps:with(CommitmentIDs, Commitments) }.
 
@@ -491,7 +534,7 @@ with_relevant_commitments(Base, Req, Opts) ->
 %% may specify `all' or `none' for each group. If no specifiers are provided,
 %% the default is `all' for commitments -- also implying `all' for committers.
 commitment_ids_from_request(Base, Req, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Base, #{}),
+    Commitments = commitments(Base, Opts),
     ReqCommitters =
         case maps:get(<<"committers">>, Req, <<"none">>) of
             X when is_list(X) -> X;
@@ -564,19 +607,116 @@ commitment_ids_from_request(Base, Req, Opts) ->
     ),
     Res.
 
+commitments(Base, Opts) ->
+    case commitment_lookup_mode(Opts) of
+        top -> maps:get(<<"commitments">>, Base, #{});
+        inherited -> hb_maps:get(<<"commitments">>, Base, #{}, Opts)
+    end.
+
+commitment_lookup_mode(Opts) ->
+    case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+        true -> top;
+        false -> inherited
+    end.
+
 %% @doc Ensure that the `commitments` submessage of a base message is fully
-%% present and loaded into local memory. We first flatten any message extension
-%% (`...') so that commitments held by an extended base surface to the top, where
-%% the commitment functions read them -- a message that merely extends a signed
-%% base must show that base's commitments. We then load the commitments link if
-%% one is present. Flattening is a no-op for the (common) non-extended message.
+%% present and loaded into local memory. We normally flatten message extensions
+%% (`...') so inherited commitments surface to the top. If commitment handling is
+%% explicitly preserving the extension edge, the top layer is kept intact instead.
 ensure_commitments_loaded(RawM, Opts) ->
-    case hb_maps:flatten(RawM, Opts) of
+    M0 =
+        case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+            true -> RawM;
+            false -> hb_maps:flatten(RawM, Opts)
+        end,
+    case M0 of
         M = #{ <<"commitments">> := L } when ?IS_LINK(L) ->
             M#{ <<"commitments">> => hb_cache:ensure_all_loaded(L, Opts) };
         M ->
             M
     end.
+
+maybe_preserve_message_extension(Msg, Req, Opts, DefaultPreserve) ->
+    case should_preserve_message_extension(Msg, Req, Opts, DefaultPreserve) of
+        true -> Opts#{ <<"preserve-message-extension">> => true };
+        false -> Opts
+    end.
+
+should_preserve_message_extension(Msg, Req, Opts, DefaultPreserve) ->
+    has_message_extension(Msg)
+        andalso (
+            explicit_commits_extension(Req, Opts)
+            orelse (
+                has_extension_commitment(Msg, Opts)
+                andalso not requests_specific_committers(Req)
+            )
+            orelse (
+                DefaultPreserve
+                andalso maps:get(<<"committed">>, Req, not_found) =:= not_found
+            )
+        ).
+
+has_message_extension(Msg) ->
+    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg).
+
+requests_specific_committers(Req) ->
+    case maps:get(<<"committers">>, Req, <<"none">>) of
+        <<"none">> -> false;
+        <<"all">> -> false;
+        _ -> true
+    end.
+
+extension_parent(Base, Opts) ->
+    case maps:find(<<"...">>, Base) of
+        {ok, Parent} ->
+            {ok, hb_cache:ensure_loaded(Parent, Opts)};
+        error ->
+            case maps:find(<<"...+link">>, Base) of
+                {ok, ID} when is_binary(ID) ->
+                    hb_cache:read(ID, hb_store:scope(Opts, local));
+                {ok, Parent} ->
+                    {ok, hb_cache:ensure_loaded(Parent, Opts)};
+                error ->
+                    error
+            end
+    end.
+
+explicit_commits_extension(Req, Opts) ->
+    case maps:get(<<"committed">>, Req, not_found) of
+        not_found ->
+            false;
+        Committed ->
+            lists:member(
+                <<"...">>,
+                lists:map(
+                    fun hb_link:remove_link_specifier/1,
+                    hb_util:message_to_ordered_list(Committed, Opts)
+                )
+            )
+    end.
+
+has_extension_commitment(Msg, Opts) ->
+    Commitments = maps:get(<<"commitments">>, Msg, #{}),
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(
+                <<"...">>,
+                committed_keys_for_commitment(Commitment, Opts)
+            )
+        end,
+        hb_maps:to_list(Commitments, Opts)
+    ).
+
+maybe_extension_commit_request(Msg, Req, _Opts) ->
+    case {has_message_extension(Msg), maps:is_key(<<"committed">>, Req)} of
+        {true, false} ->
+            Req#{ <<"committed">> => extension_commitment_keys(Msg) };
+        _ ->
+            Req
+    end.
+
+extension_commitment_keys(Msg) ->
+    lists:sort(maps:keys(maps:without([<<"commitments">>, <<"priv">>], Msg))).
 
 %% @doc Returns a list of commitment IDs in a commitments map that are relevant
 %% for a list of given committer addresses.
@@ -665,7 +805,7 @@ set(Base, NewValuesMsg, Opts) ->
             hb_maps:keys(Base, Opts)
         ),
     % Base message with keys-to-unset removed
-    BaseValues = hb_private:reset(hb_maps:without(UnsetKeys, Base, Opts)),
+    BaseValues = hb_private:reset(without_visible(UnsetKeys, Base, Opts)),
     ?event(debug_message_set,
         {performing_set,
             {conflicting_keys, ConflictingKeys},
@@ -839,8 +979,19 @@ drop_commitments_for_keys(Msg, Keys, Opts) ->
                     Commitments,
                     Opts
                 ),
-            Msg#{ <<"commitments">> => FilteredCommitments }
+            maybe_update_commitments(Msg, FilteredCommitments)
     end.
+
+maybe_update_commitments(Msg = #{ <<"...">> := _ }, Commitments)
+        when map_size(Commitments) == 0 ->
+    Msg#{ <<"commitments">> => #{} };
+maybe_update_commitments(Msg = #{ <<"...+link">> := _ }, Commitments)
+        when map_size(Commitments) == 0 ->
+    Msg#{ <<"commitments">> => #{} };
+maybe_update_commitments(Msg, Commitments) when map_size(Commitments) == 0 ->
+    maps:remove(<<"commitments">>, Msg);
+maybe_update_commitments(Msg, Commitments) ->
+    Msg#{ <<"commitments">> => Commitments }.
 
 intersects(A, B) ->
     lists:any(fun(Item) -> lists:member(Item, B) end, A).
@@ -974,25 +1125,49 @@ base_values_map(BaseValues) ->
     {ok, #{ _ => _ }} | #{ _ => _ }.
 set_path(Base, #{ <<"value">> := Value }, Opts) ->
     set_path(Base, Value, Opts);
-set_path(Base, Value, Opts) when not is_map(Value) ->
+set_path(Base, Value, Opts) ->
     % Determine whether the `path' key is committed. If it is, we remove the
     % commitment if the new value is different. We try to minimize work by
     % doing the `hb_maps:get` first, as it is far cheaper than calculating
     % the committed keys.
-    BaseWithCorrectedComms =
-        case hb_maps:get(<<"path">>, Base, undefined, Opts) of
-            Value -> Base;
-            _ ->
-                % The new value is different, but is it committed? If so, we
-                % must remove the commitments.
-                drop_commitments_for_keys(Base, [<<"path">>], Opts)
-        end,
-    case Value of
-        unset ->
-            {ok, hb_maps:without([<<"path">>], BaseWithCorrectedComms, Opts)};
-        _ ->
-            BaseWithCorrectedComms#{ <<"path">> => Value }
+    case {hb_maps:get(<<"path">>, Base, undefined, Opts), committed_keys_for_any(Base, Opts)} of
+        {Value, _} ->
+            Base;
+        {_, CommittedKeys} ->
+            case lists:member(<<"path">>, CommittedKeys) of
+                true ->
+                    OriginalPriv = hb_private:from_message(Base),
+                    BaseValues = hb_private:reset(Base),
+                    Merged =
+                        case Value of
+                            unset ->
+                                #{
+                                    <<"...">> =>
+                                        drop_commitments_for_keys(
+                                            without_visible([<<"path">>], BaseValues, Opts),
+                                            [<<"path">>],
+                                            Opts
+                                        )
+                                };
+                            _ ->
+                                #{ <<"path">> => Value, <<"...">> => BaseValues }
+                        end,
+                    hb_private:set_priv(
+                        drop_commitments_for_keys(Merged, [<<"path">>], Opts),
+                        OriginalPriv
+                    );
+                false ->
+                    case Value of
+                        unset -> {ok, without_visible([<<"path">>], Base, Opts)};
+                        _ -> Base#{ <<"path">> => Value }
+                    end
+            end
     end.
+
+without_visible([], Base, _Opts) ->
+    Base;
+without_visible(Keys, Base, Opts) ->
+    hb_maps:without(Keys, hb_maps:flatten(Base, Opts), Opts).
 
 %% @doc Remove a key or keys from a message.
 -spec remove(#{ _ => _ }, #{ item => _, items => [_], _ => _ }, #{ _ => _ }) ->

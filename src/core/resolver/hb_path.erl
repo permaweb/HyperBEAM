@@ -159,7 +159,7 @@ hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
 %%% If no hashpath algorithm is specified, the protocol defaults to
 %%% `sha-256-chain'.
 hashpath_alg(Msg, Opts) ->
-    case hb_maps:get(<<"hashpath-alg">>, Msg, <<"sha-256-chain">>, Opts) of
+    case hashpath_alg_value(Msg, Opts) of
         <<"sha-256-chain">> ->
             fun hb_crypto:sha256_chain/2;
         <<"accumulate-256">> ->
@@ -167,6 +167,14 @@ hashpath_alg(Msg, Opts) ->
         _ ->
             fun hb_crypto:sha256_chain/2
     end.
+
+hashpath_alg_value(Msg, Opts) when is_map(Msg) ->
+    case maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg) of
+        true -> maps:get(<<"hashpath-alg">>, Msg, <<"sha-256-chain">>);
+        false -> hb_maps:get(<<"hashpath-alg">>, Msg, <<"sha-256-chain">>, Opts)
+    end;
+hashpath_alg_value(Msg, Opts) ->
+    hb_maps:get(<<"hashpath-alg">>, Msg, <<"sha-256-chain">>, Opts).
 
 %% @doc Calculate the all-commitments message ID without full AO-Core resolve.
 message_id(Msg, Opts) ->

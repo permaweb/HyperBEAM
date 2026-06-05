@@ -25,6 +25,7 @@ write(RawAssignment, RawOpts) ->
     Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
+    {ok, ToWrite} = hb_message:with_only_committed(Assignment, Opts),
     % Write the message into the main cache
     ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
@@ -35,8 +36,10 @@ write(RawAssignment, RawOpts) ->
             {assignment, Assignment}
         }
     ),
-    case hb_cache:write(Assignment, Opts) of
-        {ok, _UnsignedID} ->
+    case hb_cache:write(ToWrite, Opts) of
+        {ok, WrittenID} ->
+            SignedID = hb_message:id(ToWrite, signed, Opts),
+            ok = hb_cache:link(WrittenID, SignedID, Opts),
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
             ok = hb_store:link(
@@ -47,7 +50,7 @@ write(RawAssignment, RawOpts) ->
                         <<"assignments">>,
                         hb_util:human_id(ProcID),
                         hb_ao:normalize_key(Slot)
-                    ]) => hb_message:id(Assignment, signed, Opts)
+                    ]) => SignedID
                 },
                 Opts
             ),
@@ -95,7 +98,9 @@ read(ProcID, Slot, RawOpts) ->
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->
-                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
+                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)};
+                        not_found ->
+                            not_found
                     end;
                 {error, not_found} ->
                     ?event(debug_sched, {read_assignment, {res, not_found}}),
