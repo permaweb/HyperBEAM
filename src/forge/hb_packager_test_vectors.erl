@@ -394,3 +394,67 @@ package_for_test(Group) ->
 %% Load an archive exactly as the runtime does (sans signature checks).
 load_pkg_archive(Pkg) ->
     ok = hb_device_archive:load(maps:get(archive, Pkg)).
+
+%%% --------------------------------------------------------------------
+%%% Issue #944 — cross-package call resolution.
+%%% --------------------------------------------------------------------
+%% A device in package A that calls a module in package B *directly* (by its
+%% original name) is emitted bare by the rename transform and fails with `undef'
+%% at runtime, because only the generated (hashed) module names are ever loaded.
+%% Routing the same call through a `lib_*' module that BOTH packages declare via
+%% `-device_libraries' makes it resolve — the lib is compiled (and renamed) into
+%% each package. This is the exact failure + fix shape behind #944.
+cross_package_call_resolution_test() ->
+    %% Package B exposes ping/0 (the cross-package target).
+    DirB = xpkg_fixture_dir(<<"hb_xpkg_b_">>, <<
+        "%%% @doc xpkg b.\n"
+        "-module(dev_xpkg_b).\n"
+        "-export([info/3, ping/0]).\n"
+        "info(_, _, _) -> {ok, #{}}.\n"
+        "ping() -> <<\"pong\">>.\n"
+    >>),
+    [GroupB] = hb_packager:scan([DirB], #{}),
+    PkgB = package_for_test(GroupB),
+    %% Package A: one path calls B directly (the bug), one via a shared lib (the fix).
+    DirA = xpkg_fixture_dir(<<"hb_xpkg_a_">>, <<
+        "%%% @doc xpkg a.\n"
+        "-module(dev_xpkg_a).\n"
+        "-device_libraries([lib_xshared]).\n"
+        "-export([direct/3, via_lib/3]).\n"
+        "direct(_, _, _) -> {ok, dev_xpkg_b:ping()}.\n"
+        "via_lib(_, _, _) -> {ok, lib_xshared:ping()}.\n"
+    >>),
+    ok = file:write_file(
+        filename:join(DirA, <<"lib_xshared.erl">>),
+        <<
+            "-module(lib_xshared).\n"
+            "-export([ping/0]).\n"
+            "ping() -> <<\"pong\">>.\n"
+        >>
+    ),
+    [GroupA] = hb_packager:scan([DirA], #{}),
+    PkgA = package_for_test(GroupA),
+    ModA = maps:get(module_name, PkgA),
+    ok = load_pkg_archive(PkgB),
+    ok = load_pkg_archive(PkgA),
+    %% FIX: the cross-package call routed through the declared lib_* resolves.
+    ?assertEqual({ok, <<"pong">>}, ModA:via_lib(#{}, #{}, #{})),
+    %% BUG (#944): the direct cross-package call by original name undefs — the
+    %% original `dev_xpkg_b' is never loaded, only its generated module is.
+    ?assertError(undef, ModA:direct(#{}, #{}, #{})).
+
+xpkg_fixture_dir(Prefix, RootSrc) ->
+    Tmp =
+        filename:join([
+            <<"/tmp">>,
+            <<Prefix/binary,
+                (integer_to_binary(erlang:unique_integer([positive])))/binary>>
+        ]),
+    ok = filelib:ensure_dir(filename:join(Tmp, <<".keep">>)),
+    [ModLine | _] = binary:split(RootSrc, <<"-module(">>, [trim]),
+    _ = ModLine,
+    {match, [Name]} =
+        re:run(RootSrc, <<"-module\\(([a-z0-9_]+)\\)">>,
+            [{capture, all_but_first, binary}]),
+    ok = file:write_file(filename:join(Tmp, <<Name/binary, ".erl">>), RootSrc),
+    Tmp.
