@@ -9,9 +9,12 @@
     set_results/3,
     ensure_process_key/2,
     default_device/3,
-    %% Cross-package helpers (issue #944) — see bottom of module.
+    %% Cross-package process helpers — see bottom of module.
     cache_write/4,
     cache_latest/2,
+    cache_latest/3,
+    cache_latest/4,
+    cache_path/3,
     assignments_to_aos2/4
 ]).
 
@@ -154,60 +157,96 @@ default_device_index(<<"execution">>) -> <<"genesis-wasm@1.0">>;
 default_device_index(<<"push">>) -> <<"push@1.0">>.
 
 %%% --------------------------------------------------------------------
-%%% Cross-package helpers (issue #944).
+%%% Cross-package process helpers.
 %%%
-%%% The vm-package devices (`dev_genesis_wasm', `dev_delegated_compute') need
-%%% functionality that lives in the process package (`dev_process_cache',
-%%% `dev_scheduler_formats'). A DIRECT cross-package call is emitted bare by the
-%%% device packager's rename transform (`hb_device_rename') — the called atom is
-%%% not in the calling package's rename map — so it `undef's at runtime on a fresh
-%%% build (issue #944). `lib_process' is declared via `-device_libraries' by BOTH
-%%% packages, so it is compiled into each; routing these calls through it makes
-%%% them resolve in either package. The bodies below depend only on the
-%%% (never-renamed) `hb_*'/`ar_*' core, so they are self-contained in any package.
+%%% A `lib_*' module declared via `-device_libraries' is compiled into every
+%%% package that declares it. The device packager (`hb_device_rename') only
+%%% rewrites calls to modules in the calling package's rename map, so a direct
+%%% call to a device root in another package is emitted bare and will not
+%%% resolve. A shared `lib_*' module is in every declaring package's map, so
+%%% routing cross-package functionality through it keeps the calls resolvable in
+%%% any package.
 %%%
-%%% NOTE FOR REVIEWERS: these mirror `dev_process_cache:{write,latest}/_' and
-%%% `dev_scheduler_formats:assignments_to_aos2/4'. An alternative is to MOVE the
-%%% originals here and have the process-package modules delegate to `lib_process'
-%%% (both already declare it) to avoid the duplication — flagged for your call.
-%%% (Exports are declared in the module's top `-export' block — the Forge device
-%%% compiler rejects `-export' attributes that appear after function definitions.)
+%%% The helpers below are the cross-package entry points to the process-package
+%%% cache and scheduler-format functionality that the vm-package devices
+%%% (`dev_genesis_wasm', `dev_delegated_compute') rely on. They depend only on
+%%% the core `hb_*'/`ar_*' modules, which are never renamed, so they resolve in
+%%% whichever package they are compiled into.
+%%%
+%%% Exports for these are declared in the module's top `-export' block: the Forge
+%%% device compiler rejects `-export' attributes placed after function definitions.
 %%% --------------------------------------------------------------------
 
-%% @doc Cross-package-safe mirror of `dev_process_cache:write/4'.
+%% @doc Write a process computation result to the cache. Canonical home of the
+%% process-result cache writer; `dev_process_cache:write/4' delegates here so the
+%% logic is shared (and resolvable) across the process and vm device packages.
 cache_write(ProcID, Slot, Msg, Opts) ->
+    % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
+    % Link the item to the path in the store by slot number.
     SlotNumPath = cache_path(ProcID, Slot, Opts),
     hb_cache:link(Root, SlotNumPath, Opts),
-    MsgIDPath = cache_path(ProcID, hb_message:id(Msg, uncommitted, Opts), Opts),
+    % Link the item to the message ID path in the store.
+    MsgIDPath =
+        cache_path(
+            ProcID,
+            ID = hb_message:id(Msg, uncommitted, Opts),
+            Opts
+        ),
+    ?event(
+        {linking_id,
+            {proc_id, ProcID},
+            {slot, Slot},
+            {id, ID},
+            {path, MsgIDPath}
+        }
+    ),
     hb_cache:link(Root, MsgIDPath, Opts),
+    % Return the slot number path.
     {ok, SlotNumPath}.
 
-%% @doc Cross-package-safe mirror of `dev_process_cache:latest/2'.
-cache_latest(ProcID, Opts) ->
-    cache_latest(ProcID, [], undefined, Opts).
+%% @doc Retrieve the latest slot for a given process. Optionally state a limit
+%% on the slot number to search for, as well as a required path that the slot
+%% must have. Canonical home; `dev_process_cache:latest/_' delegates here.
+cache_latest(ProcID, Opts) -> cache_latest(ProcID, [], Opts).
+cache_latest(ProcID, RequiredPath, Opts) ->
+    cache_latest(ProcID, RequiredPath, undefined, Opts).
 cache_latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
     Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    % Normalize the store descriptor to a list of stores.
     UnscopedStore =
         case hb_opts:get(store, no_viable_store, RawOpts) of
             StoreMsg when is_map(StoreMsg) -> [StoreMsg];
             Other -> Other
         end,
+    % Apply the scope to the store and update the options message.
     ScopedStore = hb_store:scope(UnscopedStore, Scope),
     Opts = RawOpts#{ <<"store">> => ScopedStore },
+    % Convert the required path to a list of _binary_ keys.
     RequiredPath =
         case RawRequiredPath of
             undefined -> [];
             [] -> [];
             _ -> hb_path:term_to_path_parts(RawRequiredPath, Opts)
         end,
+    ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
     Path = cache_path(ProcID, slot_root, Opts),
     AllSlots = hb_cache:list_numbered(Path, Opts),
+    ?event({all_slots, {proc_id, ProcID}, {slots, AllSlots}}),
     CappedSlots =
         case Limit of
             undefined -> AllSlots;
             _ -> lists:filter(fun(Slot) -> Slot =< Limit end, AllSlots)
         end,
+    ?event(
+        {finding_latest_slot,
+            {proc_id, hb_util:human_id(ProcID)},
+            {limit, Limit},
+            {path, Path},
+            {slots_in_range, CappedSlots}
+        }
+    ),
+    % Find the highest slot that has the necessary path.
     BestSlot =
         cache_first_with_path(
             ProcID, RequiredPath, lists:reverse(lists:sort(CappedSlots)), Opts),
@@ -240,6 +279,7 @@ cache_first_with_path(ProcID, RequiredPath, Slots, Opts) ->
 cache_first_with_path(_ProcID, _Required, [], _Opts, _Store) -> not_found;
 cache_first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
     RawPath = cache_path(ProcID, Slot, RequiredPath, Opts),
+    ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
     case hb_store:read(Store, RawPath, Opts) of
         {error, not_found} ->
             cache_first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
@@ -248,7 +288,8 @@ cache_first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
         _ -> Slot
     end.
 
-%% @doc Cross-package-safe mirror of `dev_scheduler_formats:assignments_to_aos2/4'.
+%% @doc Return legacy net-SU compatible AOS2 results for a set of assignments.
+%% Canonical home; `dev_scheduler_formats:assignments_to_aos2/4' delegates here.
 assignments_to_aos2(ProcID, Assignments, More, RawOpts) when is_map(Assignments) ->
     assignments_to_aos2(
         ProcID,
@@ -281,6 +322,8 @@ assignments_to_aos2(ProcID, Assignments, More, RawOpts) ->
                 )
         },
     Encoded = hb_json:encode(BodyStruct),
+    ?event({body_struct, BodyStruct}),
+    ?event({encoded, {explicit, Encoded}}),
     {ok, #{
         <<"content-type">> => <<"application/json">>,
         <<"body">> => Encoded

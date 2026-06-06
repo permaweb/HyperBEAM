@@ -12,143 +12,25 @@ read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
 read(ProcID, SlotRef, Opts) ->
     ?event({reading_computed_result, ProcID, SlotRef}),
-    Path = path(ProcID, SlotRef, Opts),
+    Path = lib_process:cache_path(ProcID, SlotRef, Opts),
     hb_cache:read(Path, Opts).
 
-%% @doc Write a process computation result to the cache.
+%% @doc Write a process computation result to the cache. The implementation
+%% lives in `lib_process' as the single canonical copy, shared with (and
+%% resolvable from) the vm device package; this is a thin delegation.
 write(ProcID, Slot, Msg, Opts) ->
-    % Write the item to the cache in the root of the store.
-    {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
-    % Link the item to the path in the store by slot number.
-    SlotNumPath = path(ProcID, Slot, Opts),
-    hb_cache:link(Root, SlotNumPath, Opts),
-    % Link the item to the message ID path in the store.
-    MsgIDPath =
-        path(
-            ProcID,
-            ID = hb_message:id(Msg, uncommitted, Opts),
-            Opts
-        ),
-    ?event(
-        {linking_id,
-            {proc_id, ProcID},
-            {slot, Slot},
-            {id, ID},
-            {path, MsgIDPath}
-        }
-    ),
-    hb_cache:link(Root, MsgIDPath, Opts),
-    % Return the slot number path.
-    {ok, SlotNumPath}.
-
-%% @doc Calculate the path of a result, given a process ID and a slot.
-path(ProcID, Ref, Opts) ->
-    path(ProcID, Ref, [], Opts).
-path(ProcID, Ref, PathSuffix, _Opts) ->
-    hb_path:to_binary(
-        [
-            <<"computed">>,
-            hb_util:human_id(ProcID)
-        ] ++
-        case Ref of
-            Int when is_integer(Int) -> ["slot", integer_to_binary(Int)];
-            root -> [];
-            slot_root -> ["slot"];
-            _ -> [Ref]
-        end ++ PathSuffix
-    ).
+    lib_process:cache_write(ProcID, Slot, Msg, Opts).
 
 %% @doc Retrieve the latest slot for a given process. Optionally state a limit
 %% on the slot number to search for, as well as a required path that the slot
-%% must have.
-latest(ProcID, Opts) -> latest(ProcID, [], Opts).
+%% must have. The implementation lives in `lib_process' as the single canonical
+%% copy, resolvable from both the process and vm device packages.
+latest(ProcID, Opts) ->
+    lib_process:cache_latest(ProcID, Opts).
 latest(ProcID, RequiredPath, Opts) ->
-    latest(ProcID, RequiredPath, undefined, Opts).
+    lib_process:cache_latest(ProcID, RequiredPath, Opts).
 latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
-    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
-    % Normalize the store descriptor to a list of stores.
-    UnscopedStore =
-        case hb_opts:get(store, no_viable_store, RawOpts) of
-            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
-            Other -> Other
-        end,
-    % Apply the scope to the store and update the options message.
-    ScopedStore = hb_store:scope(UnscopedStore, Scope),
-    Opts = RawOpts#{ <<"store">> => ScopedStore },
-    % Convert the required path to a list of _binary_ keys.
-    RequiredPath =
-        case RawRequiredPath of
-            undefined -> [];
-            [] -> [];
-            _ ->
-                hb_path:term_to_path_parts(
-                    RawRequiredPath,
-                    Opts
-                )
-        end,
-    ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
-    Path = path(ProcID, slot_root, Opts),
-    AllSlots = hb_cache:list_numbered(Path, Opts),
-    ?event({all_slots, {proc_id, ProcID}, {slots, AllSlots}}),
-    CappedSlots =
-        case Limit of
-            undefined -> AllSlots;
-            _ -> lists:filter(fun(Slot) -> Slot =< Limit end, AllSlots)
-        end,
-    ?event(
-        {finding_latest_slot,
-            {proc_id, hb_util:human_id(ProcID)},
-            {limit, Limit},
-            {path, Path},
-            {slots_in_range, CappedSlots}
-        }
-    ),
-    % Find the highest slot that has the necessary path.
-    BestSlot =
-        first_with_path(
-            ProcID,
-            RequiredPath,
-            lists:reverse(lists:sort(CappedSlots)),
-            Opts
-        ),
-    case BestSlot of
-        {failure, _} = Failure ->
-            Failure;
-        {error, _} = Error ->
-            Error;
-        not_found ->
-            % No slot found with the necessary path was found.
-            {error, not_found};
-        SlotNum ->
-            % Found. Return the slot number and the message at that slot.
-            {ok, Msg} = hb_cache:read(path(ProcID, SlotNum, Opts), Opts),
-            {ok, SlotNum, Msg}
-    end.
-
-%% @doc Find the latest assignment with the requested path suffix.
-first_with_path(ProcID, RequiredPath, Slots, Opts) ->
-    first_with_path(
-        ProcID,
-        RequiredPath,
-        Slots,
-        Opts,
-        hb_opts:get(store, no_viable_store, Opts)
-    ).
-first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
-    not_found;
-first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
-    RawPath = path(ProcID, Slot, RequiredPath, Opts),
-    ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
-    case hb_store:read(Store, RawPath, Opts) of
-        {error, not_found} ->
-            first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
-        {failure, _} = Failure ->
-            Failure;
-        {error, _} = Error ->
-            Error;
-        _ ->
-            Slot
-    end.
+    lib_process:cache_latest(ProcID, RawRequiredPath, Limit, RawOpts).
 
 %%% Tests
 
