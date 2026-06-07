@@ -24,6 +24,7 @@ nav:
       - Exposing process state: 'build/exposing-process-state.md'
       - Serverless decentralized compute: 'build/serverless-decentralized-compute.md'
       - Extending HyperBEAM: 'build/extending-hyperbeam.md'
+      - Odysee HyperBEAM bridge: 'build/odysee-hyperbeam-bridge.md'
       - Device packaging: 'build/device-packaging.md'
       - External device repository: 'build/external-device-repository.md'
   - Devices:
