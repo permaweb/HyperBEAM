@@ -762,6 +762,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:filter(
                     fun(<<"body">>, _V) -> false;
                        (<<"data">>, _V) -> false;
+                       (<<"content-length">>, _V) -> false;
                        (_Key, V) ->
                             not ?IS_LINK(V)
                                 andalso not is_map(V)
@@ -1298,6 +1299,21 @@ cors_get_test() ->
         <<"*">>,
         hb_ao:get(<<"access-control-allow-origin">>, Res, LocalOpts)
     ).
+
+content_length_not_forwarded_for_encoded_reply_test() ->
+    {200, Headers, EncodedBody} =
+        encode_reply(
+            200,
+            #{ <<"require-codec">> => <<"application/json">> },
+            #{
+                <<"content-length">> => <<"999">>,
+                <<"status">> => 200,
+                <<"body">> => <<"ok">>
+            },
+            #{}
+        ),
+    ?assertNot(maps:is_key(<<"content-length">>, Headers)),
+    ?assert(byte_size(EncodedBody) > 0).
 
 ans104_wasm_test() ->
     ServerStore = [hb_test_utils:test_store()],

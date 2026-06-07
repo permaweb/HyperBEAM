@@ -884,7 +884,7 @@ initial_push_process_id(Req, RawReq, Opts) ->
         Opts#{ <<"hashpath">> => ignore }
     ),
     initial_push_process_id(
-        [Req, ReqBody | route_body_candidates(HookBody)],
+        [Req, ReqBody | route_body_candidates(HookBody, Opts)],
         Opts
     ).
 initial_push_process_id([], _Opts) ->
@@ -896,9 +896,13 @@ initial_push_process_id([Candidate | Rest], Opts) ->
     end.
 
 %% @doc Normalize a hook body into route hint candidates.
-route_body_candidates(Body) when is_list(Body) -> Body;
-route_body_candidates(Body) when is_map(Body) -> [Body];
-route_body_candidates(_) -> [].
+route_body_candidates(Body, _Opts) when is_list(Body) -> Body;
+route_body_candidates(Body, Opts) when is_map(Body) ->
+    case hb_util:is_ordered_list(Body, Opts) of
+        true -> hb_util:message_to_ordered_list(Body, Opts);
+        false -> [Body]
+    end;
+route_body_candidates(_, _Opts) -> [].
 
 %% @doc Return a signed process ID from a candidate message, if present.
 process_id_from_candidate(Candidate, Opts) when is_map(Candidate) ->
@@ -951,6 +955,11 @@ initial_push_route_request_test() ->
     ProcID = hb_message:id(Process, signed, ClientOpts),
     Req = Process#{ <<"path">> => <<"/push">>, <<"method">> => <<"POST">> },
     RawReq = #{ <<"request">> => Req, <<"body">> => [Process, Req] },
+    NumberedRawReq =
+        #{
+            <<"request">> => Req#{ <<"body">> => not_found },
+            <<"body">> => hb_util:list_to_numbered_message([Process, Req])
+        },
     RoutePath = <<"/", ProcID/binary, "/push">>,
     Opts =
         #{
@@ -968,6 +977,10 @@ initial_push_route_request_test() ->
     ?assertMatch(
         {ok, <<"POST">>, Peer, RoutePath, _, _},
         route_request(Req, RawReq, Opts)
+    ),
+    ?assertMatch(
+        {ok, <<"POST">>, Peer, RoutePath, _, _},
+        route_request(maps:remove(<<"body">>, Req), NumberedRawReq, Opts)
     ),
     {ok, #{ <<"body">> := [RelayBase, RelayCall] }} =
         preprocess(#{}, RawReq, Opts),
