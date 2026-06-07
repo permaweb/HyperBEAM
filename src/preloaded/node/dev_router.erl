@@ -729,7 +729,7 @@ preprocess(Base, RawReq, Opts) ->
     ?event(debug_preprocess, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
     ?event(debug_preprocess, {template_routes, TemplateRoutes}),
-    Res = hb_http:message_to_request(Req, Opts),
+    Res = route_request(Req, RawReq, Opts),
     ?event(debug_preprocess, {match, Res}),
     case Res of
         {error, _} -> 
@@ -835,7 +835,150 @@ preprocess(Base, RawReq, Opts) ->
             }
     end.
 
+%% @doc Find the HTTP route for a request, using a process ID hint for an
+%% initial `/push' if the literal path does not match any route.
+route_request(Req, RawReq, Opts) ->
+    case hb_http:message_to_request(Req, Opts) of
+        Error = {error, {no_viable_route, _, _}} ->
+            case initial_push_route_request(Req, RawReq, Opts) of
+                not_found ->
+                    Error;
+                RouteReq ->
+                    ?event(debug_preprocess, {initial_push_route_req, RouteReq}),
+                    hb_http:message_to_request(RouteReq, Opts)
+            end;
+        Res ->
+            Res
+    end.
+
+%% @doc Add a route-only process path for initial pushes with a process body.
+initial_push_route_request(Req, RawReq, Opts) ->
+    Path = hb_ao:get(<<"path">>, Req, <<>>, Opts#{ <<"hashpath">> => ignore }),
+    case {is_push_path(Path), initial_push_process_id(Req, RawReq, Opts)} of
+        {true, ProcID} when ?IS_ID(ProcID) ->
+            Req#{ <<"route-path">> => <<"/", ProcID/binary, "/push">> };
+        _ ->
+            not_found
+    end.
+
+%% @doc Determine if a path is an initial process push.
+is_push_path(Path) ->
+    case hb_path:normalize(hb_path:to_binary(Path)) of
+        <<"/push">> -> true;
+        <<"/push?", _/binary>> -> true;
+        _ -> false
+    end.
+
+%% @doc Find the pushed process ID from the raw or parsed hook request.
+initial_push_process_id(Req, RawReq, Opts) ->
+    HookBody = hb_ao:get(
+        <<"body">>,
+        RawReq,
+        [],
+        Opts#{ <<"hashpath">> => ignore }
+    ),
+    ReqBody = hb_ao:get(
+        <<"body">>,
+        Req,
+        not_found,
+        Opts#{ <<"hashpath">> => ignore }
+    ),
+    initial_push_process_id(
+        [Req, ReqBody | route_body_candidates(HookBody)],
+        Opts
+    ).
+initial_push_process_id([], _Opts) ->
+    not_found;
+initial_push_process_id([Candidate | Rest], Opts) ->
+    case process_id_from_candidate(Candidate, Opts) of
+        not_found -> initial_push_process_id(Rest, Opts);
+        ProcID -> ProcID
+    end.
+
+%% @doc Normalize a hook body into route hint candidates.
+route_body_candidates(Body) when is_list(Body) -> Body;
+route_body_candidates(Body) when is_map(Body) -> [Body];
+route_body_candidates(_) -> [].
+
+%% @doc Return a signed process ID from a candidate message, if present.
+process_id_from_candidate(Candidate, Opts) when is_map(Candidate) ->
+    Process =
+        case hb_ao:get(<<"body/type">>, Candidate, not_found, Opts) of
+            <<"Process">> ->
+                hb_ao:get(
+                    <<"body">>,
+                    Candidate,
+                    not_found,
+                    Opts#{ <<"hashpath">> => ignore }
+                );
+            _ ->
+                case hb_ao:get(<<"type">>, Candidate, not_found, Opts) of
+                    <<"Process">> -> Candidate;
+                    _ -> not_found
+                end
+        end,
+    case Process of
+        Msg when is_map(Msg) ->
+            try
+                {ok, Committed} = hb_message:with_only_committed(Msg, Opts),
+                hb_message:id(Committed, signed, Opts)
+            catch
+                _:_ -> not_found
+            end;
+        _ ->
+            not_found
+    end;
+process_id_from_candidate(_, _Opts) ->
+    not_found.
+
 %%% Tests
+
+initial_push_route_request_test() ->
+    Peer = <<"http://localhost:8735">>,
+    ClientOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Process =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"execution-device">> => <<"test-device@1.0">>,
+                <<"push-device">> => <<"push@1.0">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"type">> => <<"Process">>,
+                <<"module">> => <<"test-module">>
+            },
+            ClientOpts
+        ),
+    ProcID = hb_message:id(Process, signed, ClientOpts),
+    Req = Process#{ <<"path">> => <<"/push">>, <<"method">> => <<"POST">> },
+    RawReq = #{ <<"request">> => Req, <<"body">> => [Process, Req] },
+    RoutePath = <<"/", ProcID/binary, "/push">>,
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"^/.{43}(~.*|/).*">>,
+                        <<"node">> => #{ <<"prefix">> => Peer }
+                    }
+                ]
+        },
+    ?assertMatch({error, _}, hb_http:message_to_request(Req, Opts)),
+    ?assertMatch(
+        {ok, <<"POST">>, Peer, RoutePath, _, _},
+        route_request(Req, RawReq, Opts)
+    ),
+    {ok, #{ <<"body">> := [RelayBase, RelayCall] }} =
+        preprocess(#{}, RawReq, Opts),
+    ?assertEqual(Peer, hb_maps:get(<<"peer">>, RelayBase, not_found, Opts)),
+    ProxyMsg = hb_maps:get(<<"proxy-message">>, RelayCall, #{}, Opts),
+    UserMsg = hb_maps:get(<<"user-message">>, ProxyMsg, #{}, Opts),
+    ?assertEqual(not_found, hb_maps:get(<<"route-path">>, UserMsg, not_found, Opts)),
+    ?assertEqual(
+        <<"/push">>,
+        hb_maps:get(<<"user-path">>, ProxyMsg, not_found, Opts)
+    ).
 
 test_provider_test_parallel_() ->
     {timeout, 30, fun test_provider/0}.
