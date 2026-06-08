@@ -55,13 +55,7 @@ media(Base, Req, Opts) ->
             _ ->
                 maybe
                     {ok, Stream} ?= from_claim(Base, Req, Opts),
-                    hb_ao:raw(
-                        <<"lbry-stream-descriptor@1.0">>,
-                        <<"media">>,
-                        #{},
-                        descriptor_media_request(Stream, Base, Req, Opts),
-                        Opts
-                    )
+                    media_response(Stream, Base, Req, Opts)
                 else
                     Error -> Error
                 end
@@ -184,7 +178,13 @@ playback_response(Stream, Base, Req, Opts) ->
             };
         false ->
             Payload = (playback_payload(Stream, Opts))#{ <<"streaming_url">> => URL },
-            maps:merge(cors_headers(), Stream#{ <<"body">> => hb_json:encode(Payload) })
+            Body = hb_json:encode(Payload),
+            (cors_headers())#{
+                <<"status">> => 200,
+                <<"content-type">> => <<"application/json">>,
+                <<"content-length">> => byte_size(Body),
+                <<"body">> => Body
+            }
     end.
 
 playback_payload(Stream, Opts) ->
@@ -261,6 +261,287 @@ descriptor_media_request(Stream, Base, Req, Opts) ->
             <<"allow-full">>
         ]
     ).
+
+media_response(Stream, Base, Req, Opts) ->
+    case prefer_player_proxy(Base, Req, Opts) of
+        true ->
+            player_media_response(Stream, Base, Req, Opts);
+        false ->
+            descriptor_or_player_media(Stream, Base, Req, Opts)
+    end.
+
+descriptor_or_player_media(Stream, Base, Req, Opts) ->
+    DescriptorRes =
+        hb_ao:raw(
+            <<"lbry-stream-descriptor@1.0">>,
+            <<"media">>,
+            #{},
+            descriptor_media_request(Stream, Base, Req, Opts),
+            Opts
+        ),
+    case DescriptorRes of
+        {ok, _} -> DescriptorRes;
+        Error ->
+            case player_proxy_enabled(Base, Req, Opts) of
+                true -> player_media_response(Stream, Base, Req, Opts);
+                false -> Error
+            end
+    end.
+
+prefer_player_proxy(Base, Req, Opts) ->
+    player_proxy_enabled(Base, Req, Opts) andalso not descriptor_media_config_present(Base, Req, Opts).
+
+player_proxy_enabled(Base, Req, Opts) ->
+    Value =
+        case first_found(
+            [
+                {Req, <<"player-proxy">>},
+                {Req, <<"player_proxy">>},
+                {Base, <<"player-proxy">>},
+                {Base, <<"player_proxy">>}
+            ],
+            Opts
+        ) of
+            not_found -> hb_opts:get(<<"lbry-player-proxy">>, true, Opts);
+            Found -> Found
+        end,
+    not falsy(Value).
+
+descriptor_media_config_present(Base, Req, Opts) ->
+    first_found(
+        [
+            {Req, <<"encrypted-blobs">>},
+            {Req, <<"blobs">>},
+            {Req, <<"descriptor">>},
+            {Req, <<"blob-base-url">>},
+            {Req, <<"blob_base_url">>},
+            {Req, <<"blob-base-urls">>},
+            {Req, <<"blob_base_urls">>},
+            {Req, <<"reflector-url">>},
+            {Req, <<"reflector_url">>},
+            {Req, <<"reflector-urls">>},
+            {Req, <<"reflector_urls">>},
+            {Req, <<"blob-url-template">>},
+            {Req, <<"blob_url_template">>},
+            {Req, <<"blob-url-templates">>},
+            {Req, <<"blob_url_templates">>},
+            {Req, <<"blob-dir">>},
+            {Req, <<"blob_dir">>},
+            {Req, <<"blob-dirs">>},
+            {Req, <<"blob_dirs">>},
+            {Req, <<"blob-directory">>},
+            {Req, <<"blob_directory">>},
+            {Base, <<"encrypted-blobs">>},
+            {Base, <<"blobs">>},
+            {Base, <<"descriptor">>},
+            {Base, <<"blob-base-url">>},
+            {Base, <<"blob_base_url">>},
+            {Base, <<"blob-base-urls">>},
+            {Base, <<"blob_base_urls">>},
+            {Base, <<"reflector-url">>},
+            {Base, <<"reflector_url">>},
+            {Base, <<"reflector-urls">>},
+            {Base, <<"reflector_urls">>},
+            {Base, <<"blob-url-template">>},
+            {Base, <<"blob_url_template">>},
+            {Base, <<"blob-url-templates">>},
+            {Base, <<"blob_url_templates">>},
+            {Base, <<"blob-dir">>},
+            {Base, <<"blob_dir">>},
+            {Base, <<"blob-dirs">>},
+            {Base, <<"blob_dirs">>},
+            {Base, <<"blob-directory">>},
+            {Base, <<"blob_directory">>}
+        ],
+        Opts
+    ) =/= not_found.
+
+player_media_response(Stream, Base, Req, Opts) ->
+    case method(Req, Opts) of
+        <<"head">> ->
+            {ok, player_head_response(Stream, Opts)};
+        _ ->
+            fetch_player_media(player_media_urls(Stream, Opts), Stream, Base, Req, Opts, [])
+    end.
+
+player_head_response(Stream, Opts) ->
+    Msg0 =
+        (cors_headers())#{
+            <<"status">> => 200,
+            <<"content-type">> => hb_maps:get(<<"media-type">>, Stream, <<"application/octet-stream">>, Opts),
+            <<"accept-ranges">> => <<"bytes">>,
+            <<"body">> => <<>>
+        },
+    put_optional({<<"content-length">>, stream_size(Stream, Opts)}, Msg0).
+
+fetch_player_media([], _Stream, _Base, _Req, _Opts, Errors) ->
+    {error, {player_media_fetch_failed, lists:reverse(Errors)}};
+fetch_player_media([URL | Rest], Stream, Base, Req, Opts, Errors) ->
+    Range = player_proxy_range(Stream, Base, Req, Opts),
+    Msg = #{
+        <<"method">> => <<"GET">>,
+        <<"path">> => URL,
+        <<"range">> => Range,
+        <<"accept">> => <<"video/*,*/*">>
+    },
+    case hb_http:request(Msg, Opts) of
+        {ok, Res = #{ <<"status">> := Status }}
+                when is_integer(Status), Status >= 200, Status < 300 ->
+            {ok, player_proxy_response(Res, Stream, Opts)};
+        {ok, #{ <<"status">> := Status }} when is_integer(Status) ->
+            fetch_player_media(Rest, Stream, Base, Req, Opts, [{URL, Status} | Errors]);
+        Error ->
+            fetch_player_media(Rest, Stream, Base, Req, Opts, [{URL, Error} | Errors])
+    end.
+
+player_proxy_response(Res, Stream, Opts) ->
+    Body = hb_maps:get(<<"body">>, Res, <<>>, Opts),
+    Msg0 =
+        (cors_headers())#{
+            <<"status">> => hb_maps:get(<<"status">>, Res, 206, Opts),
+            <<"content-type">> =>
+                response_header(
+                    [<<"content-type">>, <<"Content-Type">>],
+                    Res,
+                    hb_maps:get(<<"media-type">>, Stream, <<"application/octet-stream">>, Opts),
+                    Opts
+                ),
+            <<"content-length">> => byte_size(Body),
+            <<"accept-ranges">> => <<"bytes">>,
+            <<"body">> => Body
+        },
+    put_optional(
+        {<<"content-range">>,
+            response_header([<<"content-range">>, <<"Content-Range">>], Res, not_found, Opts)},
+        Msg0
+    ).
+
+response_header([], _Res, Default, _Opts) ->
+    Default;
+response_header([Key | Rest], Res, Default, Opts) ->
+    case hb_maps:get(Key, Res, not_found, Opts) of
+        not_found -> response_header(Rest, Res, Default, Opts);
+        Value -> Value
+    end.
+
+player_media_urls(Stream, Opts) ->
+    [
+        URL
+    ||
+        Key <- [<<"download-url">>, <<"streaming-url">>],
+        URL <- [hb_maps:get(Key, Stream, not_found, Opts)],
+        URL =/= not_found
+    ].
+
+player_proxy_range(Stream, Base, Req, Opts) ->
+    Range =
+        case first_found(
+            [
+                {Req, <<"range">>},
+                {Req, <<"Range">>},
+                {Base, <<"range">>},
+                {Base, <<"Range">>}
+            ],
+            Opts
+        ) of
+            not_found -> <<"bytes=0-">>;
+            Found -> hb_util:bin(Found)
+        end,
+    cap_player_range(Range, Stream, Base, Req, Opts).
+
+cap_player_range(<<"bytes=", Descriptor/binary>>, Stream, Base, Req, Opts) ->
+    cap_range_descriptor(Descriptor, Stream, Base, Req, Opts);
+cap_player_range(<<"bytes ", Descriptor/binary>>, Stream, Base, Req, Opts) ->
+    cap_range_descriptor(Descriptor, Stream, Base, Req, Opts);
+cap_player_range(_Range, Stream, Base, Req, Opts) ->
+    capped_range_from_start(0, Stream, Base, Req, Opts).
+
+cap_range_descriptor(Descriptor, Stream, Base, Req, Opts) ->
+    [FirstRange | _] = binary:split(Descriptor, <<",">>),
+    [ByteRange | _] = binary:split(FirstRange, <<"/">>),
+    case binary:split(ByteRange, <<"-">>) of
+        [<<>>, SuffixBin] ->
+            capped_suffix_range(SuffixBin, Stream, Base, Req, Opts);
+        [StartBin, <<>>] ->
+            case safe_int(StartBin) of
+                {ok, Start} -> capped_range_from_start(Start, Stream, Base, Req, Opts);
+                error -> capped_range_from_start(0, Stream, Base, Req, Opts)
+            end;
+        [StartBin, EndBin] ->
+            case {safe_int(StartBin), safe_int(EndBin)} of
+                {{ok, Start}, {ok, End}} ->
+                    capped_range(Start, End, Stream, Base, Req, Opts);
+                _ ->
+                    capped_range_from_start(0, Stream, Base, Req, Opts)
+            end;
+        _ ->
+            capped_range_from_start(0, Stream, Base, Req, Opts)
+    end.
+
+capped_suffix_range(SuffixBin, Stream, Base, Req, Opts) ->
+    case {safe_int(SuffixBin), stream_size(Stream, Opts)} of
+        {{ok, Suffix}, Size} when is_integer(Size), Suffix > 0 ->
+            Capped = min(Suffix, player_proxy_chunk_size(Base, Req, Opts)),
+            capped_range(max(0, Size - Capped), Size - 1, Stream, Base, Req, Opts);
+        _ ->
+            capped_range_from_start(0, Stream, Base, Req, Opts)
+    end.
+
+capped_range_from_start(Start, Stream, Base, Req, Opts) ->
+    capped_range(
+        Start,
+        Start + player_proxy_chunk_size(Base, Req, Opts) - 1,
+        Stream,
+        Base,
+        Req,
+        Opts
+    ).
+
+capped_range(Start, End, Stream, Base, Req, Opts) ->
+    ChunkEnd = Start + player_proxy_chunk_size(Base, Req, Opts) - 1,
+    MediaEnd =
+        case stream_size(Stream, Opts) of
+            Size when is_integer(Size), Size > 0 -> Size - 1;
+            _ -> ChunkEnd
+        end,
+    FinalEnd = max(Start, min(min(End, ChunkEnd), MediaEnd)),
+    <<"bytes=", (integer_to_binary(Start))/binary, "-", (integer_to_binary(FinalEnd))/binary>>.
+
+stream_size(Stream, Opts) ->
+    case hb_maps:get(<<"source-size">>, Stream, not_found, Opts) of
+        not_found -> not_found;
+        Value ->
+            case safe_int(Value) of
+                {ok, Size} -> Size;
+                error -> not_found
+            end
+    end.
+
+player_proxy_chunk_size(Base, Req, Opts) ->
+    Value =
+        case first_found(
+            [
+                {Req, <<"range-chunk-size">>},
+                {Req, <<"chunk-size">>},
+                {Base, <<"range-chunk-size">>},
+                {Base, <<"chunk-size">>}
+            ],
+            Opts
+        ) of
+            not_found -> hb_opts:get(<<"lbry-player-proxy-chunk-size">>, 1048576, Opts);
+            Found -> Found
+        end,
+    case safe_int(Value) of
+        {ok, Size} when Size > 0 -> Size;
+        _ -> 1048576
+    end.
+
+safe_int(Value) when is_integer(Value), Value >= 0 ->
+    {ok, Value};
+safe_int(Value) ->
+    try {ok, hb_util:int(Value)}
+    catch _:_ -> error
+    end.
 
 copy_first(Key, Base, Req, Msg, Opts) ->
     case first_found([{Req, Key}, {Base, Key}], Opts) of
@@ -567,6 +848,13 @@ truthy(<<"true">>) -> true;
 truthy(<<"yes">>) -> true;
 truthy(_) -> false.
 
+falsy(false) -> true;
+falsy(0) -> true;
+falsy(<<"0">>) -> true;
+falsy(<<"false">>) -> true;
+falsy(<<"no">>) -> true;
+falsy(_) -> false.
+
 required(Key, Map, Opts) ->
     case hb_maps:get(Key, Map, not_found, Opts) of
         not_found -> {error, {missing, Key}};
@@ -675,6 +963,23 @@ playback_bytes_redirect_adds_node_port_to_host_test() ->
     ),
     ?assertEqual(expected_media_url(), hb_maps:get(<<"location">>, Redirect, #{})).
 
+playback_bytes_json_returns_media_url_in_body_test() ->
+    {ok, Res} =
+        playback(
+            #{},
+            #{
+                <<"claim">> => target_claim(),
+                <<"mode">> => <<"bytes">>,
+                <<"media-base-url">> => <<"http://127.0.0.1:8734">>
+            },
+            #{}
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, Res, #{})),
+    ?assertEqual(200, hb_maps:get(<<"status">>, Res, #{})),
+    ?assertEqual(<<"application/json">>, hb_maps:get(<<"content-type">>, Res, #{})),
+    ?assertEqual(expected_media_url(), hb_maps:get(<<"streaming_url">>, Body, #{})),
+    ?assertEqual(not_found, hb_maps:get(<<"description">>, Res, not_found, #{})).
+
 playback_options_preflight_test() ->
     {ok, Res} = playback(#{}, #{ <<"method">> => <<"OPTIONS">> }, #{}),
     ?assertEqual(204, hb_maps:get(<<"status">>, Res, #{})),
@@ -686,6 +991,47 @@ media_options_preflight_test() ->
     ?assertEqual(204, hb_maps:get(<<"status">>, Res, #{})),
     ?assertEqual(<<"*">>, hb_maps:get(<<"access-control-allow-origin">>, Res, #{})),
     ?assertEqual(<<>>, hb_maps:get(<<"body">>, Res, #{})).
+
+media_player_proxy_head_uses_claim_metadata_test() ->
+    {ok, Res} =
+        media(
+            #{},
+            #{ <<"claim">> => target_claim(), <<"method">> => <<"HEAD">> },
+            #{}
+        ),
+    ?assertEqual(200, hb_maps:get(<<"status">>, Res, #{})),
+    ?assertEqual(<<"video/mp4">>, hb_maps:get(<<"content-type">>, Res, #{})),
+    ?assertEqual(653610679, hb_maps:get(<<"content-length">>, Res, #{})),
+    ?assertEqual(<<"bytes">>, hb_maps:get(<<"accept-ranges">>, Res, #{})),
+    ?assertEqual(<<>>, hb_maps:get(<<"body">>, Res, #{})).
+
+media_player_proxy_caps_open_range_test() ->
+    {ok, MockServer, ServerHandle} =
+        hb_mock_server:start([
+            {"/v6/streams/[...]", player, {206, <<"abcde">>}}
+        ]),
+    try
+        {ok, Stream} =
+            stream(
+                #{},
+                #{ <<"claim">> => target_claim(), <<"player-server">> => MockServer },
+                #{}
+            ),
+        {ok, Res} =
+            player_media_response(
+                Stream,
+                #{},
+                #{ <<"range">> => <<"bytes=0-">>, <<"chunk-size">> => 5 },
+                #{}
+            ),
+        ?assertEqual(206, hb_maps:get(<<"status">>, Res, #{})),
+        ?assertEqual(<<"abcde">>, hb_maps:get(<<"body">>, Res, #{})),
+        [Request] = hb_mock_server:get_requests(player, 1, ServerHandle),
+        Headers = hb_maps:get(<<"headers">>, Request, #{}, #{}),
+        ?assertEqual(<<"bytes=0-4">>, hb_maps:get(<<"range">>, Headers, #{}, #{}))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
 
 stream_rejects_non_stream_claim_test() ->
     Claim = target_claim(),
