@@ -366,7 +366,11 @@ return_types_test() ->
 
 graphql_get_serves_hyperbuddy_test() ->
     {ok, #{ <<"body">> := Body, <<"content-type">> := <<"text/html">> }} =
-        graphql(#{}, #{ <<"method">> => <<"GET">> }, #{}),
+        hb_ao:resolve(
+            #{ <<"device">> => <<"query@1.0">> },
+            #{ <<"path">> => <<"graphql">>, <<"method">> => <<"GET">> },
+            #{}
+        ),
     ?assertNotEqual(nomatch, binary:match(Body, <<"<div id=\"root\"></div>">>)),
     ?assertNotEqual(
         nomatch,
