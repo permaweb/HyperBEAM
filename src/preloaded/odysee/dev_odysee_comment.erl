@@ -413,7 +413,7 @@ claim_id_from_claim_or_uri(Base, Req, Opts) ->
                 not_found -> {error, claim_id_not_found};
                 _URI ->
                     maybe
-                        {ok, ClaimMsg} ?= hb_ao:raw(<<"lbry-claim@1.0">>, <<"resolve">>, Base, Req, Opts),
+                        {ok, ClaimMsg} ?= hb_ao:raw(<<"odysee-claim@1.0">>, <<"resolve">>, Base, Req, Opts),
                         required_first([<<"claim-id">>, <<"claim_id">>], ClaimMsg, Opts)
                     end
             end

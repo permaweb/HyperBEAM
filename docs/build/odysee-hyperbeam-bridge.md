@@ -74,18 +74,22 @@ source format and exposes decoded fields as AO-Core messages.
 
 | Device | Purpose | First milestone |
 | --- | --- | --- |
-| `~lbry-stream-descriptor@1.0` | Parse descriptor JSON, verify encrypted blobs, decrypt, and reconstruct media bytes. | Implemented proof device. |
-| `~lbry-claim@1.0` | Preserve raw SDK proxy resolve JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback-stage adapter. |
-| `~lbry-stream@1.0` | Represent stream/content claims, stream metadata, `source.sd_hash`, and player-compatible playback URLs. | Implemented playback-stage adapter. |
-| `~lbry-channel@1.0` | Represent channel identity, public key, signature context, and AO-Core committer mapping. | Implemented read-only identity adapter. |
+| `~odysee-stream-descriptor@1.0` | Parse descriptor JSON, verify encrypted blobs, decrypt, and reconstruct media bytes. | Implemented proof device. |
+| `~odysee-claim@1.0` | Preserve raw SDK proxy resolve JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback-stage adapter. |
+| `~odysee-stream@1.0` | Represent stream/content claims, stream metadata, `source.sd_hash`, and player-compatible playback URLs. | Implemented playback-stage adapter. |
+| `~odysee-channel@1.0` | Represent channel identity, public key, signature context, and AO-Core committer mapping. | Implemented read-only identity adapter. |
 | `~odysee-comment@1.0` | Represent commentron comments, signature payloads, moderation metadata, and verification inputs. | Implemented read-only Commentron adapter; signature verification awaits signed vectors. |
+
+The older `~lbry-claim@1.0`, `~lbry-stream@1.0`,
+`~lbry-stream-descriptor@1.0`, and `~lbry-channel@1.0` names remain as
+compatibility aliases, but new integration should use the `~odysee-*` routes.
 
 ## Current playback slice
 
 The current minimum end-to-end target is one Odysee frontend video resolving to
 a HyperBEAM-derived playback contract. The default path still returns the
 existing Odysee player/CDN URL, while byte mode returns a HyperBEAM media URL so
-the browser can request media ranges from `~lbry-stream@1.0/media`. The media
+the browser can request media ranges from `~odysee-stream@1.0/media`. The media
 endpoint prefers descriptor/blob reads when descriptor or blob settings are
 supplied. If no descriptor/blob settings are present, it falls back to a capped
 player-media proxy so the browser still talks to HyperBEAM for playable ranges
@@ -95,12 +99,12 @@ Implemented devices:
 
 | Device | Key | Behavior |
 | --- | --- | --- |
-| `~lbry-stream-descriptor@1.0` | `media` | Fetches or decodes a stream descriptor, verifies and decrypts only the blobs needed for the requested plaintext byte range, and returns browser-compatible `HEAD`/`Range` responses. |
-| `~lbry-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
-| `~lbry-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
-| `~lbry-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
-| `~lbry-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
-| `~lbry-channel@1.0` | `channel` / `from-claim` | Normalizes direct channel claims, claim-device messages, or a stream claim's `signing_channel`; preserves public key fields and source claim context for later verification. |
+| `~odysee-stream-descriptor@1.0` | `media` | Fetches or decodes a stream descriptor, verifies and decrypts only the blobs needed for the requested plaintext byte range, and returns browser-compatible `HEAD`/`Range` responses. |
+| `~odysee-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
+| `~odysee-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
+| `~odysee-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
+| `~odysee-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
+| `~odysee-channel@1.0` | `channel` / `from-claim` | Normalizes direct channel claims, claim-device messages, or a stream claim's `signing_channel`; preserves public key fields and source claim context for later verification. |
 | `~odysee-comment@1.0` | `list` / `by-id` / `normalize` | Normalizes `comment.List` and `comment.ByID` responses from supplied fixtures or the Commentron API; preserves comment signatures, signing timestamps, signed message hints, author channel IDs, parent IDs, and moderation metadata. |
 
 For
@@ -117,13 +121,13 @@ That is the default playback contract for the first playable video. The
 byte-mode JSON contract for the same stream is:
 
 ```text
-http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes&media-base-url=http%3A%2F%2F127.0.0.1%3A8734&url=lbry%3A%2F%2F%40veritasium%23f%2Fwhy-is-it-so-easy-to-disrupt-gps%233
+http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=bytes&media-base-url=http%3A%2F%2F127.0.0.1%3A8734&url=lbry%3A%2F%2F%40veritasium%23f%2Fwhy-is-it-so-easy-to-disrupt-gps%233
 ```
 
 That returns a JSON body whose `streaming_url` is:
 
 ```text
-http://127.0.0.1:8734/~lbry-stream@1.0/media?claim-name=why-is-it-so-easy-to-disrupt-gps&claim-id=346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169
+http://127.0.0.1:8734/~odysee-stream@1.0/media?claim-name=why-is-it-so-easy-to-disrupt-gps&claim-id=346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169
 ```
 
 For clients that want an HTTP redirect instead of JSON, add `redirect=true` or
@@ -141,7 +145,7 @@ headers needed by browser media elements.
 
 The Odysee frontend integration is opt-in through `HYPERBEAM_PLAYBACK_URL`.
 When set to a HyperBEAM playback endpoint such as
-`http://127.0.0.1:8734/~lbry-stream@1.0/playback`, the browser file-info fetch
+`http://127.0.0.1:8734/~odysee-stream@1.0/playback`, the browser file-info fetch
 asks HyperBEAM for JSON and stores the returned `streaming_url` as
 `fileInfo.streaming_url`. The existing video viewer already consumes
 `fileInfo.streaming_url`, so normal player rendering works without changing the
@@ -173,13 +177,13 @@ behavior without modifying the player:
 To test the full HyperBEAM byte path from the frontend, set:
 
 ```text
-HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=bytes
 ```
 
 To test strict blob-native playback from the frontend, set:
 
 ```text
-HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=blob
 ```
 
 For deterministic local byte-path testing, populate a directory with descriptor
@@ -187,14 +191,14 @@ and encrypted blob files named by their hash, then include that directory in the
 frontend endpoint:
 
 ```text
-HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob&blob-dir=/absolute/path/to/lbry-blobs
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=blob&blob-dir=/absolute/path/to/lbry-blobs
 ```
 
 For live local SDK-backed blob-native testing, run a LBRY SDK daemon and point
 HyperBEAM at its blob directory and JSON-RPC API:
 
 ```text
-HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob&blob-dir=/Users/<user>/Library/Application%20Support/LBRY/blobfiles&lbrynet-api-url=http://127.0.0.1:5279&lbrynet-stream-base-url=http://127.0.0.1:5280/stream&lbrynet-timeout=120
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=blob&blob-dir=/Users/<user>/Library/Application%20Support/LBRY/blobfiles&lbrynet-api-url=http://127.0.0.1:5279&lbrynet-stream-base-url=http://127.0.0.1:5280/stream&lbrynet-timeout=120
 ```
 
 The current implementation is validated against fixture descriptors, supplied
@@ -215,10 +219,10 @@ The channel and comment devices are read-only adapters. They are meant to make
 the data inspectable as AO-Core messages before any moderation or write path is
 added.
 
-`~lbry-channel@1.0` accepts:
+`~odysee-channel@1.0` accepts:
 
 * a direct channel claim;
-* a normalized `~lbry-claim@1.0` message containing a channel claim;
+* a normalized `~odysee-claim@1.0` message containing a channel claim;
 * a stream claim with `signing_channel`.
 
 It returns channel ID/name, canonical URL, title, description, thumbnail,
@@ -244,7 +248,7 @@ HYPERBEAM_BASE_URL=http://127.0.0.1:8734
 On the Veritasium video page, that produces:
 
 ```text
-POST http://127.0.0.1:8734/~lbry-channel@1.0/channel
+POST http://127.0.0.1:8734/~odysee-channel@1.0/channel
 POST http://127.0.0.1:8734/~odysee-comment@1.0/list
 ```
 
@@ -254,7 +258,7 @@ claim or Commentron API response.
 
 ## Milestone 1: stream descriptor
 
-Build `~lbry-stream-descriptor@1.0` first. It gives the bridge an objective
+Build `~odysee-stream-descriptor@1.0` first. It gives the bridge an objective
 proof loop: descriptor bytes lead to encrypted blobs, encrypted blobs verify by
 hash, decrypted blobs reassemble to media bytes, and the reconstructed file can
 be compared with the current player path.
@@ -346,7 +350,7 @@ Required tests:
 After descriptor reconstruction works, add claim resolution around the current
 Odysee SDK proxy.
 
-`~lbry-claim@1.0` should preserve:
+`~odysee-claim@1.0` should preserve:
 
 * `claim_id`, name, transaction/outpoint context, and block height when
   available;
@@ -357,7 +361,7 @@ Odysee SDK proxy.
 * signature placement and signing metadata;
 * current resolved state from trusted Odysee or hub reads.
 
-`~lbry-stream@1.0` should derive from the claim envelope and preserve:
+`~odysee-stream@1.0` should derive from the claim envelope and preserve:
 
 * title, description, media type, tags, author, license, license URL, and
   release time;
@@ -379,7 +383,7 @@ Odysee URL or claim ID
 
 ## Milestone 3: channels and comments
 
-Add `~lbry-channel@1.0` before comment verification. It should preserve channel
+Add `~odysee-channel@1.0` before comment verification. It should preserve channel
 claim ID, channel public key, protobuf metadata, `@`-prefixed name form,
 canonical Odysee suffix form, and legacy `SECP256k1` signature context. The
 read-only identity adapter is implemented.
@@ -407,13 +411,13 @@ These are intentionally not locked for the first doc:
 
 1. Select 10-20 real sample IDs covering the required stream, claim, and comment
    cases.
-2. Implement and test `~lbry-stream-descriptor@1.0`. Done for the local proof
+2. Implement and test `~odysee-stream-descriptor@1.0`. Done for the local proof
    device and unit fixtures.
-3. Implement SDK proxy claim resolution and the `~lbry-claim@1.0` envelope.
+3. Implement SDK proxy claim resolution and the `~odysee-claim@1.0` envelope.
    Done for the playback-stage adapter.
-4. Add `~lbry-stream@1.0` derived from the claim envelope. Done for the
+4. Add `~odysee-stream@1.0` derived from the claim envelope. Done for the
    playback-stage adapter.
-5. Add `~lbry-channel@1.0` identity mapping. Done for the read-only adapter.
+5. Add `~odysee-channel@1.0` identity mapping. Done for the read-only adapter.
 6. Add `~odysee-comment@1.0` and comment signature tests. Done for read-only
    normalization; signed-vector verification remains.
 7. Decide public route names only after the descriptor proof path works.
