@@ -919,10 +919,16 @@ route_request(Req, RawReq, Opts) ->
 
 %% @doc Add a route-only process path for initial pushes with a process body.
 initial_push_route_request(Req, RawReq, Opts) ->
+    case initial_push_route_path(Req, RawReq, Opts) of
+        not_found -> not_found;
+        RoutePath -> Req#{ <<"route-path">> => RoutePath }
+    end.
+
+initial_push_route_path(Req, RawReq, Opts) ->
     Path = hb_ao:get(<<"path">>, Req, <<>>, Opts#{ <<"hashpath">> => ignore }),
     case {is_push_path(Path), initial_push_process_id(Req, RawReq, Opts)} of
         {true, ProcID} when ?IS_ID(ProcID) ->
-            Req#{ <<"route-path">> => <<"/", ProcID/binary, "/push">> };
+            <<"/", ProcID/binary, "/push">>;
         _ ->
             not_found
     end.
