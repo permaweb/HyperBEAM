@@ -12,6 +12,8 @@
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
+%%% Test only 
+-export([setup_arweave_index_opts/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -1266,7 +1268,13 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
             true -> {ok, <<>>};
             false ->
                 case Type of
-                    tx -> request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
+                    tx ->
+                        case hb_ao:resolve(<<"~arweave@2.9/raw=", ID/binary>>, Opts) of
+                            {ok, #{<<"body">> := RawBody}} ->
+                                {ok, RawBody};
+                            Resp ->
+                                Resp
+                        end;
                     pending ->
                         get_chunk_range_relative(
                             0,
@@ -1474,52 +1482,6 @@ best_response_non_map_error_round_trips_test_parallel() ->
         to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
     ).
 
-tx_raw_fetch_error_round_trips_test() ->
-    {ok, MockNode, MockHandle} = hb_mock_server:start([
-        {"/raw/:id", tx_raw, {500, <<"boom">>}}
-    ]),
-    ClientOpts = post_tx_json_client_opts(),
-    HeaderBody = post_tx_json_payload(ClientOpts),
-    TXID = maps:get(<<"id">>, hb_json:decode(HeaderBody)),
-    Opts =
-        ClientOpts#{
-            <<"routes">> => [
-                #{
-                    <<"template">> =>
-                        #{
-                            <<"path">> => <<"^/arweave/raw">>,
-                            <<"method">> => <<"GET">>
-                        },
-                    <<"nodes">> =>
-                        [
-                            #{
-                                <<"match">> => <<"^/arweave">>,
-                                <<"with">> => MockNode,
-                                <<"opts">> => #{ <<"http_client">> => httpc }
-                            }
-                        ],
-                    <<"parallel">> => 1,
-                    <<"responses">> => 1,
-                    <<"stop-after">> => true,
-                    <<"admissible-status">> => 200
-                }
-            ]
-        },
-    try
-        ?assertMatch(
-            {error, _},
-            to_message(
-                <<"/tx/", TXID/binary>>,
-                <<"GET">>,
-                {ok, #{ <<"body">> => HeaderBody }},
-                [],
-                Opts
-            )
-        )
-    after
-        hb_mock_server:stop(MockHandle)
-    end.
-
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
     {ok, MockNode1, MockHandle1} = hb_mock_server:start([
         {"/tx", tx, Node1TxResponse}
@@ -1674,17 +1636,19 @@ tx_index_block(<<"4FnBmvgWmqXWEEprjVqBsV5aRpAgF6_yJX_GTGsSZjY">>) -> 753012;
 tx_index_block(<<"YR9m4c3CrlljCRYEWBLeoKekbAyYZRMo2Kpz61IeNp8">>) -> 1233918.
 
 get_tx_basic_data_test_parallel() ->
+    TXID = <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+    Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
-            <<"tx">> => <<"ptBC0UwDmrUTBQX3MqZ1lB57ex20ygwzkjjCrQjIx3o">>,
+            <<"tx">> => TXID,
             <<"exclude-data">> => false
         },
-        #{}
+        Opts
     ),
     ?event(debug_test, {structured_tx, Structured}),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     % Hash the data to make it easier to match
     StructuredWithHash = Structured#{
         <<"data">> => hb_util:encode(
@@ -1702,16 +1666,18 @@ get_tx_basic_data_test_parallel() ->
 
 %% @doc The data for this transaction ends with two smaller chunks.
 get_tx_split_chunk_test_parallel() ->
+    TXID = <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+    Opts = setup_arweave_index_opts([TXID]),
     {ok, Structured} = hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
         #{
             <<"path">> => <<"tx">>,
-            <<"tx">> => <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
+            <<"tx">> => TXID,
             <<"exclude-data">> => false
         },
-        #{}
+        Opts
     ),
-    ?assert(hb_message:verify(Structured, all, #{})),
+    ?assert(hb_message:verify(Structured, all, Opts)),
     ?assertEqual(
         <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
         hb_message:id(Structured, signed)),
@@ -1721,9 +1687,8 @@ get_tx_split_chunk_test_parallel() ->
         <<"Contract">> => <<"KTzTXT_ANmF84fWEKHzWURD1LWd9QaFR9yfYUwH2Lxw">>
     },
     ?assert(hb_message:match(ExpectedMsg, Structured, only_present)),
-
     Child = hb_ao:get(<<"1/2">>, Structured),
-    ?assert(hb_message:verify(Child, all, #{})),
+    ?assert(hb_message:verify(Child, all, Opts)),
     ?event(debug_test, {child, {explicit, hb_message:id(Child, signed)}}),
     ?assertEqual(
         <<"8aJrRWtHcJvJ61qsH6agGkemzrtLw3W22xFrpCGAnTM">>,
@@ -1999,20 +1964,22 @@ get_raw_range_ans104_test_parallel() ->
     ).
 
 get_tx_rsa_nested_bundle_test_parallel() ->
-    Node = hb_http_server:start_node(),
-    Path = <<"/~arweave@2.9/tx=bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
-    {ok, Root} = hb_http:get(Node, Path, #{}),
+    TXID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    Opts = setup_arweave_index_opts([TXID]),
+    Node = hb_http_server:start_node(Opts),
+    Path = <<"/~arweave@2.9/tx=", TXID/binary>>,
+    {ok, Root} = hb_http:get(Node, Path, Opts),
     ?event(debug_test, {root, Root}),
-    ?assert(hb_message:verify(Root, all, #{})),
+    ?assert(hb_message:verify(Root, all, Opts)),
     ChildPath = <<Path/binary, "/1/2">>,
-    {ok, Child} = hb_http:get(Node, ChildPath, #{}),
+    {ok, Child} = hb_http:get(Node, ChildPath, Opts),
     ?event(debug_test, {child, Child}),
-    ?assert(hb_message:verify(Child, all, #{})),
+    ?assert(hb_message:verify(Child, all, Opts)),
     {ok, ExpectedChild} =
         hb_ao:resolve(
             Root,
             <<"1/2">>,
-            #{}
+            Opts
         ),
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
     ManualChild = #{

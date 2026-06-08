@@ -153,12 +153,12 @@ block_items_path(Height, Depth) ->
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
-read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+read(StoreOpts, #{ <<"read">> := ID }, NodeOpts) when ?IS_ID(ID) ->
     case hb_store_remote_node:read_local_cache(StoreOpts, ID, StoreOpts) of
         {ok, Message} ->
             {ok, Message};
         _ ->
-            case do_read(StoreOpts, ID, StoreOpts) of
+            case do_read(StoreOpts, ID, NodeOpts) of
                 not_found -> {error, not_found};
                 Result -> Result
             end
@@ -184,7 +184,7 @@ do_read(StoreOpts, ID, Opts) ->
                     ID,
                     root_offset(Offset, StoreOpts, Opts),
                     Length,
-                    StoreOpts
+                    Opts
                 ),
             case Loaded of
                 {ok, Message} ->
