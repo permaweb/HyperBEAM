@@ -84,9 +84,12 @@ source format and exposes decoded fields as AO-Core messages.
 
 The current minimum end-to-end target is one Odysee frontend video resolving to
 a HyperBEAM-derived playback contract. The default path still returns the
-existing Odysee player/CDN URL, while byte mode routes playback through
-HyperBEAM's descriptor/blob reader so the browser can request media ranges from
-`~lbry-stream@1.0/media`.
+existing Odysee player/CDN URL, while byte mode returns a HyperBEAM media URL so
+the browser can request media ranges from `~lbry-stream@1.0/media`. The media
+endpoint prefers descriptor/blob reads when descriptor or blob settings are
+supplied. If no descriptor/blob settings are present, it falls back to a capped
+player-media proxy so the browser still talks to HyperBEAM for playable ranges
+while the lower-level blob path is made reliable.
 
 Implemented devices:
 
@@ -96,7 +99,7 @@ Implemented devices:
 | `~lbry-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
 | `~lbry-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
 | `~lbry-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
-| `~lbry-stream@1.0` | `media` | Resolves the claim, passes `sd-hash`, media type, source size, request method, and range headers into the descriptor device, then returns its media response. |
+| `~lbry-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
 | `~lbry-channel@1.0` | `channel` / `from-claim` | Normalizes direct channel claims, claim-device messages, or a stream claim's `signing_channel`; preserves public key fields and source claim context for later verification. |
 | `~odysee-comment@1.0` | `list` / `by-id` / `normalize` | Normalizes `comment.List` and `comment.ByID` responses from supplied fixtures or the Commentron API; preserves comment signatures, signing timestamps, signed message hints, author channel IDs, parent IDs, and moderation metadata. |
 
@@ -110,32 +113,36 @@ device therefore generates:
 https://player.odycdn.com/api/v3/streams/free/why-is-it-so-easy-to-disrupt-gps/346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169/6ee8f7.mp4
 ```
 
-That is the frontend integration contract for the first playable video. The
-byte-mode contract for the same stream is:
+That is the default playback contract for the first playable video. The
+byte-mode JSON contract for the same stream is:
 
 ```text
-http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes&redirect=true&url=lbry%3A%2F%2Fwhy-is-it-so-easy-to-disrupt-gps%23346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169
+http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes&media-base-url=http%3A%2F%2F127.0.0.1%3A8734&url=lbry%3A%2F%2F%40veritasium%23f%2Fwhy-is-it-so-easy-to-disrupt-gps%233
 ```
 
-That redirects to:
+That returns a JSON body whose `streaming_url` is:
 
 ```text
 http://127.0.0.1:8734/~lbry-stream@1.0/media?claim-name=why-is-it-so-easy-to-disrupt-gps&claim-id=346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169
 ```
 
+For clients that want an HTTP redirect instead of JSON, add `redirect=true` or
+`format=redirect`.
+
 The media endpoint returns `accept-ranges: bytes` on `HEAD`. On `GET`, explicit
 `Range: bytes=start-end` requests return `206` and `content-range`. Open-ended
 requests such as `bytes=0-` are capped to `range-chunk-size` bytes, defaulting
-to 1 MiB, so a browser can continue fetching incrementally. No-range `GET`
-responses are only allowed for small media, defaulting to 8 MiB or below, unless
-`allow-full=true` is supplied. Playback and media endpoints return permissive
-CORS headers for `GET`, `HEAD`, and `OPTIONS`, and expose range headers needed
-by browser media elements.
+to 1 MiB, so a browser can continue fetching incrementally. The descriptor path
+only allows no-range `GET` for small media, defaulting to 8 MiB or below, unless
+`allow-full=true` is supplied. The player-proxy fallback converts no-range
+requests into capped range requests. Playback and media endpoints return
+permissive CORS headers for `GET`, `HEAD`, and `OPTIONS`, and expose range
+headers needed by browser media elements.
 
 The Odysee frontend integration is opt-in through `HYPERBEAM_PLAYBACK_URL`.
 When set to a HyperBEAM playback endpoint such as
 `http://127.0.0.1:8734/~lbry-stream@1.0/playback`, the browser file-info fetch
-asks HyperBEAM for a redirect target and stores that URL as
+asks HyperBEAM for JSON and stores the returned `streaming_url` as
 `fileInfo.streaming_url`. The existing video viewer already consumes
 `fileInfo.streaming_url`, so normal player rendering works without changing the
 player component. Server-side stream routes use the same playback endpoint for
@@ -144,7 +151,7 @@ HyperBEAM request fails, or the content requires an access key, the frontend
 keeps the existing Odysee SDK playback path.
 
 Byte mode can carry descriptor/blob runtime settings in the playback URL. The
-stream device preserves those settings when redirecting to `media`, so a
+stream device preserves those settings when building the `media` URL, so a
 frontend value can point at public reflectors, a local mirror, or tuned cache
 behavior without modifying the player:
 
@@ -179,6 +186,9 @@ depends on the configured reflector/blobcache being reachable from the running
 node. In this environment, resolving the Veritasium claim succeeds, but
 descriptor/blob fetches from the public blobcache timed out; that is an
 integration/network blocker, not a descriptor parsing or range serving failure.
+The PR therefore keeps the player-proxy fallback enabled by default for the
+minimum frontend playback path. Set `player-proxy=false` when a deployment
+should fail instead of using the current player media URL as the upstream.
 
 ## Current channel/comment slice
 
@@ -204,6 +214,24 @@ and moderation fields. When a comment row has a signature and comment text, the
 device records `signed-field=comment` and `signed-message=<comment text>`, but
 marks verification as `not-verified` until real signed vectors are selected and
 validated against the channel public key.
+
+The Odysee frontend routes these read-only calls through HyperBEAM when
+`HYPERBEAM_BASE_URL` is set, for example:
+
+```text
+HYPERBEAM_BASE_URL=http://127.0.0.1:8734
+```
+
+On the Veritasium video page, that produces:
+
+```text
+POST http://127.0.0.1:8734/~lbry-channel@1.0/channel
+POST http://127.0.0.1:8734/~odysee-comment@1.0/list
+```
+
+If HyperBEAM is unset, unavailable, or returns a non-OK response, the frontend
+falls back to the existing Odysee channel/comment data already present in the
+claim or Commentron API response.
 
 ## Milestone 1: stream descriptor
 

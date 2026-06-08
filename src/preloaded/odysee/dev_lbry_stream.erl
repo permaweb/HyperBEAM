@@ -46,7 +46,7 @@ playback(Base, Req, Opts) ->
         end
     end).
 
-%% @doc Serve media bytes through the LBRY descriptor/blob path.
+%% @doc Serve media bytes through descriptor blobs or a bounded player proxy.
 media(Base, Req, Opts) ->
     safe(fun() ->
         case method(Req, Opts) of
