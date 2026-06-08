@@ -439,10 +439,15 @@ slash_edge_id_offset_roundtrip_test() ->
         read_offset(Opts, ID, Opts)
     ).
 
+%% @doc The filesystem store has no verbatim representation of a `/'-containing
+%% key, so the raw protocol degrades to the normalized path. A `native_id'
+%% beginning with `/' (0x2F) must still round-trip, because write and read
+%% normalize identically.
 fs_index_store_offset_roundtrip_test() ->
     Store = hb_test_utils:test_store(hb_store_fs, <<"arweave-fs-index">>),
     Opts = #{ <<"index-store">> => Store },
-    ID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    % Real mainnet tx whose native_id starts with 0x2F.
+    ID = <<"LwPn27rdIHwdXIHovfUODwZ7xngCzRyjgL7JiefuG64">>,
     StartOffset = 363524457284025 - 8387,
     ok = hb_store:start(Store),
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, 8387),
@@ -451,3 +456,39 @@ fs_index_store_offset_roundtrip_test() ->
         read_offset(Opts, ID, Opts)
     ),
     ok = hb_store:stop(Store).
+
+%% @doc The index-store is a list of shards in production. A raw read must
+%% propagate the `raw' flag across the list, walking past shards that miss until
+%% one resolves. Also exercises the volatile store's raw write/read clauses.
+multi_store_raw_index_test() ->
+    Volatile = hb_test_utils:test_store(hb_store_volatile),
+    Lmdb = hb_test_utils:test_store(hb_store_lmdb),
+    ok = hb_store:start(Volatile),
+    Opts = #{ <<"index-store">> => [Volatile, Lmdb] },
+    ID = <<"LwPn27rdIHwdXIHovfUODwZ7xngCzRyjgL7JiefuG64">>,
+    StartOffset = 363524457284025 - 8387,
+    V = hb_store_arweave_offset:encode(<<"tx@1.0">>, StartOffset, 8387),
+    Path = hb_store_arweave_offset:path(ID),
+    % Seed only the back (lmdb) shard: the read walks past the empty volatile
+    % shard and resolves on lmdb.
+    ok = hb_store:write([Lmdb], #{ <<"write">> => {Path, V}, <<"raw">> => true }, Opts),
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := StartOffset }},
+        read_offset(Opts, ID, Opts)
+    ),
+    % Seed the front (volatile) shard directly: covers the volatile raw clauses.
+    ok = hb_store:write([Volatile], #{ <<"write">> => {Path, V}, <<"raw">> => true }, Opts),
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := StartOffset }},
+        read_offset(Opts, ID, Opts)
+    ).
+
+%% @doc The device-API guards accept only the 43-byte string id; a 32-byte
+%% native id is rejected rather than processed.
+resolve_rejects_non_string_id_test() ->
+    StringID = <<"LwPn27rdIHwdXIHovfUODwZ7xngCzRyjgL7JiefuG64">>,
+    ?assertEqual({ok, StringID}, resolve(#{}, #{ <<"resolve">> => StringID }, #{})),
+    ?assertEqual(
+        {error, not_found},
+        resolve(#{}, #{ <<"resolve">> => <<0:256>> }, #{})
+    ).
