@@ -163,8 +163,9 @@ stream_message(
     lists:foldl(fun put_optional/2, Msg0, Optional).
 
 playback_response(Stream, Base, Req, Opts) ->
+    BytesPlayback = bytes_playback_requested(Base, Req, Opts),
     URL =
-        case bytes_playback_requested(Base, Req, Opts) of
+        case BytesPlayback of
             true -> media_url(Stream, Base, Req, Opts);
             false -> hb_maps:get(<<"streaming-url">>, Stream, Opts)
         end,
@@ -177,7 +178,12 @@ playback_response(Stream, Base, Req, Opts) ->
                 <<"body">> => <<>>
             };
         false ->
-            Payload = (playback_payload(Stream, Opts))#{ <<"streaming_url">> => URL },
+            Payload0 = (playback_payload(Stream, Opts))#{ <<"streaming_url">> => URL },
+            Payload =
+                case BytesPlayback of
+                    true -> Payload0#{ <<"download_url">> => URL };
+                    false -> Payload0
+                end,
             Body = hb_json:encode(Payload),
             (cors_headers())#{
                 <<"status">> => 200,
@@ -241,6 +247,18 @@ descriptor_media_request(Stream, Base, Req, Opts) ->
             <<"blob_url_template">>,
             <<"blob-url-templates">>,
             <<"blob_url_templates">>,
+            <<"lbrynet-api-url">>,
+            <<"lbrynet_api_url">>,
+            <<"lbrynet-api-urls">>,
+            <<"lbrynet_api_urls">>,
+            <<"lbrynet-stream-url">>,
+            <<"lbrynet_stream_url">>,
+            <<"lbrynet-media-url">>,
+            <<"lbrynet_media_url">>,
+            <<"lbrynet-stream-base-url">>,
+            <<"lbrynet_stream_base_url">>,
+            <<"lbrynet-media-base-url">>,
+            <<"lbrynet_media_base_url">>,
             <<"blob-dir">>,
             <<"blob_dir">>,
             <<"blob-dirs">>,
@@ -256,6 +274,10 @@ descriptor_media_request(Stream, Base, Req, Opts) ->
             <<"blob-connect-timeout">>,
             <<"blob-recv-timeout">>,
             <<"blob-checkout-timeout">>,
+            <<"lbrynet-timeout">>,
+            <<"lbrynet-connect-timeout">>,
+            <<"lbrynet-recv-timeout">>,
+            <<"lbrynet-checkout-timeout">>,
             <<"range-chunk-size">>,
             <<"chunk-size">>,
             <<"allow-full">>
@@ -282,14 +304,19 @@ descriptor_or_player_media(Stream, Base, Req, Opts) ->
     case DescriptorRes of
         {ok, _} -> DescriptorRes;
         Error ->
-            case player_proxy_enabled(Base, Req, Opts) of
+            case
+                player_proxy_enabled(Base, Req, Opts)
+                    andalso not blob_native_requested(Base, Req, Opts)
+            of
                 true -> player_media_response(Stream, Base, Req, Opts);
                 false -> Error
             end
     end.
 
 prefer_player_proxy(Base, Req, Opts) ->
-    player_proxy_enabled(Base, Req, Opts) andalso not descriptor_media_config_present(Base, Req, Opts).
+    player_proxy_enabled(Base, Req, Opts)
+        andalso not blob_native_requested(Base, Req, Opts)
+        andalso not descriptor_media_config_present(Base, Req, Opts).
 
 player_proxy_enabled(Base, Req, Opts) ->
     Value =
@@ -325,6 +352,18 @@ descriptor_media_config_present(Base, Req, Opts) ->
             {Req, <<"blob_url_template">>},
             {Req, <<"blob-url-templates">>},
             {Req, <<"blob_url_templates">>},
+            {Req, <<"lbrynet-api-url">>},
+            {Req, <<"lbrynet_api_url">>},
+            {Req, <<"lbrynet-api-urls">>},
+            {Req, <<"lbrynet_api_urls">>},
+            {Req, <<"lbrynet-stream-url">>},
+            {Req, <<"lbrynet_stream_url">>},
+            {Req, <<"lbrynet-media-url">>},
+            {Req, <<"lbrynet_media_url">>},
+            {Req, <<"lbrynet-stream-base-url">>},
+            {Req, <<"lbrynet_stream_base_url">>},
+            {Req, <<"lbrynet-media-base-url">>},
+            {Req, <<"lbrynet_media_base_url">>},
             {Req, <<"blob-dir">>},
             {Req, <<"blob_dir">>},
             {Req, <<"blob-dirs">>},
@@ -346,6 +385,18 @@ descriptor_media_config_present(Base, Req, Opts) ->
             {Base, <<"blob_url_template">>},
             {Base, <<"blob-url-templates">>},
             {Base, <<"blob_url_templates">>},
+            {Base, <<"lbrynet-api-url">>},
+            {Base, <<"lbrynet_api_url">>},
+            {Base, <<"lbrynet-api-urls">>},
+            {Base, <<"lbrynet_api_urls">>},
+            {Base, <<"lbrynet-stream-url">>},
+            {Base, <<"lbrynet_stream_url">>},
+            {Base, <<"lbrynet-media-url">>},
+            {Base, <<"lbrynet_media_url">>},
+            {Base, <<"lbrynet-stream-base-url">>},
+            {Base, <<"lbrynet_stream_base_url">>},
+            {Base, <<"lbrynet-media-base-url">>},
+            {Base, <<"lbrynet_media_base_url">>},
             {Base, <<"blob-dir">>},
             {Base, <<"blob_dir">>},
             {Base, <<"blob-dirs">>},
@@ -550,7 +601,32 @@ copy_first(Key, Base, Req, Msg, Opts) ->
     end.
 
 bytes_playback_requested(Base, Req, Opts) ->
-    Mode =
+    Mode = playback_mode(Base, Req, Opts),
+    truthy(first_found([{Req, <<"bytes">>}, {Req, <<"serve">>}, {Base, <<"bytes">>}, {Base, <<"serve">>}], Opts))
+        orelse Mode =:= <<"bytes">>
+        orelse Mode =:= <<"media">>
+        orelse Mode =:= <<"hyperbeam">>
+        orelse blob_native_requested(Base, Req, Opts).
+
+blob_native_requested(Base, Req, Opts) ->
+    Mode = playback_mode(Base, Req, Opts),
+    truthy(
+        first_found(
+            [
+                {Req, <<"blob-native">>},
+                {Req, <<"blob_native">>},
+                {Base, <<"blob-native">>},
+                {Base, <<"blob_native">>}
+            ],
+            Opts
+        )
+    )
+        orelse Mode =:= <<"blob">>
+        orelse Mode =:= <<"blob-native">>
+        orelse Mode =:= <<"descriptor">>.
+
+playback_mode(Base, Req, Opts) ->
+    case
         first_found(
             [
                 {Req, <<"mode">>},
@@ -561,11 +637,11 @@ bytes_playback_requested(Base, Req, Opts) ->
                 {Base, <<"format">>}
             ],
             Opts
-        ),
-    truthy(first_found([{Req, <<"bytes">>}, {Req, <<"serve">>}, {Base, <<"bytes">>}, {Base, <<"serve">>}], Opts))
-        orelse Mode =:= <<"bytes">>
-        orelse Mode =:= <<"media">>
-        orelse Mode =:= <<"hyperbeam">>.
+        )
+    of
+        not_found -> not_found;
+        Mode -> hb_util:to_lower(hb_util:bin(Mode))
+    end.
 
 media_url(Stream, Base, Req, Opts) ->
     Origin = trim_trailing_slash(media_base_url(Base, Req, Opts)),
@@ -582,19 +658,38 @@ media_url(Stream, Base, Req, Opts) ->
     <<Origin/binary, "/~lbry-stream@1.0/media?", Query/binary>>.
 
 media_query_params(Base, Req, Opts) ->
-    lists:filtermap(
-        fun(Key) ->
-            case first_found([{Req, Key}, {Base, Key}], Opts) of
-                not_found -> false;
-                Value -> {true, {Key, Value}}
-            end
+    Params =
+        lists:filtermap(
+            fun(Key) ->
+                case first_found([{Req, Key}, {Base, Key}], Opts) of
+                    not_found -> false;
+                    Value -> {true, {Key, Value}}
+                end
+            end,
+            media_query_keys()
+        ),
+    case blob_native_requested(Base, Req, Opts) andalso not query_has_blob_native(Params) of
+        true -> Params ++ [{<<"blob-native">>, true}];
+        false -> Params
+    end.
+
+query_has_blob_native(Params) ->
+    lists:any(
+        fun
+            ({<<"blob-native">>, _}) -> true;
+            ({<<"blob_native">>, _}) -> true;
+            (_) -> false
         end,
-        media_query_keys()
+        Params
     ).
 
 media_query_keys() ->
     [
         <<"descriptor">>,
+        <<"player-proxy">>,
+        <<"player_proxy">>,
+        <<"blob-native">>,
+        <<"blob_native">>,
         <<"blob-base-url">>,
         <<"blob_base_url">>,
         <<"blob-base-urls">>,
@@ -607,6 +702,18 @@ media_query_keys() ->
         <<"blob_url_template">>,
         <<"blob-url-templates">>,
         <<"blob_url_templates">>,
+        <<"lbrynet-api-url">>,
+        <<"lbrynet_api_url">>,
+        <<"lbrynet-api-urls">>,
+        <<"lbrynet_api_urls">>,
+        <<"lbrynet-stream-url">>,
+        <<"lbrynet_stream_url">>,
+        <<"lbrynet-media-url">>,
+        <<"lbrynet_media_url">>,
+        <<"lbrynet-stream-base-url">>,
+        <<"lbrynet_stream_base_url">>,
+        <<"lbrynet-media-base-url">>,
+        <<"lbrynet_media_base_url">>,
         <<"blob-dir">>,
         <<"blob_dir">>,
         <<"blob-dirs">>,
@@ -622,6 +729,10 @@ media_query_keys() ->
         <<"blob-connect-timeout">>,
         <<"blob-recv-timeout">>,
         <<"blob-checkout-timeout">>,
+        <<"lbrynet-timeout">>,
+        <<"lbrynet-connect-timeout">>,
+        <<"lbrynet-recv-timeout">>,
+        <<"lbrynet-checkout-timeout">>,
         <<"range-chunk-size">>,
         <<"chunk-size">>,
         <<"allow-full">>
@@ -949,6 +1060,37 @@ playback_bytes_redirect_preserves_blob_config_test() ->
     ?assertEqual(307, hb_maps:get(<<"status">>, Redirect, #{})),
     ?assertEqual(expected_media_url_with_config(), hb_maps:get(<<"location">>, Redirect, #{})).
 
+playback_bytes_redirect_preserves_player_proxy_flag_test() ->
+    {ok, Redirect} =
+        playback(
+            #{},
+            #{
+                <<"claim">> => target_claim(),
+                <<"redirect">> => true,
+                <<"mode">> => <<"bytes">>,
+                <<"media-base-url">> => <<"http://127.0.0.1:8734">>,
+                <<"player-proxy">> => false
+            },
+            #{}
+        ),
+    ?assertEqual(307, hb_maps:get(<<"status">>, Redirect, #{})),
+    ?assertEqual(expected_media_url_with_player_proxy_false(), hb_maps:get(<<"location">>, Redirect, #{})).
+
+playback_blob_redirect_marks_media_url_blob_native_test() ->
+    {ok, Redirect} =
+        playback(
+            #{},
+            #{
+                <<"claim">> => target_claim(),
+                <<"redirect">> => true,
+                <<"mode">> => <<"blob">>,
+                <<"media-base-url">> => <<"http://127.0.0.1:8734">>
+            },
+            #{}
+        ),
+    ?assertEqual(307, hb_maps:get(<<"status">>, Redirect, #{})),
+    ?assertEqual(expected_media_url_with_blob_native(), hb_maps:get(<<"location">>, Redirect, #{})).
+
 playback_bytes_redirect_adds_node_port_to_host_test() ->
     {ok, Redirect} =
         playback(
@@ -978,6 +1120,7 @@ playback_bytes_json_returns_media_url_in_body_test() ->
     ?assertEqual(200, hb_maps:get(<<"status">>, Res, #{})),
     ?assertEqual(<<"application/json">>, hb_maps:get(<<"content-type">>, Res, #{})),
     ?assertEqual(expected_media_url(), hb_maps:get(<<"streaming_url">>, Body, #{})),
+    ?assertEqual(expected_media_url(), hb_maps:get(<<"download_url">>, Body, #{})),
     ?assertEqual(not_found, hb_maps:get(<<"description">>, Res, not_found, #{})).
 
 playback_options_preflight_test() ->
@@ -1004,6 +1147,11 @@ media_player_proxy_head_uses_claim_metadata_test() ->
     ?assertEqual(653610679, hb_maps:get(<<"content-length">>, Res, #{})),
     ?assertEqual(<<"bytes">>, hb_maps:get(<<"accept-ranges">>, Res, #{})),
     ?assertEqual(<<>>, hb_maps:get(<<"body">>, Res, #{})).
+
+prefer_player_proxy_skips_blob_native_test() ->
+    ?assertEqual(true, prefer_player_proxy(#{}, #{}, #{})),
+    ?assertEqual(false, prefer_player_proxy(#{}, #{ <<"mode">> => <<"blob">> }, #{})),
+    ?assertEqual(false, prefer_player_proxy(#{}, #{ <<"blob-native">> => true }, #{})).
 
 media_player_proxy_caps_open_range_test() ->
     {ok, MockServer, ServerHandle} =
@@ -1064,6 +1212,12 @@ expected_media_url_with_config() ->
         "&cache-blobs=false",
         "&blob-connect-timeout=2500"
     >>.
+
+expected_media_url_with_player_proxy_false() ->
+    <<(expected_media_url())/binary, "&player-proxy=false">>.
+
+expected_media_url_with_blob_native() ->
+    <<(expected_media_url())/binary, "&blob-native=true">>.
 
 target_claim() ->
     #{

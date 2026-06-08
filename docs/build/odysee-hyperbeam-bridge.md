@@ -161,9 +161,14 @@ behavior without modifying the player:
 | `blob-base-urls` / `reflector-urls` | Comma-separated or list form of multiple reflector/blobcache bases. Default order is `blobcache-eu.odycdn.com`, `blobcache-us.odycdn.com`, then `blobcache.lbry.com`. |
 | `blob-url-template` / `blob-url-templates` | Explicit blob URL template containing `{hash}` for nonstandard mirrors. |
 | `blob-dir` / `blob-dirs` / `blob-directory` | Local directory of encrypted blob files named by their SHA-384 hash. Useful for deterministic tests and private mirrors. |
+| `lbrynet-api-url` / `lbrynet-api-urls` | Optional local LBRY SDK daemon JSON-RPC endpoint. When configured and a blob is missing from `blob-dir`, the descriptor device calls `blob_get`, then reads and verifies the fetched blob from `blob-dir`. |
+| `lbrynet-stream-url` / `lbrynet-stream-base-url` | Optional local LBRY SDK media-server URL used to warm missing stream blobs into `blob-dir` before descriptor decryption. Use `lbrynet-stream-base-url=http://127.0.0.1:5280/stream` for the default SDK media server. |
 | `cache-blobs` / `blob-cache` | Enable or disable encrypted blob cache reads/writes. Defaults to enabled. |
 | `plain-cache-blobs` | Enable or disable decrypted plaintext blob cache reads/writes. Defaults to enabled. |
 | `blob-connect-timeout`, `blob-recv-timeout`, `blob-checkout-timeout` | Per-request reflector HTTP timeout overrides. |
+| `lbrynet-timeout`, `lbrynet-connect-timeout`, `lbrynet-recv-timeout`, `lbrynet-checkout-timeout` | Per-request local daemon timeout overrides. `lbrynet-timeout` is passed to `blob_get` in seconds. |
+| `player-proxy=false` | Disable fallback to the current Odysee player media URL. Descriptor/blob serving failures surface as media errors. |
+| `mode=blob` / `mode=blob-native` / `blob-native=true` | Request strict descriptor/blob-native media serving. The generated media URL carries `blob-native=true` and does not fall back to the player proxy. |
 
 To test the full HyperBEAM byte path from the frontend, set:
 
@@ -171,23 +176,37 @@ To test the full HyperBEAM byte path from the frontend, set:
 HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes
 ```
 
+To test strict blob-native playback from the frontend, set:
+
+```text
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob
+```
+
 For deterministic local byte-path testing, populate a directory with descriptor
 and encrypted blob files named by their hash, then include that directory in the
 frontend endpoint:
 
 ```text
-HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=bytes&blob-dir=/absolute/path/to/lbry-blobs
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob&blob-dir=/absolute/path/to/lbry-blobs
+```
+
+For live local SDK-backed blob-native testing, run a LBRY SDK daemon and point
+HyperBEAM at its blob directory and JSON-RPC API:
+
+```text
+HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~lbry-stream@1.0/playback?mode=blob&blob-dir=/Users/<user>/Library/Application%20Support/LBRY/blobfiles&lbrynet-api-url=http://127.0.0.1:5279&lbrynet-stream-base-url=http://127.0.0.1:5280/stream&lbrynet-timeout=120
 ```
 
 The current implementation is validated against fixture descriptors, supplied
 blob maps, local blob directories, encrypted blob cache reuse, plaintext blob
-cache reuse, CORS preflight, and browser range forms. Live byte-serving still
-depends on the configured reflector/blobcache being reachable from the running
+cache reuse, local daemon `blob_get` fetches, SDK media-server blob warmups,
+CORS preflight, and browser range forms. Live byte-serving still depends on the
+configured reflector/blobcache or local daemon being reachable from the running
 node. In this environment, resolving the Veritasium claim succeeds, but
-descriptor/blob fetches from the public blobcache timed out; that is an
-integration/network blocker, not a descriptor parsing or range serving failure.
-The PR therefore keeps the player-proxy fallback enabled by default for the
-minimum frontend playback path. Set `player-proxy=false` when a deployment
+descriptor/blob fetches from the public blobcache timed out. The PR therefore
+keeps the player-proxy fallback enabled by default for the minimum frontend
+playback path. Set
+`player-proxy=false`, `blob-native=true`, or `mode=blob` when a deployment
 should fail instead of using the current player media URL as the upstream.
 
 ## Current channel/comment slice

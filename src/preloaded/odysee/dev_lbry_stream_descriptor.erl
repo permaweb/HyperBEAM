@@ -20,6 +20,7 @@
 -define(DEFAULT_BLOB_CONNECT_TIMEOUT, 5000).
 -define(DEFAULT_BLOB_RECV_TIMEOUT, 30000).
 -define(DEFAULT_BLOB_CHECKOUT_TIMEOUT, 5000).
+-define(DEFAULT_LBRYNET_TIMEOUT, 120).
 -define(SHA384_HEX_SIZE, 96).
 -define(AES_BLOCK_SIZE, 16).
 
@@ -386,14 +387,14 @@ media_body_response(Desc, Size, Headers, Base, Req, Opts) ->
     case parse_media_range(Base, Req, Size, Opts) of
         {ok, Start, End} ->
             maybe
-                {ok, Body} ?= read_media_range(Desc, Start, End, Base, Req, Opts),
+                {ok, Body} ?= read_media_range(Desc, Start, End, Size, Base, Req, Opts),
                 {ok, range_response(Headers, Start, End, Size, Body)}
             end;
         no_range ->
             case allow_full_response(Size, Base, Req, Opts) of
                 true ->
                     maybe
-                        {ok, Body} ?= read_media_range(Desc, 0, Size - 1, Base, Req, Opts),
+                        {ok, Body} ?= read_media_range(Desc, 0, Size - 1, Size, Base, Req, Opts),
                         {ok, Headers#{
                             <<"status">> => 200,
                             <<"content-length">> => byte_size(Body),
@@ -452,7 +453,7 @@ cors_headers() ->
             <<"Content-Length,Content-Range,Accept-Ranges,Location">>
     }.
 
-read_media_range(Desc, Start, End, Base, Req, Opts) ->
+read_media_range(Desc, Start, End, Size, Base, Req, Opts) ->
     maybe
         {ok, Key} ?=
             decode_hex(
@@ -460,7 +461,42 @@ read_media_range(Desc, Start, End, Base, Req, Opts) ->
                 hb_maps:get(<<"key">>, Desc, not_found, Opts),
                 16
             ),
-        read_media_range(data_blobs(Desc), Key, Start, End, 0, [], Base, Req, Opts)
+        Blobs = data_blobs(Desc),
+        Lengths = plain_blob_lengths(Blobs, Size, Opts),
+        read_media_range(Blobs, Lengths, Key, Start, End, 0, [], Base, Req, Opts)
+    end.
+
+read_media_range(Blobs, unknown, Key, Start, End, Offset, Acc, Base, Req, Opts) ->
+    read_media_range(Blobs, Key, Start, End, Offset, Acc, Base, Req, Opts);
+read_media_range(_Blobs, _Lengths, _Key, _Start, End, Offset, Acc, _Base, _Req, _Opts)
+        when Offset > End ->
+    {ok, iolist_to_binary(lists:reverse(Acc))};
+read_media_range([], _Lengths, _Key, _Start, _End, _Offset, Acc, _Base, _Req, _Opts)
+        when Acc =/= [] ->
+    {ok, iolist_to_binary(lists:reverse(Acc))};
+read_media_range([], _Lengths, _Key, _Start, _End, _Offset, _Acc, _Base, _Req, _Opts) ->
+    {error, range_not_satisfiable};
+read_media_range([_Blob | Rest], [PlainSize | RestLengths], Key, Start, End, Offset, Acc, Base, Req, Opts)
+        when is_integer(PlainSize), Offset + PlainSize =< Start ->
+    read_media_range(
+        Rest,
+        RestLengths,
+        Key,
+        Start,
+        End,
+        Offset + PlainSize,
+        Acc,
+        Base,
+        Req,
+        Opts
+    );
+read_media_range([Blob | Rest], [_PlainSize | RestLengths], Key, Start, End, Offset, Acc, Base, Req, Opts) ->
+    maybe
+        {ok, Plain} ?= get_plain_blob(Blob, Key, Offset, Base, Req, Opts),
+        PlainSize = byte_size(Plain),
+        NextOffset = Offset + PlainSize,
+        NextAcc = append_range_part(Plain, Start, End, Offset, NextOffset, Acc),
+        read_media_range(Rest, RestLengths, Key, Start, End, NextOffset, NextAcc, Base, Req, Opts)
     end.
 
 read_media_range(_Blobs, _Key, _Start, End, Offset, Acc, _Base, _Req, _Opts)
@@ -473,11 +509,32 @@ read_media_range([], _Key, _Start, _End, _Offset, _Acc, _Base, _Req, _Opts) ->
     {error, range_not_satisfiable};
 read_media_range([Blob | Rest], Key, Start, End, Offset, Acc, Base, Req, Opts) ->
     maybe
-        {ok, Plain} ?= get_plain_blob(Blob, Key, Base, Req, Opts),
+        {ok, Plain} ?= get_plain_blob(Blob, Key, Offset, Base, Req, Opts),
         PlainSize = byte_size(Plain),
         NextOffset = Offset + PlainSize,
         NextAcc = append_range_part(Plain, Start, End, Offset, NextOffset, Acc),
         read_media_range(Rest, Key, Start, End, NextOffset, NextAcc, Base, Req, Opts)
+    end.
+
+plain_blob_lengths([], _MediaSize, _Opts) ->
+    [];
+plain_blob_lengths(Blobs, MediaSize, Opts) ->
+    Lengths = [hb_maps:get(<<"length">>, Blob, not_found, Opts) || Blob <- Blobs],
+    case lists:all(fun(Length) -> is_integer(Length) andalso Length > 0 end, Lengths) of
+        true -> plain_blob_lengths_from_encrypted(Lengths, MediaSize);
+        false -> unknown
+    end.
+
+plain_blob_lengths_from_encrypted(Lengths, MediaSize) ->
+    Count = length(Lengths),
+    Padding = lists:sum(Lengths) - MediaSize,
+    LastPadding = Padding - (Count - 1),
+    case Padding >= Count andalso LastPadding >= 1 andalso LastPadding =< ?AES_BLOCK_SIZE of
+        true ->
+            {Front, [Last]} = lists:split(Count - 1, Lengths),
+            [Length - 1 || Length <- Front] ++ [Last - LastPadding];
+        false ->
+            unknown
     end.
 
 append_range_part(_Plain, Start, _End, _Offset, NextOffset, Acc)
@@ -745,37 +802,176 @@ fetch_blob(Hash, Base, Req, Opts) ->
                     write_cached_blob(NormHash, Bytes, Base, Req, Opts),
                     {ok, Bytes};
                 _ ->
-                    fetch_remote_blob(
-                        NormHash,
-                        blob_urls(NormHash, Base, Req, Opts),
-                        Base,
-                        Req,
-                        Opts,
-                        []
-                    )
+                    fetch_missing_blob(NormHash, Base, Req, Opts)
             end
     end.
 
+fetch_missing_blob(Hash, Base, Req, Opts) ->
+    case fetch_lbrynet_blob(Hash, Base, Req, Opts) of
+        {ok, _Bytes} = OK ->
+            OK;
+        _ ->
+            fetch_remote_blob(
+                Hash,
+                blob_urls(Hash, Base, Req, Opts),
+                Base,
+                Req,
+                Opts,
+                []
+            )
+    end.
+
+fetch_lbrynet_blob(Hash, Base, Req, Opts) ->
+    fetch_lbrynet_blob(Hash, lbrynet_api_urls(Base, Req, Opts), Base, Req, Opts, []).
+
+fetch_lbrynet_blob(_Hash, [], _Base, _Req, _Opts, Errors) ->
+    {error, {lbrynet_fetch_failed, lists:reverse(Errors)}};
+fetch_lbrynet_blob(Hash, [URL | Rest], Base, Req, Opts, Errors) ->
+    case fetch_lbrynet_blob_url(Hash, URL, Base, Req, Opts) of
+        {ok, Body} ->
+            write_cached_blob(Hash, Body, Base, Req, Opts),
+            {ok, Body};
+        Error ->
+            fetch_lbrynet_blob(Hash, Rest, Base, Req, Opts, [{URL, Error} | Errors])
+    end.
+
+fetch_lbrynet_blob_url(Hash, URL, Base, Req, Opts) ->
+    Body = hb_json:encode(#{
+        <<"method">> => <<"blob_get">>,
+        <<"params">> => #{
+            <<"blob_hash">> => Hash,
+            <<"timeout">> => lbrynet_timeout(Base, Req, Opts)
+        }
+    }),
+    Msg = #{
+        <<"method">> => <<"POST">>,
+        <<"path">> => URL,
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => Body
+    },
+    case hb_http:request(Msg, lbrynet_http_opts(Base, Req, Opts)) of
+        {ok, #{ <<"status">> := Status, <<"body">> := ResBody }}
+                when is_integer(Status), Status >= 200, Status < 300, is_binary(ResBody) ->
+            read_lbrynet_blob_response(Hash, ResBody, Base, Req, Opts);
+        {ok, #{ <<"status">> := Status }} when is_integer(Status) ->
+            {error, {http_status, Status}};
+        Error ->
+            Error
+    end.
+
+read_lbrynet_blob_response(Hash, Body, Base, Req, Opts) ->
+    maybe
+        {ok, Decoded} ?= try_decode_json(Body),
+        ok ?= lbrynet_response_ok(Decoded, Opts),
+        read_local_blob(Hash, Base, Req, Opts)
+    end.
+
+lbrynet_response_ok(Decoded, Opts) when is_map(Decoded) ->
+    case hb_maps:get(<<"error">>, Decoded, not_found, Opts) of
+        not_found -> ok;
+        null -> ok;
+        Error -> {error, {lbrynet_error, Error}}
+    end;
+lbrynet_response_ok(_Decoded, _Opts) ->
+    {error, invalid_lbrynet_response}.
+
 get_plain_blob(Blob, Key, Base, Req, Opts) ->
+    get_plain_blob(Blob, Key, not_found, Base, Req, Opts).
+
+get_plain_blob(Blob, Key, MediaOffset, Base, Req, Opts) ->
     Hash = hb_maps:get(<<"blob-hash">>, Blob, not_found, Opts),
     Path = plain_blob_cache_path(Key, Hash),
     case read_cached_bytes(Path, Base, Req, Opts, plain) of
         {ok, _Plain} = Cached ->
             Cached;
         _ ->
-            maybe
-                {ok, Bytes} ?= get_blob_bytes(Hash, Base, Req, Opts),
-                ok ?= verify_blob_bytes(Blob, Bytes),
-                {ok, IV} ?=
-                    decode_hex(
-                        <<"iv">>,
-                        hb_maps:get(<<"iv">>, Blob, not_found, Opts),
-                        16
-                    ),
-                {ok, Plain} ?= decrypt_blob(Bytes, Key, IV),
-                write_cached_bytes(Path, Plain, Base, Req, Opts, plain),
-                {ok, Plain}
+            maybe_warmup_missing_blob(Hash, MediaOffset, Base, Req, Opts),
+            decrypt_plain_blob(Blob, Key, Path, Base, Req, Opts)
+    end.
+
+decrypt_plain_blob(Blob, Key, Path, Base, Req, Opts) ->
+    maybe
+        Hash = hb_maps:get(<<"blob-hash">>, Blob, not_found, Opts),
+        {ok, Bytes} ?= get_blob_bytes(Hash, Base, Req, Opts),
+        ok ?= verify_blob_bytes(Blob, Bytes),
+        {ok, IV} ?=
+            decode_hex(
+                <<"iv">>,
+                hb_maps:get(<<"iv">>, Blob, not_found, Opts),
+                16
+            ),
+        {ok, Plain} ?= decrypt_blob(Bytes, Key, IV),
+        write_cached_bytes(Path, Plain, Base, Req, Opts, plain),
+        {ok, Plain}
+    end.
+
+maybe_warmup_missing_blob(_Hash, not_found, _Base, _Req, _Opts) ->
+    ok;
+maybe_warmup_missing_blob(Hash, MediaOffset, Base, Req, Opts)
+        when is_integer(MediaOffset) ->
+    case encrypted_blob_available(Hash, Base, Req, Opts) of
+        true -> ok;
+        false -> warmup_lbrynet_stream(Hash, MediaOffset, Base, Req, Opts)
+    end;
+maybe_warmup_missing_blob(_Hash, _MediaOffset, _Base, _Req, _Opts) ->
+    ok.
+
+encrypted_blob_available(Hash, Base, Req, Opts) ->
+    NormHash = normalize_hex(Hash),
+    Blobs =
+        first_found(
+            [
+                {Req, <<"encrypted-blobs">>},
+                {Req, <<"blobs">>},
+                {Base, <<"encrypted-blobs">>},
+                {Base, <<"blobs">>}
+            ],
+            Opts
+        ),
+    case Blobs of
+        Map when is_map(Map) ->
+            case hb_maps:get(NormHash, Map, not_found, Opts) of
+                Bytes when is_binary(Bytes) -> true;
+                _ -> encrypted_blob_file_available(NormHash, Base, Req, Opts)
+            end;
+        _ ->
+            encrypted_blob_file_available(NormHash, Base, Req, Opts)
+    end.
+
+encrypted_blob_file_available(Hash, Base, Req, Opts) ->
+    case read_cached_blob(Hash, Base, Req, Opts) of
+        {ok, _Bytes} -> true;
+        _ ->
+            case read_local_blob(Hash, Base, Req, Opts) of
+                {ok, _Bytes} -> true;
+                _ -> false
             end
+    end.
+
+warmup_lbrynet_stream(Hash, MediaOffset, Base, Req, Opts) ->
+    warmup_lbrynet_stream(Hash, MediaOffset, lbrynet_stream_urls(Base, Req, Opts), Base, Req, Opts).
+
+warmup_lbrynet_stream(_Hash, _MediaOffset, [], _Base, _Req, _Opts) ->
+    ok;
+warmup_lbrynet_stream(Hash, MediaOffset, [URL | Rest], Base, Req, Opts) ->
+    Range =
+        <<
+            "bytes=",
+            (integer_to_binary(MediaOffset))/binary,
+            "-",
+            (integer_to_binary(MediaOffset))/binary
+        >>,
+    Msg = #{
+        <<"method">> => <<"GET">>,
+        <<"path">> => URL,
+        <<"range">> => Range,
+        <<"accept">> => <<"video/*,*/*">>
+    },
+    case hb_http:request(Msg, lbrynet_http_opts(Base, Req, Opts)) of
+        {ok, #{ <<"status">> := Status }} when is_integer(Status), Status >= 200, Status < 300 ->
+            ok;
+        _ ->
+            warmup_lbrynet_stream(Hash, MediaOffset, Rest, Base, Req, Opts)
     end.
 
 read_local_blob(Hash, Base, Req, Opts) ->
@@ -901,6 +1097,86 @@ blob_url_templates(Base, Req, Opts) ->
             [],
             Opts
         ).
+
+lbrynet_api_urls(Base, Req, Opts) ->
+    values_from(
+        [
+            {Req, <<"lbrynet-api-url">>},
+            {Req, <<"lbrynet_api_url">>},
+            {Req, <<"lbrynet-api-urls">>},
+            {Req, <<"lbrynet_api_urls">>},
+            {Base, <<"lbrynet-api-url">>},
+            {Base, <<"lbrynet_api_url">>},
+            {Base, <<"lbrynet-api-urls">>},
+            {Base, <<"lbrynet_api_urls">>}
+        ],
+        Opts
+    )
+        ++ opt_values(
+            [<<"lbry-lbrynet-api-urls">>, <<"lbry-lbrynet-api-url">>],
+            [],
+            Opts
+        ).
+
+lbrynet_stream_urls(Base, Req, Opts) ->
+    Explicit =
+        values_from(
+            [
+                {Req, <<"lbrynet-stream-url">>},
+                {Req, <<"lbrynet_stream_url">>},
+                {Req, <<"lbrynet-media-url">>},
+                {Req, <<"lbrynet_media_url">>},
+                {Base, <<"lbrynet-stream-url">>},
+                {Base, <<"lbrynet_stream_url">>},
+                {Base, <<"lbrynet-media-url">>},
+                {Base, <<"lbrynet_media_url">>}
+            ],
+            Opts
+        )
+            ++ opt_values(
+                [<<"lbry-lbrynet-stream-urls">>, <<"lbry-lbrynet-stream-url">>],
+                [],
+                Opts
+            ),
+    BaseURLs =
+        values_from(
+            [
+                {Req, <<"lbrynet-stream-base-url">>},
+                {Req, <<"lbrynet_stream_base_url">>},
+                {Req, <<"lbrynet-media-base-url">>},
+                {Req, <<"lbrynet_media_base_url">>},
+                {Base, <<"lbrynet-stream-base-url">>},
+                {Base, <<"lbrynet_stream_base_url">>},
+                {Base, <<"lbrynet-media-base-url">>},
+                {Base, <<"lbrynet_media_base_url">>}
+            ],
+            Opts
+        )
+            ++ opt_values(
+                [
+                    <<"lbry-lbrynet-stream-base-urls">>,
+                    <<"lbry-lbrynet-stream-base-url">>
+                ],
+                [],
+                Opts
+            ),
+    Explicit ++
+        [
+            lbrynet_stream_url(URL, Base, Req, Opts)
+        ||
+            URL <- BaseURLs,
+            is_binary(URL),
+            byte_size(URL) > 0
+        ].
+
+lbrynet_stream_url(BaseURL, Base, Req, Opts) ->
+    {ok, SDHash} = sd_hash(Base, Req, Opts),
+    CleanBaseURL =
+        case binary:at(BaseURL, byte_size(BaseURL) - 1) of
+            $/ -> binary:part(BaseURL, 0, byte_size(BaseURL) - 1);
+            _ -> BaseURL
+        end,
+    <<CleanBaseURL/binary, "/", SDHash/binary>>.
 
 blob_dirs(Base, Req, Opts) ->
     values_from(
@@ -1046,6 +1322,47 @@ lbry_http_opts(Base, Req, Opts) ->
                 Opts
             )
     }.
+
+lbrynet_http_opts(Base, Req, Opts) ->
+    Opts#{
+        <<"http-client-connect-timeout">> =>
+            timeout_value(
+                <<"lbrynet-connect-timeout">>,
+                <<"lbry-lbrynet-connect-timeout">>,
+                ?DEFAULT_BLOB_CONNECT_TIMEOUT,
+                Base,
+                Req,
+                Opts
+            ),
+        <<"http-client-hackney-recv-timeout">> =>
+            timeout_value(
+                <<"lbrynet-recv-timeout">>,
+                <<"lbry-lbrynet-recv-timeout">>,
+                lbrynet_timeout(Base, Req, Opts) * 1000 + 5000,
+                Base,
+                Req,
+                Opts
+            ),
+        <<"http-client-hackney-checkout-timeout">> =>
+            timeout_value(
+                <<"lbrynet-checkout-timeout">>,
+                <<"lbry-lbrynet-checkout-timeout">>,
+                ?DEFAULT_BLOB_CHECKOUT_TIMEOUT,
+                Base,
+                Req,
+                Opts
+            )
+    }.
+
+lbrynet_timeout(Base, Req, Opts) ->
+    timeout_value(
+        <<"lbrynet-timeout">>,
+        <<"lbry-lbrynet-timeout">>,
+        ?DEFAULT_LBRYNET_TIMEOUT,
+        Base,
+        Req,
+        Opts
+    ).
 
 timeout_value(Key, OptKey, Default, Base, Req, Opts) ->
     case first_found([{Req, Key}, {Base, Key}], Opts) of
@@ -1328,6 +1645,122 @@ media_get_reads_local_blob_dir_test() ->
         file:del_dir(Dir)
     end.
 
+media_get_skips_blobs_before_range_test() ->
+    {JSON, _Encrypted1, Encrypted2, Plain1, Plain2, _Hash1, Hash2} =
+        two_blob_test_descriptor(),
+    Start = byte_size(Plain1),
+    End = Start + 4,
+    Range = <<"bytes=", (integer_to_binary(Start))/binary, "-", (integer_to_binary(End))/binary>>,
+    {ok, Res} =
+        media(
+            #{},
+            #{
+                <<"body">> => JSON,
+                <<"blobs">> => #{ Hash2 => Encrypted2 },
+                <<"media-size">> => byte_size(Plain1) + byte_size(Plain2),
+                <<"range">> => Range
+            },
+            #{}
+        ),
+    ?assertEqual(206, hb_maps:get(<<"status">>, Res, #{})),
+    ?assertEqual(binary:part(Plain2, 0, 5), hb_maps:get(<<"body">>, Res, #{})).
+
+media_fetches_missing_blob_from_lbrynet_api_test() ->
+    {JSON, Encrypted, Plain, BlobHash} = test_descriptor(),
+    Dir = test_tmp_dir(),
+    BlobPath = filename:join(Dir, binary_to_list(BlobHash)),
+    Response = hb_json:encode(#{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"error">> => null,
+        <<"result">> => <<"Downloaded blob">>,
+        <<"id">> => 1
+    }),
+    try
+        ok = file:make_dir(Dir),
+        {ok, MockServer, ServerHandle} =
+            hb_mock_server:start([
+                {"/", lbrynet, fun(_Msg) ->
+                    ok = file:write_file(BlobPath, Encrypted),
+                    {200, Response}
+                end}
+            ]),
+        try
+            {ok, Range} =
+                media(
+                    #{},
+                    #{
+                        <<"body">> => JSON,
+                        <<"blob-dir">> => list_to_binary(Dir),
+                        <<"fetch-blobs">> => true,
+                        <<"cache-blobs">> => false,
+                        <<"plain-cache-blobs">> => false,
+                        <<"lbrynet-api-url">> => MockServer,
+                        <<"lbrynet-timeout">> => 5,
+                        <<"media-size">> => byte_size(Plain),
+                        <<"range">> => <<"bytes=0-4">>
+                    },
+                    #{}
+                ),
+            ?assertEqual(206, hb_maps:get(<<"status">>, Range, #{})),
+            ?assertEqual(binary:part(Plain, 0, 5), hb_maps:get(<<"body">>, Range, #{})),
+            [Request] = hb_mock_server:get_requests(lbrynet, 1, ServerHandle),
+            Body = hb_json:decode(hb_maps:get(<<"body">>, Request, #{})),
+            Params = hb_maps:get(<<"params">>, Body, #{}),
+            ?assertEqual(<<"blob_get">>, hb_maps:get(<<"method">>, Body, #{})),
+            ?assertEqual(not_found, hb_maps:get(<<"jsonrpc">>, Body, not_found, #{})),
+            ?assertEqual(not_found, hb_maps:get(<<"id">>, Body, not_found, #{})),
+            ?assertEqual(BlobHash, hb_maps:get(<<"blob_hash">>, Params, #{}))
+        after
+            hb_mock_server:stop(ServerHandle)
+        end
+    after
+        file:delete(BlobPath),
+        file:del_dir(Dir)
+    end.
+
+media_warms_missing_blob_from_lbrynet_stream_test() ->
+    {JSON, Encrypted, Plain, BlobHash} = test_descriptor(),
+    Dir = test_tmp_dir(),
+    BlobPath = filename:join(Dir, binary_to_list(BlobHash)),
+    try
+        ok = file:make_dir(Dir),
+        {ok, MockServer, ServerHandle} =
+            hb_mock_server:start([
+                {"/", lbrynet_stream, fun(_Msg) ->
+                    ok = file:write_file(BlobPath, Encrypted),
+                    {206, <<"warm">>}
+                end}
+            ]),
+        try
+            {ok, Range} =
+                media(
+                    #{},
+                    #{
+                        <<"body">> => JSON,
+                        <<"blob-dir">> => list_to_binary(Dir),
+                        <<"fetch-blobs">> => true,
+                        <<"cache-blobs">> => false,
+                        <<"plain-cache-blobs">> => false,
+                        <<"lbrynet-stream-url">> => MockServer,
+                        <<"media-size">> => byte_size(Plain),
+                        <<"range">> => <<"bytes=0-4">>
+                    },
+                    #{}
+                ),
+            ?assertEqual(206, hb_maps:get(<<"status">>, Range, #{})),
+            ?assertEqual(binary:part(Plain, 0, 5), hb_maps:get(<<"body">>, Range, #{})),
+            [Request] = hb_mock_server:get_requests(lbrynet_stream, 1, ServerHandle),
+            Headers = hb_maps:get(<<"headers">>, Request, #{}, #{}),
+            ?assertEqual(<<"GET">>, hb_maps:get(<<"method">>, Request, #{})),
+            ?assertEqual(<<"bytes=0-0">>, hb_maps:get(<<"range">>, Headers, #{}, #{}))
+        after
+            hb_mock_server:stop(ServerHandle)
+        end
+    after
+        file:delete(BlobPath),
+        file:del_dir(Dir)
+    end.
+
 verify_uses_cached_encrypted_blob_after_local_read_test() ->
     {JSON, Encrypted, _Plain, BlobHash} = test_descriptor(),
     {ok, Desc} = decode(#{}, #{ <<"body">> => JSON }, #{}),
@@ -1442,6 +1875,71 @@ test_descriptor(BlobNum) ->
         ]
     }),
     {JSON, Encrypted, Plain, BlobHash}.
+
+two_blob_test_descriptor() ->
+    Plain1 = <<"1234567890123456789012345678901">>,
+    Plain2 = <<"second legacy LBRY stream blob">>,
+    Key = <<0:128>>,
+    IV1 = <<1:128>>,
+    IV2 = <<2:128>>,
+    TerminatorIV = <<3:128>>,
+    Encrypted1 = encrypt_blob(Plain1, Key, IV1),
+    Encrypted2 = encrypt_blob(Plain2, Key, IV2),
+    Hash1 = sha384_hex(Encrypted1),
+    Hash2 = sha384_hex(Encrypted2),
+    StreamNameHex = hb_util:to_hex(<<"test.mp4">>),
+    SuggestedHex = hb_util:to_hex(<<"test.mp4">>),
+    KeyHex = hb_util:to_hex(Key),
+    IVHex1 = hb_util:to_hex(IV1),
+    IVHex2 = hb_util:to_hex(IV2),
+    TerminatorIVHex = hb_util:to_hex(TerminatorIV),
+    Blobs = [
+        #{
+            <<"blob-num">> => 0,
+            <<"length">> => byte_size(Encrypted1),
+            <<"iv">> => IVHex1,
+            <<"blob-hash">> => Hash1
+        },
+        #{
+            <<"blob-num">> => 1,
+            <<"length">> => byte_size(Encrypted2),
+            <<"iv">> => IVHex2,
+            <<"blob-hash">> => Hash2
+        },
+        #{
+            <<"blob-num">> => 2,
+            <<"length">> => 0,
+            <<"iv">> => TerminatorIVHex
+        }
+    ],
+    StreamHash = calculate_stream_hash(StreamNameHex, KeyHex, SuggestedHex, Blobs),
+    JSON = hb_json:encode(#{
+        <<"stream_type">> => <<"lbryfile">>,
+        <<"stream_name">> => StreamNameHex,
+        <<"key">> => KeyHex,
+        <<"suggested_file_name">> => SuggestedHex,
+        <<"stream_hash">> => StreamHash,
+        <<"blobs">> => [
+            #{
+                <<"blob_num">> => 0,
+                <<"length">> => byte_size(Encrypted1),
+                <<"iv">> => IVHex1,
+                <<"blob_hash">> => Hash1
+            },
+            #{
+                <<"blob_num">> => 1,
+                <<"length">> => byte_size(Encrypted2),
+                <<"iv">> => IVHex2,
+                <<"blob_hash">> => Hash2
+            },
+            #{
+                <<"blob_num">> => 2,
+                <<"length">> => 0,
+                <<"iv">> => TerminatorIVHex
+            }
+        ]
+    }),
+    {JSON, Encrypted1, Encrypted2, Plain1, Plain2, Hash1, Hash2}.
 
 encrypt_blob(Plain, Key, IV) ->
     crypto:crypto_one_time(aes_128_cbc, Key, IV, add_pkcs7(Plain), true).
