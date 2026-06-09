@@ -197,36 +197,52 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                         <<"source">> => RawMsgToPush
                                     }
                             end,
+                        Origin =
+                            #{
+                                <<"process">> => ID,
+                                <<"slot">> => Slot,
+                                <<"outbox-key">> => Key,
+                                <<"result-depth">> => IncludeDepth,
+                                <<"max-depth">> => MaxDepth,
+                                <<"from-base">> => BaseID,
+                                <<"from-uncommitted">> => UncommittedID,
+                                <<"from-scheduler">> =>
+                                    hb_ao:get(
+                                        <<"scheduler">>,
+                                        PrimaryProcess,
+                                        Opts
+                                    ),
+                                <<"from-authority">> =>
+                                    hb_ao:get(
+                                        <<"authority">>,
+                                        PrimaryProcess,
+                                        Opts
+                                    )
+                            },
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
                                 push_result_message(
                                     DownstreamProcess,
                                     MsgToPush,
-                                    #{
-                                        <<"process">> => ID,
-                                        <<"slot">> => Slot,
-                                        <<"outbox-key">> => Key,
-                                        <<"result-depth">> => IncludeDepth,
-                                        <<"max-depth">> => MaxDepth,
-                                        <<"from-base">> => BaseID,
-                                        <<"from-uncommitted">> => UncommittedID,
-                                        <<"from-scheduler">> =>
-                                            hb_ao:get(
-                                                <<"scheduler">>,
-                                                PrimaryProcess,
-                                                Opts
-                                            ),
-                                        <<"from-authority">> =>
-                                            hb_ao:get(
-                                                <<"authority">>,
-                                                PrimaryProcess,
-                                                Opts
-                                            )
-                                    },
+                                    Origin,
                                     Opts
                                 );
                             {error, not_found} ->
-                                target_process_not_found(Target)
+                                ?event(push_short,
+                                    {target_process_not_found,
+                                        {target, Target},
+                                        {outbox_key, Key},
+                                        {process, ID},
+                                        {slot, Slot}
+                                    },
+                                    Opts
+                                ),
+                                push_routed_target_message(
+                                    Target,
+                                    MsgToPush,
+                                    Origin,
+                                    Opts
+                                )
                         end;
                        (Key, Msg) ->
                             #{
@@ -260,6 +276,74 @@ target_process_not_found(Target) ->
         <<"target">> => Target,
         <<"reason">> => <<"Could not access target process!">>
     }.
+
+%% @doc Route an unscheduled downstream push to the node that owns the target.
+push_routed_target_message(Target, MsgToPush, Origin, Opts) ->
+    Path = <<"/", Target/binary, "/push">>,
+    RouteReq =
+        #{
+            <<"path">> => <<"route">>,
+            <<"route-path">> => Path
+        },
+    ?event(push_short,
+        {routing_target_process_push,
+            {target, Target},
+            {outbox_key, maps:get(<<"outbox-key">>, Origin)}
+        },
+        Opts
+    ),
+    case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
+        {ok, Node} ->
+            ?event(push,
+                {routed_target_process_push,
+                    {target, Target},
+                    {node, Node}
+                },
+                Opts
+            ),
+            SignedMsg =
+                hb_message:commit(
+                    augment_message(Origin, MsgToPush, Opts),
+                    Opts,
+                    hb_opts:get(
+                        scheduler_default_commitment_spec,
+                        <<"httpsig@1.0">>,
+                        Opts
+                    )
+                ),
+            {ok, _} = hb_cache:write(SignedMsg, Opts),
+            case hb_http:post(
+                Node,
+                Path,
+                hb_maps:without([<<"path">>], SignedMsg, Opts),
+                Opts
+            ) of
+                {ok, Res} ->
+                    #{
+                        <<"id">> => hb_message:id(SignedMsg, all, Opts),
+                        <<"target">> => Target,
+                        <<"resulted-in">> => Res
+                    };
+                {error, Error} ->
+                    ?event(push, {push_failed, {error, Error}}, Opts),
+                    #{
+                        <<"response">> => <<"error">>,
+                        <<"target">> => Target,
+                        <<"reason">> => Error
+                    }
+            end;
+        {error, no_matches} ->
+            target_process_not_found(Target);
+        {error, Error} ->
+            ?event(push,
+                {no_push_route_found,
+                    {target, Target},
+                    {error, Error}
+                },
+                Opts
+            ),
+            target_process_not_found(Target)
+    end.
 
 
 %% @doc If the outbox message has a path we interpret it as a request to perform
@@ -1205,7 +1289,7 @@ test_remote_routed_push() ->
             <<"routes">> =>
                 [
                     #{
-                        <<"template">> => <<Proc2ID/binary, ".*">>,
+                        <<"template">> => <<"/", Proc2ID/binary, ".*">>,
                         <<"node">> => N2
                     }
                 ]
@@ -1216,7 +1300,7 @@ test_remote_routed_push() ->
         {ok, N2},
         hb_http:get(
             N1,
-            <<"/~router@1.0/route?route-path=", Proc2ID/binary, "/push&slot=1">>,
+            <<"/~router@1.0/route?route-path=/", Proc2ID/binary, "/push&slot=1">>,
             N1Opts
         )
     ),
@@ -1224,11 +1308,10 @@ test_remote_routed_push() ->
     Proc1 = hb_process_test_vectors:aos_process(N1Opts),
     LoadedProc1 = hb_cache:ensure_all_loaded(Proc1, N1Opts),
     Proc1ID = hb_message:id(LoadedProc1, all, N1Opts),
-    % Write both processes to each of the nodes' caches, such that both are
-    % 'globally' available to each other.
+    % Write each process to its owner node. The source node must route pushes
+    % to remote targets when pushing cross-node outbox messages.
     hb_cache:write(LoadedProc1, N1Opts),
     hb_cache:write(LoadedProc1, N2Opts),
-    hb_cache:write(LoadedProc2, N1Opts),
     hb_cache:write(LoadedProc2, N2Opts),
     ?event(debug_test,
         {network_setup, 
