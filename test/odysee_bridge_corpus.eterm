@@ -1,0 +1,288 @@
+#{
+    purpose => <<"Representative corpus for the Odysee HyperBEAM read bridge. Descriptor sd_hash values were HEAD-checked through the blob front door on 2026-06-09; EUnit validates corpus shape offline and does not perform live network calls.">>,
+    generated_at => <<"2026-06-09">>,
+    descriptor_front_door => <<"http://blobcache-eu.odycdn.com:5569/blob?hash=<sd_hash>">>,
+    descriptor_head_verified_at => <<"2026-06-09">>,
+    source_material => [
+        <<"odysee-api:app/arweave/testdata/claim_search.json">>,
+        <<"odysee-player:player/testdata/new_stream.json">>,
+        <<"Task-0 live proxy smoke from aidocs/096">>
+    ],
+    remaining_matrix_gaps => [
+        legacy_v0_v1_claim
+    ],
+    entries => [
+        #{
+            label => task0_channel_signed_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                raw_tx_hex,
+                verified_stream_attestation,
+                signed_claim_sd_hash,
+                exact_stream_size,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"9cc7f0e3de8db3b2ffd6dc0b4f1a0f0ca48a6b49">>,
+            txid => <<"51d3cd6a27420addb648347410233931b862ab52660c1dba58806b5b0f38a460">>,
+            nout => 0,
+            sd_hash => <<"3da16b833f169c21caeb62ca66111227413f30f63c9d2f52f2a787643e086c334ee6949e05875cfe94a816aba02e492e">>,
+            channel_claim_id => <<"585d54c7b82fd92043ed583c5aea18a9547028aa">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_reaction_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"129c26070b29685248b3dd59eafbf990eee63beb">>,
+            name => <<"pushpa-2-the-rule-teaser-reaction-allu">>,
+            canonical_url => <<"lbry://@MySillyReactions#d/pushpa-2-the-rule-teaser-reaction-allu#1">>,
+            txid => <<"529ccc82594ab8be3fdf8a980a6bff87bda27a5d43f5057e85eb037a3274ade2">>,
+            nout => 0,
+            sd_hash => <<"c558773c846905f5cda34d32712e2037ec115acdff922d88fc176e37fad9f55f241888e36faab856b79509644b79ec3f">>,
+            byte_size => 48786566,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"d1ae6a9097b44691d318a5bfc6dc1240311c75e2">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_large_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"30431f1a4f6ffe938bf25b5cace7825bec883f2d">>,
+            name => <<"russia-ukraine-war-major-russian-bombing">>,
+            canonical_url => <<"lbry://@Thetimapping#5/russia-ukraine-war-major-russian-bombing#3">>,
+            txid => <<"e544da432ced457e760c13772959fd6239c3a50d528d27487abd5bab4e8c2a67">>,
+            nout => 0,
+            sd_hash => <<"afed0a90e963320e73830fd154bf0a64a586117d0566193982dc725be1ef7c03b070002a7b9221ebe2fdff1eb1000ea2">>,
+            byte_size => 134281263,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"582379965e114b28da761331c4a20850adfcec02">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_unicode_spanish,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name,
+                unicode_metadata
+            ],
+            claim_id => <<"5b9eeec18ddd469a526b811f2bd8d49f9ea4a75c">>,
+            name => <<"pim,-plas,-plos-leyendas,-fabulas-y">>,
+            txid => <<"208a8c1cddf3f09f41c099f3362528b9d8193351a2e0fc6c6028aa9868d7d6a0">>,
+            nout => 0,
+            sd_hash => <<"ef79530c8a9487beb4675cc53f40b98366a4297437240c0077140b4a917693a70a1e6b449ffa4d1a1ed61cc8afff47a6">>,
+            byte_size => 34536235,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"f4bbccb6aa226ae44aae92532d222cd81d2a8800">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_german_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"0ff9153a0b5610e4793b5deee35ed3737e1eef1f">>,
+            name => <<"die-zukuenftigen-familienmitglieder-2">>,
+            txid => <<"f6843005fed1c158f1000632457b6ef329d075bd6362588a92177641f618ab97">>,
+            nout => 0,
+            sd_hash => <<"6317206362126394922353318657d839fcd9ff997a4c085dd50afc22f7bb13d0efcc8149d8b7706393737d7861a5be12">>,
+            byte_size => 80862739,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"6b0064ee0fe221fdb8a6ee02071858300e97c691">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_bengali_large,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name,
+                unicode_metadata
+            ],
+            claim_id => <<"c66a6141ec041acc59af1c2c59542dad36851f2c">>,
+            name => <<"megh-bristyr-alapon">>,
+            txid => <<"e57cfb0f1815e63221a1db713b9704671c51bf54f9085520699968a9e3d4df6c">>,
+            nout => 0,
+            sd_hash => <<"e75623a2531a0440e5f046b817e3a04c9b54bd776d8418b2613fbbb39a45863785f7f989ceee1a7b29524e40560982ba">>,
+            byte_size => 913016269,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"94808784d0a08be5fcd1b11713ffc2e2b8ee6b7a">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_small_multiblob,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"f10ef09402829849e7be550887dc7e8a1648bb44">>,
+            name => <<"tamannah-bhatia-at-airport-arrival">>,
+            txid => <<"3bf111e4bd96104867ebb1364f884047c96f911e25ac488f17efeaa7d27ce407">>,
+            nout => 0,
+            sd_hash => <<"a90903ad2d1e20d0dfcd38abb1f96cbfcb14857861a6682859de8d3a56100d32e9d957768335a4a0d086bd2d71b3a889">>,
+            byte_size => 2335997,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"b549d9dd64b6e6e484727dddb86b9ef9c5577066">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_train_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"6807a03c3b9ca563887061c099fd2b4e8ab7ae25">>,
+            name => <<"septa-regional-rail-arriving-departing">>,
+            txid => <<"2eaa964b68ffd42fc7288e0f01263d395710e7a90f3a1c7de2c50a4e69550d25">>,
+            nout => 0,
+            sd_hash => <<"3b2325fcb0ad6b0df3abcdcf2ce85927e3951222280a581972284eb23b562266dbb469c631d49a59f2011844ecb95293">>,
+            byte_size => 66254779,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"e7b01ddeec1def5b7750da63da9e6d029c08a293">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_podcast_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name,
+                unicode_metadata
+            ],
+            claim_id => <<"39cf3b8f046a71e4806b52d96272243bc80fe865">>,
+            name => <<"trezoitao-fala-em-vender-os-bitcoin">>,
+            txid => <<"97cf7f8748c434d9cc66b029deb84b92a114e3507972d73081bca45d336b6766">>,
+            nout => 0,
+            sd_hash => <<"41ff193dc7654ad39944fe9ebb72b1c7fb68ebd054f69b242ae6f9488a51ac0d2df806d50d521a376bfb4da29916a2d7">>,
+            byte_size => 238084755,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"b7b24afaeea51132e9a48708d106988195fd59f5">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_name_takeover_case,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name,
+                name_takeover
+            ],
+            claim_id => <<"78e21e6f280726e24ee3a7bdcc9904caa6b1c925">>,
+            name => <<"AUTHORITY-ONLY-Comes-From-God">>,
+            txid => <<"6045c93a6e703f009b01b0ddaba8ea1fa972cb93b424a8c8d05a63844519ec68">>,
+            nout => 0,
+            sd_hash => <<"b6bc756fca292dbd2f63d7324d29fb16eebbb324df85bc8d98c68ae959aeef8bb639d6562d31ca3b507ea5a978db6c9e">>,
+            byte_size => 102506701,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"3645cf2f5d0bdac0523f945be1c3ff60758f7845">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => channel_signed_music_video,
+            coverage => [
+                channel_signed,
+                stream_descriptor,
+                descriptor_head_204,
+                sdk_signature_valid,
+                large_multi_blob,
+                canonical_name
+            ],
+            claim_id => <<"c0c4d67226a7d293aa9d1a3b668b88dc502d479e">>,
+            name => <<"white-room-cream-karaoke-2">>,
+            txid => <<"a1bd5dc86f9a84fdc7acd8986a99e60a758150ba068e54487fce1e75ee30cfbf">>,
+            nout => 0,
+            sd_hash => <<"2be990a2760e51d62205cb0647ec9b297a78fe42c8b39b9aae2a906f1629b75b8b7aa6c802d1559765b7454f3bcdf7cd">>,
+            byte_size => 62724926,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => <<"67e312878ad816ca6933204ec785e7fbc1b97c20">>,
+            descriptor_head_status => 204
+        },
+        #{
+            label => anonymous_new_stream_fixture,
+            coverage => [
+                anonymous_stream,
+                stream_descriptor,
+                descriptor_head_204,
+                player_fixture,
+                small_file
+            ],
+            claim_id => <<"74f7d9a8748fec1754476c23840ce326d108f748">>,
+            name => <<"what">>,
+            txid => <<"001f9d09fb20849d38641421a6686ac4c7778e4c3042397bb319a592ad38f154">>,
+            nout => 0,
+            sd_hash => <<"c8bb048ebdee70c542987cd5769b6043bbf3164fba98ab9bd792b4d952a3fd824a766fbb0b59edfaf81324c06e45ca4a">>,
+            byte_size => 464293,
+            media_type => <<"video/mp4">>,
+            channel_claim_id => undefined,
+            descriptor_head_status => 204
+        },
+        #{
+            label => recent_anonymous_stream_candidate,
+            coverage => [
+                anonymous_stream,
+                stream_descriptor,
+                descriptor_head_204
+            ],
+            claim_id => <<"66d727cc68ed87dbb315246a9241d30b69f45904">>,
+            txid => <<"b918d39ac6b6d34f12060eb804a8f6b96a5d0ed274e187cc22cd7b559f0f9bce">>,
+            sd_hash => <<"f4e8415ea86bd6b69f65a48a4a1b37513f09f92ee6e912ef296881d9d8134c1ab769ba10c7e37748424bdb7adb017f26">>,
+            channel_claim_id => undefined,
+            descriptor_head_status => 204
+        },
+        #{
+            label => small_anonymous_stream_candidate,
+            coverage => [
+                small_file,
+                anonymous_stream,
+                stream_descriptor,
+                descriptor_head_204
+            ],
+            claim_id => <<"a6785f10a0d111f25c7bbcf1fb998b047774ada6">>,
+            txid => <<"f3dbe14d0ce61172cb8a1bf9dcb7cd30689eca23f557aa27bac71f6849cdb203">>,
+            sd_hash => <<"f676d085aa232fae0f29be45ec7aa360800bdf0918a3ef4fe223bc97ecc24b10cd24d6a140ac4bcbed17cf3787601e29">>,
+            channel_claim_id => undefined,
+            descriptor_head_status => 204
+        }
+    ]
+}.
