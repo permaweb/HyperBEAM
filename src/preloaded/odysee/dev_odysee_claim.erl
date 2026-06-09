@@ -4,7 +4,7 @@
 %%% while preserving the raw JSON response for audit/debugging.
 -module(dev_odysee_claim).
 -implements(<<"odysee-claim@1.0">>).
--export([info/1, resolve/3]).
+-export([info/1, resolve/3, search/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -13,7 +13,7 @@
 
 %% @doc Return the public device API.
 info(_Opts) ->
-    #{ exports => [<<"resolve">>] }.
+    #{ exports => [<<"resolve">>, <<"search">>] }.
 
 %% @doc Resolve and normalize an Odysee/LBRY claim.
 resolve(Base, Req, Opts) ->
@@ -21,6 +21,17 @@ resolve(Base, Req, Opts) ->
         maybe
             {ok, Claim, Raw} ?= find_or_fetch_claim(Base, Req, Opts),
             ok_message(normalize_claim(Claim, Raw, Opts))
+        else
+            Error -> Error
+        end
+    end).
+
+%% @doc Search claims using the SDK proxy `claim_search' method.
+search(Base, Req, Opts) ->
+    safe(fun() ->
+        maybe
+            {ok, Result, Raw} ?= find_or_fetch_search(Base, Req, Opts),
+            ok_message(normalize_search_result(Result, Raw, Opts))
         else
             Error -> Error
         end
@@ -49,6 +60,17 @@ find_or_fetch_claim(Base, Req, Opts) ->
             end
     end.
 
+find_or_fetch_search(Base, Req, Opts) ->
+    case search_candidate(Base, Req, Opts) of
+        {ok, _Result, _Raw} = Search ->
+            Search;
+        not_found ->
+            maybe
+                {ok, Raw} ?= search_proxy(search_params(Base, Req), Base, Req, Opts),
+                search_from_proxy(Raw, Opts)
+            end
+    end.
+
 claim_candidate(Base, Req, Opts) ->
     Candidates = [
         {Req, <<"claim">>},
@@ -68,6 +90,61 @@ claim_candidate(Base, Req, Opts) ->
         {ok, _Claim, _Raw} = Claim -> Claim;
         not_found -> candidate_from_fields(Candidates, Opts)
     end.
+
+search_candidate(Base, Req, Opts) ->
+    Candidates = [
+        {Req, <<"search-result">>},
+        {Req, <<"search_result">>},
+        {Req, <<"claim-search-result">>},
+        {Req, <<"claim_search_result">>},
+        {Req, <<"result">>},
+        {Req, <<"body">>},
+        {Base, <<"search-result">>},
+        {Base, <<"search_result">>},
+        {Base, <<"claim-search-result">>},
+        {Base, <<"claim_search_result">>},
+        {Base, <<"result">>},
+        {Base, <<"body">>}
+    ],
+    case search_candidate_from_value(Base, Opts) of
+        {ok, _Result, _Raw} = Search -> Search;
+        not_found -> search_candidate_from_fields(Candidates, Opts)
+    end.
+
+search_candidate_from_fields([], _Opts) ->
+    not_found;
+search_candidate_from_fields([{Msg, Key} | Rest], Opts) when is_map(Msg) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        not_found -> search_candidate_from_fields(Rest, Opts);
+        Value ->
+            case search_candidate_from_value(Value, Opts) of
+                {ok, _Result, _Raw} = Search -> Search;
+                not_found -> search_candidate_from_fields(Rest, Opts)
+            end
+    end;
+search_candidate_from_fields([_ | Rest], Opts) ->
+    search_candidate_from_fields(Rest, Opts).
+
+search_candidate_from_value(Value, Opts) when is_map(Value) ->
+    case search_from_proxy_map(Value, hb_json:encode(Value), Opts) of
+        {ok, _Result, _Raw} = Search -> Search;
+        _ -> not_found
+    end;
+search_candidate_from_value(Value, Opts) when is_binary(Value) ->
+    case try_decode_json(Value) of
+        {ok, Decoded} -> search_candidate_from_decoded(Decoded, Value, Opts);
+        _ -> not_found
+    end;
+search_candidate_from_value(_Value, _Opts) ->
+    not_found.
+
+search_candidate_from_decoded(Decoded, Raw, Opts) when is_map(Decoded) ->
+    case search_from_proxy_map(Decoded, Raw, Opts) of
+        {ok, _Result, _Raw} = Search -> Search;
+        _ -> not_found
+    end;
+search_candidate_from_decoded(_Decoded, _Raw, _Opts) ->
+    not_found.
 
 candidate_from_fields([], _Opts) ->
     not_found;
@@ -186,10 +263,16 @@ colon_to_hash(Part) ->
     end.
 
 resolve_proxy(URI, Base, Req, Opts) ->
+    sdk_proxy(<<"resolve">>, #{ <<"urls">> => [URI] }, Base, Req, Opts).
+
+search_proxy(Params, Base, Req, Opts) ->
+    sdk_proxy(<<"claim_search">>, Params, Base, Req, Opts).
+
+sdk_proxy(Method, Params, Base, Req, Opts) ->
     Payload = hb_json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
-        <<"method">> => <<"resolve">>,
-        <<"params">> => #{ <<"urls">> => [URI] },
+        <<"method">> => Method,
+        <<"params">> => Params,
         <<"id">> => 1
     }),
     Msg = #{
@@ -204,6 +287,30 @@ resolve_proxy(URI, Base, Req, Opts) ->
         {ok, Other} -> {error, {proxy_response_without_body, Other}};
         Error -> Error
     end.
+
+search_params(Base, Req) ->
+    maps:without(search_reserved_keys(), maps:merge(map_or_empty(Base), map_or_empty(Req))).
+
+map_or_empty(Map) when is_map(Map) -> Map;
+map_or_empty(_Value) -> #{}.
+
+search_reserved_keys() ->
+    [
+        <<"body">>,
+        <<"claim-search-result">>,
+        <<"claim_search_result">>,
+        <<"content-type">>,
+        <<"device">>,
+        <<"method">>,
+        <<"path">>,
+        <<"proxy-url">>,
+        <<"proxy_url">>,
+        <<"raw-result">>,
+        <<"raw_result">>,
+        <<"result">>,
+        <<"search-result">>,
+        <<"search_result">>
+    ].
 
 proxy_url(Base, Req, Opts) ->
     case first_found(
@@ -227,6 +334,12 @@ claim_from_proxy(URI, Raw, Opts) ->
         claim_from_proxy_map(URI, Decoded, Raw, Opts)
     end.
 
+search_from_proxy(Raw, Opts) ->
+    maybe
+        {ok, Decoded} ?= try_decode_json(Raw),
+        search_from_proxy_map(Decoded, Raw, Opts)
+    end.
+
 claim_from_proxy_map(URI, Msg, Raw, Opts) when is_map(Msg) ->
     case hb_maps:get(<<"error">>, Msg, not_found, Opts) of
         not_found -> claim_from_result(URI, Msg, Raw, Opts);
@@ -234,6 +347,21 @@ claim_from_proxy_map(URI, Msg, Raw, Opts) when is_map(Msg) ->
     end;
 claim_from_proxy_map(_URI, _Msg, _Raw, _Opts) ->
     {error, invalid_proxy_response}.
+
+search_from_proxy_map(Msg, Raw, Opts) when is_map(Msg) ->
+    case hb_maps:get(<<"error">>, Msg, not_found, Opts) of
+        not_found -> search_from_result(Msg, Raw, Opts);
+        Error -> {error, {proxy_error, Error}}
+    end;
+search_from_proxy_map(_Msg, _Raw, _Opts) ->
+    {error, invalid_proxy_response}.
+
+search_from_result(Msg, Raw, Opts) ->
+    Result = hb_maps:get(<<"result">>, Msg, Msg, Opts),
+    case is_search_result(Result, Opts) of
+        true -> {ok, Result, Raw};
+        false -> {error, invalid_search_result}
+    end.
 
 claim_from_result(URI, Msg, Raw, Opts) ->
     Result = hb_maps:get(<<"result">>, Msg, Msg, Opts),
@@ -301,6 +429,46 @@ normalize_claim(Claim, Raw, Opts) ->
         base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType)
     end.
 
+normalize_search_result(Result, Raw, Opts) ->
+    Items = search_items(Result, Opts),
+    Claims = normalize_search_claims(Items, Raw, Opts),
+    ClaimIDs = [hb_maps:get(<<"claim-id">>, Claim, Opts) || Claim <- Claims],
+    Msg0 = #{
+        <<"device">> => ?DEVICE,
+        <<"content-type">> => <<"application/json">>,
+        <<"body">> => Raw,
+        <<"result">> => Result,
+        <<"items">> => Items,
+        <<"claims">> => Claims,
+        <<"claim-ids">> => ClaimIDs
+    },
+    Optional = [
+        {<<"page">>, first_value([<<"page">>], Result, Opts)},
+        {<<"page-size">>, first_value([<<"page_size">>, <<"page-size">>], Result, Opts)},
+        {<<"total-items">>, first_value([<<"total_items">>, <<"total-items">>], Result, Opts)},
+        {<<"total-pages">>, first_value([<<"total_pages">>, <<"total-pages">>], Result, Opts)}
+    ],
+    lists:foldl(fun put_if_found_pair/2, Msg0, Optional).
+
+search_items(Result, Opts) when is_map(Result) ->
+    case first_value([<<"items">>, <<"claims">>], Result, Opts) of
+        Items when is_list(Items) -> Items;
+        _ -> []
+    end;
+search_items(_Result, _Opts) ->
+    [].
+
+normalize_search_claims(Items, Raw, Opts) ->
+    lists:filtermap(
+        fun(Claim) ->
+            case normalize_claim(Claim, Raw, Opts) of
+                Msg when is_map(Msg) -> {true, Msg};
+                _ -> false
+            end
+        end,
+        Items
+    ).
+
 base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType) ->
     Msg0 = #{
         <<"device">> => ?DEVICE,
@@ -318,6 +486,14 @@ is_claim_map(Map, Opts) when is_map(Map) ->
     first_value([<<"claim_id">>, <<"claim-id">>], Map, Opts) =/= not_found
         andalso first_value([<<"value">>], Map, Opts) =/= not_found;
 is_claim_map(_Map, _Opts) ->
+    false.
+
+is_search_result(Result, Opts) when is_map(Result) ->
+    case first_value([<<"items">>, <<"claims">>], Result, Opts) of
+        Items when is_list(Items) -> true;
+        _ -> false
+    end;
+is_search_result(_Result, _Opts) ->
     false.
 
 required_first(Keys, Map, Opts) ->
@@ -346,6 +522,9 @@ first_found([_ | Rest], Opts) ->
 
 put_if_found(_Key, not_found, Msg) -> Msg;
 put_if_found(Key, Value, Msg) -> Msg#{ Key => Value }.
+
+put_if_found_pair({_Key, not_found}, Msg) -> Msg;
+put_if_found_pair({Key, Value}, Msg) -> Msg#{ Key => Value }.
 
 try_decode_json(Raw) ->
     try {ok, hb_json:decode(Raw)}
@@ -377,6 +556,42 @@ resolve_proxy_result_test() ->
         hb_maps:get(<<"claim-name">>, Msg, #{})
     ),
     ?assertEqual(<<"stream">>, hb_maps:get(<<"value-type">>, Msg, #{})).
+
+search_proxy_result_test() ->
+    Claim = target_claim(),
+    Result = #{
+        <<"items">> => [Claim],
+        <<"page">> => 1,
+        <<"page_size">> => 1,
+        <<"total_items">> => 1,
+        <<"total_pages">> => 1
+    },
+    Raw = hb_json:encode(#{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"result">> => Result,
+        <<"id">> => 1
+    }),
+    {ok, Msg} = search(#{}, #{ <<"body">> => Raw }, #{}),
+    ?assertEqual(Result, hb_maps:get(<<"result">>, Msg, #{})),
+    ?assertEqual([Claim], hb_maps:get(<<"items">>, Msg, #{})),
+    ?assertEqual(
+        [<<"346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169">>],
+        hb_maps:get(<<"claim-ids">>, Msg, #{})
+    ),
+    ?assertEqual(1, hb_maps:get(<<"total-items">>, Msg, #{})).
+
+search_accepts_supplied_result_test() ->
+    Result = #{ <<"items">> => [target_claim()], <<"page">> => 2 },
+    {ok, Msg} = search(#{}, #{ <<"result">> => Result }, #{}),
+    ?assertEqual(2, hb_maps:get(<<"page">>, Msg, #{})),
+    ?assertEqual(1, length(hb_maps:get(<<"claims">>, Msg, #{}))).
+
+search_params_removes_control_fields_test() ->
+    Params = search_params(
+        #{ <<"proxy-url">> => <<"http://proxy">>, <<"page">> => 1 },
+        #{ <<"body">> => <<"{}">>, <<"claim_type">> => [<<"stream">>] }
+    ),
+    ?assertEqual(#{ <<"page">> => 1, <<"claim_type">> => [<<"stream">>] }, Params).
 
 odysee_url_to_lbry_uri_test() ->
     ?assertEqual(

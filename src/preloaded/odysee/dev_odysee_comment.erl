@@ -5,7 +5,7 @@
 %%% for later verification against LBRY channel public keys.
 -module(dev_odysee_comment).
 -implements(<<"odysee-comment@1.0">>).
--export([info/1, list/3, by_id/3, normalize/3]).
+-export([info/1, list/3, by_id/3, normalize/3, verify_signature/3, verify_claim_signature/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -14,7 +14,15 @@
 
 %% @doc Return the public device API.
 info(_Opts) ->
-    #{ exports => [<<"list">>, <<"by-id">>, <<"normalize">>] }.
+    #{
+        exports => [
+            <<"list">>,
+            <<"by-id">>,
+            <<"normalize">>,
+            <<"verify-signature">>,
+            <<"verify-claim-signature">>
+        ]
+    }.
 
 %% @doc Return a normalized `comment.List' response.
 list(Base, Req, Opts) ->
@@ -50,6 +58,50 @@ normalize(Base, Req, Opts) ->
                 end;
             not_found ->
                 {error, comment_not_found}
+        end
+    end).
+
+%% @doc Verify a Commentron `verify.Signature' payload.
+verify_signature(Base, Req, Opts) ->
+    safe(fun() ->
+        maybe
+            {ok, ChannelID} ?= required_param([<<"channel-id">>, <<"channel_id">>], Base, Req, Opts),
+            {ok, Data} ?= signature_data(Base, Req, Opts),
+            {ok, Signature} ?= required_param([<<"signature">>], Base, Req, Opts),
+            {ok, SigningTS} ?= required_param([<<"signing-ts">>, <<"signing_ts">>], Base, Req, Opts),
+            {ok, PublicKey} ?= public_key_for_signature(Base, Req, ChannelID, Opts),
+            {ok, IsValid} ?= verify_comment_signature(
+                ChannelID,
+                Data,
+                Signature,
+                SigningTS,
+                PublicKey
+            ),
+            {ok, signature_response(IsValid)}
+        else
+            Error -> Error
+        end
+    end).
+
+%% @doc Verify a Commentron `verify.ClaimSignature' payload.
+verify_claim_signature(Base, Req, Opts) ->
+    safe(fun() ->
+        maybe
+            {ok, ClaimID} ?= required_param([<<"claim-id">>, <<"claim_id">>], Base, Req, Opts),
+            {ok, ChannelID} ?= required_param([<<"channel-id">>, <<"channel_id">>], Base, Req, Opts),
+            {ok, Signature} ?= required_param([<<"signature">>], Base, Req, Opts),
+            {ok, SigningTS} ?= required_param([<<"signing-ts">>, <<"signing_ts">>], Base, Req, Opts),
+            {ok, PublicKey} ?= public_key_for_signature(Base, Req, ChannelID, Opts),
+            {ok, IsValid} ?= verify_comment_signature(
+                ChannelID,
+                ClaimID,
+                Signature,
+                SigningTS,
+                PublicKey
+            ),
+            {ok, signature_response(IsValid)}
+        else
+            Error -> Error
         end
     end).
 
@@ -289,6 +341,12 @@ normalize_comment(Comment, Opts) when is_map(Comment) ->
             {<<"channel-id">>, first_value([<<"channel_id">>, <<"channel-id">>], Comment, Opts)},
             {<<"channel-name">>, first_value([<<"channel_name">>, <<"channel-name">>], Comment, Opts)},
             {<<"channel-url">>, first_value([<<"channel_url">>, <<"channel-url">>], Comment, Opts)},
+            {<<"public-key">>,
+                first_value(
+                    [<<"public_key">>, <<"public-key">>, <<"channel_public_key">>, <<"channel-public-key">>],
+                    Comment,
+                    Opts
+                )},
             {<<"timestamp">>, first_value([<<"timestamp">>, <<"created_at">>, <<"created-at">>], Comment, Opts)},
             {<<"updated-at">>, first_value([<<"updated_at">>, <<"updated-at">>], Comment, Opts)},
             {<<"signature">>, first_value([<<"signature">>], Comment, Opts)},
@@ -317,11 +375,31 @@ with_signature_context(Msg, Text, Opts) ->
         not_found ->
             {ok, Msg};
         _Signature ->
-            {ok, Msg#{
+            SignedMsg = Msg#{
                 <<"signed-field">> => <<"comment">>,
-                <<"signed-message">> => Text,
-                <<"signature-verification">> => <<"not-verified">>
+                <<"signed-message">> => Text
+            },
+            {ok, SignedMsg#{
+                <<"signature-verification">> => signature_verification_status(SignedMsg, Text, Opts)
             }}
+    end.
+
+signature_verification_status(Msg, Text, Opts) ->
+    case comment_signature_verification(Msg, Text, Opts) of
+        {ok, true} -> <<"valid">>;
+        {ok, false} -> <<"invalid">>;
+        {error, public_key_not_found} -> <<"not-verified">>;
+        {error, {missing, _Key}} -> <<"not-verified">>;
+        {error, _Reason} -> <<"invalid">>
+    end.
+
+comment_signature_verification(Msg, Text, Opts) ->
+    maybe
+        {ok, ChannelID} ?= required_first([<<"channel-id">>], Msg, Opts),
+        {ok, Signature} ?= required_first([<<"signature">>], Msg, Opts),
+        {ok, SigningTS} ?= required_first([<<"signing-ts">>], Msg, Opts),
+        {ok, PublicKey} ?= public_key_from_message(Msg, Opts),
+        verify_comment_signature(ChannelID, Text, Signature, SigningTS, PublicKey)
     end.
 
 moderation_fields(Comment, Opts) ->
@@ -432,6 +510,151 @@ comment_id(Base, Req, Opts) ->
         CommentID -> {ok, CommentID}
     end.
 
+signature_data(Base, Req, Opts) ->
+    case first_param([<<"data-hex">>, <<"data_hex">>], Base, Req, Opts) of
+        not_found ->
+            required_param([<<"data">>, <<"comment">>, <<"signed-message">>], Base, Req, Opts);
+        DataHex ->
+            decode_hex(DataHex)
+    end.
+
+public_key_for_signature(Base, Req, ChannelID, Opts) ->
+    case public_key_from_message(Req, Opts) of
+        {ok, PublicKey} ->
+            {ok, PublicKey};
+        {error, _} ->
+            case public_key_from_message(Base, Opts) of
+                {ok, PublicKey} -> {ok, PublicKey};
+                {error, _} -> public_key_from_channel(Base, Req, ChannelID, Opts)
+            end
+    end.
+
+public_key_from_message(Msg, Opts) when is_map(Msg) ->
+    case first_value(public_key_keys(), Msg, Opts) of
+        not_found ->
+            case first_value([<<"value">>, <<"channel">>, <<"signing-channel">>, <<"signing_channel">>], Msg, Opts) of
+                Nested when is_map(Nested) -> public_key_from_message(Nested, Opts);
+                _ -> {error, public_key_not_found}
+            end;
+        PublicKey ->
+            {ok, PublicKey}
+    end;
+public_key_from_message(_Msg, _Opts) ->
+    {error, public_key_not_found}.
+
+public_key_keys() ->
+    [<<"public-key">>, <<"public_key">>, <<"channel-public-key">>, <<"channel_public_key">>].
+
+public_key_from_channel(Base, Req, ChannelID, Opts) ->
+    case channel_public_key_from_url(Base, Req, Opts) of
+        {ok, PublicKey} -> {ok, PublicKey};
+        {error, _} -> channel_public_key_from_parts(Base, Req, ChannelID, Opts)
+    end.
+
+channel_public_key_from_url(Base, Req, Opts) ->
+    case first_param([<<"channel-url">>, <<"channel_url">>, <<"channel-uri">>, <<"channel_uri">>], Base, Req, Opts) of
+        not_found ->
+            {error, public_key_not_found};
+        ChannelURI ->
+            case hb_ao:raw(<<"odysee-channel@1.0">>, <<"channel">>, #{}, #{ <<"uri">> => ChannelURI }, Opts) of
+                {ok, ChannelMsg} -> public_key_from_message(ChannelMsg, Opts);
+                Error -> Error
+            end
+    end.
+
+channel_public_key_from_parts(Base, Req, ChannelID, Opts) ->
+    case first_param([<<"channel-name">>, <<"channel_name">>], Base, Req, Opts) of
+        not_found ->
+            {error, public_key_not_found};
+        ChannelName ->
+            ChannelReq = #{
+                <<"claim-name">> => ChannelName,
+                <<"claim-id">> => ChannelID
+            },
+            case hb_ao:raw(<<"odysee-channel@1.0">>, <<"channel">>, #{}, ChannelReq, Opts) of
+                {ok, ChannelMsg} -> public_key_from_message(ChannelMsg, Opts);
+                Error -> Error
+            end
+    end.
+
+verify_comment_signature(ChannelID, Data, Signature, SigningTS, PublicKey) ->
+    maybe
+        {ok, ChannelIDBytes} ?= decode_hex(ChannelID),
+        {ok, SignatureDER} ?= signature_der(Signature),
+        {ok, PublicKeyPoint} ?= public_key_point(PublicKey),
+        SignatureData = <<
+            (hb_util:bin(SigningTS))/binary,
+            (reverse_binary(ChannelIDBytes))/binary,
+            (hb_util:bin(Data))/binary
+        >>,
+        verify_ecdsa(SignatureData, SignatureDER, PublicKeyPoint)
+    end.
+
+verify_ecdsa(SignatureData, SignatureDER, PublicKeyPoint) ->
+    try {ok, crypto:verify(ecdsa, sha256, SignatureData, SignatureDER, [PublicKeyPoint, secp256k1])}
+    catch
+        _:_ -> {ok, false}
+    end.
+
+signature_der(Signature) ->
+    maybe
+        {ok, SignatureBytes} ?= decode_hex(Signature),
+        case SignatureBytes of
+            <<R:32/binary, S:32/binary>> ->
+                DER = public_key:der_encode(
+                    'ECDSA-Sig-Value',
+                    {'ECDSA-Sig-Value', binary:decode_unsigned(R), binary:decode_unsigned(S)}
+                ),
+                {ok, DER};
+            _ ->
+                {error, invalid_signature}
+        end
+    end.
+
+public_key_point(PublicKey) ->
+    maybe
+        {ok, PublicKeyBytes} ?= public_key_bytes(PublicKey),
+        case byte_size(PublicKeyBytes) of
+            Size when Size =:= 33 orelse Size =:= 65 ->
+                {ok, PublicKeyBytes};
+            _ ->
+                der_public_key_point(PublicKeyBytes)
+        end
+    end.
+
+public_key_bytes(PublicKey) when is_binary(PublicKey) ->
+    case decode_hex(PublicKey) of
+        {ok, Bytes} -> {ok, Bytes};
+        {error, _} -> {ok, PublicKey}
+    end;
+public_key_bytes(PublicKey) ->
+    public_key_bytes(hb_util:bin(PublicKey)).
+
+der_public_key_point(PublicKeyBytes) ->
+    try public_key:der_decode('SubjectPublicKeyInfo', PublicKeyBytes) of
+        {'SubjectPublicKeyInfo', _Algorithm, Point} -> {ok, Point};
+        _ -> {error, invalid_public_key}
+    catch
+        _:_ -> {error, invalid_public_key}
+    end.
+
+decode_hex(Hex) ->
+    try {ok, binary:decode_hex(hb_util:bin(Hex))}
+    catch
+        _:_ -> {error, invalid_hex}
+    end.
+
+reverse_binary(Bin) ->
+    list_to_binary(lists:reverse(binary_to_list(Bin))).
+
+signature_response(IsValid) ->
+    #{
+        <<"device">> => ?DEVICE,
+        <<"content-type">> => <<"application/json">>,
+        <<"is-valid">> => IsValid,
+        <<"is_valid">> => IsValid
+    }.
+
 api_request(Method, Params, Base, Req, Opts) ->
     Payload = hb_json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
@@ -484,6 +707,12 @@ comment_url(Method, Base, Req, Opts) ->
 
 required_first(Keys, Map, Opts) ->
     case first_value(Keys, Map, Opts) of
+        not_found -> {error, {missing, hd(Keys)}};
+        Value -> {ok, Value}
+    end.
+
+required_param(Keys, Base, Req, Opts) ->
+    case first_param(Keys, Base, Req, Opts) of
         not_found -> {error, {missing, hd(Keys)}};
         Value -> {ok, Value}
     end.
@@ -567,8 +796,46 @@ normalize_single_comment_test() ->
     ?assertEqual(<<"c1">>, hb_maps:get(<<"comment-id">>, Norm, #{})),
     ?assertEqual(<<"comment">>, hb_maps:get(<<"signed-field">>, Norm, #{})).
 
+verify_signature_accepts_commentron_vector_test() ->
+    Vector = commentron_vector(),
+    {ok, Msg} = verify_signature(#{}, Vector#{
+        <<"data-hex">> => <<"6e69636565">>
+    }, #{}),
+    ?assertEqual(true, hb_maps:get(<<"is-valid">>, Msg, #{})),
+    ?assertEqual(true, hb_maps:get(<<"is_valid">>, Msg, #{})).
+
+verify_signature_rejects_tampered_data_test() ->
+    Vector = commentron_vector(),
+    {ok, Msg} = verify_signature(#{}, Vector#{
+        <<"data">> => <<"tampered">>
+    }, #{}),
+    ?assertEqual(false, hb_maps:get(<<"is-valid">>, Msg, #{})).
+
+normalize_verifies_comment_with_public_key_test() ->
+    Vector = commentron_vector(),
+    Comment = Vector#{
+        <<"comment_id">> => <<"vector-1">>,
+        <<"comment">> => <<"nicee">>
+    },
+    {ok, Msg} = normalize(#{}, #{ <<"comment">> => Comment }, #{}),
+    Norm = hb_maps:get(<<"comment">>, Msg, #{}),
+    ?assertEqual(<<"valid">>, hb_maps:get(<<"signature-verification">>, Norm, #{})).
+
 list_requires_claim_or_author_for_fetch_test() ->
     ?assertEqual({error, claim_id_not_found}, list(#{}, #{}, #{})).
+
+commentron_vector() ->
+    #{
+        <<"channel-id">> => <<"7fadfe1d0dce928350137a13497b6fc36627cf45">>,
+        <<"channel_id">> => <<"7fadfe1d0dce928350137a13497b6fc36627cf45">>,
+        <<"public-key">> =>
+            <<"3056301006072a8648ce3d020106052b8104000a03420004e0743cfa62857d1d7bda9ca6ba0ec3325902866e6442f51a9da2b143bc0ba40cda532e483e1a8a48c84b4b9dc16a117b2f9763d518db50d8fed2b818937ef8b1">>,
+        <<"signature">> =>
+            <<"fe35046bd949fc89037d64ac3558fea859022a166558b459b6883acafa15ca9ec567ca23e7b4ae19e4dbc3f92aac30a132315db7abcb03c15c61662fb9f49458">>,
+        <<"signing-ts">> => <<"1582846386">>,
+        <<"signing_ts">> => <<"1582846386">>,
+        <<"data">> => <<"nicee">>
+    }.
 
 comment() ->
     #{

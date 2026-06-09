@@ -64,7 +64,10 @@ Use these services as the first integration points.
 | Claims and channels | `POST https://api.na-backend.odysee.com/api/v1/proxy` | chainquery, direct hub, or raw lbrycrd proof path | Use SDK proxy methods such as `resolve`, `claim_search`, `get`, `transaction_show`, `status`, and `version`. |
 | Stream descriptors | reflector/blobcache `GET /blob?hash=<sd_hash>` | player path or direct object-store lookup | Descriptor bytes are proof inputs, so prefer blobcache/reflector before player output. |
 | Blobs | reflector/blobcache `GET /blob?hash=<blob_hash>` | direct Wasabi/S3/MinIO/Globalstake lookup | Keep current reflector policy behavior in the live read path. |
-| Comments | `POST https://comments.odysee.com/api/v2` | read-only MySQL replica | Use `comment.List`, `comment.ByID`, and commentron verification helpers first. |
+| Comments and comment reactions | `POST https://comments.odysee.com/api/v2` | read-only MySQL replica | Use `comment.List`, `comment.ByID`, `reaction.List`, and commentron verification helpers first. |
+| File stats | `POST https://api.odysee.com/file/view_count` | read-only engagement replica | Use public view count reads; keep view recording direct. |
+| File reactions | `POST https://api.odysee.com/reaction/list` | read-only engagement replica | Use unauthenticated `reaction/list` for public fire/slime counts; keep signed `reaction/react` direct. |
+| Subscription counts | `POST https://api.odysee.com/subscription/sub_count` | read-only engagement replica | Use public follower count reads; keep signed follow/unfollow notifications direct. |
 | Blocklists | existing Odysee serving path | signed policy device | Do not bypass current policy for live serving in v1. |
 
 ## Bridge device set
@@ -75,10 +78,14 @@ source format and exposes decoded fields as AO-Core messages.
 | Device | Purpose | First milestone |
 | --- | --- | --- |
 | `~odysee-stream-descriptor@1.0` | Parse descriptor JSON, verify encrypted blobs, decrypt, and reconstruct media bytes. | Implemented proof device. |
-| `~odysee-claim@1.0` | Preserve raw SDK proxy resolve JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback-stage adapter. |
+| `~odysee-claim@1.0` | Preserve raw SDK proxy resolve/search JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback/discovery adapter. |
 | `~odysee-stream@1.0` | Represent stream/content claims, stream metadata, `source.sd_hash`, and player-compatible playback URLs. | Implemented playback-stage adapter. |
 | `~odysee-channel@1.0` | Represent channel identity, public key, signature context, and AO-Core committer mapping. | Implemented read-only identity adapter. |
-| `~odysee-comment@1.0` | Represent commentron comments, signature payloads, moderation metadata, and verification inputs. | Implemented read-only Commentron adapter; signature verification awaits signed vectors. |
+| `~odysee-comment@1.0` | Represent commentron comments, signature payloads, moderation metadata, and verification inputs. | Implemented read-only Commentron adapter with secp256k1 signature verification. |
+| `~odysee-reaction@1.0` | Represent Commentron reaction summaries for comments. | Implemented read-only reaction adapter. |
+| `~odysee-file@1.0` | Represent Odysee internal API stats for stream/file claims. | Implemented read-only view count adapter. |
+| `~odysee-file-reaction@1.0` | Represent Odysee internal API reaction summaries for stream/file claims. | Implemented unauthenticated read-only reaction adapter. |
+| `~odysee-subscription@1.0` | Represent Odysee internal API follower counts for channel claims. | Implemented read-only subscription count adapter. |
 
 The older `~lbry-claim@1.0`, `~lbry-stream@1.0`,
 `~lbry-stream-descriptor@1.0`, and `~lbry-channel@1.0` names remain as
@@ -101,11 +108,16 @@ Implemented devices:
 | --- | --- | --- |
 | `~odysee-stream-descriptor@1.0` | `media` | Fetches or decodes a stream descriptor, verifies and decrypts only the blobs needed for the requested plaintext byte range, and returns browser-compatible `HEAD`/`Range` responses. |
 | `~odysee-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
+| `~odysee-claim@1.0` | `search` | Accepts `claim_search` params, supplied SDK search JSON, or a supplied result; calls the SDK proxy when needed; preserves the exact SDK result while exposing `items`, normalized `claims`, and `claim-ids`. |
 | `~odysee-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
 | `~odysee-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
 | `~odysee-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
 | `~odysee-channel@1.0` | `channel` / `from-claim` | Normalizes direct channel claims, claim-device messages, or a stream claim's `signing_channel`; preserves public key fields and source claim context for later verification. |
-| `~odysee-comment@1.0` | `list` / `by-id` / `normalize` | Normalizes `comment.List` and `comment.ByID` responses from supplied fixtures or the Commentron API; preserves comment signatures, signing timestamps, signed message hints, author channel IDs, parent IDs, and moderation metadata. |
+| `~odysee-comment@1.0` | `list` / `by-id` / `normalize` / `verify-signature` / `verify-claim-signature` | Normalizes `comment.List` and `comment.ByID` responses from supplied fixtures or the Commentron API; preserves comment signatures, signing timestamps, signed message hints, author channel IDs, parent IDs, and moderation metadata; verifies Commentron-compatible signatures when a channel public key is supplied or resolvable. |
+| `~odysee-reaction@1.0` | `list` / `normalize` | Normalizes `reaction.List` responses from supplied fixtures or the Commentron API; preserves exact `my_reactions` and `others_reactions` maps and exposes the involved comment IDs. |
+| `~odysee-file@1.0` | `view-count` / `normalize` | Normalizes internal API `/file/view_count` responses from supplied fixtures or `POST https://api.odysee.com/file/view_count`; preserves exact ordered count arrays and exposes a `by-claim-id` map. |
+| `~odysee-file-reaction@1.0` | `list` / `normalize` | Normalizes internal API `/reaction/list` responses from supplied fixtures or `POST https://api.odysee.com/reaction/list`; preserves exact `my_reactions` and `others_reactions` maps and exposes the involved claim IDs. |
+| `~odysee-subscription@1.0` | `sub-count` / `normalize` | Normalizes internal API `/subscription/sub_count` responses from supplied fixtures or `POST https://api.odysee.com/subscription/sub_count`; preserves exact ordered count arrays and exposes a `by-claim-id` map. |
 
 For
 `https://odysee.com/@veritasium:f/why-is-it-so-easy-to-disrupt-gps:3`, the
@@ -213,11 +225,25 @@ playback path. Set
 `player-proxy=false`, `blob-native=true`, or `mode=blob` when a deployment
 should fail instead of using the current player media URL as the upstream.
 
-## Current channel/comment slice
+## Current discovery slice
 
-The channel and comment devices are read-only adapters. They are meant to make
-the data inspectable as AO-Core messages before any moderation or write path is
-added.
+`~odysee-claim@1.0/search` wraps the SDK proxy `claim_search` method. It is a
+read-only adapter: request fields become SDK search params, while control fields
+such as `body`, `result`, `proxy-url`, and device routing fields are stripped
+before proxying. The response preserves the exact SDK `result` for frontend
+compatibility and also exposes AO-friendly `items`, normalized `claims`, and
+`claim-ids`.
+
+The Odysee frontend can route unauthenticated `claim_search` calls through this
+device. Search calls that require wallet/user context, such as
+`include_purchase_receipt` or `include_is_my_output`, intentionally remain on
+the existing SDK/proxy path until authenticated HyperBEAM forwarding is added.
+
+## Current channel/comment/reaction slice
+
+The channel, comment, and reaction devices are read-only adapters. They are
+meant to make the data inspectable as AO-Core messages before any moderation or
+write path is added.
 
 `~odysee-channel@1.0` accepts:
 
@@ -234,9 +260,40 @@ fetches from `POST https://comments.odysee.com/api/v2?m=<method>`. It exposes
 normalized comments with comment ID, claim ID, parent ID, channel ID/name/URL,
 comment text, timestamps, signature, `signing_ts`, pin/reply/support fields,
 and moderation fields. When a comment row has a signature and comment text, the
-device records `signed-field=comment` and `signed-message=<comment text>`, but
-marks verification as `not-verified` until real signed vectors are selected and
-validated against the channel public key.
+device records `signed-field=comment` and `signed-message=<comment text>`. If
+the row or request includes a channel public key, the device verifies the
+Commentron digest `sha256(signing_ts || reverse_hex(channel_id) || data)` with
+the compact secp256k1 ECDSA signature and marks the comment `valid` or
+`invalid`. If the public key is not available, the comment stays
+`not-verified` while still preserving all verification inputs. The explicit
+`verify-signature` and `verify-claim-signature` routes can also resolve a
+channel key from `channel-url`, `channel-name`, and `channel-id`.
+
+`~odysee-reaction@1.0` accepts supplied `reaction.List` JSON, or fetches from
+`POST https://comments.odysee.com/api/v2?m=reaction.List`. It preserves
+`my_reactions` and `others_reactions` exactly for frontend compatibility and
+adds `comment-ids` for AO-side indexing/debugging.
+
+`~odysee-file@1.0` accepts supplied internal API `/file/view_count` JSON, or
+fetches from `POST https://api.odysee.com/file/view_count`. It preserves the
+ordered count array expected by the frontend and adds `by-claim-id` for AO-side
+inspection. View recording (`file/view`) remains direct until the product event
+contract is defined.
+
+`~odysee-file-reaction@1.0` accepts supplied internal API `/reaction/list` JSON,
+or fetches from `POST https://api.odysee.com/reaction/list`. It preserves
+`my_reactions` and `others_reactions` exactly for frontend compatibility and
+adds `claim-ids` for AO-side indexing/debugging. The frontend only uses this
+HyperBEAM path when there is no auth token; authenticated reads and signed
+`reaction/react` mutations remain direct until an authenticated HyperBEAM
+forwarding contract exists.
+
+`~odysee-subscription@1.0` accepts supplied internal API
+`/subscription/sub_count` JSON, or fetches from
+`POST https://api.odysee.com/subscription/sub_count`. It preserves the ordered
+count array expected by the frontend and adds `by-claim-id` for AO-side
+inspection. Follow/unfollow writes (`subscription/new` and
+`subscription/delete`) remain direct.
 
 The Odysee frontend routes these read-only calls through HyperBEAM when
 `HYPERBEAM_BASE_URL` is set, for example:
@@ -394,8 +451,24 @@ signing timestamp, and moderation fields. Policy and moderation state should be
 metadata, not part of the signed comment body. The read-only Commentron adapter
 is implemented.
 
-Comment verification should use the channel public key from the LBRY channel
-claim and real comment rows as test vectors. This remains pending.
+Comment verification uses the channel public key from the LBRY channel claim
+or request payload and real Commentron digest rules as test vectors.
+
+`~odysee-reaction@1.0` should preserve read-only `reaction.List` summaries for
+comments. The read-only adapter is implemented; `reaction.React` remains a
+direct signed user mutation.
+
+`~odysee-file@1.0` should preserve read-only `/file/view_count` summaries for
+stream/file claims. The read-only adapter is implemented; `file/view` remains a
+direct product event.
+
+`~odysee-file-reaction@1.0` should preserve read-only `/reaction/list`
+summaries for stream/file claims. The unauthenticated read-only adapter is
+implemented; authenticated reads and `reaction/react` remain direct.
+
+`~odysee-subscription@1.0` should preserve read-only `/subscription/sub_count`
+summaries for channel claims. The read-only adapter is implemented; follow and
+unfollow notification writes remain direct.
 
 ## Open decisions
 
@@ -414,10 +487,15 @@ These are intentionally not locked for the first doc:
 2. Implement and test `~odysee-stream-descriptor@1.0`. Done for the local proof
    device and unit fixtures.
 3. Implement SDK proxy claim resolution and the `~odysee-claim@1.0` envelope.
-   Done for the playback-stage adapter.
+   Done for the playback/discovery adapter.
 4. Add `~odysee-stream@1.0` derived from the claim envelope. Done for the
    playback-stage adapter.
 5. Add `~odysee-channel@1.0` identity mapping. Done for the read-only adapter.
 6. Add `~odysee-comment@1.0` and comment signature tests. Done for read-only
-   normalization; signed-vector verification remains.
-7. Decide public route names only after the descriptor proof path works.
+   normalization and signed-vector verification.
+7. Add `~odysee-reaction@1.0` for read-only comment reaction summaries. Done.
+8. Add `~odysee-file@1.0` for read-only view counts. Done.
+9. Add `~odysee-file-reaction@1.0` for unauthenticated video/file reaction
+   summaries. Done.
+10. Add `~odysee-subscription@1.0` for read-only follower counts. Done.
+11. Decide public route names only after the descriptor proof path works.
