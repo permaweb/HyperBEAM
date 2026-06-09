@@ -54,37 +54,10 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches =
-        case has_set_filter(Args, Opts) of
-            true -> match_args(Args, Opts);
-            false ->
-                enumerate_block_range(
-                    hb_maps:get(<<"block">>, Args, undefined, Opts),
-                    Opts
-                )
-        end,
-    WithExplicit =
-        case explicit_ids(Args, Opts) of
-            [] -> Matches;
-            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-        end,
-    Ordered =
-        case annotate_ids(WithExplicit, Opts) of
-            unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-            Annotated ->
-                Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                sort_offset_annotated(
-                    filter_offset_annotated(
-                        Annotated,
-                        maps:get(<<"block">>, Args, undefined),
-                        Opts
-                    ),
-                    Order,
-                    Opts
-                )
-        end,
-    ?event({transactions_matches, Matches}),
-    {ok, connection(Ordered, Args, Opts)};
+    case fast_tag_eligible(Args, Opts) of
+        true -> {ok, transactions_fast(Args, Opts)};
+        false -> {ok, transactions_reference(Args, Opts)}
+    end;
 query(Obj, <<"block">>, Args, Opts) ->
     case hb_maps:get(<<"id">>, Args, undefined, Opts) of
         undefined ->
@@ -188,6 +161,87 @@ query(Obj, Field, Args, _Opts) ->
         {args, Args}
     }),
     {ok, <<"Not implemented.">>}.
+
+%% @doc Reference transactions path: match, annotate, block-filter, sort,
+%% paginate. Also the oracle that `transactions_fast' must match.
+transactions_reference(Args, Opts) ->
+    Matches =
+        case has_set_filter(Args, Opts) of
+            true -> match_args(Args, Opts);
+            false ->
+                enumerate_block_range(
+                    hb_maps:get(<<"block">>, Args, undefined, Opts),
+                    Opts
+                )
+        end,
+    WithExplicit =
+        case explicit_ids(Args, Opts) of
+            [] -> Matches;
+            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+        end,
+    ?event({transactions_matches, Matches}),
+    case annotate_ids(WithExplicit, Opts) of
+        unavailable -> connection([#{ <<"id">> => ID } || ID <- Matches], Args, Opts);
+        Annotated -> ordered_connection(Annotated, Args, Opts)
+    end.
+
+%% @doc Single-tag + block-range fast path: annotate/block-filter the raw tag
+%% match directly. It already holds the signed, offset-bearing ids, and the
+%% block filter drops the offset-less variants, so this matches `match_args'
+%% without its index-wide resolve + all_signed_ids.
+transactions_fast(Args, Opts) ->
+    RawIDs =
+        case match(<<"tags">>, hb_maps:get(<<"tags">>, Args, undefined, Opts), Opts) of
+            {ok, IDs} -> IDs;
+            _ -> []
+        end,
+    case annotate_ids(RawIDs, Opts) of
+        unavailable -> transactions_reference(Args, Opts);
+        Annotated -> ordered_connection(Annotated, Args, Opts)
+    end.
+
+%% @doc Block-filter, sort, and paginate an offset-annotated candidate set.
+ordered_connection(Annotated, Args, Opts) ->
+    Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+    Ordered =
+        sort_offset_annotated(
+            filter_offset_annotated(
+                Annotated,
+                maps:get(<<"block">>, Args, undefined),
+                Opts
+            ),
+            Order,
+            Opts
+        ),
+    connection(Ordered, Args, Opts).
+
+%% @doc Eligible for the fast tag path: enabled, ranges honoured, a block range
+%% present, and `tags' the only set-filter.
+fast_tag_eligible(Args, Opts) ->
+    hb_opts:get(query_arweave_fast_tag, true, Opts)
+        andalso not hb_opts:get(query_arweave_ignore_block_ranges, false, Opts)
+        andalso is_map(hb_maps:get(<<"block">>, Args, undefined, Opts))
+        andalso only_tags_filter(Args, Opts).
+
+%% @doc True when `tags' is present and no other set-filter is.
+only_tags_filter(Args, Opts) ->
+    HasTags =
+        case hb_maps:get(<<"tags">>, Args, undefined, Opts) of
+            Tags when is_list(Tags), Tags =/= [] -> true;
+            _ -> false
+        end,
+    HasOther =
+        lists:any(
+            fun(Key) ->
+                case hb_maps:get(Key, Args, undefined, Opts) of
+                    undefined -> false;
+                    null -> false;
+                    _ -> true
+                end
+            end,
+            [<<"ids">>, <<"id">>, <<"owners">>, <<"owner">>, <<"recipients">>]
+        ),
+    HasTags andalso not HasOther.
 
 %% @doc Encode a transaction anchor (`last_tx`) for the GraphQL response.
 %% Per the Arweave spec, an anchor is one of:
