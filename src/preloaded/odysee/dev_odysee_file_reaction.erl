@@ -162,7 +162,7 @@ list_params(Base, Req, Opts) ->
 api_params(Params0, Opts) ->
     Params1 = put_alias(<<"claim_ids">>, <<"claim-ids">>, Params0, Opts),
     Params2 = put_alias(<<"auth_token">>, <<"auth-token">>, Params1, Opts),
-    maps:without(control_keys(), Params2).
+    maps:without(control_keys() ++ request_metadata_keys(), Params2).
 
 control_keys() ->
     [
@@ -183,6 +183,28 @@ control_keys() ->
         <<"reaction_result">>,
         <<"reaction_url">>,
         <<"result">>
+    ].
+
+request_metadata_keys() ->
+    [
+        <<"accept">>,
+        <<"accept-bundle">>,
+        <<"accept-language">>,
+        <<"authorization">>,
+        <<"connection">>,
+        <<"content-length">>,
+        <<"cookie">>,
+        <<"host">>,
+        <<"origin">>,
+        <<"priv">>,
+        <<"referer">>,
+        <<"sec-ch-ua">>,
+        <<"sec-ch-ua-mobile">>,
+        <<"sec-ch-ua-platform">>,
+        <<"sec-fetch-dest">>,
+        <<"sec-fetch-mode">>,
+        <<"sec-fetch-site">>,
+        <<"user-agent">>
     ].
 
 put_alias(Target, Source, Params, Opts) ->

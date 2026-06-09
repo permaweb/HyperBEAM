@@ -182,7 +182,7 @@ api_params(Params0, Opts) ->
     Params2 = put_alias(<<"claim_id">>, <<"claim_ids">>, Params1, Opts),
     Params3 = put_alias(<<"claim_id">>, <<"claim-ids">>, Params2, Opts),
     Params4 = put_alias(<<"auth_token">>, <<"auth-token">>, Params3, Opts),
-    maps:without(control_keys(), Params4).
+    maps:without(control_keys() ++ request_metadata_keys(), Params4).
 
 control_keys() ->
     [
@@ -205,6 +205,28 @@ control_keys() ->
         <<"view-counts">>,
         <<"view_count_result">>,
         <<"view_count_url">>
+    ].
+
+request_metadata_keys() ->
+    [
+        <<"accept">>,
+        <<"accept-bundle">>,
+        <<"accept-language">>,
+        <<"authorization">>,
+        <<"connection">>,
+        <<"content-length">>,
+        <<"cookie">>,
+        <<"host">>,
+        <<"origin">>,
+        <<"priv">>,
+        <<"referer">>,
+        <<"sec-ch-ua">>,
+        <<"sec-ch-ua-mobile">>,
+        <<"sec-ch-ua-platform">>,
+        <<"sec-fetch-dest">>,
+        <<"sec-fetch-mode">>,
+        <<"sec-fetch-site">>,
+        <<"user-agent">>
     ].
 
 put_alias(Target, Source, Params, Opts) ->
