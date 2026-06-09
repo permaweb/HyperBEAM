@@ -364,7 +364,7 @@ normalize_height(Height, Opts) ->
     case RequestedHeight < 0 of
         true ->
             case latest_height(Opts) of
-                {ok, Tip} -> {ok, Tip + RequestedHeight};
+                {ok, Tip} -> {ok, Tip + RequestedHeight + 1};
                 {error, _} = Err -> Err
             end;
         false ->
@@ -2380,13 +2380,24 @@ negative_parse_range_test_parallel() ->
         ),
     {ok, {NegativeFrom, UndefinedTo}} =
         parse_range(#{ <<"from">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
+    ?assertEqual(hb_util:int(Tip) - 3 + 1, NegativeFrom),
     ?assertEqual(undefined, UndefinedTo),
     {ok, {PositiveFrom, NegativeTo}} =
         parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
     ?assertEqual(10, PositiveFrom),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
+    ?assertEqual(hb_util:int(Tip) - 3 + 1, NegativeTo),
     ok.
+
+negative_minus_one_should_match_tip_test_parallel() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    {ok, Tip} =
+        hb_ao:resolve(
+            <<?ARWEAVE_DEVICE/binary, "/current/height">>,
+            Opts
+        ),
+    {ok, {NegativeFrom, _}} =
+        parse_range(#{ <<"from">> => <<"-1">> }, Opts),
+    ?assertEqual(hb_util:int(Tip), NegativeFrom).
 
 latest_height_failure_test_parallel() ->
     {ok, MockURL, MockHandle} = hb_mock_server:start([
@@ -2488,7 +2499,7 @@ negative_from_index_test_parallel() ->
         ),
     ?assert(has_any_indexed_tx(StartBlock, Opts)),
     NextBlock = highest_contiguous_indexed_block(StopBlock, 50, Opts),
-    ?assertEqual(StartBlock, NextBlock),
+    ?assertEqual(StartBlock + 1, NextBlock),
     assert_indexed_range(NextBlock, StopBlock, Opts),
     ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
     ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
