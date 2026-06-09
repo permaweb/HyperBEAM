@@ -7,6 +7,7 @@
     claim/3,
     transaction/3,
     descriptor/3,
+    blob/3,
     verify_blobs/3,
     stream_graph/3,
     verified_stream/3,
@@ -26,6 +27,7 @@ info(_) ->
             <<"claim">>,
             <<"transaction">>,
             <<"descriptor">>,
+            <<"blob">>,
             <<"verify-blobs">>,
             <<"stream-graph">>,
             <<"verified-stream">>,
@@ -43,6 +45,7 @@ index(_Base, _Req, _Opts) ->
             <<"claim">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"transaction">> => [<<"txid">>],
             <<"descriptor">> => [<<"sd-hash">>],
+            <<"blob">> => [<<"hash">>],
             <<"verify-blobs">> => [<<"sd-hash">>, <<"limit">>],
             <<"stream-graph">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"verified-stream">> => [<<"claim-id">>, <<"name">>, <<"url">>],
@@ -72,12 +75,14 @@ transaction(Base, Req, Opts) ->
                 case Hex of
                     undefined -> error_map(missing_raw_tx_hex);
                     _ ->
-                        codec(
-                            <<"lbry-transaction@1.0">>,
-                            Hex,
-                            #{ <<"encoding">> => <<"hex">> },
-                            Opts
-                        )
+                        Tx =
+                            codec(
+                                <<"lbry-transaction@1.0">>,
+                                Hex,
+                                #{ <<"encoding">> => <<"hex">> },
+                                Opts
+                            ),
+                        hex_binaries(Tx#{ <<"raw-hex">> => hb_util:to_lower(Hex) })
                 end
             end
         )
@@ -89,6 +94,22 @@ descriptor(Base, Req, Opts) ->
             hb_lbry_bridge:descriptor(SDHash, Opts),
             fun(Descriptor) ->
                 codec(<<"lbry-stream-descriptor@1.0">>, Descriptor, #{}, Opts)
+            end
+        )
+    end).
+
+blob(Base, Req, Opts) ->
+    with_blob_hash(Base, Req, Opts, fun(Hash) ->
+        map_result(
+            hb_lbry_bridge:blob(Hash, Opts),
+            fun(Bytes) ->
+                #{
+                    <<"status">> => 200,
+                    <<"content-type">> => <<"application/octet-stream">>,
+                    <<"content-length">> => byte_size(Bytes),
+                    <<"blob-hash">> => hb_util:to_lower(Hash),
+                    <<"body">> => Bytes
+                }
             end
         )
     end).
@@ -106,7 +127,9 @@ stream_graph(Base, Req, Opts) ->
     with_target(Base, Req, Opts, fun(Target) ->
         map_result(
             hb_lbry_bridge:stream_graph(Target, Opts),
-            fun(StreamGraph) -> normalize_stream_graph(StreamGraph, Target, Opts) end
+            fun(StreamGraph) ->
+                hex_binaries(normalize_stream_graph(StreamGraph, Target, Opts))
+            end
         )
     end).
 
@@ -115,7 +138,7 @@ verified_stream(Base, Req, Opts) ->
         map_result(
             hb_lbry_bridge:verified_stream(Target, Opts),
             fun(VerifiedStream) ->
-                normalize_verified_stream(VerifiedStream, Target, Opts)
+                hex_binaries(normalize_verified_stream(VerifiedStream, Target, Opts))
             end
         )
     end).
@@ -294,6 +317,21 @@ normalize_verify_blobs(Result, Opts) ->
             )
     }.
 
+%% Device responses must survive JSON serialization over HTTP, so raw
+%% non-UTF8 binaries (scripts, claim envelopes, hashes) are hex-encoded at
+%% this boundary. The bridge and codec layers keep the raw bytes.
+hex_binaries(Map) when is_map(Map) ->
+    maps:map(fun(_Key, Value) -> hex_binaries(Value) end, Map);
+hex_binaries(List) when is_list(List) ->
+    [hex_binaries(Value) || Value <- List];
+hex_binaries(Bin) when is_binary(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8) of
+        Bin -> Bin;
+        _ -> hb_util:to_hex(Bin)
+    end;
+hex_binaries(Other) ->
+    Other.
+
 stream_claim(Claim, Opts) ->
     codec(<<"lbry-stream@1.0">>, Claim, #{}, Opts).
 
@@ -320,6 +358,12 @@ with_txid(Base, Req, Opts, Fun) ->
 with_sd_hash(Base, Req, Opts, Fun) ->
     case param(Base, Req, [<<"sd-hash">>, <<"sd_hash">>, <<"sdhash">>], Opts) of
         {ok, SDHash} -> {ok, Fun(SDHash)};
+        Error -> error_response(Error)
+    end.
+
+with_blob_hash(Base, Req, Opts, Fun) ->
+    case param(Base, Req, [<<"hash">>, <<"blob-hash">>, <<"blob_hash">>], Opts) of
+        {ok, Hash} -> {ok, Fun(Hash)};
         Error -> error_response(Error)
     end.
 
@@ -398,7 +442,7 @@ request_range(Base, Req, Opts) ->
         _ ->
             case param(Base, Req, [<<"range">>], Opts) of
                 {ok, Range} -> parse_range(Range, Opts);
-                _ -> {error, missing_range}
+                _ -> {ok, 0, default_range_size(Opts) - 1}
             end
     end.
 
@@ -418,10 +462,12 @@ parse_range(_, _Opts) ->
     {error, invalid_range}.
 
 range_end(Start, <<>>, Opts) ->
-    Size = hb_maps:get(<<"odysee-default-range-size">>, Opts, ?DEFAULT_RANGE_SIZE, Opts),
-    {ok, Start + Size - 1};
+    {ok, Start + default_range_size(Opts) - 1};
 range_end(_Start, EndBin, _Opts) ->
     parse_nonnegative_integer(EndBin).
+
+default_range_size(Opts) ->
+    hb_maps:get(<<"odysee-default-range-size">>, Opts, ?DEFAULT_RANGE_SIZE, Opts).
 
 parse_nonnegative_integer(Bin) ->
     try binary_to_integer(Bin) of
@@ -558,6 +604,7 @@ status_for(not_found) -> 404;
 status_for({http_status, 403, _}) -> 403;
 status_for(protected) -> 403;
 status_for(protected_content) -> 403;
+status_for({hash_mismatch, _, _}) -> 502;
 status_for({failure, _}) -> 502;
 status_for({invalid_attestation, _, _}) -> 502;
 status_for(_) -> 500.

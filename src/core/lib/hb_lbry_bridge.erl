@@ -1,5 +1,6 @@
 -module(hb_lbry_bridge).
 -export([
+    blob/2,
     descriptor/2,
     verify_blobs/3,
     stream_graph/2,
@@ -10,6 +11,9 @@
 ]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+blob(Hash, Opts) ->
+    read_blob(Hash, Opts).
 
 descriptor(SDHash, Opts) ->
     Result =

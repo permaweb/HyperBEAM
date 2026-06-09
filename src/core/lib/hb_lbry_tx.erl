@@ -149,7 +149,7 @@ parse_claim_envelope(
         <<"signed">> => true,
         <<"signing-channel-hash">> => SigningChannelHash,
         <<"signing-channel-id">> => hb_util:to_hex(reverse(SigningChannelHash)),
-        <<"signature">> => Signature,
+        <<"claim-signature">> => Signature,
         <<"message">> => Message
     }};
 parse_claim_envelope(<<"{", _/binary>> = Raw) ->
@@ -249,7 +249,7 @@ parse_task0_transaction_test() ->
         <<"585d54c7b82fd92043ed583c5aea18a9547028aa">>,
         maps:get(<<"signing-channel-id">>, Envelope)
     ),
-    ?assertEqual(64, byte_size(maps:get(<<"signature">>, Envelope))),
+    ?assertEqual(64, byte_size(maps:get(<<"claim-signature">>, Envelope))),
     ?assert(byte_size(maps:get(<<"message">>, Envelope)) > 0).
 
 hash160_claim_id_derivation_test() ->

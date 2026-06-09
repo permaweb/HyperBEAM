@@ -233,6 +233,123 @@ stream_graph_stream_uses_tx_claim_envelope_test() ->
         hb_mock_server:stop(Handle)
     end.
 
+blob_device_serves_raw_blob_test() ->
+    {RawDescriptor, DescriptorHash, BlobHash, BlobBytes, _Plaintext} =
+        sample_descriptor(),
+    {ok, Server, Handle} = blob_server(RawDescriptor, DescriptorHash, BlobHash, BlobBytes),
+    try
+        {ok, Response} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"blob">>,
+                #{},
+                #{ <<"hash">> => BlobHash },
+                opts(Server)
+            ),
+        ?assertEqual(200, maps:get(<<"status">>, Response)),
+        ?assertEqual(
+            <<"application/octet-stream">>,
+            maps:get(<<"content-type">>, Response)
+        ),
+        ?assertEqual(byte_size(BlobBytes), maps:get(<<"content-length">>, Response)),
+        ?assertEqual(BlobHash, maps:get(<<"blob-hash">>, Response)),
+        ?assertEqual(BlobBytes, maps:get(<<"body">>, Response))
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+blob_device_maps_protected_to_403_test() ->
+    Hash = hb_util:to_hex(crypto:hash(sha384, <<"protected blob">>)),
+    {ok, Server, Handle} = hb_mock_server:start([
+        {"/blob", blob, {403, <<"protected">>}}
+    ]),
+    try
+        {ok, Response} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"blob">>,
+                #{},
+                #{ <<"hash">> => Hash },
+                opts(Server)
+            ),
+        ?assertEqual(403, maps:get(<<"status">>, Response)),
+        ?assertEqual(<<"protected">>, maps:get(<<"error">>, Response))
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+blob_device_rejects_invalid_hash_test() ->
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"blob">>,
+            #{},
+            #{ <<"hash">> => <<"not-a-blob-hash">> },
+            #{}
+        ),
+    ?assertEqual(404, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"not_found">>, maps:get(<<"error">>, Response)).
+
+transaction_device_includes_raw_hex_test() ->
+    {_RawDescriptor, DescriptorHash, _BlobHash, _BlobBytes, _Plaintext} =
+        sample_descriptor(),
+    Hex = claim_tx_hex(DescriptorHash),
+    TxResponse =
+        hb_json:encode(#{
+            <<"jsonrpc">> => <<"2.0">>,
+            <<"result">> => #{ <<"hex">> => Hex },
+            <<"id">> => 1
+        }),
+    {ok, Server, Handle} = hb_mock_server:start([
+        {"/api/v1/proxy", proxy, {200, TxResponse}}
+    ]),
+    try
+        {ok, Response} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"transaction">>,
+                #{},
+                #{ <<"txid">> => <<"aabb">> },
+                #{ <<"lbry-proxy-node">> => Server, <<"http-client">> => httpc }
+            ),
+        ?assertEqual(Hex, maps:get(<<"raw-hex">>, Response)),
+        ?assertEqual(Hex, maps:get(<<"raw">>, Response)),
+        ?assertEqual(
+            <<"lbry-transaction@1.0">>,
+            maps:get(<<"device">>, Response)
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+media_device_defaults_missing_range_test() ->
+    {RawDescriptor, DescriptorHash, BlobHash, BlobBytes, Plaintext} =
+        sample_descriptor(),
+    {ok, Server, Handle} = blob_server(RawDescriptor, DescriptorHash, BlobHash, BlobBytes),
+    try
+        {ok, Response} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"media">>,
+                #{},
+                #{ <<"sd-hash">> => DescriptorHash },
+                opts(Server)
+            ),
+        ?assertEqual(206, maps:get(<<"status">>, Response)),
+        ?assertEqual(Plaintext, maps:get(<<"body">>, Response)),
+        ?assertEqual(
+            iolist_to_binary([
+                <<"bytes 0-">>,
+                integer_to_binary(byte_size(Plaintext) - 1),
+                <<"/">>,
+                integer_to_binary(byte_size(Plaintext))
+            ]),
+            maps:get(<<"content-range">>, Response)
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
 blob_server(RawDescriptor, DescriptorHash, BlobHash, BlobBytes) ->
     hb_mock_server:start([
         {"/blob", blob, fun(Req) ->

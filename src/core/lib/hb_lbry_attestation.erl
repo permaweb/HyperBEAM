@@ -77,7 +77,7 @@ verify_signed(FirstInput, Envelope, Channel) ->
         EmbeddedHash = maps:get(<<"signing-channel-hash">>, Envelope),
         {ok, PublicKey} ?= channel_public_key(Channel),
         Digest = signature_digest(FirstInput, Envelope),
-        Signature = maps:get(<<"signature">>, Envelope),
+        Signature = maps:get(<<"claim-signature">>, Envelope),
         {ok, SignatureValid} ?= verify_signature(Signature, Digest, PublicKey),
         BindingValid = ChannelHash == EmbeddedHash,
         Attestation = #{
@@ -258,7 +258,7 @@ verify_checks_channel_hash_binding_test() ->
     Envelope = #{
         <<"signed">> => true,
         <<"signing-channel-hash">> => ChannelHash,
-        <<"signature">> => Signature,
+        <<"claim-signature">> => Signature,
         <<"message">> => Message
     },
     Channel = #{
@@ -281,7 +281,7 @@ real_lbry_signature_verifies_task0_test() ->
         }
     },
     Digest = signature_digest(FirstInput, Envelope),
-    Signature = maps:get(<<"signature">>, Envelope),
+    Signature = maps:get(<<"claim-signature">>, Envelope),
     {ok, PublicKey} = channel_public_key(Channel),
     ?assertEqual(
         {ok, true},
