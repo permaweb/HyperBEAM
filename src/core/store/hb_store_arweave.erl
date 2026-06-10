@@ -174,7 +174,7 @@ do_read(StoreOpts, ID, Opts) ->
         {ok,
             #{
                 <<"codec-device">> := Codec,
-                <<"start-offset">> := Offset,
+                <<"start-offset">> := RawOffset,
                 <<"length">> := Length
             }
         } ->
@@ -182,7 +182,7 @@ do_read(StoreOpts, ID, Opts) ->
                 load_message(
                     Codec,
                     ID,
-                    root_offset(Offset, StoreOpts, Opts),
+                    root_offset(RawOffset, StoreOpts, Opts),
                     Length,
                     Opts
                 ),
@@ -194,11 +194,11 @@ do_read(StoreOpts, ID, Opts) ->
                         {read_ok,
                             {id, {string, ID}},
                             {codec, Codec},
-                            {offset, Offset},
+                            {offset, RawOffset},
                             {length, Length}
                         }
                     ),
-                    record_partition_metric(Offset, ok, StoreOpts),
+                    record_partition_metric(RawOffset, ok, StoreOpts),
                     Loaded;
                 {error, Reason} ->
                     ?event(
@@ -206,12 +206,12 @@ do_read(StoreOpts, ID, Opts) ->
                         {read_chunks_not_found, 
                             {id, {string, ID}},
                             {codec, Codec},
-                            {offset, Offset},
+                            {offset, RawOffset},
                             {length, Length},
                             {reason, Reason}
                         }
                     ),
-                    record_partition_metric(Offset, not_found, StoreOpts),
+                    record_partition_metric(RawOffset, not_found, StoreOpts),
                     if Reason =:= not_found -> not_found;
                     true -> {error, Reason}
                     end
@@ -383,7 +383,6 @@ write_offset(
 probe_block_items(Height, Opts, TransformFun) ->
     case store_from_opts(Opts) of
         no_store -> 
-            erlang:display({no_store, Opts}),
             #{};
         #{ <<"index-store">> := Store } ->
             probe_block_items(Height, Store, 1, #{}, TransformFun, Opts)
@@ -524,7 +523,9 @@ record_partition_metric(Offset, Result, StoreOpts) when is_integer(Offset) ->
         false ->
             ok
     end;
-record_partition_metric(_, _, _) -> ok.
+record_partition_metric(_, _, _) -> 
+    %% Ignore relative offsets
+    ok.
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
@@ -664,7 +665,6 @@ corrupt_item_ids_read_test() ->
     ok = hb_store:write(IndexStore, #{block_items_path(Height, 1) => <<0:256>>}, Opts),
     ok = hb_store:write(IndexStore, #{block_items_path(Height, 2) => <<0:240>>}, Opts),
     Counts = read_block_item_counts(Height, Opts),
-    erlang:display({counts, Counts}),
     ?assertEqual(1, maps:get(<<"1">>, Counts)),
     ?assertEqual(<<"corrupt">>, maps:get(<<"2">>, Counts)),
     IDs = read_block_item_ids(Height, Opts),
