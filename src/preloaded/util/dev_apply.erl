@@ -75,7 +75,7 @@ eval(Base, Request, Opts) ->
                             >>
                         };
                     {ok, ApplyPath} ->
-                        ApplyMsg = apply_msg(ApplyBase, ApplyPath, Opts),
+                        ApplyMsg = apply_msg(ApplyBase, ApplyPath, Base, Request, Opts),
                         ?event({executing, ApplyMsg}),
                         execute_apply(ApplyMsg, ApplyPath, Opts)
                 end
@@ -109,13 +109,32 @@ unwrap_ao_result({ok, Res}, Opts) when is_map(Res) ->
 unwrap_ao_result(Res, _Opts) ->
     Res.
 
-apply_msg(ApplyBase, ApplyPath, Opts) ->
+apply_msg(ApplyBase, ApplyPath, Base, Request, Opts) ->
     Msg = ApplyBase#{ <<"path">> => ApplyPath },
+    RoutedMsg = with_routed_from(Msg, Base, Request, Opts),
     case hb_path:term_to_path_parts(ApplyPath) of
         [ID | _] when ?IS_ID(ID) ->
-            hb_maps:without([<<"device">>], Msg, Opts);
+            hb_maps:without([<<"device">>], RoutedMsg, Opts);
         _ ->
-            Msg
+            RoutedMsg
+    end.
+
+with_routed_from(Msg, Base, Request, Opts) ->
+    case hb_ao:get_first(
+        [
+            {Msg, <<"routed-from">>},
+            {Request, <<"routed-from">>},
+            {Base, <<"routed-from">>}
+        ],
+        not_found,
+        Opts#{ <<"hashpath">> => ignore }
+    ) of
+        not_found -> Msg;
+        Router ->
+            case hb_maps:get(<<"routed-from">>, Msg, not_found, Opts) of
+                not_found -> Msg#{ <<"routed-from">> => Router };
+                _ -> Msg
+            end
     end.
 
 %% @doc Apply the message found at `request' to the message found at `base'.

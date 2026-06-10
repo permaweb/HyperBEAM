@@ -198,27 +198,31 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                     }
                             end,
                         Origin =
-                            #{
-                                <<"process">> => ID,
-                                <<"slot">> => Slot,
-                                <<"outbox-key">> => Key,
-                                <<"result-depth">> => IncludeDepth,
-                                <<"max-depth">> => MaxDepth,
-                                <<"from-base">> => BaseID,
-                                <<"from-uncommitted">> => UncommittedID,
-                                <<"from-scheduler">> =>
-                                    hb_ao:get(
-                                        <<"scheduler">>,
-                                        PrimaryProcess,
-                                        Opts
-                                    ),
-                                <<"from-authority">> =>
-                                    hb_ao:get(
-                                        <<"authority">>,
-                                        PrimaryProcess,
-                                        Opts
-                                    )
-                            },
+                            with_routed_from(
+                                #{
+                                    <<"process">> => ID,
+                                    <<"slot">> => Slot,
+                                    <<"outbox-key">> => Key,
+                                    <<"result-depth">> => IncludeDepth,
+                                    <<"max-depth">> => MaxDepth,
+                                    <<"from-base">> => BaseID,
+                                    <<"from-uncommitted">> => UncommittedID,
+                                    <<"from-scheduler">> =>
+                                        hb_ao:get(
+                                            <<"scheduler">>,
+                                            PrimaryProcess,
+                                            Opts
+                                        ),
+                                    <<"from-authority">> =>
+                                        hb_ao:get(
+                                            <<"authority">>,
+                                            PrimaryProcess,
+                                            Opts
+                                        )
+                                },
+                                Assignment,
+                                Opts
+                            ),
                         case hb_cache:read(Target, Opts) of
                             {ok, DownstreamProcess} ->
                                 push_result_message(
@@ -277,6 +281,43 @@ target_process_not_found(Target) ->
         <<"reason">> => <<"Could not access target process!">>
     }.
 
+with_routed_from(Origin, Assignment, Opts) ->
+    case routed_from_assignment(Assignment, Opts) of
+        not_found ->
+            Origin;
+        Router ->
+            add_routed_from(Origin, Router)
+    end.
+
+routed_from_assignment(Assignment, Opts) ->
+    case hb_maps:get(<<"routed-from">>, Assignment, not_found, Opts) of
+        not_found ->
+            case hb_maps:get(<<"body">>, Assignment, not_found, Opts) of
+                Body when is_map(Body) ->
+                    case hb_maps:get(<<"routed-from">>, Body, not_found, Opts) of
+                        not_found -> routed_from_assignment_ao(Assignment, Opts);
+                        Router -> Router
+                    end;
+                _ ->
+                    routed_from_assignment_ao(Assignment, Opts)
+            end;
+        Router ->
+            Router
+    end.
+
+routed_from_assignment_ao(Assignment, Opts) ->
+    hb_ao:get_first(
+        [
+            {Assignment, <<"routed-from">>},
+            {Assignment, <<"body/routed-from">>}
+        ],
+        not_found,
+        Opts#{ <<"hashpath">> => ignore }
+    ).
+
+add_routed_from(Origin, not_found) -> Origin;
+add_routed_from(Origin, Router) -> Origin#{ <<"routed-from">> => Router }.
+
 %% @doc Route an unscheduled downstream push to the node that owns the target.
 push_routed_target_message(Target, MsgToPush, Origin, Opts) ->
     Path = <<"/", Target/binary, "/push">>,
@@ -297,80 +338,65 @@ push_routed_target_message(Target, MsgToPush, Origin, Opts) ->
         },
         Opts
     ),
-    case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
-        {ok, Node} ->
-            ?event(push_route,
-                {downstream_push_route,
-                    {stage, route_decided},
-                    {decision, remote},
-                    {mode, target_process},
-                    {target, Target},
-                    {path, Path},
-                    {node, Node}
-                },
-                Opts
-            ),
-            SignedMsg =
-                hb_message:commit(
-                    augment_message(Origin, MsgToPush, Opts),
-                    Opts,
-                    hb_opts:get(
-                        scheduler_default_commitment_spec,
-                        <<"httpsig@1.0">>,
-                        Opts
-                    )
-                ),
-            {ok, _} = hb_cache:write(SignedMsg, Opts),
-            case hb_http:post(
-                Node,
-                Path,
-                hb_maps:without([<<"path">>], SignedMsg, Opts),
-                Opts
-            ) of
-                {ok, Res} ->
-                    #{
-                        <<"id">> => hb_message:id(SignedMsg, all, Opts),
-                        <<"target">> => Target,
-                        <<"resulted-in">> => Res
-                    };
+    case maps:get(<<"routed-from">>, Origin, not_found) of
+        Router when is_binary(Router) ->
+            post_routed_target_message(Router, Path, Target, MsgToPush, Origin, Opts);
+        not_found ->
+            case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
+                {ok, Node} ->
+                    post_routed_target_message(Node, Path, Target, MsgToPush, Origin, Opts);
+                {error, no_matches} ->
+                    target_process_not_found(Target);
                 {error, Error} ->
-                    ?event(push, {push_failed, {error, Error}}, Opts),
-                    #{
-                        <<"response">> => <<"error">>,
-                        <<"target">> => Target,
-                        <<"reason">> => Error
-                    }
-            end;
-        {error, no_matches} ->
-            ?event(push_route,
-                {downstream_push_route,
-                    {stage, no_route},
-                    {mode, target_process},
-                    {target, Target},
-                    {path, Path}
-                },
+                    ?event(push,
+                        {no_push_route_found,
+                            {target, Target},
+                            {error, Error}
+                        },
+                        Opts
+                    ),
+                    target_process_not_found(Target)
+            end
+    end.
+
+post_routed_target_message(Node, Path, Target, MsgToPush, Origin, Opts) ->
+    ?event(push,
+        {routed_target_process_push,
+            {target, Target},
+            {node, Node}
+        },
+        Opts
+    ),
+    SignedMsg =
+        hb_message:commit(
+            augment_message(Origin, MsgToPush, Opts),
+            Opts,
+            hb_opts:get(
+                scheduler_default_commitment_spec,
+                <<"httpsig@1.0">>,
                 Opts
-            ),
-            target_process_not_found(Target);
+            )
+        ),
+    {ok, _} = hb_cache:write(SignedMsg, Opts),
+    case hb_http:post(
+        Node,
+        Path,
+        hb_maps:without([<<"path">>], SignedMsg, Opts),
+        Opts
+    ) of
+        {ok, Res} ->
+            #{
+                <<"id">> => hb_message:id(SignedMsg, all, Opts),
+                <<"target">> => Target,
+                <<"resulted-in">> => Res
+            };
         {error, Error} ->
-            ?event(push_route,
-                {downstream_push_route,
-                    {stage, route_error},
-                    {mode, target_process},
-                    {target, Target},
-                    {path, Path},
-                    {error, Error}
-                },
-                Opts
-            ),
-            ?event(push,
-                {no_push_route_found,
-                    {target, Target},
-                    {error, Error}
-                },
-                Opts
-            ),
-            target_process_not_found(Target)
+            ?event(push, {push_failed, {error, Error}}, Opts),
+            #{
+                <<"response">> => <<"error">>,
+                <<"target">> => Target,
+                <<"reason">> => Error
+            }
     end.
 
 
@@ -527,17 +553,38 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             {opts, Opts}
         }
     ),
-    ?event(push_route,
-        {downstream_push_route,
-            {stage, attempting_route},
-            {mode, downstream_slot},
-            {target, TargetID},
-            {slot, NextSlotOnProc},
-            {path, Path},
-            {process, maps:get(<<"process">>, Origin)}
-        },
-        Opts
-    ),
+    case maps:get(<<"routed-from">>, Origin, not_found) of
+        Router when is_binary(Router) ->
+            ?event(push,
+                {routing_via_routed_from,
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {router, Router}
+                },
+                Opts
+            ),
+            hb_http:post(Router, Path, Opts);
+        not_found ->
+            push_downstream_remote_via_local_route(
+                TargetID,
+                NextSlotOnProc,
+                Origin,
+                Path,
+                RouteReq,
+                Self,
+                Opts
+            )
+    end.
+
+push_downstream_remote_via_local_route(
+    TargetID,
+    NextSlotOnProc,
+    Origin,
+    Path,
+    RouteReq,
+    Self,
+    Opts
+) ->
     case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
         {error, no_matches} ->
             ?event(push_route,
@@ -827,10 +874,15 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
 %% message came from.
 augment_message(Origin, ToSched, Opts) ->
     ?event(push, {adding_keys, {origin, Origin}, {to, ToSched}}, Opts),
+    RoutedFrom =
+        case maps:get(<<"routed-from">>, Origin, not_found) of
+            not_found -> #{};
+            Router -> #{ <<"routed-from">> => Router }
+        end,
     hb_message:uncommitted(
         hb_ao:set(
             ToSched,
-            #{
+            RoutedFrom#{
                 <<"data-protocol">> => <<"ao">>,
                 <<"variant">> => <<"ao.N.1">>,
                 <<"type">> => <<"Message">>,
@@ -949,10 +1001,17 @@ schedule_initial_message(Base, Req, Opts) ->
     case hb_ao:resolve(Base, ModReq, Opts) of
         {ok, Res} ->
             case hb_ao:get(<<"status">>, Res, 200, Opts) of
-                200 -> {ok, Res};
+                200 -> {ok, add_routed_from(Res, routed_from_assignment(Req, Opts))};
                 307 ->
                     Location = hb_ao:get(<<"location">>, Res, Opts),
-                    remote_schedule_result(Location, Req, Opts)
+                    case remote_schedule_result(Location, Req, Opts) of
+                        {ok, RemoteRes} ->
+                            {ok, add_routed_from(
+                                RemoteRes,
+                                routed_from_assignment(Req, Opts)
+                            )};
+                        Error -> Error
+                    end
             end;
         {error, Res = #{ <<"status">> := 422 }} ->
             ?event(push, {initial_push_wrong_format, {error, Res}}, Opts),

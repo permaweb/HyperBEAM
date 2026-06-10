@@ -382,8 +382,13 @@ post_schedule(Base, Req, Opts) ->
     case hb_message:with_only_committed(RawToSched, Opts) of
         {ok, OnlyCommitted} ->
             try hb_cache:ensure_all_loaded(OnlyCommitted, Opts) of
-                ToSched ->
-                    do_post_schedule(Base, Req, ToSched, Opts)
+                Loaded ->
+                    do_post_schedule(
+                        Base,
+                        Req,
+                        with_routed_from(Loaded, [RawToSched, Req], Opts),
+                        Opts
+                    )
             catch
                 _: {necessary_message_not_found, _, _} ->
                     {error,
@@ -420,25 +425,26 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
                     {message, ToSched}
                 }
             ),
+            RoutedCommitted = with_routed_from(OnlyCommitted, [ToSched, Req], Opts),
             % Find the relevant scheduler server for the given process and
             % message, start a new one if necessary, or return a redirect to the
             % correct remote scheduler.
             case find_server(ProcID, Base, ToSched, Opts) of
                 {local, PID} ->
                     ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
-                    post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
+                    post_local_schedule(ProcID, PID, RoutedCommitted, Opts);
                 {redirect, Redirect} ->
                     ?event({process_is_remote, {redirect, Redirect}}),
                     case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                         true ->
                             ?event({proxying_to_remote_scheduler,
                                 {redirect, Redirect},
-                                {msg, OnlyCommitted}
+                                {msg, RoutedCommitted}
                             }),
                             post_remote_schedule(
                                 ProcID,
                                 Redirect,
-                                OnlyCommitted,
+                                RoutedCommitted,
                                 Opts
                             );
                         false -> {ok, Redirect}
@@ -456,6 +462,21 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
                     <<"reason">> => Err
                 }
             }
+    end.
+
+with_routed_from(Committed, RawMessages, Opts) when is_list(RawMessages) ->
+    case hb_ao:get_first(
+        [{Raw, <<"routed-from">>} || Raw <- RawMessages],
+        not_found,
+        Opts#{ <<"hashpath">> => ignore }
+    ) of
+        not_found -> Committed;
+        Router -> Committed#{ <<"routed-from">> => Router }
+    end;
+with_routed_from(Committed, Raw, Opts) ->
+    case hb_ao:get(<<"routed-from">>, Raw, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        not_found -> Committed;
+        Router -> Committed#{ <<"routed-from">> => Router }
     end.
 
 %% @doc Post schedule the message. `Req' by this point has been refined to only

@@ -821,7 +821,7 @@ preprocess(Base, RawReq, Opts) ->
                             }]
                     }}
             end;
-        {ok, _Method, Node, RoutedPath, _MsgWithoutMeta, _ReqOpts} ->
+        {ok, _Method, Node, _RoutedPath, _MsgWithoutMeta, _ReqOpts} ->
             ?event(debug_preprocess, {matched_route, {explicit, Res}}),
             CommitRequest =
                 hb_util:atom(
@@ -847,21 +847,13 @@ preprocess(Base, RawReq, Opts) ->
             % We additionally ensure that the request itself has a commitment,
             % such that headers added by the relaying node are not added to the
             % user's request.
-            LoadedReq = hb_cache:ensure_all_loaded(Req, Opts),
-            UserReqWithCommit =
-                case hb_message:signers(LoadedReq, Opts) of
-                    [] ->
-                        hb_message:commit(
-                            LoadedReq,
-                            Opts,
-                            #{
-                                <<"commitment-device">> => <<"httpsig@1.0">>,
-                                <<"type">> => <<"unsigned">>
-                            }
-                        );
-                    _ ->
-                        LoadedReq
-                end,
+            RoutedReq = with_routed_from(Req, RawReq, Opts),
+            LoadedReq = with_loaded_routed_from(
+                hb_cache:ensure_all_loaded(RoutedReq, Opts),
+                RoutedReq,
+                Opts
+            ),
+            UserReqWithCommit = commit_routed_request(LoadedReq, Opts),
             UserPath =
                 case hb_maps:get(<<"path">>, Req, not_found, Opts) of
                     P when is_binary(P), byte_size(P) > 0 ->
@@ -871,15 +863,7 @@ preprocess(Base, RawReq, Opts) ->
                     _ ->
                         throw({error, invalid_user_path})
                 end,
-            ?event(route_preprocess,
-                {preprocess_routed,
-                    {path, UserPath},
-                    {routed_path, RoutedPath},
-                    {node, Node}
-                },
-                Opts
-            ),
-            RelayReq =
+            RelayReqBase =
                 #{
                     <<"device">> => <<"apply@1.0">>,
                     <<"path">> => <<"user-path">>,
@@ -887,6 +871,11 @@ preprocess(Base, RawReq, Opts) ->
                     <<"user-path">> => UserPath,
                     <<"user-message">> => UserReqWithCommit
                 },
+            RelayReq =
+                case hb_maps:get(<<"routed-from">>, RoutedReq, not_found, Opts) of
+                    not_found -> RelayReqBase;
+                    Router -> RelayReqBase#{ <<"routed-from">> => Router }
+                end,
             ?event(debug_preprocess, {prepared_relay_req, RelayReq}),
             {
                 ok,
@@ -907,6 +896,120 @@ preprocess(Base, RawReq, Opts) ->
                         ]
                 }
             }
+    end.
+
+%% @doc Add the router that relayed the request, preserving an existing value
+%% if this request is already moving through a routed chain.
+with_routed_from(Req, RawReq, Opts) ->
+    case hb_maps:get(<<"routed-from">>, Req, not_found, Opts) of
+        not_found ->
+            case routed_from(RawReq, Opts) of
+                not_found -> Req;
+                Router -> Req#{ <<"routed-from">> => Router }
+            end;
+        _ ->
+            Req
+    end.
+
+with_loaded_routed_body(Req, Opts) ->
+    case hb_maps:get(<<"routed-from">>, Req, not_found, Opts) of
+        not_found -> Req;
+        Router -> with_routed_body(Req, Router, Opts)
+    end.
+
+with_loaded_routed_from(LoadedReq, RoutedReq, Opts) ->
+    case hb_maps:get(<<"routed-from">>, RoutedReq, not_found, Opts) of
+        not_found ->
+            LoadedReq;
+        Router ->
+            with_loaded_routed_body(
+                with_routed_message(LoadedReq, Router, Opts),
+                Opts
+            )
+    end.
+
+with_routed_message(Req, Router, Opts) ->
+    case hb_ao:get(<<"type">>, Req, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        <<"Process">> ->
+            Req;
+        _ ->
+            case hb_maps:get(<<"routed-from">>, Req, not_found, Opts) of
+                not_found -> Req#{ <<"routed-from">> => Router };
+                _ -> Req
+            end
+    end.
+
+with_routed_body(Req, Router, Opts) ->
+    case hb_maps:get(<<"body">>, Req, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        Body when is_map(Body) ->
+            case hb_ao:get(<<"type">>, Body, not_found, Opts#{ <<"hashpath">> => ignore }) of
+                <<"Process">> ->
+                    Req;
+                _ ->
+                    RoutedBody =
+                        case hb_maps:get(<<"routed-from">>, Body, not_found, Opts) of
+                            not_found -> Body#{ <<"routed-from">> => Router };
+                            _ -> Body
+                        end,
+                    CommittedBody = commit_routed_request(RoutedBody, Opts),
+                    {ok, _} = hb_cache:write(CommittedBody, Opts),
+                    Req#{ <<"body">> => CommittedBody }
+            end;
+        _ ->
+            Req
+    end.
+
+commit_routed_request(Req, Opts) ->
+    case hb_message:signers(Req, Opts) of
+        [] ->
+            hb_message:commit(
+                Req,
+                Opts,
+                #{
+                    <<"commitment-device">> => <<"httpsig@1.0">>,
+                    <<"type">> => <<"unsigned">>
+                }
+            );
+        _ -> Req
+    end.
+
+routed_from(RawReq, Opts) ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"whois@1.0">> },
+        #{ <<"path">> => <<"node">> },
+        Opts
+    ) of
+        {ok, Host} when is_binary(Host), Host =/= <<"unknown">> ->
+            normalize_router_host(Host, Opts);
+        _ ->
+            configured_router_host(RawReq, Opts)
+    end.
+
+configured_router_host(RawReq, Opts) ->
+    case hb_opts:get(host, not_found, Opts) of
+        not_found -> request_router_host(RawReq, Opts);
+        Host -> normalize_router_host(Host, Opts)
+    end.
+
+request_router_host(RawReq, Opts) ->
+    Req = hb_ao:get(<<"request">>, RawReq, #{}, Opts#{ <<"hashpath">> => ignore }),
+    case hb_maps:get(<<"host">>, Req, not_found, Opts) of
+        not_found -> not_found;
+        Host -> normalize_router_host(Host, Opts)
+    end.
+
+normalize_router_host(<<"http://", _/binary>> = Host, _Opts) -> Host;
+normalize_router_host(<<"https://", _/binary>> = Host, _Opts) -> Host;
+normalize_router_host(Host, Opts) ->
+    case binary:match(Host, <<":">>) of
+        nomatch ->
+            Port = hb_opts:get(port, not_found, Opts),
+            case Port of
+                not_found -> <<"http://", Host/binary>>;
+                _ -> <<"http://", Host/binary, ":", (hb_util:bin(Port))/binary>>
+            end;
+        _ ->
+            <<"http://", Host/binary>>
     end.
 
 %% @doc Find the HTTP route for a request, using a process ID hint for an
@@ -1045,6 +1148,7 @@ initial_push_route_request_test() ->
         #{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"store">> => hb_test_utils:test_store(),
+            <<"node-host">> => <<"router.test:8734">>,
             <<"routes">> =>
                 [
                     #{
@@ -1069,8 +1173,37 @@ initial_push_route_request_test() ->
     UserMsg = hb_maps:get(<<"user-message">>, ProxyMsg, #{}, Opts),
     ?assertEqual(not_found, hb_maps:get(<<"route-path">>, UserMsg, not_found, Opts)),
     ?assertEqual(
+        <<"http://router.test:8734">>,
+        hb_maps:get(<<"routed-from">>, UserMsg, not_found, Opts)
+    ),
+    ?assertEqual(
         <<"/push">>,
         hb_maps:get(<<"user-path">>, ProxyMsg, not_found, Opts)
+    ),
+    Msg =
+        #{
+            <<"target">> => ProcID,
+            <<"type">> => <<"Message">>,
+            <<"data">> => <<"test-message">>
+        },
+    MsgReq =
+        #{
+            <<"path">> => RoutePath,
+            <<"method">> => <<"POST">>,
+            <<"body">> => Msg
+        },
+    {ok, #{ <<"body">> := [_MsgRelayBase, MsgRelayCall] }} =
+        preprocess(#{}, #{ <<"request">> => MsgReq }, Opts),
+    MsgProxyMsg = hb_maps:get(<<"proxy-message">>, MsgRelayCall, #{}, Opts),
+    MsgUserMsg = hb_maps:get(<<"user-message">>, MsgProxyMsg, #{}, Opts),
+    ?assertEqual(
+        <<"http://router.test:8734">>,
+        hb_maps:get(<<"routed-from">>, MsgUserMsg, not_found, Opts)
+    ),
+    RoutedBody = hb_maps:get(<<"body">>, MsgUserMsg, #{}, Opts),
+    ?assertEqual(
+        <<"http://router.test:8734">>,
+        hb_maps:get(<<"routed-from">>, RoutedBody, not_found, Opts)
     ).
 
 test_provider_test_parallel_() ->

@@ -212,9 +212,10 @@ do_assign(State, Message, ReplyPID) ->
     BaseStateHashpath = base_state(State),
     NextSlot = maps:get(current, State) + 1,
     {Timestamp, Height, Hash} = ar_timestamp:get(),
+    AssignmentMeta = routed_assignment_metadata(Message, Opts),
     Assignment =
         commit_assignment(
-            #{
+            AssignmentMeta#{
                 <<"path">> =>
                     case hb_path:from_message(request, Message, Opts) of
                         undefined -> <<"compute">>;
@@ -277,6 +278,12 @@ do_assign(State, Message, ReplyPID) ->
         current := NextSlot,
         base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
     }.
+
+routed_assignment_metadata(Message, Opts) ->
+    case hb_ao:get(<<"routed-from">>, Message, not_found, Opts#{ <<"hashpath">> => ignore }) of
+        not_found -> #{};
+        Router -> #{ <<"routed-from">> => Router }
+    end.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
