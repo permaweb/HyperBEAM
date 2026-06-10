@@ -29,6 +29,9 @@ route(<<"index">>, M1, M2, Opts) ->
     ?event({manifest_index, M1, M2}),
     case manifest(M1, M2, Opts) of
         {ok, Manifest} ->
+            % Warm the cache with every asset in one gateway query, so the
+            % per-asset requests that follow the index page are served locally.
+            prefetch_assets(Manifest, Opts),
             % Get the path to the index page from the manifest. We make
             % sure to use `hb_maps:get/4' to ensure that we do not recurse
             % on the `index' key with an `ao' resolve.
@@ -204,6 +207,50 @@ linkify(Manifest, Opts) when is_list(Manifest) ->
     );
 linkify(Manifest, _Opts) ->
     Manifest.
+
+%% @doc Fetch the manifest's not-yet-cached assets in a single gateway query and
+%% write the results to the cache, so subsequent per-asset reads are local.
+%% Already-cached assets are filtered out first (a local-scoped lookup that does
+%% not reach the remote gateway), so a re-served manifest fetches only what is
+%% missing - or nothing. Best-effort: failures leave assets to be fetched on
+%% demand as before.
+prefetch_assets(Manifest, Opts) ->
+    Paths = hb_maps:get(<<"paths">>, Manifest, #{}, Opts),
+    LocalOpts = hb_store:scope(Opts, local),
+    Missing =
+        lists:filter(
+            fun(ID) ->
+                case hb_cache:read(ID, LocalOpts) of
+                    {ok, _} -> false;
+                    _ -> true
+                end
+            end,
+            lists:usort(collect_link_ids(Paths, Opts))
+        ),
+    case Missing of
+        [] -> ok;
+        IDs ->
+            {ok, Messages} = hb_client_gateway:read_many(IDs, Opts),
+            hb_maps:map(
+                fun(_ID, Msg) -> hb_cache:write(Msg, Opts) end,
+                Messages,
+                Opts
+            ),
+            ok
+    end.
+
+%% @doc Collect the target IDs of every link in a (linkified) manifest subtree.
+collect_link_ids(Term, _Opts) when ?IS_LINK(Term) ->
+    [element(2, Term)];
+collect_link_ids(Term, Opts) when is_map(Term) ->
+    lists:flatmap(
+        fun(Value) -> collect_link_ids(Value, Opts) end,
+        hb_maps:values(Term, Opts)
+    );
+collect_link_ids(Term, Opts) when is_list(Term) ->
+    lists:flatmap(fun(Value) -> collect_link_ids(Value, Opts) end, Term);
+collect_link_ids(_Term, _Opts) ->
+    [].
 
 %%% Tests
 

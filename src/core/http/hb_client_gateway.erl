@@ -9,7 +9,7 @@
 -module(hb_client_gateway).
 %% Raw access primitives:
 -export([query/2, query/3, query/4, query/5]).
--export([read/2, data/2, result_to_message/2, item_spec/0]).
+-export([read/2, read_many/2, data/2, result_to_message/2, item_spec/0]).
 %% Application-specific data access functions:
 -export([device/3, location/2]).
 -include_lib("include/hb.hrl").
@@ -77,6 +77,78 @@ read(ID, Opts) ->
                     result_to_message(ID, Item, Opts)
             end
     end.
+
+%% @doc Read many data items by ID, returning a map of `TXID' to its
+%% `structured@1.0' message. IDs are split into batches no larger than the
+%% gateway's `first' result cap (`gateway_read_batch_size', default 100) -
+%% gateways silently truncate larger result sets - and each batch is resolved
+%% with a single GraphQL query. Per-item data is fetched in parallel (bounded by
+%% `gateway_read_concurrency'). Items that fail to resolve are omitted and the
+%% shortfall is logged, so neither a single bad item nor a failed batch fails
+%% the rest. Always returns `{ok, Map}' (possibly empty); reads are best-effort.
+read_many(IDs, Opts) ->
+    BatchSize = max(1, hb_opts:get(gateway_read_batch_size, 100, Opts)),
+    Resolved =
+        lists:foldl(
+            fun(Batch, Acc) -> maps:merge(Acc, read_batch(Batch, Opts)) end,
+            #{},
+            chunk(IDs, BatchSize)
+        ),
+    case length(IDs) - maps:size(Resolved) of
+        0 -> ok;
+        Missing ->
+            ?event(gateway,
+                {read_many_incomplete, {requested, length(IDs)}, {missing, Missing}})
+    end,
+    {ok, Resolved}.
+
+%% @doc Resolve a single batch of IDs (no larger than the gateway result cap)
+%% with one GraphQL query, returning a map of resolved `TXID' to message. A
+%% failed query yields an empty map (logged) so the caller can stay best-effort.
+read_batch(IDs, Opts) ->
+    Count = integer_to_binary(length(IDs)),
+    Query =
+        <<
+            "query($transactionIds: [ID!]!) { ",
+                "transactions(ids: $transactionIds, first: ", Count/binary, "){ ",
+                    "edges { ", (item_spec())/binary , " } ",
+                "} ",
+            "} "
+        >>,
+    Variables = #{ <<"transactionIds">> => [ hb_util:human_id(ID) || ID <- IDs ] },
+    case query(Query, Variables, Opts) of
+        {error, Reason} ->
+            ?event(gateway, {read_batch_failed, {ids, length(IDs)}, {reason, Reason}}),
+            #{};
+        {ok, GqlMsg} ->
+            Nodes =
+                [
+                    hb_ao:get(<<"node">>, Edge, Opts)
+                ||
+                    Edge <- hb_ao:get(<<"data/transactions/edges">>, GqlMsg, [], Opts)
+                ],
+            Resolved =
+                hb_pmap:parallel_map(
+                    Nodes,
+                    fun(Node) ->
+                        % Best-effort: skip any item that fails to resolve so it
+                        % does not abort the batch (`hb_pmap' fails fast).
+                        try
+                            {ok, Msg} = result_to_message(Node, Opts),
+                            {ok, {hb_maps:get(<<"id">>, Node, not_found, Opts), Msg}}
+                        catch _:_ -> error
+                        end
+                    end,
+                    max(1, hb_opts:get(gateway_read_concurrency, 10, Opts))
+                ),
+            maps:from_list([ Pair || {ok, Pair} <- Resolved ])
+    end.
+
+%% @doc Split a list into sublists of at most `Size' elements.
+chunk([], _Size) -> [];
+chunk(List, Size) ->
+    {Head, Tail} = lists:split(min(Size, length(List)), List),
+    [Head | chunk(Tail, Size)].
 
 %% @doc Gives the fields of a transaction that are needed to construct an
 %% ANS-104 message.
@@ -525,3 +597,54 @@ ao_dataitem_test() ->
     ?event(gateway, {l2_dataitem, Res}),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
+
+%% @doc `read_many/2' resolves every requested item from a single GraphQL
+%% request. Both the GraphQL response and the per-item data are mocked, so the
+%% test is hermetic; the assertion on the GraphQL request count is what proves
+%% the batch (the per-item `read/2' would have issued one request each).
+read_many_single_query_test() ->
+    _Node = hb_http_server:start_node(#{}),
+    ID1 = <<"ytJaSs2COfstyFzwnzTrKghGT5OpVj74wGUw_38vgX4">>,
+    ID2 = <<"gP2Ya2cmloNiS3xHE1v7rLXy9JIOFxQVog-1JFpWTTo">>,
+    {ok, GqlResponse} = file:read_file("test/gateway/read_many_response.json"),
+    {ok, Data1} = file:read_file("test/gateway/read_many_version.bin"),
+    {ok, Data2} = file:read_file("test/gateway/read_many_tsconfig.bin"),
+    Endpoints = [
+        {<<"/graphql">>, graphql, fun(_Req) -> {200, GqlResponse} end},
+        {<<"/arweave/raw/", ID1/binary>>, raw, {200, Data1}},
+        {<<"/arweave/raw/", ID2/binary>>, raw, {200, Data2}}
+    ],
+    {ok, MockServer, ServerHandle} = hb_mock_server:start(Endpoints),
+    MockRoute =
+        fun(Template) ->
+            #{
+                <<"template">> => Template,
+                <<"node">> => #{
+                    <<"prefix">> => MockServer,
+                    <<"opts">> =>
+                        #{ <<"http-client">> => gun, <<"protocol">> => http2 }
+                }
+            }
+        end,
+    Opts = #{ <<"routes">> => [MockRoute(<<"/graphql">>), MockRoute(<<"/raw">>)] },
+    try
+        {ok, Messages} = read_many([ID1, ID2], Opts),
+        ?assertEqual(2, maps:size(Messages)),
+        ?assert(maps:is_key(ID1, Messages)),
+        ?assert(maps:is_key(ID2, Messages)),
+        ?assertEqual(1, length(hb_mock_server:get_requests(graphql, 1, ServerHandle)))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+%% @doc `chunk/2' splits IDs into batches no larger than the gateway cap without
+%% dropping any - a manifest with more assets than the cap (100) must still
+%% resolve every ID across multiple queries.
+chunk_test() ->
+    ?assertEqual([], chunk([], 100)),
+    ?assertEqual([[a, b, c]], chunk([a, b, c], 100)),
+    ?assertEqual([[1, 2], [3, 4], [5]], chunk([1, 2, 3, 4, 5], 2)),
+    IDs = lists:seq(1, 250),
+    Chunks = chunk(IDs, 100),
+    ?assertEqual([100, 100, 50], [length(C) || C <- Chunks]),
+    ?assertEqual(IDs, lists:append(Chunks)).
