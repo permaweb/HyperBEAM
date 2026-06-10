@@ -153,16 +153,20 @@ is_reaction_result(_Result, _Opts) ->
     false.
 
 list_params(Base, Req, Opts) ->
-    Params = api_params(maps:merge(map_or_empty(Base), map_or_empty(Req)), Opts),
-    case hb_maps:get(<<"claim_ids">>, Params, not_found, Opts) of
-        not_found -> {error, claim_ids_not_found};
-        _ClaimIDs -> {ok, Params}
+    case private_credential_present(Base, Req, Opts) of
+        true ->
+            {error, private_credentials_not_allowed};
+        false ->
+            Params = api_params(maps:merge(map_or_empty(Base), map_or_empty(Req)), Opts),
+            case hb_maps:get(<<"claim_ids">>, Params, not_found, Opts) of
+                not_found -> {error, claim_ids_not_found};
+                _ClaimIDs -> {ok, Params}
+            end
     end.
 
 api_params(Params0, Opts) ->
     Params1 = put_alias(<<"claim_ids">>, <<"claim-ids">>, Params0, Opts),
-    Params2 = put_alias(<<"auth_token">>, <<"auth-token">>, Params1, Opts),
-    maps:without(control_keys() ++ request_metadata_keys(), Params2).
+    maps:without(control_keys() ++ request_metadata_keys() ++ private_credential_keys(), Params1).
 
 control_keys() ->
     [
@@ -206,6 +210,21 @@ request_metadata_keys() ->
         <<"sec-fetch-site">>,
         <<"user-agent">>
     ].
+
+private_credential_keys() ->
+    [
+        <<"auth_token">>,
+        <<"auth-token">>,
+        <<"authorization">>,
+        <<"access_token">>,
+        <<"access-token">>,
+        <<"refresh_token">>,
+        <<"refresh-token">>
+    ].
+
+private_credential_present(Base, Req, Opts) ->
+    first_found([{Req, Key} || Key <- private_credential_keys()] ++ [{Base, Key} || Key <- private_credential_keys()], Opts)
+        =/= not_found.
 
 put_alias(Target, Source, Params, Opts) ->
     case hb_maps:get(Target, Params, not_found, Opts) of
@@ -369,18 +388,21 @@ list_accepts_internal_api_json_test() ->
 list_params_normalizes_aliases_and_strips_control_fields_test() ->
     {ok, Params} = list_params(
         #{ <<"odysee-api-url">> => <<"http://api">>, <<"claim-ids">> => <<"claim-1">> },
-        #{ <<"body">> => <<"{}">>, <<"auth-token">> => <<"token">> },
+        #{ <<"body">> => <<"{}">> },
         #{}
     ),
-    ?assertEqual(#{
-        <<"claim_ids">> => <<"claim-1">>,
-        <<"auth_token">> => <<"token">>
-    }, Params).
+    ?assertEqual(#{ <<"claim_ids">> => <<"claim-1">> }, Params).
+
+list_params_rejects_private_credentials_test() ->
+    ?assertEqual(
+        {error, private_credentials_not_allowed},
+        list_params(#{ <<"claim-ids">> => <<"claim-1">> }, #{ <<"auth_token">> => <<"tok">> }, #{})
+    ).
 
 form_body_encodes_params_test() ->
     ?assertEqual(
-        <<"auth_token=tok&claim_ids=claim-1">>,
-        form_body(#{ <<"claim_ids">> => <<"claim-1">>, <<"auth_token">> => <<"tok">> })
+        <<"claim_ids=claim-1">>,
+        form_body(#{ <<"claim_ids">> => <<"claim-1">> })
     ).
 
 list_requires_claim_ids_for_fetch_test() ->

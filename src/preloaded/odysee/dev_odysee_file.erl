@@ -171,18 +171,22 @@ normalize_counts(Counts, Raw, ClaimIDs) ->
     end.
 
 count_params(Base, Req, Opts) ->
-    Params = api_params(maps:merge(map_or_empty(Base), map_or_empty(Req)), Opts),
-    case hb_maps:get(<<"claim_id">>, Params, not_found, Opts) of
-        not_found -> {error, claim_id_not_found};
-        _ClaimID -> {ok, Params}
+    case private_credential_present(Base, Req, Opts) of
+        true ->
+            {error, private_credentials_not_allowed};
+        false ->
+            Params = api_params(maps:merge(map_or_empty(Base), map_or_empty(Req)), Opts),
+            case hb_maps:get(<<"claim_id">>, Params, not_found, Opts) of
+                not_found -> {error, claim_id_not_found};
+                _ClaimID -> {ok, Params}
+            end
     end.
 
 api_params(Params0, Opts) ->
     Params1 = put_alias(<<"claim_id">>, <<"claim-id">>, Params0, Opts),
     Params2 = put_alias(<<"claim_id">>, <<"claim_ids">>, Params1, Opts),
     Params3 = put_alias(<<"claim_id">>, <<"claim-ids">>, Params2, Opts),
-    Params4 = put_alias(<<"auth_token">>, <<"auth-token">>, Params3, Opts),
-    maps:without(control_keys() ++ request_metadata_keys(), Params4).
+    maps:without(control_keys() ++ request_metadata_keys() ++ private_credential_keys(), Params3).
 
 control_keys() ->
     [
@@ -228,6 +232,20 @@ request_metadata_keys() ->
         <<"sec-fetch-site">>,
         <<"user-agent">>
     ].
+
+private_credential_keys() ->
+    [
+        <<"auth_token">>,
+        <<"auth-token">>,
+        <<"authorization">>,
+        <<"access_token">>,
+        <<"access-token">>,
+        <<"refresh_token">>,
+        <<"refresh-token">>
+    ].
+
+private_credential_present(Base, Req, Opts) ->
+    first_param(private_credential_keys(), Base, Req, Opts) =/= not_found.
 
 put_alias(Target, Source, Params, Opts) ->
     case hb_maps:get(Target, Params, not_found, Opts) of
@@ -394,18 +412,21 @@ view_count_rejects_mismatched_claim_ids_test() ->
 count_params_normalizes_aliases_and_strips_control_fields_test() ->
     {ok, Params} = count_params(
         #{ <<"odysee-api-url">> => <<"http://api">>, <<"claim-ids">> => <<"claim-1">> },
-        #{ <<"body">> => <<"{}">>, <<"auth-token">> => <<"token">> },
+        #{ <<"body">> => <<"{}">> },
         #{}
     ),
-    ?assertEqual(#{
-        <<"claim_id">> => <<"claim-1">>,
-        <<"auth_token">> => <<"token">>
-    }, Params).
+    ?assertEqual(#{ <<"claim_id">> => <<"claim-1">> }, Params).
+
+count_params_rejects_private_credentials_test() ->
+    ?assertEqual(
+        {error, private_credentials_not_allowed},
+        count_params(#{ <<"claim-id">> => <<"claim-1">> }, #{ <<"auth_token">> => <<"tok">> }, #{})
+    ).
 
 form_body_encodes_params_test() ->
     ?assertEqual(
-        <<"auth_token=tok&claim_id=claim-1">>,
-        form_body(#{ <<"claim_id">> => <<"claim-1">>, <<"auth_token">> => <<"tok">> })
+        <<"claim_id=claim-1">>,
+        form_body(#{ <<"claim_id">> => <<"claim-1">> })
     ).
 
 view_count_requires_claim_id_for_fetch_test() ->

@@ -296,11 +296,18 @@ map_or_empty(_Value) -> #{}.
 
 search_reserved_keys() ->
     [
+        <<"access-token">>,
+        <<"access_token">>,
+        <<"auth-token">>,
+        <<"auth_token">>,
+        <<"authorization">>,
         <<"body">>,
         <<"claim-search-result">>,
         <<"claim_search_result">>,
         <<"content-type">>,
         <<"device">>,
+        <<"include_is_my_output">>,
+        <<"include_purchase_receipt">>,
         <<"method">>,
         <<"path">>,
         <<"proxy-url">>,
@@ -589,7 +596,12 @@ search_accepts_supplied_result_test() ->
 search_params_removes_control_fields_test() ->
     Params = search_params(
         #{ <<"proxy-url">> => <<"http://proxy">>, <<"page">> => 1 },
-        #{ <<"body">> => <<"{}">>, <<"claim_type">> => [<<"stream">>] }
+        #{
+            <<"body">> => <<"{}">>,
+            <<"auth_token">> => <<"token">>,
+            <<"include_is_my_output">> => true,
+            <<"claim_type">> => [<<"stream">>]
+        }
     ),
     ?assertEqual(#{ <<"page">> => 1, <<"claim_type">> => [<<"stream">>] }, Params).
 
