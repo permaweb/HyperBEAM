@@ -285,18 +285,27 @@ push_routed_target_message(Target, MsgToPush, Origin, Opts) ->
             <<"path">> => <<"route">>,
             <<"route-path">> => Path
         },
-    ?event(push_short,
-        {routing_target_process_push,
+    ?event(push_route,
+        {downstream_push_route,
+            {stage, attempting_route},
+            {mode, target_process},
             {target, Target},
+            {path, Path},
+            {process, maps:get(<<"process">>, Origin)},
+            {slot, maps:get(<<"slot">>, Origin)},
             {outbox_key, maps:get(<<"outbox-key">>, Origin)}
         },
         Opts
     ),
     case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
         {ok, Node} ->
-            ?event(push,
-                {routed_target_process_push,
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, route_decided},
+                    {decision, remote},
+                    {mode, target_process},
                     {target, Target},
+                    {path, Path},
                     {node, Node}
                 },
                 Opts
@@ -333,8 +342,27 @@ push_routed_target_message(Target, MsgToPush, Origin, Opts) ->
                     }
             end;
         {error, no_matches} ->
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, no_route},
+                    {mode, target_process},
+                    {target, Target},
+                    {path, Path}
+                },
+                Opts
+            ),
             target_process_not_found(Target);
         {error, Error} ->
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, route_error},
+                    {mode, target_process},
+                    {target, Target},
+                    {path, Path},
+                    {error, Error}
+                },
+                Opts
+            ),
             ?event(push,
                 {no_push_route_found,
                     {target, Target},
@@ -494,12 +522,35 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
         {push_downstream_remote,
             {target, TargetID},
             {slot, NextSlotOnProc},
+            {path, Path},
             {origin, Origin},
             {opts, Opts}
         }
     ),
+    ?event(push_route,
+        {downstream_push_route,
+            {stage, attempting_route},
+            {mode, downstream_slot},
+            {target, TargetID},
+            {slot, NextSlotOnProc},
+            {path, Path},
+            {process, maps:get(<<"process">>, Origin)}
+        },
+        Opts
+    ),
     case hb_ao:resolve(#{ <<"device">> => <<"router@1.0">> }, RouteReq, Opts) of
         {error, no_matches} ->
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, route_decided},
+                    {decision, local_no_route},
+                    {mode, downstream_slot},
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {path, Path}
+                },
+                Opts
+            ),
             ?event(push,
                 {no_push_route_found,
                     {target, TargetID},
@@ -510,6 +561,18 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
         {ok, Self} ->
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, route_decided},
+                    {decision, local_self_route},
+                    {mode, downstream_slot},
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {path, Path},
+                    {node, Self}
+                },
+                Opts
+            ),
             % If we matched ourselves as the route, we can just push locally.
             ?event(push,
                 {routing_matched_self,
@@ -521,6 +584,18 @@ push_downstream_remote(TargetID, NextSlotOnProc, Origin, RawOpts) ->
             ),
             push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts);
         {ok, Node} ->
+            ?event(push_route,
+                {downstream_push_route,
+                    {stage, route_decided},
+                    {decision, remote},
+                    {mode, downstream_slot},
+                    {target, TargetID},
+                    {slot, NextSlotOnProc},
+                    {path, Path},
+                    {node, Node}
+                },
+                Opts
+            ),
             ?event(push,
                 {routing_matched_remote,
                     {target, TargetID},

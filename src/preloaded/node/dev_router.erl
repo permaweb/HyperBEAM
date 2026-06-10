@@ -791,11 +791,11 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Base, RawReq, Opts) ->
     Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
-    ?event(debug_preprocess1, {called_preprocess,Req}),
+    % ?event(debug_preprocess1, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
-    ?event(debug_preprocess1, {template_routes, TemplateRoutes}),
+    % ?event(debug_preprocess1, {template_routes, TemplateRoutes}),
     Res = route_request(Req, RawReq, Opts),
-    ?event(debug_preprocess1, {match, Res}),
+    % ?event(debug_preprocess1, {match, Res}),
     case Res of
         {error, _} -> 
             ?event(debug_preprocess, preprocessor_did_not_match),
@@ -821,7 +821,7 @@ preprocess(Base, RawReq, Opts) ->
                             }]
                     }}
             end;
-        {ok, _Method, Node, _Path, _MsgWithoutMeta, _ReqOpts} ->
+        {ok, _Method, Node, RoutedPath, _MsgWithoutMeta, _ReqOpts} ->
             ?event(debug_preprocess, {matched_route, {explicit, Res}}),
             CommitRequest =
                 hb_util:atom(
@@ -871,6 +871,14 @@ preprocess(Base, RawReq, Opts) ->
                     _ ->
                         throw({error, invalid_user_path})
                 end,
+            ?event(route_preprocess,
+                {preprocess_routed,
+                    {path, UserPath},
+                    {routed_path, RoutedPath},
+                    {node, Node}
+                },
+                Opts
+            ),
             RelayReq =
                 #{
                     <<"device">> => <<"apply@1.0">>,
