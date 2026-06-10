@@ -815,7 +815,7 @@ lua_metatable_get_now_test() ->
         hb_ao:resolve(
             Process,
             <<"now">>,
-            #{ process_now_from_cache => always }
+            #{ <<"process-now-from-cache">> => always }
         ),
     ?assertMatch(
         {failure, <<"No cached state available.">>},
@@ -841,7 +841,7 @@ lua_metatable_get_now_test() ->
         hb_ao:resolve(
             Process,
             <<"now/at-slot">>,
-            #{ process_now_from_cache => always }
+            #{ <<"process-now-from-cache">> => always }
         ),
     ?assertMatch(14, NowFromCacheAfter).
     

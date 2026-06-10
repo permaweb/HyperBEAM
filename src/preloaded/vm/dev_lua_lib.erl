@@ -24,10 +24,17 @@
 %%% devices, all resolutions will fail.
 -define(MINIMAL_AO_CORE_DEVICES, [<<"structured@1.0">>]).
 
+normalize_preloaded_devices(PreloadedDevices) when is_list(PreloadedDevices) ->
+    PreloadedDevices;
+normalize_preloaded_devices(PreloadedDevices) when is_map(PreloadedDevices) ->
+    maps:values(PreloadedDevices);
+normalize_preloaded_devices(_PreloadedDevices) ->
+    [].
+
 %% @doc Install the library into the given Lua environment.
 install(Base, State, Opts) ->
     % Calculate and set the new `preloaded_devices' option.
-    AllDevs = hb_opts:get(preloaded_devices, Opts),
+    AllDevs = normalize_preloaded_devices(hb_opts:get(preloaded_devices, [], Opts)),
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
@@ -39,16 +46,19 @@ install(Base, State, Opts) ->
         case DevSandboxDef of
             false -> AllDevs;
             DevNames ->
-                lists:map(
+                lists:flatmap(
                     fun(Name) ->
-                        [Dev] =
+                        case
                             lists:filter(
                                 fun(X) ->
                                     hb_ao:get(<<"name">>, X, Opts) == Name
                                 end,
                                 AllDevs
-                            ),
-                        Dev
+                            )
+                        of
+                            [Dev] -> [Dev];
+                            _ -> []
+                        end
                     end,
                     hb_util:message_to_ordered_list(
                         hb_util:unique(DevNames ++ ?MINIMAL_AO_CORE_DEVICES)
@@ -179,21 +189,21 @@ install(Base, State, Opts) ->
         end,
     {GetRef, State4} = luerl:encode(GetFun, State3),
     {SetRef, State5} = luerl:encode(SetFun, State4),
-    {MetaRef, State6} =
+    {_, State6} =
         luerl_heap:alloc_table(
             [{<<"__index">>, GetRef}, {<<"__newindex">>, SetRef}],
             State5
         ),
     %% We want to remove the custom metatable from lua-reserved util tables.
     {EmptyMeta, State7} = luerl_heap:alloc_table([], State6),
-    GRef = luerl_heap:get_global(State7),
-    State8 = luerl_heap:set_metatable(GRef, EmptyMeta, State7),
+    {ok, GRef, State8} = luerl:get_table_keys([<<"_G">>], State7),
+    State9 = luerl_heap:set_metatable(GRef, EmptyMeta, State8),
     StdTables = 
         [
             <<"ao">>, <<"string">>, <<"table">>, <<"math">>, <<"os">>,
             <<"io">>, <<"package">>, <<"coroutine">>, <<"state">>
         ],
-    State9 = 
+    State10 = 
         lists:foldl(
             fun(Name, SAcc) ->
                 case luerl_heap:raw_get_table_key(GRef, Name, SAcc) of
@@ -203,10 +213,10 @@ install(Base, State, Opts) ->
                     _ -> SAcc
                 end
             end,
-            State8,
+            State9,
             StdTables
         ),
-    {ok, luerl_heap:set_table_type_meta(MetaRef, State9)}.
+    {ok, State10}.
 
 %% @doc Build the __index/__newindex metatable for a luerl state without
 %% allocating or populating the table itself. Used to inject hb_ao:get and
