@@ -1495,7 +1495,7 @@ index_mempool(Request, Opts) ->
                 Results
             ),
             mempool_progress(Opts, {mempool_scan_completed, Summary}),
-            {ok, Summary};
+            {ok, iolist_to_binary(json:encode(Summary))};
         Error -> Error
     end.
 
@@ -1510,7 +1510,10 @@ mempool_pending(Base, Request, Opts) ->
         Fun when is_function(Fun, 3) ->
             Fun(Base, Request, Opts);
         _ ->
-            dev_arweave:pending(Base, Request, Opts)
+            hb_ao:resolve( 
+              #{<<"device">> => <<"arweave@2.9">>}, 
+              Request#{<<"path">> => <<"pending">>},  
+              Opts)
     end.
 
 mempool_sender_filter(Request, Opts) ->
