@@ -53,7 +53,7 @@ do_run(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = hb_client_remote:upload(Spec, NodeOpts, PublishCodec),
+            {ok, _} = upload(Spec, NodeOpts, PublishCodec),
             SpecID = hb_message:id(Spec, all, NodeOpts),
             % Sign and upload the implementation message.
             Impl =
@@ -62,7 +62,7 @@ do_run(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = hb_client_remote:upload(Impl, NodeOpts, PublishCodec),
+            {ok, _} = upload(Impl, NodeOpts, PublishCodec),
             ImplID = hb_message:id(Impl, all, NodeOpts),
             rebar_api:info(
                 "device publish: ~s spec=~s impl=~s",
@@ -75,6 +75,21 @@ do_run(State) ->
         )
     ),
     {ok, State}.
+
+upload(Msg, Opts, <<"ans104@1.0">>) ->
+    case hb_opts:get(bundler_ans104, not_found, Opts) of
+        not_found ->
+            {error, no_ans104_bundler};
+        Bundler ->
+            hb_http:post(
+                Bundler,
+                <<"/tx">>,
+                Msg#{ <<"codec-device">> => <<"ans104@1.0">> },
+                Opts
+            )
+    end;
+upload(Msg, Opts, Codec) ->
+    hb_client_remote:upload(Msg, Opts, Codec).
 
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->

@@ -23,6 +23,8 @@ seed_names(Opts) ->
         <<"message@1.0">>,
         <<"structured@1.0">>,
         <<"httpsig@1.0">>,
+        <<"cookie@1.0">>,
+        <<"json@1.0">>,
         hb_opts:get(commitment_device, <<"httpsig@1.0">>, Opts)
     ]).
 
