@@ -1,5 +1,5 @@
 -module(hb_lbry_claim_proto).
--export([stream_sd_hash/1]).
+-export([stream_sd_hash/1, channel_public_key/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 stream_sd_hash(Message) when is_binary(Message) ->
@@ -9,6 +9,17 @@ stream_sd_hash(Message) when is_binary(Message) ->
         {ok, SDHash} ?= length_field(Source, 6),
         ok ?= valid_hash(SDHash),
         {ok, hb_util:to_hex(SDHash)}
+    end.
+
+%% @doc Extract the raw channel public key bytes from a channel claim
+%% protobuf (`Claim.channel.public_key'). The bytes are returned untouched:
+%% legacy channels store DER/SPKI-wrapped keys, which the caller must
+%% normalize before use.
+channel_public_key(Message) when is_binary(Message) ->
+    maybe
+        {ok, Channel} ?= length_field(Message, 2),
+        {ok, PublicKey} ?= length_field(Channel, 1),
+        {ok, PublicKey}
     end.
 
 length_field(Message, FieldNum) ->
@@ -81,6 +92,16 @@ stream_sd_hash_from_task0_claim_test() ->
         {ok, <<"3da16b833f169c21caeb62ca66111227413f30f63c9d2f52f2a787643e086c334ee6949e05875cfe94a816aba02e492e">>},
         stream_sd_hash(maps:get(<<"message">>, Envelope))
     ).
+
+channel_public_key_from_channel_claim_test() ->
+    PublicKey = <<2, 1:256>>,
+    Channel = field(1, PublicKey),
+    Claim = field(2, Channel),
+    ?assertEqual({ok, PublicKey}, channel_public_key(Claim)).
+
+channel_public_key_requires_channel_field_test() ->
+    Claim = field(1, field(1, <<"stream">>)),
+    ?assertEqual({error, {missing_field, 2}}, channel_public_key(Claim)).
 
 stream_sd_hash_rejects_wrong_hash_size_test() ->
     BadHash = <<1, 2, 3>>,

@@ -17,6 +17,107 @@ stream_descriptor_codec_roundtrip_test() ->
     ?assertEqual(SDHash, maps:get(<<"sd-hash">>, Descriptor)),
     ?assertEqual(Raw, roundtrip_raw(Descriptor, <<"lbry-stream-descriptor@1.0">>)).
 
+stream_descriptor_codec_attaches_native_commitment_test() ->
+    {Raw, SDHash} = sample_descriptor(),
+    Descriptor =
+        hb_message:convert(
+            Raw,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"lbry-stream-descriptor@1.0">>,
+                <<"sd-hash">> => SDHash
+            },
+            opts()
+        ),
+    Commitments = maps:get(<<"commitments">>, Descriptor),
+    [Commitment] = maps:values(hb_cache:ensure_all_loaded(Commitments, opts())),
+    ?assertEqual(
+        <<"lbry-stream-descriptor@1.0">>,
+        maps:get(<<"commitment-device">>, Commitment)
+    ),
+    ?assertEqual(SDHash, maps:get(<<"native-id">>, Commitment)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Descriptor, #{ <<"commitment-ids">> => <<"all">> }, opts())
+    ).
+
+stream_descriptor_verify_rejects_tampered_raw_test() ->
+    {Raw, SDHash} = sample_descriptor(),
+    Descriptor =
+        hb_message:convert(
+            Raw,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"lbry-stream-descriptor@1.0">>,
+                <<"sd-hash">> => SDHash
+            },
+            opts()
+        ),
+    {OtherRaw, _} = other_descriptor(),
+    Tampered = Descriptor#{ <<"raw">> => OtherRaw },
+    ?assertEqual(
+        false,
+        hb_message:verify(Tampered, #{ <<"commitment-ids">> => <<"all">> }, opts())
+    ).
+
+stream_descriptor_verify_rejects_sd_hash_field_mismatch_test() ->
+    {Raw, SDHash} = sample_descriptor(),
+    Descriptor =
+        hb_message:convert(
+            Raw,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"lbry-stream-descriptor@1.0">>,
+                <<"sd-hash">> => SDHash
+            },
+            opts()
+        ),
+    Tampered = Descriptor#{
+        <<"sd-hash">> => hb_util:to_hex(crypto:hash(sha384, <<"other">>))
+    },
+    ?assertEqual(
+        false,
+        hb_message:verify(Tampered, #{ <<"commitment-ids">> => <<"all">> }, opts())
+    ).
+
+blob_codec_roundtrip_and_verify_test() ->
+    Bytes = <<"encrypted blob payload">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
+    Blob =
+        hb_message:convert(
+            Bytes,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"lbry-blob@1.0">>,
+                <<"blob-hash">> => Hash
+            },
+            opts()
+        ),
+    ?assertEqual(<<"lbry-blob@1.0">>, maps:get(<<"device">>, Blob)),
+    ?assertEqual(Hash, maps:get(<<"blob-hash">>, Blob)),
+    ?assertEqual(Bytes, maps:get(<<"data">>, Blob)),
+    ?assertEqual(Bytes, roundtrip_raw(Blob, <<"lbry-blob@1.0">>)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Blob, #{ <<"commitment-ids">> => <<"all">> }, opts())
+    ).
+
+blob_codec_rejects_hash_mismatch_test() ->
+    Bytes = <<"encrypted blob payload">>,
+    WrongHash = hb_lbry_stream_descriptor:blob_hash(<<"other payload">>),
+    ?assertError(
+        {case_clause, {error, {hash_mismatch, WrongHash, _}}},
+        hb_message:convert(
+            Bytes,
+            <<"structured@1.0">>,
+            #{
+                <<"device">> => <<"lbry-blob@1.0">>,
+                <<"blob-hash">> => WrongHash
+            },
+            opts()
+        )
+    ).
+
 transaction_codec_roundtrip_test() ->
     RawTx = minimal_tx(),
     Tx =
@@ -218,6 +319,12 @@ sample_descriptor() ->
         },
     Raw = hb_json:encode(Descriptor),
     {Raw, hb_lbry_stream_descriptor:descriptor_hash(Raw)}.
+
+other_descriptor() ->
+    {Raw, SDHash} = sample_descriptor(),
+    JSON = hb_json:decode(Raw),
+    OtherRaw = hb_json:encode(JSON#{ <<"stream_type">> => <<"other">> }),
+    {OtherRaw, SDHash}.
 
 minimal_tx() ->
     <<1:32/little-signed, 0, 0, 0:32/little>>.

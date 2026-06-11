@@ -294,6 +294,7 @@ transaction_device_includes_raw_hex_test() ->
     {_RawDescriptor, DescriptorHash, _BlobHash, _BlobBytes, _Plaintext} =
         sample_descriptor(),
     Hex = claim_tx_hex(DescriptorHash),
+    TxID = hb_lbry_tx:txid(binary:decode_hex(Hex)),
     TxResponse =
         hb_json:encode(#{
             <<"jsonrpc">> => <<"2.0">>,
@@ -309,15 +310,46 @@ transaction_device_includes_raw_hex_test() ->
                 <<"odysee@1.0">>,
                 <<"transaction">>,
                 #{},
-                #{ <<"txid">> => <<"aabb">> },
+                #{ <<"txid">> => TxID },
                 #{ <<"lbry-proxy-node">> => Server, <<"http-client">> => httpc }
             ),
         ?assertEqual(Hex, maps:get(<<"raw-hex">>, Response)),
         ?assertEqual(Hex, maps:get(<<"raw">>, Response)),
+        ?assertEqual(TxID, maps:get(<<"txid">>, Response)),
         ?assertEqual(
             <<"lbry-transaction@1.0">>,
             maps:get(<<"device">>, Response)
         )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+transaction_device_rejects_txid_mismatch_test() ->
+    {_RawDescriptor, DescriptorHash, _BlobHash, _BlobBytes, _Plaintext} =
+        sample_descriptor(),
+    Hex = claim_tx_hex(DescriptorHash),
+    WrongTxID =
+        <<"0000000000000000000000000000000000000000000000000000000000000000">>,
+    TxResponse =
+        hb_json:encode(#{
+            <<"jsonrpc">> => <<"2.0">>,
+            <<"result">> => #{ <<"hex">> => Hex },
+            <<"id">> => 1
+        }),
+    {ok, Server, Handle} = hb_mock_server:start([
+        {"/api/v1/proxy", proxy, {200, TxResponse}}
+    ]),
+    try
+        {ok, Response} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"transaction">>,
+                #{},
+                #{ <<"txid">> => WrongTxID },
+                #{ <<"lbry-proxy-node">> => Server, <<"http-client">> => httpc }
+            ),
+        ?assertEqual(502, maps:get(<<"status">>, Response)),
+        ?assertEqual(<<"txid_mismatch">>, maps:get(<<"error">>, Response))
     after
         hb_mock_server:stop(Handle)
     end.

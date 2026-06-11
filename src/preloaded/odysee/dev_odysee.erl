@@ -69,21 +69,14 @@ claim(Base, Req, Opts) ->
 transaction(Base, Req, Opts) ->
     with_txid(Base, Req, Opts, fun(TxID) ->
         map_result(
-            hb_lbry_proxy:transaction_show(TxID, Opts),
-            fun(TxResult) ->
-                Hex = hb_maps:get(<<"hex">>, TxResult, undefined, Opts),
-                case Hex of
-                    undefined -> error_map(missing_raw_tx_hex);
-                    _ ->
-                        Tx =
-                            codec(
-                                <<"lbry-transaction@1.0">>,
-                                Hex,
-                                #{ <<"encoding">> => <<"hex">> },
-                                Opts
-                            ),
-                        hex_binaries(Tx#{ <<"raw-hex">> => hb_util:to_lower(Hex) })
-                end
+            hb_lbry_bridge:transaction_message(TxID, Opts),
+            fun(Tx) ->
+                RawHex = hb_util:to_hex(hb_maps:get(<<"raw">>, Tx, <<>>, Opts)),
+                View = hb_message:uncommitted(Tx, Opts),
+                % `raw' is hexed explicitly: the heuristic in `hex_binaries'
+                % leaves valid-UTF8 bytes alone, but the contract is that
+                % `raw' and `raw-hex' are twins.
+                hex_binaries(View#{ <<"raw">> => RawHex, <<"raw-hex">> => RawHex })
             end
         )
     end).
@@ -91,7 +84,7 @@ transaction(Base, Req, Opts) ->
 descriptor(Base, Req, Opts) ->
     with_sd_hash(Base, Req, Opts, fun(SDHash) ->
         map_result(
-            hb_lbry_bridge:descriptor(SDHash, Opts),
+            hb_lbry_bridge:descriptor_message(SDHash, Opts),
             fun(Descriptor) ->
                 codec(<<"lbry-stream-descriptor@1.0">>, Descriptor, #{}, Opts)
             end
@@ -270,14 +263,27 @@ normalize_stream_graph(StreamGraph, Target, Opts) ->
         <<"txid">> => maps:get(<<"txid">>, StreamGraph)
     }.
 
+%% The channel view is built from the verified raw channel evidence -- never
+%% from the SDK's signing-channel hints -- and the claim-id binding strength
+%% is labeled explicitly: update claims assert their claim id in-script
+%% rather than deriving it by hash. The combined proof strength is the
+%% weakest of the stream claim binding and the signing channel claim
+%% binding, since the attestation rests on both.
 normalize_verified_stream(VerifiedStream, Target, Opts) ->
     StreamGraph = normalize_stream_graph(VerifiedStream, Target, Opts),
     Claim = maps:get(<<"claim">>, VerifiedStream),
     ParsedTx = maps:get(<<"parsed-tx">>, VerifiedStream),
     ClaimOutput = claim_output(ParsedTx, claim_nout(Claim)),
+    StreamEvidence = maps:get(<<"stream-evidence">>, VerifiedStream),
+    ChannelEvidence = maps:get(<<"channel-evidence">>, VerifiedStream),
+    ClaimOp = maps:get(<<"claim-op">>, StreamEvidence),
+    ChannelClaimOp = maps:get(<<"claim-op">>, ChannelEvidence),
     StreamGraph#{
         <<"view">> => <<"verified-stream">>,
         <<"signed-sd-hash">> => maps:get(<<"signed-sd-hash">>, VerifiedStream),
+        <<"claim-op">> => ClaimOp,
+        <<"channel-claim-op">> => ChannelClaimOp,
+        <<"proof-strength">> => proof_strength(ClaimOp, ChannelClaimOp),
         <<"claim-envelope">> =>
             case ClaimOutput of
                 not_found -> not_found;
@@ -292,7 +298,7 @@ normalize_verified_stream(VerifiedStream, Target, Opts) ->
         <<"channel">> =>
             codec(
                 <<"lbry-channel@1.0">>,
-                maps:get(<<"signing_channel">>, Claim, #{}),
+                maps:get(<<"channel-evidence">>, VerifiedStream),
                 #{},
                 Opts
             ),
@@ -304,6 +310,9 @@ normalize_verified_stream(VerifiedStream, Target, Opts) ->
                 Opts
             )
     }.
+
+proof_strength(<<"create">>, <<"create">>) -> <<"hash-derived">>;
+proof_strength(_, _) -> <<"asserted">>.
 
 normalize_verify_blobs(Result, Opts) ->
     Result#{
@@ -340,8 +349,20 @@ stream_claim_source(Claim, #{ <<"claim-envelope">> := Envelope }) ->
 stream_claim_source(Claim, _ClaimOutput) ->
     Claim.
 
+%% Facade views are uncommitted convenience representations for the
+%% frontend: native commitments live on the store-returned evidence
+%% messages, and reply-link offloading of messages carrying only foreign
+%% commitment devices does not round-trip through the cache.
 codec(Device, Msg, Req, Opts) ->
-    hb_message:convert(Msg, <<"structured@1.0">>, Req#{ <<"device">> => Device }, Opts).
+    hb_message:uncommitted(
+        hb_message:convert(
+            Msg,
+            <<"structured@1.0">>,
+            Req#{ <<"device">> => Device },
+            Opts
+        ),
+        Opts
+    ).
 
 with_target(Base, Req, Opts, Fun) ->
     case param(Base, Req, target_keys(), Opts) of
@@ -605,8 +626,12 @@ status_for({http_status, 403, _}) -> 403;
 status_for(protected) -> 403;
 status_for(protected_content) -> 403;
 status_for({hash_mismatch, _, _}) -> 502;
+status_for({txid_mismatch, _, _}) -> 502;
 status_for({failure, _}) -> 502;
 status_for({invalid_attestation, _, _}) -> 502;
+status_for({channel_binding_mismatch, _, _}) -> 502;
+status_for(invalid_claim_signature) -> 502;
+status_for(native_commitment_failure) -> 502;
 status_for(_) -> 500.
 
 error_term(Reason) when is_atom(Reason) ->

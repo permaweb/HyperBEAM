@@ -69,13 +69,32 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
             % returning the whole response to get the test-key
             {ok, Msg} = hb_message:with_only_committed(Res, Opts),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(Opts, Msg, [Key]),
-            {ok, Msg};
+            case verify_remote_read(Opts, Key, Msg) of
+                {ok, VerifiedMsg} ->
+                    maybe_cache(Opts, VerifiedMsg, [Key]),
+                    {ok, VerifiedMsg};
+                {error, Reason} ->
+                    ?event(store_remote_node,
+                        {remote_read_rejected, {key, Key}, {reason, Reason}}
+                    ),
+                    {error, {remote_verification_failed, Reason}}
+            end;
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             {error, not_found}
     end;
 read_request(_, _) -> {error, not_found}.
+
+%% @doc Optionally verify the native commitments of a message returned by
+%% the untrusted remote node before it is cached or returned. Enabled with
+%% the `verify-remote-read' store option; enforcement happens at this trust
+%% boundary so a verified result can be cached and served from the local
+%% store without re-verification on every hit.
+verify_remote_read(Opts, Key, Msg) ->
+    case hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts) of
+        false -> {ok, Msg};
+        _ -> hb_lbry_commitment:verify_remote_read(Key, Msg, Opts)
+    end.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
 

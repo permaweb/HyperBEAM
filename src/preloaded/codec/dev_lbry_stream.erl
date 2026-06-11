@@ -1,10 +1,24 @@
 -module(dev_lbry_stream).
 -implements(<<"lbry-stream@1.0">>).
 -device_libraries([lib_lbry_codec]).
--export([from/3, to/3, to_hint/3, content_type/1]).
+-export([from/3, to/3, to_hint/3, verify/3, content_type/1]).
+-include("include/hb.hrl").
 
 content_type(_) ->
     {ok, <<"application/vnd.lbry.stream+json">>}.
+
+%% @doc Verify a stream commitment: the claim-output binding plus the
+%% descriptor `sd_hash' re-derived from the stream claim protobuf. See
+%% `hb_lbry_commitment:stream_output_verification/3'.
+verify(Base, Req, Opts) ->
+    Result = hb_lbry_commitment:stream_output_verification(Base, Req, Opts),
+    Valid =
+        case Result of
+            {ok, _Envelope} -> true;
+            _ -> false
+        end,
+    ?event(lbry_commitment, {stream_verify, {valid, Valid}, {result, Result}}),
+    {ok, Valid}.
 
 from(Map, Req, Opts) when is_map(Map) ->
     case normalize(Map) of

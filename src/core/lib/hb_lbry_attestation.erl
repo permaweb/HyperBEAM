@@ -4,7 +4,8 @@
     signature_digest/2,
     verify_signature/3,
     channel_hash/1,
-    channel_public_key/1
+    channel_public_key/1,
+    normalize_public_key/1
 ]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -13,6 +14,17 @@
     16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F).
 -define(SECP256K1_N,
     16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141).
+%% DER/SPKI prefixes for secp256k1 public keys, as stored on-chain by legacy
+%% channel claims. Matched byte-exactly: any other algorithm identifier or
+%% curve OID is rejected.
+-define(SPKI_UNCOMPRESSED_PREFIX,
+    <<16#30, 16#56, 16#30, 16#10, 16#06, 16#07, 16#2a, 16#86, 16#48, 16#ce,
+        16#3d, 16#02, 16#01, 16#06, 16#05, 16#2b, 16#81, 16#04, 16#00, 16#0a,
+        16#03, 16#42, 16#00>>).
+-define(SPKI_COMPRESSED_PREFIX,
+    <<16#30, 16#36, 16#30, 16#10, 16#06, 16#07, 16#2a, 16#86, 16#48, 16#ce,
+        16#3d, 16#02, 16#01, 16#06, 16#05, 16#2b, 16#81, 16#04, 16#00, 16#0a,
+        16#03, 16#22, 16#00>>).
 
 verify(
     #{ <<"inputs">> := [FirstInput | _] },
@@ -70,6 +82,29 @@ channel_public_key(Channel) ->
         _ ->
             {error, missing_public_key}
     end.
+
+%% @doc Normalize an on-chain channel public key to the 33-byte compressed
+%% secp256k1 form. Accepts bare compressed and uncompressed points as well as
+%% the DER/SPKI encodings used by legacy channel claims. Off-curve points and
+%% unrecognized encodings fail closed.
+normalize_public_key(<<Prefix, X:256>> = PublicKey) when Prefix == 2; Prefix == 3 ->
+    case decode_public_key(PublicKey) of
+        {ok, {X, _Y}} -> {ok, PublicKey};
+        _ -> {error, invalid_channel_public_key}
+    end;
+normalize_public_key(<<4, X:256, Y:256>>) ->
+    case valid_point(X, Y) of
+        true -> {ok, <<(2 + (Y band 1)), X:256>>};
+        false -> {error, invalid_channel_public_key}
+    end;
+normalize_public_key(<<Prefix:23/binary, Point:65/binary>>)
+        when Prefix == ?SPKI_UNCOMPRESSED_PREFIX ->
+    normalize_public_key(Point);
+normalize_public_key(<<Prefix:23/binary, Point:33/binary>>)
+        when Prefix == ?SPKI_COMPRESSED_PREFIX ->
+    normalize_public_key(Point);
+normalize_public_key(_) ->
+    {error, unsupported_channel_public_key}.
 
 verify_signed(FirstInput, Envelope, Channel) ->
     maybe
@@ -156,7 +191,10 @@ public_key_to_uncompressed(PublicKey) ->
         Error -> Error
     end.
 
-decode_public_key(<<Prefix, X:256>>) when Prefix == 2; Prefix == 3 ->
+%% Coordinates must be canonical field elements: encodings with `X >= p' or
+%% `Y >= p' are invalid even when they satisfy the curve equation modulo `p'.
+decode_public_key(<<Prefix, X:256>>)
+        when (Prefix == 2 orelse Prefix == 3), X < ?SECP256K1_P ->
     Y2 = mod(pow_mod(X, 3, ?SECP256K1_P) + 7, ?SECP256K1_P),
     Y0 = pow_mod(Y2, (?SECP256K1_P + 1) div 4, ?SECP256K1_P),
     Y =
@@ -171,9 +209,11 @@ decode_public_key(<<Prefix, X:256>>) when Prefix == 2; Prefix == 3 ->
 decode_public_key(_) ->
     {error, invalid_public_key}.
 
-valid_point(X, Y) ->
+valid_point(X, Y) when X < ?SECP256K1_P, Y < ?SECP256K1_P ->
     Y2 = mod(pow_mod(X, 3, ?SECP256K1_P) + 7, ?SECP256K1_P),
-    mod(Y * Y, ?SECP256K1_P) == Y2.
+    mod(Y * Y, ?SECP256K1_P) == Y2;
+valid_point(_, _) ->
+    false.
 
 pow_mod(_Base, 0, Modulus) ->
     1 rem Modulus;
@@ -215,6 +255,58 @@ first_present([Path | Rest], Map) ->
 
 reverse(Bin) ->
     list_to_binary(lists:reverse(binary_to_list(Bin))).
+
+normalize_public_key_test() ->
+    PrivateKey = <<1:256>>,
+    {Uncompressed, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    Compressed = ar_wallet:compress_ecdsa_pubkey(Uncompressed),
+    ?assertEqual({ok, Compressed}, normalize_public_key(Compressed)),
+    ?assertEqual({ok, Compressed}, normalize_public_key(Uncompressed)),
+    ?assertEqual(
+        {ok, Compressed},
+        normalize_public_key(<<?SPKI_UNCOMPRESSED_PREFIX/binary, Uncompressed/binary>>)
+    ),
+    ?assertEqual(
+        {ok, Compressed},
+        normalize_public_key(<<?SPKI_COMPRESSED_PREFIX/binary, Compressed/binary>>)
+    ).
+
+normalize_public_key_rejects_other_curves_test() ->
+    PrivateKey = <<1:256>>,
+    {Uncompressed, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    P256Prefix =
+        binary:decode_hex(
+            <<"3059301306072a8648ce3d020106082a8648ce3d030107034200">>
+        ),
+    ?assertEqual(
+        {error, unsupported_channel_public_key},
+        normalize_public_key(<<P256Prefix/binary, Uncompressed/binary>>)
+    ).
+
+normalize_public_key_rejects_non_canonical_coordinates_test() ->
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<2, (?SECP256K1_P + 1):256>>)
+    ),
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<4, 1:256, ?SECP256K1_P:256>>)
+    ).
+
+normalize_public_key_rejects_off_curve_points_test() ->
+    % x = 0 is not on secp256k1: 7 is not a quadratic residue mod p.
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<2, 0:256>>)
+    ),
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<4, 0:256, 1:256>>)
+    ),
+    ?assertEqual(
+        {error, unsupported_channel_public_key},
+        normalize_public_key(<<1, 2, 3>>)
+    ).
 
 verify_signature_accepts_compact_secp256k1_test() ->
     PrivateKey = <<1:256>>,

@@ -1,6 +1,12 @@
 -module(hb_lbry_bridge).
 -export([
     blob/2,
+    blob_message/2,
+    transaction_message/2,
+    claim_output_message/3,
+    channel_output_message/3,
+    stream_message/3,
+    descriptor_message/2,
     descriptor/2,
     verify_blobs/3,
     stream_graph/2,
@@ -14,6 +20,51 @@
 
 blob(Hash, Opts) ->
     read_blob(Hash, Opts).
+
+%% @doc Read a blob through the store and return the full blob message,
+%% including its native `lbry-blob@1.0' commitment.
+blob_message(Hash, Opts) ->
+    Store = blob_store(Opts),
+    hb_store_lbry_blob:read(Store, #{ <<"read">> => Hash }, Opts).
+
+%% @doc Read a raw transaction through the store and return the full
+%% transaction message, including its native `lbry-transaction@1.0'
+%% commitment.
+transaction_message(TxID, Opts) ->
+    Store = transaction_store(Opts),
+    hb_store_lbry_transaction:read(Store, #{ <<"read">> => TxID }, Opts).
+
+%% @doc Read immutable claim-output evidence by outpoint through the store,
+%% returning a message with a native `lbry-claim@1.0' commitment.
+claim_output_message(TxID, Nout, Opts) ->
+    read_output(TxID, Nout, claim_output_store(Opts), Opts).
+
+%% @doc Read immutable channel-output evidence by outpoint through the
+%% store, returning a message with a native `lbry-channel@1.0' commitment
+%% and the normalized channel public key.
+channel_output_message(TxID, Nout, Opts) ->
+    Store = (claim_output_store(Opts))#{ <<"kind">> => <<"channel">> },
+    read_output(TxID, Nout, Store, Opts).
+
+%% @doc Read immutable stream claim-output evidence by outpoint through the
+%% store, returning a message with native `lbry-claim@1.0' and
+%% `lbry-stream@1.0' commitments.
+stream_message(TxID, Nout, Opts) ->
+    Store = (claim_output_store(Opts))#{ <<"kind">> => <<"stream">> },
+    read_output(TxID, Nout, Store, Opts).
+
+%% @doc Read a stream descriptor through the blob store and return the full
+%% descriptor message, including its native `lbry-stream-descriptor@1.0'
+%% commitment.
+descriptor_message(SDHash, Opts) ->
+    case read_blob(SDHash, Opts) of
+        {ok, Raw} -> hb_lbry_commitment:descriptor_message(Raw, SDHash);
+        Error -> Error
+    end.
+
+read_output(TxID, Nout, Store, Opts) ->
+    Key = <<TxID/binary, ":", (integer_to_binary(Nout))/binary>>,
+    hb_store_lbry_claim_output:read(Store, #{ <<"read">> => Key }, Opts).
 
 descriptor(SDHash, Opts) ->
     Result =
@@ -79,31 +130,44 @@ stream_graph(ClaimIDOrName, Opts) ->
     ),
     Result.
 
+%% @doc Compose a verified stream from store-sourced evidence messages. The
+%% locator (SDK resolve) only points at the immutable outpoint; the stream
+%% claim, channel claim, and descriptor evidence are fetched through stores
+%% and every native commitment is verified through `hb_message:verify'. Any
+%% missing evidence or failing commitment fails closed. Unsigned claims fail
+%% closed with `unsigned_claim': no channel attests to the content.
 verified_stream(ClaimIDOrName, Opts) ->
     ?event(lbry_bridge, {verified_stream_start, {target, ClaimIDOrName}}, Opts),
     Result =
         maybe
-            {ok, StreamGraph} ?= stream_graph(ClaimIDOrName, Opts),
-            Claim = maps:get(<<"claim">>, StreamGraph),
-            ParsedTx = maps:get(<<"parsed-tx">>, StreamGraph),
+            {ok, Claim} ?= hb_lbry_proxy:claim(ClaimIDOrName, Opts),
             {ok, ClaimID} ?= claim_id(Claim),
+            {ok, SDKSDHash} ?= claim_sd_hash(Claim),
+            {ok, TxID} ?= claim_txid(Claim),
             {ok, Nout} ?= claim_nout(Claim),
-            {ok, ClaimOutput} ?= tx_output(ParsedTx, Nout),
-            ok ?= matching_claim_id(ClaimID, ClaimOutput),
-            {ok, SigningChannel} ?= claim_signing_channel(Claim),
-            {ok, Attestation} ?= hb_lbry_attestation:verify(
-                ParsedTx,
-                ClaimOutput,
-                SigningChannel
-            ),
+            {ok, StreamMsg0} ?= stream_message(TxID, Nout, Opts),
+            ok ?= matching_claim_id(ClaimID, StreamMsg0),
+            {ok, SignedSDHash} ?=
+                matching_sd_hash(maps:get(<<"sd-hash">>, StreamMsg0), SDKSDHash),
+            {ok, ParsedTx} ?=
+                hb_lbry_tx:parse(maps:get(<<"raw-transaction">>, StreamMsg0)),
+            {ok, StreamMsg, ChannelMsg, Attestation} ?=
+                channel_attestation(StreamMsg0, ParsedTx, Opts),
             ok ?= valid_attestation(Attestation),
-            {ok, SignedSDHash} ?= signed_claim_sd_hash(
-                ClaimOutput,
-                maps:get(<<"sd-hash">>, StreamGraph)
-            ),
-            {ok, StreamGraph#{
+            {ok, DescriptorMsg} ?= descriptor_message(SignedSDHash, Opts),
+            ok ?= native_verified(StreamMsg, Opts),
+            ok ?= native_verified(ChannelMsg, Opts),
+            ok ?= native_verified(DescriptorMsg, Opts),
+            {ok, #{
+                <<"claim">> => Claim,
+                <<"sd-hash">> => SignedSDHash,
+                <<"signed-sd-hash">> => SignedSDHash,
+                <<"txid">> => TxID,
+                <<"descriptor">> => DescriptorMsg,
+                <<"parsed-tx">> => ParsedTx,
                 <<"attestation">> => Attestation,
-                <<"signed-sd-hash">> => SignedSDHash
+                <<"stream-evidence">> => StreamMsg,
+                <<"channel-evidence">> => ChannelMsg
             }}
         end,
     ?event(lbry_bridge,
@@ -199,14 +263,32 @@ stream_range(SDHash, Start, End, Opts) when
     Result.
 
 read_blob(Hash, Opts) ->
-    Store = blob_store(Opts),
-    hb_store_lbry_blob:read(Store, #{ <<"read">> => Hash }, Opts).
+    case blob_message(Hash, Opts) of
+        {ok, #{ <<"data">> := Bytes }} -> {ok, Bytes};
+        Error -> Error
+    end.
 
 blob_store(Opts) ->
     Base = #{ <<"store-module">> => hb_store_lbry_blob },
     hb_maps:merge(
         Base,
         hb_maps:get(<<"lbry-blob-store">>, Opts, #{}, Opts),
+        Opts
+    ).
+
+transaction_store(Opts) ->
+    Base = #{ <<"store-module">> => hb_store_lbry_transaction },
+    hb_maps:merge(
+        Base,
+        hb_maps:get(<<"lbry-tx-store">>, Opts, #{}, Opts),
+        Opts
+    ).
+
+claim_output_store(Opts) ->
+    Base = #{ <<"store-module">> => hb_store_lbry_claim_output },
+    hb_maps:merge(
+        Base,
+        hb_maps:get(<<"lbry-tx-store">>, Opts, #{}, Opts),
         Opts
     ).
 
@@ -275,16 +357,61 @@ non_empty_range(<<>>) ->
 non_empty_range(_) ->
     ok.
 
-signed_claim_sd_hash(#{ <<"claim-envelope">> := Envelope }, SDHash) ->
-    case hb_lbry_claim_proto:stream_sd_hash(maps:get(<<"message">>, Envelope)) of
-        {ok, SignedSDHash} ->
-            RequestedSDHash = hb_util:to_lower(SDHash),
-            case SignedSDHash of
-                RequestedSDHash -> {ok, SignedSDHash};
-                _ -> {error, {signed_sd_hash_mismatch, SignedSDHash, RequestedSDHash}}
-            end;
-        Error ->
-            Error
+%% @doc Fetch and bind the channel evidence for a signed stream claim. The
+%% channel is located by the claim envelope's embedded signing-channel id --
+%% never by the SDK's signing-channel hints -- and the channel public key
+%% comes from the verified raw channel claim. Attaches the channel
+%% attestation commitment to the stream evidence and builds the
+%% frontend-facing attestation view.
+channel_attestation(StreamMsg, ParsedTx, Opts) ->
+    Envelope = maps:get(<<"claim-envelope">>, StreamMsg),
+    case maps:get(<<"signed">>, Envelope, false) of
+        false ->
+            {error, unsigned_claim};
+        true ->
+            maybe
+                EnvelopeChannelID = maps:get(<<"signing-channel-id">>, Envelope),
+                {ok, ChannelClaim} ?=
+                    hb_lbry_proxy:claim_search(EnvelopeChannelID, Opts),
+                {ok, ChannelTxID} ?= claim_txid(ChannelClaim),
+                {ok, ChannelNout} ?= claim_nout(ChannelClaim),
+                {ok, ChannelMsg} ?=
+                    channel_output_message(ChannelTxID, ChannelNout, Opts),
+                {ok, CommittedStreamMsg} ?=
+                    hb_lbry_commitment:with_attestation_commitment(
+                        StreamMsg,
+                        ChannelMsg
+                    ),
+                {ok, Attestation} ?=
+                    hb_lbry_attestation:verify(
+                        ParsedTx,
+                        StreamMsg,
+                        evidence_channel(ChannelMsg)
+                    ),
+                {ok, CommittedStreamMsg, ChannelMsg, Attestation}
+            end
+    end.
+
+%% The attestation view builder reads SDK-shaped channel maps; feed it the
+%% raw-evidence values so the view reflects what was actually verified.
+evidence_channel(ChannelMsg) ->
+    #{
+        <<"claim_id">> => maps:get(<<"claim-id">>, ChannelMsg),
+        <<"value">> =>
+            #{ <<"public_key">> => maps:get(<<"public-key">>, ChannelMsg) }
+    }.
+
+matching_sd_hash(SignedSDHash, SDKSDHash) ->
+    Requested = hb_util:to_lower(SDKSDHash),
+    case SignedSDHash of
+        Requested -> {ok, SignedSDHash};
+        _ -> {error, {signed_sd_hash_mismatch, SignedSDHash, Requested}}
+    end.
+
+native_verified(Msg, Opts) ->
+    case hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts) of
+        true -> ok;
+        _ -> {error, native_commitment_failure}
     end.
 
 valid_attestation(#{ <<"valid">> := true }) ->
@@ -328,23 +455,6 @@ claim_nout(Claim) ->
             end;
         _ ->
             {error, missing_nout}
-    end.
-
-claim_signing_channel(Claim) ->
-    case maps:get(<<"signing_channel">>, Claim, undefined) of
-        Channel when is_map(Channel) -> {ok, Channel};
-        _ -> {error, missing_signing_channel}
-    end.
-
-tx_output(Tx, Nout) ->
-    case lists:filter(
-        fun(Output) ->
-            maps:get(<<"nout">>, Output, undefined) == Nout
-        end,
-        maps:get(<<"outputs">>, Tx, [])
-    ) of
-        [Output | _] -> {ok, Output};
-        [] -> {error, missing_claim_output}
     end.
 
 matching_claim_id(ClaimID, ClaimOutput) ->
@@ -487,57 +597,96 @@ verified_stream_rejects_sdk_sd_hash_mismatch_test() ->
         hb_mock_server:stop(Handle)
     end.
 
-verified_stream_rejects_invalid_attestation_test() ->
-    {RawDescriptor, DescriptorHash, BlobHash, BlobBytes} = sample_descriptor(),
-    ClaimID = <<"9cc7f0e3de8db3b2ffd6dc0b4f1a0f0ca48a6b49">>,
-    Claim = #{
-        <<"claim_id">> => ClaimID,
-        <<"txid">> => <<"51d3cd6a27420addb648347410233931b862ab52660c1dba58806b5b0f38a460">>,
-        <<"nout">> => 0,
-        <<"value">> => #{ <<"source">> => #{ <<"sd_hash">> => DescriptorHash } },
-        <<"signing_channel">> => #{
-            <<"claim_id">> => <<"0000000000000000000000000000000000000000">>,
-            <<"value">> => #{
-                <<"public_key">> =>
-                    <<"03fa4e5fe9f02f2f1a8c34ec150b91f762d8b07b7be942f26aa80c40902d5dbd11">>
-            }
-        }
-    },
-    ClaimResponse =
-        hb_json:encode(#{
-            <<"jsonrpc">> => <<"2.0">>,
-            <<"result">> => #{ <<"items">> => [Claim] },
-            <<"id">> => 1
-        }),
-    TxResponse =
-        hb_json:encode(#{
-            <<"jsonrpc">> => <<"2.0">>,
-            <<"result">> => #{ <<"hex">> => hb_lbry_tx:task0_tx_hex() },
-            <<"id">> => 1
-        }),
-    {ok, Server, Handle} = hb_mock_server:start([
-        {"/api/v1/proxy", proxy, fun(Req) ->
-            case maps:get(<<"qs">>, Req) of
-                <<"m=claim_search">> -> {200, ClaimResponse};
-                <<"m=transaction_show">> -> {200, TxResponse}
-            end
-        end},
-        {"/blob", blob, fun(Req) ->
-            case maps:get(<<"qs">>, Req) of
-                <<"hash=", DescriptorHash/binary>> -> {200, RawDescriptor};
-                <<"hash=", BlobHash/binary>> -> {200, BlobBytes}
-            end
-        end}
-    ]),
+verified_stream_uses_raw_channel_evidence_test() ->
+    Fixture = signed_stream_fixture(<<1:256>>, <<1:256>>),
+    % The SDK lies about the channel public key; the raw channel claim must
+    % be the source of the verification key, so verification still succeeds
+    % and the attestation reports the real key.
+    LyingKey =
+        hb_util:to_hex(
+            ar_wallet:compress_ecdsa_pubkey(
+                element(1, crypto:generate_key(ecdh, secp256k1, <<3:256>>))
+            )
+        ),
+    {ok, Server, Handle} =
+        fixture_server(Fixture, #{ sdk_channel_public_key => LyingKey }),
     try
-        Opts = #{
-            <<"http-client">> => httpc,
-            <<"lbry-proxy-node">> => Server,
-            <<"lbry-blob-store">> => #{ <<"node">> => Server }
-        },
+        {ok, Result} =
+            verified_stream(maps:get(stream_claim_id, Fixture), fixture_opts(Server)),
+        Attestation = maps:get(<<"attestation">>, Result),
+        ?assertEqual(true, maps:get(<<"valid">>, Attestation)),
         ?assertEqual(
-            {error, {invalid_attestation, true, false}},
-            verified_stream(ClaimID, Opts)
+            maps:get(channel_public_key, Fixture),
+            maps:get(<<"public-key">>, Attestation)
+        ),
+        {_, DescriptorHash, _, _} = maps:get(descriptor, Fixture),
+        ?assertEqual(DescriptorHash, maps:get(<<"signed-sd-hash">>, Result)),
+        StreamEvidence = maps:get(<<"stream-evidence">>, Result),
+        ?assertEqual(3, map_size(maps:get(<<"commitments">>, StreamEvidence))),
+        ?assertEqual(
+            true,
+            hb_message:verify(
+                StreamEvidence,
+                #{ <<"commitment-ids">> => <<"all">> },
+                #{}
+            )
+        ),
+        ChannelEvidence = maps:get(<<"channel-evidence">>, Result),
+        ?assertEqual(
+            maps:get(channel_claim_id, Fixture),
+            maps:get(<<"claim-id">>, ChannelEvidence)
+        ),
+        ?assertEqual(
+            maps:get(channel_public_key, Fixture),
+            maps:get(<<"public-key">>, ChannelEvidence)
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+verified_stream_rejects_channel_binding_mismatch_test() ->
+    % The stream is signed by channel A, but the locator serves channel B's
+    % evidence under A's claim id. The derived channel claim id must not
+    % match the envelope's embedded signing-channel hash.
+    FixtureA = signed_stream_fixture(<<1:256>>, <<1:256>>),
+    FixtureB = signed_stream_fixture(<<2:256>>, <<2:256>>),
+    {ok, Server, Handle} =
+        fixture_server(FixtureA, #{
+            channel_txid => maps:get(channel_txid, FixtureB),
+            channel_tx_hex => maps:get(channel_tx_hex, FixtureB)
+        }),
+    try
+        ?assertEqual(
+            {error,
+                {channel_binding_mismatch,
+                    maps:get(channel_claim_id, FixtureB),
+                    maps:get(channel_claim_id, FixtureA)}},
+            verified_stream(maps:get(stream_claim_id, FixtureA), fixture_opts(Server))
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+verified_stream_rejects_forged_signature_test() ->
+    % The envelope is signed with a key that is not the channel's.
+    Fixture = signed_stream_fixture(<<1:256>>, <<2:256>>),
+    {ok, Server, Handle} = fixture_server(Fixture, #{}),
+    try
+        ?assertEqual(
+            {error, invalid_claim_signature},
+            verified_stream(maps:get(stream_claim_id, Fixture), fixture_opts(Server))
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+verified_stream_rejects_unsigned_claim_test() ->
+    Fixture = unsigned_stream_fixture(),
+    {ok, Server, Handle} = fixture_server(Fixture, #{}),
+    try
+        ?assertEqual(
+            {error, unsigned_claim},
+            verified_stream(maps:get(stream_claim_id, Fixture), fixture_opts(Server))
         )
     after
         hb_mock_server:stop(Handle)
@@ -602,6 +751,200 @@ verified_stream_rejects_claim_id_mismatch_test() ->
     after
         hb_mock_server:stop(Handle)
     end.
+
+%% Build a complete signed-stream fixture: a channel claim transaction and
+%% a stream claim transaction whose envelope is signed over the real v2
+%% digest with `SignerPrivKey'. When the signer differs from the channel
+%% key, the signature is genuinely invalid for the channel.
+signed_stream_fixture(ChannelPrivKey, SignerPrivKey) ->
+    Descriptor = {_, DescriptorHash, _, _} = sample_descriptor(),
+    {ChannelPub, _} = crypto:generate_key(ecdh, secp256k1, ChannelPrivKey),
+    Compressed = ar_wallet:compress_ecdsa_pubkey(ChannelPub),
+    ChannelClaim = <<0, (proto_field(2, proto_field(1, Compressed)))/binary>>,
+    ChannelTx = create_claim_tx(<<0:256>>, <<"@chan">>, ChannelClaim),
+    {ok, ParsedChannelTx} = hb_lbry_tx:parse(ChannelTx),
+    [ChannelOutput | _] = maps:get(<<"outputs">>, ParsedChannelTx),
+    ChannelHash = maps:get(<<"claim-hash">>, ChannelOutput),
+    StreamProto =
+        proto_field(1,
+            proto_field(1,
+                proto_field(6, binary:decode_hex(DescriptorHash)))),
+    PrevHash = <<1:256>>,
+    Piece1 = <<PrevHash/binary, 0:32/little>>,
+    Digest =
+        crypto:hash(
+            sha256,
+            <<Piece1/binary, ChannelHash/binary, StreamProto/binary>>
+        ),
+    Signature = compact_signature(SignerPrivKey, Digest),
+    Envelope = <<1, ChannelHash/binary, Signature/binary, StreamProto/binary>>,
+    fixture_from_txs(
+        Descriptor,
+        ChannelTx,
+        ParsedChannelTx,
+        create_claim_tx(PrevHash, <<"video">>, Envelope),
+        hb_util:to_hex(Compressed)
+    ).
+
+unsigned_stream_fixture() ->
+    Descriptor = {_, DescriptorHash, _, _} = sample_descriptor(),
+    {ChannelPub, _} = crypto:generate_key(ecdh, secp256k1, <<1:256>>),
+    Compressed = ar_wallet:compress_ecdsa_pubkey(ChannelPub),
+    ChannelClaim = <<0, (proto_field(2, proto_field(1, Compressed)))/binary>>,
+    ChannelTx = create_claim_tx(<<0:256>>, <<"@chan">>, ChannelClaim),
+    {ok, ParsedChannelTx} = hb_lbry_tx:parse(ChannelTx),
+    StreamProto =
+        proto_field(1,
+            proto_field(1,
+                proto_field(6, binary:decode_hex(DescriptorHash)))),
+    Envelope = <<0, StreamProto/binary>>,
+    fixture_from_txs(
+        Descriptor,
+        ChannelTx,
+        ParsedChannelTx,
+        create_claim_tx(<<1:256>>, <<"video">>, Envelope),
+        hb_util:to_hex(Compressed)
+    ).
+
+fixture_from_txs(Descriptor, ChannelTx, ParsedChannelTx, StreamTx, PublicKeyHex) ->
+    [ChannelOutput | _] = maps:get(<<"outputs">>, ParsedChannelTx),
+    {ok, ParsedStreamTx} = hb_lbry_tx:parse(StreamTx),
+    [StreamOutput | _] = maps:get(<<"outputs">>, ParsedStreamTx),
+    #{
+        descriptor => Descriptor,
+        channel_claim_id => maps:get(<<"claim-id">>, ChannelOutput),
+        channel_txid => maps:get(<<"txid">>, ParsedChannelTx),
+        channel_tx_hex => hb_util:to_hex(ChannelTx),
+        stream_claim_id => maps:get(<<"claim-id">>, StreamOutput),
+        stream_txid => maps:get(<<"txid">>, ParsedStreamTx),
+        stream_tx_hex => hb_util:to_hex(StreamTx),
+        channel_public_key => PublicKeyHex
+    }.
+
+fixture_server(Fixture, Overrides) ->
+    {RawDescriptor, DescriptorHash, BlobHash, BlobBytes} =
+        maps:get(descriptor, Fixture),
+    StreamClaimID = maps:get(stream_claim_id, Fixture),
+    ChannelClaimID = maps:get(channel_claim_id, Fixture),
+    StreamTxID = maps:get(stream_txid, Fixture),
+    ChannelTxID = maps:get(channel_txid, maps:merge(Fixture, Overrides)),
+    ChannelTxHex = maps:get(channel_tx_hex, maps:merge(Fixture, Overrides)),
+    SDKPublicKey =
+        maps:get(
+            sdk_channel_public_key,
+            Overrides,
+            maps:get(channel_public_key, Fixture)
+        ),
+    StreamClaim = #{
+        <<"claim_id">> => StreamClaimID,
+        <<"txid">> => StreamTxID,
+        <<"nout">> => 0,
+        <<"value">> => #{ <<"source">> => #{ <<"sd_hash">> => DescriptorHash } },
+        <<"signing_channel">> => #{
+            <<"claim_id">> => ChannelClaimID,
+            <<"value">> => #{ <<"public_key">> => SDKPublicKey }
+        }
+    },
+    ChannelClaim = #{
+        <<"claim_id">> => ChannelClaimID,
+        <<"txid">> => ChannelTxID,
+        <<"nout">> => 0
+    },
+    Claims = #{ StreamClaimID => StreamClaim, ChannelClaimID => ChannelClaim },
+    Txs = #{
+        StreamTxID => maps:get(stream_tx_hex, Fixture),
+        ChannelTxID => ChannelTxHex
+    },
+    hb_mock_server:start([
+        {"/api/v1/proxy", proxy, fun(Req) ->
+            Body = hb_json:decode(maps:get(<<"body">>, Req)),
+            Params = maps:get(<<"params">>, Body),
+            case maps:get(<<"qs">>, Req) of
+                <<"m=claim_search">> ->
+                    [ID] = maps:get(<<"claim_ids">>, Params),
+                    {200, proxy_result(#{ <<"items">> => [maps:get(ID, Claims)] })};
+                <<"m=transaction_show">> ->
+                    TxID = maps:get(<<"txid">>, Params),
+                    {200, proxy_result(#{ <<"hex">> => maps:get(TxID, Txs) })}
+            end
+        end},
+        {"/blob", blob, fun(Req) ->
+            case maps:get(<<"qs">>, Req) of
+                <<"hash=", DescriptorHash/binary>> -> {200, RawDescriptor};
+                <<"hash=", BlobHash/binary>> -> {200, BlobBytes}
+            end
+        end}
+    ]).
+
+proxy_result(Result) ->
+    hb_json:encode(#{
+        <<"jsonrpc">> => <<"2.0">>,
+        <<"result">> => Result,
+        <<"id">> => 1
+    }).
+
+fixture_opts(Server) ->
+    #{
+        <<"http-client">> => httpc,
+        <<"lbry-proxy-node">> => Server,
+        <<"lbry-blob-store">> => #{ <<"node">> => Server },
+        <<"lbry-tx-store">> => #{ <<"lbry-proxy-node">> => Server }
+    }.
+
+create_claim_tx(PrevHash, Name, Claim) ->
+    Script = <<
+        16#b5,
+        (script_push(Name))/binary,
+        (script_push(Claim))/binary,
+        16#6d, 16#75
+    >>,
+    <<1:32/little-signed,
+        1,
+        PrevHash/binary,
+        0:32/little,
+        0,
+        16#ffffffff:32/little,
+        1,
+        0:64/little,
+        (byte_size(Script)),
+        Script/binary,
+        0:32/little>>.
+
+proto_field(Number, Value) ->
+    FieldKey = (Number bsl 3) bor 2,
+    <<(proto_varint(FieldKey))/binary,
+        (proto_varint(byte_size(Value)))/binary,
+        Value/binary>>.
+
+proto_varint(Value) when Value < 16#80 ->
+    <<Value>>;
+proto_varint(Value) ->
+    <<((Value band 16#7f) bor 16#80), (proto_varint(Value bsr 7))/binary>>.
+
+script_push(Value) when byte_size(Value) < 16#4c ->
+    <<(byte_size(Value)), Value/binary>>;
+script_push(Value) when byte_size(Value) =< 16#ff ->
+    <<16#4c, (byte_size(Value)), Value/binary>>.
+
+compact_signature(PrivKey, Digest) ->
+    der_to_compact(
+        crypto:sign(ecdsa, sha256, {digest, Digest}, [PrivKey, secp256k1])
+    ).
+
+der_to_compact(
+    <<16#30, _TotalLen, 16#02, RLen, R0:RLen/binary, 16#02, SLen, S0:SLen/binary>>
+) ->
+    <<(fixed_int(R0))/binary, (fixed_int(S0))/binary>>.
+
+fixed_int(Int) ->
+    Trimmed = trim_zeroes(Int),
+    Padding = 32 - byte_size(Trimmed),
+    <<0:(Padding * 8), Trimmed/binary>>.
+
+trim_zeroes(<<0, Rest/binary>> = Int) when byte_size(Int) > 32 ->
+    trim_zeroes(Rest);
+trim_zeroes(Int) ->
+    Int.
 
 sample_descriptor() ->
     Key = <<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>>,

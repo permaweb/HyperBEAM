@@ -35,6 +35,10 @@ type(StoreOpts, #{ <<"type">> := Hash }, NodeOpts) ->
             {error, not_found}
     end.
 
+%% @doc Read a blob by SHA-384 hash and return it as a HyperBEAM message
+%% carrying the encrypted bytes under `data' and a native `lbry-blob@1.0'
+%% commitment. The hash of the returned bytes is verified before the message
+%% is constructed; mismatching bytes never leave the store.
 read(StoreOpts, #{ <<"read">> := Hash }, NodeOpts) ->
     case valid_hash(Hash) of
         true ->
@@ -49,7 +53,7 @@ read(StoreOpts, #{ <<"read">> := Hash }, NodeOpts) ->
                                     {size, byte_size(Body)}},
                                 NodeOpts
                             ),
-                            {ok, Body};
+                            {ok, hb_lbry_commitment:blob_message(NormalizedHash, Body)};
                         Error ->
                             ?event(lbry_blob,
                                 {blob_hash_rejected, {hash, NormalizedHash}, {error, Error}},
@@ -137,16 +141,42 @@ valid_hash(Hash) when is_binary(Hash), byte_size(Hash) == 96 ->
 valid_hash(_) ->
     false.
 
-read_verifies_blob_hash_test() ->
+read_returns_committed_blob_message_test() ->
     application:ensure_all_started(inets),
     Body = <<"encrypted bytes">>,
     Hash = hb_lbry_stream_descriptor:blob_hash(Body),
     {ok, Server, Handle} = hb_mock_server:start([{"/blob", blob, {200, Body}}]),
     try
         Store = #{ <<"store-module">> => ?MODULE, <<"node">> => Server },
+        {ok, Msg} =
+            read(Store, #{ <<"read">> => Hash }, #{ <<"http-client">> => httpc }),
+        ?assertEqual(Body, maps:get(<<"data">>, Msg)),
+        ?assertEqual(Hash, maps:get(<<"blob-hash">>, Msg)),
+        ?assertEqual(<<"lbry-blob@1.0">>, maps:get(<<"device">>, Msg)),
         ?assertEqual(
-            {ok, Body},
-            read(Store, #{ <<"read">> => Hash }, #{ <<"http-client">> => httpc })
+            true,
+            hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+cache_read_returns_blob_message_test() ->
+    application:ensure_all_started(inets),
+    Body = <<"encrypted bytes">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Body),
+    {ok, Server, Handle} = hb_mock_server:start([{"/blob", blob, {200, Body}}]),
+    try
+        Store = #{
+            <<"store-module">> => ?MODULE,
+            <<"node">> => Server,
+            <<"http-client">> => httpc
+        },
+        {ok, Msg} = hb_cache:read(Hash, #{ <<"store">> => [Store] }),
+        ?assertEqual(Body, maps:get(<<"data">>, Msg)),
+        ?assertEqual(
+            true,
+            hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})
         )
     after
         hb_mock_server:stop(Handle)
@@ -179,7 +209,8 @@ edge_token_is_query_encoded_test() ->
             <<"node">> => Server,
             <<"edge-token">> => <<"a+b&c">>
         },
-        {ok, Body} = read(Store, #{ <<"read">> => Hash }, #{ <<"http-client">> => httpc }),
+        {ok, #{ <<"data">> := Body }} =
+            read(Store, #{ <<"read">> => Hash }, #{ <<"http-client">> => httpc }),
         [Req] = hb_mock_server:get_requests(Handle, blob),
         ?assertEqual(<<"hash=", Hash/binary, "&edge_token=a%2Bb%26c">>, maps:get(<<"qs">>, Req))
     after

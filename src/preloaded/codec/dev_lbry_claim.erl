@@ -1,10 +1,25 @@
 -module(dev_lbry_claim).
 -implements(<<"lbry-claim@1.0">>).
 -device_libraries([lib_lbry_codec]).
--export([from/3, to/3, to_hint/3, content_type/1]).
+-export([from/3, to/3, to_hint/3, verify/3, content_type/1]).
+-include("include/hb.hrl").
 
 content_type(_) ->
     {ok, <<"application/vnd.lbry.claim">>}.
+
+%% @doc Verify a claim-output commitment. The binding semantics depend on
+%% the commitment `type': `hash160-outpoint' is a hash-derived claim-id
+%% proof, `asserted-claim-id' is an assertion-level binding for update
+%% outputs. See `hb_lbry_commitment:claim_output_verification/3'.
+verify(Base, Req, Opts) ->
+    Result = hb_lbry_commitment:claim_output_verification(Base, Req, Opts),
+    Valid =
+        case Result of
+            {ok, _Envelope} -> true;
+            _ -> false
+        end,
+    ?event(lbry_commitment, {claim_verify, {valid, Valid}, {result, Result}}),
+    {ok, Valid}.
 
 from(Map, Req, Opts) when is_map(Map) ->
     lib_lbry_codec:from_structured(ensure_device(extract_envelope(Map)), Req, Opts);
