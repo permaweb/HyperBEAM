@@ -623,10 +623,19 @@ verified_stream_uses_raw_channel_evidence_test() ->
         ?assertEqual(DescriptorHash, maps:get(<<"signed-sd-hash">>, Result)),
         StreamEvidence = maps:get(<<"stream-evidence">>, Result),
         ?assertEqual(3, map_size(maps:get(<<"commitments">>, StreamEvidence))),
+        ?assert(maps:is_key(<<"channel-evidence">>, StreamEvidence)),
         ?assertEqual(
             true,
             hb_message:verify(
                 StreamEvidence,
+                #{ <<"commitment-ids">> => <<"all">> },
+                #{}
+            )
+        ),
+        ?assertEqual(
+            false,
+            hb_message:verify(
+                maps:remove(<<"channel-evidence">>, StreamEvidence),
                 #{ <<"commitment-ids">> => <<"all">> },
                 #{}
             )
@@ -643,6 +652,93 @@ verified_stream_uses_raw_channel_evidence_test() ->
     after
         hb_mock_server:stop(Handle)
     end.
+
+verified_stream_reports_ancestor_derived_for_updated_channel_test() ->
+    Fixture = ancestor_channel_stream_fixture(),
+    {ok, Server, Handle} =
+        fixture_server(Fixture, #{ extra_txs => maps:get(extra_txs, Fixture) }),
+    try
+        Opts0 = fixture_opts(Server),
+        TxStore = maps:get(<<"lbry-tx-store">>, Opts0),
+        Opts = Opts0#{
+            <<"lbry-tx-store">> => TxStore#{ <<"walk-ancestry">> => true }
+        },
+        {ok, Result} = verified_stream(maps:get(stream_claim_id, Fixture), Opts),
+        ?assertEqual(
+            true,
+            maps:get(<<"valid">>, maps:get(<<"attestation">>, Result))
+        ),
+        ChannelEvidence = maps:get(<<"channel-evidence">>, Result),
+        ?assertEqual(<<"update">>, maps:get(<<"claim-op">>, ChannelEvidence)),
+        ?assertEqual(
+            <<"ancestor-derived">>,
+            maps:get(<<"claim-proof-strength">>, ChannelEvidence)
+        ),
+        ?assertMatch([_], maps:get(<<"claim-ancestry">>, ChannelEvidence)),
+        StreamEvidence = maps:get(<<"stream-evidence">>, Result),
+        ?assertEqual(
+            <<"hash-derived">>,
+            maps:get(<<"claim-proof-strength">>, StreamEvidence)
+        ),
+        ?assertEqual(
+            true,
+            hb_message:verify(
+                StreamEvidence,
+                #{ <<"commitment-ids">> => <<"all">> },
+                #{}
+            )
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+%% A fixture whose signing channel is an on-chain update with walkable
+%% create ancestry: the channel evidence upgrades to ancestor-derived while
+%% the stream claim itself stays a hash-derived create.
+ancestor_channel_stream_fixture() ->
+    Descriptor = {_, DescriptorHash, _, _} = sample_descriptor(),
+    {ChannelPrivKey, Compressed, _} = hb_lbry_ancestry:test_key(),
+    ChannelClaim = <<0, (proto_field(2, proto_field(1, Compressed)))/binary>>,
+    ChannelCreate = hb_lbry_ancestry:test_create_tx(<<"@chan">>, ChannelClaim),
+    {ok, ParsedCreate} = hb_lbry_tx:parse(ChannelCreate),
+    [CreateOutput | _] = maps:get(<<"outputs">>, ParsedCreate),
+    ChannelClaimID = maps:get(<<"claim-id">>, CreateOutput),
+    ChannelUpdate =
+        hb_lbry_ancestry:test_update_tx(
+            <<"@chan">>,
+            ChannelClaimID,
+            [{ChannelCreate, 0}],
+            #{ <<"claim">> => ChannelClaim }
+        ),
+    {ok, ParsedUpdate} = hb_lbry_tx:parse(ChannelUpdate),
+    [UpdateOutput | _] = maps:get(<<"outputs">>, ParsedUpdate),
+    ChannelHash = maps:get(<<"claim-hash">>, UpdateOutput),
+    StreamProto =
+        proto_field(1,
+            proto_field(1,
+                proto_field(6, binary:decode_hex(DescriptorHash)))),
+    PrevHash = <<1:256>>,
+    Piece1 = <<PrevHash/binary, 0:32/little>>,
+    Digest =
+        crypto:hash(
+            sha256,
+            <<Piece1/binary, ChannelHash/binary, StreamProto/binary>>
+        ),
+    Signature = compact_signature(ChannelPrivKey, Digest),
+    Envelope = <<1, ChannelHash/binary, Signature/binary, StreamProto/binary>>,
+    Fixture =
+        fixture_from_txs(
+            Descriptor,
+            ChannelUpdate,
+            ParsedUpdate,
+            create_claim_tx(PrevHash, <<"video">>, Envelope),
+            hb_util:to_hex(Compressed)
+        ),
+    Fixture#{
+        extra_txs => #{
+            hb_lbry_tx:txid(ChannelCreate) => hb_util:to_hex(ChannelCreate)
+        }
+    }.
 
 verified_stream_rejects_channel_binding_mismatch_test() ->
     % The stream is signed by channel A, but the locator serves channel B's
@@ -851,10 +947,13 @@ fixture_server(Fixture, Overrides) ->
         <<"nout">> => 0
     },
     Claims = #{ StreamClaimID => StreamClaim, ChannelClaimID => ChannelClaim },
-    Txs = #{
-        StreamTxID => maps:get(stream_tx_hex, Fixture),
-        ChannelTxID => ChannelTxHex
-    },
+    Txs = maps:merge(
+        #{
+            StreamTxID => maps:get(stream_tx_hex, Fixture),
+            ChannelTxID => ChannelTxHex
+        },
+        maps:get(extra_txs, Overrides, #{})
+    ),
     hb_mock_server:start([
         {"/api/v1/proxy", proxy, fun(Req) ->
             Body = hb_json:decode(maps:get(<<"body">>, Req)),

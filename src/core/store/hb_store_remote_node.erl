@@ -66,11 +66,11 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
         ),
     case HTTPRes of
         {ok, Res} ->
-            % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
-            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            case verify_remote_read(Opts, Key, Msg) of
+            case remote_read_message(Opts, Key, Res) of
                 {ok, VerifiedMsg} ->
+                    ?event(store_remote_node,
+                        {read_found, {result, VerifiedMsg, response, Res}}
+                    ),
                     maybe_cache(Opts, VerifiedMsg, [Key]),
                     {ok, VerifiedMsg};
                 {error, Reason} ->
@@ -84,6 +84,20 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
             {error, not_found}
     end;
 read_request(_, _) -> {error, not_found}.
+
+remote_read_message(Opts, Key, Res) ->
+    case should_verify_remote_read(Opts, Key) of
+        true ->
+            verify_remote_read(Opts, Key, Res);
+        false ->
+            hb_message:with_only_committed(Res, Opts)
+    end.
+
+should_verify_remote_read(Opts, Key) ->
+    case hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts) of
+        false -> false;
+        _ -> hb_lbry_commitment:expected_remote_commitment(Key) =/= untyped
+    end.
 
 %% @doc Optionally verify the native commitments of a message returned by
 %% the untrusted remote node before it is cached or returned. Enabled with
@@ -151,10 +165,8 @@ maybe_cache(StoreOpts, Data, Links) ->
         ignored
     end.
 
-%% @doc Read local store cached value. Maintains the `Opts` for the recursive
-%% `hb_cache:read` call, but uses the `StoreOpts` as the source of the
-%% `local-store` value.
-read_local_cache(StoreOpts, ID, Opts) ->
+%% @doc Read local store cached value.
+read_local_cache(StoreOpts, ID, _Opts) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};

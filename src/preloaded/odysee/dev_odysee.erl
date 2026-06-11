@@ -265,10 +265,12 @@ normalize_stream_graph(StreamGraph, Target, Opts) ->
 
 %% The channel view is built from the verified raw channel evidence -- never
 %% from the SDK's signing-channel hints -- and the claim-id binding strength
-%% is labeled explicitly: update claims assert their claim id in-script
-%% rather than deriving it by hash. The combined proof strength is the
-%% weakest of the stream claim binding and the signing channel claim
-%% binding, since the attestation rests on both.
+%% is read from the verified committed `claim-proof-strength' fields of the
+%% evidence messages rather than inferred from the claim operations alone:
+%% an update output with a verified create-ancestry proof carries
+%% `ancestor-derived'. The combined proof strength is the weakest of the
+%% stream claim binding and the signing channel claim binding, since the
+%% attestation rests on both.
 normalize_verified_stream(VerifiedStream, Target, Opts) ->
     StreamGraph = normalize_stream_graph(VerifiedStream, Target, Opts),
     Claim = maps:get(<<"claim">>, VerifiedStream),
@@ -278,12 +280,17 @@ normalize_verified_stream(VerifiedStream, Target, Opts) ->
     ChannelEvidence = maps:get(<<"channel-evidence">>, VerifiedStream),
     ClaimOp = maps:get(<<"claim-op">>, StreamEvidence),
     ChannelClaimOp = maps:get(<<"claim-op">>, ChannelEvidence),
+    StreamStrength = maps:get(<<"claim-proof-strength">>, StreamEvidence),
+    ChannelStrength = maps:get(<<"claim-proof-strength">>, ChannelEvidence),
     StreamGraph#{
         <<"view">> => <<"verified-stream">>,
         <<"signed-sd-hash">> => maps:get(<<"signed-sd-hash">>, VerifiedStream),
         <<"claim-op">> => ClaimOp,
         <<"channel-claim-op">> => ChannelClaimOp,
-        <<"proof-strength">> => proof_strength(ClaimOp, ChannelClaimOp),
+        <<"claim-proof-strength">> => StreamStrength,
+        <<"channel-claim-proof-strength">> => ChannelStrength,
+        <<"proof-strength">> =>
+            combined_proof_strength(StreamStrength, ChannelStrength),
         <<"claim-envelope">> =>
             case ClaimOutput of
                 not_found -> not_found;
@@ -311,8 +318,18 @@ normalize_verified_stream(VerifiedStream, Target, Opts) ->
             )
     }.
 
-proof_strength(<<"create">>, <<"create">>) -> <<"hash-derived">>;
-proof_strength(_, _) -> <<"asserted">>.
+%% The weakest of the two verified bindings, ordered
+%% hash-derived > ancestor-derived > asserted.
+combined_proof_strength(StreamStrength, ChannelStrength) ->
+    Ranked = [<<"asserted">>, <<"ancestor-derived">>, <<"hash-derived">>],
+    hd(
+        [
+            Strength
+         ||
+            Strength <- Ranked,
+            Strength == StreamStrength orelse Strength == ChannelStrength
+        ]
+    ).
 
 normalize_verify_blobs(Result, Opts) ->
     Result#{

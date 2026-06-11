@@ -5,7 +5,8 @@
     verify_signature/3,
     channel_hash/1,
     channel_public_key/1,
-    normalize_public_key/1
+    normalize_public_key/1,
+    public_key_to_uncompressed/1
 ]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

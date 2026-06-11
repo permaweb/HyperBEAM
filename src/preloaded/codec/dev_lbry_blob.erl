@@ -57,6 +57,12 @@ verify(Base, Req, Opts) ->
         maybe
             <<"sha-384">> ?= hb_maps:get(<<"type">>, Req, undefined, Opts),
             <<"lbry-blob@1.0">> ?= hb_maps:get(<<"device">>, Base, undefined, Opts),
+            ok ?=
+                hb_lbry_commitment:committed_subset(
+                    Req,
+                    [<<"blob-hash">>, <<"data">>, <<"device">>],
+                    Opts
+                ),
             {ok, Hex, Bytes} ?= hb_lbry_commitment:native_id(Req, Opts),
             48 ?= byte_size(Bytes),
             Data = hb_maps:get(<<"data">>, Base, undefined, Opts),

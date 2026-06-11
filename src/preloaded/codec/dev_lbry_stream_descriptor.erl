@@ -41,6 +41,12 @@ verify(Base, Req, Opts) ->
             <<"sha-384">> ?= hb_maps:get(<<"type">>, Req, undefined, Opts),
             <<"lbry-stream-descriptor@1.0">> ?=
                 hb_maps:get(<<"device">>, Base, undefined, Opts),
+            ok ?=
+                hb_lbry_commitment:committed_subset(
+                    Req,
+                    [<<"device">>, <<"raw">>, <<"sd-hash">>],
+                    Opts
+                ),
             {ok, Hex, Bytes} ?= hb_lbry_commitment:native_id(Req, Opts),
             48 ?= byte_size(Bytes),
             Raw = hb_maps:get(<<"raw">>, Base, undefined, Opts),

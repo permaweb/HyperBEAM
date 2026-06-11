@@ -36,6 +36,12 @@ verify(Base, Req, Opts) ->
             <<"sha-256d">> ?= hb_maps:get(<<"type">>, Req, undefined, Opts),
             <<"lbry-transaction@1.0">> ?=
                 hb_maps:get(<<"device">>, Base, undefined, Opts),
+            ok ?=
+                hb_lbry_commitment:committed_subset(
+                    Req,
+                    [<<"device">>, <<"raw">>, <<"txid">>],
+                    Opts
+                ),
             {ok, Hex, Bytes} ?= hb_lbry_commitment:native_id(Req, Opts),
             32 ?= byte_size(Bytes),
             Raw = hb_maps:get(<<"raw">>, Base, undefined, Opts),

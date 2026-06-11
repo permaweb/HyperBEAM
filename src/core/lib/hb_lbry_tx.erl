@@ -5,7 +5,8 @@
     txid/1,
     double_sha256/1,
     hash160/1,
-    parse_claim_envelope/1
+    parse_claim_envelope/1,
+    signature_hash/3
 ]).
 -ifdef(TEST).
 -export([task0_tx_hex/0]).
@@ -49,6 +50,69 @@ parse(Raw) when is_binary(Raw) ->
 
 txid(Raw) ->
     hb_util:to_hex(reverse(double_sha256(Raw))).
+
+%% @doc Compute the legacy Bitcoin/LBRY `SIGHASH_ALL' digest for one input of
+%% a parsed transaction. The scriptCode is the spent output's full
+%% scriptPubKey -- for claim outputs that includes the claim prefix, not only
+%% the trailing payment script: lbcd never strips the prefix during script
+%% execution, and `opcodeCheckSig' hashes the whole executing pkScript. The
+%% spending input's script is replaced with the scriptCode, every other input
+%% script is emptied, outputs and sequences stay untouched, and the hash type
+%% is appended as a 4-byte little-endian value before double-SHA256. The
+%% caller must reject scriptCodes containing `OP_CODESEPARATOR' outside push
+%% data; the standard claim and payment script shapes accepted by the
+%% ancestry verifier cannot contain one.
+signature_hash(Tx, InputIndex, ScriptCode) ->
+    Inputs = maps:get(<<"inputs">>, Tx),
+    SerializedInputs =
+        [
+            serialize_input(Input, Position, InputIndex, ScriptCode)
+         ||
+            {Input, Position} <-
+                lists:zip(Inputs, lists:seq(0, length(Inputs) - 1))
+        ],
+    Outputs = maps:get(<<"outputs">>, Tx),
+    Preimage = <<
+        (maps:get(<<"version">>, Tx)):32/little-signed,
+        (varint(length(Inputs)))/binary,
+        (iolist_to_binary(SerializedInputs))/binary,
+        (varint(length(Outputs)))/binary,
+        (iolist_to_binary([serialize_output(Output) || Output <- Outputs]))/binary,
+        (maps:get(<<"lock-time">>, Tx)):32/little,
+        1:32/little
+    >>,
+    double_sha256(Preimage).
+
+serialize_input(Input, Position, Position, ScriptCode) ->
+    serialize_input_with_script(Input, ScriptCode);
+serialize_input(Input, _Position, _InputIndex, _ScriptCode) ->
+    serialize_input_with_script(Input, <<>>).
+
+serialize_input_with_script(Input, Script) ->
+    <<
+        (maps:get(<<"prev-tx-hash">>, Input))/binary,
+        (maps:get(<<"prev-nout">>, Input)):32/little,
+        (varbytes(Script))/binary,
+        (maps:get(<<"sequence">>, Input)):32/little
+    >>.
+
+serialize_output(Output) ->
+    <<
+        (maps:get(<<"amount">>, Output)):64/little,
+        (varbytes(maps:get(<<"script">>, Output)))/binary
+    >>.
+
+varbytes(Bytes) ->
+    <<(varint(byte_size(Bytes)))/binary, Bytes/binary>>.
+
+varint(Value) when Value < 16#fd ->
+    <<Value>>;
+varint(Value) when Value =< 16#ffff ->
+    <<16#fd, Value:16/little>>;
+varint(Value) when Value =< 16#ffffffff ->
+    <<16#fe, Value:32/little>>;
+varint(Value) ->
+    <<16#ff, Value:64/little>>.
 
 double_sha256(Raw) ->
     crypto:hash(sha256, crypto:hash(sha256, Raw)).
