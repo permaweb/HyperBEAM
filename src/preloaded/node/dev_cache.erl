@@ -3,7 +3,7 @@
 %%% supports writing messages to the store, if the node message has the
 %%% writer's address in its `cache_writers' key.
 -module(dev_cache).
--export([read/3, write/3, link/3, group/3]).
+-export([read/3, write/3, link/3, group/3, expected_response/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -65,6 +65,49 @@ read(_M1, M2, Opts) ->
             Error;
         {failure, _} = Failure ->
             Failure
+    end.
+
+%% @doc An `is-admissible'-compliant key used by the remote-node store to verify
+%% that a `~cache@1.0/read' response from an untrusted peer contains the message
+%% that was requested and that it is cryptographically valid. `Base' carries the
+%% `expected' id; `Req' is the peer's response. Returns `{ok, true}' when the
+%% response is admissible, `{ok, false}' otherwise.
+expected_response(Base, Req, Opts) ->
+    case hb_maps:find(<<"expected">>, Base, Opts) of
+        {ok, Expected} ->
+            Admissible = check_response_matches_expected(Req, Expected, Opts),
+            ?event(debug_admissible,
+                {expected_response, {expected, Expected}, {admissible, Admissible}}),
+            {ok, Admissible};
+        error ->
+            {ok, false}
+    end.
+
+%% @doc Verify that a `~cache@1.0/read' response matches the expected id. For an
+%% id-based read, the expected id must be among the response's commitment ids and
+%% that commitment must verify. For a path-based read (the `expected' value is not
+%% itself an id), verify all committer-attributed commitments on the response.
+check_response_matches_expected(Response, Expected, Opts) ->
+    case hb_maps:get(<<"commitments">>, Response, not_found, Opts) of
+        not_found ->
+            false;
+        _ ->
+            {ok, OnlyCommitted} = hb_message:with_only_committed(Response, Opts),
+            CommitmentIDs =
+                hb_maps:keys(
+                    hb_maps:get(<<"commitments">>, OnlyCommitted, #{}, Opts),
+                    Opts
+                ),
+            MembershipOk =
+                (not ?IS_ID(Expected))
+                    orelse lists:member(Expected, CommitmentIDs),
+            VerifyReq =
+                case ?IS_ID(Expected) of
+                    true -> #{ <<"commitment-ids">> => [Expected] };
+                    false -> #{ <<"committers">> => <<"all">> }
+                end,
+            MembershipOk
+                andalso hb_message:verify(OnlyCommitted, VerifyReq, Opts)
     end.
 
 %% @doc Write data to the cache.

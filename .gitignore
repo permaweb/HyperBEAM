@@ -48,3 +48,6 @@ mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
 !test/config.json
+
+!test/admissible-report-wallet.json
+!test/admissible-report.json
