@@ -469,12 +469,12 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
     wasm_val_vec_new(&prepared_args, input_args->size - 1, prepared_data);
     DRV_DEBUG("Prepared %zu arguments for function call", prepared_args.size);
 
-    uint64_t argc = prepared_args.size;
-    uint64_t* argv = malloc(sizeof(uint64_t) * argc);
+    uint32_t argc = prepared_args.size;
+    uint32_t* argv = malloc(sizeof(uint32_t) * argc);
     
-    // Convert prepared arguments to an array of 64-bit integers
-    for (uint64_t i = 0; i < argc; ++i) {
-        argv[i] = prepared_args.data[i].of.i64;
+    // Convert prepared arguments to the 32-bit cell array expected by WAMR
+    for (uint32_t i = 0; i < argc; ++i) {
+        argv[i] = prepared_args.data[i].of.i32;
     }
 
 
@@ -491,8 +491,10 @@ int wasm_execute_indirect_function(Proc* proc, const char *field_name, const was
 
     // Attempt to call the function and check for any exceptions
     if (!wasm_runtime_call_indirect(proc->exec_env, function_index, argc, argv)) {
-        if (wasm_runtime_get_exception(proc->exec_env)) {
-            DRV_DEBUG("%s", wasm_runtime_get_exception(proc->exec_env));
+        wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(proc->exec_env);
+        const char* exception = wasm_runtime_get_exception(module_inst);
+        if (exception) {
+            DRV_DEBUG("%s", exception);
         }
         DRV_DEBUG("WASM function call failed");
         result = -1;
@@ -568,7 +570,8 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
     if (wasm_runtime_call_wasm_a(proc->exec_env, func->func_comm_rt, result_types->size, results, param_types->size, params)) {
         DRV_DEBUG("=   Function call successful");
     } else {
-        const char* exception = wasm_runtime_get_exception(proc->exec_env);
+        wasm_module_inst_t module_inst = wasm_runtime_get_module_inst(proc->exec_env);
+        const char* exception = wasm_runtime_get_exception(module_inst);
         DRV_DEBUG("=   Function call failed: %s", exception);
         return -1;
     }
@@ -579,4 +582,3 @@ int wasm_execute_exported_function(Proc* proc, const char *function_name, wasm_v
 
     return 0;
 }
-

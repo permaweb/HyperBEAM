@@ -120,11 +120,11 @@ ei_term* decode_list(char* buff, int* index) {
     }
     else if(type == ERL_STRING_EXT) {
         //DRV_DEBUG("Decoding list encoded as string");
-        unsigned char* str = driver_alloc(arity * sizeof(char) + 1);
+        char* str = driver_alloc(arity * sizeof(char) + 1);
         ei_decode_string(buff, index, str);
         for(int i = 0; i < arity; i++) {
             res[i].ei_type = ERL_INTEGER_EXT;
-            res[i].value.i_val = (long) str[i];
+            res[i].value.i_val = (long) (unsigned char) str[i];
             DRV_DEBUG("Decoded term %d: %d", i, res[i].value.i_val);
         }
         driver_free(str);
