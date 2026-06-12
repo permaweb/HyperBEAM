@@ -310,9 +310,15 @@ decoding_nested_map_binary(Bin) ->
         lists:foldl(
             fun (X, Acc) ->
                 case binary:split(X, <<":">>, [global]) of
-                    [ID, Key, Value] ->
+                    [ID | Rest] when length(Rest) >= 2 ->
+                        {KeyParts, [Value]} =
+                            lists:split(length(Rest) - 1, Rest),
+                        Key =
+                            iolist_to_binary(
+                                lists:join(<<":">>, KeyParts)
+                            ),
                         Acc#{
-                            ID => #{ 
+                            ID => #{
                                 <<"name">> => Key,
                                 <<"value">> => hb_util:decode(Value)
                             }
