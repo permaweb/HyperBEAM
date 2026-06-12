@@ -85,49 +85,76 @@ route(Key, M1, M2, Opts) ->
 
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
 %% requests for legacy (non-device-tagged) manifests and casting them to
-%% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
+%% `manifest@1.0' before execution. When a manifest is hit on the root domain
+%% it redirects to its canonical b32 subdomain so browsers resolve absolute
+%% asset paths correctly.
 request(Base, Req, Opts) ->
     ?event({on_req_manifest_detector, {base, Base}, {req, Req}}),
     maybe
         {ok, [PrimaryMsg|Rest]} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Loaded} ?= load(PrimaryMsg, Opts),
         ?event(debug_manifest, {loaded, Loaded}),
-        % Must handle three cases:
-        % 1. The maybe_cast is not a manifest, so we return the *loaded* request,
-        %    such that the work to load it is not wasted.
-        % 2. The maybe_cast is a manifest, and there are no other elements of
-        %    the path, so we add the `index' path and return.
-        % 3. The maybe_cast is a manifest, and there are other elements of
-        %    the path, so we return the original request sequence with the first
-        %    message replaced with the casted manifest.
-        case {Rest, maybe_cast_manifest(Loaded, Opts)} of
-            {_, ignored} ->
-                ?event(
-                    debug_manifest,
-                    {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}),
+        case maybe_cast_manifest(Loaded, Opts) of
+            ignored ->
                 {ok, Req#{ <<"body">> => [Loaded|Rest] }};
-            {[], {ok, Casted}} ->
-                ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
-            {_, {ok, Casted}} ->
-                ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted|Rest] }}
+            {ok, Casted} ->
+                serve_or_redirect(PrimaryMsg, Casted, Rest, Req, Opts)
         end
     else
         {error, not_found} ->
-            ?event(debug_manifest, {not_found_on_load, {req, Req}}),
-            {
-                error,
-                #{
-                    <<"status">> => 404,
-                    <<"body">> => <<"Not Found">>
-                }
-            };
-        Error ->
-            ?event(debug_manifest, {request_ignored, {unexpected, Error}}),
-            % On other errors, we return the original request.
+            {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
+        _ ->
             {ok, Req}
     end.
+
+serve_or_redirect(TxId, Casted, Rest, Req, Opts) ->
+    case needs_b32_redirect(TxId, Rest, Req, Opts) of
+        {redirect, Url} ->
+            redirect_response(Url);
+        no_redirect when Rest =:= [] ->
+            {ok, Req#{<<"body">> => [Casted, #{<<"path">> => <<"index">>}]}};
+        no_redirect ->
+            {ok, Req#{<<"body">> => [Casted|Rest]}}
+    end.
+
+%% @doc A redirect is needed when the URL is `/<tx>/...' on the root domain
+%% and no device invocations in the tail, host present, and not already on the
+%% canonical `<b32>.<node-host>' subdomain.
+needs_b32_redirect(TxId, Rest, Req, Opts) when ?IS_ID(TxId) ->
+    ReqInner = hb_maps:get(<<"request">>, Req, #{}, Opts),
+    Host = hb_maps:get(<<"host">>, ReqInner, <<>>, Opts),
+    B32 = dev_b32_name:encode(TxId),
+    Already = dev_name:name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
+    PlainTail = lists:all(fun(X) -> plain_path_segment(X, Opts) end, Rest),
+    case {Host =/= <<>>, PlainTail, Already} of
+        {true, true, NotCanonical} when NotCanonical =/= {ok, B32} ->
+            {redirect, b32_url(B32, ReqInner, Opts)};
+        _ -> no_redirect
+    end;
+needs_b32_redirect(_, _, _, _) -> no_redirect.
+
+%% @doc A plain path segment is a bare ID binary or a map without a device key.
+plain_path_segment(X, _Opts) when is_binary(X) -> true;
+plain_path_segment(M, Opts) when is_map(M) ->
+    not hb_maps:is_key(<<"device">>, M, Opts);
+plain_path_segment(_,_) -> false.
+
+b32_url(B32, ReqInner, Opts) ->
+    Host = hb_maps:get(<<"host">>, ReqInner, <<>>, Opts),
+    Path = hb_maps:get(<<"path">>, ReqInner, <<"/">>, Opts),
+    HostPort = case hb_maps:get(<<"port">>, ReqInner, undefined, Opts) of
+        P when P == undefined; P == 80; P == 443 -> Host;
+        P -> <<Host/binary, ":", (hb_util:bin(P))/binary>>
+    end,
+    <<"//", B32/binary, ".", HostPort/binary, Path/binary>>.
+
+redirect_response(Url) ->
+    ?event(debug_manifest, {b32_redirect, {url, Url}}),
+    {error, #{
+        <<"status">> => 302,
+        <<"location">> => Url,
+        <<"body">> => <<"Redirecting to canonical manifest subdomain: ", Url/binary>>
+    }}.
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
@@ -189,7 +216,7 @@ manifest(Base, _Req, Opts) ->
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ <<"scope">> => [local, remote]},
+    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ scope => [local, remote]},
     {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(

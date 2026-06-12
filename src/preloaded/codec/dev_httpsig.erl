@@ -594,6 +594,32 @@ validate_large_message_from_http_test() ->
     ?assert(hb_message:verify(OnlyCommitted, all, Opts)),
     ?event_debug({msg_with_only_committed_verifies_hmac, <<"hmac-sha256">>}).
 
+%% @doc Ensure that a signed response that contains both `status' and another
+%% top-level locally-typed key (e.g. an integer) round-trips through HTTP and
+%% verifies on the receiving side. This exercises the case where `ao-types'
+%% must agree between signer and verifier for multiple locally-typed fields.
+validate_sibling_typed_key_over_http_test() ->
+    Node = hb_http_server:start_node(Opts = #{
+        force_signed => true,
+        commitment_device => <<"httpsig@1.0">>,
+        % Top-level locally-typed siblings to `status' in the signed response:
+        % one integer that sorts before `status' alphabetically, one that sorts
+        % after, and an atom. All become entries in `ao-types' alongside
+        % `status'.
+        <<"alpha-count">> => 7,
+        <<"test-count">> => 42,
+        <<"zebra-flag">> => true
+    }),
+    {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
+    ?event({received_with_sibling_typed, Res}),
+    ?assertEqual(7, hb_ao:get(<<"alpha-count">>, Res, undefined, Opts)),
+    ?assertEqual(42, hb_ao:get(<<"test-count">>, Res, undefined, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"zebra-flag">>, Res, undefined, Opts)),
+    Signers = hb_message:signers(Res, Opts),
+    ?assert(length(Signers) == 1),
+    ?assert(hb_message:verify(Res, Signers, Opts)),
+    ?assert(hb_message:verify(Res, all, Opts)).
+
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
