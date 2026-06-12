@@ -1494,7 +1494,7 @@ index_mempool(Request, Opts) ->
                 mempool_empty_summary(),
                 Results
             ),
-            mempool_progress(Opts, {mempool_scan_completed, Summary}),
+            ?event(copycat_short, {mempool_scan_completed, Summary}),
             {ok, Summary};
         Error -> Error
     end.

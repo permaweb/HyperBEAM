@@ -4,7 +4,7 @@
 %%% Store API:
 -export([scope/0, scope/1, type/3, read/3, start/3]).
 %%% Unused Store API:
--export([resolve/3, write/3, link/3, group/3]).
+-export([resolve/3, write/3, link/3, group/3, list/3]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/6, write_parent/5, read_offset/3, read_parent/3, decode_parent_entries/1, read_chunks/3]).
 -export([block_indexed_path/1, block_items_path/2]).
@@ -62,6 +62,10 @@ link(_, _, _) -> {error, not_found}.
 
 %% @doc Unsupported.
 group(_, _, _) -> {error, not_found}.
+
+list(_Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+    ?event(error, {unsupported_list, Path}),
+    {error, not_found}.
 
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route

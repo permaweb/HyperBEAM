@@ -164,7 +164,10 @@ handle(_Base, RawReq, Opts) ->
                 throw:Error:Stacktrace ->
                     ?event({graphql_error, {error, Error}, {trace, Stacktrace}}),
                     {error, Error}
-            end
+            end;
+        {error, {parser_error, _}} ->
+            %% Improve error messages to the user when it writes invalid queries.
+            {error, <<"Invalid query">>}
     end.
 
 %% @doc The main entrypoint for resolving GraphQL elements, called by the
