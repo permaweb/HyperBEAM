@@ -179,6 +179,15 @@ stream_message(
         {<<"source-name">>, first_value([<<"name">>], Source, Opts)},
         {<<"source-hash">>, first_value([<<"hash">>], Source, Opts)},
         {<<"source-size">>, first_value([<<"size">>], Source, Opts)},
+        {<<"stream-store-path">>, <<"odysee/stream-id/", ClaimID/binary>>},
+        {<<"claim-store-path">>, <<"odysee/claim-id/", ClaimID/binary>>},
+        {<<"descriptor-store-path">>, <<"odysee/descriptor/", SDHash/binary>>},
+        {<<"channel-store-path">>, channel_store_path(signing_channel_id(Claim, Opts))},
+        {<<"claim-proof-store-path">>, claim_proof_store_path(Claim, Opts)},
+        {<<"txid">>, first_value([<<"txid">>], Claim, Opts)},
+        {<<"nout">>, first_value([<<"nout">>], Claim, Opts)},
+        {<<"claim-height">>, first_value([<<"height">>], Claim, Opts)},
+        {<<"claim-op">>, first_value([<<"claim_op">>, <<"claim-op">>], Claim, Opts)},
         {<<"thumbnail">>, thumbnail_url(Value, Opts)},
         {<<"duration">>, video_field(<<"duration">>, Value, Opts)},
         {<<"height">>, video_field(<<"height">>, Value, Opts)},
@@ -813,6 +822,24 @@ signing_channel_id(Claim, Opts) ->
             not_found
     end.
 
+channel_store_path(ChannelID) when is_binary(ChannelID) ->
+    <<"odysee/channel/", ChannelID/binary>>;
+channel_store_path(_ChannelID) ->
+    not_found.
+
+claim_proof_store_path(Claim, Opts) ->
+    case {first_value([<<"txid">>], Claim, Opts), first_value([<<"nout">>], Claim, Opts)} of
+        {TxID, NOut} when is_binary(TxID), is_integer(NOut) orelse is_binary(NOut) ->
+            <<"odysee/claim-proof/", TxID/binary, "/", (path_int(NOut))/binary>>;
+        _ ->
+            not_found
+    end.
+
+path_int(Int) when is_integer(Int) ->
+    integer_to_binary(Int);
+path_int(Bin) when is_binary(Bin) ->
+    Bin.
+
 signed_sd_hash(true, SDHash) -> SDHash;
 signed_sd_hash(false, _SDHash) -> not_found.
 
@@ -1251,6 +1278,14 @@ stream_from_claim_builds_playback_url_test() ->
     {ok, Stream} = stream(#{}, #{ <<"claim">> => target_claim() }, #{}),
     ?assertEqual(<<"video/mp4">>, hb_maps:get(<<"media-type">>, Stream, #{})),
     ?assertEqual(expected_streaming_url(), hb_maps:get(<<"streaming-url">>, Stream, #{})),
+    ?assertEqual(
+        <<"odysee/stream-id/346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169">>,
+        hb_maps:get(<<"stream-store-path">>, Stream, #{})
+    ),
+    ?assertEqual(
+        <<"odysee/descriptor/6ee8f762a2eedbd2b5eeade82ca4d0a6287f55db4195563cc52fc004701b7d55edcfad277a5141084bdf5fca3adb403a">>,
+        hb_maps:get(<<"descriptor-store-path">>, Stream, #{})
+    ),
     Body = hb_json:decode(hb_maps:get(<<"body">>, Stream, #{})),
     ?assertEqual(expected_streaming_url(), hb_maps:get(<<"streaming_url">>, Body, #{})).
 

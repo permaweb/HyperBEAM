@@ -4,7 +4,7 @@
 %%% while preserving the raw JSON response for audit/debugging.
 -module(dev_odysee_claim).
 -implements(<<"odysee-claim@1.0">>).
--export([info/1, resolve/3, search/3]).
+-export([info/1, resolve/3, search/3, transaction/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -13,7 +13,7 @@
 
 %% @doc Return the public device API.
 info(_Opts) ->
-    #{ exports => [<<"resolve">>, <<"search">>] }.
+    #{ exports => [<<"resolve">>, <<"search">>, <<"transaction">>] }.
 
 %% @doc Resolve and normalize an Odysee/LBRY claim.
 resolve(Base, Req, Opts) ->
@@ -32,6 +32,17 @@ search(Base, Req, Opts) ->
         maybe
             {ok, Result, Raw} ?= find_or_fetch_search(Base, Req, Opts),
             ok_message(normalize_search_result(Result, Raw, Opts))
+        else
+            Error -> Error
+        end
+    end).
+
+%% @doc Fetch or normalize SDK proxy `transaction_show' evidence.
+transaction(Base, Req, Opts) ->
+    safe(fun() ->
+        maybe
+            {ok, Result, Raw} ?= find_or_fetch_transaction(Base, Req, Opts),
+            ok_message(normalize_transaction_result(Result, Raw, Opts))
         else
             Error -> Error
         end
@@ -68,6 +79,19 @@ find_or_fetch_search(Base, Req, Opts) ->
             maybe
                 {ok, Raw} ?= search_proxy(search_params(Base, Req), Base, Req, Opts),
                 search_from_proxy(Raw, Opts)
+            end
+    end.
+
+find_or_fetch_transaction(Base, Req, Opts) ->
+    case transaction_candidate(Base, Req, Opts) of
+        {ok, _Result, _Raw} = Transaction ->
+            Transaction;
+        not_found ->
+            maybe
+                {ok, TxID} ?= required_txid(Base, Req, Opts),
+                {ok, Raw} ?=
+                    sdk_proxy(<<"transaction_show">>, #{ <<"txid">> => TxID }, Base, Req, Opts),
+                transaction_from_proxy(Raw, Opts)
             end
     end.
 
@@ -111,6 +135,22 @@ search_candidate(Base, Req, Opts) ->
         not_found -> search_candidate_from_fields(Candidates, Opts)
     end.
 
+transaction_candidate(Base, Req, Opts) ->
+    Candidates = [
+        {Req, <<"transaction-result">>},
+        {Req, <<"transaction_result">>},
+        {Req, <<"result">>},
+        {Req, <<"body">>},
+        {Base, <<"transaction-result">>},
+        {Base, <<"transaction_result">>},
+        {Base, <<"result">>},
+        {Base, <<"body">>}
+    ],
+    case transaction_candidate_from_value(Base, Opts) of
+        {ok, _Result, _Raw} = Transaction -> Transaction;
+        not_found -> transaction_candidate_from_fields(Candidates, Opts)
+    end.
+
 search_candidate_from_fields([], _Opts) ->
     not_found;
 search_candidate_from_fields([{Msg, Key} | Rest], Opts) when is_map(Msg) ->
@@ -136,6 +176,41 @@ search_candidate_from_value(Value, Opts) when is_binary(Value) ->
         _ -> not_found
     end;
 search_candidate_from_value(_Value, _Opts) ->
+    not_found.
+
+transaction_candidate_from_fields([], _Opts) ->
+    not_found;
+transaction_candidate_from_fields([{Msg, Key} | Rest], Opts) when is_map(Msg) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        not_found -> transaction_candidate_from_fields(Rest, Opts);
+        Value ->
+            case transaction_candidate_from_value(Value, Opts) of
+                {ok, _Result, _Raw} = Transaction -> Transaction;
+                not_found -> transaction_candidate_from_fields(Rest, Opts)
+            end
+    end;
+transaction_candidate_from_fields([_ | Rest], Opts) ->
+    transaction_candidate_from_fields(Rest, Opts).
+
+transaction_candidate_from_value(Value, Opts) when is_map(Value) ->
+    case transaction_from_proxy_map(Value, hb_json:encode(Value), Opts) of
+        {ok, _Result, _Raw} = Transaction -> Transaction;
+        _ -> not_found
+    end;
+transaction_candidate_from_value(Value, Opts) when is_binary(Value) ->
+    case try_decode_json(Value) of
+        {ok, Decoded} -> transaction_candidate_from_decoded(Decoded, Value, Opts);
+        _ -> not_found
+    end;
+transaction_candidate_from_value(_Value, _Opts) ->
+    not_found.
+
+transaction_candidate_from_decoded(Decoded, Raw, Opts) when is_map(Decoded) ->
+    case transaction_from_proxy_map(Decoded, Raw, Opts) of
+        {ok, _Result, _Raw} = Transaction -> Transaction;
+        _ -> not_found
+    end;
+transaction_candidate_from_decoded(_Decoded, _Raw, _Opts) ->
     not_found.
 
 search_candidate_from_decoded(Decoded, Raw, Opts) when is_map(Decoded) ->
@@ -347,6 +422,12 @@ search_from_proxy(Raw, Opts) ->
         search_from_proxy_map(Decoded, Raw, Opts)
     end.
 
+transaction_from_proxy(Raw, Opts) ->
+    maybe
+        {ok, Decoded} ?= try_decode_json(Raw),
+        transaction_from_proxy_map(Decoded, Raw, Opts)
+    end.
+
 claim_from_proxy_map(URI, Msg, Raw, Opts) when is_map(Msg) ->
     case hb_maps:get(<<"error">>, Msg, not_found, Opts) of
         not_found -> claim_from_result(URI, Msg, Raw, Opts);
@@ -363,11 +444,26 @@ search_from_proxy_map(Msg, Raw, Opts) when is_map(Msg) ->
 search_from_proxy_map(_Msg, _Raw, _Opts) ->
     {error, invalid_proxy_response}.
 
+transaction_from_proxy_map(Msg, Raw, Opts) when is_map(Msg) ->
+    case hb_maps:get(<<"error">>, Msg, not_found, Opts) of
+        not_found -> transaction_from_result(Msg, Raw, Opts);
+        Error -> {error, {proxy_error, Error}}
+    end;
+transaction_from_proxy_map(_Msg, _Raw, _Opts) ->
+    {error, invalid_proxy_response}.
+
 search_from_result(Msg, Raw, Opts) ->
     Result = hb_maps:get(<<"result">>, Msg, Msg, Opts),
     case is_search_result(Result, Opts) of
         true -> {ok, Result, Raw};
         false -> {error, invalid_search_result}
+    end.
+
+transaction_from_result(Msg, Raw, Opts) ->
+    Result = hb_maps:get(<<"result">>, Msg, Msg, Opts),
+    case is_transaction_result(Result, Opts) of
+        true -> {ok, Result, Raw};
+        false -> {error, invalid_transaction_result}
     end.
 
 claim_from_result(URI, Msg, Raw, Opts) ->
@@ -433,7 +529,7 @@ normalize_claim(Claim, Raw, Opts) ->
                 Opts
             ),
         ValueType = first_value([<<"value_type">>, <<"value-type">>], Claim, Opts),
-        base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType)
+        base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType, Opts)
     end.
 
 normalize_search_result(Result, Raw, Opts) ->
@@ -457,6 +553,27 @@ normalize_search_result(Result, Raw, Opts) ->
     ],
     lists:foldl(fun put_if_found_pair/2, Msg0, Optional).
 
+normalize_transaction_result(Result, Raw, Opts) ->
+    maybe
+        {ok, TxID} ?= required_first([<<"txid">>], Result, Opts),
+        {ok, TxHex} ?= required_first([<<"hex">>, <<"tx-hex">>, <<"tx_hex">>], Result, Opts),
+        Msg0 = #{
+            <<"device">> => ?DEVICE,
+            <<"view">> => <<"transaction">>,
+            <<"content-type">> => <<"application/json">>,
+            <<"body">> => Raw,
+            <<"result">> => Result,
+            <<"txid">> => TxID,
+            <<"tx-hex">> => TxHex
+        },
+        Optional = [
+            {<<"height">>, first_value([<<"height">>], Result, Opts)},
+            {<<"inputs">>, first_value([<<"inputs">>], Result, Opts)},
+            {<<"outputs">>, first_value([<<"outputs">>], Result, Opts)}
+        ],
+        lists:foldl(fun put_if_found_pair/2, Msg0, Optional)
+    end.
+
 search_items(Result, Opts) when is_map(Result) ->
     case first_value([<<"items">>, <<"claims">>], Result, Opts) of
         Items when is_list(Items) -> Items;
@@ -476,7 +593,7 @@ normalize_search_claims(Items, Raw, Opts) ->
         Items
     ).
 
-base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType) ->
+base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueType, Opts) ->
     Msg0 = #{
         <<"device">> => ?DEVICE,
         <<"content-type">> => <<"application/json">>,
@@ -487,7 +604,36 @@ base_claim_message(Claim, Raw, ClaimID, ClaimName, Value, CanonicalURL, ValueTyp
         <<"value">> => Value
     },
     Msg1 = put_if_found(<<"canonical-url">>, CanonicalURL, Msg0),
-    put_if_found(<<"value-type">>, ValueType, Msg1).
+    Msg2 = put_if_found(<<"value-type">>, ValueType, Msg1),
+    Msg3 = put_if_found(<<"claim-store-path">>, claim_store_path(ClaimID), Msg2),
+    Optional = [
+        {<<"claim-proof-store-path">>, claim_proof_store_path(Claim, Opts)},
+        {<<"txid">>, first_value([<<"txid">>], Claim, Opts)},
+        {<<"nout">>, first_value([<<"nout">>], Claim, Opts)},
+        {<<"height">>, first_value([<<"height">>], Claim, Opts)},
+        {<<"claim-op">>, first_value([<<"claim_op">>, <<"claim-op">>], Claim, Opts)}
+    ],
+    lists:foldl(fun put_if_found_pair/2, Msg3, Optional).
+
+claim_store_path(ClaimID) when is_binary(ClaimID) ->
+    <<"odysee/claim-id/", ClaimID/binary>>;
+claim_store_path(_ClaimID) ->
+    not_found.
+
+claim_proof_store_path(Claim, Opts) ->
+    case {first_value([<<"txid">>], Claim, Opts), first_value([<<"nout">>], Claim, Opts)} of
+        {TxID, NOut} when is_binary(TxID), is_integer(NOut) orelse is_binary(NOut) ->
+            <<"odysee/claim-proof/", TxID/binary, "/", (path_int(NOut))/binary>>;
+        _ ->
+            not_found
+    end.
+
+path_int(Int) when is_integer(Int) ->
+    integer_to_binary(Int);
+path_int(Bin) when is_binary(Bin) ->
+    Bin;
+path_int(Value) ->
+    hb_util:bin(Value).
 
 is_claim_map(Map, Opts) when is_map(Map) ->
     first_value([<<"claim_id">>, <<"claim-id">>], Map, Opts) =/= not_found
@@ -502,6 +648,18 @@ is_search_result(Result, Opts) when is_map(Result) ->
     end;
 is_search_result(_Result, _Opts) ->
     false.
+
+is_transaction_result(Result, Opts) when is_map(Result) ->
+    first_value([<<"txid">>], Result, Opts) =/= not_found
+        andalso first_value([<<"hex">>, <<"tx-hex">>, <<"tx_hex">>], Result, Opts) =/= not_found;
+is_transaction_result(_Result, _Opts) ->
+    false.
+
+required_txid(Base, Req, Opts) ->
+    case first_found([{Req, <<"txid">>}, {Base, <<"txid">>}], Opts) of
+        TxID when is_binary(TxID) -> {ok, TxID};
+        _ -> {error, txid_not_found}
+    end.
 
 required_first(Keys, Map, Opts) ->
     case first_value(Keys, Map, Opts) of
@@ -592,6 +750,18 @@ search_accepts_supplied_result_test() ->
     {ok, Msg} = search(#{}, #{ <<"result">> => Result }, #{}),
     ?assertEqual(2, hb_maps:get(<<"page">>, Msg, #{})),
     ?assertEqual(1, length(hb_maps:get(<<"claims">>, Msg, #{}))).
+
+transaction_accepts_supplied_result_test() ->
+    Result = #{
+        <<"txid">> => <<"tx123">>,
+        <<"hex">> => <<"0100000000">>,
+        <<"height">> => 123
+    },
+    {ok, Msg} = transaction(#{}, #{ <<"result">> => Result }, #{}),
+    ?assertEqual(<<"transaction">>, hb_maps:get(<<"view">>, Msg, #{})),
+    ?assertEqual(<<"tx123">>, hb_maps:get(<<"txid">>, Msg, #{})),
+    ?assertEqual(<<"0100000000">>, hb_maps:get(<<"tx-hex">>, Msg, #{})),
+    ?assertEqual(123, hb_maps:get(<<"height">>, Msg, #{})).
 
 search_params_removes_control_fields_test() ->
     Params = search_params(

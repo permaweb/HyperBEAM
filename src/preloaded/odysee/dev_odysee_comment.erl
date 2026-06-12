@@ -262,16 +262,15 @@ normalize_by_id(Result, Raw, Opts) when is_map(Result) ->
                     first_value([<<"ancestors">>], Result, Opts),
                     Opts
                 ),
-                {ok,
-                    #{
-                        <<"device">> => ?DEVICE,
-                        <<"content-type">> => <<"application/json">>,
-                        <<"body">> => Raw,
-                        <<"comment">> => Comment,
-                        <<"comment-id">> => hb_maps:get(<<"comment-id">>, Comment, Opts),
-                        <<"ancestors">> => Ancestors
-                    }
-                }
+                Msg0 = #{
+                    <<"device">> => ?DEVICE,
+                    <<"content-type">> => <<"application/json">>,
+                    <<"body">> => Raw,
+                    <<"comment">> => Comment,
+                    <<"comment-id">> => hb_maps:get(<<"comment-id">>, Comment, Opts),
+                    <<"ancestors">> => Ancestors
+                },
+                {ok, copy_comment_refs(Comment, Msg0, Opts)}
             end;
         _CommentID ->
             normalize_single_comment(Result, Raw, Opts)
@@ -282,15 +281,14 @@ normalize_by_id(Comment, Raw, Opts) ->
 normalize_single_comment(Comment, Raw, Opts) ->
     maybe
         {ok, Norm} ?= normalize_comment(Comment, Opts),
-        {ok,
-            #{
-                <<"device">> => ?DEVICE,
-                <<"content-type">> => <<"application/json">>,
-                <<"body">> => Raw,
-                <<"comment">> => Norm,
-                <<"comment-id">> => hb_maps:get(<<"comment-id">>, Norm, Opts)
-            }
-        }
+        Msg0 = #{
+            <<"device">> => ?DEVICE,
+            <<"content-type">> => <<"application/json">>,
+            <<"body">> => Raw,
+            <<"comment">> => Norm,
+            <<"comment-id">> => hb_maps:get(<<"comment-id">>, Norm, Opts)
+        },
+        {ok, copy_comment_refs(Norm, Msg0, Opts)}
     end.
 
 list_items(Result, Opts) ->
@@ -332,7 +330,8 @@ normalize_comment(Comment, Opts) when is_map(Comment) ->
         Msg0 = #{
             <<"device">> => ?DEVICE,
             <<"source">> => Comment,
-            <<"comment-id">> => CommentID
+            <<"comment-id">> => CommentID,
+            <<"comment-store-path">> => <<"odysee/comment/", CommentID/binary>>
         },
         Optional = [
             {<<"comment">>, Text},
@@ -363,10 +362,47 @@ normalize_comment(Comment, Opts) when is_map(Comment) ->
             {<<"blocked">>, first_value([<<"blocked">>, <<"is_blocked">>, <<"is-blocked">>], Comment, Opts)},
             {<<"moderation">>, moderation_fields(Comment, Opts)}
         ],
-        with_signature_context(lists:foldl(fun put_optional/2, Msg0, Optional), Text, Opts)
+        with_signature_context(
+            add_comment_store_refs(lists:foldl(fun put_optional/2, Msg0, Optional), Opts),
+            Text,
+            Opts
+        )
     end;
 normalize_comment(_Comment, _Opts) ->
     {error, invalid_comment}.
+
+copy_comment_refs(Comment, Msg, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            put_optional({Key, hb_maps:get(Key, Comment, not_found, Opts)}, Acc)
+        end,
+        Msg,
+        [
+            <<"claim-id">>,
+            <<"channel-id">>,
+            <<"channel-name">>,
+            <<"comment-store-path">>,
+            <<"claim-store-path">>,
+            <<"channel-store-path">>
+        ]
+    ).
+
+add_comment_store_refs(Msg, Opts) ->
+    Msg1 =
+        put_optional(
+            {<<"claim-store-path">>, store_path(<<"claim-id">>, <<"odysee/claim-id/">>, Msg, Opts)},
+            Msg
+        ),
+    put_optional(
+        {<<"channel-store-path">>, store_path(<<"channel-id">>, <<"odysee/channel/">>, Msg1, Opts)},
+        Msg1
+    ).
+
+store_path(Key, Prefix, Msg, Opts) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        ID when is_binary(ID) -> <<Prefix/binary, ID/binary>>;
+        _ -> not_found
+    end.
 
 with_signature_context(Msg, not_found, _Opts) ->
     {ok, Msg};

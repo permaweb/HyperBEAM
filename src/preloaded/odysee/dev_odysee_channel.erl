@@ -147,6 +147,8 @@ normalize_channel(Claim, SourceClaim, Opts) ->
             <<"channel-id">> => ClaimID,
             <<"claim-name">> => ClaimName,
             <<"channel-name">> => ClaimName,
+            <<"claim-store-path">> => <<"odysee/claim-id/", ClaimID/binary>>,
+            <<"channel-store-path">> => <<"odysee/channel/", ClaimID/binary>>,
             <<"identity-type">> => <<"channel">>
         },
         Msg1 =
@@ -168,7 +170,12 @@ normalize_channel(Claim, SourceClaim, Opts) ->
             {<<"public-key-id">>, first_value([<<"public_key_id">>, <<"public-key-id">>], Value, Opts)},
             {<<"signature-valid">>, first_value([<<"signature_valid">>, <<"signature-valid">>], SourceClaim, Opts)},
             {<<"committer-format">>, public_key_format(PublicKey)},
-            {<<"ao-committer">>, PublicKey}
+            {<<"ao-committer">>, PublicKey},
+            {<<"claim-proof-store-path">>, claim_proof_store_path(Claim, Opts)},
+            {<<"txid">>, first_value([<<"txid">>], Claim, Opts)},
+            {<<"nout">>, first_value([<<"nout">>], Claim, Opts)},
+            {<<"height">>, first_value([<<"height">>], Claim, Opts)},
+            {<<"claim-op">>, first_value([<<"claim_op">>, <<"claim-op">>], Claim, Opts)}
         ],
         lists:foldl(fun put_optional/2, Msg1, Optional)
     end.
@@ -218,6 +225,19 @@ thumbnail_url(Value, Opts) ->
 
 public_key_format(not_found) -> not_found;
 public_key_format(_PublicKey) -> <<"lbry-channel-public-key">>.
+
+claim_proof_store_path(Claim, Opts) ->
+    case {first_value([<<"txid">>], Claim, Opts), first_value([<<"nout">>], Claim, Opts)} of
+        {TxID, NOut} when is_binary(TxID), is_integer(NOut) orelse is_binary(NOut) ->
+            <<"odysee/claim-proof/", TxID/binary, "/", (path_int(NOut))/binary>>;
+        _ ->
+            not_found
+    end.
+
+path_int(Int) when is_integer(Int) ->
+    integer_to_binary(Int);
+path_int(Bin) when is_binary(Bin) ->
+    Bin.
 
 first_value([], _Map, _Opts) ->
     not_found;

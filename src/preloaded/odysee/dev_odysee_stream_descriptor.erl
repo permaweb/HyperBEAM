@@ -176,6 +176,8 @@ normalize_descriptor(Source, Raw, ProvidedSDHash, Opts) when is_map(Source) ->
             <<"suggested-file-name-hex">> => SuggestedHex,
             <<"stream-hash">> => StreamHash,
             <<"sd-hash">> => SDHash,
+            <<"descriptor-store-path">> => <<"odysee/descriptor/", SDHash/binary>>,
+            <<"blob-store-paths">> => blob_store_paths(Blobs),
             <<"blobs">> => Blobs
         }
     else
@@ -244,9 +246,20 @@ normalize_blob_hash(Blob, Expected, Length, IVHex) ->
             <<"blob-num">> => Expected,
             <<"length">> => Length,
             <<"iv">> => IVHex,
-            <<"blob-hash">> => BlobHash
+            <<"blob-hash">> => BlobHash,
+            <<"blob-store-path">> => <<"odysee/blob/", BlobHash/binary>>
         }}
     end.
+
+blob_store_paths(Blobs) ->
+    hb_util:list_to_numbered_message(
+        [
+            hb_maps:get(<<"blob-store-path">>, Blob, #{})
+        ||
+            Blob <- Blobs,
+            not is_terminator(Blob)
+        ]
+    ).
 
 is_terminator(#{ <<"length">> := 0 }) -> true;
 is_terminator(_) -> false.
@@ -797,13 +810,53 @@ fetch_blob(Hash, Base, Req, Opts) ->
         {ok, _Bytes} = Cached ->
             Cached;
         _ ->
-            case read_local_blob(NormHash, Base, Req, Opts) of
+            case read_store_blob(NormHash, Base, Req, Opts) of
                 {ok, Bytes} ->
                     write_cached_blob(NormHash, Bytes, Base, Req, Opts),
                     {ok, Bytes};
                 _ ->
-                    fetch_missing_blob(NormHash, Base, Req, Opts)
+                    case read_local_blob(NormHash, Base, Req, Opts) of
+                        {ok, Bytes} ->
+                            write_cached_blob(NormHash, Bytes, Base, Req, Opts),
+                            {ok, Bytes};
+                        _ ->
+                            fetch_missing_blob(NormHash, Base, Req, Opts)
+                    end
             end
+    end.
+
+read_store_blob(Hash, Base, Req, Opts) ->
+    case store_blob_enabled(Base, Req, Opts) of
+        true ->
+            case hb_cache:read(<<"odysee/blob/", Hash/binary>>, Opts) of
+                {ok, Msg} when is_map(Msg) ->
+                    case hb_maps:get(<<"body">>, Msg, not_found, Opts) of
+                        Body when is_binary(Body) -> verify_fetched_blob(Hash, Body);
+                        _ -> {error, not_found}
+                    end;
+                {ok, Body} when is_binary(Body) ->
+                    verify_fetched_blob(Hash, Body);
+                _ ->
+                    {error, not_found}
+            end;
+        false ->
+            {error, not_found}
+    end.
+
+store_blob_enabled(Base, Req, Opts) ->
+    case first_found(
+        [
+            {Req, <<"use-store-blobs">>},
+            {Req, <<"use_store_blobs">>},
+            {Base, <<"use-store-blobs">>},
+            {Base, <<"use_store_blobs">>}
+        ],
+        Opts
+    ) of
+        not_found ->
+            hb_opts:get(store, no_viable_store, Opts) =/= no_viable_store;
+        Value ->
+            truthy(Value)
     end.
 
 fetch_missing_blob(Hash, Base, Req, Opts) ->
@@ -1486,6 +1539,14 @@ decode_and_reconstruct_test() ->
     {JSON, Encrypted, Plain, BlobHash} = test_descriptor(),
     {ok, Desc} = decode(#{}, #{ <<"body">> => JSON }, #{}),
     ?assertEqual(JSON, hb_maps:get(<<"body">>, Desc, #{})),
+    ?assertEqual(
+        <<"odysee/descriptor/", (hb_maps:get(<<"sd-hash">>, Desc, #{}))/binary>>,
+        hb_maps:get(<<"descriptor-store-path">>, Desc, #{})
+    ),
+    ?assertEqual(
+        [<<"odysee/blob/", BlobHash/binary>>],
+        hb_util:message_to_ordered_list(hb_maps:get(<<"blob-store-paths">>, Desc, #{}), #{})
+    ),
     Verified =
         hb_util:ok(verify(
             Desc,
@@ -1514,6 +1575,30 @@ verify_reports_missing_blobs_test() ->
     {ok, Verified} = verify(Desc, #{}, #{}),
     ?assertEqual(false, hb_maps:get(<<"verified">>, Verified, #{})),
     ?assertEqual([BlobHash], hb_maps:get(<<"missing-blobs">>, Verified, #{})).
+
+verify_reads_encrypted_blob_from_store_test() ->
+    {JSON, Encrypted, _Plain, BlobHash} = test_descriptor(),
+    {ok, Desc} = decode(#{}, #{ <<"body">> => JSON }, #{}),
+    Store = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", BlobHash/binary>> => #{
+                <<"device">> => <<"odysee-blob@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Encrypted,
+                <<"blob-hash">> => BlobHash,
+                <<"blob-store-path">> => <<"odysee/blob/", BlobHash/binary>>
+            }
+        }
+    },
+    {ok, Verified} =
+        verify(
+            Desc,
+            #{ <<"fetch-blobs">> => true, <<"cache-blobs">> => false },
+            #{ <<"store">> => Store }
+        ),
+    ?assertEqual(true, hb_maps:get(<<"verified">>, Verified, #{})),
+    ?assertEqual([BlobHash], hb_maps:get(<<"verified-blobs">>, Verified, #{})).
 
 media_head_returns_range_metadata_test() ->
     {JSON, Encrypted, Plain, BlobHash} = test_descriptor(),

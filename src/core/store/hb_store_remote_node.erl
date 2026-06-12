@@ -58,10 +58,16 @@ read_request(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
     {error, not_found};
 read_request(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+    ReadReq0 = #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
+    ReadReq =
+        case hb_maps:get(<<"require-codec">>, Opts, not_found, Opts) of
+            not_found -> ReadReq0;
+            Codec -> ReadReq0#{ <<"require-codec">> => Codec }
+        end,
     HTTPRes =
         hb_http:get(
             Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
+            ReadReq,
             Opts
         ),
     case HTTPRes of
@@ -139,7 +145,7 @@ read_local_cache(StoreOpts, ID, Opts) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};
-        Store -> hb_cache:read(ID, StoreOpts#{ <<"store">> => Store })
+        Store -> hb_cache:read(ID, maps:merge(Opts, StoreOpts#{ <<"store">> => Store }))
     end.
 
 %% @doc Write a key to the remote node.

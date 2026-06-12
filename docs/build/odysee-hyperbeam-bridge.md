@@ -77,8 +77,10 @@ source format and exposes decoded fields as AO-Core messages.
 
 | Device | Purpose | First milestone |
 | --- | --- | --- |
+| `~odysee@1.0` | Source commitment device for normalized Odysee messages. It adds committer-less commitments over stable public source fields and verifies those commitments through the normal `message@1.0` commitment path. | Implemented native source commitments for claims, channels, comments, stream descriptors, streams, stream attestations, and blobs. |
 | `~odysee-stream-descriptor@1.0` | Parse descriptor JSON, verify encrypted blobs, decrypt, and reconstruct media bytes. | Implemented proof device. |
 | `~odysee-claim@1.0` | Preserve raw SDK proxy resolve/search JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback/discovery adapter. |
+| `~odysee-claim-proof@1.0` | Verify raw LBRY transaction output evidence for a claim by parsing transaction bytes, claim script prefixes, output index, and claim ID derivation. | Implemented transaction-output proof device. |
 | `~odysee-stream@1.0` | Represent stream/content claims, stream metadata, `source.sd_hash`, and player-compatible playback URLs. | Implemented playback-stage adapter. |
 | `~odysee-channel@1.0` | Represent channel identity, public key, signature context, and AO-Core committer mapping. | Implemented read-only identity adapter. |
 | `~odysee-comment@1.0` | Represent commentron comments, signature payloads, moderation metadata, and verification inputs. | Implemented read-only Commentron adapter with secp256k1 signature verification. |
@@ -90,6 +92,44 @@ source format and exposes decoded fields as AO-Core messages.
 The older `~lbry-claim@1.0`, `~lbry-stream@1.0`,
 `~lbry-stream-descriptor@1.0`, and `~lbry-channel@1.0` names remain as
 compatibility aliases, but new integration should use the `~odysee-*` routes.
+
+## Store / codec split
+
+The next bridge milestone separates sourcing from computation:
+
+* `hb_store_odysee` is a read-only public Odysee source store. It supports stable
+  paths such as `odysee/claim/<percent-encoded-url>`,
+  `odysee/claim-id/<claim-id>`, `odysee/stream/<percent-encoded-url>`,
+  `odysee/stream-id/<claim-id>`, `odysee/channel/<channel-claim-id>`,
+  `odysee/channel-id/<channel-claim-id>`, `odysee/claim-proof/<txid>/<nout>`,
+  `odysee/descriptor/<sd-hash>`, `odysee/descriptor-id/<sd-hash>`,
+  `odysee/stream-descriptor/<sd-hash>`, `odysee/comment/<comment-id>`,
+  `odysee/comment-id/<comment-id>`, `odysee/blob/<blob-sha384>`, and
+  `odysee/blob-id/<blob-sha384>`. It can sit below a local cache or behind
+  `hb_store_remote_node`.
+* `~odysee@1.0` is the source commitment device. Store reads return normalized
+  messages with `~odysee@1.0` commitments so a downstream node can select those
+  commitment IDs from `commitments` and call `hb_message:verify/3` on them
+  instead of trusting a proxy response. This matters when remote transport also
+  adds ordinary HTTP signatures to the same message.
+* The current claim and channel commitments bind the raw Odysee resolver/search
+  body plus stable public claim fields. The stream descriptor commitment binds
+  the raw descriptor body, recomputes the descriptor `sd_hash`, and verifies it
+  through `~odysee-stream-descriptor@1.0`. Blob commitments bind the encrypted
+  blob bytes to the blob SHA-384 hash. Comment commitments bind the normalized
+  Commentron row and verify the comment signature when the channel public key is
+  present in the committed message.
+* `~odysee-claim-proof@1.0` verifies raw transaction-output proof objects from
+  `transaction_show` evidence: txid, output index, LBRY claim script prefix,
+  claim name, and claim ID derivation. Full block/ClaimTrie inclusion proof is
+  still the next proof tier.
+* Normalized claim, stream, descriptor, channel, comment, blob, and claim-proof
+  messages expose stable `*-store-path` fields. Stream messages point to their
+  claim, descriptor, channel, and raw transaction-output proof paths when the
+  source claim includes those IDs. Descriptor messages expose
+  `descriptor-store-path` plus numbered `blob-store-paths`, and descriptor blob
+  verification can read encrypted blobs through the configured HyperBEAM store
+  stack before falling back to local/LBRY/blobcache sources.
 
 ## Current playback slice
 
@@ -106,13 +146,16 @@ Implemented devices:
 
 | Device | Key | Behavior |
 | --- | --- | --- |
+| `~odysee@1.0` | `commit` / `verify` / `to-hint` | Adds and verifies Odysee source commitments over stable public fields. The descriptor path recomputes `sd_hash`; blobs recompute SHA-384 over the committed body; comments verify Commentron signatures when public-key material is committed; claim/channel paths record source digests over raw resolved or searched claim bodies, while raw transaction-output proof is represented by committed `claim-proof` objects. |
 | `~odysee-stream-descriptor@1.0` | `media` | Fetches or decodes a stream descriptor, verifies and decrypts only the blobs needed for the requested plaintext byte range, and returns browser-compatible `HEAD`/`Range` responses. |
 | `~odysee-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
 | `~odysee-claim@1.0` | `search` | Accepts `claim_search` params, supplied SDK search JSON, or a supplied result; calls the SDK proxy when needed; preserves the exact SDK result while exposing `items`, normalized `claims`, and `claim-ids`. |
+| `~odysee-claim@1.0` | `transaction` | Calls or normalizes SDK proxy `transaction_show` JSON and exposes raw transaction hex plus parsed SDK transaction fields for proof devices. |
+| `~odysee-claim-proof@1.0` | `decode` / `verify` | Parses raw LBRY transaction hex, verifies txid, output index, claim/update/support script shape, claim name, and claim ID derivation. |
 | `~odysee-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
 | `~odysee-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
 | `~odysee-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
-| `~odysee-stream@1.0` | `verified-stream` | Resolves the claim, checks the resolved signing-channel relationship, validates the descriptor hash against the claim `sd_hash`, and returns an explicit JSON attestation with `valid`, `signature-valid`, `channel-hash-valid`, `descriptor-valid`, `signed-sd-hash`, and nested evidence. The current stream-signature field is SDK/resolve-attested; raw LBRY transaction proof is called out in `verification-limitations` until that proof path lands. |
+| `~odysee-stream@1.0` | `verified-stream` | Resolves the claim, checks the resolved signing-channel relationship, validates the descriptor hash against the claim `sd_hash`, and returns an explicit JSON attestation with `valid`, `signature-valid`, `channel-hash-valid`, `descriptor-valid`, `signed-sd-hash`, and nested evidence. The current stream-signature field is SDK/resolve-attested; raw transaction-output proof is represented separately by `~odysee-claim-proof@1.0`. |
 | `~odysee-channel@1.0` | `channel` / `from-claim` | Normalizes direct channel claims, claim-device messages, or a stream claim's `signing_channel`; preserves public key fields and source claim context for later verification. |
 | `~odysee-comment@1.0` | `list` / `by-id` / `normalize` / `verify-signature` / `verify-claim-signature` | Normalizes `comment.List` and `comment.ByID` responses from supplied fixtures or the Commentron API; preserves comment signatures, signing timestamps, signed message hints, author channel IDs, parent IDs, and moderation metadata; verifies Commentron-compatible signatures when a channel public key is supplied or resolvable. |
 | `~odysee-reaction@1.0` | `list` / `normalize` | Normalizes `reaction.List` responses from supplied fixtures or the Commentron API; preserves exact `my_reactions` and `others_reactions` maps and exposes the involved comment IDs. |
@@ -182,6 +225,7 @@ behavior without modifying the player:
 | `lbrynet-stream-url` / `lbrynet-stream-base-url` | Optional local LBRY SDK media-server URL used to warm missing stream blobs into `blob-dir` before descriptor decryption. Use `lbrynet-stream-base-url=http://127.0.0.1:5280/stream` for the default SDK media server. |
 | `cache-blobs` / `blob-cache` | Enable or disable encrypted blob cache reads/writes. Defaults to enabled. |
 | `plain-cache-blobs` | Enable or disable decrypted plaintext blob cache reads/writes. Defaults to enabled. |
+| `use-store-blobs` | Enable or disable descriptor blob reads through the configured HyperBEAM store stack. Defaults to enabled when a store is configured. |
 | `blob-connect-timeout`, `blob-recv-timeout`, `blob-checkout-timeout` | Per-request reflector HTTP timeout overrides. |
 | `lbrynet-timeout`, `lbrynet-connect-timeout`, `lbrynet-recv-timeout`, `lbrynet-checkout-timeout` | Per-request local daemon timeout overrides. `lbrynet-timeout` is passed to `blob_get` in seconds. |
 | `player-proxy=false` | Disable fallback to the current Odysee player media URL. Descriptor/blob serving failures surface as media errors. |
@@ -216,8 +260,9 @@ HYPERBEAM_PLAYBACK_URL=http://127.0.0.1:8734/~odysee-stream@1.0/playback?mode=bl
 
 The current implementation is validated against fixture descriptors, supplied
 blob maps, local blob directories, encrypted blob cache reuse, plaintext blob
-cache reuse, local daemon `blob_get` fetches, SDK media-server blob warmups,
-CORS preflight, and browser range forms. Live byte-serving still depends on the
+cache reuse, store-backed encrypted blob reads, local daemon `blob_get` fetches,
+SDK media-server blob warmups, CORS preflight, and browser range forms. Live
+byte-serving still depends on the
 configured reflector/blobcache or local daemon being reachable from the running
 node. In this environment, resolving the Veritasium claim succeeds, but
 descriptor/blob fetches from the public blobcache timed out. The PR therefore
@@ -254,15 +299,18 @@ write path is added.
 
 It returns channel ID/name, canonical URL, title, description, thumbnail,
 public key, public key ID, tags, and the containing source claim when the
-channel came from a signed stream.
+channel came from a signed stream. It also exposes `claim-store-path`,
+`channel-store-path`, and `claim-proof-store-path` when the source claim has
+transaction evidence.
 
 `~odysee-comment@1.0` accepts supplied `comment.List` / `comment.ByID` JSON, or
 fetches from `POST https://comments.odysee.com/api/v2?m=<method>`. It exposes
 normalized comments with comment ID, claim ID, parent ID, channel ID/name/URL,
 comment text, timestamps, signature, `signing_ts`, pin/reply/support fields,
-and moderation fields. When a comment row has a signature and comment text, the
-device records `signed-field=comment` and `signed-message=<comment text>`. If
-the row or request includes a channel public key, the device verifies the
+moderation fields, and store paths for the comment, claim, and author channel.
+When a comment row has a signature and comment text, the device records
+`signed-field=comment` and `signed-message=<comment text>`. If the row or
+request includes a channel public key, the device verifies the
 Commentron digest `sha256(signing_ts || reverse_hex(channel_id) || data)` with
 the compact secp256k1 ECDSA signature and marks the comment `valid` or
 `invalid`. If the public key is not available, the comment stays
@@ -499,4 +547,12 @@ These are intentionally not locked for the first doc:
 9. Add `~odysee-file-reaction@1.0` for unauthenticated video/file reaction
    summaries. Done.
 10. Add `~odysee-subscription@1.0` for read-only follower counts. Done.
-11. Decide public route names only after the descriptor proof path works.
+11. Add `~odysee@1.0` source commitments and `hb_store_odysee` read-store
+    plumbing so public Odysee objects can be sourced by stores and verified via
+    `hb_message:verify/3`. Claim URL, claim ID, stream URL, stream claim ID,
+    channel ID aliases, descriptor hash aliases, comment ID aliases, encrypted
+    blob hash aliases, and raw transaction-output claim proof paths are
+    implemented.
+12. Use two HyperBEAM nodes to prove the remote-store path: node A misses
+    locally, asks node B, verifies the returned `~odysee@1.0` commitment, then
+    caches/serves the verified message.
