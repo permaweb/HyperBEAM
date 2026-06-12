@@ -31,6 +31,7 @@ do_run(State) ->
     KeyPath = maps:get(<<"key">>, Args),
     PublishCodec = maps:get(<<"publish-codec">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
+    Signer = hb:address(Wallet),
     Opts =
         (hb_forge_args:package_opts(Args))#{
             <<"priv-wallet">> => Wallet,
@@ -65,8 +66,8 @@ do_run(State) ->
             {ok, _} = upload(Impl, NodeOpts, PublishCodec),
             ImplID = hb_message:id(Impl, all, NodeOpts),
             rebar_api:info(
-                "device publish: ~s spec=~s impl=~s",
-                [maps:get(device_name, Pkg), SpecID, ImplID]
+                "device publish: ~s spec=~s impl=~s signer=~s",
+                [maps:get(device_name, Pkg), SpecID, ImplID, Signer]
             )
         end,
         hb_packager:package_all(
