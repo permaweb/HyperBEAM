@@ -876,10 +876,14 @@ expected_remote_commitment(_) ->
 
 require_native_commitments(Devices, NativeIDHex, Key, Msg, Opts) when is_map(Msg) ->
     Commitments =
-        hb_cache:ensure_all_loaded(
-            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-            Opts
+        canonical_committed_keys(
+            Msg,
+            hb_cache:ensure_all_loaded(
+                hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+                Opts
+            )
         ),
+    NormalizedMsg = Msg#{ <<"commitments">> => Commitments },
     LbryCommitments =
         maps:filter(
             fun(_ID, Commitment) -> lbry_commitment(Commitment) end,
@@ -900,17 +904,83 @@ require_native_commitments(Devices, NativeIDHex, Key, Msg, Opts) when is_map(Msg
         true ?= Bound =/= [] orelse {error, {missing_native_commitment, Key}},
         true ?=
             hb_message:verify(
-                Msg,
+                NormalizedMsg,
                 #{ <<"commitment-ids">> => maps:keys(LbryCommitments) },
                 Opts
             ) orelse {error, commitment_verification_failed},
-        {ok, native_committed_view(Msg, LbryCommitments, Opts)}
+        {ok, native_committed_view(NormalizedMsg, LbryCommitments, Opts)}
     else
         {error, _} = Error -> Error;
         _ -> {error, remote_verification_failed}
     end;
 require_native_commitments(_Devices, _NativeIDHex, Key, _Msg, _Opts) ->
     {error, {missing_native_commitment, Key}}.
+
+%% @doc Rebuild the canonical committed key lists of a remotely received
+%% message's LBRY commitments. The HTTPSig wire encoding cannot express a
+%% committed-body subset: bundle responses fold every body part into the
+%% `content-digest' component, so the decoded committed lists gain whatever
+%% uncommitted sibling fields shared the body (such as `claim-envelope').
+%% The canonical lists derive from the commitment devices alone, mirroring
+%% the constructors (including their `share_committed_keys' union), and
+%% every native fact is re-verified before the message is accepted, so the
+%% lists are rebuilt here rather than trusted from the wire.
+canonical_committed_keys(Msg, Commitments) ->
+    Ancestry =
+        case
+            maps:is_key(<<"claim-ancestry">>, Msg)
+                orelse maps:is_key(<<"claim-ancestry+link">>, Msg)
+        of
+            true -> present;
+            false -> undefined
+        end,
+    Lists =
+        [
+            device_committed_list(
+                maps:get(<<"commitment-device">>, Commitment, undefined),
+                Ancestry
+            )
+         ||
+            Commitment <- maps:values(Commitments),
+            lbry_commitment(Commitment)
+        ],
+    case Lists of
+        [] ->
+            Commitments;
+        _ ->
+            Shared = lists:usort(lists:flatten(Lists)),
+            maps:map(
+                fun(_ID, Commitment) ->
+                    case lbry_commitment(Commitment) of
+                        true -> Commitment#{ <<"committed">> => Shared };
+                        false -> Commitment
+                    end
+                end,
+                Commitments
+            )
+    end.
+
+device_committed_list(<<"lbry-blob@1.0">>, _Ancestry) ->
+    [<<"blob-hash">>, <<"data">>, <<"device">>];
+device_committed_list(<<"lbry-transaction@1.0">>, _Ancestry) ->
+    [<<"device">>, <<"raw">>, <<"txid">>];
+device_committed_list(<<"lbry-stream-descriptor@1.0">>, _Ancestry) ->
+    [<<"device">>, <<"raw">>, <<"sd-hash">>];
+device_committed_list(<<"lbry-claim@1.0">>, Ancestry) ->
+    claim_committed_list(Ancestry);
+device_committed_list(<<"lbry-channel@1.0">>, Ancestry) ->
+    lists:sort(
+        claim_committed_list(Ancestry) ++ [<<"channel-id">>, <<"public-key">>]
+    );
+device_committed_list(<<"lbry-stream@1.0">>, Ancestry) ->
+    lists:sort(claim_committed_list(Ancestry) ++ [<<"sd-hash">>]);
+device_committed_list(<<"lbry-channel-attestation@1.0">>, _Ancestry) ->
+    [
+        <<"channel-evidence">>, <<"claim">>, <<"claim-id">>, <<"claim-op">>,
+        <<"device">>, <<"nout">>, <<"raw-transaction">>, <<"txid">>
+    ];
+device_committed_list(_Device, _Ancestry) ->
+    [].
 
 lbry_commitment(#{ <<"commitment-device">> := <<"lbry-", _/binary>> }) -> true;
 lbry_commitment(_) -> false.
