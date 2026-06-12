@@ -1495,7 +1495,7 @@ index_mempool(Request, Opts) ->
                 Results
             ),
             mempool_progress(Opts, {mempool_scan_completed, Summary}),
-            {ok, iolist_to_binary(json:encode(Summary))};
+            {ok, Summary};
         Error -> Error
     end.
 
