@@ -839,6 +839,26 @@ basic_test() ->
     ?assertEqual(Value, <<"World2">>),
     ok = test_stop(StoreOpts).
 
+%% @doc Binary keys must be stored and read verbatim, even when they contain
+%% bytes that coincide with the path separator (e.g. raw Arweave IDs with
+%% leading, trailing, or consecutive `/' bytes).
+opaque_binary_key_roundtrip_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    Keys = [
+        << $/, "leading-slash-key" >>,
+        << "trailing-slash-key", $/ >>,
+        << "consecutive", $/, $/, "slash-key" >>
+    ],
+    lists:foreach(
+        fun(Key) ->
+            ok = hb_store:write(StoreOpts, #{ Key => Key }, #{}),
+            ?assertEqual({ok, Key}, hb_store:read(StoreOpts, Key, #{}))
+        end,
+        Keys
+    ),
+    ok = test_stop(StoreOpts).
+
 %% @doc List test - verifies prefix-based key listing functionality.
 %%
 %% This test creates several keys with hierarchical names and verifies that

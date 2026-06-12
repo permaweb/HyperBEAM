@@ -301,7 +301,7 @@ read(Path, Opts) ->
 read(Modules, Req = #{ <<"read">> := _ }, Opts) ->
     call_function(Modules, read, [Req, Opts]);
 read(Modules, Path, Opts) ->
-    read(Modules, #{ <<"read">> => hb_path:to_binary(Path) }, Opts).
+    read(Modules, #{ <<"read">> => hb_path:do_to_binary(Path) }, Opts).
 
 %% @doc Write a key with a value to the store.
 write(Req, Opts) ->
@@ -316,7 +316,7 @@ group(Path, Opts) ->
 group(Modules, Req = #{ <<"group">> := _ }, Opts) ->
     call_function(Modules, group, [Req, Opts]);
 group(Modules, Path, Opts) ->
-    group(Modules, #{ <<"group">> => hb_path:to_binary(Path) }, Opts).
+    group(Modules, #{ <<"group">> => hb_path:do_to_binary(Path) }, Opts).
 
 %% @doc Make a link from one path to another in the store.
 link(Req, Opts) ->
@@ -343,7 +343,7 @@ type(Path, Opts) ->
 type(Modules, Req = #{ <<"type">> := _ }, Opts) ->
     call_function(Modules, type, [Req, Opts]);
 type(Modules, Path, Opts) ->
-    type(Modules, #{ <<"type">> => hb_path:to_binary(Path) }, Opts).
+    type(Modules, #{ <<"type">> => hb_path:do_to_binary(Path) }, Opts).
 
 %% @doc Follow links through the store to resolve a path to its ultimate target.
 resolve(Path, Opts) ->
@@ -351,7 +351,7 @@ resolve(Path, Opts) ->
 resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
     call_function(Modules, resolve, [Req, Opts]);
 resolve(Modules, Path, Opts) ->
-    resolve(Modules, #{ <<"resolve">> => hb_path:to_binary(Path) }, Opts).
+    resolve(Modules, #{ <<"resolve">> => hb_path:do_to_binary(Path) }, Opts).
 
 %% @doc List the keys in a group in the store. Use only in debugging.
 %% The hyperbeam model assumes that stores are built as efficient hash-based
@@ -361,7 +361,7 @@ list(Path, Opts) ->
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
     call_function(Modules, list, [Req, Opts]);
 list(Modules, Path, Opts) ->
-    list(Modules, #{ <<"list">> => hb_path:to_binary(Path) }, Opts).
+    list(Modules, #{ <<"list">> => hb_path:do_to_binary(Path) }, Opts).
 
 %% @doc Match a series of keys and values against the store. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
