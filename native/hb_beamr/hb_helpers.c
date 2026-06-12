@@ -124,7 +124,7 @@ ei_term* decode_list(char* buff, int* index) {
         ei_decode_string(buff, index, str);
         for(int i = 0; i < arity; i++) {
             res[i].ei_type = ERL_INTEGER_EXT;
-            res[i].value.i_val = (long) (unsigned char) str[i];
+            res[i].value.i_val = (unsigned char) str[i];
             DRV_DEBUG("Decoded term %d: %d", i, res[i].value.i_val);
         }
         driver_free(str);
