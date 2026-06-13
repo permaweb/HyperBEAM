@@ -3,8 +3,10 @@
 -export([from/3]).
 -export([fields/3, tags/2, data/5, committed/6, base/5]).
 -export([with_commitments/8]).
--export([bundle_hint/4, data/3, tags/5, excluded_tags/3]).
+-export([bundle_hint/4, is_bundle/3, maybe_load/3, data/3, data/4]).
+-export([tags/5, excluded_tags/3]).
 -export([to/3, to/6, siginfo/4, fields_to_tx/4]).
+-export([commitment/4]).
 -export([bundle_header/2, bundle_header/3]).
 -include("include/hb.hrl").
 
@@ -50,23 +52,23 @@ to(TABM, Req, Opts) when is_map(TABM) ->
 to(Other, _Req, _Opts) ->
     throw({invalid_tx, Other}).
 
-to(Device, TABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
+to(Device, RawTABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
+    CommitmentSpec = #{ <<"commitment-device">> => Device },
+    MaybeCommitment0 = hb_message:commitment(CommitmentSpec, RawTABM, Opts),
+    IsBundle = is_bundle(MaybeCommitment0, Req, Opts),
     MaybeCommitment =
-        hb_message:commitment(
-            #{ <<"commitment-device">> => Device },
-            TABM,
-            Opts
-        ),
-    Data = data(TABM, Req, Opts),
+        select_commitment(CommitmentSpec, RawTABM, IsBundle, MaybeCommitment0, Opts),
+    MaybeBundle = maybe_load(RawTABM, IsBundle, Opts),
+    Data = data(MaybeBundle, Req, fun ?MODULE:to/3, Opts),
     ?event({calculated_data, Data}),
-    TX0 = siginfo(TABM, MaybeCommitment, FieldsFun, Opts),
+    TX0 = siginfo(MaybeBundle, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
     TX1 = TX0#tx{ data = Data },
     Tags = tags(
         TX1,
         MaybeCommitment,
-        TABM,
-        ExcludedTagsFun(TX1, TABM, Opts),
+        MaybeBundle,
+        ExcludedTagsFun(TX1, MaybeBundle, Opts),
         Opts
     ),
     ?event({calculated_tags, Tags}),
@@ -469,6 +471,139 @@ bundle_hint(Device, Msg, Req, Opts) ->
         _ -> not_found
     end.
 
+is_bundle({ok, _, Commitment}, _Req, Opts) ->
+    hb_util:atom(hb_ao:get(<<"bundle">>, Commitment, false, Opts));
+is_bundle(_, Req, Opts) ->
+    case hb_maps:is_key(<<"bundle">>, Req, Opts) of
+        true -> hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts));
+        false -> hb_util:atom(hb_ao:get(<<"bundle">>, Opts, false, Opts))
+    end.
+
+commitment(Spec, Msg, PreferBundle, Opts) ->
+    select_commitment(
+        Spec,
+        Msg,
+        PreferBundle,
+        hb_message:commitment(Spec, Msg, Opts),
+        Opts
+    ).
+
+select_commitment(_Spec, _Msg, _PreferBundle, Match = {ok, _, _}, _Opts) ->
+    Match;
+select_commitment(_Spec, _Msg, _PreferBundle, not_found, _Opts) ->
+    not_found;
+select_commitment(Spec, Msg, PreferBundle, multiple_matches, Opts) ->
+    Matches = hb_message:commitments(Spec, Msg, Opts),
+    case preferred_commitment(Matches, PreferBundle, Opts) of
+        {ID, Commitment} -> {ok, ID, Commitment};
+        false -> multiple_matches
+    end.
+
+preferred_commitment(Matches, PreferBundle, Opts) when map_size(Matches) > 0 ->
+    Ordered = lists:sort(maps:to_list(Matches)),
+    BundleMatches =
+        [
+            Pair
+        ||
+            Pair = {_ID, Commitment} <- Ordered,
+            hb_util:atom(
+                hb_maps:get(<<"bundle">>, Commitment, false, Opts)
+            ) =:= PreferBundle
+        ],
+    preferred_commitment_from_candidates(
+        case BundleMatches of
+            [] -> Ordered;
+            _ -> BundleMatches
+        end,
+        Opts
+    );
+preferred_commitment(_Matches, _PreferBundle, _Opts) ->
+    false.
+
+preferred_commitment_from_candidates(Candidates, Opts) ->
+    case
+        [
+            Pair
+        ||
+            Pair = {_ID, Commitment} <- Candidates,
+            hb_maps:get(<<"original-tags">>, Commitment, undefined, Opts)
+                =/= undefined
+        ]
+    of
+        [Preferred | _] ->
+            Preferred;
+        [] ->
+            case
+                [
+                    Pair
+                ||
+                    Pair = {_ID, Commitment} <- Candidates,
+                    hb_maps:get(<<"signature">>, Commitment, undefined, Opts)
+                        =/= undefined
+                ]
+            of
+                [Preferred | _] -> Preferred;
+                [] -> hd(Candidates)
+            end
+    end.
+
+%% @doc Determine if the message should be loaded from the cache and re-converted
+%% to the TABM format. We do this if the `bundle' key is set to true.
+maybe_load(RawTABM, true, Opts) ->
+    % Convert back to the fully loaded structured@1.0 message, then
+    % convert to TABM with bundling enabled.
+    LoadOpts = Opts#{ <<"load-all-commitments">> => true },
+    Structured = hb_message:convert(RawTABM, <<"structured@1.0">>, LoadOpts),
+    Loaded = hb_cache:ensure_all_loaded(Structured, LoadOpts),
+    % Convert to TABM with bundling enabled.
+    LoadedTABM =
+        hb_message:convert(
+            Loaded,
+            tabm,
+            #{
+                <<"device">> => <<"structured@1.0">>,
+                <<"bundle">> => true
+            },
+            LoadOpts
+        ),
+    % Preserve commitments from the original message while keeping the
+    % additional signed commitments loaded for nested bundle items.
+    replace_commitments_recursive(LoadedTABM, RawTABM);
+maybe_load(RawTABM, false, _Opts) ->
+    RawTABM.
+
+%% @doc Recursively replace commitments from RawTABM into LoadedTABM.
+replace_commitments_recursive(LoadedTABM, RawTABM)
+        when is_map(LoadedTABM), is_map(RawTABM) ->
+    LoadedTABM2 =
+        case maps:find(<<"commitments">>, RawTABM) of
+            {ok, RawCommitments} ->
+                LoadedCommitments = maps:get(<<"commitments">>, LoadedTABM, #{}),
+                LoadedTABM#{
+                    <<"commitments">> =>
+                        maps:merge(LoadedCommitments, RawCommitments)
+                };
+            error ->
+                LoadedTABM
+        end,
+    maps:map(
+        fun(<<"commitments">>, Value) ->
+            Value;
+           (Key, Value) when is_map(Value) ->
+            case maps:get(Key, RawTABM, undefined) of
+                RawValue when is_map(RawValue) ->
+                    replace_commitments_recursive(Value, RawValue);
+                _ ->
+                    Value
+            end;
+           (_Key, Value) ->
+            Value
+        end,
+        LoadedTABM2
+    );
+replace_commitments_recursive(LoadedTABM, _RawTABM) ->
+    LoadedTABM.
+
 %% @doc Calculate the fields for a message, returning an initial TX record.
 siginfo(_Message, {ok, _, Commitment}, FieldsFun, Opts) ->
     commitment_to_tx(Commitment, FieldsFun, Opts);
@@ -549,12 +684,15 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
 
 %% @doc Calculate the data field for a message.
 data(TABM, Req, Opts) ->
+    data(TABM, Req, fun ?MODULE:to/3, Opts).
+
+data(TABM, Req, ToFun, Opts) ->
     DataKey = inline_key(TABM),
     UnencodedNestedMsgs = data_messages(TABM, Opts),
     NestedMsgs =
         hb_maps:map(
             fun(_, Msg) ->
-                hb_util:ok(to(Msg, Req, Opts))
+                hb_util:ok(ToFun(Msg, Req, Opts))
             end,
             UnencodedNestedMsgs,
             Opts
@@ -567,7 +705,7 @@ data(TABM, Req, Opts) ->
         {?DEFAULT_DATA, _} ->
             NestedMsgs;
         {DataVal, _} ->
-            NestedMsgs#{ DataKey => hb_util:ok(to(DataVal, Req, Opts)) }
+            NestedMsgs#{ DataKey => hb_util:ok(ToFun(DataVal, Req, Opts)) }
     end.
 
 %% @doc Calculate data messages for large tag values or nested messages.

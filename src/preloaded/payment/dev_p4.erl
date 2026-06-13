@@ -250,7 +250,11 @@ response(State, RawResponse, NodeMsg) ->
                                     end,
                                 <<"request">> => Request
                             },
-                            NodeMsg
+                            NodeMsg,
+                            #{
+                                <<"bundle">> => true,
+                                <<"linkify-mode">> => false
+                            }
                         ),
                     ?event(payment,
                         {post_charge,
@@ -259,10 +263,18 @@ response(State, RawResponse, NodeMsg) ->
                         }
                     ),
                     case hb_ao:resolve(LedgerMsg, LedgerReq, NodeMsg) of
-                        {ok, _} ->
-                            ?event(payment, {p4_post_ledger_response, {ok, Price}}),
-                            % Return the original response.
-                            {ok, #{ <<"body">> => Response }};
+                        {ok, Res} ->
+                            case hb_ao:get(<<"status">>, Res, 200, NodeMsg) of
+                                Status when is_integer(Status), Status >= 400 ->
+                                    ?event(payment,
+                                        {p4_post_ledger_response, {error, Res}}),
+                                    {error, Res};
+                                _ ->
+                                    ?event(payment,
+                                        {p4_post_ledger_response, {ok, Price}}),
+                                    % Return the original response.
+                                    {ok, #{ <<"body">> => Response }}
+                            end;
                         {error, Error} ->
                             ?event(payment, {p4_post_ledger_response, {error, Error}}),
                             % The charge failed, so we return the error from the

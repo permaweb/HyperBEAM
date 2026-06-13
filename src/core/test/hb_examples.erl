@@ -174,6 +174,11 @@ bundler_dynamic_metering() ->
                 <<"ans104@1.0">>,
                 Opts
             ),
+        UploadOpts =
+            #{
+                <<"priv-wallet">> => UploaderWallet,
+                <<"store">> => maps:get(<<"store">>, Opts)
+            },
         UploadReq =
             hb_message:commit(
                 #{
@@ -181,9 +186,9 @@ bundler_dynamic_metering() ->
                     <<"bundler-subject">> => <<"body">>,
                     <<"body">> => StructuredItem
                 },
-                #{ <<"priv-wallet">> => UploaderWallet }
+                UploadOpts
             ),
-        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, #{})),
+        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, UploadOpts)),
         ?assertEqual(50, bundle_payment_balance(Node, UploaderWallet))
     after
         hb_mock_server:stop(ServerHandle)
@@ -267,6 +272,11 @@ bundler_completion_payment_hook() ->
                 <<"ans104@1.0">>,
                 Opts
             ),
+        UploadOpts =
+            #{
+                <<"priv-wallet">> => UploaderWallet,
+                <<"store">> => maps:get(<<"store">>, Opts)
+            },
         UploadReq =
             hb_message:commit(
                 #{
@@ -274,9 +284,9 @@ bundler_completion_payment_hook() ->
                     <<"bundler-subject">> => <<"body">>,
                     <<"body">> => StructuredItem
                 },
-                #{ <<"priv-wallet">> => UploaderWallet }
+                UploadOpts
             ),
-        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, #{})),
+        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, UploadOpts)),
         ?assert(
             hb_util:wait_until(
                 fun() ->

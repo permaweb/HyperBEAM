@@ -71,7 +71,12 @@ parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     ).
 
 %% @doc The default handler for the scheduler device.
--spec router(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+-spec router(
+    binary(),
+    #{ _ => _ },
+    #{ '...' => _, '...+link' => _, _ => _ },
+    #{ _ => _ }
+) ->
     {ok, #{ _ => _ }} | {error, _}.
 router(_, Base, Req, Opts) ->
     ?event({scheduler_router_called, {req, Req}, {opts, Opts}}),
@@ -364,7 +369,15 @@ status(_M1, _M2, _Opts) ->
 %% scheduling a new message.
 -spec schedule(
     #{ _ => _ },
-    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    #{
+        '...' => _,
+        '...+link' => _,
+        method => binary(),
+        from => integer(),
+        to => integer(),
+        accept => binary(),
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
@@ -517,6 +530,7 @@ post_local_schedule(ProcID, PID, Req, Opts) ->
                     {is_alive, is_process_alive(PID)}
                 }
             ),
+            {ok, _} = hb_cache:write(Req, Opts),
             % If Request is not a process, use the ID of Base as the PID
             {ok, dev_scheduler_server:schedule(PID, Req)}
     end.
@@ -1382,10 +1396,45 @@ find_message_to_schedule(Base, Req, Opts) ->
         <<"base">> -> Base;
         <<"self">> -> Req;
         not_found ->
-            hb_ao:get(<<"body">>, Req, Req, Opts#{ <<"hashpath">> => ignore });
+            direct_body_or_request(Req, Opts);
         Subject ->
             hb_ao:get(Subject, Req, Opts#{ <<"hashpath">> => ignore })
     end.
+
+direct_body_or_request(Req, Opts) ->
+    case maps:find(<<"body">>, Req) of
+        {ok, Body} -> Body;
+        error ->
+            case direct_extension_parent(Req, Opts) of
+                not_found ->
+                    hb_ao:get(
+                        <<"body">>,
+                        Req,
+                        Req,
+                        Opts#{ <<"hashpath">> => ignore }
+                    );
+                Parent -> Parent
+            end
+    end.
+
+direct_extension_parent(Msg, Opts) ->
+    case direct_extension_parent_once(Msg, Opts) of
+        not_found -> not_found;
+        Parent -> deepest_extension_parent(Parent, Opts)
+    end.
+
+deepest_extension_parent(Msg, Opts) ->
+    case direct_extension_parent_once(Msg, Opts) of
+        not_found -> Msg;
+        Parent -> deepest_extension_parent(Parent, Opts)
+    end.
+
+direct_extension_parent_once(#{ <<"...">> := Parent }, _Opts) ->
+    Parent;
+direct_extension_parent_once(#{ <<"...+link">> := Link }, Opts) ->
+    hb_cache:ensure_loaded(Link, Opts);
+direct_extension_parent_once(_Req, _Opts) ->
+    not_found.
 
 %% @doc Generate a `GET /schedule' response for a process.
 generate_local_schedule(Format, ProcID, From, To, Opts) ->

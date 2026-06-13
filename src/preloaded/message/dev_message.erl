@@ -302,11 +302,24 @@ commit(Self, Req, Opts) ->
     % part of the commitment. Instead, we find the device module's `commit'
     % function and apply it.
     BaseCommitOpts =
-        case hb_maps:get(<<"type">>, Req, <<"signed">>) of
-            <<"unsigned">> ->
-                Opts#{ <<"linkify-mode">> => discard };
-            _ ->
-                Opts#{ <<"linkify-mode">> => offload }
+        case hb_maps:get(<<"linkify-mode">>, Req, not_specified, Opts) of
+            not_specified ->
+                case hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, Opts)) of
+                    true ->
+                        Opts#{
+                            <<"linkify-mode">> => false,
+                            <<"load-all-commitments">> => true
+                        };
+                    false ->
+                        case hb_maps:get(<<"type">>, Req, <<"signed">>) of
+                            <<"unsigned">> ->
+                                Opts#{ <<"linkify-mode">> => discard };
+                            _ ->
+                                Opts#{ <<"linkify-mode">> => offload }
+                        end
+                end;
+            Mode ->
+                Opts#{ <<"linkify-mode">> => Mode }
         end,
     CommitOpts = maybe_preserve_message_extension(Base, Req, BaseCommitOpts, true),
     % Encode to a TABM. The `bundle' flag (when set on the request) is the
@@ -319,11 +332,20 @@ commit(Self, Req, Opts) ->
             Req#{ <<"device">> => AttDev },
             CommitOpts
         ),
+    BaseTABM = hb_message:convert(Base, tabm, SourceSpec, CommitOpts),
     Loaded =
-        ensure_commitments_loaded(
-            hb_message:convert(Base, tabm, SourceSpec, CommitOpts),
-            CommitOpts
-        ),
+        case hb_util:atom(hb_maps:get(<<"bundle">>, Req, false, CommitOpts)) of
+            true ->
+                load_bundle_children_commitments(
+                    hb_cache:ensure_all_loaded(
+                        hb_link:decode_all_links(BaseTABM),
+                        CommitOpts
+                    ),
+                    CommitOpts
+                );
+            false ->
+                ensure_commitments_loaded(BaseTABM, CommitOpts)
+        end,
     CommitReq =
         maybe_extension_commit_request(
             Loaded,
@@ -351,16 +373,39 @@ commit(Self, Req, Opts) ->
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
+    RawWithCommitments = ensure_commitments_loaded(RawBase, Opts),
     VerifyOpts =
         maybe_preserve_message_extension(
-            RawBase,
+            RawWithCommitments,
             Req,
-            Opts#{ <<"linkify-mode">> => discard },
+            Opts#{
+                <<"linkify-mode">> => discard
+            },
             false
         ),
-    CommitmentBase = ensure_commitments_loaded(RawBase, VerifyOpts),
-    Commitments = commitments(CommitmentBase, VerifyOpts),
-    IDsToVerify = commitment_ids_from_request(CommitmentBase, Req, VerifyOpts),
+    {Base, BaseOpts} =
+        case needs_loaded_bundle_view(RawWithCommitments, VerifyOpts) of
+            true ->
+                loaded_bundle_verify_view(RawWithCommitments, VerifyOpts);
+            false ->
+                {
+                    hb_message:convert(
+                        RawWithCommitments,
+                        tabm,
+                        VerifyOpts
+                    ),
+                    VerifyOpts
+                }
+        end,
+    ?event(verify, {verify, {base_found, Base}}),
+    Commitments =
+        committer_lookup_commitments(Base, commitments(Base, BaseOpts), BaseOpts),
+    IDsToVerify =
+        commitment_ids_from_request(
+            commitment_lookup_base(Base, Req, Commitments),
+            Req,
+            BaseOpts
+        ),
     % Generate the new commitment request base messsage by removing the keys
     % used by this function (path, committers, commitments) and returning the
     % remaining keys. This message will then be merged with each commitment
@@ -380,37 +425,22 @@ verify(Self, Req, Opts) ->
     Res =
         lists:all(
             fun(CommitmentID) ->
-                Commitment = maps:merge(
-                    ReqBase,
-                    maps:get(CommitmentID, Commitments)
-                ),
-                % Build the source spec from the commitment device alone: a
-                % `hint-device' lets the structured codec reproduce each
-                % subtree in the bundle state it was committed in. The verify
-                % request's `bundle' is deliberately *not* propagated -- a
-                % commitment is always verified in the state it was signed
-                % in, so any `bundle' passed by the caller is irrelevant.
-                SourceSpec =
-                    hb_message:add_bundle_hint(
-                        #{ <<"device">> => <<"structured@1.0">> },
-                        #{
-                            <<"device">> =>
-                                maps:get(
-                                    <<"commitment-device">>,
-                                    Commitment,
-                                    undefined
-                                )
-                        },
-                        VerifyOpts
-                    ),
-                Base = hb_message:convert(
-                    CommitmentBase, tabm, SourceSpec, VerifyOpts),
-                ?event(verify, {verify, {base_found, Base}}),
-                {ok, Res} =
-                    verify_commitment(
+                Commitment = maps:get(CommitmentID, Commitments),
+                {CommitmentBase, CommitmentOpts} =
+                    commitment_verify_view(
+                        RawWithCommitments,
                         Base,
                         Commitment,
-                        VerifyOpts
+                        BaseOpts
+                    ),
+                {ok, Res} =
+                    verify_commitment(
+                        CommitmentBase,
+                        maps:merge(
+                            ReqBase,
+                            Commitment
+                        ),
+                        CommitmentOpts
                     ),
                 ?event(verify,
                     {verify_commitment_res,
@@ -423,6 +453,205 @@ verify(Self, Req, Opts) ->
         ),
     ?event(verify, {verify, {res, Res}}),
     {ok, Res}.
+
+commitment_verify_view(RawBase, DefaultBase, Commitment, Opts) ->
+    case commitment_needs_loaded_bundle_view(
+        RawBase,
+        DefaultBase,
+        Commitment,
+        Opts
+    ) of
+        true -> loaded_bundle_verify_view(RawBase, Opts);
+        false ->
+            SourceSpec =
+                hb_message:add_bundle_hint(
+                    #{ <<"device">> => <<"structured@1.0">> },
+                    #{
+                        <<"device">> =>
+                            maps:get(
+                                <<"commitment-device">>,
+                                Commitment,
+                                undefined
+                            )
+                    },
+                    Opts
+                ),
+            {hb_message:convert(RawBase, tabm, SourceSpec, Opts), Opts}
+    end.
+
+loaded_bundle_verify_view(Msg, Opts) ->
+    LoadedOpts =
+        Opts#{
+            <<"linkify-mode">> => false,
+            <<"load-all-commitments">> => true
+        },
+    Loaded =
+        load_bundle_commitments_deep(
+            hb_cache:ensure_all_loaded(
+                hb_link:decode_all_links(Msg),
+                LoadedOpts
+            ),
+            LoadedOpts
+        ),
+    {
+        hb_message:convert(
+            Loaded,
+            tabm,
+            LoadedOpts
+        ),
+        LoadedOpts
+    }.
+
+load_bundle_commitments_deep(Msg, Opts) when is_map(Msg) ->
+    Loaded = load_top_commitments(Msg, Opts),
+    lists:foldl(
+        fun(Key, Acc) ->
+            case maps:find(Key, Acc) of
+                {ok, Value} ->
+                    maps:put(Key, load_bundle_commitments_deep(Value, Opts), Acc);
+                error ->
+                    Acc
+            end
+        end,
+        Loaded,
+        bundle_child_keys(Loaded, Opts)
+    );
+load_bundle_commitments_deep(List, Opts) when is_list(List) ->
+    lists:map(fun(Value) -> load_bundle_commitments_deep(Value, Opts) end, List);
+load_bundle_commitments_deep(Value, _Opts) ->
+    Value.
+
+load_bundle_children_commitments(Msg, Opts) when is_map(Msg) ->
+    maps:map(
+        fun(Key, Value) when Key == <<"commitments">> orelse Key == <<"priv">> ->
+            Value;
+           (_Key, Value) ->
+            load_bundle_commitments_deep(Value, Opts)
+        end,
+        Msg
+    );
+load_bundle_children_commitments(Value, _Opts) ->
+    Value.
+
+load_top_commitments(Msg = #{ <<"commitments">> := Commitments }, _Opts)
+        when map_size(Commitments) > 0 ->
+    Msg;
+load_top_commitments(Msg, Opts) ->
+    hb_cache:read_all_commitments(Msg, Opts).
+
+bundle_child_keys(Msg, Opts) ->
+    lists:usort(
+        lists:flatmap(
+            fun({_ID, Commitment}) ->
+                case hb_util:atom(
+                    hb_maps:get(<<"bundle">>, Commitment, false, Opts)
+                ) of
+                    true ->
+                        numbered_committed_keys(
+                            committed_keys_for_commitment(Commitment, Opts)
+                        );
+                    false ->
+                        []
+                end
+            end,
+            maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts))
+        )
+    ).
+
+numbered_committed_keys(Keys) ->
+    lists:filtermap(fun numbered_committed_key/1, Keys).
+
+numbered_committed_key(Key) ->
+    BinKey = hb_link:remove_link_specifier(hb_util:bin(Key)),
+    try binary_to_integer(BinKey) of
+        Int when Int > 0 -> {true, BinKey};
+        _ -> false
+    catch
+        _:_ -> false
+    end.
+
+commitment_needs_loaded_bundle_view(RawBase, DefaultBase, Commitment, Opts) ->
+    original_tagged_bundle_commitment(Commitment, Opts)
+        orelse bundle_commitment_has_linked_fields(RawBase, Commitment, Opts)
+        orelse bundle_commitment_has_linked_fields(DefaultBase, Commitment, Opts)
+        orelse needs_loaded_bundle_view(RawBase, Opts).
+
+bundle_commitment_has_linked_fields(Msg, Commitment, Opts) ->
+    hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        andalso commitment_has_linked_fields(Msg, Commitment, Opts).
+
+commitment_has_linked_fields(Msg, Commitment, Opts) ->
+    is_map(Msg)
+        andalso lists:any(
+            fun(Key) -> committed_field_has_link(Msg, Key) end,
+            committed_keys_for_commitment(Commitment, Opts)
+        ).
+
+committed_field_has_link(Msg, Key) when is_map(Msg) ->
+    BinKey = hb_util:bin(Key),
+    LinkKey = <<BinKey/binary, "+link">>,
+    case maps:find(BinKey, Msg) of
+        {ok, Value} -> has_link_value(Value);
+        error -> maps:is_key(LinkKey, Msg)
+    end;
+committed_field_has_link(_Msg, _Key) ->
+    false.
+
+has_link_value(Value) when ?IS_LINK(Value) ->
+    true;
+has_link_value(Msg) when is_map(Msg) ->
+    lists:any(
+        fun({_Key, Value}) -> has_link_value(Value) end,
+        maps:to_list(maps:without([<<"commitments">>, <<"priv">>], Msg))
+    );
+has_link_value(List) when is_list(List) ->
+    lists:any(fun has_link_value/1, List);
+has_link_value(_Value) ->
+    false.
+
+has_bundle_commitment(Msg, Opts) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        end,
+        maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts))
+    ).
+
+needs_loaded_bundle_view(Msg, Opts) ->
+    has_bundle_commitment_deep(Msg, Opts)
+        andalso (
+            not has_bundle_commitment(Msg, Opts)
+            orelse has_original_tagged_bundle_commitment(Msg, Opts)
+        ).
+
+has_original_tagged_bundle_commitment(Msg, Opts) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            original_tagged_bundle_commitment(Commitment, Opts)
+        end,
+        maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, Opts))
+    ).
+
+original_tagged_bundle_commitment(Commitment, Opts) ->
+    hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        andalso
+            hb_maps:get(
+                <<"original-tags">>,
+                Commitment,
+                undefined,
+                Opts
+            ) =/= undefined.
+
+has_bundle_commitment_deep(Msg, Opts) when is_map(Msg) ->
+    has_bundle_commitment(Msg, Opts)
+        orelse lists:any(
+            fun({_Key, Value}) -> has_bundle_commitment_deep(Value, Opts) end,
+            maps:to_list(maps:without([<<"commitments">>, <<"priv">>], Msg))
+        );
+has_bundle_commitment_deep(List, Opts) when is_list(List) ->
+    lists:any(fun(Value) -> has_bundle_commitment_deep(Value, Opts) end, List);
+has_bundle_commitment_deep(_Msg, _Opts) ->
+    false.
 
 %% @doc Execute a function for a single commitment in the context of its
 %% parent message.
@@ -569,7 +798,11 @@ commitment_ids_from_request(Base, Req, Opts) ->
             <<"all">> ->
                 {ok, Committers} = committers(Base, Req, Opts),
                 ?event(debug_commitments, {commitment_ids_from_committers, Committers}),
-                commitment_ids_from_committers(Committers, Commitments, Opts);
+                commitment_ids_from_committers(
+                    Committers,
+                    Commitments,
+                    Opts
+                );
             RawCommitterAddrs ->
                 ?event(
                     debug_commitments,
@@ -579,7 +812,11 @@ commitment_ids_from_request(Base, Req, Opts) ->
                     if is_list(RawCommitterAddrs) -> RawCommitterAddrs;
                     true -> [RawCommitterAddrs]
                     end,
-                commitment_ids_from_committers(CommitterAddrs, Commitments, Opts)
+                commitment_ids_from_committers(
+                    CommitterAddrs,
+                    Commitments,
+                    Opts
+                )
         end,
     Res =
         case FromCommitterAddrs ++ FromCommitmentIDs of
@@ -611,6 +848,26 @@ commitments(Base, Opts) ->
     case commitment_lookup_mode(Opts) of
         top -> maps:get(<<"commitments">>, Base, #{});
         inherited -> hb_maps:get(<<"commitments">>, Base, #{}, Opts)
+    end.
+
+committer_lookup_commitments(Base, Commitments, Opts) ->
+    case is_map(Base) of
+        true ->
+            Inherited = hb_maps:get(
+                <<"commitments">>,
+                hb_maps:flatten(Base, maps:remove(<<"preserve-message-extension">>, Opts)),
+                #{},
+                Opts
+            ),
+            maps:merge(Inherited, Commitments);
+        false ->
+            Commitments
+    end.
+
+commitment_lookup_base(Base, Req, Commitments) ->
+    case maps:get(<<"committers">>, Req, <<"none">>) of
+        <<"none">> -> Base;
+        _ -> Base#{ <<"commitments">> => Commitments }
     end.
 
 commitment_lookup_mode(Opts) ->
@@ -645,19 +902,25 @@ maybe_preserve_message_extension(Msg, Req, Opts, DefaultPreserve) ->
 should_preserve_message_extension(Msg, Req, Opts, DefaultPreserve) ->
     has_message_extension(Msg)
         andalso (
-            explicit_commits_extension(Req, Opts)
+            (
+                explicit_commits_extension(Req, Opts)
+                andalso not requests_specific_committers(Req)
+            )
             orelse (
                 has_extension_commitment(Msg, Opts)
                 andalso not requests_specific_committers(Req)
             )
             orelse (
                 DefaultPreserve
+                andalso not requests_specific_committers(Req)
                 andalso maps:get(<<"committed">>, Req, not_found) =:= not_found
             )
         ).
 
-has_message_extension(Msg) ->
-    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg).
+has_message_extension(Msg) when is_map(Msg) ->
+    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg);
+has_message_extension(_Msg) ->
+    false.
 
 requests_specific_committers(Req) ->
     case maps:get(<<"committers">>, Req, <<"none">>) of
@@ -741,7 +1004,17 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
                         Commitments
                     )
                 ),
-                {CommitterAddr, IDs}
+                FallbackIDs =
+                    case IDs of
+                        [] ->
+                            lists:filter(
+                                fun(ID) -> maps:is_key(ID, Commitments) end,
+                                [RawCommitterAddr, CommitterAddr]
+                            );
+                        _ ->
+                            IDs
+                    end,
+                {CommitterAddr, FallbackIDs}
             end,
             CommitterAddrs
         ),

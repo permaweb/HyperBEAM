@@ -60,7 +60,8 @@
 -export([convert/3, convert/4, uncommitted/1, uncommitted/2, committed/3]).
 -export([add_bundle_hint/2, add_bundle_hint/3]).
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
--export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
+-export([verify/1, verify/2, verify/3, verify_all_signed_commitments/2]).
+-export([paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
@@ -97,20 +98,29 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
         if is_map(Msg) -> maps:get(<<"priv">>, Msg, #{});
            true -> #{}
         end,
+    SourceOpts = bundle_target_source_opts(TargetFormat, Opts),
     TABM =
         to_tabm(
             case is_map(Msg) of
-                true -> hb_maps:without([<<"priv">>], Msg, Opts);
+                true -> hb_maps:without([<<"priv">>], Msg, SourceOpts);
                 false -> Msg
             end,
             TargetFormat,
             SourceFormat,
-            Opts
+            SourceOpts
         ),
     case TargetFormat of
         tabm -> restore_priv(TABM, OldPriv, Opts);
         _ -> from_tabm(TABM, TargetFormat, OldPriv, Opts)
     end.
+
+bundle_target_source_opts(TargetFormat, Opts) when is_map(TargetFormat) ->
+    case hb_util:atom(hb_maps:get(<<"bundle">>, TargetFormat, false, Opts)) of
+        true -> Opts#{ <<"linkify-mode">> => false };
+        false -> Opts
+    end;
+bundle_target_source_opts(_TargetFormat, Opts) ->
+    Opts.
 
 to_tabm(RawMsg, TargetFormat, SourceFormat, Opts) ->
     {SourceCodecMod, Params0} = conversion_spec_to_req(SourceFormat, Opts),
@@ -269,24 +279,59 @@ normalize_commitments(RawMsg, Opts, Mode) when is_map(RawMsg) ->
     % can then carry an unsigned commitment over its own keys and the `...' edge
     % to its parent. A concrete/flattened view is still used by callers that ask
     % for concrete message equality or non-commitment serialization.
-    Msg = normalize_commitment_view(RawMsg, Opts),
-    NormMsg =
-        maps:map(
-            fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
-                Val;
-               (_Key, Val) -> normalize_commitments(Val, Opts, Mode)
-            end,
-            Msg
-        ),
-    do_normalize_commitments(NormMsg, Opts, Mode);
+	Msg = normalize_commitment_view(RawMsg, Opts),
+	ParentHasCommitmentMaterial = has_commitment_material(Msg, Opts),
+	NormMsg =
+		maps:map(
+			fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
+				Val;
+			   (_Key, Val) ->
+				normalize_child_commitments(
+					Val,
+					Opts,
+					Mode,
+					ParentHasCommitmentMaterial
+				)
+			end,
+			Msg
+		),
+	case is_uncommitted_list_container(NormMsg, Opts) of
+		true -> NormMsg;
+		false -> do_normalize_commitments(NormMsg, Opts, Mode)
+	end;
 normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
     ?event(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
     lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
 normalize_commitments(Msg, _Opts, _Mode) ->
-    Msg.
+	Msg.
+
+normalize_child_commitments(Val, Opts, Mode, ParentHasCommitmentMaterial)
+		when is_map(Val) ->
+	case (not ParentHasCommitmentMaterial) orelse has_commitment_material(Val, Opts) of
+		true -> normalize_commitments(Val, Opts, Mode);
+		false -> Val
+	end;
+normalize_child_commitments(Val, Opts, Mode, ParentHasCommitmentMaterial)
+		when is_list(Val) ->
+	lists:map(
+		fun(X) ->
+			normalize_child_commitments(X, Opts, Mode, ParentHasCommitmentMaterial)
+		end,
+		Val
+	);
+normalize_child_commitments(Val, _Opts, _Mode, _ParentHasCommitmentMaterial) ->
+	Val.
+
+has_commitment_material(Msg, Opts) ->
+	has_message_extension(Msg)
+		orelse
+			case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
+				Commitments when is_map(Commitments) -> map_size(Commitments) > 0;
+				_ -> true
+			end.
 
 do_normalize_commitments(Msg, _Opts, _Mode) when ?IS_EMPTY_MESSAGE(Msg) ->
-    Msg;
+	Msg;
 do_normalize_commitments(Msg, Opts, passive) ->
     Commitments = filter_commitments_for_visible_keys(
         Msg,
@@ -312,8 +357,8 @@ do_normalize_commitments(Msg, Opts, passive) ->
                     <<"message@1.0">>,
                     <<"commit">>,
                     uncommitted(MsgWithVisibleCommitments),
-                    #{ <<"type">> => <<"unsigned">> },
-                    Opts
+                    unsigned_commit_request(MsgWithVisibleCommitments, #{}, Opts),
+                    unsigned_commit_opts(MsgWithVisibleCommitments, Opts)
                 ),
             MergedCommitments = hb_maps:merge(
                 NewCommitments,
@@ -325,27 +370,42 @@ do_normalize_commitments(Msg, Opts, passive) ->
             MsgWithVisibleCommitments
     end;
 do_normalize_commitments(Msg, Opts, verify) ->
-    UnsignedCommitment = commitment(#{ <<"type">> => <<"unsigned">> }, Msg, Opts),
+    UnsignedCommitments = unsigned_commitments(Msg, Opts),
     {MaybeUnsignedID, MaybeCommittedSpec} =
-        case UnsignedCommitment of
-            {ok, ID, #{ <<"committed">> := Committed }} ->
+        case UnsignedCommitments of
+            [{ID, #{ <<"committed">> := Committed }}] ->
                 {ID, #{ <<"committed">> => Committed }};
-            _ -> {undefined, #{}}
+            [] -> {undefined, #{}};
+            _ -> {multiple_matches, #{}}
         end,
     {ok, #{ <<"commitments">> := NormCommitments }} =
-        hb_ao:raw(
-            <<"message@1.0">>,
-            <<"commit">>,
-            uncommitted(Msg),
-            MaybeCommittedSpec#{ <<"type">> => <<"unsigned">> },
-            Opts
-        ),
+                hb_ao:raw(
+                    <<"message@1.0">>,
+                    <<"commit">>,
+                    uncommitted(Msg),
+                    unsigned_commit_request(Msg, MaybeCommittedSpec, Opts),
+                    unsigned_commit_opts(Msg, Opts)
+                ),
     ?event(normalization, {normalizing_commitments, verify}),
-    [NormID] = hb_maps:keys(NormCommitments, Opts),
-    case {MaybeUnsignedID, NormID} of
-        {MatchedID, MatchedID} ->
+    NormIDs = hb_maps:keys(NormCommitments, Opts),
+    case {MaybeUnsignedID, lists:member(MaybeUnsignedID, NormIDs)} of
+        {multiple_matches, _} ->
+            case unsigned_commitments_match(Msg, UnsignedCommitments, Opts) of
+                true -> Msg;
+                false ->
+                    {ok, #{ <<"commitments">> := NewCommitments }} =
+                        hb_ao:raw(
+                            <<"message@1.0">>,
+                            <<"commit">>,
+                            uncommitted(Msg),
+                            unsigned_commit_request(Msg, #{}, Opts),
+                            unsigned_commit_opts(Msg, Opts)
+                        ),
+                    refresh_unsigned_commitments(Msg, NewCommitments, Opts)
+            end;
+        {MatchedID, true} when MatchedID =/= undefined ->
             Msg;
-        {undefined, _NewID} ->
+        {undefined, _} ->
             % We did not have an unsigned ID to begin with, so we need to add it.
             attach_phash2(
                 Msg#{
@@ -357,19 +417,16 @@ do_normalize_commitments(Msg, Opts, verify) ->
                 },
                 Opts
             );
-        {_OldID, _NewID} ->
+        {_OldID, _} ->
             {ok, #{ <<"commitments">> := NewCommitments }} =
                 hb_ao:raw(
                     <<"message@1.0">>,
                     <<"commit">>,
                     uncommitted(Msg),
-                    #{ <<"type">> => <<"unsigned">> },
-                    Opts
+                    unsigned_commit_request(Msg, #{}, Opts),
+                    unsigned_commit_opts(Msg, Opts)
                 ),
-            % We had an unsigned ID to begin with and the new one is different.
-            % This means that the committed keys have changed, so we drop any
-            % other commitments and return only the new unsigned one.
-            attach_phash2(Msg#{ <<"commitments">> => NewCommitments }, Opts)
+            refresh_unsigned_commitments(Msg, NewCommitments, Opts)
     end;
 do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ExpectedHash = erlang:phash2(hb_private:reset(Msg)),
@@ -388,6 +445,131 @@ do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
             MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
             do_normalize_commitments(MsgWithHash, Opts, verify)
     end.
+
+refresh_unsigned_commitments(Msg, NewCommitments, Opts) ->
+    attach_phash2(
+        Msg#{
+            <<"commitments">> =>
+                hb_maps:merge(
+                    NewCommitments,
+                    valid_signed_commitments(Msg, Opts),
+                    Opts
+                )
+        },
+        Opts
+    ).
+
+valid_signed_commitments(Msg, Opts) ->
+    case verify_all_signed_commitments(Msg, Opts) of
+        true -> signed_commitments(Msg, Opts);
+        false -> valid_individual_signed_commitments(Msg, Opts)
+    end.
+
+valid_individual_signed_commitments(Msg, Opts) ->
+    hb_maps:filter(
+        fun(ID, Commitment) ->
+            case hb_maps:get(<<"committer">>, Commitment, undefined, Opts) of
+                undefined -> false;
+                _ -> verify_commitment(ID, Msg, Opts)
+            end
+        end,
+        maps:get(<<"commitments">>, Msg, #{}),
+        Opts
+    ).
+
+signed_commitments(Msg, Opts) ->
+    hb_maps:filter(
+        fun(_ID, Commitment) ->
+            hb_maps:get(<<"committer">>, Commitment, undefined, Opts) =/= undefined
+        end,
+        maps:get(<<"commitments">>, Msg, #{}),
+        Opts
+    ).
+
+verify_all_signed_commitments(Msg, Opts) ->
+    try verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts) of
+        true -> true;
+        false -> verify_each_signed_commitment(Msg, Opts)
+    catch
+        _:{multiple_ans104_commitments_unsupported, _}:_ ->
+            verify_each_signed_commitment(Msg, Opts);
+        _:_ ->
+            false
+    end.
+
+verify_each_signed_commitment(Msg, Opts) ->
+    case signed_commitments(Msg, Opts) of
+        Commitments when is_map(Commitments), map_size(Commitments) > 0 ->
+            lists:all(
+                fun(ID) -> verify_commitment(ID, Msg, Opts) end,
+                hb_maps:keys(Commitments, Opts)
+            );
+        _ ->
+            false
+    end.
+
+verify_commitment(ID, Msg, Opts) ->
+    try verify(Msg, #{ <<"commitment-ids">> => [ID] }, Opts)
+    catch _:_ -> false
+    end.
+
+unsigned_commit_opts(Msg, Opts) ->
+    case needs_loaded_bundle_view(Msg, Opts) of
+        true -> Opts#{ <<"linkify-mode">> => false };
+        false -> Opts
+    end.
+
+unsigned_commit_request(Msg, Spec, Opts) ->
+    Req = Spec#{ <<"type">> => <<"unsigned">> },
+    case needs_loaded_bundle_view(Msg, Opts) of
+        true -> Req#{ <<"linkify-mode">> => false };
+        false -> Req
+    end.
+
+needs_loaded_bundle_view(Msg, Opts) ->
+    has_bundle_commitment_deep(Msg, Opts)
+        andalso (
+            not has_bundle_commitment(Msg, Opts)
+            orelse has_original_tagged_bundle_commitment(Msg, Opts)
+        ).
+
+has_original_tagged_bundle_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+                andalso
+                    hb_maps:get(
+                        <<"original-tags">>,
+                        Commitment,
+                        undefined,
+                        Opts
+                    ) =/= undefined
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_original_tagged_bundle_commitment(_Msg, _Opts) ->
+    false.
+
+has_bundle_commitment_deep(Msg, Opts) when is_map(Msg) ->
+    has_bundle_commitment(Msg, Opts)
+        orelse lists:any(
+            fun({_Key, Value}) -> has_bundle_commitment_deep(Value, Opts) end,
+            maps:to_list(maps:without([<<"commitments">>, <<"priv">>], Msg))
+        );
+has_bundle_commitment_deep(List, Opts) when is_list(List) ->
+    lists:any(fun(Value) -> has_bundle_commitment_deep(Value, Opts) end, List);
+has_bundle_commitment_deep(_Msg, _Opts) ->
+    false.
+
+has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_bundle_commitment(_Msg, _Opts) ->
+    false.
 
 %% @doc Annotate a message with its phash2 value in the `priv' sub-map,
 %% calculating it if necessary.
@@ -476,12 +658,23 @@ has_extension_commitment(Msg, Opts) ->
         hb_maps:to_list(Commitments, Opts)
     ).
 
-has_message_extension(Msg) ->
-    maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg).
+has_message_extension(Msg) when is_map(Msg) ->
+	maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg);
+has_message_extension(_Msg) ->
+	false.
+
+is_uncommitted_list_container(Msg, Opts) ->
+	(not has_message_extension(Msg))
+		andalso hb_util:is_ordered_list(Msg, Opts)
+		andalso
+			case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
+				Commitments when is_map(Commitments) -> map_size(Commitments) == 0;
+				_ -> false
+			end.
 
 filter_commitments_for_visible_keys(_Msg, Commitments, _Opts)
-        when map_size(Commitments) == 0 ->
-    Commitments;
+		when map_size(Commitments) == 0 ->
+	Commitments;
 filter_commitments_for_visible_keys(Msg, Commitments, Opts) ->
     hb_maps:filter(
         fun(_ID, Commitment) ->
@@ -494,6 +687,17 @@ filter_commitments_for_visible_keys(Msg, Commitments, Opts) ->
         Commitments,
         Opts
     ).
+
+filter_message_commitments_for_visible_keys(Msg, Opts) ->
+    case hb_maps:get(<<"commitments">>, Msg, undefined, Opts) of
+        Commitments when is_map(Commitments) ->
+            Msg#{
+                <<"commitments">> =>
+                    filter_commitments_for_visible_keys(Msg, Commitments, Opts)
+            };
+        _ ->
+            Msg
+    end.
 
 has_committed_key_view(<<"...">>, Msg, _Opts) ->
     has_message_extension(Msg);
@@ -552,6 +756,39 @@ committed_keys_for_commitment(Commitment, Opts) ->
             hb_maps:get(<<"committed">>, Commitment, [], Opts),
             Opts
         )
+    ).
+
+unsigned_commitments(Msg, Opts) ->
+    hb_maps:to_list(
+        hb_maps:filter(
+            fun(_, #{ <<"committer">> := _Committer }) -> false;
+               (_, _) -> true
+            end,
+            maps:get(<<"commitments">>, Msg, #{}),
+            Opts
+        ),
+        Opts
+    ).
+
+unsigned_commitments_match(Msg, UnsignedCommitments, Opts) ->
+    lists:all(
+        fun({ID, Commitment}) ->
+            Committed = hb_maps:get(<<"committed">>, Commitment, [], Opts),
+            {ok, #{ <<"commitments">> := NormCommitments }} =
+                hb_ao:raw(
+                    <<"message@1.0">>,
+                    <<"commit">>,
+                    uncommitted(Msg),
+                    unsigned_commit_request(
+                        Msg,
+                        #{ <<"committed">> => Committed },
+                        Opts
+                    ),
+                    unsigned_commit_opts(Msg, Opts)
+                ),
+            lists:member(ID, hb_maps:keys(NormCommitments, Opts))
+        end,
+        UnsignedCommitments
     ).
 
 %% @doc Filter keys from a map that do not match either the list of keys or
@@ -617,10 +854,8 @@ commit(Msg, NotOpts, CodecName) when not is_map(NotOpts) ->
 commit(Msg, Opts, CodecName) when is_binary(CodecName) ->
     commit(Msg, Opts, #{ <<"commitment-device">> => CodecName });
 commit(Msg, Opts, Spec) ->
-    {ok, Signed} =
-        hb_ao:raw(
-            <<"message@1.0">>,
-            <<"commit">>,
+    CommitSpec =
+        maybe_deep_bundle_linkify_spec(
             Msg,
             Spec#{
                 <<"commitment-device">> =>
@@ -648,7 +883,30 @@ commit(Msg, Opts, Spec) ->
             },
             Opts
         ),
+    {ok, Signed} =
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"commit">>,
+            Msg,
+            CommitSpec,
+            maybe_deep_bundle_linkify_opts(Msg, CommitSpec, Opts)
+        ),
     Signed.
+
+maybe_deep_bundle_linkify_spec(Msg, Spec, Opts) ->
+    case has_bundle_commitment_deep(Msg, Opts)
+            andalso not hb_util:atom(maps:get(<<"bundle">>, Spec, false))
+            andalso not maps:is_key(<<"linkify-mode">>, Spec) of
+        true -> Spec#{ <<"linkify-mode">> => false };
+        false -> Spec
+    end.
+
+maybe_deep_bundle_linkify_opts(Msg, Spec, Opts) ->
+    case has_bundle_commitment_deep(Msg, Opts)
+            andalso not hb_util:atom(maps:get(<<"bundle">>, Spec, false)) of
+        true -> Opts#{ <<"linkify-mode">> => false };
+        false -> Opts
+    end.
 
 %% @doc Return the list of committed keys from a message.
 committed(Msg, all, Opts) ->
@@ -760,13 +1018,45 @@ do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
     do_paranoid_verify_children(Topic, Path, Msg, Opts),
-    try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
+    VerifyMsg = paranoid_verify_message(Topic, Msg, Opts),
+    try true = paranoid_verify_commitments(VerifyMsg, Opts)
     catch
         _:Details:St ->
-            throw({verification_failure, Topic, Path, Msg, Details, St})
+            throw({verification_failure, Topic, Path, VerifyMsg, Details, St})
     end;
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
+
+paranoid_verify_commitments(Msg, Opts) ->
+    try verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts) of
+        true -> true;
+        false -> paranoid_verify_each_commitment(Msg, Opts)
+    catch
+        _:{multiple_ans104_commitments_unsupported, _}:_ ->
+            paranoid_verify_each_commitment(Msg, Opts)
+    end.
+
+paranoid_verify_each_commitment(Msg, Opts) ->
+    case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
+        Commitments when is_map(Commitments), map_size(Commitments) > 0 ->
+            lists:all(
+                fun(ID) ->
+                    try verify(Msg, #{ <<"commitment-ids">> => [ID] }, Opts)
+                    catch _:_ -> false
+                    end
+                end,
+                hb_maps:keys(Commitments, Opts)
+            );
+        _ ->
+            false
+    end.
+
+paranoid_verify_message(cache_read, Msg, Opts) ->
+    filter_message_commitments_for_visible_keys(Msg, Opts);
+paranoid_verify_message(cache_write, Msg, Opts) ->
+    filter_message_commitments_for_visible_keys(Msg, Opts);
+paranoid_verify_message(_Topic, Msg, _Opts) ->
+    Msg.
 
 do_paranoid_verify_children(Topic, Path, Msg, Opts) ->
     VerifyChild =

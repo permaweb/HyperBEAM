@@ -22,10 +22,16 @@ opts(Opts) ->
 
 %% @doc Write an assignment message into the cache.
 write(RawAssignment, RawOpts) ->
-    Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
+    Assignment = RawAssignment,
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    {ok, ToWrite} = hb_message:with_only_committed(Assignment, Opts),
+    {ok, CommittedAssignment} = hb_message:with_only_committed(Assignment, Opts),
+    ToWrite =
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(CommittedAssignment, Opts),
+            Opts,
+            verify
+        ),
     % Write the message into the main cache
     ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
@@ -93,12 +99,12 @@ read(ProcID, Slot, RawOpts) ->
                     % AOS2, so we need to convert it to the canonical format.
                     case hb_ao:get(<<"variant">>, Assignment, Opts) of
                         <<"ao.TN.1">> ->
-                            Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
+                            Loaded = load_assignment(Assignment, Opts),
                             Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->
-                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)};
+                            {ok, load_assignment(Assignment, Opts)};
                         not_found ->
                             not_found
                     end;
@@ -110,6 +116,12 @@ read(ProcID, Slot, RawOpts) ->
             ?event(debug_sched, {read_assignment, {res, not_found}}),
             not_found
     end.
+
+load_assignment(Assignment, Opts) ->
+    hb_cache:read_all_commitments(
+        hb_cache:ensure_all_loaded(Assignment, Opts),
+        Opts
+    ).
 
 %% @doc Get the assignments for a process.
 list(ProcID, RawOpts) ->

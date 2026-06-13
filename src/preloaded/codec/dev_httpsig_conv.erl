@@ -376,7 +376,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
                 % Convert back to the fully loaded structured@1.0 message, then
                 % convert to TABM with bundling enabled.
                 Structured = hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts),
-                Loaded = load_bundle_message(Structured, Opts),
+                Loaded = load_bundle_message(TABM, Structured, Opts),
                 encode_ids(
                     hb_message:convert(
                         Loaded,
@@ -445,55 +445,103 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
         )
     }.
 
-load_bundle_message(Structured, Opts) ->
+load_bundle_message(Original, Structured, Opts) ->
     PreserveKeys = [<<"commitments">>, <<"hashpath">>, <<"priv">>, <<"process">>],
     Preserved = maps:filter(fun(Key, _Value) ->
         lists:member(Key, PreserveKeys)
     end, Structured),
+    LoadOpts = Opts#{ <<"load-all-commitments">> => true },
     Loaded =
         hb_cache:ensure_all_loaded(
             maps:filter(fun(Key, _Value) ->
                 not lists:member(Key, PreserveKeys)
             end, Structured),
-            Opts
+            LoadOpts
         ),
-    link_bundle_provenance(maps:merge(Loaded, Preserved), Opts).
+    link_bundle_provenance(maps:merge(Loaded, Preserved), Original, Opts).
 
-link_bundle_provenance(Msg, Opts) when is_map(Msg) ->
+link_bundle_provenance(Msg, Opts) ->
+    link_bundle_provenance(Msg, Msg, Opts).
+
+link_bundle_provenance(Msg, Original, Opts) when is_map(Msg) ->
     maps:from_list(lists:flatmap(
         fun({Key, Value}) ->
             case lists:member(Key, [<<"commitments">>, <<"priv">>]) of
                 true ->
                     [{Key, Value}];
                 false ->
-                    case bundle_link_id(Key, Value, Opts) of
+                    OriginalValue = original_link_value(Key, Original),
+                    case bundle_link_id(Key, OriginalValue, Opts) of
                         {ok, ID} ->
-                            [{<<(hb_util:bin(Key))/binary, "+link">>, ID}];
+                            [
+                                {Key, link_bundle_provenance(Value, OriginalValue, Opts)},
+                                {<<(hb_util:bin(Key))/binary, "+link">>, ID}
+                            ];
                         false ->
-                            [{Key, link_bundle_provenance(Value, Opts)}]
+                            case loaded_bundle_link_id(Key, Value, Opts) of
+                                {ok, ID} ->
+                                    [{<<(hb_util:bin(Key))/binary, "+link">>, ID}];
+                                false ->
+                                    [
+                                        {Key,
+                                            link_bundle_provenance(
+                                                Value,
+                                                OriginalValue,
+                                                Opts
+                                            )
+                                        }
+                                    ]
+                            end
                     end
             end
         end,
         maps:to_list(Msg)
     ));
-link_bundle_provenance(List, Opts) when is_list(List) ->
-    lists:map(fun(Value) -> link_bundle_provenance(Value, Opts) end, List);
-link_bundle_provenance(Value, _Opts) ->
+link_bundle_provenance(List, Original, Opts)
+        when is_list(List), is_list(Original), length(List) == length(Original) ->
+    lists:zipwith(
+        fun(Value, OriginalValue) ->
+            link_bundle_provenance(Value, OriginalValue, Opts)
+        end,
+        List,
+        Original
+    );
+link_bundle_provenance(List, _Original, Opts) when is_list(List) ->
+    lists:map(fun(Value) -> link_bundle_provenance(Value, Value, Opts) end, List);
+link_bundle_provenance(Value, _Original, _Opts) ->
     Value.
 
-bundle_link_id(Key, Link, Opts) when ?IS_LINK(Link) ->
-    case Key == <<"process">> of
-        true -> {ok, link_id(Link, Opts)};
-        false -> false
+original_link_value(Key, Original) when is_map(Original) ->
+    case maps:find(Key, Original) of
+        {ok, Value} ->
+            Value;
+        error ->
+            LinkKey = <<(hb_util:bin(Key))/binary, "+link">>,
+            case maps:find(LinkKey, Original) of
+                {ok, ID} -> {link_id, ID};
+                error -> undefined
+            end
     end;
+original_link_value(_Key, _Original) ->
+    undefined.
+
+bundle_link_id(_Key, {link_id, ID}, _Opts) when ?IS_ID(ID) ->
+    {ok, ID};
+bundle_link_id(_Key, Link, Opts) when ?IS_LINK(Link) ->
+    {ok, link_id(Link, Opts)};
 bundle_link_id(Key, Value, Opts) when is_map(Value) ->
+    loaded_bundle_link_id(Key, Value, Opts);
+bundle_link_id(_Key, _Value, _Opts) ->
+    false.
+
+loaded_bundle_link_id(Key, Value, Opts) when is_map(Value) ->
     case {Key, maps:get(<<"commitments">>, Value, undefined)} of
         {<<"process">>, Commitments} when is_map(Commitments), map_size(Commitments) > 0 ->
             {ok, hb_message:id(Value, all, Opts)};
         _ ->
             false
     end;
-bundle_link_id(_Key, _Value, _Opts) ->
+loaded_bundle_link_id(_Key, _Value, _Opts) ->
     false.
 
 link_id({link, ID, #{ <<"type">> := <<"link">>, <<"lazy">> := false }}, _Opts) ->
@@ -830,7 +878,10 @@ encode_http_flat_msg(Httpsig, Opts) ->
                 [<<HeaderName/binary, ": ", HVal/binary>> | Acc]
             end,
             [],
-            hb_maps:to_list(hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts), Opts)
+            hb_util:to_sorted_list(
+                hb_maps:without([<<"body">>, <<"priv">>], Httpsig, Opts),
+                Opts
+            )
         ),
     EncodedHeaders = iolist_to_binary(lists:join(?CRLF, lists:reverse(HeaderList))),
     case hb_maps:get(<<"body">>, Httpsig, <<>>, Opts) of

@@ -208,6 +208,12 @@ do_assign(State, Message, ReplyPID) ->
             Message,
             Opts = maps:get(opts, State)
         ),
+    NormalizedAttested =
+        hb_message:normalize_commitments(
+            hb_cache:ensure_all_loaded(OnlyAttested, Opts),
+            Opts,
+            verify
+        ),
     % Generate parameters for the assignment message and commit to it.
     BaseStateHashpath = base_state(State),
     NextSlot = maps:get(current, State) + 1,
@@ -215,11 +221,7 @@ do_assign(State, Message, ReplyPID) ->
     Assignment =
         commit_assignment(
             #{
-                <<"path">> =>
-                    case hb_path:from_message(request, Message, Opts) of
-                        undefined -> <<"compute">>;
-                        Path -> hb_path:to_binary(Path)
-                    end,
+                <<"path">> => assignment_path(NormalizedAttested, Opts),
                 <<"data-protocol">> => <<"ao">>,
                 <<"variant">> => <<"ao.N.1">>,
                 <<"process">> => hb_util:id(maps:get(id, State)),
@@ -231,7 +233,7 @@ do_assign(State, Message, ReplyPID) ->
                 % Note: Local time on the SU, not Arweave
                 <<"timestamp">> => scheduler_time(),
                 <<"base-hashpath">> => BaseStateHashpath,
-                <<"body">> => OnlyAttested,
+                <<"body">> => NormalizedAttested,
                 <<"type">> => <<"Assignment">>
             },
             State
@@ -296,6 +298,17 @@ do_assign(State, Message, ReplyPID) ->
         current := NextSlot,
         base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
     }.
+
+assignment_path(Message, Opts) ->
+    case direct_path(Message, Opts) of
+        undefined -> <<"compute">>;
+        Path -> hb_path:to_binary(hb_path:term_to_path_parts(Path, Opts))
+    end.
+
+direct_path(#{ path := Path }, _Opts) -> Path;
+direct_path(#{ <<"path">> := Path }, _Opts) -> Path;
+direct_path(#{ <<"Path">> := Path }, _Opts) -> Path;
+direct_path(_Msg, _Opts) -> undefined.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->

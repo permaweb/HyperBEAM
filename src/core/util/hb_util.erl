@@ -571,7 +571,10 @@ message_to_ordered_list(Message, Opts) ->
             fun hb_ao:normalize_key/1,
             lists:sort(lists:map(fun int/1, Keys))
         ),
-    message_to_ordered_list(NormMessage, SortedKeys, erlang:hd(SortedKeys), Opts).
+    case SortedKeys of
+        [] -> [];
+        [FirstKey | _] -> message_to_ordered_list(NormMessage, SortedKeys, FirstKey, Opts)
+    end.
 message_to_ordered_list(_Message, [], _Key, _Opts) ->
     [];
 message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->

@@ -128,9 +128,16 @@ upload(Msg, Opts, _CommitmentDevice) ->
 %%% Tests
 
 upload_test_opts() ->
+    Store =
+        #{
+            <<"store-module">> => hb_store_fs,
+            <<"name">> => <<"cache-TEST/client-remote-upload">>
+        },
+    hb_store:reset(Store),
     #{
         <<"bundler-ans104">> => hb_http_server:start_node(#{}),
-        <<"priv-wallet">> => hb:wallet()
+        <<"priv-wallet">> => hb:wallet(),
+        <<"store">> => Store
     }.
 
 upload_empty_message_test() ->

@@ -64,18 +64,18 @@ normalize(Msg, Mode, Opts) when is_map(Msg) ->
                         % referenced by a link.
                         % We start by normalizing the child message, generating 
                         % its IDs by proxy.
-                        NormChild = normalize(V, Mode, Opts),
                         NormKey = hb_util:bin(Key),
                         MaterializeDiscard =
                             should_materialize_discard_link(NormKey, Msg, Opts),
+                        NormChild =
+                            case has_bundle_commitment(V, Opts) of
+                                true -> V;
+                                false -> normalize(V, Mode, Opts)
+                            end,
                         LinkedChild =
                             case {Mode, MaterializeDiscard} of
                                 {discard, true} ->
-                                    hb_message:normalize_commitments(
-                                        NormChild,
-                                        Opts,
-                                        verify
-                                    );
+                                    normalize_materialized_child(NormChild, Opts);
                                 _ ->
                                     normalize_extension_child(NormChild, Opts)
                             end,
@@ -138,11 +138,20 @@ offloaded_link_id(LinkedChild, WrittenID, Opts) when is_map(LinkedChild) ->
     case has_commitment_view(LinkedChild) of
         true ->
             case hb_message:signers(LinkedChild, Opts) of
-                [] -> WrittenID;
+                [] ->
+                    WrittenID;
                 _ ->
                     LinkID = hb_message:id(LinkedChild, all, Opts),
-                    ensure_resolvable_link_id(WrittenID, LinkID, Opts),
-                    LinkID
+                    case ensure_resolvable_link_id(WrittenID, LinkID, Opts) of
+                        ok ->
+                            LinkID;
+                        conflict ->
+                            ?event(debug_linkify,
+                                {link_id_conflict_fallback,
+                                    {written_id, WrittenID},
+                                    {link_id, LinkID}}),
+                            WrittenID
+                    end
             end;
         false ->
             WrittenID
@@ -156,17 +165,92 @@ has_commitment_view(Msg) ->
         orelse maps:is_key(<<"...+link">>, Msg).
 
 normalize_extension_child(Child, Opts) when is_map(Child) ->
-    case maps:is_key(<<"...">>, Child) orelse maps:is_key(<<"...+link">>, Child) of
+    case maps:is_key(<<"commitments">>, Child)
+            orelse maps:is_key(<<"...">>, Child)
+            orelse maps:is_key(<<"...+link">>, Child) of
         true -> hb_message:normalize_commitments(Child, Opts, verify);
         false -> Child
     end;
 normalize_extension_child(Child, _Opts) ->
     Child.
 
+has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_bundle_commitment(_Msg, _Opts) ->
+    false.
+
+normalize_materialized_child(Child, Opts)
+        when is_map(Child) ->
+    case is_list_like(Child, Opts) of
+        true -> Child;
+        false -> hb_message:normalize_commitments(Child, Opts, verify)
+    end;
+normalize_materialized_child(Child, _Opts) ->
+    Child.
+
+is_list_like(Child, Opts) ->
+    hb_util:is_ordered_list(Child, Opts)
+        orelse hb_util:is_ordered_list(
+            maps:from_list(
+                lists:map(
+                    fun({Key, Value}) ->
+                        {remove_link_specifier(hb_ao:normalize_key(Key)), Value}
+                    end,
+                    maps:to_list(Child)
+                )
+            ),
+            Opts
+        ).
+
 ensure_resolvable_link_id(ID, ID, _Opts) ->
     ok;
 ensure_resolvable_link_id(WrittenID, LinkID, Opts) ->
-    ok = hb_cache:link(WrittenID, LinkID, Opts).
+    case hb_cache:link(WrittenID, LinkID, Opts) of
+        ok -> ok;
+        {error, Exists} when Exists == eexist; Exists == already_added ->
+            ensure_existing_link_id(WrittenID, LinkID, Opts);
+        _Error ->
+            conflict
+    end.
+
+ensure_existing_link_id(WrittenID, LinkID, Opts) ->
+    case {hb_cache:read(WrittenID, Opts), hb_cache:read(LinkID, Opts)} of
+        {{ok, Msg}, {ok, Msg}} ->
+            ok;
+        {{ok, Expected}, {ok, Actual}} ->
+            case equivalent_cached_values(Expected, Actual, Opts) of
+                true -> ok;
+                false -> conflict
+            end;
+        {_WrittenRes, _LinkRes} ->
+            conflict
+    end.
+
+equivalent_cached_values(Expected, Actual, Opts)
+        when is_map(Expected), is_map(Actual) ->
+    (hb_private:reset(Expected) =:= hb_private:reset(Actual))
+        orelse (
+            (hb_message:id(Expected, all, Opts) =:= hb_message:id(Actual, all, Opts))
+                andalso
+                    (unsigned_commitments(Expected, Opts)
+                        =:= unsigned_commitments(Actual, Opts))
+        );
+equivalent_cached_values(Expected, Actual, _Opts) ->
+    Expected =:= Actual.
+
+unsigned_commitments(Msg, Opts) ->
+    hb_maps:filter(
+        fun(_, #{ <<"committer">> := _Committer }) -> false;
+           (_, _) -> true
+        end,
+        maps:get(<<"commitments">>, Msg, #{}),
+        Opts
+    ).
 
 %% @doc Decode links embedded in the headers of a message.
 decode_all_links(Msg) when is_map(Msg) ->
@@ -175,7 +259,7 @@ decode_all_links(Msg) when is_map(Msg) ->
             fun({Key, MaybeID}) ->
                 case is_link_key(Key) of
                     true ->
-                        NewKey = binary:part(Key, 0, byte_size(Key) - 5),
+                        NewKey = remove_link_specifier(Key),
                         {NewKey, 
                             {
                                 link,
@@ -186,7 +270,7 @@ decode_all_links(Msg) when is_map(Msg) ->
                                 }
                             }
                         };
-                    _ -> {Key, MaybeID}
+                    _ -> {Key, decode_all_links(MaybeID)}
                 end
             end,
             maps:to_list(Msg)
@@ -258,7 +342,7 @@ format_unresolved({link, ID, Opts}, BaseOpts, Indent) ->
 %%% Tests
 
 offload_linked_message_test() ->
-    Opts = #{},
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
         <<"link-key">> => #{
@@ -276,7 +360,7 @@ offload_linked_message_test() ->
     ?assert(hb_message:match(Msg, Loaded, primary, Opts)).
 
 offload_list_test() ->
-    Opts = #{},
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
     Msg = #{
         <<"list-key">> => [1.0, 2.0, 3.0]
     },

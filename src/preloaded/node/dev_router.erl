@@ -140,7 +140,11 @@ register(_M1, M2, Opts) ->
     {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
--spec routes(#{ _ => _ }, #{ method => binary(), _ => _ }, #{ _ => _ }) ->
+-spec routes(
+    #{ _ => _ },
+    #{ '...' => map(), method => binary(), _ => _ },
+    #{ _ => _ }
+) ->
     {ok, binary() | [_] | #{ _ => _ }} | {error, _}.
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
@@ -197,7 +201,7 @@ routes(M1, M2, Opts) ->
                         case RegistrarPath of
                             not_found -> M2;
                             RegPath ->
-                                M2#{ <<"path">> => RegPath }
+                                registrar_request(M2, RegPath, Opts)
                         end,
                     RegistrarMsgs = hb_singleton:from(Registrar, Opts) ++ [RegReq],
                     ?event(debug_route_reg, {registrar_msgs, RegistrarMsgs}),
@@ -211,6 +215,27 @@ routes(M1, M2, Opts) ->
         _ ->
             {ok, Routes}
     end.
+
+registrar_request(Msg, Path, Opts) ->
+    case hb_path:to_binary(Path) of
+        <<"schedule">> ->
+            #{
+                <<"path">> => Path,
+                <<"method">> => hb_maps:get(<<"method">>, Msg, <<"POST">>, Opts),
+                <<"body">> => original_request(Msg, Opts)
+            };
+        _ ->
+            Msg#{ <<"path">> => Path }
+    end.
+
+original_request(Msg, Opts) when is_map(Msg) ->
+    Loaded = hb_cache:ensure_all_loaded(hb_link:decode_all_links(Msg), Opts),
+    case maps:find(<<"...">>, Loaded) of
+        {ok, Parent} -> original_request(Parent, Opts);
+        error -> Loaded
+    end;
+original_request(Msg, _Opts) ->
+    Msg.
 
 %% @doc Find the appropriate route for the given message. If we are able to 
 %% resolve to a single host+path, we return that directly. Otherwise, we return

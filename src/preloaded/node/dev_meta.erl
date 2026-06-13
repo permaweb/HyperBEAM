@@ -406,7 +406,12 @@ maybe_sign(Res, NodeMsg) ->
     case hb_opts:get(force_signed, false, NodeMsg) of
         true ->
             case hb_message:signers(Res, NodeMsg) of
-                [] -> hb_message:commit(Res, NodeMsg);
+                [] ->
+                    Loaded = hb_cache:ensure_all_loaded(
+                        hb_link:decode_all_links(Res),
+                        NodeMsg
+                    ),
+                    hb_message:commit(Loaded, NodeMsg);
                 _ -> Res
             end;
         false -> Res

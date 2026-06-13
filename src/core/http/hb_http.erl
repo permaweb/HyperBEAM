@@ -446,7 +446,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % set an explicit preference.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found -> WithoutPriv#{ <<"accept-bundle">> => <<"true">> };
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
@@ -454,29 +454,37 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % the peer node should receive. This allows users to proxy requests to their
     % HB node from another port.
     WithSelfPort =
-        WithAcceptBundle#{
-            <<"ao-peer-port">> =>
-                hb_maps:get(
-                    <<"ao-peer-port">>,
-                    WithAcceptBundle,
-                    hb_opts:get(
-                        port_external,
-                        hb_opts:get(port, undefined, Opts),
-                        Opts
-                    ),
+        case hb_maps:find(<<"ao-peer-port">>, WithAcceptBundle, Opts) of
+            {ok, _} ->
+                WithAcceptBundle;
+            error ->
+                case hb_opts:get(
+                    port_external,
+                    hb_opts:get(port, undefined, Opts),
                     Opts
-                )
-        },
+                ) of
+                    undefined -> WithAcceptBundle;
+                    PeerPort ->
+                        WithAcceptBundle#{
+                            <<"ao-peer-port">> => hb_util:bin(PeerPort)
+                        }
+                end
+        end,
     BinPeer = if is_binary(Peer) -> Peer; true -> list_to_binary(Peer) end,
     BinPath = hb_path:normalize(hb_path:to_binary(Path)),
     ReqBase = #{ peer => BinPeer, path => BinPath, method => Method },
     case Format of
         <<"httpsig@1.0">> ->
+            HTTPSigInput = with_link_provenance(WithSelfPort, Opts),
             FullEncoding =
                 hb_message:convert(
-                    WithSelfPort,
+                    HTTPSigInput,
                     #{
                         <<"device">> => <<"httpsig@1.0">>,
+                        <<"bundle">> => true
+                    },
+                    #{
+                        <<"device">> => <<"structured@1.0">>,
                         <<"bundle">> => true
                     },
                     Opts
@@ -493,10 +501,9 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
         <<"ans104@1.0">> ->
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
-                case hb_message:signers(Message, Opts) of
-                    [] -> WithSelfPort;
-                    _ ->
-                        hb_message:with_only_committed(WithSelfPort, Opts)
+                case has_top_signer(Message, Opts) of
+                    false -> WithSelfPort;
+                    true -> hb_message:with_only_committed(WithSelfPort, Opts)
                 end,
             ReqBase#{
                 headers =>
@@ -521,6 +528,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                                 <<"device">> => <<"ans104@1.0">>,
                                 <<"bundle">> => true
                             },
+                            #{
+                                <<"device">> => <<"structured@1.0">>,
+                                <<"bundle">> => true
+                            },
                             Opts
                         )
                     )
@@ -532,6 +543,56 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
                 body => maps:get(<<"body">>, Message, <<>>)
             }
     end.
+
+has_top_signer(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_maps:is_key(<<"committer">>, Commitment, Opts)
+        end,
+        hb_maps:to_list(maps:get(<<"commitments">>, Msg, #{}), Opts)
+    );
+has_top_signer(_Msg, _Opts) ->
+    false.
+
+has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        end,
+        hb_maps:to_list(maps:get(<<"commitments">>, Msg, #{}), Opts)
+    );
+has_bundle_commitment(_Msg, _Opts) ->
+    false.
+
+with_link_provenance(Msg, Opts) when is_map(Msg) ->
+    maps:from_list(lists:flatmap(
+        fun({Key, Value}) ->
+            LinkedValue = with_link_provenance(Value, Opts),
+            case link_provenance_id(Value, Opts) of
+                {ok, ID} ->
+                    [
+                        {Key, LinkedValue},
+                        {<<(hb_util:bin(Key))/binary, "+link">>, ID}
+                    ];
+                false ->
+                    [{Key, LinkedValue}]
+            end
+        end,
+        maps:to_list(Msg)
+    ));
+with_link_provenance(List, Opts) when is_list(List) ->
+    lists:map(fun(Value) -> with_link_provenance(Value, Opts) end, List);
+with_link_provenance(Value, _Opts) ->
+    Value.
+
+link_provenance_id({link, ID, #{ <<"type">> := <<"link">>, <<"lazy">> := true }}, Opts) ->
+    {ok, hb_util:ok(hb_cache:read(ID, Opts))};
+link_provenance_id({link, ID, #{ <<"type">> := <<"link">> }}, _Opts) ->
+    {ok, ID};
+link_provenance_id({link, ID, _LinkOpts}, _Opts) ->
+    {ok, ID};
+link_provenance_id(_Value, _Opts) ->
+    false.
 
 %% @doc Reply to the client's HTTP request with a message.
 reply(Req, TABMReq, Message, Opts) ->
@@ -748,11 +809,28 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {_, <<"httpsig@1.0">>, _} ->
+            MessageForEncoding =
+                hb_cache:ensure_all_loaded(
+                    hb_link:decode_all_links(Message),
+                    Opts#{ <<"load-all-commitments">> => true }
+                ),
+            StructuredBundle =
+                AcceptBundle orelse has_bundle_commitment(MessageForEncoding, Opts),
+            StructuredSource =
+                case StructuredBundle of
+                    true ->
+                        #{
+                            <<"device">> => <<"structured@1.0">>,
+                            <<"bundle">> => true
+                        };
+                    false ->
+                        <<"structured@1.0">>
+                end,
             TABM =
                 hb_message:convert(
-                    Message,
+                    MessageForEncoding,
                     tabm,
-                    <<"structured@1.0">>,
+                    StructuredSource,
                     Opts#{ <<"topic">> => ao_internal }
                 ),
             EncMessage =
@@ -865,7 +943,7 @@ accept_to_codec(OriginalReq, Reply = #{ <<"content-type">> := Link }, Opts) when
         Reply#{ <<"content-type">> => hb_cache:ensure_loaded(Link, Opts) },
         Opts
     );
-accept_to_codec(_OriginalReq, #{ <<"content-type">> := CT }, _Opts) ->
+accept_to_codec(_OriginalReq, #{ <<"content-type">> := _CT }, _Opts) ->
     <<"httpsig@1.0">>;
 accept_to_codec(OriginalReq, _, Opts) ->
     Accept = hb_maps:get(<<"accept">>, OriginalReq, <<"*/*">>, Opts),
@@ -1125,31 +1203,37 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         ),
     FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
     FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
+    AcceptBundle =
+        maps:get(
+            <<"accept-bundle">>,
+            Msg,
+            maps:get(
+                <<"accept-bundle">>,
+                PrimMsg,
+                maps:get(<<"accept-bundle">>, RawHeaders, false)
+            )
+        ),
+    Accept =
+        maps:get(
+            <<"accept">>,
+            Msg,
+            maps:get(
+                <<"accept">>,
+                PrimMsg,
+                maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
+            )
+        ),
     BaseMsg =
-        FilteredMsg#{
-            <<"method">> => Method,
-            <<"path">> => MsgPath,
-            <<"accept-bundle">> =>
-                maps:get(
-                    <<"accept-bundle">>,
-                    Msg,
-                    maps:get(
-                        <<"accept-bundle">>,
-                        PrimMsg,
-                        maps:get(<<"accept-bundle">>, RawHeaders, false)
-                    )
-                ),
-            <<"accept">> =>
-                Accept = maps:get(
-                    <<"accept">>,
-                    Msg,
-                    maps:get(
-                        <<"accept">>,
-                        PrimMsg,
-                        maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
-                    )
-                )
-        },
+        maybe_overlay_http_metadata(
+            FilteredMsg,
+            #{
+                <<"method">> => Method,
+                <<"path">> => MsgPath,
+                <<"accept-bundle">> => AcceptBundle,
+                <<"accept">> => Accept
+            },
+            Opts
+        ),
     ?event(debug_accept, {normalize_unsigned, {accept, Accept}}),
     % Parse and add the cookie from the request, if present. We reinstate the
     % `cookie' field in the message, as it is not typically signed, yet should
@@ -1188,6 +1272,30 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     end,
     Host = cowboy_req:host(Req),
     WithDevice#{<<"host">> => Host}.
+
+maybe_overlay_http_metadata(Msg, Metadata, Opts) ->
+    case {
+        hb_message:signers(Msg, Opts),
+        hb_maps:get(<<"type">>, Msg, undefined, Opts)
+    } of
+        {[], _} -> maps:merge(Msg, Metadata);
+        {_, <<"Process">>} -> maps:merge(Msg, Metadata);
+        {_, _} ->
+            Metadata#{
+                <<"...">> => hb_message:without_unless_signed(http_envelope_keys(), Msg, Opts)
+            }
+    end.
+
+http_envelope_keys() ->
+    [
+        <<"accept">>,
+        <<"accept-bundle">>,
+        <<"ao-peer">>,
+        <<"ao-peer-port">>,
+        <<"host">>,
+        <<"method">>,
+        <<"path">>
+    ].
 
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
@@ -1400,11 +1508,15 @@ ans104_wasm_test() ->
             Msg#{ <<"path">> => <<"/init/compute/results">> },
             ClientOpts
         ),
-    %% TODO: Is there a better way to do this?
-    {link, LinkID, _ } = maps:get(<<"output">>, Res),
-    %% We need to resolve agaisnt the server cache
-    {ok, #{<<"body">> := Body}} = post(URL, Msg#{<<"path">> => <<"/", LinkID/binary, "/1">>}, ClientOpts),
-    ?assertEqual(<<"6.00000000000000000000e+00">>, Body),
+    case maps:get(<<"output">>, Res) of
+        {link, LinkID, _ } ->
+            %% We need to resolve against the server cache.
+            {ok, #{<<"body">> := Body}} =
+                post(URL, Msg#{<<"path">> => <<"/", LinkID/binary, "/1">>}, ClientOpts),
+            ?assertEqual(<<"6.00000000000000000000e+00">>, Body);
+        Output ->
+            ?assertEqual([6.0], Output)
+    end,
     % @TODO this assertion should pass, but it doesn't due to how `bundle`
     % tag is handled between client an server. Commenting out for now.
     % ?assertEqual(6.0, hb_ao:get(<<"output/1">>, Res, ClientOpts)),

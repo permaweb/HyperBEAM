@@ -866,7 +866,7 @@ end
 --- Index function, called by the `~process@1.0` device for scheduled messages.
 --- We route any `action' to the appropriate function based on the request path.
 function compute(base, assignment)
-    local action = string.lower(assignment.body.action or "")
+    local action = string.lower(assignment.body.action or assignment.path or "")
     ao.event(
         {
             "compute called",

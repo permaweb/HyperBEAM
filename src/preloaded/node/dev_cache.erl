@@ -53,7 +53,13 @@ read(_M1, M2 = #{ <<"read">> := Location }, Opts) ->
                         }
 					};
                 _ ->
-                    {ok, Res}
+                    LoadOpts = Opts#{ <<"load-all-commitments">> => true },
+                    {ok,
+                        hb_cache:ensure_all_loaded(
+                            hb_link:decode_all_links(Res),
+                            LoadOpts
+                        )
+                    }
             end;
         {error, not_found} ->
             % The cache does not have this ID,but it may still be an explicit

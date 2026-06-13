@@ -698,19 +698,23 @@ when_test() ->
 %% This function filters the response to return only the signers of that message,
 %% excluding the server's own signature.
 signers_from_commitments_response(Response, ServerWallet) ->
-    ServerAddress = ar_wallet:to_address(ServerWallet),
-    hb_maps:values(hb_maps:filtermap(
-        fun(Key, Value) when ?IS_ID(Key) ->
-            Type = hb_maps:get(<<"type">>, Value, not_found, #{}),
-            Committer = hb_maps:get(<<"committer">>, Value, not_found, #{}),
-            case {Type, Committer} of
-                {<<"rsa-pss-sha512">>, ServerAddress} -> false;
-                {<<"rsa-pss-sha512">>, _} -> {true, Committer};
-                _ -> false
-            end;
-           (_Key, _Value) ->
-            false
+    ServerAddress = hb_util:human_id(ar_wallet:to_address(ServerWallet)),
+    lists:filter(
+        fun(Committer) -> Committer =/= ServerAddress end,
+        commitment_signers(Response)
+    ).
+
+commitment_signers(Msg) when is_map(Msg) ->
+    Type = hb_maps:get(<<"type">>, Msg, not_found, #{}),
+    Committer = hb_maps:get(<<"committer">>, Msg, not_found, #{}),
+    OwnSigner =
+        case {Type, Committer} of
+            {<<"rsa-pss-sha512">>, not_found} -> [];
+            {<<"rsa-pss-sha512">>, _} -> [Committer];
+            _ -> []
         end,
-        Response,
-        #{}
-    )).
+    OwnSigner ++ lists:flatmap(fun commitment_signers/1, maps:values(Msg));
+commitment_signers(List) when is_list(List) ->
+    lists:flatmap(fun commitment_signers/1, List);
+commitment_signers(_Other) ->
+    [].

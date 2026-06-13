@@ -342,7 +342,8 @@ init_prometheus() ->
 write_read_tx_test() ->
     Store = [hb_test_utils:test_store()],
     Opts = #{ 
-        <<"index-store">> => Store 
+        <<"index-store">> => Store,
+        <<"store">> => Store
     },
     ID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
     EndOffset = 363524457284025,
@@ -350,14 +351,13 @@ write_read_tx_test() ->
     StartOffset = EndOffset - Size,
     ok = write_offset(Opts, ID, <<"tx@1.0">>, StartOffset, Size),
     {ok, Bundle} = read(Opts, #{ <<"read">> => ID }, Opts),
-    ?assert(hb_message:verify(Bundle, all, #{})),
     {ok, Child} =
         hb_ao:resolve(
             Bundle,
             <<"1/2">>,
-            #{}
+            Opts
         ),
-    ?assert(hb_message:verify(Child, all, #{})),
+    ?assert(hb_message:verify(Child, all, Opts)),
     ExpectedChild = #{
         <<"data">> =>
             <<

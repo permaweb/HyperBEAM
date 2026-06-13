@@ -351,7 +351,8 @@ to_siginfo_keys(Msg, Commitment, Opts) ->
 %% 3. Replace the `body' key again with the value of the `ao-body-key' key, if
 %%    present. This is possible because the keys derived from the body often
 %%    contain the `body' key itself.
-%% 4. If the `content-type' starts with `multipart/', we remove it.
+%% 4. If the `content-type' starts with `multipart/' and was not part of the
+%%    signature components, we remove it.
 from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     % 1. Remove specifiers from the list and decode percent-encoded keys.
     BaseCommitted =
@@ -385,22 +386,30 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
             false ->
                 WithBody
         end,
-    % 4. If the `content-type' starts with `multipart/', we remove it.
+    % 4. If the `content-type' starts with `multipart/' and was not part of the
+    %    signature components, we remove it.
     ListWithoutContentType =
         case maps:get(<<"content-type">>, HTTPEncMsg, undefined) of
             <<"multipart/", _/binary>> ->
-                hb_util:list_replace(ListWithoutBodyKey, <<"content-type">>, []);
+                case lists:member(<<"content-type">>, BaseCommitted) of
+                    true -> ListWithoutBodyKey;
+                    false ->
+                        hb_util:list_replace(
+                            ListWithoutBodyKey,
+                            <<"content-type">>,
+                            []
+                        )
+                end;
             _ ->
                 ListWithoutBodyKey
         end,
-    Normalized =
-        hb_ao:normalize_keys(
-            lists:map(
-                fun hb_link:remove_link_specifier/1,
-                ListWithoutContentType
-            )
+    List =
+        lists:map(
+            fun(Key) ->
+                hb_ao:normalize_key(hb_link:remove_link_specifier(Key))
+            end,
+            ListWithoutContentType
         ),
-    List = hb_util:message_to_ordered_list(Normalized),
     ?event({from_siginfo_keys, {list, List}}),
     List.
 

@@ -327,7 +327,7 @@ compute_native_http_hook_cache_ignores_request_noise_test_parallel_() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
         Opts = test_opts(#{
-            <<"port">> => 10000 + rand:uniform(10000),
+            <<"port">> => 0,
             <<"priv-wallet">> => Wallet,
             <<"cache-control">> => <<"always">>,
             <<"async-cache">> => false,
@@ -391,7 +391,7 @@ http_wasm_process_by_id_test_parallel() ->
     rand:seed(default),
     SchedWallet = ar_wallet:new(),
     Node = hb_http_server:start_node(Opts = #{
-        <<"port">> => 10000 + rand:uniform(10000),
+        <<"port">> => 0,
         <<"priv-wallet">> => SchedWallet,
         <<"cache-control">> => <<"always">>,
         <<"store">> => #{
@@ -481,7 +481,7 @@ aos_state_access_via_http_test_parallel_() ->
         rand:seed(default),
         Wallet = ar_wallet:new(),
         Node = hb_http_server:start_node(Opts = test_opts(#{
-            <<"port">> => 10000 + rand:uniform(10000),
+            <<"port">> => 0,
             <<"priv-wallet">> => Wallet,
             <<"cache-control">> => <<"always">>,
             <<"store">> => hb_test_utils:test_store(),

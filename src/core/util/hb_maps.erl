@@ -476,11 +476,11 @@ get_with_typed_link_test() ->
 
 resolve_on_link_test() ->
     Msg = #{ <<"test-key">> => <<"test-value">> },
-    Opts = #{},
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, ID} = hb_cache:write(Msg, Opts),
     ?assertEqual(
         {ok, <<"test-value">>},
-        hb_ao:resolve({link, ID, #{}}, <<"test-key">>, #{})
+        hb_ao:resolve({link, ID, #{}}, <<"test-key">>, Opts)
     ).
 
 filter_with_link_test() ->
@@ -566,7 +566,7 @@ nested_extension_test() ->
     ?assertEqual(3, get(<<"c">>, L2, undefined)).
 
 extension_through_link_test() ->
-    Opts = #{},
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, Location} = hb_cache:write(#{ <<"a">> => 1 }, Opts),
     Ext = #{ <<"b">> => 2, <<"...">> => {link, Location, #{}} },
     ?assertEqual(1, get(<<"a">>, Ext, undefined, Opts)),

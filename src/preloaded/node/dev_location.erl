@@ -94,7 +94,7 @@ find_target(Base, RawReq, Opts) ->
         ),
     Req =
         case TargetSpec of
-            not_found -> RawReq;
+            not_found -> hb_maps:get(<<"...">>, RawReq, RawReq, Opts);
             <<"self">> -> Base;
             <<"request">> -> RawReq;
             Target ->
@@ -105,7 +105,17 @@ find_target(Base, RawReq, Opts) ->
 
 %% @doc Generate a new scheduler location record and register it. We both send 
 %% the new scheduler-location to the given registry, and return it to the caller.
--spec node(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
+-spec node(
+    #{ _ => _ },
+    #{
+        '...' => map(),
+        nonce => integer(),
+        'require-codec' => binary(),
+        'time-to-live' => integer(),
+        url => binary()
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _}.
 node(Base, RawReq, RawOpts) ->
     Opts =
         case hb_ao:resolve(

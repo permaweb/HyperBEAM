@@ -1,7 +1,7 @@
 %%% @doc Extract Dialyzer-style type information from AO-Core devices and apply
 %%% a static `vary` transform to base and request messages.
 -module(hb_types).
--export([extract/2, vary/5, vary/7]).
+-export([extract/2, vary/5, vary/7, preserves_message_extension/6]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(EXTRACT_CACHE_TAG, {hb_types, extract, 2}).
@@ -55,6 +55,31 @@ vary(Device, Key, Func, AddKey, Base, Request, Opts) ->
                 overlay(ReturnSchema)
             }
     end.
+
+%% @doc Return whether the resolved function's schema explicitly asks to
+%% receive a message extension edge on the selected input side.
+preserves_message_extension(Device, Key, Func, AddKey, Side, Opts) ->
+    case function_schema(Device, Func, Key, Opts) of
+        undefined ->
+            false;
+        Schema ->
+            {BaseSchema, ReqSchema, _ReturnSchema} =
+                execution_schemas(Schema, AddKey),
+            SideSchema =
+                case Side of
+                    base -> implicit_base(BaseSchema);
+                    request -> implicit_request(ReqSchema)
+                end,
+            schema_preserves_message_extension(SideSchema)
+    end.
+
+schema_preserves_message_extension(
+    #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }
+) ->
+    maps:is_key(<<"...">>, Keys)
+        orelse maps:is_key(<<"...+link">>, Keys);
+schema_preserves_message_extension(_Schema) ->
+    false.
 
 %% @doc Extract the public type schema for a device.
 extract(Device, _Opts) when is_map(Device) ->

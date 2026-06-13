@@ -28,14 +28,25 @@ function charge(base, request)
         "client starting charge",
         { request = request, base = base }
     })
-    local status, res = ao.resolve({
+    local status, res = ao.resolve_committed({
         path = "(" .. base["ledger-path"] .. ")/push",
         method = "POST",
+        ["result-depth"] = 0,
         body = request
+    }, {
+        ["commitment-device"] = "httpsig@1.0",
+        bundle = true,
+        ["linkify-mode"] = false
     })
     ao.event("debug_charge", {
         "client received charge response",
         { status = status, res = res }
     })
+    if status ~= "ok" then
+        return status, res
+    end
+    if type(res) == "table" and tonumber(res.status or 200) >= 400 then
+        return "error", res
+    end
     return "ok", res
 end

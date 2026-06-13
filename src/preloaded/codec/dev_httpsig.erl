@@ -259,6 +259,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
         maybe_bundle_tag_commitment(
             BaseCommitment,
             Req,
+            Msg,
             Opts
         ),
     {ok, EncMsg, EncComm, ModCommittedKeys} =
@@ -301,6 +302,33 @@ maybe_bundle_tag_commitment(Commitment, Req, _Opts) ->
         true -> Commitment#{ <<"bundle">> => <<"true">> };
         false -> Commitment
     end.
+
+maybe_bundle_tag_commitment(Commitment, Req, Msg, Opts) ->
+    case
+        hb_util:atom(maps:get(<<"bundle">>, Req, false))
+            orelse has_bundle_httpsig_commitment(Msg, Opts)
+    of
+        true -> Commitment#{ <<"bundle">> => <<"true">> };
+        false -> Commitment
+    end.
+
+has_bundle_httpsig_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_maps:get(
+                <<"commitment-device">>,
+                Commitment,
+                undefined,
+                Opts
+            ) =:= <<"httpsig@1.0">>
+                andalso hb_util:atom(
+                    hb_maps:get(<<"bundle">>, Commitment, false, Opts)
+                )
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_bundle_httpsig_commitment(_Msg, _Opts) ->
+    false.
 
 %% @doc Derive the set of keys to commit to from a `commit` request and a 
 %% base message.
@@ -364,11 +392,16 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         lists:map(
             fun(Key) ->
                 NormalizedKey = hb_ao:normalize_key(Key),
-                case maps:is_key(NormalizedKey, Msg) of
-                    true -> NormalizedKey;
-                    false ->
-                        case maps:is_key(<<NormalizedKey/binary, "+link">>, Msg) of
-                            true -> <<NormalizedKey/binary, "+link">>;
+                LinkKey = <<NormalizedKey/binary, "+link">>,
+                UseLink =
+                    (not hb_util:atom(maps:get(<<"bundle">>, Commitment, false)))
+                        andalso maps:is_key(LinkKey, Msg),
+                case {UseLink, maps:is_key(NormalizedKey, Msg)} of
+                    {true, _} -> LinkKey;
+                    {false, true} -> NormalizedKey;
+                    {false, false} ->
+                        case maps:is_key(LinkKey, Msg) of
+                            true -> LinkKey;
                             false -> NormalizedKey
                         end
                 end
@@ -396,35 +429,20 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     % Remove the signature and signature-input keys from the encoded message,
     % convert the `body' key to a `content-digest' key, if present.
     Encoded = add_content_digest(EncodedWithSigInfo, Opts),
-    % Transform the list of requested keys to their `httpsig@1.0' equivalents.
-    EncodedKeys = maps:keys(Encoded),
-    EncodedKeysWithBodyKey =
-        case maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
-            not_found ->
-                EncodedKeys;
-            AOBodyKey ->
-                hb_util:list_replace(
-                    EncodedKeys,
-                    AOBodyKey,
-                    [<<"body">>, <<"ao-body-key">>]
-                )
-        end,
-    % The keys to be used in encodings of the message:
+    % Transform the requested keys to their `httpsig@1.0' equivalents while
+    % preserving the commitment's original order.
     KeysForEncoding =
-        hb_util:list_replace(
-            EncodedKeysWithBodyKey,
-            <<"body">>,
-            <<"content-digest">>
-        ),
+        keys_for_encoding(RawInputs, Inputs, Encoded, EncodedWithSigInfo),
     % Calculate the keys that have been removed from the message, as a result
     % of being added to the body. These keys will need to be removed from the
     % `committed' list and re-added where the `content-digest' was in the
     % `from_siginfo_keys' call.
-    BodyKeys =
+    BodyKeyPairs =
         lists:filter(
-            fun(Key) -> not key_present(Key, Encoded) end,
-            RawInputs
+            fun({_RawInput, Input}) -> encoded_key(Input, Encoded) == not_found end,
+            lists:zip(RawInputs, Inputs)
         ),
+    BodyKeys = lists:map(fun({RawInput, _Input}) -> RawInput end, BodyKeyPairs),
     KeysForCommitment =
         decode_committed_keys(
             dev_httpsig_siginfo:from_siginfo_keys(
@@ -463,6 +481,51 @@ key_present(TryEncoded, Key, Msg) ->
         key_present(false, hb_escape:encode(Key), Msg);
     true ->
         false
+    end.
+
+keys_for_encoding(RawInputs, Inputs, Encoded, EncodedWithSigInfo) ->
+    {Keys, _SawDigest} =
+        lists:foldl(
+            fun({RawInput, Input}, {Acc, SawDigest}) ->
+                case encoded_key(Input, Encoded) of
+                    not_found ->
+                        BodyKeys =
+                            body_signature_keys(
+                                RawInput,
+                                Encoded,
+                                EncodedWithSigInfo,
+                                SawDigest
+                            ),
+                        {Acc ++ BodyKeys, SawDigest orelse BodyKeys =/= []};
+                    EncodedKey ->
+                        {Acc ++ [EncodedKey], SawDigest}
+                end
+            end,
+            {[], false},
+            lists:zip(RawInputs, Inputs)
+        ),
+    hb_util:unique(Keys).
+
+encoded_key(Key, Msg) ->
+    NormKey = hb_ao:normalize_key(Key),
+    EncKey = hb_escape:encode(NormKey),
+    Candidates =
+        [NormKey, <<NormKey/binary, "+link">>, EncKey, <<EncKey/binary, "+link">>],
+    case lists:filter(fun(Candidate) -> maps:is_key(Candidate, Msg) end, Candidates) of
+        [Found | _] -> Found;
+        [] -> not_found
+    end.
+
+body_signature_keys(_RawInput, _Encoded, _EncodedWithSigInfo, true) ->
+    [];
+body_signature_keys(_RawInput, Encoded, EncodedWithSigInfo, false) ->
+    case maps:is_key(<<"content-digest">>, Encoded) of
+        false -> [];
+        true ->
+            case maps:get(<<"ao-body-key">>, EncodedWithSigInfo, not_found) of
+                not_found -> [<<"content-digest">>];
+                _AOBodyKey -> [<<"content-digest">>, <<"ao-body-key">>]
+            end
     end.
 
 with_only_inputs(Inputs, Msg, Opts) ->

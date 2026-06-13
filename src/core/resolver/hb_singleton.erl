@@ -135,7 +135,7 @@ type(_Value) -> unknown.
 from(RawMsg, Opts) when is_binary(RawMsg) ->
     from(#{ <<"path">> => RawMsg }, Opts);
 from(RawMsg, Opts) ->
-    RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
+    RawPath = maps:get(<<"path">>, RawMsg, <<>>),
     ?event(parsing, {raw_path, RawPath}),
     {ok, Path, Query} = from_path(RawPath),
     ?event(parsing, {parsed_path, Path, Query}),
@@ -164,11 +164,8 @@ from(RawMsg, Opts) ->
     ScopedModifications = group_scoped(Typed, Msgs),
     ?event(parsing, {scoped_modifications, ScopedModifications}),
     % 5. Generate the list of messages (plus-notation, device, typed keys).
-    Result = anchor_messages(
-        build_messages(Msgs, ScopedModifications, Opts),
-        RawMsg,
-        Opts
-    ),
+    BuiltMessages = build_messages(Msgs, ScopedModifications, Opts),
+    Result = anchor_messages(BuiltMessages, RawMsg, Opts),
     ?event(parsing, {result, Result}),
     Result.
 
@@ -318,7 +315,11 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
-        Opts#{ <<"topic">> => ao_internal }
+        Opts#{
+            <<"linkify-mode">> => false,
+            <<"preserve-message-extension">> => true,
+            <<"topic">> => ao_internal
+        }
     ),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
@@ -330,13 +331,17 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
-        Opts#{ <<"topic">> => ao_internal }
+        Opts#{
+            <<"linkify-mode">> => false,
+            <<"preserve-message-extension">> => true,
+            <<"topic">> => ao_internal
+        }
     ),
     ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 anchor_messages(Messages, RawMsg, Opts) ->
-    case hb_maps:get(<<"commitments">>, RawMsg, not_found, Opts) of
+    case maps:get(<<"commitments">>, RawMsg, not_found) of
         not_found -> Messages;
         _ ->
             AnchorMsg = maps:remove(<<"ao-types">>, hb_message:minimize(RawMsg)),
@@ -354,7 +359,13 @@ anchor_message(Msg, RawMsg, Opts) when is_map(Msg) ->
     Anchored =
         case maps:remove(<<"path">>, Msg) of
             Empty when map_size(Empty) == 0 -> BaseWithPath;
-            Rest -> message_set(BaseWithPath, Rest, Opts)
+            Rest ->
+                commit_rewritten_values(
+                    message_set(BaseWithPath, Rest, Opts),
+                    Rest,
+                    RawMsg,
+                    Opts
+                )
         end,
     hb_message:normalize_commitments(
         Anchored,
@@ -366,6 +377,62 @@ anchor_message(Msg, RawMsg, Opts) when is_map(Msg) ->
     );
 anchor_message(Msg, _RawMsg, _Opts) ->
     Msg.
+
+commit_rewritten_values(Msg, Rewritten, RawMsg, Opts) ->
+    Keys =
+        hb_maps:fold(
+            fun(_Key, Value, Acc) when is_map(Value) orelse is_list(Value) ->
+                Acc;
+               (Key, Value, Acc) ->
+                RawValue = hb_maps:get(Key, RawMsg, not_found, Opts),
+                Changed = RawValue =/= not_found andalso RawValue =/= Value,
+                case
+                    Changed
+                        andalso not hb_link:is_link_key(Key)
+                        andalso not ?IS_LINK(Value)
+                        andalso raw_commitment_covers(Key, RawMsg, Opts)
+                of
+                    true -> [Key | Acc];
+                    false -> Acc
+                end
+            end,
+            [],
+            Rewritten,
+            Opts
+        ),
+    case Keys of
+        [] ->
+            Msg;
+        _ ->
+            hb_message:commit(
+                Msg,
+                Opts#{
+                    commitment_device => <<"httpsig@1.0">>,
+                    <<"commitment-device">> => <<"httpsig@1.0">>
+                },
+                #{
+                    <<"type">> => <<"unsigned">>,
+                    <<"committed">> => lists:reverse(Keys)
+                }
+            )
+    end.
+
+raw_commitment_covers(Key, RawMsg, Opts) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:member(Key, committed_keys(Commitment, Opts))
+        end,
+        hb_maps:to_list(maps:get(<<"commitments">>, RawMsg, #{}), Opts)
+    ).
+
+committed_keys(Commitment, Opts) ->
+    lists:map(
+        fun hb_link:remove_link_specifier/1,
+        hb_util:message_to_ordered_list(
+            hb_maps:get(<<"committed">>, Commitment, [], Opts),
+            Opts
+        )
+    ).
 
 message_set(Base, <<"path">>, Value, Opts) ->
     set_result(

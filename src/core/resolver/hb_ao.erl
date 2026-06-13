@@ -431,8 +431,38 @@ resolve_stage(2, RawBase, Req, Opts) ->
                             UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
                             {ok, VariedBase0, VariedReq0, Overlay} =
                                 hb_types:vary(Device, Key, Func, AddKey, Base, Req, UserOpts),
-                            VariedBase = normalize_varied(Base, VariedBase0, Opts),
-                            VariedReq = normalize_varied(Req, VariedReq0, Opts),
+                            PreserveBaseExtension =
+                                hb_types:preserves_message_extension(
+                                    Device,
+                                    Key,
+                                    Func,
+                                    AddKey,
+                                    base,
+                                    UserOpts
+                                ),
+                            PreserveReqExtension =
+                                hb_types:preserves_message_extension(
+                                    Device,
+                                    Key,
+                                    Func,
+                                    AddKey,
+                                    request,
+                                    UserOpts
+                                ),
+                            VariedBase =
+                                normalize_varied(
+                                    Base,
+                                    VariedBase0,
+                                    Opts,
+                                    PreserveBaseExtension
+                                ),
+                            VariedReq =
+                                normalize_varied(
+                                    Req,
+                                    VariedReq0,
+                                    Opts,
+                                    PreserveReqExtension
+                                ),
                             resolve_stage(
                                 2,
                                 Base,
@@ -841,56 +871,62 @@ update_hashpath(Base, Req, Res, Opts) ->
             end
     end.
 
-normalize_varied(Original, Original, Opts) ->
+normalize_varied(Original, Original, Opts, true) ->
+    NormOpts = normalize_opts(Opts),
+    case has_message_extension(Original) of
+        true ->
+            load_varied(
+                hb_message:normalize_commitments(Original, NormOpts, verify),
+                NormOpts,
+                true
+            );
+        false ->
+            load_varied(hb_maps:flatten(Original, NormOpts), NormOpts, false)
+    end;
+normalize_varied(Original, Original, Opts, false) ->
     % No schema varied the message, so the device function receives it directly.
     % Flatten any message extension so functions that pattern-match keys (rather
     % than reading via `hb_ao'/`hb_maps') see a concrete map. A no-op for messages
     % without `...'. Typed functions instead receive the schema-varied (already
     % concrete) message via the clause below.
     NormOpts = normalize_opts(Opts),
-    case has_extension_commitment(Original, NormOpts) of
-        true -> Original;
-        false -> hb_maps:flatten(Original, NormOpts)
-    end;
-normalize_varied(_Original, Varied, Opts) ->
+    Normalized = hb_maps:flatten(Original, NormOpts),
+    load_varied(Normalized, NormOpts, false);
+normalize_varied(_Original, Varied, Opts, PreserveExtension) ->
     NormOpts = normalize_opts(Opts),
-    case has_message_extension(Varied) of
+    Normalized = case has_message_extension(Varied) of
         true -> hb_message:normalize_commitments(Varied, NormOpts, verify);
         false -> hb_message:normalize_commitments(Varied, NormOpts, fast)
-    end.
+    end,
+    load_varied(Normalized, NormOpts, PreserveExtension).
 
 has_message_extension(Msg) when is_map(Msg) ->
     maps:is_key(<<"...">>, Msg) orelse maps:is_key(<<"...+link">>, Msg);
 has_message_extension(_Msg) ->
     false.
 
-has_extension_commitment(Msg = #{ <<"...">> := _ }, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Msg, #{}),
-    lists:any(
-        fun({_ID, Commitment}) ->
-            lists:member(<<"...">>, committed_keys(Commitment, Opts))
+load_varied(Msg, Opts, PreserveExtension) ->
+    Decoded = hb_link:decode_all_links(Msg),
+    Flattened =
+        case PreserveExtension of
+            true -> Decoded;
+            false -> flatten_varied_deep(Decoded, Opts)
         end,
-        maps:to_list(Commitments)
-    );
-has_extension_commitment(Msg = #{ <<"...+link">> := _ }, Opts) ->
-    Commitments = maps:get(<<"commitments">>, Msg, #{}),
-    lists:any(
-        fun({_ID, Commitment}) ->
-            lists:member(<<"...">>, committed_keys(Commitment, Opts))
-        end,
-        maps:to_list(Commitments)
-    );
-has_extension_commitment(_Msg, _Opts) ->
-    false.
+    hb_cache:ensure_all_loaded(Flattened, Opts).
 
-committed_keys(Commitment, Opts) ->
-    lists:map(
-        fun hb_link:remove_link_specifier/1,
-        hb_util:message_to_ordered_list(
-            maps:get(<<"committed">>, Commitment, []),
-            Opts
-        )
-    ).
+flatten_varied_deep(Msg, Opts) when is_map(Msg) ->
+    maps:map(
+        fun
+            (<<"commitments">>, Value) -> Value;
+            (<<"priv">>, Value) -> Value;
+            (_Key, Value) -> flatten_varied_deep(Value, Opts)
+        end,
+        hb_maps:flatten(Msg, Opts)
+    );
+flatten_varied_deep(List, Opts) when is_list(List) ->
+    [flatten_varied_deep(Value, Opts) || Value <- List];
+flatten_varied_deep(Value, _Opts) ->
+    Value.
 
 normalize_opts(Opts) when is_map(Opts) ->
     Opts;

@@ -98,7 +98,7 @@ verify_message(Req, Opts) ->
                     ),
                     {error, unsigned_item};
                 _ ->
-                    case hb_message:verify(Item, all, Opts) of
+                    case hb_message:verify_all_signed_commitments(Item, Opts) of
                         true -> {ok, Item};
                         false ->
                             ?event(

@@ -30,7 +30,9 @@ to(Msg, Req, Opts) ->
         ),
     Loaded =
         case hb_maps:get(<<"bundle">>, Req, false, Opts) of
-            true -> hb_cache:ensure_all_loaded(Restructured, Opts);
+            true ->
+                LoadOpts = Opts#{ <<"load-all-commitments">> => true },
+                hb_cache:ensure_all_loaded(Restructured, LoadOpts);
             false -> Restructured
         end,
     JSONStructured =

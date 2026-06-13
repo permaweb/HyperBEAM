@@ -49,15 +49,18 @@ default(Key, Base, Request, Opts) ->
 eval(Base, Request, Opts) ->
     maybe
         ?event({eval, {base, Base}, {request, Request}}),
-        {ok, ApplyBase} ?=
+        {ok, {ApplyBase, ExplicitSource}} ?=
             case find_path(<<"source">>, Base, Request, Opts) of
                 {ok, SourcePath} ->
-                    find_key(SourcePath, Base, Request, Opts);
+                    case find_key(SourcePath, Base, Request, Opts) of
+                        {ok, Source} -> {ok, {Source, true}};
+                        Err -> Err
+                    end;
                 {error, path_not_found, _} ->
                     % If the base is not found, we return the base for this 
                     % request, minus the device (which will, inherently, be
                     % `apply@1.0' and cause recursion).
-                    {ok, maps:remove(<<"device">>, Base)}
+                    {ok, {hb_maps:without([<<"device">>], Base, Opts), false}}
             end,
         ?event({eval, {apply_base, ApplyBase}}),
         case find_path(<<"apply-path">>, Base, Request, Opts) of
@@ -77,9 +80,24 @@ eval(Base, Request, Opts) ->
                             >>
                         };
                     {ok, ApplyPath} ->
-                        ApplyMsg = hb_ao:set(ApplyBase, <<"path">>, ApplyPath, Opts),
-                        ?event({executing, ApplyMsg}),
-                        hb_ao:resolve(ApplyMsg, Opts)
+                        case find_key(ApplyPath, ApplyBase, Request, Opts) of
+                            {ok, DirectValue} ->
+                                {ok, DirectValue};
+                            {error, _, _} ->
+                                KeysToRemove =
+                                    case ExplicitSource of
+                                        true -> [];
+                                        false -> [<<"commitments">>, <<"device">>]
+                                    end,
+                                ApplyMsg = hb_ao:set(
+                                    hb_maps:without(KeysToRemove, hb_maps:flatten(ApplyBase, Opts), Opts),
+                                    <<"path">>,
+                                    ApplyPath,
+                                    Opts
+                                ),
+                                ?event({executing, ApplyMsg}),
+                                hb_ao:resolve(ApplyMsg, Opts)
+                        end
                 end
         end
     else
@@ -143,16 +161,22 @@ find_key(Path, Base, Request, Opts) ->
                     [Req, Key] when Req == <<"request">> orelse Req == <<"req">> ->
                         {resolve, [{RequestAs, normalize_path([Key|RestKeys])}]};
                     [_] ->
-                        {resolve, [
-                            {RequestAs, normalize_path(Path)},
-                            {BaseAs, normalize_path(Path)}
-                        ]}
+                        case direct_key_value(Path, Base, Request, Opts) of
+                            not_found ->
+                                {resolve, [
+                                    {RequestAs, normalize_path(Path)},
+                                    {BaseAs, normalize_path(Path)}
+                                ]};
+                            FoundDirectValue ->
+                                {value, FoundDirectValue}
+                        end
                 end;
             _ -> {error, invalid_path, Path}
         end,
     case MaybeResolve of
         Err = {error, _, _} -> Err;
         {message, Message} -> {ok, Message};
+        {value, ResolvedDirectValue} -> {ok, ResolvedDirectValue};
         {resolve, Sources} ->
             ?event(
                 {resolving_from_sources,
@@ -165,6 +189,23 @@ find_key(Path, Base, Request, Opts) ->
                 Source -> {ok, Source}
             end
     end.
+
+direct_key_value(Path, Base, Request, _Opts) ->
+    Parts = hb_path:term_to_path_parts(Path),
+    case direct_path_value(Parts, Request) of
+        not_found -> direct_path_value(Parts, Base);
+        Value -> Value
+    end.
+
+direct_path_value([], Value) ->
+    Value;
+direct_path_value([Key|Rest], Msg) when is_map(Msg) ->
+    case maps:find(Key, Msg) of
+        {ok, Value} -> direct_path_value(Rest, Value);
+        error -> not_found
+    end;
+direct_path_value(_Path, _Value) ->
+    not_found.
 
 %% @doc Normalize the path.
 normalize_path(Path) ->

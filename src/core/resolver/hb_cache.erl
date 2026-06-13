@@ -266,15 +266,23 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    hb_message:paranoid_verify(cache_write, RawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
-    TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    LinkifyMode = cache_linkify_mode(Msg, Opts),
+    WriteOpts = Opts#{ <<"linkify-mode">> => LinkifyMode, linkify_mode => LinkifyMode },
+    WriteView = cache_write_view(Msg, WriteOpts),
+    hb_message:paranoid_verify(cache_write, WriteView, WriteOpts),
+    TABM = hb_message:convert(
+        WriteView,
+        tabm,
+        <<"structured@1.0">>,
+        WriteOpts
+    ),
     ?event(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
             TABM,
             hb_opts:get(store, no_viable_store, Opts),
-            Opts
+            WriteOpts
         )
     catch
         Type:Reason:Stacktrace ->
@@ -292,6 +300,33 @@ write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
 write(Bin, Opts) when is_binary(Bin) ->
     do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
+
+cache_linkify_mode(Msg, Opts) ->
+    case has_bundle_commitment(Msg, Opts) of
+        true -> false;
+        false -> offload
+    end.
+
+cache_write_view(Msg, Opts) ->
+    case has_bundle_commitment(Msg, Opts) of
+        true ->
+            hb_message:normalize_commitments(
+                ensure_all_loaded(hb_link:decode_all_links(Msg), Opts),
+                Opts,
+                verify
+            );
+        false -> Msg
+    end.
+
+has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_bundle_commitment(_Msg, _Opts) ->
+    false.
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
@@ -670,21 +705,28 @@ store_read(Target, Path, Store, Opts) ->
                             {subpaths, {explicit, Subpaths}}
                         }
                     ),
-                    Msg =
+                    case
                         prepare_links(
                             Target,
                             ResolvedFullPath,
                             Subpaths,
                             Store,
                             Opts
-                        ),
-                    ?event(
-                        {completed_read,
-                            {resolved_path, ResolvedFullPath},
-                            {explicit, Msg}
-                        }
-                    ),
-                    {ok, Msg};
+                        )
+                    of
+                        {error, _} = Error ->
+                            Error;
+                        {failure, _} = Failure ->
+                            Failure;
+                        Msg ->
+                            ?event(
+                                {completed_read,
+                                    {resolved_path, ResolvedFullPath},
+                                    {explicit, Msg}
+                                }
+                            ),
+                            {ok, Msg}
+                    end;
                 {error, _} = Error ->
                     Error;
                 {failure, _} = Failure ->
@@ -723,7 +765,16 @@ prepare_raw_links(RootPath, Subpaths, Store) ->
 
 %% @doc Prepare typed links using `ao-types' and commitment normalization.
 prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
-    {ok, Implicit, Types} = read_ao_types(RootPath, Subpaths, Store, Opts),
+    case read_ao_types(RootPath, Subpaths, Store, Opts) of
+        {ok, Implicit, Types} ->
+            prepare_typed_links(Target, RootPath, Subpaths, Store, Opts, Implicit, Types);
+        {error, _} = Error ->
+            Error;
+        {failure, _} = Failure ->
+            Failure
+    end.
+
+prepare_typed_links(Target, RootPath, Subpaths, Store, Opts, Implicit, Types) ->
     Res =
         maps:from_list(lists:filtermap(
             fun(<<"ao-types">>) -> false;
@@ -731,37 +782,38 @@ prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
                     % List the commitments for this message, and load them into
                     % memory. If there no commitments at the path, we exclude
                     % commitments from the list of links.
-                    CommPath = hb_path:to_binary([RootPath, <<"commitments">>, Target]),
+                    CommitmentsBase =
+                        hb_path:to_binary([RootPath, <<"commitments">>]),
                     ?event(read_commitment,
-                        {reading_commitment,
+                        {reading_commitments,
                             {target, Target},
                             {root_path, RootPath},
-                            {commitments_path, CommPath}
+                            {commitments_path, CommitmentsBase}
                         }
                     ),
-                    case do_read_commitment(CommPath, Opts) of
-                        {ok, Commitment} ->
-                            LoadedCommitment = 
-                                ensure_all_loaded(
-                                    Commitment,
-                                    Opts#{ <<"commitment">> => true }
-                                ),
-                            ?event(read_commitment,
-                                {found_target_commitment,
-                                    {path, CommPath},
-                                    {commitment, LoadedCommitment}
-                                }
-                            ),
-                            % We have commitments, so we read each commitment
-                            % into memory, and return it as part of the message.
+                    Commitments =
+                        case hb_opts:get(
+                            <<"load-all-commitments">>,
+                            false,
+                            Opts
+                        ) of
+                            true ->
+                                read_commitments(CommitmentsBase, Opts);
+                            false ->
+                                TargetPath =
+                                    hb_path:to_binary([CommitmentsBase, Target]),
+                                read_commitment(TargetPath, Target, Opts)
+                        end,
+                    case Commitments of
+                        CommitmentMap when map_size(CommitmentMap) > 0 ->
                             {
                                 true,
                                 {
                                     <<"commitments">>,
-                                    #{ Target => LoadedCommitment }
+                                    CommitmentMap
                                 }
                             };
-                        _ ->
+                        _NoCommitments ->
                             false
                     end;
                 (Subpath) ->
@@ -839,17 +891,98 @@ prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
             end
     end.
 
+read_commitment(CommitmentPath, CommitmentID, Opts) ->
+    case do_read_commitment(CommitmentPath, Opts) of
+        {ok, Commitment} ->
+            case load_commitment(Commitment, Opts) of
+                {ok, LoadedCommitment} ->
+                    ?event(read_commitment,
+                        {found_target_commitment,
+                            {path, CommitmentPath},
+                            {commitment, LoadedCommitment}
+                        }
+                    ),
+                    #{ CommitmentID => LoadedCommitment };
+                error ->
+                    #{}
+            end;
+        _ ->
+            #{}
+    end.
+
+read_commitments(CommitmentsPath, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    Store = hb_opts:get(store, no_viable_store, LocalOpts),
+    ResolvedCommitmentsPath =
+        case hb_store:resolve(Store, CommitmentsPath, LocalOpts) of
+            {ok, ResolvedPath} -> ResolvedPath;
+            _ -> CommitmentsPath
+        end,
+    case hb_store:list(Store, ResolvedCommitmentsPath, LocalOpts) of
+        {ok, CommitmentIDs} ->
+            maps:from_list(lists:filtermap(
+                fun(CommitmentID) ->
+                    CommitmentPath =
+                        hb_path:to_binary([ResolvedCommitmentsPath, CommitmentID]),
+                    case do_read_commitment(CommitmentPath, LocalOpts) of
+                        {ok, Commitment} ->
+                            case load_commitment(Commitment, Opts) of
+                                {ok, LoadedCommitment} ->
+                                    ?event(read_commitment,
+                                        {found_commitment,
+                                            {path, CommitmentPath},
+                                            {commitment, LoadedCommitment}
+                                        }
+                                    ),
+                                    {true, {CommitmentID, LoadedCommitment}};
+                                error ->
+                                    false
+                            end;
+                        _ ->
+                            false
+                    end
+                end,
+                CommitmentIDs
+            ));
+        _ ->
+            #{}
+    end.
+
+load_commitment(Commitment, Opts) ->
+    try
+        {ok,
+            ensure_all_loaded(
+                Commitment,
+                Opts#{ <<"commitment">> => true }
+            )
+        }
+    catch
+        throw:Reason
+                when is_tuple(Reason),
+                     tuple_size(Reason) > 0,
+                     (
+                        element(1, Reason) =:= missing_key
+                        orelse element(1, Reason) =:= necessary_message_not_found
+                     ) ->
+            error
+    end.
+
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
 %% list of subpaths, returning a map of keys and their types.
 read_ao_types(Path, Subpaths, Store, Opts) ->
     ?event({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
         true ->
-            {ok, TypesBin} =
-                hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts),
-            Types = structured_decode_types(TypesBin, Opts),
-            ?event({parsed_ao_types, {types, Types}}),
-            {ok, types_to_implicit(Types), Types};
+            case hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts) of
+                {ok, TypesBin} ->
+                    Types = structured_decode_types(TypesBin, Opts),
+                    ?event({parsed_ao_types, {types, Types}}),
+                    {ok, types_to_implicit(Types), Types};
+                {error, _} = Error ->
+                    Error;
+                {failure, _} = Failure ->
+                    Failure
+            end;
         false ->
             ?event({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
             {ok, #{}, #{}}

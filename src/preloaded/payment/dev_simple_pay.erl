@@ -77,25 +77,32 @@ estimate(_Base, EstimateReq, NodeMsg) ->
 %% inner request in addition to the price of the outer request.
 apply_price([{as, Device, Msg} | Rest], NodeMsg) ->
     apply_price([Msg#{ <<"device">> => Device } | Rest], NodeMsg);
-apply_price(
-        [Req = #{ <<"device">> := <<"apply@1.0">> }, #{ <<"path">> := Path } | Rest],
-        NodeMsg
-    ) ->
-    UserPath = hb_maps:get(Path, Req, <<"">>, NodeMsg),
-    UserMessage =
-        case hb_maps:find(<<"source">>, Req, NodeMsg) of
-            {ok, Source} -> hb_maps:get(Source, Req, Req, NodeMsg);
-            error -> Req
-        end,
-    UserRequest =
-        hb_maps:without(
-            [<<"device">>],
-            UserMessage#{ <<"path">> => UserPath }
-        ),
-    ?event(payment, {estimating_price_of_subrequest, {req, UserRequest}}),
-    {ok, Price} = estimate(#{}, #{ <<"request">> => UserRequest }, NodeMsg),
-    ?event(payment, {price_of_apply_subrequest, {price, Price}}),
-    {ok, Price, Rest};
+apply_price([RawReq, RawNext | Rest] = Seq, NodeMsg) ->
+    Req = hb_maps:flatten(RawReq, NodeMsg),
+    Next = hb_maps:flatten(RawNext, NodeMsg),
+    case {
+        hb_maps:get(<<"device">>, Req, undefined, NodeMsg),
+        maps:find(<<"path">>, Next)
+    } of
+        {<<"apply@1.0">>, {ok, Path}} ->
+            UserPath = hb_maps:get(Path, Req, <<"">>, NodeMsg),
+            UserMessage =
+                case hb_maps:find(<<"source">>, Req, NodeMsg) of
+                    {ok, Source} -> hb_maps:get(Source, Req, Req, NodeMsg);
+                    error -> Req
+                end,
+            UserRequest =
+                hb_maps:without(
+                    [<<"device">>],
+                    UserMessage#{ <<"path">> => UserPath }
+                ),
+            ?event(payment, {estimating_price_of_subrequest, {req, UserRequest}}),
+            {ok, Price} = estimate(#{}, #{ <<"request">> => UserRequest }, NodeMsg),
+            ?event(payment, {price_of_apply_subrequest, {price, Price}}),
+            {ok, Price, Rest};
+        _ ->
+            {ok, 0, Seq}
+    end;
 apply_price(Seq, _) ->
     {ok, 0, Seq}.
 
@@ -148,11 +155,11 @@ charge(_, RawReq, NodeMsg) ->
             RawReq,
             NodeMsg#{ <<"hashpath">> => ignore }
         ),
-    case hb_message:signers(Req, NodeMsg) of
-        [] ->
+    case charge_account(RawReq, Req, NodeMsg) of
+        no_signers ->
             ?event(payment, {charge, {error, <<"No signers">>}}),
             {ok, false};
-        [Signer] ->
+        {ok, Signer} ->
             UserBalance = get_balance(Signer, NodeMsg),
             Price = hb_ao:get(<<"quantity">>, RawReq, 0, NodeMsg),
             ?event(payment,
@@ -190,12 +197,38 @@ charge(_, RawReq, NodeMsg) ->
                             ".">>
                     }}
             end;
-        MultipleSigners ->
+        {multiple_signers, MultipleSigners} ->
             ?event(payment, {charge, {error_multiple_signers, MultipleSigners}}),
             {error, #{
                 <<"status">> => 400,
                 <<"body">> => <<"Multiple signers in charge.">>
             }}
+    end.
+
+charge_account(RawReq, Req, NodeMsg) ->
+    case {hb_ao:get(<<"account">>, RawReq, undefined, NodeMsg), is_node_signed(RawReq, NodeMsg)} of
+        {Account, true} when ?IS_ID(Account) ->
+            {ok, Account};
+        _ ->
+            case hb_message:signers(Req, NodeMsg) of
+                [] -> no_signers;
+                [Signer] -> {ok, Signer};
+                MultipleSigners -> {multiple_signers, MultipleSigners}
+            end
+    end.
+
+is_node_signed(Msg, NodeMsg) ->
+    case hb_opts:get(address, undefined, NodeMsg) of
+        NodeAddress when ?IS_ID(NodeAddress) ->
+            HumanNodeAddress = hb_util:human_id(NodeAddress),
+            lists:any(
+                fun(Signer) ->
+                    hb_util:human_id(Signer) =:= HumanNodeAddress
+                end,
+                hb_message:signers(Msg, NodeMsg)
+            );
+        _ ->
+            false
     end.
 
 %% @doc Get the balance of a user in the ledger.

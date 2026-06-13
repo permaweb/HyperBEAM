@@ -15,7 +15,7 @@
 %%% Library functions. Each exported function is _automatically_ added to the
 %%% Lua environment, except for the `install/3' function, which is used to
 %%% install the library in the first place.
--export([get/3, resolve/3, set/3, event/3, install/3]).
+-export([get/3, resolve/3, resolve_committed/3, set/3, event/3, install/3]).
 -export([make_table_meta/2]).
 -include("include/hb.hrl").
 
@@ -26,6 +26,7 @@
 -define(LIBRARY_FUNCTIONS, [
     {get, fun get/3},
     {resolve, fun resolve/3},
+    {resolve_committed, fun resolve_committed/3},
     {set, fun set/3},
     {event, fun event/3}
 ]).
@@ -189,13 +190,14 @@ raw_set_encoded(RawTable, Key, Value, State, Opts) ->
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->
     ?event(lua_import, {import_returning, {result, Result}}),
+    SafeResult = hb_private:reset(hb_cache:ensure_all_loaded(Result, Opts)),
     {ReturnParams, ResultingState} =
         lists:mapfoldl(
             fun(Term, StateIn) ->
                 dev_lua:encode_value(Term, StateIn, Opts)
             end,
             ExecState,
-            hb_cache:ensure_all_loaded(Result, Opts)
+            SafeResult
         ),
     ?event({lua_encoded, ReturnParams}),
     {ReturnParams, ResultingState}.
@@ -223,6 +225,26 @@ resolve({many, Msgs}, ExecState, ExecOpts) ->
         Error ->
             ?event(lua_error, {ao_core_resolver_error, Error}),
             {[<<"error">>, Error], ExecState}
+    end.
+
+%% @doc Commit a request body in the host, then resolve the request.
+resolve_committed([Req], ExecState, ExecOpts) ->
+    resolve_committed([Req, #{}], ExecState, ExecOpts);
+resolve_committed([Req, Spec], ExecState, ExecOpts) ->
+    try
+        CleanReq = maps:without([<<"commitments">>, <<"priv">>], Req),
+        Body = maps:get(<<"body">>, CleanReq),
+        Signed = hb_message:commit(Body, ExecOpts, Spec),
+        {Status, Res} = hb_ao:resolve(CleanReq#{ <<"body">> => Signed }, ExecOpts),
+        {[Status, Res], ExecState}
+    catch
+        Class:Reason:Stack ->
+            ?event(lua_error,
+                {ao_core_resolve_committed_error,
+                    {class, Class},
+                    {reason, Reason},
+                    {stack, Stack}}),
+            {[<<"error">>, Reason], ExecState}
     end.
 
 %% @doc A wrapper for `hb_ao''s `get' functionality.

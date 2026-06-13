@@ -52,16 +52,36 @@ tx(Base, Request, Opts) ->
     {ok, #{ _ => _ }} | {error, _}.
 post_tx(Base, RawRequest, Opts) ->
     {ok, Request} = extract_target(Base, RawRequest, Opts),
-    case hb_maps:find(<<"commitment-device">>, Request, Opts) of
+    case explicit_post_tx_device(Request, Opts) of
         {ok, Device} ->
             post_tx(Base, Request, Opts, Device);
-        error ->
+        not_found ->
             post_tx_detect_device(Base, Request, Opts)
     end.
 
+explicit_post_tx_device(Request, Opts) ->
+    lists:foldl(
+        fun
+            (_Key, {ok, Device}) ->
+                {ok, Device};
+            (Key, not_found) ->
+                case hb_maps:find(Key, Request, Opts) of
+                    {ok, Device}
+                            when Device == <<"tx@1.0">>;
+                                 Device == <<"ans104@1.0">> ->
+                        {ok, Device};
+                    _ ->
+                        not_found
+                end
+        end,
+        not_found,
+        [<<"commitment-device">>, <<"codec-device">>]
+    ).
+
 %% @doc Detect the commitment device to use when posting a transaction.
 post_tx_detect_device(Base, Request, Opts) ->
-    case hb_message:commitment_devices(Request, Opts) of
+    Devices = hb_message:commitment_devices(hb_maps:flatten(Request, Opts), Opts),
+    case supported_post_tx_devices(Devices) of
         [Device] -> post_tx(Base, Request, Opts, Device);
         [] -> 
             ?event(warning,
@@ -75,6 +95,16 @@ post_tx_detect_device(Base, Request, Opts) ->
             ?event(error, {too_many_commitment_devices, Devices}),
             {error, too_many_commitment_devices}
     end.
+
+supported_post_tx_devices(Devices) ->
+    lists:usort(
+        lists:filter(
+            fun(Device) ->
+                Device == <<"tx@1.0">> orelse Device == <<"ans104@1.0">>
+            end,
+            Devices
+        )
+    ).
 
 %% @doc Extract the target from the request or base message.
 extract_target(Base, Request, Opts) ->
@@ -95,31 +125,66 @@ extract_target(Base, Request, Opts) ->
 %% transactions. Both are expected in their `structured@1.0` forms as input and
 %% converted to their commitment codecs during their dispatch flows.
 post_tx(_Base, Request, Opts, <<"tx@1.0">>) ->
-    TX = hb_message:convert(Request, <<"tx@1.0">>, Opts),
+    Payload = post_tx_payload(Request, <<"tx@1.0">>, Opts),
+    TX = tx_from_post_request(Payload, Opts),
     Res = post_tx_header(TX, Opts),
     case Res of
         {ok, _} ->
-            CacheRes = hb_cache:write(Request, Opts),
+            CacheRes = hb_cache:write(Payload, Opts),
             case CacheRes of
                 {ok, _} ->
-                    ?event(debug_arweave, {tx_cached, {msg, Request}, {status, ok}});
+                    ?event(debug_arweave, {tx_cached, {msg, Payload}, {status, ok}});
                 _ ->
-                    ?event(error, {tx_failed_to_cache, {msg, Request}, CacheRes})
+                    ?event(error, {tx_failed_to_cache, {msg, Payload}, CacheRes})
             end;
         _ ->
             ok
     end,
     Res;
 post_tx(_Base, Request, Opts, <<"ans104@1.0">>) ->
+    Payload = post_tx_payload(Request, <<"ans104@1.0">>, Opts),
     hb_http:post(
         hb_opts:get(bundler_ans104, not_found, Opts),
         #{
             <<"path">> => <<"/~bundler@1.0/tx">>,
             <<"bundler-subject">> => <<"body">>,
-            <<"body">> => Request
+            <<"body">> => Payload
         },
         Opts
     ).
+
+post_tx_payload(Request, Device, Opts) ->
+    Flat = hb_maps:flatten(Request, Opts),
+    Commitments =
+        hb_maps:filter(
+            fun(_ID, Commitment) ->
+                hb_ao:get(<<"commitment-device">>, Commitment, Opts) == Device
+            end,
+            hb_maps:get(<<"commitments">>, Flat, #{}, Opts),
+            Opts
+        ),
+    case map_size(Commitments) of
+        0 ->
+            Request;
+        _ ->
+            {ok, Payload} =
+                hb_message:with_only_committed(
+                    Flat#{ <<"commitments">> => Commitments },
+                    Opts
+                ),
+            Payload
+    end.
+
+tx_from_post_request(Request, Opts) ->
+    case {
+        hb_maps:get(<<"content-type">>, Request, undefined, Opts),
+        hb_maps:get(<<"body">>, Request, undefined, Opts)
+    } of
+        {<<"application/json">>, Body} when is_binary(Body) ->
+            ar_tx:json_struct_to_tx(hb_json:decode(Body));
+        _ ->
+            hb_message:convert(Request, <<"tx@1.0">>, Opts)
+    end.
 
 post_tx_header(TX, Opts) ->
     JSON = ar_tx:tx_to_json_struct(TX#tx{ data = <<>> }),

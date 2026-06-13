@@ -64,11 +64,14 @@ verify(M1, M2, NodeOpts) ->
         % comes from M1 (result of previous stage). For direct calls, it may be
         % in M2. Try M1 first, then fall back to M2.
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}} 
-            ?= case extract_and_normalize_message(M1, NodeOpts) of
+            ?= case extract_and_normalize_message(M2, NodeOpts) of
                 {ok, Result} -> {ok, Result};
                 {error, {report_not_found, _}} ->
-                    ?event(snp_verify, {report_not_in_m1_trying_m2}),
-                    extract_and_normalize_message(M2, NodeOpts);
+                    ?event(snp_verify, {report_not_in_m2_trying_m1}),
+                    extract_and_normalize_message(M1, NodeOpts);
+                {error, missing_address} ->
+                    ?event(snp_verify, {address_not_in_m2_trying_m1}),
+                    extract_and_normalize_message(M1, NodeOpts);
                 {error, ExtractReason} -> {error, ExtractReason}
             end,
         % Perform all validation steps
@@ -240,14 +243,26 @@ extract_and_normalize_message(M2, NodeOpts) ->
         end,
         Report = hb_json:decode(ValidReportJSON),
         Msg =
-            maps:merge(
-                maps:without([<<"report">>], MsgWithJSONReport),
-                Report
+            restore_uncommitted_report_keys(
+                maps:merge(
+                    maps:without([<<"report">>], MsgWithJSONReport),
+                    Report
+                ),
+                RawMsg,
+                NodeOpts
             ),
         
         % Extract address and node message ID
-        Address = hb_ao:get(<<"address">>, Msg, NodeOpts),
+        Address = hb_maps:get(<<"address">>, Msg, not_found, NodeOpts),
         ?event({snp_address, Address}),
+        ok ?= case Address of
+            MissingAddress
+                    when MissingAddress == undefined;
+                         MissingAddress == not_found ->
+                {error, missing_address};
+            _ ->
+                ok
+        end,
         {ok, NodeMsgID} ?= extract_node_message_id(Msg, NodeOpts),
         ?event({snp_node_msg_id, NodeMsgID}),
         {ok, {Msg, Address, NodeMsgID, ReportJSON, MsgWithJSONReport}}
@@ -269,14 +284,55 @@ extract_and_normalize_message(M2, NodeOpts) ->
 %% `{error, missing_node_msg_id}' if no ID can be found
 -spec extract_node_message_id(_, _) -> {ok, binary()} | {error, missing_node_msg_id}.
 extract_node_message_id(Msg, NodeOpts) ->
-    case {hb_ao:get(<<"node-message">>, Msg, NodeOpts#{ <<"hashpath">> => ignore }),
-          hb_ao:get(<<"node-message-id">>, Msg, NodeOpts)} of
-        {undefined, undefined} ->
+    case {hb_maps:get(<<"node-message">>, Msg, not_found, NodeOpts),
+          hb_maps:get(<<"node-message-id">>, Msg, not_found, NodeOpts)} of
+        {MissingNode, MissingID}
+                when (MissingNode == undefined orelse MissingNode == not_found)
+                andalso (MissingID == undefined orelse MissingID == not_found) ->
             {error, missing_node_msg_id};
-        {undefined, ID} ->
+        {MissingNode, ID} when MissingNode == undefined; MissingNode == not_found ->
             {ok, ID};
-        {NodeMsg, _} ->
-            {ok, hb_message:id(NodeMsg, none, NodeOpts)}
+        {NodeMsg, MaybeID} ->
+            case hb_message:id(NodeMsg, none, NodeOpts) of
+                MissingID when MissingID == undefined; MissingID == not_found ->
+                    case MaybeID of
+                        MissingFallback
+                                when MissingFallback == undefined;
+                                     MissingFallback == not_found ->
+                            {error, missing_node_msg_id};
+                        FallbackID ->
+                            {ok, FallbackID}
+                    end;
+                NodeMsgID ->
+                    {ok, NodeMsgID}
+            end
+    end.
+
+restore_uncommitted_report_keys(Msg, RawMsg, NodeOpts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            case maps:find(Key, Acc) of
+                error ->
+                    case raw_report_key(Key, RawMsg, NodeOpts) of
+                        RawMissing when RawMissing == undefined; RawMissing == not_found ->
+                            Acc;
+                        RawValue ->
+                            Acc#{ Key => RawValue }
+                    end;
+                {ok, _} ->
+                    Acc
+            end
+        end,
+        Msg,
+        [<<"node-message">>, <<"node-message-id">>]
+    ).
+
+raw_report_key(Key, RawMsg, NodeOpts) ->
+    case maps:find(Key, RawMsg) of
+        {ok, Value} ->
+            Value;
+        error ->
+            hb_maps:get(Key, RawMsg, not_found, NodeOpts#{ <<"hashpath">> => ignore })
     end.
 
 %% @doc Verify that the nonce in the report matches the expected value.
@@ -292,7 +348,12 @@ extract_node_message_id(Msg, NodeOpts) ->
 %% @returns `{ok, true}' if the nonce matches, or `{error, nonce_mismatch}' on failure
 -spec verify_nonce(binary(), binary(), _, _) -> {ok, true} | {error, nonce_mismatch}.
 verify_nonce(Address, NodeMsgID, Msg, NodeOpts) ->
-    Nonce = hb_util:decode(hb_ao:get(<<"nonce">>, Msg, NodeOpts)),
+    EncodedNonce = hb_maps:get(<<"nonce">>, Msg, not_found, NodeOpts),
+    Nonce =
+        case hb_util:safe_decode(EncodedNonce) of
+            {ok, Decoded} -> Decoded;
+            {error, invalid} -> EncodedNonce
+        end,
     ?event({snp_nonce, Nonce}),
     NonceMatches = report_data_matches(Address, NodeMsgID, Nonce),
     ?event({nonce_matches, NonceMatches}),
@@ -598,6 +659,13 @@ report_data_matches(Address, NodeMsgID, ReportData) ->
 %% @returns A binary nonce formed by concatenating the native address and message ID
 -spec generate_nonce(RawAddress :: binary(), RawNodeMsgID :: binary()) -> binary().
 generate_nonce(RawAddress, RawNodeMsgID) ->
+    case {RawAddress, RawNodeMsgID} of
+        {not_found, _} -> throw({missing_snp_nonce_input, address});
+        {undefined, _} -> throw({missing_snp_nonce_input, address});
+        {_, not_found} -> throw({missing_snp_nonce_input, node_message_id});
+        {_, undefined} -> throw({missing_snp_nonce_input, node_message_id});
+        _ -> ok
+    end,
     Address = hb_util:native_id(RawAddress),
     NodeMsgID = hb_util:native_id(RawNodeMsgID),
     << Address/binary, NodeMsgID/binary >>.

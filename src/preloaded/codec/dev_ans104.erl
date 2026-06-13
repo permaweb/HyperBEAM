@@ -924,4 +924,3 @@ test_bundle_uncommitted(Encode, Decode) ->
             ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label)
     end,
     ok.
-

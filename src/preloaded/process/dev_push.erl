@@ -70,8 +70,13 @@ push(Base, Req, Opts) ->
                                 },
                                 Opts
                             ),
-                            ok = cache_scheduled_assignment(Assignment, Opts),
-                            push_with_mode(Process, Assignment, Opts)
+                            {ok, CachedAssignment} =
+                                cache_scheduled_assignment(Assignment, Opts),
+                            push_with_mode(
+                                Process,
+                                inherit_push_controls(CachedAssignment, Req, Opts),
+                                Opts
+                            )
                     end;
                 {error, Res} -> {error, Res}
             end;
@@ -185,8 +190,35 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                 end
             }
         }),
-    case {Status, hb_ao:get(<<"outbox">>, Result, #{}, Opts)} of
-        {ok, NoResults} when ?IS_EMPTY_MESSAGE(NoResults) ->
+    case Status of
+        ok ->
+            handle_push_result(
+                Result,
+                AdditionalRes,
+                #{
+                    <<"process">> => ID,
+                    <<"slot">> => Slot,
+                    <<"result-depth">> => IncludeDepth,
+                    <<"max-depth">> => MaxDepth,
+                    <<"from-base">> => BaseID,
+                    <<"from-uncommitted">> => UncommittedID,
+                    <<"from-scheduler">> =>
+                        hb_ao:get(<<"scheduler">>, PrimaryProcess, Opts),
+                    <<"from-authority">> =>
+                        hb_ao:get(<<"authority">>, PrimaryProcess, Opts)
+                },
+                Opts
+            );
+        Err when Err == error; Err == failure ->
+            ?event(push, {push_compute_failed, {error, Result}}, Opts),
+            {error, Result}
+    end.
+
+handle_push_result(Result, AdditionalRes, Origin, Opts) ->
+    ID = maps:get(<<"process">>, Origin),
+    Slot = maps:get(<<"slot">>, Origin),
+    case hb_ao:get(<<"outbox">>, Result, #{}, Opts) of
+        NoResults when ?IS_EMPTY_MESSAGE(NoResults) ->
             ?event(push_short, {done, {process, {string, ID}}, {slot, Slot}}),
             {ok,
                 push_response(
@@ -195,7 +227,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                     Opts
                 )
             };
-        {ok, Outbox} ->
+        Outbox ->
             ?event(push, {push_found_outbox, {outbox, Outbox}}),
             Downstream =
                 hb_maps:map(
@@ -218,27 +250,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                                 push_result_message(
                                     DownstreamProcess,
                                     MsgToPush,
-                                    #{
-                                        <<"process">> => ID,
-                                        <<"slot">> => Slot,
-                                        <<"outbox-key">> => Key,
-                                        <<"result-depth">> => IncludeDepth,
-                                        <<"max-depth">> => MaxDepth,
-                                        <<"from-base">> => BaseID,
-                                        <<"from-uncommitted">> => UncommittedID,
-                                        <<"from-scheduler">> =>
-                                            hb_ao:get(
-                                                <<"scheduler">>,
-                                                PrimaryProcess,
-                                                Opts
-                                            ),
-                                        <<"from-authority">> =>
-                                            hb_ao:get(
-                                                <<"authority">>,
-                                                PrimaryProcess,
-                                                Opts
-                                            )
-                                    },
+                                    Origin#{ <<"outbox-key">> => Key },
                                     Opts
                                 );
                             {error, not_found} ->
@@ -269,10 +281,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                     ),
                     Opts
                 )
-            };
-        {Err, Error} when Err == error; Err == failure ->
-            ?event(push, {push_failed_to_find_outbox, {error, Error}}, Opts),
-            {error, Error}
+            }
     end.
 
 push_response(Base, Extra, Opts) ->
@@ -349,10 +358,11 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
             ),
             case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
                 {ok, Assignment} ->
-                    ok = cache_scheduled_assignment(Assignment, Opts),
+                    {ok, CachedAssignment} =
+                        cache_scheduled_assignment(Assignment, Opts),
                     % Analyze the result of the message push.
-                    NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
-                    PushedMsg = hb_ao:get(<<"body">>, Assignment, Opts),
+                    NextSlotOnProc = hb_ao:get(<<"slot">>, CachedAssignment, Opts),
+                    PushedMsg = hb_ao:get(<<"body">>, CachedAssignment, Opts),
                     % Get the ID of the message that was pushed. We already have
                     % the 'origin' message, but we need the signed ID.
                     PushedMsgID = hb_message:id(PushedMsg, all, Opts),
@@ -391,11 +401,10 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
 cache_scheduled_assignment(Assignment, Opts) ->
     case hb_ao:get(<<"type">>, Assignment, not_found, Opts#{ <<"hashpath">> => ignore }) of
         <<"Assignment">> -> write_scheduled_assignment(Assignment, Opts);
-        _ -> ok
+        _ -> {ok, Assignment}
     end.
 
 write_scheduled_assignment(RawAssignment, RawOpts) ->
-    Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
     Opts =
         RawOpts#{
             <<"store">> =>
@@ -405,6 +414,13 @@ write_scheduled_assignment(RawAssignment, RawOpts) ->
                     RawOpts
                 )
         },
+    {ok, CommittedAssignment} =
+        hb_message:with_only_committed(
+            hb_cache:ensure_all_loaded(RawAssignment, Opts),
+            Opts
+        ),
+    Assignment =
+        hb_message:normalize_commitments(CommittedAssignment, Opts, verify),
     ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     AssignmentPath =
@@ -430,7 +446,8 @@ write_scheduled_assignment(RawAssignment, RawOpts) ->
     SignedID = hb_message:id(ToWrite, signed, Opts),
     AllID = hb_message:id(ToWrite, all, Opts),
     ok = hb_cache:link(WrittenID, SignedID, Opts),
-    hb_cache:link(WrittenID, AllID, Opts).
+    ok = hb_cache:link(WrittenID, AllID, Opts),
+    {ok, Assignment}.
 
 %% @doc Push a downstream resultant message that has already been scheduled.
 %% We determine whether to push the message locally or remotely based on the
@@ -904,10 +921,21 @@ schedule_initial_message(Base, Req, Opts) ->
             {error, Res}
     end.
 
+inherit_push_controls(Assignment, Req, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            case hb_maps:get(Key, Req, undefined, Opts#{ <<"hashpath">> => ignore }) of
+                undefined -> Acc;
+                Value -> Acc#{ Key => Value }
+            end
+        end,
+        Assignment,
+        [<<"async">>, <<"max-depth">>, <<"result-depth">>]
+    ).
+
 is_signed_message(Msg, Opts) ->
     try
         length(hb_message:signers(Msg, Opts)) > 0
-            andalso hb_message:verify(Msg, signers, Opts)
     catch _:_ ->
         false
     end.
