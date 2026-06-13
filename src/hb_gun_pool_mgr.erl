@@ -230,7 +230,7 @@ handle_info({gun_response, ConnPid, StreamRef, IsFin, Status, Headers},
     case maps:find(StreamRef, Streams) of
         error ->
             {noreply, State};
-        {ok, {CallerPid, ConnPid}} ->
+        {ok, {CallerPid, ConnPid}} when is_pid(CallerPid) ->
             CallerPid ! {gun_response, self(), StreamRef, IsFin, Status, Headers},
             State2 = case IsFin of
                 fin  -> stream_done(StreamRef, ConnPid, State);
@@ -250,7 +250,7 @@ handle_info({gun_data, ConnPid, StreamRef, IsFin, Data},
     case maps:find(StreamRef, Streams) of
         error ->
             {noreply, State};
-        {ok, {CallerPid, ConnPid}} ->
+        {ok, {CallerPid, ConnPid}} when is_pid(CallerPid) ->
             CallerPid ! {gun_data, self(), StreamRef, IsFin, Data},
             State2 = case IsFin of
                 fin  -> stream_done(StreamRef, ConnPid, State);
@@ -269,7 +269,7 @@ handle_info({gun_trailers, ConnPid, StreamRef, Trailers},
             State = #state{streams = Streams}) ->
     case maps:find(StreamRef, Streams) of
         error -> {noreply, State};
-        {ok, {CallerPid, ConnPid}} ->
+        {ok, {CallerPid, ConnPid}} when is_pid(CallerPid) ->
             CallerPid ! {gun_trailers, self(), StreamRef, Trailers},
             {noreply, stream_done(StreamRef, ConnPid, State)};
         {ok, {abandoned, ConnPid}} ->
@@ -280,7 +280,7 @@ handle_info({gun_error, ConnPid, StreamRef, Reason},
             State = #state{streams = Streams}) when is_reference(StreamRef) ->
     case maps:find(StreamRef, Streams) of
         error -> {noreply, State};
-        {ok, {CallerPid, ConnPid}} ->
+        {ok, {CallerPid, ConnPid}} when is_pid(CallerPid) ->
             CallerPid ! {gun_error, self(), StreamRef, Reason},
             {noreply, stream_done(StreamRef, ConnPid, State)};
         {ok, {abandoned, ConnPid}} ->
