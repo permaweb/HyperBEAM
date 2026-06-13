@@ -70,6 +70,13 @@
     DEFAULT_HTTP_OPTS,
     #{ <<"http-client">> => ?DEFAULT_HTTP_CLIENT, <<"protocol">> => http2 }
 ).
+%% Arweave nodes are reached over plain HTTP, where `http2' means h2c
+%% prior-knowledge. The nodes accept h2c but emit uppercase header names,
+%% which gun rejects (RFC7540 8.1.2), so we pin them to HTTP/1.1.
+-define(
+    ARWEAVE_NODE_HTTP_OPTS,
+    #{ <<"http-client">> => ?DEFAULT_HTTP_CLIENT, <<"protocol">> => http1 }
+).
 -define(ENV_KEYS,
     #{
         <<"priv-key-location">> => {"HB_KEY", "hyperbeam-key.json"},
@@ -967,7 +974,7 @@ ensure_node_history(Opts, RequiredOpts) ->
 
 %% @doc Util to add opts to nodes.
 add_opts(Items) ->
-    add_opts(Items, ?DEFAULT_HTTP_OPTS).
+    add_opts(Items, ?ARWEAVE_NODE_HTTP_OPTS).
 add_opts(Items, Opts) ->
     lists:map(
         fun (Item) when is_map(Item) -> 

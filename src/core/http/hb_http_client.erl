@@ -362,15 +362,21 @@ do_gun_pool_request(MgrPid, Args, Headers, Body, Opts) ->
     end.
 
 %% @doc Expand a header map into a proplist suitable for gun:request/5,
-%% splitting any list-valued <<"cookie">> entry into one header per line
-%% (gun does not collapse list values; pooled and non-pooled paths must
-%% produce the same wire format).
+%% lowercasing header names (HTTP/2 rejects uppercase names, RFC 7540
+%% 8.1.2) and splitting any list-valued <<"cookie">> entry into one
+%% header per line (gun does not collapse list values; pooled and
+%% non-pooled paths must produce the same wire format).
 normalize_gun_headers(HeaderMap, Opts) ->
     HeadersWithoutCookie =
-        hb_maps:to_list(
-            hb_maps:without([<<"cookie">>], HeaderMap, Opts),
-            Opts
-        ),
+        [
+            {hb_util:to_lower(hb_util:bin(Name)), Value}
+        ||
+            {Name, Value} <-
+                hb_maps:to_list(
+                    hb_maps:without([<<"cookie">>], HeaderMap, Opts),
+                    Opts
+                )
+        ],
     CookieLines =
         case hb_maps:get(<<"cookie">>, HeaderMap, [], Opts) of
             BinCookie when is_binary(BinCookie) -> [BinCookie];
