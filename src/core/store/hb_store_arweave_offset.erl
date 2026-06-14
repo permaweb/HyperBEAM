@@ -6,6 +6,8 @@
 %%% 
 %%% The encoding is as follows:
 %%%     << Version:4, Codec:4, StartOffset:64, Length/binary >>
+%%% Pending TXs omit the offset and length:
+%%%     << Version:4, 0:4 >>
 %%% where:
 %%%     - Version: 4-bit unsigned integer. Max: 15. Current: version `1`.
 %%%     - Codec: 4-bit unsigned integer. Max: 15.
@@ -44,6 +46,8 @@ path(ID) -> throw({cannot_encode_path, ID}).
 
 %% @doc Encode the offset of the data if it is valid. Throws `cannot_encode_offset'
 %% if invalid.
+encode(<<"tx@1.0">>, relative, _Length) ->
+    <<?FORMAT_VERSION:4, 0:4>>;
 encode(Type, StartOffset, Length)
         when
         (Type == true orelse Type == false orelse is_binary(Type))
@@ -58,6 +62,8 @@ encode(Type, StartOffset, Length)
 encode(IsTX, StartOffset, Length) ->
     throw({cannot_encode_offset, {IsTX, StartOffset, Length}}).
 
+decode(<<?FORMAT_VERSION:4, 0:4>>) ->
+    {?FORMAT_VERSION, <<"tx@1.0">>, relative, 0};
 decode(<<Format:1/binary, StartOffset:?OFFSET_SZ, Length/binary>>) ->
     {Version, CodecName} = decode_format(Format),
     {Version, CodecName, StartOffset, binary:decode_unsigned(Length)};
