@@ -1,8 +1,8 @@
 %%% @doc A `~copycat@1.0' engine that fetches block data from an Arweave node for
 %%% replication. This engine works in _reverse_ chronological order by default.
 %%% If `to' is omitted, it keeps moving downward from `from' until it reaches a
-%%% block where at least one TX is already indexed, then stops. If `to' is
-%%% provided, every block in the range is processed.
+%%% block that is already indexed at the requested depth. If `to' is provided,
+%%% every block in the range is processed.
 -module(dev_copycat_arweave).
 -device_libraries([lib_arweave_common]).
 -export([arweave/3]).
@@ -22,7 +22,10 @@ arweave(_Base, Request, Opts) ->
             {error, unavailable};
         {ok, {From, To}} ->
             case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-                <<"write">> -> fetch_blocks(Request, From, To, Opts);
+                <<"write">> ->
+                    Depth = max(2,
+                        hb_util:int(hb_maps:get(<<"depth">>, Request, 2, Opts))),
+                    fetch_blocks(Request, From, To, Depth, Opts);
                 <<"list">> -> list_index(From, To, Opts);
                 Mode ->
                     {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
@@ -166,8 +169,8 @@ classify_txs(TXIDs, Opts) ->
 
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
 %% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
-%% is omitted, stop at the first block where any TX is already indexed.
-fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
+%% is omitted, stop at the first block indexed to the target depth.
+fetch_blocks(Req, Current, To, _TargetDepth, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
             {reached_target, To},
@@ -175,11 +178,10 @@ fetch_blocks(Req, Current, To, _Opts) when is_integer(To), Current < To ->
         }
     ),
     {ok, To};
-fetch_blocks(_Req, Current, undefined, _Opts) when Current < 0 ->
+fetch_blocks(_Req, Current, undefined, _TargetDepth, _Opts) when Current < 0 ->
     {ok, 0};
-fetch_blocks(Req, Current, undefined, Opts) ->
-    BlockRes = fetch_block_header(Current, Opts),
-    case is_already_indexed(BlockRes, Opts) of
+fetch_blocks(Req, Current, undefined, TargetDepth, Opts) ->
+    case is_block_indexed(Current, TargetDepth, Opts) of
         true ->
             ?event(copycat_short,
                 {arweave_block_indexing_completed,
@@ -189,36 +191,24 @@ fetch_blocks(Req, Current, undefined, Opts) ->
             ),
             {ok, Current};
         false ->
+            BlockRes = fetch_block_header(Current, Opts),
             observe_event(<<"block_indexed">>, fun() ->
-                process_block(BlockRes, Current, undefined, Opts)
+                process_block(BlockRes, Current, undefined, TargetDepth, Opts)
             end),
-            fetch_blocks(Req, Current - 1, undefined, Opts)
+            fetch_blocks(Req, Current - 1, undefined, TargetDepth, Opts)
     end;
-fetch_blocks(Req, Current, To, Opts) ->
+fetch_blocks(Req, Current, To, TargetDepth, Opts) ->
     observe_event(<<"block_indexed">>, fun() ->
-        fetch_and_process_block(Current, To, Opts)
+        process_block(fetch_block_header(Current, Opts), Current, To, TargetDepth, Opts)
     end),
-    fetch_blocks(Req, Current - 1, To, Opts).
+    fetch_blocks(Req, Current - 1, To, TargetDepth, Opts).
 
-%% @doc Determine whether a fetched block is considered indexed.
-%% A block is indexed when any TX from its `txs' list is in the index.
-is_already_indexed({ok, Block}, Opts) ->
-    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
-is_already_indexed({error, _}, _Opts) ->
-    false.
-
-fetch_and_process_block(Current, To, Opts) ->
-    BlockRes = fetch_block_header(Current, Opts),
-    process_block(BlockRes, Current, To, Opts).
-
-%% @doc Process a block.
-process_block(BlockRes, Current, To, Opts) ->
+process_block(BlockRes, Current, To, TargetDepth, Opts) ->
     case BlockRes of
         {ok, Block} ->
             ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
-            case maybe_index_ids(Block, Opts) of
+            case maybe_index_ids(Block, TargetDepth, Opts) of
                 {block_skipped, Results} ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     ?event(
@@ -234,6 +224,10 @@ process_block(BlockRes, Current, To, Opts) ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     BundleTXs = maps:get(bundle_count, Results, 0),
                     SkippedTXs = maps:get(skipped_count, Results, 0),
+                    case SkippedTXs of
+                        0 -> ok = write_block_index(Current, TargetDepth, Opts);
+                        _ -> ok
+                    end,
                     ?event(
                         copycat_short,
                         {arweave_block_indexed,
@@ -256,9 +250,36 @@ process_block(BlockRes, Current, To, Opts) ->
             )
     end.
 
+block_indexed_path(Height) ->
+    <<"block/", (hb_util:bin(Height))/binary, "/depth">>.
+
+write_block_index(Height, Depth, Opts) ->
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    hb_store:write(
+        Store,
+        #{ block_indexed_path(Height) => integer_to_binary(Depth) },
+        Opts
+    ).
+
+is_block_indexed(Height, TargetDepth, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store ->
+            false;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(Store, block_indexed_path(Height), Opts) of
+                {ok, Bin} ->
+                    try binary_to_integer(Bin) >= TargetDepth
+                    catch _:_ -> false
+                    end;
+                _ ->
+                    false
+            end
+    end.
+
 %% @doc Index the IDs of all transactions in the block if configured to do so.
-maybe_index_ids(Block, Opts) ->
-    TotalTXs = length(hb_maps:get(<<"txs">>, Block, [], Opts)),
+maybe_index_ids(Block, TargetDepth, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    TotalTXs = length(TXIDs),
     case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
             {block_skipped, #{
@@ -273,7 +294,7 @@ maybe_index_ids(Block, Opts) ->
             BlockSize = hb_util:int(
                 hb_maps:get(<<"block_size">>, Block, 0, Opts)),
             BlockStartOffset = BlockEndOffset - BlockSize,
-            case resolve_tx_headers(hb_maps:get(<<"txs">>, Block, [], Opts), Opts) of
+            case resolve_tx_headers(TXIDs, Opts) of
                 error ->
                     % Skip entire block if any transaction errors
                     {block_skipped, #{
@@ -288,8 +309,9 @@ maybe_index_ids(Block, Opts) ->
                         fun({{padding, _}, _}) -> false; (_) -> true end,
                         TXsWithData
                     ),
-                    TXResults = process_txs(ValidTXs, BlockStartOffset, Opts),
-                    {block_cached, TXResults#{total_txs => TotalTXs}}
+                    TXResults = process_txs(
+                        ValidTXs, BlockStartOffset, TargetDepth, Opts),
+                    {block_cached, TXResults#{ total_txs => TotalTXs }}
             end
     end.
 
@@ -301,12 +323,17 @@ parallel_map(Items, Fun, Opts) ->
     MaxWorkers = max(1, hb_opts:get(arweave_index_workers, 1, Opts)),
     hb_pmap:parallel_map(Items, Fun, MaxWorkers).
 
+counters(Items, Bundles, Skipped) ->
+    #{
+        items_count => Items,
+        bundle_count => Bundles,
+        skipped_count => Skipped
+    }.
+
 %% @doc Process a single transaction and return its contribution to the counters.
 %% Returns a map with keys: items_count, bundle_count, skipped_count
-process_tx({{padding, _PaddingRoot}, _EndOffset}, _BlockStartOffset, _Opts) ->
-    #{items_count => 0, bundle_count => 0, skipped_count => 0};
-process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
-    IndexStore = hb_store_arweave:store_from_opts(Opts),
+process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) ->
+    ArweaveStore = hb_store_arweave:store_from_opts(Opts),
     TXID = hb_util:encode(TX#tx.id),
     TXEndOffset = BlockStartOffset + EndOffset,
     TXStartOffset = TXEndOffset - TX#tx.data_size,
@@ -315,9 +342,9 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         {offset, TXStartOffset},
         {size, TX#tx.data_size}
     }),
-    observe_event(<<"item_indexed">>, fun() ->
+    ok = observe_event(<<"item_indexed">>, fun() ->
         hb_store_arweave:write_offset(
-            IndexStore,
+            ArweaveStore,
             TXID,
             <<"tx@1.0">>,
             TXStartOffset,
@@ -325,7 +352,44 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
         )
     end),
     case is_bundle_tx(TX, Opts) of
-        false -> #{items_count => 0, bundle_count => 0, skipped_count => 0};
+        false ->
+            counters(0, 0, 0);
+        true when TargetDepth > 2 ->
+            try
+                case hb_store_arweave:read_chunks(
+                    TXStartOffset, TX#tx.data_size, Opts) of
+                    {ok, BundleData} ->
+                        {TotalTime, IndexRes} = timer:tc(
+                            fun() ->
+                                index_full_bundle_bytes(
+                                    BundleData,
+                                    TXStartOffset,
+                                    TargetDepth - 1,
+                                    ArweaveStore,
+                                    Opts
+                                )
+                            end
+                        ),
+                        case IndexRes of
+                            {ok, ItemsCount} ->
+                                record_event_metrics(
+                                    <<"item_indexed">>,
+                                    ItemsCount,
+                                    TotalTime
+                                ),
+                                counters(ItemsCount, 1, 0);
+                            {error, IndexError} ->
+                                skip_bundle(TXID, IndexError)
+                        end;
+                    {error, ReadError} ->
+                        skip_bundle(TXID, ReadError);
+                    not_found ->
+                        skip_bundle(TXID, not_found)
+                end
+            catch
+                _:Reason:_ ->
+                    skip_bundle(TXID, Reason)
+            end;
         true ->
             % Lightweight processing of block transactions to depth 2. We
             % can avoid loading the full L1 TX data into memory, and instead
@@ -336,17 +400,14 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                 {tx_end_offset, TXEndOffset},
                 {tx_data_size, TX#tx.data_size}
             }),
-            BundleRes = download_bundle_header(
-                TXEndOffset, TX#tx.data_size, Opts
-            ),
-            case BundleRes of
+            case download_bundle_header(TXEndOffset, TX#tx.data_size, Opts) of
                 {ok, HeaderSize, BundleIndex} ->
                     % Batch event tracking: measure total time and count for all write_offset calls
                     {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
                         lists:foldl(
                             fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
-                                hb_store_arweave:write_offset(
-                                    IndexStore,
+                                ok = hb_store_arweave:write_offset(
+                                    ArweaveStore,
                                     hb_util:encode(ItemID),
                                     <<"ans104@1.0">>,
                                     ItemStartOffset,
@@ -365,16 +426,9 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
                         }),
                     % Single event record for the batch
                     record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-                    #{items_count => ItemsCount, bundle_count => 1, skipped_count => 0};
+                    counters(ItemsCount, 1, 0);
                 {error, Reason} ->
-                    ?event(
-                        copycat_short,
-                        {arweave_bundle_skipped,
-                            {tx_id, {explicit, TXID}},
-                            {reason, Reason}
-                        }
-                    ),
-                    #{items_count => 0, bundle_count => 1, skipped_count => 1}
+                    skip_bundle(TXID, Reason)
             end
     end.
 
@@ -383,23 +437,124 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, Opts) ->
 %% When arweave_index_workers <= 1, processes sequentially (one worker at a time).
 %% When arweave_index_workers > 1, processes in parallel with the specified concurrency limit.
 %% Returns a map with keys: items_count, bundle_count, skipped_count.
-process_txs(ValidTXs, BlockStartOffset, Opts) ->
+process_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
     Results = parallel_map(
         ValidTXs,
-        fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, Opts) end,
+        fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, TargetDepth, Opts) end,
         Opts
     ),
     lists:foldl(
         fun(Result, Acc) ->
-            #{
-                items_count => maps:get(items_count, Result, 0) + maps:get(items_count, Acc, 0),
-                bundle_count => maps:get(bundle_count, Result, 0) + maps:get(bundle_count, Acc, 0),
-                skipped_count => maps:get(skipped_count, Result, 0) + maps:get(skipped_count, Acc, 0)
-            }
+            maps:merge_with(
+                fun(_Key, ResultCount, AccCount) -> ResultCount + AccCount end,
+                Result,
+                Acc
+            )
         end,
-        #{items_count => 0, bundle_count => 0, skipped_count => 0},
+        counters(0, 0, 0),
         Results
     ).
+
+skip_bundle(EncodedTXID, Reason) ->
+    ?event(
+        copycat_short,
+        {arweave_bundle_skipped,
+            {tx_id, {explicit, EncodedTXID}},
+            {reason, Reason}
+        }
+    ),
+    counters(0, 1, 1).
+
+index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
+    case ar_bundles:decode_bundle_header(BundleData) of
+        invalid_bundle_header ->
+            {error, invalid_bundle_header};
+        {ItemsBin, BundleIndex} ->
+            HeaderSize = byte_size(BundleData) - byte_size(ItemsBin),
+            index_full_bundle_items(
+                BundleIndex,
+                ItemsBin,
+                BundleStartOffset + HeaderSize,
+                Depth,
+                Store,
+                Opts,
+                0
+            )
+    end.
+
+index_full_bundle_items(
+        [], _ItemsBin, _ItemStartOffset, _Depth, _Store, _Opts, Count) ->
+    {ok, Count};
+index_full_bundle_items(
+    [{ItemID, Size} | Rest],
+    ItemsBin,
+    ItemStartOffset,
+    Depth,
+    Store,
+    Opts,
+    Count
+) when byte_size(ItemsBin) >= Size ->
+    <<ItemBinary:Size/binary, RestBin/binary>> = ItemsBin,
+    EncodedItemID = hb_util:encode(ItemID),
+    ParseResult =
+        try ar_bundles:deserialize_header(ItemBinary)
+        catch _:_ -> error
+        end,
+    ok = hb_store_arweave:write_offset(
+        Store,
+        EncodedItemID,
+        <<"ans104@1.0">>,
+        ItemStartOffset,
+        Size
+    ),
+    ok =
+        case {ParseResult, hb_opts:get(arweave_index_headers, false, Opts)} of
+            {{ok, _, Parsed}, true} ->
+                LocalOpts = hb_store:scope(Opts, local),
+                Msg = hb_message:convert(
+                    Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
+                {ok, _Path} = hb_cache:write(Msg, LocalOpts),
+                ok;
+            _ -> ok
+        end,
+    DescendantRes =
+        case {Depth > 1, ParseResult} of
+            {true, {ok, HeaderSize, ParsedItem}} ->
+                case is_bundle_tx(ParsedItem, Opts) of
+                    true ->
+                        index_full_bundle_bytes(
+                            ParsedItem#tx.data,
+                            ItemStartOffset + HeaderSize,
+                            Depth - 1,
+                            Store,
+                            Opts
+                        );
+                    false ->
+                        {ok, 0}
+                end;
+            {true, _} ->
+                {error, invalid_item_header};
+            _ ->
+                {ok, 0}
+        end,
+    case DescendantRes of
+        {ok, DescendantCount} ->
+            index_full_bundle_items(
+                Rest,
+                RestBin,
+                ItemStartOffset + Size,
+                Depth,
+                Store,
+                Opts,
+                Count + 1 + DescendantCount
+            );
+        {error, _} = Error ->
+            Error
+    end;
+index_full_bundle_items(
+        _BundleIndex, _ItemsBin, _ItemStartOffset, _Depth,
+        _Store, _Opts, _Count) ->
+    {error, invalid_bundle_header}.
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
@@ -624,7 +779,7 @@ invalid_bundle_test_parallel() ->
     Block = 1307606,
     {ok, Block} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
+            <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary, "&depth=3">>,
             Opts
         ),
     assert_bundle_read(
@@ -901,54 +1056,6 @@ explicit_to_reindexes_all_test_parallel() ->
     ?assert(has_any_indexed_tx(LowerBlock, Opts)),
     ok.
 
-%% @doc Manually write to the index to simulate a partially indexed block.
-%% This should also trigger a stop when the `to` option is omitted.
-auto_stop_partial_index_test_parallel() ->
-    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
-    Block = 1826700,
-    HigherBlock = Block + 1,
-    NoIndexOpts = Opts#{
-        <<"arweave-index-ids">> => false,
-        <<"arweave-index-blocks">> => true
-    },
-    {ok, Block} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(Block))/binary, "&"
-                "to=", (hb_util:bin(Block))/binary, "&"
-                "mode=write"
-            >>,
-            NoIndexOpts
-        ),
-    {ok, BlockData} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave@2.9">> },
-            #{
-                <<"path">> => <<"block">>,
-                <<"block">> => Block,
-                <<"cache-control">> => [<<"only-if-cached">>]
-            },
-            Opts
-        ),
-    TXIDs = hb_maps:get(<<"txs">>, BlockData, [], Opts),
-    ?assert(length(TXIDs) > 0),
-    [OneTXID | _] = TXIDs,
-    hb_store_arweave:write_offset(StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
-    {ok, Block} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(HigherBlock))/binary, "&"
-                "mode=write"
-            >>,
-            Opts
-        ),
-    ?assert(has_any_indexed_tx(HigherBlock, Opts)),
-    ?assert(has_any_indexed_tx(Block, Opts)),
-    ?assertNot(has_any_indexed_tx(Block-1, Opts)),
-    ok.
-
 negative_parse_range_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     {ok, Tip} =
@@ -1170,3 +1277,41 @@ assert_indexed_range(From, To, _Opts) when From < To ->
 assert_indexed_range(From, To, Opts) ->
     ?assert(has_any_indexed_tx(From, Opts)),
     assert_indexed_range(From - 1, To, Opts).
+
+small_block_depth_3_test() ->
+    {_TestStore, _StoreOpts, DefaultOpts} = setup_index_opts(),
+    Opts = DefaultOpts#{ <<"arweave-index-headers">> => true },
+    Block = 1889322,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(Block))/binary, "&"
+                "to=", (hb_util:bin(Block))/binary, "&"
+                "depth=3"
+            >>,
+            Opts
+        ),
+    L3ID = <<"npAzk_BomjWBQQr_xnmlhdxjyl97EJnNv_MAaXffs1s">>,
+    assert_item_read(L3ID, Opts),
+    LocalOpts = hb_store:scope(Opts, local),
+    {ok, L3Header} = hb_cache:read(L3ID, LocalOpts),
+    L3Data =
+        hb_ao:get_first(
+            [
+                {{as, <<"message@1.0">>, L3Header}, <<"data">>},
+                {{as, <<"message@1.0">>, L3Header}, <<"body">>}
+            ],
+            <<>>,
+            Opts
+        ),
+    ?assert(byte_size(L3Data) > 0),
+    L3AppName = hb_maps:get(
+        <<"app-name">>, hb_message:uncommitted(L3Header, Opts), undefined, Opts),
+    ?assertNotEqual(undefined, L3AppName),
+    {ok, MessageIDs} =
+        hb_cache:match(#{<<"app-name">> => L3AppName}, LocalOpts),
+    ?assert(lists:member(L3ID, MessageIDs), {missing_match_index, L3ID}),
+    ?assert(hb_message:verify(L3Header, all, Opts), {verify_failed, L3ID}),
+    ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
+    ok.
