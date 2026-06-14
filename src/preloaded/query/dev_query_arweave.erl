@@ -510,9 +510,14 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         end,
     WithCursor =
         Annotated#{
-            <<"cursor">> => << (hb_util:bin(Offset))/binary, Postfix/binary >>
+            <<"cursor">> => << (offset_cursor(ID, Offset))/binary, Postfix/binary >>
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
+
+offset_cursor(ID, relative) when is_binary(ID) ->
+    <<"pending:", ID/binary>>;
+offset_cursor(_ID, Offset) ->
+    hb_util:bin(Offset).
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
@@ -532,7 +537,10 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun(#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
+            fun(#{ <<"offset">> := relative }) ->
+                    EndOffset =:= infinity;
+                (#{ <<"offset">> := IDOffset, <<"length">> := Length })
+                        when is_integer(IDOffset) ->
                     ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
                         (
                             (EndOffset =:= infinity) orelse
@@ -636,3 +644,43 @@ explicit_ids(Args, Opts) ->
             _ -> []
         end
     ).
+
+pending_offsets_page_by_cursor_test() ->
+    Store = hb_test_utils:test_store(),
+    ArweaveStore = #{ <<"store-module">> => hb_store_arweave, <<"index-store">> => [Store] },
+    Opts = #{ <<"store">> => [Store], <<"arweave-index-store">> => ArweaveStore },
+    {ok, NumericID} =
+        hb_cache:write(#{ <<"type">> => <<"Message">>, <<"data">> => <<"numeric">> }, Opts),
+    {ok, PendingA} =
+        hb_cache:write(#{ <<"type">> => <<"Message">>, <<"data">> => <<"pending-a">> }, Opts),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, NumericID, <<"tx@1.0">>, 10, 1),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, PendingA, <<"tx@1.0">>, relative, 0),
+    BaseArgs =
+        #{
+            <<"ids">> => [PendingA, NumericID],
+            <<"block">> => #{ <<"min">> => 0 },
+            <<"first">> => 1
+        },
+    Page =
+        fun(Args) ->
+            {ok, #{ <<"edges">> := [Edge] }} =
+                query(#{}, <<"transactions">>, Args, Opts),
+            Edge
+        end,
+    {ok, BlockMsgID} =
+        hb_cache:write(
+            #{ <<"height">> => 1, <<"weave_size">> => 100, <<"block_size">> => 100 },
+            Opts
+        ),
+    hb_cache:link(
+        BlockMsgID,
+        [<<"~arweave@2.9">>, <<"block">>, <<"height">>, <<"1">>],
+        Opts
+    ),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"block">> => #{ <<"max">> => 1 } }),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"sort">> => <<"HEIGHT_ASC">> }),
+    #{ <<"id">> := PendingA, <<"cursor">> := FirstCursor } = Page(BaseArgs),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"after">> => FirstCursor }),
+    ok.
