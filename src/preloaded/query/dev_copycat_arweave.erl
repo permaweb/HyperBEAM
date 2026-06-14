@@ -457,10 +457,8 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
                     skip_bundle(TXID, Reason)
             end;
         true ->
-            % Lightweight processing of block transactions to depth 2. We
-            % can avoid loading the full L1 TX data into memory, and instead
-            % only load the bundle header. But as a result we're unable to
-            % recurse any deeper than L2 dataitems.
+            % Shallow confirmed indexing only needs the bundle header, avoiding
+            % a full L1 data download while still writing direct item offsets.
             ?event(debug_copycat, {fetching_bundle_header, 
                 {tx_id, {string, TXID}},
                 {tx_end_offset, TXEndOffset},
