@@ -123,15 +123,29 @@ serve_or_redirect(TxId, Casted, Rest, Req, Opts) ->
 needs_b32_redirect(TxId, Rest, Req, Opts) when ?IS_ID(TxId) ->
     ReqInner = hb_maps:get(<<"request">>, Req, #{}, Opts),
     Host = hb_maps:get(<<"host">>, ReqInner, <<>>, Opts),
-    B32 = dev_b32_name:encode(TxId),
-    Already = dev_name:name_from_host(Host, hb_opts:get(node_host, no_host, Opts)),
+    B32 = b32_encode(TxId),
     PlainTail = lists:all(fun(X) -> plain_path_segment(X, Opts) end, Rest),
-    case {Host =/= <<>>, PlainTail, Already} of
-        {true, true, NotCanonical} when NotCanonical =/= {ok, B32} ->
+    Prefix = <<B32/binary, ".">>,
+    AlreadyCanonical =
+        byte_size(Host) >= byte_size(Prefix)
+            andalso binary:part(Host, 0, byte_size(Prefix)) == Prefix,
+    case {Host =/= <<>>, PlainTail, AlreadyCanonical} of
+        {true, true, false} ->
             {redirect, b32_url(B32, ReqInner, Opts)};
         _ -> no_redirect
     end;
 needs_b32_redirect(_, _, _, _) -> no_redirect.
+
+%% @doc Base32-encode a tx id (lowercased, unpadded) for the canonical
+%% subdomain. Inlined from `dev_b32_name:encode/1' because preloaded devices are
+%% loaded under content-hashed module names and cannot be called by source name.
+b32_encode(ID) ->
+    hb_util:bin(
+        string:replace(
+            string:to_lower(hb_util:list(base32:encode(hb_util:native_id(ID)))),
+            "=", "", all
+        )
+    ).
 
 %% @doc A plain path segment is a bare ID binary or a map without a device key.
 plain_path_segment(X, _Opts) when is_binary(X) -> true;
