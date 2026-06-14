@@ -457,39 +457,44 @@ get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
 %% @doc Return a chunk or range of bytes relative to a specific, unconfirmed,
 %% transaction's data root.
 get_chunk_range_relative(Offset, Length, RelativeTXID, Opts) ->
-    hb_prometheus:observe(
-        Length,
-        arweave_chunk_load_requested_bytes,
-        []
-    ),
-    Offsets =
-        generate_offsets(
-            max(1, Offset + 1),
-            (Offset + Length),
-            ?DATA_CHUNK_SIZE
-        ),
-    GETFun =
-        fun(XOffset) ->
-            pending(
-                #{},
-                #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
-                Opts
-            )
-        end,
-    case fetch_and_collect(Offsets, GETFun, Opts) of
-        {ok, ChunkInfos} ->
-            Concatenated =
-                hb_util:bin(
-                    lists:map(
-                        fun(JSONStruct) ->
-                            hb_util:decode(maps:get(<<"chunk">>, JSONStruct))
-                        end,
-                        ChunkInfos
+    case pending(
+        #{},
+        #{ <<"pending">> => RelativeTXID, <<"exclude-data">> => true },
+        Opts
+    ) of
+        {ok, PendingTX} ->
+            DataSize = hb_util:int(maps:get(<<"data_size">>, PendingTX)),
+            hb_prometheus:observe(
+                Length,
+                arweave_chunk_load_requested_bytes,
+                []
+            ),
+            Offsets = pending_relative_chunk_offsets(Offset, Length, DataSize),
+            GETFun =
+                fun(XOffset) ->
+                    decode_relative_chunk(
+                        pending(
+                            #{},
+                            #{ <<"offset">> => XOffset, <<"pending">> => RelativeTXID },
+                            Opts
+                        )
                     )
-                ),
-            {ok, Concatenated};
-        Error -> Error
+                end,
+            case fetch_and_collect(Offsets, GETFun, Opts) of
+                {ok, ChunkInfos} ->
+                    {ok, Binaries} = assemble_chunks(ChunkInfos, Offset + 1),
+                    {ok, iolist_to_binary(Binaries)};
+                Error -> Error
+            end;
+        Error ->
+            Error
     end.
+
+decode_relative_chunk({ok, JSON}) ->
+    {ok, decode_chunk_tuple(JSON, ar_merkle:extract_note(
+        hb_util:decode(maps:get(<<"data_path">>, JSON))))};
+decode_relative_chunk({error, _} = Err) ->
+    Err.
 
 %% @doc Iteratively detect gaps in coverage and fetch the chunk at the start
 %% of each gap until the entire range [Offset, EndOffset] is covered.
@@ -548,20 +553,36 @@ generate_offsets(Current, End, _Step, Acc) when Current > End ->
 generate_offsets(Current, End, Step, Acc) ->
     generate_offsets(Current + Step, End, Step, [Current | Acc]).
 
+pending_relative_chunk_offsets(Offset, Length, DataSize) ->
+    RangeStart = max(1, Offset + 1),
+    RangeEnd = min(Offset + Length, DataSize),
+    case RangeStart > RangeEnd of
+        true ->
+            [];
+        false ->
+            FirstChunk = ((RangeStart - 1) div ?DATA_CHUNK_SIZE) + 1,
+            LastChunk = ((RangeEnd - 1) div ?DATA_CHUNK_SIZE) + 1,
+            [min(Chunk * ?DATA_CHUNK_SIZE, DataSize) ||
+                Chunk <- lists:seq(FirstChunk, LastChunk)]
+    end.
+
 %% @doc Decode a chunk response into a {Start, End, Binary} tuple.
 %% Runs inside the pmap worker so raw JSON is GC'd per-worker.
 decode_chunk({ok, JSON}) ->
-    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
     AbsEnd = hb_util:int(maps:get(<<"absolute_end_offset">>, JSON)),
-    AbsStart = AbsEnd - byte_size(Chunk) + 1,
+    {AbsStart, _AbsEnd, Chunk} = ChunkTuple = decode_chunk_tuple(JSON, AbsEnd),
     ?event(debug_arweave,
         {decode_chunk,
             {abs_start, AbsStart},
             {abs_end, AbsEnd},
             {size, byte_size(Chunk)}}),
-    {ok, {AbsStart, AbsEnd, Chunk}};
+    {ok, ChunkTuple};
 decode_chunk({error, _} = Err) ->
     Err.
+
+decode_chunk_tuple(JSON, ChunkEnd) ->
+    Chunk = hb_util:decode(maps:get(<<"chunk">>, JSON)),
+    {ChunkEnd - byte_size(Chunk) + 1, ChunkEnd, Chunk}.
 
 %% @doc Collect decoded chunk results. Fails fast on the first error.
 collect_chunks(Results) ->
@@ -776,7 +797,14 @@ pending(Base, Request, Opts) ->
             case hb_maps:find(<<"offset">>, Request, Opts) of
                 error ->
                     % Retreive a bare TX header by its TXID
-                    request(<<"GET">>, <<"/unconfirmed_tx/", TXID/binary>>, Opts);
+                    ExcludeData =
+                        hb_util:bool(
+                            find_key(<<"exclude-data">>, Base, Request, Opts)),
+                    request(
+                        <<"GET">>,
+                        <<"/unconfirmed_tx/", TXID/binary>>,
+                        Opts#{ <<"exclude-data">> => ExcludeData }
+                    );
                 {ok, RawOffset} ->
                     Offset = hb_util:int(RawOffset),
                     % Download an unconfirmed chunk by its offset
@@ -788,17 +816,7 @@ pending(Base, Request, Opts) ->
                             "/",
                             (hb_util:bin(Offset))/binary
                         >>,
-                        Opts#{
-                            <<"exclude-data">> =>
-                                hb_util:bool(
-                                    find_key(
-                                        <<"exclude-data">>,
-                                        Base,
-                                        Request,
-                                        Opts
-                                    )
-                                )
-                        }
+                        Opts
                     )
             end
     end.
@@ -1665,6 +1683,66 @@ get_bad_tx_test_parallel() ->
     Res = hb_http:get(Node, Path, #{}),
     ?assertEqual({error, not_found}, Res).
 
+pending_offset_handling_test() ->
+    ClientOpts = post_tx_json_client_opts(),
+    PendingData = <<"test-data">>,
+    PendingLength = byte_size(PendingData),
+    #tx{ data_root = DataRoot, data_tree = DataTree } =
+        ar_tx:generate_chunk_tree(
+            #tx{
+                data = PendingData,
+                data_size = PendingLength,
+                format = 2
+            }
+    ),
+    DataPath = ar_merkle:generate_path(DataRoot, 0, DataTree),
+    HeaderJSON = hb_json:decode(post_tx_json_payload(ClientOpts)),
+    TXID = maps:get(<<"id">>, HeaderJSON),
+    ChunkBody =
+        hb_json:encode(
+            #{
+                <<"chunk">> => hb_util:encode(PendingData),
+                <<"data_path">> => hb_util:encode(DataPath)
+            }
+        ),
+    {ok, MockNode, MockHandle} = hb_mock_server:start([
+        {"/unconfirmed_chunk/:id/:offset", pending_chunk, {200, ChunkBody}},
+        {"/unconfirmed_tx/:id", pending_tx, {200, hb_json:encode(HeaderJSON)}}
+    ]),
+    Routes = [
+        #{
+            <<"template">> => <<"^/arweave">>,
+            <<"nodes">> => [
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockNode,
+                    <<"opts">> => #{ <<"http-client">> => httpc }
+                }
+            ],
+            <<"stop-after">> => true
+        }
+    ],
+    IndexStore =
+        #{
+            <<"index-store">> => [hb_test_utils:test_store()],
+            <<"routes">> => Routes
+        },
+    try
+        ok = hb_store_arweave:write_offset(
+            IndexStore,
+            TXID,
+            <<"tx@1.0">>,
+            relative,
+            PendingLength
+        ),
+        {ok, StoreTX} =
+            hb_store_arweave:read(IndexStore, #{ <<"read">> => TXID }, ClientOpts),
+        ?assertEqual(TXID, hb_message:id(StoreTX, signed, ClientOpts)),
+        ?assertEqual(PendingData, maps:get(<<"data">>, StoreTX))
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
+
 %% @doc: helper test to generate and write a dataitem to disk so that we
 %% can validate it using 3rd-party js libraries and gateways.
 serialize_data_item_test_disabled() ->
@@ -1697,6 +1775,12 @@ serialize_data_item_test_disabled() ->
     ?assertEqual(length(DataItem#tx.tags), length(VerifiedItem#tx.tags)),
     ?assert(ar_bundles:verify_item(VerifiedItem)),
     ok.
+
+pending_relative_chunk_helpers_test_parallel() ->
+    DataSize = 315127,
+    ?assertEqual([?DATA_CHUNK_SIZE], pending_relative_chunk_offsets(0, 1, DataSize)),
+    ?assertEqual([DataSize], pending_relative_chunk_offsets(?DATA_CHUNK_SIZE, 1, DataSize)),
+    ?assertEqual([?DATA_CHUNK_SIZE, DataSize], pending_relative_chunk_offsets(0, DataSize, DataSize)).
 
 get_partial_chunk_post_split_test_parallel() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset
