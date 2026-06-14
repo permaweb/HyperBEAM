@@ -239,25 +239,39 @@ fetch_blocks(_Req, Current, undefined, _IndexMode, _Opts) when Current < 0 ->
 fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
     case is_block_indexed(Current, IndexMode, Opts) of
         true ->
-            ?event(copycat_short,
-                {arweave_block_indexing_completed,
-                    {stop_at_indexed_block, Current},
-                    {initial_request, Req}
-                }
-            ),
-            {ok, Current};
+            stop_at_indexed_block(Req, Current);
         false ->
             BlockRes = fetch_block_header(Current, Opts),
-            observe_event(<<"block_indexed">>, fun() ->
-                process_block(BlockRes, Current, undefined, IndexMode, Opts)
-            end),
-            fetch_blocks(Req, Current - 1, undefined, IndexMode, Opts)
+            case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
+                true ->
+                    stop_at_indexed_block(Req, Current);
+                false ->
+                    observe_event(<<"block_indexed">>, fun() ->
+                        process_block(BlockRes, Current, undefined, IndexMode, Opts)
+                    end),
+                    fetch_blocks(Req, Current - 1, undefined, IndexMode, Opts)
+            end
     end;
 fetch_blocks(Req, Current, To, IndexMode, Opts) ->
     observe_event(<<"block_indexed">>, fun() ->
         process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
     end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
+
+stop_at_indexed_block(Req, Current) ->
+    ?event(copycat_short,
+        {arweave_block_indexing_completed,
+            {stop_at_indexed_block, Current},
+            {initial_request, Req}
+        }
+    ),
+    {ok, Current}.
+
+is_already_indexed({ok, Block}, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
+is_already_indexed({error, _}, _Opts) ->
+    false.
 
 process_block(BlockRes, Current, To, IndexMode, Opts) ->
     case BlockRes of
@@ -1201,6 +1215,28 @@ explicit_to_reindexes_all_test_parallel() ->
             Opts
         ),
     ?assert(has_any_indexed_tx(LowerBlock, Opts)),
+    ok.
+
+auto_stop_partial_index_test_parallel() ->
+    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    IndexedBlock = 1826700,
+    HigherBlock = IndexedBlock + 1,
+    {ok, BlockData} = fetch_block_header(IndexedBlock, Opts),
+    [OneTXID | _] = hb_maps:get(<<"txs">>, BlockData, [], Opts),
+    ok = hb_store_arweave:write_offset(
+        StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
+    {ok, IndexedBlock} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(HigherBlock))/binary, "&"
+                "mode=shallow"
+            >>,
+            Opts
+        ),
+    ?assert(has_any_indexed_tx(HigherBlock, Opts)),
+    ?assert(has_any_indexed_tx(IndexedBlock, Opts)),
+    ?assertNot(has_any_indexed_tx(IndexedBlock-1, Opts)),
     ok.
 
 negative_parse_range_test_parallel() ->
