@@ -221,7 +221,7 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
         #{
             <<"raw-id">> => TXID,
             <<"offset">> => StartOffset,
-            <<"data-offset">> => StartOffset,
+            <<"data-offset">> => pending_root_offset(TXID, StartOffset),
             <<"content-type">> => ContentType,
             <<"header-length">> => 0,
             <<"content-length">> => Length,
@@ -234,13 +234,8 @@ head_raw_tx(TXID, StartOffset, Length, Opts) ->
 %% chunk, deserialize it, and offset our data read from its starting offset.
 head_raw_ans104(TXID, ArweaveOffset, Length, Opts) ->
     ?event(debug_raw, {head_raw_ans104, {txid, TXID}, {arweave_offset, ArweaveOffset}, {length, Length}}),
-    HeaderReq =
-        #{
-            <<"path">> => <<"chunk">>,
-            <<"offset">> => ArweaveOffset + 1,
-            <<"length">> => min(Length, ?DATA_CHUNK_SIZE)
-        },
-    case hb_ao:resolve(#{ <<"device">> => <<"arweave@2.9">> }, HeaderReq, Opts) of
+    case hb_store_arweave:read_chunks(
+        ArweaveOffset, min(Length, ?DATA_CHUNK_SIZE), Opts) of
         {ok, HeaderChunk} ->
             do_head_raw_ans104(TXID, ArweaveOffset, Length, HeaderChunk, Opts);
         {error, Error} -> {error, Error}
@@ -258,7 +253,8 @@ do_head_raw_ans104(TXID, ArweaveOffset, Length, Data, _Opts) ->
                 #{
                     <<"raw-id">> => TXID,
                     <<"offset">> => ArweaveOffset,
-                    <<"data-offset">> => ArweaveOffset + HeaderSize,
+                    <<"data-offset">> =>
+                        add_data_offset(ArweaveOffset, HeaderSize),
                     <<"content-type">> => ContentType,
                     <<"header-length">> => HeaderSize,
                     <<"content-length">> => Length - HeaderSize,
@@ -280,6 +276,16 @@ deserialize_ans104_header(Data) ->
                 }
             }
     end.
+
+pending_root_offset(TXID, relative) ->
+    #{ <<"relative">> => TXID, <<"offset">> => 0 };
+pending_root_offset(_TXID, Offset) ->
+    Offset.
+
+add_data_offset(#{ <<"relative">> := TXID, <<"offset">> := Offset }, Add) ->
+    #{ <<"relative">> => TXID, <<"offset">> => Offset + Add };
+add_data_offset(Offset, Add) ->
+    Offset + Add.
 
 %% @doc Get raw transaction *data* and `content-type` of an Arweave message.
 %% Does not deserialize the message, nor return signature information. Included
@@ -304,7 +310,7 @@ get_raw(Base, Request, Opts) ->
                 RangeLength = (EndRange - StartRange) + 1,
                 {ok, Data} =
                     hb_store_arweave:read_chunks(
-                        ArweaveDataOffset + StartRange,
+                        add_data_offset(ArweaveDataOffset, StartRange),
                         RangeLength,
                         Opts
                     ),

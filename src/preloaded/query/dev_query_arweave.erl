@@ -275,7 +275,7 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
     Ascending =
         lists:sort(
             fun(#{ <<"offset">> := OffsetA }, #{ <<"offset">> := OffsetB }) ->
-                OffsetA < OffsetB
+                offset_sort_key(OffsetA) < offset_sort_key(OffsetB)
             end,
             WithOffset
         ),
@@ -514,10 +514,21 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
-offset_cursor(ID, relative) when is_binary(ID) ->
-    <<"pending:", ID/binary>>;
-offset_cursor(_ID, Offset) ->
-    hb_util:bin(Offset).
+offset_cursor(ID, Offset) when is_binary(ID) ->
+    case pending_offset(Offset) of
+        true -> <<"pending:", ID/binary>>;
+        false -> hb_util:bin(Offset)
+    end.
+
+pending_offset(relative) -> true;
+pending_offset(#{ <<"relative">> := _, <<"offset">> := _ }) -> true;
+pending_offset(_) -> false.
+
+offset_sort_key(Offset) ->
+    case pending_offset(Offset) of
+        true -> {pending, Offset};
+        false -> {confirmed, Offset}
+    end.
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
@@ -537,7 +548,9 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun(#{ <<"offset">> := relative }) ->
+            fun(#{ <<"offset">> := Offset }) when Offset =:= relative ->
+                    EndOffset =:= infinity;
+                (#{ <<"offset">> := Offset }) when is_map(Offset) ->
                     EndOffset =:= infinity;
                 (#{ <<"offset">> := IDOffset, <<"length">> := Length })
                         when is_integer(IDOffset) ->

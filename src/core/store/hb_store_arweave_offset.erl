@@ -8,6 +8,8 @@
 %%%     << Version:4, Codec:4, StartOffset:64, Length/binary >>
 %%% Pending TXs omit the offset and length:
 %%%     << Version:4, 0:4 >>
+%%% Pending TX children use the maximum offset as a relative marker:
+%%%     << Version:4, Codec:4, 2^64-1:64, ParentID:256, Offset:64, Length/binary >>
 %%% where:
 %%%     - Version: 4-bit unsigned integer. Max: 15. Current: version `1`.
 %%%     - Codec: 4-bit unsigned integer. Max: 15.
@@ -30,11 +32,13 @@
 -module(hb_store_arweave_offset).
 -export([encode/3, decode/1, path/1]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc Determine if a value is within a given unsigned bit range.
 -define(IN_BIT_RANGE(X, Bits), (X >= 0 andalso X < (1 bsl Bits))).
 
 -define(OFFSET_SZ, (8*8)). % 64-bit uint. Max: 2^64-1.
+-define(OFFSET_MAX, ((1 bsl ?OFFSET_SZ) - 1)).
 -define(FORMAT_VERSION, 1). % 4-bit uint. Max: 15.
 
 %% @doc Reserved for future use. At the present time, store containing offsets are
@@ -48,10 +52,24 @@ path(ID) -> throw({cannot_encode_path, ID}).
 %% if invalid.
 encode(<<"tx@1.0">>, relative, _Length) ->
     <<?FORMAT_VERSION:4, 0:4>>;
+encode(Type, #{ <<"relative">> := ParentID, <<"offset">> := RelOffset }, Length)
+        when
+        is_binary(Type)
+        andalso ?IS_ID(ParentID)
+        andalso ?IN_BIT_RANGE(RelOffset, ?OFFSET_SZ)
+        andalso is_integer(Length) andalso Length >= 0
+    ->
+    <<
+        (encode_format(Type))/binary,
+        ?OFFSET_MAX:?OFFSET_SZ,
+        (hb_util:native_id(ParentID))/binary,
+        RelOffset:?OFFSET_SZ,
+        (binary:encode_unsigned(Length))/binary
+    >>;
 encode(Type, StartOffset, Length)
         when
         (Type == true orelse Type == false orelse is_binary(Type))
-        andalso ?IN_BIT_RANGE(StartOffset, ?OFFSET_SZ*8)
+        andalso ?IN_BIT_RANGE(StartOffset, ?OFFSET_SZ)
         andalso is_integer(Length) andalso Length >= 0
     ->
     <<
@@ -64,6 +82,18 @@ encode(IsTX, StartOffset, Length) ->
 
 decode(<<?FORMAT_VERSION:4, 0:4>>) ->
     {?FORMAT_VERSION, <<"tx@1.0">>, relative, 0};
+decode(<<Format:1/binary, ?OFFSET_MAX:?OFFSET_SZ,
+        ParentID:32/binary, RelOffset:?OFFSET_SZ, Length/binary>>) ->
+    {Version, CodecName} = decode_format(Format),
+    {
+        Version,
+        CodecName,
+        #{
+            <<"relative">> => hb_util:encode(ParentID),
+            <<"offset">> => RelOffset
+        },
+        binary:decode_unsigned(Length)
+    };
 decode(<<Format:1/binary, StartOffset:?OFFSET_SZ, Length/binary>>) ->
     {Version, CodecName} = decode_format(Format),
     {Version, CodecName, StartOffset, binary:decode_unsigned(Length)};
@@ -87,12 +117,19 @@ decode_type(Type) -> throw({cannot_decode_type, Type}).
 %% @doc Encode the format of the offset. See the module documentation for the
 %% present index of supported codecs.
 encode_format(CodecName) ->
-    << ?FORMAT_VERSION:4, (encode_type(CodecName)):4 >>;
-encode_format(CodecName) ->
-    throw({cannot_encode_format, CodecName}).
+    << ?FORMAT_VERSION:4, (encode_type(CodecName)):4 >>.
 
 %% @doc Decode the format of the offset.
 decode_format(<<FormatVersion:4, CodecName:4>>) ->
     {FormatVersion, decode_type(CodecName)};
 decode_format(Binary) ->
     throw({cannot_decode_format, Binary}).
+
+relative_ref_round_trip_test() ->
+    ParentID = hb_util:encode(crypto:strong_rand_bytes(32)),
+    Offset = #{ <<"relative">> => ParentID, <<"offset">> => 321 },
+    Encoded = encode(<<"ans104@1.0">>, Offset, 654),
+    ?assertEqual(
+        {?FORMAT_VERSION, <<"ans104@1.0">>, Offset, 654},
+        decode(Encoded)
+    ).

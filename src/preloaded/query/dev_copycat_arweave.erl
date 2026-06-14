@@ -17,18 +17,28 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
-    case parse_range(Request, Opts) of
-        {error, unavailable} ->
-            {error, unavailable};
-        {ok, {From, To}} ->
-            case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
-                <<"write">> ->
-                    Depth = max(2,
-                        hb_util:int(hb_maps:get(<<"depth">>, Request, 2, Opts))),
-                    fetch_blocks(Request, From, To, Depth, Opts);
-                <<"list">> -> list_index(From, To, Opts);
-                Mode ->
-                    {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, list">>}
+    case hb_maps:get(<<"mode">>, Request, <<"write">>, Opts) of
+        <<"pending">> ->
+            Depth = max(2,
+                hb_util:int(hb_maps:get(<<"depth">>, Request, 2, Opts))),
+            index_pending(Depth, Opts);
+        Mode ->
+            case parse_range(Request, Opts) of
+                {error, unavailable} ->
+                    {error, unavailable};
+                {ok, {From, To}} ->
+                    case Mode of
+                        <<"write">> ->
+                            Depth = max(2,
+                                hb_util:int(
+                                    hb_maps:get(
+                                        <<"depth">>, Request, 2, Opts))),
+                            fetch_blocks(Request, From, To, Depth, Opts);
+                        <<"list">> ->
+                            list_index(From, To, Opts);
+                        _ ->
+                            {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary, "`. Supported modes are: write, pending, list">>}
+                    end
             end
     end.
 
@@ -413,9 +423,10 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, TargetDepth, Opts) 
                                     ItemStartOffset,
                                     Size
                                 ),
-                                {ItemStartOffset + Size, ItemsCountAcc + 1}
+                                {add_data_offset(ItemStartOffset, Size),
+                                    ItemsCountAcc + 1}
                             end,
-                            {TXStartOffset + HeaderSize, 0},
+                            {add_data_offset(TXStartOffset, HeaderSize), 0},
                             BundleIndex
                         )
                     end),
@@ -443,6 +454,9 @@ process_txs(ValidTXs, BlockStartOffset, TargetDepth, Opts) ->
         fun(TXWithData) -> process_tx(TXWithData, BlockStartOffset, TargetDepth, Opts) end,
         Opts
     ),
+    sum_counters(Results).
+
+sum_counters(Results) ->
     lists:foldl(
         fun(Result, Acc) ->
             maps:merge_with(
@@ -474,12 +488,81 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, Depth, Store, Opts) ->
             index_full_bundle_items(
                 BundleIndex,
                 ItemsBin,
-                BundleStartOffset + HeaderSize,
+                add_data_offset(BundleStartOffset, HeaderSize),
                 Depth,
                 Store,
                 Opts,
                 0
             )
+    end.
+
+%% @doc Index unconfirmed transactions from the Arweave mempool.
+index_pending(TargetDepth, Opts) ->
+    case hb_ao:resolve(<<?ARWEAVE_DEVICE/binary, "/pending">>, Opts) of
+        {ok, TXIDs} when is_list(TXIDs) ->
+            Results = parallel_map(
+                TXIDs,
+                fun(TXID) -> process_pending_tx(TXID, TargetDepth, Opts) end,
+                Opts
+            ),
+            {ok, (sum_counters(Results))#{ total_txs => length(TXIDs) }};
+        Error ->
+            Error
+    end.
+
+process_pending_tx(TXID, TargetDepth, Opts) ->
+    case is_tx_indexed(TXID, Opts) of
+        true ->
+            counters(0, 0, 0);
+        false ->
+            case resolve_pending_tx_header(TXID, Opts) of
+                {ok, TX} ->
+                    Store = hb_store_arweave:store_from_opts(Opts),
+                    ok = hb_store_arweave:write_offset(
+                        Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
+                    index_pending_children(TXID, TX, TargetDepth, Store, Opts);
+                error ->
+                    counters(0, 0, 1)
+            end
+    end.
+
+resolve_pending_tx_header(TXID, Opts) ->
+    case hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"pending">>,
+            <<"pending">> => TXID,
+            <<"exclude-data">> => true
+        },
+        Opts
+    ) of
+        {ok, StructuredTXHeader} ->
+            {ok,
+                hb_message:convert(
+                    StructuredTXHeader,
+                    <<"tx@1.0">>,
+                    <<"structured@1.0">>,
+                    Opts)};
+        {error, _} ->
+            error
+    end.
+
+index_pending_children(TXID, TX, TargetDepth, Store, Opts) ->
+    case is_bundle_tx(TX, Opts) of
+        false ->
+            counters(0, 0, 0);
+        true ->
+            Offset = #{ <<"relative">> => TXID, <<"offset">> => 0 },
+            case hb_store_arweave:read_chunks(Offset, TX#tx.data_size, Opts) of
+                {ok, BundleData} ->
+                    case index_full_bundle_bytes(
+                        BundleData, Offset, TargetDepth - 1, Store, Opts) of
+                        {ok, ItemsCount} -> counters(ItemsCount, 1, 0);
+                        {error, Reason} -> skip_bundle(TXID, Reason)
+                    end;
+                {error, Reason} ->
+                    skip_bundle(TXID, Reason)
+            end
     end.
 
 index_full_bundle_items(
@@ -524,7 +607,7 @@ index_full_bundle_items(
                     true ->
                         index_full_bundle_bytes(
                             ParsedItem#tx.data,
-                            ItemStartOffset + HeaderSize,
+                            add_data_offset(ItemStartOffset, HeaderSize),
                             Depth - 1,
                             Store,
                             Opts
@@ -542,7 +625,7 @@ index_full_bundle_items(
             index_full_bundle_items(
                 Rest,
                 RestBin,
-                ItemStartOffset + Size,
+                add_data_offset(ItemStartOffset, Size),
                 Depth,
                 Store,
                 Opts,
@@ -555,6 +638,11 @@ index_full_bundle_items(
         _BundleIndex, _ItemsBin, _ItemStartOffset, _Depth,
         _Store, _Opts, _Count) ->
     {error, invalid_bundle_header}.
+
+add_data_offset(#{ <<"relative">> := TXID, <<"offset">> := Offset }, Add) ->
+    #{ <<"relative">> => TXID, <<"offset">> => Offset + Add };
+add_data_offset(Offset, Add) ->
+    Offset + Add.
 
 %% @doc Check whether a TX header indicates bundle content.
 is_bundle_tx(TX, _Opts) ->
@@ -1270,6 +1358,87 @@ highest_contiguous_indexed_block(Current, Max, LastIndexed, Opts) ->
             highest_contiguous_indexed_block(Current + 1, Max, Current, Opts);
         false ->
             LastIndexed
+    end.
+
+pending_mode_indexes_bundle_children_test() ->
+    {_TestStore, StoreOpts, DefaultOpts} = setup_index_opts(),
+    Wallet = ar_wallet:new(),
+    Child = ar_bundles:sign_item(
+        #tx{
+            data = <<"pending-child">>,
+            tags = [{<<"content-type">>, <<"text/plain">>}]
+        },
+        Wallet
+    ),
+    {undefined, BundleData} =
+        ar_bundles:serialize_bundle(list, [Child], false),
+    RootTX =
+        ar_tx:sign(
+            ar_tx:generate_chunk_tree(
+                #tx{
+                    data = BundleData,
+                    data_size = byte_size(BundleData),
+                    format = 2,
+                    tags = [
+                        {<<"bundle-format">>, <<"binary">>},
+                        {<<"bundle-version">>, <<"2.0.0">>}
+                    ]
+                }
+            ),
+            Wallet
+        ),
+    TXID = hb_util:encode(RootTX#tx.id),
+    ChildID = hb_util:encode(ar_bundles:id(Child, signed)),
+    DataPath =
+        ar_merkle:generate_path(RootTX#tx.data_root, 0, RootTX#tx.data_tree),
+    HeaderJSON = ar_tx:tx_to_json_struct(RootTX#tx{ data = <<>> }),
+    ChunkBody =
+        hb_json:encode(
+            #{
+                <<"chunk">> => hb_util:encode(BundleData),
+                <<"data_path">> => hb_util:encode(DataPath)
+            }
+        ),
+    {ok, MockNode, MockHandle} = hb_mock_server:start([
+        {"/tx/pending", pending, {200, hb_json:encode([TXID])}},
+        {"/unconfirmed_tx/:id", pending_tx, {200, hb_json:encode(HeaderJSON)}},
+        {"/unconfirmed_chunk/:id/:offset", pending_chunk, {200, ChunkBody}}
+    ]),
+    Routes = [
+        #{
+            <<"template">> => <<"^/arweave">>,
+            <<"nodes">> => [
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockNode,
+                    <<"opts">> => #{ <<"http-client">> => httpc }
+                }
+            ],
+            <<"stop-after">> => true
+        }
+    ],
+    ReadStore = StoreOpts#{ <<"routes">> => Routes },
+    Opts =
+        DefaultOpts#{
+            <<"routes">> => Routes,
+            <<"arweave-index-store">> => ReadStore
+        },
+    try
+        {ok, #{ items_count := 1, total_txs := 1 }} =
+            hb_ao:resolve(<<"~copycat@1.0/arweave&mode=pending">>, Opts),
+        ?assertMatch(
+            {ok, #{ <<"start-offset">> := relative }},
+            hb_store_arweave:read_offset(ReadStore, TXID, Opts)
+        ),
+        ?assertMatch(
+            {ok, #{ <<"start-offset">> := #{ <<"relative">> := TXID } }},
+            hb_store_arweave:read_offset(ReadStore, ChildID, Opts)
+        ),
+        {ok, ChildMsg} =
+            hb_store_arweave:read(ReadStore, #{ <<"read">> => ChildID }, Opts),
+        ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts))
+    after
+        hb_mock_server:stop(MockHandle)
     end.
 
 assert_indexed_range(From, To, _Opts) when From < To ->

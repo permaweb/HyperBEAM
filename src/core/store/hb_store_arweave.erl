@@ -270,6 +270,17 @@ load_tx(ID, StartOffset, Length, Opts) ->
 
 %% @doc Read the chunks from the given start offset and length using the 
 %% `~arweave@2.9` device.
+read_chunks(#{ <<"relative">> := TXID, <<"offset">> := Offset }, Length, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"pending">> => TXID,
+            <<"offset">> => Offset,
+            <<"length">> => Length
+        },
+        Opts
+    );
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
