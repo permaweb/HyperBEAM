@@ -567,19 +567,14 @@ index_pending(IndexMode, Opts) ->
     end.
 
 process_pending_tx(TXID, IndexMode, Opts) ->
-    case is_tx_indexed(TXID, Opts) of
-        true ->
-            counters(0, 0, 0);
-        false ->
-            case resolve_pending_tx_header(TXID, Opts) of
-                {ok, TX} ->
-                    Store = hb_store_arweave:store_from_opts(Opts),
-                    ok = hb_store_arweave:write_offset(
-                        Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
-                    index_pending_children(TXID, TX, IndexMode, Store, Opts);
-                error ->
-                    counters(0, 0, 1)
-            end
+    case resolve_pending_tx_header(TXID, Opts) of
+        {ok, TX} ->
+            Store = hb_store_arweave:store_from_opts(Opts),
+            ok = hb_store_arweave:write_offset(
+                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
+            index_pending_children(TXID, TX, IndexMode, Store, Opts);
+        error ->
+            counters(0, 0, 1)
     end.
 
 resolve_pending_tx_header(TXID, Opts) ->
@@ -677,7 +672,7 @@ index_full_bundle_items(
                         {ok, 0}
                 end;
             {true, _} ->
-                {error, invalid_item_header};
+                {ok, 0};
             _ ->
                 {ok, 0}
         end,
@@ -1430,7 +1425,7 @@ highest_contiguous_indexed_block(Current, Max, LastIndexed, Opts) ->
             LastIndexed
     end.
 
-pending_mode_indexes_bundle_children_test() ->
+pending_range_indexes_bundle_children_test() ->
     {_TestStore, StoreOpts, DefaultOpts} = setup_index_opts(),
     Wallet = ar_wallet:new(),
     Child = ar_bundles:sign_item(
@@ -1499,6 +1494,10 @@ pending_mode_indexes_bundle_children_test() ->
         {ok, #{ items_count := 1, total_txs := 1 }} =
             hb_ao:resolve(
                 <<"~copycat@1.0/arweave&from=pending&to=pending">>, Opts),
+        {ok, #{ items_count := 1, total_txs := 1 }} =
+            hb_ao:resolve(
+                <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
+                Opts),
         ?assertMatch(
             {ok, #{ <<"start-offset">> := relative }},
             hb_store_arweave:read_offset(ReadStore, TXID, Opts)
@@ -1509,6 +1508,10 @@ pending_mode_indexes_bundle_children_test() ->
         ),
         {ok, ChildMsg} =
             hb_store_arweave:read(ReadStore, #{ <<"read">> => ChildID }, Opts),
+        ?assertMatch(
+            {ok, _},
+            hb_cache:read(ChildID, hb_store:scope(Opts, local))
+        ),
         ?assertEqual(ChildID, hb_message:id(ChildMsg, signed, Opts))
     after
         hb_mock_server:stop(MockHandle)
