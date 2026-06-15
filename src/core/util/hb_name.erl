@@ -87,7 +87,8 @@ singleton_spawn(Name, Fun) ->
                     ok ->
                         Parent ! {spawned, ReadyRef, Spawned},
                         Fun();
-                    _ ->
+                    Error ->
+                        ?event(error, {spawn_failed, {error, Error}}),
                         Parent ! {spawn_failed, ReadyRef},
                         ok
                 end
