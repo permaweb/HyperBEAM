@@ -82,15 +82,53 @@ upload(Msg, Opts, <<"ans104@1.0">>) ->
         not_found ->
             {error, no_ans104_bundler};
         Bundler ->
-            hb_http:post(
-                Bundler,
-                <<"/tx">>,
-                Msg#{ <<"codec-device">> => <<"ans104@1.0">> },
-                Opts
-            )
+            upload_ans104(Bundler, Msg, Opts)
     end;
 upload(Msg, Opts, Codec) ->
     hb_client_remote:upload(Msg, Opts, Codec).
+
+%% @doc Upload an ANS-104 bundle directly to the bundler `/tx' endpoint.
+%% Forge publishes package messages directly to the Arweave bundler endpoint;
+upload_ans104(Bundler, Msg, Opts) ->
+    {ok, CommittedMsg} =
+        hb_message:with_only_committed(hb_private:reset(Msg), Opts),
+    Body =
+        ar_bundles:serialize(
+            hb_message:convert(
+                CommittedMsg,
+                #{
+                    <<"device">> => <<"ans104@1.0">>,
+                    <<"bundle">> => true
+                },
+                Opts
+            )
+        ),
+    Req = #{
+        peer => hb_util:bin(Bundler),
+        path => <<"/tx">>,
+        method => <<"POST">>,
+        headers => #{
+            <<"codec-device">> => <<"ans104@1.0">>,
+            <<"content-type">> => <<"application/ans104">>,
+            <<"accept-bundle">> => <<"true">>
+        },
+        body => Body
+    },
+    case hb_http_client:request(Req, Opts) of
+        {ok, Status, Headers, RespBody} ->
+            Result = #{
+                <<"status">> => Status,
+                <<"headers">> => Headers,
+                <<"body">> => RespBody
+            },
+            if
+                Status < 400 -> {ok, Result};
+                Status < 500 -> {error, Result};
+                true -> {failure, Result}
+            end;
+        Error ->
+            Error
+    end.
 
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->
