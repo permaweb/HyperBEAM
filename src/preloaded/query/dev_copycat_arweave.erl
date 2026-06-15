@@ -80,6 +80,7 @@ range_tip(FromArg, ToArg, Opts) ->
 needs_tip(error, true) -> true;
 needs_tip(error, false) -> false;
 needs_tip({ok, <<"pending">>}, _DefaultFrom) -> true;
+needs_tip({ok, <<"tip">>}, _DefaultFrom) -> true;
 needs_tip({ok, Height}, _DefaultFrom) -> hb_util:int(Height) < 0.
 
 from_height(error, Tip) ->
@@ -92,17 +93,15 @@ to_height(error, _Tip) ->
 to_height({ok, Height}, Tip) ->
     normalize_height(<<"to">>, Height, Tip).
 
-normalize_height(Key, <<"pending">>, Tip) ->
-    {ok, true, pending_height(Key, Tip)};
+normalize_height(<<"to">>, <<"pending">>, Tip) -> {ok, true, Tip + 1};
+normalize_height(_Key, <<"pending">>, Tip) -> {ok, true, Tip};
+normalize_height(_Key, <<"tip">>, Tip) -> {ok, false, Tip};
 normalize_height(_Key, Height, Tip) ->
     RequestedHeight = hb_util:int(Height),
     case RequestedHeight < 0 of
         true -> {ok, false, Tip + RequestedHeight};
         false -> {ok, false, RequestedHeight}
     end.
-
-pending_height(<<"to">>, Tip) -> Tip + 1;
-pending_height(_Key, Tip) -> Tip.
 
 latest_height(Opts) ->
     case hb_ao:resolve(
@@ -128,7 +127,10 @@ index_range(Request, true, From, To, IndexMode, Opts) ->
                     end
             end;
         Error ->
-            Error
+            case block_range_empty(From, To) of
+                true -> Error;
+                false -> fetch_blocks(Request, From, To, IndexMode, Opts)
+            end
     end;
 index_range(Request, false, From, To, IndexMode, Opts) ->
     fetch_blocks(Request, From, To, IndexMode, Opts).
