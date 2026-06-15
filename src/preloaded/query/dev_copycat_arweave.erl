@@ -83,7 +83,7 @@ needs_tip({ok, <<"pending">>}, _DefaultFrom) -> true;
 needs_tip({ok, Height}, _DefaultFrom) -> hb_util:int(Height) < 0.
 
 from_height(error, Tip) ->
-    {ok, false, Tip};
+    {ok, true, Tip};
 from_height({ok, Height}, Tip) ->
     normalize_height(<<"from">>, Height, Tip).
 
@@ -1254,6 +1254,10 @@ negative_parse_range_test_parallel() ->
         parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
     ?assertEqual(10, PositiveFrom),
     ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
+    {ok, {true, DefaultPendingFrom, DefaultNegativeTo}} =
+        parse_range(#{ <<"to">> => <<"-3">> }, Opts),
+    ?assertEqual(hb_util:int(Tip), DefaultPendingFrom),
+    ?assertEqual(hb_util:int(Tip) - 3, DefaultNegativeTo),
     {ok, {true, PendingFrom, PendingTo}} =
         parse_range(#{ <<"from">> => <<"pending">>, <<"to">> => <<"pending">> }, Opts),
     ?assertEqual(hb_util:int(Tip), PendingFrom),
