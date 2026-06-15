@@ -219,7 +219,8 @@ collect_ids(Msg, Acc, Opts) when is_map(Msg) ->
     hb_maps:fold(
         fun(_Key, Value, AccIn) -> collect_ids(Value, AccIn, Opts) end,
         Acc,
-        Msg
+        Msg,
+        Opts
     );
 collect_ids(List, Acc, Opts) when is_list(List) ->
     lists:foldl(
