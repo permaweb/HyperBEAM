@@ -224,13 +224,21 @@ codec_test_suite(Codecs) ->
                             true -> maps:get(<<"with-opts">>, CodecSpec, normal);
                             false -> normal
                         end,
-                    TestSpecificOpts = test_opts(OptsType),
                     {
                         true,
                         {
                             Desc,
                             TestName,
-                            fun(_SuiteOpts) ->
+                            fun(SuiteOpts) ->
+                                TestSpecificOpts =
+                                    (test_opts(OptsType))#{
+                                        <<"store">> =>
+                                            maps:get(
+                                                <<"store">>,
+                                                SuiteOpts,
+                                                hb_test_utils:test_store()
+                                            )
+                                    },
                                 Test(CodecSpec, TestSpecificOpts)
                             end
                         }

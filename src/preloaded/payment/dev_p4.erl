@@ -226,13 +226,16 @@ response(State, RawResponse, NodeMsg) ->
                     % so we proceed to charge the user's account. We sign the
                     % request with the node's private key, as it is the node
                     % that is performing the charge, not the user.
+                    RequestSigners = hb_message:signers(Request, NodeMsg),
+                    RequestForCharge =
+                        request_for_charge(Request, RequestSigners, NodeMsg),
                     LedgerReq =
                         hb_message:commit(
                             #{
                                 <<"path">> => <<"charge">>,
                                 <<"quantity">> => Price,
                                 <<"account">> =>
-                                    case hb_message:signers(Request, NodeMsg) of
+                                    case RequestSigners of
                                         [Signer] -> Signer;
                                         Multiple -> Multiple
                                     end,
@@ -248,10 +251,12 @@ response(State, RawResponse, NodeMsg) ->
                                                     hb_util:human_id(Operator)
                                             end
                                     end,
-                                <<"request">> => Request
+                                <<"request">> => RequestForCharge
                             },
                             NodeMsg,
                             #{
+                                <<"commitment-device">> => <<"httpsig@1.0">>,
+                                <<"type">> => <<"signed">>,
                                 <<"bundle">> => true,
                                 <<"linkify-mode">> => false
                             }
@@ -264,7 +269,7 @@ response(State, RawResponse, NodeMsg) ->
                     ),
                     case hb_ao:resolve(LedgerMsg, LedgerReq, NodeMsg) of
                         {ok, Res} ->
-                            case hb_ao:get(<<"status">>, Res, 200, NodeMsg) of
+                            case direct_status(Res) of
                                 Status when is_integer(Status), Status >= 400 ->
                                     ?event(payment,
                                         {p4_post_ledger_response, {error, Res}}),
@@ -287,6 +292,18 @@ response(State, RawResponse, NodeMsg) ->
                     {error, PricingError}
             end
     end.
+
+request_for_charge(Request, Signers, NodeMsg) ->
+    hb_message:with_only_committers(
+        hb_maps:flatten(Request, NodeMsg),
+        Signers,
+        NodeMsg
+    ).
+
+direct_status(Res) when is_map(Res) ->
+    maps:get(<<"status">>, Res, 200);
+direct_status(_Res) ->
+    200.
 
 %% @doc Get the balance of a user in the ledger.
 -spec balance(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, _} | {error, _}.
@@ -572,9 +589,9 @@ hyper_token_ledger() ->
             Node,
             <<LedgerPath/binary, "/now/balance">>,
             #{}
-        ),
-    ?event(debug_charge, {balances, Balances}),
-    ?assertMatch(48, hb_ao:get(BobAddress, Balances, #{})),
+	    ),
+	    ?event(debug_charge, {balances, Balances}),
+	    ?assertMatch(48, hb_ao:get(BobAddress, Balances, #{})),
     % Finally, we check the balance of the operator. It should be 2 tokens,
     % the amount that was charged from Alice.
     ?assertMatch(2, hb_ao:get(OperatorAddress, Balances, #{})).

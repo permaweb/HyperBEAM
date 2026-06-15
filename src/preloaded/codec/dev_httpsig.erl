@@ -387,6 +387,14 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             maps:get(<<"committed">>, Commitment, []),
             Opts
         ),
+    MsgWithInputsLoaded = load_committed_input_values(Msg, RawInputs, Opts),
+    MsgForInputs =
+        maybe_add_committed_link_views(
+            MsgWithInputsLoaded,
+            RawInputs,
+            Commitment,
+            Opts
+        ),
     % Normalize the keys to their maybe-linked form, adding `+link` if necessary.
     Inputs =
         lists:map(
@@ -395,12 +403,12 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
                 LinkKey = <<NormalizedKey/binary, "+link">>,
                 UseLink =
                     (not hb_util:atom(maps:get(<<"bundle">>, Commitment, false)))
-                        andalso maps:is_key(LinkKey, Msg),
-                case {UseLink, maps:is_key(NormalizedKey, Msg)} of
+                        andalso maps:is_key(LinkKey, MsgForInputs),
+                case {UseLink, maps:is_key(NormalizedKey, MsgForInputs)} of
                     {true, _} -> LinkKey;
                     {false, true} -> NormalizedKey;
                     {false, false} ->
-                        case maps:is_key(LinkKey, Msg) of
+                        case maps:is_key(LinkKey, MsgForInputs) of
                             true -> LinkKey;
                             false -> NormalizedKey
                         end
@@ -413,7 +421,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
     MsgWithOnlyInputs =
         with_only_inputs(
             Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
-            Msg,
+            MsgForInputs,
             Opts
         ),
     ?event({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
@@ -466,6 +474,157 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         Commitment#{ <<"committed">> => KeysForEncoding },
         KeysForCommitment
     }.
+
+% Vary may load link components before verification, but the signature base may
+% still commit to their `+link' IDs. Recreate those views only when requested.
+maybe_add_committed_link_views(Msg, RawInputs, Commitment, Opts)
+        when is_map(Msg), is_list(RawInputs) ->
+    case hb_util:atom(maps:get(<<"bundle">>, Commitment, false)) of
+        true ->
+            Msg;
+        false ->
+            MissingLink =
+                lists:any(
+                    fun(Key) ->
+                        LinkKey = hb_ao:normalize_key(Key),
+                        hb_link:is_link_key(LinkKey) andalso
+                            not maps:is_key(LinkKey, Msg)
+                    end,
+                    RawInputs
+                ),
+            case MissingLink of
+                true ->
+                    MsgWithLinkViews =
+                        add_link_views_for_inputs(Msg, RawInputs, Opts),
+                    case has_missing_link_view(MsgWithLinkViews, RawInputs) of
+                        true ->
+                            MsgWithLinkInputsLoaded =
+                                load_link_input_base_values(
+                                    MsgWithLinkViews,
+                                    RawInputs,
+                                    Opts
+                                ),
+                            maps:merge(
+                                MsgWithLinkInputsLoaded,
+                                hb_link:normalize(
+                                    MsgWithLinkInputsLoaded,
+                                    offload,
+                                    Opts
+                                )
+                            );
+                        false ->
+                            MsgWithLinkViews
+                    end;
+                false ->
+                    Msg
+            end
+    end;
+maybe_add_committed_link_views(Msg, _RawInputs, _Commitment, _Opts) ->
+    Msg.
+
+load_committed_input_values(Msg, RawInputs, Opts) when is_map(Msg) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            NormKey = hb_ao:normalize_key(Key),
+            case hb_link:is_link_key(NormKey) of
+                true ->
+                    Acc;
+                false ->
+                    case maps:find(NormKey, Acc) of
+                        {ok, Value = {link, _ID, _LinkOpts}} ->
+                            Acc#{ NormKey => hb_cache:ensure_loaded(Value, Opts) };
+                        _ ->
+                            Acc
+                    end
+            end
+        end,
+        Msg,
+        RawInputs
+    );
+load_committed_input_values(Msg, _RawInputs, _Opts) ->
+    Msg.
+
+load_link_input_base_values(Msg, RawInputs, Opts) when is_map(Msg) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            LinkKey = hb_ao:normalize_key(Key),
+            BaseKey = hb_link:remove_link_specifier(LinkKey),
+            ShouldLoad =
+                hb_link:is_link_key(LinkKey)
+                    andalso not maps:is_key(LinkKey, Acc),
+            case {ShouldLoad, maps:find(BaseKey, Acc)} of
+                {true, {ok, Value = {link, _ID, _LinkOpts}}} ->
+                    Acc#{
+                        BaseKey =>
+                            load_link_input_base_value(Value, Opts)
+                    };
+                _ ->
+                    Acc
+            end
+        end,
+        Msg,
+        RawInputs
+    );
+load_link_input_base_values(Msg, _RawInputs, _Opts) ->
+    Msg.
+
+load_link_input_base_value(Value, Opts) ->
+    case hb_cache:ensure_loaded(Value, Opts) of
+        Loaded when is_map(Loaded) ->
+            hb_cache:read_all_commitments(Loaded, Opts);
+        Loaded ->
+            Loaded
+    end.
+
+has_missing_link_view(Msg, RawInputs) ->
+    lists:any(
+        fun(Key) ->
+            LinkKey = hb_ao:normalize_key(Key),
+            hb_link:is_link_key(LinkKey) andalso
+                not maps:is_key(LinkKey, Msg)
+        end,
+        RawInputs
+    ).
+
+add_link_views_for_inputs(Msg, RawInputs, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            LinkKey = hb_ao:normalize_key(Key),
+            BaseKey = hb_link:remove_link_specifier(LinkKey),
+            ShouldAdd =
+                hb_link:is_link_key(LinkKey)
+                    andalso not maps:is_key(LinkKey, Acc),
+            case {ShouldAdd, maps:find(BaseKey, Acc)} of
+                {true, {ok, Value}} ->
+                    case link_view_value(Value, Opts) of
+                        {ok, LinkValue} -> Acc#{ LinkKey => LinkValue };
+                        error -> Acc
+                    end;
+                _ ->
+                    Acc
+            end
+        end,
+        Msg,
+        RawInputs
+    ).
+
+link_view_value({link, ID, LinkOpts = #{ <<"type">> := <<"link">> }}, Opts) ->
+    case maps:get(<<"lazy">>, LinkOpts, true) of
+        true ->
+            ReadOpts =
+                hb_store:scope(
+                    hb_util:deep_merge(Opts, LinkOpts, Opts),
+                    hb_opts:get(scope, local, LinkOpts)
+                ),
+            case hb_cache:read(ID, hb_util:deep_merge(ReadOpts, LinkOpts, ReadOpts)) of
+                {ok, LinkID} -> {ok, LinkID};
+                _ -> error
+            end;
+        false ->
+            {ok, ID}
+    end;
+link_view_value(_Value, _Opts) ->
+    error.
 
 %% @doc Decode the committed keys from their percent-encoded form, for use in
 %% the `committed` key of the commitment.

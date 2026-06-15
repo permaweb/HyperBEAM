@@ -28,7 +28,7 @@ write(RawAssignment, RawOpts) ->
     {ok, CommittedAssignment} = hb_message:with_only_committed(Assignment, Opts),
     ToWrite =
         hb_message:normalize_commitments(
-            hb_cache:ensure_all_loaded(CommittedAssignment, Opts),
+            CommittedAssignment,
             Opts,
             verify
         ),

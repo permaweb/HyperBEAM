@@ -270,7 +270,11 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
     LinkifyMode = cache_linkify_mode(Msg, Opts),
     WriteOpts = Opts#{ <<"linkify-mode">> => LinkifyMode, linkify_mode => LinkifyMode },
     WriteView = cache_write_view(Msg, WriteOpts),
-    hb_message:paranoid_verify(cache_write, WriteView, WriteOpts),
+    hb_message:paranoid_verify(
+        cache_write,
+        cache_write_verify_view(RawMsg, WriteView, Opts),
+        Opts
+    ),
     TABM = hb_message:convert(
         WriteView,
         tabm,
@@ -315,8 +319,23 @@ cache_write_view(Msg, Opts) ->
                 Opts,
                 verify
             );
-        false -> Msg
+        false ->
+            case has_committed_link_key(Msg, Opts) of
+                true ->
+                    hb_link:normalize(
+                        Msg,
+                        hb_opts:get(<<"linkify-mode">>, offload, Opts),
+                        Opts
+                    );
+                false ->
+                    Msg
+            end
     end.
+
+cache_write_verify_view(RawMsg, WriteView, Opts) when is_map(RawMsg), is_map(WriteView) ->
+    hb_private:merge(WriteView, RawMsg, Opts);
+cache_write_verify_view(_RawMsg, WriteView, _Opts) ->
+    WriteView.
 
 has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
     lists:any(
@@ -326,6 +345,24 @@ has_bundle_commitment(Msg, Opts) when is_map(Msg) ->
         maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
     );
 has_bundle_commitment(_Msg, _Opts) ->
+    false.
+
+has_committed_link_key(Msg, Opts) when is_map(Msg) ->
+    lists:any(
+        fun({_ID, Commitment}) ->
+            lists:any(
+                fun(Key) ->
+                    hb_link:is_link_key(hb_ao:normalize_key(Key))
+                end,
+                hb_util:message_to_ordered_list(
+                    hb_maps:get(<<"committed">>, Commitment, [], Opts),
+                    Opts
+                )
+            )
+        end,
+        maps:to_list(maps:get(<<"commitments">>, Msg, #{}))
+    );
+has_committed_link_key(_Msg, _Opts) ->
     false.
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->

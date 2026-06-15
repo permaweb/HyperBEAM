@@ -240,21 +240,22 @@ id_device(_, _) ->
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
 committers(Base, Req, NodeOpts) ->
-    case maps:get(<<"commitments">>, Base, not_found) of
+    CommitterBase = committer_lookup_base(Base, NodeOpts),
+    case maps:get(<<"commitments">>, CommitterBase, not_found) of
         not_found ->
             case commitment_lookup_mode(NodeOpts) of
                 top -> {ok, []};
                 inherited ->
-                    case hb_maps:get(<<"commitments">>, Base, not_found, NodeOpts) of
+                    case hb_maps:get(<<"commitments">>, CommitterBase, not_found, NodeOpts) of
                         not_found -> {ok, []};
                         Commitments -> {ok, committers_from_commitments(Commitments, NodeOpts)}
                     end
             end;
         Commitments ->
             ParentCommitters =
-                case map_size(Req) == 0 andalso has_extension_commitment(Base, NodeOpts) of
+                case map_size(Req) == 0 andalso has_extension_commitment(CommitterBase, NodeOpts) of
                     true ->
-                        case extension_parent(Base, NodeOpts) of
+                        case extension_parent(CommitterBase, NodeOpts) of
                             {ok, Parent} -> hb_message:signers(Parent, NodeOpts);
                             error -> []
                         end;
@@ -267,6 +268,18 @@ committers(Base, Req, NodeOpts) ->
                 )
             }
     end.
+
+committer_lookup_base(Base, NodeOpts) when is_map(Base) ->
+    case commitment_lookup_mode(NodeOpts) of
+        top -> Base;
+        inherited ->
+            hb_maps:flatten(
+                Base,
+                maps:remove(<<"preserve-message-extension">>, NodeOpts)
+            )
+    end;
+committer_lookup_base(Base, _NodeOpts) ->
+    Base.
 
 committers_from_commitments(Commitments, NodeOpts) ->
     hb_maps:values(
@@ -693,7 +706,7 @@ committed(Self, Req, Opts) ->
     ),
     Commitments = commitments(Base, CommittedOpts),
     % Get the list of committed keys from each committer.
-    CommitmentKeys =
+    RawCommittedKeys =
         lists:map(
             fun(CommitmentID) ->
                 Commitment = maps:get(CommitmentID, Commitments),
@@ -706,6 +719,11 @@ committed(Self, Req, Opts) ->
                 )
             end,
             CommitmentIDs
+        ),
+    CommitmentKeys =
+        normalize_committed_key_lists(
+            RawCommittedKeys,
+            maps:get(<<"raw">>, Req, false)
         ),
     % Remove commitments that are not in *every* committer's list.
     % To start, we need to create the super-set of committed keys.
@@ -732,22 +750,18 @@ committed(Self, Req, Opts) ->
             end,
             AllCommittedKeys
         ),
-    % Remove any `+link` suffixes from TABM-form committed keys if the `raw` flag
-    % is not set. This means that callers to `committed/3' will receive a list of
-    % keys that they can match  against the 'normal' representation of the message
-    % in devices, etc., without exposure to TABM-specifics. If `raw' is set, the
-    % recipient receives the `committed` list in its unprocessed form.
-    CommittedNormalizedKeys =
-        case maps:get(<<"raw">>, Req, false) of
-            true -> OnlyCommittedKeys;
-            false ->
-                lists:map(
-                    fun hb_link:remove_link_specifier/1,
-                    OnlyCommittedKeys
-                )
+    ?event(debug_commitments, {only_committed_keys, OnlyCommittedKeys}),
+    {ok, OnlyCommittedKeys}.
+
+normalize_committed_key_lists(CommitmentKeys, true) ->
+    CommitmentKeys;
+normalize_committed_key_lists(CommitmentKeys, false) ->
+    lists:map(
+        fun(Keys) ->
+            lists:map(fun hb_link:remove_link_specifier/1, Keys)
         end,
-    ?event(debug_commitments, {only_committed_keys, CommittedNormalizedKeys}),
-    {ok, CommittedNormalizedKeys}.
+        CommitmentKeys
+    ).
 
 %% @doc Return a message with only the relevant commitments for a given request.
 %% See `commitment_ids_from_request/3' for more information on the request format.

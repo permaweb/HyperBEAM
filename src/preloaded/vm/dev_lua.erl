@@ -3,7 +3,7 @@
 -implements(<<"lua@5.3a">>).
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
--export([encode/2, decode/2, encode_value/3]).
+-export([encode/2, decode/2, decode/3, encode_value/3]).
 -export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -284,7 +284,7 @@ compute(Key, RawBase, RawReq, Opts) ->
     ?event(debug_lua, compute_called),
     Req = 
         hb_cache:read_all_commitments(
-            RawReq,
+            hb_cache:ensure_all_loaded(RawReq, Opts),
             Opts
         ),
     {ok, Base} = ensure_initialized(RawBase, Req, Opts),
@@ -434,7 +434,7 @@ process_response({ok, [Result], NewState}, Priv, Opts) ->
 process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
     % If the result is a HyperBEAM device return (`{Status, Msg}'), decode it 
     % and add the previous `priv' element back into the resulting message.
-    case decode(MsgResult, Opts) of
+    case decode(MsgResult, Opts, auto) of
         Msg when is_map(Msg) ->
             ?event(lua, {response, {status, Status}, {msg, Msg}}),
             {hb_util:atom(Status), Msg#{
@@ -518,8 +518,24 @@ normalize(Base, _Req, RawOpts) ->
 
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
 decode(EncMsg, Opts) ->
+    decode(EncMsg, Opts, verify).
+decode(EncMsg, Opts, auto) ->
+    normalize_result(do_decode(EncMsg, Opts), Opts);
+decode(EncMsg, Opts, none) ->
+    do_decode(EncMsg, Opts);
+decode(EncMsg, Opts, Mode) ->
     Decoded = do_decode(EncMsg, Opts),
-    hb_message:normalize_commitments(Decoded, Opts, verify).
+    hb_message:normalize_commitments(Decoded, Opts, Mode).
+
+normalize_result(Decoded, Opts) when is_map(Decoded) ->
+    case maps:get(<<"commitments">>, Decoded, #{}) of
+        Commitments when is_map(Commitments), map_size(Commitments) > 0 ->
+            hb_message:normalize_commitments(Decoded, Opts, verify);
+        _ ->
+            hb_message:normalize_commitments(Decoded, Opts, fast)
+    end;
+normalize_result(Decoded, Opts) ->
+    hb_message:normalize_commitments(Decoded, Opts, fast).
 do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
     % The value is an empty table, so we assume it is a message rather than
     % a list.
@@ -548,7 +564,7 @@ do_decode(Other, _Opts) ->
 
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
 encode(Map, Opts) ->
-    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+    hb_message:normalize_commitments(do_encode(Map, Opts), Opts, fast).
 do_encode(Map, Opts) when is_map(Map) ->
     hb_cache:ensure_all_loaded(
         case hb_util:is_ordered_list(Map, Opts) of

@@ -362,7 +362,11 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
         ),
     % 2. Replace the `content-digest' key with the `body' key, if present.
     WithBody =
-        hb_util:list_replace(BaseCommitted, <<"content-digest">>, BodyKeys),
+        hb_util:list_replace(
+            BaseCommitted,
+            <<"content-digest">>,
+            body_keys_for_content_digest(BodyKeys, BaseCommitted)
+        ),
     % 3. Replace the `body' key again with the value of the `ao-body-key' key,
     %    if present.
     ?event(
@@ -406,12 +410,27 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     List =
         lists:map(
             fun(Key) ->
-                hb_ao:normalize_key(hb_link:remove_link_specifier(Key))
+                hb_ao:normalize_key(Key)
             end,
             ListWithoutContentType
         ),
     ?event({from_siginfo_keys, {list, List}}),
     List.
+
+body_keys_for_content_digest(BodyKeys, BaseCommitted) when is_list(BodyKeys) ->
+    ExplicitKeys = lists:delete(<<"content-digest">>, BaseCommitted),
+    ExplicitViews = lists:map(fun signature_key_view/1, ExplicitKeys),
+    lists:filter(
+        fun(Key) ->
+            not lists:member(signature_key_view(Key), ExplicitViews)
+        end,
+        BodyKeys
+    );
+body_keys_for_content_digest(_BodyKeys, _BaseCommitted) ->
+    [].
+
+signature_key_view(Key) ->
+    hb_ao:normalize_key(hb_link:remove_link_specifier(Key)).
 
 %% @doc Convert committed keys to their siginfo format. This involves removing
 %% the `body' key from the committed keys, if present, and replacing it with
@@ -580,3 +599,25 @@ escaped_value_test() ->
     ?event(debug_test, {siginfo, {explicit, SigInfo}}),
     ?event(debug_test, {commitments, {explicit, Commitments}}),
     ?assertEqual(#{ ID => Commitment }, Commitments).
+
+content_digest_body_keys_preserve_explicit_component_order_test() ->
+    ?assertEqual(
+        [
+            <<"body">>,
+            <<"device">>,
+            <<"function">>,
+            <<"parameters+link">>,
+            <<"path">>
+        ],
+        from_siginfo_keys(
+            #{},
+            [<<"body">>, <<"parameters+link">>],
+            [
+                <<"content-digest">>,
+                <<"device">>,
+                <<"function">>,
+                <<"parameters+link">>,
+                <<"@path">>
+            ]
+        )
+    ).

@@ -29,12 +29,12 @@ function charge(base, request)
         { request = request, base = base }
     })
     local status, res = ao.resolve_committed({
-        path = "(" .. base["ledger-path"] .. ")/push",
+        path = base["ledger-path"] .. "/schedule",
         method = "POST",
-        ["result-depth"] = 0,
         body = request
     }, {
         ["commitment-device"] = "httpsig@1.0",
+        type = "signed",
         bundle = true,
         ["linkify-mode"] = false
     })
@@ -45,7 +45,8 @@ function charge(base, request)
     if status ~= "ok" then
         return status, res
     end
-    if type(res) == "table" and tonumber(res.status or 200) >= 400 then
+    local res_status = type(res) == "table" and rawget(res, "status") or nil
+    if tonumber(res_status or 200) >= 400 then
         return "error", res
     end
     return "ok", res

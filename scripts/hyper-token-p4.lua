@@ -7,6 +7,21 @@
 --- This script must be added as after the `hyper-token.lua` script in the
 --- `process-definition`s `script` field.
 
+local function admin_committers(message)
+    local resolved = ao.get("committers", message)
+    if type(resolved) == "table" then
+        return resolved
+    end
+
+    local committers = {}
+    for _, commitment in pairs(message.commitments or {}) do
+        if commitment.committer then
+            table.insert(committers, commitment.committer)
+        end
+    end
+    return committers
+end
+
 -- Process an `admin' charge request:
 -- 1. Verify the sender's identity.
 -- 2. Ensure that the quantity and account are present in the request.
@@ -15,24 +30,37 @@
 function charge(base, assignment)
     ao.event({ "debug_charge", { "Charging", { assignment = assignment } } })
 
-    -- Verify that the request is signed by the admin.
-    local admin = base.admin
-    local charge_req = assignment.body
-    local _, committers = ao.resolve(charge_req, "committers")
-    ao.event({ "debug_charge", { "Validating charge requester: ", {
-        admin = admin,
-        committers = committers,
-        ["charge-request"] = charge_req,
-    } }})
-    
-    if count_common(committers, admin) ~= 1 then
-        return "error", base
-    end
-
-    local status, res, request = validate_request(base, assignment)
+    local status, res = validate_assignment(base, assignment)
     if status ~= "ok" then
         return status, res
     end
+    base = res
+
+    -- Verify that either the charge body or its trusted assignment was signed by
+    -- the admin.
+    local admin = base.admin
+    local charge_req = assignment.body
+    local request_committers = admin_committers(charge_req)
+    local trusted_committers = admin_committers(assignment)
+    local committers = request_committers
+    if count_common(committers, admin) < 1 then
+        committers = trusted_committers
+    end
+    ao.event("debug_charge", { "Validating charge requester: ", {
+        admin = admin,
+        committers = committers,
+        ["charge-request"] = charge_req,
+    } })
+    
+    if count_common(committers, admin) < 1 then
+        base.results = {
+            status = "error",
+            message = "Charge request is not signed by an admin."
+        }
+        return "error", base
+    end
+
+    local request = charge_req
 
     -- Ensure that the quantity and account are present in the request.
     if not request.quantity or not request.account then

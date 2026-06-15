@@ -156,6 +156,7 @@ ensure_process_key(Base, Opts) ->
             % the cache. This can happen if the message was 'cast' to a different
             % device, leading the signers to be unset.
             {ok, Committed} = hb_message:with_only_committed(Base, Opts),
+            {ok, _} = hb_cache:write(Committed, Opts),
             ?event(
                 {process_key_before_set,
                     {base, Base},

@@ -460,10 +460,9 @@ local function ensure_initialized(base, assignment)
     return "ok", base
 end
 
--- Verify that an assignment has not been processed and that the request is
--- valid. If it is, update the `from' field to the address that signed the
--- request.
-function validate_request(incoming_base, assignment)
+-- Verify that an assignment has not been processed and was scheduled by a
+-- trusted scheduler.
+function validate_assignment(incoming_base, assignment)
     -- Ensure that the ledger is initialized.
     local status, base = ensure_initialized(incoming_base, assignment)
     if status ~= "ok" then
@@ -509,8 +508,21 @@ function validate_request(incoming_base, assignment)
     if not trusted then
         return "error", log_result(base, "error", {
             message = "Assignment is not trusted.",
-            details = details
+            details = details,
+            assignment = assignment
         })
+    end
+
+    return "ok", base
+end
+
+-- Verify that an assignment has not been processed and that the request is
+-- valid. If it is, update the `from' field to the address that signed the
+-- request.
+function validate_request(incoming_base, assignment)
+    local status, base = validate_assignment(incoming_base, assignment)
+    if status ~= "ok" then
+        return status, base
     end
 
     if assignment.body["from-process"] then

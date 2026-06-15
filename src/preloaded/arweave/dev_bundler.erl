@@ -122,7 +122,12 @@ verify_message(Req, Opts) ->
 %% @doc Format an error signifier for external responses.
 error_to_bin({error, Reason}) -> error_to_bin(Reason);
 error_to_bin(Reason) ->
-    binary:replace(hb_util:bin(Reason), <<"_">>, <<"-">>, [global]).
+    Bin =
+        try hb_util:bin(Reason)
+        catch _:_ ->
+            iolist_to_binary(io_lib:format("~p", [Reason]))
+        end,
+    binary:replace(Bin, <<"_">>, <<"-">>, [global]).
 
 %% @doc Cache an item.
 %% Returns ok or {error, Reason}.

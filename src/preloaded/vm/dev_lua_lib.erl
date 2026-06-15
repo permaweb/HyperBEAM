@@ -89,7 +89,8 @@ install(Base, State, Opts) ->
                                     fun(Arg) ->
                                         dev_lua:decode(
                                             luerl:decode(Arg, ImportState),
-                                            Opts
+                                            Opts,
+                                            none
                                         )
                                     end,
                                     RawArgs
@@ -114,7 +115,7 @@ install(Base, State, Opts) ->
 make_table_meta(State0, Opts) ->
     GetFun =
         fun([RawTable, Key], State) ->
-            Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+            Table = dev_lua:decode(luerl:decode(RawTable, State), Opts, none),
             case hb_ao:get(Key, Table, Opts) of
                 not_found ->
                     {[nil], State};
@@ -132,8 +133,8 @@ make_table_meta(State0, Opts) ->
             State2 =
                 case luerl_heap:raw_get_table_key(RawTable, <<"device">>, State) of
                     <<"trie@1.0">> ->
-                        Value = dev_lua:decode(luerl:decode(RawValue, State), Opts),
-                        Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+                        Value = dev_lua:decode(luerl:decode(RawValue, State), Opts, none),
+                        Table = dev_lua:decode(luerl:decode(RawTable, State), Opts, none),
                         SetResult =
                             hb_cache:ensure_all_loaded(
                                 hb_ao:set(Table, #{ Key => Value }, Opts),

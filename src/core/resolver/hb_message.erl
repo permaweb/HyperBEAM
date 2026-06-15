@@ -98,7 +98,7 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
         if is_map(Msg) -> maps:get(<<"priv">>, Msg, #{});
            true -> #{}
         end,
-    SourceOpts = bundle_target_source_opts(TargetFormat, Opts),
+    SourceOpts = bundle_target_source_opts(Msg, TargetFormat, Opts),
     TABM =
         to_tabm(
             case is_map(Msg) of
@@ -114,13 +114,51 @@ convert(Msg, TargetFormat, SourceFormat, Opts) ->
         _ -> from_tabm(TABM, TargetFormat, OldPriv, Opts)
     end.
 
-bundle_target_source_opts(TargetFormat, Opts) when is_map(TargetFormat) ->
+bundle_target_source_opts(Msg, TargetFormat, Opts) when is_map(TargetFormat) ->
     case hb_util:atom(hb_maps:get(<<"bundle">>, TargetFormat, false, Opts)) of
-        true -> Opts#{ <<"linkify-mode">> => false };
+        true ->
+            case target_format_unbundled_commitment(Msg, TargetFormat, Opts) of
+                true -> Opts;
+                false -> Opts#{ <<"linkify-mode">> => false }
+            end;
         false -> Opts
     end;
-bundle_target_source_opts(_TargetFormat, Opts) ->
+bundle_target_source_opts(_Msg, _TargetFormat, Opts) ->
     Opts.
+
+target_format_unbundled_commitment(Msg, TargetFormat, Opts) when is_map(Msg) ->
+    case hb_maps:get(<<"device">>, TargetFormat, undefined, Opts) of
+        undefined ->
+            false;
+        Device ->
+            Spec = #{ <<"commitment-device">> => Device },
+            case commitment(Spec, Msg, Opts) of
+                {ok, _ID, Commitment} ->
+                    not hb_util:atom(
+                        hb_maps:get(<<"bundle">>, Commitment, false, Opts)
+                    );
+                multiple_matches ->
+                    case commitments(Spec, Msg, Opts) of
+                        Matches when map_size(Matches) > 0 ->
+                            not lists:any(
+                                fun({_ID, Commitment}) ->
+                                    hb_util:atom(
+                                        hb_maps:get(
+                                            <<"bundle">>, Commitment, false, Opts
+                                        )
+                                    )
+                                end,
+                                maps:to_list(Matches)
+                            );
+                        _ ->
+                            false
+                    end;
+                _ ->
+                    false
+            end
+    end;
+target_format_unbundled_commitment(_Msg, _TargetFormat, _Opts) ->
+    false.
 
 to_tabm(RawMsg, TargetFormat, SourceFormat, Opts) ->
     {SourceCodecMod, Params0} = conversion_spec_to_req(SourceFormat, Opts),
@@ -438,12 +476,20 @@ do_normalize_commitments(Msg, Opts, fast) when is_map(Msg) ->
     ),
     case hb_private:get(<<"last-phash2">>, Msg, not_found, Opts) of
         not_found ->
-            attach_phash2(Msg, ExpectedHash, Opts);
+            normalize_untracked_fast(Msg, ExpectedHash, Opts);
         ExpectedHash ->
             Msg;
         _DifferingHash ->
             MsgWithHash = attach_phash2(Msg, ExpectedHash, Opts),
             do_normalize_commitments(MsgWithHash, Opts, verify)
+    end.
+
+normalize_untracked_fast(Msg, ExpectedHash, Opts) ->
+    case unsigned_commitments(Msg, Opts) of
+        [] ->
+            attach_phash2(Msg, ExpectedHash, Opts);
+        _ ->
+            attach_phash2(do_normalize_commitments(Msg, Opts, verify), Opts)
     end.
 
 refresh_unsigned_commitments(Msg, NewCommitments, Opts) ->
@@ -699,14 +745,18 @@ filter_message_commitments_for_visible_keys(Msg, Opts) ->
             Msg
     end.
 
-has_committed_key_view(<<"...">>, Msg, _Opts) ->
-    has_message_extension(Msg);
-has_committed_key_view(<<"ao-types">>, Msg, Opts) when is_map(Msg) ->
-    hb_maps:is_key(<<"ao-types">>, Msg, Opts)
-        orelse has_implicit_ao_types(Msg, Opts);
-has_committed_key_view(Key, Msg, _Opts) when is_binary(Key), is_map(Msg) ->
-    maps:is_key(Key, Msg) orelse
-        maps:is_key(<<Key/binary, "+link">>, Msg);
+has_committed_key_view(Key, Msg, Opts) when is_binary(Key), is_map(Msg) ->
+    BaseKey = hb_link:remove_link_specifier(Key),
+    case BaseKey of
+        <<"...">> ->
+            has_message_extension(Msg);
+        <<"ao-types">> ->
+            hb_maps:is_key(<<"ao-types">>, Msg, Opts)
+                orelse has_implicit_ao_types(Msg, Opts);
+        _ ->
+            maps:is_key(BaseKey, Msg) orelse
+                maps:is_key(<<BaseKey/binary, "+link">>, Msg)
+    end;
 has_committed_key_view(Key, Msg, Opts) ->
     hb_maps:is_key(Key, Msg, Opts).
 
@@ -1185,7 +1235,7 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
             fun({_, #{ <<"committer">> := _Committer }}) -> false;
                ({_, _}) -> true
             end,
-            hb_maps:to_list(hb_maps:get(<<"commitments">>, Map1Flat, #{}, Opts))
+            hb_maps:to_list(hb_maps:get(<<"commitments">>, Map2Flat, #{}, Opts))
         ),
     Map1 = Map1Flat#{ <<"commitments">> => SignedCommitments1 },
     Map2 = Map2Flat#{ <<"commitments">> => SignedCommitments2 },

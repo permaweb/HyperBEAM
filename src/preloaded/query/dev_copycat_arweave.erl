@@ -950,21 +950,21 @@ auto_stop_partial_index_test_parallel() ->
     ok.
 
 negative_parse_range_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, Tip} =
-        hb_ao:resolve(
-            <<?ARWEAVE_DEVICE/binary, "/current/height">>,
-            Opts
-        ),
-    {ok, {NegativeFrom, UndefinedTo}} =
-        parse_range(#{ <<"from">> => <<"-3">> }, Opts),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeFrom),
-    ?assertEqual(undefined, UndefinedTo),
-    {ok, {PositiveFrom, NegativeTo}} =
-        parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
-    ?assertEqual(10, PositiveFrom),
-    ?assertEqual(hb_util:int(Tip) - 3, NegativeTo),
-    ok.
+    {_TestStore, _StoreOpts, BaseOpts} = setup_index_opts(),
+    Tip = 1939010,
+    {Opts, MockHandle} = with_mock_current_height(BaseOpts, Tip),
+    try
+        {ok, {NegativeFrom, UndefinedTo}} =
+            parse_range(#{ <<"from">> => <<"-3">> }, Opts),
+        ?assertEqual(Tip - 3, NegativeFrom),
+        ?assertEqual(undefined, UndefinedTo),
+        {ok, {PositiveFrom, NegativeTo}} =
+            parse_range(#{ <<"from">> => <<"10">>, <<"to">> => <<"-3">> }, Opts),
+        ?assertEqual(10, PositiveFrom),
+        ?assertEqual(Tip - 3, NegativeTo)
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
 
 latest_height_failure_test_parallel() ->
     {ok, MockURL, MockHandle} = hb_mock_server:start([
@@ -1038,39 +1038,40 @@ negative_resolved_height_test_parallel() ->
     end.
 
 negative_from_index_test_parallel() ->
-    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
-    {ok, Tip} = latest_height(Opts),
     StopBlock = 1827942,
     StartBlock = 1827943,
-    OffsetFromTip = Tip - StartBlock,
-    ?assert(OffsetFromTip > 0),
-    NegativeFrom = <<"-", (hb_util:bin(OffsetFromTip))/binary>>,
-    {ok, StopBlock} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", (hb_util:bin(StopBlock))/binary, "&"
-                "to=", (hb_util:bin(StopBlock))/binary, "&"
-                "mode=write"
-            >>,
-            Opts
-        ),
-    {ok, StopBlock} =
-        hb_ao:resolve(
-            <<
-                "~copycat@1.0/arweave&"
-                "from=", NegativeFrom/binary, "&"
-                "mode=write"
-            >>,
-            Opts
-        ),
-    ?assert(has_any_indexed_tx(StartBlock, Opts)),
-    NextBlock = highest_contiguous_indexed_block(StopBlock, 50, Opts),
-    ?assertEqual(StartBlock, NextBlock),
-    assert_indexed_range(NextBlock, StopBlock, Opts),
-    ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
-    ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts)),
-    ok.
+    {_TestStore, _StoreOpts, BaseOpts} = setup_index_opts(),
+    Tip = StartBlock + 3,
+    {Opts, MockHandle} = with_mock_current_height(BaseOpts, Tip),
+    try
+        {ok, StopBlock} =
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&"
+                    "from=", (hb_util:bin(StopBlock))/binary, "&"
+                    "to=", (hb_util:bin(StopBlock))/binary, "&"
+                    "mode=write"
+                >>,
+                Opts
+            ),
+        {ok, StopBlock} =
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&"
+                    "from=-3&"
+                    "mode=write"
+                >>,
+                Opts
+            ),
+        ?assert(has_any_indexed_tx(StartBlock, Opts)),
+        NextBlock = highest_contiguous_indexed_block(StopBlock, 50, Opts),
+        ?assertEqual(StartBlock, NextBlock),
+        assert_indexed_range(NextBlock, StopBlock, Opts),
+        ?assertNot(has_any_indexed_tx(StopBlock - 1, Opts)),
+        ?assertNot(has_any_indexed_tx(NextBlock + 1, Opts))
+    after
+        hb_mock_server:stop(MockHandle)
+    end.
 
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
@@ -1108,6 +1109,34 @@ setup_index_opts() ->
         <<"arweave-index-store">> => StoreOpts
     },
     {TestStore, StoreOpts, Opts}.
+
+with_mock_current_height(Opts, Height) ->
+    {ok, MockURL, MockHandle} = hb_mock_server:start([
+        {"/block/current", block_current,
+            {200, <<"{\"height\": ", (hb_util:bin(Height))/binary, "}">>}}
+    ]),
+    MockRoute =
+        #{
+            <<"template">> =>
+                #{
+                    <<"path">> => <<"^/arweave/block/current$">>,
+                    <<"method">> => <<"GET">>
+                },
+            <<"node">> =>
+                #{
+                    <<"match">> => <<"^/arweave">>,
+                    <<"with">> => MockURL,
+                    <<"opts">> => #{ <<"http-client">> => httpc }
+                }
+        },
+    Routes = hb_opts:get(routes, [], Opts),
+    {
+        Opts#{
+            <<"routes">> => [MockRoute | Routes],
+            <<"arweave-index-blocks">> => false
+        },
+        MockHandle
+    }.
 
 assert_bundle_read(BundleID, ExpectedItems, Opts) ->
     ReadItems =

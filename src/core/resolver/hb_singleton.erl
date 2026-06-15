@@ -341,11 +341,40 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 anchor_messages(Messages, RawMsg, Opts) ->
-    case maps:get(<<"commitments">>, RawMsg, not_found) of
-        not_found -> Messages;
-        _ ->
-            AnchorMsg = maps:remove(<<"ao-types">>, hb_message:minimize(RawMsg)),
+    case has_anchor_commitments(RawMsg, Opts) of
+        false -> Messages;
+        true ->
+            AnchorBase = anchor_base(RawMsg, Opts),
+            AnchorMsg = maps:remove(<<"ao-types">>, hb_message:minimize(AnchorBase)),
             [anchor_message(Msg, AnchorMsg, Opts) || Msg <- Messages]
+    end.
+
+has_anchor_commitments(RawMsg, Opts) ->
+    case hb_maps:get(<<"commitments">>, RawMsg, not_found, Opts) of
+        Commitments when is_map(Commitments) -> map_size(Commitments) > 0;
+        _ -> false
+    end.
+
+anchor_base(RawMsg = #{ <<"commitments">> := Commitments }, _Opts)
+        when is_map(Commitments), map_size(Commitments) > 0 ->
+    RawMsg;
+anchor_base(RawMsg, Opts) ->
+    case maps:find(<<"...">>, RawMsg) of
+        {ok, Parent} ->
+            case hb_cache:ensure_loaded(Parent, Opts) of
+                Loaded when is_map(Loaded) -> Loaded;
+                _ -> RawMsg
+            end;
+        error ->
+            case maps:find(<<"...+link">>, RawMsg) of
+                {ok, Parent} ->
+                    case hb_cache:ensure_loaded(Parent, Opts) of
+                        Loaded when is_map(Loaded) -> Loaded;
+                        _ -> RawMsg
+                    end;
+                error ->
+                    RawMsg
+            end
     end.
 
 anchor_message({as, DevID, Msg}, RawMsg, Opts) when is_map(Msg) ->
@@ -608,6 +637,33 @@ parse_explicit_message_test() ->
         [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
         from(Singleton3, #{})
     ).
+
+inherited_commitment_anchor_test() ->
+    Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Parent =
+        hb_message:commit(
+            #{
+                <<"method">> => <<"POST">>,
+                <<"path">> => <<"/~location@1.0/node">>,
+                <<"nonce">> => 1,
+                <<"require-codec">> => <<"ans104@1.0">>,
+                <<"url">> => <<"https://hyperbeam-test-ignore.com">>
+            },
+            Opts
+        ),
+    [Signer] = hb_message:signers(Parent, Opts),
+    Raw =
+        #{
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"/~location@1.0/node">>,
+            <<"accept">> => <<"*/*">>,
+            <<"accept-bundle">> => false,
+            <<"host">> => <<"localhost">>,
+            <<"...">> => Parent
+        },
+    [{as, <<"location@1.0">>, _Base}, Req] = from(Raw, Opts),
+    ?assertEqual(<<"node">>, maps:get(<<"path">>, Req)),
+    ?assertEqual([Signer], hb_message:signers(maps:get(<<"...">>, Req), Opts)).
 
 %%% `to/1' function tests
 to_suite_test_() ->
