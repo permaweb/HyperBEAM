@@ -1223,15 +1223,32 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                 maps:get(<<"accept">>, RawHeaders, <<"*/*">>)
             )
         ),
+    RequireCodec =
+        maps:get(
+            <<"require-codec">>,
+            Msg,
+            maps:get(
+                <<"require-codec">>,
+                PrimMsg,
+                maps:get(<<"require-codec">>, RawHeaders, undefined)
+            )
+        ),
+    HTTPMetadata0 =
+        #{
+            <<"method">> => Method,
+            <<"path">> => MsgPath,
+            <<"accept-bundle">> => AcceptBundle,
+            <<"accept">> => Accept
+        },
+    HTTPMetadata =
+        case RequireCodec of
+            undefined -> HTTPMetadata0;
+            _ -> HTTPMetadata0#{ <<"require-codec">> => RequireCodec }
+        end,
     BaseMsg =
         maybe_overlay_http_metadata(
             FilteredMsg,
-            #{
-                <<"method">> => Method,
-                <<"path">> => MsgPath,
-                <<"accept-bundle">> => AcceptBundle,
-                <<"accept">> => Accept
-            },
+            HTTPMetadata,
             Opts
         ),
     ?event(debug_accept, {normalize_unsigned, {accept, Accept}}),
@@ -1294,7 +1311,8 @@ http_envelope_keys() ->
         <<"ao-peer-port">>,
         <<"host">>,
         <<"method">>,
-        <<"path">>
+        <<"path">>,
+        <<"require-codec">>
     ].
 
 

@@ -72,8 +72,14 @@ push(Base, Req, Opts) ->
                             ),
                             {ok, CachedAssignment} =
                                 cache_scheduled_assignment(Assignment, Opts),
+                            PushProcess =
+                                process_for_assignment(
+                                    Process,
+                                    CachedAssignment,
+                                    Opts
+                                ),
                             push_with_mode(
-                                Process,
+                                PushProcess,
                                 inherit_push_controls(CachedAssignment, Req, Opts),
                                 Opts
                             )
@@ -81,6 +87,31 @@ push(Base, Req, Opts) ->
                 {error, Res} -> {error, Res}
             end;
         _ -> push_with_mode(Process, Req, Opts)
+    end.
+
+process_for_assignment(DefaultProcess, Assignment, Opts) ->
+    case hb_ao:get(<<"process">>, Assignment, not_found, Opts) of
+        ProcID when is_binary(ProcID) ->
+            case process_id(DefaultProcess, Opts) of
+                ProcID -> DefaultProcess;
+                _ -> load_process(ProcID, DefaultProcess, Opts)
+            end;
+        _ -> DefaultProcess
+    end.
+
+process_id(Process, Opts) ->
+    try lib_process:process_id(Process, #{}, Opts)
+    catch _:_ -> not_found
+    end.
+
+load_process(ProcID, DefaultProcess, Opts) ->
+    case hb_cache:read(ProcID, Opts) of
+        {ok, Process} ->
+            lib_process:as_process(
+                lib_process:ensure_process_key(Process, Opts),
+                Opts
+            );
+        _ -> DefaultProcess
     end.
 
 push_with_mode(Process, Req, Opts) ->

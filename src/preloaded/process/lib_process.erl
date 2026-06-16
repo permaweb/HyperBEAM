@@ -150,6 +150,14 @@ set_results(State, Results, Opts) ->
 
 %% @doc Helper function to store a copy of the `process' key in the message.
 ensure_process_key(Base, Opts) ->
+    case target_process(Base, Opts) of
+        {ok, Process} ->
+            ensure_process_key(Process, Opts);
+        not_found ->
+            ensure_self_process_key(Base, Opts)
+    end.
+
+ensure_self_process_key(Base, Opts) ->
     case hb_maps:get(<<"process">>, Base, not_found, Opts) of
         not_found ->
             % If the message has lost its signers, we need to re-read it from
@@ -179,6 +187,29 @@ ensure_process_key(Base, Opts) ->
             ),
             Res;
         _ -> Base
+    end.
+
+target_process(Base, Opts) ->
+    case hb_ao:get(<<"type">>, Base, not_found, Opts) of
+        <<"Message">> ->
+            case hb_ao:get(<<"target">>, Base, not_found, Opts) of
+                Target when is_binary(Target) ->
+                    read_target_process(Target, Opts);
+                _ -> not_found
+            end;
+        _ -> not_found
+    end.
+
+read_target_process(Target, Opts) ->
+    case hb_cache:read(target_id(Target), Opts) of
+        {ok, Process} -> {ok, Process};
+        _ -> not_found
+    end.
+
+target_id(Target) ->
+    case binary:split(Target, [<<"?">>, <<"&">>]) of
+        [ProcID, _] -> ProcID;
+        _ -> Target
     end.
 
 %% @doc Returns the default device for a given piece of process functionality.
