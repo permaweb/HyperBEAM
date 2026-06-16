@@ -61,7 +61,7 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
     HTTPRes =
         hb_http:get(
             Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
+            #{ <<"path">> => read_path(Key) },
             Opts
         ),
     case HTTPRes of
@@ -84,6 +84,13 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
             {error, not_found}
     end;
 read_request(_, _) -> {error, not_found}.
+
+read_path(Key) ->
+    Query =
+        unicode:characters_to_binary(
+            uri_string:compose_query([{<<"read">>, Key}])
+        ),
+    <<"/~cache@1.0/read?", Query/binary>>.
 
 remote_read_message(Opts, Key, Res) ->
     case should_verify_remote_read(Opts, Key) of
