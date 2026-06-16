@@ -5,6 +5,7 @@
     index/3,
     resolve/3,
     claim/3,
+    source/3,
     transaction/3,
     descriptor/3,
     blob/3,
@@ -25,6 +26,7 @@ info(_) ->
             <<"index">>,
             <<"resolve">>,
             <<"claim">>,
+            <<"source">>,
             <<"transaction">>,
             <<"descriptor">>,
             <<"blob">>,
@@ -43,6 +45,7 @@ index(_Base, _Req, _Opts) ->
         <<"paths">> => #{
             <<"resolve">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"claim">> => [<<"claim-id">>, <<"name">>, <<"url">>],
+            <<"source">> => [<<"id">>, <<"native-id">>],
             <<"transaction">> => [<<"txid">>],
             <<"descriptor">> => [<<"sd-hash">>],
             <<"blob">> => [<<"hash">>],
@@ -65,6 +68,40 @@ resolve(Base, Req, Opts) ->
 
 claim(Base, Req, Opts) ->
     resolve(Base, Req, Opts).
+
+source(Base, Req, Opts) ->
+    case native_source_id(Base, Req, Opts) of
+        {ok, Kind, Key} ->
+            ?event(odysee_device,
+                {source_read, {kind, Kind}, {key, Key}},
+                Opts
+            ),
+            case hb_ao:raw(
+                <<"cache@1.0">>,
+                <<"read">>,
+                Base,
+                #{ <<"read">> => Key },
+                Opts
+            ) of
+                {ok, Msg} ->
+                    {ok, Msg};
+                {error, Reason} ->
+                    ?event(odysee_device,
+                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        Opts
+                    ),
+                    error_response(Reason);
+                {failure, Reason} ->
+                    ?event(odysee_device,
+                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        Opts
+                    ),
+                    error_response({failure, Reason})
+            end;
+        {error, Reason} ->
+            ?event(odysee_device, {source_key_rejected, {reason, Reason}}, Opts),
+            error_response(Reason)
+    end.
 
 transaction(Base, Req, Opts) ->
     with_txid(Base, Req, Opts, fun(TxID) ->
@@ -405,6 +442,72 @@ with_blob_hash(Base, Req, Opts, Fun) ->
         Error -> error_response(Error)
     end.
 
+native_source_id(Base, Req, Opts) ->
+    case source_param_values(Base, Req, Opts) of
+        [] ->
+            {error, missing_native_source_id};
+        Values ->
+            case source_param_key(Values) of
+                {ok, Key} -> classify_native_source_key(Key);
+                Error -> Error
+            end
+    end.
+
+source_param_values(Base, Req, Opts) ->
+    [
+        Value
+     ||
+        Value <- [
+            hb_maps:get(<<"id">>, Req, not_found, Opts),
+            hb_maps:get(<<"id">>, Base, not_found, Opts),
+            hb_maps:get(<<"native-id">>, Req, not_found, Opts),
+            hb_maps:get(<<"native-id">>, Base, not_found, Opts)
+        ],
+        Value =/= not_found
+    ].
+
+source_param_key(Values) ->
+    Normalized =
+        lists:usort([
+            hb_util:to_lower(Value)
+         ||
+            Value <- Values,
+            is_binary(Value),
+            byte_size(Value) > 0
+        ]),
+    case {length(Normalized), length(Values)} of
+        {0, _} -> {error, unsupported_native_source_id};
+        {1, N} when N == length(Values) -> {ok, hd(Normalized)};
+        {_, N} when N =/= length(Values) -> {error, unsupported_native_source_id};
+        _ -> {error, conflicting_native_source_id}
+    end.
+
+classify_native_source_key(Key) ->
+    case binary:split(Key, <<":">>) of
+        [TxID, NoutBin] ->
+            case {valid_hex_bytes(TxID, 32), parse_source_nout(NoutBin)} of
+                {true, {ok, Nout}} ->
+                    {ok, <<"outpoint">>, <<TxID/binary, ":", (integer_to_binary(Nout))/binary>>};
+                _ ->
+                    {error, unsupported_native_source_id}
+            end;
+        [Single] ->
+            case {valid_hex_bytes(Single, 48), valid_hex_bytes(Single, 32)} of
+                {true, _} -> {ok, <<"blob">>, Single};
+                {_, true} -> {ok, <<"transaction">>, Single};
+                _ -> {error, unsupported_native_source_id}
+            end
+    end.
+
+valid_hex_bytes(Bin, Bytes) when is_binary(Bin), byte_size(Bin) == Bytes * 2 ->
+    try binary:decode_hex(Bin) of
+        Decoded -> byte_size(Decoded) == Bytes
+    catch
+        _:_ -> false
+    end;
+valid_hex_bytes(_Bin, _Bytes) ->
+    false.
+
 with_media_source(Base, Req, Opts, Fun) ->
     case param(Base, Req, [<<"sd-hash">>, <<"sd_hash">>, <<"sdhash">>], Opts) of
         {ok, SDHash} ->
@@ -514,6 +617,21 @@ parse_nonnegative_integer(Bin) ->
     catch
         _:_ -> {error, invalid_integer}
     end.
+
+parse_source_nout(Bin) when is_binary(Bin), byte_size(Bin) > 0 ->
+    case all_digits(Bin) of
+        true -> parse_nonnegative_integer(Bin);
+        false -> {error, invalid_integer}
+    end;
+parse_source_nout(_Bin) ->
+    {error, invalid_integer}.
+
+all_digits(<<>>) ->
+    true;
+all_digits(<<Char, Rest/binary>>) when Char >= $0, Char =< $9 ->
+    all_digits(Rest);
+all_digits(_Bin) ->
+    false.
 
 bounded_range(Source, Start, End) ->
     case maps:get(<<"byte-size">>, Source, undefined) of
@@ -635,6 +753,9 @@ error_map(Reason) ->
 
 status_for({missing_required, _}) -> 400;
 status_for({error, Reason}) -> status_for(Reason);
+status_for(missing_native_source_id) -> 400;
+status_for(unsupported_native_source_id) -> 400;
+status_for(conflicting_native_source_id) -> 400;
 status_for(missing_range) -> 416;
 status_for(invalid_range) -> 416;
 status_for(invalid_integer) -> 400;

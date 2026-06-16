@@ -354,6 +354,173 @@ transaction_device_rejects_txid_mismatch_test() ->
         hb_mock_server:stop(Handle)
     end.
 
+source_route_txid_preserves_native_commitment_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => uppercase(TxID) },
+            source_test_opts(TxID, Msg)
+        ),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+    ?assert(source_has_commitment(Source, <<"lbry-transaction@1.0">>)).
+
+source_http_route_exposes_native_signature_input_test() ->
+    application:ensure_all_started(inets),
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    Store = source_test_store(TxID, Msg),
+    Node = hb_http_server:start_node(#{ <<"store">> => [Store] }),
+    URL = binary_to_list(<<Node/binary, "~odysee@1.0/source?id=", TxID/binary>>),
+    {ok, {{_, 200, _}, Headers, _Body}} =
+        httpc:request(get, {URL, []}, [], [{body_format, binary}]),
+    SignatureInput = http_header(<<"signature-input">>, Headers),
+    ?assertNotEqual(not_found, SignatureInput),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"alg=\"lbry-transaction@1.0/sha-256d\"">>)
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"native-id=\"", TxID/binary, "\"">>)
+    ).
+
+source_route_blob_preserves_native_commitment_test() ->
+    Body = <<"encrypted bytes">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Body),
+    Msg = hb_lbry_commitment:blob_message(Hash, Body),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"native-id">> => uppercase(Hash) },
+            source_test_opts(Hash, Msg)
+        ),
+    ?assertEqual(Hash, maps:get(<<"blob-hash">>, Source)),
+    ?assert(source_has_commitment(Source, <<"lbry-blob@1.0">>)).
+
+source_route_outpoint_preserves_native_commitment_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, TxMsg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, TxMsg),
+    Key = <<TxID/binary, ":0">>,
+    {ok, Msg} = hb_lbry_commitment:claim_output_message(Raw, 0),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => uppercase(Key) },
+            source_test_opts(Key, Msg)
+        ),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+    ?assertEqual(0, maps:get(<<"nout">>, Source)),
+    ?assert(source_has_commitment(Source, <<"lbry-claim@1.0">>)).
+
+source_route_accepts_duplicate_aliases_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => uppercase(TxID), <<"native-id">> => TxID },
+            source_test_opts(TxID, Msg)
+        ),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+    ?assert(source_has_commitment(Source, <<"lbry-transaction@1.0">>)).
+
+source_route_rejects_claim_id_test() ->
+    ClaimID = <<"585d54c7bb8fd92043ed583c5aea18a9547028aa">>,
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => ClaimID },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"unsupported_native_source_id">>, maps:get(<<"error">>, Response)).
+
+source_route_rejects_malformed_id_test() ->
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => <<"not-a-source-id">> },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"unsupported_native_source_id">>, maps:get(<<"error">>, Response)).
+
+source_route_rejects_signed_nout_alias_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    TxID = hb_lbry_tx:txid(Raw),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => <<TxID/binary, ":+1">> },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"unsupported_native_source_id">>, maps:get(<<"error">>, Response)).
+
+source_route_rejects_read_parameter_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    TxID = hb_lbry_tx:txid(Raw),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"read">> => TxID },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"missing_native_source_id">>, maps:get(<<"error">>, Response)).
+
+source_route_rejects_conflicting_aliases_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    TxID = hb_lbry_tx:txid(Raw),
+    Hash = hb_lbry_stream_descriptor:blob_hash(<<"encrypted bytes">>),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => TxID, <<"native-id">> => Hash },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"conflicting_native_source_id">>, maps:get(<<"error">>, Response)).
+
+source_route_ignores_accept_for_internal_read_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => TxID, <<"accept">> => <<"application/aos-2">> },
+            source_test_opts(TxID, Msg)
+        ),
+    ?assertEqual(Raw, maps:get(<<"raw">>, Source)),
+    ?assertEqual(false, maps:is_key(<<"body">>, Source)).
+
 media_device_defaults_missing_range_test() ->
     {RawDescriptor, DescriptorHash, BlobHash, BlobBytes, Plaintext} =
         sample_descriptor(),
@@ -492,3 +659,34 @@ opts(Server) ->
         <<"http-client">> => httpc,
         <<"lbry-blob-store">> => #{ <<"node">> => Server }
     }.
+
+source_test_opts(Key, Msg) ->
+    #{ <<"store">> => [source_test_store(Key, Msg)] }.
+
+source_test_store(Key, Msg) ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"odysee-source">>),
+    ok = hb_store:write(Store, #{ Key => Msg }, #{}),
+    Store.
+
+source_has_commitment(Msg, Device) ->
+    lists:any(
+        fun(Commitment) ->
+            maps:get(<<"commitment-device">>, Commitment, undefined) == Device
+        end,
+        maps:values(maps:get(<<"commitments">>, Msg, #{}))
+    ).
+
+uppercase(Bin) ->
+    hb_util:bin(string:uppercase(binary_to_list(Bin))).
+
+http_header(Name, Headers) ->
+    LowerName = hb_util:bin(string:lowercase(hb_util:bin(Name))),
+    case [
+        hb_util:bin(Value)
+     ||
+        {Key, Value} <- Headers,
+        hb_util:bin(string:lowercase(hb_util:bin(Key))) == LowerName
+    ] of
+        [Value | _] -> Value;
+        [] -> not_found
+    end.
