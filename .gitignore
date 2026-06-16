@@ -44,3 +44,6 @@ mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
 !test/config.json
+
+# rebar3_cargo plugin-generated header (source copy lives in src/core/include/)
+/src/cargo.hrl
