@@ -151,6 +151,11 @@ machine.
 Index data is persisted in a Docker volume (`hyperbeam-data`). Continuous
 indexing starts automatically.
 
+Create the operator wallet file at `../../wallets/operator.json`, relative to
+`docs/community`. The compose file mounts this wallet to both `/app/wallet.json`
+and `/app/hb/hyperbeam-key.json`. These paths must point to the same wallet so
+the configured key path and the runtime default key path use the same signer.
+
 Other environment variables:
 - `HB_PORT`: HyperBEAM listen port (default: `8001`)
 - `DATA_DIR`: LMDB path inside the container (default: `/data/rolling`)
