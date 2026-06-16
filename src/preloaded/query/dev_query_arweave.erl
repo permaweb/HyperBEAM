@@ -286,17 +286,20 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
             fun(AnnotatedID) -> maps:is_key(<<"offset">>, AnnotatedID) end,
             AnnotatedIDs
         ),
-    Ascending =
-        lists:sort(
-            fun(#{ <<"offset">> := OffsetA }, #{ <<"offset">> := OffsetB }) ->
-                offset_sort_key(OffsetA) < offset_sort_key(OffsetB)
-            end,
-            WithOffset
-        ),
+    {Pending, Confirmed} =
+        lists:partition(fun(#{ <<"offset">> := Offset }) -> pending_offset(Offset) end, WithOffset),
+    ByID = fun(#{ <<"id">> := A }, #{ <<"id">> := B }) -> A < B end,
+    ByOffset = fun(#{ <<"offset">> := A }, #{ <<"offset">> := B }) -> A < B end,
     UserOrderSorted =
         case SortOrder of
-            <<"HEIGHT_ASC">> -> Ascending;
-            _ -> lists:reverse(Ascending)
+            <<"HEIGHT_ASC">> ->
+                lists:sort(ByOffset, Confirmed) ++
+                    lists:sort(ByID, Pending) ++
+                    lists:sort(ByID, WithoutOffset);
+            _ ->
+                lists:reverse(lists:sort(ByID, Pending)) ++
+                    lists:reverse(lists:sort(ByOffset, Confirmed)) ++
+                    lists:reverse(lists:sort(ByID, WithoutOffset))
         end,
     ?event(
         {order_by_block,
@@ -305,7 +308,7 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
             {without_offset, length(WithoutOffset)}
         }
     ),
-    UserOrderSorted ++ WithoutOffset.
+    UserOrderSorted.
 
 %% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
 %% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
@@ -518,7 +521,7 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
                 {undefined, #{ <<"id">> => ID }}
         end,
     {NewOrdinate, Postfix} =
-        case Offset =:= LastOffset of
+        case Offset =/= undefined andalso not pending_offset(Offset) andalso Offset =:= LastOffset of
             true -> {Ordinate + 1, <<"-", (hb_util:bin(Ordinate + 1))/binary>>};
             false -> {0, <<>>}
         end,
@@ -528,6 +531,7 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
+offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral:", ID/binary>>;
 offset_cursor(ID, Offset) when is_binary(ID) ->
     case pending_offset(Offset) of
         true -> <<"pending:", ID/binary>>;
@@ -537,12 +541,6 @@ offset_cursor(ID, Offset) when is_binary(ID) ->
 pending_offset(relative) -> true;
 pending_offset(#{ <<"relative">> := _, <<"offset">> := _ }) -> true;
 pending_offset(_) -> false.
-
-offset_sort_key(Offset) ->
-    case pending_offset(Offset) of
-        true -> {pending, Offset};
-        false -> {confirmed, Offset}
-    end.
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
