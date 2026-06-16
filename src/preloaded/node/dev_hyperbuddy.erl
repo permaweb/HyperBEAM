@@ -2,9 +2,11 @@
 -module(dev_hyperbuddy).
 -export([info/1, format/3, return_file/2, return_error/2]).
 -export([metrics/3, events/3]).
--export([throw/3]).
+-export([assets/3, throw/3]).
 -include_lib("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
+
+-define(STATIC_PREFIX_KEY, <<"hyperbuddy-static-prefix">>).
 
 %% @doc Export an explicit list of files via http. Filenames added to the 
 %% `hyperbuddy-serve' key of the node message will be served as static files.
@@ -12,24 +14,25 @@
 %% build subdirectory as follows: `priv/html/hyperbuddy@1.0'.
 info(Opts) ->
     ServedRoutes = hb_opts:get(<<"hyperbuddy-serve">>, #{}, Opts),
+    DefaultRoutes = #{
+        % Default message viewer page:
+        <<"index">> => <<"index.html">>,
+        <<"bundle.js">> => <<"bundle.js">>,
+        <<"fonts.css">> => <<"fonts.css">>,
+        <<"favicon-light.png">> => <<"favicon-light.png">>,
+        <<"favicon-dark.png">> => <<"favicon-dark.png">>,
+        <<"font-dm-sans-italic.ttf">> => <<"font-dm-sans-italic.ttf">>,
+        <<"font-dm-sans-variable.ttf">> => <<"font-dm-sans-variable.ttf">>,
+        <<"font-geist-mono-variable.ttf">> => <<"font-geist-mono-variable.ttf">>,
+        % Error pages:
+        <<"404.html">> => <<"404.html">>,
+        <<"500.html">> => <<"500.html">>,
+        <<"styles.css">> => <<"styles.css">>,
+        <<"script.js">> => <<"script.js">>
+    },
     #{
         default => fun serve/4,
-        serve => ServedRoutes#{
-            % Default message viewer page:
-            <<"index">> => <<"index.html">>,
-            <<"bundle.js">> => <<"bundle.js">>,
-            <<"fonts.css">> => <<"fonts.css">>,
-            <<"favicon-light.png">> => <<"favicon-light.png">>,
-            <<"favicon-dark.png">> => <<"favicon-dark.png">>,
-            <<"font-dm-sans-italic.ttf">> => <<"font-dm-sans-italic.ttf">>,
-            <<"font-dm-sans-variable.ttf">> => <<"font-dm-sans-variable.ttf">>,
-            <<"font-geist-mono-variable.ttf">> => <<"font-geist-mono-variable.ttf">>,
-            % Error pages:
-            <<"404.html">> => <<"404.html">>,
-            <<"500.html">> => <<"500.html">>,
-            <<"styles.css">> => <<"styles.css">>,
-            <<"script.js">> => <<"script.js">>
-        },
+        serve => maps:merge(ServedRoutes, DefaultRoutes),
         excludes => [<<"return_file">>]
     }.
 
@@ -152,13 +155,40 @@ serve(<<"keys">>, M1, _M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
 serve(<<"set">>, M1, M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
-serve(Key, _, _, Opts) ->
+serve(<<"assets">>, _, Req, Opts) ->
+    serve_asset(Req, Opts);
+serve(Key, Base, _, Opts) ->
     ?event({hyperbuddy_serving, Key}),
-    ServeRoutes = hb_maps:get(serve, info(Opts), #{}, Opts),
-    case hb_maps:find(Key, ServeRoutes, Opts) of
-        {ok, Filename} -> return_file(<<"hyperbuddy@1.0">>, Filename, #{});
-        error -> {error, not_found}
+    case hb_maps:get(?STATIC_PREFIX_KEY, Base, undefined, Opts) of
+        <<"assets">> when is_binary(Key) ->
+            return_asset(Key, Opts);
+        _ ->
+            ServeRoutes = hb_maps:get(serve, info(Opts), #{}, Opts),
+            case hb_maps:find(Key, ServeRoutes, Opts) of
+                {ok, Filename} -> return_file(<<"hyperbuddy@1.0">>, Filename, #{});
+                error -> {error, not_found}
+            end
     end.
+
+assets(_Base, Req, Opts) ->
+    serve_asset(Req, Opts).
+
+serve_asset(Req, Opts) ->
+    case hb_path:tl(Req, Opts) of
+        #{ <<"path">> := [Name] } when is_binary(Name) ->
+            return_asset(Name, Opts);
+        #{ <<"path">> := Name } when is_binary(Name) ->
+            return_asset(Name, Opts);
+        _ ->
+            {ok,
+                #{
+                    <<"device">> => <<"hyperbuddy@1.0">>,
+                    ?STATIC_PREFIX_KEY => <<"assets">>
+                }}
+    end.
+
+return_asset(Name, _Opts) ->
+    return_file(<<"hyperbuddy@1.0">>, <<"assets/", Name/binary>>, #{}).
 
 %% @doc Read a file from disk and serve it as a static HTML page.
 return_file(Device, Name) ->
@@ -191,6 +221,19 @@ return_templated_file_test() ->
         binary:match(Body, <<"This is an error message.">>),
         nomatch
     ).
+
+return_asset_test() ->
+    {ok,
+        #{
+            <<"body">> := Body,
+            <<"content-type">> := <<"image/svg+xml">>
+        }} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"hyperbuddy@1.0">> },
+            <<"assets/search.svg">>,
+            #{}
+        ),
+    ?assertNotEqual(binary:match(Body, <<"<svg">>), nomatch).
 
 return_custom_json_test() ->
     Base = hb_util:bin(code:priv_dir(hb)),

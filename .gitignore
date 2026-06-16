@@ -36,7 +36,6 @@ priv/*
 cache-*
 
 *.dot
-*.svg
 
 cu/
 mkdocs-site/
