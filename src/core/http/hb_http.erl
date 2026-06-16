@@ -538,7 +538,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
     ?event(http_server_short,
         {sent,
             {status, Status},
-            {ip, {string, real_ip(Req, Opts)}},
+            {ip, {string, real_ip(Req, peer_ip(Req), Opts)}},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
@@ -1099,7 +1099,8 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
             _ -> WithCookie
         end,
-    RealIP = real_ip(Req, Opts),
+    PeerIP = peer_ip(Req),
+    RealIP = real_ip(Req, PeerIP, Opts),
     WithPeer = case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
         undefined -> NormalBody;
         P2PPort ->
@@ -1108,7 +1109,8 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                 <<"ao-peer">> => Peer
             }
     end,
-    WithPrivIP = hb_private:set(WithPeer, <<"ip">>, RealIP, Opts),
+    WithPrivPeerIP = hb_private:set(WithPeer, <<"peer-ip">>, PeerIP, Opts),
+    WithPrivIP = hb_private:set(WithPrivPeerIP, <<"ip">>, RealIP, Opts),
     % Add device from PrimMsg if present
     WithDevice = case maps:get(<<"device">>, PrimMsg, not_found) of
         not_found -> WithPrivIP;
@@ -1118,17 +1120,15 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
     WithDevice#{<<"host">> => Host}.
 
 
+%% @doc Return the direct peer IP of the HTTP connection.
+peer_ip(Req) ->
+    {Peer, _Port} = cowboy_req:peer(Req),
+    hb_util:bin(inet:ntoa(Peer)).
+
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
-real_ip(Req = #{ headers := RawHeaders }, Opts) ->
+real_ip(#{ headers := RawHeaders }, PeerIP, Opts) ->
     case hb_maps:get(<<"x-real-ip">>, RawHeaders, undefined, Opts) of
-        undefined ->
-            {{A, B, C, D}, _} = cowboy_req:peer(Req),
-            hb_util:bin(
-                io_lib:format(
-                    "~b.~b.~b.~b",
-                    [A, B, C, D]
-                )
-            );
+        undefined -> PeerIP;
         IP -> IP
     end.
 

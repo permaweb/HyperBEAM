@@ -505,6 +505,9 @@ raw_default_message() ->
             <<"request">> =>
                 [
                     #{
+                        <<"device">> => <<"nginx@1.0">>
+                    },
+                    #{
                         <<"device">> => <<"rate-limit@1.0">>
                     },
                     #{
