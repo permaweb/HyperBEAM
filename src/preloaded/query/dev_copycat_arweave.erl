@@ -584,31 +584,62 @@ process_pending_tx(TXID, IndexMode, Opts) ->
     case resolve_pending_tx_header(TXID, Opts) of
         {ok, TX} ->
             Store = hb_store_arweave:store_from_opts(Opts),
-            ok = hb_store_arweave:write_offset(
-                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size),
-            index_pending_children(TXID, TX, IndexMode, Store, Opts);
+            case hb_store_arweave:write_offset(
+                Store, TXID, <<"tx@1.0">>, relative, TX#tx.data_size) of
+                ok ->
+                    index_pending_children(TXID, TX, IndexMode, Store, Opts);
+                WriteError ->
+                    ?event(
+                        copycat_short,
+                        {arweave_pending_tx_skipped,
+                            {tx_id, {explicit, TXID}},
+                            {reason, {write_offset_failed, WriteError}}
+                        }
+                    ),
+                    counters(0, 0, 1)
+            end;
         error ->
             counters(0, 0, 1)
     end.
 
 resolve_pending_tx_header(TXID, Opts) ->
-    case hb_ao:resolve(
-        #{ <<"device">> => <<"arweave@2.9">> },
-        #{
-            <<"path">> => <<"pending">>,
-            <<"pending">> => TXID,
-            <<"exclude-data">> => true
-        },
-        Opts
-    ) of
-        {ok, StructuredTXHeader} ->
-            {ok,
-                hb_message:convert(
-                    StructuredTXHeader,
-                    <<"tx@1.0">>,
-                    <<"structured@1.0">>,
-                    Opts)};
-        {error, _} ->
+    try
+        case hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"pending">>,
+                <<"pending">> => TXID,
+                <<"exclude-data">> => true
+            },
+            Opts
+        ) of
+            {ok, StructuredTXHeader} ->
+                {ok,
+                    hb_message:convert(
+                        StructuredTXHeader,
+                        <<"tx@1.0">>,
+                        <<"structured@1.0">>,
+                        Opts)};
+            {error, ResolveError} ->
+                ?event(
+                    copycat_short,
+                    {arweave_pending_tx_skipped,
+                        {tx_id, {explicit, TXID}},
+                        {reason, ResolveError}
+                    }
+                ),
+                error
+        end
+    catch
+        Class:Reason:_ ->
+            ?event(
+                copycat_short,
+                {arweave_pending_tx_skipped,
+                    {tx_id, {explicit, TXID}},
+                    {class, Class},
+                    {reason, Reason}
+                }
+            ),
             error
     end.
 

@@ -200,13 +200,38 @@ head_raw(Base, Request, Opts) ->
 %% @doc Arweave transaction headers are not part of the Arweave data tree, and
 %% thus we do not add their header bytes to the offset in order to read their
 %% data.
+head_raw_tx(TXID, relative, Length, Opts) ->
+    case pending(
+        #{ <<"pending">> => TXID },
+        #{ <<"exclude-data">> => true },
+        Opts
+    ) of
+        {ok, StructuredTXHeader} ->
+            head_raw_tx_response(
+                TXID,
+                relative,
+                hb_util:int(
+                    hb_ao:get(<<"data_size">>, StructuredTXHeader, Length, Opts)
+                ),
+                StructuredTXHeader,
+                Opts
+            );
+        _ ->
+            head_raw_confirmed_tx(TXID, relative, Length, Opts)
+    end;
 head_raw_tx(TXID, StartOffset, Length, Opts) ->
+    head_raw_confirmed_tx(TXID, StartOffset, Length, Opts).
+
+head_raw_confirmed_tx(TXID, StartOffset, Length, Opts) ->
     {ok, StructuredTXHeader} =
         get_tx(
             #{ <<"tx">> => TXID },
             #{ <<"exclude-data">> => true },
             Opts
         ),
+    head_raw_tx_response(TXID, StartOffset, Length, StructuredTXHeader, Opts).
+
+head_raw_tx_response(TXID, StartOffset, Length, StructuredTXHeader, Opts) ->
     ContentType =
         hb_ao:get(
             <<"content-type">>,
