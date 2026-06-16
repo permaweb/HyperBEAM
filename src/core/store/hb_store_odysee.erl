@@ -68,7 +68,8 @@ read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
     Path = normalize_key(Key),
     case fixture(Path, StoreOpts, NodeOpts) of
         {ok, Msg} ->
-            commit_result(Msg, infer_type(Path, Msg, NodeOpts), NodeOpts);
+            Type = infer_type(Path, Msg, NodeOpts),
+            commit_result(enrich_surface(Path, Type, Msg), Type, NodeOpts);
         not_found ->
             read_live(Path, StoreOpts, NodeOpts)
     end.
@@ -254,6 +255,66 @@ read_live(<<"odysee/comment/", Encoded/binary>>, StoreOpts, NodeOpts) ->
     else
         Error -> Error
     end;
+read_live(<<"odysee/comment-reaction/", Encoded/binary>>, StoreOpts, NodeOpts) ->
+    maybe
+        {ok, CommentID} ?= decode_component(Encoded),
+        {ok, Reaction} ?=
+            hb_ao:raw(
+                <<"odysee-reaction@1.0">>,
+                <<"list">>,
+                #{},
+                #{ <<"comment-ids">> => CommentID },
+                store_node_opts(StoreOpts, NodeOpts)
+            ),
+        commit_result(enrich_surface(<<"odysee/comment-reaction/", CommentID/binary>>, <<"comment-reaction">>, Reaction), <<"comment-reaction">>, NodeOpts)
+    else
+        Error -> Error
+    end;
+read_live(<<"odysee/file-view-count/", Encoded/binary>>, StoreOpts, NodeOpts) ->
+    maybe
+        {ok, ClaimID} ?= decode_component(Encoded),
+        {ok, Counts} ?=
+            hb_ao:raw(
+                <<"odysee-file@1.0">>,
+                <<"view-count">>,
+                #{},
+                #{ <<"claim-id">> => ClaimID },
+                store_node_opts(StoreOpts, NodeOpts)
+            ),
+        commit_result(enrich_surface(<<"odysee/file-view-count/", ClaimID/binary>>, <<"file-view-count">>, Counts), <<"file-view-count">>, NodeOpts)
+    else
+        Error -> Error
+    end;
+read_live(<<"odysee/file-reaction/", Encoded/binary>>, StoreOpts, NodeOpts) ->
+    maybe
+        {ok, ClaimID} ?= decode_component(Encoded),
+        {ok, Reaction} ?=
+            hb_ao:raw(
+                <<"odysee-file-reaction@1.0">>,
+                <<"list">>,
+                #{},
+                #{ <<"claim-ids">> => ClaimID },
+                store_node_opts(StoreOpts, NodeOpts)
+            ),
+        commit_result(enrich_surface(<<"odysee/file-reaction/", ClaimID/binary>>, <<"file-reaction">>, Reaction), <<"file-reaction">>, NodeOpts)
+    else
+        Error -> Error
+    end;
+read_live(<<"odysee/subscription-count/", Encoded/binary>>, StoreOpts, NodeOpts) ->
+    maybe
+        {ok, ClaimID} ?= decode_component(Encoded),
+        {ok, Counts} ?=
+            hb_ao:raw(
+                <<"odysee-subscription@1.0">>,
+                <<"sub-count">>,
+                #{},
+                #{ <<"claim-id">> => ClaimID },
+                store_node_opts(StoreOpts, NodeOpts)
+            ),
+        commit_result(enrich_surface(<<"odysee/subscription-count/", ClaimID/binary>>, <<"subscription-count">>, Counts), <<"subscription-count">>, NodeOpts)
+    else
+        Error -> Error
+    end;
 read_live(<<"odysee/blob-id/", Encoded/binary>>, StoreOpts, NodeOpts) ->
     read_live(<<"odysee/blob/", Encoded/binary>>, StoreOpts, NodeOpts);
 read_live(<<"odysee/blob/", Encoded/binary>>, StoreOpts, NodeOpts) ->
@@ -322,6 +383,29 @@ source_message(<<"transaction">>, Msg) ->
 source_message(_Type, Msg) ->
     Msg.
 
+enrich_surface(<<"odysee/comment-reaction/", CommentID/binary>> = Path, <<"comment-reaction">>, Msg) ->
+    Msg#{
+        <<"comment-id">> => CommentID,
+        <<"comment-reaction-store-path">> => Path
+    };
+enrich_surface(<<"odysee/file-view-count/", ClaimID/binary>> = Path, <<"file-view-count">>, Msg) ->
+    Msg#{
+        <<"claim-id">> => ClaimID,
+        <<"file-view-count-store-path">> => Path
+    };
+enrich_surface(<<"odysee/file-reaction/", ClaimID/binary>> = Path, <<"file-reaction">>, Msg) ->
+    Msg#{
+        <<"claim-id">> => ClaimID,
+        <<"file-reaction-store-path">> => Path
+    };
+enrich_surface(<<"odysee/subscription-count/", ClaimID/binary>> = Path, <<"subscription-count">>, Msg) ->
+    Msg#{
+        <<"claim-id">> => ClaimID,
+        <<"subscription-count-store-path">> => Path
+    };
+enrich_surface(_Path, _Type, Msg) ->
+    Msg.
+
 has_commitment_device(Msg, Device, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     lists:any(
@@ -358,6 +442,14 @@ infer_type(<<"odysee/comment-id/", _/binary>>, _Msg, _Opts) ->
     <<"comment">>;
 infer_type(<<"odysee/comment/", _/binary>>, _Msg, _Opts) ->
     <<"comment">>;
+infer_type(<<"odysee/comment-reaction/", _/binary>>, _Msg, _Opts) ->
+    <<"comment-reaction">>;
+infer_type(<<"odysee/file-view-count/", _/binary>>, _Msg, _Opts) ->
+    <<"file-view-count">>;
+infer_type(<<"odysee/file-reaction/", _/binary>>, _Msg, _Opts) ->
+    <<"file-reaction">>;
+infer_type(<<"odysee/subscription-count/", _/binary>>, _Msg, _Opts) ->
+    <<"subscription-count">>;
 infer_type(<<"odysee/blob-id/", _/binary>>, _Msg, _Opts) ->
     <<"blob">>;
 infer_type(<<"odysee/blob/", _/binary>>, _Msg, _Opts) ->
@@ -370,6 +462,10 @@ infer_type(_Path, Msg, Opts) when is_map(Msg) ->
         <<"lbry-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
         <<"odysee-channel@1.0">> -> <<"channel">>;
         <<"odysee-comment@1.0">> -> <<"comment">>;
+        <<"odysee-reaction@1.0">> -> <<"comment-reaction">>;
+        <<"odysee-file@1.0">> -> <<"file-view-count">>;
+        <<"odysee-file-reaction@1.0">> -> <<"file-reaction">>;
+        <<"odysee-subscription@1.0">> -> <<"subscription-count">>;
         <<"odysee-blob@1.0">> -> <<"blob">>;
         <<"lbry-blob@1.0">> -> <<"blob">>;
         <<"odysee-claim-proof@1.0">> -> <<"claim-proof">>;

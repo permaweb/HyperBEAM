@@ -272,6 +272,10 @@ infer_type(Base, Opts) ->
         <<"lbry-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
         <<"odysee-channel@1.0">> -> <<"channel">>;
         <<"odysee-comment@1.0">> -> <<"comment">>;
+        <<"odysee-reaction@1.0">> -> <<"comment-reaction">>;
+        <<"odysee-file@1.0">> -> <<"file-view-count">>;
+        <<"odysee-file-reaction@1.0">> -> <<"file-reaction">>;
+        <<"odysee-subscription@1.0">> -> <<"subscription-count">>;
         <<"odysee-blob@1.0">> -> <<"blob">>;
         <<"lbry-blob@1.0">> -> <<"blob">>;
         <<"odysee-claim-proof@1.0">> -> <<"claim-proof">>;
@@ -401,6 +405,17 @@ committed_keys(Type, Msg, Opts) ->
                     <<"signing-ts">>,
                     <<"public-key">>
                 ];
+            <<"comment-reaction">> ->
+                [
+                    <<"device">>,
+                    <<"content-type">>,
+                    <<"body">>,
+                    <<"comment-id">>,
+                    <<"comment-ids">>,
+                    <<"my_reactions">>,
+                    <<"others_reactions">>,
+                    <<"comment-reaction-store-path">>
+                ];
             <<"stream-attestation">> ->
                 [
                     <<"device">>,
@@ -443,6 +458,39 @@ committed_keys(Type, Msg, Opts) ->
                     <<"blob-hash">>,
                     <<"blob-size">>,
                     <<"blob-store-path">>
+                ];
+            <<"file-view-count">> ->
+                [
+                    <<"device">>,
+                    <<"content-type">>,
+                    <<"body">>,
+                    <<"claim-id">>,
+                    <<"claim-ids">>,
+                    <<"view-counts">>,
+                    <<"by-claim-id">>,
+                    <<"file-view-count-store-path">>
+                ];
+            <<"file-reaction">> ->
+                [
+                    <<"device">>,
+                    <<"content-type">>,
+                    <<"body">>,
+                    <<"claim-id">>,
+                    <<"claim-ids">>,
+                    <<"my_reactions">>,
+                    <<"others_reactions">>,
+                    <<"file-reaction-store-path">>
+                ];
+            <<"subscription-count">> ->
+                [
+                    <<"device">>,
+                    <<"content-type">>,
+                    <<"body">>,
+                    <<"claim-id">>,
+                    <<"claim-ids">>,
+                    <<"sub-counts">>,
+                    <<"by-claim-id">>,
+                    <<"subscription-count-store-path">>
                 ];
             _ ->
                 hb_maps:keys(Msg, Opts)
@@ -580,11 +628,47 @@ add_evidence(<<"comment">>, Msg, Commitment, Opts) ->
         ],
         Commitment
     );
+add_evidence(<<"comment-reaction">>, Msg, Commitment, Opts) ->
+    put_optionals(
+        [
+            {<<"comment-id">>, hb_maps:get(<<"comment-id">>, Msg, not_found, Opts)},
+            {<<"comment-reaction-store-path">>,
+                hb_maps:get(<<"comment-reaction-store-path">>, Msg, not_found, Opts)}
+        ],
+        Commitment
+    );
 add_evidence(<<"blob">>, Msg, Commitment, Opts) ->
     put_optionals(
         [
             {<<"blob-hash">>, hb_maps:get(<<"blob-hash">>, Msg, not_found, Opts)},
             {<<"blob-store-path">>, hb_maps:get(<<"blob-store-path">>, Msg, not_found, Opts)}
+        ],
+        Commitment
+    );
+add_evidence(<<"file-view-count">>, Msg, Commitment, Opts) ->
+    put_optionals(
+        [
+            {<<"claim-id">>, hb_maps:get(<<"claim-id">>, Msg, not_found, Opts)},
+            {<<"file-view-count-store-path">>,
+                hb_maps:get(<<"file-view-count-store-path">>, Msg, not_found, Opts)}
+        ],
+        Commitment
+    );
+add_evidence(<<"file-reaction">>, Msg, Commitment, Opts) ->
+    put_optionals(
+        [
+            {<<"claim-id">>, hb_maps:get(<<"claim-id">>, Msg, not_found, Opts)},
+            {<<"file-reaction-store-path">>,
+                hb_maps:get(<<"file-reaction-store-path">>, Msg, not_found, Opts)}
+        ],
+        Commitment
+    );
+add_evidence(<<"subscription-count">>, Msg, Commitment, Opts) ->
+    put_optionals(
+        [
+            {<<"claim-id">>, hb_maps:get(<<"claim-id">>, Msg, not_found, Opts)},
+            {<<"subscription-count-store-path">>,
+                hb_maps:get(<<"subscription-count-store-path">>, Msg, not_found, Opts)}
         ],
         Commitment
     );
@@ -654,6 +738,21 @@ verify_type(<<"comment">>, Base, _Req, Opts) ->
                 _ -> false
             end
     end;
+verify_type(<<"comment-reaction">>, Base, _Req, Opts) ->
+    summary_store_path_valid(
+        Base,
+        <<"comment-id">>,
+        <<"comment-ids">>,
+        <<"comment-reaction-store-path">>,
+        <<"odysee/comment-reaction/">>,
+        Opts
+    )
+        andalso normalized_surface_matches(
+            <<"odysee-reaction@1.0">>,
+            Base,
+            [<<"comment-ids">>, <<"my_reactions">>, <<"others_reactions">>],
+            Opts
+        );
 verify_type(<<"blob">>, Base, _Req, Opts) ->
     case {hb_maps:get(<<"blob-hash">>, Base, not_found, Opts), hb_maps:get(<<"body">>, Base, not_found, Opts)} of
         {Hash, Body} when is_binary(Hash), is_binary(Body) ->
@@ -661,6 +760,51 @@ verify_type(<<"blob">>, Base, _Req, Opts) ->
         _ ->
             false
     end;
+verify_type(<<"file-view-count">>, Base, _Req, Opts) ->
+    summary_store_path_valid(
+        Base,
+        <<"claim-id">>,
+        <<"claim-ids">>,
+        <<"file-view-count-store-path">>,
+        <<"odysee/file-view-count/">>,
+        Opts
+    )
+        andalso normalized_surface_matches(
+            <<"odysee-file@1.0">>,
+            Base,
+            [<<"claim-ids">>, <<"view-counts">>, <<"by-claim-id">>],
+            Opts
+        );
+verify_type(<<"file-reaction">>, Base, _Req, Opts) ->
+    summary_store_path_valid(
+        Base,
+        <<"claim-id">>,
+        <<"claim-ids">>,
+        <<"file-reaction-store-path">>,
+        <<"odysee/file-reaction/">>,
+        Opts
+    )
+        andalso normalized_surface_matches(
+            <<"odysee-file-reaction@1.0">>,
+            Base,
+            [<<"claim-ids">>, <<"my_reactions">>, <<"others_reactions">>],
+            Opts
+        );
+verify_type(<<"subscription-count">>, Base, _Req, Opts) ->
+    summary_store_path_valid(
+        Base,
+        <<"claim-id">>,
+        <<"claim-ids">>,
+        <<"subscription-count-store-path">>,
+        <<"odysee/subscription-count/">>,
+        Opts
+    )
+        andalso normalized_surface_matches(
+            <<"odysee-subscription@1.0">>,
+            Base,
+            [<<"claim-ids">>, <<"sub-counts">>, <<"by-claim-id">>],
+            Opts
+        );
 verify_type(_Type, _Base, _Req, _Opts) ->
     true.
 
@@ -686,6 +830,32 @@ decode_body(Msg, Opts) ->
             end;
         _ ->
             {error, body_not_found}
+    end.
+
+normalized_surface_matches(Device, Base, Keys, Opts) ->
+    case hb_ao:raw(Device, <<"normalize">>, Base, #{}, Opts) of
+        {ok, Normalized} ->
+            lists:all(
+                fun(Key) ->
+                    hb_maps:get(Key, Base, not_found, Opts)
+                        =:= hb_maps:get(Key, Normalized, not_found, Opts)
+                end,
+                Keys
+            );
+        _ ->
+            false
+    end.
+
+summary_store_path_valid(Base, IDKey, IDsKey, PathKey, Prefix, Opts) ->
+    case {
+        hb_maps:get(IDKey, Base, not_found, Opts),
+        hb_maps:get(IDsKey, Base, not_found, Opts),
+        hb_maps:get(PathKey, Base, not_found, Opts)
+    } of
+        {ID, IDs, Path} when is_binary(ID), is_list(IDs), is_binary(Path) ->
+            lists:member(ID, IDs) andalso Path =:= <<Prefix/binary, ID/binary>>;
+        _ ->
+            false
     end.
 
 sha384_hex(Bin) ->
@@ -767,6 +937,19 @@ comment_commitment_verifies_test() ->
     Tampered = Committed#{ <<"comment">> => Nested#{ <<"comment">> => <<"tampered">> } },
     ?assertEqual(false, hb_message:verify(Tampered, source_verify_req(Committed), #{})).
 
+comment_reaction_commitment_verifies_test() ->
+    Reaction = comment_reaction_fixture(),
+    {ok, Committed} = commit(Reaction, #{ <<"type">> => <<"comment-reaction">> }, #{}),
+    ?assert(hb_message:verify(Committed, source_verify_req(Committed), #{})),
+    ?assertEqual(
+        false,
+        hb_message:verify(
+            Committed#{ <<"comment-id">> => <<"wrong">> },
+            source_verify_req(Committed),
+            #{}
+        )
+    ).
+
 blob_commitment_verifies_test() ->
     {Blob, Body, _Hash} = blob_fixture(),
     {ok, Committed} = commit(Blob, #{ <<"type">> => <<"blob">> }, #{}),
@@ -775,6 +958,45 @@ blob_commitment_verifies_test() ->
         false,
         hb_message:verify(
             Committed#{ <<"body">> => <<Body/binary, "!">> },
+            source_verify_req(Committed),
+            #{}
+        )
+    ).
+
+file_view_count_commitment_verifies_test() ->
+    Counts = file_view_count_fixture(),
+    {ok, Committed} = commit(Counts, #{ <<"type">> => <<"file-view-count">> }, #{}),
+    ?assert(hb_message:verify(Committed, source_verify_req(Committed), #{})),
+    ?assertEqual(
+        false,
+        hb_message:verify(
+            Committed#{ <<"view-counts">> => [0] },
+            source_verify_req(Committed),
+            #{}
+        )
+    ).
+
+file_reaction_commitment_verifies_test() ->
+    Reaction = file_reaction_fixture(),
+    {ok, Committed} = commit(Reaction, #{ <<"type">> => <<"file-reaction">> }, #{}),
+    ?assert(hb_message:verify(Committed, source_verify_req(Committed), #{})),
+    ?assertEqual(
+        false,
+        hb_message:verify(
+            Committed#{ <<"claim-id">> => <<"wrong">> },
+            source_verify_req(Committed),
+            #{}
+        )
+    ).
+
+subscription_count_commitment_verifies_test() ->
+    Counts = subscription_count_fixture(),
+    {ok, Committed} = commit(Counts, #{ <<"type">> => <<"subscription-count">> }, #{}),
+    ?assert(hb_message:verify(Committed, source_verify_req(Committed), #{})),
+    ?assertEqual(
+        false,
+        hb_message:verify(
+            Committed#{ <<"claim-id">> => <<"wrong">> },
             source_verify_req(Committed),
             #{}
         )
@@ -843,6 +1065,30 @@ store_fixture_read_commits_channel_comment_blob_and_descriptor_test() ->
         hb_maps:get(<<"1">>, hb_maps:get(<<"blob-store-paths">>, DescMsg, #{}), #{})
     ),
     ?assert(hb_message:verify(DescMsg, source_verify_req(DescMsg), #{})).
+
+store_fixture_read_commits_surface_summaries_test() ->
+    Store = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/comment-reaction/vector-1">> => comment_reaction_fixture(),
+            <<"odysee/file-view-count/claim-1">> => file_view_count_fixture(),
+            <<"odysee/file-reaction/claim-1">> => file_reaction_fixture(),
+            <<"odysee/subscription-count/channel-1">> => subscription_count_fixture()
+        }
+    },
+    {ok, CommentReaction} = hb_store:read(Store, <<"odysee/comment-reaction/vector-1">>, #{}),
+    ?assertEqual(<<"vector-1">>, hb_maps:get(<<"comment-id">>, CommentReaction, #{})),
+    ?assert(hb_message:verify(CommentReaction, source_verify_req(CommentReaction), #{})),
+    {ok, ViewCounts} = hb_store:read(Store, <<"odysee/file-view-count/claim-1">>, #{}),
+    ?assertEqual(<<"claim-1">>, hb_maps:get(<<"claim-id">>, ViewCounts, #{})),
+    ?assert(hb_message:verify(ViewCounts, source_verify_req(ViewCounts), #{})),
+    {ok, FileReaction} = hb_store:read(Store, <<"odysee/file-reaction/claim-1">>, #{}),
+    ?assertEqual(<<"claim-1">>, hb_maps:get(<<"claim-id">>, FileReaction, #{})),
+    ?assert(hb_message:verify(FileReaction, source_verify_req(FileReaction), #{})),
+    {ok, SubscriptionCounts} =
+        hb_store:read(Store, <<"odysee/subscription-count/channel-1">>, #{}),
+    ?assertEqual(<<"channel-1">>, hb_maps:get(<<"claim-id">>, SubscriptionCounts, #{})),
+    ?assert(hb_message:verify(SubscriptionCounts, source_verify_req(SubscriptionCounts), #{})).
 
 store_fixture_read_commits_transaction_test() ->
     {Raw, TxID} = transaction_fixture(),
@@ -1055,6 +1301,31 @@ remote_store_read_verifies_and_caches_source_commitment_test() ->
     {ok, Cached} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
     ?assert(hb_message:verify(Cached, source_verify_req(Cached), #{})).
 
+remote_store_read_verifies_and_caches_surface_summary_commitment_test() ->
+    Key = <<"odysee/file-view-count/claim-1">>,
+    SourceStore = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            Key => file_view_count_fixture()
+        }
+    },
+    SourceNode = hb_http_server:start_node(#{ <<"store">> => SourceStore }),
+    ClientStore = hb_test_utils:test_store(),
+    RemoteStore = [
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => SourceNode,
+            <<"require-codec">> => <<"json@1.0">>,
+            <<"verify-remote-read">> => true,
+            <<"local-store">> => [ClientStore]
+        }
+    ],
+    {ok, Msg} = hb_cache:read(Key, #{ <<"store">> => RemoteStore }),
+    ?assertEqual(<<"claim-1">>, hb_maps:get(<<"claim-id">>, Msg, #{})),
+    ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
+    {ok, Cached} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
+    ?assert(hb_message:verify(Cached, source_verify_req(Cached), #{})).
+
 remote_store_verifies_native_lbry_blob_and_caches_commitment_id_test() ->
     Body = <<"encrypted blob">>,
     BlobHash = sha384_hex(Body),
@@ -1235,10 +1506,90 @@ comment_fixture() ->
         )
     ).
 
+comment_reaction_fixture() ->
+    Msg = hb_util:ok(
+        hb_ao:raw(
+            <<"odysee-reaction@1.0">>,
+            <<"normalize">>,
+            #{},
+            #{ <<"result">> => comment_reaction_result() },
+            #{}
+        )
+    ),
+    Msg#{
+        <<"comment-id">> => <<"vector-1">>,
+        <<"comment-reaction-store-path">> => <<"odysee/comment-reaction/vector-1">>
+    }.
+
 comment_source_fixture() ->
     (commentron_vector())#{
         <<"comment_id">> => <<"vector-1">>,
         <<"comment">> => <<"nicee">>
+    }.
+
+comment_reaction_result() ->
+    #{
+        <<"my_reactions">> => #{
+            <<"vector-1">> => [<<"like">>]
+        },
+        <<"others_reactions">> => #{
+            <<"vector-1">> => #{ <<"like">> => 53 }
+        }
+    }.
+
+file_view_count_fixture() ->
+    Msg = hb_util:ok(
+        hb_ao:raw(
+            <<"odysee-file@1.0">>,
+            <<"normalize">>,
+            #{ <<"claim-ids">> => <<"claim-1">> },
+            #{ <<"counts">> => [1504] },
+            #{}
+        )
+    ),
+    Msg#{
+        <<"claim-id">> => <<"claim-1">>,
+        <<"file-view-count-store-path">> => <<"odysee/file-view-count/claim-1">>
+    }.
+
+file_reaction_fixture() ->
+    Msg = hb_util:ok(
+        hb_ao:raw(
+            <<"odysee-file-reaction@1.0">>,
+            <<"normalize">>,
+            #{},
+            #{ <<"result">> => file_reaction_result() },
+            #{}
+        )
+    ),
+    Msg#{
+        <<"claim-id">> => <<"claim-1">>,
+        <<"file-reaction-store-path">> => <<"odysee/file-reaction/claim-1">>
+    }.
+
+file_reaction_result() ->
+    #{
+        <<"my_reactions">> => #{
+            <<"claim-1">> => [<<"like">>]
+        },
+        <<"others_reactions">> => #{
+            <<"claim-1">> => #{ <<"like">> => 59 }
+        }
+    }.
+
+subscription_count_fixture() ->
+    Msg = hb_util:ok(
+        hb_ao:raw(
+            <<"odysee-subscription@1.0">>,
+            <<"normalize">>,
+            #{ <<"claim-ids">> => <<"channel-1">> },
+            #{ <<"counts">> => [169000] },
+            #{}
+        )
+    ),
+    Msg#{
+        <<"claim-id">> => <<"channel-1">>,
+        <<"subscription-count-store-path">> => <<"odysee/subscription-count/channel-1">>
     }.
 
 search_response(Claims) ->

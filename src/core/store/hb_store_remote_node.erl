@@ -177,6 +177,10 @@ inferred_commitment_devices(Key, Msg, Opts) when is_binary(Key) ->
         <<"odysee/channel-id/", _/binary>> -> [<<"odysee@1.0">>];
         <<"odysee/comment/", _/binary>> -> [<<"odysee@1.0">>];
         <<"odysee/comment-id/", _/binary>> -> [<<"odysee@1.0">>];
+        <<"odysee/comment-reaction/", _/binary>> -> [<<"odysee@1.0">>];
+        <<"odysee/file-view-count/", _/binary>> -> [<<"odysee@1.0">>];
+        <<"odysee/file-reaction/", _/binary>> -> [<<"odysee@1.0">>];
+        <<"odysee/subscription-count/", _/binary>> -> [<<"odysee@1.0">>];
         _ -> inferred_commitment_devices(not_found, Msg, Opts)
     end;
 inferred_commitment_devices(_Key, Msg, Opts) when is_map(Msg) ->
@@ -193,6 +197,10 @@ inferred_commitment_devices(_Key, Msg, Opts) when is_map(Msg) ->
         <<"odysee-stream@1.0">> -> [<<"odysee@1.0">>];
         <<"odysee-channel@1.0">> -> [<<"odysee@1.0">>];
         <<"odysee-comment@1.0">> -> [<<"odysee@1.0">>];
+        <<"odysee-reaction@1.0">> -> [<<"odysee@1.0">>];
+        <<"odysee-file@1.0">> -> [<<"odysee@1.0">>];
+        <<"odysee-file-reaction@1.0">> -> [<<"odysee@1.0">>];
+        <<"odysee-subscription@1.0">> -> [<<"odysee@1.0">>];
         _ -> []
     end;
 inferred_commitment_devices(_Key, _Msg, _Opts) ->
