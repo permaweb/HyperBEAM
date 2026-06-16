@@ -2,6 +2,8 @@
 -export([
     verify/3,
     signature_digest/2,
+    comment_digest/3,
+    verify_comment/4,
     verify_signature/3,
     channel_hash/1,
     channel_public_key/1,
@@ -44,6 +46,30 @@ signature_digest(FirstInput, Envelope) ->
     ChannelHash = maps:get(<<"signing-channel-hash">>, Envelope),
     Message = maps:get(<<"message">>, Envelope),
     crypto:hash(sha256, <<Piece1/binary, ChannelHash/binary, Message/binary>>).
+
+%% @doc The single-SHA256 digest a channel signs when posting an Odysee/LBRY
+%% comment: the signing timestamp string bytes, the 20-byte channel claim hash
+%% in internal byte order, and the comment body bytes, concatenated. Matches
+%% lbry-sdk and commentron.
+comment_digest(SigningTs, ChannelHash, Comment)
+        when is_binary(SigningTs),
+            byte_size(ChannelHash) == 20,
+            is_binary(Comment) ->
+    crypto:hash(sha256, <<SigningTs/binary, ChannelHash/binary, Comment/binary>>).
+
+%% @doc Verify a channel-signed comment. Rebuilds the signing digest from the
+%% comment body, signing timestamp and channel claim hash, then checks the
+%% 64-byte compact secp256k1 signature against the channel public key.
+%% High-S signatures are accepted. Returns `{ok, true}'/`{ok, false}' for
+%% signature outcomes and `{error, Reason}' for malformed inputs.
+verify_comment(Comment, SigningTs, ChannelHash, {Signature, PublicKey})
+        when is_binary(Comment),
+            is_binary(SigningTs),
+            byte_size(ChannelHash) == 20 ->
+    Digest = comment_digest(SigningTs, ChannelHash, Comment),
+    verify_signature(Signature, Digest, PublicKey);
+verify_comment(_, _, _, _) ->
+    {error, invalid_comment}.
 
 verify_signature(<<R:256, S:256>>, <<Digest:32/binary>>, PublicKey) ->
     verify_signature_ints(R, S, Digest, PublicKey);
@@ -384,6 +410,96 @@ real_lbry_signature_verifies_task0_test() ->
     ?assertEqual(true, maps:get(<<"valid">>, Attestation)),
     ?assertEqual(true, maps:get(<<"signature-valid">>, Attestation)),
     ?assertEqual(true, maps:get(<<"channel-hash-valid">>, Attestation)).
+
+sample_comment() ->
+    PrivateKey = <<7:256>>,
+    {PublicKey0, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    PublicKey = ar_wallet:compress_ecdsa_pubkey(PublicKey0),
+    ChannelID = <<"585d54c7b82fd92043ed583c5aea18a9547028aa">>,
+    {ok, ChannelHash} = channel_hash(#{ <<"claim_id">> => ChannelID }),
+    SigningTs = <<"1718500000">>,
+    Comment = <<"hello verified world">>,
+    Preimage = <<SigningTs/binary, ChannelHash/binary, Comment/binary>>,
+    Signature =
+        der_to_compact(
+            crypto:sign(ecdsa, sha256, Preimage, [PrivateKey, secp256k1])
+        ),
+    #{
+        comment => Comment,
+        signing_ts => SigningTs,
+        channel_hash => ChannelHash,
+        public_key => PublicKey,
+        signature => Signature
+    }.
+
+verify_comment_accepts_channel_signature_test() ->
+    #{
+        comment := Comment,
+        signing_ts := SigningTs,
+        channel_hash := ChannelHash,
+        public_key := PublicKey,
+        signature := Signature
+    } = sample_comment(),
+    ?assertEqual(
+        {ok, true},
+        verify_comment(Comment, SigningTs, ChannelHash, {Signature, PublicKey})
+    ).
+
+verify_comment_rejects_tampered_body_test() ->
+    #{
+        signing_ts := SigningTs,
+        channel_hash := ChannelHash,
+        public_key := PublicKey,
+        signature := Signature
+    } = sample_comment(),
+    Tampered = <<"goodbye verified world">>,
+    ?assertEqual(
+        {ok, false},
+        verify_comment(Tampered, SigningTs, ChannelHash, {Signature, PublicKey})
+    ).
+
+verify_comment_rejects_tampered_timestamp_test() ->
+    #{
+        comment := Comment,
+        channel_hash := ChannelHash,
+        public_key := PublicKey,
+        signature := Signature
+    } = sample_comment(),
+    ?assertEqual(
+        {ok, false},
+        verify_comment(Comment, <<"1718500001">>, ChannelHash, {Signature, PublicKey})
+    ).
+
+verify_comment_accepts_high_s_signature_test() ->
+    #{
+        comment := Comment,
+        signing_ts := SigningTs,
+        channel_hash := ChannelHash,
+        public_key := PublicKey,
+        signature := <<R:32/binary, S:256>>
+    } = sample_comment(),
+    HighS = ?SECP256K1_N - S,
+    ?assertEqual(
+        {ok, true},
+        verify_comment(
+            Comment,
+            SigningTs,
+            ChannelHash,
+            {<<R/binary, HighS:256>>, PublicKey}
+        )
+    ).
+
+verify_comment_rejects_malformed_signature_test() ->
+    #{
+        comment := Comment,
+        signing_ts := SigningTs,
+        channel_hash := ChannelHash,
+        public_key := PublicKey
+    } = sample_comment(),
+    ?assertEqual(
+        {error, invalid_signature},
+        verify_comment(Comment, SigningTs, ChannelHash, {<<0:8>>, PublicKey})
+    ).
 
 der_to_compact(<<16#30, _TotalLen, 16#02, RLen, R0:RLen/binary, 16#02, SLen, S0:SLen/binary>>) ->
     <<(fixed_int(R0))/binary, (fixed_int(S0))/binary>>.
