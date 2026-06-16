@@ -6,19 +6,57 @@
 %%% invariants that are available for each message type.
 -module(dev_odysee).
 -implements(<<"odysee@1.0">>).
--export([info/1, commit/3, verify/3, to_hint/3]).
+-export([info/1, index/3, source/3, commit/3, verify/3, to_hint/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE, <<"odysee@1.0">>).
+-define(LBRY_BLOB_COMMITMENT_DEVICE, <<"lbry-blob@1.0">>).
+-define(LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE, <<"lbry-stream-descriptor@1.0">>).
+-define(LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE, <<"lbry-claim-output@1.0">>).
+-define(LBRY_TRANSACTION_COMMITMENT_DEVICE, <<"lbry-transaction@1.0">>).
 
 %% @doc Return the public device API.
 info(_Opts) ->
-    #{ exports => [<<"commit">>, <<"verify">>, <<"to-hint">>] }.
+    #{ exports => [<<"index">>, <<"source">>, <<"commit">>, <<"verify">>, <<"to-hint">>] }.
+
+index(_Base, _Req, _Opts) ->
+    {ok, #{
+        <<"device">> => ?DEVICE,
+        <<"paths">> => #{
+            <<"source">> => [<<"id">>, <<"native-id">>, <<"kind">>],
+            <<"commit">> => [<<"type">>],
+            <<"verify">> => [<<"commitment-ids">>]
+        },
+        <<"source-kinds">> =>
+            [
+                <<"blob">>,
+                <<"stream-descriptor">>,
+                <<"transaction">>,
+                <<"claim-output">>,
+                <<"claim">>
+            ]
+    }}.
 
 %% @doc Preserve nested source messages in bundle form when verifying.
 to_hint(_Base, Req, _Opts) ->
     {ok, Req#{ <<"bundle">> => true }}.
+
+%% @doc Read a committed public Odysee/LBRY source object by native identifier.
+source(Base, Req, Opts) ->
+    safe(fun() ->
+        {ok, _Kind, Path} = native_source_path(Base, Req, Opts),
+        case hb_ao:raw(
+            <<"cache@1.0">>,
+            <<"read">>,
+            Base,
+            #{ <<"read">> => Path },
+            Opts
+        ) of
+            {ok, Msg} -> {ok, Msg};
+            Error -> Error
+        end
+    end).
 
 %% @doc Add an Odysee source commitment to a normalized Odysee message.
 commit(Base, Req, Opts) ->
@@ -66,6 +104,161 @@ safe(Fun) ->
         _:Reason -> {error, Reason}
     end.
 
+native_source_path(Base, Req, Opts) ->
+    case first_message_value(
+        [<<"id">>, <<"native-id">>, <<"native_id">>, <<"source-id">>, <<"source_id">>, <<"read">>],
+        [Req, Base],
+        Opts
+    ) of
+        ID when is_binary(ID) ->
+            classify_native_source_id(ID, source_kind(Base, Req, Opts));
+        _ ->
+            {error, source_id_not_found}
+    end.
+
+source_kind(Base, Req, Opts) ->
+    case first_message_value([<<"kind">>, <<"source-kind">>, <<"type">>], [Req, Base], Opts) of
+        Kind when is_binary(Kind) -> hb_ao:normalize_key(Kind);
+        _ -> not_found
+    end.
+
+first_message_value(_Keys, [], _Opts) ->
+    not_found;
+first_message_value(Keys, [Msg | Rest], Opts) when is_map(Msg) ->
+    case first_value(Keys, Msg, Opts) of
+        not_found -> first_message_value(Keys, Rest, Opts);
+        Value -> Value
+    end;
+first_message_value(Keys, [_ | Rest], Opts) ->
+    first_message_value(Keys, Rest, Opts).
+
+classify_native_source_id(ID0, Kind) ->
+    ID = normalize_source_id(ID0),
+    case ID of
+        <<"odysee/", _/binary>> ->
+            {ok, <<"path">>, ID};
+        <<"lbry/blob/", Hash/binary>> ->
+            blob_source_path(Hash);
+        <<"lbry/blob-id/", Hash/binary>> ->
+            blob_source_path(Hash);
+        <<"lbry/descriptor/", Hash/binary>> ->
+            descriptor_source_path(Hash);
+        <<"lbry/descriptor-id/", Hash/binary>> ->
+            descriptor_source_path(Hash);
+        <<"lbry/stream-descriptor/", Hash/binary>> ->
+            descriptor_source_path(Hash);
+        <<"lbry/transaction/", TxID/binary>> ->
+            transaction_source_path(TxID);
+        <<"lbry/tx/", TxID/binary>> ->
+            transaction_source_path(TxID);
+        <<"lbry/claim-output/", Rest/binary>> ->
+            claim_output_source_path(Rest);
+        <<"lbry/claim-proof/", Rest/binary>> ->
+            claim_output_source_path(Rest);
+        _ ->
+            classify_bare_native_source_id(ID, Kind)
+    end.
+
+classify_bare_native_source_id(ID, <<"blob">>) ->
+    blob_source_path(ID);
+classify_bare_native_source_id(ID, <<"stream-descriptor">>) ->
+    descriptor_source_path(ID);
+classify_bare_native_source_id(ID, <<"descriptor">>) ->
+    descriptor_source_path(ID);
+classify_bare_native_source_id(ID, <<"transaction">>) ->
+    transaction_source_path(ID);
+classify_bare_native_source_id(ID, <<"tx">>) ->
+    transaction_source_path(ID);
+classify_bare_native_source_id(ID, Kind)
+        when Kind =:= <<"claim-output">>; Kind =:= <<"claim-proof">>; Kind =:= <<"outpoint">> ->
+    claim_output_source_path(ID);
+classify_bare_native_source_id(ID, _Kind) ->
+    case {byte_size(ID), binary:match(ID, <<":">>)} of
+        {96, nomatch} -> blob_source_path(ID);
+        {64, nomatch} -> transaction_source_path(ID);
+        {40, nomatch} -> claim_source_path(ID);
+        {_Size, _Colon} -> claim_output_source_path(ID)
+    end.
+
+blob_source_path(Hash0) ->
+    Hash = normalize_hex(Hash0),
+    case valid_hex(Hash, 96) of
+        true -> {ok, <<"blob">>, <<"odysee/blob/", Hash/binary>>};
+        false -> {error, invalid_blob_hash}
+    end.
+
+descriptor_source_path(Hash0) ->
+    Hash = normalize_hex(Hash0),
+    case valid_hex(Hash, 96) of
+        true -> {ok, <<"stream-descriptor">>, <<"odysee/descriptor/", Hash/binary>>};
+        false -> {error, invalid_descriptor_hash}
+    end.
+
+transaction_source_path(TxID0) ->
+    TxID = normalize_hex(TxID0),
+    case valid_hex(TxID, 64) of
+        true -> {ok, <<"transaction">>, <<"odysee/transaction/", TxID/binary>>};
+        false -> {error, invalid_txid}
+    end.
+
+claim_source_path(ClaimID0) ->
+    ClaimID = normalize_hex(ClaimID0),
+    case valid_hex(ClaimID, 40) of
+        true -> {ok, <<"claim">>, <<"odysee/claim-id/", ClaimID/binary>>};
+        false -> {error, invalid_claim_id}
+    end.
+
+claim_output_source_path(Rest0) ->
+    Rest = normalize_source_id(Rest0),
+    Parts =
+        case binary:split(Rest, <<"/">>) of
+            [PathTxID, PathNOut] -> [PathTxID, PathNOut];
+            _ -> binary:split(Rest, <<":">>)
+        end,
+    case Parts of
+        [TxID0, NOut0] ->
+            TxID = normalize_hex(TxID0),
+            case {valid_hex(TxID, 64), non_negative_integer(NOut0)} of
+                {true, {ok, NOut}} ->
+                    {ok,
+                        <<"claim-output">>,
+                        <<"odysee/claim-proof/", TxID/binary, "/", (integer_to_binary(NOut))/binary>>};
+                {false, _} ->
+                    {error, invalid_txid};
+                {_, Error} ->
+                    Error
+            end;
+        _ ->
+            {error, invalid_claim_output_id}
+    end.
+
+valid_hex(Hex, Size) when is_binary(Hex), byte_size(Hex) =:= Size ->
+    try byte_size(binary:decode_hex(Hex)) =:= Size div 2
+    catch _:_ -> false
+    end;
+valid_hex(_Hex, _Size) ->
+    false.
+
+non_negative_integer(Bin) when is_binary(Bin) ->
+    try
+        Int = binary_to_integer(Bin),
+        case Int >= 0 of
+            true -> {ok, Int};
+            false -> {error, invalid_nout}
+        end
+    catch _:_ ->
+        {error, invalid_nout}
+    end;
+non_negative_integer(Int) when is_integer(Int), Int >= 0 ->
+    {ok, Int};
+non_negative_integer(_Value) ->
+    {error, invalid_nout}.
+
+normalize_source_id(<<"/", Rest/binary>>) ->
+    normalize_source_id(Rest);
+normalize_source_id(ID) when is_binary(ID) ->
+    ID.
+
 commitment_type(Base, Req, Opts) ->
     case hb_maps:get(<<"type">>, Req, not_found, Opts) of
         not_found -> infer_type(Base, Opts);
@@ -76,10 +269,13 @@ infer_type(Base, Opts) ->
     case hb_maps:get(<<"device">>, Base, not_found, Opts) of
         <<"odysee-claim@1.0">> -> <<"claim">>;
         <<"odysee-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
+        <<"lbry-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
         <<"odysee-channel@1.0">> -> <<"channel">>;
         <<"odysee-comment@1.0">> -> <<"comment">>;
         <<"odysee-blob@1.0">> -> <<"blob">>;
+        <<"lbry-blob@1.0">> -> <<"blob">>;
         <<"odysee-claim-proof@1.0">> -> <<"claim-proof">>;
+        <<"lbry-claim-output@1.0">> -> <<"claim-proof">>;
         <<"odysee-stream@1.0">> ->
             case hb_maps:get(<<"view">>, Base, not_found, Opts) of
                 <<"verified-stream">> -> <<"stream-attestation">>;
@@ -607,14 +803,24 @@ store_fixture_read_keeps_verifiable_commitment_test() ->
     ?assertEqual(false, hb_maps:is_key(<<"claim">>, Msg, #{})),
     ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})).
 
-store_fixture_read_commits_channel_comment_and_blob_test() ->
+store_fixture_read_commits_channel_comment_blob_and_descriptor_test() ->
     {Blob, _Body, BlobHash} = blob_fixture(),
+    {Descriptor, SDHash} = descriptor_fixture(),
+    {ok, Desc} =
+        hb_ao:raw(
+            <<"odysee-stream-descriptor@1.0">>,
+            <<"decode">>,
+            #{},
+            #{ <<"body">> => Descriptor, <<"sd-hash">> => SDHash },
+            #{}
+        ),
     Store = #{
         <<"store-module">> => hb_store_odysee,
         <<"fixtures">> => #{
             <<"odysee/channel/channel-1">> => channel_fixture(),
             <<"odysee/comment/vector-1">> => comment_fixture(),
-            <<"odysee/blob/", BlobHash/binary>> => Blob
+            <<"odysee/blob/", BlobHash/binary>> => Blob,
+            <<"odysee/descriptor/", SDHash/binary>> => Desc
         }
     },
     {ok, Channel} = hb_store:read(Store, <<"odysee/channel/channel-1">>, #{}),
@@ -622,7 +828,65 @@ store_fixture_read_commits_channel_comment_and_blob_test() ->
     {ok, Comment} = hb_store:read(Store, <<"odysee/comment/vector-1">>, #{}),
     ?assert(hb_message:verify(Comment, source_verify_req(Comment), #{})),
     {ok, BlobMsg} = hb_store:read(Store, <<"odysee/blob/", BlobHash/binary>>, #{}),
-    ?assert(hb_message:verify(BlobMsg, source_verify_req(BlobMsg), #{})).
+    ?assert(has_commitment_device(BlobMsg, ?LBRY_BLOB_COMMITMENT_DEVICE)),
+    ?assertEqual(?LBRY_BLOB_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, BlobMsg, #{})),
+    ?assert(hb_message:verify(BlobMsg, source_verify_req(BlobMsg), #{})),
+    {ok, DescMsg} = hb_store:read(Store, <<"odysee/descriptor/", SDHash/binary>>, #{}),
+    ?assert(has_commitment_device(DescMsg, ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE)),
+    ?assertEqual(
+        ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE,
+        hb_maps:get(<<"device">>, DescMsg, #{})
+    ),
+    ?assertEqual(SDHash, hb_maps:get(<<"sd-hash">>, DescMsg, #{})),
+    ?assertEqual(
+        <<"odysee/blob/", BlobHash/binary>>,
+        hb_maps:get(<<"1">>, hb_maps:get(<<"blob-store-paths">>, DescMsg, #{}), #{})
+    ),
+    ?assert(hb_message:verify(DescMsg, source_verify_req(DescMsg), #{})).
+
+store_fixture_read_commits_transaction_test() ->
+    {Raw, TxID} = transaction_fixture(),
+    Store = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/transaction/", TxID/binary>> => #{
+                <<"device">> => <<"lbry-transaction@1.0">>,
+                <<"content-type">> => <<"application/vnd.lbry.transaction">>,
+                <<"body">> => Raw,
+                <<"txid">> => TxID,
+                <<"tx-size">> => byte_size(Raw)
+            }
+        }
+    },
+    {ok, Msg} = hb_store:read(Store, <<"odysee/transaction/", TxID/binary>>, #{}),
+    ?assert(has_commitment_device(Msg, ?LBRY_TRANSACTION_COMMITMENT_DEVICE)),
+    ?assertEqual(?LBRY_TRANSACTION_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, Msg, #{})),
+    ?assertEqual(TxID, hb_maps:get(<<"txid">>, Msg, #{})),
+    ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})).
+
+source_reads_native_blob_and_transaction_ids_test() ->
+    {Blob, _Body, BlobHash} = blob_fixture(),
+    {Raw, TxID} = transaction_fixture(),
+    Store = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", BlobHash/binary>> => Blob,
+            <<"odysee/transaction/", TxID/binary>> => #{
+                <<"device">> => <<"lbry-transaction@1.0">>,
+                <<"content-type">> => <<"application/vnd.lbry.transaction">>,
+                <<"body">> => Raw,
+                <<"txid">> => TxID,
+                <<"tx-size">> => byte_size(Raw)
+            }
+        }
+    },
+    {ok, BlobMsg} = source(#{}, #{ <<"id">> => BlobHash }, #{ <<"store">> => Store }),
+    ?assertEqual(?LBRY_BLOB_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, BlobMsg, #{})),
+    ?assert(hb_message:verify(BlobMsg, source_verify_req(BlobMsg), #{})),
+    {ok, TxMsg} = source(#{}, #{ <<"id">> => TxID }, #{ <<"store">> => Store }),
+    ?assertEqual(?LBRY_TRANSACTION_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, TxMsg, #{})),
+    ?assertEqual(TxID, hb_maps:get(<<"txid">>, TxMsg, #{})),
+    ?assert(hb_message:verify(TxMsg, source_verify_req(TxMsg), #{})).
 
 store_live_blob_read_fetches_and_commits_hash_test() ->
     Body = <<"encrypted blob">>,
@@ -638,6 +902,8 @@ store_live_blob_read_fetches_and_commits_hash_test() ->
         },
         {ok, Msg} = hb_store:read(Store, <<"odysee/blob-id/", BlobHash/binary>>, #{}),
         ?assertEqual(BlobHash, hb_maps:get(<<"blob-hash">>, Msg, #{})),
+        ?assert(has_commitment_device(Msg, ?LBRY_BLOB_COMMITMENT_DEVICE)),
+        ?assertEqual(?LBRY_BLOB_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, Msg, #{})),
         ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
         [_Request] = hb_mock_server:get_requests(blob, 1, ServerHandle)
     after
@@ -668,8 +934,14 @@ store_live_claim_proof_read_fetches_and_commits_test() ->
         {ok, Msg} = hb_store:read(Store, Path, #{}),
         ?assertEqual(ClaimID, hb_maps:get(<<"claim-id">>, Msg, #{})),
         ?assertEqual(true, hb_maps:get(<<"valid">>, Msg, #{})),
+        ?assert(has_commitment_device(Msg, ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE)),
         ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
-        [_Request] = hb_mock_server:get_requests(transaction_show, 1, ServerHandle)
+        LbryStore = Store#{ <<"store-module">> => hb_store_lbry_claim_output },
+        {ok, LbryMsg} = hb_store:read(LbryStore, <<TxID/binary, ":0">>, #{}),
+        ?assertEqual(ClaimID, hb_maps:get(<<"claim-id">>, LbryMsg, #{})),
+        ?assert(has_commitment_device(LbryMsg, ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE)),
+        ?assert(hb_message:verify(LbryMsg, source_verify_req(LbryMsg), #{})),
+        [_Request1, _Request2] = hb_mock_server:get_requests(transaction_show, 2, ServerHandle)
     after
         hb_mock_server:stop(ServerHandle)
     end.
@@ -783,6 +1055,78 @@ remote_store_read_verifies_and_caches_source_commitment_test() ->
     {ok, Cached} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
     ?assert(hb_message:verify(Cached, source_verify_req(Cached), #{})).
 
+remote_store_verifies_native_lbry_blob_and_caches_commitment_id_test() ->
+    Body = <<"encrypted blob">>,
+    BlobHash = sha384_hex(Body),
+    Key = <<"lbry/blob/", BlobHash/binary>>,
+    SourceStore = #{
+        <<"store-module">> => hb_store_lbry_blob,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", BlobHash/binary>> => #{
+                <<"device">> => <<"lbry-blob@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Body,
+                <<"blob-hash">> => BlobHash,
+                <<"blob-size">> => byte_size(Body)
+            }
+        }
+    },
+    SourceNode = hb_http_server:start_node(#{ <<"store">> => SourceStore }),
+    ClientStore = hb_test_utils:test_store(),
+    RemoteStore = [
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => SourceNode,
+            <<"require-codec">> => <<"json@1.0">>,
+            <<"verify-remote-read">> => true,
+            <<"local-store">> => [ClientStore]
+        }
+    ],
+    {ok, Msg} = hb_cache:read(Key, #{ <<"store">> => RemoteStore }),
+    ?assert(has_commitment_device(Msg, ?LBRY_BLOB_COMMITMENT_DEVICE)),
+    ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
+    [CommitmentID] = commitment_ids_by_device(Msg, ?LBRY_BLOB_COMMITMENT_DEVICE),
+    {ok, CachedByKey} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
+    ?assert(hb_message:verify(CachedByKey, source_verify_req(CachedByKey), #{})),
+    {ok, CachedByCommitmentID} =
+        hb_cache:read(CommitmentID, #{ <<"store">> => [ClientStore] }),
+    ?assert(hb_message:verify(
+        CachedByCommitmentID,
+        source_verify_req(CachedByCommitmentID),
+        #{}
+    )).
+
+remote_store_rejects_substituted_native_blob_test() ->
+    Body = <<"the real blob">>,
+    BlobHash = sha384_hex(Body),
+    RequestedHash = sha384_hex(<<"a different blob">>),
+    Key = <<"lbry/blob/", RequestedHash/binary>>,
+    SourceStore = #{
+        <<"store-module">> => hb_store_lbry_blob,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", RequestedHash/binary>> => #{
+                <<"device">> => <<"lbry-blob@1.0">>,
+                <<"content-type">> => <<"application/octet-stream">>,
+                <<"body">> => Body,
+                <<"blob-hash">> => BlobHash,
+                <<"blob-size">> => byte_size(Body)
+            }
+        }
+    },
+    SourceNode = hb_http_server:start_node(#{ <<"store">> => SourceStore }),
+    ClientStore = hb_test_utils:test_store(),
+    RemoteStore = [
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => SourceNode,
+            <<"require-codec">> => <<"json@1.0">>,
+            <<"verify-remote-read">> => true,
+            <<"local-store">> => [ClientStore]
+        }
+    ],
+    ?assertMatch({error, _}, hb_cache:read(Key, #{ <<"store">> => RemoteStore })),
+    ?assertEqual({error, not_found}, hb_cache:read(Key, #{ <<"store">> => [ClientStore] })).
+
 source_verify_req(Msg) ->
     #{
         <<"commitment-ids">> => odysee_commitment_ids(Msg)
@@ -794,7 +1138,27 @@ odysee_commitment_ids(Msg) ->
         ID
     ||
         {ID, Commitment} <- maps:to_list(Commitments),
-        hb_maps:get(<<"commitment-device">>, Commitment, not_found, #{}) =:= ?DEVICE
+        lists:member(
+            hb_maps:get(<<"commitment-device">>, Commitment, not_found, #{}),
+            [
+                ?DEVICE,
+                ?LBRY_BLOB_COMMITMENT_DEVICE,
+                ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE,
+                ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE,
+                ?LBRY_TRANSACTION_COMMITMENT_DEVICE
+            ]
+        )
+    ].
+
+has_commitment_device(Msg, Device) ->
+    lists:member(Device, hb_message:commitment_devices(Msg, #{})).
+
+commitment_ids_by_device(Msg, Device) ->
+    [
+        ID
+    ||
+        {ID, Commitment} <- maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, #{})),
+        hb_maps:get(<<"commitment-device">>, Commitment, not_found, #{}) =:= Device
     ].
 
 claim_fixture() ->
@@ -904,6 +1268,22 @@ blob_fixture() ->
         Body,
         BlobHash
     }.
+
+transaction_fixture() ->
+    Raw =
+        <<
+            1:32/little,
+            1,
+            0:256,
+            16#ffffffff:32/little,
+            0,
+            16#ffffffff:32/little,
+            1,
+            0:64/little,
+            0,
+            0:32/little
+        >>,
+    {Raw, hb_lbry_tx:txid(Raw)}.
 
 proof_tx_fixture(Name, Value) ->
     Script = proof_claim_script(Name, Value),

@@ -1,7 +1,7 @@
 %%% @doc Read-only Odysee source store.
 %%%
 %%% This store sources public Odysee objects and returns normalized HyperBEAM
-%%% messages carrying `~odysee@1.0' source commitments. It is intentionally a
+%%% messages carrying source commitments. It is intentionally a
 %%% store, not another playback adapter: callers can place it below a local
 %%% cache or behind `hb_store_remote_node' and then verify the returned message
 %%% through normal `hb_message:verify/3'.
@@ -13,6 +13,10 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(ODYSEE_COMMITMENT_DEVICE, <<"odysee@1.0">>).
+-define(LBRY_BLOB_COMMITMENT_DEVICE, <<"lbry-blob@1.0">>).
+-define(LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE, <<"lbry-stream-descriptor@1.0">>).
+-define(LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE, <<"lbry-claim-output@1.0">>).
+-define(LBRY_TRANSACTION_COMMITMENT_DEVICE, <<"lbry-transaction@1.0">>).
 -define(SHA384_HEX_SIZE, 96).
 -define(DEFAULT_BLOB_BASE_URLS, [
     <<"https://blobcache-eu.odycdn.com">>,
@@ -197,6 +201,24 @@ read_live(<<"odysee/claim-proof/", Rest/binary>>, StoreOpts, NodeOpts) ->
     else
         Error -> Error
     end;
+read_live(<<"odysee/transaction/", Encoded/binary>>, StoreOpts, NodeOpts) ->
+    maybe
+        {ok, TxID0} ?= decode_component(Encoded),
+        TxID = normalize_hex(TxID0),
+        ok ?= require_hex_size(TxID, 64, invalid_txid),
+        {ok, Transaction} ?=
+            hb_ao:raw(
+                <<"odysee-claim@1.0">>,
+                <<"transaction">>,
+                #{},
+                #{ <<"txid">> => TxID },
+                store_node_opts(StoreOpts, NodeOpts)
+            ),
+        {ok, Msg} ?= transaction_message(Transaction, TxID, NodeOpts),
+        commit_result(Msg, <<"transaction">>, NodeOpts)
+    else
+        Error -> Error
+    end;
 read_live(<<"odysee/stream-descriptor/", SDHash/binary>>, StoreOpts, NodeOpts) ->
     read_live(<<"odysee/descriptor/", SDHash/binary>>, StoreOpts, NodeOpts);
 read_live(<<"odysee/descriptor-id/", SDHash/binary>>, StoreOpts, NodeOpts) ->
@@ -254,8 +276,10 @@ fixture(Path, StoreOpts, Opts) ->
         Msg -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)}
     end.
 
-commit_result(Msg, Type, Opts) when is_map(Msg) ->
-    case has_odysee_commitment(Msg, Opts)
+commit_result(Msg0, Type, Opts) when is_map(Msg0) ->
+    Msg = source_message(Type, Msg0),
+    CommitmentDevice = commitment_device(Type),
+    case has_commitment_device(Msg, CommitmentDevice, Opts)
         andalso hb_message:verify(
             Msg,
             #{ <<"committers">> => <<"none">>, <<"commitment-ids">> => <<"all">> },
@@ -265,7 +289,7 @@ commit_result(Msg, Type, Opts) when is_map(Msg) ->
         true ->
             committed_surface(Msg, Opts);
         false ->
-            case hb_ao:raw(?ODYSEE_COMMITMENT_DEVICE, <<"commit">>, Msg, #{ <<"type">> => Type }, Opts) of
+            case hb_ao:raw(CommitmentDevice, <<"commit">>, Msg, #{ <<"type">> => Type }, Opts) of
                 {ok, Committed} -> committed_surface(Committed, Opts);
                 Error -> Error
             end
@@ -276,12 +300,34 @@ commit_result(Bin, _Type, _Opts) when is_binary(Bin) ->
 committed_surface(Msg, Opts) ->
     hb_message:with_only_committed(Msg, Opts).
 
-has_odysee_commitment(Msg, Opts) ->
+commitment_device(<<"blob">>) ->
+    ?LBRY_BLOB_COMMITMENT_DEVICE;
+commitment_device(<<"stream-descriptor">>) ->
+    ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE;
+commitment_device(<<"claim-proof">>) ->
+    ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE;
+commitment_device(<<"transaction">>) ->
+    ?LBRY_TRANSACTION_COMMITMENT_DEVICE;
+commitment_device(_Type) ->
+    ?ODYSEE_COMMITMENT_DEVICE.
+
+source_message(<<"blob">>, Msg) ->
+    Msg#{ <<"device">> => ?LBRY_BLOB_COMMITMENT_DEVICE };
+source_message(<<"stream-descriptor">>, Msg) ->
+    Msg#{ <<"device">> => ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE };
+source_message(<<"claim-proof">>, Msg) ->
+    Msg#{ <<"device">> => ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE };
+source_message(<<"transaction">>, Msg) ->
+    Msg#{ <<"device">> => ?LBRY_TRANSACTION_COMMITMENT_DEVICE };
+source_message(_Type, Msg) ->
+    Msg.
+
+has_commitment_device(Msg, Device, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
     lists:any(
         fun(Commitment) ->
             hb_maps:get(<<"commitment-device">>, Commitment, not_found, Opts)
-                =:= ?ODYSEE_COMMITMENT_DEVICE
+                =:= Device
         end,
         maps:values(Commitments)
     ).
@@ -300,6 +346,8 @@ infer_type(<<"odysee/channel/", _/binary>>, _Msg, _Opts) ->
     <<"channel">>;
 infer_type(<<"odysee/claim-proof/", _/binary>>, _Msg, _Opts) ->
     <<"claim-proof">>;
+infer_type(<<"odysee/transaction/", _/binary>>, _Msg, _Opts) ->
+    <<"transaction">>;
 infer_type(<<"odysee/stream-descriptor/", _/binary>>, _Msg, _Opts) ->
     <<"stream-descriptor">>;
 infer_type(<<"odysee/descriptor-id/", _/binary>>, _Msg, _Opts) ->
@@ -319,10 +367,14 @@ infer_type(_Path, Msg, Opts) when is_map(Msg) ->
         <<"odysee-claim@1.0">> -> <<"claim">>;
         <<"odysee-stream@1.0">> -> <<"stream">>;
         <<"odysee-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
+        <<"lbry-stream-descriptor@1.0">> -> <<"stream-descriptor">>;
         <<"odysee-channel@1.0">> -> <<"channel">>;
         <<"odysee-comment@1.0">> -> <<"comment">>;
         <<"odysee-blob@1.0">> -> <<"blob">>;
+        <<"lbry-blob@1.0">> -> <<"blob">>;
         <<"odysee-claim-proof@1.0">> -> <<"claim-proof">>;
+        <<"lbry-claim-output@1.0">> -> <<"claim-proof">>;
+        <<"lbry-transaction@1.0">> -> <<"transaction">>;
         _ -> <<"source">>
     end;
 infer_type(_Path, _Msg, _Opts) ->
@@ -343,13 +395,34 @@ claim_from_search(Search, ClaimID, Opts) ->
 
 blob_message(BlobHash, Body) ->
     #{
-        <<"device">> => <<"odysee-blob@1.0">>,
+        <<"device">> => <<"lbry-blob@1.0">>,
         <<"content-type">> => <<"application/octet-stream">>,
         <<"body">> => Body,
         <<"blob-hash">> => BlobHash,
         <<"blob-store-path">> => <<"odysee/blob/", BlobHash/binary>>,
         <<"blob-size">> => byte_size(Body)
     }.
+
+transaction_message(Transaction, TxID, Opts) ->
+    maybe
+        TxHex = hb_maps:get(<<"tx-hex">>, Transaction, not_found, Opts),
+        true ?= is_binary(TxHex),
+        {ok, Raw} ?= decode_tx_hex(TxHex),
+        TxID ?= hb_lbry_tx:txid(Raw),
+        {ok, _Parsed} ?= hb_lbry_tx:parse(Raw),
+        {ok, #{
+            <<"device">> => <<"lbry-transaction@1.0">>,
+            <<"content-type">> => <<"application/vnd.lbry.transaction">>,
+            <<"body">> => Raw,
+            <<"txid">> => TxID,
+            <<"tx-size">> => byte_size(Raw),
+            <<"tx-store-path">> => <<"odysee/transaction/", TxID/binary>>
+        }}
+    else
+        false -> {error, tx_hex_not_found};
+        not_found -> {error, tx_hex_not_found};
+        Other -> Other
+    end.
 
 fetch_blob(BlobHash, StoreOpts, NodeOpts) ->
     Opts = store_node_opts(StoreOpts, NodeOpts),
@@ -464,6 +537,11 @@ require_hex_size(Hex, Size, _Error) when is_binary(Hex), byte_size(Hex) =:= Size
     ok;
 require_hex_size(_Hex, _Size, Error) ->
     {error, Error}.
+
+decode_tx_hex(Hex) when is_binary(Hex) ->
+    try {ok, binary:decode_hex(normalize_hex(Hex))}
+    catch _:_ -> {error, invalid_tx_hex}
+    end.
 
 non_negative_integer(Bin) when is_binary(Bin) ->
     try

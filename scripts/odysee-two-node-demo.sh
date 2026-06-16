@@ -8,6 +8,20 @@ export HB_PORT="${HB_DEMO_SUPERVISOR_PORT:-0}"
 
 export PATH="/opt/homebrew/opt/rust/bin:/opt/homebrew/opt/erlang@27/bin:/opt/homebrew/bin:${PATH}"
 
+port_in_use() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1
+}
+
+if port_in_use "${NODE_A_PORT}" || port_in_use "${NODE_B_PORT}"; then
+  echo "Odysee two-node demo port conflict."
+  echo "  NODE_A_PORT=${NODE_A_PORT} in use: $(port_in_use "${NODE_A_PORT}" && echo yes || echo no)"
+  echo "  NODE_B_PORT=${NODE_B_PORT} in use: $(port_in_use "${NODE_B_PORT}" && echo yes || echo no)"
+  echo
+  echo "An earlier demo may already be running. Use the existing nodes, stop them, or override ports:"
+  echo "  NODE_A_PORT=19734 NODE_B_PORT=19735 ./scripts/odysee-two-node-demo.sh"
+  exit 1
+fi
+
 ERL=$(cat <<'ERL'
 application:ensure_all_started(hb),
 
@@ -31,7 +45,8 @@ NodeALocalStore = #{
 NodeARemoteStore = #{
     <<"store-module">> => hb_store_remote_node,
     <<"node">> => NodeB,
-    <<"require-codec">> => <<"json@1.0">>,
+    <<"require-codec">> => <<"ans104@1.0">>,
+    <<"verify-remote-read">> => true,
     <<"local-store">> => [NodeALocalStore]
 },
 NodeA = hb_http_server:start_node(#{
@@ -47,7 +62,10 @@ io:format("~nFrontend env:~n", []),
 io:format("  HYPERBEAM_BASE_URL=~s~n", [NodeA]),
 io:format("  HYPERBEAM_PLAYBACK_URL=~s~s~n", [NodeA, <<"~odysee-stream@1.0/playback">>]),
 io:format("~nRemote-store check:~n", []),
-io:format("  curl -sS -H 'accept: application/json' '~s~s?read=odysee/stream-id/346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169' | jq .~n~n", [NodeA, <<"~cache@1.0/read">>]).
+io:format("  curl -sS -H 'accept: application/json' '~s~s?read=odysee/stream-id/346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169' | jq .~n", [NodeA, <<"~cache@1.0/read">>]),
+io:format("~nNative source getter examples:~n", []),
+io:format("  curl -sS -H 'accept: application/json' '~s~s?id=<blob-sha384>' | jq .~n", [NodeA, <<"~odysee@1.0/source">>]),
+io:format("  curl -sS -H 'accept: application/json' '~s~s?id=<txid>' | jq .~n~n", [NodeA, <<"~odysee@1.0/source">>]).
 ERL
 )
 

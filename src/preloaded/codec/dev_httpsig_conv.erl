@@ -794,15 +794,22 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     NormalizedName = hb_ao:normalize_key(Name),
     % The default location where the value is encoded within the HTTP
     % message depends on its size.
-    % 
+    %
     % So we check whether the size of the value is within the threshold
     % to encode as a header, and otherwise default to encoding in the body.
+    % Header field values additionally cannot carry control bytes (RFC 9110
+    % permits only HTAB below 0x20 and forbids DEL), so raw binaries with
+    % unsafe bytes go to the body regardless of size.
     %
     % Note that a "where" Opts may force the location of the encoded
-    % value -- this is only a default location if not specified in Opts 
+    % value -- this is only a default location if not specified in Opts
     DefaultWhere =
         case {maps:get(where, Opts, headers), byte_size(Value)} of
-            {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH -> headers;
+            {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH ->
+                case hb_http:has_field_unsafe_byte(Value) of
+                    false -> headers;
+                    true -> body
+                end;
             _ -> body
         end,
     case maps:get(where, Opts, DefaultWhere) of

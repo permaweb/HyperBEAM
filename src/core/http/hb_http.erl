@@ -8,10 +8,12 @@
 -export([get/2, get/3, post/3, post/4, request/2, request/4, request/5]).
 -export([message_to_request/2, reply/4, accept_to_codec/2]).
 -export([req_to_tabm_singleton/3]).
+-export([has_field_unsafe_byte/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_FILTER_KEYS, [<<"content-length">>]).
+-define(MAX_EXTRA_HEADER_VALUE, 1024).
 
 start() ->
     init_prometheus(),
@@ -760,6 +762,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                             not ?IS_LINK(V)
                                 andalso not is_map(V)
                                 andalso not is_list(V)
+                                andalso header_value_safe(hb_util:bin(V))
                     end,
                     Message
                 ),
@@ -780,6 +783,26 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 )
             }
     end.
+
+%% @doc HTTP header field values cannot contain control bytes (RFC 9110
+%% permits only HTAB below 0x20 and forbids DEL), and large values push
+%% replies past the total header-size limit that strict clients enforce
+%% (16KB in Node/undici). Callers pass the encoded binary form so atom and
+%% numeric values are validated as they will appear on the wire. Unsafe
+%% fields are omitted from the extra headers; they remain available in the
+%% encoded body.
+header_value_safe(V) when is_binary(V) ->
+    byte_size(V) =< ?MAX_EXTRA_HEADER_VALUE
+        andalso not has_field_unsafe_byte(V).
+
+has_field_unsafe_byte(<<>>) ->
+    false;
+has_field_unsafe_byte(<<B, _/binary>>) when B < 16#20, B =/= $\t ->
+    true;
+has_field_unsafe_byte(<<16#7f, _/binary>>) ->
+    true;
+has_field_unsafe_byte(<<_, Rest/binary>>) ->
+    has_field_unsafe_byte(Rest).
 
 %% @doc Calculate the codec name to use for a reply given the original parsed 
 %% singleton TABM request and the response message. The precidence
@@ -1463,3 +1486,15 @@ request_error_handling_test() ->
     ),
     % The result should be an error tuple, not crash with badmatch
     ?assertMatch({error, _}, Result).
+
+header_value_safe_test() ->
+    ?assert(header_value_safe(<<"plain value">>)),
+    ?assert(header_value_safe(<<"tab\tis fine">>)),
+    ?assert(header_value_safe(hb_util:bin(some_atom))),
+    ?assert(header_value_safe(hb_util:bin(42))),
+    ?assertNot(header_value_safe(<<"line\nbreak">>)),
+    ?assertNot(header_value_safe(<<"carriage\rreturn">>)),
+    ?assertNot(header_value_safe(<<"nul", 0, "byte">>)),
+    ?assertNot(header_value_safe(<<"del", 16#7f, "byte">>)),
+    ?assertNot(header_value_safe(binary:copy(<<"a">>, ?MAX_EXTRA_HEADER_VALUE + 1))),
+    ?assert(header_value_safe(binary:copy(<<"a">>, ?MAX_EXTRA_HEADER_VALUE))).
