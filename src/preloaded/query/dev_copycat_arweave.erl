@@ -424,7 +424,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
         {offset, TXStartOffset},
         {size, TX#tx.data_size}
     }),
-    ok = observe_event(<<"item_indexed">>, fun() ->
+    case observe_event(<<"item_indexed">>, fun() ->
         hb_store_arweave:write_offset(
             ArweaveStore,
             TXID,
@@ -432,85 +432,108 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
             TXStartOffset,
             TX#tx.data_size
         )
-    end),
-    case is_bundle_tx(TX, Opts) of
-        false ->
-            counters(0, 0, 0);
-        true when IndexMode =/= shallow ->
-            try
-                case hb_store_arweave:read_chunks(
-                    TXStartOffset, TX#tx.data_size, Opts) of
-                    {ok, BundleData} ->
-                        {TotalTime, IndexRes} = timer:tc(
-                            fun() ->
-                                index_full_bundle_bytes(
-                                    BundleData,
-                                    TXStartOffset,
-                                    IndexMode,
-                                    ArweaveStore,
-                                    Opts
+    end) of
+        ok ->
+            case is_bundle_tx(TX, Opts) of
+                false ->
+                    counters(0, 0, 0);
+                true when IndexMode =/= shallow ->
+                    try
+                        case hb_store_arweave:read_chunks(
+                            TXStartOffset, TX#tx.data_size, Opts) of
+                            {ok, BundleData} ->
+                                {TotalTime, IndexRes} = timer:tc(
+                                    fun() ->
+                                        index_full_bundle_bytes(
+                                            BundleData,
+                                            TXStartOffset,
+                                            IndexMode,
+                                            ArweaveStore,
+                                            Opts
+                                        )
+                                    end
+                                ),
+                                case IndexRes of
+                                    {ok, ItemsCount} ->
+                                        record_event_metrics(
+                                            <<"item_indexed">>,
+                                            ItemsCount,
+                                            TotalTime
+                                        ),
+                                        counters(ItemsCount, 1, 0);
+                                    {error, IndexError} ->
+                                        skip_bundle(TXID, IndexError)
+                                end;
+                            {error, ReadError} ->
+                                skip_bundle(TXID, ReadError);
+                            not_found ->
+                                skip_bundle(TXID, not_found)
+                        end
+                    catch
+                        _:Reason:_ ->
+                            skip_bundle(TXID, Reason)
+                    end;
+                true ->
+                    % Shallow confirmed indexing only needs the bundle header, avoiding
+                    % a full L1 data download while still writing direct item offsets.
+                    ?event(debug_copycat, {fetching_bundle_header, 
+                        {tx_id, {string, TXID}},
+                        {tx_end_offset, TXEndOffset},
+                        {tx_data_size, TX#tx.data_size}
+                    }),
+                    case download_bundle_header(TXEndOffset, TX#tx.data_size, Opts) of
+                        {ok, HeaderSize, BundleIndex} ->
+                            % Batch event tracking: measure total time and count for all write_offset calls
+                            {TotalTime, IndexItemsRes} = timer:tc(fun() ->
+                                lists:foldl(
+                                    fun
+                                        (_Item, {error, _} = Error) ->
+                                            Error;
+                                        ({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
+                                            case hb_store_arweave:write_offset(
+                                                ArweaveStore,
+                                                hb_util:encode(ItemID),
+                                                <<"ans104@1.0">>,
+                                                ItemStartOffset,
+                                                Size
+                                            ) of
+                                                ok ->
+                                                    {add_data_offset(ItemStartOffset, Size),
+                                                        ItemsCountAcc + 1};
+                                                WriteError ->
+                                                    {error, {write_offset_failed, WriteError}}
+                                            end
+                                    end,
+                                    {add_data_offset(TXStartOffset, HeaderSize), 0},
+                                    BundleIndex
                                 )
-                            end
-                        ),
-                        case IndexRes of
-                            {ok, ItemsCount} ->
-                                record_event_metrics(
-                                    <<"item_indexed">>,
-                                    ItemsCount,
-                                    TotalTime
-                                ),
-                                counters(ItemsCount, 1, 0);
-                            {error, IndexError} ->
-                                skip_bundle(TXID, IndexError)
-                        end;
-                    {error, ReadError} ->
-                        skip_bundle(TXID, ReadError);
-                    not_found ->
-                        skip_bundle(TXID, not_found)
-                end
-            catch
-                _:Reason:_ ->
-                    skip_bundle(TXID, Reason)
+                            end),
+                            case IndexItemsRes of
+                                {error, Reason} ->
+                                    skip_bundle(TXID, Reason);
+                                {_, ItemsCount} ->
+                                    ?event(debug_copycat,
+                                        {bundle_items_indexed,
+                                            {tx_id, {string, TXID}},
+                                            {items_count, ItemsCount}
+                                    }),
+                                    % Single event record for the batch
+                                    record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
+                                    counters(ItemsCount, 1, 0)
+                            end;
+                        {error, Reason} ->
+                            skip_bundle(TXID, Reason)
+                    end
             end;
-        true ->
-            % Shallow confirmed indexing only needs the bundle header, avoiding
-            % a full L1 data download while still writing direct item offsets.
-            ?event(debug_copycat, {fetching_bundle_header, 
-                {tx_id, {string, TXID}},
-                {tx_end_offset, TXEndOffset},
-                {tx_data_size, TX#tx.data_size}
-            }),
-            case download_bundle_header(TXEndOffset, TX#tx.data_size, Opts) of
-                {ok, HeaderSize, BundleIndex} ->
-                    % Batch event tracking: measure total time and count for all write_offset calls
-                    {TotalTime, {_, ItemsCount}} = timer:tc(fun() ->
-                        lists:foldl(
-                            fun({ItemID, Size}, {ItemStartOffset, ItemsCountAcc}) ->
-                                ok = hb_store_arweave:write_offset(
-                                    ArweaveStore,
-                                    hb_util:encode(ItemID),
-                                    <<"ans104@1.0">>,
-                                    ItemStartOffset,
-                                    Size
-                                ),
-                                {add_data_offset(ItemStartOffset, Size),
-                                    ItemsCountAcc + 1}
-                            end,
-                            {add_data_offset(TXStartOffset, HeaderSize), 0},
-                            BundleIndex
-                        )
-                    end),
-                    ?event(debug_copycat,
-                        {bundle_items_indexed,
-                            {tx_id, {string, TXID}},
-                            {items_count, ItemsCount}
-                        }),
-                    % Single event record for the batch
-                    record_event_metrics(<<"item_indexed">>, ItemsCount, TotalTime),
-                    counters(ItemsCount, 1, 0);
-                {error, Reason} ->
-                    skip_bundle(TXID, Reason)
-            end
+        WriteError ->
+            ?event(
+                copycat_short,
+                {arweave_tx_skipped,
+                    {tx_id, {explicit, TXID}},
+                    {reason, {write_offset_failed, WriteError}}
+                }
+            ),
+            counters(0, 0, 1)
     end.
 
 %% @doc Process transactions: spawn workers and manage the worker pool.
@@ -684,56 +707,60 @@ index_full_bundle_items(
                 catch _:_ -> error
                 end
         end,
-    ok = hb_store_arweave:write_offset(
+    case hb_store_arweave:write_offset(
         Store,
         EncodedItemID,
         <<"ans104@1.0">>,
         ItemStartOffset,
         Size
-    ),
-    ok =
-        case {IndexMode, ParseResult} of
-            {full, {ok, _, Parsed}} ->
-                LocalOpts = hb_store:scope(Opts, local),
-                Msg = hb_message:convert(
-                    Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
-                {ok, _Path} = hb_cache:write(Msg, LocalOpts),
-                ok;
-            _ -> ok
-        end,
-    DescendantRes =
-        case {IndexMode =/= shallow, ParseResult} of
-            {true, {ok, HeaderSize, ParsedItem}} ->
-                case is_bundle_tx(ParsedItem, Opts) of
-                    true ->
-                        index_full_bundle_bytes(
-                            ParsedItem#tx.data,
-                            add_data_offset(ItemStartOffset, HeaderSize),
-                            IndexMode,
-                            Store,
-                            Opts
-                        );
-                    false ->
+    ) of
+        ok ->
+            ok =
+                case {IndexMode, ParseResult} of
+                    {full, {ok, _, Parsed}} ->
+                        LocalOpts = hb_store:scope(Opts, local),
+                        Msg = hb_message:convert(
+                            Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
+                        {ok, _Path} = hb_cache:write(Msg, LocalOpts),
+                        ok;
+                    _ -> ok
+                end,
+            DescendantRes =
+                case {IndexMode =/= shallow, ParseResult} of
+                    {true, {ok, HeaderSize, ParsedItem}} ->
+                        case is_bundle_tx(ParsedItem, Opts) of
+                            true ->
+                                index_full_bundle_bytes(
+                                    ParsedItem#tx.data,
+                                    add_data_offset(ItemStartOffset, HeaderSize),
+                                    IndexMode,
+                                    Store,
+                                    Opts
+                                );
+                            false ->
+                                {ok, 0}
+                        end;
+                    {true, _} ->
+                        {ok, 0};
+                    _ ->
                         {ok, 0}
-                end;
-            {true, _} ->
-                {ok, 0};
-            _ ->
-                {ok, 0}
-        end,
-    case DescendantRes of
-        {ok, DescendantCount} ->
-            index_full_bundle_items(
-                Rest,
-                RestBin,
-                add_data_offset(ItemStartOffset, Size),
-                IndexMode,
-                Store,
-                Opts,
-                Count + 1 + DescendantCount
-            );
-        {error, _} = Error ->
-            Error
+                end,
+            case DescendantRes of
+                {ok, DescendantCount} ->
+                    index_full_bundle_items(
+                        Rest,
+                        RestBin,
+                        add_data_offset(ItemStartOffset, Size),
+                        IndexMode,
+                        Store,
+                        Opts,
+                        Count + 1 + DescendantCount
+                    );
+                {error, _} = Error ->
+                    Error
+            end;
+        WriteError ->
+            {error, {write_offset_failed, WriteError}}
     end;
 index_full_bundle_items(
         _BundleIndex, _ItemsBin, _ItemStartOffset, _IndexMode,
