@@ -10,6 +10,7 @@ cat > /app/config.json <<EOF
 {
   "ao-types": "generate_index=atom,max_connections=integer,num_acceptors=integer",
   "port": ${HB_PORT},
+  "priv_key_location": "/app/wallet.json",
   "num_acceptors": 32,
   "max_connections": 512,
   "arweave_index_workers": 16,

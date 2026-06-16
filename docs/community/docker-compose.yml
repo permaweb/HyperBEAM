@@ -9,6 +9,18 @@ services:
       - DATA_DIR=/data/rolling
     volumes:
       - hyperbeam-data:/data
+      - type: bind
+        source: ../../wallets/operator.json
+        target: /app/wallet.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ../../wallets/operator.json
+        target: /app/hb/hyperbeam-key.json
+        read_only: true
+        bind:
+          create_host_path: false
 
 volumes:
   hyperbeam-data:
