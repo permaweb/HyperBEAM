@@ -84,15 +84,17 @@ sign_tx(TX, Wallet, Opts) ->
 -spec verify(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, boolean()}.
 verify(Msg, Req, Opts) ->
     ?event({verify, {base, Msg}, {req, Req}}),
+    CommitmentSpec = commitment_filter_spec(Req),
     OnlyWithCommitment =
         hb_private:reset(
             hb_message:with_commitments(
-                Req,
+                CommitmentSpec,
                 Msg,
                 Opts
             )
         ),
-    {ok, OnlyCommitted} = hb_message:with_only_committed(OnlyWithCommitment, Opts),
+    {ok, OnlyCommitted0} = hb_message:with_only_committed(OnlyWithCommitment, Opts),
+    OnlyCommitted = hb_message:with_commitments(CommitmentSpec, OnlyCommitted0, Opts),
     ?event({verify, {only_with_commitment, OnlyCommitted}}),
     {ok, TX} = to(OnlyCommitted, Req, Opts),
     ?event({verify, {encoded, TX}}),
@@ -105,6 +107,13 @@ verify(Msg, Req, Opts) ->
                     trusted_gql_commitment_matches(TX, OnlyCommitted, Opts)
         end,
     {ok, Res}.
+
+commitment_filter_spec(Req) ->
+    case maps:get(<<"commitment-ids">>, Req, undefined) of
+        undefined -> Req;
+        IDs when is_list(IDs) -> IDs;
+        ID -> [ID]
+    end.
 
 unsigned_id_matches(TX, Msg, Opts) ->
     case hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) of

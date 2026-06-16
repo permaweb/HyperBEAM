@@ -51,10 +51,11 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
 -spec verify(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, boolean()}.
 verify(Msg, Req, Opts) ->
     ?event({verify, {base, Msg}, {req, Req}}),
+    CommitmentSpec = commitment_filter_spec(Req),
     OnlyWithCommitment =
         hb_private:reset(
             hb_message:with_commitments(
-                Req,
+                CommitmentSpec,
                 Msg,
                 Opts
             )
@@ -70,6 +71,13 @@ verify(Msg, Req, Opts) ->
                 ar_tx:verify(TX)
         end,
     {ok, Res}.
+
+commitment_filter_spec(Req) ->
+    case maps:get(<<"commitment-ids">>, Req, undefined) of
+        undefined -> Req;
+        IDs when is_list(IDs) -> IDs;
+        ID -> [ID]
+    end.
 
 unsigned_id_matches(TX, Msg, Opts) ->
     case hb_maps:keys(hb_maps:get(<<"commitments">>, Msg, #{}, Opts), Opts) of

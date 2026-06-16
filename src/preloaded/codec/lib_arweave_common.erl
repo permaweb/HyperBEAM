@@ -58,8 +58,18 @@ to(Device, RawTABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
     IsBundle = is_bundle(MaybeCommitment0, Req, Opts),
     MaybeCommitment =
         select_commitment(CommitmentSpec, RawTABM, IsBundle, MaybeCommitment0, Opts),
-    MaybeBundle = maybe_load(RawTABM, IsBundle, Opts),
-    Data = data(MaybeBundle, Req, fun ?MODULE:to/3, Opts),
+    MaybeBundle =
+        maybe_load(
+            RawTABM,
+            requested_bundle(Req, Opts),
+            Opts#{ <<"hint-device">> => Device }
+        ),
+    Data = data(
+        MaybeBundle,
+        Req#{ <<"hint-device">> => Device },
+        fun ?MODULE:to/3,
+        Opts
+    ),
     ?event({calculated_data, Data}),
     TX0 = siginfo(MaybeBundle, MaybeCommitment, FieldsFun, Opts),
     ?event({found_siginfo, TX0}),
@@ -474,6 +484,9 @@ bundle_hint(Device, Msg, Req, Opts) ->
 is_bundle({ok, _, Commitment}, _Req, Opts) ->
     hb_util:atom(hb_ao:get(<<"bundle">>, Commitment, false, Opts));
 is_bundle(_, Req, Opts) ->
+    requested_bundle(Req, Opts).
+
+requested_bundle(Req, Opts) ->
     case hb_maps:is_key(<<"bundle">>, Req, Opts) of
         true -> hb_util:atom(hb_ao:get(<<"bundle">>, Req, false, Opts));
         false -> hb_util:atom(hb_ao:get(<<"bundle">>, Opts, false, Opts))
@@ -553,19 +566,20 @@ maybe_load(RawTABM, true, Opts) ->
     % Convert back to the fully loaded structured@1.0 message, then
     % convert to TABM with bundling enabled.
     LoadOpts = Opts#{ <<"load-all-commitments">> => true },
-    Structured = hb_message:convert(RawTABM, <<"structured@1.0">>, LoadOpts),
+    Structured = hb_message:convert(RawTABM, <<"structured@1.0">>, tabm, LoadOpts),
     Loaded = hb_cache:ensure_all_loaded(Structured, LoadOpts),
     % Convert to TABM with bundling enabled.
-    LoadedTABM =
-        hb_message:convert(
-            Loaded,
-            tabm,
-            #{
-                <<"device">> => <<"structured@1.0">>,
-                <<"bundle">> => true
-            },
-            LoadOpts
-        ),
+    SourceSpec0 =
+        #{
+            <<"device">> => <<"structured@1.0">>,
+            <<"bundle">> => true
+        },
+    SourceSpec =
+        case hb_opts:get(<<"hint-device">>, undefined, LoadOpts) of
+            undefined -> SourceSpec0;
+            HintDevice -> SourceSpec0#{ <<"hint-device">> => HintDevice }
+        end,
+    LoadedTABM = hb_message:convert(Loaded, tabm, SourceSpec, LoadOpts),
     % Preserve commitments from the original message while keeping the
     % additional signed commitments loaded for nested bundle items.
     replace_commitments_recursive(LoadedTABM, RawTABM);
@@ -578,11 +592,7 @@ replace_commitments_recursive(LoadedTABM, RawTABM)
     LoadedTABM2 =
         case maps:find(<<"commitments">>, RawTABM) of
             {ok, RawCommitments} ->
-                LoadedCommitments = maps:get(<<"commitments">>, LoadedTABM, #{}),
-                LoadedTABM#{
-                    <<"commitments">> =>
-                        maps:merge(LoadedCommitments, RawCommitments)
-                };
+                LoadedTABM#{ <<"commitments">> => RawCommitments };
             error ->
                 LoadedTABM
         end,
@@ -692,7 +702,7 @@ data(TABM, Req, ToFun, Opts) ->
     NestedMsgs =
         hb_maps:map(
             fun(_, Msg) ->
-                hb_util:ok(ToFun(Msg, Req, Opts))
+                hb_util:ok(ToFun(Msg, nested_req(Msg, Req, Opts), Opts))
             end,
             UnencodedNestedMsgs,
             Opts
@@ -705,7 +715,21 @@ data(TABM, Req, ToFun, Opts) ->
         {?DEFAULT_DATA, _} ->
             NestedMsgs;
         {DataVal, _} ->
-            NestedMsgs#{ DataKey => hb_util:ok(ToFun(DataVal, Req, Opts)) }
+            NestedMsgs#{
+                DataKey =>
+                    hb_util:ok(ToFun(DataVal, nested_req(DataVal, Req, Opts), Opts))
+            }
+    end.
+
+nested_req(Msg, Req, Opts) ->
+    case hb_maps:get(<<"hint-device">>, Req, undefined, Opts) of
+        undefined ->
+            Req;
+        Device ->
+            try hb_util:ok(hb_ao:raw(Device, <<"to-hint">>, Msg, Req, Opts))
+            catch _:_ ->
+                Req
+            end
     end.
 
 %% @doc Calculate data messages for large tag values or nested messages.

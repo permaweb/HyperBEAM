@@ -396,6 +396,7 @@ verify(Self, Req, Opts) ->
             },
             false
         ),
+    BaseViewOpts = VerifyOpts#{ <<"linkify-mode">> => false },
     {Base, BaseOpts} =
         case needs_loaded_bundle_view(RawWithCommitments, VerifyOpts) of
             true ->
@@ -405,7 +406,7 @@ verify(Self, Req, Opts) ->
                     hb_message:convert(
                         RawWithCommitments,
                         tabm,
-                        VerifyOpts
+                        BaseViewOpts
                     ),
                     VerifyOpts
                 }
@@ -439,9 +440,16 @@ verify(Self, Req, Opts) ->
         lists:all(
             fun(CommitmentID) ->
                 Commitment = maps:get(CommitmentID, Commitments),
+                RawCommitmentBase =
+                    commitment_raw_base(
+                        RawWithCommitments,
+                        CommitmentID,
+                        Commitment,
+                        BaseOpts
+                    ),
                 {CommitmentBase, CommitmentOpts} =
                     commitment_verify_view(
-                        RawWithCommitments,
+                        RawCommitmentBase,
                         Base,
                         Commitment,
                         BaseOpts
@@ -449,10 +457,9 @@ verify(Self, Req, Opts) ->
                 {ok, Res} =
                     verify_commitment(
                         CommitmentBase,
-                        maps:merge(
-                            ReqBase,
-                            Commitment
-                        ),
+                        (maps:merge(ReqBase, Commitment))#{
+                            <<"commitment-ids">> => [CommitmentID]
+                        },
                         CommitmentOpts
                     ),
                 ?event(verify,
@@ -466,6 +473,14 @@ verify(Self, Req, Opts) ->
         ),
     ?event(verify, {verify, {res, Res}}),
     {ok, Res}.
+
+commitment_raw_base(RawBase, CommitmentID, Commitment, Opts) ->
+    Base =
+        case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+            true -> RawBase;
+            false -> hb_maps:flatten(RawBase, Opts)
+        end,
+    Base#{ <<"commitments">> => #{ CommitmentID => Commitment } }.
 
 commitment_verify_view(RawBase, DefaultBase, Commitment, Opts) ->
     case commitment_needs_loaded_bundle_view(
