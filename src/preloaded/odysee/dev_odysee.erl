@@ -7,6 +7,7 @@
     claim/3,
     publish/3,
     source/3,
+    sdk/3,
     transaction/3,
     descriptor/3,
     blob/3,
@@ -29,6 +30,7 @@ info(_) ->
             <<"claim">>,
             <<"publish">>,
             <<"source">>,
+            <<"sdk">>,
             <<"transaction">>,
             <<"descriptor">>,
             <<"blob">>,
@@ -49,6 +51,7 @@ index(_Base, _Req, _Opts) ->
             <<"claim">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"publish">> => [<<"body">>, <<"content-type">>, <<"name">>],
             <<"source">> => [<<"id">>, <<"native-id">>],
+            <<"sdk">> => [<<"method">>, <<"params64">>],
             <<"transaction">> => [<<"txid">>],
             <<"descriptor">> => [<<"sd-hash">>],
             <<"blob">> => [<<"hash">>],
@@ -189,6 +192,21 @@ with_lbry_stores(Opts) ->
             ],
     Opts#{ <<"store">> => Stores }.
 
+%% A trusted Odysee-SDK JSON-RPC passthrough for operations without a native,
+%% verifiable path. The result is explicitly stamped `native => false' so callers
+%% never mistake it for verified provenance.
+sdk(Base, Req, Opts) ->
+    case {param(Base, Req, [<<"method">>], Opts), param(Base, Req, [<<"params64">>], Opts)} of
+        {{ok, Method}, {ok, Params64}} ->
+            case decode_params64(Params64) of
+                {ok, Params} -> sdk_result(Method, Params, Opts);
+                Error -> error_response(Error)
+            end;
+        {{error, _} = Error, _} ->
+            error_response(Error);
+        {_, {error, _} = Error} ->
+            error_response(Error)
+    end.
 transaction(Base, Req, Opts) ->
     with_txid(Base, Req, Opts, fun(TxID) ->
         map_result(
@@ -692,6 +710,64 @@ range_end(Start, <<>>, Opts) ->
     {ok, Start + default_range_size(Opts) - 1};
 range_end(_Start, EndBin, _Opts) ->
     parse_nonnegative_integer(EndBin).
+
+decode_params64(Params64) ->
+    case hb_util:safe_decode(Params64) of
+        {ok, Json} ->
+            try {ok, hb_json:decode(Json)}
+            catch _:_ -> {error, invalid_params_json}
+            end;
+        {error, _} ->
+            {error, invalid_params64}
+    end.
+
+sdk_result(Method, Params, Opts) ->
+    SourceLayer = sdk_source_layer(),
+    case hb_lbry_proxy:call(Method, Params, Opts) of
+        {ok, Result} ->
+            Body = #{
+                <<"jsonrpc">> => <<"2.0">>,
+                <<"result">> => Result,
+                <<"sourceLayer">> => SourceLayer,
+                <<"source-layer">> => SourceLayer
+            },
+            Body#{
+                <<"status">> => 200,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => hb_json:encode(Body)
+            };
+        {error, Error} ->
+            Body = #{
+                <<"jsonrpc">> => <<"2.0">>,
+                <<"error">> => Error,
+                <<"sourceLayer">> => SourceLayer,
+                <<"source-layer">> => SourceLayer
+            },
+            Body#{
+                <<"status">> => 502,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => hb_json:encode(Body)
+            };
+        {failure, Reason} ->
+            Body = #{
+                <<"jsonrpc">> => <<"2.0">>,
+                <<"error">> => #{ <<"message">> => hb_util:bin(io_lib:format("~p", [Reason])) },
+                <<"sourceLayer">> => SourceLayer,
+                <<"source-layer">> => SourceLayer
+            },
+            Body#{
+                <<"status">> => 503,
+                <<"content-type">> => <<"application/json">>,
+                <<"body">> => hb_json:encode(Body)
+            }
+    end.
+
+sdk_source_layer() ->
+    #{
+        <<"native">> => false,
+        <<"fallback">> => <<"sdk_proxy">>,
+        <<"source">> => <<"backend_api_proxy">>
+    }.
 
 default_range_size(Opts) ->
     hb_maps:get(<<"odysee-default-range-size">>, Opts, ?DEFAULT_RANGE_SIZE, Opts).

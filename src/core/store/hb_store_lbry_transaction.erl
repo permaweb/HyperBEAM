@@ -56,9 +56,19 @@ fetch_transaction(StoreOpts, TxID, NodeOpts) ->
 %% The proxy node and HTTP client may be pinned per-store; otherwise the
 %% node options apply.
 proxy_opts(StoreOpts, NodeOpts) ->
+    ProxyNode =
+        case hb_maps:get(<<"lbry-proxy-node">>, StoreOpts, not_found, NodeOpts) of
+            not_found -> hb_maps:get(<<"lbry-proxy-url">>, StoreOpts, not_found, NodeOpts);
+            Node -> Node
+        end,
+    ProxyOpts =
+        case ProxyNode of
+            not_found -> #{};
+            _ -> #{ <<"lbry-proxy-node">> => ProxyNode }
+        end,
     hb_maps:merge(
-        NodeOpts,
-        hb_maps:with([<<"lbry-proxy-node">>, <<"http-client">>], StoreOpts, NodeOpts),
+        hb_maps:merge(NodeOpts, ProxyOpts, NodeOpts),
+        hb_maps:with([<<"http-client">>], StoreOpts, NodeOpts),
         NodeOpts
     ).
 
@@ -157,6 +167,22 @@ read_rejects_invalid_txid_test() ->
         {error, not_found},
         read(#{}, #{ <<"read">> => <<"not-a-txid">> }, #{})
     ).
+
+proxy_url_alias_is_accepted_test() ->
+    application:ensure_all_started(inets),
+    TxID = <<"51d3cd6a27420addb648347410233931b862ab52660c1dba58806b5b0f38a460">>,
+    {ok, Server, Handle} = proxy_server(hb_lbry_tx:task0_tx_hex()),
+    try
+        Store = #{
+            <<"store-module">> => ?MODULE,
+            <<"lbry-proxy-url">> => Server,
+            <<"http-client">> => httpc
+        },
+        {ok, Msg} = read(Store, #{ <<"read">> => TxID }, #{}),
+        ?assertEqual(TxID, maps:get(<<"txid">>, Msg))
+    after
+        hb_mock_server:stop(Handle)
+    end.
 
 proxy_server(Hex) ->
     Response =
