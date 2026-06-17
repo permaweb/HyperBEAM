@@ -154,9 +154,23 @@ variables. Returns each device's spec and impl IDs on stdout.
 | `<<"preloaded-devices-index">>` | binary | Committed ID of the flat preloaded resolver message. Embedded into `hb_opts` from `_build/hb_preloaded_index.hrl` during compilation. |
 | `<<"loaded-device-store">>` | store map | Optional shared cache of name/spec-ID → loaded module atom. |
 | `<<"trusted-device-signers">>` | `[Address]` | Acceptable signer addresses for impl messages. Defaults to the node wallet. |
+| `<<"trusted-device-signer-policies">>` | `#{Address => #{<<"expiry-height">> => Height}}` | Optional remote lookup policy for trusted signer impl messages. `expiry-height` adds a GraphQL block max filter. |
 | `<<"trusted-devices">>` | `#{NameOrSpecID => ImplID}` | Operator-pinned implementation IDs trusted directly for the named device or spec ID. |
 | `<<"load-remote-devices">>` | bool | Whether unmatched devices may be fetched via the Arweave gateway. |
 | `<<"admissible-devices">>` | `all` or `[Name]` | Per-execution allowlist (used by the Lua sandbox). |
+
+In `config.json`, signer policies use signer addresses as keys:
+
+```json
+{
+  "trusted-device-signer-policies": {
+    "SIGNER_ADDR": { "expiry-height": 1940492 }
+  }
+}
+```
+
+Policies only apply to addresses also listed in `trusted-device-signers`;
+they do not add trusted signers by themselves.
 
 `HB_PRELOADED_STORE` and `HB_PRELOADED_DEVICES_INDEX` override the
 first two fields for provider-driven test runs, so the nested EUnit

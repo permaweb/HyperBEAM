@@ -173,19 +173,37 @@ location(Address, Opts) ->
 %% compatible device implementations we must query for messages with the
 %% appropriate tags and signatures.
 device(SpecID, TrustedSigners, Opts) ->
-    Query =
-        <<"query($specid: [String!], $trusted: [String!]) { ",
-                "transactions(",
-                "owners: $trusted, ",
-                "tags: { name: \"implements-device\" values: $specid }, ",
-                "first: 1",
-            "){ ",
-                "edges { ",
-                    (item_spec())/binary ,
-                " } ",
-            "} ",
-        "}">>,
-    Variables = #{ <<"trusted">> => TrustedSigners, <<"specid">> => [SpecID] },
+    Queries = device_queries(SpecID, TrustedSigners, Opts),
+    case device_result(Queries, Opts) of
+        {error, _} = Error ->
+            Error;
+        {ok, []} ->
+            ?event(
+                device_load,
+                {no_viable_device_implementations, {device, SpecID}}
+            ),
+            {error, not_found};
+        {ok, Items} ->
+            ?event(
+                device_load,
+                {implementations_found_via_graphql,
+                    {device, SpecID},
+                    {implementations, length(Items)}
+                }
+            ),
+            {
+                ok,
+                [
+                    ID
+                ||
+                    #{ <<"node">> := #{ <<"id">> := ID } } <- Items
+                ]
+            }
+    end.
+
+device_result([], _Opts) ->
+    {ok, []};
+device_result([{Query, Variables} | Rest], Opts) ->
     case query(Query, Variables, Opts) of
         {error, Reason} ->
             ?event({device_read_failed, {query, Query}, {error, Reason}}),
@@ -194,29 +212,69 @@ device(SpecID, TrustedSigners, Opts) ->
             ?event({device_query_success, {query, Query}, {response, GqlMsg}}),
             case hb_ao:get(<<"data/transactions/edges">>, GqlMsg, Opts) of
                 X when X =:= not_found orelse X =:= [] ->
-                    ?event(
-                        device_load,
-                        {no_viable_device_implementations, {device, SpecID}}
-                    ),
-                    {error, not_found};
+                    device_result(Rest, Opts);
                 Items ->
-                    ?event(
-                        device_load,
-                        {implementations_found_via_graphql,
-                            {device, SpecID},
-                            {implementations, length(Items)}
-                        }
-                    ),
-                    {
-                        ok,
-                        [
-                            ID
-                        ||
-                            #{ <<"node">> := #{ <<"id">> := ID } } <- Items
-                        ]
-                    }
+                    {ok, Items}
             end
     end.
+
+device_queries(SpecID, TrustedSigners, Opts) ->
+    Policies = hb_opts:get(trusted_device_signer_policies, #{}, Opts),
+    SignerPolicies =
+        [{Signer, signer_expiry_height(Signer, Policies, Opts)}
+            || Signer <- TrustedSigners],
+    case lists:any(fun({_Signer, Height}) -> Height =/= undefined end, SignerPolicies) of
+        false -> [device_query(SpecID, TrustedSigners, undefined)];
+        true ->
+            [
+                device_query(SpecID, [Signer], Height)
+            ||
+                {Signer, Height} <- SignerPolicies
+            ]
+    end.
+
+signer_expiry_height(Signer, Policies, Opts) ->
+    case hb_maps:get(Signer, Policies, undefined, Opts) of
+        Policy when is_map(Policy) ->
+            case hb_maps:get(<<"expiry-height">>, Policy, undefined, Opts) of
+                undefined -> undefined;
+                Height -> hb_util:int(Height)
+            end;
+        _ ->
+            undefined
+    end.
+
+device_query(SpecID, TrustedSigners, ExpiryHeight) ->
+    BlockFilter =
+        case ExpiryHeight of
+            undefined -> <<>>;
+            _ -> <<"block: { max: $expiryHeight }, ">>
+        end,
+    ExpiryVar =
+        case ExpiryHeight of
+            undefined -> <<>>;
+            _ -> <<", $expiryHeight: Int">>
+        end,
+    Query =
+        <<"query($specid: [String!], $trusted: [String!]", ExpiryVar/binary, ") { ",
+                "transactions(",
+                "owners: $trusted, ",
+                "tags: { name: \"implements-device\" values: $specid }, ",
+                BlockFilter/binary,
+                "first: 1",
+            "){ ",
+                "edges { ",
+                    (item_spec())/binary ,
+                " } ",
+            "} ",
+        "}">>,
+    Variables0 = #{ <<"trusted">> => TrustedSigners, <<"specid">> => [SpecID] },
+    Variables =
+        case ExpiryHeight of
+            undefined -> Variables0;
+            _ -> Variables0#{ <<"expiryHeight">> => ExpiryHeight }
+        end,
+    {Query, Variables}.
 
 %% @doc Run a GraphQL request encoded as a binary. The node message may contain 
 %% a list of URLs to use, optionally as a tuple with an additional map of options
@@ -446,6 +504,29 @@ subindex_to_tags(Subindex) ->
     <<"[", ListInner/binary, "]">>.
 
 %%% Tests
+device_expiry_height_query_test() ->
+    SpecID = <<"spec">>,
+    Alice = <<"alice">>,
+    Bob = <<"bob">>,
+    [{BaseQuery, BaseVars}] = device_queries(SpecID, [Alice, Bob], #{}),
+    ?assertEqual([Alice, Bob], maps:get(<<"trusted">>, BaseVars)),
+    ?assertEqual(nomatch, binary:match(BaseQuery, <<"expiryHeight">>)),
+    Opts =
+        #{
+            <<"trusted-device-signer-policies">> =>
+                #{ Alice => #{ <<"expiry-height">> => 1543210 } }
+        },
+    [{AliceQuery, AliceVars}, {BobQuery, BobVars}] =
+        device_queries(SpecID, [Alice, Bob], Opts),
+    ?assertEqual([Alice], maps:get(<<"trusted">>, AliceVars)),
+    ?assertEqual(1543210, maps:get(<<"expiryHeight">>, AliceVars)),
+    ?assert(
+        binary:match(AliceQuery, <<"block: { max: $expiryHeight }">>)
+            =/= nomatch
+    ),
+    ?assertEqual([Bob], maps:get(<<"trusted">>, BobVars)),
+    ?assertEqual(nomatch, binary:match(BobQuery, <<"expiryHeight">>)).
+
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),

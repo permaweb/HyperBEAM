@@ -266,6 +266,8 @@ raw_default_message() ->
         <<"load-remote-devices">> => false,
         % The list of device signers that the node should trust.
         <<"trusted-device-signers">> => [],
+        % Optional remote lookup policy per trusted signer address.
+        <<"trusted-device-signer-policies">> => #{},
         % Map of device name/spec ID -> trusted implementation ID,
         % loaded without a signer check.
         <<"trusted-devices">> => #{},
