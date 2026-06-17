@@ -87,8 +87,8 @@ upload(Msg, Opts, <<"ans104@1.0">>) ->
 upload(Msg, Opts, Codec) ->
     hb_client_remote:upload(Msg, Opts, Codec).
 
-%% @doc Upload an ANS-104 bundle directly to the bundler `/tx' endpoint.
-%% Forge publishes package messages directly to the Arweave bundler endpoint;
+%% @doc Upload an ANS-104 bundle directly to the bundler endpoint.
+%% Forge publishes package messages directly to the HyperBEAM bundler route.
 upload_ans104(Bundler, Msg, Opts) ->
     {ok, CommittedMsg} =
         hb_message:with_only_committed(hb_private:reset(Msg), Opts),
@@ -105,7 +105,7 @@ upload_ans104(Bundler, Msg, Opts) ->
         ),
     Req = #{
         peer => hb_util:bin(Bundler),
-        path => <<"/tx">>,
+        path => <<"/~bundler@1.0/tx">>,
         method => <<"POST">>,
         headers => #{
             <<"codec-device">> => <<"ans104@1.0">>,

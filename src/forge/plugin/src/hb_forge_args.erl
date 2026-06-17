@@ -50,6 +50,8 @@ opts() ->
             "Path to wallet keyfile used for signing."},
         {publish_codec, undefined, "publish-codec", string,
             "Commitment codec used when publishing."},
+        {bundler, undefined, "bundler", string,
+            "Bundler endpoint used when publishing."},
         {requires_system_architecture, undefined,
             "requires-system-architecture", {boolean, false},
             "Include the host system architecture in implementation metadata."},
@@ -79,6 +81,7 @@ parse(State, DefaultOutput) ->
     SrcRaw = proplists:get_value(device_src, Args, default_device_src()),
     OutRaw = proplists:get_value(output_dir, Args, DefaultOutput),
     KeyRaw = proplists:get_value(key, Args, undefined),
+    BundlerRaw = proplists:get_value(bundler, Args, undefined),
     RootsRaw = proplists:get_value(devices, Args, undefined),
     ModuleRaw = proplists:get_value(module, Args, undefined),
     TestRaw = proplists:get_value(test, Args, undefined),
@@ -94,11 +97,13 @@ parse(State, DefaultOutput) ->
             true -> proplists:get_value(record, Args, "errors");
             false -> undefined
         end,
+    Bundler = maybe_bin(BundlerRaw),
     #{
         <<"device-src">> => split_list(SrcRaw),
         <<"output-dir">> => to_bin(OutRaw),
         <<"key">> => maybe_bin(KeyRaw),
         <<"publish-codec">> => to_bin(proplists:get_value(publish_codec, Args, "ans104@1.0")),
+        <<"bundler">> => Bundler,
         <<"requires-system-architecture">> => RequiresSystemArchitecture,
         <<"with-core">> => WithCore,
         <<"show-hash">> => ShowHash,
@@ -214,11 +219,15 @@ package_opts() ->
     package_opts(#{}).
 
 package_opts(Args) ->
-    #{
+    Opts = #{
         <<"bootstrap-device-src">> => bootstrap_preloaded_dirs(),
         <<"requires-system-architecture">> =>
             maps:get(<<"requires-system-architecture">>, Args, false)
-    }.
+    },
+    case maps:get(<<"bundler">>, Args, undefined) of
+        undefined -> Opts;
+        Bundler -> Opts#{ <<"bundler-ans104">> => Bundler }
+    end.
 
 %% @doc Run `Fun' with `HB_PRELOADED_*' pointed at a preload result.
 with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->

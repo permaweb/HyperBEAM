@@ -141,10 +141,14 @@ HB_CONFIG=custom.json rebar3 device local
 ### `rebar3 device publish`
 
 Packages, signs, and uploads spec + implementation messages to
-Arweave via `dev_arweave`. Before signing, the provider builds the
+the configured ANS-104 bundler. Before signing, the provider builds the
 same local preloaded-store used by `device test`, so the signing path
 can resolve HyperBEAM's built-in devices without extra environment
-variables. Returns each device's spec and impl IDs on stdout.
+variables. Returns each device's spec, impl, and signer IDs on stdout.
+
+By default, publish uses HyperBEAM's configured `bundler-ans104`.
+Use `--bundler` to override the endpoint. Forge posts ANS-104 items to
+`/~bundler@1.0/tx`.
 
 ## Configuration the runtime cares about
 
