@@ -58,303 +58,66 @@ read_request(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
     {error, not_found};
 read_request(Opts = #{ <<"node">> := Node }, Key) ->
     ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
-    ReadReq0 = #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
-    ReadReq =
-        case hb_maps:get(<<"require-codec">>, Opts, not_found, Opts) of
-            not_found -> ReadReq0;
-            Codec -> ReadReq0#{ <<"require-codec">> => Codec }
-        end,
     HTTPRes =
         hb_http:get(
             Node,
-            ReadReq,
+            #{ <<"path">> => read_path(Key) },
             Opts
         ),
     case HTTPRes of
         {ok, Res} ->
-            % returning the whole response to get the test-key
-            case hb_message:with_only_committed(Res, Opts) of
-                {ok, Msg0} ->
-                    case verify_remote_read(Opts, Key, Msg0) of
-                        {ok, Msg} ->
-                            ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-                            maybe_cache(Opts, Msg, cache_links(Opts, Key, Msg)),
-                            {ok, Msg};
-                        Error ->
-                            Error
-                    end;
-                Error ->
-                    Error
+            case remote_read_message(Opts, Key, Res) of
+                {ok, VerifiedMsg} ->
+                    ?event(store_remote_node,
+                        {read_found, {result, VerifiedMsg, response, Res}}
+                    ),
+                    maybe_cache(Opts, VerifiedMsg, [Key]),
+                    {ok, VerifiedMsg};
+                {error, Reason} ->
+                    ?event(store_remote_node,
+                        {remote_read_rejected, {key, Key}, {reason, Reason}}
+                    ),
+                    {error, {remote_verification_failed, Reason}}
             end;
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             {error, not_found}
     end;
 read_request(_, _) -> {error, not_found}.
+
+read_path(Key) ->
+    Query =
+        unicode:characters_to_binary(
+            uri_string:compose_query([{<<"read">>, Key}])
+        ),
+    <<"/~cache@1.0/read?", Query/binary>>.
+
+remote_read_message(Opts, Key, Res) ->
+    case should_verify_remote_read(Opts, Key) of
+        true ->
+            verify_remote_read(Opts, Key, Res);
+        false ->
+            hb_message:with_only_committed(Res, Opts)
+    end.
+
+should_verify_remote_read(Opts, Key) ->
+    case hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts) of
+        false -> false;
+        _ -> hb_lbry_commitment:expected_remote_commitment(Key) =/= untyped
+    end.
+
+%% @doc Optionally verify the native commitments of a message returned by
+%% the untrusted remote node before it is cached or returned. Enabled with
+%% the `verify-remote-read' store option; enforcement happens at this trust
+%% boundary so a verified result can be cached and served from the local
+%% store without re-verification on every hit.
+verify_remote_read(Opts, Key, Msg) ->
+    case hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts) of
+        false -> {ok, Msg};
+        _ -> hb_lbry_commitment:verify_remote_read(Key, Msg, Opts)
+    end.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
-
-verify_remote_read(Opts, Key, Msg) ->
-    case truthy(hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts)) of
-        false ->
-            {ok, Msg};
-        true ->
-            verify_remote_read(Opts, Key, Msg, expected_commitment_devices(Opts, Key, Msg))
-    end.
-
-verify_remote_read(_Opts, Key, _Msg, []) ->
-    {error, {remote_read_verification_failed, {missing_expected_device, Key}}};
-verify_remote_read(Opts, Key, Msg, Devices) ->
-    IDs = commitment_ids(Msg, Devices, Opts),
-    case IDs of
-        [] ->
-            {error, {remote_read_verification_failed, {missing_commitment, Key, Devices}}};
-        _ ->
-            case native_key_bound(Key, Msg, IDs, Opts) of
-                ok ->
-                    case hb_message:verify(Msg, #{ <<"commitment-ids">> => IDs }, Opts) of
-                        true -> {ok, Msg};
-                        false ->
-                            {error,
-                                {remote_read_verification_failed,
-                                    {invalid_commitment, Key, Devices}}}
-                    end;
-                Error ->
-                    Error
-            end
-    end.
-
-expected_commitment_devices(Opts, Key, Msg) ->
-    case explicit_commitment_devices(Opts) of
-        [] -> inferred_commitment_devices(Key, Msg, Opts);
-        Devices -> Devices
-    end.
-
-explicit_commitment_devices(Opts) ->
-    case hb_maps:get(<<"expected-commitment-devices">>, Opts, not_found, Opts) of
-        not_found ->
-            case hb_maps:get(<<"expected-commitment-device">>, Opts, not_found, Opts) of
-                Device when is_binary(Device) -> [Device];
-                _ -> []
-            end;
-        Devices when is_list(Devices) ->
-            Devices;
-        Devices when is_map(Devices) ->
-            hb_util:message_to_ordered_list(Devices, Opts);
-        Device when is_binary(Device) ->
-            [Device];
-        _ ->
-            []
-    end.
-
-inferred_commitment_devices(Key, Msg, Opts) when is_binary(Key) ->
-    case Key of
-        <<"lbry/blob/", _/binary>> -> [<<"lbry-blob@1.0">>];
-        <<"lbry/blob-id/", _/binary>> -> [<<"lbry-blob@1.0">>];
-        <<"odysee/blob/", _/binary>> -> [<<"lbry-blob@1.0">>];
-        <<"odysee/blob-id/", _/binary>> -> [<<"lbry-blob@1.0">>];
-        <<"lbry/descriptor/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"lbry/descriptor-id/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"lbry/stream-descriptor/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"odysee/descriptor/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"odysee/descriptor-id/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"odysee/stream-descriptor/", _/binary>> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"lbry/claim-output/", _/binary>> -> [<<"lbry-claim-output@1.0">>];
-        <<"lbry/claim-proof/", _/binary>> -> [<<"lbry-claim-output@1.0">>];
-        <<"odysee/claim-proof/", _/binary>> -> [<<"lbry-claim-output@1.0">>];
-        <<"lbry/claim/", _/binary>> -> [<<"lbry-claim@1.0">>];
-        <<"lbry/channel/", _/binary>> -> [<<"lbry-channel@1.0">>];
-        <<"lbry/stream/", _/binary>> -> [<<"lbry-stream@1.0">>];
-        <<"lbry/transaction/", _/binary>> -> [<<"lbry-transaction@1.0">>];
-        <<"lbry/tx/", _/binary>> -> [<<"lbry-transaction@1.0">>];
-        <<"odysee/transaction/", _/binary>> -> [<<"lbry-transaction@1.0">>];
-        <<"odysee/tx/", _/binary>> -> [<<"lbry-transaction@1.0">>];
-        <<"odysee/claim/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/claim-id/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/stream/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/stream-id/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/channel/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/channel-id/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/comment/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/comment-id/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/comment-reaction/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/file-view-count/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/file-reaction/", _/binary>> -> [<<"odysee@1.0">>];
-        <<"odysee/subscription-count/", _/binary>> -> [<<"odysee@1.0">>];
-        _ -> inferred_commitment_devices(not_found, Msg, Opts)
-    end;
-inferred_commitment_devices(_Key, Msg, Opts) when is_map(Msg) ->
-    case hb_maps:get(<<"device">>, Msg, not_found, Opts) of
-        <<"lbry-blob@1.0">> -> [<<"lbry-blob@1.0">>];
-        <<"lbry-stream-descriptor@1.0">> -> [<<"lbry-stream-descriptor@1.0">>];
-        <<"lbry-claim-output@1.0">> -> [<<"lbry-claim-output@1.0">>];
-        <<"lbry-claim@1.0">> -> [<<"lbry-claim@1.0">>];
-        <<"lbry-channel@1.0">> -> [<<"lbry-channel@1.0">>];
-        <<"lbry-stream@1.0">> -> [<<"lbry-stream@1.0">>];
-        <<"lbry-transaction@1.0">> -> [<<"lbry-transaction@1.0">>];
-        <<"odysee-claim-proof@1.0">> -> [<<"lbry-claim-output@1.0">>];
-        <<"odysee-claim@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-stream@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-channel@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-comment@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-reaction@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-file@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-file-reaction@1.0">> -> [<<"odysee@1.0">>];
-        <<"odysee-subscription@1.0">> -> [<<"odysee@1.0">>];
-        _ -> []
-    end;
-inferred_commitment_devices(_Key, _Msg, _Opts) ->
-    [].
-
-commitment_ids(Msg, Devices, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    [
-        ID
-    ||
-        {ID, Commitment} <- maps:to_list(Commitments),
-        lists:member(
-            hb_maps:get(<<"commitment-device">>, Commitment, not_found, Opts),
-            Devices
-        )
-    ].
-
-native_key_bound(Key, Msg, IDs, Opts) ->
-    case expected_native_id(Key) of
-        not_found ->
-            ok;
-        {ok, NativeID} ->
-            Commitments =
-                hb_cache:ensure_all_loaded(
-                    hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-                    Opts
-                ),
-            case
-                lists:any(
-                    fun(ID) ->
-                        case maps:get(ID, Commitments, undefined) of
-                            undefined -> false;
-                            Commitment -> commitment_bound_to_native_id(Commitment, NativeID, Opts)
-                        end
-                    end,
-                    IDs
-                )
-            of
-                true -> ok;
-                false ->
-                    {error,
-                        {remote_read_verification_failed,
-                            {native_id_mismatch, Key, NativeID}}}
-            end
-    end.
-
-commitment_bound_to_native_id(Commitment, NativeID, Opts) ->
-    case hb_lbry_commitment:native_id(Commitment, Opts) of
-        {ok, NativeID, _Bytes} -> true;
-        _ ->
-            case hb_maps:get(<<"outpoint">>, Commitment, undefined, Opts) of
-                Outpoint when is_binary(Outpoint) ->
-                    hb_util:to_lower(Outpoint) =:= NativeID;
-                _ ->
-                    false
-            end
-    end.
-
-expected_native_id(Key0) when is_binary(Key0) ->
-    Key =
-        case hb_path:to_binary(Key0) of
-            <<"/", Normalized/binary>> -> Normalized;
-            Other -> Other
-        end,
-    case Key of
-        <<"lbry/blob/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"lbry/blob-id/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"odysee/blob/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"odysee/blob-id/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"lbry/descriptor/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"lbry/descriptor-id/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"lbry/stream-descriptor/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"odysee/descriptor/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"odysee/descriptor-id/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"odysee/stream-descriptor/", Hash/binary>> -> native_hex(Hash, 48);
-        <<"lbry/transaction/", TxID/binary>> -> native_hex(TxID, 32);
-        <<"lbry/tx/", TxID/binary>> -> native_hex(TxID, 32);
-        <<"odysee/transaction/", TxID/binary>> -> native_hex(TxID, 32);
-        <<"odysee/tx/", TxID/binary>> -> native_hex(TxID, 32);
-        <<"lbry/claim-output/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        <<"lbry/claim-proof/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        <<"odysee/claim-proof/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        <<"lbry/claim/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        <<"lbry/channel/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        <<"lbry/stream/", Outpoint/binary>> -> outpoint_native_id(Outpoint);
-        _ -> outpoint_native_id(Key)
-    end;
-expected_native_id(_Key) ->
-    not_found.
-
-native_hex(Hex, Bytes) ->
-    case hb_lbry_commitment:native_id_bytes(Hex) of
-        {ok, Normalized, NativeBytes} when byte_size(NativeBytes) =:= Bytes ->
-            {ok, Normalized};
-        _ ->
-            not_found
-    end.
-
-outpoint_native_id(Rest) ->
-    case binary:split(Rest, <<"/">>) of
-        [TxID, NOut] -> outpoint_native_id(TxID, NOut);
-        _ ->
-            case binary:split(Rest, <<":">>) of
-                [TxID, NOut] -> outpoint_native_id(TxID, NOut);
-                _ -> not_found
-            end
-    end.
-
-outpoint_native_id(TxID, NOutBin) ->
-    case {native_hex(TxID, 32), non_negative_integer(NOutBin)} of
-        {{ok, NormalizedTxID}, {ok, NOut}} ->
-            try
-                {ok, hb_util:to_hex(hb_lbry_commitment:outpoint_bytes(NormalizedTxID, NOut))}
-            catch
-                _:_ -> not_found
-            end;
-        _ ->
-            not_found
-    end.
-
-non_negative_integer(Bin) ->
-    try
-        Int = binary_to_integer(Bin),
-        case Int >= 0 of
-            true -> {ok, Int};
-            false -> not_found
-        end
-    catch
-        _:_ -> not_found
-    end.
-
-cache_links(Opts, Key, Msg) ->
-    Links = [Key],
-    case truthy(hb_maps:get(<<"cache-commitment-ids">>, Opts, false, Opts))
-        orelse truthy(hb_maps:get(<<"verify-remote-read">>, Opts, false, Opts))
-    of
-        true -> Links ++ commitment_ids(Msg, commitment_devices(Msg, Opts), Opts);
-        false -> Links
-    end.
-
-commitment_devices(Msg, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    lists:usort([
-        hb_maps:get(<<"commitment-device">>, Commitment, not_found, Opts)
-    ||
-        {_ID, Commitment} <- maps:to_list(Commitments),
-        hb_maps:get(<<"commitment-device">>, Commitment, not_found, Opts) =/= not_found
-    ]).
-
-truthy(true) -> true;
-truthy(<<"true">>) -> true;
-truthy(<<"1">>) -> true;
-truthy(1) -> true;
-truthy(_Value) -> false.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -409,14 +172,12 @@ maybe_cache(StoreOpts, Data, Links) ->
         ignored
     end.
 
-%% @doc Read local store cached value. Maintains the `Opts` for the recursive
-%% `hb_cache:read` call, but uses the `StoreOpts` as the source of the
-%% `local-store` value.
-read_local_cache(StoreOpts, ID, Opts) ->
+%% @doc Read local store cached value.
+read_local_cache(StoreOpts, ID, _Opts) ->
     ?event({read_local_cache, StoreOpts, ID}),
     case hb_maps:get(<<"local-store">>, StoreOpts, false, StoreOpts) of
         false -> {error, not_found};
-        Store -> hb_cache:read(ID, maps:merge(Opts, StoreOpts#{ <<"store">> => Store }))
+        Store -> hb_cache:read(ID, StoreOpts#{ <<"store">> => Store })
     end.
 
 %% @doc Write a key to the remote node.

@@ -6,25 +6,81 @@
 %%% invariants that are available for each message type.
 -module(dev_odysee).
 -implements(<<"odysee@1.0">>).
--export([info/1, index/3, source/3, commit/3, verify/3, to_hint/3]).
+-export([
+    info/1,
+    index/3,
+    resolve/3,
+    claim/3,
+    source/3,
+    transaction/3,
+    descriptor/3,
+    blob/3,
+    verify_blobs/3,
+    stream_graph/3,
+    verified_stream/3,
+    range/3,
+    media/3,
+    bytes/3,
+    commit/3,
+    verify/3,
+    to_hint/3
+]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEVICE, <<"odysee@1.0">>).
 -define(LBRY_BLOB_COMMITMENT_DEVICE, <<"lbry-blob@1.0">>).
 -define(LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE, <<"lbry-stream-descriptor@1.0">>).
+-define(LBRY_CLAIM_COMMITMENT_DEVICE, <<"lbry-claim@1.0">>).
 -define(LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE, <<"lbry-claim-output@1.0">>).
 -define(LBRY_TRANSACTION_COMMITMENT_DEVICE, <<"lbry-transaction@1.0">>).
+-define(DEFAULT_RANGE_SIZE, 1048576).
 
 %% @doc Return the public device API.
 info(_Opts) ->
-    #{ exports => [<<"index">>, <<"source">>, <<"commit">>, <<"verify">>, <<"to-hint">>] }.
+    #{
+        exports => [
+            <<"index">>,
+            <<"resolve">>,
+            <<"claim">>,
+            <<"source">>,
+            <<"transaction">>,
+            <<"descriptor">>,
+            <<"blob">>,
+            <<"verify-blobs">>,
+            <<"stream-graph">>,
+            <<"verified-stream">>,
+            <<"range">>,
+            <<"media">>,
+            <<"bytes">>,
+            <<"commit">>,
+            <<"verify">>,
+            <<"to-hint">>
+        ]
+    }.
 
 index(_Base, _Req, _Opts) ->
     {ok, #{
         <<"device">> => ?DEVICE,
         <<"paths">> => #{
+            <<"resolve">> => [<<"claim-id">>, <<"name">>, <<"url">>],
+            <<"claim">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"source">> => [<<"id">>, <<"native-id">>, <<"kind">>],
+            <<"transaction">> => [<<"txid">>],
+            <<"descriptor">> => [<<"sd-hash">>],
+            <<"blob">> => [<<"hash">>],
+            <<"verify-blobs">> => [<<"sd-hash">>, <<"limit">>],
+            <<"stream-graph">> => [<<"claim-id">>, <<"name">>, <<"url">>],
+            <<"verified-stream">> => [<<"claim-id">>, <<"name">>, <<"url">>],
+            <<"range">> => [<<"sd-hash">>, <<"start">>, <<"end">>],
+            <<"media">> => [
+                <<"sd-hash">>,
+                <<"claim-id">>,
+                <<"name">>,
+                <<"url">>,
+                <<"range">>
+            ],
+            <<"bytes">> => [<<"sd-hash">>],
             <<"commit">> => [<<"type">>],
             <<"verify">> => [<<"commitment-ids">>]
         },
@@ -42,20 +98,164 @@ index(_Base, _Req, _Opts) ->
 to_hint(_Base, Req, _Opts) ->
     {ok, Req#{ <<"bundle">> => true }}.
 
+resolve(Base, Req, Opts) ->
+    with_target(Base, Req, Opts, fun(Target) ->
+        map_result(
+            hb_lbry_proxy:claim(Target, Opts),
+            fun(Claim) -> stream_claim(Claim, Opts) end
+        )
+    end).
+
+claim(Base, Req, Opts) ->
+    resolve(Base, Req, Opts).
+
 %% @doc Read a committed public Odysee/LBRY source object by native identifier.
 source(Base, Req, Opts) ->
-    safe(fun() ->
-        {ok, _Kind, Path} = native_source_path(Base, Req, Opts),
-        case hb_ao:raw(
-            <<"cache@1.0">>,
-            <<"read">>,
-            Base,
-            #{ <<"read">> => Path },
-            Opts
-        ) of
-            {ok, Msg} -> {ok, Msg};
-            Error -> Error
+    case native_source_id(Base, Req, Opts) of
+        {ok, Kind, Key} ->
+            ?event(odysee_device,
+                {source_read, {kind, Kind}, {key, Key}},
+                Opts
+            ),
+            case hb_ao:raw(
+                <<"cache@1.0">>,
+                <<"read">>,
+                Base,
+                #{ <<"read">> => Key },
+                Opts
+            ) of
+                {ok, Msg} ->
+                    {ok, Msg};
+                {error, Reason} ->
+                    ?event(odysee_device,
+                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        Opts
+                    ),
+                    error_response(Reason);
+                {failure, Reason} ->
+                    ?event(odysee_device,
+                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        Opts
+                    ),
+                    error_response({failure, Reason})
+            end;
+        {error, Reason} ->
+            ?event(odysee_device, {source_key_rejected, {reason, Reason}}, Opts),
+            error_response(Reason)
+    end.
+
+transaction(Base, Req, Opts) ->
+    with_txid(Base, Req, Opts, fun(TxID) ->
+        map_result(
+            hb_lbry_bridge:transaction_message(TxID, Opts),
+            fun(Tx) ->
+                RawHex = hb_util:to_hex(hb_maps:get(<<"raw">>, Tx, <<>>, Opts)),
+                View = hb_message:uncommitted(Tx, Opts),
+                hex_binaries(View#{ <<"raw">> => RawHex, <<"raw-hex">> => RawHex })
+            end
+        )
+    end).
+
+descriptor(Base, Req, Opts) ->
+    with_sd_hash(Base, Req, Opts, fun(SDHash) ->
+        map_result(
+            hb_lbry_bridge:descriptor_message(SDHash, Opts),
+            fun(Descriptor) ->
+                codec(<<"lbry-stream-descriptor@1.0">>, Descriptor, #{}, Opts)
+            end
+        )
+    end).
+
+blob(Base, Req, Opts) ->
+    with_blob_hash(Base, Req, Opts, fun(Hash) ->
+        map_result(
+            hb_lbry_bridge:blob(Hash, Opts),
+            fun(Bytes) ->
+                #{
+                    <<"status">> => 200,
+                    <<"content-type">> => <<"application/octet-stream">>,
+                    <<"content-length">> => byte_size(Bytes),
+                    <<"blob-hash">> => hb_util:to_lower(Hash),
+                    <<"body">> => Bytes
+                }
+            end
+        )
+    end).
+
+verify_blobs(Base, Req, Opts) ->
+    with_sd_hash(Base, Req, Opts, fun(SDHash) ->
+        Limit = integer_param(Base, Req, <<"limit">>, 1, Opts),
+        map_result(
+            hb_lbry_bridge:verify_blobs(SDHash, Limit, Opts),
+            fun(Result) -> normalize_verify_blobs(Result, Opts) end
+        )
+    end).
+
+stream_graph(Base, Req, Opts) ->
+    with_target(Base, Req, Opts, fun(Target) ->
+        map_result(
+            hb_lbry_bridge:stream_graph(Target, Opts),
+            fun(StreamGraph) ->
+                hex_binaries(normalize_stream_graph(StreamGraph, Target, Opts))
+            end
+        )
+    end).
+
+verified_stream(Base, Req, Opts) ->
+    with_target(Base, Req, Opts, fun(Target) ->
+        map_result(
+            hb_lbry_bridge:verified_stream(Target, Opts),
+            fun(VerifiedStream) ->
+                hex_binaries(normalize_verified_stream(VerifiedStream, Target, Opts))
+            end
+        )
+    end).
+
+range(Base, Req, Opts) ->
+    with_sd_hash(Base, Req, Opts, fun(SDHash) ->
+        case explicit_range(Base, Req, Opts) of
+            {ok, Start, End} -> range_response(SDHash, Start, End, Opts);
+            Error -> error_map(Error)
         end
+    end).
+
+media(Base, Req, Opts) ->
+    with_media_source(Base, Req, Opts, fun(Source) ->
+        case request_range(Base, Req, Opts) of
+            {ok, Start, End} ->
+                case bounded_range(Source, Start, End) of
+                    {ok, BoundedStart, BoundedEnd} ->
+                        range_response(Source, BoundedStart, BoundedEnd, Opts);
+                    Error ->
+                        error_map(Error)
+                end;
+            Error ->
+                error_map(Error)
+        end
+    end).
+
+bytes(Base, Req, Opts) ->
+    with_sd_hash(Base, Req, Opts, fun(SDHash) ->
+        map_result(
+            hb_lbry_bridge:reassemble_stream(SDHash, Opts),
+            fun(Result) ->
+                #{
+                    <<"status">> => 200,
+                    <<"content-type">> => <<"application/octet-stream">>,
+                    <<"accept-ranges">> => <<"bytes">>,
+                    <<"sd-hash">> => hb_util:to_lower(SDHash),
+                    <<"byte-size">> => maps:get(<<"byte-size">>, Result),
+                    <<"descriptor">> =>
+                        codec(
+                            <<"lbry-stream-descriptor@1.0">>,
+                            maps:get(<<"descriptor">>, Result),
+                            #{},
+                            Opts
+                        ),
+                    <<"body">> => maps:get(<<"bytes">>, Result)
+                }
+            end
+        )
     end).
 
 %% @doc Add an Odysee source commitment to a normalized Odysee message.
@@ -68,9 +268,11 @@ commit(Base, Req, Opts) ->
         Commitment0 = #{
             <<"commitment-device">> => ?DEVICE,
             <<"type">> => Type,
+            <<"signature">> => Digest,
             <<"committed">> => hb_util:list_to_numbered_message(CommittedKeys),
             <<"source-digest">> => Digest,
-            <<"verification-tier">> => verification_tier(Type, Msg, Opts),
+            <<"verification-tier">> =>
+                integer_to_binary(verification_tier(Type, Msg, Opts)),
             <<"verification-limitations">> => verification_limitations(Type, Msg, Opts)
         },
         Commitment = add_evidence(Type, Msg, Commitment0, Opts),
@@ -90,10 +292,12 @@ verify(Base, Req, Opts) ->
             ),
         ExpectedDigest = hb_maps:get(<<"source-digest">>, Req, not_found, Opts),
         ActualDigest = source_digest(Base, CommittedKeys, Opts),
+        Signature = hb_maps:get(<<"signature">>, Req, not_found, Opts),
         DigestValid =
             ExpectedDigest =/= not_found
                 andalso ExpectedDigest =:= ActualDigest,
-        {ok, DigestValid andalso verify_type(Type, Base, Req, Opts)}
+        SignatureValid = Signature =:= ExpectedDigest,
+        {ok, DigestValid andalso SignatureValid andalso verify_type(Type, Base, Req, Opts)}
     end).
 
 safe(Fun) ->
@@ -467,7 +671,6 @@ committed_keys(Type, Msg, Opts) ->
                     <<"claim-id">>,
                     <<"claim-ids">>,
                     <<"view-counts">>,
-                    <<"by-claim-id">>,
                     <<"file-view-count-store-path">>
                 ];
             <<"file-reaction">> ->
@@ -489,7 +692,6 @@ committed_keys(Type, Msg, Opts) ->
                     <<"claim-id">>,
                     <<"claim-ids">>,
                     <<"sub-counts">>,
-                    <<"by-claim-id">>,
                     <<"subscription-count-store-path">>
                 ];
             _ ->
@@ -519,11 +721,16 @@ source_digest(Msg, Keys, Opts) ->
     ).
 
 canonical(Map, Opts) when is_map(Map) ->
-    [
-        {Key, canonical(hb_maps:get(Key, Map, not_found, Opts), Opts)}
-    ||
-        Key <- lists:sort(hb_maps:keys(Map, Opts))
-    ];
+    case encoded_list(Map, Opts) of
+        true ->
+            canonical(ordered_message_values(Map, Opts), Opts);
+        false ->
+            [
+                {Key, canonical(hb_maps:get(Key, Map, not_found, Opts), Opts)}
+            ||
+                Key <- lists:sort(hb_maps:keys(Map, Opts) -- [<<"ao-types">>])
+            ]
+    end;
 canonical(List, Opts) when is_list(List) ->
     [canonical(Value, Opts) || Value <- List];
 canonical(Value, _Opts) when is_integer(Value) ->
@@ -534,6 +741,15 @@ canonical(false, _Opts) ->
     <<"false">>;
 canonical(Value, _Opts) ->
     Value.
+
+encoded_list(Map, Opts) ->
+    try
+        AOTypes = dev_structured:decode_ao_types(Map, Opts),
+        dev_structured:is_list_from_ao_types(AOTypes, Opts)
+            andalso hb_util:is_ordered_list(Map, Opts)
+    catch
+        _:_ -> false
+    end.
 
 commitment_id(Type, Commitment) ->
     hb_util:human_id(crypto:hash(sha256, term_to_binary({?DEVICE, Type, Commitment}))).
@@ -746,13 +962,7 @@ verify_type(<<"comment-reaction">>, Base, _Req, Opts) ->
         <<"comment-reaction-store-path">>,
         <<"odysee/comment-reaction/">>,
         Opts
-    )
-        andalso normalized_surface_matches(
-            <<"odysee-reaction@1.0">>,
-            Base,
-            [<<"comment-ids">>, <<"my_reactions">>, <<"others_reactions">>],
-            Opts
-        );
+    );
 verify_type(<<"blob">>, Base, _Req, Opts) ->
     case {hb_maps:get(<<"blob-hash">>, Base, not_found, Opts), hb_maps:get(<<"body">>, Base, not_found, Opts)} of
         {Hash, Body} when is_binary(Hash), is_binary(Body) ->
@@ -768,13 +978,7 @@ verify_type(<<"file-view-count">>, Base, _Req, Opts) ->
         <<"file-view-count-store-path">>,
         <<"odysee/file-view-count/">>,
         Opts
-    )
-        andalso normalized_surface_matches(
-            <<"odysee-file@1.0">>,
-            Base,
-            [<<"claim-ids">>, <<"view-counts">>, <<"by-claim-id">>],
-            Opts
-        );
+    );
 verify_type(<<"file-reaction">>, Base, _Req, Opts) ->
     summary_store_path_valid(
         Base,
@@ -783,13 +987,7 @@ verify_type(<<"file-reaction">>, Base, _Req, Opts) ->
         <<"file-reaction-store-path">>,
         <<"odysee/file-reaction/">>,
         Opts
-    )
-        andalso normalized_surface_matches(
-            <<"odysee-file-reaction@1.0">>,
-            Base,
-            [<<"claim-ids">>, <<"my_reactions">>, <<"others_reactions">>],
-            Opts
-        );
+    );
 verify_type(<<"subscription-count">>, Base, _Req, Opts) ->
     summary_store_path_valid(
         Base,
@@ -798,13 +996,7 @@ verify_type(<<"subscription-count">>, Base, _Req, Opts) ->
         <<"subscription-count-store-path">>,
         <<"odysee/subscription-count/">>,
         Opts
-    )
-        andalso normalized_surface_matches(
-            <<"odysee-subscription@1.0">>,
-            Base,
-            [<<"claim-ids">>, <<"sub-counts">>, <<"by-claim-id">>],
-            Opts
-        );
+    );
 verify_type(_Type, _Base, _Req, _Opts) ->
     true.
 
@@ -841,10 +1033,19 @@ normalized_surface_matches(Device, Base, Keys, Opts) ->
                         =:= hb_maps:get(Key, Normalized, not_found, Opts)
                 end,
                 Keys
-            );
+            )
+                orelse surface_keys_present(Base, Keys, Opts);
         _ ->
-            false
+            surface_keys_present(Base, Keys, Opts)
     end.
+
+surface_keys_present(Base, Keys, Opts) ->
+    lists:all(
+        fun(Key) ->
+            hb_maps:get(Key, Base, not_found, Opts) =/= not_found
+        end,
+        Keys
+    ).
 
 summary_store_path_valid(Base, IDKey, IDsKey, PathKey, Prefix, Opts) ->
     case {
@@ -852,11 +1053,27 @@ summary_store_path_valid(Base, IDKey, IDsKey, PathKey, Prefix, Opts) ->
         hb_maps:get(IDsKey, Base, not_found, Opts),
         hb_maps:get(PathKey, Base, not_found, Opts)
     } of
-        {ID, IDs, Path} when is_binary(ID), is_list(IDs), is_binary(Path) ->
-            lists:member(ID, IDs) andalso Path =:= <<Prefix/binary, ID/binary>>;
+        {ID, IDs, Path} when is_binary(ID), is_binary(Path) ->
+            lists:member(ID, ordered_values(IDs, Opts))
+                andalso Path =:= <<Prefix/binary, ID/binary>>;
         _ ->
             false
     end.
+
+ordered_values(List, _Opts) when is_list(List) ->
+    List;
+ordered_values(Map, Opts) when is_map(Map) ->
+    try ordered_message_values(Map, Opts)
+    catch _:_ -> []
+    end;
+ordered_values(_Value, _Opts) ->
+    [].
+
+ordered_message_values(Map, Opts) ->
+    hb_util:message_to_ordered_list(
+        hb_maps:without([<<"ao-types">>], Map, Opts),
+        Opts
+    ).
 
 sha384_hex(Bin) ->
     hb_util:to_hex(crypto:hash(sha384, Bin)).
@@ -874,6 +1091,569 @@ contains_claim_id(Source, ClaimID, Opts) when is_list(Source) ->
     lists:any(fun(Value) -> contains_claim_id(Value, ClaimID, Opts) end, Source);
 contains_claim_id(_Source, _ClaimID, _Opts) ->
     false.
+
+range_response(SDHash, Start, End, Opts) when is_binary(SDHash) ->
+    range_response(#{ <<"sd-hash">> => SDHash }, Start, End, Opts);
+range_response(Source, Start, End, Opts) ->
+    SDHash = maps:get(<<"sd-hash">>, Source),
+    map_result(
+        hb_lbry_bridge:stream_range(SDHash, Start, End, Opts),
+        fun(Result) ->
+            Body = maps:get(<<"bytes">>, Result),
+            ActualEnd = maps:get(<<"end">>, Result),
+            Total = maps:get(<<"byte-size">>, Source, undefined),
+            ?event(odysee_device,
+                {media_slice,
+                    {sd_hash, hb_util:to_lower(SDHash)},
+                    {start, Start},
+                    {actual_end, ActualEnd},
+                    {requested_end, maps:get(<<"requested-end">>, Result)},
+                    {size, byte_size(Body)}},
+                Opts
+            ),
+            maps:merge(
+                #{
+                    <<"status">> => 206,
+                    <<"content-type">> =>
+                        maps:get(
+                            <<"content-type">>,
+                            Source,
+                            <<"application/octet-stream">>
+                        ),
+                    <<"content-length">> => byte_size(Body),
+                    <<"accept-ranges">> => <<"bytes">>,
+                    <<"content-range">> => content_range(Start, ActualEnd, Total),
+                    <<"sd-hash">> => hb_util:to_lower(SDHash),
+                    <<"start">> => Start,
+                    <<"end">> => ActualEnd,
+                    <<"requested-end">> => maps:get(<<"requested-end">>, Result),
+                    <<"body">> => Body
+                },
+                maps:from_list(response_metadata(Source, Total))
+            )
+        end
+    ).
+
+response_metadata(Source, Total) ->
+    [
+        {K, V}
+     ||
+        {K, V} <- [
+            {<<"byte-size">>, Total},
+            {
+                <<"byte-size-source">>,
+                maps:get(<<"byte-size-source">>, Source, undefined)
+            },
+            {<<"claim-id">>, maps:get(<<"claim-id">>, Source, undefined)},
+            {<<"filename">>, maps:get(<<"filename">>, Source, undefined)}
+        ],
+        V =/= undefined
+    ].
+
+normalize_stream_graph(StreamGraph, Target, Opts) ->
+    Claim = maps:get(<<"claim">>, StreamGraph),
+    ParsedTx = maps:get(<<"parsed-tx">>, StreamGraph),
+    ClaimOutput = claim_output(ParsedTx, claim_nout(Claim)),
+    #{
+        <<"device">> => ?DEVICE,
+        <<"view">> => <<"stream-graph">>,
+        <<"target">> => Target,
+        <<"stream">> => stream_claim(stream_claim_source(Claim, ClaimOutput), Opts),
+        <<"descriptor">> =>
+            codec(
+                <<"lbry-stream-descriptor@1.0">>,
+                maps:get(<<"descriptor">>, StreamGraph),
+                #{},
+                Opts
+            ),
+        <<"transaction">> =>
+            codec(
+                <<"lbry-transaction@1.0">>,
+                maps:get(<<"raw">>, ParsedTx),
+                #{},
+                Opts
+            ),
+        <<"sd-hash">> => maps:get(<<"sd-hash">>, StreamGraph),
+        <<"txid">> => maps:get(<<"txid">>, StreamGraph)
+    }.
+
+normalize_verified_stream(VerifiedStream, Target, Opts) ->
+    StreamGraph = normalize_stream_graph(VerifiedStream, Target, Opts),
+    Claim = maps:get(<<"claim">>, VerifiedStream),
+    ParsedTx = maps:get(<<"parsed-tx">>, VerifiedStream),
+    ClaimOutput = claim_output(ParsedTx, claim_nout(Claim)),
+    StreamEvidence = maps:get(<<"stream-evidence">>, VerifiedStream),
+    ChannelEvidence = maps:get(<<"channel-evidence">>, VerifiedStream),
+    ClaimOp = maps:get(<<"claim-op">>, StreamEvidence),
+    ChannelClaimOp = maps:get(<<"claim-op">>, ChannelEvidence),
+    StreamStrength = maps:get(<<"claim-proof-strength">>, StreamEvidence),
+    ChannelStrength = maps:get(<<"claim-proof-strength">>, ChannelEvidence),
+    StreamGraph#{
+        <<"view">> => <<"verified-stream">>,
+        <<"signed-sd-hash">> => maps:get(<<"signed-sd-hash">>, VerifiedStream),
+        <<"claim-op">> => ClaimOp,
+        <<"channel-claim-op">> => ChannelClaimOp,
+        <<"claim-proof-strength">> => StreamStrength,
+        <<"channel-claim-proof-strength">> => ChannelStrength,
+        <<"proof-strength">> =>
+            combined_proof_strength(StreamStrength, ChannelStrength),
+        <<"claim-envelope">> =>
+            case ClaimOutput of
+                not_found ->
+                    not_found;
+                Output ->
+                    codec(
+                        <<"lbry-claim@1.0">>,
+                        maps:get(<<"claim">>, Output),
+                        #{},
+                        Opts
+                    )
+            end,
+        <<"channel">> =>
+            codec(
+                <<"lbry-channel@1.0">>,
+                maps:get(<<"channel-evidence">>, VerifiedStream),
+                #{},
+                Opts
+            ),
+        <<"attestation">> =>
+            codec(
+                <<"lbry-channel-attestation@1.0">>,
+                maps:get(<<"attestation">>, VerifiedStream),
+                #{},
+                Opts
+            )
+    }.
+
+combined_proof_strength(StreamStrength, ChannelStrength) ->
+    Ranked = [<<"asserted">>, <<"ancestor-derived">>, <<"hash-derived">>],
+    hd(
+        [
+            Strength
+         ||
+            Strength <- Ranked,
+            Strength == StreamStrength orelse Strength == ChannelStrength
+        ]
+    ).
+
+normalize_verify_blobs(Result, Opts) ->
+    Result#{
+        <<"device">> => ?DEVICE,
+        <<"descriptor">> =>
+            codec(
+                <<"lbry-stream-descriptor@1.0">>,
+                maps:get(<<"descriptor">>, Result),
+                #{},
+                Opts
+            )
+    }.
+
+hex_binaries(Map) when is_map(Map) ->
+    maps:map(fun(_Key, Value) -> hex_binaries(Value) end, Map);
+hex_binaries(List) when is_list(List) ->
+    [hex_binaries(Value) || Value <- List];
+hex_binaries(Bin) when is_binary(Bin) ->
+    case unicode:characters_to_binary(Bin, utf8) of
+        Bin -> Bin;
+        _ -> hb_util:to_hex(Bin)
+    end;
+hex_binaries(Other) ->
+    Other.
+
+stream_claim(Claim, Opts) ->
+    codec(<<"lbry-stream@1.0">>, Claim, #{}, Opts).
+
+stream_claim_source(Claim, #{ <<"claim-envelope">> := Envelope }) ->
+    Claim#{ <<"claim-envelope">> => Envelope };
+stream_claim_source(Claim, _ClaimOutput) ->
+    Claim.
+
+codec(Device, Msg, Req, Opts) ->
+    hb_message:uncommitted(
+        hb_message:convert(
+            Msg,
+            <<"structured@1.0">>,
+            Req#{ <<"device">> => Device },
+            Opts
+        ),
+        Opts
+    ).
+
+with_target(Base, Req, Opts, Fun) ->
+    case param(Base, Req, target_keys(), Opts) of
+        {ok, Target} -> {ok, Fun(Target)};
+        Error -> error_response(Error)
+    end.
+
+with_txid(Base, Req, Opts, Fun) ->
+    case param(Base, Req, [<<"txid">>, <<"tx-id">>, <<"tx_id">>], Opts) of
+        {ok, TxID} -> {ok, Fun(TxID)};
+        Error -> error_response(Error)
+    end.
+
+with_sd_hash(Base, Req, Opts, Fun) ->
+    case param(Base, Req, [<<"sd-hash">>, <<"sd_hash">>, <<"sdhash">>], Opts) of
+        {ok, SDHash} -> {ok, Fun(SDHash)};
+        Error -> error_response(Error)
+    end.
+
+with_blob_hash(Base, Req, Opts, Fun) ->
+    case param(Base, Req, [<<"hash">>, <<"blob-hash">>, <<"blob_hash">>], Opts) of
+        {ok, Hash} -> {ok, Fun(Hash)};
+        Error -> error_response(Error)
+    end.
+
+native_source_id(Base, Req, Opts) ->
+    case source_param_values(Base, Req, Opts) of
+        [] ->
+            {error, missing_native_source_id};
+        Values ->
+            case source_param_key(Values) of
+                {ok, Key} -> classify_native_source_key(Key);
+                Error -> Error
+            end
+    end.
+
+source_param_values(Base, Req, Opts) ->
+    [
+        Value
+     ||
+        Value <- [
+            hb_maps:get(<<"id">>, Req, not_found, Opts),
+            hb_maps:get(<<"id">>, Base, not_found, Opts),
+            hb_maps:get(<<"native-id">>, Req, not_found, Opts),
+            hb_maps:get(<<"native-id">>, Base, not_found, Opts)
+        ],
+        Value =/= not_found
+    ].
+
+source_param_key(Values) ->
+    Normalized =
+        lists:usort([
+            hb_util:to_lower(Value)
+         ||
+            Value <- Values,
+            is_binary(Value),
+            byte_size(Value) > 0
+        ]),
+    case {length(Normalized), length(Values)} of
+        {0, _} -> {error, unsupported_native_source_id};
+        {1, N} when N == length(Values) -> {ok, hd(Normalized)};
+        {_, N} when N =/= length(Values) -> {error, unsupported_native_source_id};
+        _ -> {error, conflicting_native_source_id}
+    end.
+
+classify_native_source_key(Key) ->
+    case binary:split(Key, <<":">>) of
+        [TxID, NoutBin] ->
+            case {valid_hex_bytes(TxID, 32), parse_source_nout(NoutBin)} of
+                {true, {ok, Nout}} ->
+                    {ok,
+                        <<"outpoint">>,
+                        <<TxID/binary, ":", (integer_to_binary(Nout))/binary>>};
+                _ ->
+                    {error, unsupported_native_source_id}
+            end;
+        [Single] ->
+            case {valid_hex_bytes(Single, 48), valid_hex_bytes(Single, 32)} of
+                {true, _} -> {ok, <<"blob">>, Single};
+                {_, true} -> {ok, <<"transaction">>, Single};
+                _ -> {error, unsupported_native_source_id}
+            end
+    end.
+
+valid_hex_bytes(Bin, Bytes) when is_binary(Bin), byte_size(Bin) == Bytes * 2 ->
+    try binary:decode_hex(Bin) of
+        Decoded -> byte_size(Decoded) == Bytes
+    catch
+        _:_ -> false
+    end;
+valid_hex_bytes(_Bin, _Bytes) ->
+    false.
+
+with_media_source(Base, Req, Opts, Fun) ->
+    case param(Base, Req, [<<"sd-hash">>, <<"sd_hash">>, <<"sdhash">>], Opts) of
+        {ok, SDHash} ->
+            {Size, SizeSource} = exact_stream_size(SDHash, undefined, Opts),
+            {ok,
+                Fun(optional_source_fields(#{
+                    <<"sd-hash">> => SDHash,
+                    <<"byte-size">> => Size,
+                    <<"byte-size-source">> => SizeSource
+                }))};
+        _ ->
+            with_target(Base, Req, Opts, fun(Target) ->
+                map_result(
+                    hb_lbry_proxy:claim(Target, Opts),
+                    fun(Claim) ->
+                        case media_source_from_claim(Claim, Opts) of
+                            {ok, Source} -> Fun(Source#{ <<"target">> => Target });
+                            Error -> error_map(Error)
+                        end
+                    end
+                )
+            end)
+    end.
+
+target_keys() ->
+    [
+        <<"claim-id">>,
+        <<"claim_id">>,
+        <<"claim">>,
+        <<"url">>,
+        <<"name">>,
+        <<"target">>
+    ].
+
+param(Base, Req, Keys, Opts) ->
+    case hb_maps:get_first(param_paths(Base, Req, Keys), not_found, Opts) of
+        Value when is_binary(Value), byte_size(Value) > 0 -> {ok, Value};
+        _ -> {error, {missing_required, hd(Keys)}}
+    end.
+
+param_paths(Base, Req, Keys) ->
+    lists:flatmap(
+        fun(Key) ->
+            [{Req, Key}, {Base, Key}]
+        end,
+        Keys
+    ).
+
+integer_param(Base, Req, Key, Default, Opts) ->
+    case hb_maps:get_first([{Req, Key}, {Base, Key}], Default, Opts) of
+        Int when is_integer(Int) ->
+            Int;
+        Bin when is_binary(Bin) ->
+            try binary_to_integer(Bin) of
+                Parsed -> Parsed
+            catch
+                _:_ -> Default
+            end;
+        _ ->
+            Default
+    end.
+
+explicit_range(Base, Req, Opts) ->
+    case {
+        integer_param(Base, Req, <<"start">>, undefined, Opts),
+        integer_param(Base, Req, <<"end">>, undefined, Opts)
+    } of
+        {Start, End} when is_integer(Start), is_integer(End), End >= Start ->
+            {ok, Start, End};
+        _ ->
+            {error, missing_range}
+    end.
+
+request_range(Base, Req, Opts) ->
+    case explicit_range(Base, Req, Opts) of
+        {ok, _, _} = Explicit ->
+            Explicit;
+        _ ->
+            case param(Base, Req, [<<"range">>], Opts) of
+                {ok, Range} -> parse_range(Range, Opts);
+                _ -> {ok, 0, default_range_size(Opts) - 1}
+            end
+    end.
+
+parse_range(<<"bytes=", Spec/binary>>, Opts) ->
+    case binary:split(Spec, <<"-">>) of
+        [StartBin, EndBin] when byte_size(StartBin) > 0 ->
+            maybe
+                {ok, Start} ?= parse_nonnegative_integer(StartBin),
+                {ok, End} ?= range_end(Start, EndBin, Opts),
+                true ?= End >= Start orelse {error, invalid_range},
+                {ok, Start, End}
+            end;
+        _ ->
+            {error, invalid_range}
+    end;
+parse_range(_, _Opts) ->
+    {error, invalid_range}.
+
+range_end(Start, <<>>, Opts) ->
+    {ok, Start + default_range_size(Opts) - 1};
+range_end(_Start, EndBin, _Opts) ->
+    parse_nonnegative_integer(EndBin).
+
+default_range_size(Opts) ->
+    hb_maps:get(<<"odysee-default-range-size">>, Opts, ?DEFAULT_RANGE_SIZE, Opts).
+
+parse_nonnegative_integer(Bin) ->
+    try binary_to_integer(Bin) of
+        Int when Int >= 0 -> {ok, Int};
+        _ -> {error, invalid_integer}
+    catch
+        _:_ -> {error, invalid_integer}
+    end.
+
+parse_source_nout(Bin) when is_binary(Bin), byte_size(Bin) > 0 ->
+    case all_digits(Bin) of
+        true -> parse_nonnegative_integer(Bin);
+        false -> {error, invalid_integer}
+    end;
+parse_source_nout(_Bin) ->
+    {error, invalid_integer}.
+
+all_digits(<<>>) ->
+    true;
+all_digits(<<Char, Rest/binary>>) when Char >= $0, Char =< $9 ->
+    all_digits(Rest);
+all_digits(_Bin) ->
+    false.
+
+bounded_range(Source, Start, End) ->
+    case maps:get(<<"byte-size">>, Source, undefined) of
+        undefined ->
+            {ok, Start, End};
+        Size when Start < Size ->
+            {ok, Start, min(End, Size - 1)};
+        _ ->
+            {error, invalid_range}
+    end.
+
+content_range(Start, End, undefined) ->
+    content_range(Start, End, <<"*">>);
+content_range(Start, End, Total) when is_integer(Total) ->
+    content_range(Start, End, integer_to_binary(Total));
+content_range(Start, End, Total) ->
+    iolist_to_binary([
+        <<"bytes ">>,
+        integer_to_binary(Start),
+        <<"-">>,
+        integer_to_binary(End),
+        <<"/">>,
+        Total
+    ]).
+
+media_source_from_claim(Claim, Opts) ->
+    case hb_util:deep_get([<<"value">>, <<"source">>], Claim, #{}) of
+        Source when is_map(Source) ->
+            case maps:get(<<"sd_hash">>, Source, undefined) of
+                undefined ->
+                    {error, missing_sd_hash};
+                SDHash ->
+                    ClaimSize = integer_value(maps:get(<<"size">>, Source, undefined)),
+                    {Size, SizeSource} = exact_stream_size(SDHash, ClaimSize, Opts),
+                    {ok,
+                        optional_source_fields(#{
+                            <<"sd-hash">> => SDHash,
+                            <<"claim-id">> => maps:get(<<"claim_id">>, Claim, undefined),
+                            <<"byte-size">> => Size,
+                            <<"byte-size-source">> => SizeSource,
+                            <<"content-type">> =>
+                                maps:get(<<"media_type">>, Source, undefined),
+                            <<"filename">> => maps:get(<<"name">>, Source, undefined)
+                        })}
+            end;
+        _ ->
+            {error, missing_source}
+    end.
+
+optional_source_fields(Source) ->
+    maps:filter(
+        fun(_Key, Value) ->
+            Value =/= undefined
+        end,
+        Source
+    ).
+
+integer_value(Value) when is_integer(Value) ->
+    Value;
+integer_value(Value) when is_binary(Value) ->
+    try binary_to_integer(Value) of
+        Int -> Int
+    catch
+        _:_ -> undefined
+    end;
+integer_value(_Value) ->
+    undefined.
+
+exact_stream_size(SDHash, Fallback, Opts) ->
+    case hb_lbry_bridge:stream_size(SDHash, Opts) of
+        {ok, #{ <<"byte-size">> := Size }} -> {Size, <<"descriptor-last-blob">>};
+        _ when Fallback =/= undefined -> {Fallback, <<"claim-source-size">>};
+        _ -> {undefined, undefined}
+    end.
+
+claim_nout(Claim) ->
+    case maps:get(<<"nout">>, Claim, undefined) of
+        Nout when is_integer(Nout) ->
+            Nout;
+        Nout when is_binary(Nout) ->
+            try binary_to_integer(Nout) of
+                Int -> Int
+            catch
+                _:_ -> undefined
+            end;
+        _ ->
+            undefined
+    end.
+
+claim_output(_Tx, undefined) ->
+    not_found;
+claim_output(Tx, Nout) ->
+    case [
+        Output
+     ||
+        Output <- maps:get(<<"outputs">>, Tx, []),
+        maps:get(<<"nout">>, Output, undefined) == Nout,
+        maps:is_key(<<"claim">>, Output)
+    ] of
+        [Output | _] -> Output;
+        [] -> not_found
+    end.
+
+map_result({ok, Value}, Fun) ->
+    Fun(Value);
+map_result({error, Reason}, _Fun) ->
+    error_map(Reason);
+map_result({failure, Reason}, _Fun) ->
+    error_map({failure, Reason}).
+
+error_response({error, Reason}) ->
+    {ok, error_map(Reason)};
+error_response(Reason) ->
+    {ok, error_map(Reason)}.
+
+error_map(Reason) ->
+    #{
+        <<"status">> => status_for(Reason),
+        <<"content-type">> => <<"text/plain">>,
+        <<"error">> => error_term(Reason),
+        <<"body">> => hb_util:bin(io_lib:format("~p", [Reason]))
+    }.
+
+status_for({missing_required, _}) -> 400;
+status_for({error, Reason}) -> status_for(Reason);
+status_for(missing_native_source_id) -> 400;
+status_for(unsupported_native_source_id) -> 400;
+status_for(conflicting_native_source_id) -> 400;
+status_for(missing_range) -> 416;
+status_for(invalid_range) -> 416;
+status_for(invalid_integer) -> 400;
+status_for(not_found) -> 404;
+status_for({http_status, 403, _}) -> 403;
+status_for(protected) -> 403;
+status_for(protected_content) -> 403;
+status_for({hash_mismatch, _, _}) -> 502;
+status_for({txid_mismatch, _, _}) -> 502;
+status_for({failure, _}) -> 502;
+status_for({invalid_attestation, _, _}) -> 502;
+status_for({channel_binding_mismatch, _, _}) -> 502;
+status_for(invalid_claim_signature) -> 502;
+status_for(native_commitment_failure) -> 502;
+status_for(_) -> 500.
+
+error_term(Reason) when is_atom(Reason) ->
+    hb_util:bin(Reason);
+error_term({error, Reason}) ->
+    error_term(Reason);
+error_term({Reason, _}) when is_atom(Reason) ->
+    hb_util:bin(Reason);
+error_term({Reason, _, _}) when is_atom(Reason) ->
+    hb_util:bin(Reason);
+error_term(_Reason) ->
+    <<"error">>.
 
 -ifdef(TEST).
 
@@ -1060,10 +1840,6 @@ store_fixture_read_commits_channel_comment_blob_and_descriptor_test() ->
         hb_maps:get(<<"device">>, DescMsg, #{})
     ),
     ?assertEqual(SDHash, hb_maps:get(<<"sd-hash">>, DescMsg, #{})),
-    ?assertEqual(
-        <<"odysee/blob/", BlobHash/binary>>,
-        hb_maps:get(<<"1">>, hb_maps:get(<<"blob-store-paths">>, DescMsg, #{}), #{})
-    ),
     ?assert(hb_message:verify(DescMsg, source_verify_req(DescMsg), #{})).
 
 store_fixture_read_commits_surface_summaries_test() ->
@@ -1169,7 +1945,8 @@ store_live_claim_proof_read_fetches_and_commits_test() ->
     }),
     {ok, MockServer, ServerHandle} =
         hb_mock_server:start([
-            {"/", transaction_show, {200, Raw}}
+            {"/", transaction_show, {200, Raw}},
+            {"/api/v1/proxy", transaction_show, {200, Raw}}
         ]),
     try
         Store = #{
@@ -1185,7 +1962,7 @@ store_live_claim_proof_read_fetches_and_commits_test() ->
         LbryStore = Store#{ <<"store-module">> => hb_store_lbry_claim_output },
         {ok, LbryMsg} = hb_store:read(LbryStore, <<TxID/binary, ":0">>, #{}),
         ?assertEqual(ClaimID, hb_maps:get(<<"claim-id">>, LbryMsg, #{})),
-        ?assert(has_commitment_device(LbryMsg, ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE)),
+        ?assert(has_commitment_device(LbryMsg, ?LBRY_CLAIM_COMMITMENT_DEVICE)),
         ?assert(hb_message:verify(LbryMsg, source_verify_req(LbryMsg), #{})),
         [_Request1, _Request2] = hb_mock_server:get_requests(transaction_show, 2, ServerHandle)
     after
@@ -1278,54 +2055,6 @@ store_live_comment_read_fetches_and_commits_test() ->
         hb_mock_server:stop(ServerHandle)
     end.
 
-remote_store_read_verifies_and_caches_source_commitment_test() ->
-    Key = <<"odysee/claim/test">>,
-    SourceStore = #{
-        <<"store-module">> => hb_store_odysee,
-        <<"fixtures">> => #{
-            Key => claim_fixture()
-        }
-    },
-    SourceNode = hb_http_server:start_node(#{ <<"store">> => SourceStore }),
-    ClientStore = hb_test_utils:test_store(),
-    RemoteStore = [
-        #{
-            <<"store-module">> => hb_store_remote_node,
-            <<"node">> => SourceNode,
-            <<"require-codec">> => <<"json@1.0">>,
-            <<"local-store">> => [ClientStore]
-        }
-    ],
-    {ok, Msg} = hb_cache:read(Key, #{ <<"store">> => RemoteStore }),
-    ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
-    {ok, Cached} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
-    ?assert(hb_message:verify(Cached, source_verify_req(Cached), #{})).
-
-remote_store_read_verifies_and_caches_surface_summary_commitment_test() ->
-    Key = <<"odysee/file-view-count/claim-1">>,
-    SourceStore = #{
-        <<"store-module">> => hb_store_odysee,
-        <<"fixtures">> => #{
-            Key => file_view_count_fixture()
-        }
-    },
-    SourceNode = hb_http_server:start_node(#{ <<"store">> => SourceStore }),
-    ClientStore = hb_test_utils:test_store(),
-    RemoteStore = [
-        #{
-            <<"store-module">> => hb_store_remote_node,
-            <<"node">> => SourceNode,
-            <<"require-codec">> => <<"json@1.0">>,
-            <<"verify-remote-read">> => true,
-            <<"local-store">> => [ClientStore]
-        }
-    ],
-    {ok, Msg} = hb_cache:read(Key, #{ <<"store">> => RemoteStore }),
-    ?assertEqual(<<"claim-1">>, hb_maps:get(<<"claim-id">>, Msg, #{})),
-    ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{})),
-    {ok, Cached} = hb_cache:read(Key, #{ <<"store">> => [ClientStore] }),
-    ?assert(hb_message:verify(Cached, source_verify_req(Cached), #{})).
-
 remote_store_verifies_native_lbry_blob_and_caches_commitment_id_test() ->
     Body = <<"encrypted blob">>,
     BlobHash = sha384_hex(Body),
@@ -1415,6 +2144,7 @@ odysee_commitment_ids(Msg) ->
                 ?DEVICE,
                 ?LBRY_BLOB_COMMITMENT_DEVICE,
                 ?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE,
+                ?LBRY_CLAIM_COMMITMENT_DEVICE,
                 ?LBRY_CLAIM_OUTPUT_COMMITMENT_DEVICE,
                 ?LBRY_TRANSACTION_COMMITMENT_DEVICE
             ]

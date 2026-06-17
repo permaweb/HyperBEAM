@@ -1,51 +1,29 @@
-%%% @doc Native LBRY channel codec plus compatibility channel surfaces.
 -module(dev_lbry_channel).
 -implements(<<"lbry-channel@1.0">>).
 -device_libraries([lib_lbry_codec]).
--export([
-    info/1,
-    channel/3,
-    from_claim/3,
-    from/3,
-    to/3,
-    to_hint/3,
-    verify/3,
-    content_type/1
-]).
-
-info(_Opts) ->
-    #{
-        exports => [
-            <<"channel">>,
-            <<"from-claim">>,
-            <<"from">>,
-            <<"to">>,
-            <<"to-hint">>,
-            <<"verify">>
-        ]
-    }.
-
-channel(Base, Req, Opts) ->
-    hb_ao:raw(<<"odysee-channel@1.0">>, <<"channel">>, Base, Req, Opts).
-
-from_claim(Base, Req, Opts) ->
-    hb_ao:raw(<<"odysee-channel@1.0">>, <<"from-claim">>, Base, Req, Opts).
+-export([from/3, to/3, to_hint/3, verify/3, content_type/1]).
+-include("include/hb.hrl").
 
 content_type(_) ->
     {ok, <<"application/vnd.lbry.channel+json">>}.
 
+%% @doc Verify a channel-output commitment: the claim-output binding plus
+%% the channel public key re-derived from the raw channel claim protobuf.
+%% See `hb_lbry_commitment:channel_output_verification/3'.
 verify(Base, Req, Opts) ->
+    Result = hb_lbry_commitment:channel_output_verification(Base, Req, Opts),
     Valid =
-        case hb_lbry_commitment:channel_output_verification(Base, Req, Opts) of
+        case Result of
             {ok, _PublicKeyHex} -> true;
             _ -> false
         end,
+    ?event(lbry_commitment, {channel_verify, {valid, Valid}, {result, Result}}),
     {ok, Valid}.
 
 from(Map, Req, Opts) when is_map(Map) ->
     case normalize(Map) of
-        {ok, ChannelMsg} ->
-            lib_lbry_codec:from_structured(ChannelMsg, Req, Opts);
+        {ok, Channel} ->
+            lib_lbry_codec:from_structured(Channel, Req, Opts);
         Error ->
             Error
     end.

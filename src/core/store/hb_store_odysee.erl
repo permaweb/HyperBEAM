@@ -65,7 +65,7 @@ link(_StoreOpts, _Req, _NodeOpts) ->
 
 %% @doc Read a public Odysee object by a stable store path.
 read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
-    Path = normalize_key(Key),
+    Path = canonical_read_path(normalize_key(Key)),
     case fixture(Path, StoreOpts, NodeOpts) of
         {ok, Msg} ->
             Type = infer_type(Path, Msg, NodeOpts),
@@ -334,9 +334,15 @@ fixture(Path, StoreOpts, Opts) ->
     Fixtures = hb_maps:get(<<"fixtures">>, StoreOpts, #{}, Opts),
     case hb_maps:get(Path, Fixtures, not_found, Opts) of
         not_found -> not_found;
+        Msg when is_map(Msg) -> {ok, Msg};
         Msg -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)}
     end.
 
+commit_result(Msg0, Type, Opts)
+        when is_map(Msg0), Type =:= <<"blob">>;
+        is_map(Msg0), Type =:= <<"stream-descriptor">>;
+        is_map(Msg0), Type =:= <<"transaction">> ->
+    native_source_message(Type, Msg0, Opts);
 commit_result(Msg0, Type, Opts) when is_map(Msg0) ->
     Msg = source_message(Type, Msg0),
     CommitmentDevice = commitment_device(Type),
@@ -490,11 +496,8 @@ claim_from_search(Search, ClaimID, Opts) ->
     end.
 
 blob_message(BlobHash, Body) ->
-    #{
-        <<"device">> => <<"lbry-blob@1.0">>,
+    (hb_lbry_commitment:blob_message(BlobHash, Body))#{
         <<"content-type">> => <<"application/octet-stream">>,
-        <<"body">> => Body,
-        <<"blob-hash">> => BlobHash,
         <<"blob-store-path">> => <<"odysee/blob/", BlobHash/binary>>,
         <<"blob-size">> => byte_size(Body)
     }.
@@ -504,19 +507,98 @@ transaction_message(Transaction, TxID, Opts) ->
         TxHex = hb_maps:get(<<"tx-hex">>, Transaction, not_found, Opts),
         true ?= is_binary(TxHex),
         {ok, Raw} ?= decode_tx_hex(TxHex),
-        TxID ?= hb_lbry_tx:txid(Raw),
-        {ok, _Parsed} ?= hb_lbry_tx:parse(Raw),
-        {ok, #{
-            <<"device">> => <<"lbry-transaction@1.0">>,
+        {ok, Msg} ?= native_transaction_message(Raw, TxID),
+        {ok, Msg#{
             <<"content-type">> => <<"application/vnd.lbry.transaction">>,
-            <<"body">> => Raw,
-            <<"txid">> => TxID,
             <<"tx-size">> => byte_size(Raw),
             <<"tx-store-path">> => <<"odysee/transaction/", TxID/binary>>
         }}
     else
         false -> {error, tx_hex_not_found};
         not_found -> {error, tx_hex_not_found};
+        Other -> Other
+    end.
+
+native_source_message(<<"blob">>, Msg, Opts) ->
+    maybe
+        Hash = hb_maps:get(<<"blob-hash">>, Msg, not_found, Opts),
+        true ?= is_binary(Hash),
+        Body = native_bytes([<<"data">>, <<"body">>], Msg, Opts),
+        true ?= is_binary(Body),
+        {ok, Body} ?= verify_blob_body(normalize_hex(Hash), Body),
+        {ok, blob_message(normalize_hex(Hash), Body)}
+    else
+        false -> {error, invalid_blob};
+        not_found -> {error, invalid_blob};
+        Error -> Error
+    end;
+native_source_message(<<"stream-descriptor">>, Msg, Opts) ->
+    maybe
+        SDHash = hb_maps:get(<<"sd-hash">>, Msg, not_found, Opts),
+        true ?= is_binary(SDHash),
+        Raw = native_bytes([<<"raw">>, <<"body">>], Msg, Opts),
+        true ?= is_binary(Raw),
+        {ok, Descriptor} ?=
+            hb_lbry_commitment:descriptor_message(Raw, normalize_hex(SDHash)),
+        {ok, Descriptor#{
+            <<"content-type">> => <<"application/vnd.lbry.stream-descriptor+json">>,
+            <<"descriptor-store-path">> => <<"odysee/descriptor/", (normalize_hex(SDHash))/binary>>
+        }}
+    else
+        false -> {error, invalid_stream_descriptor};
+        not_found -> {error, invalid_stream_descriptor};
+        Error -> Error
+    end;
+native_source_message(<<"transaction">>, Msg, Opts) ->
+    maybe
+        TxID = hb_maps:get(<<"txid">>, Msg, not_found, Opts),
+        true ?= is_binary(TxID),
+        {ok, Raw} ?= transaction_bytes(Msg, Opts),
+        {ok, TxMsg} ?= native_transaction_message(Raw, normalize_hex(TxID)),
+        {ok, TxMsg#{
+            <<"content-type">> => <<"application/vnd.lbry.transaction">>,
+            <<"tx-size">> => byte_size(Raw),
+            <<"tx-store-path">> => <<"odysee/transaction/", (normalize_hex(TxID))/binary>>
+        }}
+    else
+        false -> {error, invalid_transaction};
+        not_found -> {error, invalid_transaction};
+        Error -> Error
+    end.
+
+native_bytes([], _Msg, _Opts) ->
+    not_found;
+native_bytes([Key | Rest], Msg, Opts) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        Bytes when is_binary(Bytes) -> Bytes;
+        _ -> native_bytes(Rest, Msg, Opts)
+    end.
+
+transaction_bytes(Msg, Opts) ->
+    case native_bytes([<<"raw">>, <<"body">>], Msg, Opts) of
+        Raw when is_binary(Raw) ->
+            {ok, Raw};
+        _ ->
+            case first_hex([<<"tx-hex">>, <<"hex">>, <<"raw-hex">>], Msg, Opts) of
+                Hex when is_binary(Hex) -> decode_tx_hex(Hex);
+                _ -> {error, missing_raw_transaction}
+            end
+    end.
+
+first_hex([], _Msg, _Opts) ->
+    not_found;
+first_hex([Key | Rest], Msg, Opts) ->
+    case hb_maps:get(Key, Msg, not_found, Opts) of
+        Hex when is_binary(Hex) -> Hex;
+        _ -> first_hex(Rest, Msg, Opts)
+    end.
+
+native_transaction_message(Raw, TxID) ->
+    maybe
+        {ok, Msg} ?= hb_lbry_commitment:transaction_message(Raw),
+        TxID ?= hb_maps:get(<<"txid">>, Msg, not_found, #{}),
+        {ok, Msg}
+    else
         Other -> Other
     end.
 
@@ -676,6 +758,42 @@ normalize_key(Key) ->
         <<"/", Rest/binary>> -> Rest;
         _ -> Path
     end.
+
+canonical_read_path(Path) ->
+    case classify_native_path(Path) of
+        {ok, NativePath} -> NativePath;
+        _ -> Path
+    end.
+
+classify_native_path(<<TxID:64/binary, ":", NOut/binary>>) ->
+    case valid_hex_size(TxID, 32) andalso valid_uint(NOut) of
+        true -> {ok, <<"odysee/claim-proof/", TxID/binary, "/", NOut/binary>>};
+        false -> not_found
+    end;
+classify_native_path(Path) ->
+    case {valid_hex_size(Path, 48), valid_hex_size(Path, 32)} of
+        {true, _} -> {ok, <<"odysee/blob/", Path/binary>>};
+        {_, true} -> {ok, <<"odysee/transaction/", Path/binary>>};
+        _ -> not_found
+    end.
+
+valid_hex_size(Hex, Bytes) when is_binary(Hex), byte_size(Hex) =:= Bytes * 2 ->
+    try binary:decode_hex(Hex) of
+        Decoded -> byte_size(Decoded) =:= Bytes
+    catch
+        _:_ -> false
+    end;
+valid_hex_size(_Hex, _Bytes) ->
+    false.
+
+valid_uint(Bin) when is_binary(Bin), byte_size(Bin) > 0 ->
+    try binary_to_integer(Bin) of
+        Int -> Int >= 0
+    catch
+        _:_ -> false
+    end;
+valid_uint(_Bin) ->
+    false.
 
 decode_component(Encoded) ->
     try {ok, hb_util:bin(uri_string:percent_decode(Encoded))}

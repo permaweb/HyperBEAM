@@ -15,6 +15,9 @@
     16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F).
 -define(SECP256K1_N,
     16#FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141).
+%% DER/SPKI prefixes for secp256k1 public keys, as stored on-chain by legacy
+%% channel claims. Matched byte-exactly: any other algorithm identifier or
+%% curve OID is rejected.
 -define(SPKI_UNCOMPRESSED_PREFIX,
     <<16#30, 16#56, 16#30, 16#10, 16#06, 16#07, 16#2a, 16#86, 16#48, 16#ce,
         16#3d, 16#02, 16#01, 16#06, 16#05, 16#2b, 16#81, 16#04, 16#00, 16#0a,
@@ -81,9 +84,13 @@ channel_public_key(Channel) ->
             {error, missing_public_key}
     end.
 
+%% @doc Normalize an on-chain channel public key to the 33-byte compressed
+%% secp256k1 form. Accepts bare compressed and uncompressed points as well as
+%% the DER/SPKI encodings used by legacy channel claims. Off-curve points and
+%% unrecognized encodings fail closed.
 normalize_public_key(<<Prefix, X:256>> = PublicKey) when Prefix == 2; Prefix == 3 ->
     case decode_public_key(PublicKey) of
-        {ok, {_X, _Y}} -> {ok, PublicKey};
+        {ok, {X, _Y}} -> {ok, PublicKey};
         _ -> {error, invalid_channel_public_key}
     end;
 normalize_public_key(<<4, X:256, Y:256>>) ->
@@ -109,7 +116,7 @@ verify_signed(FirstInput, Envelope, Channel) ->
         Signature = maps:get(<<"claim-signature">>, Envelope),
         {ok, SignatureValid} ?= verify_signature(Signature, Digest, PublicKey),
         BindingValid = ChannelHash == EmbeddedHash,
-        {ok, #{
+        Attestation = #{
             <<"device">> => <<"lbry-channel-attestation@1.0">>,
             <<"tier">> => 2,
             <<"valid">> => SignatureValid andalso BindingValid,
@@ -119,7 +126,15 @@ verify_signed(FirstInput, Envelope, Channel) ->
             <<"signing-channel-id">> => hb_util:to_hex(reverse(EmbeddedHash)),
             <<"channel-id">> => hb_util:to_hex(reverse(ChannelHash)),
             <<"public-key">> => hb_util:to_hex(PublicKey)
-        }}
+        },
+        ?event(lbry_attestation,
+            {attestation_result,
+                {valid, maps:get(<<"valid">>, Attestation)},
+                {signature_valid, SignatureValid},
+                {channel_hash_valid, BindingValid},
+                {channel_id, maps:get(<<"channel-id">>, Attestation)}}
+        ),
+        {ok, Attestation}
     end.
 
 verify_signature_ints(R, S, Digest, PublicKey) when
@@ -177,6 +192,8 @@ public_key_to_uncompressed(PublicKey) ->
         Error -> Error
     end.
 
+%% Coordinates must be canonical field elements: encodings with `X >= p' or
+%% `Y >= p' are invalid even when they satisfy the curve equation modulo `p'.
 decode_public_key(<<Prefix, X:256>>)
         when (Prefix == 2 orelse Prefix == 3), X < ?SECP256K1_P ->
     Y2 = mod(pow_mod(X, 3, ?SECP256K1_P) + 7, ?SECP256K1_P),
@@ -245,4 +262,138 @@ normalize_public_key_test() ->
     {Uncompressed, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
     Compressed = ar_wallet:compress_ecdsa_pubkey(Uncompressed),
     ?assertEqual({ok, Compressed}, normalize_public_key(Compressed)),
-    ?assertEqual({ok, Compressed}, normalize_public_key(Uncompressed)).
+    ?assertEqual({ok, Compressed}, normalize_public_key(Uncompressed)),
+    ?assertEqual(
+        {ok, Compressed},
+        normalize_public_key(<<?SPKI_UNCOMPRESSED_PREFIX/binary, Uncompressed/binary>>)
+    ),
+    ?assertEqual(
+        {ok, Compressed},
+        normalize_public_key(<<?SPKI_COMPRESSED_PREFIX/binary, Compressed/binary>>)
+    ).
+
+normalize_public_key_rejects_other_curves_test() ->
+    PrivateKey = <<1:256>>,
+    {Uncompressed, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    P256Prefix =
+        binary:decode_hex(
+            <<"3059301306072a8648ce3d020106082a8648ce3d030107034200">>
+        ),
+    ?assertEqual(
+        {error, unsupported_channel_public_key},
+        normalize_public_key(<<P256Prefix/binary, Uncompressed/binary>>)
+    ).
+
+normalize_public_key_rejects_non_canonical_coordinates_test() ->
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<2, (?SECP256K1_P + 1):256>>)
+    ),
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<4, 1:256, ?SECP256K1_P:256>>)
+    ).
+
+normalize_public_key_rejects_off_curve_points_test() ->
+    % x = 0 is not on secp256k1: 7 is not a quadratic residue mod p.
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<2, 0:256>>)
+    ),
+    ?assertEqual(
+        {error, invalid_channel_public_key},
+        normalize_public_key(<<4, 0:256, 1:256>>)
+    ),
+    ?assertEqual(
+        {error, unsupported_channel_public_key},
+        normalize_public_key(<<1, 2, 3>>)
+    ).
+
+verify_signature_accepts_compact_secp256k1_test() ->
+    PrivateKey = <<1:256>>,
+    {PublicKey0, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    PublicKey = ar_wallet:compress_ecdsa_pubkey(PublicKey0),
+    Message = <<"lbry attestation">>,
+    Digest = crypto:hash(sha256, Message),
+    CompactSignature = der_to_compact(
+        crypto:sign(ecdsa, sha256, Message, [PrivateKey, secp256k1])
+    ),
+    ?assertEqual({ok, true}, verify_signature(CompactSignature, Digest, PublicKey)),
+    <<R:32/binary, S:256>> = CompactSignature,
+    HighS = ?SECP256K1_N - S,
+    ?assertEqual({ok, true}, verify_signature(<<R/binary, HighS:256>>, Digest, PublicKey)).
+
+verify_signature_rejects_tampered_digest_test() ->
+    PrivateKey = <<1:256>>,
+    {PublicKey0, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    PublicKey = ar_wallet:compress_ecdsa_pubkey(PublicKey0),
+    Message = <<"lbry attestation">>,
+    CompactSignature = der_to_compact(
+        crypto:sign(ecdsa, sha256, Message, [PrivateKey, secp256k1])
+    ),
+    BadDigest = crypto:hash(sha256, <<"tampered">>),
+    ?assertEqual({ok, false}, verify_signature(CompactSignature, BadDigest, PublicKey)).
+
+verify_checks_channel_hash_binding_test() ->
+    PrivateKey = <<1:256>>,
+    {PublicKey0, _} = crypto:generate_key(ecdh, secp256k1, PrivateKey),
+    PublicKey = ar_wallet:compress_ecdsa_pubkey(PublicKey0),
+    ChannelHash = <<1:160>>,
+    FirstInput = #{ <<"signature-digest-piece">> => <<2:288>> },
+    Message = <<"claim protobuf">>,
+    Payload =
+        <<(maps:get(<<"signature-digest-piece">>, FirstInput))/binary,
+            ChannelHash/binary,
+            Message/binary>>,
+    Signature = der_to_compact(
+        crypto:sign(ecdsa, sha256, Payload, [PrivateKey, secp256k1])
+    ),
+    Envelope = #{
+        <<"signed">> => true,
+        <<"signing-channel-hash">> => ChannelHash,
+        <<"claim-signature">> => Signature,
+        <<"message">> => Message
+    },
+    Channel = #{
+        <<"claim_id">> => hb_util:to_hex(reverse(ChannelHash)),
+        <<"value">> => #{ <<"public_key">> => hb_util:to_hex(PublicKey) }
+    },
+    {ok, Attestation} = verify(#{ <<"inputs">> => [FirstInput] }, #{ <<"claim-envelope">> => Envelope }, Channel),
+    ?assertEqual(true, maps:get(<<"valid">>, Attestation)).
+
+real_lbry_signature_verifies_task0_test() ->
+    {ok, Tx} = hb_lbry_tx:parse_hex(hb_lbry_tx:task0_tx_hex()),
+    [FirstInput] = maps:get(<<"inputs">>, Tx),
+    [ClaimOutput | _] = maps:get(<<"outputs">>, Tx),
+    Envelope = maps:get(<<"claim-envelope">>, ClaimOutput),
+    Channel = #{
+        <<"claim_id">> => <<"585d54c7b82fd92043ed583c5aea18a9547028aa">>,
+        <<"value">> => #{
+            <<"public_key">> =>
+                <<"03fa4e5fe9f02f2f1a8c34ec150b91f762d8b07b7be942f26aa80c40902d5dbd11">>
+        }
+    },
+    Digest = signature_digest(FirstInput, Envelope),
+    Signature = maps:get(<<"claim-signature">>, Envelope),
+    {ok, PublicKey} = channel_public_key(Channel),
+    ?assertEqual(
+        {ok, true},
+        verify_signature(Signature, Digest, PublicKey)
+    ),
+    {ok, Attestation} = verify(Tx, ClaimOutput, Channel),
+    ?assertEqual(true, maps:get(<<"valid">>, Attestation)),
+    ?assertEqual(true, maps:get(<<"signature-valid">>, Attestation)),
+    ?assertEqual(true, maps:get(<<"channel-hash-valid">>, Attestation)).
+
+der_to_compact(<<16#30, _TotalLen, 16#02, RLen, R0:RLen/binary, 16#02, SLen, S0:SLen/binary>>) ->
+    <<(fixed_int(R0))/binary, (fixed_int(S0))/binary>>.
+
+fixed_int(Int) ->
+    Trimmed = trim_zeroes(Int),
+    Padding = 32 - byte_size(Trimmed),
+    <<0:(Padding * 8), Trimmed/binary>>.
+
+trim_zeroes(<<0, Rest/binary>> = Int) when byte_size(Int) > 32 ->
+    trim_zeroes(Rest);
+trim_zeroes(Int) ->
+    Int.

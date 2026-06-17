@@ -11,6 +11,10 @@ stream_sd_hash(Message) when is_binary(Message) ->
         {ok, hb_util:to_hex(SDHash)}
     end.
 
+%% @doc Extract the raw channel public key bytes from a channel claim
+%% protobuf (`Claim.channel.public_key'). The bytes are returned untouched:
+%% legacy channels store DER/SPKI-wrapped keys, which the caller must
+%% normalize before use.
 channel_public_key(Message) when is_binary(Message) ->
     maybe
         {ok, Channel} ?= length_field(Message, 2),
@@ -94,6 +98,17 @@ channel_public_key_from_channel_claim_test() ->
     Channel = field(1, PublicKey),
     Claim = field(2, Channel),
     ?assertEqual({ok, PublicKey}, channel_public_key(Claim)).
+
+channel_public_key_requires_channel_field_test() ->
+    Claim = field(1, field(1, <<"stream">>)),
+    ?assertEqual({error, {missing_field, 2}}, channel_public_key(Claim)).
+
+stream_sd_hash_rejects_wrong_hash_size_test() ->
+    BadHash = <<1, 2, 3>>,
+    Source = field(6, BadHash),
+    Stream = field(1, Source),
+    Claim = field(1, Stream),
+    ?assertEqual({error, {invalid_sd_hash_size, 3}}, stream_sd_hash(Claim)).
 
 field(Number, Value) ->
     Key = (Number bsl 3) bor 2,

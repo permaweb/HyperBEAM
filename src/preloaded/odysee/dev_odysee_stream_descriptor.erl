@@ -830,7 +830,7 @@ read_store_blob(Hash, Base, Req, Opts) ->
         true ->
             case hb_cache:read(<<"odysee/blob/", Hash/binary>>, Opts) of
                 {ok, Msg} when is_map(Msg) ->
-                    case hb_maps:get(<<"body">>, Msg, not_found, Opts) of
+                    case stored_blob_bytes(Msg, Opts) of
                         Body when is_binary(Body) -> verify_fetched_blob(Hash, Body);
                         _ -> {error, not_found}
                     end;
@@ -841,6 +841,12 @@ read_store_blob(Hash, Base, Req, Opts) ->
             end;
         false ->
             {error, not_found}
+    end.
+
+stored_blob_bytes(Msg, Opts) ->
+    case hb_maps:get(<<"body">>, Msg, not_found, Opts) of
+        Body when is_binary(Body) -> Body;
+        _ -> hb_maps:get(<<"data">>, Msg, not_found, Opts)
     end.
 
 store_blob_enabled(Base, Req, Opts) ->
