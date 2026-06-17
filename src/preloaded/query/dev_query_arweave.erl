@@ -330,7 +330,8 @@ block_range_to_offset_range(Heights, Opts) ->
                         BlockSize = hb_util:int(
                             hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
                         WeaveSize - BlockSize;
-                    not_found -> 0
+                    not_found -> 0;
+                    {error, not_found} -> 0
                 end
         end,
     EndOffset =
@@ -342,7 +343,8 @@ block_range_to_offset_range(Heights, Opts) ->
                         hb_util:int(
                             hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
                         );
-                    not_found -> infinity
+                    not_found -> infinity;
+                    {error, not_found} -> infinity
                 end
         end,
     ?event(
