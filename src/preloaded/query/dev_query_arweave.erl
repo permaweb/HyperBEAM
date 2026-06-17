@@ -219,16 +219,17 @@ find_field_key(Field, Msg, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
+    {_DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
+    ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
+    ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
     #{
         <<"count">> => hb_util:bin(ResultsCount),
         <<"edges">> => ResultsPage,
         <<"pageInfo">> =>
             #{
                 <<"hasNextPage">> =>
-                    (DroppedCount + length(ResultsPage)) < ResultsCount
+                    length(ResultsPagePlusOne) > CountToReturn
             }
     }.
 
