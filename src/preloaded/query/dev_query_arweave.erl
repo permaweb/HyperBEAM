@@ -428,27 +428,15 @@ match_args(Args, Opts) when is_map(Args) ->
         Opts
     ).
 match_args([], [], _Opts) -> [];
-match_args([], Results, Opts) ->
+match_args([], Results, _Opts) ->
     ?event({match_args_results, Results}),
-    Store = scoped_store(Opts),
-    % For every ID in every result, we resolve it to its uncommitted ID form.
-    ResolvedResults =
-        [
-            [ hb_util:ok(hb_store:resolve(Store, ID, Opts)) || ID <- Result ]
-        ||
-            Result <- Results
-        ],
-    % Next, we find the intersection of all the results. Having the uncommitted 
-    % ID gives us their 'neutral' form: correctly returning a result with `SignedID1`
-    % from one matcher and `SignedID2` from another matcher -- while they are
-    % unequal, but pertain to the same message.
-    Matches =
+    hb_util:unique(
         lists:foldl(
             fun(Result, Acc) -> hb_util:list_with(Result, Acc) end,
-            hd(ResolvedResults),
-            tl(ResolvedResults)
-        ),
-    hb_util:unique(lists:flatten([ all_signed_ids(ID, Store, Opts) || ID <- Matches ]));
+            hd(Results),
+            tl(Results)
+        )
+    );
 match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
@@ -616,45 +604,6 @@ commitment_id_to_base_id(ID, Opts) ->
             hb_util:encode(hb_crypto:sha256(Sig));
         _ -> not_found
     end.
-
-%% @doc Find all IDs for a message, by any of its other IDs. It achieves this
-%% by resolving the given ID, recursing through its links, then returning all
-%% of the IDs found in that `BaseID/commitments' key.
-all_signed_ids(ID, Store, Opts) ->
-    ResolvedID = hb_util:ok_or(hb_store:resolve(Store, ID, Opts), ID),
-    case hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts) of
-        {composite, CommitmentIDs} ->
-            lists:filter(
-                fun(CommitmentID) ->
-                    CommitmentPath =
-                        <<
-                            ResolvedID/binary,
-                            "/commitments/",
-                            CommitmentID/binary,
-                            "/committer"
-                        >>,
-                    CommitmentMsgID =
-                        hb_util:ok_or(
-                            hb_store:resolve(Store, CommitmentPath, Opts),
-                            CommitmentPath
-                        ),
-                    case hb_store:read(Store, CommitmentMsgID, Opts) of
-                        {ok, _} -> true;
-                        _ ->
-                            false
-                    end
-                end,
-                CommitmentIDs
-            );
-        _ ->
-            [ID]
-    end.
-
-%% @doc Scope the stores used for block matching. The searched stores can be
-%% scoped by setting the `query_arweave_scope' option.
-scoped_store(Opts) ->
-    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
-    hb_opts:get(store, no_store, hb_store:scope(Opts, Scope)).
 
 %% @doc Return the explicit IDs from the arguments, if given. Searches for
 %% both `ids' and `id' keys.
