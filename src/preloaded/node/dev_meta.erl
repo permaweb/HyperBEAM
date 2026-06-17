@@ -86,15 +86,10 @@ build_info() ->
 handle(NodeMsg, RawRequest) ->
     ?event({singleton_tabm_request, RawRequest}),
     NormRequest = hb_singleton:from(RawRequest, NodeMsg),
-    ?event(
-        http,
-        {request,
-            hb_cache:ensure_all_loaded(
-                hb_ao:normalize_keys(NormRequest, NodeMsg),
-                NodeMsg
-            )
-        }
-    ),
+    %% Log the raw singleton. Building an `ensure_all_loaded' form here forced
+    %% store reads on every request even when the `http' topic is off, because
+    %% the `?event' macro evaluates its argument eagerly.
+    ?event(http, {request, NormRequest}),
     case hb_opts:get(initialized, false, NodeMsg) of
         false ->
             Res =
