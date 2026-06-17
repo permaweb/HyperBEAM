@@ -327,7 +327,6 @@ block_range_to_offset_range(Heights, Opts) ->
                         BlockSize = hb_util:int(
                             hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
                         WeaveSize - BlockSize;
-                    not_found -> 0;
                     {error, not_found} -> 0
                 end
         end,
@@ -340,7 +339,6 @@ block_range_to_offset_range(Heights, Opts) ->
                         hb_util:int(
                             hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
                         );
-                    not_found -> infinity;
                     {error, not_found} -> infinity
                 end
         end,
@@ -368,7 +366,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
@@ -379,7 +377,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end
     end.
 
