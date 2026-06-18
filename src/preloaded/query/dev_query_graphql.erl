@@ -109,11 +109,7 @@ handle(_Base, RawReq, Opts) ->
     ?event({request, {processed, Req}}),
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
     OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
-    Vars = 
-        hb_message:uncommitted_deep(
-            hb_maps:get(<<"variables">>, Req, #{}, Opts),
-            Opts
-        ),
+    Vars = graphql_variables(Req, RawReq, Opts),
     ?event(
         {graphql_run_called,
             {query, Query},
@@ -136,6 +132,7 @@ handle(_Base, RawReq, Opts) ->
                 Ctx =
                     #{
                         params => Coerced,
+                        variables => Vars,
                         operation_name => OpName,
                         default_timeout =>
                             hb_opts:get(
@@ -143,7 +140,7 @@ handle(_Base, RawReq, Opts) ->
                                 ?DEFAULT_QUERY_TIMEOUT,
                                 Opts
                             ),
-                        opts => Opts
+                        opts => Opts#{ <<"graphql-variables">> => Vars }
                     },
                 ?event(graphql_context_created),
                 Response = graphql:execute(Ctx, AST2),
@@ -167,7 +164,12 @@ handle(_Base, RawReq, Opts) ->
 %% GraphQL library. We split the resolution flows into two separated functions:
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
-execute(#{opts := Opts}, Obj, Field, Args) ->
+execute(Ctx = #{opts := Opts}, Obj, Field, RawArgs) ->
+    Args =
+        fill_variable_args(
+            RawArgs,
+            maps:get(<<"graphql-variables">>, Opts, maps:get(variables, Ctx, #{}))
+        ),
     ?event({graphql_query, {object, Obj}, {field, Field}, {args, Args}}),
     case lists:member(Field, ?MESSAGE_QUERY_KEYS) of
         true -> message_query(Obj, Field, Args, Opts);
@@ -239,6 +241,64 @@ message_query(Msg, <<"cursor">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"cursor">>, Msg, hb_util:bin(hb_maps:get(<<"offset">>, Msg, <<>>, Opts)), Opts)};
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
+
+graphql_variables(Req, RawReq, Opts) ->
+    Vars =
+        case hb_maps:find(<<"variables">>, Req, Opts) of
+            {ok, Found} -> Found;
+            error -> variables_from_body(RawReq, Opts)
+        end,
+    normalize_variables(Vars, Opts).
+
+normalize_variables(Vars, Opts) ->
+    try
+        Loaded = hb_cache:ensure_all_loaded(
+            hb_cache:ensure_loaded(Vars, Opts),
+            Opts
+        ),
+        case Loaded of
+            Msg when is_map(Msg) ->
+                hb_cache:ensure_all_loaded(
+                    hb_message:uncommitted_deep(Msg, Opts),
+                    Opts
+                );
+            _ ->
+                #{}
+        end
+    catch
+        _:_ -> #{}
+    end.
+
+variables_from_body(RawReq, Opts) ->
+    case hb_maps:find(<<"body">>, RawReq, Opts) of
+        {ok, Body} when is_binary(Body) ->
+            try hb_json:decode(Body) of
+                Decoded when is_map(Decoded) ->
+                    maps:get(<<"variables">>, Decoded, #{});
+                _ ->
+                    #{}
+            catch
+                _:_ -> #{}
+            end;
+        _ ->
+            #{}
+    end.
+
+%% @doc The GraphQL library can pass `null' to resolvers for variable-backed
+%% arguments. Recover the decoded request variables at the HyperBEAM boundary.
+fill_variable_args(Args, Vars) when is_map(Args), is_map(Vars) ->
+    maps:map(
+        fun(Key, null) ->
+            maps:get(Key, Vars, null);
+        (_Key, Value) when is_map(Value) ->
+            fill_variable_args(Value, Vars);
+        (_Key, Value) ->
+            Value
+        end,
+        Args
+    );
+fill_variable_args(Args, _Vars) ->
+    Args.
 
 keys_to_template(Keys) ->
     maps:from_list(lists:foldl(

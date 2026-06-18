@@ -1,5 +1,8 @@
 %%% @doc Extract Dialyzer-style type information from AO-Core devices and apply
 %%% a static `vary` transform to base and request messages.
+%%%
+%%% Vary specs use `_' or `map()' for pass-through, `#{}' for no explicit
+%%% keys, and `#{ _ => _ }' for all keys.
 -module(hb_types).
 -export([extract/2, vary/5, vary/7, preserves_message_extension/6]).
 -include("include/hb.hrl").
@@ -120,12 +123,21 @@ cached_extract(Module, Opts) ->
 
 extract_cache_path(Module) ->
     ModuleBin = atom_to_binary(Module, utf8),
-    BeamHash =
-        case code:get_object_code(Module) of
-            {Module, Beam, _Filename} -> hb_util:encode(hb_crypto:sha256(Beam));
-            _ -> hb_util:encode(Module:module_info(md5))
-        end,
+    BeamHash = module_beam_hash(Module),
     hb_path:to_binary([<<"ao-core">>, <<"device-", ModuleBin/binary>>, BeamHash]).
+
+module_beam_hash(Module) ->
+    case hb_device_archive:object_code(Module) of
+        undefined ->
+            case code:get_object_code(Module) of
+                {Module, Beam, _Filename} ->
+                    hb_util:encode(hb_crypto:sha256(Beam));
+                _ ->
+                    hb_util:encode(Module:module_info(md5))
+            end;
+        Beam ->
+            hb_util:encode(hb_crypto:sha256(Beam))
+    end.
 
 read_cached_extract(Path, Opts) ->
     try hb_store:read(Path, hb_store:scope(Opts, local)) of
@@ -177,14 +189,14 @@ do_extract(Module) ->
     end.
 
 module_beam(Module) ->
-    case code:get_object_code(Module) of
-        {Module, Binary, _Filename} ->
-            Binary;
-        _ ->
-            case hb_device_archive:object_code(Module) of
-                undefined -> code:which(Module);
-                Binary -> Binary
-            end
+    case hb_device_archive:object_code(Module) of
+        undefined ->
+            case code:get_object_code(Module) of
+                {Module, Binary, _Filename} -> Binary;
+                _ -> code:which(Module)
+            end;
+        Binary ->
+            Binary
     end.
 
 build_type_env(Forms) ->
@@ -781,8 +793,8 @@ variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_
 message_type(AllKeys) ->
     Wildcard = maps:get(<<"_">>, AllKeys, undefined),
     ?event(apply_schema, {message_type, {all_keys, AllKeys}, {wildcard, Wildcard}}),
-    % If the `_` key is exactly the literal `_`, pass through unmatched keys.
-    % Otherwise, only maintain explicitly declared keys.
+    % `#{ _ => _ }' passes through unmatched keys. `#{}' and other message
+    % specs only maintain explicitly declared keys.
     #{
         <<"kind">> => <<"message">>,
         <<"keys">> => maps:without([<<"_">>], AllKeys),
@@ -1070,6 +1082,63 @@ unschematized_key_wrong_type_is_unchanged_test() ->
             #{},
             #{ <<"outer">> => #{ <<"slot">> => <<"1">> }},
             Opts
+        )
+    ).
+
+vary_on_nothing_passes_messages_through_test() ->
+    Opts = test_opts(),
+    Base =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"a">> => <<"1">>,
+            <<"nested">> => #{ <<"b">> => <<"2">> }
+        },
+    Req =
+        #{
+            <<"path">> => <<"pass-through">>,
+            <<"slot">> => <<"1">>,
+            <<"extra">> => #{ <<"c">> => <<"3">> }
+        },
+    ?assertEqual(
+        {ok, Base, Req},
+        vary(
+            <<"test-device@1.0">>,
+            <<"pass-through">>,
+            Base,
+            Req,
+            Opts
+        )
+    ).
+
+wildcard_message_does_not_preserve_extension_test() ->
+    ?assertEqual(
+        false,
+        schema_preserves_message_extension(
+            message_type(
+                #{
+                    <<"_">> =>
+                        #{
+                            <<"presence">> => optional,
+                            <<"type">> => any_type()
+                        }
+                }
+            )
+        )
+    ).
+
+explicit_extension_preserves_extension_test() ->
+    ?assertEqual(
+        true,
+        schema_preserves_message_extension(
+            message_type(
+                #{
+                    <<"...">> =>
+                        #{
+                            <<"presence">> => optional,
+                            <<"type">> => any_type()
+                        }
+                }
+            )
         )
     ).
 

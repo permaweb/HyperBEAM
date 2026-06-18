@@ -59,9 +59,10 @@ to(Device, RawTABM, Req, FieldsFun, ExcludedTagsFun, Opts) ->
     MaybeCommitment =
         select_commitment(CommitmentSpec, RawTABM, IsBundle, MaybeCommitment0, Opts),
     MaybeBundle =
-        maybe_load(
+        prepare_tabm(
             RawTABM,
-            requested_bundle(Req, Opts),
+            MaybeCommitment,
+            Req,
             Opts#{ <<"hint-device">> => Device }
         ),
     Data = data(
@@ -562,6 +563,59 @@ preferred_commitment_from_candidates(Candidates, Opts) ->
 
 %% @doc Determine if the message should be loaded from the cache and re-converted
 %% to the TABM format. We do this if the `bundle' key is set to true.
+prepare_tabm(RawTABM, MaybeCommitment, Req, Opts) ->
+    case existing_unbundled_nested_commitment(MaybeCommitment, RawTABM, Opts) of
+        {true, CommitmentID, Commitment} ->
+            linkify_unbundled_view(RawTABM, CommitmentID, Commitment, Opts);
+        false ->
+            maybe_load(RawTABM, requested_bundle(Req, Opts), Opts)
+    end.
+
+existing_unbundled_nested_commitment({ok, CommitmentID, Commitment}, RawTABM, Opts) ->
+    case
+        not hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
+            andalso map_size(non_payload_data_messages(RawTABM, Opts)) > 0
+    of
+        true -> {true, CommitmentID, Commitment};
+        false -> false
+    end;
+existing_unbundled_nested_commitment(_, _RawTABM, _Opts) ->
+    false.
+
+non_payload_data_messages(TABM, Opts) ->
+    hb_maps:without(
+        [inline_key(TABM), <<"body">>, <<"data">>],
+        data_messages(TABM, Opts),
+        Opts
+    ).
+
+linkify_unbundled_view(RawTABM, CommitmentID, Commitment, Opts) ->
+    LoadOpts =
+        Opts#{
+            <<"linkify-mode">> => offload,
+            <<"load-all-commitments">> => true,
+            linkify_mode => offload
+        },
+    Structured = hb_message:convert(RawTABM, <<"structured@1.0">>, tabm, LoadOpts),
+    Loaded = hb_cache:ensure_all_loaded(Structured, LoadOpts),
+    SourceSpec0 =
+        #{
+            <<"device">> => <<"structured@1.0">>,
+            <<"bundle">> => false
+        },
+    SourceSpec =
+        case hb_opts:get(<<"hint-device">>, undefined, LoadOpts) of
+            undefined -> SourceSpec0;
+            HintDevice -> SourceSpec0#{ <<"hint-device">> => HintDevice }
+        end,
+    LinkifiedTABM = hb_message:convert(Loaded, tabm, SourceSpec, LoadOpts),
+    replace_commitments_recursive(
+        LinkifiedTABM,
+        RawTABM#{
+            <<"commitments">> => #{ CommitmentID => Commitment }
+        }
+    ).
+
 maybe_load(RawTABM, true, Opts) ->
     % Convert back to the fully loaded structured@1.0 message, then
     % convert to TABM with bundling enabled.
@@ -764,6 +818,7 @@ tags(#tx{ tags = ExistingTags }, _, _, _, _) when ExistingTags =/= [] ->
     ExistingTags;
 tags(TX, MaybeCommitment, TABM, ExcludedTagKeys, Opts) ->
     CommittedTagKeys = committed_tag_keys(MaybeCommitment, TABM, Opts),
+    DataKey = committed_inline_key(CommittedTagKeys, TX, TABM, Opts),
     DataKeysToExclude =
         case TX#tx.data of
             Data when is_map(Data)-> maps:keys(Data);
@@ -774,7 +829,18 @@ tags(TX, MaybeCommitment, TABM, ExcludedTagKeys, Opts) ->
         CommittedTagKeys
     ),
     bundle_tags_to_tags(MaybeCommitment) ++
-        committed_tag_keys_to_tags(TABM, TagKeys, Opts).
+        committed_tag_keys_to_tags(TABM, DataKey, TagKeys, Opts).
+
+committed_inline_key(CommittedKeys, _TX, TABM, Opts) ->
+    DataKey = inline_key(TABM),
+    case
+        DataKey =:= <<"data">>
+            andalso lists:member(<<"body">>, CommittedKeys)
+            andalso not hb_maps:is_key(<<"body">>, TABM, Opts)
+    of
+        true -> <<"body">>;
+        false -> DataKey
+    end.
 
 committed_tag_keys({ok, _, Commitment}, TABM, Opts) ->
     lists:map(
@@ -822,8 +888,7 @@ exclude_anchor_tag(TX, TABM, Opts) ->
     end.
 
 %% @doc Apply the `ao-data-key' to the committed keys.
-committed_tag_keys_to_tags(TABM, Committed, Opts) ->
-    DataKey = inline_key(TABM),
+committed_tag_keys_to_tags(TABM, DataKey, Committed, Opts) ->
     ?event(
         {tags_before_data_key,
             {tag_keys, Committed},

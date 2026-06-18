@@ -97,7 +97,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
         end,
     {Types, Values} = lists:foldl(
         fun (Key, {Types, Values}) ->
-            case hb_maps:find(Key, NormKeysMap, Opts) of
+            case find_encoded_key(Key, NormKeysMap, Opts) of
                 {ok, Value} when is_binary(Value) ->
                     {Types, [{Key, Value} | Values]};
                 {ok, Nested} when is_map(Nested) orelse is_list(Nested) ->
@@ -183,6 +183,12 @@ from(Msg, Req, Opts) when is_map(Msg) ->
         end
     };
 from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
+
+find_encoded_key(Key, Msg, Opts) ->
+    case hb_opts:get(<<"preserve-message-extension">>, false, Opts) of
+        true -> maps:find(Key, Msg);
+        false -> hb_maps:find(Key, Msg, Opts)
+    end.
 
 %% @doc Find the types that should be encoded from the request and options.
 find_encode_types(Req, _Opts) ->

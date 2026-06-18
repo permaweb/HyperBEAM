@@ -1090,12 +1090,13 @@ req_to_tabm_singleton(Req, Body, Opts) ->
         Codec ->
             % Assume that the codec stores the encoded message in the `body' field.
             ?event(debug_http, {decoding_body, {codec, Codec}, {body, {string, Body}}}),
+            DecodeOpts = http_body_decode_opts(Codec, Opts),
             Decoded =
                 hb_message:convert(
                     Body,
                     <<"structured@1.0">>,
                     Codec,
-                    Opts
+                    DecodeOpts
                 ),
             ReqMessage = hb_maps:merge(PrimitiveMsg, Decoded, Opts),
             ?event(debug_http,
@@ -1112,6 +1113,11 @@ req_to_tabm_singleton(Req, Body, Opts) ->
                     throw({invalid_commitment, ReqMessage})
             end
     end.
+
+http_body_decode_opts(<<"json@1.0">>, Opts) ->
+    Opts#{ <<"linkify-mode">> => false };
+http_body_decode_opts(_Codec, Opts) ->
+    Opts.
 
 %% @doc HTTPSig messages are inherently mixed into the transport layer, so they
 %% require special handling in order to be converted to a normalized message.
@@ -1541,7 +1547,8 @@ ans104_wasm_test() ->
     skip.
 
 send_large_signed_request_test() ->
-    Opts = #{ <<"priv-wallet">> => hb:wallet() },
+    Store = hb_test_utils:test_store(),
+    Opts = #{ <<"priv-wallet">> => hb:wallet(), <<"store">> => Store },
     Req =
         hb_cache:ensure_all_loaded(
             hb_message:commit(
@@ -1567,15 +1574,14 @@ send_large_signed_request_test() ->
         ),
     % Get the short trace length from the node message in the large, stored
     % request.
-    ?assertMatch(
-        {ok, 5},
+    Res =
         post(
-            hb_http_server:start_node(),
+            hb_http_server:start_node(#{ <<"store">> => Store }),
             <<"/node-message/short-trace-len">>,
             Req,
-            #{ <<"http-client">> => gun }
-        )
-    ).
+            Opts#{ <<"http-client">> => gun }
+        ),
+    ?assertMatch({ok, 5}, Res).
 
 index_test() ->
     NodeURL = hb_http_server:start_node(),

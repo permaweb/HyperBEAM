@@ -689,8 +689,14 @@ run_nested_unbundled_bundle_test(Variant) ->
         }
     ),
     try
-        ClientOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
-        NodeOpts2 = maps:merge(NodeOpts, #{ <<"bundler-max-items">> => 3 }),
+        ClientOpts = #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
+        },
+        NodeOpts2 = maps:merge(NodeOpts, #{
+            <<"bundler-max-items">> => 3,
+            <<"store-all-signed">> => false
+        }),
         Node = hb_http_server:start_node(NodeOpts2#{
             <<"priv-wallet">> => ar_wallet:new(),
             <<"store">> => hb_test_utils:test_store()

@@ -5,6 +5,7 @@
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
 -export([varied/3, varied_request/3, compute_nested/3, compute_all/3]).
+-export([pass_through/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -136,6 +137,11 @@ compute_all(Base, Req, Opts) ->
 ) -> {ok, #{ nested := #{ all := binary() }, _ => _ }}.
 compute_all_nested(Base, Req, Opts) ->
     {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
+
+-spec pass_through(_, map(), _) -> {ok, #{ _ => _ }}.
+pass_through(Base, Req, _Opts) ->
+    {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
+
 %% @doc Example `init/3' handler. Sets the `Already-Seen' key to an empty list.
 -spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'already-seen' := list(), _ => _ }}.

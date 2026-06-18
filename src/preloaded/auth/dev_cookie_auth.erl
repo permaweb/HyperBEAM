@@ -125,7 +125,7 @@ verify(Base, Req = #{ <<"secret">> := Secret }, RawOpts) ->
         #{ <<"device">> => <<"httpsig@1.0">> },
         Req#{
             <<"path">> => <<"proxy-verify">>,
-            <<"secret">> => hb_util:decode(Secret),
+            <<"secret">> => Secret,
             <<"message">> => Base
         },
         Opts
@@ -153,7 +153,7 @@ verify_with_secret(Secret, Base, Request, Opts) ->
         #{ <<"device">> => <<"httpsig@1.0">> },
         Request#{
             <<"path">> => <<"proxy-verify">>,
-            <<"secret">> => hb_util:decode(Secret),
+            <<"secret">> => Secret,
             <<"message">> => Base
         },
         Opts

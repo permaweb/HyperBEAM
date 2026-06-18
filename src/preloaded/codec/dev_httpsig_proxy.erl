@@ -75,4 +75,33 @@ verify(Secret, Base, RawReq, Opts) ->
             <<"secret">> => Secret
         },
     ?event({proxy_request, {priv_request, ProxyRequest}}),
-    {ok, hb_message:verify(Base, ProxyRequest, Opts)}.
+    {ok, hb_message:verify(proxy_base(Base, RawReq), ProxyRequest, Opts)}.
+
+proxy_base(Base = #{ <<"commitments">> := Commitments }, Req) ->
+    IDs = proxy_commitment_ids(Req, Commitments),
+    Base#{
+        <<"commitments">> =>
+            maps:map(
+                fun(ID, Commitment) ->
+                    case lists:member(ID, IDs) of
+                        true ->
+                            Commitment#{
+                                <<"commitment-device">> => <<"httpsig@1.0">>
+                            };
+                        false ->
+                            Commitment
+                    end
+                end,
+                Commitments
+            )
+    };
+proxy_base(Base, _Req) ->
+    Base.
+
+proxy_commitment_ids(Req, Commitments) ->
+    case maps:get(<<"commitment-ids">>, Req, maps:keys(Commitments)) of
+        <<"all">> -> maps:keys(Commitments);
+        <<"none">> -> [];
+        IDs when is_list(IDs) -> IDs;
+        ID -> [ID]
+    end.

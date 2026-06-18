@@ -396,7 +396,10 @@ verify(Self, Req, Opts) ->
             },
             false
         ),
-    BaseViewOpts = VerifyOpts#{ <<"linkify-mode">> => false },
+    BaseViewOpts = VerifyOpts#{
+        <<"linkify-mode">> => false,
+        <<"preserve-message-extension">> => true
+    },
     {Base, BaseOpts} =
         case needs_loaded_bundle_view(RawWithCommitments, VerifyOpts) of
             true ->
@@ -491,6 +494,13 @@ commitment_verify_view(RawBase, DefaultBase, Commitment, Opts) ->
     ) of
         true -> loaded_bundle_verify_view(RawBase, Opts);
         false ->
+            ConvertOpts =
+                commitment_convert_opts(
+                    RawBase,
+                    DefaultBase,
+                    Commitment,
+                    Opts
+                ),
             SourceSpec =
                 hb_message:add_bundle_hint(
                     #{ <<"device">> => <<"structured@1.0">> },
@@ -502,9 +512,27 @@ commitment_verify_view(RawBase, DefaultBase, Commitment, Opts) ->
                                 undefined
                             )
                     },
-                    Opts
+                    ConvertOpts
                 ),
-            {hb_message:convert(RawBase, tabm, SourceSpec, Opts), Opts}
+            {hb_message:convert(RawBase, tabm, SourceSpec, ConvertOpts), Opts}
+    end.
+
+commitment_convert_opts(RawBase, DefaultBase, Commitment, Opts) ->
+    PreserveOpts = Opts#{ <<"preserve-message-extension">> => true },
+    case hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts)) of
+        true ->
+            case
+                commitment_has_linked_fields(RawBase, Commitment, Opts)
+                    orelse commitment_has_linked_fields(
+                        DefaultBase,
+                        Commitment,
+                        Opts
+                    )
+            of
+                true -> PreserveOpts;
+                false -> Opts#{ <<"linkify-mode">> => false }
+            end;
+        false -> Opts
     end.
 
 loaded_bundle_verify_view(Msg, Opts) ->
@@ -598,15 +626,32 @@ numbered_committed_key(Key) ->
         _:_ -> false
     end.
 
-commitment_needs_loaded_bundle_view(RawBase, DefaultBase, Commitment, Opts) ->
+commitment_needs_loaded_bundle_view(RawBase, _DefaultBase, Commitment, Opts) ->
     original_tagged_bundle_commitment(Commitment, Opts)
-        orelse bundle_commitment_has_linked_fields(RawBase, Commitment, Opts)
-        orelse bundle_commitment_has_linked_fields(DefaultBase, Commitment, Opts)
+        orelse direct_bundle_commitment_has_linked_fields(
+            RawBase,
+            Commitment,
+            Opts
+        )
         orelse needs_loaded_bundle_view(RawBase, Opts).
 
-bundle_commitment_has_linked_fields(Msg, Commitment, Opts) ->
+direct_bundle_commitment_has_linked_fields(Msg, Commitment, Opts) ->
     hb_util:atom(hb_maps:get(<<"bundle">>, Commitment, false, Opts))
-        andalso commitment_has_linked_fields(Msg, Commitment, Opts).
+        andalso is_map(Msg)
+        andalso lists:any(
+            fun(Key) -> direct_committed_field_has_link(Msg, Key) end,
+            committed_keys_for_commitment(Commitment, Opts)
+        ).
+
+direct_committed_field_has_link(Msg, Key) when is_map(Msg) ->
+    BinKey = hb_util:bin(Key),
+    LinkKey = <<BinKey/binary, "+link">>,
+    case maps:find(BinKey, Msg) of
+        {ok, Value} -> ?IS_LINK(Value);
+        error -> maps:is_key(LinkKey, Msg)
+    end;
+direct_committed_field_has_link(_Msg, _Key) ->
+    false.
 
 commitment_has_linked_fields(Msg, Commitment, Opts) ->
     is_map(Msg)
