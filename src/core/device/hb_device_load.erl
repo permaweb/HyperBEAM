@@ -25,6 +25,7 @@
 -module(hb_device_load).
 -export([reference/2]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc A message is already a device. A binary reference is resolved,
 %% then memoised in the process cache unless it is a forge seed.
@@ -182,6 +183,7 @@ preloaded(Opts) ->
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
+        TrustedSigners = trusted_signer_entries(Ref, SpecID, Opts),
         LocalIterators =
             [
                 fun() ->
@@ -192,25 +194,25 @@ from_low_trust(Ref, Opts) ->
                 end
             ],
         RemoteIterators =
-            case hb_opts:get(<<"load-remote-devices">>, false, Opts) of
-                true ->
+            case {hb_opts:get(<<"load-remote-devices">>, false, Opts), TrustedSigners} of
+                {true, [_ | _]} ->
                     [
                         fun() ->
                             hb_util:ok_or(
                                 hb_client_gateway:device(
                                     SpecID,
-                                    trusted_signer_entries(Opts),
+                                    TrustedSigners,
                                     Opts
                                 ),
                                 []
                             )
                         end
                     ];
-                false ->
+                _ ->
                     []
             end,
         lazy_first(
-            fun(ID) -> verify_and_load(SpecID, ID, Opts) end,
+            fun(ID) -> verify_and_load(Ref, SpecID, ID, Opts) end,
             LocalIterators ++ RemoteIterators
         )
     end.
@@ -231,7 +233,7 @@ resolve_spec(Ref, Opts) ->
 
 %% @doc A low-trust implementation must be signed by a trusted signer,
 %% implement the requested specification, and be machine-compatible.
-verify_and_load(SpecID, ID, Opts) ->
+verify_and_load(Ref, SpecID, ID, Opts) ->
     maybe
         {ok, Msg} ?= hb_cache:read(ID, Opts),
         Signers = signers(Msg, Opts),
@@ -240,7 +242,7 @@ verify_and_load(SpecID, ID, Opts) ->
                 orelse {error, <<"implementation-signature-invalid">>},
         true ?=
             lists:any(
-                fun(S) -> lists:member(S, trusted_signers(Opts)) end,
+                fun(S) -> lists:member(S, trusted_signers(Ref, SpecID, Opts)) end,
                 Signers
             ) orelse {error, <<"device-signer-untrusted">>},
         ok ?= implements(SpecID, Msg, Opts),
@@ -313,15 +315,24 @@ signers(Msg, Opts) ->
         ),
         Opts
     ).
+
 %% @doc Trusted signers, defaulting to the node's own address.
 %% Computed lazily so the default config need not call `hb:address/0'.
-trusted_signers(Opts) ->
+trusted_signers(Ref, SpecID, Opts) ->
     [
         Address
     ||
-        Signer <- trusted_signer_entries(Opts),
+        Signer <- trusted_signer_entries(Ref, SpecID, Opts),
         Address <- [trusted_signer_address(Signer, Opts)],
         Address =/= undefined
+    ].
+
+trusted_signer_entries(Ref, SpecID, Opts) ->
+    [
+        Signer
+    ||
+        Signer <- trusted_signer_entries(Opts),
+        trusted_signer_accepts(Ref, SpecID, Signer, Opts)
     ].
 
 trusted_signer_entries(Opts) ->
@@ -330,12 +341,48 @@ trusted_signer_entries(Opts) ->
         Signers when is_list(Signers) -> Signers
     end.
 
+trusted_signer_accepts(_Ref, _SpecID, Signer, _Opts) when is_binary(Signer) ->
+    true;
+trusted_signer_accepts(Ref, SpecID, Signer, Opts) when is_map(Signer) ->
+    case hb_maps:get(<<"accepted-packages">>, Signer, undefined, Opts) of
+        undefined -> true;
+        Packages when is_list(Packages) ->
+            lists:member(Ref, Packages) orelse lists:member(SpecID, Packages);
+        _ ->
+            false
+    end;
+trusted_signer_accepts(_Ref, _SpecID, _Signer, _Opts) ->
+    false.
+
 trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
     Signer;
 trusted_signer_address(Signer, Opts) when is_map(Signer) ->
     hb_maps:get(<<"address">>, Signer, undefined, Opts);
 trusted_signer_address(_Signer, _Opts) ->
     undefined.
+
+trusted_signer_accepted_packages_test() ->
+    Ref = <<"copycat@1.0">>,
+    SpecID = <<"SPEC_ID">>,
+    ?assertEqual(
+        [<<"plain">>, <<"unscoped">>, <<"by-ref">>, <<"by-spec">>],
+        trusted_signers(
+            Ref,
+            SpecID,
+            #{
+                <<"trusted-device-signers">> => [
+                    <<"plain">>,
+                    #{<<"address">> => <<"unscoped">>},
+                    #{<<"address">> => <<"by-ref">>, <<"accepted-packages">> => [Ref]},
+                    #{<<"address">> => <<"by-spec">>, <<"accepted-packages">> => [SpecID]},
+                    #{
+                        <<"address">> => <<"other">>,
+                        <<"accepted-packages">> => [<<"arweave@2.9">>]
+                    }
+                ]
+            }
+        )
+    ).
 
 %% @doc Every `requires-*' key must match this machine's `system_info'.
 compatible(Msg, Opts) ->
