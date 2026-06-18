@@ -219,12 +219,18 @@ device_result([{Query, Variables} | Rest], Opts) ->
     end.
 
 device_queries(SpecID, TrustedSigners, Opts) ->
-    Policies = hb_opts:get(trusted_device_signer_policies, #{}, Opts),
     SignerPolicies =
-        [{Signer, signer_expiry_height(Signer, Policies, Opts)}
-            || Signer <- TrustedSigners],
+        [
+            {Address, signer_valid_until_height(Signer, Opts)}
+        ||
+            Signer <- TrustedSigners,
+            Address <- [trusted_signer_address(Signer, Opts)],
+            Address =/= undefined
+        ],
     case lists:any(fun({_Signer, Height}) -> Height =/= undefined end, SignerPolicies) of
-        false -> [device_query(SpecID, TrustedSigners, undefined)];
+        false ->
+            Signers = [Signer || {Signer, _Height} <- SignerPolicies],
+            [device_query(SpecID, Signers, undefined)];
         true ->
             [
                 device_query(SpecID, [Signer], Height)
@@ -233,30 +239,34 @@ device_queries(SpecID, TrustedSigners, Opts) ->
             ]
     end.
 
-signer_expiry_height(Signer, Policies, Opts) ->
-    case hb_maps:get(Signer, Policies, undefined, Opts) of
-        Policy when is_map(Policy) ->
-            case hb_maps:get(<<"expiry-height">>, Policy, undefined, Opts) of
-                undefined -> undefined;
-                Height -> hb_util:int(Height)
-            end;
-        _ ->
-            undefined
-    end.
+trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
+    Signer;
+trusted_signer_address(Signer, Opts) when is_map(Signer) ->
+    hb_maps:get(<<"address">>, Signer, undefined, Opts);
+trusted_signer_address(_Signer, _Opts) ->
+    undefined.
 
-device_query(SpecID, TrustedSigners, ExpiryHeight) ->
+signer_valid_until_height(Signer, Opts) when is_map(Signer) ->
+    case hb_maps:get(<<"valid-until-height">>, Signer, undefined, Opts) of
+        undefined -> undefined;
+        Height -> hb_util:int(Height)
+    end;
+signer_valid_until_height(_Signer, _Opts) ->
+    undefined.
+
+device_query(SpecID, TrustedSigners, ValidUntilHeight) ->
     BlockFilter =
-        case ExpiryHeight of
+        case ValidUntilHeight of
             undefined -> <<>>;
-            _ -> <<"block: { max: $expiryHeight }, ">>
+            _ -> <<"block: { max: $validUntilHeight }, ">>
         end,
-    ExpiryVar =
-        case ExpiryHeight of
+    ValidUntilVar =
+        case ValidUntilHeight of
             undefined -> <<>>;
-            _ -> <<", $expiryHeight: Int">>
+            _ -> <<", $validUntilHeight: Int">>
         end,
     Query =
-        <<"query($specid: [String!], $trusted: [String!]", ExpiryVar/binary, ") { ",
+        <<"query($specid: [String!], $trusted: [String!]", ValidUntilVar/binary, ") { ",
                 "transactions(",
                 "owners: $trusted, ",
                 "tags: { name: \"implements-device\" values: $specid }, ",
@@ -270,9 +280,9 @@ device_query(SpecID, TrustedSigners, ExpiryHeight) ->
         "}">>,
     Variables0 = #{ <<"trusted">> => TrustedSigners, <<"specid">> => [SpecID] },
     Variables =
-        case ExpiryHeight of
+        case ValidUntilHeight of
             undefined -> Variables0;
-            _ -> Variables0#{ <<"expiryHeight">> => ExpiryHeight }
+            _ -> Variables0#{ <<"validUntilHeight">> => ValidUntilHeight }
         end,
     {Query, Variables}.
 
@@ -504,28 +514,27 @@ subindex_to_tags(Subindex) ->
     <<"[", ListInner/binary, "]">>.
 
 %%% Tests
-device_expiry_height_query_test() ->
+device_valid_until_height_query_test() ->
     SpecID = <<"spec">>,
     Alice = <<"alice">>,
     Bob = <<"bob">>,
     [{BaseQuery, BaseVars}] = device_queries(SpecID, [Alice, Bob], #{}),
     ?assertEqual([Alice, Bob], maps:get(<<"trusted">>, BaseVars)),
-    ?assertEqual(nomatch, binary:match(BaseQuery, <<"expiryHeight">>)),
-    Opts =
-        #{
-            <<"trusted-device-signer-policies">> =>
-                #{ Alice => #{ <<"expiry-height">> => 1543210 } }
-        },
+    ?assertEqual(nomatch, binary:match(BaseQuery, <<"validUntilHeight">>)),
     [{AliceQuery, AliceVars}, {BobQuery, BobVars}] =
-        device_queries(SpecID, [Alice, Bob], Opts),
+        device_queries(
+            SpecID,
+            [#{ <<"address">> => Alice, <<"valid-until-height">> => 1543210 }, Bob],
+            #{}
+        ),
     ?assertEqual([Alice], maps:get(<<"trusted">>, AliceVars)),
-    ?assertEqual(1543210, maps:get(<<"expiryHeight">>, AliceVars)),
+    ?assertEqual(1543210, maps:get(<<"validUntilHeight">>, AliceVars)),
     ?assert(
-        binary:match(AliceQuery, <<"block: { max: $expiryHeight }">>)
+        binary:match(AliceQuery, <<"block: { max: $validUntilHeight }">>)
             =/= nomatch
     ),
     ?assertEqual([Bob], maps:get(<<"trusted">>, BobVars)),
-    ?assertEqual(nomatch, binary:match(BobQuery, <<"expiryHeight">>)).
+    ?assertEqual(nomatch, binary:match(BobQuery, <<"validUntilHeight">>)).
 
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.

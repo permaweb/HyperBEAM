@@ -199,7 +199,7 @@ from_low_trust(Ref, Opts) ->
                             hb_util:ok_or(
                                 hb_client_gateway:device(
                                     SpecID,
-                                    trusted_signers(Opts),
+                                    trusted_signer_entries(Opts),
                                     Opts
                                 ),
                                 []
@@ -316,10 +316,26 @@ signers(Msg, Opts) ->
 %% @doc Trusted signers, defaulting to the node's own address.
 %% Computed lazily so the default config need not call `hb:address/0'.
 trusted_signers(Opts) ->
+    [
+        Address
+    ||
+        Signer <- trusted_signer_entries(Opts),
+        Address <- [trusted_signer_address(Signer, Opts)],
+        Address =/= undefined
+    ].
+
+trusted_signer_entries(Opts) ->
     case hb_opts:get(trusted_device_signers, [], Opts) of
         [] -> [hb:address()];
         Signers when is_list(Signers) -> Signers
     end.
+
+trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
+    Signer;
+trusted_signer_address(Signer, Opts) when is_map(Signer) ->
+    hb_maps:get(<<"address">>, Signer, undefined, Opts);
+trusted_signer_address(_Signer, _Opts) ->
+    undefined.
 
 %% @doc Every `requires-*' key must match this machine's `system_info'.
 compatible(Msg, Opts) ->
