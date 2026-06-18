@@ -715,8 +715,8 @@ load_paths([P | Rest], Opts, Acc) ->
 %% @doc Convert a path to a device from its file extension. If no extension is
 %% provided, we default to `flat@1.0'.
 path_to_device(Path) ->
-    case binary:split(hb_util:bin(Path), <<".">>, []) of
-        [_, Extension] ->
+    case filename:extension(hb_util:bin(Path)) of
+        <<".", Extension/binary>> when byte_size(Extension) > 0 ->
             ?event(debug_node_msg,
                 {path_to_device,
                     {path, Path},
@@ -724,7 +724,7 @@ path_to_device(Path) ->
                 }
             ),
             extension_to_device(Extension);
-        _ -> {ok, <<"flat@1.0">>}
+        <<>> -> {ok, <<"flat@1.0">>}
     end.
 
 %% @doc Convert a file extension to a device name. Configuration files
@@ -1063,6 +1063,21 @@ load_json_test() ->
         [#{ <<"store-module">> := hb_store_fs }|_],
         hb_maps:get(<<"store">>, Conf)
     ).
+
+load_json_dotted_path_test() ->
+    Dir = "test/.hb-config-dotted",
+    Path = filename:join(Dir, "config.json"),
+    ok = filelib:ensure_dir(Path),
+    {ok, Bin} = file:read_file("test/config.json"),
+    ok = file:write_file(Path, Bin),
+    try
+        {ok, Conf} = load(Path, #{}),
+        ?assertEqual(1234, hb_maps:get(<<"port">>, Conf)),
+        ?assertEqual(9001, hb_maps:get(<<"example">>, Conf))
+    after
+        file:delete(Path),
+        file:del_dir(Dir)
+    end.
 
 load_multi_precedence_test() ->
     %% Two sources via a comma-separated path. Each is parsed and type-coerced
