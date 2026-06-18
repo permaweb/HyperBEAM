@@ -38,6 +38,10 @@ two_node_blob_read_verifies_and_caches_test() ->
         Loaded = hb_cache:ensure_all_loaded(Msg),
         ?assertEqual(Bytes, maps:get(<<"data">>, Loaded)),
         ?assertEqual(Hash, maps:get(<<"blob-hash">>, Loaded)),
+        ?assertEqual(
+            hb_lbry_commitment:content_digest_sha384(Bytes),
+            maps:get(<<"content-digest">>, Loaded)
+        ),
         % The boundary keeps only the native LBRY commitments: node B's own
         % HTTP response signatures are neither required nor trusted.
         ?assertEqual(
@@ -67,13 +71,15 @@ two_node_blob_read_verifies_and_caches_test() ->
                 LocalOpts
             )
         ),
-        ?assertMatch(
-            {ok, _},
+        {ok, Reverified} =
             hb_lbry_commitment:verify_remote_read(
                 Hash,
                 CommittedLoaded,
                 LocalOpts
-            )
+            ),
+        ?assertEqual(
+            hb_lbry_commitment:content_digest_sha384(Bytes),
+            maps:get(<<"content-digest">>, Reverified)
         )
     after
         hb_mock_server:stop(Handle)
@@ -129,6 +135,75 @@ two_node_rejects_tampered_blob_test() ->
         <<"store-module">> => hb_store_remote_node,
         <<"node">> => NodeB,
         <<"verify-remote-read">> => true,
+        <<"local-store">> => [LocalStore]
+    },
+    ?assertMatch(
+        {error, _},
+        hb_cache:read(Hash, #{ <<"store">> => [LocalStore, RemoteStore] })
+    ),
+    ?assertMatch(
+        {error, _},
+        hb_cache:read(Hash, #{ <<"store">> => [LocalStore] })
+    ).
+
+two_node_descriptor_read_verifies_and_caches_test() ->
+    {Raw, SDHash} = sample_descriptor(),
+    StoreB = hb_test_utils:test_store(),
+    hb_store:reset(StoreB),
+    NodeB =
+        hb_http_server:start_node(#{
+            <<"store">> => [
+                StoreB,
+                #{
+                    <<"store-module">> => hb_store_lbry_stream_descriptor,
+                    <<"fixtures">> => #{ SDHash => Raw }
+                }
+            ]
+        }),
+    LocalStore = hb_test_utils:test_store(),
+    hb_store:reset(LocalStore),
+    RemoteStore = #{
+        <<"store-module">> => hb_store_remote_node,
+        <<"node">> => NodeB,
+        <<"verify-remote-read">> => true,
+        <<"verify-remote-devices">> => [<<"lbry-stream-descriptor@1.0">>],
+        <<"local-store">> => [LocalStore]
+    },
+    {ok, Msg} =
+        hb_cache:read(SDHash, #{ <<"store">> => [LocalStore, RemoteStore] }),
+    Loaded = hb_cache:ensure_all_loaded(Msg),
+    ?assertEqual(<<"lbry-stream-descriptor@1.0">>, maps:get(<<"device">>, Loaded)),
+    ?assertEqual(SDHash, maps:get(<<"sd-hash">>, Loaded)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Loaded, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ),
+    {ok, Cached} = hb_cache:read(SDHash, #{ <<"store">> => [LocalStore] }),
+    CachedLoaded = hb_cache:ensure_all_loaded(Cached, #{ <<"store">> => [LocalStore] }),
+    ?assertEqual(SDHash, maps:get(<<"sd-hash">>, CachedLoaded)).
+
+two_node_rejects_blob_when_descriptor_expected_test() ->
+    % Descriptor and blob IDs are both 96-hex SHA-384 values. A caller that
+    % expects descriptor evidence must be able to narrow the acceptable remote
+    % device and reject a valid blob commitment for the same-shaped key.
+    Bytes = <<"valid blob bytes, not descriptor json">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
+    NodeB =
+        hb_http_server:start_node(#{
+            <<"store">> => [
+                #{
+                    <<"store-module">> => hb_store_lbry_blob,
+                    <<"fixtures">> => #{ Hash => Bytes }
+                }
+            ]
+        }),
+    LocalStore = hb_test_utils:test_store(),
+    hb_store:reset(LocalStore),
+    RemoteStore = #{
+        <<"store-module">> => hb_store_remote_node,
+        <<"node">> => NodeB,
+        <<"verify-remote-read">> => true,
+        <<"verify-remote-devices">> => [<<"lbry-stream-descriptor@1.0">>],
         <<"local-store">> => [LocalStore]
     },
     ?assertMatch(
@@ -370,6 +445,45 @@ chain_proxy_server(Raws) ->
             {200, hb_json:encode(Response)}
         end,
     hb_mock_server:start([{"/api/v1/proxy", proxy, Handler}]).
+
+sample_descriptor() ->
+    Key = <<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15>>,
+    IV = <<16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31>>,
+    Ciphertext = crypto:crypto_one_time(
+        aes_128_cbc,
+        Key,
+        IV,
+        pkcs7_pad(<<"hello verified legacy stream">>),
+        true
+    ),
+    BlobHash = hb_lbry_stream_descriptor:blob_hash(Ciphertext),
+    Descriptor =
+        #{
+            <<"stream_type">> => <<"lbryfile">>,
+            <<"stream_name">> => hb_util:to_hex(<<"sample.mp4">>),
+            <<"key">> => hb_util:to_hex(Key),
+            <<"suggested_file_name">> => hb_util:to_hex(<<"sample.mp4">>),
+            <<"stream_hash">> => hb_lbry_stream_descriptor:blob_hash(<<"stream hash test">>),
+            <<"blobs">> => [
+                #{
+                    <<"length">> => byte_size(Ciphertext),
+                    <<"blob_num">> => 0,
+                    <<"iv">> => hb_util:to_hex(IV),
+                    <<"blob_hash">> => BlobHash
+                },
+                #{
+                    <<"length">> => 0,
+                    <<"blob_num">> => 1,
+                    <<"iv">> => hb_util:to_hex(<<0:128>>)
+                }
+            ]
+        },
+    Raw = hb_json:encode(Descriptor),
+    {Raw, hb_lbry_stream_descriptor:descriptor_hash(Raw)}.
+
+pkcs7_pad(Data) ->
+    PadLen = 16 - (byte_size(Data) rem 16),
+    <<Data/binary, (binary:copy(<<PadLen>>, PadLen))/binary>>.
 
 two_node_stream_output_read_verifies_without_stripping_test() ->
     application:ensure_all_started(inets),

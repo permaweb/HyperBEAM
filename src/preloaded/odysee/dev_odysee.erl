@@ -111,30 +111,24 @@ claim(Base, Req, Opts) ->
 
 %% @doc Read a committed public Odysee/LBRY source object by native identifier.
 source(Base, Req, Opts) ->
-    case native_source_id(Base, Req, Opts) of
-        {ok, Kind, Key} ->
+    case native_source_path(Base, Req, Opts) of
+        {ok, Kind, Keys} ->
             ?event(odysee_device,
-                {source_read, {kind, Kind}, {key, Key}},
+                {source_read, {kind, Kind}, {keys, Keys}},
                 Opts
             ),
-            case hb_ao:raw(
-                <<"cache@1.0">>,
-                <<"read">>,
-                Base,
-                #{ <<"read">> => Key },
-                Opts
-            ) of
+            case read_source_key(Keys, Opts) of
                 {ok, Msg} ->
                     {ok, Msg};
                 {error, Reason} ->
                     ?event(odysee_device,
-                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        {source_read_failed, {keys, Keys}, {reason, Reason}},
                         Opts
                     ),
                     error_response(Reason);
                 {failure, Reason} ->
                     ?event(odysee_device,
-                        {source_read_failed, {key, Key}, {reason, Reason}},
+                        {source_read_failed, {keys, Keys}, {reason, Reason}},
                         Opts
                     ),
                     error_response({failure, Reason})
@@ -142,6 +136,19 @@ source(Base, Req, Opts) ->
         {error, Reason} ->
             ?event(odysee_device, {source_key_rejected, {reason, Reason}}, Opts),
             error_response(Reason)
+    end.
+
+read_source_key(Key, Opts) when is_binary(Key) ->
+    read_source_key([Key], Opts);
+read_source_key([Key | Rest], Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    case hb_store:read(Store, Key, maps:without([<<"store">>, store], Opts)) of
+        {error, not_found} when Rest =/= [] ->
+            read_source_key(Rest, Opts);
+        not_found when Rest =/= [] ->
+            read_source_key(Rest, Opts);
+        Result ->
+            Result
     end.
 
 transaction(Base, Req, Opts) ->
@@ -309,16 +316,67 @@ safe(Fun) ->
     end.
 
 native_source_path(Base, Req, Opts) ->
-    case first_message_value(
-        [<<"id">>, <<"native-id">>, <<"native_id">>, <<"source-id">>, <<"source_id">>, <<"read">>],
-        [Req, Base],
-        Opts
-    ) of
-        ID when is_binary(ID) ->
-            classify_native_source_id(ID, source_kind(Base, Req, Opts));
-        _ ->
-            {error, source_id_not_found}
+    case source_param_values(Base, Req, Opts) of
+        [] ->
+            {error, missing_native_source_id};
+        Values ->
+            case source_param_key(Values) of
+                {ok, ID} -> classify_source_param(ID, source_kind(Base, Req, Opts));
+                Error -> Error
+            end
     end.
+
+classify_source_param(ID0, Kind) ->
+    ID = normalize_source_id(ID0),
+    case ID of
+        <<"odysee/", _/binary>> ->
+            {ok, <<"path">>, [ID]};
+        <<"lbry/blob/", Hash/binary>> ->
+            source_path_result(blob_source_path(Hash));
+        <<"lbry/blob-id/", Hash/binary>> ->
+            source_path_result(blob_source_path(Hash));
+        <<"lbry/descriptor/", Hash/binary>> ->
+            source_path_result(descriptor_source_path(Hash));
+        <<"lbry/descriptor-id/", Hash/binary>> ->
+            source_path_result(descriptor_source_path(Hash));
+        <<"lbry/stream-descriptor/", Hash/binary>> ->
+            source_path_result(descriptor_source_path(Hash));
+        <<"lbry/transaction/", TxID/binary>> ->
+            source_path_result(transaction_source_path(TxID));
+        <<"lbry/tx/", TxID/binary>> ->
+            source_path_result(transaction_source_path(TxID));
+        <<"lbry/claim-output/", Rest/binary>> ->
+            source_path_result(claim_output_source_path(Rest));
+        <<"lbry/claim-proof/", Rest/binary>> ->
+            source_path_result(claim_output_source_path(Rest));
+        _ when Kind =:= <<"claim">>; Kind =:= <<"stream">>;
+                Kind =:= <<"channel">>; Kind =:= <<"comment">>;
+                Kind =:= <<"comment-reaction">>; Kind =:= <<"file-view-count">>;
+                Kind =:= <<"file-reaction">>; Kind =:= <<"subscription-count">> ->
+            source_path_result(classify_bare_native_source_id(ID, Kind));
+        _ ->
+            native_source_key_path(ID)
+    end.
+
+native_source_key_path(ID) ->
+    case classify_native_source_key(hb_util:to_lower(ID)) of
+        {ok, <<"blob">>, Hash} ->
+            {ok, <<"blob">>, [<<"odysee/blob/", Hash/binary>>, Hash]};
+        {ok, <<"transaction">>, TxID} ->
+            {ok, <<"transaction">>, [<<"odysee/transaction/", TxID/binary>>, TxID]};
+        {ok, <<"outpoint">>, Key} ->
+            [TxID, Nout] = binary:split(Key, <<":">>),
+            {ok,
+                <<"claim-output">>,
+                [<<"odysee/claim-proof/", TxID/binary, "/", Nout/binary>>, Key]};
+        _ ->
+            {error, unsupported_native_source_id}
+    end.
+
+source_path_result({ok, Kind, Key}) ->
+    {ok, Kind, [Key]};
+source_path_result(_Error) ->
+    {error, unsupported_native_source_id}.
 
 source_kind(Base, Req, Opts) ->
     case first_message_value([<<"kind">>, <<"source-kind">>, <<"type">>], [Req, Base], Opts) of
@@ -336,39 +394,44 @@ first_message_value(Keys, [Msg | Rest], Opts) when is_map(Msg) ->
 first_message_value(Keys, [_ | Rest], Opts) ->
     first_message_value(Keys, Rest, Opts).
 
-classify_native_source_id(ID0, Kind) ->
-    ID = normalize_source_id(ID0),
-    case ID of
-        <<"odysee/", _/binary>> ->
-            {ok, <<"path">>, ID};
-        <<"lbry/blob/", Hash/binary>> ->
-            blob_source_path(Hash);
-        <<"lbry/blob-id/", Hash/binary>> ->
-            blob_source_path(Hash);
-        <<"lbry/descriptor/", Hash/binary>> ->
-            descriptor_source_path(Hash);
-        <<"lbry/descriptor-id/", Hash/binary>> ->
-            descriptor_source_path(Hash);
-        <<"lbry/stream-descriptor/", Hash/binary>> ->
-            descriptor_source_path(Hash);
-        <<"lbry/transaction/", TxID/binary>> ->
-            transaction_source_path(TxID);
-        <<"lbry/tx/", TxID/binary>> ->
-            transaction_source_path(TxID);
-        <<"lbry/claim-output/", Rest/binary>> ->
-            claim_output_source_path(Rest);
-        <<"lbry/claim-proof/", Rest/binary>> ->
-            claim_output_source_path(Rest);
-        _ ->
-            classify_bare_native_source_id(ID, Kind)
-    end.
-
 classify_bare_native_source_id(ID, <<"blob">>) ->
     blob_source_path(ID);
 classify_bare_native_source_id(ID, <<"stream-descriptor">>) ->
     descriptor_source_path(ID);
 classify_bare_native_source_id(ID, <<"descriptor">>) ->
     descriptor_source_path(ID);
+classify_bare_native_source_id(ID, <<"claim">>) ->
+    surface_source_path(<<"claim">>, <<"odysee/claim-id/">>, ID);
+classify_bare_native_source_id(ID, <<"stream">>) ->
+    surface_source_path(<<"stream">>, <<"odysee/stream-id/">>, ID);
+classify_bare_native_source_id(ID, <<"channel">>) ->
+    surface_source_path(<<"channel">>, <<"odysee/channel/">>, ID);
+classify_bare_native_source_id(ID, <<"comment">>) ->
+    surface_source_path(<<"comment">>, <<"odysee/comment/">>, ID);
+classify_bare_native_source_id(ID, <<"comment-reaction">>) ->
+    surface_source_path(
+        <<"comment-reaction">>,
+        <<"odysee/comment-reaction/">>,
+        ID
+    );
+classify_bare_native_source_id(ID, <<"file-view-count">>) ->
+    surface_source_path(
+        <<"file-view-count">>,
+        <<"odysee/file-view-count/">>,
+        ID
+    );
+classify_bare_native_source_id(ID, <<"file-reaction">>) ->
+    surface_source_path(
+        <<"file-reaction">>,
+        <<"odysee/file-reaction/">>,
+        ID
+    );
+classify_bare_native_source_id(ID, <<"subscription-count">>) ->
+    surface_source_path(
+        <<"subscription-count">>,
+        <<"odysee/subscription-count/">>,
+        ID
+    );
 classify_bare_native_source_id(ID, <<"transaction">>) ->
     transaction_source_path(ID);
 classify_bare_native_source_id(ID, <<"tx">>) ->
@@ -411,6 +474,11 @@ claim_source_path(ClaimID0) ->
         true -> {ok, <<"claim">>, <<"odysee/claim-id/", ClaimID/binary>>};
         false -> {error, invalid_claim_id}
     end.
+
+surface_source_path(Type, Prefix, ID) when is_binary(ID), byte_size(ID) > 0 ->
+    {ok, Type, <<Prefix/binary, ID/binary>>};
+surface_source_path(_Type, _Prefix, _ID) ->
+    {error, missing_native_source_id}.
 
 claim_output_source_path(Rest0) ->
     Rest = normalize_source_id(Rest0),
@@ -1303,17 +1371,6 @@ with_blob_hash(Base, Req, Opts, Fun) ->
         Error -> error_response(Error)
     end.
 
-native_source_id(Base, Req, Opts) ->
-    case source_param_values(Base, Req, Opts) of
-        [] ->
-            {error, missing_native_source_id};
-        Values ->
-            case source_param_key(Values) of
-                {ok, Key} -> classify_native_source_key(Key);
-                Error -> Error
-            end
-    end.
-
 source_param_values(Base, Req, Opts) ->
     [
         Value
@@ -1910,6 +1967,84 @@ source_reads_native_blob_and_transaction_ids_test() ->
     ?assertEqual(TxID, hb_maps:get(<<"txid">>, TxMsg, #{})),
     ?assert(hb_message:verify(TxMsg, source_verify_req(TxMsg), #{})).
 
+source_reads_prefixed_lbry_source_ids_test() ->
+    {Descriptor, SDHash} = descriptor_fixture(),
+    {ok, Desc} =
+        hb_ao:raw(
+            <<"odysee-stream-descriptor@1.0">>,
+            <<"decode">>,
+            #{},
+            #{ <<"body">> => Descriptor, <<"sd-hash">> => SDHash },
+            #{}
+        ),
+    {TxHex, TxID, _ClaimID} = proof_tx_fixture(<<"example">>, <<"raw claim">>),
+    Raw = binary:decode_hex(TxHex),
+    {ok, ClaimOutput} = hb_lbry_commitment:claim_output_message(Raw, 0),
+    Store = #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/descriptor/", SDHash/binary>> => Desc,
+            <<"odysee/claim-proof/", TxID/binary, "/0">> => ClaimOutput
+        }
+    },
+    {ok, DescMsg} =
+        source(
+            #{},
+            #{ <<"id">> => <<"lbry/stream-descriptor/", SDHash/binary>> },
+            #{ <<"store">> => Store }
+        ),
+    ?assertEqual(?LBRY_STREAM_DESCRIPTOR_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, DescMsg, #{})),
+    ?assertEqual(SDHash, hb_maps:get(<<"sd-hash">>, DescMsg, #{})),
+    ?assert(hb_message:verify(DescMsg, source_verify_req(DescMsg), #{})),
+    {ok, ClaimMsg} =
+        source(
+            #{},
+            #{ <<"id">> => <<"lbry/claim-output/", TxID/binary, "/0">> },
+            #{ <<"store">> => Store }
+        ),
+    ?assertEqual(?LBRY_CLAIM_COMMITMENT_DEVICE, hb_maps:get(<<"device">>, ClaimMsg, #{})),
+    ?assertEqual(TxID, hb_maps:get(<<"txid">>, ClaimMsg, #{})),
+    ?assertEqual(0, hb_maps:get(<<"nout">>, ClaimMsg, #{})),
+    ?assert(hb_message:verify(ClaimMsg, source_verify_req(ClaimMsg), #{})).
+
+source_reads_store_path_surface_objects_test() ->
+    Store = surface_fixture_store(),
+    Opts = #{ <<"store">> => Store },
+    {ok, Claim} =
+        source(#{}, #{ <<"id">> => <<"odysee/claim-id/abc123">> }, Opts),
+    ?assertEqual(<<"abc123">>, hb_maps:get(<<"claim-id">>, Claim, #{})),
+    ?assert(has_commitment_device(Claim, ?DEVICE)),
+    ?assert(hb_message:verify(Claim, source_verify_req(Claim), #{})),
+    {ok, Channel} =
+        source(#{}, #{ <<"id">> => <<"odysee/channel/channel-1">> }, Opts),
+    ?assertEqual(<<"channel-1">>, hb_maps:get(<<"channel-id">>, Channel, #{})),
+    ?assert(has_commitment_device(Channel, ?DEVICE)),
+    ?assert(hb_message:verify(Channel, source_verify_req(Channel), #{})),
+    {ok, Comment} =
+        source(#{}, #{ <<"id">> => <<"odysee/comment/vector-1">> }, Opts),
+    ?assertEqual(<<"vector-1">>, hb_maps:get(<<"comment-id">>, Comment, #{})),
+    ?assert(has_commitment_device(Comment, ?DEVICE)),
+    ?assert(hb_message:verify(Comment, source_verify_req(Comment), #{})).
+
+source_reads_kinded_surface_objects_test() ->
+    Store = surface_fixture_store(),
+    Opts = #{ <<"store">> => Store },
+    Cases = [
+        {<<"comment-reaction">>, <<"vector-1">>, <<"comment-id">>, <<"vector-1">>},
+        {<<"file-view-count">>, <<"claim-1">>, <<"claim-id">>, <<"claim-1">>},
+        {<<"file-reaction">>, <<"claim-1">>, <<"claim-id">>, <<"claim-1">>},
+        {<<"subscription-count">>, <<"channel-1">>, <<"claim-id">>, <<"channel-1">>}
+    ],
+    lists:foreach(
+        fun({Kind, ID, Field, Expected}) ->
+            {ok, Msg} = source(#{}, #{ <<"id">> => ID, <<"kind">> => Kind }, Opts),
+            ?assertEqual(Expected, hb_maps:get(Field, Msg, #{})),
+            ?assert(has_commitment_device(Msg, ?DEVICE)),
+            ?assert(hb_message:verify(Msg, source_verify_req(Msg), #{}))
+        end,
+        Cases
+    ).
+
 store_live_blob_read_fetches_and_commits_hash_test() ->
     Body = <<"encrypted blob">>,
     BlobHash = sha384_hex(Body),
@@ -2161,6 +2296,20 @@ commitment_ids_by_device(Msg, Device) ->
         {ID, Commitment} <- maps:to_list(hb_maps:get(<<"commitments">>, Msg, #{}, #{})),
         hb_maps:get(<<"commitment-device">>, Commitment, not_found, #{}) =:= Device
     ].
+
+surface_fixture_store() ->
+    #{
+        <<"store-module">> => hb_store_odysee,
+        <<"fixtures">> => #{
+            <<"odysee/claim-id/abc123">> => claim_fixture(),
+            <<"odysee/channel/channel-1">> => channel_fixture(),
+            <<"odysee/comment/vector-1">> => comment_fixture(),
+            <<"odysee/comment-reaction/vector-1">> => comment_reaction_fixture(),
+            <<"odysee/file-view-count/claim-1">> => file_view_count_fixture(),
+            <<"odysee/file-reaction/claim-1">> => file_reaction_fixture(),
+            <<"odysee/subscription-count/channel-1">> => subscription_count_fixture()
+        }
+    }.
 
 claim_fixture() ->
     Claim = claim_source_fixture(),

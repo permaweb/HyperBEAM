@@ -343,7 +343,18 @@ commit_result(Msg0, Type, Opts)
         is_map(Msg0), Type =:= <<"stream-descriptor">>;
         is_map(Msg0), Type =:= <<"transaction">> ->
     native_source_message(Type, Msg0, Opts);
+commit_result(Msg0, <<"claim-proof">> = Type, Opts) when is_map(Msg0) ->
+    case native_claim_output_message(Msg0, Opts) of
+        {ok, Msg} -> {ok, Msg};
+        {error, not_native_claim_output} -> commit_surface_result(Msg0, Type, Opts);
+        Error -> Error
+    end;
 commit_result(Msg0, Type, Opts) when is_map(Msg0) ->
+    commit_surface_result(Msg0, Type, Opts);
+commit_result(Bin, _Type, _Opts) when is_binary(Bin) ->
+    {ok, Bin}.
+
+commit_surface_result(Msg0, Type, Opts) ->
     Msg = source_message(Type, Msg0),
     CommitmentDevice = commitment_device(Type),
     case has_commitment_device(Msg, CommitmentDevice, Opts)
@@ -360,9 +371,7 @@ commit_result(Msg0, Type, Opts) when is_map(Msg0) ->
                 {ok, Committed} -> committed_surface(Committed, Opts);
                 Error -> Error
             end
-    end;
-commit_result(Bin, _Type, _Opts) when is_binary(Bin) ->
-    {ok, Bin}.
+    end.
 
 committed_surface(Msg, Opts) ->
     hb_message:with_only_committed(Msg, Opts).
@@ -475,6 +484,7 @@ infer_type(_Path, Msg, Opts) when is_map(Msg) ->
         <<"odysee-blob@1.0">> -> <<"blob">>;
         <<"lbry-blob@1.0">> -> <<"blob">>;
         <<"odysee-claim-proof@1.0">> -> <<"claim-proof">>;
+        <<"lbry-claim@1.0">> -> <<"claim-proof">>;
         <<"lbry-claim-output@1.0">> -> <<"claim-proof">>;
         <<"lbry-transaction@1.0">> -> <<"transaction">>;
         _ -> <<"source">>
@@ -564,6 +574,23 @@ native_source_message(<<"transaction">>, Msg, Opts) ->
         false -> {error, invalid_transaction};
         not_found -> {error, invalid_transaction};
         Error -> Error
+    end.
+
+native_claim_output_message(Msg, Opts) ->
+    case hb_maps:get(<<"device">>, Msg, not_found, Opts) of
+        <<"lbry-claim@1.0">> ->
+            case
+                hb_message:verify(
+                    Msg,
+                    #{ <<"commitment-ids">> => <<"all">> },
+                    Opts
+                )
+            of
+                true -> {ok, Msg};
+                false -> {error, invalid_claim_output}
+            end;
+        _ ->
+            {error, not_native_claim_output}
     end.
 
 native_bytes([], _Msg, _Opts) ->
@@ -798,4 +825,192 @@ valid_uint(_Bin) ->
 decode_component(Encoded) ->
     try {ok, hb_util:bin(uri_string:percent_decode(Encoded))}
     catch _:_ -> {error, invalid_odysee_store_path}
+    end.
+
+bare_sha384_read_returns_native_blob_test() ->
+    Bytes = <<"encrypted blob payload">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", Hash/binary>> => #{
+                <<"device">> => <<"odysee-blob@1.0">>,
+                <<"body">> => Bytes,
+                <<"blob-hash">> => Hash
+            }
+        }
+    },
+    {ok, Msg} = read(Store, #{ <<"read">> => Hash }, #{}),
+    ?assertEqual(<<"lbry-blob@1.0">>, maps:get(<<"device">>, Msg)),
+    ?assertEqual(Hash, maps:get(<<"blob-hash">>, Msg)),
+    ?assertEqual(Bytes, maps:get(<<"data">>, Msg)),
+    ?assertEqual(
+        hb_lbry_commitment:content_digest_sha384(Bytes),
+        maps:get(<<"content-digest">>, Msg)
+    ),
+    ?assertEqual(
+        true,
+        hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ).
+
+direct_sha384_get_returns_native_blob_test() ->
+    Bytes = <<"encrypted blob payload">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", Hash/binary>> => #{
+                <<"device">> => <<"odysee-blob@1.0">>,
+                <<"body">> => Bytes,
+                <<"blob-hash">> => Hash
+            }
+        }
+    },
+    {ok, Msg} =
+        hb_ao:resolve(
+            #{ <<"path">> => <<"/", Hash/binary>> },
+            #{ <<"store">> => [Store] }
+        ),
+    ?assertEqual(<<"lbry-blob@1.0">>, maps:get(<<"device">>, Msg)),
+    ?assertEqual(Hash, maps:get(<<"blob-hash">>, Msg)),
+    ?assertEqual(Bytes, maps:get(<<"data">>, Msg)).
+
+direct_sha384_http_get_exposes_native_signature_input_test() ->
+    application:ensure_all_started(inets),
+    Bytes = <<"encrypted blob payload">>,
+    Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/blob/", Hash/binary>> => #{
+                <<"device">> => <<"odysee-blob@1.0">>,
+                <<"body">> => Bytes,
+                <<"blob-hash">> => Hash
+            }
+        }
+    },
+    Node = hb_http_server:start_node(#{ <<"store">> => [Store] }),
+    URL = binary_to_list(<<Node/binary, Hash/binary>>),
+    {ok, {{_, 200, _}, Headers, Body}} =
+        httpc:request(get, {URL, []}, [], [{body_format, binary}]),
+    ?assertEqual(Bytes, Body),
+    SignatureInput = http_header(<<"signature-input">>, Headers),
+    ?assertNotEqual(not_found, SignatureInput),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"\"content-digest\"">>)
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"alg=\"lbry-blob@1.0/sha-384\"">>)
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"native-id=\"", Hash/binary, "\"">>)
+    ).
+
+bare_txid_read_returns_native_transaction_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, TxMsg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, TxMsg),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/transaction/", TxID/binary>> => TxMsg
+        }
+    },
+    {ok, Msg} = read(Store, #{ <<"read">> => TxID }, #{}),
+    ?assertEqual(<<"lbry-transaction@1.0">>, maps:get(<<"device">>, Msg)),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Msg)),
+    ?assertEqual(Raw, maps:get(<<"raw">>, Msg)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ).
+
+direct_txid_get_returns_native_transaction_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, TxMsg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, TxMsg),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/transaction/", TxID/binary>> => TxMsg
+        }
+    },
+    {ok, Msg} =
+        hb_ao:resolve(
+            #{ <<"path">> => <<"/", TxID/binary>> },
+            #{ <<"store">> => [Store] }
+    ),
+    ?assertEqual(<<"lbry-transaction@1.0">>, maps:get(<<"device">>, Msg)),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Msg)),
+    ?assertEqual(Raw, maps:get(<<"raw">>, Msg)).
+
+direct_txid_http_get_exposes_native_signature_input_test() ->
+    application:ensure_all_started(inets),
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, TxMsg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, TxMsg),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/transaction/", TxID/binary>> => TxMsg
+        }
+    },
+    Node = hb_http_server:start_node(#{ <<"store">> => [Store] }),
+    URL = binary_to_list(<<Node/binary, TxID/binary>>),
+    {ok, {{_, 200, _}, Headers, _Body}} =
+        httpc:request(get, {URL, []}, [], [{body_format, binary}]),
+    SignatureInput = http_header(<<"signature-input">>, Headers),
+    ?assertNotEqual(not_found, SignatureInput),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"alg=\"lbry-transaction@1.0/sha-256d\"">>)
+    ),
+    ?assertNotEqual(
+        nomatch,
+        binary:match(SignatureInput, <<"native-id=\"", TxID/binary, "\"">>)
+    ).
+
+direct_outpoint_get_returns_native_claim_output_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    TxID = hb_lbry_tx:txid(Raw),
+    Outpoint = <<TxID/binary, ":0">>,
+    {ok, ClaimOutput} = hb_lbry_commitment:claim_output_message(Raw, 0),
+    Store = #{
+        <<"store-module">> => ?MODULE,
+        <<"fixtures">> => #{
+            <<"odysee/claim-proof/", TxID/binary, "/0">> => ClaimOutput
+        }
+    },
+    ?assertEqual(
+        <<"odysee/claim-proof/", TxID/binary, "/0">>,
+        canonical_read_path(Outpoint)
+    ),
+    {ok, StoreMsg} = read(Store, #{ <<"read">> => Outpoint }, #{}),
+    ?assertEqual(<<"lbry-claim@1.0">>, maps:get(<<"device">>, StoreMsg)),
+    {ok, Msg} =
+        hb_ao:resolve(
+            #{ <<"path">> => <<"/", Outpoint/binary>> },
+            #{ <<"store">> => [Store] }
+        ),
+    ?assertEqual(<<"lbry-claim@1.0">>, maps:get(<<"device">>, Msg)),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Msg)),
+    ?assertEqual(0, maps:get(<<"nout">>, Msg)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ).
+
+http_header(Name, Headers) ->
+    LowerName = hb_util:bin(string:lowercase(hb_util:bin(Name))),
+    case [
+        hb_util:bin(Value)
+     ||
+        {Key, Value} <- Headers,
+        hb_util:bin(string:lowercase(hb_util:bin(Key))) == LowerName
+    ] of
+        [Value | _] -> Value;
+        [] -> not_found
     end.

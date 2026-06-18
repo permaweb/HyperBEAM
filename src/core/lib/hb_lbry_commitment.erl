@@ -6,6 +6,7 @@
 %%% `commitment-device' dispatch in `dev_message'.
 -module(hb_lbry_commitment).
 -export([commitment_id/1, commitment/5, with_commitment/6]).
+-export([content_digest_sha384/1]).
 -export([native_id/2, native_id_bytes/1, native_id_fields/2, outpoint_bytes/2]).
 -export([blob_message/2, transaction_message/1, descriptor_message/2]).
 -export([claim_output_message/2, claim_output_message/3]).
@@ -117,18 +118,42 @@ signature_matches(_, _) ->
 %% The caller must have verified that `SHA-384(Bytes)' matches `HexHash'.
 blob_message(HexHash, Bytes) ->
     Normalized = hb_util:to_lower(HexHash),
+    ContentDigest = content_digest_sha384(Bytes),
     with_commitment(
         #{
             <<"device">> => <<"lbry-blob@1.0">>,
             <<"data">> => Bytes,
-            <<"blob-hash">> => Normalized
+            <<"blob-hash">> => Normalized,
+            <<"content-digest">> => ContentDigest
         },
         <<"lbry-blob@1.0">>,
         <<"sha-384">>,
         {<<"blob-hash">>, binary:decode_hex(Normalized)},
-        [<<"blob-hash">>, <<"data">>, <<"device">>],
+        [<<"blob-hash">>, <<"content-digest">>, <<"data">>, <<"device">>],
         #{}
     ).
+
+%% @doc RFC 9530 Content-Digest value for encrypted blob bytes.
+content_digest_sha384(Bytes) when is_binary(Bytes) ->
+    content_digest_sha384_hash(crypto:hash(sha384, Bytes)).
+
+content_digest_sha384_hash(Hash) when is_binary(Hash), byte_size(Hash) == 48 ->
+    hb_util:bin(
+        hb_structured_fields:dictionary(
+            #{
+                <<"sha-384">> => {item, {binary, Hash}, []}
+            }
+        )
+    ).
+
+content_digest_sha384_hex(Hex) when is_binary(Hex) ->
+    try binary:decode_hex(hb_util:to_lower(Hex)) of
+        Hash -> {ok, content_digest_sha384_hash(Hash)}
+    catch
+        _:_ -> {error, invalid_hash}
+    end;
+content_digest_sha384_hex(_) ->
+    {error, invalid_hash}.
 
 %% @doc Build the canonical transaction message for raw LBRY transaction
 %% bytes. The native identifier is the display-order txid, which is recomputed
@@ -881,7 +906,13 @@ expected_remote_commitment(Key) when is_binary(Key) ->
             end;
         [Single] ->
             case {hex_bytes(Single, 48), hex_bytes(Single, 32)} of
-                {{ok, Hex, _}, _} -> {ok, [<<"lbry-blob@1.0">>], Hex};
+                {{ok, Hex, _}, _} ->
+                    {ok,
+                        [
+                            <<"lbry-stream-descriptor@1.0">>,
+                            <<"lbry-blob@1.0">>
+                        ],
+                        Hex};
                 {_, {ok, Hex, _}} -> {ok, [<<"lbry-transaction@1.0">>], Hex};
                 _ -> untyped
             end
@@ -890,15 +921,18 @@ expected_remote_commitment(_) ->
     untyped.
 
 require_native_commitments(Devices, NativeIDHex, Key, Msg, Opts) when is_map(Msg) ->
+    RemoteCommitments =
+        hb_cache:ensure_all_loaded(
+            hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+            Opts
+        ),
+    DerivedMsg = ensure_native_derived_fields(Msg, RemoteCommitments, Opts),
     Commitments =
         canonical_committed_keys(
-            Msg,
-            hb_cache:ensure_all_loaded(
-                hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-                Opts
-            )
+            DerivedMsg,
+            RemoteCommitments
         ),
-    NormalizedMsg = Msg#{ <<"commitments">> => Commitments },
+    NormalizedMsg = DerivedMsg#{ <<"commitments">> => Commitments },
     LbryCommitments =
         maps:filter(
             fun(_ID, Commitment) -> lbry_commitment(Commitment) end,
@@ -930,6 +964,34 @@ require_native_commitments(Devices, NativeIDHex, Key, Msg, Opts) when is_map(Msg
     end;
 require_native_commitments(_Devices, _NativeIDHex, Key, _Msg, _Opts) ->
     {error, {missing_native_commitment, Key}}.
+
+ensure_native_derived_fields(Msg, Commitments, Opts) ->
+    ensure_blob_content_digest(Msg, Commitments, Opts).
+
+ensure_blob_content_digest(Msg, Commitments, Opts) ->
+    case
+        has_commitment_device(
+            Commitments,
+            <<"lbry-blob@1.0">>
+        ) andalso
+            hb_maps:get(<<"content-digest">>, Msg, undefined, Opts) =:= undefined
+    of
+        true ->
+            case content_digest_sha384_hex(lower_field(Msg, <<"blob-hash">>, Opts)) of
+                {ok, Digest} -> Msg#{ <<"content-digest">> => Digest };
+                _ -> Msg
+            end;
+        false ->
+            Msg
+    end.
+
+has_commitment_device(Commitments, Device) ->
+    lists:any(
+        fun(Commitment) ->
+            maps:get(<<"commitment-device">>, Commitment, undefined) =:= Device
+        end,
+        maps:values(Commitments)
+    ).
 
 %% @doc Rebuild the canonical committed key lists of a remotely received
 %% message's LBRY commitments. The HTTPSig wire encoding cannot express a
@@ -976,7 +1038,7 @@ canonical_committed_keys(Msg, Commitments) ->
     end.
 
 device_committed_list(<<"lbry-blob@1.0">>, _Ancestry) ->
-    [<<"blob-hash">>, <<"data">>, <<"device">>];
+    [<<"blob-hash">>, <<"content-digest">>, <<"data">>, <<"device">>];
 device_committed_list(<<"lbry-transaction@1.0">>, _Ancestry) ->
     [<<"device">>, <<"raw">>, <<"txid">>];
 device_committed_list(<<"lbry-stream-descriptor@1.0">>, _Ancestry) ->
@@ -1318,6 +1380,15 @@ blob_message_verifies_test() ->
     Bytes = <<"encrypted blob bytes">>,
     Hash = hb_lbry_stream_descriptor:blob_hash(Bytes),
     Msg = blob_message(Hash, Bytes),
+    ?assertEqual(
+        content_digest_sha384(Bytes),
+        maps:get(<<"content-digest">>, Msg)
+    ),
+    [Commitment] = maps:values(maps:get(<<"commitments">>, Msg)),
+    ?assert(lists:member(
+        <<"content-digest">>,
+        maps:get(<<"committed">>, Commitment)
+    )),
     ?assertEqual(
         true,
         hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, #{})

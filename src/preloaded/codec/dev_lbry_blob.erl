@@ -60,7 +60,7 @@ verify(Base, Req, Opts) ->
             ok ?=
                 hb_lbry_commitment:committed_subset(
                     Req,
-                    [<<"blob-hash">>, <<"data">>, <<"device">>],
+                    [<<"blob-hash">>, <<"content-digest">>, <<"data">>, <<"device">>],
                     Opts
                 ),
             {ok, Hex, Bytes} ?= hb_lbry_commitment:native_id(Req, Opts),
@@ -68,6 +68,7 @@ verify(Base, Req, Opts) ->
             Data = hb_maps:get(<<"data">>, Base, undefined, Opts),
             true ?= is_binary(Data),
             ok ?= hb_lbry_stream_descriptor:verify_blob_hash(Hex, Data),
+            true ?= digest_field_valid(Base, Data, Opts),
             Hex == hash_field(Base, Opts)
         else
             _ -> false
@@ -79,6 +80,14 @@ hash_field(Base, Opts) ->
     case hb_maps:get(<<"blob-hash">>, Base, undefined, Opts) of
         Hash when is_binary(Hash) -> hb_util:to_lower(Hash);
         _ -> undefined
+    end.
+
+digest_field_valid(Base, Data, Opts) ->
+    case hb_maps:get(<<"content-digest">>, Base, undefined, Opts) of
+        Digest when is_binary(Digest) ->
+            Digest =:= hb_lbry_commitment:content_digest_sha384(Data);
+        _ ->
+            true
     end.
 
 ensure_device(Msg) ->

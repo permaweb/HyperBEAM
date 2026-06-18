@@ -463,7 +463,7 @@ cors_headers() ->
         <<"access-control-allow-headers">> =>
             <<"Range,Content-Type,Accept,Authorization">>,
         <<"access-control-expose-headers">> =>
-            <<"Content-Length,Content-Range,Accept-Ranges,Location">>
+            <<"Content-Length,Content-Range,Accept-Ranges,Location,Content-Digest">>
     }.
 
 read_media_range(Desc, Start, End, Size, Base, Req, Opts) ->

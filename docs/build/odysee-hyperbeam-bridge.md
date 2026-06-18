@@ -29,8 +29,9 @@ paths only when they are needed.
   Odysee data model.
 * Do not flatten claims into ANS-104 tags. Claims can exceed practical tag
   sizes; keep source-format bodies and TABM/structured AO messages.
-* Keep reflector/blob-serving policy controls in front of live serving until a
-  signed decentralized policy format exists.
+* Keep reflector/blob-serving policy controls in front of live serving until
+  the signed policy artifact format has a production trust and distribution
+  model.
 
 ## HyperBEAM fit
 
@@ -52,8 +53,11 @@ normal HyperBEAM device:
 * outbound reads should use existing HyperBEAM HTTP paths, such as `hb_http`
   and the patterns already used by `relay@1.0`.
 
-The bridge should be written as application-layer devices. It should not change
-the AO-Core resolver, device loader, or message semantics.
+The bridge should be written as application-layer devices and stores. It should
+not change the AO-Core resolver, device loader, or message semantics. The only
+core-level hook used by the first milestone is adding LBRY-shaped lengths to
+the shared ID recognizer so store-native `GET /<id>` routing can see
+descriptor/blob hashes, txids, and outpoints.
 
 ## Odysee integration boundaries
 
@@ -68,7 +72,7 @@ Use these services as the first integration points.
 | File stats | `POST https://api.odysee.com/file/view_count` | read-only engagement replica | Use public view count reads; keep view recording direct. |
 | File reactions | `POST https://api.odysee.com/reaction/list` | read-only engagement replica | Use unauthenticated `reaction/list` for public fire/slime counts; keep signed `reaction/react` direct. |
 | Subscription counts | `POST https://api.odysee.com/subscription/sub_count` | read-only engagement replica | Use public follower count reads; keep signed follow/unfollow notifications direct. |
-| Blocklists | existing Odysee serving path | signed policy device | Do not bypass current policy for live serving in v1. |
+| Blocklists | existing Odysee serving path | `~odysee-policy@1.0` signed policy device | Do not bypass current policy for live serving in v1; the bridge can now evaluate signed policy artifacts before playback/media responses. |
 
 ## Bridge device set
 
@@ -77,12 +81,15 @@ source format and exposes decoded fields as AO-Core messages.
 
 | Device | Purpose | First milestone |
 | --- | --- | --- |
-| `~odysee@1.0` | Source commitment device for normalized Odysee messages. It adds committer-less commitments over stable public source fields and verifies those commitments through the normal `message@1.0` commitment path. | Implemented native source commitments for claims, channels, comments, stream descriptors, streams, stream attestations, and blobs. |
+| `~odysee@1.0` | Facade and operator/debug surface for normalized Odysee views. It can preserve public Odysee API surfaces, but it is not the canonical native LBRY source-commitment layer. | Implemented composition/source-getter endpoints; native LBRY commitments are carried by the `~lbry-*` codec family. |
 | `~odysee-stream-descriptor@1.0` | Parse descriptor JSON, verify encrypted blobs, decrypt, and reconstruct media bytes. | Implemented proof device. |
 | `~lbry-blob@1.0` | Commit encrypted LBRY blob bytes to their native SHA-384 blob ID. | Implemented source-native blob commitment device. |
 | `~lbry-stream-descriptor@1.0` | Commit raw LBRY stream descriptor JSON to its `sd_hash`, stream hash, and blob store paths while preserving descriptor decode/media compatibility. | Implemented source-native descriptor commitment device. |
-| `~lbry-claim-output@1.0` | Commit verified raw LBRY transaction output proof objects by txid and output index. | Implemented source-native claim-output commitment device. |
 | `~lbry-transaction@1.0` | Commit raw LBRY transaction bytes to their display-order txid. | Implemented source-native transaction commitment device. |
+| `~lbry-claim@1.0` | Commit verified raw LBRY transaction-output claim objects by immutable txid and output index. | Implemented source-native generic claim codec. |
+| `~lbry-channel@1.0` | Commit verified channel claim objects, including public-key material used by downstream signature checks. | Implemented source-native channel codec. |
+| `~lbry-stream@1.0` | Commit verified stream claim objects, including signed source descriptor references. | Implemented source-native stream codec. |
+| `~lbry-channel-attestation@1.0` | Commit the channel-signed stream attestation over claim ID, signing channel, and `sd_hash`. | Implemented source-native stream/channel attestation codec. |
 | `~odysee-claim@1.0` | Preserve raw SDK proxy resolve/search JSON, claim ID, name, value, canonical URL, and current resolved state. | Implemented playback/discovery adapter. |
 | `~odysee-claim-proof@1.0` | Verify raw LBRY transaction output evidence for a claim by parsing transaction bytes, claim script prefixes, output index, and claim ID derivation. | Implemented transaction-output proof device. |
 | `~odysee-stream@1.0` | Represent stream/content claims, stream metadata, `source.sd_hash`, and player-compatible playback URLs. | Implemented playback-stage adapter. |
@@ -92,13 +99,14 @@ source format and exposes decoded fields as AO-Core messages.
 | `~odysee-file@1.0` | Represent Odysee internal API stats for stream/file claims. | Implemented read-only view count adapter. |
 | `~odysee-file-reaction@1.0` | Represent Odysee internal API reaction summaries for stream/file claims. | Implemented unauthenticated read-only reaction adapter. |
 | `~odysee-subscription@1.0` | Represent Odysee internal API follower counts for channel claims. | Implemented read-only subscription count adapter. |
+| `~odysee-policy@1.0` | Represent signed content-policy artifacts for public Odysee/LBRY IDs and optional country constraints. | Implemented signed artifact verifier/evaluator; `~odysee-stream@1.0` can opt into policy enforcement before playback/media responses. |
 
-The older `~lbry-claim@1.0`, `~lbry-stream@1.0`, and `~lbry-channel@1.0`
-names still preserve their compatibility surface methods, but they are no
-longer thin aliases only: they now expose native claim-family codecs and
-verify raw LBRY transaction evidence by immutable outpoint. Current-claim
-lookup by claim ID remains a locator concern until full ClaimTrie inclusion
-proof lands.
+`~lbry-claim-output@1.0` remains as the Odysee-side proof adapter around
+`transaction_show` evidence. The canonical source-native claim-family codecs
+are `~lbry-claim@1.0`, `~lbry-stream@1.0`, `~lbry-channel@1.0`, and
+`~lbry-channel-attestation@1.0`; they verify raw LBRY transaction evidence by
+immutable outpoint. Current-claim lookup by claim ID remains a locator concern
+until full ClaimTrie inclusion proof lands.
 
 ## Store / codec split
 
@@ -114,24 +122,28 @@ The next bridge milestone separates sourcing from computation:
   `odysee/comment/<comment-id>`, `odysee/comment-id/<comment-id>`,
   `odysee/blob/<blob-sha384>`, and `odysee/blob-id/<blob-sha384>`. It can sit
   below a local cache or behind `hb_store_remote_node`.
-* `hb_store_lbry_blob`, `hb_store_lbry_stream_descriptor`,
+* `hb_store_lbry_stream_descriptor`, `hb_store_lbry_blob`,
   `hb_store_lbry_claim_output`, and `hb_store_lbry_transaction` expose native
   LBRY key forms for the source objects that can be verified locally today:
-  bare blob hash / `lbry/blob/...`, bare descriptor `sd_hash` /
-  `lbry/descriptor/...`, bare txid / `lbry/transaction/...`, and immutable
-  outpoints for the claim family. `hb_store_lbry_claim_output` now supports
-  `lbry/claim/<txid>/<nout>`, `lbry/channel/<txid>/<nout>`,
-  `lbry/stream/<txid>/<nout>`, plus the legacy `txid:nout` /
-  `lbry/claim-output/...` proof view.
+  bare descriptor/blob SHA-384 hashes, `lbry/descriptor/<sd_hash>`,
+  `lbry/stream-descriptor/<sd_hash>`, bare txids, and immutable
+  `txid:nout` outpoints for the claim family. Because descriptors and blobs
+  are both 96-hex SHA-384 values, deployments that want direct `GET /<id>`
+  descriptor reads should place `hb_store_lbry_stream_descriptor` before
+  `hb_store_lbry_blob`; non-descriptor bytes fall through to the blob store.
+  Claim/channel/stream output shape is selected by the
+  `hb_store_lbry_claim_output` `kind` option.
 * Store reads return normalized messages with source commitments: `~odysee@1.0`
-  for Odysee resolver/comment/channel surfaces, `~lbry-stream-descriptor@1.0`
-  for stream descriptors, `~lbry-blob@1.0` for encrypted blobs, and
-  `~lbry-claim-output@1.0` for raw transaction-output proof objects.
-  `~lbry-transaction@1.0` commits raw transaction bytes to their display-order
-  txid. A downstream node can select those commitment IDs from `commitments`
-  and call `hb_message:verify/3` on them instead of trusting a proxy response.
-  This matters when remote transport also adds ordinary HTTP signatures to the
-  same message.
+  only for Odysee resolver/comment/product API surfaces,
+  `~lbry-stream-descriptor@1.0`
+  for stream descriptors, `~lbry-blob@1.0` for encrypted blobs,
+  `~lbry-transaction@1.0` for raw transaction bytes, and the
+  `~lbry-claim@1.0` / `~lbry-stream@1.0` / `~lbry-channel@1.0` /
+  `~lbry-channel-attestation@1.0` family for raw transaction-output proof
+  objects. A downstream node can select those commitment IDs from
+  `commitments` and call `hb_message:verify/3` on them instead of trusting a
+  proxy response. This matters when remote transport also adds ordinary HTTP
+  signatures to the same message.
 * LBRY-native commitments carry `signature`, `native-id`, and `native-id-type`
   fields. The signature is the source object's native identifier bytes, so the
   commitment ID is derived from the blob hash, descriptor `sd_hash`, txid, or
@@ -140,19 +152,22 @@ The next bridge milestone separates sourcing from computation:
   body plus stable public claim fields. The LBRY stream descriptor commitment
   binds the raw descriptor body, recomputes the descriptor `sd_hash`, and
   verifies it through `~odysee-stream-descriptor@1.0`. Blob commitments bind the
-  encrypted blob bytes to the blob SHA-384 hash. Comment commitments bind the
-  normalized Commentron row and verify the comment signature when the channel
-  public key is present in the committed message.
+  encrypted blob bytes, blob SHA-384 hash, and RFC 9530 `content-digest`.
+  Comment commitments bind the normalized Commentron row and verify the comment
+  signature when the channel public key is present in the committed message.
 * `~odysee-claim-proof@1.0` verifies raw transaction-output proof objects from
   `transaction_show` evidence: txid, output index, LBRY claim script prefix,
-  claim name, and claim ID derivation. `~lbry-claim-output@1.0` binds that
-  verified source object as a native LBRY commitment. Full block/ClaimTrie
+  claim name, and claim ID derivation. The LBRY claim-family codecs bind those
+  verified source objects as native LBRY commitments. Full block/ClaimTrie
   inclusion proof is still the next proof tier.
 * `~odysee@1.0/source` is an operator/debug source getter. It accepts public
-  native IDs without auth tokens: blob SHA-384, descriptor `sd_hash` with
-  `kind=descriptor`, transaction txid, claim-output outpoint (`txid:nout`), or
-  40-byte claim ID. It maps those IDs onto the store paths above and returns the
-  committed store object through `~cache@1.0/read`.
+  source IDs without auth tokens: blob SHA-384, descriptor `sd_hash` with
+  `kind=descriptor`, transaction txid, claim-output outpoint (`txid:nout`), and
+  explicit Odysee surface store paths. Bare 40-hex claim IDs are deliberately
+  not treated as native store IDs: claim ID to transaction/outpoint resolution
+  remains an index layer until a ClaimTrie/currentness proof exists. The source
+  getter maps supported IDs onto store paths and returns the committed store
+  object through `~cache@1.0/read`.
 * HTTPSig response encoding now keeps unsafe binary fields out of HTTP headers.
   Binary values containing control bytes, plus large scalar values, are encoded
   in the message body instead. This is required for raw LBRY transaction/blob
@@ -163,7 +178,10 @@ The next bridge milestone separates sourcing from computation:
   verifies those commitment IDs with `hb_message:verify/3`, requires the
   commitment `native-id` to match the requested blob hash, descriptor hash,
   txid, or outpoint, and only then writes the remote value into the local cache.
-  Verified reads can also be cached under their source commitment IDs.
+  The `verify-remote-devices` option narrows ambiguous keys, such as
+  descriptor/blob SHA-384 values or claim-family outpoints, to the expected
+  source device. Verified reads can also be cached under their source
+  commitment IDs.
 * Normalized claim, stream, descriptor, channel, comment, blob, and claim-proof
   messages expose stable `*-store-path` fields. Stream messages point to their
   claim, descriptor, channel, and raw transaction-output proof paths when the
@@ -187,13 +205,13 @@ Implemented devices:
 
 | Device | Key | Behavior |
 | --- | --- | --- |
-| `~odysee@1.0` | `commit` / `verify` / `to-hint` | Adds and verifies Odysee source commitments over stable public fields. The descriptor path recomputes `sd_hash`; blobs recompute SHA-384 over the committed body; comments verify Commentron signatures when public-key material is committed; claim/channel paths record source digests over raw resolved or searched claim bodies, while raw transaction-output proof is represented by committed `claim-proof` objects. |
+| `~odysee@1.0` | `source` / `commit` / `verify` / `to-hint` | Provides facade/source-getter behavior and preserves Odysee API surface commitments where useful. Native LBRY source evidence is represented by the `~lbry-*` commitment devices, not by the facade. |
 | `~odysee-stream-descriptor@1.0` | `media` | Fetches or decodes a stream descriptor, verifies and decrypts only the blobs needed for the requested plaintext byte range, and returns browser-compatible `HEAD`/`Range` responses. |
 | `~odysee-claim@1.0` | `resolve` | Accepts an Odysee URL, LBRY URI, claim fixture, or SDK proxy JSON result; calls the SDK proxy when needed; returns a normalized claim message while preserving raw JSON in `body`. |
 | `~odysee-claim@1.0` | `search` | Accepts `claim_search` params, supplied SDK search JSON, or a supplied result; calls the SDK proxy when needed; preserves the exact SDK result while exposing `items`, normalized `claims`, and `claim-ids`. |
 | `~odysee-claim@1.0` | `transaction` | Calls or normalizes SDK proxy `transaction_show` JSON and exposes raw transaction hex plus parsed SDK transaction fields for proof devices. |
 | `~odysee-claim-proof@1.0` | `decode` / `verify` | Parses raw LBRY transaction hex, verifies txid, output index, claim/update/support script shape, claim name, and claim ID derivation. |
-| `~lbry-claim-output@1.0` | `commit` / `verify` / `to-hint` | Commits the verified raw transaction-output proof surface using the native LBRY claim-output boundary. |
+| `~lbry-claim@1.0` / `~lbry-stream@1.0` / `~lbry-channel@1.0` / `~lbry-channel-attestation@1.0` | `commit` / `verify` / `to-hint` | Commit verified raw transaction-output proof surfaces using native LBRY claim, stream, channel, and attestation boundaries. |
 | `~odysee-stream@1.0` | `stream` / `from-claim` | Derives stream metadata from the claim, including `media-type`, `sd-hash`, source fields, dimensions, duration, thumbnail, and generated player/download URLs. |
 | `~odysee-stream@1.0` | `playback` | Returns a JSON body with Odysee-compatible `streaming_url`/`download_url`, or a `307` redirect when `redirect=true` or `format=redirect`. With `mode=bytes`, `mode=media`, `mode=hyperbeam`, or `bytes=true`, the returned URL points to the local `media` endpoint. |
 | `~odysee-stream@1.0` | `media` | Resolves the claim, serves `HEAD` metadata, and serves capped `Range` responses. Descriptor/blob settings route through the descriptor device; otherwise the device proxies bounded ranges from the current player media URL. |
@@ -566,7 +584,7 @@ unfollow notification writes remain direct.
 These are intentionally not locked for the first doc:
 
 * exact public route names for AO message views and playable byte streams;
-* first signed policy artifact format;
+* production distribution and trust model for signed policy artifacts;
 * when product events or a dedicated `hb.api.odysee.com` coordinator enter the
   bridge;
 * when raw lbrycrd/ClaimTrie proofs replace trusted Odysee/hub reads.
@@ -594,8 +612,42 @@ These are intentionally not locked for the first doc:
     `hb_message:verify/3`. Claim URL, claim ID, stream URL, stream claim ID,
     channel ID aliases, descriptor hash aliases, comment ID aliases, encrypted
     blob hash aliases, raw transaction txid paths, native source getter paths,
-    and raw transaction-output claim proof paths are implemented.
+    and raw transaction-output claim proof paths are implemented. Bare native
+    `GET /<id>` reads are implemented for descriptor/blob SHA-384 values,
+    transaction txids, and `txid:nout` outpoints; claim ID discovery remains an
+    index/resolution concern.
 12. Use two HyperBEAM nodes to prove the remote-store path: node A misses
     locally, asks node B, verifies the returned source commitment, then
     caches/serves the verified message. `hb_store_remote_node` now supports
     opt-in `verify-remote-read=true` and source commitment ID cache aliases.
+13. Add `~odysee-policy@1.0` signed policy artifacts and optional
+    `~odysee-stream@1.0` playback/media enforcement. Done for signed deny/allow
+    evaluation over public claim/channel/blob/descriptor/tx/outpoint IDs and
+    optional country constraints.
+
+## June review alignment
+
+The June 12 and June 17 reviews narrowed the immediate milestone to
+store-native, source-committed reads for known LBRY/Odysee IDs. The current
+implementation lines up with that milestone as follows:
+
+| Review requirement | Current status |
+| --- | --- |
+| Source data must return as HyperBEAM messages with a `commitments` map, not proof-like JSON fields. | Implemented for Odysee surfaces and native LBRY blob, descriptor, transaction, claim, channel, stream, and attestation objects. |
+| Commitment metadata must identify source-format devices. | Implemented through `~lbry-blob@1.0`, `~lbry-stream-descriptor@1.0`, `~lbry-transaction@1.0`, `~lbry-claim@1.0`, `~lbry-channel@1.0`, `~lbry-stream@1.0`, and `~lbry-channel-attestation@1.0`. |
+| HTTP wire output should expose source-format commitment metadata through normal `Signature-Input`, not only JSON body fields. | Implemented for store-native and source-helper reads; tests assert direct `GET /<txid>`, `GET /<blob-sha384>`, and `GET /<descriptor-sd-hash>` responses include `signature-input` with source-format `alg` and `native-id` parameters. |
+| Normal store reads should work as `GET /<id>` instead of only through an Odysee facade route. | Implemented for descriptor/blob SHA-384 IDs, transaction txids, and `txid:nout` outpoints. The Odysee `source` route remains only as an operator/debug adapter for explicit public source paths. |
+| Node A must verify Node B's returned source commitments before caching. | Implemented with `hb_store_remote_node` `verify-remote-read=true`; the two-node demo starts Node A as the verifying cache and Node B as the source store. |
+| Blob byte integrity should lean on standard `Content-Digest` for SHA-384 over encrypted blob bytes. | Implemented in native blob messages and committed under `~lbry-blob@1.0`; invalid digest fields fail blob verification. On the HTTP wire, the generic HTTPSig codec may also emit its normal body `content-digest`, while the LBRY source identity remains the `lbry-blob@1.0/sha-384` commitment metadata. |
+| Claim/name/latest resolution should stay separate from the source-object proof path. | Preserved. Bare claim IDs remain index/resolution inputs, not native store IDs. Known txid/output objects are the verifiable source boundary. |
+| Signed geoblock/DMCA policy artifacts should be represented as HyperBEAM messages instead of ad hoc product flags. | Implemented `~odysee-policy@1.0` signed artifacts. The device verifies the policy message commitment, matches only public identifiers and country codes, and can return `451` before playback/media fetches. |
+
+The following are deliberately not claimed as complete by this milestone:
+
+* full LBRY block inclusion, SPV, or ClaimTrie currentness proof;
+* proof of completeness for channel-to-stream listings or search/index results;
+* production trust, route, and operator-distribution model for signed policy
+  artifacts;
+* production deployment automation and router/WeaveSpace worker operations;
+* deterministic, TEE-backed, or decentralized transcoding verification;
+* browser-side replay of ancestry/currentness proofs.

@@ -47,7 +47,7 @@ playback(Base, Req, Opts) ->
             _ ->
                 maybe
                     {ok, Stream} ?= from_claim(Base, Req, Opts),
-                    {ok, playback_response(Stream, Base, Req, Opts)}
+                    playback_response_with_policy(Stream, Base, Req, Opts)
                 else
                     Error -> Error
                 end
@@ -63,7 +63,7 @@ media(Base, Req, Opts) ->
             _ ->
                 maybe
                     {ok, Stream} ?= from_claim(Base, Req, Opts),
-                    media_response(Stream, Base, Req, Opts)
+                    media_response_with_policy(Stream, Base, Req, Opts)
                 else
                     Error -> Error
                 end
@@ -226,6 +226,13 @@ playback_response(Stream, Base, Req, Opts) ->
             }
     end.
 
+playback_response_with_policy(Stream, Base, Req, Opts) ->
+    case policy_gate(Stream, Base, Req, Opts) of
+        allow -> {ok, playback_response(Stream, Base, Req, Opts)};
+        {deny, Res} -> {ok, Res};
+        Error -> Error
+    end.
+
 playback_payload(Stream, Opts) ->
     Pairs = [
         {<<"streaming_url">>, hb_maps:get(<<"streaming-url">>, Stream, Opts)},
@@ -324,6 +331,50 @@ media_response(Stream, Base, Req, Opts) ->
         false ->
             descriptor_or_player_media(Stream, Base, Req, Opts)
     end.
+
+media_response_with_policy(Stream, Base, Req, Opts) ->
+    case policy_gate(Stream, Base, Req, Opts) of
+        allow -> media_response(Stream, Base, Req, Opts);
+        {deny, Res} -> {ok, Res};
+        Error -> Error
+    end.
+
+policy_gate(Stream, Base, Req, Opts) ->
+    PolicyReq = policy_request(Base, Req, Opts),
+    case hb_ao:raw(<<"odysee-policy@1.0">>, <<"evaluate">>, Stream, PolicyReq, Opts) of
+        {ok, #{ <<"decision">> := <<"allow">> }} ->
+            allow;
+        {ok, Decision = #{ <<"decision">> := <<"deny">> }} ->
+            {deny, policy_denied_response(Decision)};
+        Error ->
+            Error
+    end.
+
+policy_request(Base, Req, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) -> copy_first(Key, Base, Req, Acc, Opts) end,
+        Req,
+        [
+            <<"odysee-policy">>,
+            <<"policy">>,
+            <<"country">>,
+            <<"geo-country">>,
+            <<"geo_country">>,
+            <<"cf-ipcountry">>,
+            <<"x-country">>
+        ]
+    ).
+
+policy_denied_response(Decision) ->
+    Body = hb_json:encode(Decision),
+    (cors_headers())#{
+        <<"status">> => 451,
+        <<"reason">> =>
+            hb_maps:get(<<"reason">>, Decision, <<"content-policy">>, #{}),
+        <<"content-type">> => <<"application/json">>,
+        <<"content-length">> => byte_size(Body),
+        <<"body">> => Body
+    }.
 
 descriptor_or_player_media(Stream, Base, Req, Opts) ->
     DescriptorRes =
@@ -1057,7 +1108,7 @@ cors_headers() ->
         <<"access-control-allow-headers">> =>
             <<"Range,Content-Type,Accept,Authorization">>,
         <<"access-control-expose-headers">> =>
-            <<"Content-Length,Content-Range,Accept-Ranges,Location">>
+            <<"Content-Length,Content-Range,Accept-Ranges,Location,Content-Digest">>
     }.
 
 media_base_url(Base, Req, Opts) ->
@@ -1402,11 +1453,54 @@ playback_options_preflight_test() ->
     ?assertEqual(<<"*">>, hb_maps:get(<<"access-control-allow-origin">>, Res, #{})),
     ?assertEqual(<<>>, hb_maps:get(<<"body">>, Res, #{})).
 
+playback_signed_policy_denies_claim_test() ->
+    Policy = signed_odysee_policy([policy_deny_rule()]),
+    {ok, Res} =
+        playback(
+            #{},
+            #{ <<"claim">> => target_claim(), <<"odysee-policy">> => Policy },
+            #{}
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, Res, #{})),
+    ?assertEqual(451, hb_maps:get(<<"status">>, Res, #{})),
+    ?assertEqual(<<"deny">>, hb_maps:get(<<"decision">>, Body, #{})),
+    ?assertEqual(<<"dmca">>, hb_maps:get(<<"reason">>, Body, #{})).
+
 media_options_preflight_test() ->
     {ok, Res} = media(#{}, #{ <<"method">> => <<"OPTIONS">> }, #{}),
     ?assertEqual(204, hb_maps:get(<<"status">>, Res, #{})),
     ?assertEqual(<<"*">>, hb_maps:get(<<"access-control-allow-origin">>, Res, #{})),
     ?assertEqual(<<>>, hb_maps:get(<<"body">>, Res, #{})).
+
+media_signed_policy_denies_before_fetch_test() ->
+    Policy = signed_odysee_policy([policy_deny_rule()]),
+    {ok, Res} =
+        media(
+            #{},
+            #{
+                <<"claim">> => target_claim(),
+                <<"method">> => <<"HEAD">>,
+                <<"odysee-policy">> => Policy
+            },
+            #{}
+        ),
+    Body = hb_json:decode(hb_maps:get(<<"body">>, Res, #{})),
+    ?assertEqual(451, hb_maps:get(<<"status">>, Res, #{})),
+    ?assertEqual(<<"deny">>, hb_maps:get(<<"decision">>, Body, #{})).
+
+playback_rejects_unsigned_policy_test() ->
+    Policy = #{
+        <<"device">> => <<"odysee-policy@1.0">>,
+        <<"rules">> => [policy_deny_rule()]
+    },
+    ?assertEqual(
+        {error, unsigned_or_invalid_policy},
+        playback(
+            #{},
+            #{ <<"claim">> => target_claim(), <<"odysee-policy">> => Policy },
+            #{}
+        )
+    ).
 
 media_player_proxy_head_uses_claim_metadata_test() ->
     {ok, Res} =
@@ -1534,6 +1628,24 @@ expected_media_url_with_player_proxy_false() ->
 
 expected_media_url_with_blob_native() ->
     <<(expected_media_url())/binary, "&blob-native=true">>.
+
+signed_odysee_policy(Rules) ->
+    hb_message:commit(
+        #{
+            <<"device">> => <<"odysee-policy@1.0">>,
+            <<"policy-version">> => <<"1">>,
+            <<"rules">> => Rules
+        },
+        #{ <<"priv-wallet">> => ar_wallet:new() }
+    ).
+
+policy_deny_rule() ->
+    #{
+        <<"id">> => <<"demo-dmca">>,
+        <<"action">> => <<"deny">>,
+        <<"reason">> => <<"dmca">>,
+        <<"claim-id">> => <<"346c1fed0fbc2f0b3ecc8bf3915aa8aaa029c169">>
+    }.
 
 target_claim() ->
     #{
