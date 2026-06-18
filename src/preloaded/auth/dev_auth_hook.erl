@@ -103,11 +103,7 @@
 %%     by the user request).
 %% </pre>
 %% 
--spec request(
-    #{ 'secret-provider' => _, 'generate-path' => binary(), 'finalize-path' => binary(), _ => _ },
-    #{ request := #{ _ => _ }, body := _, _ => _ },
-    #{ _ => _ }
-) -> {ok, #{ _ => _ }} | {error, _} | {skip, _, _} | error.
+-spec request(map(), map(), map()) -> {ok, #{ _ => _ }} | {error, _} | {skip, _, _} | error.
 request(Base, HookReq, Opts) ->
     ?event({auth_hook_request, {base, Base}, {priv_hook_req, HookReq}}),
     maybe

@@ -23,9 +23,20 @@
 %% @doc Return the `private' key from a message. If the key does not exist, an
 %% empty map is returned.
 from_message(Msg) when is_map(Msg) ->
-    case maps:is_key(<<"priv">>, Msg) of
-        true -> maps:get(<<"priv">>, Msg, #{});
-        false -> maps:get(priv, Msg, #{})
+    case {maps:find(<<"priv">>, Msg), maps:find(priv, Msg)} of
+        {{ok, Priv}, _} ->
+            Priv;
+        {_, {ok, Priv}} ->
+            Priv;
+        _ ->
+            case hb_maps:find(<<"priv">>, Msg, #{}) of
+                {ok, Priv} -> Priv;
+                error ->
+                    case hb_maps:find(priv, Msg, #{}) of
+                        {ok, Priv} -> Priv;
+                        error -> #{}
+                    end
+            end
     end;
 from_message(_NonMapMessage) -> #{}.
 

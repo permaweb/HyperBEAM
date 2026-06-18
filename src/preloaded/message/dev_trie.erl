@@ -75,11 +75,11 @@ collect_keys(TrieNode, Prefix, Opts, Acc) ->
 
 %% @doc Get the value associated with a key from a trie represented in a base
 %% message.
--spec get(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+-spec get(binary(), map(), map(), map()) ->
     {ok, _} | {error, binary()}.
 get(Key, Trie, Req, Opts) ->
     get(Trie, Req#{<<"key">> => Key}, Opts).
--spec get(#{ _ => _ }, #{ key := binary(), _ => _ }, #{ _ => _ }) ->
+-spec get(map(), map(), map()) ->
     {ok, _} | {error, binary()}.
 get(TrieNode, Req, Opts) ->
     case hb_maps:find(<<"key">>, Req, Opts) of
@@ -88,7 +88,7 @@ get(TrieNode, Req, Opts) ->
     end.
 
 %% @doc Set keys and their values in the trie.
--spec set(#{ _ => _ }, #{ path => binary(), _ => _ }, #{ _ => _ }) ->
+-spec set(map(), map(), map()) ->
     {ok, #{ _ => _ }}.
 set(Trie, Req, Opts) ->
     Insertable = hb_maps:without([<<"path">>], Req, Opts),

@@ -37,11 +37,7 @@
 %%                       `N > 0' - recurse, with the inner `/push'
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
--spec push(
-    #{ _ => _ },
-    #{ slot => integer(), body => #{ _ => _ }, async => boolean(), 'max-depth' => integer(), _ => _ },
-    #{ _ => _ }
-) -> {ok, #{ _ => _ }} | {error, _} | pid().
+-spec push(map(), map(), map()) -> {ok, #{ _ => _ }} | {error, _} | pid().
 push(Base, Req, Opts) ->
     Process =
         lib_process:as_process(
