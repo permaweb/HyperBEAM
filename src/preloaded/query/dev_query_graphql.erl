@@ -108,7 +108,11 @@ handle(_Base, RawReq, Opts) ->
         end,
     ?event({request, {processed, Req}}),
     Query = hb_maps:get(<<"query">>, Req, <<>>, Opts),
-    OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
+    OpName = 
+        case hb_maps:get(<<"operationName">>, Req, undefined, Opts) of
+            Name when is_binary(Name) -> Name;
+            _ -> undefined
+        end,
     Vars = 
         hb_message:uncommitted_deep(
             hb_maps:get(<<"variables">>, Req, #{}, Opts),
@@ -236,7 +240,10 @@ message_query(Msg, <<"id">>, _Args, Opts) ->
     ?event({message_query_id, {object, Msg}}),
     {ok, hb_message:id(Msg, all, Opts)};
 message_query(Msg, <<"cursor">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"cursor">>, Msg, hb_util:bin(hb_maps:get(<<"offset">>, Msg, <<>>, Opts)), Opts)};
+    case hb_maps:find(<<"cursor">>, Msg, Opts) of
+        {ok, Cursor} -> {ok, Cursor};
+        error -> {ok, hb_util:bin(hb_maps:get(<<"offset">>, Msg, <<>>, Opts))}
+    end;
 message_query(_Obj, _Field, _, _) ->
     {ok, <<"Not found.">>}.
 
@@ -338,6 +345,23 @@ lookup_test() ->
             } 
         },
         Res
+    ).
+
+pending_cursor_prefers_existing_cursor_test() ->
+    ?assertEqual(
+        {ok, <<"pending:txid">>},
+        message_query(
+            #{
+                <<"cursor">> => <<"pending:txid">>,
+                <<"offset">> => #{
+                    <<"relative">> => <<"txid">>,
+                    <<"offset">> => 1
+                }
+            },
+            <<"cursor">>,
+            #{},
+            #{}
+        )
     ).
 
 %%% Tests for the GraphQL interface of the dev_query module.

@@ -520,6 +520,7 @@ remote_hyperbeam_node_ans104_test() ->
             #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
     {ok, ID} = hb_cache:write(Msg, ServerOpts),
+    PublicID = hb_message:id(Msg, all, ServerOpts),
     {ok, ReadMsg} = hb_cache:read(ID, ServerOpts),
     ?assert(hb_message:verify(ReadMsg)),
     LocalStore = hb_test_utils:test_store(),
@@ -535,6 +536,6 @@ remote_hyperbeam_node_ans104_test() ->
                     }
                 ]
         },
-    {ok, Req} = hb_cache:read(ID, ClientOpts),
+    {ok, Req} = hb_cache:read(PublicID, ClientOpts),
     ?assert(hb_message:verify(Req)),
     ?assert(hb_message:match(Msg, Req)).

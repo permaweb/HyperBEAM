@@ -158,7 +158,7 @@ query(Msg, <<"recipient">>, _Args, Opts) ->
 query(Msg, <<"anchor">>, _Args, Opts) ->
     case find_field_key(<<"field-anchor">>, Msg, Opts) of
         {ok, null} -> {ok, <<"">>};
-        {ok, Anchor} -> {ok, hb_util:human_id(Anchor)}
+        {ok, Anchor} -> encode_anchor(Anchor)
     end;
 query(Msg, <<"data">>, _Args, Opts) ->
     Data =
@@ -184,6 +184,20 @@ query(Obj, Field, Args, _Opts) ->
     }),
     {ok, <<"Not implemented.">>}.
 
+%% @doc Encode a transaction anchor (`last_tx`) for the GraphQL response.
+%% Per the Arweave spec, an anchor is one of:
+%%   - empty (first TX from a wallet),
+%%   - a 32-byte raw TX ID (the wallet's last outgoing TX), or
+%%   - a 48-byte raw block hash (any of the last 50 blocks).
+%% The cached value may already be base64url-encoded (43 / 64 chars). Other
+%% sizes are not valid per the spec.
+encode_anchor(<<>>) -> {ok, <<>>};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 32 -> {ok, hb_util:encode(Bin)};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 48 -> {ok, hb_util:encode(Bin)};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 43 -> {ok, Bin};
+encode_anchor(Bin) when is_binary(Bin), byte_size(Bin) == 64 -> {ok, Bin};
+encode_anchor(Other) -> {error, <<"invalid_anchor: ", Other/binary>>}.
+
 %% @doc Find and return a value from the fields of a message (from its
 %% commitments).
 find_field_key(Field, Msg, Opts) ->
@@ -205,16 +219,17 @@ find_field_key(Field, Msg, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
+    Remaining = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
+    ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
+    ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
     #{
         <<"count">> => hb_util:bin(ResultsCount),
         <<"edges">> => ResultsPage,
         <<"pageInfo">> =>
             #{
                 <<"hasNextPage">> =>
-                    (DroppedCount + length(ResultsPage)) < ResultsCount
+                    length(ResultsPagePlusOne) > CountToReturn
             }
     }.
 
@@ -230,24 +245,21 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
             read_ids(Rest, Count, Opts)
     end.
 
-%% @doc Drop to the cursor position, returning the number of items dropped and
-%% the list of items after the cursor.
+%% @doc Drop to the cursor position, returning the list of items after the cursor.
 drop_to_cursor(Args, Ordered, Opts) ->
     drop_to_cursor(
         hb_maps:get(<<"after">>, Args, null, Opts),
-        Ordered,
-        Opts,
-        0
+        Ordered
     ).
-drop_to_cursor(Cursor, Ordered, _Opts, Index)
+drop_to_cursor(Cursor, Ordered)
         when Cursor =:= null orelse Cursor =:= undefined orelse Ordered =:= [] ->
-    {Index, Ordered};
-drop_to_cursor(After, [AnnotatedID | Rest], Opts, Index) ->
+    Ordered;
+drop_to_cursor(After, [AnnotatedID | Rest]) ->
     ID = maps:get(<<"id">>, AnnotatedID, undefined),
     Cursor = maps:get(<<"cursor">>, AnnotatedID, undefined),
     case (After =:= ID) orelse (After =:= Cursor) of
-        true -> {Index + 1, Rest};
-        false -> drop_to_cursor(After, Rest, Opts, Index + 1)
+        true -> Rest;
+        false -> drop_to_cursor(After, Rest)
     end.
 
 %% @doc Return the page size, clamped to the maximum allowed.
@@ -272,17 +284,20 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
             fun(AnnotatedID) -> maps:is_key(<<"offset">>, AnnotatedID) end,
             AnnotatedIDs
         ),
-    Ascending =
-        lists:sort(
-            fun(#{ <<"offset">> := OffsetA }, #{ <<"offset">> := OffsetB }) ->
-                OffsetA < OffsetB
-            end,
-            WithOffset
-        ),
+    {Pending, Confirmed} =
+        lists:partition(fun(#{ <<"offset">> := Offset }) -> pending_offset(Offset) end, WithOffset),
+    ByID = fun(#{ <<"id">> := A }, #{ <<"id">> := B }) -> A < B end,
+    ByOffset = fun(#{ <<"offset">> := A }, #{ <<"offset">> := B }) -> A < B end,
     UserOrderSorted =
         case SortOrder of
-            <<"HEIGHT_ASC">> -> Ascending;
-            _ -> lists:reverse(Ascending)
+            <<"HEIGHT_ASC">> ->
+                lists:sort(ByOffset, Confirmed) ++
+                    lists:sort(ByID, Pending) ++
+                    lists:sort(ByID, WithoutOffset);
+            _ ->
+                lists:reverse(lists:sort(ByID, Pending)) ++
+                    lists:reverse(lists:sort(ByOffset, Confirmed)) ++
+                    lists:reverse(lists:sort(ByID, WithoutOffset))
         end,
     ?event(
         {order_by_block,
@@ -291,7 +306,7 @@ sort_offset_annotated(AnnotatedIDs, SortOrder, _Opts) ->
             {without_offset, length(WithoutOffset)}
         }
     ),
-    UserOrderSorted ++ WithoutOffset.
+    UserOrderSorted.
 
 %% @doc Convert a block height range (`#{<<"min">> => Min, <<"max">> => Max}')
 %% into weave byte offset boundaries `{StartOffset, EndOffset}'. Notably, the
@@ -312,7 +327,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         BlockSize = hb_util:int(
                             hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
                         WeaveSize - BlockSize;
-                    not_found -> 0
+                    {error, not_found} -> 0
                 end
         end,
     EndOffset =
@@ -324,7 +339,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         hb_util:int(
                             hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
                         );
-                    not_found -> infinity
+                    {error, not_found} -> infinity
                 end
         end,
     ?event(
@@ -351,7 +366,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
@@ -362,7 +377,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end
     end.
 
@@ -411,27 +426,15 @@ match_args(Args, Opts) when is_map(Args) ->
         Opts
     ).
 match_args([], [], _Opts) -> [];
-match_args([], Results, Opts) ->
+match_args([], Results, _Opts) ->
     ?event({match_args_results, Results}),
-    Store = scoped_store(Opts),
-    % For every ID in every result, we resolve it to its uncommitted ID form.
-    ResolvedResults =
-        [
-            [ hb_util:ok(hb_store:resolve(Store, ID, Opts)) || ID <- Result ]
-        ||
-            Result <- Results
-        ],
-    % Next, we find the intersection of all the results. Having the uncommitted 
-    % ID gives us their 'neutral' form: correctly returning a result with `SignedID1`
-    % from one matcher and `SignedID2` from another matcher -- while they are
-    % unequal, but pertain to the same message.
-    Matches =
+    hb_util:unique(
         lists:foldl(
             fun(Result, Acc) -> hb_util:list_with(Result, Acc) end,
-            hd(ResolvedResults),
-            tl(ResolvedResults)
-        ),
-    hb_util:unique(lists:flatten([ all_signed_ids(ID, Store, Opts) || ID <- Matches ]));
+            hd(Results),
+            tl(Results)
+        )
+    );
 match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
@@ -504,15 +507,26 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
                 {undefined, #{ <<"id">> => ID }}
         end,
     {NewOrdinate, Postfix} =
-        case Offset =:= LastOffset of
+        case Offset =/= undefined andalso not pending_offset(Offset) andalso Offset =:= LastOffset of
             true -> {Ordinate + 1, <<"-", (hb_util:bin(Ordinate + 1))/binary>>};
             false -> {0, <<>>}
         end,
     WithCursor =
         Annotated#{
-            <<"cursor">> => << (hb_util:bin(Offset))/binary, Postfix/binary >>
+            <<"cursor">> => << (offset_cursor(ID, Offset))/binary, Postfix/binary >>
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
+
+offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral:", ID/binary>>;
+offset_cursor(ID, Offset) when is_binary(ID) ->
+    case pending_offset(Offset) of
+        true -> <<"pending:", ID/binary>>;
+        false -> hb_util:bin(Offset)
+    end.
+
+pending_offset(relative) -> true;
+pending_offset(#{ <<"relative">> := _, <<"offset">> := _ }) -> true;
+pending_offset(_) -> false.
 
 %% @doc Apply the `block' height range as a post-filter over candidate IDs.
 %% Each candidate's offset is checked against the block range boundaries,
@@ -532,7 +546,12 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         block_range_to_offset_range(Heights, Opts),
     Filtered =
         lists:filter(
-            fun(#{ <<"offset">> := IDOffset, <<"length">> := Length }) ->
+            fun(#{ <<"offset">> := Offset }) when Offset =:= relative ->
+                    EndOffset =:= infinity;
+                (#{ <<"offset">> := Offset }) when is_map(Offset) ->
+                    EndOffset =:= infinity;
+                (#{ <<"offset">> := IDOffset, <<"length">> := Length })
+                        when is_integer(IDOffset) ->
                     ((StartOffset =:= 0) orelse (IDOffset >= StartOffset)) andalso
                         (
                             (EndOffset =:= infinity) orelse
@@ -584,45 +603,6 @@ commitment_id_to_base_id(ID, Opts) ->
         _ -> not_found
     end.
 
-%% @doc Find all IDs for a message, by any of its other IDs. It achieves this
-%% by resolving the given ID, recursing through its links, then returning all
-%% of the IDs found in that `BaseID/commitments' key.
-all_signed_ids(ID, Store, Opts) ->
-    ResolvedID = hb_util:ok_or(hb_store:resolve(Store, ID, Opts), ID),
-    case hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts) of
-        {composite, CommitmentIDs} ->
-            lists:filter(
-                fun(CommitmentID) ->
-                    CommitmentPath =
-                        <<
-                            ResolvedID/binary,
-                            "/commitments/",
-                            CommitmentID/binary,
-                            "/committer"
-                        >>,
-                    CommitmentMsgID =
-                        hb_util:ok_or(
-                            hb_store:resolve(Store, CommitmentPath, Opts),
-                            CommitmentPath
-                        ),
-                    case hb_store:read(Store, CommitmentMsgID, Opts) of
-                        {ok, _} -> true;
-                        _ ->
-                            false
-                    end
-                end,
-                CommitmentIDs
-            );
-        _ ->
-            [ID]
-    end.
-
-%% @doc Scope the stores used for block matching. The searched stores can be
-%% scoped by setting the `query_arweave_scope' option.
-scoped_store(Opts) ->
-    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
-    hb_opts:get(store, no_store, hb_store:scope(Opts, Scope)).
-
 %% @doc Return the explicit IDs from the arguments, if given. Searches for
 %% both `ids' and `id' keys.
 explicit_ids(Args, Opts) ->
@@ -636,3 +616,43 @@ explicit_ids(Args, Opts) ->
             _ -> []
         end
     ).
+
+pending_offsets_page_by_cursor_test() ->
+    Store = hb_test_utils:test_store(),
+    ArweaveStore = #{ <<"store-module">> => hb_store_arweave, <<"index-store">> => [Store] },
+    Opts = #{ <<"store">> => [Store], <<"arweave-index-store">> => ArweaveStore },
+    {ok, NumericID} =
+        hb_cache:write(#{ <<"type">> => <<"Message">>, <<"data">> => <<"numeric">> }, Opts),
+    {ok, PendingA} =
+        hb_cache:write(#{ <<"type">> => <<"Message">>, <<"data">> => <<"pending-a">> }, Opts),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, NumericID, <<"tx@1.0">>, 10, 1),
+    ok = hb_store_arweave:write_offset(
+        ArweaveStore, PendingA, <<"tx@1.0">>, relative, 0),
+    BaseArgs =
+        #{
+            <<"ids">> => [PendingA, NumericID],
+            <<"block">> => #{ <<"min">> => 0 },
+            <<"first">> => 1
+        },
+    Page =
+        fun(Args) ->
+            {ok, #{ <<"edges">> := [Edge] }} =
+                query(#{}, <<"transactions">>, Args, Opts),
+            Edge
+        end,
+    {ok, BlockMsgID} =
+        hb_cache:write(
+            #{ <<"height">> => 1, <<"weave_size">> => 100, <<"block_size">> => 100 },
+            Opts
+        ),
+    hb_cache:link(
+        BlockMsgID,
+        [<<"~arweave@2.9">>, <<"block">>, <<"height">>, <<"1">>],
+        Opts
+    ),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"block">> => #{ <<"max">> => 1 } }),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"sort">> => <<"HEIGHT_ASC">> }),
+    #{ <<"id">> := PendingA, <<"cursor">> := FirstCursor } = Page(BaseArgs),
+    #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"after">> => FirstCursor }),
+    ok.

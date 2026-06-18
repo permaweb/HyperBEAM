@@ -23,7 +23,11 @@ graphql(Base, Req, Opts) ->
     case parse_query(Base, Req, Opts) of
         {ok, Query} ->
             Node = maps:get(<<"node">>, Opts, undefined),
-            OpName = hb_maps:get(<<"operationName">>, Req, undefined, Opts),
+            OpName =
+                case hb_maps:get(<<"operationName">>, Req, undefined, Opts) of
+                    Name when is_binary(Name) -> Name;
+                    _ -> undefined
+                end,
             Vars = hb_maps:get(<<"variables">>, Req, #{}, Opts),
             index_graphql(0, Query, Vars, Node, OpName, Opts);
         Other ->
