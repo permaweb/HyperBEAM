@@ -123,32 +123,15 @@ install(Base, State, Opts) ->
             ||
                 {FuncName, _} <- dev_lua_lib:module_info(exports),
                 FuncName /= module_info,
-                FuncName /= ?FUNCTION_NAME
+                FuncName /= ?FUNCTION_NAME,
+                FuncName /= make_table_meta
             ]
         ),
-    % Install a type-level metatable for all luerl tables so that any table
-    % created in Lua routes reads through hb_ao:get and writes through hb_ao:set.
-    % Per-table metatables (set by encode_table) take precedence.
+    % Build table index/set handlers for AO metatables. Encoded AO messages
+    % receive these through per-table metatables in encode_table.
     GetFun =
         fun([RawTable, Key], S) ->
-            Table = dev_lua:decode(luerl:decode(RawTable, S), Opts),
-            ?event(debug_lua_getindex, {global_get, {table, Table}, {key, Key}}),
-            case hb_ao:get(Key, Table, Opts) of
-                not_found -> 
-                    ?event(
-                        debug_lua_getindex,
-                        {global_get_not_found, {key, Key}}
-                    ),
-                    {[nil], S};
-                R ->
-                    ?event(
-                        debug_lua_getindex,
-                        {global_get_found, {key, Key}, {result, R}}
-                    ),
-                    Encodable = if is_map(R) -> hb_private:reset(R); true -> R end,
-                    {Encoded, S2} = dev_lua:encode_value(Encodable, S, Opts),
-                    {[Encoded], S2}
-            end
+            table_index(RawTable, Key, S, Opts)
         end,
     SetFun =
         fun([RawTable, Key, Value], S) ->
@@ -225,15 +208,7 @@ install(Base, State, Opts) ->
 make_table_meta(St0, Opts) ->
     GetFun =
         fun([RawTable, Key], S) ->
-            Table = dev_lua:decode(luerl:decode(RawTable, S), Opts),
-            case hb_ao:get(Key, Table, Opts) of
-                not_found ->
-                    {[nil], S};
-                R ->
-                    Encodable = if is_map(R) -> hb_private:reset(R); true -> R end,
-                    {Encoded, S2} = dev_lua:encode_value(Encodable, S, Opts),
-                    {[Encoded], S2}
-            end
+            table_index(RawTable, Key, S, Opts)
         end,
     SetFun =
         fun([RawTable, Key, RawValue], S) ->
@@ -272,6 +247,50 @@ make_table_meta(St0, Opts) ->
         [{<<"__index">>, GetFunRef}, {<<"__newindex">>, SetFunRef}],
         St2
     ).
+
+table_index(RawTable, RawKey, State, Opts) ->
+    Table = dev_lua:decode(luerl:decode(RawTable, State), Opts),
+    Key = dev_lua:decode(luerl:decode(RawKey, State), Opts),
+    ?event(debug_lua_getindex, {global_get, {table, Table}, {key, Key}}),
+    Action = table_key_action(Key, Opts),
+    Result =
+        case Action of
+            {get, Path} ->
+                value_result(hb_ao:get(Path, Table, Opts));
+            {resolve, Req} ->
+                hb_ao:resolve(Table, Req, Opts);
+            false ->
+                value_result(hb_ao:get(Key, Table, Opts))
+        end,
+    encode_index_result(Result, State, Opts).
+
+table_key_action([Path], _Opts) ->
+    {get, Path};
+table_key_action([Path, Req], Opts) when is_map(Req) ->
+    {resolve, (hb_ao:normalize_keys(Req, Opts))#{ <<"path">> => hb_path:to_binary(Path) }};
+table_key_action(Req, Opts) when is_map(Req) ->
+    {resolve, hb_ao:normalize_keys(Req, Opts)};
+table_key_action(_Key, _Opts) ->
+    false.
+
+value_result(not_found) ->
+    not_found;
+value_result(Value) ->
+    {ok, Value}.
+
+encode_index_result(not_found, State, _Opts) ->
+    {[nil], State};
+encode_index_result({error, _Reason}, State, _Opts) ->
+    {[nil], State};
+encode_index_result({ok, Result}, State, Opts) ->
+    ?event(debug_lua_getindex, {global_get_found, {result, Result}}),
+    Encodable =
+        case is_map(Result) of
+            true -> hb_private:reset(Result);
+            false -> Result
+        end,
+    {Encoded, State2} = dev_lua:encode_value(Encodable, State, Opts),
+    {[Encoded], State2}.
 
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->

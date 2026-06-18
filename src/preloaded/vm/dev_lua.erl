@@ -844,6 +844,46 @@ lua_metatable_get_now_test() ->
             #{ <<"process-now-from-cache">> => always }
         ),
     ?assertMatch(14, NowFromCacheAfter).
+
+lua_request_metatable_test() ->
+    Opts = #{
+        <<"preloaded-store">> => hb_opts:get(<<"preloaded-store">>, #{}),
+        <<"preloaded-devices-index">> =>
+            hb_opts:get(<<"preloaded-devices-index">>, undefined),
+        store => [hb_test_utils:test_store()],
+        priv_wallet => hb:wallet()
+    },
+    {ok, Script} = file:read_file("test/test.lua"),
+    Base =
+        #{
+            <<"device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Script
+            }
+        },
+    TestDevice =
+        #{
+            <<"device">> => <<"test-device@1.0">>,
+            <<"connect">> => <<"connected">>,
+            <<"result">> => <<"base:">>,
+            <<"append-prefix">> => <<"via-">>
+        },
+    {ok, Res} =
+        hb_ao:resolve_many(
+            [
+                Base,
+                #{
+                    <<"path">> => <<"request_metatable_test">>,
+                    <<"parameters">> => [TestDevice, #{}, #{}]
+                }
+            ],
+            Opts
+        ),
+    ?assertEqual(<<"connected">>, hb_ao:get(<<"string_get">>, Res, Opts)),
+    ?assertEqual(<<"connected">>, hb_ao:get(<<"tuple_get">>, Res, Opts)),
+    ?assertEqual(<<"base:via-tuple">>, hb_ao:get(<<"tuple_resolve">>, Res, Opts)),
+    ?assertEqual(<<"base:via-map">>, hb_ao:get(<<"req_resolve">>, Res, Opts)).
     
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.

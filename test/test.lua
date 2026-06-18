@@ -181,3 +181,12 @@ function get_now_test(base, req, opts)
     base.executed_now = true
     return base
 end
+
+function request_metatable_test(base, req, opts)
+    return {
+        string_get = base["connect"],
+        tuple_get = base[{ "connect" }],
+        tuple_resolve = base[{ "append", { bin = "tuple" }}].result,
+        req_resolve = base[{ path = "append", bin = "map" }].result
+    }
+end
