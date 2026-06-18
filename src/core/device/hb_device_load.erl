@@ -344,10 +344,10 @@ trusted_signer_entries(Opts) ->
 trusted_signer_accepts(_Ref, _SpecID, Signer, _Opts) when is_binary(Signer) ->
     true;
 trusted_signer_accepts(Ref, SpecID, Signer, Opts) when is_map(Signer) ->
-    case hb_maps:get(<<"accepted-packages">>, Signer, undefined, Opts) of
+    case hb_maps:get(<<"devices">>, Signer, undefined, Opts) of
         undefined -> true;
-        Packages when is_list(Packages) ->
-            lists:member(Ref, Packages) orelse lists:member(SpecID, Packages);
+        Devices when is_list(Devices) ->
+            lists:member(Ref, Devices) orelse lists:member(SpecID, Devices);
         _ ->
             false
     end;
@@ -361,7 +361,7 @@ trusted_signer_address(Signer, Opts) when is_map(Signer) ->
 trusted_signer_address(_Signer, _Opts) ->
     undefined.
 
-trusted_signer_accepted_packages_test() ->
+trusted_signer_devices_test() ->
     Ref = <<"copycat@1.0">>,
     SpecID = <<"SPEC_ID">>,
     ?assertEqual(
@@ -373,11 +373,11 @@ trusted_signer_accepted_packages_test() ->
                 <<"trusted-device-signers">> => [
                     <<"plain">>,
                     #{<<"address">> => <<"unscoped">>},
-                    #{<<"address">> => <<"by-ref">>, <<"accepted-packages">> => [Ref]},
-                    #{<<"address">> => <<"by-spec">>, <<"accepted-packages">> => [SpecID]},
+                    #{<<"address">> => <<"by-ref">>, <<"devices">> => [Ref]},
+                    #{<<"address">> => <<"by-spec">>, <<"devices">> => [SpecID]},
                     #{
                         <<"address">> => <<"other">>,
-                        <<"accepted-packages">> => [<<"arweave@2.9">>]
+                        <<"devices">> => [<<"arweave@2.9">>]
                     }
                 ]
             }
