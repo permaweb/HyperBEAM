@@ -112,7 +112,10 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "  node -v && npm -v"; \
 		exit 1; \
 	fi
-	@cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
+	@mkdir -p cache-mainnet/genesis-wasm/genesis-wasm-db \
+		cache-mainnet/genesis-wasm/checkpoints && \
+		cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
+		npm rebuild better-sqlite3 > /dev/null 2>&1 && \
 		echo "Installed genesis-wasm@1.0 server."
 
 # Update hyperbuddy-ui from remote bundle
