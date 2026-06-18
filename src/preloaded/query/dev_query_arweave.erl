@@ -219,16 +219,17 @@ find_field_key(Field, Msg, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
+    Remaining = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
+    ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
+    ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
     #{
         <<"count">> => hb_util:bin(ResultsCount),
         <<"edges">> => ResultsPage,
         <<"pageInfo">> =>
             #{
                 <<"hasNextPage">> =>
-                    (DroppedCount + length(ResultsPage)) < ResultsCount
+                    length(ResultsPagePlusOne) > CountToReturn
             }
     }.
 
@@ -244,24 +245,21 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
             read_ids(Rest, Count, Opts)
     end.
 
-%% @doc Drop to the cursor position, returning the number of items dropped and
-%% the list of items after the cursor.
+%% @doc Drop to the cursor position, returning the list of items after the cursor.
 drop_to_cursor(Args, Ordered, Opts) ->
     drop_to_cursor(
         hb_maps:get(<<"after">>, Args, null, Opts),
-        Ordered,
-        Opts,
-        0
+        Ordered
     ).
-drop_to_cursor(Cursor, Ordered, _Opts, Index)
+drop_to_cursor(Cursor, Ordered)
         when Cursor =:= null orelse Cursor =:= undefined orelse Ordered =:= [] ->
-    {Index, Ordered};
-drop_to_cursor(After, [AnnotatedID | Rest], Opts, Index) ->
+    Ordered;
+drop_to_cursor(After, [AnnotatedID | Rest]) ->
     ID = maps:get(<<"id">>, AnnotatedID, undefined),
     Cursor = maps:get(<<"cursor">>, AnnotatedID, undefined),
     case (After =:= ID) orelse (After =:= Cursor) of
-        true -> {Index + 1, Rest};
-        false -> drop_to_cursor(After, Rest, Opts, Index + 1)
+        true -> Rest;
+        false -> drop_to_cursor(After, Rest)
     end.
 
 %% @doc Return the page size, clamped to the maximum allowed.
@@ -329,7 +327,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         BlockSize = hb_util:int(
                             hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
                         WeaveSize - BlockSize;
-                    not_found -> 0
+                    {error, not_found} -> 0
                 end
         end,
     EndOffset =
@@ -341,7 +339,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         hb_util:int(
                             hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
                         );
-                    not_found -> infinity
+                    {error, not_found} -> infinity
                 end
         end,
     ?event(
@@ -368,7 +366,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
@@ -379,7 +377,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end
     end.
 
