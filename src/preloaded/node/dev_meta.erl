@@ -10,6 +10,7 @@
 -export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
 -export([is_operator/3]).
 -export([is_operator/2]).
+-export([verified_committers/2, verified_committers/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,22 +28,17 @@ info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
 is_operator(Request, NodeMsg) ->
-    RequestSigners = hb_message:signers(Request, NodeMsg),
-    Operator =
-        hb_opts:get(
-            operator,
-            case hb_opts:get(priv_wallet, no_viable_wallet, NodeMsg) of
-                no_viable_wallet -> unclaimed;
-                Wallet -> ar_wallet:to_address(Wallet)
-            end,
-            NodeMsg
-        ),
-    EncOperator =
-        case Operator of
-            unclaimed -> unclaimed;
-            NativeAddress -> hb_util:human_id(NativeAddress)
-        end,
-    EncOperator == unclaimed orelse lists:member(EncOperator, RequestSigners).
+    is_operator(Request, [], NodeMsg).
+
+is_operator(Request, RequiredKeys, NodeMsg) when is_list(RequiredKeys) ->
+    case operator(NodeMsg) of
+        unclaimed -> false;
+        EncOperator ->
+            lists:member(
+                EncOperator,
+                hb_message:verified_committers(Request, RequiredKeys, NodeMsg)
+            )
+    end;
 
 %% @doc Return whether the request in the body is signed by the node operator.
 is_operator(_Base, Req, NodeMsg) ->
@@ -424,39 +420,21 @@ is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
     % Does the caller have the right to change the node message?
-    RequestSigners = hb_message:signers(Request, NodeMsg),
-    ValidOperator =
-        hb_util:bin(
-            hb_opts:get(
-                operator,
-                case hb_opts:get(priv_wallet, no_viable_wallet, NodeMsg) of
-                    no_viable_wallet -> unclaimed;
-                    Wallet -> ar_wallet:to_address(Wallet)
-                end,
-                NodeMsg
-            )
-        ),
-    EncOperator =
-        case ValidOperator of
-            <<"unclaimed">> -> unclaimed;
-            NativeAddress -> hb_util:human_id(NativeAddress)
-        end,
+    RequiredKeys = signed_request_keys(Request, NodeMsg),
+    ValidCommitters = hb_message:verified_committers(Request, RequiredKeys, NodeMsg),
+    EncOperator = operator(NodeMsg),
     ?event({is,
         {operator,
-            {valid_operator, ValidOperator},
             {encoded_operator, EncOperator},
-            {request_signers, RequestSigners}
+            {request_signers, ValidCommitters}
         }
     }),
-    EncOperator == unclaimed orelse lists:member(EncOperator, RequestSigners);
+    case EncOperator of
+        unclaimed -> claims_operator(Request, ValidCommitters, NodeMsg);
+        _ -> lists:member(EncOperator, ValidCommitters)
+    end;
 is(operator, Req, NodeMsg) ->
-    % Is the caller explicitly set to be the operator?
-    % Get the operator from the node message
-    Operator = hb_opts:get(operator, unclaimed, NodeMsg),
-    % Get the request signers
-    RequestSigners = hb_message:signers(Req, NodeMsg),
-    % Ensure the operator is present in the request
-    lists:member(Operator, RequestSigners);
+    is_operator(Req, NodeMsg);
 is(initiator, Request, NodeMsg) ->
     % Is the caller the first identity that configured the node message?
     NodeHistory = hb_opts:get(node_history, [], NodeMsg),
@@ -466,13 +444,15 @@ is(initiator, Request, NodeMsg) ->
             ?event(meta, {is_initiator, node_history, empty}),
             false;
         [InitializationRequest | _] ->
-            % Extract signature from first entry
-            InitializationRequestSigners = hb_message:signers(InitializationRequest, NodeMsg),
-            % Get request signers
-            RequestSigners = hb_message:signers(Request, NodeMsg),
-            % Ensure all signers of the initalization request are present in the
+            % Extract verified committers from first entry.
+            InitializationRequestSigners =
+                hb_message:verified_committers(InitializationRequest, [], NodeMsg),
+            % Get verified request committers.
+            RequestSigners = hb_message:verified_committers(Request, [], NodeMsg),
+            % Ensure all signers of the initialization request are present in the
             % request.
             AllSignersPresent =
+                InitializationRequestSigners =/= [] andalso
                 lists:all(
                     fun(Signer) -> lists:member(Signer, RequestSigners) end,
                     InitializationRequestSigners
@@ -487,6 +467,71 @@ is(initiator, Request, NodeMsg) ->
                     }}
             end
     end.
+
+operator(NodeMsg) ->
+    Operator =
+        hb_opts:get(
+            operator,
+            case hb_opts:get(priv_wallet, no_viable_wallet, NodeMsg) of
+                no_viable_wallet -> unclaimed;
+                Wallet -> ar_wallet:to_address(Wallet)
+            end,
+            NodeMsg
+        ),
+    encode_operator(Operator).
+
+encode_operator(Operator) ->
+    case hb_util:bin(Operator) of
+        <<"unclaimed">> -> unclaimed;
+        NativeAddress -> hb_util:human_id(NativeAddress)
+    end.
+
+signed_request_keys(Request, NodeMsg) when is_map(Request) ->
+    [
+        Key
+    ||
+        {Key, Value} <- hb_maps:to_list(Request, NodeMsg),
+        requires_signature(Key, Value)
+    ];
+signed_request_keys(_Request, _NodeMsg) ->
+    [].
+
+requires_signature(<<"body">>, <<>>) ->
+    false;
+requires_signature(Key, _Value) ->
+    not lists:member(Key, transport_keys()).
+
+transport_keys() ->
+    [
+        <<"accept">>,
+        <<"accept-bundle">>,
+        <<"ao-peer">>,
+        <<"ao-peer-port">>,
+        <<"commitments">>,
+        <<"content-digest">>,
+        <<"content-type">>,
+        <<"cookie">>,
+        <<"host">>,
+        <<"method">>,
+        <<"path">>,
+        <<"priv">>,
+        <<"signature">>,
+        <<"signature-input">>
+    ].
+
+claims_operator(Request, ValidCommitters, NodeMsg) ->
+    case hb_maps:find(<<"operator">>, Request, NodeMsg) of
+        {ok, Operator} ->
+            lists:member(encode_operator(Operator), ValidCommitters);
+        error ->
+            false
+    end.
+
+verified_committers(Request, NodeMsg) ->
+    verified_committers(Request, [], NodeMsg).
+
+verified_committers(Request, RequiredKeys, NodeMsg) ->
+    hb_message:verified_committers(Request, RequiredKeys, NodeMsg).
 
 %%% Tests
 
@@ -537,6 +582,41 @@ unauthorized_set_node_msg_fails_test() ->
     ?assertEqual(not_found, hb_ao:get(<<"evil-config-item">>, Res, Opts)),
     ?assertEqual(0, length(hb_ao:get(<<"node-history">>, Res, [], Opts))).
 
+forged_committer_set_node_msg_fails_test_parallel() ->
+    Owner = ar_wallet:new(),
+    Attacker = ar_wallet:new(),
+    OwnerAddr = hb_util:human_id(ar_wallet:to_address(Owner)),
+    Opts = #{ <<"priv-wallet">> => Owner },
+    Signed =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~meta@1.0/info">>,
+                <<"evil-config-item">> => <<"BAD">>
+            },
+            #{ <<"priv-wallet">> => Attacker }
+        ),
+    Forged =
+        Signed#{
+            <<"commitments">> =>
+                hb_maps:map(
+                    fun(_ID, Commitment) ->
+                        Commitment#{ <<"committer">> => OwnerAddr }
+                    end,
+                    hb_maps:get(<<"commitments">>, Signed, #{}, #{})
+                )
+        },
+    ?assertEqual(false, is(admin, Forged, Opts)).
+
+unsigned_unclaimed_node_claim_fails_test_parallel() ->
+    Owner = ar_wallet:new(),
+    OwnerAddr = hb_util:human_id(ar_wallet:to_address(Owner)),
+    Req =
+        #{
+            <<"path">> => <<"/~meta@1.0/info">>,
+            <<"operator">> => OwnerAddr
+        },
+    ?assertEqual(false, is(admin, Req, #{ <<"operator">> => unclaimed })).
+
 %% @doc Test that we can set the node message if the request is signed by the
 %% owner of the node.
 authorized_set_node_msg_succeeds_test() ->
@@ -580,7 +660,7 @@ permanent_node_message_test() ->
     Owner = ar_wallet:new(),
     Node = hb_http_server:start_node(
         Opts =#{
-            <<"operator">> => <<"unclaimed">>,
+            <<"operator">> => hb_util:human_id(ar_wallet:to_address(Owner)),
             <<"initialized">> => false,
             <<"test-config-item">> => <<"test">>,
 			<<"store">> => StoreOpts

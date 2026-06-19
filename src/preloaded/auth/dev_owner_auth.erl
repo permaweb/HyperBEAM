@@ -20,20 +20,43 @@ request(Base, HookReq, Opts) ->
     case protected_request(Base, HookReq, Opts) of
         false ->
             {ok, HookReq};
-        true ->
-            authorize(HookReq, Opts)
+        RequiredKeys ->
+            authorize(HookReq, RequiredKeys, Opts)
     end.
 
 %% @doc Check whether the hook payload can invoke a protected device/path.
 protected_request(Base, HookReq, Opts) ->
     Protected = protected(Base, Opts),
-    lists:any(
-        fun(Term) -> protected_term(Term, Protected, Opts) end,
-        [
-            hb_maps:get(<<"request">>, HookReq, #{}, Opts),
-            hb_maps:get(<<"body">>, HookReq, [], Opts)
-        ]
-    ).
+    MaxLinkFollows = link_follow_limit(Base, Opts),
+    Request = hb_maps:get(<<"request">>, HookReq, #{}, Opts),
+    Body = hb_maps:get(<<"body">>, HookReq, [], Opts),
+    RequestProtected = protected_term(Request, Protected, Opts, MaxLinkFollows),
+    BodyProtected = protected_term(Body, Protected, Opts, MaxLinkFollows),
+    RequiredKeys =
+        case {RequestProtected, BodyProtected} of
+            {false, false} -> [];
+            {true, _} -> signed_request_keys(Request, Opts);
+            {false, true} -> [<<"body">> | signed_request_keys(Request, Opts)]
+        end,
+    case RequiredKeys of
+        [] -> false;
+        _ -> RequiredKeys
+    end.
+
+signed_request_keys(Request, Opts) when is_map(Request) ->
+    PresentPathKeys =
+        lists:filter(
+            fun(Key) -> hb_maps:is_key(Key, Request, Opts) end,
+            ?PATH_KEYS
+        ),
+    PresentDeviceKeys =
+        case hb_maps:is_key(<<"device">>, Request, Opts) of
+            true -> [<<"device">>];
+            false -> []
+        end,
+    hb_util:unique(PresentPathKeys ++ PresentDeviceKeys);
+signed_request_keys(_Request, _Opts) ->
+    [].
 
 protected(Base, Opts) ->
     case hb_maps:get(<<"protected">>, Base, [], Opts) of
@@ -41,35 +64,74 @@ protected(Base, Opts) ->
         One -> [normalize_path(One)]
     end.
 
+link_follow_limit(Base, Opts) ->
+    RawLimit =
+        hb_maps:get(
+            <<"max-link-follows">>,
+            Base,
+            hb_opts:get(owner_auth_max_link_follows, 16, Opts),
+            Opts
+        ),
+    try max(0, hb_util:int(RawLimit))
+    catch _:_ -> 0
+    end.
+
 protected_term(Bin, Protected, _Opts) when is_binary(Bin) ->
     path_protected(Bin, Protected);
-protected_term({as, Device, Msg}, Protected, Opts) ->
-    device_protected(Device, Protected) orelse protected_term(Msg, Protected, Opts);
-protected_term({resolve, Msg}, Protected, Opts) ->
-    protected_term(Msg, Protected, Opts);
-protected_term(List, Protected, Opts) when is_list(List) ->
-    lists:any(fun(Item) -> protected_term(Item, Protected, Opts) end, List);
-protected_term(Msg, Protected, Opts) when is_map(Msg) ->
-    device_protected(hb_maps:get(<<"device">>, Msg, not_found, Opts), Protected)
-        orelse path_keys_protected(Msg, Protected, Opts)
+protected_term(Term, Protected, Opts) ->
+    protected_term(Term, Protected, Opts, 16).
+
+protected_term(Link, Protected, Opts, LinksLeft) when ?IS_LINK(Link) ->
+    case LinksLeft > 0 of
+        true ->
+            try protected_term(
+                hb_cache:ensure_loaded(Link, Opts),
+                Protected,
+                Opts,
+                LinksLeft - 1
+            )
+            catch _:_ -> true
+            end;
+        false ->
+            true
+    end;
+protected_term(Bin, Protected, _Opts, _LinksLeft) when is_binary(Bin) ->
+    path_protected(Bin, Protected);
+protected_term({as, Device, Msg}, Protected, Opts, LinksLeft) ->
+    device_protected(Device, Protected)
+        orelse protected_term(Msg, Protected, Opts, LinksLeft);
+protected_term({resolve, Msg}, Protected, Opts, LinksLeft) ->
+    protected_term(Msg, Protected, Opts, LinksLeft);
+protected_term(List, Protected, Opts, LinksLeft) when is_list(List) ->
+    lists:any(fun(Item) -> protected_term(Item, Protected, Opts, LinksLeft) end, List);
+protected_term(Msg, Protected, Opts, LinksLeft) when is_map(Msg) ->
+    device_protected(maps:get(<<"device">>, Msg, not_found), Protected)
+        orelse path_keys_protected(Msg, Protected)
         orelse
             lists:any(
-                fun({_Key, Value}) -> protected_term(Value, Protected, Opts) end,
-                hb_maps:to_list(Msg)
+                fun({_Key, Value}) -> protected_term(Value, Protected, Opts, LinksLeft) end,
+                maps:to_list(Msg)
             );
-protected_term(_Other, _Protected, _Opts) ->
+protected_term(_Other, _Protected, _Opts, _LinksLeft) ->
     false.
 
-path_keys_protected(Msg, Protected, Opts) ->
+path_keys_protected(Msg, Protected) ->
     lists:any(
         fun(Key) ->
-            case hb_maps:find(Key, Msg, Opts) of
-                {ok, Path} -> path_protected(Path, Protected);
+            case maps:find(Key, Msg) of
+                {ok, Path} -> path_value_protected(Path, Protected);
                 error -> false
             end
         end,
         ?PATH_KEYS
     ).
+
+path_value_protected(Path, _Protected) when ?IS_LINK(Path) ->
+    true;
+path_value_protected(Path, Protected) ->
+    try path_protected(Path, Protected)
+    catch _:_ -> true
+    end.
 
 device_protected(not_found, _Protected) ->
     false;
@@ -116,9 +178,11 @@ trim_leading_tilde(<<"~", Rest/binary>>) ->
 trim_leading_tilde(Path) ->
     Path.
 
-authorize(HookReq, Opts) ->
+authorize(HookReq, RequiredKeys, Opts) ->
     Request = hb_maps:get(<<"request">>, HookReq, #{}, Opts),
-    case is_admin(Request, Opts) of
+    Meta = hb_device:message_to_device(#{ <<"device">> => <<"meta@1.0">> }, Opts),
+    case body_matches_request(HookReq, RequiredKeys, Opts)
+            andalso Meta:is_operator(Request, RequiredKeys, Opts) of
         true ->
             {ok, HookReq};
         false ->
@@ -131,27 +195,31 @@ authorize(HookReq, Opts) ->
             }
     end.
 
-%% @doc Same admin authorization semantics used by `~meta@1.0' when updating
-%% the node message.
-is_admin(Request, Opts) ->
-    RequestSigners = hb_message:signers(Request, Opts),
-    ValidOperator =
-        hb_util:bin(
-            hb_opts:get(
-                operator,
-                case hb_opts:get(priv_wallet, no_viable_wallet, Opts) of
-                    no_viable_wallet -> unclaimed;
-                    Wallet -> ar_wallet:to_address(Wallet)
-                end,
-                Opts
-            )
-        ),
-    EncOperator =
-        case ValidOperator of
-            <<"unclaimed">> -> unclaimed;
-            NativeAddress -> hb_util:human_id(NativeAddress)
-        end,
-    EncOperator == unclaimed orelse lists:member(EncOperator, RequestSigners).
+body_matches_request(HookReq, RequiredKeys, Opts) ->
+    case lists:member(<<"body">>, RequiredKeys) of
+        false ->
+            true;
+        true ->
+            Request = hb_maps:get(<<"request">>, HookReq, #{}, Opts),
+            comparable_body(hb_maps:get(<<"body">>, Request, not_found, Opts), Opts)
+                =:= comparable_body(
+                    hb_maps:get(<<"body">>, HookReq, not_found, Opts),
+                    Opts
+                )
+    end.
+
+comparable_body(Body, Opts) ->
+    try hb_message:id(hb_cache:ensure_all_loaded(Body, Opts), Opts)
+    catch _:_ ->
+        try
+            case hb_cache:ensure_all_loaded(Body, Opts) of
+                List when is_list(List) -> hb_util:list_to_numbered_message(List);
+                Loaded -> Loaded
+            end
+        catch _:_ ->
+            Body
+        end
+    end.
 
 %%% Tests
 
@@ -180,6 +248,14 @@ unsigned_protected_request_test_parallel() ->
     Opts = #{ <<"priv-wallet">> => Owner },
     ?assertMatch({error, #{ <<"status">> := 401 }}, request(Base, HookReq, Opts)).
 
+unclaimed_operator_rejected_test_parallel() ->
+    Base = #{ <<"protected">> => [<<"~example@1.0">>] },
+    HookReq = #{
+        <<"request">> => #{ <<"path">> => <<"/~example@1.0/run">> },
+        <<"body">> => []
+    },
+    ?assertMatch({error, #{ <<"status">> := 401 }}, request(Base, HookReq, #{})).
+
 signed_protected_request_test_parallel() ->
     Owner = ar_wallet:new(),
     Base = #{ <<"protected">> => [<<"~example@1.0">>] },
@@ -191,6 +267,75 @@ signed_protected_request_test_parallel() ->
         ),
     HookReq = #{ <<"request">> => Signed, <<"body">> => [] },
     ?assertEqual({ok, HookReq}, request(Base, HookReq, Opts)).
+
+forged_committer_rejected_test_parallel() ->
+    Owner = ar_wallet:new(),
+    Attacker = ar_wallet:new(),
+    Base = #{ <<"protected">> => [<<"~example@1.0">>] },
+    OwnerAddr = hb_util:human_id(ar_wallet:to_address(Owner)),
+    Signed =
+        hb_message:commit(
+            #{ <<"path">> => <<"/~example@1.0/run">> },
+            #{ <<"priv-wallet">> => Attacker }
+        ),
+    Forged =
+        Signed#{
+            <<"commitments">> =>
+                hb_maps:map(
+                    fun(_ID, Commitment) ->
+                        Commitment#{ <<"committer">> => OwnerAddr }
+                    end,
+                    hb_maps:get(<<"commitments">>, Signed, #{}, #{})
+                )
+        },
+    HookReq = #{ <<"request">> => Forged, <<"body">> => [] },
+    ?assertMatch(
+        {error, #{ <<"status">> := 401 }},
+        request(Base, HookReq, #{ <<"priv-wallet">> => Owner })
+    ).
+
+body_protection_requires_signed_body_test_parallel() ->
+    Owner = ar_wallet:new(),
+    Base = #{ <<"protected">> => [<<"~example@1.0">>] },
+    Body = [#{ <<"path">> => <<"/~example@1.0/run">> }],
+    Opts = #{
+        <<"priv-wallet">> => Owner,
+        <<"store">> => hb_test_utils:test_store()
+    },
+    SignedWithoutBody =
+        hb_message:commit(
+            #{ <<"path">> => <<"/~relay@1.0/call">> },
+            Opts
+        ),
+    HookReqWithoutBody = #{ <<"request">> => SignedWithoutBody, <<"body">> => Body },
+    ?assertMatch(
+        {error, #{ <<"status">> := 401 }},
+        request(Base, HookReqWithoutBody, Opts)
+    ),
+    SignedWithBody =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~relay@1.0/call">>,
+                <<"body">> => Body
+            },
+            Opts
+        ),
+    HookReqWithBody = #{ <<"request">> => SignedWithBody, <<"body">> => Body },
+    ?assertEqual({ok, HookReqWithBody}, request(Base, HookReqWithBody, Opts)).
+
+link_follow_limit_fails_closed_test_parallel() ->
+    Base =
+        #{
+            <<"protected">> => [<<"~example@1.0">>],
+            <<"max-link-follows">> => 0
+        },
+    HookReq =
+        #{
+            <<"request">> => #{ <<"path">> => <<"/~relay@1.0/call">> },
+            <<"body">> =>
+                [{link, <<"unfollowed-body-link">>, #{ <<"type">> => <<"link">> }}]
+        },
+    ?assertMatch({error, #{ <<"status">> := 401 }}, request(Base, HookReq, #{})).
 
 cron_path_is_protected_test_parallel() ->
     Owner = ar_wallet:new(),
@@ -245,3 +390,36 @@ configured_node_protects_copycat_test_parallel() ->
     SignedReq = hb_message:commit(Req, NodeOpts),
     ?assertMatch({error, <<"Unsupported mode `invalid`", _/binary>>},
         hb_http:get(Node, SignedReq, #{})).
+
+auth_hook_signature_does_not_bypass_copycat_protection_test_parallel() ->
+    Owner = ar_wallet:new(),
+    NodeOpts =
+        #{
+            <<"priv-wallet">> => Owner,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{
+                                <<"device">> => <<"auth-hook@1.0">>,
+                                <<"path">> => <<"request">>,
+                                <<"secret-provider">> =>
+                                    #{
+                                        <<"device">> => <<"cookie@1.0">>
+                                    }
+                            },
+                            #{
+                                <<"device">> => <<"owner-auth@1.0">>,
+                                <<"protected">> => [<<"~copycat@1.0">>]
+                            }
+                        ]
+                }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    Req =
+        #{
+            <<"path">> => <<"/~copycat@1.0/arweave">>,
+            <<"mode">> => <<"invalid">>
+        },
+    ?assertMatch({error, #{ <<"status">> := 401 }}, hb_http:get(Node, Req, #{})).

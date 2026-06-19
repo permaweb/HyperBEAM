@@ -62,6 +62,7 @@
 -export([with_only_committers/2, with_only_committers/3, commitment_devices/2]).
 -export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
+-export([verified_committers/2, verified_committers/3]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, without_unless_signed/3]).
@@ -672,6 +673,73 @@ signers(Msg, Opts) ->
     hb_util:ok(
         hb_ao:raw(<<"message@1.0">>, <<"committers">>, Msg, #{}, Opts)
     ).
+
+%% @doc Return committers whose commitments verify and cover the required keys.
+verified_committers(Request, Opts) ->
+    verified_committers(Request, [], Opts).
+
+verified_committers(Request, RequiredKeys, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Request, #{}, Opts),
+    lists:filtermap(
+        fun({CommitmentID, Commitment}) ->
+            LoadedCommitment = hb_cache:ensure_all_loaded(Commitment, Opts),
+            case valid_commitment(
+                Request,
+                CommitmentID,
+                LoadedCommitment,
+                RequiredKeys,
+                Opts
+            ) of
+                {true, Committer} -> {true, Committer};
+                false -> false
+            end
+        end,
+        hb_maps:to_list(Commitments, Opts)
+    ).
+
+valid_commitment(
+        Request,
+        CommitmentID,
+        Commitment =
+            #{
+                <<"commitment-device">> := <<"httpsig@1.0">>,
+                <<"type">> := <<"rsa-pss-sha512">>,
+                <<"keyid">> := KeyID
+            },
+        RequiredKeys,
+        Opts) ->
+    Committed = commitment_keys(Commitment, Opts),
+    Present = committed_keys_present(Committed, RequiredKeys),
+    case Present andalso verify_commitment(Request, CommitmentID, Opts) of
+        true -> {true, dev_httpsig_keyid:keyid_to_committer(KeyID)};
+        false -> false
+    end;
+valid_commitment(_Request, _CommitmentID, _Commitment, _RequiredKeys, _Opts) ->
+    false.
+
+committed_keys_present(Committed, RequiredKeys) ->
+    lists:all(
+        fun(Key) -> lists:member(Key, Committed) end,
+        RequiredKeys
+    ).
+
+verify_commitment(Request, CommitmentID, Opts) ->
+    try
+        {ok, VerificationBase} = hb_message:with_only_committed(Request, Opts),
+        hb_message:verify(
+            VerificationBase,
+            #{ <<"commitment-ids">> => [CommitmentID] },
+            Opts
+        )
+    catch
+        _:_ -> false
+    end.
+
+commitment_keys(Commitment, Opts) ->
+    RawCommitted = maps:get(<<"committed">>, Commitment, []),
+    try hb_util:message_to_ordered_list(RawCommitted, Opts)
+    catch _:_ -> RawCommitted
+    end.
 
 %% @doc Pretty-print a message.
 print(Msg) -> print(Msg, 0).

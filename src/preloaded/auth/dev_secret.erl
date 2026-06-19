@@ -519,7 +519,7 @@ verify_controllers(WalletDetails, Request, Opts) ->
             fun(Signer) ->
                 lists:member(Signer, Controllers)
             end,
-            hb_message:signers(Request, Opts)
+            hb_message:verified_committers(Request, Opts)
         ),
     length(PresentControllers) >= RequiredControllers.
 
@@ -901,6 +901,43 @@ commit_with_cookie_wallet_test() ->
     {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
     % Should return the signed message with signature attached.
     ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletName]).
+
+forged_controller_rejected_test_parallel() ->
+    Controller = ar_wallet:new(),
+    Attacker = ar_wallet:new(),
+    ControllerAddr = hb_util:human_id(ar_wallet:to_address(Controller)),
+    WalletDetails =
+        #{
+            <<"controllers">> => [ControllerAddr],
+            <<"required-controllers">> => 1
+        },
+    Signed =
+        hb_message:commit(
+            #{ <<"path">> => <<"/~secret@1.0/export">> },
+            #{ <<"priv-wallet">> => Attacker }
+        ),
+    Forged =
+        Signed#{
+            <<"commitments">> =>
+                hb_maps:map(
+                    fun(_ID, Commitment) ->
+                        Commitment#{ <<"committer">> => ControllerAddr }
+                    end,
+                    hb_maps:get(<<"commitments">>, Signed, #{}, #{})
+                )
+        },
+    ?assertEqual(false, verify_controllers(WalletDetails, Forged, #{})),
+    ?assertEqual(
+        true,
+        verify_controllers(
+            WalletDetails,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~secret@1.0/export">> },
+                #{ <<"priv-wallet">> => Controller }
+            ),
+            #{}
+        )
+    ).
 
 export_wallet_test() ->
     Node = hb_http_server:start_node(#{}),
