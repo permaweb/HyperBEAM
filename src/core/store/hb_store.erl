@@ -658,6 +658,9 @@ test_stores() ->
         },
         (hb_test_utils:test_store(hb_store_volatile))#{
             <<"benchmark-scale">> => 0.01
+        },
+        (hb_test_utils:test_store(hb_store_pdict))#{
+            <<"benchmark-scale">> => 0.5
         }
     ] ++ rocks_stores().
 
