@@ -111,7 +111,12 @@ multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
                 #{
                     <<"device">> => <<"cache@1.0">>,
                     <<"path">> => <<"expected-response">>,
-                    <<"expected">> => Key
+                    <<"expected">> => Key,
+                    %% Hook config rides the admissibility spec (the `Base' that
+                    %% reaches `expected_response'), never `NodeOpts' — no collision.
+                    <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, StoreOpts),
+                    <<"commit-hook-response">> =>
+                        hb_opts:get(commit_hook_response, false, StoreOpts)
                 }
         },
     ?event(store_remote_node,
