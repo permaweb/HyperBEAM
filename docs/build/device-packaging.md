@@ -157,9 +157,8 @@ Use `--bundler` to override the endpoint. Forge posts ANS-104 items to
 | `<<"preloaded-store">>` | store map | LMDB preloaded device store. |
 | `<<"preloaded-devices-index">>` | binary | Committed ID of the flat preloaded resolver message. Embedded into `hb_opts` from `_build/hb_preloaded_index.hrl` during compilation. |
 | `<<"loaded-device-store">>` | store map | Optional shared cache of name/spec-ID → loaded module atom. |
-| `<<"trusted-device-signers">>` | `[Address \| SignerPolicy]` | Acceptable signer addresses for impl messages. Defaults to the node wallet. A signer policy object may include `<<"address">>`, `<<"valid-until-height">>` to cap remote GraphQL lookup by block height, and `<<"devices">>` to scope that signer to package names or spec IDs. |
+| `<<"trusted-device-signers">>` | `[Address \| SignerPolicy]` | Acceptable signer addresses for impl messages. A non-empty configured list enables remote implementation lookup; omitted or empty disables it. A signer policy object may include `<<"address">>`, `<<"valid-until-height">>` to cap remote GraphQL lookup by block height, and `<<"devices">>` to scope that signer to device refs or spec IDs. |
 | `<<"trusted-devices">>` | `#{NameOrSpecID => ImplID}` | Operator-pinned implementation IDs trusted directly for the named device or spec ID. |
-| `<<"load-remote-devices">>` | bool | Whether unmatched devices may be fetched via the Arweave gateway. |
 | `<<"admissible-devices">>` | `all` or `[Name]` | Per-execution allowlist (used by the Lua sandbox). |
 
 In `config.json`, signer entries may be plain addresses or policy
@@ -181,7 +180,8 @@ objects:
 Plain signer entries have no lookup cutoff. `valid-until-height` only limits
 remote implementation lookup; loaded implementations must still be signed
 by an address in `trusted-device-signers`. `devices` scopes a signer
-to matching package names or resolved spec IDs; omitted means all packages.
+to matching device refs or resolved spec IDs; omitted means all devices.
+Omit `trusted-device-signers` or set it to `[]` to disable remote lookup.
 
 `HB_PRELOADED_STORE` and `HB_PRELOADED_DEVICES_INDEX` override the
 first two fields for provider-driven test runs, so the nested EUnit

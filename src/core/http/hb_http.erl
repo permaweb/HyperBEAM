@@ -852,7 +852,7 @@ codec_to_content_type(Codec, Opts) ->
             <<"hashpath">> => ignore,
             <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
             <<"cache-lookup-hueristics">> => false,
-            <<"load-remote-devices">> => false,
+            <<"trusted-device-signers">> => [],
             <<"error-strategy">> => continue
         },
     case hb_ao:get(<<"content-type">>, #{ <<"device">> => Codec }, FastOpts) of

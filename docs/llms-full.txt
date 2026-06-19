@@ -11478,8 +11478,7 @@ float, atom, or list of such values).
 
 Devices can be expressed as either modules or maps. They can also be
 referenced by an Arweave ID, which can be used to load a device from
-the network (depending on the value of the `load_remote_devices` and
-`trusted_device_signers` environment settings).
+the network when `trusted_device_signers` are configured.
 
 HyperBEAM device implementations are defined as follows:
 
@@ -20406,9 +20405,8 @@ These options control how HyperBEAM executes messages and processes.
 
 These options control how HyperBEAM manages devices.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
+Remote device loading is enabled by configuring `trusted_device_signers`;
+omit it or set it to `[]` to disable remote signer lookup.
 <!-- Complex options like preloaded-store, devices are omitted -->
 
 ### Debug & Development

@@ -286,7 +286,6 @@ load_device_test() ->
     % Establish an execution environment which trusts the device author.
     Wallet = ar_wallet:new(),
     Opts = #{
-        <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
             [hb:address(), hb_util:human_id(ar_wallet:to_address(Wallet))],
         <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
@@ -300,7 +299,6 @@ untrusted_load_device_test() ->
     UntrustedWallet = ar_wallet:new(),
     TrustedWallet = ar_wallet:new(),
     Opts = #{
-        <<"load-remote-devices">> => true,
         <<"trusted-device-signers">> =>
             [hb:address(), hb_util:human_id(ar_wallet:to_address(TrustedWallet))],
         <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
@@ -312,10 +310,9 @@ untrusted_load_device_test() ->
         exec_dummy_device(Opts)
     ).
 
-load_remote_devices_false_skips_gateway_test() ->
+no_trusted_device_signers_skips_gateway_test() ->
     Wallet = ar_wallet:new(),
     Opts = #{
-        <<"load-remote-devices">> => false,
         <<"routes">> => invalid,
         <<"store">> => Store = hb_test_utils:test_store(hb_store_fs),
         <<"priv-wallet">> => Wallet
