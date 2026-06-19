@@ -17,8 +17,8 @@ info(_Opts) ->
     }.
 
 %% @doc Takes a `key' argument and returns the value of the name, if it exists.
-lookup(_, Req, Opts) ->
-    Key = hb_ao:get(<<"key">>, Req, no_key_specified, Opts),
+-spec lookup(#{ _ => _ }, #{ key := binary(), _ => _ }, _) -> _.
+lookup(_, #{ <<"key">> := Key }, Opts) ->
     ?event(local_name, {lookup, Key}),
     hb_ao:resolve(
         find_names(Opts),
@@ -27,11 +27,13 @@ lookup(_, Req, Opts) ->
     ).
 
 %% @doc Handle all other requests by delegating to the lookup function.
+-spec default_lookup(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
 default_lookup(Key, _, Req, Opts) ->
     lookup(Key, Req#{ <<"key">> => Key }, Opts).
 
 %% @doc Takes a `key' and `value' argument and registers the name. The caller
 %% must be the node operator in order to register a name.
+-spec register(#{ _ => _ }, #{ key := binary(), value := _, _ => _ }, _) -> _.
 register(_, Req, Opts) ->
     case hb_ao:resolve(
         #{ <<"device">> => <<"meta@1.0">> },
@@ -52,9 +54,9 @@ register(_, Req, Opts) ->
 %% @doc Register a name without checking if the caller is an operator. Exported
 %% for use by other devices, but not publicly available.
 direct_register(Req, Opts) ->
-    case hb_cache:write(hb_ao:get(<<"value">>, Req, Opts), Opts) of
+    case hb_cache:write(maps:get(<<"value">>, Req), Opts) of
         {ok, MsgPath} ->
-            NormKey = hb_ao:normalize_key(hb_ao:get(<<"key">>, Req, Opts)),
+            NormKey = hb_ao:normalize_key(maps:get(<<"key">>, Req)),
             hb_cache:link(
                 MsgPath,
                 LinkPath = << ?DEV_CACHE/binary, "/", NormKey/binary >>,

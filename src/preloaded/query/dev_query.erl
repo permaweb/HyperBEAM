@@ -44,12 +44,14 @@ info(_Opts) ->
     }.
 
 %% @doc Execute the query via GraphQL.
+-spec graphql(#{ _ => _ }, #{ _ => _ }, _) -> _.
 graphql(Req, Base, Opts) ->
     dev_query_graphql:handle(Req, Base, Opts).
 
 %% @doc Return whether a GraphQL esponse in a message has transaction results.
 %% This key is used in HB's gateway client multirequest configuration to
 %% determine if the response from the node should be considered admissible.
+-spec has_results(#{ _ => _ }, #{ _ => _ }, _) -> _.
 has_results(Base, Req, Opts) ->
     JSON =
         hb_ao:get_first(
@@ -70,24 +72,32 @@ has_results(Base, Req, Opts) ->
     end.
 
 %% @doc Search for the keys specified in the request message.
+-spec default(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
 default(_, Base, Req, Opts) ->
     all(Base, Req, Opts).
 
 %% @doc Search the node's store for all of the keys and values in the request,
 %% aside from the `commitments' and `path' keys.
+-spec all(#{ _ => _ }, #{ _ => _ }, _) -> _.
 all(Base, Req, Opts) ->
     match(Req, Base, Req, Opts).
 
 %% @doc Search the node's store for all of the keys and values in the base
 %% message, aside from the `commitments' and `path' keys.
+-spec base(#{ _ => _ }, #{ _ => _ }, _) -> _.
 base(Base, Req, Opts) ->
     match(Base, Base, Req, Opts).
 
 %% @doc Search only for the (list of) key(s) specified in `only' in the request.
 %% The `only' key can be a binary, a map, or a list of keys. See the moduledoc
 %% for semantics.
+-spec only(
+    #{ _ => _ },
+    #{ only => binary() | [binary()] | #{ _ => _ }, exclude => [binary()], return => binary(), _ => _ },
+    _
+) -> _.
 only(Base, Req, Opts) ->
-    case hb_maps:get(<<"only">>, Req, not_found, Opts) of
+    case maps:get(<<"only">>, Req, not_found) of
         KeyBin when is_binary(KeyBin) ->
             % The descriptor is a binary, so we split it on commas to get a
             % list of keys to search for. If there is only one key, we
@@ -134,11 +144,11 @@ match(Keys, Base, Req, Opts) when is_list(Keys) ->
 match(UserSpec, _Base, Req, Opts) ->
     ?event({matching, {spec, UserSpec}}),
     FilteredSpec =
-        hb_maps:without(
-            hb_maps:get(<<"exclude">>, Req, ?DEFAULT_EXCLUDES, Opts),
+        maps:without(
+            maps:get(<<"exclude">>, Req, ?DEFAULT_EXCLUDES),
             UserSpec
         ),
-    ReturnType = hb_maps:get(<<"return">>, Req, <<"paths">>, Opts),
+    ReturnType = maps:get(<<"return">>, Req, <<"paths">>),
     ?event({matching, {spec, FilteredSpec}, {return, ReturnType}}),
     case hb_cache:match(FilteredSpec, Opts) of
         {ok, RawMatches} ->

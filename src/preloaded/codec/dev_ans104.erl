@@ -13,12 +13,14 @@
 content_type(_) -> {ok, <<"application/ans104">>}.
 
 %% @doc Serialize a message or TX to a binary.
+-spec serialize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 serialize(Msg, Req, Opts) when is_map(Msg) ->
     serialize(to(Msg, Req, Opts), Req, Opts);
 serialize(TX, _Req, _Opts) when is_record(TX, tx) ->
     {ok, ar_bundles:serialize(TX)}.
 
 %% @doc Deserialize a binary ans104 message to a TABM.
+-spec deserialize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 deserialize(#{ <<"body">> := Binary }, Req, Opts) ->
     deserialize(Binary, Req, Opts);
 deserialize(Binary, Req, Opts) when is_binary(Binary) ->
@@ -29,6 +31,7 @@ deserialize(TX, Req, Opts) when is_record(TX, tx) ->
 %% @doc Sign a message using the `priv-wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
 %% signed commitments.
+-spec commit(#{ _ => _ }, #{ _ => _ }, _) -> _.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"unsigned-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
@@ -58,7 +61,7 @@ commit(Msg, #{ <<"type">> := <<"unsigned-sha256">> }, Opts) ->
     {
         ok,
         hb_message:convert(
-            hb_maps:without([<<"commitments">>], Msg, Opts),
+            maps:remove(<<"commitments">>, Msg),
             <<"ans104@1.0">>,
             <<"structured@1.0">>,
             Opts
@@ -77,6 +80,7 @@ sign_tx(TX, Wallet, Opts) ->
     {ok, SignedStructured}.
 
 %% @doc Verify an ANS-104 commitment.
+-spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
 verify(Msg, Req, Opts) ->
     ?event({verify, {base, Msg}, {req, Req}}),
     OnlyWithCommitment =
@@ -94,6 +98,7 @@ verify(Msg, Req, Opts) ->
     {ok, Res}.
 
 %% @doc Convert a #tx record into a message map recursively.
+-spec from(#{ _ => _ }, #{ _ => _ }, _) -> _.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
 from(TX, Req, Opts) when is_record(TX, tx) ->
     case lists:keyfind(<<"ao-type">>, 1, TX#tx.tags) of
@@ -141,6 +146,7 @@ to_hint(Msg, Req, Opts) ->
 %% message's device in order to get the keys that we will be checkpointing. We 
 %% do this recursively to handle nested messages. The base case is that we hit
 %% a binary, which we return as is.
+-spec to(#{ _ => _ }, #{ _ => _ }, _) -> _.
 to(Binary, _Req, _Opts) when is_binary(Binary) ->
     % ar_bundles cannot serialize just a simple binary or get an ID for it, so
     % we turn it into a TX record with a special tag, tx_to_message will

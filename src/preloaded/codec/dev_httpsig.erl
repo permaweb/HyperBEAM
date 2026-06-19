@@ -20,7 +20,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Routing functions for the `dev_httpsig_conv' module
+-spec to(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 to(Msg, Req, Opts) -> dev_httpsig_conv:to(Msg, Req, Opts).
+-spec from(#{ _ => _ }, #{ _ => _ }, map()) -> term().
 from(Msg, Req, Opts) -> dev_httpsig_conv:from(Msg, Req, Opts).
 
 %% @doc Generate the `Opts' to use during AO-Core operations in the codec.
@@ -61,6 +63,7 @@ proxy_verify(_Base, Req, Opts) ->
 %% 
 %% Optionally, the `index` key can be set to override resolution of the default
 %% index page into HTTP responses that do not contain their own `body` field.
+-spec serialize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 serialize(Msg, Opts) -> serialize(Msg, #{}, Opts).
 serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
     % Convert to HTTPSig via TABM through calling `hb_message:convert` rather
@@ -69,8 +72,8 @@ serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
     {ok, EncMsg} = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts),
     {ok,
         #{
-            <<"body">> => hb_maps:get(<<"body">>, EncMsg, <<>>),
-            <<"headers">> => hb_maps:without([<<"body">>], EncMsg)
+            <<"body">> => maps:get(<<"body">>, EncMsg, <<>>),
+            <<"headers">> => maps:remove(<<"body">>, EncMsg)
         }
     };
 serialize(Msg, _Req, Opts) ->
@@ -79,6 +82,7 @@ serialize(Msg, _Req, Opts) ->
     HTTPSig = hb_message:convert(Msg, <<"httpsig@1.0">>, Opts), 
     {ok, dev_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
 
+-spec verify(#{ _ => _ }, #{ _ => _ }, _) -> _.
 verify(Base, Req, RawOpts) ->
     % A rsa-pss-sha512 commitment is verified by regenerating the signature
     % base and validating against the signature.
@@ -137,6 +141,7 @@ verify(Base, Req, RawOpts) ->
 %% parameter to determine the type of commitment to use. If the `type' parameter
 %% is `signed', we default to the rsa-pss-sha512 algorithm. If the `type'
 %% parameter is `unsigned', we default to the hmac-sha256 algorithm.
+-spec commit(#{ _ => _ }, #{ _ => _ }, _) -> _.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"hmac-sha256">> }, Opts);
 commit(Msg, Req = #{ <<"type">> := <<"signed">> }, Opts) ->
@@ -336,6 +341,7 @@ add_content_digest(Msg, _Opts) ->
 
 %% @doc Given a base message and a commitment, derive the message and commitment
 %% normalized for encoding.
+-spec normalize_for_encoding(#{ _ => _ }, #{ _ => _ }, _) -> _.
 normalize_for_encoding(Msg, Commitment, Opts) ->
     % Extract the requested keys to include in the signature base.
     RawInputs =

@@ -6,6 +6,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
+-spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
 info(_) -> 
 	#{ default => fun handler/4 }.
 
@@ -23,6 +24,7 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
+-spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
 handler(<<"set">>, Base, Req, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"set">>, Base, Req, Opts);
 handler(<<"keys">>, Base, _Req, _Opts) ->
@@ -31,6 +33,7 @@ handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
+-spec once(#{ _ => _ }, #{ _ => _ }, _) -> _.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
@@ -76,10 +79,11 @@ once_worker(Path, Req, Opts) ->
 
 
 %% @doc Exported function for scheduling a recurring message.
+-spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, _) -> _.
 every(_Base, Req, Opts) ->
 	case {
 		extract_path(Req, Opts),
-		hb_ao:get(<<"interval">>, Req, Opts)
+		maps:get(<<"interval">>, Req, not_found)
 	} of
 		{not_found, _} -> 
 			{error, <<"No cron path found in message.">>};
@@ -95,14 +99,13 @@ every(_Base, Req, Opts) ->
 				end,
 				ReqMsgID = hb_message:id(Req, all, Opts),
 				ModifiedReq =
-                    hb_maps:without(
+                    maps:without(
                         [
                             <<"interval">>,
                             <<"cron-path">>,
-                            hb_maps:get(<<"every">>, Req, <<"every">>, Opts)
+                            maps:get(<<"every">>, Req, <<"every">>)
                         ],
-                        Req,
-                        Opts
+                        Req
                     ),
 				Pid =
                     spawn(
@@ -136,8 +139,9 @@ every(_Base, Req, Opts) ->
 	end.
 
 %% @doc Exported function for stopping a scheduled task.
-stop(_Base, Req, Opts) ->
-	case hb_ao:get(<<"task">>, Req, Opts) of
+-spec stop(#{ _ => _ }, #{ task := binary(), _ => _ }, _) -> _.
+stop(_Base, Req, _Opts) ->
+	case maps:get(<<"task">>, Req, not_found) of
 		not_found ->
 			{error, <<"No task ID found in message.">>};
 		TaskID ->
@@ -204,7 +208,7 @@ parse_time(BinString) ->
 %% @doc Extract the path from the request message, given the name of the key
 %% that was invoked.
 extract_path(Req, Opts) ->
-    extract_path(hb_maps:get(<<"path">>, Req, Opts), Req, Opts).
+    extract_path(maps:get(<<"path">>, Req), Req, Opts).
 extract_path(Key, Req, Opts) ->
     hb_ao:get_first([{Req, Key}, {Req, <<"cron-path">>}], Opts).
 

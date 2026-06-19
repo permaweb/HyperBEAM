@@ -28,20 +28,26 @@
 -include_lib("include/hb.hrl").
 
 %% @doc Necessary hooks for compliance with the `execution-device' standard.
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(Base, _Req, _Opts) -> {ok, Base}.
+-spec normalize(#{ _ => _ }, #{ _ => _ }, _) -> _.
 normalize(Base, _Req, _Opts) -> {ok, Base}.
+-spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
 snapshot(Base, _Req, _Opts) -> {ok, Base}.
+-spec compute(#{ _ => _ }, #{ _ => _ }, _) -> _.
 compute(Base, Req, Opts) -> patches(Base, Req, Opts).
 
 %% @doc Get the value found at the `patch-from' key of the message, or the
 %% `from' key if the former is not present. Remove it from the message and set
 %% the new source to the value found.
+-spec all(#{ _ => _ }, #{ _ => _ }, _) -> _.
 all(Base, Req, Opts) ->
     move(all, Base, Req, Opts).
 
 %% @doc Find relevant `PATCH' messages in the given source key of the execution
 %% and request messages, and apply them to the given destination key of the
 %% request.
+-spec patches(#{ _ => _ }, #{ _ => _ }, _) -> _.
 patches(Base, Req, Opts) ->
     move(patches, Base, Req, Opts).
 
@@ -107,18 +113,17 @@ move(Mode, Base, Req, Opts) ->
                 patches ->
                     maps:fold(
                         fun(Key, Msg, {PatchAcc, NewSourceAcc}) ->
-                            Method = hb_ao:get(<<"method">>, Msg, Opts)
+                            Method = maps:get(<<"method">>, Msg, undefined)
                                 == <<"PATCH">>,
-                            Device = hb_ao:get(<<"device">>, Msg, Opts)
+                            Device = maps:get(<<"device">>, Msg, undefined)
                                 == <<"patch@1.0">>,
                             if Method orelse Device ->
                                 {
                                     PatchAcc#{
                                         Key =>
-                                            hb_maps:without(
+                                            maps:without(
                                                 [<<"commitments">>, <<"Tags">>],
-                                                Msg,
-                                                Opts
+                                                Msg
                                             )
                                     },
                                     NewSourceAcc

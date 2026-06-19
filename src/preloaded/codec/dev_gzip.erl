@@ -8,10 +8,11 @@
 %% containting a gzip-encoded payload. Returns the rest of the base message 
 %% unchanged, with the `content-encoding' key unset.
 %% 
+-spec unzip(#{ body => binary(), 'content-encoding' => binary(), _ => _ }, #{ _ => _ }, _) -> _.
 unzip(Base, _Req, Opts) ->
-    case hb_maps:get(<<"content-encoding">>, Base, <<"gzip">>, Opts) of
+    case maps:get(<<"content-encoding">>, Base, <<"gzip">>) of
         <<"gzip">> ->
-            case hb_maps:find(<<"body">>, Base, Opts) of
+            case maps:find(<<"body">>, Base) of
                 error ->
                     ?event(
                         debug_gzip,
@@ -25,17 +26,11 @@ unzip(Base, _Req, Opts) ->
                         {unzipping_body, {size, byte_size(Body)}},
                         Opts
                     ),
-                    {
-                        ok,
-                        hb_ao:set(
-                            Base,
-                            #{
-                                <<"body">> => zlib:gunzip(Body),
-                                <<"content-encoding">> => unset
-                            },
-                            Opts
-                        )
-                    }
+                    {ok,
+                        maps:remove(
+                            <<"content-encoding">>,
+                            Base#{ <<"body">> => zlib:gunzip(Body) }
+                        )}
             end;
         _ ->
             ?event(
@@ -48,20 +43,15 @@ unzip(Base, _Req, Opts) ->
 
 %% @doc Take a base message with a `body' key and return it zipped, in-place.
 %% Add a `content-encoding' key with the value `gzip'.
-zip(Base, _Req, Opts) ->
-    case hb_maps:find(<<"body">>, Base, Opts) of
+-spec zip(#{ body => binary(), _ => _ }, #{ _ => _ }, _) -> _.
+zip(Base, _Req, _Opts) ->
+    case maps:find(<<"body">>, Base) of
         {ok, Body} ->
-            {
-                ok,
-                hb_ao:set(
-                    Base,
-                    #{
-                        <<"body">> => zlib:gzip(Body),
-                        <<"content-encoding">> => <<"gzip">>
-                    },
-                    Opts
-                )
-            };
+            {ok,
+                Base#{
+                    <<"body">> => zlib:gzip(Body),
+                    <<"content-encoding">> => <<"gzip">>
+                }};
         error ->
             {error, <<"No `body' key to zip found in message.">>}
     end.

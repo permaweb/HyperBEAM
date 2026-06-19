@@ -103,6 +103,7 @@
 %%     by the user request).
 %% </pre>
 %% 
+-spec request(#{ _ => _ }, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 request(Base, HookReq, Opts) ->
     ?event({auth_hook_request, {base, Base}, {priv_hook_req, HookReq}}),
     maybe
@@ -111,8 +112,8 @@ request(Base, HookReq, Opts) ->
         {ok, Provider} ?= find_provider(Base, Opts),
         % Check if the request already has signatures, or the hook base enforces
         % that we should always attempt to sign the request.
-        {ok, Request} ?= hb_maps:find(<<"request">>, HookReq, Opts),
-        {ok, OrigMessages} ?= hb_maps:find(<<"body">>, HookReq, Opts),
+        {ok, Request} ?= maps:find(<<"request">>, HookReq),
+        {ok, OrigMessages} ?= maps:find(<<"body">>, HookReq),
         true ?= is_relevant(Base, Request, OrigMessages, Opts),
         ?event(auth_hook_is_relevant),
         % Call the key provider to normalize authentication (generate if needed)
@@ -257,7 +258,7 @@ generate_secret(Provider, Request, Opts) ->
             % If there is a `wallet' field in the request, we move it to the
             % provider, else continue with the existing provider.
             ?event({priv_normalized_req, NormalizedReq}),
-            case hb_maps:find(<<"secret">>, NormalizedReq, Opts) of
+            case maps:find(<<"secret">>, NormalizedReq) of
                 {ok, Key} ->
                     ?event({priv_key_found_in_normalized_req, Key}),
                     {
@@ -272,8 +273,8 @@ generate_secret(Provider, Request, Opts) ->
     end.
 
 %% @doc Strip the `secret' field from a request.
-strip_sensitive(Request, Opts) ->
-    hb_maps:without([<<"secret">>], Request, Opts).
+strip_sensitive(Request, _Opts) ->
+    maps:remove(<<"secret">>, Request).
 
 %% @doc Generate a wallet with the key if the `wallet' field is not present in
 %% the provider after normalization.
@@ -298,7 +299,7 @@ sign_request(Provider, Msg, Opts) ->
         true ->
             % Wallet signs without ignored keys
             IgnoredKeys = ignored_keys(Msg, Opts),
-            WithoutIgnored = hb_maps:without(IgnoredKeys, Msg, Opts),
+            WithoutIgnored = maps:without(IgnoredKeys, Msg),
             % Call the wallet to sign the request.
             case hb_ao:raw(
                 <<"secret@1.0">>,
@@ -309,10 +310,9 @@ sign_request(Provider, Msg, Opts) ->
                 {ok, Signed} ->
                     ?event({auth_hook_signed, Signed}),
                     SignedWithIgnored = 
-                        hb_maps:merge(
+                        maps:merge(
                             Signed,
-                            hb_maps:with(IgnoredKeys, Msg, Opts),
-                            Opts
+                            maps:with(IgnoredKeys, Msg)
                         ),
                     {ok, SignedWithIgnored};
                 {error, Err} ->
@@ -412,7 +412,7 @@ call_provider(Key, Provider, Request, Opts) ->
     case hb_ao:resolve(Provider, Request#{ <<"path">> => ExecKey }, Opts) of
         {ok, Msg} when is_map(Msg) ->
             % The result is a message. We revert the path to its original value.
-            case hb_maps:find(<<"path">>, Request, Opts) of
+            case maps:find(<<"path">>, Request) of
                 {ok, Path} -> {ok, Msg#{ <<"path">> => Path }};
                 _ -> {ok, Msg}
             end;

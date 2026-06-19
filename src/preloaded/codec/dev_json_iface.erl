@@ -42,10 +42,12 @@
 -include("include/hb.hrl").
 
 %% @doc Initialize the device.
+-spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
 init(M1, _M2, Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>}, Opts)}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
+-spec compute(#{ _ => _ }, #{ _ => _ }, _) -> _.
 compute(M1, M2, Opts) ->
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
@@ -508,6 +510,7 @@ normalize_test_opts(Opts) ->
 test_init() ->
     application:ensure_all_started(hb).
 
+-spec generate_stack(#{ _ => _ }, #{ _ => _ }, _) -> _.
 generate_stack(File) ->
     generate_stack(File, <<"WASM">>).
 generate_stack(File, Mode) ->
