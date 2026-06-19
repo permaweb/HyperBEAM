@@ -205,7 +205,7 @@ import(Base, Request, Opts) ->
             {ok, Keys} when is_list(Keys) ->
                 [ wallet_from_key(Key) || Key <- Keys ];
             {ok, Key} ->
-                [ wallet_from_key(hb_escape:decode_quotes(Key)) ];
+                [ wallet_from_key(Key) ];
             error ->
                 request_to_wallets(Base, Request, Opts)
         end,
@@ -273,8 +273,13 @@ register_wallet(Wallet, Base, Request, Opts) ->
                     {defaulting_access_control, {base, Base}, {request, Request}}
                 ),
                 {ok, #{ <<"device">> => ?DEFAULT_AUTH_DEVICE }};
-            AuthPath when is_binary(AuthPath) ->
-                hb_ao:resolve(AuthPath, Opts);
+            AccessControlDevice when is_binary(AccessControlDevice) ->
+                case hb_ao:resolve(<<"~", AccessControlDevice/binary>>, Opts) of 
+                    {ok, {as, Device, _}} -> 
+                        {ok, #{ <<"device">> => Device }};
+                    AccessControlResolution ->
+                        AccessControlResolution
+                end;
             Msg ->
                 case hb_maps:is_key(<<"path">>, Msg, Opts) of
                     true -> hb_ao:resolve(Msg, Opts);
@@ -445,11 +450,12 @@ request_to_wallets(Base, Request, Opts) ->
                         wallets_from_cookie(Request, Opts);
                     _ -> secrets_to_keyids(Keys)
                 end;
-        KeyIDs -> lists:map(fun(KeyID) ->
+            KeyIDs ->
+                lists:map(fun(KeyID) ->
                     Wallet = find_wallet(KeyID, Opts),
                     {secret, KeyID, hb_maps:get(<<"wallet">>, Wallet, Opts) }
                 end, KeyIDs)
-    end,
+        end,
     ?event({attempting_to_load_wallets, {priv_keyids, WalletKeyIDs}, {priv_request, Request}}),
     lists:filtermap(
         fun(WalletKeyID) ->
