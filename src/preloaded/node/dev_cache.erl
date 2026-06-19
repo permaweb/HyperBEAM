@@ -103,7 +103,7 @@ fire_admissible_response_hook(Base, Opts) ->
     Run =
         fun() ->
             hb_hook:on(
-                <<"admissible-response">>,
+                [<<"~cache@1.0">>, <<"admissible-response">>],
                 #{ <<"body">> => admissible_response_body(Base, HookOpts) },
                 HookOpts
             )
@@ -113,10 +113,7 @@ fire_admissible_response_hook(Base, Opts) ->
         _ ->
             spawn(
                 fun() ->
-                    try 
-                        Res = Run(),
-                        ?event(debug_admissible, {res, {explicit, Res}}),
-                        ok
+                    try Run()
                     catch C:R:S ->
                         ?event(debug_admissible,
                             {admissible_response_hook_async_error,
