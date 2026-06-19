@@ -66,7 +66,14 @@ on(HookName, Req, Opts) ->
 %% @doc Get all handlers for a specific hook from the node message options.
 %% Handlers are stored in the `on' key of this message.
 find(HookName, Opts = #{ <<"on">> := On }) when is_map(On) ->
-    case maps:get(HookName, On, []) of
+    % Device-scoped hooks fire a path (e.g. `[<<"~cache@1.0">>, <<"...">>]')
+    % resolved by walking `on'; flat names keep the direct, fast lookup.
+    Found =
+        case is_list(HookName) of
+            true -> hb_util:deep_get(HookName, On, [], Opts);
+            false -> maps:get(HookName, On, [])
+        end,
+    case Found of
         Handler when is_map(Handler) ->
             case hb_util:is_ordered_list(Handler, Opts) of
                 true ->
