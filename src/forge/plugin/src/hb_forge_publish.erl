@@ -31,6 +31,7 @@ do_run(State) ->
     KeyPath = maps:get(<<"key">>, Args),
     PublishCodec = maps:get(<<"publish-codec">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
+    Signer = hb:address(Wallet),
     Opts =
         (hb_forge_args:package_opts(Args))#{
             <<"priv-wallet">> => Wallet,
@@ -53,7 +54,7 @@ do_run(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = hb_client_remote:upload(Spec, NodeOpts, PublishCodec),
+            {ok, _} = upload(Spec, NodeOpts, PublishCodec),
             SpecID = hb_message:id(Spec, all, NodeOpts),
             % Sign and upload the implementation message.
             Impl =
@@ -62,11 +63,11 @@ do_run(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = hb_client_remote:upload(Impl, NodeOpts, PublishCodec),
+            {ok, _} = upload(Impl, NodeOpts, PublishCodec),
             ImplID = hb_message:id(Impl, all, NodeOpts),
             rebar_api:info(
-                "device publish: ~s spec=~s impl=~s",
-                [maps:get(device_name, Pkg), SpecID, ImplID]
+                "device publish: ~s spec=~s impl=~s signer=~s",
+                [maps:get(device_name, Pkg), SpecID, ImplID, Signer]
             )
         end,
         hb_packager:package_all(
@@ -75,6 +76,59 @@ do_run(State) ->
         )
     ),
     {ok, State}.
+
+upload(Msg, Opts, <<"ans104@1.0">>) ->
+    case hb_opts:get(bundler_ans104, not_found, Opts) of
+        not_found ->
+            {error, no_ans104_bundler};
+        Bundler ->
+            upload_ans104(Bundler, Msg, Opts)
+    end;
+upload(Msg, Opts, Codec) ->
+    hb_client_remote:upload(Msg, Opts, Codec).
+
+%% @doc Upload an ANS-104 bundle directly to the bundler endpoint.
+%% Forge publishes package messages directly to the HyperBEAM bundler route.
+upload_ans104(Bundler, Msg, Opts) ->
+    {ok, CommittedMsg} =
+        hb_message:with_only_committed(hb_private:reset(Msg), Opts),
+    Body =
+        ar_bundles:serialize(
+            hb_message:convert(
+                CommittedMsg,
+                #{
+                    <<"device">> => <<"ans104@1.0">>,
+                    <<"bundle">> => true
+                },
+                Opts
+            )
+        ),
+    Req = #{
+        peer => hb_util:bin(Bundler),
+        path => <<"/~bundler@1.0/tx">>,
+        method => <<"POST">>,
+        headers => #{
+            <<"codec-device">> => <<"ans104@1.0">>,
+            <<"content-type">> => <<"application/ans104">>,
+            <<"accept-bundle">> => <<"true">>
+        },
+        body => Body
+    },
+    case hb_http_client:request(Req, Opts) of
+        {ok, Status, Headers, RespBody} ->
+            Result = #{
+                <<"status">> => Status,
+                <<"headers">> => Headers,
+                <<"body">> => RespBody
+            },
+            if
+                Status < 400 -> {ok, Result};
+                Status < 500 -> {error, Result};
+                true -> {failure, Result}
+            end;
+        Error ->
+            Error
+    end.
 
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->

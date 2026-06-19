@@ -207,6 +207,23 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
 %% @doc Load a TX from the given start offset and length. The `StartOffset' is
 %% the start of the first chunk of the data and runs for the length of the data
 %% segment, ignoring header size.
+%% Pending TX offsets are fetched by ID.
+load_tx(ID, relative, _Length, Opts) ->
+    hb_prometheus:measure_and_report(
+        fun() ->
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{
+                    <<"path">> => <<"pending">>,
+                    <<"pending">> => ID,
+                    <<"exclude-data">> => false
+                },
+                Opts
+            )
+        end,
+        hb_store_arweave_chunk_fetch_duration_seconds,
+        [load_tx]
+    );
 load_tx(ID, StartOffset, Length, Opts) ->
     hb_prometheus:measure_and_report(
         fun() ->
@@ -253,6 +270,17 @@ load_tx(ID, StartOffset, Length, Opts) ->
 
 %% @doc Read the chunks from the given start offset and length using the 
 %% `~arweave@2.9` device.
+read_chunks(#{ <<"relative">> := TXID, <<"offset">> := Offset }, Length, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{
+            <<"path">> => <<"chunk">>,
+            <<"pending">> => TXID,
+            <<"offset">> => Offset,
+            <<"length">> => Length
+        },
+        Opts
+    );
 read_chunks(StartOffset, Length, Opts) ->
     hb_ao:resolve(
         #{ <<"device">> => <<"arweave@2.9">> },
@@ -303,7 +331,8 @@ record_partition_metric(Offset, Result, StoreOpts) when is_integer(Offset) ->
             end);
         false ->
             ok
-    end.
+    end;
+record_partition_metric(_, _, _) -> ok.
 
 %% @doc Initialize the Prometheus metrics for the Arweave store. Executed on
 %% `start/1' of the store.
