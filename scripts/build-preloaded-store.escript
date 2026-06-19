@@ -11,6 +11,10 @@
 -include("../include/hb.hrl").
 
 main(_Args) ->
+    with_lock("_build/preloaded-store.lock", fun build/0),
+    halt(0).
+
+build() ->
     add_code_paths(),
     {ok, _} = application:ensure_all_started(crypto),
     {ok, _} = application:ensure_all_started(asn1),
@@ -43,8 +47,37 @@ main(_Args) ->
     HeaderPath = <<"_build/hb_preloaded_index.hrl">>,
     ok = hb_preload:write_index_header(Index, HeaderPath),
     ?event(preload, {preloaded_index_header, HeaderPath}),
-    recompile_hb_opts(),
-    halt(0).
+    recompile_hb_opts().
+
+with_lock(LockDir, Fun) ->
+    ensure_build_dir(),
+    acquire_lock(LockDir),
+    try
+        Fun()
+    after
+        file:del_dir(LockDir)
+    end.
+
+ensure_build_dir() ->
+    case file:make_dir("_build") of
+        ok -> ok;
+        {error, eexist} -> ok;
+        {error, Reason} -> erlang:error({build_dir_failed, Reason})
+    end.
+
+acquire_lock(LockDir) ->
+    case file:make_dir(LockDir) of
+        ok ->
+            ok;
+        {error, eexist} ->
+            timer:sleep(500),
+            acquire_lock(LockDir);
+        {error, enoent} ->
+            ensure_build_dir(),
+            acquire_lock(LockDir);
+        {error, Reason} ->
+            erlang:error({preloaded_store_lock_failed, Reason})
+    end.
 
 add_code_paths() ->
     DefaultPaths =

@@ -8,7 +8,11 @@ WAMR_DIR = _build/wamr
 
 GENESIS_WASM_BRANCH = feat/hb-unit
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
+GENESIS_WASM_ROOT_DIR = _build/genesis_wasm
 GENESIS_WASM_SERVER_DIR = _build/genesis_wasm/genesis-wasm-server
+GENESIS_WASM_EXTRACT_STAMP = $(GENESIS_WASM_SERVER_DIR)/.extract-complete
+GENESIS_WASM_SETUP_STAMP = $(GENESIS_WASM_SERVER_DIR)/.setup-complete
+GENESIS_WASM_PATCH_SCRIPT = native/genesis-wasm/patch-weavedrive.js
 
 HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
 HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
@@ -91,19 +95,37 @@ clean:
 print-lib-path:
 	@echo $(CURDIR)/lib/libvmlib.a
 
-$(GENESIS_WASM_SERVER_DIR):
-	mkdir -p $(GENESIS_WASM_SERVER_DIR)
-	@echo "Cloning genesis-wasm repository..." && \
-        tmp_dir=$$(mktemp -d) && \
-        git clone --depth=1 -b $(GENESIS_WASM_BRANCH) $(GENESIS_WASM_REPO) $$tmp_dir && \
-        mkdir -p $(GENESIS_WASM_SERVER_DIR) && \
-        cp -r $$tmp_dir/servers/cu/* $(GENESIS_WASM_SERVER_DIR) && \
-        rm -rf $$tmp_dir && \
-        echo "Extracted servers/genesis-wasm to $(GENESIS_WASM_SERVER_DIR)"
+$(GENESIS_WASM_SERVER_DIR): $(GENESIS_WASM_EXTRACT_STAMP)
+
+$(GENESIS_WASM_EXTRACT_STAMP):
+	@mkdir -p $(GENESIS_WASM_ROOT_DIR)
+	@lock_dir="$(CURDIR)/$(GENESIS_WASM_ROOT_DIR)/extract.lock"; \
+	tmp_dir=""; \
+	while ! mkdir "$$lock_dir" 2>/dev/null; do sleep 1; done; \
+	trap 'status=$$?; [ -n "$$tmp_dir" ] && rm -rf "$$tmp_dir"; rmdir "$$lock_dir"; exit $$status' EXIT; \
+	if [ -f "$(GENESIS_WASM_EXTRACT_STAMP)" ]; then exit 0; fi; \
+	echo "Cloning genesis-wasm repository..." && \
+	tmp_dir=$$(mktemp -d) && \
+	git clone --depth=1 -b $(GENESIS_WASM_BRANCH) $(GENESIS_WASM_REPO) $$tmp_dir && \
+	rm -rf $(GENESIS_WASM_SERVER_DIR) && \
+	mkdir -p $(GENESIS_WASM_SERVER_DIR) && \
+	cp -r $$tmp_dir/servers/cu/* $(GENESIS_WASM_SERVER_DIR) && \
+	touch $(GENESIS_WASM_EXTRACT_STAMP) && \
+	echo "Extracted servers/genesis-wasm to $(GENESIS_WASM_SERVER_DIR)"
 
 # Set up genesis-wasm@1.0 environment
-setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
-	@cp native/genesis-wasm/launch-monitored.sh $(GENESIS_WASM_SERVER_DIR) && \
+setup-genesis-wasm: $(GENESIS_WASM_SETUP_STAMP)
+
+$(GENESIS_WASM_SETUP_STAMP): $(GENESIS_WASM_EXTRACT_STAMP) native/genesis-wasm/launch-monitored.sh $(GENESIS_WASM_PATCH_SCRIPT)
+	@mkdir -p $(GENESIS_WASM_ROOT_DIR)
+	@lock_dir="$(CURDIR)/$(GENESIS_WASM_ROOT_DIR)/setup.lock"; \
+	while ! mkdir "$$lock_dir" 2>/dev/null; do sleep 1; done; \
+	trap 'status=$$?; rmdir "$$lock_dir"; exit $$status' EXIT; \
+	cp native/genesis-wasm/launch-monitored.sh $(GENESIS_WASM_SERVER_DIR) && \
+	if [ -f "$(GENESIS_WASM_SETUP_STAMP)" ] && [ "$(GENESIS_WASM_SETUP_STAMP)" -nt native/genesis-wasm/launch-monitored.sh ] && [ "$(GENESIS_WASM_SETUP_STAMP)" -nt "$(GENESIS_WASM_PATCH_SCRIPT)" ]; then \
+		echo "Installed genesis-wasm@1.0 server."; \
+		exit 0; \
+	fi; \
 	if ! command -v node > /dev/null; then \
 		echo "Error: Node.js is not installed. Please install Node.js before continuing."; \
 		echo "For Ubuntu/Debian, you can install it with:"; \
@@ -111,12 +133,14 @@ setup-genesis-wasm: $(GENESIS_WASM_SERVER_DIR)
 		echo "  apt-get install -y nodejs=22.16.0-1nodesource1 --allow-downgrades && \\"; \
 		echo "  node -v && npm -v"; \
 		exit 1; \
-	fi
-	@mkdir -p cache-mainnet/genesis-wasm/genesis-wasm-db \
+	fi; \
+	mkdir -p cache-mainnet/genesis-wasm/genesis-wasm-db \
 		cache-mainnet/genesis-wasm/checkpoints && \
-		cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
-		npm rebuild better-sqlite3 > /dev/null 2>&1 && \
-		echo "Installed genesis-wasm@1.0 server."
+	cd $(GENESIS_WASM_SERVER_DIR) && npm install > /dev/null 2>&1 && \
+	npm rebuild better-sqlite3 > /dev/null 2>&1 && \
+	node "$(CURDIR)/$(GENESIS_WASM_PATCH_SCRIPT)" "$(CURDIR)/$(GENESIS_WASM_SERVER_DIR)" && \
+	touch .setup-complete && \
+	echo "Installed genesis-wasm@1.0 server."
 
 # Update hyperbuddy-ui from remote bundle
 update-hyperbuddy-ui:
