@@ -31,13 +31,13 @@
 %%% Public interface.
 
 %% @doc An alias for `item/3'.
--spec tx(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec tx(_, _, _) -> _.
 tx(Base, Req, Opts) ->
     item(Base, Req, Opts).
 
 %% @doc Implements an `up.arweave.net'-compatible endpoint for
 %% bundling messages.
--spec item(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec item(_, _, _) -> _.
 item(_Base, Req, Opts) ->
     ServerPID = ensure_server(Opts),
     ItemToProcess =

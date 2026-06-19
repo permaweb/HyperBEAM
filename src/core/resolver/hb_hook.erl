@@ -57,7 +57,7 @@
 %% @doc Execute a named hook with the provided request and options
 %% This function finds all handlers for the hook and evaluates them in sequence.
 %% The result of each handler is used as input to the next handler.
--spec on(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec on(_, _, _) -> _.
 on(HookName, Req, Opts) ->
     ?event(hook, {attempting_execution_for_hook, HookName}),
     % Get all handlers for this hook from the options
@@ -79,6 +79,7 @@ on(HookName, Req, Opts) ->
 %% directly via the device API. Instead it is used by `on/3' and other internal
 %% functionality to find handlers when necessary. The `find/3' variant can,
 %% however, be called directly via the device API.
+-spec find(_, _, _) -> _.
 find(HookName, Opts) ->
     find(#{}, #{ <<"target">> => <<"body">>, <<"body">> => HookName }, Opts).
 -spec find(#{ _ => _ }, #{ _ => _ }, map()) -> term().

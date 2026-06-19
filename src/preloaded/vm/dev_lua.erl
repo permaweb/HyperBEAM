@@ -59,7 +59,7 @@ info(Base) ->
 
 %% @doc Initialize the device state, loading the script into memory if it is 
 %% a reference.
--spec init(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec init(_, _, _) -> _.
 init(Base, Req, Opts) ->
     ensure_initialized(Base, Req, Opts).
 
@@ -229,7 +229,7 @@ initialize(Base, Modules, Opts) ->
     {ok, hb_private:set(Base, <<"state">>, State3, Opts)}.
 
 %%% @doc Return a list of all functions in the Lua environment.
--spec functions(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec functions(_, _, _) -> _.
 functions(Base, _Req, Opts) ->
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
@@ -270,7 +270,7 @@ sandbox(State, [Path | Rest], Opts) ->
     sandbox(NextState, Rest, Opts).
 
 %% @doc Call the Lua script with the given arguments.
--spec compute(_, #{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec compute(_, _, _, _) -> _.
 compute(Key, RawBase, RawReq, Opts) ->
     ?event(debug_lua, compute_called),
     Req = 
@@ -377,7 +377,7 @@ process_response({error, Reason, Trace}, _Priv, _Opts) ->
 
 %% @doc Snapshot the Lua state from a live computation. Normalizes its `priv'
 %% state element, then serializes the state to a binary.
--spec snapshot(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec snapshot(_, _, _) -> _.
 snapshot(Base, _Req, Opts) ->
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
@@ -387,7 +387,7 @@ snapshot(Base, _Req, Opts) ->
     end.
 
 %% @doc Restore the Lua state from a snapshot, if it exists.
--spec normalize(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec normalize(_, _, _) -> _.
 normalize(Base, _Req, RawOpts) ->
     Opts = RawOpts#{ <<"hashpath">> => ignore },
     case hb_private:get(<<"state">>, Base, Opts) of
@@ -726,7 +726,7 @@ pure_lua_process_test() ->
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_restore_test() ->
-    Opts = #{ <<"process-cache-frequency">> => 1 },
+    Opts = #{},
     Process = generate_lua_process("test/test.lua", Opts),
     {ok, _} = hb_cache:write(Process, Opts),
     Message = generate_test_message(Process, Opts, #{ <<"path">> => <<"inc">>}),

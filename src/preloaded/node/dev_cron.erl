@@ -6,7 +6,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Exported function for getting device info.
--spec info(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec info(_, _, _) -> _.
 info(_) -> 
 	#{ default => fun handler/4 }.
 
@@ -24,16 +24,14 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Default handler: Assume that the key is an interval descriptor.
--spec handler(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
-handler(<<"set">>, Base, Req, Opts) ->
-    hb_ao:raw(<<"message@1.0">>, <<"set">>, Base, Req, Opts);
-handler(<<"keys">>, Base, _Req, _Opts) ->
-    hb_ao:raw(<<"message@1.0">>, <<"keys">>, Base, #{}, #{});
+-spec handler(_, _, _, _) -> _.
+handler(<<"set">>, Base, Req, Opts) -> dev_message:set(Base, Req, Opts);
+handler(<<"keys">>, Base, _Req, _Opts) -> dev_message:keys(Base);
 handler(Interval, Base, Req, Opts) ->
     every(Base, Req#{ <<"interval">> => Interval }, Opts).
 
 %% @doc Exported function for scheduling a one-time message.
--spec once(#{ _ => _ }, #{ _ => _ }, _) -> _.
+-spec once(_, _, _) -> _.
 once(_Base, Req, Opts) ->
 	case extract_path(<<"once">>, Req, Opts) of
 		not_found ->
@@ -79,7 +77,7 @@ once_worker(Path, Req, Opts) ->
 
 
 %% @doc Exported function for scheduling a recurring message.
--spec every(#{ _ => _ }, #{ interval := binary(), _ => _ }, _) -> _.
+-spec every(_, #{ interval := binary(), _ => _ }, _) -> _.
 every(_Base, Req, Opts) ->
 	case {
 		extract_path(Req, Opts),
@@ -139,7 +137,7 @@ every(_Base, Req, Opts) ->
 	end.
 
 %% @doc Exported function for stopping a scheduled task.
--spec stop(#{ _ => _ }, #{ task := binary(), _ => _ }, _) -> _.
+-spec stop(_, #{ task := binary(), _ => _ }, _) -> _.
 stop(_Base, Req, _Opts) ->
 	case maps:get(<<"task">>, Req, not_found) of
 		not_found ->

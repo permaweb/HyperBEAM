@@ -543,21 +543,7 @@ link_result(Base, Req, Existing, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     EdgePath = result_edge_path(Base, Req, Opts),
     ExistingPath = hb_path:to_binary(Existing),
-    case hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts) of
-        ok ->
-            ok;
-        Error ->
-            case ?IS_ID(Base) of
-                true ->
-                    ResolvedEdgePath = resolved_result_edge_path(Base, Req, Opts),
-                    case ResolvedEdgePath of
-                        EdgePath -> Error;
-                        _ -> hb_store:link(Store, #{ ResolvedEdgePath => ExistingPath }, Opts)
-                    end;
-                false ->
-                    Error
-            end
-    end.
+    hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts).
 
 %% @doc Write a raw binary keys into the store and link it at a given hashpath.
 write_binary(Hashpath, Bin, Opts) ->
@@ -957,14 +943,7 @@ read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
 read_hashpath(_, _, _) -> miss.
 
 read_result_edge(BaseID, ReqID, Opts) ->
-    case hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)) of
-        miss ->
-            hashpath_read_result(
-                read(legacy_result_edge_path_from_id(BaseID, ReqID, Opts), Opts)
-            );
-        Hit ->
-            Hit
-    end.
+    hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)).
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
 hashpath_read_result({error, not_found}) -> miss;
