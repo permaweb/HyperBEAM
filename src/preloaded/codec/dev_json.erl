@@ -11,7 +11,8 @@
 content_type(_) -> {ok, <<"application/json">>}.
 
 %% @doc Encode a message to a JSON string, using JSON-native typing.
--spec to(binary() | #{ _ => _ }, #{ bundle => boolean(), _ => _ }, #{ _ => _ }) -> {ok, binary()}.
+-spec to(binary() | #{ _ => _ }, #{ bundle => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary()}.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
@@ -83,7 +84,7 @@ from(JSON, Req, Opts) ->
     end.
 
 %% @doc Route commitments through `httpsig@1.0'.
--spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec commit(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 commit(Msg, Req, Opts) ->
     {ok,
         hb_message:commit(
@@ -94,7 +95,7 @@ commit(Msg, Req, Opts) ->
     }.
 
 %% @doc Route verification through `httpsig@1.0'.
--spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec verify(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 verify(Msg, Req, Opts) ->
     {ok,
         hb_message:verify(
@@ -130,7 +131,7 @@ deserialize(Base, Req, Opts) ->
     end.
 
 %% @doc Serialize a message to a JSON string.
--spec serialize(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+-spec serialize(#{ _ => _ }, #{ bundle => boolean(), _ => _ }, #{ _ => _ }) ->
     {ok, #{ 'content-type' := binary(), body := binary(), _ => _ }}.
 serialize(Base, Msg, Opts) ->
     {ok,

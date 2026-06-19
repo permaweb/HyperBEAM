@@ -18,6 +18,10 @@
 -define(DEFAULT_ID_DEVICE, <<"httpsig@1.0">>).
 -define(DEFAULT_ATT_DEVICE, <<"httpsig@1.0">>).
 
+-type cache_link() :: {link, _, #{ _ => _ }}.
+-type message_term() :: binary() | [_] | #{ _ => _ } | cache_link().
+-type request_msg() :: #{ _ => _ }.
+
 %% The list of keys that are exported by this device.
 -define(DEVICE_KEYS, [
     <<"id">>,
@@ -47,7 +51,7 @@ info() ->
 %%    was a device name.
 %% 3. Execute the `default_index_path` (base: `index') upon the message,
 %%    giving the rest of the request unchanged.
--spec index(map(), map(), map()) ->
+-spec index(message_term(), request_msg(), request_msg()) ->
     {ok, _} | {error, _}.
 index(Msg, Req, Opts) ->
     case hb_opts:get(default_index, not_found, Opts) of
@@ -84,7 +88,7 @@ index(Msg, Req, Opts) ->
 %% Note: This function _does not_ use AO-Core's `get/3' function, as it
 %% would require significant computation. We may want to change this
 %% if/when non-map message structures are created.
--spec id(binary() | [map()] | map(),
+-spec id(message_term(),
     #{ committers => _,
         'commitment-ids' => _,
         'id-device' => binary(),
@@ -235,7 +239,7 @@ id_device(_, _) ->
     {ok, ?DEFAULT_ID_DEVICE}.
 
 %% @doc Return the committers of a message that are present in the given request.
--spec committers(map(), map(), map()) ->
+-spec committers(message_term(), request_msg(), request_msg()) ->
     {ok, [_]}.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
@@ -299,8 +303,14 @@ committers_from_commitments(Commitments, NodeOpts) ->
 %% @doc Commit to a message, using the `commitment-device' key to specify the
 %% device that should be used to commit to the message. If the key is not set,
 %% the default device (`httpsig@1.0') is used.
--spec commit(map(),
-    #{ 'commitment-device' => binary(), type => binary(), _ => _ },
+-spec commit(
+    message_term(),
+    #{ 'commitment-device' => binary(),
+        type => binary(),
+        bundle => boolean(),
+        'linkify-mode' => _,
+        _ => _
+    },
     #{ _ => _ }
 ) -> {ok, #{ commitments := #{ _ => _ }, _ => _ }}.
 commit(Self, Req, Opts) ->
@@ -379,23 +389,24 @@ commit(Self, Req, Opts) ->
 %% `committers' key in the request can be used to specify that only the 
 %% commitments from specific committers should be verified. Similarly, specific
 %% commitments can be specified using the `commitments' key.
--spec verify(map(),
+-spec verify(
+    message_term(),
     #{ committers => _, 'commitment-ids' => _, commitments => _, _ => _ },
     #{ _ => _ }
 ) -> {ok, boolean()}.
 verify(Self, Req, Opts) ->
     % Get the target message of the verification request.
     {ok, RawBase} = hb_message:find_target(Self, Req, Opts),
-    RawWithCommitments = ensure_commitments_loaded(RawBase, Opts),
     VerifyOpts =
         maybe_preserve_message_extension(
-            RawWithCommitments,
+            RawBase,
             Req,
             Opts#{
                 <<"linkify-mode">> => discard
             },
             false
         ),
+    RawWithCommitments = ensure_commitments_loaded(RawBase, VerifyOpts),
     BaseViewOpts = VerifyOpts#{
         <<"linkify-mode">> => false,
         <<"preserve-message-extension">> => true
@@ -742,7 +753,8 @@ verify_commitment(Base, Commitment, Opts) ->
     hb_ao:raw(AttDev, <<"verify">>, Base, Commitment, Opts).
 
 %% @doc Return the list of committed keys from a message.
--spec committed(map(),
+-spec committed(
+    message_term(),
     #{ raw => boolean(), committers => _, 'commitment-ids' => _, _ => _ },
     #{ _ => _ }
 ) -> {ok, [binary()]}.
@@ -925,8 +937,8 @@ commitments(Base, Opts) ->
     end.
 
 committer_lookup_commitments(Base, Commitments, Opts) ->
-    case is_map(Base) of
-        true ->
+    case {is_map(Base), commitment_lookup_mode(Opts)} of
+        {true, inherited} ->
             Inherited = hb_maps:get(
                 <<"commitments">>,
                 hb_maps:flatten(Base, maps:remove(<<"preserve-message-extension">>, Opts)),
@@ -934,7 +946,7 @@ committer_lookup_commitments(Base, Commitments, Opts) ->
                 Opts
             ),
             maps:merge(Inherited, Commitments);
-        false ->
+        _ ->
             Commitments
     end.
 
@@ -1120,7 +1132,7 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
--spec set(map(), map(), map()) ->
+-spec set(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }}.
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
@@ -1468,7 +1480,7 @@ base_values_map(BaseValues) ->
 %% transmit the present key that is being executed. Subsequently, to call `path'
 %% we would need to set `path' to `set', removing the ability to specify its 
 %% new value.
--spec set_path(map(), #{ value => _ }, map()) ->
+-spec set_path(#{ _ => _ }, _, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | #{ _ => _ }.
 set_path(Base, #{ <<"value">> := Value }, Opts) ->
     set_path(Base, Value, Opts);
@@ -1517,7 +1529,7 @@ without_visible(Keys, Base, Opts) ->
     hb_maps:without(Keys, hb_maps:flatten(Base, Opts), Opts).
 
 %% @doc Remove a key or keys from a message.
--spec remove(map(), #{ item => _, items => [_] }, map()) ->
+-spec remove(#{ _ => _ }, #{ item => _, _ => _ } | #{ items => [_], _ => _ }, #{ _ => _ }) ->
     {ok, #{ _ => _ }}.
 remove(Base, #{ <<"item">> := Key }, Opts) ->
     remove(Base, #{ <<"items">> => [Key] }, Opts);

@@ -50,21 +50,21 @@
 opts(Opts) -> hb_private:opts(Opts).
 
 %%% ~message@1.0 Commitments API keys.
--spec commit(map(), map(), map()) -> term().
+-spec commit(#{ _ => _ }, _, #{ _ => _ }) -> term().
 commit(Base, Req, RawOpts) -> dev_cookie_auth:commit(Base, Req, RawOpts).
--spec verify(map(), map(), map()) -> term().
+-spec verify(#{ _ => _ }, _, #{ _ => _ }) -> term().
 verify(Base, Req, RawOpts) -> dev_cookie_auth:verify(Base, Req, RawOpts).
 
 %% @doc Preprocessor keys that utilize cookies and the `~secret@1.0' device to
 %% sign inbound HTTP requests from users if they are not already signed. We use
 %% the hook authentication framework to implement this.
--spec generate(map(), map(), map()) -> term().
+-spec generate(#{}, #{ _ => _ }, #{ _ => _ }) -> term().
 generate(Base, Req, Opts) ->
     dev_cookie_auth:generate(Base, Req, Opts).
 
 %% @doc Finalize an `on-request' hook by adding the `set-cookie' header to the
 %% end of the message sequence.
--spec finalize(map(), map(), map()) ->
+-spec finalize(#{}, #{ request => _, body => [_], _ => _ }, #{ _ => _ }) ->
     {ok, [_]} | {error, no_request}.
 finalize(Base, Request, Opts) ->
     dev_cookie_auth:finalize(Base, Request, Opts).
@@ -81,7 +81,11 @@ finalize(Base, Request, Opts) ->
 %% 
 %% The `format' may be specified in the request message as the `req:format' key.
 %% If no `format' is specified, the default is `default'.
--spec get_cookie(map(), map(), map()) ->
+-spec get_cookie(
+    _,
+    #{ key := binary(), format => binary() },
+    #{ _ => _ }
+) ->
     {ok, _} | {error, not_found}.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
@@ -99,7 +103,11 @@ get_cookie(Base, Req, RawOpts) ->
     end.
 
 %% @doc Return the parsed and normalized cookies from a message.
--spec extract(map(), map(), map()) -> {ok, #{ _ => _ }}.
+-spec extract(
+    _,
+    #{},
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 extract(Msg, Req, Opts) ->
     {ok, MsgWithCookie} = from(Msg, Req, Opts),
     Cookies = hb_private:get(<<"cookie">>, MsgWithCookie, #{}, Opts),
@@ -108,7 +116,7 @@ extract(Msg, Req, Opts) ->
 %% @doc Set the keys in the request message in the cookies of the caller. Removes
 %% a set of base keys from the request message before setting the remainder as
 %% cookies.
--spec store(map(), map(), map()) -> {ok, #{ _ => _ }}.
+-spec store(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 store(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     ?event({store, {priv_base, Base}, {priv_req, Req}}),
@@ -135,6 +143,10 @@ store(Base, Req, RawOpts) ->
 
 %% @doc Remove all cookie keys from the given message (including `cookie' and
 %% `set-cookie' in the base, and `priv/cookie' in the request message).
+-spec reset(
+    _,
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 reset(Base, RawOpts) ->
     Opts = opts(RawOpts),
     WithoutBaseCookieKeys = maps:without([<<"cookie">>, <<"set-cookie">>], Base),
@@ -146,6 +158,11 @@ reset(Base, RawOpts) ->
             Opts
         ),
     {ok, WithoutPrivCookie}.
+-spec reset(
+    _,
+    #{},
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }}.
 reset(Base, _Req, Opts) ->
     reset(Base, Opts).
 
@@ -162,9 +179,9 @@ reset(Base, _Req, Opts) ->
 %% Note that the `format: cookie' form is information lossy: All provided
 %% attributes and flags are discarded.
 -spec to(
-    map(),
-    map(),
-    map()
+    _,
+    #{ format => binary() },
+    #{ _ => _ }
 ) -> {ok, #{ cookie => binary(), 'set-cookie' => [binary()], _ => _ }}.
 to(Msg, Req, Opts) ->
     ?event({to, {priv_msg, Msg}, {priv_req, Req}}),
@@ -259,9 +276,9 @@ to_cookie_line(Key, Cookie) ->
 %% @doc Normalize a message containing a `cookie', `set-cookie', and potentially
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
 -spec from(
-    map(),
-    map(),
-    map()
+    _,
+    #{},
+    #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 from(Msg, Req, Opts) ->
     CookieOpts = opts(Opts),

@@ -2,7 +2,8 @@
 %%% a static `vary` transform to base and request messages.
 %%%
 %%% Vary specs use `_' or `map()' for pass-through, `#{}' for no explicit
-%%% keys, and `#{ _ => _ }' to vary all keys without flattening them.
+%%% keys, and `#{ _ => _ }' to pass through all keys while still applying
+%%% explicitly declared key schemas.
 -module(hb_types).
 -export([extract/2, vary/5, vary/7, preserves_message_extension/6]).
 -include("include/hb.hrl").
@@ -587,16 +588,10 @@ apply_schema(#{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"all">> := Al
             {#{}, false},
             maps:to_list(Keys)
         ),
-    % If `all` is true, pass unmatched keys through as a message extension
-    % instead of flattening them into the varied message.
+    % If `all` is true, pass all keys through at the current layer. Explicit
+    % schemas still validate/coerce their keys and take precedence.
     case All of
-        true ->
-            case maps:without(maps:keys(Keys), Message) of
-                Empty when map_size(Empty) =:= 0 ->
-                    Explicit;
-                _Unmatched ->
-                    Explicit#{ <<"...">> => Message }
-            end;
+        true -> maps:merge(Message, Explicit);
         false ->
             Explicit
     end;
@@ -798,7 +793,7 @@ variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_
 message_type(AllKeys) ->
     Wildcard = maps:get(<<"_">>, AllKeys, undefined),
     ?event(apply_schema, {message_type, {all_keys, AllKeys}, {wildcard, Wildcard}}),
-    % `#{ _ => _ }' varies unmatched keys without flattening them. `#{}' and
+    % `#{ _ => _ }' passes unmatched keys through at the same layer. `#{}' and
     % other message specs only maintain explicitly declared keys.
     #{
         <<"kind">> => <<"message">>,
@@ -844,8 +839,7 @@ successful_vary_test() ->
             #{ <<"slot">> => 1 },
             Opts
         ),
-    ?assertEqual(#{ <<"...">> => #{ <<"unused">> => 1 } }, VariedBase),
-    ?assertEqual(1, hb_maps:get(<<"unused">>, VariedBase, Opts)),
+    ?assertEqual(#{ <<"unused">> => 1 }, VariedBase),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq),
     ?event(
         debug_types,
@@ -1162,11 +1156,10 @@ vary_on_all_test() ->
     ?assertEqual(
         #{
             <<"a">> => 1,
-            <<"...">> => #{ <<"a">> => <<"1">>, <<"b">> => 2 }
+            <<"b">> => 2
         },
         VariedBase
     ),
-    ?assertEqual(2, hb_maps:get(<<"b">>, VariedBase, Opts)),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
 
 vary_on_all_nested_test() -> 
@@ -1190,18 +1183,14 @@ vary_on_all_nested_test() ->
     ?assertEqual(
         #{
             <<"a">> => 1,
-            <<"...">> => #{
-                <<"a">> => <<"1">>,
-                <<"b">> => 2,
-                <<"outer">> => #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> }
-            }
+            <<"b">> => 2,
+            <<"outer">> => #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> }
         },
         VariedBase
     ),
-    ?assertEqual(2, hb_maps:get(<<"b">>, VariedBase, Opts)),
     ?assertEqual(
         #{ <<"c">> => <<"3">>, <<"d">> => <<"4">> },
-        hb_maps:get(<<"outer">>, VariedBase, Opts)
+        maps:get(<<"outer">>, VariedBase)
     ),
     ?assertEqual(#{ <<"slot">> => 1 }, VariedReq).
 
@@ -1219,11 +1208,11 @@ vary_on_all_preserves_extra_request_keys_test() ->
     ?assertEqual(
         #{
             <<"slot">> => 1,
-            <<"...">> => #{ <<"slot">> => 1, <<"extra">> => <<"x">> }
+            <<"extra">> => <<"x">>
         },
         VariedReq
     ),
-    ?assertEqual(<<"x">>, hb_maps:get(<<"extra">>, VariedReq, Opts)).
+    ?assertEqual(<<"x">>, maps:get(<<"extra">>, VariedReq)).
 
 vary_on_all_preserves_nested_request_keys_test() ->
     Opts = test_opts(),
@@ -1241,16 +1230,13 @@ vary_on_all_preserves_nested_request_keys_test() ->
     ?assertEqual(
         #{
             <<"slot">> => 1,
-            <<"...">> => #{
-                <<"slot">> => 1,
-                <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 }
-            }
+            <<"outer">> => #{ <<"c">> => 3, <<"d">> => 4 }
         },
         VariedReq
     ),
     ?assertEqual(
         #{ <<"c">> => 3, <<"d">> => 4 },
-        hb_maps:get(<<"outer">>, VariedReq, Opts)
+        maps:get(<<"outer">>, VariedReq)
     ).
 
 vary_on_all_removes_schematized_nested_keys_test() ->
@@ -1272,25 +1258,19 @@ vary_on_all_removes_schematized_nested_keys_test() ->
     ?assertEqual(
         #{
             <<"nested">> => #{ <<"a">> => 1 },
-            <<"...">> => #{
-                <<"nested">> => #{ <<"a">> => <<"1">>, <<"b">> => <<"2">> },
-                <<"other">> => <<"3">>
-            }
+            <<"other">> => <<"3">>
         },
         VariedBase
     ),
-    ?assertEqual(<<"3">>, hb_maps:get(<<"other">>, VariedBase, Opts)),
+    ?assertEqual(<<"3">>, maps:get(<<"other">>, VariedBase)),
     ?assertEqual(
         #{
             <<"slot">> => 1,
-            <<"...">> => #{
-                <<"slot">> => 1,
-                <<"nested">> => #{ <<"c">> => 3, <<"d">> => 4 }
-            }
+            <<"nested">> => #{ <<"c">> => 3, <<"d">> => 4 }
         },
         VariedReq
     ),
     ?assertEqual(
         #{ <<"c">> => 3, <<"d">> => 4 },
-        hb_maps:get(<<"nested">>, VariedReq, Opts)
+        maps:get(<<"nested">>, VariedReq)
     ).

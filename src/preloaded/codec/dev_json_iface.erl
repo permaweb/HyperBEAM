@@ -42,13 +42,13 @@
 -include("include/hb.hrl").
 
 %% @doc Initialize the device.
--spec init(map(), map(), map()) ->
+-spec init(_, #{}, #{ _ => _ }) ->
     {ok, #{ function := binary(), _ => _ }}.
 init(M1, _M2, Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>}, Opts)}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
--spec compute(map(), map(), map()) -> {ok, #{ _ => _ }}.
+-spec compute(_, _, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 compute(M1, M2, Opts) ->
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);

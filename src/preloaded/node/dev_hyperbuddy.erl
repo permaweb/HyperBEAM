@@ -156,7 +156,7 @@ throw(_Msg, _Req, Opts) ->
 
 %% @doc Serve a file from the priv directory. Only serves files that are explicitly
 %% listed in the `routes' field of the `info/1' return value.
--spec serve(term(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec serve(term(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 serve(<<"keys">>, M1, _M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"keys">>, M1, #{}, Opts);
 serve(<<"set">>, M1, M2, Opts) ->

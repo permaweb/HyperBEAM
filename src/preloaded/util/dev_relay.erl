@@ -30,8 +30,32 @@
 %% - `commit-request': Whether the request should be committed before dispatching.
 %% Defaults to `false'.
 -spec call(
-    #{ _ => _ },
-    #{ target => binary(), 'relay-path' => binary(), method => binary(), peer => binary(), _ => _ },
+    #{
+        path => binary(),
+        'relay-path' => binary(),
+        'relay-device' => binary(),
+        peer => binary(),
+        method => binary(),
+        'relay-method' => binary(),
+        body => _,
+        'relay-body' => _,
+        'commit-request' => boolean(),
+        'relay-commit-request' => boolean()
+    },
+    #{
+        path => binary(),
+        target => binary(),
+        body => _,
+        'proxy-message' => _,
+        'relay-path' => binary(),
+        'relay-device' => binary(),
+        peer => binary(),
+        method => binary(),
+        'relay-method' => binary(),
+        'relay-body' => _,
+        'commit-request' => boolean(),
+        'relay-commit-request' => boolean()
+    },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
 call(M1, RawM2, Opts) ->
@@ -105,7 +129,7 @@ call(M1, RawM2, Opts) ->
     TargetMod4 =
         hb_maps:without(
             [<<"commitments">>],
-            hb_maps:flatten(TargetMod3, Opts),
+            TargetMod3,
             Opts
         ),
     Commit =
@@ -169,13 +193,41 @@ call(M1, RawM2, Opts) ->
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
--spec cast(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, binary()}.
+-spec cast(
+    #{
+        path => binary(),
+        'relay-path' => binary(),
+        'relay-device' => binary(),
+        peer => binary(),
+        method => binary(),
+        'relay-method' => binary(),
+        body => _,
+        'relay-body' => _,
+        'commit-request' => boolean(),
+        'relay-commit-request' => boolean()
+    },
+    #{
+        path => binary(),
+        target => binary(),
+        body => _,
+        'proxy-message' => _,
+        'relay-path' => binary(),
+        'relay-device' => binary(),
+        peer => binary(),
+        method => binary(),
+        'relay-method' => binary(),
+        'relay-body' => _,
+        'commit-request' => boolean(),
+        'relay-commit-request' => boolean()
+    },
+    #{ _ => _ }
+) -> {ok, binary()}.
 cast(M1, M2, Opts) ->
     spawn(fun() -> call(M1, M2, Opts) end),
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
--spec request(#{ _ => _ }, #{ request := #{ _ => _ }, _ => _ }, #{ _ => _ }) ->
+-spec request(#{}, #{ request := #{ _ => _ } }, #{ _ => _ }) ->
     {ok, #{ body := [#{ _ => _ }], _ => _ }}.
 request(_Base, Req, _Opts) ->
     {ok,

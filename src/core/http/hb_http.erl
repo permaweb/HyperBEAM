@@ -1298,29 +1298,13 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
 
 maybe_overlay_http_metadata(Msg, Metadata, Opts) ->
     case {
-        hb_message:signers(Msg, Opts),
+        has_top_signer(Msg, Opts),
         hb_maps:get(<<"type">>, Msg, undefined, Opts)
     } of
-        {[], _} -> maps:merge(Msg, Metadata);
+        {false, _} -> maps:merge(Msg, Metadata);
         {_, <<"Process">>} -> maps:merge(Msg, Metadata);
-        {_, _} ->
-            Metadata#{
-                <<"...">> => hb_message:without_unless_signed(http_envelope_keys(), Msg, Opts)
-            }
+        {_, _} -> maps:merge(Metadata, Msg)
     end.
-
-http_envelope_keys() ->
-    [
-        <<"accept">>,
-        <<"accept-bundle">>,
-        <<"ao-peer">>,
-        <<"ao-peer-port">>,
-        <<"host">>,
-        <<"method">>,
-        <<"path">>,
-        <<"require-codec">>
-    ].
-
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.
 real_ip(Req = #{ headers := RawHeaders }, Opts) ->

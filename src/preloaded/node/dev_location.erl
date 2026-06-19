@@ -33,8 +33,12 @@ info() ->
 
 %% @doc Route either `POST' or `GET' requests to the correct handler for known
 %% location records.
--spec known(#{ _ => _ }, #{ method => binary(), _ => _ }, #{ _ => _ }) ->
-    {ok, #{ _ => _ }} | {error, _}.
+-spec known(
+    #{ commitments => _, target => binary(), _ => _ },
+    #{ commitments => _, method => binary(), target => binary(), _ => _ },
+    #{ _ => _ }
+) ->
+    {ok, #{ _ => _ } | [_]} | {error, _}.
 known(Base, Req, Opts) ->
     case maps:get(<<"method">>, Req, <<"GET">>) of
         <<"POST">> -> write_foreign(Base, Req, Opts);
@@ -42,7 +46,7 @@ known(Base, Req, Opts) ->
     end.
 
 %% @doc List all known location records.
--spec all(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, [_]} | {error, _}.
+-spec all(#{}, #{}, #{ _ => _ }) -> {ok, [_]} | {error, _}.
 all(_Base, _Req, Opts) ->
     dev_location_cache:list(Opts).
 
@@ -50,10 +54,12 @@ all(_Base, _Req, Opts) ->
 %% cache. If an address is provided, we search for the location of that
 %% specific scheduler. Otherwise, we return the location record for the current
 %% node's scheduler, if it has been established.
--spec read(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
+-spec read(binary(), #{}, #{}, #{ _ => _ }) ->
     {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 read(Address, _Base, _Req, Opts) ->
     read(Address, Opts).
+-spec read(binary(), #{ _ => _ }) ->
+    {ok, #{ _ => _ }} | {error, #{ status := integer(), body := binary(), _ => _ }}.
 read(Address, Opts) ->
     % Search for the location of the scheduler in the scheduler-location cache.
     case dev_location_cache:read(Address, Opts) of
@@ -106,13 +112,21 @@ find_target(Base, RawReq, Opts) ->
 %% @doc Generate a new scheduler location record and register it. We both send 
 %% the new scheduler-location to the given registry, and return it to the caller.
 -spec node(
-    #{ _ => _ },
     #{
-        '...' => map(),
+        commitments => _,
+        target => binary(),
+        'time-to-live' => integer(),
+        'require-codec' => binary(),
+        _ => _
+    },
+    #{
+        commitments => _,
+        target => binary(),
         nonce => integer(),
         'require-codec' => binary(),
         'time-to-live' => integer(),
-        url => binary()
+        url => binary(),
+        _ => _
     },
     #{ _ => _ }
 ) -> {ok, #{ _ => _ }} | {error, _}.
@@ -303,33 +317,43 @@ generate_new_location(URL, Nonce, TTL, Codec, Opts) ->
             hb_client_remote:upload(Signed, Opts)
         end
     ),
-    % Post the new scheduler location to the peers specified in the
-    % `location_notify' option.
-    Results =
-        lists:map(
-            fun(Node) ->
-                PostRes =
-                    hb_http:post(
-                        Node,
-                        <<"/~location@1.0/known">>,
-                        Signed,
-                        Opts
-                    ),
-                ?event(scheduler_location,
-                    {outbound_request, {res, PostRes}}
-                )
+    % Notify peers without blocking node startup on slow or unresponsive peers.
+    NotifyPeers = hb_opts:get(location_notify, [], Opts),
+    lists:foreach(
+        fun(Node) ->
+            spawn(
+                fun() ->
+                    PostRes =
+                        hb_http:post(
+                            Node,
+                            <<"/~location@1.0/known">>,
+                            Signed,
+                            Opts
+                        ),
+                    ?event(scheduler_location,
+                        {outbound_request, {res, PostRes}}
+                    )
+                end
+            )
             end,
-            hb_opts:get(location_notify, [], Opts)
-        ),
+        NotifyPeers
+    ),
     ?event(location,
         {location_registration_success,
             {arweave_publication, async_upload_initiated},
-            {foreign_peers_notified, length(Results)}
+            {foreign_peers_notified, length(NotifyPeers)}
         }
     ),
     {ok, Signed}.
 
 %% @doc Verify and write a location record for a foreign peer to the cache.
+-spec write_foreign(
+    #{ commitments => _, target => binary(), _ => _ },
+    #{ commitments => _, target => binary(), _ => _ },
+    #{ _ => _ }
+) ->
+    {ok, #{ _ => _ }}
+        | {error, binary() | #{ status := integer(), body := binary(), _ => _ }}.
 write_foreign(Base, RawReq, Opts) ->
     MaybeLocation = find_target(Base, RawReq, Opts),
     maybe

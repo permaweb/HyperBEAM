@@ -322,10 +322,14 @@ cache_write_view(Msg, Opts) ->
         false ->
             case has_committed_link_key(Msg, Opts) of
                 true ->
-                    hb_link:normalize(
-                        Msg,
-                        hb_opts:get(<<"linkify-mode">>, offload, Opts),
-                        Opts
+                    hb_message:normalize_commitments(
+                        hb_link:normalize(
+                            Msg,
+                            hb_opts:get(<<"linkify-mode">>, offload, Opts),
+                            Opts
+                        ),
+                        Opts,
+                        verify
                     );
                 false ->
                     Msg

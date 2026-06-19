@@ -29,7 +29,7 @@ info(_) ->
 %% @doc The default handler. If the `base' and `request' keys are present in
 %% the given request, then the `pair' function is called. Otherwise, the `eval'
 %% key is used to resolve the request.
--spec default(binary(), map(), map(), map()) ->
+-spec default(binary(), #{ _ => _ }, #{ base => _, request => _, source => _, _ => _ }, #{ _ => _ }) ->
     {ok, _} | {error, _}.
 default(Key, Base, Request, Opts) ->
     ?event(debug_apply, {req, {key, Key}, {base, Base}, {request, Request}}),
@@ -105,7 +105,7 @@ eval(Base, Request, Opts) ->
     end.
 
 %% @doc Apply the message found at `request' to the message found at `base'.
--spec pair(map(), map(), map()) ->
+-spec pair(#{ _ => _ }, #{ base => _, request => _, _ => _ }, #{ _ => _ }) ->
     {ok, _} | {error, _}.
 pair(Base, Request, Opts) ->
     pair(<<"undefined">>, Base, Request, Opts).

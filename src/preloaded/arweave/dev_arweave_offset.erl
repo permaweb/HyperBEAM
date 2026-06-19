@@ -8,7 +8,7 @@
 
 %% @doc Resolve either a message at an Arweave offset, or a direct key from the
 %% base message if the key is not an integer.
--spec get(binary(), #{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec get(binary(), #{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 get(Key, Base, _Request, Opts) ->
     case parse(Key) of
         {ok, StartOffset, Length} ->

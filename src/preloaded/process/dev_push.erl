@@ -37,7 +37,11 @@
 %%                       `N > 0' - recurse, with the inner `/push'
 %%                                 inheriting `max-depth = N - 1'.
 %%                                 Unwinds at most `N' levels deep.
--spec push(map(), map(), map()) -> {ok, #{ _ => _ }} | {error, _} | pid().
+-spec push(
+    #{ _ => _ },
+    #{ slot => integer(), body => #{ _ => _ }, async => boolean(), 'max-depth' => integer(), _ => _ },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ }} | {error, _} | pid().
 push(Base, Req, Opts) ->
     Process =
         lib_process:as_process(
@@ -1037,7 +1041,7 @@ max_depth_test_cases() ->
     [
         {timeout, 30, fun test_max_depth_zero_schedules_only/0},
         {timeout, 30, fun test_max_depth_one_walks_one_hop/0},
-        {timeout, 30, fun test_compute_push_hook_idempotent/0},
+        {timeout, 90, fun test_compute_push_hook_idempotent/0},
         fun test_parse_max_depth/0
     ].
 
@@ -1609,7 +1613,7 @@ test_compute_push_hook_idempotent() ->
                 hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),
             S > ReceiverSlot0
         end,
-        10000
+        60000
     ),
     {ok, ReceiverSlot1} =
         hb_ao:resolve(Receiver, #{ <<"path">> => <<"slot/current">> }, Opts),

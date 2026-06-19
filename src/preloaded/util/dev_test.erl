@@ -73,11 +73,11 @@ load(Base, _, _Opts) ->
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
 
--spec varied(#{ x := integer() }, #{}, _) -> {ok, #{ x := integer(), _ => base }}.
+-spec varied(#{ x := integer() }, #{}, #{ _ => _ }) -> {ok, #{ x := integer(), _ => base }}.
 varied(#{ <<"x">> := X }, _Req, _Opts) ->
     {ok, #{ <<"x">> => X + 1 }}.
 
--spec varied_request(#{}, #{ x := integer() }, _) -> {ok, #{ y := integer(), _ => request }}.
+-spec varied_request(#{}, #{ x := integer() }, #{ _ => _ }) -> {ok, #{ y := integer(), _ => request }}.
 varied_request(_Base, #{ <<"x">> := X }, _Opts) ->
     {ok, #{ <<"y">> => X + 1 }}.
 
@@ -138,7 +138,7 @@ compute_all(Base, Req, Opts) ->
 compute_all_nested(Base, Req, Opts) ->
     {ok, Base#{ <<"nested">> => #{ <<"all">> => <<"done">> } }}.
 
--spec pass_through(_, map(), _) -> {ok, #{ _ => _ }}.
+-spec pass_through(_, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 pass_through(Base, Req, _Opts) ->
     {ok, #{ <<"base">> => Base, <<"request">> => Req }}.
 

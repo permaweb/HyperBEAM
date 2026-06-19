@@ -71,7 +71,12 @@ parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
     ).
 
 %% @doc The default handler for the scheduler device.
--spec router(binary(), map(), map(), map()) ->
+-spec router(
+    binary(),
+    #{ _ => _ },
+    #{ '...' => _, '...+link' => _, _ => _ },
+    #{ _ => _ }
+) ->
     {ok, #{ _ => _ }} | {error, _}.
 router(_, Base, Req, Opts) ->
     ?event({scheduler_router_called, {req, Req}, {opts, Opts}}),
@@ -81,7 +86,7 @@ router(_, Base, Req, Opts) ->
 %% assignment. Assumes that Base is a `dev_process' or similar message, having
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
--spec next(map(), map(), map()) ->
+-spec next(#{ 'at-slot' := integer(), _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ body := #{ _ => _ }, state := #{ _ => _ }, _ => _ }} | {error, _}.
 next(Base, Req, Opts) ->
     ?event(debug_next, {scheduler_next_called, {base, Base}, {req, Req}}),
@@ -406,7 +411,19 @@ status(_M1, _M2, _Opts) ->
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
--spec schedule(map(), map(), map()) -> {ok, #{ _ => _ } | binary()} | {error, _}.
+-spec schedule(
+    #{ _ => _ },
+    #{
+        '...' => _,
+        '...+link' => _,
+        method => binary(),
+        from => integer(),
+        to => integer(),
+        accept => binary(),
+        _ => _
+    },
+    #{ _ => _ }
+) -> {ok, #{ _ => _ } | binary()} | {error, _}.
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
     case hb_util:to_lower(maps:get(<<"method">>, Req, <<"GET">>)) of
@@ -767,7 +784,7 @@ find_remote_scheduler(ProcID, Scheduler, Opts) ->
     end.
 
 %% @doc Returns information about the current slot for a process.
--spec slot(map(), map(), map()) -> {ok, #{ _ => _ }} | {error, _}.
+-spec slot(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }} | {error, _}.
 slot(M1, M2, Opts) ->
     ?event({getting_current_slot, {msg, M1}}),
     ProcID = find_target_id(M1, M2, Opts),

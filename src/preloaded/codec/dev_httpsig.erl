@@ -20,9 +20,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Routing functions for the `dev_httpsig_conv' module
--spec to(map(), map(), map()) -> term().
+-spec to(_, _, #{ _ => _ }) -> term().
 to(Msg, Req, Opts) -> dev_httpsig_conv:to(Msg, Req, Opts).
--spec from(map(), map(), map()) -> term().
+-spec from(_, _, #{ _ => _ }) -> term().
 from(Msg, Req, Opts) -> dev_httpsig_conv:from(Msg, Req, Opts).
 
 %% @doc Generate the `Opts' to use during AO-Core operations in the codec.
@@ -63,7 +63,7 @@ proxy_verify(_Base, Req, Opts) ->
 %% 
 %% Optionally, the `index` key can be set to override resolution of the default
 %% index page into HTTP responses that do not contain their own `body` field.
--spec serialize(map(), map(), map()) ->
+-spec serialize(_, #{ format => binary(), index => binary() }, #{ _ => _ }) ->
     {ok, binary() | #{ headers := #{ _ => _ }, body := _, _ => _ }}.
 serialize(Msg, Opts) -> serialize(Msg, #{}, Opts).
 serialize(Msg, #{ <<"format">> := <<"components">> }, Opts) ->
@@ -84,9 +84,9 @@ serialize(Msg, _Req, Opts) ->
     {ok, dev_httpsig_conv:encode_http_msg(HTTPSig, Opts) }.
 
 -spec verify(
-    map(),
-    map(),
-    map()
+    _,
+    _,
+    #{ _ => _ }
 ) -> {ok, boolean()} | {failure, _}.
 verify(Base, Req, RawOpts) ->
     % A rsa-pss-sha512 commitment is verified by regenerating the signature
@@ -147,9 +147,9 @@ verify(Base, Req, RawOpts) ->
 %% is `signed', we default to the rsa-pss-sha512 algorithm. If the `type'
 %% parameter is `unsigned', we default to the hmac-sha256 algorithm.
 -spec commit(
-    map(),
-    map(),
-    map()
+    _,
+    #{ type := binary(), bundle => boolean(), committed => [_], _ => _ },
+    #{ _ => _ }
 ) -> {ok, #{ _ => _ }}.
 commit(Msg, Req = #{ <<"type">> := <<"unsigned">> }, Opts) ->
     commit(Msg, Req#{ <<"type">> => <<"hmac-sha256">> }, Opts);
@@ -378,7 +378,11 @@ add_content_digest(Msg, _Opts) ->
 
 %% @doc Given a base message and a commitment, derive the message and commitment
 %% normalized for encoding.
--spec normalize_for_encoding(map(), map(), map()) ->
+-spec normalize_for_encoding(
+    _,
+    _,
+    #{ _ => _ }
+) ->
     {ok, #{ _ => _ }, #{ committed := [_], _ => _ }, [_]}.
 normalize_for_encoding(Msg, Commitment, Opts) ->
     % Extract the requested keys to include in the signature base.

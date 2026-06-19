@@ -41,7 +41,7 @@
 %% - Empty stdio files
 %% - WASI-preview-1 compatible functions for accessing the filesystem
 %% - File descriptors for those files.
--spec init(map(), map(), map()) -> {ok, #{ _ => _ }}.
+-spec init(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> {ok, #{ _ => _ }}.
 init(M1, _M2, Opts) ->
     ?event(running_init),
     MsgWithLib =
@@ -78,7 +78,7 @@ stdout(M) ->
 
 %% @doc Adds a file descriptor to the state message.
 %path_open(M, Instance, [FDPtr, LookupFlag, PathPtr|_]) ->
--spec path_open(map(), map(), map()) ->
+-spec path_open(#{ _ => _ }, #{ args := [integer()], _ => _ }, #{ _ => _ }) ->
     {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 path_open(Base, Req, Opts) ->
     FDs = hb_ao:get(<<"file-descriptors">>, Base, Opts),
@@ -114,7 +114,7 @@ path_open(Base, Req, Opts) ->
 
 %% @doc WASM stdlib implementation of `fd_write', using the WASI-p1 standard
 %% interface.
--spec fd_write(map(), map(), map()) ->
+-spec fd_write(#{ state := #{ _ => _ }, _ => _ }, #{ args := [integer()], 'func-sig' => _, _ => _ }, #{ _ => _ }) ->
     {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 fd_write(Base, Req, Opts) ->
     State = hb_ao:get(<<"state">>, Base, Opts),
@@ -170,7 +170,7 @@ fd_write(S, Instance, [FDnum, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
     ).
 
 %% @doc Read from a file using the WASI-p1 standard interface.
--spec fd_read(map(), map(), map()) ->
+-spec fd_read(#{ state := #{ _ => _ }, _ => _ }, #{ args := [integer()], 'func-sig' => _, _ => _ }, #{ _ => _ }) ->
     {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 fd_read(Base, Req, Opts) ->
     State = hb_ao:get(<<"state">>, Base, Opts),
@@ -225,7 +225,7 @@ parse_iovec(Instance, Ptr) ->
     {BinPtr, Len}.
 
 %%% Misc WASI-preview-1 handlers.
--spec clock_time_get(map(), map(), map()) ->
+-spec clock_time_get(#{ state := #{ _ => _ }, _ => _ }, #{ _ => _ }, #{ _ => _ }) ->
     {ok, #{ state := #{ _ => _ }, results := [integer()], _ => _ }}.
 clock_time_get(Base, _Req, Opts) ->
     ?event({clock_time_get, {returning, 1}}),

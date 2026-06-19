@@ -63,12 +63,13 @@ json(Base, Req, Opts) ->
     Res.
 
 %% @doc Return a renderer in HTML form for the JSON format.
--spec index(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec index(#{}, #{}, #{ _ => _ }) ->
+    {ok, #{ 'content-type' := binary(), body := binary() }} | {error, not_found}.
 index(Base, _, Opts) ->
     ?event({cacheviz_index, {base, Base}}),
     hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.html">>, Opts).
 
 %% @doc Return a JS library that can be used to render the JSON format.
--spec js(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec js(#{}, #{}, #{ _ => _ }) -> term().
 js(_, _, Opts) ->
     hb_http_server:static(<<"cacheviz@1.0">>, <<"graph.js">>, Opts).

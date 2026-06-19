@@ -26,7 +26,7 @@
 -define(SUPPORTED_TYPES, [<<"integer">>, <<"float">>, <<"atom">>, <<"list">>]).
 
 %% @doc Route commitments through `httpsig@1.0'.
--spec commit(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec commit(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 commit(Msg, Req, Opts) ->
     {ok,
         hb_message:commit(
@@ -37,7 +37,7 @@ commit(Msg, Req, Opts) ->
     }.
 
 %% @doc Route verification through `httpsig@1.0'.
--spec verify(#{ _ => _ }, #{ _ => _ }, map()) -> term().
+-spec verify(#{ _ => _ }, #{ _ => _ }, #{ _ => _ }) -> term().
 verify(Msg, Req, Opts) ->
     {ok,
         hb_message:verify(
@@ -48,10 +48,8 @@ verify(Msg, Req, Opts) ->
     }.
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
--spec from(_,
-    #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
-    #{ _ => _ }
-) -> {ok, binary() | [_] | #{ _ => _ }}.
+-spec from(_, #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ }, #{ _ => _ }) ->
+    {ok, binary() | [_] | #{ _ => _ }}.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
     % Encode the list as a map, then -- if our request indicates that we are
