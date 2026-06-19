@@ -8,10 +8,9 @@
 %%% device is (by default) a single device.
 %%% 
 %%% This allows the devices to share state as needed. Additionally, after each
-%%% computation step the device caches the result at a path relative to the
-%%% process definition itself, such that the process message's ID can act as an
-%%% immutable reference to the process's growing list of interactions. See 
-%%% `dev_process_cache' for details.
+%%% computation step the device caches the result as AO-Core result edges, such
+%%% that the process message's ID can act as an immutable reference to the
+%%% process's growing list of interactions.
 %%% 
 %%% The external API of the device is as follows:
 %%% <pre>
@@ -211,7 +210,7 @@ compute(Base, Req, Opts) ->
                     {error, not_found}
             end;
         Slot ->
-            case dev_process_cache:read(ProcID, Slot, Opts) of
+            case read_process_slot(ProcID, Slot, Opts) of
                 {ok, Result} ->
                     % The result is already cached, so we can return it.
                     ?event(
@@ -569,13 +568,79 @@ store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
         end,
     PublicResult = without_snapshot(ResMaybeWithSnapshot, Opts),
     ?event(compute, {caching_result, {proc_id, ProcID}, {slot, Slot}}, Opts),
-    SlotReq = #{ <<"path">> => <<"compute">>, <<"slot">> => Slot },
-    LatestReq = #{ <<"path">> => <<"latest">> },
-    CacheEdges = [{ProcID, SlotReq}, {ProcID, LatestReq}],
+    CacheEdges = [{ProcID, slot_req(Slot)}, {ProcID, latest_req()}],
     PublicCacheResult = hb_private:reset(PublicResult),
     {ok, _} = hb_cache:write_result(CacheEdges, PublicCacheResult, Opts),
+    {ok, _} =
+        write_restore_edges(
+            ProcID,
+            Slot,
+            ResMaybeWithSnapshot,
+            maps:is_key(<<"snapshot">>, ResMaybeWithSnapshot),
+            Opts
+        ),
     ?event(compute, {caching_completed, {proc_id, ProcID}, {slot, Slot}}, Opts),
     PublicResult.
+
+read_process_slot(ProcID, Slot, Opts) ->
+    read_process_edge(ProcID, slot_req(Slot), Opts).
+
+read_process_edge(ProcID, Req, Opts) ->
+    case hb_cache:read_resolved(ProcID, Req, Opts) of
+        {hit, {ok, Msg}} -> {ok, Msg};
+        {hit, Other} -> Other;
+        miss -> {error, not_found}
+    end.
+
+slot_req(Slot) ->
+    #{ <<"path">> => <<"compute">>, <<"slot">> => hb_util:int(Slot) }.
+
+latest_req() ->
+    #{ <<"path">> => <<"latest">> }.
+
+restore_req() ->
+    #{ <<"path">> => <<"restore">> }.
+
+restore_req(Slot) ->
+    #{ <<"path">> => <<"restore">>, <<"slot">> => hb_util:int(Slot) }.
+
+write_restore_edges(ProcID, Slot, Checkpoint, true, Opts) ->
+    hb_cache:write_result(
+        [{ProcID, restore_req(Slot)}, {ProcID, restore_req()}],
+        hb_private:reset(Checkpoint),
+        Opts
+    );
+write_restore_edges(_ProcID, _Slot, _Res, false, _Opts) ->
+    {ok, skipped}.
+
+read_restore_checkpoint(ProcID, undefined, Opts) ->
+    read_restore_checkpoint(ProcID, restore_req(), Opts);
+read_restore_checkpoint(ProcID, Req, Opts) when is_map(Req) ->
+    case read_process_edge(ProcID, Req, process_cache_opts(Opts)) of
+        {ok, Msg = #{ <<"at-slot">> := Slot }} -> {ok, hb_util:int(Slot), Msg};
+        {ok, _} -> {error, not_found};
+        Other -> Other
+    end;
+read_restore_checkpoint(ProcID, TargetSlot, Opts) ->
+    TargetSlotInt = hb_util:int(TargetSlot),
+    case read_restore_checkpoint(ProcID, restore_req(TargetSlotInt), Opts) of
+        {error, not_found} ->
+            case read_restore_checkpoint(ProcID, restore_req(), Opts) of
+                {ok, Slot, Msg} when Slot =< TargetSlotInt -> {ok, Slot, Msg};
+                _ -> {error, not_found}
+            end;
+        Other ->
+            Other
+    end.
+
+process_cache_opts(RawOpts) ->
+    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    UnscopedStore =
+        case hb_opts:get(store, no_viable_store, RawOpts) of
+            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
+            Other -> Other
+        end,
+    RawOpts#{ store => hb_store:scope(UnscopedStore, Scope) }.
 
 %% @doc Should we snapshot a new full state result? First, we check if the 
 %% `process_snapshot_time' option is set. If it is, we check if the elapsed time
@@ -653,9 +718,9 @@ now(RawBase, Req, Opts) ->
         CacheParam ->
             % We are serving the latest known state from the cache, rather
             % than computing it.
-            LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
+            LatestKnown = read_process_edge(ProcessID, latest_req(), Opts),
             case LatestKnown of
-                {ok, LatestSlot, RawLatestMsg} ->
+                {ok, RawLatestMsg = #{ <<"at-slot">> := LatestSlot }} ->
                     LatestMsg = without_snapshot(RawLatestMsg, Opts),
                     ?event(compute_cache,
                         {serving_latest_cached_state,
@@ -710,13 +775,7 @@ ensure_loaded(Base, Req, Opts) ->
         _ ->
             ?event(not_initialized),
             % Try to load the latest complete state from disk.
-            LoadRes =
-                dev_process_cache:latest(
-                    ProcID,
-                    [<<"snapshot+link">>],
-                    TargetSlot,
-                    Opts
-                ),
+            LoadRes = read_restore_checkpoint(ProcID, TargetSlot, Opts),
             ?event(compute,
                 {snapshot_load_res,
                     {proc_id, ProcID},

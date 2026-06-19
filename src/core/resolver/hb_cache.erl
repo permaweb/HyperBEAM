@@ -948,13 +948,23 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
 read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
     ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
-    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
+    read_result_edge(BaseMsgID, ReqID, Opts);
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
     ReqID = hb_message:id(Req, all, Opts),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
 read_hashpath(_, _, _) -> miss.
+
+read_result_edge(BaseID, ReqID, Opts) ->
+    case hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)) of
+        miss ->
+            hashpath_read_result(
+                read(legacy_result_edge_path_from_id(BaseID, ReqID, Opts), Opts)
+            );
+        Hit ->
+            Hit
+    end.
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
 hashpath_read_result({error, not_found}) -> miss;
@@ -1281,6 +1291,9 @@ test_write_result_edges(Store) ->
     LatestReq = #{ <<"path">> => <<"latest">> },
     Res = #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => 7 },
     {ok, WrittenID} = write_result([{BaseID, SlotReq}, {BaseID, LatestReq}], Res, Opts),
+    {ok, SlotReqID} = dev_message:id(SlotReq, #{ <<"committers">> => <<"all">> }, Opts),
+    {ok, ReadBase} = read(BaseID, Opts),
+    ?assertEqual(false, maps:is_key(SlotReqID, ReadBase)),
     {ok, WrittenRes} = read(WrittenID, Opts),
     ?assert(hb_message:match(Res, WrittenRes, strict, Opts)),
     {hit, {ok, SlotRes}} = read_resolved(BaseID, SlotReq, Opts),
