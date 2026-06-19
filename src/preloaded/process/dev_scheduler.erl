@@ -74,7 +74,7 @@ parse_schedulers(SchedLoc) when is_binary(SchedLoc) ->
 -spec router(
     binary(),
     #{ _ => _ },
-    #{ '...' => _, '...+link' => _, _ => _ },
+    #{ _ => _ },
     #{ _ => _ }
 ) ->
     {ok, #{ _ => _ }} | {error, _}.
@@ -414,8 +414,6 @@ status(_M1, _M2, _Opts) ->
 -spec schedule(
     #{ _ => _ },
     #{
-        '...' => _,
-        '...+link' => _,
         method => binary(),
         from => integer(),
         to => integer(),
@@ -1448,36 +1446,17 @@ direct_body_or_request(Req, Opts) ->
     case maps:find(<<"body">>, Req) of
         {ok, Body} -> Body;
         error ->
-            case direct_extension_parent(Req, Opts) of
-                not_found ->
+            case hb_message:with_only_signed(Req, Opts) of
+                {ok, Req} ->
                     hb_ao:get(
                         <<"body">>,
                         Req,
                         Req,
                         Opts#{ <<"hashpath">> => ignore }
                     );
-                Parent -> Parent
+                {ok, SignedReq} -> SignedReq
             end
     end.
-
-direct_extension_parent(Msg, Opts) ->
-    case direct_extension_parent_once(Msg, Opts) of
-        not_found -> not_found;
-        Parent -> deepest_extension_parent(Parent, Opts)
-    end.
-
-deepest_extension_parent(Msg, Opts) ->
-    case direct_extension_parent_once(Msg, Opts) of
-        not_found -> Msg;
-        Parent -> deepest_extension_parent(Parent, Opts)
-    end.
-
-direct_extension_parent_once(#{ <<"...">> := Parent }, _Opts) ->
-    Parent;
-direct_extension_parent_once(#{ <<"...+link">> := Link }, Opts) ->
-    hb_cache:ensure_loaded(Link, Opts);
-direct_extension_parent_once(_Req, _Opts) ->
-    not_found.
 
 %% @doc Generate a `GET /schedule' response for a process.
 generate_local_schedule(Format, ProcID, From, To, Opts) ->

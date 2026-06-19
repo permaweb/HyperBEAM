@@ -100,7 +100,7 @@ find_target(Base, RawReq, Opts) ->
         ),
     Req =
         case TargetSpec of
-            not_found -> hb_maps:get(<<"...">>, RawReq, RawReq, Opts);
+            not_found -> hb_util:ok(hb_message:with_only_signed(RawReq, Opts));
             <<"self">> -> Base;
             <<"request">> -> RawReq;
             Target ->

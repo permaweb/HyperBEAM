@@ -65,7 +65,8 @@
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
--export([with_only_committed/2, without_unless_signed/3]).
+-export([with_only_committed/2, with_only_signed/2, without_unless_signed/3]).
+-export([has_message_extension/1]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
@@ -680,6 +681,49 @@ with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
 
+%% @doc Return the first layer in a message extension chain with a signed
+%% commitment. The returned message keeps only that first signed commitment.
+with_only_signed(Msg, Opts) when is_map(Msg) ->
+    case first_signed_commitment(Msg, Opts) of
+        {ok, ID, Commitment} ->
+            {ok, Msg#{ <<"commitments">> => #{ ID => Commitment } }};
+        not_found ->
+            case extension_parent(Msg, Opts) of
+                {ok, Parent} -> with_only_signed(Parent, Opts);
+                error -> {ok, Msg}
+            end
+    end;
+with_only_signed(Msg, _Opts) ->
+    {ok, Msg}.
+
+first_signed_commitment(Msg, Opts) ->
+    case hb_maps:to_list(signed_commitments(Msg, Opts), Opts) of
+        [{ID, Commitment} | _] -> {ok, ID, Commitment};
+        [] -> not_found
+    end.
+
+extension_parent(Msg, Opts) ->
+    case maps:find(<<"...">>, Msg) of
+        {ok, Parent} -> load_extension_parent(Parent, Opts);
+        error ->
+            case maps:find(<<"...+link">>, Msg) of
+                {ok, Link} -> load_extension_parent(Link, Opts);
+                error -> error
+            end
+    end.
+
+load_extension_parent(Parent, Opts) ->
+    case hb_cache:ensure_loaded(Parent, Opts) of
+        Loaded when is_map(Loaded) -> {ok, Loaded};
+        ID when is_binary(ID) ->
+            case hb_cache:read(ID, hb_store:scope(Opts, local)) of
+                {ok, Loaded} when is_map(Loaded) -> {ok, Loaded};
+                _ -> error
+            end;
+        _ ->
+            error
+    end.
+
 normalize_commitment_view(Msg, Opts) ->
     case has_message_extension(Msg) of
         true -> Msg;
@@ -1156,9 +1200,30 @@ uncommitted_deep(Msg, Opts) ->
 
 %% @doc Return all of the committers on a message that have 'normal', 256 bit, 
 %% addresses.
-signers(Msg, Opts) ->
+signers(Msg, Opts) when is_map(Msg) ->
+    case first_signed_commitment(Msg, Opts) of
+        {ok, _ID, _Commitment} ->
+            committers_for_signers(Msg, Opts);
+        not_found ->
+            case with_only_signed(Msg, Opts) of
+                {ok, SignedMsg} when is_map(SignedMsg) ->
+                    committers_for_signers(SignedMsg, Opts);
+                {ok, _} ->
+                    []
+            end
+    end;
+signers(_Msg, _Opts) ->
+    [].
+
+committers_for_signers(Msg, Opts) ->
     hb_util:ok(
-        hb_ao:raw(<<"message@1.0">>, <<"committers">>, Msg, #{}, Opts)
+        hb_ao:raw(
+            <<"message@1.0">>,
+            <<"committers">>,
+            Msg,
+            #{},
+            Opts
+        )
     ).
 
 %% @doc Pretty-print a message.

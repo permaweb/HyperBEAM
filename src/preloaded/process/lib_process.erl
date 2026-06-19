@@ -37,26 +37,8 @@ process_id(Base, Req, Opts) ->
             end
     end.
 
-canonical_process(Process = #{ <<"...">> := Parent }, Opts) ->
-    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
-        true -> Process;
-        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
-    end;
-canonical_process(Process = #{ <<"...+link">> := Parent }, Opts) ->
-    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
-        true -> Process;
-        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
-    end;
-canonical_process(Process, _Opts) ->
-    Process.
-
-has_top_signer(Process, Opts) ->
-    lists:any(
-        fun({_ID, Commitment}) ->
-            hb_maps:is_key(<<"committer">>, Commitment, Opts)
-        end,
-        hb_maps:to_list(maps:get(<<"commitments">>, Process, #{}), Opts)
-    ).
+canonical_process(Process, Opts) ->
+    hb_util:ok(hb_message:with_only_signed(Process, Opts)).
 
 %% @doc Run a message against Base, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
@@ -128,7 +110,7 @@ set_process_keys(Base, Values, Opts) ->
 
 can_direct_set(Msg, Opts) ->
     is_map(Msg)
-        andalso not maps:is_key(<<"...">>, Msg)
+        andalso not hb_message:has_message_extension(Msg)
         andalso not has_commitments(Msg, Opts).
 
 has_commitments(Msg, Opts) ->

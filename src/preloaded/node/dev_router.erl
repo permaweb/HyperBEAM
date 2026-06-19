@@ -142,7 +142,7 @@ register(_M1, M2, Opts) ->
 %% @doc Device function that returns all known routes.
 -spec routes(
     #{ _ => _ },
-    #{ '...' => map(), method => binary(), _ => _ },
+    #{ method => binary(), _ => _ },
     #{ _ => _ }
 ) ->
     {ok, binary() | [_] | #{ _ => _ }} | {error, _}.
@@ -230,10 +230,7 @@ registrar_request(Msg, Path, Opts) ->
 
 original_request(Msg, Opts) when is_map(Msg) ->
     Loaded = hb_cache:ensure_all_loaded(hb_link:decode_all_links(Msg), Opts),
-    case maps:find(<<"...">>, Loaded) of
-        {ok, Parent} -> original_request(Parent, Opts);
-        error -> Loaded
-    end;
+    hb_util:ok(hb_message:with_only_signed(Loaded, Opts));
 original_request(Msg, _Opts) ->
     Msg.
 

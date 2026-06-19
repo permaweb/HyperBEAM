@@ -243,8 +243,14 @@ id_device(_, _) ->
     {ok, [_]}.
 committers(Base) -> committers(Base, #{}).
 committers(Base, Req) -> committers(Base, Req, #{}).
-committers(Base, Req, NodeOpts) ->
+committers(Base, _Req, NodeOpts) ->
     CommitterBase = committer_lookup_base(Base, NodeOpts),
+    case is_map(CommitterBase) of
+        false -> {ok, []};
+        true -> committers_from_base(CommitterBase, NodeOpts)
+    end.
+
+committers_from_base(CommitterBase, NodeOpts) ->
     case maps:get(<<"commitments">>, CommitterBase, not_found) of
         not_found ->
             case commitment_lookup_mode(NodeOpts) of
@@ -256,21 +262,7 @@ committers(Base, Req, NodeOpts) ->
                     end
             end;
         Commitments ->
-            ParentCommitters =
-                case map_size(Req) == 0 andalso has_extension_commitment(CommitterBase, NodeOpts) of
-                    true ->
-                        case extension_parent(CommitterBase, NodeOpts) of
-                            {ok, Parent} -> hb_message:signers(Parent, NodeOpts);
-                            error -> []
-                        end;
-                    false -> []
-                end,
-            {ok,
-                lists:usort(
-                    committers_from_commitments(Commitments, NodeOpts)
-                        ++ ParentCommitters
-                )
-            }
+            {ok, committers_from_commitments(Commitments, NodeOpts)}
     end.
 
 committer_lookup_base(Base, NodeOpts) when is_map(Base) ->
@@ -1013,21 +1005,6 @@ requests_specific_committers(Req) ->
         <<"none">> -> false;
         <<"all">> -> false;
         _ -> true
-    end.
-
-extension_parent(Base, Opts) ->
-    case maps:find(<<"...">>, Base) of
-        {ok, Parent} ->
-            {ok, hb_cache:ensure_loaded(Parent, Opts)};
-        error ->
-            case maps:find(<<"...+link">>, Base) of
-                {ok, ID} when is_binary(ID) ->
-                    hb_cache:read(ID, hb_store:scope(Opts, local));
-                {ok, Parent} ->
-                    {ok, hb_cache:ensure_loaded(Parent, Opts)};
-                error ->
-                    error
-            end
     end.
 
 explicit_commits_extension(Req, Opts) ->

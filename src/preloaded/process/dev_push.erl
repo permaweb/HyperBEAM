@@ -677,26 +677,8 @@ calculate_base_id(GivenProcess, Opts) ->
     ?event(debug_base, {push_generated_base, {id, BaseID}, {base, BaseProcess}}),
     BaseID.
 
-canonical_process(Process = #{ <<"...">> := Parent }, Opts) ->
-    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
-        true -> Process;
-        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
-    end;
-canonical_process(Process = #{ <<"...+link">> := Parent }, Opts) ->
-    case hb_message:verify(Process, all, Opts) andalso has_top_signer(Process, Opts) of
-        true -> Process;
-        false -> canonical_process(hb_cache:ensure_loaded(Parent, Opts), Opts)
-    end;
-canonical_process(Process, _Opts) ->
-    Process.
-
-has_top_signer(Process, Opts) ->
-    lists:any(
-        fun({_ID, Commitment}) ->
-            hb_maps:is_key(<<"committer">>, Commitment, Opts)
-        end,
-        hb_maps:to_list(maps:get(<<"commitments">>, Process, #{}), Opts)
-    ).
+canonical_process(Process, Opts) ->
+    hb_util:ok(hb_message:with_only_signed(Process, Opts)).
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
 %% If the remote scheduler does not support the given codec, it will be

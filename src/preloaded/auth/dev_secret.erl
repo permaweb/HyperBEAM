@@ -854,7 +854,7 @@ sanitize_exported_wallet(Wallet, Opts) ->
             ConcreteAccessControl = hb_maps:flatten(AccessControl, Opts),
             SanitizedAccessControl =
                 (maps:without(
-                    [<<"commitments">>, <<"...">>],
+                    [<<"commitments">>],
                     ConcreteAccessControl
                 ))#{ <<"auth-disabled">> => true },
             WalletWithoutAuth =
