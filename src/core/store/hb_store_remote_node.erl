@@ -103,7 +103,7 @@ multi_read(#{ <<"only-ids">> := true }, _Nodes, Key, _NodeOpts) when not ?IS_ID(
 multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
     Config =
         #{
-            <<"nodes">> => [ node_url(N) || N <- Nodes ],
+            <<"nodes">> => [ node_request(N) || N <- Nodes ],
             <<"parallel">> => true,
             <<"responses">> => 1,
             <<"stop-after">> => true,
@@ -113,7 +113,7 @@ multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
                     <<"path">> => <<"expected-response">>,
                     <<"expected">> => Key,
                     %% Hook config rides the admissibility spec (the `Base' that
-                    %% reaches `expected_response'), never `NodeOpts' — no collision.
+                    %% reaches `expected_response'), never `NodeOpts', no collision.
                     <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, StoreOpts),
                     <<"commit-hook-response">> =>
                         hb_opts:get(commit_hook_response, false, StoreOpts)
@@ -149,6 +149,14 @@ multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
 node_url(#{ <<"prefix">> := Prefix }) -> Prefix;
 node_url(#{ <<"uri">> := URI }) -> URI;
 node_url(URL) when is_binary(URL) -> URL.
+
+%% @doc Wrap each configured node so its URL and its per-node `opts' (e.g.
+%% `http-reference') both reach the fan-out, letting the admissibility check
+%% report which node served the content.
+node_request(N) when is_map(N) ->
+    #{ <<"prefix">> => node_url(N), <<"opts">> => hb_maps:get(<<"opts">>, N, #{}, #{}) };
+node_request(N) ->
+    #{ <<"prefix">> => node_url(N), <<"opts">> => #{} }.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional

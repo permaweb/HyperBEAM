@@ -87,6 +87,10 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
             MergedOpts
         ),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
+request(Method, #{ <<"prefix">> := Prefix }, Path, RawMessage, Opts) ->
+    % A configured remote node carrying a `prefix' URL (its per-node `opts' are
+    % read elsewhere). Use the prefix as the peer, preserving the request path.
+    request(Method, Prefix, Path, RawMessage, Opts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
     Req =
