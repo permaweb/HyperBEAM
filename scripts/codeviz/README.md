@@ -51,9 +51,9 @@ highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights
 its callers and callees without changing the selected inspector target. Kernel
 selections also show short directed device paths when the rendered graph
-contains a route from a loaded device module into that node. Large unsearched
-function views open as an overview, while searched function graphs stay at a
-readable first-fit scale.
+contains a route from a loaded device module into that node; clicking a path row
+paints the route on the graph. Large unsearched function views open as an
+overview, while searched function graphs stay at a readable first-fit scale.
 
 ## Live and Recorder Overlays
 

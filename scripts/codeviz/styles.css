@@ -1148,6 +1148,15 @@ svg {
   filter: drop-shadow(0 0 10px rgba(189, 52, 66, 0.22));
 }
 
+.edge.path-edge {
+  opacity: 1;
+  stroke: var(--green);
+  stroke-width: calc(var(--edge-hot-width, 2.3px) + 1.7px);
+  stroke-opacity: 1;
+  marker-end: url("#arrow-hot");
+  filter: drop-shadow(0 0 10px rgba(19, 138, 109, 0.2));
+}
+
 .edge.trace {
   stroke: rgba(189, 52, 66, 0.86);
   stroke-width: var(--trace-width, 3px);
@@ -1277,6 +1286,19 @@ svg {
 .node.callee rect {
   stroke: var(--green);
   stroke-width: 2;
+}
+
+.node.path-node {
+  opacity: 1;
+}
+
+.node.path-node rect {
+  stroke: var(--green);
+  stroke-width: 2.5;
+}
+
+.node.path-node text {
+  font-weight: 800;
 }
 
 .node.live-warm rect {
@@ -1517,6 +1539,11 @@ button.ref-pill {
   border-radius: 6px;
   background: #f6fffc;
   text-align: left;
+}
+
+.path-row.active {
+  border-color: rgba(19, 138, 109, 0.42);
+  background: #ecfff8;
 }
 
 .edge-summary {

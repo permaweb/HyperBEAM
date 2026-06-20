@@ -84,6 +84,7 @@
     selectedDevices: new Set(),
     selected: null,
     selectedEdge: null,
+    selectedPath: [],
     hovered: null,
     search: "",
     deviceSearch: "",
@@ -545,6 +546,7 @@
   function selectNode(id, options = {}) {
     if (options.manual) state.live.follow = false;
     state.selectedEdge = options.edge || null;
+    state.selectedPath = options.path || [];
     state.hovered = null;
     state.selected = id;
     render();
@@ -3289,6 +3291,7 @@
     if (isCaller(node.id)) classes.push("caller");
     if (isCallee(node.id)) classes.push("callee");
     if (isDimmed(node.id)) classes.push("dim");
+    if (selectedPathHasNode(node.id)) classes.push("path-node");
     const liveScore = liveNodeScore(node);
     if (liveScore > 7) classes.push("live-hot");
     else if (liveScore > 0.6) classes.push("live-warm");
@@ -3339,7 +3342,22 @@
     if (liveScore > 7) classes.push("live-hot");
     else if (liveScore > 0.6) classes.push("live-warm");
     if (edgeIsSelected(edge, "call")) classes.push("selected-edge");
+    if (edgeIsInSelectedPath(edge)) classes.push("path-edge");
     return classes.join(" ");
+  }
+
+  function selectedPathHasNode(id) {
+    return Array.isArray(state.selectedPath) && state.selectedPath.includes(id);
+  }
+
+  function edgeIsInSelectedPath(edge) {
+    if (!Array.isArray(state.selectedPath) || state.selectedPath.length < 2) return false;
+    for (let idx = 0; idx < state.selectedPath.length - 1; idx += 1) {
+      if (state.selectedPath[idx] === edge.source && state.selectedPath[idx + 1] === edge.target) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function edgeIsSelected(edge, kind) {
@@ -3824,10 +3842,14 @@
     paths.forEach((path) => {
       const row = document.createElement("button");
       row.type = "button";
-      row.className = "path-row";
+      row.className = pathIsSelected(path) ? "path-row active" : "path-row";
       row.title = path.ids.join(" -> ");
       row.addEventListener("click", () => {
-        selectNode(path.ids[0], { manual: true, showGraph: true });
+        state.live.follow = false;
+        state.selectedPath = path.ids;
+        render();
+        focusNode(path.ids[path.ids.length - 1]);
+        showGraph();
       });
       const route = document.createElement("strong");
       route.textContent = path.labels.join(" -> ");
@@ -3838,6 +3860,12 @@
     });
     section.append(heading, list);
     return section;
+  }
+
+  function pathIsSelected(path) {
+    return Array.isArray(state.selectedPath) &&
+      state.selectedPath.length === path.ids.length &&
+      state.selectedPath.every((id, idx) => id === path.ids[idx]);
   }
 
   function eventAliasesForNode(node) {
