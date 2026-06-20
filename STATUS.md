@@ -18,11 +18,12 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Relation lists now sort by call count and show counts inline.
-- Validated weighted `kernel:resolver` callers/callees in the browser.
+- Added `Repeated calls` edge mode for dense graph reduction.
+- Repeated-call mode persists through `edges=strong`.
+- Validated subsystem edge count dropping from `39` to `32` in the browser.
 
 ## Next Work
 
 - Add richer export/source affordances in the inspector.
-- Add richer dense-graph controls.
+- Continue dense-graph polish.
 - Continue browser validation after each presentation pass.

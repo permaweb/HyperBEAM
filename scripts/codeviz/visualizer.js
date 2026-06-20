@@ -134,7 +134,7 @@
       state.selected = params.get("selected");
     }
     if (params.has("group")) state.group = params.get("group");
-    if (["context", "selected", "cross"].includes(params.get("edges"))) {
+    if (["context", "selected", "cross", "strong"].includes(params.get("edges"))) {
       state.edgeMode = params.get("edges");
       els.edgeFilter.value = state.edgeMode;
     }
@@ -409,8 +409,14 @@
         }
         return edge.source === selected || edge.target === selected;
       });
+    } else if (state.edgeMode === "strong" && state.mode === "function") {
+      edges = edges.filter((edge) => edge.count > 1);
     }
     return { modules, functions, edges };
+  }
+
+  function filterLayoutEdges(edges) {
+    return edges.filter((edge) => state.edgeMode !== "strong" || edge.count > 1);
   }
 
   function expandSelectedFunctions(functions, functionInScope) {
@@ -460,7 +466,7 @@
     const nodes = state.mode === "module" ? moduleGraphNodes(visible) : functionGraphNodes(visible);
     const positioned = positionNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
-    const edges = (state.mode === "module" ? moduleEdges(visible.edges) : visible.edges)
+    const edges = filterLayoutEdges(state.mode === "module" ? moduleEdges(visible.edges) : visible.edges)
       .map((edge) => {
         const source = nodeById.get(edge.source);
         const target = nodeById.get(edge.target);
@@ -511,7 +517,7 @@
     ];
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const ids = new Set(nodes.map((node) => node.id));
-    const edges = allEdges
+    const edges = filterLayoutEdges(allEdges)
       .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
       .filter((edge) => edge.source === selected.id || edge.target === selected.id)
       .map((edge) => ({
@@ -585,7 +591,7 @@
     ];
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const ids = new Set(nodes.map((node) => node.id));
-    const edges = moduleEdges(visible.edges)
+    const edges = filterLayoutEdges(moduleEdges(visible.edges))
       .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
       .filter((edge) => edge.source === selected.id || edge.target === selected.id)
       .map((edge) => ({
@@ -686,7 +692,7 @@
     ];
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const ids = new Set(nodes.map((node) => node.id));
-    const edges = visible.edges
+    const edges = filterLayoutEdges(visible.edges)
       .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
       .filter((edge) => edge.source === selected.id || edge.target === selected.id)
       .map((edge) => ({
@@ -724,7 +730,7 @@
     const nodes = systemGraphNodes(visible);
     const positioned = positionSystemNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
-    const edges = systemEdges(visible.edges)
+    const edges = filterLayoutEdges(systemEdges(visible.edges))
       .map((edge) => {
         const source = nodeById.get(edge.source);
         const target = nodeById.get(edge.target);
