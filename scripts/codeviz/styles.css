@@ -70,6 +70,7 @@ button:hover {
 }
 
 input[type="search"],
+input[type="url"],
 select {
   width: 100%;
   min-height: 38px;
@@ -81,6 +82,7 @@ select {
 }
 
 input[type="search"]:focus,
+input[type="url"]:focus,
 select:focus {
   border-color: var(--blue);
   outline: 2px solid rgba(0, 154, 247, 0.12);
@@ -244,6 +246,57 @@ h3 {
   gap: 9px;
   padding: 10px;
   margin-bottom: 10px;
+}
+
+.live-strip {
+  display: grid;
+  grid-template-columns: max-content minmax(220px, 1fr) max-content max-content max-content;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff, #fbfbfb);
+  box-shadow: var(--shadow);
+}
+
+.live-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 32px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.live-status::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--faint);
+  content: "";
+}
+
+.live-status.active {
+  color: var(--green);
+}
+
+.live-status.active::before {
+  background: var(--green);
+  box-shadow: 0 0 0 6px rgba(19, 138, 109, 0.09);
+}
+
+.live-status.error {
+  color: var(--red);
+}
+
+.live-status.error::before {
+  background: var(--red);
+  box-shadow: 0 0 0 6px rgba(189, 52, 66, 0.1);
 }
 
 .toggle {
@@ -463,6 +516,19 @@ svg {
   marker-end: url("#arrow-hot");
 }
 
+.edge.live-warm {
+  stroke: rgba(105, 86, 197, 0.72);
+  marker-end: url("#arrow-hot");
+}
+
+.edge.live-hot {
+  stroke: var(--red);
+  stroke-width: calc(var(--edge-hot-width, 2.3px) + 1.1px);
+  stroke-dasharray: 8 5;
+  marker-end: url("#arrow-hot");
+  animation: live-edge-flow 1.1s linear infinite;
+}
+
 .edge.dim,
 .node.dim,
 .module-frame.dim {
@@ -561,6 +627,46 @@ svg {
 .node.callee rect {
   stroke: var(--green);
   stroke-width: 2;
+}
+
+.node.live-warm rect {
+  stroke: rgba(105, 86, 197, 0.72);
+  stroke-width: 2;
+}
+
+.node.live-hot rect {
+  stroke: var(--red);
+  stroke-width: 2.4;
+  filter: drop-shadow(0 0 16px rgba(189, 52, 66, 0.28));
+  animation: live-node-pulse 1.2s ease-out infinite;
+}
+
+.node.live-error rect {
+  fill: #fff4f4;
+}
+
+.live-ring {
+  fill: rgba(189, 52, 66, 0.72);
+  stroke: #ffffff;
+  stroke-width: 2;
+  pointer-events: none;
+  animation: live-ring-pulse 1.2s ease-out infinite;
+}
+
+@keyframes live-node-pulse {
+  0% { stroke-opacity: 1; }
+  70% { stroke-opacity: 0.45; }
+  100% { stroke-opacity: 1; }
+}
+
+@keyframes live-ring-pulse {
+  0% { opacity: 0.95; }
+  70% { opacity: 0.35; }
+  100% { opacity: 0.95; }
+}
+
+@keyframes live-edge-flow {
+  to { stroke-dashoffset: -26; }
 }
 
 .empty {
@@ -733,6 +839,10 @@ svg {
     grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr) max-content max-content;
   }
 
+  .live-strip {
+    grid-template-columns: max-content minmax(0, 1fr) repeat(3, max-content);
+  }
+
   .workspace {
     grid-template-areas:
       "graph graph"
@@ -800,6 +910,16 @@ svg {
   .filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 6px;
+  }
+
+  .live-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .live-status,
+  .live-strip input {
+    grid-column: 1 / -1;
   }
 
   .filters input[type="search"] {

@@ -16,6 +16,11 @@
     edgeFilter: document.getElementById("edge-filter"),
     showPrivate: document.getElementById("show-private"),
     showForge: document.getElementById("show-forge"),
+    liveStatus: document.getElementById("live-status"),
+    liveEndpoint: document.getElementById("live-endpoint"),
+    liveConnect: document.getElementById("live-connect"),
+    liveDemo: document.getElementById("live-demo"),
+    liveStop: document.getElementById("live-stop"),
     fitGraph: document.getElementById("fit-graph"),
     resetGraph: document.getElementById("reset-graph"),
     graphTitle: document.getElementById("graph-title"),
@@ -48,6 +53,10 @@
   const incoming = relationMap("target", "source");
   const moduleOutgoing = moduleRelationMap("source-module", "target-module");
   const moduleIncoming = moduleRelationMap("target-module", "source-module");
+  const functionsByModuleId = new Map([...functionsByModule.entries()]
+    .map(([module, functions]) => [module, functions.map((fun) => fun.id)]));
+  const liveIndex = buildLiveIndex();
+  const defaultLiveEndpoint = "/~hyperbuddy@1.0/events";
 
   const state = {
     mode: "system",
@@ -63,7 +72,20 @@
     layout: { nodes: [], edges: [], modules: [], bands: [], bounds: null },
     dragging: null,
     fitAfterRender: true,
-    ignoreNextClick: false
+    ignoreNextClick: false,
+    live: {
+      enabled: false,
+      mode: "off",
+      endpoint: "",
+      timer: null,
+      previous: new Map(),
+      activity: new Map(),
+      errors: new Map(),
+      totalDelta: 0,
+      lastSeen: 0,
+      lastError: "",
+      demoTick: 0
+    }
   };
 
   function base64ToBytes(value) {
@@ -105,6 +127,39 @@
     return new Map([...out.entries()].map(([key, value]) => [key, [...value.values()]]));
   }
 
+  function buildLiveIndex() {
+    const index = new Map();
+    const add = (key, id) => {
+      const normalized = liveToken(key);
+      if (!normalized || normalized.length < 2) return;
+      if (!index.has(normalized)) index.set(normalized, new Set());
+      index.get(normalized).add(id);
+    };
+    graph.modules.forEach((mod) => {
+      add(mod.id, mod.id);
+      add(mod.module, mod.id);
+      add(`${mod.role}:${mod.group}`, mod.id);
+      (mod["device-refs"] || []).forEach((ref) => {
+        add(ref, mod.id);
+        add(`~${ref}`, mod.id);
+        add(ref.replace(/@.*$/, ""), mod.id);
+      });
+    });
+    graph.functions.forEach((fun) => {
+      add(fun.id, fun.id);
+      add(`${fun.module}:${fun.label}`, fun.id);
+      add(`${fun.module}.${fun.label}`, fun.id);
+    });
+    return index;
+  }
+
+  function liveToken(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^~/, "")
+      .toLowerCase();
+  }
+
   function init() {
     applyInitialParams();
     renderGroupFilter();
@@ -112,6 +167,7 @@
     renderDevices();
     bindEvents();
     render();
+    if (state.live.endpoint) startLive(state.live.endpoint);
   }
 
   function applyInitialParams() {
@@ -151,9 +207,18 @@
       state.showForge = true;
       els.showForge.checked = true;
     }
+    if (params.has("live")) {
+      state.live.endpoint = liveParamValue(params.get("live"));
+      if (state.live.endpoint !== "demo") els.liveEndpoint.value = state.live.endpoint;
+    }
     document.querySelectorAll("[data-mode]").forEach((button) => {
       button.classList.toggle("active", button.dataset.mode === state.mode);
     });
+  }
+
+  function liveParamValue(value) {
+    if (!value || value === "true" || value === "1") return defaultLiveEndpoint;
+    return value;
   }
 
   function bindEvents() {
@@ -195,6 +260,14 @@
       requestFit();
       render();
     });
+    els.liveConnect.addEventListener("click", () => {
+      startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
+    });
+    els.liveEndpoint.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
+    });
+    els.liveDemo.addEventListener("click", () => startLive("demo"));
+    els.liveStop.addEventListener("click", stopLive);
     els.clearDevices.addEventListener("click", () => {
       state.selectedDevices.clear();
       state.selected = null;
@@ -349,6 +422,9 @@
     if (state.edgeMode !== "context") params.set("edges", state.edgeMode);
     if (!state.showPrivate) params.set("private", "false");
     if (state.showForge) params.set("forge", "true");
+    if (state.live.enabled) {
+      params.set("live", state.live.mode === "demo" ? "demo" : state.live.endpoint);
+    }
     const query = params.toString();
     const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
     window.history.replaceState(null, "", next);
@@ -1025,6 +1101,286 @@
     return `${parts[1]}/${parts[2]}`;
   }
 
+  function startLive(endpoint) {
+    stopLive({ renderAfter: false });
+    const normalized = liveParamValue(endpoint);
+    state.live.enabled = true;
+    state.live.mode = normalized === "demo" ? "demo" : "events";
+    state.live.endpoint = normalized;
+    state.live.previous = new Map();
+    state.live.activity = new Map();
+    state.live.errors = new Map();
+    state.live.totalDelta = 0;
+    state.live.lastError = "";
+    state.live.demoTick = 0;
+    if (normalized !== "demo") els.liveEndpoint.value = normalized;
+    if (state.live.mode === "demo") {
+      demoLiveTick();
+      state.live.timer = window.setInterval(demoLiveTick, 1300);
+    } else {
+      pollLive();
+      state.live.timer = window.setInterval(pollLive, 2200);
+    }
+    renderLiveControls();
+    render();
+  }
+
+  function stopLive(options = {}) {
+    if (state.live.timer) window.clearInterval(state.live.timer);
+    state.live.timer = null;
+    state.live.enabled = false;
+    state.live.mode = "off";
+    state.live.endpoint = "";
+    state.live.previous = new Map();
+    state.live.activity = new Map();
+    state.live.errors = new Map();
+    state.live.totalDelta = 0;
+    state.live.lastError = "";
+    renderLiveControls();
+    if (options.renderAfter !== false) render();
+  }
+
+  async function pollLive() {
+    if (!state.live.enabled || state.live.mode !== "events") return;
+    decayLiveActivity();
+    try {
+      const response = await fetch(state.live.endpoint, {
+        cache: "no-store",
+        headers: { accept: "application/json, text/plain;q=0.9, */*;q=0.8" }
+      });
+      const text = await response.text();
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const payload = parseLivePayload(text);
+      applyLiveCounters(flattenCounters(payload));
+      state.live.lastSeen = Date.now();
+      state.live.lastError = "";
+    } catch (error) {
+      state.live.lastError = error.message || String(error);
+      state.live.totalDelta = 0;
+    }
+    render();
+  }
+
+  function parseLivePayload(text) {
+    const trimmed = (text || "").trim();
+    if (!trimmed) return {};
+    try {
+      return JSON.parse(trimmed);
+    } catch (_error) {
+      return parsePrometheusCounters(trimmed);
+    }
+  }
+
+  function parsePrometheusCounters(text) {
+    const counters = {};
+    text.split(/\n/).forEach((line) => {
+      if (!line || line.startsWith("#")) return;
+      const match = line.match(/^event(?:\{([^}]*)\})?\s+([0-9.]+)$/);
+      if (!match) return;
+      const labels = {};
+      (match[1] || "").split(",").forEach((pair) => {
+        const label = pair.match(/([^=]+)="([^"]*)"/);
+        if (label) labels[label[1]] = label[2];
+      });
+      const topic = labels.topic || "event";
+      const event = labels.event || "count";
+      if (!counters[topic]) counters[topic] = {};
+      counters[topic][event] = Number(match[2]);
+    });
+    return counters;
+  }
+
+  function flattenCounters(value) {
+    const out = [];
+    const walk = (node, path) => {
+      if (typeof node === "number" && Number.isFinite(node)) {
+        out.push({ key: path.join("/"), value: node });
+      } else if (Array.isArray(node)) {
+        node.forEach((item, idx) => walk(item, path.concat(String(idx))));
+      } else if (node && typeof node === "object") {
+        Object.entries(node).forEach(([key, child]) => walk(child, path.concat(key)));
+      }
+    };
+    walk(value, []);
+    return out;
+  }
+
+  function applyLiveCounters(counters) {
+    let totalDelta = 0;
+    counters.forEach(({ key, value }) => {
+      const previous = state.live.previous.get(key);
+      const delta = previous === undefined ? 0 : Math.max(0, value - previous);
+      state.live.previous.set(key, value);
+      if (delta > 0) {
+        totalDelta += delta;
+        applyLiveKey(key, delta);
+      }
+    });
+    state.live.totalDelta = totalDelta;
+  }
+
+  function demoLiveTick() {
+    if (!state.live.enabled || state.live.mode !== "demo") return;
+    decayLiveActivity();
+    const candidates = [
+      "hb_message",
+      "hb_ao",
+      "hb_cache",
+      "hb_http_server",
+      "hb_process",
+      "hb_event",
+      "dev_scheduler",
+      "dev_recorder",
+      "dev_hyperbuddy"
+    ].filter((id) => byModule.has(id));
+    if (!candidates.length) return;
+    const tick = state.live.demoTick;
+    state.live.demoTick += 1;
+    let totalDelta = 0;
+    candidates.slice(0, 7).forEach((_, offset) => {
+      const id = candidates[(tick + offset * 2) % candidates.length];
+      const amount = 2 + ((tick + offset) % 5);
+      totalDelta += amount;
+      bumpLive(id, amount, false);
+    });
+    if (tick % 5 === 3) {
+      bumpLive("warning/process_sampler_failed", 5, true);
+      totalDelta += 5;
+    }
+    state.live.totalDelta = totalDelta;
+    state.live.lastSeen = Date.now();
+    state.live.lastError = "";
+    render();
+  }
+
+  function decayLiveActivity() {
+    decayMap(state.live.activity, 0.7);
+    decayMap(state.live.errors, 0.58);
+  }
+
+  function decayMap(map, factor) {
+    [...map.entries()].forEach(([key, value]) => {
+      const next = value * factor;
+      if (next < 0.18) {
+        map.delete(key);
+      } else {
+        map.set(key, next);
+      }
+    });
+  }
+
+  function applyLiveKey(key, amount) {
+    const error = /error|failed|warning|throw|crash|exception/i.test(key);
+    const ids = resolveLiveIds(key);
+    if (!ids.size) return;
+    ids.forEach((id) => bumpLive(id, amount, error));
+  }
+
+  function bumpLive(id, amount, error) {
+    const resolved = resolveLiveIds(id);
+    const targets = resolved.size ? resolved : new Set([id]);
+    targets.forEach((target) => {
+      state.live.activity.set(target, (state.live.activity.get(target) || 0) + amount);
+      if (error) state.live.errors.set(target, (state.live.errors.get(target) || 0) + amount);
+    });
+  }
+
+  function resolveLiveIds(key) {
+    const ids = new Set();
+    const raw = String(key || "");
+    const pieces = raw
+      .split(/[^A-Za-z0-9_@.:'/-]+/)
+      .flatMap((piece) => piece.split("/"))
+      .filter(Boolean);
+    [raw, ...pieces].forEach((piece) => addLiveMatches(ids, piece));
+    const mfa = raw.match(/\b([a-z][A-Za-z0-9_]*)(?::|\.)([A-Za-z0-9_'-]+\/\d+)/);
+    if (mfa) addLiveMatches(ids, `${mfa[1]}:${mfa[2]}`);
+    return ids;
+  }
+
+  function addLiveMatches(ids, value) {
+    const token = liveToken(value);
+    const variants = [
+      token,
+      token.replace(/^~/, ""),
+      token.replace(/@.*$/, ""),
+      `hb_${token}`,
+      `dev_${token}`,
+      token.replace(/^hb_/, ""),
+      token.replace(/^dev_/, "")
+    ];
+    variants.forEach((variant) => {
+      if (byModule.has(variant)) ids.add(variant);
+      if (byFunction.has(variant)) ids.add(variant);
+      const indexed = liveIndex.get(variant);
+      if (indexed) indexed.forEach((id) => ids.add(id));
+    });
+  }
+
+  function liveNodeScore(node) {
+    if (!state.live.enabled) return 0;
+    let score = state.live.activity.get(node.id) || 0;
+    if (node.kind === "system") {
+      (node.moduleIds || []).forEach((moduleId) => {
+        score += state.live.activity.get(moduleId) || 0;
+        (functionsByModuleId.get(moduleId) || []).forEach((funId) => {
+          score += (state.live.activity.get(funId) || 0) * 0.45;
+        });
+      });
+    } else if (node.kind === "module") {
+      (functionsByModuleId.get(node.id) || []).forEach((funId) => {
+        score += (state.live.activity.get(funId) || 0) * 0.6;
+      });
+    } else if (node.kind === "function") {
+      score += (state.live.activity.get(node.module) || 0) * 0.22;
+    }
+    return score;
+  }
+
+  function liveErrorScore(node) {
+    if (!state.live.enabled) return 0;
+    let score = state.live.errors.get(node.id) || 0;
+    if (node.kind === "system") {
+      (node.moduleIds || []).forEach((moduleId) => {
+        score += state.live.errors.get(moduleId) || 0;
+        (functionsByModuleId.get(moduleId) || []).forEach((funId) => {
+          score += (state.live.errors.get(funId) || 0) * 0.45;
+        });
+      });
+    } else if (node.kind === "module") {
+      (functionsByModuleId.get(node.id) || []).forEach((funId) => {
+        score += (state.live.errors.get(funId) || 0) * 0.6;
+      });
+    } else if (node.kind === "function") {
+      score += (state.live.errors.get(node.module) || 0) * 0.22;
+    }
+    return score;
+  }
+
+  function liveEdgeScore(edge) {
+    return Math.min(liveNodeScore(edge.sourceNode), liveNodeScore(edge.targetNode));
+  }
+
+  function liveMetaText() {
+    if (!state.live.enabled) return "";
+    const active = [...state.live.activity.values()].filter((value) => value > 1).length;
+    if (state.live.lastError) return `live error: ${state.live.lastError}`;
+    const prefix = state.live.mode === "demo" ? "demo live" : "live";
+    return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${active} hot`;
+  }
+
+  function renderLiveControls() {
+    if (!state.live.enabled) {
+      els.liveStatus.textContent = "live off";
+      els.liveStatus.className = "live-status";
+      els.liveStop.hidden = true;
+      return;
+    }
+    els.liveStatus.textContent = liveMetaText() || "live connected";
+    els.liveStatus.className = `live-status ${state.live.lastError ? "error" : "active"}`;
+    els.liveStop.hidden = false;
+  }
+
   function renderStats(visible) {
     els.modules.textContent = nf.format(visible.modules.length);
     els.functions.textContent = nf.format(visible.functions.length);
@@ -1035,7 +1391,11 @@
     els.graphTitle.textContent =
       state.mode === "system" ? "Subsystem flow map" :
       state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
-    els.graphMeta.textContent = `${nf.format(state.layout.edges.length)} visible calls`;
+    els.graphMeta.textContent = [
+      `${nf.format(state.layout.edges.length)} visible calls`,
+      liveMetaText()
+    ].filter(Boolean).join(" · ");
+    renderLiveControls();
   }
 
   function renderGraph() {
@@ -1130,6 +1490,16 @@
         height: node.height,
         rx: node.kind === "module" ? 7 : 5
       }));
+      const liveScore = liveNodeScore(node);
+      if (liveScore > 0.6) {
+        const ring = svgEl("circle", {
+          class: "live-ring",
+          cx: node.width - 12,
+          cy: 12,
+          r: Math.min(9, 3.5 + liveScore * 0.28)
+        });
+        g.append(ring);
+      }
       const title = svgEl("text", {
         x: 9,
         y: node.kind === "module" || node.kind === "system" ? 18 : 16
@@ -1163,17 +1533,23 @@
     if (isCaller(node.id)) classes.push("caller");
     if (isCallee(node.id)) classes.push("callee");
     if (isDimmed(node.id)) classes.push("dim");
+    const liveScore = liveNodeScore(node);
+    if (liveScore > 7) classes.push("live-hot");
+    else if (liveScore > 0.6) classes.push("live-warm");
+    if (liveErrorScore(node) > 0.6) classes.push("live-error");
     return classes.join(" ");
   }
 
   function nodeTooltip(node) {
+    const liveScore = liveNodeScore(node);
+    const liveLine = liveScore > 0.6 ? `\nlive delta ${Math.round(liveScore)}` : "";
     if (node.kind === "system") {
-      return `${node.title}\n${node.modules} modules\n${node.functions} functions`;
+      return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}`;
     }
     if (node.kind === "module") {
-      return `${node.id}\n${node.path}\n${node.functions} functions`;
+      return `${node.id}\n${node.path}\n${node.functions} functions${liveLine}`;
     }
-    return `${node.id}\n${node.path}:${node.line}`;
+    return `${node.id}\n${node.path}:${node.line}${liveLine}`;
   }
 
   function edgeClass(edge) {
@@ -1189,6 +1565,9 @@
     if (state.selected && edge.source !== state.selected && edge.target !== state.selected) {
       classes.push("dim");
     }
+    const liveScore = liveEdgeScore(edge);
+    if (liveScore > 7) classes.push("live-hot");
+    else if (liveScore > 0.6) classes.push("live-warm");
     return classes.join(" ");
   }
 
@@ -1303,6 +1682,13 @@
       ["Calls out", nf.format(node["calls-out"])],
       ["Calls in", nf.format(node["calls-in"])]
     ];
+    const liveScore = liveNodeScore(node);
+    if (liveScore > 0.6) {
+      cells.push(["Live delta", `+${nf.format(Math.round(liveScore))}`]);
+    }
+    if (liveErrorScore(node) > 0.6) {
+      cells.push(["Errors", "hot"]);
+    }
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
     const refs = node["device-refs"] || [];
