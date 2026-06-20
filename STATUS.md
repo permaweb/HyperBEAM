@@ -18,12 +18,10 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added `Repeated calls` edge mode for dense graph reduction.
-- Repeated-call mode persists through `edges=strong`.
-- Validated subsystem edge count dropping from `39` to `32` in the browser.
+- Exported functions are highlighted in module inspector function lists.
+- Validated `hb_message` showing `31` exported functions out of `42` in the browser.
 
 ## Next Work
 
-- Add richer export/source affordances in the inspector.
 - Continue dense-graph polish.
 - Continue browser validation after each presentation pass.

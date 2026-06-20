@@ -1330,6 +1330,7 @@
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = fun.label;
+          if (fun.exported) button.classList.add("exported");
           button.addEventListener("click", () => {
           activateMode("function");
           state.selected = fun.id;

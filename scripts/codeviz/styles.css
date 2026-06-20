@@ -697,6 +697,11 @@ svg {
   font-size: 12px;
 }
 
+.relation-list button.exported {
+  border-color: rgba(0, 154, 247, 0.28);
+  background: #f5fbff;
+}
+
 @media (max-width: 1100px) {
   .shell {
     width: min(100vw - 24px, 980px);
