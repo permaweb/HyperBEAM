@@ -1042,7 +1042,9 @@ svg {
 }
 
 .detail-doc {
+  max-height: 170px;
   margin-top: 10px;
+  overflow: auto;
   color: var(--ink);
   font-size: 13px;
   line-height: 1.45;

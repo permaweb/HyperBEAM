@@ -88,6 +88,7 @@
     layout: { nodes: [], edges: [], modules: [], bands: [], bounds: null },
     dragging: null,
     resizing: null,
+    focusAfterRender: null,
     fitAfterRender: true,
     ignoreNextClick: false,
     minimap: null,
@@ -450,7 +451,7 @@
     const followTarget = heatFollowTarget();
     if (followTarget && followTarget !== state.selected) {
       state.selected = followTarget;
-      requestFit();
+      state.focusAfterRender = followTarget;
     }
     const visible = visibleData();
     state.layout = layout(visible);
@@ -458,7 +459,12 @@
     renderGraph();
     renderInspector();
     syncUrl();
-    if (state.fitAfterRender) {
+    if (state.focusAfterRender) {
+      const target = state.focusAfterRender;
+      state.focusAfterRender = null;
+      state.fitAfterRender = false;
+      focusNode(target);
+    } else if (state.fitAfterRender) {
       state.fitAfterRender = false;
       fitGraph(true);
     }

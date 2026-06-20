@@ -56,6 +56,7 @@ Branch: `expr/visualizer`
 - Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
 - Stack-path row proof: `recording=demo&selected=hb_ao` rendered a stack row path `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3` and preserved the full newline stack in the row title. Screenshot saved to `build/codeviz/validation-stack-path-rows.png`.
 - Inspector event-click proof: `live=demo&selected=dev_scheduler` rendered an enabled `dev_scheduler/events` inspector event row; clicking it focused `dev_scheduler` and preserved the event key in the row title. Screenshot saved to `build/codeviz/validation-inspector-event-click.png`.
+- Follow-focus/doc-clamp proof: `live=demo&follow=heat` kept the hot `dev_scheduler` node visible in the graph, clamped a long `320px` module doc to `170px`, and left live event rows visible in the inspector. Screenshot saved to `build/codeviz/validation-follow-focus-doc-clamp.png`.
 
 ## Last Presentation Pass
 
@@ -94,6 +95,7 @@ Branch: `expr/visualizer`
 - Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
 - Added compact stack-path trails to live/recorded inspector stack rows.
 - Made selected-node live event rows in the inspector clickable graph targets.
+- Clamped long inspector docs and made follow mode focus the hot node after render instead of broad-fitting the whole lens.
 
 ## Next Work
 
