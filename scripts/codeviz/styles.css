@@ -262,9 +262,22 @@ h3 {
 
 .workspace {
   display: grid;
+  grid-template-areas: "context graph detail";
   grid-template-columns: minmax(250px, 300px) minmax(580px, 1fr) minmax(280px, 340px);
   gap: 10px;
   min-height: calc(100vh - 244px);
+}
+
+.context-panel {
+  grid-area: context;
+}
+
+.graph-panel {
+  grid-area: graph;
+}
+
+.detail-panel {
+  grid-area: detail;
 }
 
 .context-panel,
@@ -420,6 +433,11 @@ svg {
   marker-end: url("#arrow-normal");
 }
 
+.edge.internal {
+  stroke: rgba(0, 0, 0, 0.09);
+  stroke-dasharray: 4 5;
+}
+
 #arrow-normal path {
   fill: rgba(0, 0, 0, 0.28);
 }
@@ -512,6 +530,20 @@ svg {
 .node .subtext {
   fill: var(--muted);
   font-size: 10px;
+}
+
+.node.system rect {
+  filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.08));
+}
+
+.node.system text {
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.node.system .subtext {
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .node:hover rect,
@@ -665,10 +697,42 @@ svg {
 }
 
 @media (max-width: 1100px) {
-  .filters,
-  .workspace,
+  .shell {
+    width: min(100vw - 24px, 980px);
+    padding-top: 16px;
+  }
+
+  .topbar {
+    align-items: flex-start;
+  }
+
+  h1 {
+    font-size: 28px;
+  }
+
   .stats {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .stats article {
+    min-height: 64px;
+    padding: 10px 12px;
+  }
+
+  .stats strong {
+    font-size: 20px;
+  }
+
+  .filters {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr) max-content max-content;
+  }
+
+  .workspace {
+    grid-template-areas:
+      "graph graph"
+      "context detail";
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+    min-height: auto;
   }
 
   .context-panel,
@@ -676,8 +740,38 @@ svg {
     min-height: 360px;
   }
 
+  .graph-stage {
+    min-height: 560px;
+  }
+
   .device-list,
   .detail-view {
     height: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    display: grid;
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .filters,
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace {
+    grid-template-areas:
+      "graph"
+      "context"
+      "detail";
   }
 }

@@ -20,6 +20,7 @@
     resetGraph: document.getElementById("reset-graph"),
     graphTitle: document.getElementById("graph-title"),
     graphMeta: document.getElementById("graph-meta"),
+    graphPanel: document.querySelector(".graph-panel"),
     stage: document.getElementById("graph-stage"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
@@ -44,7 +45,7 @@
   const moduleIncoming = moduleRelationMap("target-module", "source-module");
 
   const state = {
-    mode: "function",
+    mode: "system",
     selectedDevices: new Set(),
     selected: null,
     search: "",
@@ -55,7 +56,8 @@
     showForge: false,
     transform: { x: 40, y: 40, scale: 1 },
     layout: { nodes: [], edges: [], modules: [], bands: [], bounds: null },
-    dragging: null
+    dragging: null,
+    fitAfterRender: true
   };
 
   function base64ToBytes(value) {
@@ -116,7 +118,7 @@
     devices.forEach((device) => {
       if (knownDevices.has(device)) state.selectedDevices.add(device);
     });
-    if (["function", "module"].includes(params.get("mode"))) {
+    if (["system", "module", "function"].includes(params.get("mode"))) {
       state.mode = params.get("mode");
     }
     if (params.has("search")) {
@@ -149,12 +151,14 @@
           el.classList.toggle("active", el === button);
         });
         state.selected = null;
+        requestFit();
         render();
       });
     });
 
     els.search.addEventListener("input", () => {
       state.search = els.search.value.trim().toLowerCase();
+      requestFit();
       render();
     });
     els.deviceSearch.addEventListener("input", () => {
@@ -163,32 +167,38 @@
     });
     els.groupFilter.addEventListener("change", () => {
       state.group = els.groupFilter.value;
+      requestFit();
       render();
     });
     els.edgeFilter.addEventListener("change", () => {
       state.edgeMode = els.edgeFilter.value;
+      requestFit();
       render();
     });
     els.showPrivate.addEventListener("change", () => {
       state.showPrivate = els.showPrivate.checked;
+      requestFit();
       render();
     });
     els.showForge.addEventListener("change", () => {
       state.showForge = els.showForge.checked;
+      requestFit();
       render();
     });
     els.clearDevices.addEventListener("click", () => {
       state.selectedDevices.clear();
       state.selected = null;
+      requestFit();
       renderDevices();
       render();
     });
     els.allDevices.addEventListener("click", () => {
       graph.devices.forEach((device) => state.selectedDevices.add(device.id));
+      requestFit();
       renderDevices();
       render();
     });
-    els.fitGraph.addEventListener("click", fitGraph);
+    els.fitGraph.addEventListener("click", () => fitGraph(false));
     els.resetGraph.addEventListener("click", () => {
       state.transform = { x: 40, y: 40, scale: 1 };
       applyTransform();
@@ -226,6 +236,7 @@
             state.selectedDevices.add(device.id);
           }
         });
+        requestFit();
         renderGroupChips();
         renderDevices();
         render();
@@ -266,6 +277,7 @@
       } else {
         state.selectedDevices.delete(device.id);
       }
+      requestFit();
       renderDevices();
       render();
     });
@@ -287,6 +299,14 @@
     renderStats(visible);
     renderGraph();
     renderInspector();
+    if (state.fitAfterRender) {
+      state.fitAfterRender = false;
+      fitGraph(true);
+    }
+  }
+
+  function requestFit() {
+    state.fitAfterRender = true;
   }
 
   function visibleData() {
@@ -324,7 +344,7 @@
     });
     const moduleIds = new Set(modules.map((mod) => mod.id));
     let edges = graph.edges.filter((edge) => {
-      if (state.mode === "module") {
+      if (state.mode === "module" || state.mode === "system") {
         return moduleIds.has(edge["source-module"]) &&
           moduleIds.has(edge["target-module"]) &&
           edge["source-module"] !== edge["target-module"];
@@ -336,6 +356,12 @@
     } else if (state.edgeMode === "selected" && state.selected) {
       const selected = state.selected;
       edges = edges.filter((edge) => {
+        if (state.mode === "system") {
+          const sourceModule = byModule.get(edge["source-module"]);
+          const targetModule = byModule.get(edge["target-module"]);
+          return (sourceModule && systemId(sourceModule) === selected) ||
+            (targetModule && systemId(targetModule) === selected);
+        }
         if (state.mode === "module") {
           return edge["source-module"] === selected || edge["target-module"] === selected;
         }
@@ -346,6 +372,7 @@
   }
 
   function layout(visible) {
+    if (state.mode === "system") return systemLayout(visible);
     const nodes = state.mode === "module" ? moduleGraphNodes(visible) : functionGraphNodes(visible);
     const positioned = positionNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
@@ -358,6 +385,89 @@
       })
       .filter(Boolean);
     return { ...positioned, edges };
+  }
+
+  function systemLayout(visible) {
+    const nodes = systemGraphNodes(visible);
+    const positioned = positionSystemNodes(nodes);
+    const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
+    const edges = systemEdges(visible.edges)
+      .map((edge) => {
+        const source = nodeById.get(edge.source);
+        const target = nodeById.get(edge.target);
+        if (!source || !target) return null;
+        return { ...edge, sourceNode: source, targetNode: target };
+      })
+      .filter(Boolean);
+    return { ...positioned, edges };
+  }
+
+  function systemGraphNodes(visible) {
+    const grouped = new Map();
+    visible.modules.forEach((mod) => {
+      const id = systemId(mod);
+      if (!grouped.has(id)) {
+        grouped.set(id, {
+          id,
+          kind: "system",
+          role: mod.role,
+          group: mod.group,
+          title: systemLabel(mod),
+          modules: 0,
+          functions: 0,
+          exports: 0,
+          loc: 0,
+          deviceCount: 0,
+          moduleIds: [],
+          "device-refs": new Set(),
+          width: 270,
+          height: 76
+        });
+      }
+      const node = grouped.get(id);
+      node.modules += 1;
+      node.functions += mod.functions;
+      node.exports += mod.exports;
+      node.loc += mod.loc;
+      node.moduleIds.push(mod.id);
+      if (mod.role === "device") node.deviceCount += 1;
+      (mod["device-refs"] || []).forEach((ref) => node["device-refs"].add(ref));
+    });
+    return [...grouped.values()].map((node) => ({
+      ...node,
+      "device-refs": [...node["device-refs"]].sort(),
+      subtitle: `${nf.format(node.modules)} modules · ${nf.format(node.functions)} functions`
+    }));
+  }
+
+  function systemEdges(edges) {
+    const merged = new Map();
+    edges.forEach((edge) => {
+      const sourceModule = byModule.get(edge["source-module"]);
+      const targetModule = byModule.get(edge["target-module"]);
+      if (!sourceModule || !targetModule) return;
+      const source = systemId(sourceModule);
+      const target = systemId(targetModule);
+      if (source === target) return;
+      const id = `${source}->${target}`;
+      const existing = merged.get(id);
+      if (existing) {
+        existing.count += edge.count;
+      } else {
+        merged.set(id, { id, source, target, count: edge.count });
+      }
+    });
+    return [...merged.values()];
+  }
+
+  function systemId(mod) {
+    return `${mod.role}:${mod.group}`;
+  }
+
+  function systemLabel(mod) {
+    if (mod.role === "kernel") return `kernel/${mod.group}`;
+    if (mod.role === "device") return `devices/${mod.group}`;
+    return `${mod.role}/${mod.group}`;
   }
 
   function functionGraphNodes(visible) {
@@ -380,6 +490,69 @@
       width: 270,
       height: 44
     }));
+  }
+
+  function positionSystemNodes(nodes) {
+    const roles = ["device", "kernel", "forge", "other"];
+    const roleLabels = {
+      device: "Loaded devices",
+      kernel: "HyperBEAM kernel",
+      forge: "Forge tooling",
+      other: "Other"
+    };
+    const byRole = new Map(
+      groupBy(nodes, (node) => node.role).map((items) => [items[0].role, items])
+    );
+    const placed = [];
+    const bands = [];
+    const laneStep = 300;
+    const roleGap = 22;
+    let xCursor = 36;
+    let maxY = 0;
+    roles.forEach((role) => {
+      const columnNodes = (byRole.get(role) || [])
+        .sort((a, b) => a.group.localeCompare(b.group));
+      if (!columnNodes.length) return;
+      const lanes = Math.min(3, Math.max(1, Math.ceil(columnNodes.length / 5)));
+      const rows = Math.ceil(columnNodes.length / lanes);
+      columnNodes.forEach((node, idx) => {
+        const lane = Math.floor(idx / rows);
+        const row = idx % rows;
+        const x = xCursor + lane * laneStep;
+        const y = 68 + row * (node.height + 18);
+        placed.push({
+          ...node,
+          x,
+          y,
+          cx: x + node.width / 2,
+          cy: y + node.height / 2
+        });
+      });
+      const width = (lanes - 1) * laneStep + columnNodes[0].width + 32;
+      const height = Math.max(500, 68 + rows * (columnNodes[0].height + 18) + 20);
+      bands.push({
+        id: role,
+        x: xCursor - 16,
+        y: 16,
+        width,
+        height,
+        label: roleLabels[role] || role
+      });
+      maxY = Math.max(maxY, height + 24);
+      xCursor += width + roleGap;
+    });
+    const maxX = placed.reduce((max, node) => Math.max(max, node.x + node.width), 0);
+    return {
+      nodes: placed,
+      modules: [],
+      bands,
+      bounds: {
+        x: 0,
+        y: 0,
+        width: Math.max(760, maxX + 52),
+        height: Math.max(540, maxY)
+      }
+    };
   }
 
   function moduleEdges(edges) {
@@ -505,9 +678,9 @@
     els.context.textContent = state.selectedDevices.size ?
       `${state.selectedDevices.size} devices` :
       "kernel";
-    els.graphTitle.textContent = state.selectedDevices.size ?
-      "Kernel plus device context" :
-      "Kernel call graph";
+    els.graphTitle.textContent =
+      state.mode === "system" ? "Subsystem flow map" :
+      state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
     els.graphMeta.textContent = `${nf.format(state.layout.edges.length)} visible calls`;
   }
 
@@ -589,14 +762,19 @@
       }));
       const title = svgEl("text", {
         x: 9,
-        y: node.kind === "module" ? 18 : 16
+        y: node.kind === "module" || node.kind === "system" ? 18 : 16
       });
       title.textContent = node.title;
       g.append(title);
-      if (node.kind === "module") {
+      if (node.kind === "module" || node.kind === "system") {
         const sub = svgEl("text", { class: "subtext", x: 9, y: 34 });
         sub.textContent = node.subtitle;
         g.append(sub);
+      }
+      if (node.kind === "system") {
+        const sub2 = svgEl("text", { class: "subtext", x: 9, y: 54 });
+        sub2.textContent = `${nf.format(node.exports)} exports · ${nf.format(node.loc)} LoC`;
+        g.append(sub2);
       }
       fragment.append(g);
     });
@@ -614,6 +792,9 @@
   }
 
   function nodeTooltip(node) {
+    if (node.kind === "system") {
+      return `${node.title}\n${node.modules} modules\n${node.functions} functions`;
+    }
     if (node.kind === "module") {
       return `${node.id}\n${node.path}\n${node.functions} functions`;
     }
@@ -622,6 +803,9 @@
 
   function edgeClass(edge) {
     const classes = ["edge"];
+    if (state.mode === "system" && edge.sourceNode.role === edge.targetNode.role) {
+      classes.push("internal");
+    }
     if (state.selected && edge.source === state.selected) classes.push("outgoing");
     if (state.selected && edge.target === state.selected) classes.push("incoming");
     if (state.selected && (edge.source === state.selected || edge.target === state.selected)) {
@@ -638,8 +822,13 @@
     const t = edge.targetNode;
     const x1 = s.x + s.width;
     const y1 = s.cy;
-    const x2 = t.x;
     const y2 = t.cy;
+    if (state.mode === "system" && t.x <= s.x) {
+      const x2 = t.x + t.width;
+      const gutter = x1 + 30 + Math.min(70, Math.abs(y2 - y1) * 0.18);
+      return `M ${x1} ${y1} C ${gutter} ${y1}, ${gutter} ${y2}, ${x2} ${y2}`;
+    }
+    const x2 = t.x;
     const dx = Math.max(70, Math.abs(x2 - x1) * 0.45);
     return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
   }
@@ -655,11 +844,24 @@
   }
 
   function activeIncoming() {
+    if (state.mode === "system") return layoutRelationMap("target", "source");
     return state.mode === "module" ? moduleIncoming : incoming;
   }
 
   function activeOutgoing() {
+    if (state.mode === "system") return layoutRelationMap("source", "target");
     return state.mode === "module" ? moduleOutgoing : outgoing;
+  }
+
+  function layoutRelationMap(fromKey, toKey) {
+    const out = new Map();
+    state.layout.edges.forEach((edge) => {
+      const from = edge[fromKey];
+      const to = edge[toKey];
+      if (!out.has(from)) out.set(from, []);
+      out.get(from).push({ id: to, edge });
+    });
+    return out;
   }
 
   function isDimmed(id) {
@@ -683,6 +885,9 @@
 
   function selectedNode() {
     if (!state.selected) return null;
+    if (state.mode === "system") {
+      return state.layout.nodes.find((node) => node.id === state.selected) || null;
+    }
     return state.mode === "module" ? byModule.get(state.selected) : byFunction.get(state.selected);
   }
 
@@ -700,7 +905,14 @@
     }
     const grid = document.createElement("div");
     grid.className = "kv-grid";
-    const cells = state.mode === "module" ? [
+    const cells = state.mode === "system" ? [
+      ["Role", node.role],
+      ["Group", node.group],
+      ["Modules", nf.format(node.modules)],
+      ["Functions", nf.format(node.functions)],
+      ["Exports", nf.format(node.exports)],
+      ["LoC", nf.format(node.loc)]
+    ] : state.mode === "module" ? [
       ["Role", node.role],
       ["Group", node.group],
       ["Functions", nf.format(node.functions)],
@@ -740,6 +952,32 @@
       sourceSection.append(sourceTitle, pre);
       wrap.append(sourceSection);
     }
+    if (state.mode === "system") {
+      const moduleSection = document.createElement("div");
+      moduleSection.className = "source-section";
+      const moduleTitle = document.createElement("h3");
+      moduleTitle.textContent = "Modules";
+      const moduleList = document.createElement("div");
+      moduleList.className = "relation-list";
+      node.moduleIds.slice(0, 40).forEach((moduleId) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = moduleId;
+        button.addEventListener("click", () => {
+          state.mode = "module";
+          document.querySelectorAll("[data-mode]").forEach((el) => {
+            el.classList.toggle("active", el.dataset.mode === "module");
+          });
+          state.selected = moduleId;
+          render();
+          centerNode(moduleId);
+          showGraph();
+        });
+        moduleList.append(button);
+      });
+      moduleSection.append(moduleTitle, moduleList);
+      wrap.append(moduleSection);
+    }
     return wrap;
   }
 
@@ -763,7 +1001,12 @@
       return;
     }
     const buttons = relations
-      .filter((rel) => state.mode === "function" ? byFunction.has(rel.id) : byModule.has(rel.id))
+      .filter((rel) => {
+        if (state.mode === "system") {
+          return state.layout.nodes.some((node) => node.id === rel.id);
+        }
+        return state.mode === "function" ? byFunction.has(rel.id) : byModule.has(rel.id);
+      })
       .slice(0, 80)
       .map((rel) => {
         const button = document.createElement("button");
@@ -773,6 +1016,7 @@
           state.selected = rel.id;
           render();
           centerNode(rel.id);
+          showGraph();
         });
         return button;
       });
@@ -790,16 +1034,32 @@
     els.viewport.setAttribute("transform", `translate(${x},${y}) scale(${scale})`);
   }
 
-  function fitGraph() {
+  function showGraph() {
+    els.graphPanel.scrollIntoView({ block: "start" });
+  }
+
+  function fitGraph(preferReadable = false) {
     const bounds = state.layout.bounds;
     if (!bounds) return;
     const rect = els.stage.getBoundingClientRect();
-    const scale = Math.min(1.4, Math.max(0.16, Math.min(
+    const minScale = readableScale(preferReadable);
+    const scale = Math.min(1.4, Math.max(minScale, Math.min(
       (rect.width - 48) / bounds.width,
       (rect.height - 48) / bounds.height
     )));
     state.transform = { x: 24, y: 24, scale };
     applyTransform();
+  }
+
+  function readableScale(preferReadable) {
+    if (!preferReadable) {
+      if (state.mode === "system") return 0.42;
+      if (state.mode === "module") return 0.18;
+      return 0.12;
+    }
+    if (state.mode === "system") return 0.52;
+    if (state.mode === "module") return 0.72;
+    return 0.42;
   }
 
   function centerNode(id) {
