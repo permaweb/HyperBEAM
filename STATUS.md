@@ -54,6 +54,7 @@ Branch: `expr/visualizer`
 - Recording playback proof: `recording=demo` timeline now has a `Play` control; clicking it moved from aggregate `All` into a numbered event with `Pause` active and then returned to `All` with `Play` restored after replay. Screenshot saved to `build/codeviz/validation-recording-playback.png`.
 - Recording step-button proof: `recording=demo` timeline now shows `Play`, disabled `Prev`, and enabled `Next`; clicking `Next` moved `All -> 1 -> 2`, clicking `Prev` returned to event `1`, the title and `recording-event=N` URL state followed each step, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-recording-step-buttons.png`.
 - Recording step-button mobile proof: at `390x844`, `Play`, `Prev`, `Next`, `All`, and ticks `1..3` all fit without horizontal offscreen controls, `Next` focused event `1`, and document/body overflow stayed `0`. Screenshot saved to `build/codeviz/validation-recording-step-buttons-mobile.png`.
+- Recording focus edge-clear proof: after selecting a trace edge from focused `recording-event=1`, clicking `Next` moved to tick `2`, cleared `edge=`, cleared the selected trace edge/card and active stack row, retained `recording-event=2`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-focus-clears-edge.png`.
 - Workspace splitter proof: dragging the context splitter widened the context pane from `300px` to `364px` and kept page overflow at `0`; dragging the inspector splitter widened the detail pane from `340px` to `398px` and kept page overflow at `0`. Screenshot saved to `build/codeviz/validation-workspace-splitter.png`.
 - Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
 - Stack-path row proof: `recording=demo&selected=hb_ao` rendered a stack row path `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3` and preserved the full newline stack in the row title. Screenshot saved to `build/codeviz/validation-stack-path-rows.png`.
@@ -158,6 +159,7 @@ Branch: `expr/visualizer`
 - Renamed live inspector metrics to numeric `Live heat` / `Error heat` labels for clearer engine-view telemetry.
 - Added recorder timeline playback so imported or demo recordings can repaint their stack traces event-by-event.
 - Added recorder timeline Prev/Next stepping with mobile wrapping so recording controls fit without horizontal scrolling.
+- Cleared selected edge/path state whenever recorder timeline focus moves between aggregate and individual events.
 - Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
 - Added compact stack-path trails to live/recorded inspector stack rows.
 - Made selected-node live event rows in the inspector clickable graph targets.

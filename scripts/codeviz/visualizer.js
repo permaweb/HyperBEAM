@@ -2613,6 +2613,8 @@
     all.addEventListener("click", () => {
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
       render();
     });
@@ -2677,6 +2679,8 @@
     if (next >= state.live.recordingEvents.length) {
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
       render();
       return;
@@ -2687,6 +2691,8 @@
   function focusRecordingEvent(idx) {
     const event = state.live.recordingEvents[idx];
     if (!event) return;
+    state.selectedEdge = null;
+    state.selectedPath = [];
     state.live.recordingFocus = idx;
     paintRecordingEntries([{ event, idx }]);
     render();
