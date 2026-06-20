@@ -497,16 +497,21 @@
       if (state.showForge && mod.role === "forge") activeModules.add(mod.id);
     });
     activeDeviceModules().forEach((module) => activeModules.add(module));
+    const selectedFun = byFunction.get(state.selected);
+    const selectedModule = byModule.get(state.selected) || (selectedFun && byModule.get(selectedFun.module));
+    if (selectedModule) activeModules.add(selectedModule.id);
 
     const needle = state.search;
     const groupFilter = state.group;
     const functionInScope = (fun) => {
+      if (fun.id === state.selected) return true;
       if (!activeModules.has(fun.module)) return false;
       if (!state.showPrivate && !fun.exported) return false;
       if (groupFilter && `${fun.role}:${fun.group}` !== groupFilter) return false;
       return true;
     };
     const moduleInScope = (mod) => {
+      if (selectedModule && mod.id === selectedModule.id) return true;
       if (!activeModules.has(mod.id)) return false;
       if (groupFilter && `${mod.role}:${mod.group}` !== groupFilter) return false;
       return true;
@@ -2279,6 +2284,23 @@
     return null;
   }
 
+  function liveFrameTarget(frame) {
+    for (const id of resolveFrameIds(frame)) {
+      const projected = frameTargetForMode(id);
+      if (projected) return projected;
+    }
+    return null;
+  }
+
+  function frameTargetForMode(id) {
+    const fun = byFunction.get(id);
+    const mod = byModule.get(id) || (fun && byModule.get(fun.module));
+    if (!mod) return null;
+    if (state.mode === "function") return fun ? fun.id : null;
+    if (state.mode === "system") return systemId(mod);
+    return mod.id;
+  }
+
   function renderBands() {
     const fragment = document.createDocumentFragment();
     state.layout.bands.forEach((band) => {
@@ -2707,8 +2729,19 @@
       const stackList = document.createElement("div");
       stackList.className = "stack-list";
       liveSamples.forEach((sample) => {
-        const row = document.createElement("div");
+        const row = document.createElement("button");
+        row.type = "button";
         row.className = "stack-row";
+        const target = liveFrameTarget(sample.current);
+        row.disabled = !target;
+        if (target) {
+          row.addEventListener("click", () => {
+            state.selected = target;
+            render();
+            focusNode(target);
+            showGraph();
+          });
+        }
         const current = document.createElement("strong");
         current.textContent = sample.current;
         const meta = document.createElement("span");

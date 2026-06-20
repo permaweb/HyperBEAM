@@ -1086,6 +1086,12 @@ button.ref-pill {
   border: 1px solid rgba(189, 52, 66, 0.16);
   border-radius: 6px;
   background: #fff8f8;
+  text-align: left;
+}
+
+.stack-row:disabled {
+  color: inherit;
+  cursor: default;
 }
 
 .event-sample-row {

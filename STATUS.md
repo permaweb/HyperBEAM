@@ -46,6 +46,7 @@ Branch: `expr/visualizer`
 - Focused recording URL proof: `recording=demo&recording-event=1` opened directly with tick `1` active, status `demo: 1 events · 3 frames · 4 traces · 44 hot`, and retained `recording-event=1` in the URL.
 - Mobile QA proof: at `390x844`, the page had `0` horizontal overflow, no offscreen controls, and the `2 devices` context stat fit its container. Screenshot saved to `build/codeviz/validation-mobile.png`.
 - Refreshed mobile QA proof: at `390x844`, `dev_recorder` with `recording=demo` had `0` horizontal overflow, no offscreen controls, and the three recorder action buttons fit at about `99px` each. Screenshot saved to `build/codeviz/validation-mobile-recorder-actions.png`.
+- Stack-row navigation proof: `recording=demo&selected=dev_recorder` rendered an enabled `hb_message:commit/3` stack row; clicking it selected and revealed `hb_message` even though the target was outside the pre-click recorder lens. Screenshot saved to `build/codeviz/validation-stack-row-pulls-target.png`.
 
 ## Last Presentation Pass
 
@@ -77,6 +78,7 @@ Branch: `expr/visualizer`
 - Added a recorder timeline rail that can repaint aggregate recordings or focus an individual recorded event.
 - Added `recording-event=N` URL state for shareable focused recorder playback.
 - Tightened mobile stat sizing so the context count fits in the four-card summary row.
+- Made live/recorded stack rows clickable debugger targets that can pull their resolved module/function into the graph.
 
 ## Next Work
 
