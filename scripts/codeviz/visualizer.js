@@ -2603,16 +2603,16 @@
         x: 9,
         y: node.kind === "module" || node.kind === "system" ? 18 : 16
       });
-      title.textContent = node.title;
+      title.textContent = truncateText(node.title, node.width - (liveScore > 0.6 ? 56 : 18), 6.8);
       g.append(title);
       if (node.kind === "module" || node.kind === "system") {
         const sub = svgEl("text", { class: "subtext", x: 9, y: 34 });
-        sub.textContent = node.subtitle;
+        sub.textContent = truncateText(node.subtitle, node.width - 18, 6.2);
         g.append(sub);
       }
       if (node.kind === "function" && node.lens) {
         const sub = svgEl("text", { class: "subtext", x: 9, y: 27 });
-        sub.textContent = node.subtitle;
+        sub.textContent = truncateText(node.subtitle, node.width - 18, 6.2);
         g.append(sub);
       }
       if (node.kind === "system") {
@@ -2653,6 +2653,13 @@
       return `${node.id}\n${node.path}\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
     }
     return `${node.id}\n${node.path}:${node.line}${liveLine}${errorLine}${aliasLine}`;
+  }
+
+  function truncateText(value, width, charWidth) {
+    const text = String(value || "");
+    const max = Math.max(4, Math.floor(width / charWidth));
+    if (text.length <= max) return text;
+    return `${text.slice(0, Math.max(1, max - 3))}...`;
   }
 
   function edgeClass(edge) {
