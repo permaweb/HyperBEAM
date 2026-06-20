@@ -8,7 +8,7 @@
 %%% `~recorder@1.0/maybe-append' is intended to be installed as an `on/event'
 %%% hook handler. It appends the hook request only while a flight is active.
 -module(dev_recorder).
--export([info/1, maybe_append/3, record/3, index/3]).
+-export([info/1, maybe_append/3, record/3, index/3, live/3]).
 -export([take_off/3, land/3, clear/0]).
 -include_lib("hb/include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -44,6 +44,7 @@ info(_) ->
             <<"land">>,
             <<"maybe-append">>,
             <<"record">>,
+            <<"live">>,
             <<"index">>
         ]
     }.
@@ -106,6 +107,10 @@ record(_Base, Req, Opts) ->
 %% @doc Return the browser UI with the current process flight embedded.
 index(_Base, Req, Opts) ->
     html_response(report(), Opts).
+
+%% @doc Return a bounded live snapshot of BEAM process stacktraces.
+live(_Base, Req, Opts) ->
+    response(live_report(Req, Opts), Req, Opts, <<"json">>).
 
 response(Report, Req, Opts) ->
     response(Report, Req, Opts, <<"raw">>).
@@ -396,6 +401,170 @@ report() ->
         <<"count">> => length(Events),
         <<"events">> => Events
     }.
+
+live_report(Req, Opts) ->
+    Limit = bounded_positive_int(Req, <<"limit">>, 100, 500, Opts),
+    StackLimit = bounded_positive_int(Req, <<"stack-limit">>, 16, 80, Opts),
+    Processes =
+        lists:sublist(
+            lists:sort(
+                fun(A, B) ->
+                    maps:get(<<"reductions">>, A, 0) >=
+                        maps:get(<<"reductions">>, B, 0)
+                end,
+                lists:filtermap(
+                    fun(Pid) -> live_process(Pid, StackLimit) end,
+                    erlang:processes()
+                )
+            ),
+            Limit
+        ),
+    #{
+        <<"recording">> => recording(),
+        <<"sampled-at">> => erlang:system_time(millisecond),
+        <<"count">> => length(Processes),
+        <<"processes">> => Processes
+    }.
+
+live_process(Pid, StackLimit) ->
+    case safe_process_info(
+        Pid,
+        [
+            registered_name,
+            current_function,
+            current_stacktrace,
+            initial_call,
+            status,
+            memory,
+            reductions,
+            message_queue_len
+        ]
+    ) of
+        undefined ->
+            false;
+        Info ->
+            Stack = proplists:get_value(current_stacktrace, Info, []),
+            {true,
+                #{
+                    <<"pid">> => hb_util:bin(pid_to_list(Pid)),
+                    <<"registered-name">> =>
+                        live_registered_name(
+                            proplists:get_value(registered_name, Info, [])
+                        ),
+                    <<"entry">> => hb_format:process_from_trace(Stack),
+                    <<"current">> =>
+                        live_frame(proplists:get_value(current_function, Info)),
+                    <<"initial-call">> =>
+                        live_frame(proplists:get_value(initial_call, Info)),
+                    <<"status">> =>
+                        hb_util:bin(proplists:get_value(status, Info, unknown)),
+                    <<"memory">> => proplists:get_value(memory, Info, 0),
+                    <<"reductions">> => proplists:get_value(reductions, Info, 0),
+                    <<"message-queue-len">> =>
+                        proplists:get_value(message_queue_len, Info, 0),
+                    <<"stack">> =>
+                        [
+                            live_frame(Frame)
+                        ||
+                            Frame <- lists:sublist(Stack, StackLimit)
+                        ]
+                }
+            }
+    end.
+
+safe_process_info(Pid, Items) ->
+    try erlang:process_info(Pid, Items) of
+        undefined -> undefined;
+        Info -> Info
+    catch
+        _:_ -> undefined
+    end.
+
+live_registered_name([]) ->
+    <<>>;
+live_registered_name(Name) when is_atom(Name) ->
+    atom_to_binary(Name, utf8);
+live_registered_name(Name) ->
+    format_term(Name, 100).
+
+live_frame(undefined) ->
+    #{ <<"label">> => <<"unknown">> };
+live_frame({Mod, Func, Arity, Extras}) ->
+    live_frame(Mod, Func, Arity, Extras);
+live_frame({Mod, Func, Arity}) ->
+    live_frame(Mod, Func, Arity, []);
+live_frame(Frame) ->
+    #{
+        <<"label">> => format_term(Frame, 100),
+        <<"module">> => <<"unknown">>,
+        <<"function">> => <<"unknown">>,
+        <<"arity">> => <<"unknown">>
+    }.
+
+live_frame(Mod, Func, Arity0, Extras) ->
+    ModBin = live_module_name(Mod),
+    FuncBin = live_function_name(Func),
+    {Arity, ArityBin} = live_arity(Arity0),
+    Frame =
+        #{
+            <<"label">> => <<ModBin/binary, ":", FuncBin/binary, "/", ArityBin/binary>>,
+            <<"module">> => ModBin,
+            <<"function">> => FuncBin,
+            <<"arity">> => Arity
+        },
+    live_frame_extras(Frame, Extras).
+
+live_frame_extras(Frame, Extras) when is_list(Extras) ->
+    Frame1 =
+        case proplists:get_value(file, Extras) of
+            undefined -> Frame;
+            File -> Frame#{ <<"file">> => hb_util:bin(File) }
+        end,
+    case proplists:get_value(line, Extras) of
+        undefined -> Frame1;
+        Line -> Frame1#{ <<"line">> => Line }
+    end;
+live_frame_extras(Frame, _Extras) ->
+    Frame.
+
+live_module_name(Mod) when is_atom(Mod) ->
+    case hb_device_name:parts(Mod) of
+        not_generated ->
+            atom_to_binary(Mod, utf8);
+        {Name, Hash} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            <<"~", Name/binary, "+", Short/binary>>;
+        {Name, Hash, Submodule} ->
+            Short = binary:part(Hash, 0, min(byte_size(Hash), 6)),
+            <<"~", Name/binary, "/", Submodule/binary, "+", Short/binary>>;
+        _ ->
+            atom_to_binary(Mod, utf8)
+    end;
+live_module_name(Mod) ->
+    format_term(Mod, 100).
+
+live_function_name(Func) when is_atom(Func) ->
+    atom_to_binary(Func, utf8);
+live_function_name(Func) ->
+    format_term(Func, 100).
+
+live_arity(Arity) when is_integer(Arity) ->
+    {Arity, integer_to_binary(Arity)};
+live_arity(Args) when is_list(Args) ->
+    Arity = length(Args),
+    {Arity, integer_to_binary(Arity)};
+live_arity(Arity) ->
+    Formatted = format_term(Arity, 100),
+    {Formatted, Formatted}.
+
+bounded_positive_int(Req, Key, Default, Max, Opts) ->
+    try hb_util:int(hb_maps:get(Key, Req, Default, Opts)) of
+        Value when Value > Max -> Max;
+        Value when Value > 0 -> Value;
+        _ -> Default
+    catch
+        _:_ -> Default
+    end.
 
 maybe_record(HookReq, _Opts) ->
     case erlang:get(?RECORDING_KEY) of
@@ -836,6 +1005,31 @@ private_data_redacted_test() ->
     ?assertEqual(nomatch, binary:match(Json, <<"priv-wallet">>)),
     ?assertEqual(nomatch, binary:match(Json, <<"priv-result">>)),
     clear_recording().
+
+live_report_processes_test() ->
+    Report = live_report(#{ <<"limit">> => 5, <<"stack-limit">> => 4 }, #{}),
+    Processes = maps:get(<<"processes">>, Report),
+    ?assert(length(Processes) =< 5),
+    ?assert(length(Processes) > 0),
+    [Process | _] = Processes,
+    ?assert(maps:is_key(<<"pid">>, Process)),
+    ?assert(maps:is_key(<<"entry">>, Process)),
+    ?assert(maps:is_key(<<"stack">>, Process)).
+
+live_json_response_test() ->
+    {ok,
+        #{
+            <<"content-type">> := <<"application/json">>,
+            <<"body">> := Body
+        }} =
+        live(
+            #{},
+            #{ <<"limit">> => 2, <<"stack-limit">> => 2 },
+            #{}
+        ),
+    Decoded = hb_json:decode(Body),
+    ?assert(maps:is_key(<<"processes">>, Decoded)),
+    ?assert(length(maps:get(<<"processes">>, Decoded)) =< 2).
 
 record_installs_hook_test() ->
     clear_recording(),

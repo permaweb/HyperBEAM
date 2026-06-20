@@ -250,7 +250,7 @@ h3 {
 
 .live-strip {
   display: grid;
-  grid-template-columns: max-content minmax(220px, 1fr) max-content max-content max-content;
+  grid-template-columns: max-content minmax(220px, 1fr) max-content max-content max-content max-content;
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -786,6 +786,40 @@ svg {
   white-space: pre;
 }
 
+.stack-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.stack-row {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(189, 52, 66, 0.16);
+  border-radius: 6px;
+  background: #fff8f8;
+}
+
+.stack-row strong,
+.stack-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.stack-row strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.stack-row span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .relation-list {
   display: grid;
   gap: 6px;
@@ -840,7 +874,7 @@ svg {
   }
 
   .live-strip {
-    grid-template-columns: max-content minmax(0, 1fr) repeat(3, max-content);
+    grid-template-columns: max-content minmax(0, 1fr) repeat(4, max-content);
   }
 
   .workspace {

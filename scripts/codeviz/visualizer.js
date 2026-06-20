@@ -19,6 +19,7 @@
     liveStatus: document.getElementById("live-status"),
     liveEndpoint: document.getElementById("live-endpoint"),
     liveConnect: document.getElementById("live-connect"),
+    liveStack: document.getElementById("live-stack"),
     liveDemo: document.getElementById("live-demo"),
     liveStop: document.getElementById("live-stop"),
     fitGraph: document.getElementById("fit-graph"),
@@ -57,6 +58,7 @@
     .map(([module, functions]) => [module, functions.map((fun) => fun.id)]));
   const liveIndex = buildLiveIndex();
   const defaultLiveEndpoint = "/~hyperbuddy@1.0/events";
+  const defaultStackEndpoint = "/~recorder@1.0/live?limit=90&stack-limit=18";
 
   const state = {
     mode: "system",
@@ -81,7 +83,9 @@
       previous: new Map(),
       activity: new Map(),
       errors: new Map(),
+      samples: new Map(),
       totalDelta: 0,
+      processCount: 0,
       lastSeen: 0,
       lastError: "",
       demoTick: 0
@@ -218,6 +222,7 @@
 
   function liveParamValue(value) {
     if (!value || value === "true" || value === "1") return defaultLiveEndpoint;
+    if (value === "stack") return defaultStackEndpoint;
     return value;
   }
 
@@ -266,6 +271,7 @@
     els.liveEndpoint.addEventListener("keydown", (event) => {
       if (event.key === "Enter") startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
     });
+    els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
     els.liveDemo.addEventListener("click", () => startLive("demo"));
     els.liveStop.addEventListener("click", stopLive);
     els.clearDevices.addEventListener("click", () => {
@@ -423,11 +429,17 @@
     if (!state.showPrivate) params.set("private", "false");
     if (state.showForge) params.set("forge", "true");
     if (state.live.enabled) {
-      params.set("live", state.live.mode === "demo" ? "demo" : state.live.endpoint);
+      params.set("live", liveUrlParam());
     }
     const query = params.toString();
     const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
     window.history.replaceState(null, "", next);
+  }
+
+  function liveUrlParam() {
+    if (state.live.mode === "demo") return "demo";
+    if (state.live.mode === "stack" && state.live.endpoint === defaultStackEndpoint) return "stack";
+    return state.live.endpoint;
   }
 
   function visibleData() {
@@ -1105,12 +1117,14 @@
     stopLive({ renderAfter: false });
     const normalized = liveParamValue(endpoint);
     state.live.enabled = true;
-    state.live.mode = normalized === "demo" ? "demo" : "events";
+    state.live.mode = liveModeForEndpoint(normalized);
     state.live.endpoint = normalized;
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();
+    state.live.samples = new Map();
     state.live.totalDelta = 0;
+    state.live.processCount = 0;
     state.live.lastError = "";
     state.live.demoTick = 0;
     if (normalized !== "demo") els.liveEndpoint.value = normalized;
@@ -1125,6 +1139,14 @@
     render();
   }
 
+  function liveModeForEndpoint(endpoint) {
+    if (endpoint === "demo") return "demo";
+    if (endpoint === defaultStackEndpoint || endpoint.includes("~recorder@1.0/live")) {
+      return "stack";
+    }
+    return "events";
+  }
+
   function stopLive(options = {}) {
     if (state.live.timer) window.clearInterval(state.live.timer);
     state.live.timer = null;
@@ -1134,7 +1156,9 @@
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();
+    state.live.samples = new Map();
     state.live.totalDelta = 0;
+    state.live.processCount = 0;
     state.live.lastError = "";
     renderLiveControls();
     if (options.renderAfter !== false) render();
@@ -1151,7 +1175,12 @@
       const text = await response.text();
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
       const payload = parseLivePayload(text);
-      applyLiveCounters(flattenCounters(payload));
+      if (Array.isArray(payload.processes)) {
+        state.live.mode = "stack";
+        applyLiveProcesses(payload.processes);
+      } else {
+        applyLiveCounters(flattenCounters(payload));
+      }
       state.live.lastSeen = Date.now();
       state.live.lastError = "";
     } catch (error) {
@@ -1217,6 +1246,88 @@
       }
     });
     state.live.totalDelta = totalDelta;
+    state.live.processCount = 0;
+    state.live.samples = new Map();
+  }
+
+  function applyLiveProcesses(processes) {
+    let totalDelta = 0;
+    const nextSamples = new Map();
+    processes.forEach((proc) => {
+      const pid = String(proc.pid || "");
+      const reductions = Number(proc.reductions || 0);
+      const previous = state.live.previous.get(`proc:${pid}`);
+      const delta = previous === undefined ? 1 : Math.max(0, reductions - previous);
+      state.live.previous.set(`proc:${pid}`, reductions);
+      const amount = Math.max(0.8, Math.min(28, Math.log1p(delta || 1) * 2.6));
+      totalDelta += delta;
+      const sample = {
+        pid,
+        entry: proc.entry || "unknown",
+        current: frameLabel(proc.current),
+        status: proc.status || "unknown",
+        reductions: delta,
+        queue: Number(proc["message-queue-len"] || 0)
+      };
+      const hotFrames = [
+        { frame: proc.current, weight: 1 },
+        { frame: proc["initial-call"], weight: 0.45 },
+        ...(Array.isArray(proc.stack) ? proc.stack.slice(0, 10).map((frame, idx) => ({
+          frame,
+          weight: Math.max(0.2, 0.82 - idx * 0.06)
+        })) : [])
+      ];
+      hotFrames.forEach(({ frame, weight }) => {
+        const ids = resolveFrameIds(frame);
+        ids.forEach((id) => {
+          bumpLive(id, amount * weight, /error|failed|exception|crash/i.test(sample.current));
+          addLiveSample(nextSamples, id, sample);
+        });
+      });
+      applyLiveKey(String(proc.entry || ""), amount * 0.5);
+    });
+    state.live.totalDelta = totalDelta;
+    state.live.processCount = processes.length;
+    state.live.samples = nextSamples;
+  }
+
+  function addLiveSample(samples, id, sample) {
+    if (!samples.has(id)) samples.set(id, []);
+    const bucket = samples.get(id);
+    if (bucket.some((existing) => existing.pid === sample.pid && existing.current === sample.current)) {
+      return;
+    }
+    bucket.push(sample);
+    bucket.sort((a, b) => b.reductions - a.reductions);
+    if (bucket.length > 8) bucket.length = 8;
+  }
+
+  function frameLabel(frame) {
+    if (!frame) return "unknown";
+    if (typeof frame === "string") return frame;
+    return frame.label || [
+      frame.module || "unknown",
+      frame.function || "unknown",
+      frame.arity === undefined ? "" : `/${frame.arity}`
+    ].join(":").replace(":/", "/");
+  }
+
+  function resolveFrameIds(frame) {
+    const ids = new Set();
+    if (!frame) return ids;
+    if (typeof frame === "string") {
+      resolveLiveIds(frame).forEach((id) => ids.add(id));
+      return ids;
+    }
+    const label = frame.label || frameLabel(frame);
+    resolveLiveIds(label).forEach((id) => ids.add(id));
+    if (frame.module) {
+      addLiveMatches(ids, frame.module);
+      if (frame.function && frame.arity !== undefined) {
+        addLiveMatches(ids, `${frame.module}:${frame.function}/${frame.arity}`);
+      }
+    }
+    return ids;
   }
 
   function demoLiveTick() {
@@ -1357,6 +1468,30 @@
     return score;
   }
 
+  function liveSamplesForNode(node) {
+    if (!state.live.enabled || !state.live.samples.size) return [];
+    const ids = new Set([node.id]);
+    if (node.kind === "system") {
+      (node.moduleIds || []).forEach((moduleId) => {
+        ids.add(moduleId);
+        (functionsByModuleId.get(moduleId) || []).forEach((funId) => ids.add(funId));
+      });
+    } else if (node.kind === "module") {
+      (functionsByModuleId.get(node.id) || []).forEach((funId) => ids.add(funId));
+    }
+    const seen = new Set();
+    const samples = [];
+    ids.forEach((id) => {
+      (state.live.samples.get(id) || []).forEach((sample) => {
+        const key = `${sample.pid}:${sample.current}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        samples.push(sample);
+      });
+    });
+    return samples.sort((a, b) => b.reductions - a.reductions).slice(0, 10);
+  }
+
   function liveEdgeScore(edge) {
     return Math.min(liveNodeScore(edge.sourceNode), liveNodeScore(edge.targetNode));
   }
@@ -1365,6 +1500,9 @@
     if (!state.live.enabled) return "";
     const active = [...state.live.activity.values()].filter((value) => value > 1).length;
     if (state.live.lastError) return `live error: ${state.live.lastError}`;
+    if (state.live.mode === "stack") {
+      return `stacks: ${nf.format(state.live.processCount)} procs · +${nf.format(Math.round(state.live.totalDelta))} reductions · ${active} hot`;
+    }
     const prefix = state.live.mode === "demo" ? "demo live" : "live";
     return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${active} hot`;
   }
@@ -1702,6 +1840,28 @@
         pills.append(pill);
       });
       wrap.append(pills);
+    }
+    const liveSamples = liveSamplesForNode(node);
+    if (liveSamples.length) {
+      const stackSection = document.createElement("div");
+      stackSection.className = "source-section";
+      const stackTitle = document.createElement("h3");
+      stackTitle.textContent = "Live stacks";
+      const stackList = document.createElement("div");
+      stackList.className = "stack-list";
+      liveSamples.forEach((sample) => {
+        const row = document.createElement("div");
+        row.className = "stack-row";
+        const current = document.createElement("strong");
+        current.textContent = sample.current;
+        const meta = document.createElement("span");
+        meta.textContent =
+          `${sample.pid} · ${sample.status} · +${nf.format(Math.round(sample.reductions))} reductions`;
+        row.append(current, meta);
+        stackList.append(row);
+      });
+      stackSection.append(stackTitle, stackList);
+      wrap.append(stackSection);
     }
     if (state.mode === "function" && node.source) {
       const sourceSection = document.createElement("div");
