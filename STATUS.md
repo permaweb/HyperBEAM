@@ -93,6 +93,7 @@ Branch: `expr/visualizer`
 - Module drilldown proof: clicking `dev_recorder` once selected it, clicking it again opened function mode with `search=dev_recorder`, `80` search matches, `99` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-double-click-drilldown.png`.
 - System drilldown proof: clicking `kernel:resolver` twice opened module mode with `group=kernel:resolver`, `12` visible nodes, `43` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-system-drilldown.png`.
 - Edge click proof: clicking a wide invisible hit path for `hb_device_load -> hb_device_archive` selected `hb_device_archive`, added `selected=hb_device_archive` to the URL, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-click-target.png`.
+- Edge summary proof: the same edge click rendered an inspector `Selected call` section with `hb_device_load -> hb_device_archive` and `1 calls`, preserved the target selection, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-summary.png`.
 
 ## Last Presentation Pass
 
@@ -170,6 +171,7 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with graph drilldown behavior.
 - Added wide invisible hit paths for call/trace edges so edge clicks select the callee without requiring pixel-perfect stroke targeting.
 - Updated the codeviz README with edge-click behavior.
+- Added selected-edge context to the inspector so edge clicks preserve the source/target/count that led to the selected node.
 
 ## Next Work
 

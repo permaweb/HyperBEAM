@@ -43,8 +43,9 @@ filters the graph to repeated call relationships. The context and inspector
 panes can be resized with the recorder-style splitters around the graph.
 Clicking an already-selected graph node drills down one level: subsystems open
 their module graph, and modules open a function graph filtered to that module.
-Call edges have wide invisible hit paths; clicking one selects its callee and
-lights the surrounding relationship.
+Call edges have wide invisible hit paths; clicking one selects its callee,
+lights the surrounding relationship, and records the selected call in the
+inspector.
 Selected devices are pinned to the top of the device list. Search matches are
 highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights

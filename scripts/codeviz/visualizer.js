@@ -83,6 +83,7 @@
     mode: "system",
     selectedDevices: new Set(),
     selected: null,
+    selectedEdge: null,
     hovered: null,
     search: "",
     deviceSearch: "",
@@ -543,6 +544,7 @@
 
   function selectNode(id, options = {}) {
     if (options.manual) state.live.follow = false;
+    state.selectedEdge = options.edge || null;
     state.hovered = null;
     state.selected = id;
     render();
@@ -2947,7 +2949,8 @@
     liveTraceEdges().forEach((edge) => {
       fragment.append(edgeHitPath(
         edge,
-        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`
+        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`,
+        "trace"
       ));
       const path = svgEl("path", { class: "edge trace", d: edgePath(edge) });
       path.style.setProperty("--trace-width", `${traceEdgeWidth(edge)}px`);
@@ -2962,13 +2965,21 @@
     els.edges.replaceChildren(fragment);
   }
 
-  function edgeHitPath(edge, label) {
+  function edgeHitPath(edge, label, kind = "call") {
     const hit = svgEl("path", { class: "edge-hit", d: edgePath(edge) });
     hit.dataset.source = edge.source;
     hit.dataset.target = edge.target;
     hit.addEventListener("click", (event) => {
       event.stopPropagation();
-      selectNode(edge.target, { manual: true });
+      selectNode(edge.target, {
+        manual: true,
+        edge: {
+          source: edge.source,
+          target: edge.target,
+          count: edge.count || 1,
+          kind
+        }
+      });
     });
     const title = svgEl("title");
     title.textContent = label;
@@ -3140,6 +3151,7 @@
   function drillIntoNode(node) {
     state.live.follow = false;
     state.selected = null;
+    state.selectedEdge = null;
     state.hovered = null;
     if (node.kind === "system") {
       activateMode("module");
@@ -3373,6 +3385,9 @@
     }
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
+    if (state.selectedEdge && state.selectedEdge.target === node.id) {
+      wrap.append(selectedEdgeCard());
+    }
     const refs = node["device-refs"] || [];
     if (refs.length) {
       const pills = document.createElement("div");
@@ -3599,6 +3614,25 @@
       wrap.append(moduleSection);
     }
     return wrap;
+  }
+
+  function selectedEdgeCard() {
+    const edge = state.selectedEdge;
+    const section = document.createElement("div");
+    section.className = "source-section";
+    const heading = document.createElement("h3");
+    heading.textContent = edge.kind === "trace" ? "Selected trace" : "Selected call";
+    const card = document.createElement("div");
+    card.className = "edge-summary";
+    const route = document.createElement("strong");
+    route.textContent = `${edge.source} -> ${edge.target}`;
+    const meta = document.createElement("span");
+    meta.textContent = edge.kind === "trace" ?
+      `${nf.format(Math.round(edge.count))} sampled frames` :
+      `${nf.format(edge.count)} calls`;
+    card.append(route, meta);
+    section.append(heading, card);
+    return section;
   }
 
   function eventAliasesForNode(node) {
@@ -3946,6 +3980,7 @@
       return;
     }
     state.selected = null;
+    state.selectedEdge = null;
     requestFit();
     render();
   }

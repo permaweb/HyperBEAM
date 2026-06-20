@@ -1496,10 +1496,21 @@ button.ref-pill {
   background: #f3fbff;
 }
 
+.edge-summary {
+  min-width: 0;
+  margin-top: 9px;
+  padding: 8px;
+  border: 1px solid rgba(0, 154, 247, 0.18);
+  border-radius: 6px;
+  background: #f5fbff;
+}
+
 .stack-row strong,
 .stack-row span,
 .event-sample-row strong,
-.event-sample-row span {
+.event-sample-row span,
+.edge-summary strong,
+.edge-summary span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1508,13 +1519,15 @@ button.ref-pill {
 }
 
 .stack-row strong,
-.event-sample-row strong {
+.event-sample-row strong,
+.edge-summary strong {
   color: var(--ink);
   font-size: 11px;
 }
 
 .stack-row span,
-.event-sample-row span {
+.event-sample-row span,
+.edge-summary span {
   margin-top: 4px;
   color: var(--muted);
   font-size: 10px;
