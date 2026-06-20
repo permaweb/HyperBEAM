@@ -2143,6 +2143,7 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "bridge-row";
+      button.title = `${edge.source} -> ${edge.target} (${nf.format(edge.count || 1)} calls)`;
       button.addEventListener("click", () => {
         selectNode(edge.target, { manual: true });
       });
@@ -2164,6 +2165,7 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "bridge-row touchpoint";
+      button.title = `${node.id} (${nf.format(count)} bridge calls)`;
       button.addEventListener("click", () => {
         selectNode(node.id, { manual: true });
       });
@@ -2305,6 +2307,7 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = errors > 0.6 ? "heat-row error" : "heat-row";
+      button.title = `${node.id} (+${nf.format(Math.round(score))} live heat)`;
       button.addEventListener("click", () => {
         selectNode(node.id, { manual: true });
       });
@@ -2340,6 +2343,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "trace-row";
+      button.title =
+        `${edge.source} -> ${edge.target} (+${nf.format(Math.round(edge.count))} sampled frames)`;
       button.addEventListener("click", () => {
         selectNode(edge.target, { manual: true });
       });
@@ -2373,6 +2378,7 @@
       button.className = /error|failed|warning|throw|crash|exception/i.test(key) ?
         "event-row error" :
         "event-row";
+      button.title = key;
       button.addEventListener("click", () => {
         const target = liveEventTarget(key);
         if (!target) return;
