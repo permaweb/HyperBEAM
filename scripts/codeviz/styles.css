@@ -593,12 +593,31 @@ h3 {
   background: #fff7f7;
 }
 
+.bridge-row {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  justify-items: stretch;
+  gap: 3px;
+  padding: 5px 7px;
+  text-align: left;
+  border-color: rgba(0, 154, 247, 0.18);
+  background: #f5fbff;
+}
+
+.bridge-row.touchpoint {
+  border-color: rgba(19, 138, 109, 0.2);
+  background: #f6fffc;
+}
+
 .heat-row strong,
 .heat-row span,
 .trace-row strong,
 .trace-row span,
 .event-row strong,
-.event-row span {
+.event-row span,
+.bridge-row strong,
+.bridge-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -607,13 +626,15 @@ h3 {
 
 .heat-row strong,
 .trace-row strong,
-.event-row strong {
+.event-row strong,
+.bridge-row strong {
   font-size: 11px;
 }
 
 .heat-row span,
 .trace-row span,
-.event-row span {
+.event-row span,
+.bridge-row span {
   color: var(--muted);
   font-size: 10px;
 }

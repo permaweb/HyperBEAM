@@ -1806,9 +1806,100 @@
   }
 
   function renderTelemetryPanel() {
+    if (!state.live.enabled) {
+      const hasBridge = renderBridgePanel();
+      els.enginePanel.hidden = !hasBridge;
+      return;
+    }
     const hasHeat = renderHeatPanel();
     const hasTraces = renderTracePanel();
     els.enginePanel.hidden = !hasHeat && !hasTraces;
+  }
+
+  function renderBridgePanel() {
+    if (!state.selectedDevices.size) {
+      els.heatPanel.replaceChildren();
+      els.tracePanel.replaceChildren();
+      return false;
+    }
+    const bridges = state.layout.edges
+      .filter((edge) => edge.sourceNode && edge.targetNode)
+      .filter((edge) => edge.sourceNode.role !== edge.targetNode.role)
+      .filter((edge) => edge.sourceNode.role === "device" || edge.targetNode.role === "device")
+      .sort((a, b) => (b.count || 0) - (a.count || 0))
+      .slice(0, 4);
+    const touchpoints = bridgeTouchpoints();
+    if (!bridges.length && !touchpoints.length) {
+      els.heatPanel.replaceChildren();
+      els.tracePanel.replaceChildren();
+      return false;
+    }
+    renderBridgeEdges(bridges);
+    renderBridgeTouchpoints(touchpoints);
+    return true;
+  }
+
+  function renderBridgeEdges(bridges) {
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Device bridges";
+    const rows = bridges.map((edge) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "bridge-row";
+      button.addEventListener("click", () => {
+        state.selected = edge.target;
+        render();
+        focusNode(edge.target);
+      });
+      const name = document.createElement("strong");
+      name.textContent = `${edge.source} -> ${edge.target}`;
+      const meta = document.createElement("span");
+      meta.textContent = `${nf.format(edge.count || 1)} calls`;
+      button.append(name, meta);
+      return button;
+    });
+    els.heatPanel.replaceChildren(title, ...rows);
+  }
+
+  function renderBridgeTouchpoints(touchpoints) {
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Kernel touchpoints";
+    const rows = touchpoints.map(({ node, count }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "bridge-row touchpoint";
+      button.addEventListener("click", () => {
+        state.selected = node.id;
+        render();
+        focusNode(node.id);
+      });
+      const name = document.createElement("strong");
+      name.textContent = node.title || node.id;
+      const meta = document.createElement("span");
+      meta.textContent = `${nf.format(count)} bridge calls · ${node.kind}`;
+      button.append(name, meta);
+      return button;
+    });
+    els.tracePanel.replaceChildren(title, ...rows);
+  }
+
+  function bridgeTouchpoints() {
+    const counts = new Map();
+    state.layout.edges.forEach((edge) => {
+      if (!edge.sourceNode || !edge.targetNode) return;
+      if (edge.sourceNode.role === edge.targetNode.role) return;
+      [edge.sourceNode, edge.targetNode].forEach((node) => {
+        if (node.role === "device") return;
+        counts.set(node.id, (counts.get(node.id) || 0) + (edge.count || 1));
+      });
+    });
+    return [...counts.entries()]
+      .map(([id, count]) => ({ node: state.layout.nodes.find((node) => node.id === id), count }))
+      .filter((item) => item.node)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 4);
   }
 
   function renderHeatPanel() {
