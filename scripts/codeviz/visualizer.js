@@ -2576,6 +2576,31 @@
       });
       wrap.append(pills);
     }
+    const eventAliases = eventAliasesForNode(node);
+    if (eventAliases.length) {
+      const eventSection = document.createElement("div");
+      eventSection.className = "source-section";
+      const eventTitle = document.createElement("h3");
+      eventTitle.textContent = "Event aliases";
+      const pills = document.createElement("div");
+      pills.className = "pill-list";
+      eventAliases.slice(0, 24).forEach((alias) => {
+        const pill = document.createElement("button");
+        pill.type = "button";
+        pill.className = "ref-pill event-pill";
+        pill.textContent = alias;
+        pill.addEventListener("click", () => {
+          state.search = alias.toLowerCase();
+          els.search.value = alias;
+          requestFit();
+          render();
+          showGraph();
+        });
+        pills.append(pill);
+      });
+      eventSection.append(eventTitle, pills);
+      wrap.append(eventSection);
+    }
     if (isRecorderNode(node)) {
       wrap.append(recorderActions());
     }
@@ -2698,6 +2723,16 @@
       wrap.append(moduleSection);
     }
     return wrap;
+  }
+
+  function eventAliasesForNode(node) {
+    if (state.mode === "system") {
+      return [...new Set((node.moduleIds || [])
+        .flatMap((moduleId) => byModule.get(moduleId)?.["event-topics"] || []))]
+        .sort();
+    }
+    if (state.mode === "module") return (node["event-topics"] || []).slice().sort();
+    return (node.events || []).slice().sort();
   }
 
   function isRecorderNode(node) {

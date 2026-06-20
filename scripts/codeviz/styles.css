@@ -1048,6 +1048,17 @@ svg {
   font-weight: 700;
 }
 
+button.ref-pill {
+  min-height: 26px;
+  text-align: left;
+}
+
+.event-pill {
+  border-color: rgba(19, 138, 109, 0.18);
+  background: #f2fffa;
+  color: var(--green);
+}
+
 .source-snippet {
   max-height: 320px;
   margin: 8px 0 0;
