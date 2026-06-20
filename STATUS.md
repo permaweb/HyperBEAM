@@ -7,8 +7,8 @@ Branch: `expr/visualizer`
 - Static visualizer generator produces `build/codeviz/hyperbeam-codeviz.html`.
 - Current graph build: `167 modules`, `3359 functions`, `8508 calls`.
 - Default view is now `Subsystems`, with module and function modes as drilldowns.
-- Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system`.
-- Live engine overlay supports `live=demo` and `live=<endpoint>`; endpoints are interpreted as event counter streams and painted onto the graph as hot nodes, rings, and flowing edges.
+- Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat`.
+- Live engine overlay supports `live=demo`, `live=<endpoint>`, `live=stack`, `follow=heat`, and `recording=<url|demo>`; event counters, process stack samples, and recorder traces are painted onto the graph as hot nodes, numeric badges, live event rows, stack paths, and flowing trace edges.
 
 ## Evidence
 
