@@ -99,9 +99,10 @@ the selected cadence and freshness of the last sample.
 Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
 report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
 as aggregate heat, replayed event-by-event with the timeline Play control, or
-focused to one event with `recording-event=N`. Timeline ticks that carry
-warning/failure activity are marked as error ticks, and each tick carries a
-small stack-depth heat bar. Focused recording events render their stack frames
+focused to one event with `recording-event=N`. Timeline Play/Prev/Next controls
+step through the recorder events, ticks that carry warning/failure activity are
+marked as error ticks, and each tick carries a small stack-depth heat bar.
+Focused recording events render their stack frames
 as clickable rows in the engine deck; frame rows select the adjacent trace edge
 when the current graph can project it. The source switcher in the graph panel can jump
 between HyperBuddy counters, live stack snapshots, demo telemetry, recorder

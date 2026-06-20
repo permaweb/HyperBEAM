@@ -2595,6 +2595,17 @@
         startRecordingPlayback();
       }
     });
+    const prev = recordingStepButton(
+      "Prev",
+      state.live.recordingFocus <= 0,
+      () => focusRecordingEvent(Math.max(0, state.live.recordingFocus - 1))
+    );
+    const nextIndex = state.live.recordingFocus < 0 ? 0 : state.live.recordingFocus + 1;
+    const next = recordingStepButton(
+      "Next",
+      nextIndex >= state.live.recordingEvents.length,
+      () => focusRecordingEvent(nextIndex)
+    );
     const all = document.createElement("button");
     all.type = "button";
     all.className = state.live.recordingFocus < 0 ? "recording-tick active" : "recording-tick";
@@ -2627,9 +2638,22 @@
       });
       return button;
     });
-    els.recordingTimeline.replaceChildren(title, play, all, ...ticks);
+    els.recordingTimeline.replaceChildren(title, play, prev, next, all, ...ticks);
     els.recordingTimeline.hidden = false;
     return true;
+  }
+
+  function recordingStepButton(label, disabled, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "recording-play";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.addEventListener("click", () => {
+      stopRecordingPlayback(false);
+      action();
+    });
+    return button;
   }
 
   function startRecordingPlayback() {

@@ -810,6 +810,11 @@ body.resizing {
   background: #fff2f3;
 }
 
+.recording-play:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .recording-tick {
   position: relative;
   flex: 0 0 auto;
@@ -1901,6 +1906,17 @@ button.ref-pill {
   .error-panel {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     max-height: 116px;
+  }
+
+  .recording-timeline {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    max-height: 156px;
+  }
+
+  .recording-title {
+    flex-basis: 100%;
+    max-width: 100%;
   }
 
   .engine-source-button {
