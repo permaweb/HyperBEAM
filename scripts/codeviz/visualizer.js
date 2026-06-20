@@ -103,6 +103,7 @@
       sourceName: "",
       recordingEvents: [],
       recordingFocus: -1,
+      pendingRecordingFocus: -1,
       lastSeen: 0,
       lastError: "",
       demoTick: 0
@@ -235,6 +236,12 @@
     }
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
+    }
+    if (params.has("recording-event")) {
+      const focus = Number(params.get("recording-event"));
+      if (Number.isInteger(focus) && focus > 0) {
+        state.live.pendingRecordingFocus = focus - 1;
+      }
     }
     document.querySelectorAll("[data-mode]").forEach((button) => {
       button.classList.toggle("active", button.dataset.mode === state.mode);
@@ -458,6 +465,9 @@
     }
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
+    }
+    if (state.live.mode === "recording" && state.live.recordingFocus >= 0) {
+      params.set("recording-event", String(state.live.recordingFocus + 1));
     }
     const query = params.toString();
     const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
@@ -1159,6 +1169,7 @@
     state.live.sourceName = "";
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
+    state.live.pendingRecordingFocus = -1;
     state.live.lastError = "";
     state.live.demoTick = 0;
     if (normalized !== "demo") els.liveEndpoint.value = normalized;
@@ -1199,6 +1210,7 @@
     state.live.sourceName = "";
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
+    state.live.pendingRecordingFocus = -1;
     state.live.lastError = "";
     renderLiveControls();
     if (options.renderAfter !== false) render();
@@ -1374,6 +1386,7 @@
   }
 
   function applyRecordingReport(report, sourceName) {
+    const pendingFocus = state.live.pendingRecordingFocus;
     stopLive({ renderAfter: false });
     state.live.enabled = true;
     state.live.mode = "recording";
@@ -1390,9 +1403,20 @@
     state.live.sourceName = sourceName;
     state.live.recordingEvents = Array.isArray(report.events) ? report.events : [];
     state.live.recordingFocus = -1;
+    state.live.pendingRecordingFocus = pendingFocus;
     state.live.lastError = "";
     paintRecordingEntries(recordingEntries(state.live.recordingEvents));
-    render();
+    if (
+      state.live.pendingRecordingFocus >= 0 &&
+      state.live.pendingRecordingFocus < state.live.recordingEvents.length
+    ) {
+      const focus = state.live.pendingRecordingFocus;
+      state.live.pendingRecordingFocus = -1;
+      focusRecordingEvent(focus);
+    } else {
+      state.live.pendingRecordingFocus = -1;
+      render();
+    }
   }
 
   function recordingEntries(events) {
