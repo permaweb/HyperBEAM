@@ -957,6 +957,10 @@
     const fragment = document.createDocumentFragment();
     state.layout.edges.forEach((edge) => {
       const path = svgEl("path", { class: edgeClass(edge), d: edgePath(edge) });
+      const width = edgeWidth(edge);
+      path.style.setProperty("--edge-width", `${width}px`);
+      path.style.setProperty("--edge-hot-width", `${width + 1.25}px`);
+      path.style.setProperty("--edge-opacity", edgeOpacity(edge));
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
       const title = svgEl("title");
@@ -965,6 +969,17 @@
       fragment.append(path);
     });
     els.edges.replaceChildren(fragment);
+  }
+
+  function edgeWidth(edge) {
+    return Math.min(4.2, 0.9 + Math.log1p(edge.count || 1) * 0.36);
+  }
+
+  function edgeOpacity(edge) {
+    if (state.mode === "system" && edge.sourceNode.role === edge.targetNode.role) {
+      return "0.72";
+    }
+    return "1";
   }
 
   function renderNodes() {

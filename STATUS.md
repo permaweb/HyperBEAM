@@ -18,14 +18,13 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added selected-module local flow lenses.
-- Direct graph clicks now focus the selected neighborhood.
-- De-duplicated modules/functions that are both callers and callees in lenses.
-- Tightened the responsive graph stage height for the in-app browser viewport.
-- Validated `hb_message` module neighborhood in the browser.
+- Added call-count weighted edge strokes.
+- Tightened mobile stats and filter layout so the graph starts much earlier.
+- Fixed mobile Context stat truncation.
+- Validated desktop/default subsystem, module lens, and 390px mobile layouts in the browser.
 
 ## Next Work
 
-- Improve selected-neighborhood controls for systems.
-- Add richer dense-edge reduction and visual weighting.
+- Improve selected-neighborhood controls for systems and dense graphs.
+- Add richer export/source affordances in the inspector.
 - Continue browser validation after each presentation pass.
