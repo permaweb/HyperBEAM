@@ -20,6 +20,7 @@ Branch: `expr/visualizer`
 - Live overlay browser proof: `?devices=recorder@1.0,scheduler@1.0&mode=system&live=demo` showed `3` hot nodes, `3` hot edges, `6` live rings, and status `demo live: +27 events · 40 hot`; screenshot saved to `build/codeviz/validation-live-demo.png`.
 - Recorder stack proof: `rebar3 device test --devices dev_recorder --module recorder@1.0 --test live_report_processes_test+live_json_response_test` passes (`2 tests passed`).
 - Browser stack overlay proof against a recorder-shaped local JSON feed: `selected=hb_message` showed status `stacks: 2 procs · +2 reductions · 47 hot`, one `Live stacks` inspector row, `8` live rings, and `8` warm edges; screenshot saved to `build/codeviz/validation-stack-live.png`.
+- Recorder import proof: `recording=demo&selected=hb_message` showed status `demo: 3 events · 9 frames · 54 hot`, one recorded inspector stack row, `10` live rings, and `3` warm edges; screenshot saved to `build/codeviz/validation-recording-demo.png`.
 
 ## Last Presentation Pass
 
@@ -28,9 +29,10 @@ Branch: `expr/visualizer`
 - Added URL-addressable live mode with explicit demo feed and real endpoint mode.
 - Added `~recorder@1.0/live` JSON endpoint for bounded BEAM process stack snapshots.
 - Added visualizer stack mode that paints live process stacks onto modules/functions and surfaces matching process rows in the inspector.
+- Added recorder report import support for saved `~recorder@1.0` HTML/JSON reports with embedded stack traces.
 
 ## Next Work
 
-- Add recorder recording import/paint path for captured flight-recorder stack data.
 - Improve stack heat ranking and selected-node timeline affordances.
+- Add stronger UI affordances for switching between event heat, stack heat, and recording heat.
 - Continue browser validation after each presentation pass.

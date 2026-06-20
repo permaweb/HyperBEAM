@@ -20,6 +20,8 @@
     liveEndpoint: document.getElementById("live-endpoint"),
     liveConnect: document.getElementById("live-connect"),
     liveStack: document.getElementById("live-stack"),
+    recordingImport: document.getElementById("recording-import"),
+    recordingFile: document.getElementById("recording-file"),
     liveDemo: document.getElementById("live-demo"),
     liveStop: document.getElementById("live-stop"),
     fitGraph: document.getElementById("fit-graph"),
@@ -86,6 +88,8 @@
       samples: new Map(),
       totalDelta: 0,
       processCount: 0,
+      frameCount: 0,
+      sourceName: "",
       lastSeen: 0,
       lastError: "",
       demoTick: 0
@@ -172,6 +176,7 @@
     bindEvents();
     render();
     if (state.live.endpoint) startLive(state.live.endpoint);
+    if (state.live.sourceName === "demo") applyRecordingReport(demoRecordingReport(), "demo");
   }
 
   function applyInitialParams() {
@@ -214,6 +219,9 @@
     if (params.has("live")) {
       state.live.endpoint = liveParamValue(params.get("live"));
       if (state.live.endpoint !== "demo") els.liveEndpoint.value = state.live.endpoint;
+    }
+    if (params.get("recording") === "demo") {
+      state.live.sourceName = "demo";
     }
     document.querySelectorAll("[data-mode]").forEach((button) => {
       button.classList.toggle("active", button.dataset.mode === state.mode);
@@ -272,6 +280,8 @@
       if (event.key === "Enter") startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
     });
     els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
+    els.recordingImport.addEventListener("click", () => els.recordingFile.click());
+    els.recordingFile.addEventListener("change", importRecordingFile);
     els.liveDemo.addEventListener("click", () => startLive("demo"));
     els.liveStop.addEventListener("click", stopLive);
     els.clearDevices.addEventListener("click", () => {
@@ -428,8 +438,11 @@
     if (state.edgeMode !== "context") params.set("edges", state.edgeMode);
     if (!state.showPrivate) params.set("private", "false");
     if (state.showForge) params.set("forge", "true");
-    if (state.live.enabled) {
+    if (state.live.enabled && state.live.mode !== "recording") {
       params.set("live", liveUrlParam());
+    }
+    if (state.live.mode === "recording" && state.live.sourceName === "demo") {
+      params.set("recording", "demo");
     }
     const query = params.toString();
     const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
@@ -1125,6 +1138,8 @@
     state.live.samples = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
+    state.live.frameCount = 0;
+    state.live.sourceName = "";
     state.live.lastError = "";
     state.live.demoTick = 0;
     if (normalized !== "demo") els.liveEndpoint.value = normalized;
@@ -1159,6 +1174,8 @@
     state.live.samples = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
+    state.live.frameCount = 0;
+    state.live.sourceName = "";
     state.live.lastError = "";
     renderLiveControls();
     if (options.renderAfter !== false) render();
@@ -1247,6 +1264,8 @@
     });
     state.live.totalDelta = totalDelta;
     state.live.processCount = 0;
+    state.live.frameCount = 0;
+    state.live.sourceName = "";
     state.live.samples = new Map();
   }
 
@@ -1288,7 +1307,170 @@
     });
     state.live.totalDelta = totalDelta;
     state.live.processCount = processes.length;
+    state.live.frameCount = processes.reduce(
+      (sum, proc) => sum + (Array.isArray(proc.stack) ? proc.stack.length : 0),
+      0
+    );
+    state.live.sourceName = "";
     state.live.samples = nextSamples;
+  }
+
+  async function importRecordingFile() {
+    const file = els.recordingFile.files && els.recordingFile.files[0];
+    if (!file) return;
+    try {
+      const report = parseRecordingReport(await file.text());
+      applyRecordingReport(report, file.name || "imported");
+    } catch (error) {
+      stopLive({ renderAfter: false });
+      state.live.enabled = true;
+      state.live.mode = "recording";
+      state.live.lastError = `import failed: ${error.message || error}`;
+      render();
+    } finally {
+      els.recordingFile.value = "";
+    }
+  }
+
+  function parseRecordingReport(text) {
+    const embedded = text.match(/<script[^>]+id=["']embedded-log["'][^>]*>([^<]*)<\/script>/i);
+    if (embedded) {
+      return JSON.parse(new TextDecoder().decode(base64ToBytes(embedded[1])));
+    }
+    return JSON.parse(text);
+  }
+
+  function applyRecordingReport(report, sourceName) {
+    stopLive({ renderAfter: false });
+    state.live.enabled = true;
+    state.live.mode = "recording";
+    state.live.endpoint = "";
+    state.live.previous = new Map();
+    state.live.activity = new Map();
+    state.live.errors = new Map();
+    state.live.samples = new Map();
+    state.live.totalDelta = 0;
+    state.live.processCount = 0;
+    state.live.frameCount = 0;
+    state.live.sourceName = sourceName;
+    state.live.lastError = "";
+    const events = Array.isArray(report.events) ? report.events : [];
+    const samples = new Map();
+    events.forEach((event, idx) => {
+      const frames = recordingFrames(event);
+      const sample = {
+        pid: `event ${event.sequence || idx + 1}`,
+        entry: `${event.topic || "recording"}/${event.name || "event"}`,
+        current: frames.length ? frameLabel(frames[0]) : recordingEventLabel(event),
+        status: "recorded",
+        reductions: 1,
+        queue: 0
+      };
+      frames.forEach((frame, frameIdx) => {
+        const amount = Math.max(0.45, 5 - frameIdx * 0.28);
+        resolveFrameIds(frame).forEach((id) => {
+          bumpLive(id, amount, /error|failed|exception|crash/i.test(sample.entry));
+          addLiveSample(samples, id, sample);
+        });
+      });
+      resolveFrameIds(recordingEventFrame(event)).forEach((id) => {
+        bumpLive(id, 2.2, /error|failed|exception|crash/i.test(sample.entry));
+        addLiveSample(samples, id, sample);
+      });
+      state.live.frameCount += frames.length;
+    });
+    state.live.totalDelta = events.length;
+    state.live.samples = samples;
+    render();
+  }
+
+  function recordingFrames(event) {
+    return (Array.isArray(event.stack) ? event.stack : [])
+      .map(recordingFrame)
+      .filter(Boolean);
+  }
+
+  function recordingFrame(frame) {
+    if (!frame) return null;
+    if (typeof frame === "string") return frame;
+    if (Array.isArray(frame) && frame.length >= 3) {
+      const module = String(frame[0]);
+      const func = String(frame[1]);
+      const arity = recordingArity(frame[2]);
+      return {
+        label: `${module}:${func}/${arity}`,
+        module,
+        function: func,
+        arity
+      };
+    }
+    if (typeof frame === "object") return frame;
+    return null;
+  }
+
+  function recordingArity(value) {
+    if (typeof value === "number") return value;
+    if (Array.isArray(value)) return value.length;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+
+  function recordingEventFrame(event) {
+    const module = event.module || "unknown";
+    const func = event.function || "unknown";
+    return {
+      label: `${module}:${func}`,
+      module,
+      function: func,
+      arity: ""
+    };
+  }
+
+  function recordingEventLabel(event) {
+    return `${event.module || "unknown"}:${event.function || "unknown"}`;
+  }
+
+  function demoRecordingReport() {
+    return {
+      events: [
+        {
+          sequence: 1,
+          topic: "ao_result",
+          name: "resolving",
+          module: "hb_ao",
+          function: "resolve",
+          stack: [
+            ["hb_message", "commit", 3, []],
+            ["hb_ao", "resolve", 3, []],
+            ["dev_recorder", "record", 3, []]
+          ]
+        },
+        {
+          sequence: 2,
+          topic: "scheduler",
+          name: "compute",
+          module: "dev_scheduler",
+          function: "compute",
+          stack: [
+            ["dev_scheduler", "compute", 3, []],
+            ["hb_process", "execute", 3, []],
+            ["hb_cache", "read", 2, []]
+          ]
+        },
+        {
+          sequence: 3,
+          topic: "warning",
+          name: "process_sampler_failed",
+          module: "hb_process_sampler",
+          function: "sample_processes",
+          stack: [
+            ["hb_process_sampler", "sample_processes", 1, []],
+            ["hb_event", "log", 6, []],
+            ["hb_prometheus", "inc", 3, []]
+          ]
+        }
+      ]
+    };
   }
 
   function addLiveSample(samples, id, sample) {
@@ -1502,6 +1684,10 @@
     if (state.live.lastError) return `live error: ${state.live.lastError}`;
     if (state.live.mode === "stack") {
       return `stacks: ${nf.format(state.live.processCount)} procs · +${nf.format(Math.round(state.live.totalDelta))} reductions · ${active} hot`;
+    }
+    if (state.live.mode === "recording") {
+      const source = state.live.sourceName ? `${state.live.sourceName}: ` : "";
+      return `${source}${nf.format(state.live.totalDelta)} events · ${nf.format(state.live.frameCount)} frames · ${active} hot`;
     }
     const prefix = state.live.mode === "demo" ? "demo live" : "live";
     return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${active} hot`;

@@ -250,7 +250,7 @@ h3 {
 
 .live-strip {
   display: grid;
-  grid-template-columns: max-content minmax(220px, 1fr) max-content max-content max-content max-content;
+  grid-template-columns: max-content minmax(220px, 1fr) repeat(5, max-content);
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -874,7 +874,7 @@ svg {
   }
 
   .live-strip {
-    grid-template-columns: max-content minmax(0, 1fr) repeat(4, max-content);
+    grid-template-columns: max-content minmax(0, 1fr) repeat(5, max-content);
   }
 
   .workspace {
