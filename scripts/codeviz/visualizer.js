@@ -1224,11 +1224,13 @@
   }
 
   function startLive(endpoint) {
-    stopLive({ renderAfter: false });
+    const follow = state.live.follow;
+    stopLive({ renderAfter: false, clearFollow: false });
     const normalized = liveParamValue(endpoint);
     state.live.enabled = true;
     state.live.mode = liveModeForEndpoint(normalized);
     state.live.endpoint = normalized;
+    state.live.follow = follow;
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();
@@ -1274,7 +1276,7 @@
     state.live.enabled = false;
     state.live.mode = "off";
     state.live.endpoint = "";
-    state.live.follow = false;
+    if (options.clearFollow !== false) state.live.follow = false;
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();
