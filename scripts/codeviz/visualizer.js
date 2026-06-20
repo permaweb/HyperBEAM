@@ -515,7 +515,7 @@
     if (state.live.enabled && state.live.mode !== "recording") {
       params.set("live", liveUrlParam());
     }
-    if (state.live.follow) params.set("follow", "heat");
+    if (state.live.enabled && state.live.follow) params.set("follow", "heat");
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
     } else if (state.live.mode === "recording" && state.live.recordingUrl) {
@@ -1274,6 +1274,7 @@
     state.live.enabled = false;
     state.live.mode = "off";
     state.live.endpoint = "";
+    state.live.follow = false;
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();

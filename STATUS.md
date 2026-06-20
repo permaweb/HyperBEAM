@@ -60,6 +60,7 @@ Branch: `expr/visualizer`
 - Selected-device pinning proof: with `recorder@1.0,scheduler@1.0` loaded, the first two visible context rows are active `~recorder@1.0` and `~scheduler@1.0`, followed by inactive devices. Screenshot saved to `build/codeviz/validation-selected-device-pinning.png`.
 - Live heat badge proof: `live=demo&follow=heat` rendered `6` live rings with numeric node badges such as `+9`, `+7`, and `+6`. Screenshot saved to `build/codeviz/validation-live-heat-badges.png`.
 - Follow-pause proof: with `live=demo&follow=heat`, clicking a live heat row selected `dev_scheduler`, turned the `Follow` control off, and removed `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-manual-pauses-follow.png`.
+- Stop-live proof: clicking `Stop` from `live=demo&follow=heat` set status to `live off`, cleared Follow, and removed both `live=` and `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-stop-clears-follow.png`.
 
 ## Last Presentation Pass
 
@@ -102,6 +103,7 @@ Branch: `expr/visualizer`
 - Pinned selected devices to the top of the context device list with an active row treatment.
 - Added numeric live heat badges directly on hot graph nodes.
 - Manual graph/engine/inspector selections now pause Follow mode so live ticks do not immediately steal focus back.
+- Stopping live mode now clears Follow mode and its URL state.
 
 ## Next Work
 
