@@ -3016,6 +3016,7 @@
     label.textContent = key;
     const strong = document.createElement("strong");
     strong.textContent = value;
+    strong.title = String(value);
     div.append(label, strong);
     return div;
   }
