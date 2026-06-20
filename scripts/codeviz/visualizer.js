@@ -657,7 +657,7 @@
     state.hovered = null;
     state.selected = id;
     render();
-    focusNode(id);
+    if (options.focus !== false) focusNode(id);
     if (options.showGraph) showGraph();
   }
 
@@ -4668,7 +4668,7 @@
           clearSelectedNode();
           return;
         }
-        selectNode(node.id, { manual: true, relationFocus: true });
+        selectNode(node.id, { manual: true, relationFocus: true, focus: false });
       });
       g.addEventListener("dblclick", (event) => {
         event.stopPropagation();
@@ -5905,6 +5905,7 @@
       event.stopPropagation();
       selectNode(edge.target, {
         manual: true,
+        focus: false,
         edge: {
           source: edge.source,
           target: edge.target,
