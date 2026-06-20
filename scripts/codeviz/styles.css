@@ -1276,6 +1276,11 @@ button.ref-pill {
   background: #fff8f8;
 }
 
+.event-sample-row.active {
+  border-color: rgba(0, 154, 247, 0.42);
+  background: #f3fbff;
+}
+
 .stack-row strong,
 .stack-row span,
 .event-sample-row strong,
@@ -1300,7 +1305,8 @@ button.ref-pill {
   font-size: 10px;
 }
 
-.stack-row span.stack-path {
+.stack-row span.stack-path,
+.event-sample-row span.stack-path {
   color: var(--red);
   opacity: 0.74;
 }

@@ -2040,6 +2040,30 @@
       .slice(0, 8);
   }
 
+  function recordingEventsForNode(node) {
+    if (state.live.mode !== "recording" || !state.live.recordingEvents.length) return [];
+    const ids = liveScopeIds(node);
+    return state.live.recordingEvents
+      .map((event, idx) => {
+        const matches = [];
+        [...recordingFrames(event), recordingEventFrame(event)].forEach((frame) => {
+          const resolved = resolveFrameIds(frame);
+          if ([...resolved].some((id) => ids.has(id))) matches.push(frameLabel(frame));
+        });
+        if (!matches.length) return null;
+        return {
+          event,
+          idx,
+          matches: [...new Set(matches)].slice(0, 5),
+          error: /error|failed|warning|throw|crash|exception/i.test(
+            `${event.topic || ""}/${event.name || ""}`
+          )
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
   function liveScopeIds(node) {
     const ids = new Set([node.id]);
     if (node.kind === "system") {
@@ -2919,6 +2943,7 @@
     }
     const liveSamples = liveSamplesForNode(node);
     const liveEvents = liveEventsForNode(node);
+    const recordingHits = recordingEventsForNode(node);
     if (liveEvents.length) {
       const eventSection = document.createElement("div");
       eventSection.className = "source-section";
@@ -2956,6 +2981,44 @@
       });
       eventSection.append(eventTitle, eventList);
       wrap.append(eventSection);
+    }
+    if (recordingHits.length) {
+      const recordingSection = document.createElement("div");
+      recordingSection.className = "source-section";
+      const recordingTitle = document.createElement("h3");
+      recordingTitle.textContent = "Recording events";
+      const recordingList = document.createElement("div");
+      recordingList.className = "stack-list";
+      recordingHits.forEach(({ event, idx, matches, error }) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = [
+          "event-sample-row",
+          error ? "error" : "",
+          state.live.recordingFocus === idx ? "active" : ""
+        ].filter(Boolean).join(" ");
+        row.title = `${event.topic || "recording"}/${event.name || "event"}\n${matches.join("\n")}`;
+        row.addEventListener("click", () => {
+          state.live.follow = false;
+          stopRecordingPlayback(false);
+          focusRecordingEvent(idx);
+          showGraph();
+        });
+        const name = document.createElement("strong");
+        name.textContent = `#${event.sequence || idx + 1} ${event.topic || "recording"}/${event.name || "event"}`;
+        const meta = document.createElement("span");
+        meta.textContent = `${matches.length} matching frames`;
+        row.append(name, meta);
+        if (matches.length) {
+          const path = document.createElement("span");
+          path.className = "stack-path";
+          path.textContent = matches.join(" <- ");
+          row.append(path);
+        }
+        recordingList.append(row);
+      });
+      recordingSection.append(recordingTitle, recordingList);
+      wrap.append(recordingSection);
     }
     if (liveSamples.length) {
       const stackSection = document.createElement("div");

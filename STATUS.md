@@ -65,6 +65,7 @@ Branch: `expr/visualizer`
 - Engine-source switcher proof: `live=demo&follow=heat` rendered the source row with `Demo` active, switching to `Recording` painted the recorder timeline with `recording=demo`, switching back restored `Demo` as active, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-switcher.png`.
 - Engine-source mobile proof: at `390x844`, the source row showed `DEMO ENGINE FEED`, all five source buttons fit onscreen, and horizontal overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-mobile-fixed.png`.
 - Hot minimap proof: `live=demo&follow=heat` rendered `1` hot minimap marker, `5` warm markers, `1` selected marker, kept the minimap visible, and maintained desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-hot-minimap.png`.
+- Selected recording-event proof: `recording=demo&selected=hb_ao` rendered a `Recording events` inspector row; clicking it made timeline tick `1` active, marked the row active, added `recording-event=1` to the URL, and kept overflow at `0`. Screenshot saved to `build/codeviz/validation-selected-recording-events.png`.
 
 ## Last Presentation Pass
 
@@ -113,9 +114,10 @@ Branch: `expr/visualizer`
 - Stacked the engine source label above full-width source controls on mobile so the active telemetry feed remains legible.
 - Routed all recorder import controls through one guarded helper so restricted browsers do not throw when opening a report picker.
 - Painted live/recorded heat and the selected node onto the minimap so offscreen activity is visible from the engine view.
+- Added selected-node recording event rows in the inspector with click-to-focus playback for the matching recorder event.
 
 ## Next Work
 
-- Improve stack heat ranking and selected-node timeline affordances.
+- Improve stack heat ranking and multi-event recording navigation.
 - Add richer source-specific legends for event heat, stack heat, and recording heat.
 - Continue browser validation after each presentation pass.
