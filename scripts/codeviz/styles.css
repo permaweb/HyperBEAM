@@ -1134,6 +1134,14 @@ svg {
   animation: live-edge-flow 1.1s linear infinite;
 }
 
+.edge.selected-edge {
+  stroke: var(--red);
+  stroke-width: calc(var(--edge-hot-width, var(--trace-width, 2.3px)) + 2px);
+  stroke-opacity: 1;
+  marker-end: url("#arrow-hot");
+  filter: drop-shadow(0 0 10px rgba(189, 52, 66, 0.22));
+}
+
 .edge.trace {
   stroke: rgba(189, 52, 66, 0.86);
   stroke-width: var(--trace-width, 3px);

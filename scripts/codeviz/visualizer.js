@@ -2952,7 +2952,10 @@
         `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`,
         "trace"
       ));
-      const path = svgEl("path", { class: "edge trace", d: edgePath(edge) });
+      const path = svgEl("path", {
+        class: `edge trace${edgeIsSelected(edge, "trace") ? " selected-edge" : ""}`,
+        d: edgePath(edge)
+      });
       path.style.setProperty("--trace-width", `${traceEdgeWidth(edge)}px`);
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
@@ -3256,7 +3259,15 @@
     const liveScore = liveEdgeScore(edge);
     if (liveScore > 7) classes.push("live-hot");
     else if (liveScore > 0.6) classes.push("live-warm");
+    if (edgeIsSelected(edge, "call")) classes.push("selected-edge");
     return classes.join(" ");
+  }
+
+  function edgeIsSelected(edge, kind) {
+    return !!state.selectedEdge &&
+      state.selectedEdge.kind === kind &&
+      state.selectedEdge.source === edge.source &&
+      state.selectedEdge.target === edge.target;
   }
 
   function edgePath(edge) {
