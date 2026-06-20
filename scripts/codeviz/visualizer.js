@@ -656,8 +656,12 @@
     state.selectedPath = options.path || [];
     state.hovered = null;
     state.selected = id;
-    render();
-    if (options.focus !== false) focusNode(id);
+    if (options.render === true || !layoutHasNode(id)) {
+      render();
+    } else {
+      refreshSelectionState();
+    }
+    if (options.focus === true) focusNode(id);
     if (options.showGraph) showGraph();
   }
 
@@ -668,7 +672,18 @@
     state.selectedEdge = null;
     state.selectedPath = [];
     state.hovered = null;
-    render();
+    refreshSelectionState();
+  }
+
+  function layoutHasNode(id) {
+    return !!state.layout && state.layout.nodes.some((node) => node.id === id);
+  }
+
+  function refreshSelectionState() {
+    syncDetailTabs();
+    applyRelationClasses();
+    renderInspector();
+    syncUrl();
   }
 
   function setHoveredNode(id) {
@@ -4769,9 +4784,11 @@
     els.nodes.querySelectorAll(".node").forEach((el) => {
       const id = el.dataset.id;
       el.classList.toggle("hovered", state.hovered === id);
+      el.classList.toggle("selected", state.selected === id);
       el.classList.toggle("caller", isCaller(id));
       el.classList.toggle("callee", isCallee(id));
       el.classList.toggle("dim", isDimmed(id));
+      el.classList.toggle("path-node", selectedPathHasNode(id));
     });
     els.bands.querySelectorAll(".module-frame").forEach((el) => {
       el.classList.toggle("dim", isDimmed(el.dataset.id));
@@ -5926,8 +5943,7 @@
     state.relationFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
-    requestFit();
-    render();
+    refreshSelectionState();
   }
 
   init();
