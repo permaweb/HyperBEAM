@@ -1817,6 +1817,525 @@ button.ref-pill {
   background: #f5fbff;
 }
 
+/* Map cockpit: the call graph owns the viewport; controls float around it. */
+.shell {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.topbar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  left: 12px;
+  z-index: 40;
+  min-height: 44px;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.title-lockup {
+  gap: 9px;
+}
+
+.title-mark {
+  width: 34px;
+  height: 32px;
+  font-size: 10px;
+}
+
+.eyebrow {
+  margin-bottom: 1px;
+  font-size: 9px;
+}
+
+h1 {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.toolbar {
+  gap: 6px;
+}
+
+.toolbar button,
+.segmented button,
+.live-strip button {
+  min-height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.segmented {
+  padding: 2px;
+  border-radius: 7px;
+}
+
+.stats {
+  position: absolute;
+  bottom: 16px;
+  left: calc(var(--context-width, 300px) + 224px);
+  z-index: 28;
+  display: flex;
+  width: auto;
+  max-width: calc(100vw - var(--context-width, 300px) - var(--detail-width, 340px) - 284px);
+  gap: 6px;
+  margin: 0;
+}
+
+.stats article {
+  min-width: 94px;
+  min-height: 34px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.07);
+  backdrop-filter: blur(14px);
+}
+
+.stats span {
+  font-size: 8px;
+}
+
+.stats strong {
+  margin-top: 3px;
+  font-size: 13px;
+}
+
+.filters,
+.live-strip {
+  position: absolute;
+  right: calc(var(--detail-width, 340px) + 34px);
+  left: calc(var(--context-width, 300px) + 34px);
+  z-index: 36;
+  margin: 0;
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.07);
+  backdrop-filter: blur(18px);
+}
+
+.filters {
+  top: 62px;
+  grid-template-columns:
+    minmax(180px, 2fr)
+    minmax(120px, 0.75fr)
+    minmax(120px, 0.75fr)
+    minmax(120px, 0.75fr)
+    max-content
+    max-content;
+  gap: 6px;
+  padding: 6px;
+}
+
+.filters input[type="search"],
+.filters select,
+.toggle {
+  min-height: 30px;
+  font-size: 11px;
+}
+
+.live-strip {
+  top: 108px;
+  grid-template-columns: max-content minmax(180px, 1fr) minmax(62px, max-content) repeat(6, max-content);
+  gap: 6px;
+  padding: 6px;
+}
+
+.live-status {
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.live-strip input[type="url"],
+.live-strip select {
+  min-height: 28px;
+  font-size: 11px;
+}
+
+.workspace {
+  position: absolute;
+  inset: 0;
+  display: block;
+  min-height: 0;
+}
+
+.workspace-splitter {
+  display: none;
+}
+
+.graph-panel {
+  position: absolute;
+  inset: 0;
+  display: block;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.graph-stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.graph-head {
+  position: absolute;
+  top: 154px;
+  right: calc(var(--detail-width, 340px) + 34px);
+  left: calc(var(--context-width, 300px) + 34px);
+  z-index: 25;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+  backdrop-filter: blur(16px);
+}
+
+.graph-head h2 {
+  font-size: 12px;
+}
+
+.graph-head span {
+  font-size: 10px;
+}
+
+.context-panel,
+.detail-panel {
+  position: absolute;
+  top: 72px;
+  bottom: 18px;
+  z-index: 30;
+  min-height: 0;
+  border-color: rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.09);
+  backdrop-filter: blur(18px);
+}
+
+.context-panel {
+  left: 14px;
+  width: var(--context-width, 300px);
+}
+
+.detail-panel {
+  right: 14px;
+  width: var(--detail-width, 340px);
+}
+
+.section-head {
+  min-height: 42px;
+}
+
+.context-actions {
+  padding: 8px 10px;
+}
+
+.context-panel input {
+  width: calc(100% - 20px);
+  min-height: 32px;
+  margin: 0 10px 8px;
+}
+
+.group-chips {
+  padding: 0 10px 8px;
+}
+
+.device-list {
+  height: calc(100% - 170px);
+  min-height: 0;
+}
+
+.detail-view {
+  height: calc(100% - 42px);
+  min-height: 0;
+}
+
+.empty {
+  min-height: calc(100% - 42px);
+}
+
+.engine-panel {
+  position: absolute;
+  top: 192px;
+  right: calc(var(--detail-width, 340px) + 34px);
+  left: calc(var(--context-width, 300px) + 34px);
+  z-index: 24;
+  max-height: 122px;
+  overflow: hidden;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 9px;
+  background:
+    linear-gradient(90deg, rgba(105, 86, 197, 0.1), transparent 40%),
+    linear-gradient(90deg, transparent 58%, rgba(189, 52, 66, 0.09)),
+    rgba(255, 255, 255, 0.86);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.09);
+  backdrop-filter: blur(18px);
+}
+
+.engine-panel:hover,
+.engine-panel:focus-within {
+  max-height: min(48vh, 430px);
+  overflow: auto;
+}
+
+.engine-panel.context-active {
+  max-height: 52px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.engine-panel.context-active .heat-panel,
+.engine-panel.context-active .trace-panel,
+.engine-panel.context-active .process-panel,
+.engine-panel.context-active .error-panel,
+.engine-panel.context-active .recording-timeline {
+  display: none;
+}
+
+.engine-panel.context-active:hover,
+.engine-panel.context-active:focus-within {
+  max-height: min(42vh, 320px);
+  overflow: auto;
+}
+
+.engine-panel.context-active:hover .heat-panel,
+.engine-panel.context-active:focus-within .heat-panel,
+.engine-panel.context-active:hover .trace-panel,
+.engine-panel.context-active:focus-within .trace-panel,
+.engine-panel.context-active:hover .process-panel,
+.engine-panel.context-active:focus-within .process-panel,
+.engine-panel.context-active:hover .error-panel,
+.engine-panel.context-active:focus-within .error-panel {
+  display: grid;
+}
+
+.engine-source {
+  gap: 4px 8px;
+  padding-bottom: 0;
+}
+
+.engine-source-copy span {
+  font-size: 9px;
+}
+
+.engine-source-controls,
+.engine-source-metrics {
+  gap: 4px;
+}
+
+.engine-metric {
+  min-width: 52px;
+  padding: 3px 5px;
+}
+
+.engine-metric small {
+  font-size: 8px;
+}
+
+.engine-metric strong {
+  font-size: 10px;
+}
+
+.engine-source-button {
+  min-height: 22px;
+  padding: 0 7px;
+  font-size: 10px;
+}
+
+.heat-panel,
+.error-panel {
+  max-height: 42px;
+}
+
+.trace-panel,
+.trace-panel.event-panel {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  max-height: 56px;
+}
+
+.process-panel {
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  max-height: 62px;
+}
+
+.recording-timeline {
+  max-height: 34px;
+}
+
+.heat-title {
+  display: none;
+}
+
+.heat-row,
+.event-row,
+.error-row,
+.bridge-row {
+  min-height: 28px;
+  padding: 4px 6px;
+}
+
+.trace-row,
+.process-row {
+  min-height: 34px;
+  padding: 4px 6px;
+}
+
+.minimap {
+  left: calc(var(--context-width, 300px) + 34px);
+  bottom: 16px;
+}
+
+@media (min-width: 2300px) {
+  .filters,
+  .live-strip,
+  .graph-head,
+  .engine-panel {
+    right: calc(var(--detail-width, 340px) + 64px);
+    left: calc(var(--context-width, 300px) + 64px);
+  }
+}
+
+@media (max-width: 1500px) {
+  .filters,
+  .live-strip,
+  .graph-head,
+  .engine-panel {
+    right: calc(var(--detail-width, 340px) + 24px);
+    left: calc(var(--context-width, 300px) + 24px);
+  }
+
+  .stats {
+    display: none;
+  }
+}
+
+@media (min-width: 1101px) and (max-height: 700px) {
+  .topbar {
+    top: 6px;
+    min-height: 38px;
+    padding: 5px 7px;
+  }
+
+  .title-mark {
+    width: 30px;
+    height: 28px;
+  }
+
+  .eyebrow {
+    font-size: 8px;
+  }
+
+  h1 {
+    font-size: 16px;
+  }
+
+  .toolbar button,
+  .segmented button,
+  .live-strip button {
+    min-height: 26px;
+    padding: 0 8px;
+  }
+
+  .filters {
+    top: 54px;
+    padding: 5px;
+  }
+
+  .filters input[type="search"],
+  .filters select,
+  .toggle {
+    min-height: 28px;
+  }
+
+  .live-strip {
+    top: 93px;
+    padding: 5px;
+  }
+
+  .live-status,
+  .live-strip input[type="url"],
+  .live-strip select {
+    min-height: 26px;
+  }
+
+  .context-panel,
+  .detail-panel {
+    top: 64px;
+    bottom: 10px;
+  }
+
+  .graph-head {
+    top: 134px;
+    min-height: 26px;
+  }
+
+  .engine-panel {
+    top: 166px;
+    max-height: 72px;
+  }
+
+  .engine-panel.context-active {
+    max-height: 48px;
+  }
+
+  .engine-panel:hover,
+  .engine-panel:focus-within {
+    max-height: min(46vh, 300px);
+  }
+
+  .trace-panel,
+  .trace-panel.event-panel,
+  .process-panel,
+  .error-panel,
+  .recording-timeline {
+    display: none;
+  }
+
+  .heat-panel {
+    grid-column: 1 / -1;
+    max-height: 34px;
+  }
+
+  .engine-source-metrics {
+    overflow: hidden;
+    max-height: 25px;
+  }
+
+  .device-list {
+    height: calc(100% - 156px);
+  }
+
+  .detail-view {
+    height: calc(100% - 42px);
+  }
+
+  .minimap {
+    width: 138px;
+    height: 92px;
+    bottom: 10px;
+  }
+}
+
 @media (max-width: 1100px) {
   .shell {
     width: min(100vw - 24px, 980px);

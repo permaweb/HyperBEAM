@@ -434,7 +434,8 @@
     });
     els.fitGraph.addEventListener("click", () => fitGraph(false));
     els.resetGraph.addEventListener("click", () => {
-      state.transform = { x: 40, y: 40, scale: 1 };
+      const viewport = graphViewport();
+      state.transform = { x: viewport.x, y: viewport.y, scale: 1 };
       applyTransform();
     });
     els.svg.addEventListener("wheel", onWheel, { passive: false });
@@ -3170,6 +3171,8 @@
   }
 
   function renderTelemetryPanel() {
+    els.enginePanel.classList.toggle("live-active", state.live.enabled);
+    els.enginePanel.classList.toggle("context-active", !state.live.enabled);
     const hasSource = renderEngineSourcePanel();
     if (!state.live.enabled) {
       els.processPanel.replaceChildren();
@@ -5051,24 +5054,60 @@
     els.graphPanel.scrollIntoView({ block: "start" });
   }
 
+  function graphViewport() {
+    const rect = els.stage.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return { x: 24, y: 24, width: 760, height: 520 };
+    }
+    if (window.matchMedia("(max-width: 1100px)").matches) {
+      return {
+        x: 24,
+        y: 24,
+        width: Math.max(120, rect.width - 48),
+        height: Math.max(120, rect.height - 48)
+      };
+    }
+    const contextRect = els.contextPanel.getBoundingClientRect();
+    const detailRect = els.detailPanel.getBoundingClientRect();
+    const liveRect = document.querySelector(".live-strip").getBoundingClientRect();
+    const compressed = rect.height < 700;
+    const left = Math.max(24, contextRect.right - rect.left + 24);
+    const right = Math.max(24, rect.right - detailRect.left + 24);
+    const top = Math.max(
+      24,
+      Math.min(rect.height * (compressed ? 0.34 : 0.28), liveRect.bottom - rect.top + (compressed ? 30 : 54))
+    );
+    const bottom = compressed ? 84 : 150;
+    return {
+      x: left,
+      y: top,
+      width: Math.max(160, rect.width - left - right),
+      height: Math.max(160, rect.height - top - bottom)
+    };
+  }
+
   function fitGraph(preferReadable = false) {
     const bounds = state.layout.bounds;
     if (!bounds) return;
-    const rect = els.stage.getBoundingClientRect();
+    const viewport = graphViewport();
     const minScale = readableScale(preferReadable);
     const fitScale = Math.min(
-      (rect.width - 48) / bounds.width,
-      (rect.height - 48) / bounds.height
+      viewport.width / bounds.width,
+      viewport.height / bounds.height
     );
     const scale = Math.min(1.4, Math.max(minScale, fitScale));
     if (state.layout.force && scale > fitScale) {
       state.transform = {
-        x: rect.width / 2 - (bounds.x + bounds.width / 2) * scale,
-        y: rect.height / 2 - (bounds.y + bounds.height / 2) * scale,
+        x: viewport.x + viewport.width / 2 - (bounds.x + bounds.width / 2) * scale,
+        y: viewport.y + viewport.height / 2 - (bounds.y + bounds.height / 2) * scale,
         scale
       };
     } else {
-      state.transform = { x: 24, y: 24, scale };
+      state.transform = {
+        x: viewport.x - bounds.x * scale,
+        y: viewport.y - bounds.y * scale,
+        scale
+      };
     }
     applyTransform();
   }
@@ -5095,9 +5134,9 @@
   function centerNode(id) {
     const node = state.layout.nodes.find((candidate) => candidate.id === id);
     if (!node) return;
-    const rect = els.stage.getBoundingClientRect();
-    state.transform.x = rect.width / 2 - node.cx * state.transform.scale;
-    state.transform.y = rect.height / 2 - node.cy * state.transform.scale;
+    const viewport = graphViewport();
+    state.transform.x = viewport.x + viewport.width / 2 - node.cx * state.transform.scale;
+    state.transform.y = viewport.y + viewport.height / 2 - node.cy * state.transform.scale;
     applyTransform();
   }
 
@@ -5114,14 +5153,14 @@
     const minY = Math.min(...nodes.map((node) => node.y));
     const maxX = Math.max(...nodes.map((node) => node.x + node.width));
     const maxY = Math.max(...nodes.map((node) => node.y + node.height));
-    const rect = els.stage.getBoundingClientRect();
+    const viewport = graphViewport();
     const scale = Math.min(1.15, Math.max(
       state.layout.lens ? 0.52 : readableScale(true),
-      Math.min((rect.width - 96) / (maxX - minX), (rect.height - 96) / (maxY - minY))
+      Math.min(viewport.width / (maxX - minX), viewport.height / (maxY - minY))
     ));
     state.transform = {
-      x: rect.width / 2 - ((minX + maxX) / 2) * scale,
-      y: rect.height / 2 - ((minY + maxY) / 2) * scale,
+      x: viewport.x + viewport.width / 2 - ((minX + maxX) / 2) * scale,
+      y: viewport.y + viewport.height / 2 - ((minY + maxY) / 2) * scale,
       scale
     };
     applyTransform();
