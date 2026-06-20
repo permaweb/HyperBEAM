@@ -506,14 +506,14 @@
     let functions = graph.functions.filter((fun) => {
       if (!functionInScope(fun)) return false;
       if (!needle) return true;
-      return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")}`
+      return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")} ${(fun.events || []).join(" ")}`
         .toLowerCase()
         .includes(needle);
     });
     let modules = graph.modules.filter((mod) => {
       if (!moduleInScope(mod)) return false;
       if (!needle) return true;
-      return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")}`
+      return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")} ${(mod["event-topics"] || []).join(" ")}`
         .toLowerCase()
         .includes(needle) ||
         functions.some((fun) => fun.module === mod.id);
