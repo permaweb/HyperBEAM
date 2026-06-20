@@ -18,12 +18,12 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added selected-subsystem local flow lenses.
-- System lens de-duplicates caller/callee overlaps and preserves weighted edges.
-- Validated `kernel:resolver` subsystem neighborhood in the browser.
+- Added shareable URL state for mode, devices, selection, search, group, edge mode, and toggles.
+- Added `selected=` load support so shared URLs reopen directly into a lens.
+- Validated a `kernel:resolver` selected subsystem URL in the browser.
 
 ## Next Work
 
 - Add richer export/source affordances in the inspector.
-- Add richer dense-graph controls and URL state polish.
+- Add richer dense-graph controls.
 - Continue browser validation after each presentation pass.

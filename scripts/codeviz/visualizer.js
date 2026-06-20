@@ -130,6 +130,9 @@
       state.search = params.get("search").trim().toLowerCase();
       els.search.value = params.get("search");
     }
+    if (params.has("selected")) {
+      state.selected = params.get("selected");
+    }
     if (params.has("group")) state.group = params.get("group");
     if (["context", "selected", "cross"].includes(params.get("edges"))) {
       state.edgeMode = params.get("edges");
@@ -301,6 +304,7 @@
     renderStats(visible);
     renderGraph();
     renderInspector();
+    syncUrl();
     if (state.fitAfterRender) {
       state.fitAfterRender = false;
       fitGraph(true);
@@ -316,6 +320,23 @@
     document.querySelectorAll("[data-mode]").forEach((el) => {
       el.classList.toggle("active", el.dataset.mode === mode);
     });
+  }
+
+  function syncUrl() {
+    const params = new URLSearchParams();
+    params.set("mode", state.mode);
+    if (state.selectedDevices.size) {
+      params.set("devices", [...state.selectedDevices].sort().join(","));
+    }
+    if (state.selected) params.set("selected", state.selected);
+    if (state.search) params.set("search", state.search);
+    if (state.group) params.set("group", state.group);
+    if (state.edgeMode !== "context") params.set("edges", state.edgeMode);
+    if (!state.showPrivate) params.set("private", "false");
+    if (state.showForge) params.set("forge", "true");
+    const query = params.toString();
+    const next = `${window.location.pathname}${query ? `?${query}` : ""}`;
+    window.history.replaceState(null, "", next);
   }
 
   function visibleData() {
