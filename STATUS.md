@@ -103,6 +103,7 @@ Branch: `expr/visualizer`
 - Recording event stack mobile proof: at `390x844`, the same focused recording event rendered `3` full-width `344px` event-stack rows with no horizontally offscreen rows and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-recording-event-stack-mobile.png`.
 - Device path proof: with `recorder@1.0,scheduler@1.0` loaded and `hb_message` selected, the inspector rendered `dev_scheduler -> hb_message` as a `1` hop / `43` call device path; clicking the row kept `hb_message` selected, highlighted `1` path edge and `2` path nodes, marked the row active, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-device-path-highlight.png`.
 - Device path mobile proof: at `390x844`, the same selected `hb_message` view rendered one `310px` device-path row; clicking it marked `1` row active, highlighted `1` path edge and `2` path nodes, had no horizontally offscreen rows, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-device-path-highlight-mobile.png`.
+- Device path minimap proof: clicking the `dev_scheduler -> hb_message` path row kept `hb_message` selected, marked `1` path edge and `2` path nodes in the main graph, rendered `2` `.mini-node.path-node` markers plus `1` selected minimap marker, kept the minimap visible, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-device-path-minimap.png`.
 - Post edge/stack canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, no horizontally offscreen controls, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-post-edge-stack.png`.
 - Post edge/stack canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no horizontally offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-post-edge-stack-mobile.png`.
 - Latest canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-latest.png`.
@@ -190,6 +191,7 @@ Branch: `expr/visualizer`
 - Added Source/Target jump actions to the selected-edge inspector card while preserving selected-edge highlighting across endpoint jumps.
 - Added a focused recording event-stack deck with clickable frame rows for `recording-event=N` playback.
 - Added a selected-node device-path inspector section that shows short directed paths from loaded device modules into kernel nodes and paints a selected route onto the rendered graph.
+- Painted selected device-path nodes onto the minimap so offscreen route endpoints remain visible.
 
 ## Next Work
 

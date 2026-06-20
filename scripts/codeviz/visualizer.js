@@ -4006,6 +4006,7 @@
     if (liveScore > 7) classes.push("live-hot");
     else if (liveScore > 0.6) classes.push("live-warm");
     if (liveErrorScore(node) > 0.6) classes.push("live-error");
+    if (selectedPathHasNode(node.id)) classes.push("path-node");
     if (node.id === state.selected) classes.push("selected");
     return classes.filter(Boolean).join(" ");
   }

@@ -710,6 +710,12 @@ body.resizing {
   stroke-width: 1.2;
 }
 
+.mini-node.path-node {
+  fill: rgba(19, 138, 109, 0.72);
+  stroke: rgba(19, 138, 109, 0.98);
+  stroke-width: 1.4;
+}
+
 #minimap-view {
   fill: rgba(105, 86, 197, 0.12);
   stroke: rgba(105, 86, 197, 0.88);
