@@ -663,6 +663,17 @@
     ];
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
+    if (state.mode === "function" && node.source) {
+      const sourceSection = document.createElement("div");
+      sourceSection.className = "source-section";
+      const sourceTitle = document.createElement("h3");
+      sourceTitle.textContent = "Source";
+      const pre = document.createElement("pre");
+      pre.className = "source-snippet";
+      pre.textContent = node.source;
+      sourceSection.append(sourceTitle, pre);
+      wrap.append(sourceSection);
+    }
     return wrap;
   }
 
@@ -695,6 +706,7 @@
         button.addEventListener("click", () => {
           state.selected = rel.id;
           render();
+          centerNode(rel.id);
         });
         return button;
       });
@@ -721,6 +733,15 @@
       (rect.height - 48) / bounds.height
     )));
     state.transform = { x: 24, y: 24, scale };
+    applyTransform();
+  }
+
+  function centerNode(id) {
+    const node = state.layout.nodes.find((candidate) => candidate.id === id);
+    if (!node) return;
+    const rect = els.stage.getBoundingClientRect();
+    state.transform.x = rect.width / 2 - node.cx * state.transform.scale;
+    state.transform.y = rect.height / 2 - node.cy * state.transform.scale;
     applyTransform();
   }
 

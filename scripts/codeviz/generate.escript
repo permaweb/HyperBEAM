@@ -107,6 +107,10 @@ exports(Forms) ->
     ).
 
 functions(Module, Exports, Forms, Lines) ->
+    FunctionForms = [
+        {Line, Name, Arity, Clauses}
+    || {function, Line, Name, Arity, Clauses} <- Forms ],
+    NextLines = tl([Line || {Line, _, _, _} <- FunctionForms] ++ [length(Lines) + 1]),
     [
         #{
             module => Module,
@@ -116,9 +120,10 @@ functions(Module, Exports, Forms, Lines) ->
             line => Line,
             exported => lists:member({Name, Arity}, Exports),
             doc => function_doc(Line, Lines),
+            source => source_excerpt(Line, NextLine, Lines),
             calls => collect_calls(Module, Clauses)
         }
-    || {function, Line, Name, Arity, Clauses} <- Forms ].
+    || {{Line, Name, Arity, Clauses}, NextLine} <- lists:zip(FunctionForms, NextLines) ].
 
 collect_calls(Module, Clauses) ->
     lists:usort(walk(Clauses, Module, [])).
@@ -297,6 +302,7 @@ function_node(Module, Fun, Counts) ->
         <<"device">> => maps:get(device, Module),
         <<"exported">> => maps:get(exported, Fun),
         <<"doc">> => maps:get(doc, Fun),
+        <<"source">> => maps:get(source, Fun),
         <<"calls-out">> => maps:get({out, Id}, Counts, 0),
         <<"calls-in">> => maps:get({in, Id}, Counts, 0)
     }.
@@ -526,6 +532,19 @@ clean_doc_line(Line) ->
                 end
         end,
     [Stripped0, "\n"].
+
+source_excerpt(Line, NextLine, Lines) ->
+    LastLine = min(NextLine - 1, min(length(Lines), Line + 18)),
+    Width = length(integer_to_list(LastLine)),
+    Snippet = [
+        [
+            io_lib:format("~*.. B", [Width, LineNo]),
+            " | ",
+            binary_to_list(lists:nth(LineNo, Lines)),
+            "\n"
+        ]
+    || LineNo <- lists:seq(Line, LastLine) ],
+    unicode:characters_to_binary(Snippet).
 
 function_id(Module, Name, Arity) ->
     <<(atom_bin(Module))/binary, ":", (atom_bin(Name))/binary,

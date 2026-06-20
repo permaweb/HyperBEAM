@@ -606,6 +606,25 @@ svg {
   margin-top: 14px;
 }
 
+.source-section {
+  margin-top: 14px;
+}
+
+.source-snippet {
+  max-height: 320px;
+  margin: 8px 0 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0d0d0d;
+  color: #f4f4f4;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre;
+}
+
 .relation-list {
   display: grid;
   gap: 6px;
