@@ -19,10 +19,11 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Exported functions are highlighted in module inspector function lists.
-- Validated `hb_message` showing `31` exported functions out of `42` in the browser.
+- Background clicking the graph clears the active lens/selection.
+- Pan gestures are guarded so they do not accidentally clear selection.
+- Validated clearing `kernel:resolver` selection in the browser.
 
 ## Next Work
 
-- Continue dense-graph polish.
+- Continue interaction polish.
 - Continue browser validation after each presentation pass.

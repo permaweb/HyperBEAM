@@ -62,7 +62,8 @@
     transform: { x: 40, y: 40, scale: 1 },
     layout: { nodes: [], edges: [], modules: [], bands: [], bounds: null },
     dragging: null,
-    fitAfterRender: true
+    fitAfterRender: true,
+    ignoreNextClick: false
   };
 
   function base64ToBytes(value) {
@@ -210,6 +211,7 @@
     });
     els.svg.addEventListener("wheel", onWheel, { passive: false });
     els.svg.addEventListener("pointerdown", startPan);
+    els.svg.addEventListener("click", clearSelectionFromBackground);
     window.addEventListener("pointermove", movePan);
     window.addEventListener("pointerup", endPan);
   }
@@ -1509,21 +1511,37 @@
       x: event.clientX,
       y: event.clientY,
       tx: state.transform.x,
-      ty: state.transform.y
+      ty: state.transform.y,
+      moved: false
     };
     els.stage.classList.add("dragging");
   }
 
   function movePan(event) {
     if (!state.dragging) return;
-    state.transform.x = state.dragging.tx + event.clientX - state.dragging.x;
-    state.transform.y = state.dragging.ty + event.clientY - state.dragging.y;
+    const dx = event.clientX - state.dragging.x;
+    const dy = event.clientY - state.dragging.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) state.dragging.moved = true;
+    state.transform.x = state.dragging.tx + dx;
+    state.transform.y = state.dragging.ty + dy;
     applyTransform();
   }
 
   function endPan() {
+    if (state.dragging && state.dragging.moved) state.ignoreNextClick = true;
     state.dragging = null;
     els.stage.classList.remove("dragging");
+  }
+
+  function clearSelectionFromBackground(event) {
+    if (state.ignoreNextClick) {
+      state.ignoreNextClick = false;
+      return;
+    }
+    if (!state.selected || event.target.closest(".node")) return;
+    state.selected = null;
+    requestFit();
+    render();
   }
 
   init();
