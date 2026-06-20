@@ -2772,6 +2772,9 @@
   }
 
   function renderProcessPanel() {
+    if (state.live.enabled && state.live.mode === "recording") {
+      return renderRecordingEventStackPanel();
+    }
     if (!state.live.enabled || state.live.mode !== "stack" || !state.live.processSamples.length) {
       els.processPanel.replaceChildren();
       return false;
@@ -2818,6 +2821,48 @@
         formatBytes(sample.memory),
         sample.queue ? `q ${nf.format(sample.queue)}` : ""
       ].filter(Boolean).join(" · ");
+      button.append(current, meta);
+      return button;
+    });
+    els.processPanel.replaceChildren(title, ...rows);
+    return true;
+  }
+
+  function renderRecordingEventStackPanel() {
+    const event = state.live.recordingEvents[state.live.recordingFocus];
+    if (!event) {
+      els.processPanel.replaceChildren();
+      return false;
+    }
+    const frames = recordingFrames(event);
+    if (!frames.length) {
+      els.processPanel.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Event stack";
+    const stackTitle = `${recordingEventName(event)}\n${frames.map(frameLabel).join("\n")}`;
+    const rows = frames.slice(0, 8).map((frame, idx) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = recordingEventIsError(event) ? "process-row error" : "process-row";
+      button.title = stackTitle;
+      const target = liveFrameTarget(frame);
+      button.disabled = !target;
+      if (target) {
+        button.addEventListener("click", () => {
+          selectNode(target, { manual: true });
+        });
+      }
+      const current = document.createElement("strong");
+      current.textContent = frameLabel(frame);
+      const meta = document.createElement("span");
+      meta.textContent = [
+        `#${event.sequence || state.live.recordingFocus + 1}`,
+        `frame ${idx + 1}/${frames.length}`,
+        recordingEventName(event)
+      ].join(" · ");
       button.append(current, meta);
       return button;
     });

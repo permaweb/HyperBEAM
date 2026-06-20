@@ -99,6 +99,8 @@ Branch: `expr/visualizer`
 - Trace breadcrumb mobile proof: at `390x844`, the same recording view rendered full-width `344px` trace rows with `4` stack breadcrumbs, `4` SVG trace titles carrying stack frames, no horizontally offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-trace-breadcrumbs-mobile.png`.
 - Edge jump proof: clicking a visible edge rendered Source/Target inspector actions, clicking Source selected `hb_ao`, kept exactly `1` selected edge highlighted, preserved the selected-call card, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-jump-actions.png`.
 - Edge jump mobile proof: at `390x844`, clicking a visible edge rendered two `143px` Source/Target actions, kept exactly `1` selected edge highlighted, had no horizontally offscreen jump buttons, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-edge-jump-actions-mobile.png`.
+- Recording event stack proof: `recording=demo&recording-event=1` rendered an `Event stack` deck with `3` clickable frames (`hb_message:commit/3`, `hb_ao:resolve/3`, `dev_recorder:record/3`); clicking the first row selected `hb_message`, retained `recording-event=1`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-event-stack.png`.
+- Recording event stack mobile proof: at `390x844`, the same focused recording event rendered `3` full-width `344px` event-stack rows with no horizontally offscreen rows and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-recording-event-stack-mobile.png`.
 - Latest canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-latest.png`.
 - Latest canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `39` edge hit paths, no offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-latest-mobile.png`.
 
@@ -182,6 +184,7 @@ Branch: `expr/visualizer`
 - Highlighted the selected call/trace edge directly on the graph so the inspector context is visually anchored.
 - Added representative stack breadcrumbs to trace route rows and SVG trace titles, with full-width trace route decks for readable recorder/live paths.
 - Added Source/Target jump actions to the selected-edge inspector card while preserving selected-edge highlighting across endpoint jumps.
+- Added a focused recording event-stack deck with clickable frame rows for `recording-event=N` playback.
 
 ## Next Work
 
