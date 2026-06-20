@@ -18,9 +18,8 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added shareable URL state for mode, devices, selection, search, group, edge mode, and toggles.
-- Added `selected=` load support so shared URLs reopen directly into a lens.
-- Validated a `kernel:resolver` selected subsystem URL in the browser.
+- Relation lists now sort by call count and show counts inline.
+- Validated weighted `kernel:resolver` callers/callees in the browser.
 
 ## Next Work
 

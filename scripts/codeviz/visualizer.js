@@ -1389,11 +1389,15 @@
         }
         return state.mode === "function" ? byFunction.has(rel.id) : byModule.has(rel.id);
       })
+      .sort((a, b) => {
+        const countDelta = (b.edge.count || 0) - (a.edge.count || 0);
+        return countDelta || a.id.localeCompare(b.id);
+      })
       .slice(0, 80)
       .map((rel) => {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = rel.id;
+        button.textContent = `${rel.id} · ${nf.format(rel.edge.count || 1)}`;
         button.addEventListener("click", () => {
           state.selected = rel.id;
           render();
