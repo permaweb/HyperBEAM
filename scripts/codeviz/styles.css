@@ -513,15 +513,17 @@ body.resizing {
 
 .engine-source {
   grid-column: 1 / -1;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  justify-content: space-between;
   min-width: 0;
-  gap: 10px;
+  gap: 6px 10px;
   padding-bottom: 2px;
 }
 
 .engine-source-copy {
+  grid-column: 1;
+  grid-row: 1;
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -531,25 +533,78 @@ body.resizing {
 .engine-source-copy span {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
   font-family: var(--mono);
 }
 
 .engine-source-copy strong {
   font-size: 11px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .engine-source-copy span {
   color: var(--muted);
   font-size: 10px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .engine-source-controls {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   flex: 0 0 auto;
   min-width: 0;
   gap: 5px;
+}
+
+.engine-source-metrics {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  min-width: 0;
+  gap: 5px;
+}
+
+.engine-metric {
+  display: grid;
+  min-width: 58px;
+  padding: 4px 6px;
+  border: 1px solid rgba(0, 154, 247, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  font-family: var(--mono);
+  text-align: left;
+}
+
+.engine-metric.error {
+  border-color: rgba(189, 52, 66, 0.16);
+  background: rgba(255, 247, 247, 0.82);
+}
+
+.engine-metric small,
+.engine-metric strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.engine-metric small {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.engine-metric strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.engine-metric.error strong {
+  color: var(--red);
 }
 
 .engine-source-button {
@@ -1483,15 +1538,39 @@ button.ref-pill {
   }
 
   .engine-source {
-    display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
+  }
+
+  .engine-source-copy,
+  .engine-source-controls,
+  .engine-source-metrics {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .engine-source-controls {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
     width: 100%;
+  }
+
+  .engine-source-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+
+  .engine-metric {
+    min-width: 0;
+    padding: 4px;
+  }
+
+  .engine-metric small {
+    font-size: 8px;
+  }
+
+  .engine-metric strong {
+    font-size: 10px;
   }
 
   .engine-source-button {

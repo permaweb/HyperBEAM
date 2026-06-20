@@ -66,6 +66,7 @@ Branch: `expr/visualizer`
 - Engine-source mobile proof: at `390x844`, the source row showed `DEMO ENGINE FEED`, all five source buttons fit onscreen, and horizontal overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-mobile-fixed.png`.
 - Hot minimap proof: `live=demo&follow=heat` rendered `1` hot minimap marker, `5` warm markers, `1` selected marker, kept the minimap visible, and maintained desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-hot-minimap.png`.
 - Selected recording-event proof: `recording=demo&selected=hb_ao` rendered a `Recording events` inspector row; clicking it made timeline tick `1` active, marked the row active, added `recording-event=1` to the URL, and kept overflow at `0`. Screenshot saved to `build/codeviz/validation-selected-recording-events.png`.
+- Engine metric chip proof: `live=demo&follow=heat` rendered metric chips for events, rate, streams, hot nodes, and errors with no text clipping and `0` overflow on desktop and at `390x844`. Screenshots saved to `build/codeviz/validation-engine-metric-chips.png` and `build/codeviz/validation-engine-metric-chips-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -115,6 +116,7 @@ Branch: `expr/visualizer`
 - Routed all recorder import controls through one guarded helper so restricted browsers do not throw when opening a report picker.
 - Painted live/recorded heat and the selected node onto the minimap so offscreen activity is visible from the engine view.
 - Added selected-node recording event rows in the inspector with click-to-focus playback for the matching recorder event.
+- Added source-specific engine metric chips for event counters, stack snapshots, recorder playback, and device bridge context.
 
 ## Next Work
 

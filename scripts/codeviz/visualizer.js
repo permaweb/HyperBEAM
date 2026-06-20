@@ -2164,6 +2164,19 @@
     detail.textContent = engineSourceDetail();
     copy.append(title, detail);
 
+    const metrics = document.createElement("div");
+    metrics.className = "engine-source-metrics";
+    engineSourceMetrics().forEach(({ label, value, kind }) => {
+      const chip = document.createElement("span");
+      chip.className = `engine-metric${kind ? ` ${kind}` : ""}`;
+      const chipLabel = document.createElement("small");
+      chipLabel.textContent = label;
+      const chipValue = document.createElement("strong");
+      chipValue.textContent = value;
+      chip.append(chipLabel, chipValue);
+      metrics.appendChild(chip);
+    });
+
     const controls = document.createElement("div");
     controls.className = "engine-source-controls";
     [
@@ -2181,7 +2194,7 @@
       button.addEventListener("click", action);
       controls.appendChild(button);
     });
-    els.engineSource.replaceChildren(copy, controls);
+    els.engineSource.replaceChildren(copy, metrics, controls);
     return true;
   }
 
@@ -2213,6 +2226,51 @@
     if (mode === "import") return false;
     if (!state.live.enabled) return false;
     return state.live.mode === mode;
+  }
+
+  function engineSourceMetrics() {
+    if (!state.live.enabled) {
+      return [
+        { label: "Devices", value: nf.format(state.selectedDevices.size) },
+        { label: "Bridges", value: nf.format(deviceBridgeCount()) }
+      ];
+    }
+    const hot = [...state.live.activity.values()].filter((value) => value > 1).length;
+    const errors = [...state.live.errors.values()].reduce((sum, value) => sum + value, 0);
+    if (state.live.mode === "stack") {
+      return [
+        { label: "Processes", value: nf.format(state.live.processCount) },
+        { label: "Reductions", value: `+${nf.format(Math.round(state.live.totalDelta))}` },
+        { label: "Traces", value: nf.format(state.live.traceEdges.size) },
+        { label: "Hot", value: nf.format(hot) },
+        { label: "Errors", value: `+${nf.format(Math.round(errors))}`, kind: "error" }
+      ];
+    }
+    if (state.live.mode === "recording") {
+      return [
+        { label: "Events", value: nf.format(state.live.totalDelta) },
+        { label: "Frames", value: nf.format(state.live.frameCount) },
+        { label: "Traces", value: nf.format(state.live.traceEdges.size) },
+        { label: "Hot", value: nf.format(hot) },
+        { label: "Errors", value: `+${nf.format(Math.round(errors))}`, kind: "error" }
+      ];
+    }
+    const rate = [...state.live.eventRates.values()].reduce((sum, value) => sum + value, 0);
+    return [
+      { label: "Events", value: `+${nf.format(Math.round(state.live.totalDelta))}` },
+      { label: "Rate", value: formatEventRate(rate) },
+      { label: "Streams", value: nf.format(state.live.eventDeltas.size) },
+      { label: "Hot", value: nf.format(hot) },
+      { label: "Errors", value: `+${nf.format(Math.round(errors))}`, kind: "error" }
+    ];
+  }
+
+  function deviceBridgeCount() {
+    return state.layout.edges
+      .filter((edge) => edge.sourceNode && edge.targetNode)
+      .filter((edge) => edge.sourceNode.role !== edge.targetNode.role)
+      .filter((edge) => edge.sourceNode.role === "device" || edge.targetNode.role === "device")
+      .length;
   }
 
   function renderBridgePanel() {
