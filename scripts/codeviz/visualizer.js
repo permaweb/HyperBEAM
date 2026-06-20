@@ -558,6 +558,9 @@
       const path = svgEl("path", { class: edgeClass(edge), d: edgePath(edge) });
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
+      const title = svgEl("title");
+      title.textContent = `${edge.source} -> ${edge.target} (${edge.count} calls)`;
+      path.append(title);
       fragment.append(path);
     });
     els.edges.replaceChildren(fragment);
@@ -576,6 +579,9 @@
         state.selected = node.id;
         render();
       });
+      const tooltip = svgEl("title");
+      tooltip.textContent = nodeTooltip(node);
+      g.append(tooltip);
       g.append(svgEl("rect", {
         width: node.width,
         height: node.height,
@@ -605,6 +611,13 @@
     if (isCallee(node.id)) classes.push("callee");
     if (isDimmed(node.id)) classes.push("dim");
     return classes.join(" ");
+  }
+
+  function nodeTooltip(node) {
+    if (node.kind === "module") {
+      return `${node.id}\n${node.path}\n${node.functions} functions`;
+    }
+    return `${node.id}\n${node.path}:${node.line}`;
   }
 
   function edgeClass(edge) {
