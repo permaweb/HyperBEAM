@@ -2743,13 +2743,21 @@
     const rows = traces.map((edge) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "trace-row";
+      button.className = edgeIsSelected(edge, "trace") ? "trace-row active" : "trace-row";
       const path = tracePath(edge);
       button.title =
         `${edge.source} -> ${edge.target} (+${nf.format(Math.round(edge.count))} sampled frames)` +
         tracePathTitle(edge);
       button.addEventListener("click", () => {
-        selectNode(edge.target, { manual: true });
+        selectNode(edge.target, {
+          manual: true,
+          edge: {
+            source: edge.source,
+            target: edge.target,
+            count: edge.count || 1,
+            kind: "trace"
+          }
+        });
       });
       const name = document.createElement("strong");
       name.textContent = `${edge.source} -> ${edge.target}`;

@@ -889,6 +889,11 @@ body.resizing {
   background: #fff8f8;
 }
 
+.trace-row.active {
+  border-color: rgba(189, 52, 66, 0.46);
+  background: #fff0f1;
+}
+
 .event-row {
   display: grid;
   min-width: 0;

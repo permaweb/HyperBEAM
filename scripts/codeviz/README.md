@@ -82,7 +82,9 @@ instead of a single momentary delta.
 `/~recorder@1.0/live?limit=90&stack-limit=18`, paints sampled BEAM stack traces,
 and draws animated trace routes between visible graph nodes. Trace route rows
 carry the representative stack breadcrumb, and SVG trace titles include the
-same frames. `follow=heat` keeps the inspector and graph centered on the
+same frames. Clicking a trace route selects the trace edge and opens the same
+source/target inspector card as clicking the graph edge. `follow=heat` keeps
+the inspector and graph centered on the
 hottest live node. Live stack rows show compact stack trails and can be clicked
 to pull their module/function into the current graph view. Stack mode also shows
 a process deck with the busiest sampled processes, including
