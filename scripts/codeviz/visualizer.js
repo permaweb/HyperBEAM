@@ -23,6 +23,7 @@
     liveFollow: document.getElementById("live-follow"),
     liveConnect: document.getElementById("live-connect"),
     liveStack: document.getElementById("live-stack"),
+    liveRateMode: document.getElementById("live-rate-mode"),
     recordingImport: document.getElementById("recording-import"),
     recordingFile: document.getElementById("recording-file"),
     liveDemo: document.getElementById("live-demo"),
@@ -53,6 +54,8 @@
     minimapView: document.getElementById("minimap-view"),
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
+    inspectorTab: document.getElementById("inspector-tab"),
+    engineTab: document.getElementById("engine-tab"),
     detailCard: document.getElementById("detail-card"),
     detailPanel: document.querySelector(".detail-panel"),
     selectionLabel: document.getElementById("selection-label"),
@@ -85,6 +88,7 @@
     layoutMode: "map",
     selectedDevices: new Set(),
     selected: null,
+    detailTab: "inspector",
     selectedEdge: null,
     selectedPath: [],
     hovered: null,
@@ -117,6 +121,10 @@
       traceEdges: new Map(),
       eventDeltas: new Map(),
       eventRates: new Map(),
+      previousRates: new Map(),
+      rateChanges: new Map(),
+      rateActivity: new Map(),
+      rateMode: false,
       eventHistory: new Map(),
       eventTick: 0,
       lastCounterAt: 0,
@@ -284,6 +292,10 @@
       setLiveIntervalSelect(state.live.intervalMs);
     }
     if (params.get("follow") === "heat") state.live.follow = true;
+    if (params.get("pulse") === "rate") state.live.rateMode = true;
+    if (["inspector", "engine"].includes(params.get("panel"))) {
+      state.detailTab = params.get("panel");
+    }
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
     } else if (params.has("recording")) {
@@ -301,6 +313,7 @@
     document.querySelectorAll("[data-layout]").forEach((button) => {
       button.classList.toggle("active", button.dataset.layout === state.layoutMode);
     });
+    syncDetailTabs();
   }
 
   function liveParamValue(value) {
@@ -347,6 +360,9 @@
         requestFit();
         render();
       });
+    });
+    document.querySelectorAll("[data-detail-tab]").forEach((button) => {
+      button.addEventListener("click", () => activateDetailTab(button.dataset.detailTab));
     });
 
     els.search.addEventListener("input", () => {
@@ -408,6 +424,10 @@
           requestFit();
         }
       }
+      render();
+    });
+    els.liveRateMode.addEventListener("click", () => {
+      state.live.rateMode = !state.live.rateMode;
       render();
     });
     els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
@@ -546,6 +566,7 @@
   }
 
   function render() {
+    syncDetailTabs();
     const followTarget = heatFollowTarget();
     if (followTarget && followTarget !== state.selected) {
       state.selected = followTarget;
@@ -589,8 +610,26 @@
     });
   }
 
+  function activateDetailTab(tab) {
+    state.detailTab = tab === "engine" ? "engine" : "inspector";
+    syncDetailTabs();
+    syncUrl();
+  }
+
+  function syncDetailTabs() {
+    document.querySelectorAll("[data-detail-tab]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.detailTab === state.detailTab);
+    });
+    els.inspectorTab.hidden = state.detailTab !== "inspector";
+    els.inspectorTab.classList.toggle("active", state.detailTab === "inspector");
+    els.engineTab.hidden = state.detailTab !== "engine";
+    els.engineTab.classList.toggle("active", state.detailTab === "engine");
+  }
+
   function selectNode(id, options = {}) {
     if (options.manual) state.live.follow = false;
+    state.detailTab = "inspector";
+    syncDetailTabs();
     state.selectedEdge = options.edge || null;
     state.selectedPath = options.path || [];
     state.hovered = null;
@@ -634,6 +673,8 @@
       }
     }
     if (state.live.enabled && state.live.follow) params.set("follow", "heat");
+    if (state.live.rateMode) params.set("pulse", "rate");
+    if (state.detailTab !== "inspector") params.set("panel", state.detailTab);
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
     } else if (state.live.mode === "recording" && state.live.recordingUrl) {
@@ -2126,6 +2167,7 @@
     stopLive({ renderAfter: false, clearFollow: false });
     const normalized = liveParamValue(endpoint);
     state.live.enabled = true;
+    state.detailTab = "engine";
     state.live.mode = liveModeForEndpoint(normalized);
     state.live.endpoint = normalized;
     state.live.intervalMs = intervalMs;
@@ -2137,6 +2179,9 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.previousRates = new Map();
+    state.live.rateChanges = new Map();
+    state.live.rateActivity = new Map();
     state.live.eventHistory = new Map();
     state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
@@ -2189,6 +2234,9 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.previousRates = new Map();
+    state.live.rateChanges = new Map();
+    state.live.rateActivity = new Map();
     state.live.eventHistory = new Map();
     state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
@@ -2377,6 +2425,7 @@
       const previous = state.live.previous.get(key);
       const delta = previous === undefined ? 0 : Math.max(0, value - previous);
       state.live.previous.set(key, value);
+      rememberLiveRate(key, delta, elapsedSeconds);
       if (delta > 0) {
         totalDelta += delta;
         rememberLiveEvent(key, delta, elapsedSeconds);
@@ -2398,6 +2447,9 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.previousRates = new Map();
+    state.live.rateChanges = new Map();
+    state.live.rateActivity = new Map();
     state.live.eventHistory = new Map();
     state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
@@ -2514,6 +2566,7 @@
     const follow = state.live.follow;
     stopLive({ renderAfter: false, clearFollow: false });
     state.live.enabled = true;
+    state.detailTab = "engine";
     state.live.mode = "recording";
     state.live.endpoint = "";
     state.live.follow = follow;
@@ -2524,6 +2577,9 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.previousRates = new Map();
+    state.live.rateChanges = new Map();
+    state.live.rateActivity = new Map();
     state.live.eventHistory = new Map();
     state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
@@ -2564,6 +2620,9 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.previousRates = new Map();
+    state.live.rateChanges = new Map();
+    state.live.rateActivity = new Map();
     state.live.eventHistory = new Map();
     state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
@@ -2807,11 +2866,13 @@
       const id = candidates[(tick + offset * 2) % candidates.length];
       const amount = 2 + ((tick + offset) % 5);
       totalDelta += amount;
+      rememberLiveRate(`${id}/events`, amount, tickSeconds);
       rememberLiveEvent(`${id}/events`, amount, tickSeconds);
       bumpLive(id, amount, false);
     });
     if (tick % 5 === 3) {
       bumpLive("warning/process_sampler_failed", 5, true);
+      rememberLiveRate("warning/process_sampler_failed", 5, tickSeconds);
       rememberLiveEvent("warning/process_sampler_failed", 5, tickSeconds);
       totalDelta += 5;
     }
@@ -2837,6 +2898,8 @@
     decayMap(state.live.errors, 0.58);
     decayMap(state.live.eventDeltas, 0.66, 0.45);
     decayMap(state.live.eventRates, 0.66, 0.05);
+    decaySignedMap(state.live.rateChanges, 0.64, 0.05);
+    decaySignedMap(state.live.rateActivity, 0.68, 0.05);
   }
 
   function decayMap(map, factor, minimum = 0.18) {
@@ -2850,9 +2913,19 @@
     });
   }
 
+  function decaySignedMap(map, factor, minimum = 0.18) {
+    [...map.entries()].forEach(([key, value]) => {
+      const next = value * factor;
+      if (Math.abs(next) < minimum) {
+        map.delete(key);
+      } else {
+        map.set(key, next);
+      }
+    });
+  }
+
   function rememberLiveEvent(key, amount, seconds = 1) {
     state.live.eventDeltas.set(key, (state.live.eventDeltas.get(key) || 0) + amount);
-    if (seconds > 0) state.live.eventRates.set(key, amount / seconds);
     const tick = state.live.eventTick || 0;
     const history = (state.live.eventHistory.get(key) || []).slice(-15);
     const last = history[history.length - 1];
@@ -2862,6 +2935,23 @@
       history.push({ tick, amount });
     }
     state.live.eventHistory.set(key, history);
+  }
+
+  function rememberLiveRate(key, amount, seconds = 1) {
+    if (seconds <= 0) return;
+    const rate = Math.max(0, amount) / seconds;
+    const previous = state.live.previousRates.get(key);
+    state.live.previousRates.set(key, rate);
+    if (rate > 0.05) {
+      state.live.eventRates.set(key, rate);
+    } else {
+      state.live.eventRates.delete(key);
+    }
+    if (previous === undefined) return;
+    const change = rate - previous;
+    if (Math.abs(change) < 0.05) return;
+    state.live.rateChanges.set(key, change);
+    applyLiveRateKey(key, change);
   }
 
   function formatEventRate(rate) {
@@ -2903,12 +2993,26 @@
     ids.forEach((id) => bumpLive(id, amount, error));
   }
 
+  function applyLiveRateKey(key, change) {
+    const ids = resolveLiveIds(key);
+    if (!ids.size) return;
+    ids.forEach((id) => bumpLiveRate(id, change));
+  }
+
   function bumpLive(id, amount, error) {
     const resolved = byModule.has(id) || byFunction.has(id) ? new Set([id]) : resolveLiveIds(id);
     const targets = resolved.size ? resolved : new Set([id]);
     targets.forEach((target) => {
       state.live.activity.set(target, (state.live.activity.get(target) || 0) + amount);
       if (error) state.live.errors.set(target, (state.live.errors.get(target) || 0) + amount);
+    });
+  }
+
+  function bumpLiveRate(id, change) {
+    const resolved = byModule.has(id) || byFunction.has(id) ? new Set([id]) : resolveLiveIds(id);
+    const targets = resolved.size ? resolved : new Set([id]);
+    targets.forEach((target) => {
+      state.live.rateActivity.set(target, (state.live.rateActivity.get(target) || 0) + change);
     });
   }
 
@@ -2960,6 +3064,26 @@
       });
     } else if (node.kind === "function") {
       score += (state.live.activity.get(node.module) || 0) * 0.22;
+    }
+    return score;
+  }
+
+  function liveRateScore(node) {
+    if (!state.live.enabled || !state.live.rateMode) return 0;
+    let score = state.live.rateActivity.get(node.id) || 0;
+    if (node.kind === "system") {
+      (node.moduleIds || []).forEach((moduleId) => {
+        score += state.live.rateActivity.get(moduleId) || 0;
+        (functionsByModuleId.get(moduleId) || []).forEach((funId) => {
+          score += (state.live.rateActivity.get(funId) || 0) * 0.45;
+        });
+      });
+    } else if (node.kind === "module") {
+      (functionsByModuleId.get(node.id) || []).forEach((funId) => {
+        score += (state.live.rateActivity.get(funId) || 0) * 0.6;
+      });
+    } else if (node.kind === "function") {
+      score += (state.live.rateActivity.get(node.module) || 0) * 0.22;
     }
     return score;
   }
@@ -3092,6 +3216,8 @@
   function renderLiveControls() {
     els.liveFollow.classList.toggle("active", state.live.follow);
     els.liveFollow.setAttribute("aria-pressed", state.live.follow ? "true" : "false");
+    els.liveRateMode.classList.toggle("active", state.live.rateMode);
+    els.liveRateMode.setAttribute("aria-pressed", state.live.rateMode ? "true" : "false");
     if (!state.live.enabled) {
       els.liveStatus.textContent = "live off";
       els.liveStatus.className = "live-status";
@@ -3278,6 +3404,8 @@
     }
     const hot = [...state.live.activity.values()].filter((value) => value > 1).length;
     const errors = [...state.live.errors.values()].reduce((sum, value) => sum + value, 0);
+    const acceleration = [...state.live.rateChanges.values()]
+      .reduce((sum, value) => sum + Math.abs(value), 0);
     if (state.live.mode === "stack") {
       return [
         { label: "Processes", value: nf.format(state.live.processCount) },
@@ -3302,6 +3430,7 @@
     return [
       { label: "Events", value: `+${nf.format(Math.round(state.live.totalDelta))}` },
       { label: "Rate", value: formatEventRate(rate) },
+      { label: "Accel", value: state.live.rateMode ? formatEventRate(acceleration) : "off" },
       { label: "Streams", value: nf.format(state.live.eventDeltas.size) },
       { label: "Cadence", value: formatInterval(state.live.intervalMs) },
       { label: "Fresh", value: liveFreshnessLabel() },
@@ -3547,6 +3676,39 @@
       els.heatPanel.replaceChildren();
       return false;
     }
+    if (state.live.rateMode) {
+      const rateNodes = state.layout.nodes
+        .map((node) => ({ node, score: liveRateScore(node), errors: liveErrorScore(node) }))
+        .filter((item) => Math.abs(item.score) > 0.05)
+        .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+        .slice(0, 6);
+      if (rateNodes.length) {
+        const title = document.createElement("div");
+        title.className = "heat-title";
+        title.textContent = "Rate change";
+        const rows = rateNodes.map(({ node, score, errors }) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = [
+            "heat-row",
+            score >= 0 ? "rate-up" : "rate-down",
+            errors > 0.6 ? "error" : ""
+          ].filter(Boolean).join(" ");
+          button.title = `${node.id} (${formatRateChange(score)} rate change)`;
+          button.addEventListener("click", () => {
+            selectNode(node.id, { manual: true });
+          });
+          const name = document.createElement("strong");
+          name.textContent = node.title || node.id;
+          const meta = document.createElement("span");
+          meta.textContent = `${formatRateChange(score)} · ${node.kind}`;
+          button.append(name, meta);
+          return button;
+        });
+        els.heatPanel.replaceChildren(title, ...rows);
+        return true;
+      }
+    }
     const hotNodes = state.layout.nodes
       .map((node) => ({ node, score: liveNodeScore(node), errors: liveErrorScore(node) }))
       .filter((item) => item.score > 0.6)
@@ -3582,6 +3744,11 @@
     if (state.live.mode === "recording") return "Recorded heat";
     if (state.live.mode === "stack") return "Stack heat";
     return "Live heat";
+  }
+
+  function formatRateChange(value) {
+    const sign = value >= 0 ? "+" : "-";
+    return `${sign}${formatEventRate(Math.abs(value))}`;
   }
 
   function renderErrorPanel() {
@@ -4113,6 +4280,9 @@
       g.addEventListener("mouseleave", () => setHoveredNode(null));
       g.addEventListener("pointerenter", () => setHoveredNode(node.id));
       g.addEventListener("pointerleave", () => setHoveredNode(null));
+      Object.entries(rateNodeStyle(node)).forEach(([key, value]) => {
+        g.style.setProperty(key, value);
+      });
       const tooltip = svgEl("title");
       tooltip.textContent = nodeTooltip(node);
       g.append(tooltip);
@@ -4229,30 +4399,61 @@
     if (isDimmed(node.id)) classes.push("dim");
     if (selectedPathHasNode(node.id)) classes.push("path-node");
     const liveScore = liveNodeScore(node);
-    if (liveScore > 7) classes.push("live-hot");
-    else if (liveScore > 0.6) classes.push("live-warm");
+    if (state.live.rateMode) {
+      const rateScore = liveRateScore(node);
+      if (rateScore > 0.05) classes.push("rate-up");
+      else if (rateScore < -0.05) classes.push("rate-down");
+    } else if (liveScore > 7) {
+      classes.push("live-hot");
+    } else if (liveScore > 0.6) {
+      classes.push("live-warm");
+    }
     if (liveErrorScore(node) > 0.6) classes.push("live-error");
     return classes.join(" ");
+  }
+
+  function rateNodeStyle(node) {
+    const score = liveRateScore(node);
+    if (!score) return {};
+    const magnitude = Math.min(1, Math.log1p(Math.abs(score)) / 4.4);
+    const alpha = 0.36 + magnitude * 0.58;
+    const width = 1.4 + magnitude * 2.6;
+    const glow = 8 + magnitude * 18;
+    const color = score > 0 ?
+      `rgba(19, 138, 109, ${alpha})` :
+      `rgba(189, 52, 66, ${alpha})`;
+    const glowColor = score > 0 ?
+      `rgba(19, 138, 109, ${0.12 + magnitude * 0.24})` :
+      `rgba(189, 52, 66, ${0.12 + magnitude * 0.24})`;
+    return {
+      "--rate-color": color,
+      "--rate-width": `${width}px`,
+      "--rate-filter": `drop-shadow(0 0 ${glow}px ${glowColor})`
+    };
   }
 
   function nodeTooltip(node) {
     const liveScore = liveNodeScore(node);
     const errorScore = liveErrorScore(node);
+    const rateScore = liveRateScore(node);
     const aliases = eventAliasesForNode(node).slice(0, 4);
     const liveLine = liveScore > 0.6 ?
       `\n${sourceHeatLabel().toLowerCase()} +${Math.round(liveScore)}` :
       "";
+    const rateLine = Math.abs(rateScore) > 0.05 ?
+      `\nrate change ${formatRateChange(rateScore)}` :
+      "";
     const errorLine = errorScore > 0.6 ? `\nerror heat +${Math.round(errorScore)}` : "";
     const aliasLine = aliases.length ? `\nevents ${aliases.join(", ")}` : "";
     if (node.kind === "system") {
-      return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
+      return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}${rateLine}${errorLine}${aliasLine}`;
     }
     if (node.kind === "module") {
       const namespace = node.namespace ? `\n${node.namespace}` : "";
-      return `${node.id}\n${node.path}${namespace}\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
+      return `${node.id}\n${node.path}${namespace}\n${node.functions} functions${liveLine}${rateLine}${errorLine}${aliasLine}`;
     }
     const namespace = node.namespace ? `\n${node.namespace}` : "";
-    return `${node.id}\n${node.path}:${node.line}${namespace}${liveLine}${errorLine}${aliasLine}`;
+    return `${node.id}\n${node.path}:${node.line}${namespace}${liveLine}${rateLine}${errorLine}${aliasLine}`;
   }
 
   function truncateText(value, width, charWidth) {
@@ -4277,8 +4478,8 @@
       classes.push("dim");
     }
     const liveScore = liveEdgeScore(edge);
-    if (liveScore > 7) classes.push("live-hot");
-    else if (liveScore > 0.6) classes.push("live-warm");
+    if (!state.live.rateMode && liveScore > 7) classes.push("live-hot");
+    else if (!state.live.rateMode && liveScore > 0.6) classes.push("live-warm");
     if (edgeIsSelected(edge, "call")) classes.push("selected-edge");
     if (edgeIsInSelectedPath(edge)) classes.push("path-edge");
     return classes.join(" ");
@@ -4985,7 +5186,10 @@
       });
       const title = svgEl("title");
       const score = liveNodeScore(node);
-      title.textContent = score > 0.6 ?
+      const rateScore = liveRateScore(node);
+      title.textContent = state.live.rateMode && Math.abs(rateScore) > 0.05 ?
+        `${node.id} (${formatRateChange(rateScore)} rate change)` :
+        score > 0.6 ?
         `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})` :
         node.id;
       mini.append(title);
@@ -5000,8 +5204,15 @@
     const classes = ["mini-node", node.role || "", node.kind || ""];
     if (nodeMatchesSearch(node)) classes.push("search-match");
     const liveScore = liveNodeScore(node);
-    if (liveScore > 7) classes.push("live-hot");
-    else if (liveScore > 0.6) classes.push("live-warm");
+    if (state.live.rateMode) {
+      const rateScore = liveRateScore(node);
+      if (rateScore > 0.05) classes.push("rate-up");
+      else if (rateScore < -0.05) classes.push("rate-down");
+    } else if (liveScore > 7) {
+      classes.push("live-hot");
+    } else if (liveScore > 0.6) {
+      classes.push("live-warm");
+    }
     if (liveErrorScore(node) > 0.6) classes.push("live-error");
     if (selectedPathHasNode(node.id)) classes.push("path-node");
     if (node.id === state.selected) classes.push("selected");

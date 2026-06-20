@@ -97,6 +97,7 @@ the script tag with id="embedded-graph".
       <button type="button" id="live-follow" class="live-follow" title="Follow hottest live node" aria-pressed="false">Follow</button>
       <button type="button" id="live-connect" title="Connect live endpoint">Connect</button>
       <button type="button" id="live-stack" title="Poll recorder stacks">Stack</button>
+      <button type="button" id="live-rate-mode" title="Pulse outlines by activity rate changes" aria-pressed="false">Accel</button>
       <button type="button" id="recording-import" title="Import recorder report">Import</button>
       <button type="button" id="live-demo" title="Run demo telemetry">Demo</button>
       <button type="button" id="live-stop" title="Stop live overlay" hidden>Stop</button>
@@ -123,14 +124,6 @@ the script tag with id="embedded-graph".
         <div class="section-head graph-head">
           <h2 id="graph-title">Kernel call graph</h2>
           <span id="graph-meta">0 visible calls</span>
-        </div>
-        <div id="engine-panel" class="engine-panel" hidden>
-          <div id="engine-source" class="engine-source"></div>
-          <div id="heat-panel" class="heat-panel"></div>
-          <div id="trace-panel" class="trace-panel"></div>
-          <div id="process-panel" class="process-panel"></div>
-          <div id="error-panel" class="error-panel"></div>
-          <div id="recording-timeline" class="recording-timeline" hidden></div>
         </div>
         <div id="graph-stage" class="graph-stage">
           <svg id="graph" role="img" aria-label="HyperBEAM call graph">
@@ -161,22 +154,37 @@ the script tag with id="embedded-graph".
       <div class="workspace-splitter" data-splitter="detail" aria-hidden="true"></div>
 
       <aside class="detail-panel">
-        <div class="section-head">
-          <h2>Inspector</h2>
+        <div class="section-head detail-head">
+          <div class="detail-tabs" role="tablist" aria-label="Detail panels">
+            <button type="button" class="active" data-detail-tab="inspector">Inspector</button>
+            <button type="button" data-detail-tab="engine">Engine</button>
+          </div>
           <span id="selection-label">No selection</span>
         </div>
-        <div id="detail-empty" class="empty">Select a node</div>
-        <div id="detail-view" class="detail-view" hidden>
-          <div id="detail-card" class="detail-card"></div>
-          <div class="relation-grid">
-            <section>
-              <h3>Callers</h3>
-              <div id="callers" class="relation-list"></div>
-            </section>
-            <section>
-              <h3>Callees</h3>
-              <div id="callees" class="relation-list"></div>
-            </section>
+        <div id="inspector-tab" class="detail-tab active">
+          <div id="detail-empty" class="empty">Select a node</div>
+          <div id="detail-view" class="detail-view" hidden>
+            <div id="detail-card" class="detail-card"></div>
+            <div class="relation-grid">
+              <section>
+                <h3>Callers</h3>
+                <div id="callers" class="relation-list"></div>
+              </section>
+              <section>
+                <h3>Callees</h3>
+                <div id="callees" class="relation-list"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div id="engine-tab" class="detail-tab" hidden>
+          <div id="engine-panel" class="engine-panel" hidden>
+            <div id="engine-source" class="engine-source"></div>
+            <div id="heat-panel" class="heat-panel"></div>
+            <div id="trace-panel" class="trace-panel"></div>
+            <div id="process-panel" class="process-panel"></div>
+            <div id="error-panel" class="error-panel"></div>
+            <div id="recording-timeline" class="recording-timeline" hidden></div>
           </div>
         </div>
       </aside>

@@ -261,7 +261,7 @@ h3 {
 
 .live-strip {
   display: grid;
-  grid-template-columns: max-content minmax(220px, 1fr) minmax(72px, max-content) repeat(6, max-content);
+  grid-template-columns: max-content minmax(220px, 1fr) minmax(72px, max-content) repeat(7, max-content);
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -312,7 +312,8 @@ h3 {
   box-shadow: 0 0 0 6px rgba(189, 52, 66, 0.1);
 }
 
-.live-follow.active {
+.live-follow.active,
+#live-rate-mode.active {
   border-color: rgba(19, 138, 109, 0.24);
   background: #f2fbf8;
   color: var(--green);
@@ -355,6 +356,8 @@ h3 {
 
 .detail-panel {
   grid-area: detail;
+  display: flex;
+  flex-direction: column;
 }
 
 .workspace-splitter {
@@ -419,6 +422,47 @@ body.resizing {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+.detail-head {
+  flex: 0 0 auto;
+}
+
+.detail-tabs {
+  display: inline-flex;
+  min-width: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f7f7f7;
+  gap: 3px;
+}
+
+.detail-tabs button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.detail-tabs button.active {
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.detail-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.detail-tab[hidden] {
+  display: none;
 }
 
 .context-actions {
@@ -511,13 +555,16 @@ body.resizing {
 
 .engine-panel {
   display: grid;
-  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-  gap: 8px;
-  padding: 7px 10px;
-  border-bottom: 1px solid var(--line);
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  gap: 10px;
+  padding: 10px;
   background:
-    linear-gradient(90deg, rgba(105, 86, 197, 0.08), transparent 38%),
-    linear-gradient(90deg, transparent 54%, rgba(189, 52, 66, 0.075));
+    linear-gradient(180deg, rgba(0, 154, 247, 0.07), transparent 150px),
+    linear-gradient(180deg, transparent 55%, rgba(19, 138, 109, 0.06));
 }
 
 .engine-panel[hidden] {
@@ -525,18 +572,14 @@ body.resizing {
 }
 
 .engine-source {
-  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
   min-width: 0;
-  gap: 6px 10px;
-  padding-bottom: 2px;
+  gap: 7px;
 }
 
 .engine-source-copy {
-  grid-column: 1;
-  grid-row: 1;
   display: grid;
   min-width: 0;
   gap: 2px;
@@ -563,27 +606,22 @@ body.resizing {
 }
 
 .engine-source-controls {
-  grid-column: 2;
-  grid-row: 1;
-  display: flex;
-  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   min-width: 0;
   gap: 5px;
 }
 
 .engine-source-metrics {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-start;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   min-width: 0;
   gap: 5px;
 }
 
 .engine-metric {
   display: grid;
-  min-width: 58px;
+  min-width: 0;
   padding: 4px 6px;
   border: 1px solid rgba(0, 154, 247, 0.12);
   border-radius: 6px;
@@ -728,6 +766,14 @@ body.resizing {
   animation: mini-node-pulse 1.2s ease-out infinite;
 }
 
+.mini-node.rate-up {
+  fill: rgba(19, 138, 109, 0.72);
+}
+
+.mini-node.rate-down {
+  fill: rgba(189, 52, 66, 0.68);
+}
+
 .mini-node.live-error {
   fill: rgba(189, 52, 66, 0.88);
   stroke: rgba(0, 0, 0, 0.36);
@@ -753,55 +799,42 @@ body.resizing {
 
 .heat-panel {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  max-height: 76px;
-  overflow: auto;
   gap: 5px;
 }
 
 .trace-panel {
-  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  max-height: 126px;
-  overflow: auto;
   gap: 5px;
 }
 
 .trace-panel.event-panel {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  max-height: 142px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .process-panel {
-  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  max-height: 142px;
-  overflow: auto;
   gap: 5px;
 }
 
 .error-panel {
-  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
-  max-height: 76px;
-  overflow: auto;
   gap: 5px;
 }
 
 .recording-timeline {
-  grid-column: 1 / -1;
   display: flex;
   min-width: 0;
   align-items: center;
   gap: 6px;
-  overflow: auto;
+  overflow: auto hidden;
   padding-top: 2px;
 }
 
@@ -907,6 +940,16 @@ body.resizing {
 }
 
 .heat-row.error {
+  border-color: rgba(189, 52, 66, 0.24);
+  background: #fff7f7;
+}
+
+.heat-row.rate-up {
+  border-color: rgba(19, 138, 109, 0.26);
+  background: #f4fffb;
+}
+
+.heat-row.rate-down {
   border-color: rgba(189, 52, 66, 0.24);
   background: #fff7f7;
 }
@@ -1364,7 +1407,7 @@ svg {
 }
 
 .node .live-badge {
-  fill: var(--red);
+  fill: var(--amber);
   font-size: 9px;
   font-weight: 800;
 }
@@ -1438,12 +1481,20 @@ svg {
   animation: live-node-pulse 1.2s ease-out infinite;
 }
 
+.node.rate-up rect,
+.node.rate-down rect {
+  stroke: var(--rate-color, var(--green));
+  stroke-width: var(--rate-width, 2.2px);
+  filter: var(--rate-filter, drop-shadow(0 0 12px rgba(19, 138, 109, 0.18)));
+  animation: rate-outline-pulse 1.25s ease-out infinite;
+}
+
 .node.live-error rect {
   fill: #fff4f4;
 }
 
 .live-ring {
-  fill: rgba(189, 52, 66, 0.72);
+  fill: rgba(178, 98, 20, 0.78);
   stroke: #ffffff;
   stroke-width: 2;
   pointer-events: none;
@@ -1454,6 +1505,12 @@ svg {
   0% { stroke-opacity: 1; }
   70% { stroke-opacity: 0.45; }
   100% { stroke-opacity: 1; }
+}
+
+@keyframes rate-outline-pulse {
+  0% { stroke-opacity: 0.98; }
+  70% { stroke-opacity: 0.5; }
+  100% { stroke-opacity: 0.98; }
 }
 
 @keyframes live-ring-pulse {
@@ -1947,7 +2004,7 @@ h1 {
 
 .live-strip {
   top: 108px;
-  grid-template-columns: max-content minmax(180px, 1fr) minmax(62px, max-content) repeat(6, max-content);
+  grid-template-columns: max-content minmax(180px, 1fr) minmax(62px, max-content) repeat(7, max-content);
   gap: 6px;
   padding: 6px;
 }
@@ -2071,62 +2128,6 @@ h1 {
   min-height: calc(100% - 42px);
 }
 
-.engine-panel {
-  position: absolute;
-  top: 192px;
-  right: calc(var(--detail-width, 340px) + 34px);
-  left: calc(var(--context-width, 300px) + 34px);
-  z-index: 24;
-  max-height: 122px;
-  overflow: hidden;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 6px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
-  border-radius: 9px;
-  background:
-    linear-gradient(90deg, rgba(105, 86, 197, 0.1), transparent 40%),
-    linear-gradient(90deg, transparent 58%, rgba(189, 52, 66, 0.09)),
-    rgba(255, 255, 255, 0.86);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.09);
-  backdrop-filter: blur(18px);
-}
-
-.engine-panel:hover,
-.engine-panel:focus-within {
-  max-height: min(48vh, 430px);
-  overflow: auto;
-}
-
-.engine-panel.context-active {
-  max-height: 52px;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.engine-panel.context-active .heat-panel,
-.engine-panel.context-active .trace-panel,
-.engine-panel.context-active .process-panel,
-.engine-panel.context-active .error-panel,
-.engine-panel.context-active .recording-timeline {
-  display: none;
-}
-
-.engine-panel.context-active:hover,
-.engine-panel.context-active:focus-within {
-  max-height: min(42vh, 320px);
-  overflow: auto;
-}
-
-.engine-panel.context-active:hover .heat-panel,
-.engine-panel.context-active:focus-within .heat-panel,
-.engine-panel.context-active:hover .trace-panel,
-.engine-panel.context-active:focus-within .trace-panel,
-.engine-panel.context-active:hover .process-panel,
-.engine-panel.context-active:focus-within .process-panel,
-.engine-panel.context-active:hover .error-panel,
-.engine-panel.context-active:focus-within .error-panel {
-  display: grid;
-}
-
 .engine-source {
   gap: 4px 8px;
   padding-bottom: 0;
@@ -2162,28 +2163,22 @@ h1 {
 
 .heat-panel,
 .error-panel {
-  max-height: 42px;
+  max-height: none;
 }
 
 .trace-panel,
 .trace-panel.event-panel {
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  max-height: 56px;
+  grid-template-columns: minmax(0, 1fr);
+  max-height: none;
 }
 
 .process-panel {
-  grid-column: 1 / -1;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  max-height: 62px;
+  grid-template-columns: minmax(0, 1fr);
+  max-height: none;
 }
 
 .recording-timeline {
-  max-height: 34px;
-}
-
-.heat-title {
-  display: none;
+  max-height: none;
 }
 
 .heat-row,
@@ -2208,8 +2203,7 @@ h1 {
 @media (min-width: 2300px) {
   .filters,
   .live-strip,
-  .graph-head,
-  .engine-panel {
+  .graph-head {
     right: calc(var(--detail-width, 340px) + 64px);
     left: calc(var(--context-width, 300px) + 64px);
   }
@@ -2218,8 +2212,7 @@ h1 {
 @media (max-width: 1500px) {
   .filters,
   .live-strip,
-  .graph-head,
-  .engine-panel {
+  .graph-head {
     right: calc(var(--detail-width, 340px) + 24px);
     left: calc(var(--context-width, 300px) + 24px);
   }
@@ -2289,38 +2282,6 @@ h1 {
     min-height: 26px;
   }
 
-  .engine-panel {
-    top: 166px;
-    max-height: 72px;
-  }
-
-  .engine-panel.context-active {
-    max-height: 48px;
-  }
-
-  .engine-panel:hover,
-  .engine-panel:focus-within {
-    max-height: min(46vh, 300px);
-  }
-
-  .trace-panel,
-  .trace-panel.event-panel,
-  .process-panel,
-  .error-panel,
-  .recording-timeline {
-    display: none;
-  }
-
-  .heat-panel {
-    grid-column: 1 / -1;
-    max-height: 34px;
-  }
-
-  .engine-source-metrics {
-    overflow: hidden;
-    max-height: 25px;
-  }
-
   .device-list {
     height: calc(100% - 156px);
   }
@@ -2374,7 +2335,7 @@ h1 {
   }
 
   .live-strip {
-    grid-template-columns: max-content minmax(0, 1fr) minmax(72px, max-content) repeat(6, max-content);
+    grid-template-columns: max-content minmax(0, 1fr) minmax(72px, max-content) repeat(7, max-content);
   }
 
   .workspace {
