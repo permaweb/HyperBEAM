@@ -488,11 +488,7 @@
       if (mod.role === "kernel") activeModules.add(mod.id);
       if (state.showForge && mod.role === "forge") activeModules.add(mod.id);
     });
-    graph.devices.forEach((device) => {
-      if (state.selectedDevices.has(device.id)) {
-        device.modules.forEach((module) => activeModules.add(module));
-      }
-    });
+    activeDeviceModules().forEach((module) => activeModules.add(module));
 
     const needle = state.search;
     const groupFilter = state.group;
@@ -556,6 +552,22 @@
       edges = edges.filter((edge) => edge.count > 1);
     }
     return { modules, functions, edges };
+  }
+
+  function activeDeviceModules() {
+    const modules = new Set();
+    const selectedGroups = new Map();
+    graph.devices.forEach((device) => {
+      if (state.selectedDevices.has(device.id)) {
+        selectedGroups.set(device.id, device.group);
+        device.modules.forEach((module) => modules.add(module));
+      }
+    });
+    graph.modules.forEach((mod) => {
+      const refs = mod["device-refs"] || [];
+      if (refs.some((ref) => selectedGroups.get(ref) === mod.group)) modules.add(mod.id);
+    });
+    return modules;
   }
 
   function filterLayoutEdges(edges) {

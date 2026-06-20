@@ -22,7 +22,9 @@ escript scripts/codeviz/generate.escript --json-out=build/codeviz/graph.json
 The generator parses Erlang source under `src/core`, `src/preloaded`, and
 `src/forge`, excluding test directories. The visualizer starts with a subsystem
 map of the kernel and lets device modules from `src/preloaded` be added to the
-context.
+context. Selecting a device also includes same-group modules that reference it,
+so helper/server pieces stay visible with the root device without pulling in
+unrelated device groups.
 
 Focused views can be opened with query parameters when served over HTTP:
 
