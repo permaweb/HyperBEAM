@@ -6,8 +6,8 @@ Branch: `expr/visualizer`
 
 - Static visualizer generator produces `build/codeviz/hyperbeam-codeviz.html`.
 - Current graph build: `167 modules`, `3359 functions`, `8508 calls`.
-- Default view is now `Subsystems`, with module and function modes as drilldowns.
-- Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat`.
+- Default view is now `Subsystems`, with module and function modes using the `Map` force layout by default and `Flow` available for staged/lens inspection.
+- Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?mode=function&devices=recorder@1.0,scheduler@1.0`.
 - Live engine overlay supports `live=demo`, `live=<endpoint>`, `live=stack`, `follow=heat`, and `recording=<url|demo>`; event counters, process stack samples, and recorder traces are painted onto the graph as hot nodes, numeric badges, live event rows, stack paths, and flowing trace edges.
 
 ## Evidence
@@ -17,6 +17,9 @@ Branch: `expr/visualizer`
 - `git diff --check` passes.
 - `HB_PORT=0 rebar3 eunit` passes: `All 947 tests passed`, `EXIT_CODE=0`.
 - Browser screenshots saved under `build/codeviz/validation-*.png`.
+- Force-map proof: `mode=function&devices=recorder@1.0,scheduler@1.0` rendered `286` visible function nodes, `730` visible calls, `26` map regions, `2` role bands, `0` measured label overlaps, nearest node-center distance `69.7`, spread `4368x2631`, and opened at readable `scale(0.32)`. Screenshot saved to `build/codeviz/validation-force-map-recorder-scheduler-readable.png`.
+- Force-map search proof: `mode=module&devices=recorder@1.0,scheduler@1.0&search=hb_message` rendered a readable `2` node / `1` call map with `0` overlaps and spread `639x47`. Screenshot saved to `build/codeviz/validation-force-map-hb-message-search.png`.
+- Force-map selection proof: clicking high-degree `hb_event:log/5` preserved the `286` node / `730` edge map, highlighted `77` hot call edges in place, and populated the inspector with `80` callers and `2` callees. Screenshot saved to `build/codeviz/validation-force-map-high-degree-selection.png`.
 - Live overlay browser proof: `?devices=recorder@1.0,scheduler@1.0&mode=system&live=demo` showed `3` hot nodes, `3` hot edges, `6` live rings, and status `demo live: +27 events · 40 hot`; screenshot saved to `build/codeviz/validation-live-demo.png`.
 - Recorder stack proof: `rebar3 device test --devices dev_recorder --module recorder@1.0 --test live_report_processes_test+live_json_response_test` passes (`2 tests passed`).
 - Browser stack overlay proof against a recorder-shaped local JSON feed: `selected=hb_message` showed status `stacks: 2 procs · +2 reductions · 47 hot`, one `Live stacks` inspector row, `8` live rings, and `8` warm edges; screenshot saved to `build/codeviz/validation-stack-live.png`.

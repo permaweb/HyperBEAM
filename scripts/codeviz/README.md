@@ -35,12 +35,17 @@ hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&selected=h
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system&selected=kernel:resolver&edges=strong
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat&interval=1
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=function&layout=flow
 ```
 
-Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
-module, or function opens a local callers/callees lens, and `edges=strong`
-filters the graph to repeated call relationships. The context and inspector
-panes can be resized with the recorder-style splitters around the graph.
+Supported modes are `system`, `module`, and `function`. Module and function
+views default to a force-balanced map layout, with soft module/role regions,
+curved bidirectional edge ports, collision-relaxed labels, a quieter background
+traffic layer, and in-place caller/callee highlighting when a node is selected.
+Use `layout=flow` to restore the staged column/lens layouts for narrow
+call-chain inspection. `edges=strong` filters the graph to repeated call
+relationships. The context and inspector panes can be resized with the
+recorder-style splitters around the graph.
 Caller/callee rows preserve the selected call edge when clicked, so side-list
 navigation keeps the graph edge and source/target inspector context visible.
 Clicking an already-selected graph node drills down one level: subsystems open
@@ -58,9 +63,9 @@ contains a route from a loaded device module into that node; clicking a path row
 paints the route on the graph and minimap. Large unsearched function views open
 as an overview, while searched function graphs stay at a readable first-fit
 scale. Function mode with selected devices uses a compact device-context graph:
-the selected device functions plus their direct kernel touchpoints are laid out
-as left-to-right call stages, so a device's internal flow remains readable
-instead of disappearing into the full-kernel overview.
+the selected device functions plus their direct kernel touchpoints are projected
+into the force map, so a device's internal flow remains readable instead of
+disappearing into the full-kernel overview.
 
 ## Live and Recorder Overlays
 

@@ -195,6 +195,10 @@ h3 {
   color: #ffffff;
 }
 
+.layout-switch button.active {
+  background: var(--green);
+}
+
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -641,6 +645,15 @@ body.resizing {
 
 .graph-stage.dragging {
   cursor: grabbing;
+}
+
+.graph-stage[data-layout="map"] {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(0, 154, 247, 0.04), transparent 34%),
+    linear-gradient(rgba(0, 0, 0, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.018) 1px, transparent 1px),
+    var(--surface);
+  background-size: auto, 72px 72px, 72px 72px, auto;
 }
 
 .minimap {
@@ -1094,6 +1107,12 @@ svg {
   stroke-width: 1;
 }
 
+.graph-stage[data-layout="map"] .band rect {
+  fill: rgba(246, 248, 248, 0.5);
+  stroke: rgba(0, 0, 0, 0.06);
+  stroke-dasharray: 8 8;
+}
+
 .band text {
   fill: var(--muted);
   font-family: var(--mono);
@@ -1109,6 +1128,27 @@ svg {
   stroke-opacity: var(--edge-opacity, 1);
   marker-end: url("#arrow-normal");
   pointer-events: none;
+}
+
+.graph-stage[data-layout="map"] .edge {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-opacity: 0.34;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.graph-stage[data-layout="map"] .edge.hot,
+.graph-stage[data-layout="map"] .edge.incoming,
+.graph-stage[data-layout="map"] .edge.outgoing,
+.graph-stage[data-layout="map"] .edge.selected-edge,
+.graph-stage[data-layout="map"] .edge.path-edge,
+.graph-stage[data-layout="map"] .edge.live-warm,
+.graph-stage[data-layout="map"] .edge.live-hot {
+  stroke-opacity: 1;
+}
+
+.graph-stage[data-layout="map"] .edge-hit {
+  stroke-width: 24px;
 }
 
 .edge-hit {
@@ -1202,6 +1242,34 @@ svg {
   filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.045));
 }
 
+.module-frame.map-region rect {
+  fill: rgba(255, 255, 255, 0.42);
+  stroke: rgba(0, 0, 0, 0.09);
+  stroke-dasharray: 10 7;
+  filter: none;
+}
+
+.module-frame.map-region.kernel rect {
+  fill: rgba(0, 154, 247, 0.045);
+  stroke: rgba(0, 154, 247, 0.2);
+}
+
+.module-frame.map-region.device rect {
+  fill: rgba(19, 138, 109, 0.055);
+  stroke: rgba(19, 138, 109, 0.22);
+}
+
+.module-frame.map-region.forge rect {
+  fill: rgba(178, 98, 20, 0.055);
+  stroke: rgba(178, 98, 20, 0.2);
+}
+
+.module-frame.map-region text {
+  fill: rgba(0, 0, 0, 0.42);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
 .module-frame.kernel rect {
   stroke: rgba(0, 154, 247, 0.32);
 }
@@ -1229,6 +1297,14 @@ svg {
   fill: #ffffff;
   stroke: var(--line-strong);
   stroke-width: 1;
+}
+
+.graph-stage[data-layout="map"] .node rect {
+  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.055));
+}
+
+.graph-stage[data-layout="map"] .node.function rect {
+  fill: rgba(255, 255, 255, 0.94);
 }
 
 .node.exported rect {

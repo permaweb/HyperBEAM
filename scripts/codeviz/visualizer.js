@@ -81,6 +81,7 @@
 
   const state = {
     mode: "system",
+    layoutMode: "map",
     selectedDevices: new Set(),
     selected: null,
     selectedEdge: null,
@@ -238,6 +239,9 @@
     if (["system", "module", "function"].includes(params.get("mode"))) {
       state.mode = params.get("mode");
     }
+    if (["map", "flow"].includes(params.get("layout"))) {
+      state.layoutMode = params.get("layout");
+    }
     if (params.has("search")) {
       state.search = params.get("search").trim().toLowerCase();
       els.search.value = params.get("search");
@@ -288,6 +292,9 @@
     document.querySelectorAll("[data-mode]").forEach((button) => {
       button.classList.toggle("active", button.dataset.mode === state.mode);
     });
+    document.querySelectorAll("[data-layout]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.layout === state.layoutMode);
+    });
   }
 
   function liveParamValue(value) {
@@ -320,6 +327,15 @@
       button.addEventListener("click", () => {
         activateMode(button.dataset.mode);
         state.selected = null;
+        state.selectedEdge = null;
+        state.selectedPath = [];
+        requestFit();
+        render();
+      });
+    });
+    document.querySelectorAll("[data-layout]").forEach((button) => {
+      button.addEventListener("click", () => {
+        activateLayout(button.dataset.layout);
         state.selectedEdge = null;
         state.selectedPath = [];
         requestFit();
@@ -554,6 +570,13 @@
     });
   }
 
+  function activateLayout(layoutMode) {
+    state.layoutMode = layoutMode;
+    document.querySelectorAll("[data-layout]").forEach((el) => {
+      el.classList.toggle("active", el.dataset.layout === layoutMode);
+    });
+  }
+
   function selectNode(id, options = {}) {
     if (options.manual) state.live.follow = false;
     state.selectedEdge = options.edge || null;
@@ -575,6 +598,7 @@
   function syncUrl() {
     const params = new URLSearchParams();
     params.set("mode", state.mode);
+    if (state.layoutMode !== "map") params.set("layout", state.layoutMode);
     if (state.selectedDevices.size) {
       params.set(
         "devices",
@@ -650,18 +674,18 @@
   function visibleData() {
     const activeModules = new Set();
     const deviceModules = activeDeviceModules();
+    const selectedFunction = byFunction.get(state.selected);
     const compactDeviceFunctions =
       state.mode === "function" &&
       state.selectedDevices.size &&
       !state.search &&
-      !state.selected;
+      (!state.selected || (state.layoutMode === "map" && selectedFunction));
     graph.modules.forEach((mod) => {
       if (!compactDeviceFunctions && mod.role === "kernel") activeModules.add(mod.id);
       if (state.showForge && mod.role === "forge") activeModules.add(mod.id);
     });
     deviceModules.forEach((module) => activeModules.add(module));
-    const selectedFun = byFunction.get(state.selected);
-    const selectedModule = byModule.get(state.selected) || (selectedFun && byModule.get(selectedFun.module));
+    const selectedModule = byModule.get(state.selected) || (selectedFunction && byModule.get(selectedFunction.module));
     if (selectedModule) activeModules.add(selectedModule.id);
 
     const needle = state.search;
@@ -685,7 +709,7 @@
       return functionSearchText(fun).includes(needle);
     });
     if (compactDeviceFunctions) {
-      functions = expandDeviceFunctionTouchpoints(functions);
+      functions = compactDeviceFunctionSet(functions, selectedFunction);
     }
     let modules = graph.modules.filter((mod) => {
       if (!moduleInScope(mod)) return false;
@@ -700,7 +724,7 @@
         (!groupFilter || `${mod.role}:${mod.group}` === groupFilter)
       );
     }
-    if (state.selected) {
+    if (state.selected && state.layoutMode !== "map") {
       functions = expandSelectedFunctions(functions, functionInScope);
       modules = expandSelectedModules(modules, functions, moduleInScope);
     }
@@ -756,6 +780,18 @@
     graph.functions.forEach((fun) => {
       if (additions.has(fun.id)) expanded.push(fun);
     });
+    return expanded;
+  }
+
+  function compactDeviceFunctionSet(functions, selectedFunction) {
+    const deviceFunctions = functions.filter((fun) => {
+      const mod = byModule.get(fun.module);
+      return mod && mod.role === "device";
+    });
+    const expanded = expandDeviceFunctionTouchpoints(deviceFunctions);
+    if (selectedFunction && !expanded.some((fun) => fun.id === selectedFunction.id)) {
+      expanded.push(selectedFunction);
+    }
     return expanded;
   }
 
@@ -817,18 +853,21 @@
     if (state.mode === "system") {
       return state.selected ? selectedSystemLayout(visible) : systemLayout(visible);
     }
-    if (state.mode === "module" && byModule.has(state.selected)) {
+    if (state.layoutMode === "flow" && state.mode === "module" && byModule.has(state.selected)) {
       return selectedModuleLayout(visible);
     }
-    if (state.mode === "function" && byFunction.has(state.selected)) {
+    if (state.layoutMode === "flow" && state.mode === "function" && byFunction.has(state.selected)) {
       return selectedFunctionLayout(visible);
     }
     const nodes = state.mode === "module" ? moduleGraphNodes(visible) : functionGraphNodes(visible);
-    const positioned = state.mode === "function" ?
-      positionFunctionNodes(nodes, visible.edges) :
-      positionNodes(nodes);
+    const graphEdges = state.mode === "module" ? moduleEdges(visible.edges) : visible.edges;
+    const positioned = forceMapActive(nodes) ?
+      positionForceMapNodes(nodes, graphEdges) :
+      state.mode === "function" ?
+        positionFunctionNodes(nodes, visible.edges) :
+        positionNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
-    const edges = filterLayoutEdges(state.mode === "module" ? moduleEdges(visible.edges) : visible.edges)
+    const edges = filterLayoutEdges(graphEdges)
       .map((edge) => {
         const source = nodeById.get(edge.source);
         const target = nodeById.get(edge.target);
@@ -1177,8 +1216,8 @@
       kind: "function",
       title: fun.label,
       subtitle: fun.module,
-      width: 250,
-      height: 24
+      width: state.layoutMode === "map" ? 220 : 250,
+      height: state.layoutMode === "map" ? 22 : 24
     }));
   }
 
@@ -1188,8 +1227,8 @@
       kind: "module",
       title: mod.module,
       subtitle: `${mod.functions} functions`,
-      width: 270,
-      height: 44
+      width: state.layoutMode === "map" ? 245 : 270,
+      height: state.layoutMode === "map" ? 42 : 44
     }));
   }
 
@@ -1392,6 +1431,413 @@
         height: Math.max(520, maxY + 24)
       }
     };
+  }
+
+  function forceMapActive(nodes) {
+    return state.layoutMode === "map" && state.mode !== "system" && nodes.length > 1;
+  }
+
+  function positionForceMapNodes(nodes, rawEdges) {
+    const edgeInput = filterLayoutEdges(rawEdges)
+      .filter((edge) => edge.source !== edge.target);
+    const ids = new Set(nodes.map((node) => node.id));
+    const links = edgeInput.filter((edge) => ids.has(edge.source) && ids.has(edge.target));
+    const anchors = forceMapAnchors(nodes);
+    const degree = new Map(nodes.map((node) => [node.id, 0]));
+    links.forEach((edge) => {
+      degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+      degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+    });
+    const simNodes = nodes.map((node, idx) => {
+      const anchor = anchors.nodeAnchors.get(node.id) || { x: 0, y: 0 };
+      const angle = idx * 2.399963 + hashUnit(node.id) * Math.PI;
+      const radius = 18 + Math.sqrt(idx + 1) * 11 + hashUnit(`${node.id}:r`) * 28;
+      return {
+        node,
+        id: node.id,
+        x: anchor.x + Math.cos(angle) * radius,
+        y: anchor.y + Math.sin(angle) * radius,
+        vx: 0,
+        vy: 0,
+        width: node.width,
+        height: node.height,
+        radius: Math.max(node.width, node.height) / 2,
+        anchor,
+        degree: degree.get(node.id) || 0
+      };
+    });
+    const simById = new Map(simNodes.map((node) => [node.id, node]));
+    const simLinks = links.map((edge) => ({
+      edge,
+      source: simById.get(edge.source),
+      target: simById.get(edge.target),
+      distance: forceLinkDistance(edge),
+      strength: forceLinkStrength(edge)
+    })).filter((link) => link.source && link.target);
+    const iterations = forceIterationCount(simNodes.length);
+    for (let iter = 0; iter < iterations; iter += 1) {
+      const progress = iter / Math.max(1, iterations - 1);
+      const alpha = 0.92 * Math.pow(1 - progress, 1.65) + 0.025;
+      applyForceLinks(simLinks, alpha);
+      applyForceCharge(simNodes, alpha);
+      applyForceAnchors(simNodes, alpha);
+      applyForceCollisions(simNodes, alpha);
+      applyForceCenter(simNodes, alpha);
+      simNodes.forEach((node) => {
+        node.vx = clamp(node.vx, -72, 72) * 0.72;
+        node.vy = clamp(node.vy, -72, 72) * 0.72;
+        node.x += node.vx;
+        node.y += node.vy;
+      });
+    }
+    relaxForceCollisions(simNodes, 90);
+    const placed = normalizeForceNodes(simNodes);
+    return {
+      nodes: placed,
+      modules: forceMapRegions(placed),
+      bands: forceMapBands(placed),
+      bounds: forceBounds(placed, 92),
+      force: true
+    };
+  }
+
+  function forceMapAnchors(nodes) {
+    const groups = groupBy(nodes, forceGroupKey)
+      .map((items) => ({
+        id: forceGroupKey(items[0]),
+        role: items[0].role || "other",
+        group: items[0].group || "other",
+        items: items.slice().sort(nodeSort)
+      }))
+      .sort((a, b) => {
+        const roleDelta = forceRoleRank(a.role) - forceRoleRank(b.role);
+        if (roleDelta !== 0) return roleDelta;
+        return `${a.group}:${a.id}`.localeCompare(`${b.group}:${b.id}`);
+      });
+    const byRole = new Map(groupBy(groups, (group) => group.role).map((items) => [items[0].role, items]));
+    const roles = ["device", "kernel", "forge", "other"].filter((role) => byRole.has(role));
+    const groupAnchors = new Map();
+    let xCursor = 0;
+    roles.forEach((role) => {
+      const roleGroups = byRole.get(role);
+      const cols = Math.max(1, Math.ceil(Math.sqrt(roleGroups.length * 1.25)));
+      const rows = Math.max(1, Math.ceil(roleGroups.length / cols));
+      const xStep = state.mode === "function" ? 430 : 360;
+      const yStep = state.mode === "function" ? 300 : 250;
+      roleGroups.forEach((group, idx) => {
+        const col = idx % cols;
+        const row = Math.floor(idx / cols);
+        const x = xCursor + col * xStep + hashOffset(`${group.id}:x`, 40);
+        const y = (row - (rows - 1) / 2) * yStep + hashOffset(`${group.id}:y`, 46);
+        groupAnchors.set(group.id, { x, y, role, group: group.group });
+      });
+      xCursor += Math.max(1, cols) * xStep + 520;
+    });
+    const nodeAnchors = new Map();
+    groups.forEach((group) => {
+      const anchor = groupAnchors.get(group.id) || { x: 0, y: 0 };
+      group.items.forEach((node, idx) => {
+        const angle = idx * 2.399963 + hashUnit(`${node.id}:ga`) * Math.PI;
+        const spread = state.mode === "function" ? 54 : 24;
+        const radius = Math.sqrt(idx + 0.35) * spread;
+        nodeAnchors.set(node.id, {
+          x: anchor.x + Math.cos(angle) * radius,
+          y: anchor.y + Math.sin(angle) * radius,
+          role: anchor.role,
+          group: anchor.group
+        });
+      });
+    });
+    return { groupAnchors, nodeAnchors };
+  }
+
+  function forceGroupKey(node) {
+    if (state.mode === "function") return node.module;
+    return `${node.role || "other"}:${node.group || "other"}`;
+  }
+
+  function forceRoleRank(role) {
+    if (role === "device") return 0;
+    if (role === "kernel") return 1;
+    if (role === "forge") return 2;
+    return 3;
+  }
+
+  function forceLinkDistance(edge) {
+    const sameModule = edge["source-module"] && edge["source-module"] === edge["target-module"];
+    const base = state.mode === "function" ?
+      sameModule ? 172 : 360 :
+      310;
+    return Math.max(120, base - Math.min(95, Math.log1p(edge.count || 1) * 20));
+  }
+
+  function forceLinkStrength(edge) {
+    const sameModule = edge["source-module"] && edge["source-module"] === edge["target-module"];
+    const base = state.mode === "function" && sameModule ? 0.052 : 0.034;
+    return base + Math.min(0.035, Math.log1p(edge.count || 1) * 0.006);
+  }
+
+  function forceIterationCount(count) {
+    if (count > 900) return 170;
+    if (count > 520) return 210;
+    if (count > 260) return 270;
+    return 430;
+  }
+
+  function applyForceLinks(links, alpha) {
+    links.forEach((link) => {
+      const dx = link.target.x - link.source.x || 0.001;
+      const dy = link.target.y - link.source.y || 0.001;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const force = ((distance - link.distance) / distance) * link.strength * alpha;
+      const weight = 0.5;
+      const fx = dx * force;
+      const fy = dy * force;
+      link.source.vx += fx * weight;
+      link.source.vy += fy * weight;
+      link.target.vx -= fx * weight;
+      link.target.vy -= fy * weight;
+    });
+  }
+
+  function applyForceCharge(nodes, alpha) {
+    const cellSize = 520;
+    const grid = forceGrid(nodes, cellSize);
+    const seen = new Set();
+    nodes.forEach((node) => {
+      forceGridNeighbors(grid, node, cellSize, 1).forEach((other) => {
+        if (node === other) return;
+        const key = node.id < other.id ? `${node.id}|${other.id}` : `${other.id}|${node.id}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const dx = node.x - other.x || hashOffset(key, 0.01);
+        const dy = node.y - other.y || hashOffset(`${key}:y`, 0.01);
+        const distanceSq = dx * dx + dy * dy;
+        if (distanceSq > 900000) return;
+        const distance = Math.sqrt(distanceSq);
+        const desired = node.radius + other.radius + 180;
+        const force = (desired * desired / Math.max(2200, distanceSq)) * 1.7 * alpha;
+        const fx = (dx / distance) * force;
+        const fy = (dy / distance) * force;
+        node.vx += fx;
+        node.vy += fy;
+        other.vx -= fx;
+        other.vy -= fy;
+      });
+    });
+  }
+
+  function applyForceAnchors(nodes, alpha) {
+    nodes.forEach((node) => {
+      const strength = state.mode === "function" ? 0.012 : 0.018;
+      node.vx += (node.anchor.x - node.x) * strength * alpha;
+      node.vy += (node.anchor.y - node.y) * strength * alpha;
+      if (state.selected && node.id === state.selected) {
+        node.vx += (0 - node.x) * 0.0025 * alpha;
+        node.vy += (0 - node.y) * 0.0025 * alpha;
+      }
+    });
+  }
+
+  function applyForceCollisions(nodes, alpha) {
+    const cellSize = 460;
+    const grid = forceGrid(nodes, cellSize);
+    const seen = new Set();
+    nodes.forEach((node) => {
+      forceGridNeighbors(grid, node, cellSize, 1).forEach((other) => {
+        if (node === other) return;
+        const key = node.id < other.id ? `${node.id}|${other.id}` : `${other.id}|${node.id}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const dx = node.x - other.x || hashOffset(key, 0.01);
+        const dy = node.y - other.y || hashOffset(`${key}:y`, 0.01);
+        const overlapX = (node.width + other.width) / 2 + 42 - Math.abs(dx);
+        const overlapY = (node.height + other.height) / 2 + 28 - Math.abs(dy);
+        if (overlapX <= 0 || overlapY <= 0) return;
+        if (overlapX < overlapY) {
+          const sign = dx < 0 ? -1 : 1;
+          const push = overlapX * 0.92 * alpha;
+          node.vx += sign * push;
+          other.vx -= sign * push;
+        } else {
+          const sign = dy < 0 ? -1 : 1;
+          const push = overlapY * 1.02 * alpha;
+          node.vy += sign * push;
+          other.vy -= sign * push;
+        }
+      });
+    });
+  }
+
+  function relaxForceCollisions(nodes, passes) {
+    for (let pass = 0; pass < passes; pass += 1) {
+      const cellSize = 460;
+      const grid = forceGrid(nodes, cellSize);
+      const seen = new Set();
+      let moved = false;
+      nodes.forEach((node) => {
+        forceGridNeighbors(grid, node, cellSize, 1).forEach((other) => {
+          if (node === other) return;
+          const key = node.id < other.id ? `${node.id}|${other.id}` : `${other.id}|${node.id}`;
+          if (seen.has(key)) return;
+          seen.add(key);
+          const dx = node.x - other.x || hashOffset(key, 0.01);
+          const dy = node.y - other.y || hashOffset(`${key}:y`, 0.01);
+          const overlapX = (node.width + other.width) / 2 + 18 - Math.abs(dx);
+          const overlapY = (node.height + other.height) / 2 + 12 - Math.abs(dy);
+          if (overlapX <= 0 || overlapY <= 0) return;
+          moved = true;
+          if (overlapX < overlapY) {
+            const sign = dx < 0 ? -1 : 1;
+            const push = overlapX / 2 + 0.8;
+            node.x += sign * push;
+            other.x -= sign * push;
+          } else {
+            const sign = dy < 0 ? -1 : 1;
+            const push = overlapY / 2 + 0.8;
+            node.y += sign * push;
+            other.y -= sign * push;
+          }
+        });
+      });
+      if (!moved) return;
+    }
+  }
+
+  function applyForceCenter(nodes, alpha) {
+    if (!nodes.length) return;
+    const cx = nodes.reduce((sum, node) => sum + node.x, 0) / nodes.length;
+    const cy = nodes.reduce((sum, node) => sum + node.y, 0) / nodes.length;
+    nodes.forEach((node) => {
+      node.vx -= cx * 0.002 * alpha;
+      node.vy -= cy * 0.002 * alpha;
+    });
+  }
+
+  function forceGrid(nodes, cellSize) {
+    const grid = new Map();
+    nodes.forEach((node) => {
+      const key = forceGridKey(node.x, node.y, cellSize);
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(node);
+    });
+    return grid;
+  }
+
+  function forceGridNeighbors(grid, node, cellSize, radius) {
+    const [cx, cy] = forceGridKey(node.x, node.y, cellSize).split(":").map(Number);
+    const neighbors = [];
+    for (let x = cx - radius; x <= cx + radius; x += 1) {
+      for (let y = cy - radius; y <= cy + radius; y += 1) {
+        const items = grid.get(`${x}:${y}`);
+        if (items) neighbors.push(...items);
+      }
+    }
+    return neighbors;
+  }
+
+  function forceGridKey(x, y, cellSize) {
+    return `${Math.floor(x / cellSize)}:${Math.floor(y / cellSize)}`;
+  }
+
+  function normalizeForceNodes(simNodes) {
+    const raw = simNodes.map((sim) => ({
+      ...sim.node,
+      x: sim.x - sim.width / 2,
+      y: sim.y - sim.height / 2,
+      cx: sim.x,
+      cy: sim.y
+    }));
+    const bounds = forceBounds(raw, 92);
+    const shiftX = -bounds.x;
+    const shiftY = -bounds.y;
+    return raw.map((node) => ({
+      ...node,
+      x: node.x + shiftX,
+      y: node.y + shiftY,
+      cx: node.cx + shiftX,
+      cy: node.cy + shiftY
+    }));
+  }
+
+  function forceBounds(nodes, padding) {
+    if (!nodes.length) return { x: 0, y: 0, width: 760, height: 520 };
+    const minX = Math.min(...nodes.map((node) => node.x)) - padding;
+    const minY = Math.min(...nodes.map((node) => node.y)) - padding;
+    const maxX = Math.max(...nodes.map((node) => node.x + node.width)) + padding;
+    const maxY = Math.max(...nodes.map((node) => node.y + node.height)) + padding;
+    return {
+      x: minX,
+      y: minY,
+      width: Math.max(760, maxX - minX),
+      height: Math.max(520, maxY - minY)
+    };
+  }
+
+  function forceMapRegions(nodes) {
+    const groups = groupBy(nodes, (node) =>
+      state.mode === "function" ? node.module : `${node.role}:${node.group}`
+    );
+    return groups
+      .filter((items) => items.length > 1)
+      .map((items) => {
+        const first = items[0];
+        const padX = state.mode === "function" ? 42 : 34;
+        const padY = state.mode === "function" ? 34 : 28;
+        const minX = Math.min(...items.map((node) => node.x)) - padX;
+        const minY = Math.min(...items.map((node) => node.y)) - padY;
+        const maxX = Math.max(...items.map((node) => node.x + node.width)) + padX;
+        const maxY = Math.max(...items.map((node) => node.y + node.height)) + padY;
+        return {
+          id: state.mode === "function" ? first.module : `${first.role}:${first.group}`,
+          role: first.role,
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY,
+          title: state.mode === "function" ? first.module : columnLabel(columnKey(first)),
+          subtitle: first.group,
+          map: true
+        };
+      });
+  }
+
+  function forceMapBands(nodes) {
+    const roles = groupBy(nodes, (node) => node.role || "other");
+    return roles
+      .filter((items) => items.length > 1)
+      .map((items) => {
+        const role = items[0].role || "other";
+        const minX = Math.min(...items.map((node) => node.x)) - 78;
+        const minY = Math.min(...items.map((node) => node.y)) - 68;
+        const maxX = Math.max(...items.map((node) => node.x + node.width)) + 78;
+        const maxY = Math.max(...items.map((node) => node.y + node.height)) + 68;
+        return {
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY,
+          label: role === "device" ? "loaded devices" : role === "kernel" ? "kernel subsystems" : role
+        };
+      });
+  }
+
+  function hashNumber(value) {
+    let hash = 2166136261;
+    const text = String(value || "");
+    for (let idx = 0; idx < text.length; idx += 1) {
+      hash ^= text.charCodeAt(idx);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function hashUnit(value) {
+    return hashNumber(value) / 4294967295;
+  }
+
+  function hashOffset(value, spread) {
+    return (hashUnit(value) - 0.5) * spread * 2;
   }
 
   function functionModuleFlow(moduleNodes, edges) {
@@ -2493,6 +2939,7 @@
       0;
     els.graphMeta.textContent = [
       `${nf.format(state.layout.nodes.length)} visible nodes`,
+      state.layout.force ? "force map" : "",
       functionOverviewActive() ? "overview" : "",
       state.search ? `${nf.format(searchMatches)} matches` : "",
       `${nf.format(state.layout.edges.length)} visible calls`,
@@ -2520,6 +2967,7 @@
   }
 
   function renderGraph() {
+    els.stage.dataset.layout = state.layout.force ? "map" : "flow";
     renderBands();
     renderEdges();
     renderNodes();
@@ -3263,15 +3711,15 @@
       fragment.append(g);
     });
     state.layout.modules.forEach((mod) => {
-      const g = svgEl("g", { class: `module-frame ${mod.role}` });
+      const g = svgEl("g", { class: `module-frame ${mod.role}${mod.map ? " map-region" : ""}` });
       g.dataset.id = mod.id;
-      if (isDimmed(mod.id)) g.classList.add("dim");
+      if (!mod.map && isDimmed(mod.id)) g.classList.add("dim");
       g.append(svgEl("rect", {
         x: mod.x,
         y: mod.y,
         width: mod.width,
         height: mod.height,
-        rx: 8
+        rx: mod.map ? 18 : 8
       }));
       const text = svgEl("text", { x: mod.x + 10, y: mod.y + 21 });
       text.textContent = mod.title;
@@ -3428,6 +3876,9 @@
   }
 
   function edgeWidth(edge) {
+    if (state.layout.force) {
+      return Math.min(2.3, 0.55 + Math.log1p(edge.count || 1) * 0.2);
+    }
     return Math.min(4.2, 0.9 + Math.log1p(edge.count || 1) * 0.36);
   }
 
@@ -3653,6 +4104,7 @@
   function edgePath(edge) {
     const s = edge.sourceNode;
     const t = edge.targetNode;
+    if (state.layout.force) return forceEdgePath(edge);
     const x1 = s.x + s.width;
     const y1 = s.cy;
     const y2 = t.cy;
@@ -3664,6 +4116,38 @@
     const x2 = t.x;
     const dx = Math.max(70, Math.abs(x2 - x1) * 0.45);
     return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+  }
+
+  function forceEdgePath(edge) {
+    const s = edge.sourceNode;
+    const t = edge.targetNode;
+    const start = nodePort(s, t.cx, t.cy);
+    const end = nodePort(t, s.cx, s.cy);
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const distance = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    const direction = hashUnit(`${edge.source}->${edge.target}`) > 0.5 ? 1 : -1;
+    const bend = Math.min(180, Math.max(28, distance * 0.15)) * direction;
+    const normalX = -dy / distance;
+    const normalY = dx / distance;
+    const midX = (start.x + end.x) / 2 + normalX * bend;
+    const midY = (start.y + end.y) / 2 + normalY * bend;
+    return `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`;
+  }
+
+  function nodePort(node, towardX, towardY) {
+    const dx = towardX - node.cx;
+    const dy = towardY - node.cy;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) {
+      return { x: node.cx + node.width / 2, y: node.cy };
+    }
+    const scaleX = Math.abs(dx) < 0.001 ? Infinity : (node.width / 2) / Math.abs(dx);
+    const scaleY = Math.abs(dy) < 0.001 ? Infinity : (node.height / 2) / Math.abs(dy);
+    const scale = Math.min(scaleX, scaleY);
+    return {
+      x: node.cx + dx * scale,
+      y: node.cy + dy * scale
+    };
   }
 
   function isCaller(id) {
@@ -4366,15 +4850,31 @@
     if (!bounds) return;
     const rect = els.stage.getBoundingClientRect();
     const minScale = readableScale(preferReadable);
-    const scale = Math.min(1.4, Math.max(minScale, Math.min(
+    const fitScale = Math.min(
       (rect.width - 48) / bounds.width,
       (rect.height - 48) / bounds.height
-    )));
-    state.transform = { x: 24, y: 24, scale };
+    );
+    const scale = Math.min(1.4, Math.max(minScale, fitScale));
+    if (state.layout.force && scale > fitScale) {
+      state.transform = {
+        x: rect.width / 2 - (bounds.x + bounds.width / 2) * scale,
+        y: rect.height / 2 - (bounds.y + bounds.height / 2) * scale,
+        scale
+      };
+    } else {
+      state.transform = { x: 24, y: 24, scale };
+    }
     applyTransform();
   }
 
   function readableScale(preferReadable) {
+    if (state.layout.force) {
+      if (!preferReadable) return 0.05;
+      const count = state.layout.nodes.length;
+      if (count > 640) return 0.2;
+      if (count > 220) return 0.32;
+      return 0.48;
+    }
     if (!preferReadable) {
       if (state.mode === "system") return 0.42;
       if (state.mode === "module") return 0.18;
@@ -4467,7 +4967,8 @@
   function onWheel(event) {
     event.preventDefault();
     const oldScale = state.transform.scale;
-    const nextScale = Math.min(2.2, Math.max(0.12, oldScale * (event.deltaY > 0 ? 0.9 : 1.1)));
+    const minScale = state.layout.force ? 0.04 : 0.12;
+    const nextScale = Math.min(2.2, Math.max(minScale, oldScale * (event.deltaY > 0 ? 0.9 : 1.1)));
     const rect = els.svg.getBoundingClientRect();
     const px = event.clientX - rect.left;
     const py = event.clientY - rect.top;
