@@ -85,6 +85,7 @@ parse_module(Root, File) ->
     Group = group(Root, File, Role),
     Device = device_name(Module, Source, Forms, Role),
     DeviceRefs = device_refs(Source),
+    Functions = functions(Module, Exports, Forms, Lines),
     #{
         module => Module,
         id => atom_bin(Module),
@@ -93,16 +94,18 @@ parse_module(Root, File) ->
         group => Group,
         device => Device,
         device_refs => DeviceRefs,
+        event_topics => module_event_topics(Functions),
         doc => module_doc(Lines),
         loc => length(Lines),
         exports => Exports,
-        functions => functions(Module, Exports, Forms, Lines)
+        functions => Functions
     }.
 
 include_paths(Root) ->
     [
         filename:join([Root, "include"]),
         filename:join([Root, "src"]),
+        filename:join([Root, "src", "core"]),
         filename:join([Root, "_build", "default", "lib", "hb", "include"])
     ].
 
@@ -132,7 +135,8 @@ functions(Module, Exports, Forms, Lines) ->
             exported => lists:member({Name, Arity}, Exports),
             doc => function_doc(Line, Lines),
             source => source_excerpt(Line, NextLine, Lines),
-            calls => collect_calls(Module, Clauses)
+            calls => collect_calls(Module, Clauses),
+            events => collect_events(Clauses)
         }
     || {{Line, Name, Arity, Clauses}, NextLine} <- lists:zip(FunctionForms, NextLines),
         not excluded_function(Name) ].
@@ -183,6 +187,79 @@ literal_list_length({cons, _, _Head, Tail}) ->
         Count -> Count + 1
     end;
 literal_list_length(_) -> unknown.
+
+collect_events(Clauses) ->
+    lists:usort(event_walk(Clauses, [])).
+
+event_walk({call, _Line, {remote, _, {atom, _, hb_event}, {atom, _, log}}, Args}, Acc) ->
+    event_walk(Args, log_event_aliases(Args) ++ Acc);
+event_walk({call, _Line, {remote, _, {atom, _, hb_event}, {atom, _, record}}, Args}, Acc) ->
+    event_walk(Args, record_event_aliases(Args) ++ Acc);
+event_walk(Term, Acc) when is_tuple(Term) ->
+    event_walk(tuple_to_list(Term), Acc);
+event_walk(Term, Acc) when is_list(Term) ->
+    lists:foldl(fun(Child, ChildAcc) -> event_walk(Child, ChildAcc) end, Acc, Term);
+event_walk(Term, Acc) when is_map(Term) ->
+    event_walk(maps:to_list(Term), Acc);
+event_walk(_Term, Acc) ->
+    Acc.
+
+log_event_aliases([TopicTerm, MessageTerm, _Mod, _Func, _Line | _]) ->
+    event_aliases(TopicTerm, MessageTerm);
+log_event_aliases(_) ->
+    [].
+
+record_event_aliases([TopicTerm, MessageTerm | _]) ->
+    event_aliases(TopicTerm, MessageTerm);
+record_event_aliases(_) ->
+    [].
+
+event_aliases(TopicTerm, MessageTerm) ->
+    Topic = literal_event_name(TopicTerm),
+    Message = literal_event_name(MessageTerm),
+    valid_event_aliases(Topic, Message).
+
+valid_event_aliases(<<>>, _Message) ->
+    [];
+valid_event_aliases(<<"global">>, _Message) ->
+    [];
+valid_event_aliases(<<"debug", _Rest/binary>>, _Message) ->
+    [];
+valid_event_aliases(Topic, <<>>) ->
+    valid_event_parts([Topic]);
+valid_event_aliases(Topic, Message) ->
+    valid_event_parts([Topic, <<Topic/binary, "/", Message/binary>>]).
+
+valid_event_parts(Parts) ->
+    lists:filter(
+        fun(Part) -> byte_size(Part) > 1 andalso byte_size(Part) =< 96 end,
+        lists:usort(Parts)
+    ).
+
+literal_event_name({atom, _, Atom}) ->
+    atom_bin(Atom);
+literal_event_name({tuple, _, [First | _]}) ->
+    literal_event_name(First);
+literal_event_name({bin, _, Elements}) ->
+    literal_binary(Elements);
+literal_event_name({string, _, String}) ->
+    unicode:characters_to_binary(String);
+literal_event_name({integer, _, Value}) when Value >= 0, Value =< 255 ->
+    <<Value>>;
+literal_event_name(_Term) ->
+    <<>>.
+
+literal_binary(Elements) ->
+    Parts = [
+        literal_event_name(Expr)
+    || {bin_element, _, Expr, default, default} <- Elements ],
+    case lists:any(fun(Part) -> Part =:= <<>> end, Parts) of
+        true -> <<>>;
+        false -> iolist_to_binary(Parts)
+    end.
+
+module_event_topics(Functions) ->
+    lists:usort(lists:append([maps:get(events, Fun) || Fun <- Functions])).
 
 graph(Root, Modules) ->
     FunctionIndexes = function_indexes(Modules),
@@ -317,6 +394,7 @@ function_node(Module, Fun, Counts) ->
         <<"group">> => maps:get(group, Module),
         <<"device">> => maps:get(device, Module),
         <<"device-refs">> => maps:get(device_refs, Module),
+        <<"events">> => maps:get(events, Fun),
         <<"exported">> => maps:get(exported, Fun),
         <<"doc">> => maps:get(doc, Fun),
         <<"source">> => maps:get(source, Fun),
@@ -354,6 +432,7 @@ module_nodes(Modules, Functions, Edges) ->
             <<"subsystem">> => maps:get(group, Module),
             <<"device">> => maps:get(device, Module),
             <<"device-refs">> => maps:get(device_refs, Module),
+            <<"event-topics">> => maps:get(event_topics, Module),
             <<"doc">> => maps:get(doc, Module),
             <<"loc">> => maps:get(loc, Module),
             <<"functions">> => maps:get(maps:get(id, Module), FunctionCounts, 0),

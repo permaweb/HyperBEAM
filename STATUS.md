@@ -5,7 +5,7 @@ Branch: `expr/visualizer`
 ## Current State
 
 - Static visualizer generator produces `build/codeviz/hyperbeam-codeviz.html`.
-- Current graph build: `167 modules`, `2489 functions`, `3424 calls`.
+- Current graph build: `167 modules`, `3359 functions`, `8508 calls`.
 - Default view is now `Subsystems`, with module and function modes as drilldowns.
 - Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system`.
 - Live engine overlay supports `live=demo` and `live=<endpoint>`; endpoints are interpreted as event counter streams and painted onto the graph as hot nodes, rings, and flowing edges.
@@ -27,6 +27,9 @@ Branch: `expr/visualizer`
 - Event-delta proof: a local `~hyperbuddy@1.0/events`-shaped JSON counter feed showed rows including `hb_http/request+7 events`, status `live: +16 events · 41 hot`, and clicking the top event row selected `hb_http`; screenshot saved to `build/codeviz/validation-event-deltas.png`.
 - Linkified-event proof: a local HyperBuddy-shaped `/events` mock returned only `+link` keys, the visualizer fetched the formatted fallback, and the engine deck showed `http/request+5 events`, `http/parsed_singleton+3 events`, and `hb_message/commit+2 events`; screenshot saved to `build/codeviz/validation-linkified-events.png`.
 - Real recorder proof: a throwaway node on `localhost:19876` returned `200 application/json` from `~recorder@1.0/live`; the browser connected to that absolute endpoint and showed `stacks: 90 procs · +4,266 reductions · 1 traces · 8 hot` with a visible `hb_http_server -> hb_ao` route. Screenshot saved to `build/codeviz/validation-real-recorder-live.png`.
+- Fresh full-suite proof after the linkified-event pass: `HB_PORT=0 rebar3 eunit` completed with `All 947 tests passed`.
+- Event-alias proof: after adding the missing `src/core` include path to the generator, the graph expanded from `2489 functions / 3424 calls` to `3359 functions / 8508 calls`; `70` modules now carry event aliases harvested from `?event(...)` and `hb_event:record(...)`.
+- Event-alias browser proof: a local counter feed with `scheduling/assigned`, `store_error/store_call_failed_retrying`, and `payment/charge` rows highlighted `dev_scheduler_server`, `hb_store`, `dev_simple_pay`, and `dev_p4`; clicking `scheduling/assigned` selected `dev_scheduler_server` and saved URL state. Screenshot saved to `build/codeviz/validation-event-aliases.png`.
 - Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
 - Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
 - Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
@@ -46,6 +49,8 @@ Branch: `expr/visualizer`
 - Moved heat and trace route telemetry into a compact docked engine panel above the graph so live data no longer blocks the map.
 - Added event-delta rows for live counter feeds so `~hyperbuddy@1.0/events` activity can be inspected and clicked even when no stack traces are present.
 - Added support for linkified HyperBuddy event counter responses by fetching the formatted event message and parsing numeric counters from it.
+- Added static event-topic aliases to modules/functions so live HyperBuddy counters can resolve through instrumentation names instead of only module-name guesses.
+- Added event-row decay so recent live pulses remain inspectable across quiet poll ticks.
 - Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
 - Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
 - Added a recorder timeline rail that can repaint aggregate recordings or focus an individual recorded event.

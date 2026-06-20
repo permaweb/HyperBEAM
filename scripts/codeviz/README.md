@@ -52,6 +52,10 @@ hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&recording=demo&recording
 `live=/~hyperbuddy@1.0/events` polls HyperBEAM event counters, computes deltas,
 and highlights hot modules/functions. If the JSON response is linkified, the
 visualizer fetches the formatted event message and extracts the numeric counters.
+The static graph also indexes `?event(...)` and `hb_event:record(...)` topics so
+counter names such as `scheduling/assigned` can resolve to the modules/functions
+that emit them. Event rows decay over several poll ticks, leaving recent pulses
+visible long enough to inspect.
 `live=stack` polls
 `/~recorder@1.0/live?limit=90&stack-limit=18`, paints sampled BEAM stack traces,
 and draws animated trace routes between visible graph nodes.

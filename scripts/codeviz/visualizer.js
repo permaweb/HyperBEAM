@@ -166,11 +166,13 @@
         add(`~${ref}`, mod.id);
         add(ref.replace(/@.*$/, ""), mod.id);
       });
+      (mod["event-topics"] || []).forEach((topic) => add(topic, mod.id));
     });
     graph.functions.forEach((fun) => {
       add(fun.id, fun.id);
       add(`${fun.module}:${fun.label}`, fun.id);
       add(`${fun.module}.${fun.label}`, fun.id);
+      (fun.events || []).forEach((topic) => add(topic, fun.id));
     });
     return index;
   }
@@ -1345,7 +1347,6 @@
 
   function applyLiveCounters(counters) {
     let totalDelta = 0;
-    const nextEvents = new Map();
     state.live.traceEdges = new Map();
     counters.forEach(({ key, value }) => {
       const previous = state.live.previous.get(key);
@@ -1353,7 +1354,7 @@
       state.live.previous.set(key, value);
       if (delta > 0) {
         totalDelta += delta;
-        nextEvents.set(key, delta);
+        rememberLiveEvent(key, delta);
         applyLiveKey(key, delta);
       }
     });
@@ -1362,7 +1363,6 @@
     state.live.frameCount = 0;
     state.live.sourceName = "";
     state.live.samples = new Map();
-    state.live.eventDeltas = nextEvents;
   }
 
   function applyLiveProcesses(processes) {
@@ -1694,18 +1694,17 @@
     const tick = state.live.demoTick;
     state.live.demoTick += 1;
     state.live.traceEdges = new Map();
-    state.live.eventDeltas = new Map();
     let totalDelta = 0;
     candidates.slice(0, 7).forEach((_, offset) => {
       const id = candidates[(tick + offset * 2) % candidates.length];
       const amount = 2 + ((tick + offset) % 5);
       totalDelta += amount;
-      state.live.eventDeltas.set(`${id}/events`, amount);
+      rememberLiveEvent(`${id}/events`, amount);
       bumpLive(id, amount, false);
     });
     if (tick % 5 === 3) {
       bumpLive("warning/process_sampler_failed", 5, true);
-      state.live.eventDeltas.set("warning/process_sampler_failed", 5);
+      rememberLiveEvent("warning/process_sampler_failed", 5);
       totalDelta += 5;
     }
     addTraceEdgesForFrames([
@@ -1728,17 +1727,22 @@
   function decayLiveActivity() {
     decayMap(state.live.activity, 0.7);
     decayMap(state.live.errors, 0.58);
+    decayMap(state.live.eventDeltas, 0.66, 0.45);
   }
 
-  function decayMap(map, factor) {
+  function decayMap(map, factor, minimum = 0.18) {
     [...map.entries()].forEach(([key, value]) => {
       const next = value * factor;
-      if (next < 0.18) {
+      if (next < minimum) {
         map.delete(key);
       } else {
         map.set(key, next);
       }
     });
+  }
+
+  function rememberLiveEvent(key, amount) {
+    state.live.eventDeltas.set(key, (state.live.eventDeltas.get(key) || 0) + amount);
   }
 
   function applyLiveKey(key, amount) {
