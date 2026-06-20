@@ -224,6 +224,12 @@ Branch: `expr/visualizer`
 - Reworked unselected function-mode device context from a full-kernel overview into a compact flow graph of selected device functions plus direct kernel touchpoints.
 - Laid out functions inside each module in left-to-right call-stage columns and routed reverse/cyclic calls around the outside of their source column.
 - Suppressed the static device bridge rows in function mode so the actual function flow starts higher and remains the primary visual surface.
+- Moved dense static call edges from SVG paths to a canvas-backed traffic layer, keeping SVG for nodes, labels, and capped live trace routes.
+- Cached live event-key resolution and changed live counter/stack/demo ticks to repaint heat, minimap classes, engine panels, and the canvas edge layer without recomputing the full graph layout unless Follow changes selection.
+- Tuned very large function namespace maps with wider anchors and reduced late collision polishing so thousands of functions render as a broad map instead of spending most time on imperceptible overlap cleanup.
+- Browser perf proof: `mode=function&layout=namespace&devices=all&scope=kernel` rendered `3,268` nodes and `8,333` visible calls with `0` static call-edge DOM nodes, a nonblank canvas, `6,212` visible canvas edge strokes, and `lastRenderMs=3467.8`. Screenshot saved to `build/codeviz/validation-canvas-edge-perf-spaced.png`.
+- Live perf proof on the same heavy map with `live=demo&interval=1&pulse=rate`: `3` live ticks produced `0` full renders, `3` canvas redraws, and live frame work around `19.1ms`; the URL retained `live=demo&interval=1&pulse=rate&panel=engine`.
+- Real Delta event-feed proof: `live=https://delta.neo2.zephyrdev.xyz/~hyperbuddy@1.0/events&interval=1&pulse=rate` on the recorder/scheduler module map advanced to `+5,193 events · 6,683/s · 17 hot`, with `3` live frames, `3` canvas redraws, `0` full renders, `lastLiveFrameMs=1.7`, and `lastEdgeMs=1.8`.
 
 ## Next Work
 

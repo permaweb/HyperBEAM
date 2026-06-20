@@ -46,8 +46,9 @@ hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=function&scope=to
 
 Supported modes are `system`, `module`, and `function`. Module and function
 views default to a force-balanced call map, with soft module/role regions,
-curved bidirectional edge ports, collision-relaxed labels, a quieter background
-traffic layer, and in-place caller/callee highlighting when a node is selected.
+curved bidirectional edge ports, collision-relaxed labels, a canvas-backed
+background traffic layer for dense call sets, and in-place caller/callee
+highlighting when a node is selected.
 Use `layout=namespace` for a source-ownership objective: outer role bands remain
 visible while inner namespace hulls group modules or functions by
 `kernel/...`, `devices/...`, and `forge/...` paths. Use `layout=flow` to restore
@@ -63,10 +64,11 @@ Caller/callee rows preserve the selected call edge when clicked, so side-list
 navigation keeps the graph edge and source/target inspector context visible.
 Clicking an already-selected graph node drills down one level: subsystems open
 their module graph, and modules open a function graph filtered to that module.
-Call edges have wide invisible hit paths; clicking one selects its callee,
-lights the surrounding relationship, and records the selected call in the
-inspector with source/target jump actions. Selected call/trace edge context is
-encoded in the URL as `edge=...`, so copied links preserve the exact edge card.
+Call edges are drawn through the raster traffic layer and still support nearest
+edge hit-testing; clicking one selects its callee, lights the surrounding
+relationship, and records the selected call in the inspector with source/target
+jump actions. Selected call/trace edge context is encoded in the URL as
+`edge=...`, so copied links preserve the exact edge card.
 Selected devices are pinned to the top of the device list. Search matches are
 highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights

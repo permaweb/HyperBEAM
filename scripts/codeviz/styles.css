@@ -691,6 +691,15 @@ body.resizing {
   cursor: grabbing;
 }
 
+.edge-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .graph-stage[data-layout="map"],
 .graph-stage[data-layout="namespace"] {
   background:
@@ -1152,6 +1161,8 @@ body.resizing {
 }
 
 svg {
+  position: relative;
+  z-index: 1;
   width: 100%;
   height: 100%;
   min-height: inherit;

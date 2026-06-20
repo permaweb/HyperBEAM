@@ -43,6 +43,7 @@
     processPanel: document.getElementById("process-panel"),
     errorPanel: document.getElementById("error-panel"),
     recordingTimeline: document.getElementById("recording-timeline"),
+    edgeCanvas: document.getElementById("edge-canvas"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
     bands: document.getElementById("bands"),
@@ -79,6 +80,16 @@
   const functionsByModuleId = new Map([...functionsByModule.entries()]
     .map(([module, functions]) => [module, functions.map((fun) => fun.id)]));
   const liveIndex = buildLiveIndex();
+  const liveResolutionCache = new Map();
+  const perfProbe = window.__codevizPerf = {
+    renders: 0,
+    liveFrames: 0,
+    edgeDraws: 0,
+    lastRenderMs: 0,
+    lastLiveFrameMs: 0,
+    lastEdgeMs: 0,
+    lastEdgeCount: 0
+  };
   const defaultLiveEndpoint = "/~hyperbuddy@1.0/events";
   const defaultStackEndpoint = "/~recorder@1.0/live?limit=90&stack-limit=18";
   const defaultLiveInterval = 2200;
@@ -108,6 +119,7 @@
     fitAfterRender: true,
     ignoreNextClick: false,
     minimap: null,
+    edgeDrawFrame: null,
     live: {
       enabled: false,
       mode: "off",
@@ -570,6 +582,8 @@
   }
 
   function render() {
+    const started = performance.now();
+    perfProbe.renders += 1;
     syncDetailTabs();
     const followTarget = heatFollowTarget();
     if (followTarget && followTarget !== state.selected) {
@@ -578,6 +592,7 @@
       state.focusAfterRender = followTarget;
     }
     const visible = visibleData();
+    state.visible = visible;
     state.layout = layout(visible);
     if (state.hovered && !state.layout.nodes.some((node) => node.id === state.hovered)) {
       state.hovered = null;
@@ -595,6 +610,7 @@
       state.fitAfterRender = false;
       fitGraph(true);
     }
+    perfProbe.lastRenderMs = performance.now() - started;
   }
 
   function requestFit() {
@@ -1631,7 +1647,7 @@
         node.y += node.vy;
       });
     }
-    relaxForceCollisions(simNodes, simNodes.length > 260 ? 160 : 90);
+    relaxForceCollisions(simNodes, forceRelaxPasses(simNodes.length));
     const placed = normalizeForceNodes(simNodes);
     return {
       nodes: placed,
@@ -1665,10 +1681,10 @@
       const cols = Math.max(1, Math.ceil(Math.sqrt(roleGroups.length * 1.25)));
       const rows = Math.max(1, Math.ceil(roleGroups.length / cols));
       const xStep = namespaceLayoutActive() ?
-        state.mode === "function" ? 580 : 440 :
+        state.mode === "function" ? largeFunctionMap ? 900 : 580 : 440 :
         state.mode === "function" ? largeFunctionMap ? 660 : 430 : 360;
       const yStep = namespaceLayoutActive() ?
-        state.mode === "function" ? 410 : 320 :
+        state.mode === "function" ? largeFunctionMap ? 650 : 410 : 320 :
         state.mode === "function" ? largeFunctionMap ? 460 : 300 : 250;
       roleGroups.forEach((group, idx) => {
         const col = idx % cols;
@@ -1685,7 +1701,7 @@
       const anchor = groupAnchors.get(group.id) || { x: 0, y: 0 };
       group.items.forEach((node, idx) => {
         const angle = idx * 2.399963 + hashUnit(`${node.id}:ga`) * Math.PI;
-        const spread = state.mode === "function" ? largeFunctionMap ? 82 : 54 : 24;
+        const spread = state.mode === "function" ? largeFunctionMap ? 142 : 54 : 24;
         const radius = Math.sqrt(idx + 0.35) * spread;
         nodeAnchors.set(node.id, {
           x: anchor.x + Math.cos(angle) * radius,
@@ -1735,11 +1751,21 @@
   }
 
   function forceIterationCount(count) {
-    if (count > 1500) return 90;
-    if (count > 900) return 170;
+    if (count > 2600) return 34;
+    if (count > 1500) return 52;
+    if (count > 900) return 120;
     if (count > 520) return 210;
     if (count > 260) return 270;
     return 430;
+  }
+
+  function forceRelaxPasses(count) {
+    if (count > 2600) return 20;
+    if (count > 1500) return 32;
+    if (count > 900) return 48;
+    if (count > 520) return 78;
+    if (count > 260) return 120;
+    return 90;
   }
 
   function applyForceLinks(links, alpha) {
@@ -2224,7 +2250,8 @@
       state.live.timer = window.setInterval(pollLive, state.live.intervalMs);
     }
     renderLiveControls();
-    render();
+    syncUrl();
+    renderLiveFrame();
   }
 
   function liveModeForEndpoint(endpoint) {
@@ -2311,7 +2338,7 @@
       state.live.lastError = error.message || String(error);
       state.live.totalDelta = 0;
     }
-    render();
+    renderLiveFrame();
   }
 
   function parseLivePayload(text) {
@@ -2906,7 +2933,7 @@
     state.live.totalDelta = totalDelta;
     state.live.lastSeen = Date.now();
     state.live.lastError = "";
-    render();
+    renderLiveFrame();
   }
 
   function decayLiveActivity() {
@@ -3033,8 +3060,9 @@
   }
 
   function resolveLiveIds(key) {
-    const ids = new Set();
     const raw = String(key || "");
+    if (liveResolutionCache.has(raw)) return liveResolutionCache.get(raw);
+    const ids = new Set();
     const pieces = raw
       .split(/[^A-Za-z0-9_@.:'/-]+/)
       .flatMap((piece) => piece.split("/"))
@@ -3042,6 +3070,7 @@
     [raw, ...pieces].forEach((piece) => addLiveMatches(ids, piece));
     const mfa = raw.match(/\b([a-z][A-Za-z0-9_]*)(?::|\.)([A-Za-z0-9_'-]+\/\d+)/);
     if (mfa) addLiveMatches(ids, `${mfa[1]}:${mfa[2]}`);
+    liveResolutionCache.set(raw, ids);
     return ids;
   }
 
@@ -4117,20 +4146,6 @@
 
   function renderEdges() {
     const fragment = document.createDocumentFragment();
-    state.layout.edges.forEach((edge) => {
-      fragment.append(edgeHitPath(edge, `${edge.source} -> ${edge.target} (${countLabel(edge.count, "call", "calls")})`));
-      const path = svgEl("path", { class: edgeClass(edge), d: edgePath(edge) });
-      const width = edgeWidth(edge);
-      path.style.setProperty("--edge-width", `${width}px`);
-      path.style.setProperty("--edge-hot-width", `${width + 1.25}px`);
-      path.style.setProperty("--edge-opacity", edgeOpacity(edge));
-      path.dataset.source = edge.source;
-      path.dataset.target = edge.target;
-      const title = svgEl("title");
-      title.textContent = `${edge.source} -> ${edge.target} (${countLabel(edge.count, "call", "calls")})`;
-      path.append(title);
-      fragment.append(path);
-    });
     liveTraceEdges().forEach((edge) => {
       const traceLabel =
         `${edge.source} -> ${edge.target} (${countLabel(edge.count, "sampled stack frame", "sampled stack frames")})` +
@@ -4153,6 +4168,366 @@
       fragment.append(path);
     });
     els.edges.replaceChildren(fragment);
+    scheduleEdgeCanvasDraw();
+  }
+
+  function renderLiveFrame() {
+    const started = performance.now();
+    perfProbe.liveFrames += 1;
+    const followTarget = heatFollowTarget();
+    if (followTarget && followTarget !== state.selected) {
+      state.selected = followTarget;
+      state.relationFocus = null;
+      state.focusAfterRender = followTarget;
+      render();
+      perfProbe.lastLiveFrameMs = performance.now() - started;
+      return;
+    }
+    refreshLiveNodes();
+    refreshMinimapLive();
+    renderStats(state.visible || { modules: [], functions: [], edges: [] });
+    renderTelemetryPanel();
+    renderInspector();
+    scheduleEdgeCanvasDraw();
+    perfProbe.lastLiveFrameMs = performance.now() - started;
+  }
+
+  function refreshLiveNodes() {
+    if (!state.layout || !state.layout.nodes.length) return;
+    const nodeById = new Map(state.layout.nodes.map((node) => [node.id, node]));
+    els.nodes.querySelectorAll(".node").forEach((el) => {
+      const node = nodeById.get(el.dataset.id);
+      if (!node) return;
+      el.setAttribute("class", nodeClass(node));
+      ["--rate-color", "--rate-width", "--rate-filter"].forEach((key) => {
+        el.style.removeProperty(key);
+      });
+      Object.entries(rateNodeStyle(node)).forEach(([key, value]) => {
+        el.style.setProperty(key, value);
+      });
+      const title = [...el.children].find((child) => child.tagName.toLowerCase() === "title");
+      if (title) title.textContent = nodeTooltip(node);
+      el.querySelectorAll(".live-ring, .live-badge").forEach((child) => child.remove());
+      const liveScore = liveNodeScore(node);
+      if (liveScore <= 0.6) return;
+      const ring = svgEl("circle", {
+        class: "live-ring",
+        cx: node.width - 12,
+        cy: 12,
+        r: Math.min(9, 3.5 + liveScore * 0.28)
+      });
+      const badge = svgEl("text", {
+        class: "live-badge",
+        x: node.width - 24,
+        y: 15,
+        "text-anchor": "end"
+      });
+      badge.textContent = `+${nf.format(Math.round(liveScore))}`;
+      const firstText = [...el.children].find((child) => child.tagName.toLowerCase() === "text");
+      if (firstText) {
+        el.insertBefore(ring, firstText);
+        el.insertBefore(badge, firstText);
+      } else {
+        el.append(ring, badge);
+      }
+    });
+  }
+
+  function refreshMinimapLive() {
+    if (!state.minimap || els.minimap.hidden) return;
+    const nodeById = new Map(state.layout.nodes.map((node) => [node.id, node]));
+    els.minimapNodes.querySelectorAll(".mini-node").forEach((el) => {
+      const node = nodeById.get(el.dataset.id);
+      if (!node) return;
+      el.setAttribute("class", minimapNodeClass(node));
+      const title = [...el.children].find((child) => child.tagName.toLowerCase() === "title");
+      if (!title) return;
+      const score = liveNodeScore(node);
+      const rateScore = liveRateScore(node);
+      title.textContent = state.live.rateMode && Math.abs(rateScore) > 0.05 ?
+        `${node.id} (${formatRateChange(rateScore)} rate change)` :
+        score > 0.6 ?
+        `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})` :
+        node.id;
+    });
+  }
+
+  function scheduleEdgeCanvasDraw() {
+    if (!els.edgeCanvas) return;
+    if (state.edgeDrawFrame) return;
+    state.edgeDrawFrame = window.requestAnimationFrame(() => {
+      state.edgeDrawFrame = null;
+      drawEdgeCanvas();
+    });
+  }
+
+  function drawEdgeCanvas() {
+    const started = performance.now();
+    const canvas = els.edgeCanvas;
+    if (!canvas) return;
+    const rect = els.stage.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+      canvas.width = Math.round(width * dpr);
+      canvas.height = Math.round(height * dpr);
+    }
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    if (!state.layout || !state.layout.edges.length) return;
+    const world = canvasWorldBounds(width, height, 180);
+    const scores = new Map();
+    let drawn = 0;
+    ctx.save();
+    ctx.translate(state.transform.x, state.transform.y);
+    ctx.scale(state.transform.scale, state.transform.scale);
+    drawn += drawCanvasEdges(ctx, world, scores, false);
+    drawn += drawCanvasEdges(ctx, world, scores, true);
+    ctx.restore();
+    perfProbe.edgeDraws += 1;
+    perfProbe.lastEdgeCount = drawn;
+    perfProbe.lastEdgeMs = performance.now() - started;
+  }
+
+  function drawCanvasEdges(ctx, world, scores, highlightPass) {
+    let drawn = 0;
+    state.layout.edges.forEach((edge) => {
+      const style = canvasEdgeStyle(edge, scores, highlightPass);
+      if (!style) return;
+      const curve = edgeCurve(edge);
+      if (curveOutside(curve, world)) return;
+      ctx.save();
+      ctx.globalAlpha = style.alpha;
+      ctx.strokeStyle = style.color;
+      ctx.lineWidth = style.width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.setLineDash(style.dash || []);
+      drawCanvasCurve(ctx, curve);
+      ctx.stroke();
+      if (style.arrow) drawCanvasArrow(ctx, curve, style);
+      ctx.restore();
+      drawn += 1;
+    });
+    return drawn;
+  }
+
+  function canvasEdgeStyle(edge, scores, highlightPass) {
+    const focus = relationFocusId();
+    const incoming = !!focus && edge.target === focus;
+    const outgoing = !!focus && edge.source === focus;
+    const selected = edgeIsSelected(edge, "call");
+    const path = edgeIsInSelectedPath(edge);
+    const liveScore = state.live.rateMode ? 0 : cachedLiveEdgeScore(edge, scores);
+    const liveHot = liveScore > 7;
+    const liveWarm = liveScore > 0.6;
+    const highlighted = incoming || outgoing || selected || path || liveWarm || liveHot;
+    if (highlightPass && !highlighted) return null;
+    const force = state.layout.force;
+    const baseAlpha = force ? 0.34 : Number(edgeOpacity(edge));
+    if (!highlightPass) {
+      return {
+        color: state.mode === "system" && edge.sourceNode.role === edge.targetNode.role ?
+          "rgba(0, 0, 0, 0.09)" :
+          "rgba(0, 0, 0, 0.18)",
+        width: edgeWidth(edge),
+        alpha: focus && !incoming && !outgoing ? 0.055 : baseAlpha,
+        dash: state.mode === "system" && edge.sourceNode.role === edge.targetNode.role ? [4, 5] : null,
+        arrow: !force && !focus && state.layout.edges.length < 900
+      };
+    }
+    if (selected) {
+      return {
+        color: "rgba(189, 52, 66, 0.98)",
+        width: edgeWidth(edge) + 2.3,
+        alpha: 1,
+        arrow: true
+      };
+    }
+    if (path) {
+      return {
+        color: "rgba(19, 138, 109, 0.96)",
+        width: edgeWidth(edge) + 1.9,
+        alpha: 0.98,
+        arrow: true
+      };
+    }
+    if (outgoing) {
+      return {
+        color: "rgba(19, 138, 109, 0.9)",
+        width: edgeWidth(edge) + 1.2,
+        alpha: 0.96,
+        arrow: true
+      };
+    }
+    if (incoming) {
+      return {
+        color: "rgba(178, 98, 20, 0.9)",
+        width: edgeWidth(edge) + 1.2,
+        alpha: 0.96,
+        arrow: true
+      };
+    }
+    if (liveHot) {
+      return {
+        color: "rgba(189, 52, 66, 0.86)",
+        width: edgeWidth(edge) + 1.4,
+        alpha: 0.86,
+        dash: [8, 5],
+        arrow: true
+      };
+    }
+    if (liveWarm) {
+      return {
+        color: "rgba(105, 86, 197, 0.72)",
+        width: edgeWidth(edge) + 0.8,
+        alpha: 0.72,
+        arrow: true
+      };
+    }
+    return null;
+  }
+
+  function cachedLiveEdgeScore(edge, scores) {
+    const source = cachedLiveNodeScore(edge.sourceNode, scores);
+    const target = cachedLiveNodeScore(edge.targetNode, scores);
+    return Math.min(source, target);
+  }
+
+  function cachedLiveNodeScore(node, scores) {
+    if (!node) return 0;
+    if (!scores.has(node.id)) scores.set(node.id, liveNodeScore(node));
+    return scores.get(node.id);
+  }
+
+  function canvasWorldBounds(width, height, margin) {
+    return {
+      minX: (0 - state.transform.x) / state.transform.scale - margin,
+      minY: (0 - state.transform.y) / state.transform.scale - margin,
+      maxX: (width - state.transform.x) / state.transform.scale + margin,
+      maxY: (height - state.transform.y) / state.transform.scale + margin
+    };
+  }
+
+  function curveOutside(curve, bounds) {
+    const points = curve.points.filter(Boolean);
+    const minX = Math.min(...points.map((point) => point.x));
+    const minY = Math.min(...points.map((point) => point.y));
+    const maxX = Math.max(...points.map((point) => point.x));
+    const maxY = Math.max(...points.map((point) => point.y));
+    return maxX < bounds.minX || minX > bounds.maxX || maxY < bounds.minY || minY > bounds.maxY;
+  }
+
+  function drawCanvasCurve(ctx, curve) {
+    const [start, c1, c2, end] = curve.points;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    if (curve.kind === "quadratic") {
+      ctx.quadraticCurveTo(c1.x, c1.y, end.x, end.y);
+    } else {
+      ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, end.x, end.y);
+    }
+  }
+
+  function drawCanvasArrow(ctx, curve, style) {
+    const end = curvePointAt(curve, 1);
+    const before = curvePointAt(curve, 0.985);
+    const angle = Math.atan2(end.y - before.y, end.x - before.x);
+    const length = Math.max(7, style.width * 3.4);
+    const spread = Math.PI / 7;
+    ctx.save();
+    ctx.fillStyle = style.color;
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(
+      end.x - Math.cos(angle - spread) * length,
+      end.y - Math.sin(angle - spread) * length
+    );
+    ctx.lineTo(
+      end.x - Math.cos(angle + spread) * length,
+      end.y - Math.sin(angle + spread) * length
+    );
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function pickCallEdge(event) {
+    if (!state.layout || !state.layout.edges.length) return null;
+    const point = eventWorldPoint(event);
+    const threshold = Math.max(10, 16 / state.transform.scale);
+    let best = null;
+    state.layout.edges.forEach((edge) => {
+      const curve = edgeCurve(edge);
+      if (pointOutsideCurve(point, curve, threshold)) return;
+      const distance = curveDistance(curve, point);
+      if (distance > threshold) return;
+      const weight = edgeIsSelected(edge, "call") || edgeIsInSelectedPath(edge) ? 0.65 : 1;
+      const score = distance * weight;
+      if (!best || score < best.score) best = { edge, score };
+    });
+    return best && best.edge;
+  }
+
+  function eventWorldPoint(event) {
+    const rect = els.svg.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    return {
+      x: (x - state.transform.x) / state.transform.scale,
+      y: (y - state.transform.y) / state.transform.scale
+    };
+  }
+
+  function pointOutsideCurve(point, curve, margin) {
+    const bounds = {
+      minX: point.x - margin,
+      minY: point.y - margin,
+      maxX: point.x + margin,
+      maxY: point.y + margin
+    };
+    return curveOutside(curve, bounds);
+  }
+
+  function curveDistance(curve, point) {
+    const steps = state.layout.force ? 14 : 18;
+    let best = Infinity;
+    let prev = curvePointAt(curve, 0);
+    for (let idx = 1; idx <= steps; idx += 1) {
+      const next = curvePointAt(curve, idx / steps);
+      best = Math.min(best, pointSegmentDistance(point, prev, next));
+      prev = next;
+    }
+    return best;
+  }
+
+  function curvePointAt(curve, t) {
+    const [a, b, c, d] = curve.points;
+    if (curve.kind === "quadratic") {
+      const inv = 1 - t;
+      return {
+        x: inv * inv * a.x + 2 * inv * t * b.x + t * t * d.x,
+        y: inv * inv * a.y + 2 * inv * t * b.y + t * t * d.y
+      };
+    }
+    const inv = 1 - t;
+    return {
+      x: inv ** 3 * a.x + 3 * inv * inv * t * b.x + 3 * inv * t * t * c.x + t ** 3 * d.x,
+      y: inv ** 3 * a.y + 3 * inv * inv * t * b.y + 3 * inv * t * t * c.y + t ** 3 * d.y
+    };
+  }
+
+  function pointSegmentDistance(point, a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSq = dx * dx + dy * dy;
+    if (!lengthSq) return Math.hypot(point.x - a.x, point.y - a.y);
+    const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq, 0, 1);
+    const x = a.x + dx * t;
+    const y = a.y + dy * t;
+    return Math.hypot(point.x - x, point.y - y);
   }
 
   function edgeHitPath(edge, label, kind = "call") {
@@ -4410,6 +4785,7 @@
       el.classList.toggle("hot", outgoing || incoming);
       el.classList.toggle("dim", !!focus && !outgoing && !incoming);
     });
+    scheduleEdgeCanvasDraw();
   }
 
   function nodeClass(node) {
@@ -4531,6 +4907,15 @@
   }
 
   function edgePath(edge) {
+    const curve = edgeCurve(edge);
+    const [start, c1, c2, end] = curve.points;
+    if (curve.kind === "quadratic") {
+      return `M ${start.x} ${start.y} Q ${c1.x} ${c1.y} ${end.x} ${end.y}`;
+    }
+    return `M ${start.x} ${start.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${end.x} ${end.y}`;
+  }
+
+  function edgeCurve(edge) {
     const s = edge.sourceNode;
     const t = edge.targetNode;
     if (state.layout.force) return forceEdgePath(edge);
@@ -4540,11 +4925,27 @@
     if (t.x <= s.x) {
       const x2 = t.x + t.width;
       const gutter = Math.max(x1, x2) + 34 + Math.min(92, Math.abs(y2 - y1) * 0.16);
-      return `M ${x1} ${y1} C ${gutter} ${y1}, ${gutter} ${y2}, ${x2} ${y2}`;
+      return {
+        kind: "cubic",
+        points: [
+          { x: x1, y: y1 },
+          { x: gutter, y: y1 },
+          { x: gutter, y: y2 },
+          { x: x2, y: y2 }
+        ]
+      };
     }
     const x2 = t.x;
     const dx = Math.max(70, Math.abs(x2 - x1) * 0.45);
-    return `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+    return {
+      kind: "cubic",
+      points: [
+        { x: x1, y: y1 },
+        { x: x1 + dx, y: y1 },
+        { x: x2 - dx, y: y2 },
+        { x: x2, y: y2 }
+      ]
+    };
   }
 
   function forceEdgePath(edge) {
@@ -4561,7 +4962,10 @@
     const normalY = dx / distance;
     const midX = (start.x + end.x) / 2 + normalX * bend;
     const midY = (start.y + end.y) / 2 + normalY * bend;
-    return `M ${start.x} ${start.y} Q ${midX} ${midY} ${end.x} ${end.y}`;
+    return {
+      kind: "quadratic",
+      points: [start, { x: midX, y: midY }, null, end]
+    };
   }
 
   function nodePort(node, towardX, towardY) {
@@ -5218,6 +5622,7 @@
         score > 0.6 ?
         `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})` :
         node.id;
+      mini.dataset.id = node.id;
       mini.append(title);
       fragment.append(mini);
     });
@@ -5285,6 +5690,7 @@
     const { x, y, scale } = state.transform;
     els.viewport.setAttribute("transform", `translate(${x},${y}) scale(${scale})`);
     updateMinimapView();
+    scheduleEdgeCanvasDraw();
   }
 
   function showGraph() {
@@ -5494,6 +5900,20 @@
       return;
     }
     if (event.target.closest(".node")) return;
+    const edge = pickCallEdge(event);
+    if (edge) {
+      event.stopPropagation();
+      selectNode(edge.target, {
+        manual: true,
+        edge: {
+          source: edge.source,
+          target: edge.target,
+          count: edge.count || 1,
+          kind: "call"
+        }
+      });
+      return;
+    }
     if (!state.selected && !state.hovered && !state.relationFocus) return;
     state.hovered = null;
     if (!state.selected) {
