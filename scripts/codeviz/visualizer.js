@@ -89,6 +89,7 @@
     selectedDevices: new Set(),
     selected: null,
     detailTab: "inspector",
+    relationFocus: null,
     selectedEdge: null,
     selectedPath: [],
     hovered: null,
@@ -346,6 +347,7 @@
       button.addEventListener("click", () => {
         activateMode(button.dataset.mode);
         state.selected = null;
+        state.relationFocus = null;
         state.selectedEdge = null;
         state.selectedPath = [];
         requestFit();
@@ -355,6 +357,7 @@
     document.querySelectorAll("[data-layout]").forEach((button) => {
       button.addEventListener("click", () => {
         activateLayout(button.dataset.layout);
+        state.relationFocus = null;
         state.selectedEdge = null;
         state.selectedPath = [];
         requestFit();
@@ -438,6 +441,7 @@
     els.clearDevices.addEventListener("click", () => {
       state.selectedDevices.clear();
       state.selected = null;
+      state.relationFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       requestFit();
@@ -570,6 +574,7 @@
     const followTarget = heatFollowTarget();
     if (followTarget && followTarget !== state.selected) {
       state.selected = followTarget;
+      state.relationFocus = null;
       state.focusAfterRender = followTarget;
     }
     const visible = visibleData();
@@ -630,6 +635,7 @@
     if (options.manual) state.live.follow = false;
     state.detailTab = "inspector";
     syncDetailTabs();
+    state.relationFocus = options.relationFocus ? id : null;
     state.selectedEdge = options.edge || null;
     state.selectedPath = options.path || [];
     state.hovered = null;
@@ -637,6 +643,16 @@
     render();
     focusNode(id);
     if (options.showGraph) showGraph();
+  }
+
+  function clearSelectedNode() {
+    state.live.follow = false;
+    state.selected = null;
+    state.relationFocus = null;
+    state.selectedEdge = null;
+    state.selectedPath = [];
+    state.hovered = null;
+    render();
   }
 
   function setHoveredNode(id) {
@@ -3582,6 +3598,7 @@
     all.addEventListener("click", () => {
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
+      state.relationFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
@@ -3648,6 +3665,7 @@
     if (next >= state.live.recordingEvents.length) {
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
+      state.relationFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
@@ -3660,6 +3678,7 @@
   function focusRecordingEvent(idx) {
     const event = state.live.recordingEvents[idx];
     if (!event) return;
+    state.relationFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     state.live.recordingFocus = idx;
@@ -4266,11 +4285,15 @@
       g.dataset.id = node.id;
       g.addEventListener("click", (event) => {
         event.stopPropagation();
-        if (event.detail >= 2 || state.selected === node.id) {
+        if (event.detail >= 2) {
           drillIntoNode(node);
           return;
         }
-        selectNode(node.id, { manual: true });
+        if (state.selected === node.id && state.relationFocus === node.id) {
+          clearSelectedNode();
+          return;
+        }
+        selectNode(node.id, { manual: true, relationFocus: true });
       });
       g.addEventListener("dblclick", (event) => {
         event.stopPropagation();
@@ -4340,6 +4363,7 @@
   function drillIntoNode(node) {
     state.live.follow = false;
     state.selected = null;
+    state.relationFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     state.hovered = null;
@@ -4566,7 +4590,7 @@
   }
 
   function relationFocusId() {
-    return state.hovered || state.selected;
+    return state.relationFocus;
   }
 
   function activeIncoming() {
@@ -4602,6 +4626,7 @@
     els.detailView.hidden = !selected;
     if (!selected) {
       if (state.selected) state.selected = null;
+      state.relationFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       els.selectionLabel.textContent = "No selection";
@@ -5028,6 +5053,7 @@
       row.title = path.ids.join(" -> ");
       row.addEventListener("click", () => {
         state.live.follow = false;
+        state.relationFocus = null;
         state.selectedPath = path.ids;
         render();
         focusNode(path.ids[path.ids.length - 1]);
@@ -5468,13 +5494,15 @@
       return;
     }
     if (event.target.closest(".node")) return;
-    if (!state.selected && !state.hovered) return;
+    if (!state.selected && !state.hovered && !state.relationFocus) return;
     state.hovered = null;
     if (!state.selected) {
+      state.relationFocus = null;
       applyRelationClasses();
       return;
     }
     state.selected = null;
+    state.relationFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     requestFit();
