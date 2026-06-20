@@ -64,6 +64,7 @@ Branch: `expr/visualizer`
 - Recording follow proof: `recording=demo&follow=heat` kept Follow active, preserved `follow=heat` in the URL, and selected the hottest recorded node (`hb_process_sampler` in the demo sample).
 - Engine-source switcher proof: `live=demo&follow=heat` rendered the source row with `Demo` active, switching to `Recording` painted the recorder timeline with `recording=demo`, switching back restored `Demo` as active, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-switcher.png`.
 - Engine-source mobile proof: at `390x844`, the source row showed `DEMO ENGINE FEED`, all five source buttons fit onscreen, and horizontal overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-mobile-fixed.png`.
+- Hot minimap proof: `live=demo&follow=heat` rendered `1` hot minimap marker, `5` warm markers, `1` selected marker, kept the minimap visible, and maintained desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-hot-minimap.png`.
 
 ## Last Presentation Pass
 
@@ -111,6 +112,7 @@ Branch: `expr/visualizer`
 - Added a graph-local engine source switcher for HyperBuddy counters, live recorder stacks, demo telemetry, recorder playback, and report imports.
 - Stacked the engine source label above full-width source controls on mobile so the active telemetry feed remains legible.
 - Routed all recorder import controls through one guarded helper so restricted browsers do not throw when opening a report picker.
+- Painted live/recorded heat and the selected node onto the minimap so offscreen activity is visible from the engine view.
 
 ## Next Work
 

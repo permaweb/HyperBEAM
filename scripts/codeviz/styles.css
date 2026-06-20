@@ -626,6 +626,26 @@ body.resizing {
   fill: rgba(128, 86, 33, 0.32);
 }
 
+.mini-node.live-warm {
+  fill: rgba(178, 98, 20, 0.56);
+}
+
+.mini-node.live-hot {
+  fill: rgba(189, 52, 66, 0.74);
+  animation: mini-node-pulse 1.2s ease-out infinite;
+}
+
+.mini-node.live-error {
+  fill: rgba(189, 52, 66, 0.88);
+  stroke: rgba(0, 0, 0, 0.36);
+  stroke-width: 0.8;
+}
+
+.mini-node.selected {
+  stroke: rgba(0, 0, 0, 0.78);
+  stroke-width: 1.2;
+}
+
 #minimap-view {
   fill: rgba(105, 86, 197, 0.12);
   stroke: rgba(105, 86, 197, 0.88);
@@ -1064,6 +1084,12 @@ svg {
   0% { opacity: 0.95; }
   70% { opacity: 0.35; }
   100% { opacity: 0.95; }
+}
+
+@keyframes mini-node-pulse {
+  0% { opacity: 0.98; }
+  70% { opacity: 0.5; }
+  100% { opacity: 0.98; }
 }
 
 @keyframes event-meter-pulse {

@@ -3168,18 +3168,35 @@
     els.minimapSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
     const fragment = document.createDocumentFragment();
     state.layout.nodes.forEach((node) => {
-      fragment.append(svgEl("rect", {
-        class: `mini-node ${node.role || ""} ${node.kind || ""}`,
+      const mini = svgEl("rect", {
+        class: minimapNodeClass(node),
         x: minimapX(node.x),
         y: minimapY(node.y),
         width: Math.max(2, node.width * scale),
         height: Math.max(2, node.height * scale),
         rx: 1.5
-      }));
+      });
+      const title = svgEl("title");
+      const score = liveNodeScore(node);
+      title.textContent = score > 0.6 ?
+        `${node.id} (+${nf.format(Math.round(score))} live heat)` :
+        node.id;
+      mini.append(title);
+      fragment.append(mini);
     });
     els.minimapNodes.replaceChildren(fragment);
     els.minimap.hidden = false;
     updateMinimapView();
+  }
+
+  function minimapNodeClass(node) {
+    const classes = ["mini-node", node.role || "", node.kind || ""];
+    const liveScore = liveNodeScore(node);
+    if (liveScore > 7) classes.push("live-hot");
+    else if (liveScore > 0.6) classes.push("live-warm");
+    if (liveErrorScore(node) > 0.6) classes.push("live-error");
+    if (node.id === state.selected) classes.push("selected");
+    return classes.filter(Boolean).join(" ");
   }
 
   function updateMinimapView() {
