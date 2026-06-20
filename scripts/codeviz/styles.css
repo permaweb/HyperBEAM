@@ -940,6 +940,11 @@ body.resizing {
   background: #fff7f7;
 }
 
+.process-row.active {
+  border-color: rgba(189, 52, 66, 0.46);
+  background: #fff0f1;
+}
+
 .event-meter {
   position: relative;
   display: block;

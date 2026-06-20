@@ -102,7 +102,8 @@ as aggregate heat, replayed event-by-event with the timeline Play control, or
 focused to one event with `recording-event=N`. Timeline ticks that carry
 warning/failure activity are marked as error ticks, and each tick carries a
 small stack-depth heat bar. Focused recording events render their stack frames
-as clickable rows in the engine deck. The source switcher in the graph panel can jump
+as clickable rows in the engine deck; frame rows select the adjacent trace edge
+when the current graph can project it. The source switcher in the graph panel can jump
 between HyperBuddy counters, live stack snapshots, demo telemetry, recorder
 playback, and report import. The source header shows metric chips for event
 rates, stack frames, trace counts, hot nodes, and errors.

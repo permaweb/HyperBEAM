@@ -2889,13 +2889,18 @@
     const rows = frames.slice(0, 8).map((frame, idx) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = recordingEventIsError(event) ? "process-row error" : "process-row";
+      const traceEdge = recordingFrameTraceEdge(frames, idx);
+      button.className = [
+        "process-row",
+        recordingEventIsError(event) ? "error" : "",
+        traceEdge && edgeIsSelected(traceEdge, "trace") ? "active" : ""
+      ].filter(Boolean).join(" ");
       button.title = stackTitle;
       const target = liveFrameTarget(frame);
       button.disabled = !target;
       if (target) {
         button.addEventListener("click", () => {
-          selectNode(target, { manual: true });
+          selectNode(target, { manual: true, edge: traceEdge || undefined });
         });
       }
       const current = document.createElement("strong");
@@ -2911,6 +2916,20 @@
     });
     els.processPanel.replaceChildren(title, ...rows);
     return true;
+  }
+
+  function recordingFrameTraceEdge(frames, idx) {
+    const target = liveFrameTarget(frames[idx]);
+    if (!target) return null;
+    const caller = liveFrameTarget(frames[idx + 1]);
+    if (caller && caller !== target) {
+      return { source: caller, target, count: 1, kind: "trace" };
+    }
+    const callee = liveFrameTarget(frames[idx - 1]);
+    if (callee && callee !== target) {
+      return { source: target, target: callee, count: 1, kind: "trace" };
+    }
+    return null;
   }
 
   function renderEventPanel() {
