@@ -90,6 +90,7 @@
       errors: new Map(),
       samples: new Map(),
       traceEdges: new Map(),
+      eventDeltas: new Map(),
       totalDelta: 0,
       processCount: 0,
       frameCount: 0,
@@ -1141,6 +1142,7 @@
     state.live.errors = new Map();
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1178,6 +1180,7 @@
     state.live.errors = new Map();
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1259,6 +1262,7 @@
 
   function applyLiveCounters(counters) {
     let totalDelta = 0;
+    const nextEvents = new Map();
     state.live.traceEdges = new Map();
     counters.forEach(({ key, value }) => {
       const previous = state.live.previous.get(key);
@@ -1266,6 +1270,7 @@
       state.live.previous.set(key, value);
       if (delta > 0) {
         totalDelta += delta;
+        nextEvents.set(key, delta);
         applyLiveKey(key, delta);
       }
     });
@@ -1274,12 +1279,14 @@
     state.live.frameCount = 0;
     state.live.sourceName = "";
     state.live.samples = new Map();
+    state.live.eventDeltas = nextEvents;
   }
 
   function applyLiveProcesses(processes) {
     let totalDelta = 0;
     const nextSamples = new Map();
     state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
     processes.forEach((proc) => {
       const pid = String(proc.pid || "");
       const reductions = Number(proc.reductions || 0);
@@ -1362,6 +1369,7 @@
     state.live.errors = new Map();
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1574,15 +1582,18 @@
     const tick = state.live.demoTick;
     state.live.demoTick += 1;
     state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
     let totalDelta = 0;
     candidates.slice(0, 7).forEach((_, offset) => {
       const id = candidates[(tick + offset * 2) % candidates.length];
       const amount = 2 + ((tick + offset) % 5);
       totalDelta += amount;
+      state.live.eventDeltas.set(`${id}/events`, amount);
       bumpLive(id, amount, false);
     });
     if (tick % 5 === 3) {
       bumpLive("warning/process_sampler_failed", 5, true);
+      state.live.eventDeltas.set("warning/process_sampler_failed", 5);
       totalDelta += 5;
     }
     addTraceEdgesForFrames([
@@ -1833,10 +1844,11 @@
   }
 
   function renderTracePanel() {
-    if (!state.live.enabled || !state.live.traceEdges.size) {
+    if (!state.live.enabled) {
       els.tracePanel.replaceChildren();
       return false;
     }
+    if (!state.live.traceEdges.size) return renderEventPanel();
     const traces = liveTraceEdges()
       .slice()
       .sort((a, b) => b.count - a.count)
@@ -1866,6 +1878,51 @@
     });
     els.tracePanel.replaceChildren(title, ...rows);
     return true;
+  }
+
+  function renderEventPanel() {
+    const events = [...state.live.eventDeltas.entries()]
+      .filter(([, delta]) => delta > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+    if (!events.length) {
+      els.tracePanel.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Event deltas";
+    const rows = events.map(([key, delta]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = /error|failed|warning|throw|crash|exception/i.test(key) ?
+        "event-row error" :
+        "event-row";
+      button.addEventListener("click", () => {
+        const target = liveEventTarget(key);
+        if (!target) return;
+        state.selected = target;
+        render();
+        focusNode(target);
+      });
+      const name = document.createElement("strong");
+      name.textContent = key;
+      const meta = document.createElement("span");
+      meta.textContent = `+${nf.format(Math.round(delta))} events`;
+      button.append(name, meta);
+      return button;
+    });
+    els.tracePanel.replaceChildren(title, ...rows);
+    return true;
+  }
+
+  function liveEventTarget(key) {
+    const nodeById = new Map(state.layout.nodes.map((node) => [node.id, node]));
+    for (const id of resolveLiveIds(key)) {
+      const projected = liveTraceNodeIds(id, nodeById);
+      if (projected.length) return projected[0];
+    }
+    return null;
   }
 
   function renderBands() {

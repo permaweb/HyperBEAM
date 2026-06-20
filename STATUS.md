@@ -24,6 +24,7 @@ Branch: `expr/visualizer`
 - Heat panel proof: `recording=demo` showed a `Recorded heat` panel with `8` rows; clicking the top row selected `hb_http` and focused its module lens. Screenshot saved to `build/codeviz/validation-heat-panel.png`.
 - Trace edge proof: `recording=demo` in module mode showed status `demo: 3 events · 9 frames · 16 traces · 54 hot`, with `4` visible animated trace paths including `hb_ao -> hb_message` and `dev_recorder -> hb_ao`; screenshot saved to `build/codeviz/validation-trace-edges.png`.
 - Engine panel proof: `recording=demo` shows a docked `72px` engine deck with `4` hot rows and `4` trace-route rows; clicking the first route selected `hb_message` and focused its module lens. Screenshot saved to `build/codeviz/validation-engine-panel.png`.
+- Event-delta proof: a local `~hyperbuddy@1.0/events`-shaped JSON counter feed showed rows including `hb_http/request+7 events`, status `live: +16 events · 41 hot`, and clicking the top event row selected `hb_http`; screenshot saved to `build/codeviz/validation-event-deltas.png`.
 
 ## Last Presentation Pass
 
@@ -36,6 +37,7 @@ Branch: `expr/visualizer`
 - Added graph heat panel for the hottest live, stack, or recorded nodes with click-to-focus behavior.
 - Added animated trace edges that project live/recorded stack frames into the current subsystem, module, or function view.
 - Moved heat and trace route telemetry into a compact docked engine panel above the graph so live data no longer blocks the map.
+- Added event-delta rows for live counter feeds so `~hyperbuddy@1.0/events` activity can be inspected and clicked even when no stack traces are present.
 
 ## Next Work
 
