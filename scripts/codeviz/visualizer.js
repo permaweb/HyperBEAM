@@ -1217,7 +1217,7 @@
   }
 
   async function pollLive() {
-    if (!state.live.enabled || state.live.mode !== "events") return;
+    if (!state.live.enabled || !["events", "stack"].includes(state.live.mode)) return;
     decayLiveActivity();
     try {
       const response = await fetch(state.live.endpoint, {
@@ -1226,11 +1226,15 @@
       });
       const text = await response.text();
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-      const payload = parseLivePayload(text);
+      let payload = parseLivePayload(text);
+      if (linkifiedCounterPayload(payload)) {
+        payload = parseLivePayload(await fetchFormattedCounters());
+      }
       if (Array.isArray(payload.processes)) {
         state.live.mode = "stack";
         applyLiveProcesses(payload.processes);
       } else {
+        state.live.mode = "events";
         applyLiveCounters(flattenCounters(payload));
       }
       state.live.lastSeen = Date.now();
@@ -1246,10 +1250,63 @@
     const trimmed = (text || "").trim();
     if (!trimmed) return {};
     try {
-      return JSON.parse(trimmed);
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed.body === "string" && parsed.body.includes("=>")) {
+        return parseFormattedCounters(parsed.body);
+      }
+      return parsed;
     } catch (_error) {
       return parsePrometheusCounters(trimmed);
     }
+  }
+
+  async function fetchFormattedCounters() {
+    const response = await fetch(formattedCounterEndpoint(state.live.endpoint), {
+      cache: "no-store",
+      headers: { accept: "application/json, text/plain;q=0.9, */*;q=0.8" }
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    return response.text();
+  }
+
+  function formattedCounterEndpoint(endpoint) {
+    const url = new URL(endpoint, window.location.href);
+    url.pathname = `${url.pathname.replace(/\/$/, "")}/~hyperbuddy@1.0/format`;
+    url.search = "";
+    url.searchParams.set("format", "base");
+    return url.href;
+  }
+
+  function linkifiedCounterPayload(payload) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+    const keys = Object.keys(payload);
+    if (!keys.some((key) => key.endsWith("+link"))) return false;
+    return flattenCounters(payload).filter(({ key }) => key !== "status").length === 0;
+  }
+
+  function parseFormattedCounters(text) {
+    const counters = {};
+    let group = "";
+    text.split(/\n/).forEach((line) => {
+      const mapLine = line.match(/^\s*([A-Za-z0-9_@+.-]+)\s*=>\s*#\{(.+)\}/);
+      if (mapLine) {
+        [...mapLine[2].matchAll(/<<"([^"]+)">>\s*=>\s*([0-9.]+)/g)]
+          .forEach((match) => {
+            counters[`${mapLine[1]}/${match[1]}`] = Number(match[2]);
+          });
+        return;
+      }
+      const groupLine = line.match(/^\s*([A-Za-z0-9_@+.-]+)\s*=>\s*$/);
+      if (groupLine) {
+        group = groupLine[1];
+        return;
+      }
+      const valueLine = line.match(/^\s*([A-Za-z0-9_@+.-]+)\s*=>\s*([0-9.]+)\s*$/);
+      if (!valueLine) return;
+      const key = group ? `${group}/${valueLine[1]}` : valueLine[1];
+      counters[key] = Number(valueLine[2]);
+    });
+    return counters;
   }
 
   function parsePrometheusCounters(text) {
