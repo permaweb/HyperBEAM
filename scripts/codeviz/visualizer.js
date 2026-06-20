@@ -1555,10 +1555,12 @@
 
   function applyRecordingReport(report, sourceName, recordingUrl = "") {
     const pendingFocus = state.live.pendingRecordingFocus;
-    stopLive({ renderAfter: false });
+    const follow = state.live.follow;
+    stopLive({ renderAfter: false, clearFollow: false });
     state.live.enabled = true;
     state.live.mode = "recording";
     state.live.endpoint = "";
+    state.live.follow = follow;
     state.live.previous = new Map();
     state.live.activity = new Map();
     state.live.errors = new Map();

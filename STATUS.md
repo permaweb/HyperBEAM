@@ -61,6 +61,7 @@ Branch: `expr/visualizer`
 - Live heat badge proof: `live=demo&follow=heat` rendered `6` live rings with numeric node badges such as `+9`, `+7`, and `+6`. Screenshot saved to `build/codeviz/validation-live-heat-badges.png`.
 - Follow-pause proof: with `live=demo&follow=heat`, clicking a live heat row selected `dev_scheduler`, turned the `Follow` control off, and removed `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-manual-pauses-follow.png`.
 - Stop-live proof: clicking `Stop` from `live=demo&follow=heat` set status to `live off`, cleared Follow, and removed both `live=` and `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-stop-clears-follow.png`.
+- Recording follow proof: `recording=demo&follow=heat` kept Follow active, preserved `follow=heat` in the URL, and selected the hottest recorded node (`hb_process_sampler` in the demo sample).
 
 ## Last Presentation Pass
 
@@ -104,6 +105,7 @@ Branch: `expr/visualizer`
 - Added numeric live heat badges directly on hot graph nodes.
 - Manual graph/engine/inspector selections now pause Follow mode so live ticks do not immediately steal focus back.
 - Stopping live mode now clears Follow mode and its URL state.
+- Recording loads now preserve Follow mode so recorded heat can auto-focus like live heat.
 
 ## Next Work
 
