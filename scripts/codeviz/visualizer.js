@@ -313,6 +313,8 @@
       button.addEventListener("click", () => {
         activateMode(button.dataset.mode);
         state.selected = null;
+        state.selectedEdge = null;
+        state.selectedPath = [];
         requestFit();
         render();
       });
@@ -382,6 +384,8 @@
     els.clearDevices.addEventListener("click", () => {
       state.selectedDevices.clear();
       state.selected = null;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       requestFit();
       renderDevices();
       render();
@@ -3236,6 +3240,7 @@
     state.live.follow = false;
     state.selected = null;
     state.selectedEdge = null;
+    state.selectedPath = [];
     state.hovered = null;
     if (node.kind === "system") {
       activateMode("module");
@@ -3430,7 +3435,12 @@
     els.detailView.hidden = !selected;
     if (!selected) {
       if (state.selected) state.selected = null;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       els.selectionLabel.textContent = "No selection";
+      els.detailCard.replaceChildren();
+      els.callers.replaceChildren();
+      els.callees.replaceChildren();
       return;
     }
     els.selectionLabel.textContent = selected.id;
@@ -4215,6 +4225,7 @@
     }
     state.selected = null;
     state.selectedEdge = null;
+    state.selectedPath = [];
     requestFit();
     render();
   }
