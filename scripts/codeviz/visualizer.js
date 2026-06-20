@@ -2931,6 +2931,7 @@
   function renderEdges() {
     const fragment = document.createDocumentFragment();
     state.layout.edges.forEach((edge) => {
+      fragment.append(edgeHitPath(edge, `${edge.source} -> ${edge.target} (${edge.count} calls)`));
       const path = svgEl("path", { class: edgeClass(edge), d: edgePath(edge) });
       const width = edgeWidth(edge);
       path.style.setProperty("--edge-width", `${width}px`);
@@ -2944,6 +2945,10 @@
       fragment.append(path);
     });
     liveTraceEdges().forEach((edge) => {
+      fragment.append(edgeHitPath(
+        edge,
+        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`
+      ));
       const path = svgEl("path", { class: "edge trace", d: edgePath(edge) });
       path.style.setProperty("--trace-width", `${traceEdgeWidth(edge)}px`);
       path.dataset.source = edge.source;
@@ -2955,6 +2960,20 @@
       fragment.append(path);
     });
     els.edges.replaceChildren(fragment);
+  }
+
+  function edgeHitPath(edge, label) {
+    const hit = svgEl("path", { class: "edge-hit", d: edgePath(edge) });
+    hit.dataset.source = edge.source;
+    hit.dataset.target = edge.target;
+    hit.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectNode(edge.target, { manual: true });
+    });
+    const title = svgEl("title");
+    title.textContent = label;
+    hit.append(title);
+    return hit;
   }
 
   function liveTraceEdges() {

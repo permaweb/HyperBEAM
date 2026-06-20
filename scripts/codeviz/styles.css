@@ -1081,6 +1081,15 @@ svg {
   stroke-width: var(--edge-width, 1.25px);
   stroke-opacity: var(--edge-opacity, 1);
   marker-end: url("#arrow-normal");
+  pointer-events: none;
+}
+
+.edge-hit {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.001);
+  stroke-width: 18px;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 
 .edge.internal {
@@ -1132,7 +1141,6 @@ svg {
   stroke-dasharray: 2 7;
   stroke-opacity: 0.9;
   marker-end: url("#arrow-hot");
-  pointer-events: none;
   filter: drop-shadow(0 0 12px rgba(189, 52, 66, 0.2));
   animation: live-edge-flow 0.82s linear infinite;
 }

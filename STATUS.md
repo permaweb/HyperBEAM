@@ -92,6 +92,7 @@ Branch: `expr/visualizer`
 - Varied recording tick heat proof: a local recorder JSON report at `127.0.0.1:8895/report.json` rendered tick heat levels `33.333%`, `50%`, and `100%` for events with `2`, `3`, and `6` frame weights, with the deepest warning event marked `.recording-tick.error` and `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat-varied.png`.
 - Module drilldown proof: clicking `dev_recorder` once selected it, clicking it again opened function mode with `search=dev_recorder`, `80` search matches, `99` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-double-click-drilldown.png`.
 - System drilldown proof: clicking `kernel:resolver` twice opened module mode with `group=kernel:resolver`, `12` visible nodes, `43` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-system-drilldown.png`.
+- Edge click proof: clicking a wide invisible hit path for `hb_device_load -> hb_device_archive` selected `hb_device_archive`, added `selected=hb_device_archive` to the URL, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-click-target.png`.
 
 ## Last Presentation Pass
 
@@ -167,6 +168,8 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with recorder tick heat behavior.
 - Added graph drilldown gestures where clicking an already-selected subsystem/module dives to the next graph mode.
 - Updated the codeviz README with graph drilldown behavior.
+- Added wide invisible hit paths for call/trace edges so edge clicks select the callee without requiring pixel-perfect stroke targeting.
+- Updated the codeviz README with edge-click behavior.
 
 ## Next Work
 
