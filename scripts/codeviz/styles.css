@@ -538,6 +538,47 @@ h3 {
   gap: 5px;
 }
 
+.recording-timeline {
+  grid-column: 1 / -1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  overflow: auto;
+  padding-top: 2px;
+}
+
+.recording-timeline[hidden] {
+  display: none;
+}
+
+.recording-title {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.recording-tick {
+  flex: 0 0 auto;
+  min-width: 32px;
+  min-height: 26px;
+  padding: 0 8px;
+  border-color: rgba(189, 52, 66, 0.18);
+  background: #fff8f8;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.recording-tick.active {
+  border-color: rgba(189, 52, 66, 0.52);
+  background: var(--red);
+  color: #ffffff;
+}
+
 .heat-title {
   grid-column: 1 / -1;
   color: var(--muted);

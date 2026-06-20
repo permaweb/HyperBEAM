@@ -27,6 +27,7 @@ Branch: `expr/visualizer`
 - Event-delta proof: a local `~hyperbuddy@1.0/events`-shaped JSON counter feed showed rows including `hb_http/request+7 events`, status `live: +16 events · 41 hot`, and clicking the top event row selected `hb_http`; screenshot saved to `build/codeviz/validation-event-deltas.png`.
 - Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
 - Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
+- Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
 
 ## Last Presentation Pass
 
@@ -42,6 +43,7 @@ Branch: `expr/visualizer`
 - Added event-delta rows for live counter feeds so `~hyperbuddy@1.0/events` activity can be inspected and clicked even when no stack traces are present.
 - Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
 - Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
+- Added a recorder timeline rail that can repaint aggregate recordings or focus an individual recorded event.
 
 ## Next Work
 

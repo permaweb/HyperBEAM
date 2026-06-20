@@ -33,6 +33,7 @@
     enginePanel: document.getElementById("engine-panel"),
     heatPanel: document.getElementById("heat-panel"),
     tracePanel: document.getElementById("trace-panel"),
+    recordingTimeline: document.getElementById("recording-timeline"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
     bands: document.getElementById("bands"),
@@ -100,6 +101,8 @@
       processCount: 0,
       frameCount: 0,
       sourceName: "",
+      recordingEvents: [],
+      recordingFocus: -1,
       lastSeen: 0,
       lastError: "",
       demoTick: 0
@@ -1154,6 +1157,8 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = "";
+    state.live.recordingEvents = [];
+    state.live.recordingFocus = -1;
     state.live.lastError = "";
     state.live.demoTick = 0;
     if (normalized !== "demo") els.liveEndpoint.value = normalized;
@@ -1192,6 +1197,8 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = "";
+    state.live.recordingEvents = [];
+    state.live.recordingFocus = -1;
     state.live.lastError = "";
     renderLiveControls();
     if (options.renderAfter !== false) render();
@@ -1381,36 +1388,53 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = sourceName;
+    state.live.recordingEvents = Array.isArray(report.events) ? report.events : [];
+    state.live.recordingFocus = -1;
     state.live.lastError = "";
-    const events = Array.isArray(report.events) ? report.events : [];
+    paintRecordingEntries(recordingEntries(state.live.recordingEvents));
+    render();
+  }
+
+  function recordingEntries(events) {
+    return events.map((event, idx) => ({ event, idx }));
+  }
+
+  function paintRecordingEntries(entries) {
+    state.live.activity = new Map();
+    state.live.errors = new Map();
+    state.live.samples = new Map();
+    state.live.traceEdges = new Map();
+    state.live.eventDeltas = new Map();
+    state.live.totalDelta = entries.length;
+    state.live.frameCount = 0;
     const samples = new Map();
-    events.forEach((event, idx) => {
-      const frames = recordingFrames(event);
-      const sample = {
-        pid: `event ${event.sequence || idx + 1}`,
-        entry: `${event.topic || "recording"}/${event.name || "event"}`,
-        current: frames.length ? frameLabel(frames[0]) : recordingEventLabel(event),
-        status: "recorded",
-        reductions: 1,
-        queue: 0
-      };
-      frames.forEach((frame, frameIdx) => {
-        const amount = Math.max(0.45, 5 - frameIdx * 0.28);
-        resolveFrameIds(frame).forEach((id) => {
-          bumpLive(id, amount, /error|failed|exception|crash/i.test(sample.entry));
-          addLiveSample(samples, id, sample);
-        });
-      });
-      addTraceEdgesForFrames(frames, 3.8);
-      resolveFrameIds(recordingEventFrame(event)).forEach((id) => {
-        bumpLive(id, 2.2, /error|failed|exception|crash/i.test(sample.entry));
+    entries.forEach(({ event, idx }) => paintRecordingEvent(event, idx, samples));
+    state.live.samples = samples;
+  }
+
+  function paintRecordingEvent(event, idx, samples) {
+    const frames = recordingFrames(event);
+    const sample = {
+      pid: `event ${event.sequence || idx + 1}`,
+      entry: `${event.topic || "recording"}/${event.name || "event"}`,
+      current: frames.length ? frameLabel(frames[0]) : recordingEventLabel(event),
+      status: "recorded",
+      reductions: 1,
+      queue: 0
+    };
+    frames.forEach((frame, frameIdx) => {
+      const amount = Math.max(0.45, 5 - frameIdx * 0.28);
+      resolveFrameIds(frame).forEach((id) => {
+        bumpLive(id, amount, /error|failed|exception|crash/i.test(sample.entry));
         addLiveSample(samples, id, sample);
       });
-      state.live.frameCount += frames.length;
     });
-    state.live.totalDelta = events.length;
-    state.live.samples = samples;
-    render();
+    addTraceEdgesForFrames(frames, 3.8);
+    resolveFrameIds(recordingEventFrame(event)).forEach((id) => {
+      bumpLive(id, 2.2, /error|failed|exception|crash/i.test(sample.entry));
+      addLiveSample(samples, id, sample);
+    });
+    state.live.frameCount += frames.length;
   }
 
   function recordingFrames(event) {
@@ -1813,13 +1837,16 @@
     }
     const hasHeat = renderHeatPanel();
     const hasTraces = renderTracePanel();
-    els.enginePanel.hidden = !hasHeat && !hasTraces;
+    const hasTimeline = renderRecordingTimeline();
+    els.enginePanel.hidden = !hasHeat && !hasTraces && !hasTimeline;
   }
 
   function renderBridgePanel() {
     if (!state.selectedDevices.size) {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
+      els.recordingTimeline.hidden = true;
+      els.recordingTimeline.replaceChildren();
       return false;
     }
     const bridges = state.layout.edges
@@ -1832,6 +1859,8 @@
     if (!bridges.length && !touchpoints.length) {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
+      els.recordingTimeline.hidden = true;
+      els.recordingTimeline.replaceChildren();
       return false;
     }
     renderBridgeEdges(bridges);
@@ -1900,6 +1929,48 @@
       .filter((item) => item.node)
       .sort((a, b) => b.count - a.count)
       .slice(0, 4);
+  }
+
+  function renderRecordingTimeline() {
+    if (state.live.mode !== "recording" || state.live.recordingEvents.length < 2) {
+      els.recordingTimeline.hidden = true;
+      els.recordingTimeline.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "recording-title";
+    title.textContent = "Recording timeline";
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = state.live.recordingFocus < 0 ? "recording-tick active" : "recording-tick";
+    all.textContent = "All";
+    all.addEventListener("click", () => {
+      state.live.recordingFocus = -1;
+      paintRecordingEntries(recordingEntries(state.live.recordingEvents));
+      render();
+    });
+    const ticks = state.live.recordingEvents.slice(0, 48).map((event, idx) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = state.live.recordingFocus === idx ?
+        "recording-tick active" :
+        "recording-tick";
+      button.textContent = String(event.sequence || idx + 1);
+      button.title = `${event.topic || "recording"}/${event.name || "event"}`;
+      button.addEventListener("click", () => focusRecordingEvent(idx));
+      return button;
+    });
+    els.recordingTimeline.replaceChildren(title, all, ...ticks);
+    els.recordingTimeline.hidden = false;
+    return true;
+  }
+
+  function focusRecordingEvent(idx) {
+    const event = state.live.recordingEvents[idx];
+    if (!event) return;
+    state.live.recordingFocus = idx;
+    paintRecordingEntries([{ event, idx }]);
+    render();
   }
 
   function renderHeatPanel() {
