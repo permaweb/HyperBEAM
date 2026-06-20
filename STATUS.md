@@ -47,6 +47,8 @@ Branch: `expr/visualizer`
 - Mobile QA proof: at `390x844`, the page had `0` horizontal overflow, no offscreen controls, and the `2 devices` context stat fit its container. Screenshot saved to `build/codeviz/validation-mobile.png`.
 - Refreshed mobile QA proof: at `390x844`, `dev_recorder` with `recording=demo` had `0` horizontal overflow, no offscreen controls, and the three recorder action buttons fit at about `99px` each. Screenshot saved to `build/codeviz/validation-mobile-recorder-actions.png`.
 - Stack-row navigation proof: `recording=demo&selected=dev_recorder` rendered an enabled `hb_message:commit/3` stack row; clicking it selected and revealed `hb_message` even though the target was outside the pre-click recorder lens. Screenshot saved to `build/codeviz/validation-stack-row-pulls-target.png`.
+- Follow-heat proof: `live=demo&follow=heat` auto-selected hot module `dev_scheduler`, showed the inspector, marked the `Follow` control active, and preserved `follow=heat` in the URL. Screenshot saved to `build/codeviz/validation-follow-heat.png`.
+- Follow-heat mobile proof: at `390x844`, `live=demo&follow=heat` had `0` horizontal overflow, no offscreen controls, selected `dev_scheduler`, and fit six live-strip controls in two rows. Screenshot saved to `build/codeviz/validation-follow-heat-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -79,6 +81,7 @@ Branch: `expr/visualizer`
 - Added `recording-event=N` URL state for shareable focused recorder playback.
 - Tightened mobile stat sizing so the context count fits in the four-card summary row.
 - Made live/recorded stack rows clickable debugger targets that can pull their resolved module/function into the graph.
+- Added shareable `follow=heat` engine-view mode that follows the hottest live/recorded module while keeping the control explicit.
 
 ## Next Work
 

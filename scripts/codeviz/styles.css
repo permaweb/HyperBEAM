@@ -250,7 +250,7 @@ h3 {
 
 .live-strip {
   display: grid;
-  grid-template-columns: max-content minmax(220px, 1fr) repeat(5, max-content);
+  grid-template-columns: max-content minmax(220px, 1fr) repeat(6, max-content);
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -297,6 +297,12 @@ h3 {
 .live-status.error::before {
   background: var(--red);
   box-shadow: 0 0 0 6px rgba(189, 52, 66, 0.1);
+}
+
+.live-follow.active {
+  border-color: rgba(19, 138, 109, 0.24);
+  background: #f2fbf8;
+  color: var(--green);
 }
 
 .toggle {
@@ -1214,7 +1220,7 @@ button.ref-pill {
   }
 
   .live-strip {
-    grid-template-columns: max-content minmax(0, 1fr) repeat(5, max-content);
+    grid-template-columns: max-content minmax(0, 1fr) repeat(6, max-content);
   }
 
   .workspace {

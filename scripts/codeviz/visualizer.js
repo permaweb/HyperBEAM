@@ -18,6 +18,7 @@
     showForge: document.getElementById("show-forge"),
     liveStatus: document.getElementById("live-status"),
     liveEndpoint: document.getElementById("live-endpoint"),
+    liveFollow: document.getElementById("live-follow"),
     liveConnect: document.getElementById("live-connect"),
     liveStack: document.getElementById("live-stack"),
     recordingImport: document.getElementById("recording-import"),
@@ -90,6 +91,7 @@
       enabled: false,
       mode: "off",
       endpoint: "",
+      follow: false,
       timer: null,
       previous: new Map(),
       activity: new Map(),
@@ -240,6 +242,7 @@
       state.live.endpoint = liveParamValue(params.get("live"));
       if (state.live.endpoint !== "demo") els.liveEndpoint.value = state.live.endpoint;
     }
+    if (params.get("follow") === "heat") state.live.follow = true;
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
     } else if (params.has("recording")) {
@@ -306,6 +309,11 @@
     });
     els.liveEndpoint.addEventListener("keydown", (event) => {
       if (event.key === "Enter") startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
+    });
+    els.liveFollow.addEventListener("click", () => {
+      state.live.follow = !state.live.follow;
+      if (state.live.follow) requestFit();
+      render();
     });
     els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
     els.recordingImport.addEventListener("click", () => els.recordingFile.click());
@@ -428,6 +436,11 @@
   }
 
   function render() {
+    const followTarget = heatFollowTarget();
+    if (followTarget && followTarget !== state.selected) {
+      state.selected = followTarget;
+      requestFit();
+    }
     const visible = visibleData();
     state.layout = layout(visible);
     renderStats(visible);
@@ -471,6 +484,7 @@
     if (state.live.enabled && state.live.mode !== "recording") {
       params.set("live", liveUrlParam());
     }
+    if (state.live.follow) params.set("follow", "heat");
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
     } else if (state.live.mode === "recording" && state.live.recordingUrl) {
@@ -1893,6 +1907,29 @@
     return score;
   }
 
+  function heatFollowTarget() {
+    if (!state.live.enabled || !state.live.follow) return null;
+    const scores = new Map();
+    const addScore = (id, amount) => {
+      const target = frameTargetForMode(id);
+      if (!target || !Number.isFinite(amount) || amount <= 0) return;
+      scores.set(target, (scores.get(target) || 0) + amount);
+    };
+    state.live.activity.forEach((amount, id) => addScore(id, amount));
+    state.live.errors.forEach((amount, id) => addScore(id, amount * 1.8));
+    state.live.eventDeltas.forEach((amount, key) => {
+      resolveLiveIds(key).forEach((id) => addScore(id, amount * 0.75));
+    });
+    let best = null;
+    scores.forEach((score, target) => {
+      if (!best || score > best.score) best = { target, score };
+    });
+    if (!best || best.score < 0.5) return null;
+    const current = scores.get(state.selected) || 0;
+    if (state.selected && current >= best.score * 0.62) return state.selected;
+    return best.target;
+  }
+
   function liveErrorScore(node) {
     if (!state.live.enabled) return 0;
     let score = state.live.errors.get(node.id) || 0;
@@ -1974,6 +2011,8 @@
   }
 
   function renderLiveControls() {
+    els.liveFollow.classList.toggle("active", state.live.follow);
+    els.liveFollow.setAttribute("aria-pressed", state.live.follow ? "true" : "false");
     if (!state.live.enabled) {
       els.liveStatus.textContent = "live off";
       els.liveStatus.className = "live-status";
