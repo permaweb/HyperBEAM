@@ -14,7 +14,7 @@
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(hb_forge_args).
 -export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0, package_opts/1]).
--export([maybe_help/2]).
+-export([run_provider/3]).
 -export([set_preloaded_env/1, restore_preloaded_env/1, with_preloaded_env/2]).
 -export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
 -export([default_preloaded_dirs/1]).
@@ -119,8 +119,8 @@ parse(State, DefaultOutput) ->
             end
     }.
 
-%% @doc Print the current provider's generated help if `--help' was given.
-maybe_help(State, Module) ->
+%% @doc Run a provider body after shared `rebar3 device' boundary handling.
+run_provider(State, Module, Fun) when is_function(Fun, 1) ->
     {Args, _Rest} = rebar_state:command_parsed_args(State),
     case proplists:get_value(help, Args, false) of
         true ->
@@ -130,9 +130,13 @@ maybe_help(State, Module) ->
                     rebar_state:providers(State)
                 ),
             providers:help(Provider),
-            true;
+            {ok, State};
         false ->
-            false
+            try Fun(State)
+            catch
+                error:{device_compile_failed, _, _, _, _} = Reason ->
+                    {error, hb_packager:format_error(Reason)}
+            end
     end.
 
 %% @doc Parse a comma-separated provider option into atoms, or `all'.
