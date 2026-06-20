@@ -32,6 +32,7 @@ Branch: `expr/visualizer`
 - Event-alias browser proof: a local counter feed with `scheduling/assigned`, `store_error/store_call_failed_retrying`, and `payment/charge` rows highlighted `dev_scheduler_server`, `hb_store`, `dev_simple_pay`, and `dev_p4`; clicking `scheduling/assigned` selected `dev_scheduler_server` and saved URL state. Screenshot saved to `build/codeviz/validation-event-aliases.png`.
 - Device-family proof: `devices=scheduler@1.0&mode=module` now includes same-group modules that reference the selected device (`dev_scheduler`, `dev_scheduler_registry`, `dev_scheduler_server`, and `lib_process`) while excluding unrelated router/payment/vm referrers. Screenshot saved to `build/codeviz/validation-device-family-context.png`.
 - Event-meter proof: a local live counter feed rendered three event pulse meters at `100%`, `42.857%`, and `14.286%` for `scheduling/assigned`, `store_error/store_call_failed_retrying`, and `payment/charge`; screenshot saved to `build/codeviz/validation-event-meters.png`.
+- Inspector live-event proof: selecting the hot `hb_store` module from a live feed showed a `Live events` inspector section with `store_error/store_call_failed_retrying` at `100%`; screenshot saved to `build/codeviz/validation-inspector-live-events.png`.
 - Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
 - Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
 - Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
@@ -54,6 +55,7 @@ Branch: `expr/visualizer`
 - Added static event-topic aliases to modules/functions so live HyperBuddy counters can resolve through instrumentation names instead of only module-name guesses.
 - Added event-row decay so recent live pulses remain inspectable across quiet poll ticks.
 - Added compact animated event meters to the live event deck so relative event frequency is visible at a glance.
+- Added selected-node live event rows to the inspector so hot modules explain which event streams are driving their heat.
 - Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
 - Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
 - Expanded selected device contexts with same-group modules that reference the selected device so helper/server pieces appear with their root device.

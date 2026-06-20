@@ -634,7 +634,7 @@ h3 {
   background: #fff7f7;
 }
 
-.event-row span.event-meter {
+.event-meter {
   position: relative;
   display: block;
   width: 100%;
@@ -645,7 +645,7 @@ h3 {
   font-size: 0;
 }
 
-.event-row span.event-meter::before {
+.event-meter::before {
   position: absolute;
   inset: 0 auto 0 0;
   width: var(--event-level, 0%);
@@ -655,11 +655,13 @@ h3 {
   animation: event-meter-pulse 1.15s ease-in-out infinite;
 }
 
-.event-row.error span.event-meter {
+.event-row.error span.event-meter,
+.event-sample-row.error .event-meter {
   background: rgba(189, 52, 66, 0.12);
 }
 
-.event-row.error span.event-meter::before {
+.event-row.error span.event-meter::before,
+.event-sample-row.error .event-meter::before {
   background: linear-gradient(90deg, rgba(189, 52, 66, 0.86), rgba(178, 98, 20, 0.8));
 }
 
@@ -1075,8 +1077,23 @@ svg {
   background: #fff8f8;
 }
 
+.event-sample-row {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(19, 138, 109, 0.16);
+  border-radius: 6px;
+  background: #f6fffc;
+}
+
+.event-sample-row.error {
+  border-color: rgba(189, 52, 66, 0.16);
+  background: #fff8f8;
+}
+
 .stack-row strong,
-.stack-row span {
+.stack-row span,
+.event-sample-row strong,
+.event-sample-row span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1084,15 +1101,27 @@ svg {
   font-family: var(--mono);
 }
 
-.stack-row strong {
+.stack-row strong,
+.event-sample-row strong {
   color: var(--ink);
   font-size: 11px;
 }
 
-.stack-row span {
+.stack-row span,
+.event-sample-row span {
   margin-top: 4px;
   color: var(--muted);
   font-size: 10px;
+}
+
+.event-sample-row .event-meter {
+  margin-top: 6px;
+}
+
+.event-row span.event-meter,
+.event-sample-row span.event-meter {
+  color: transparent;
+  font-size: 0;
 }
 
 .relation-list {

@@ -1847,15 +1847,7 @@
 
   function liveSamplesForNode(node) {
     if (!state.live.enabled || !state.live.samples.size) return [];
-    const ids = new Set([node.id]);
-    if (node.kind === "system") {
-      (node.moduleIds || []).forEach((moduleId) => {
-        ids.add(moduleId);
-        (functionsByModuleId.get(moduleId) || []).forEach((funId) => ids.add(funId));
-      });
-    } else if (node.kind === "module") {
-      (functionsByModuleId.get(node.id) || []).forEach((funId) => ids.add(funId));
-    }
+    const ids = liveScopeIds(node);
     const seen = new Set();
     const samples = [];
     ids.forEach((id) => {
@@ -1867,6 +1859,30 @@
       });
     });
     return samples.sort((a, b) => b.reductions - a.reductions).slice(0, 10);
+  }
+
+  function liveEventsForNode(node) {
+    if (!state.live.enabled || !state.live.eventDeltas.size) return [];
+    const ids = liveScopeIds(node);
+    return [...state.live.eventDeltas.entries()]
+      .filter(([, delta]) => delta > 0.45)
+      .filter(([key]) => [...resolveLiveIds(key)].some((id) => ids.has(id)))
+      .map(([key, delta]) => ({ key, delta }))
+      .sort((a, b) => b.delta - a.delta)
+      .slice(0, 8);
+  }
+
+  function liveScopeIds(node) {
+    const ids = new Set([node.id]);
+    if (node.kind === "system") {
+      (node.moduleIds || []).forEach((moduleId) => {
+        ids.add(moduleId);
+        (functionsByModuleId.get(moduleId) || []).forEach((funId) => ids.add(funId));
+      });
+    } else if (node.kind === "module") {
+      (functionsByModuleId.get(node.id) || []).forEach((funId) => ids.add(funId));
+    }
+    return ids;
   }
 
   function liveEdgeScore(edge) {
@@ -2561,6 +2577,36 @@
       wrap.append(pills);
     }
     const liveSamples = liveSamplesForNode(node);
+    const liveEvents = liveEventsForNode(node);
+    if (liveEvents.length) {
+      const eventSection = document.createElement("div");
+      eventSection.className = "source-section";
+      const eventTitle = document.createElement("h3");
+      eventTitle.textContent = "Live events";
+      const eventList = document.createElement("div");
+      eventList.className = "stack-list";
+      const maxDelta = Math.max(1, ...liveEvents.map((event) => event.delta));
+      liveEvents.forEach((event) => {
+        const row = document.createElement("div");
+        row.className = /error|failed|warning|throw|crash|exception/i.test(event.key) ?
+          "event-sample-row error" :
+          "event-sample-row";
+        const name = document.createElement("strong");
+        name.textContent = event.key;
+        const meter = document.createElement("span");
+        meter.className = "event-meter";
+        meter.style.setProperty(
+          "--event-level",
+          `${Math.max(7, Math.min(100, (event.delta / maxDelta) * 100))}%`
+        );
+        const meta = document.createElement("span");
+        meta.textContent = `+${nf.format(Math.round(event.delta))} recent events`;
+        row.append(name, meter, meta);
+        eventList.append(row);
+      });
+      eventSection.append(eventTitle, eventList);
+      wrap.append(eventSection);
+    }
     if (liveSamples.length) {
       const stackSection = document.createElement("div");
       stackSection.className = "source-section";
