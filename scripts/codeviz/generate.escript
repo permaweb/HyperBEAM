@@ -14,7 +14,9 @@ main(Args) ->
     ok = filelib:ensure_dir(Out),
     Modules = parse_modules(Root),
     Graph = graph(Root, Modules),
-    Html = render_html(Root, Graph),
+    GraphJson = iolist_to_binary(json(Graph)),
+    maybe_write_json(value_arg("--json-out", Args, ""), GraphJson),
+    Html = render_html(Root, GraphJson),
     ok = file:write_file(Out, Html),
     io:format(
         "Wrote ~s (~p modules, ~p functions, ~p calls).~n",
@@ -25,6 +27,13 @@ main(Args) ->
             length(maps:get(<<"edges">>, Graph))
         ]
     ).
+
+maybe_write_json("", _GraphJson) ->
+    ok;
+maybe_write_json(Path, GraphJson) ->
+    Out = filename:absname(Path),
+    ok = filelib:ensure_dir(Out),
+    file:write_file(Out, GraphJson).
 
 value_arg(Name, Args, Default) ->
     Prefix = Name ++ "=",
@@ -601,12 +610,12 @@ generated_at() ->
         )
     ).
 
-render_html(Root, Graph) ->
+render_html(Root, GraphJson) ->
     Dir = filename:join([Root, "scripts", "codeviz"]),
     {ok, Template} = file:read_file(filename:join([Dir, "index.html"])),
     {ok, Css} = file:read_file(filename:join([Dir, "styles.css"])),
     {ok, Js} = file:read_file(filename:join([Dir, "visualizer.js"])),
-    Data = base64:encode(iolist_to_binary(json(Graph))),
+    Data = base64:encode(GraphJson),
     Step1 = binary:replace(Template, <<"{{CODEVIZ_CSS}}">>, Css),
     Step2 = binary:replace(Step1, <<"{{CODEVIZ_JS}}">>, Js),
     binary:replace(Step2, <<"{{GRAPH_JSON_BASE64}}">>, Data).
