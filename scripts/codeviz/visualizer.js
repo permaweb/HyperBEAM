@@ -3474,7 +3474,7 @@
     }
     if (state.mode === "system") return 0.52;
     if (state.mode === "module") return 0.72;
-    return 0.42;
+    return 0.72;
   }
 
   function centerNode(id) {
