@@ -31,6 +31,7 @@
 -export([scan/2, scan/1]).
 -export([package/2, package_all/2, group_device_name/1]).
 -export([spec_message/2, impl_message/3]).
+-export([format_error/1]).
 
 -include("include/hb.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -590,13 +591,47 @@ compile_module(Old, Path, RenameMap, IncludeDirs, Opts) ->
             erlang:error({device_module_name_mismatch, Old, New, Other});
         {error, Errors, Warnings} ->
             erlang:error(
-                {device_compile_failed, Old,
-                    [{errors, Errors}, {warnings, Warnings},
-                     {source_path, Path}]}
+                {device_compile_failed, Old, Path, Errors, Warnings}
             );
         Other ->
-            erlang:error({device_compile_failed, Old, Other})
+            erlang:error(
+                {device_compile_failed,
+                    Old,
+                    Path,
+                    [{Path, [{none, ?MODULE, Other}]}],
+                    []}
+            )
     end.
+
+%% @doc Render packager errors for user-facing forge providers.
+format_error({device_compile_failed, Device, Path, Errors, Warnings}) ->
+    [
+        io_lib:format(
+            "While building device package ~p from ~ts:~n",
+            [Device, hb_util:list(Path)]
+        ),
+        compile_messages("", Errors),
+        compile_messages("Warning: ", Warnings)
+    ];
+format_error(Reason) ->
+    io_lib:format("~p", [Reason]).
+
+compile_messages(Prefix, Messages) ->
+    [
+        Text
+     ||
+        {File, Infos} <- Messages,
+        {_Where, Text} <-
+            sys_messages:format_messages(
+                hb_util:list(compile_file(File)),
+                Prefix,
+                Infos,
+                []
+            )
+    ].
+
+compile_file({Path, _Line}) -> Path;
+compile_file(Path) -> Path.
 
 %% @doc Build the old-module -> generated-module mapping.
 module_renamings(RootMod, Root, Entries) ->

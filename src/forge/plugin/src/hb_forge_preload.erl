@@ -29,10 +29,7 @@ init(State) ->
 
 %% @doc Parse CLI args and build a signed preloaded-store.
 do(State) ->
-    case hb_forge_args:maybe_help(State, ?MODULE) of
-        true -> {ok, State};
-        false -> do_run(State)
-    end.
+    hb_forge_args:run_provider(State, ?MODULE, fun do_run/1).
 
 do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/preloaded-store">>),

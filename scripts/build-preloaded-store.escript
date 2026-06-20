@@ -10,8 +10,19 @@
 
 -include("../include/hb.hrl").
 
-main(_Args) ->
+main(Args) ->
     add_code_paths(),
+    try run(Args)
+    catch
+        error:{device_compile_failed, _, _, _, _} = Reason ->
+            io:put_chars(
+                standard_error,
+                hb_packager:format_error(Reason)
+            ),
+            halt(1)
+    end.
+
+run(_Args) ->
     {ok, _} = application:ensure_all_started(crypto),
     {ok, _} = application:ensure_all_started(asn1),
     {ok, _} = application:ensure_all_started(public_key),
