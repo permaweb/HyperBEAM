@@ -1405,6 +1405,11 @@ button.ref-pill {
   font-size: 10px;
 }
 
+.stack-row span.stack-meta {
+  line-height: 1.25;
+  white-space: normal;
+}
+
 .stack-row span.stack-path,
 .event-sample-row span.stack-path {
   color: var(--red);

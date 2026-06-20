@@ -72,6 +72,7 @@ Branch: `expr/visualizer`
 - Function-scale proof: `mode=function&search=hb_message` now opens at `scale(0.72)` with `60` function nodes, `52` visible calls, readable labels, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-readable-scale.png`.
 - Search-highlight proof: `mode=function&search=hb_message` rendered `60` search-match graph nodes and `60` search-match minimap markers with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-highlights.png`.
 - Search-meta proof: `mode=function&search=hb_message` now reports `60 visible nodes · 60 matches · 52 visible calls` in the graph metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-meta.png`.
+- Stack metadata proof: a local live stack JSON feed at `127.0.0.1:8892` rendered a `hb_message:commit/3` stack row with `2 MB` memory and `q 7` queue metadata, no metadata clipping, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-memory-queue.png`.
 
 ## Last Presentation Pass
 
@@ -128,6 +129,7 @@ Branch: `expr/visualizer`
 - Highlighted search-matching graph and minimap nodes so filtered results are visually distinct from supporting context.
 - Added active-search match counts to the graph metadata.
 - Made graph titles mode-specific so function views are labeled as function call graphs.
+- Added memory and message-queue metadata to live stack inspector rows, with wrapped stack metadata so the values remain readable.
 - Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
 
 ## Next Work

@@ -1505,6 +1505,7 @@
           .map(frameLabel),
         status: proc.status || "unknown",
         reductions: delta,
+        memory: Number(proc.memory || 0),
         queue: Number(proc["message-queue-len"] || 0)
       };
       const hotFrames = [
@@ -1920,6 +1921,20 @@
     if (!Number.isFinite(rate) || rate <= 0) return "0/s";
     const value = rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10;
     return `${nf.format(value)}/s`;
+  }
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return "";
+    if (bytes < 1024) return `${nf.format(Math.round(bytes))} B`;
+    const units = ["KB", "MB", "GB"];
+    let value = bytes / 1024;
+    let unitIdx = 0;
+    while (value >= 1024 && unitIdx < units.length - 1) {
+      value /= 1024;
+      unitIdx += 1;
+    }
+    const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+    return `${nf.format(rounded)} ${units[unitIdx]}`;
   }
 
   function applyLiveKey(key, amount) {
@@ -3227,8 +3242,14 @@
         const current = document.createElement("strong");
         current.textContent = sample.current;
         const meta = document.createElement("span");
-        meta.textContent =
-          `${sample.pid} · ${sample.status} · +${nf.format(Math.round(sample.reductions))} reductions`;
+        meta.className = "stack-meta";
+        meta.textContent = [
+          sample.pid,
+          sample.status,
+          `+${nf.format(Math.round(sample.reductions))} reductions`,
+          formatBytes(sample.memory),
+          sample.queue ? `q ${nf.format(sample.queue)}` : ""
+        ].filter(Boolean).join(" · ");
         if (Array.isArray(sample.stack) && sample.stack.length > 1) {
           row.title = sample.stack.join("\n");
         }
