@@ -125,7 +125,12 @@ functions(Module, Exports, Forms, Lines) ->
             source => source_excerpt(Line, NextLine, Lines),
             calls => collect_calls(Module, Clauses)
         }
-    || {{Line, Name, Arity, Clauses}, NextLine} <- lists:zip(FunctionForms, NextLines) ].
+    || {{Line, Name, Arity, Clauses}, NextLine} <- lists:zip(FunctionForms, NextLines),
+        not excluded_function(Name) ].
+
+excluded_function(Name) ->
+    Text = atom_to_list(Name),
+    lists:suffix("_test", Text) orelse lists:suffix("_test_", Text).
 
 collect_calls(Module, Clauses) ->
     lists:usort(walk(Clauses, Module, [])).
