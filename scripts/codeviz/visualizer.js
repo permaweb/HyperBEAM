@@ -271,14 +271,18 @@
       if (!state.showPrivate && !fun.exported) return false;
       if (groupFilter && `${fun.role}:${fun.group}` !== groupFilter) return false;
       if (!needle) return true;
-      return `${fun.id} ${fun.path} ${fun.doc}`.toLowerCase().includes(needle);
+      return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")}`
+        .toLowerCase()
+        .includes(needle);
     });
     const functionIds = new Set(functions.map((fun) => fun.id));
     const modules = graph.modules.filter((mod) => {
       if (!activeModules.has(mod.id)) return false;
       if (groupFilter && `${mod.role}:${mod.group}` !== groupFilter) return false;
       if (!needle) return true;
-      return `${mod.id} ${mod.path} ${mod.doc}`.toLowerCase().includes(needle) ||
+      return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")}`
+        .toLowerCase()
+        .includes(needle) ||
         functions.some((fun) => fun.module === mod.id);
     });
     const moduleIds = new Set(modules.map((mod) => mod.id));
@@ -663,6 +667,18 @@
     ];
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
+    const refs = node["device-refs"] || [];
+    if (refs.length) {
+      const pills = document.createElement("div");
+      pills.className = "pill-list";
+      refs.forEach((ref) => {
+        const pill = document.createElement("span");
+        pill.className = "ref-pill";
+        pill.textContent = `~${ref}`;
+        pills.append(pill);
+      });
+      wrap.append(pills);
+    }
     if (state.mode === "function" && node.source) {
       const sourceSection = document.createElement("div");
       sourceSection.className = "source-section";

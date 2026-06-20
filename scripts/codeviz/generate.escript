@@ -75,6 +75,7 @@ parse_module(Root, File) ->
     Role = role(Root, File),
     Group = group(Root, File, Role),
     Device = device_name(Module, Source, Forms, Role),
+    DeviceRefs = device_refs(Source),
     #{
         module => Module,
         id => atom_bin(Module),
@@ -82,6 +83,7 @@ parse_module(Root, File) ->
         role => Role,
         group => Group,
         device => Device,
+        device_refs => DeviceRefs,
         doc => module_doc(Lines),
         loc => length(Lines),
         exports => Exports,
@@ -300,6 +302,7 @@ function_node(Module, Fun, Counts) ->
         <<"role">> => maps:get(role, Module),
         <<"group">> => maps:get(group, Module),
         <<"device">> => maps:get(device, Module),
+        <<"device-refs">> => maps:get(device_refs, Module),
         <<"exported">> => maps:get(exported, Fun),
         <<"doc">> => maps:get(doc, Fun),
         <<"source">> => maps:get(source, Fun),
@@ -336,6 +339,7 @@ module_nodes(Modules, Functions, Edges) ->
             <<"group">> => maps:get(group, Module),
             <<"subsystem">> => maps:get(group, Module),
             <<"device">> => maps:get(device, Module),
+            <<"device-refs">> => maps:get(device_refs, Module),
             <<"doc">> => maps:get(doc, Module),
             <<"loc">> => maps:get(loc, Module),
             <<"functions">> => maps:get(maps:get(id, Module), FunctionCounts, 0),
@@ -464,6 +468,18 @@ device_name(Module, Source, Forms, <<"device">>) ->
     end;
 device_name(_Module, _Source, _Forms, _Role) ->
     <<>>.
+
+device_refs(Source) ->
+    case re:run(
+        Source,
+        <<"\"([A-Za-z0-9_.-]+@[0-9][A-Za-z0-9_.-]*)\"">>,
+        [global, {capture, [1], binary}]
+    ) of
+        {match, Matches} ->
+            lists:usort([Ref || [Ref] <- Matches, byte_size(Ref) =< 80]);
+        nomatch ->
+            []
+    end.
 
 inferred_device_name(Module) ->
     Name = atom_bin(Module),

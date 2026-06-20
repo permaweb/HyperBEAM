@@ -610,6 +610,28 @@ svg {
   margin-top: 14px;
 }
 
+.pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.ref-pill {
+  max-width: 100%;
+  overflow: hidden;
+  padding: 4px 7px;
+  border: 1px solid rgba(0, 154, 247, 0.18);
+  border-radius: 6px;
+  background: #f0f8ff;
+  color: var(--blue);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .source-snippet {
   max-height: 320px;
   margin: 8px 0 0;
