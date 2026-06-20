@@ -14,6 +14,7 @@ Branch: `expr/visualizer`
 - `node --check scripts/codeviz/visualizer.js` passes.
 - `escript scripts/codeviz/generate.escript --out=build/codeviz/hyperbeam-codeviz.html --json-out=build/codeviz/graph.json` passes.
 - `git diff --check` passes.
+- `HB_PORT=0 rebar3 eunit` passes: `All 947 tests passed`, `EXIT_CODE=0`.
 - Browser screenshots saved under `build/codeviz/validation-*.png`.
 
 ## Last Presentation Pass
