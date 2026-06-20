@@ -94,6 +94,8 @@ Branch: `expr/visualizer`
 - System drilldown proof: clicking `kernel:resolver` twice opened module mode with `group=kernel:resolver`, `12` visible nodes, `43` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-system-drilldown.png`.
 - Edge click proof: clicking a wide invisible hit path for `hb_device_load -> hb_device_archive` selected `hb_device_archive`, added `selected=hb_device_archive` to the URL, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-click-target.png`.
 - Edge summary proof: the same edge click rendered an inspector `Selected call` section with `hb_device_load -> hb_device_archive` and `1 calls`, preserved the target selection, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-summary.png`.
+- Latest canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-latest.png`.
+- Latest canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `39` edge hit paths, no offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-latest-mobile.png`.
 
 ## Last Presentation Pass
 
