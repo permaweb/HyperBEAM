@@ -1161,7 +1161,7 @@ svg {
 
   .stats article {
     min-height: 58px;
-    padding: 8px;
+    padding: 8px 6px;
   }
 
   .stats span {
@@ -1173,7 +1173,8 @@ svg {
   }
 
   .stats article:last-child strong {
-    font-size: 14px;
+    font-size: 12px;
+    letter-spacing: 0;
   }
 
   .filters {

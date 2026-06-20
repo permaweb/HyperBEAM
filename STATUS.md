@@ -28,6 +28,7 @@ Branch: `expr/visualizer`
 - Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
 - Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
 - Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
+- Mobile QA proof: at `390x844`, the page had `0` horizontal overflow, no offscreen controls, and the `2 devices` context stat fit its container. Screenshot saved to `build/codeviz/validation-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -44,6 +45,7 @@ Branch: `expr/visualizer`
 - Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
 - Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
 - Added a recorder timeline rail that can repaint aggregate recordings or focus an individual recorded event.
+- Tightened mobile stat sizing so the context count fits in the four-card summary row.
 
 ## Next Work
 
