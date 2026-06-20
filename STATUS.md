@@ -1,0 +1,238 @@
+# HyperBEAM Code Visualizer Status
+
+Branch: `expr/visualizer`
+
+## Current State
+
+- Static visualizer generator produces `build/codeviz/hyperbeam-codeviz.html`.
+- Current graph build: `167 modules`, `3359 functions`, `8508 calls`.
+- Default view is now `Subsystems`, with module and function modes using the `Map` force layout by default and `Flow` available for staged/lens inspection.
+- Browser target in use: `http://127.0.0.1:8765/hyperbeam-codeviz.html?mode=function&devices=recorder@1.0,scheduler@1.0`.
+- Live engine overlay supports `live=demo`, `live=<endpoint>`, `live=stack`, `follow=heat`, and `recording=<url|demo>`; event counters, process stack samples, and recorder traces are painted onto the graph as hot nodes, numeric badges, live event rows, stack paths, and flowing trace edges.
+
+## Evidence
+
+- `node --check scripts/codeviz/visualizer.js` passes.
+- `escript scripts/codeviz/generate.escript --out=build/codeviz/hyperbeam-codeviz.html --json-out=build/codeviz/graph.json` passes.
+- `git diff --check` passes.
+- `HB_PORT=0 rebar3 eunit` passes: `All 947 tests passed`, `EXIT_CODE=0`.
+- Browser screenshots saved under `build/codeviz/validation-*.png`.
+- Force-map proof: `mode=function&devices=recorder@1.0,scheduler@1.0` rendered `286` visible function nodes, `730` visible calls, `26` map regions, `2` role bands, `0` measured label overlaps, nearest node-center distance `69.7`, spread `4368x2631`, and opened at readable `scale(0.32)`. Screenshot saved to `build/codeviz/validation-force-map-recorder-scheduler-readable.png`.
+- Force-map search proof: `mode=module&devices=recorder@1.0,scheduler@1.0&search=hb_message` rendered a readable `2` node / `1` call map with `0` overlaps and spread `639x47`. Screenshot saved to `build/codeviz/validation-force-map-hb-message-search.png`.
+- Force-map selection proof: clicking high-degree `hb_event:log/5` preserved the `286` node / `730` edge map, highlighted `77` hot call edges in place, and populated the inspector with `80` callers and `2` callees. Screenshot saved to `build/codeviz/validation-force-map-high-degree-selection.png`.
+- Live overlay browser proof: `?devices=recorder@1.0,scheduler@1.0&mode=system&live=demo` showed `3` hot nodes, `3` hot edges, `6` live rings, and status `demo live: +27 events · 40 hot`; screenshot saved to `build/codeviz/validation-live-demo.png`.
+- Recorder stack proof: `rebar3 device test --devices dev_recorder --module recorder@1.0 --test live_report_processes_test+live_json_response_test` passes (`2 tests passed`).
+- Browser stack overlay proof against a recorder-shaped local JSON feed: `selected=hb_message` showed status `stacks: 2 procs · +2 reductions · 47 hot`, one `Live stacks` inspector row, `8` live rings, and `8` warm edges; screenshot saved to `build/codeviz/validation-stack-live.png`.
+- Recorder import proof: `recording=demo&selected=hb_message` showed status `demo: 3 events · 9 frames · 54 hot`, one recorded inspector stack row, `10` live rings, and `3` warm edges; screenshot saved to `build/codeviz/validation-recording-demo.png`.
+- Heat panel proof: `recording=demo` showed a `Recorded heat` panel with `8` rows; clicking the top row selected `hb_http` and focused its module lens. Screenshot saved to `build/codeviz/validation-heat-panel.png`.
+- Trace edge proof: `recording=demo` in module mode showed status `demo: 3 events · 9 frames · 16 traces · 54 hot`, with `4` visible animated trace paths including `hb_ao -> hb_message` and `dev_recorder -> hb_ao`; screenshot saved to `build/codeviz/validation-trace-edges.png`.
+- Engine panel proof: `recording=demo` shows a docked `72px` engine deck with `4` hot rows and `4` trace-route rows; clicking the first route selected `hb_message` and focused its module lens. Screenshot saved to `build/codeviz/validation-engine-panel.png`.
+- Event-delta proof: a local `~hyperbuddy@1.0/events`-shaped JSON counter feed showed rows including `hb_http/request+7 events`, status `live: +16 events · 41 hot`, and clicking the top event row selected `hb_http`; screenshot saved to `build/codeviz/validation-event-deltas.png`.
+- Linkified-event proof: a local HyperBuddy-shaped `/events` mock returned only `+link` keys, the visualizer fetched the formatted fallback, and the engine deck showed `http/request+5 events`, `http/parsed_singleton+3 events`, and `hb_message/commit+2 events`; screenshot saved to `build/codeviz/validation-linkified-events.png`.
+- Real recorder proof: a throwaway node on `localhost:19876` returned `200 application/json` from `~recorder@1.0/live`; the browser connected to that absolute endpoint and showed `stacks: 90 procs · +4,266 reductions · 1 traces · 8 hot` with a visible `hb_http_server -> hb_ao` route. Screenshot saved to `build/codeviz/validation-real-recorder-live.png`.
+- Fresh full-suite proof after the linkified-event pass: `HB_PORT=0 rebar3 eunit` completed with `All 947 tests passed`.
+- Fresh full-suite proof after the event-alias, device-context, inspector, and recorder-action passes: `HB_PORT=0 rebar3 eunit` completed with `All 947 tests passed`.
+- Fresh full-suite proof after the follow-heat, playback, splitter, stack-path, and inspector-event passes: `HB_PORT=0 rebar3 eunit` completed with `All 947 tests passed`.
+- Event-alias proof: after adding the missing `src/core` include path to the generator, the graph expanded from `2489 functions / 3424 calls` to `3359 functions / 8508 calls`; `70` modules now carry event aliases harvested from `?event(...)` and `hb_event:record(...)`.
+- Event-alias browser proof: a local counter feed with `scheduling/assigned`, `store_error/store_call_failed_retrying`, and `payment/charge` rows highlighted `dev_scheduler_server`, `hb_store`, `dev_simple_pay`, and `dev_p4`; clicking `scheduling/assigned` selected `dev_scheduler_server` and saved URL state. Screenshot saved to `build/codeviz/validation-event-aliases.png`.
+- Device-family proof: `devices=scheduler@1.0&mode=module` now includes same-group modules that reference the selected device (`dev_scheduler`, `dev_scheduler_registry`, `dev_scheduler_server`, and `lib_process`) while excluding unrelated router/payment/vm referrers. Screenshot saved to `build/codeviz/validation-device-family-context.png`.
+- Event-meter proof: a local live counter feed rendered three event pulse meters at `100%`, `42.857%`, and `14.286%` for `scheduling/assigned`, `store_error/store_call_failed_retrying`, and `payment/charge`; screenshot saved to `build/codeviz/validation-event-meters.png`.
+- Inspector live-event proof: selecting the hot `hb_store` module from a live feed showed a `Live events` inspector section with `store_error/store_call_failed_retrying` at `100%`; screenshot saved to `build/codeviz/validation-inspector-live-events.png`.
+- Recorder action proof: selecting `dev_recorder` shows `Recorder black box` actions (`Live stacks`, `Import`, `Demo recording`); clicking `Demo recording` painted the recorder timeline and trace rows from the inspector. Screenshot saved to `build/codeviz/validation-recorder-actions.png`.
+- Event-search proof: `search=scheduling/assigned` with all devices loaded returned exactly one module, `dev_scheduler_server`, by searching static event aliases. Screenshot saved to `build/codeviz/validation-event-search.png`.
+- Event-alias pill proof: selecting `dev_scheduler_server` shows event alias pills including `scheduling/assigned`; clicking that pill sets graph search to `scheduling/assigned` and preserves the selected scheduler server. Screenshot saved to `build/codeviz/validation-event-alias-pills.png`.
+- Recording URL proof: `recording=http://127.0.0.1:8891/report.json` loaded a recorder-shaped JSON report, painted `2 events · 6 frames · 4 traces`, retained the recording URL state, and heated the actual structured frames (`hb_message`, `dev_recorder`, `hb_store`, `hb_ao`). Screenshot saved to `build/codeviz/validation-recording-url.png`.
+- Event-rate proof: a local live feed rendered event rows with approximate rates (`3.6/s`, `1.8/s`, `0.9/s`) beside their recent deltas. Screenshot saved to `build/codeviz/validation-event-rates.png`.
+- Aggregate-rate proof: `live=demo` status now shows an aggregate rate (`demo live: +27 events · 20/s · 8 hot`) in both the live badge and graph metadata.
+- Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
+- Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
+- Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
+- Focused recording URL proof: `recording=demo&recording-event=1` opened directly with tick `1` active, status `demo: 1 events · 3 frames · 4 traces · 44 hot`, and retained `recording-event=1` in the URL.
+- Mobile QA proof: at `390x844`, the page had `0` horizontal overflow, no offscreen controls, and the `2 devices` context stat fit its container. Screenshot saved to `build/codeviz/validation-mobile.png`.
+- Refreshed mobile QA proof: at `390x844`, `dev_recorder` with `recording=demo` had `0` horizontal overflow, no offscreen controls, and the three recorder action buttons fit at about `99px` each. Screenshot saved to `build/codeviz/validation-mobile-recorder-actions.png`.
+- Stack-row navigation proof: `recording=demo&selected=dev_recorder` rendered an enabled `hb_message:commit/3` stack row; clicking it selected and revealed `hb_message` even though the target was outside the pre-click recorder lens. Screenshot saved to `build/codeviz/validation-stack-row-pulls-target.png`.
+- Follow-heat proof: `live=demo&follow=heat` auto-selected hot module `dev_scheduler`, showed the inspector, marked the `Follow` control active, and preserved `follow=heat` in the URL. Screenshot saved to `build/codeviz/validation-follow-heat.png`.
+- Follow-heat mobile proof: at `390x844`, `live=demo&follow=heat` had `0` horizontal overflow, no offscreen controls, selected `dev_scheduler`, and fit six live-strip controls in two rows. Screenshot saved to `build/codeviz/validation-follow-heat-mobile.png`.
+- Inspector heat wording proof: `live=demo&follow=heat` showed numeric `Live heat` in the inspector and no longer rendered the ambiguous `Errors hot` wording. Screenshot saved to `build/codeviz/validation-inspector-heat-wording.png`.
+- Recording playback proof: `recording=demo` timeline now has a `Play` control; clicking it moved from aggregate `All` into a numbered event with `Pause` active and then returned to `All` with `Play` restored after replay. Screenshot saved to `build/codeviz/validation-recording-playback.png`.
+- Recording step-button proof: `recording=demo` timeline now shows `Play`, disabled `Prev`, and enabled `Next`; clicking `Next` moved `All -> 1 -> 2`, clicking `Prev` returned to event `1`, the title and `recording-event=N` URL state followed each step, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-recording-step-buttons.png`.
+- Recording step-button mobile proof: at `390x844`, `Play`, `Prev`, `Next`, `All`, and ticks `1..3` all fit without horizontal offscreen controls, `Next` focused event `1`, and document/body overflow stayed `0`. Screenshot saved to `build/codeviz/validation-recording-step-buttons-mobile.png`.
+- Recording focus edge-clear proof: after selecting a trace edge from focused `recording-event=1`, clicking `Next` moved to tick `2`, cleared `edge=`, cleared the selected trace edge/card and active stack row, retained `recording-event=2`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-focus-clears-edge.png`.
+- Workspace splitter proof: dragging the context splitter widened the context pane from `300px` to `364px` and kept page overflow at `0`; dragging the inspector splitter widened the detail pane from `340px` to `398px` and kept page overflow at `0`. Screenshot saved to `build/codeviz/validation-workspace-splitter.png`.
+- Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
+- Stack-path row proof: `recording=demo&selected=hb_ao` rendered a stack row path `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3` and preserved the full newline stack in the row title. Screenshot saved to `build/codeviz/validation-stack-path-rows.png`.
+- Inspector event-click proof: `live=demo&selected=dev_scheduler` rendered an enabled `dev_scheduler/events` inspector event row; clicking it focused `dev_scheduler` and preserved the event key in the row title. Screenshot saved to `build/codeviz/validation-inspector-event-click.png`.
+- Follow-focus/doc-clamp proof: `live=demo&follow=heat` kept the hot `dev_scheduler` node visible in the graph, clamped a long `320px` module doc to `170px`, and left live event rows visible in the inspector. Screenshot saved to `build/codeviz/validation-follow-focus-doc-clamp.png`.
+- Selected-device pinning proof: with `recorder@1.0,scheduler@1.0` loaded, the first two visible context rows are active `~recorder@1.0` and `~scheduler@1.0`, followed by inactive devices. Screenshot saved to `build/codeviz/validation-selected-device-pinning.png`.
+- Live heat badge proof: `live=demo&follow=heat` rendered `6` live rings with numeric node badges such as `+9`, `+7`, and `+6`. Screenshot saved to `build/codeviz/validation-live-heat-badges.png`.
+- Follow-pause proof: with `live=demo&follow=heat`, clicking a live heat row selected `dev_scheduler`, turned the `Follow` control off, and removed `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-manual-pauses-follow.png`.
+- Stop-live proof: clicking `Stop` from `live=demo&follow=heat` set status to `live off`, cleared Follow, and removed both `live=` and `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-stop-clears-follow.png`.
+- Recording follow proof: `recording=demo&follow=heat` kept Follow active, preserved `follow=heat` in the URL, and selected the hottest recorded node (`hb_process_sampler` in the demo sample).
+- Engine-source switcher proof: `live=demo&follow=heat` rendered the source row with `Demo` active, switching to `Recording` painted the recorder timeline with `recording=demo`, switching back restored `Demo` as active, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-switcher.png`.
+- Engine-source mobile proof: at `390x844`, the source row showed `DEMO ENGINE FEED`, all five source buttons fit onscreen, and horizontal overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-mobile-fixed.png`.
+- Hot minimap proof: `live=demo&follow=heat` rendered `1` hot minimap marker, `5` warm markers, `1` selected marker, kept the minimap visible, and maintained desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-hot-minimap.png`.
+- Selected recording-event proof: `recording=demo&selected=hb_ao` rendered a `Recording events` inspector row; clicking it made timeline tick `1` active, marked the row active, added `recording-event=1` to the URL, and kept overflow at `0`. Screenshot saved to `build/codeviz/validation-selected-recording-events.png`.
+- Engine metric chip proof: `live=demo&follow=heat` rendered metric chips for events, rate, streams, hot nodes, and errors with no text clipping and `0` overflow on desktop and at `390x844`. Screenshots saved to `build/codeviz/validation-engine-metric-chips.png` and `build/codeviz/validation-engine-metric-chips-mobile.png`.
+- Relation-highlight proof: after hover-neighborhood wiring, clicking `dev_scheduler_server` still produced `2` caller nodes, `11` callee nodes, `13` hot edges, and `0` overflow; the in-app browser harness did not emit hover events or expose event constructors for direct hover proof. Screenshot saved to `build/codeviz/validation-hover-relation-path.png`.
+- Error-deck proof: `recording=demo&recording-event=3` rendered `ERRORS +31`, timeline tick `3`, and `3` clickable error-heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`) with `0` overflow; at `390x844` the error rows had no clipping or offscreen controls. Screenshots saved to `build/codeviz/validation-error-heat-deck.png` and `build/codeviz/validation-error-heat-deck-mobile.png`.
+- Function-scale proof: `mode=function&search=hb_message` now opens at `scale(0.72)` with `60` function nodes, `52` visible calls, readable labels, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-readable-scale.png`.
+- Search-highlight proof: `mode=function&search=hb_message` rendered `60` search-match graph nodes and `60` search-match minimap markers with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-highlights.png`.
+- Search-meta proof: `mode=function&search=hb_message` now reports `60 visible nodes · 60 matches · 52 visible calls` in the graph metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-meta.png`.
+- Stack metadata proof: a local live stack JSON feed at `127.0.0.1:8892` rendered a `hb_message:commit/3` stack row with `2 MB` memory and `q 7` queue metadata, no metadata clipping, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-memory-queue.png`.
+- Stack process-name proof: the same local live stack feed rendered registered process name `hb_worker_demo` beside pid/status/reduction/memory/queue metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-name.png`.
+- Recording title proof: `recording=demo&recording-event=3` rendered `Recording timeline · warning/process_sampler_failed`, kept timeline tick `3` active, and had no title clipping or overflow. Screenshot saved to `build/codeviz/validation-recording-focused-title.png`.
+- Source heat label proof: `recording=demo&selected=hb_ao` rendered `Recorded heat` in the heat panel and inspector, with hot-row tooltip `hb_ao (+10 recorded heat)` and `0` overflow. Screenshot saved to `build/codeviz/validation-source-heat-labels.png`.
+- Canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `21` nodes, `21` calls, `6` live badges, `6` hot/warm minimap markers, engine metrics, and `0` overflow on desktop and at `390x844` with no offscreen controls. Screenshots saved to `build/codeviz/validation-canonical-current.png` and `build/codeviz/validation-canonical-current-mobile.png`.
+- Live cadence proof: `live=demo&follow=heat&interval=1` preserved `interval=1` in the URL, selected the `1s` cadence control, rendered source metric chips including `Cadence 1s` and `Fresh now`, and kept desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-live-cadence.png`.
+- Live cadence mobile proof: at `390x844`, `live=demo&follow=heat&interval=1` had `0` horizontal overflow, no offscreen live/source controls, and visible cadence/freshness chips. Screenshot saved to `build/codeviz/validation-live-cadence-mobile.png`.
+- Function overview proof: unsearched `mode=function` with recorder/scheduler context rendered `1,758` function nodes, `3,708` visible calls, graph title `Function call graph overview`, graph metadata `overview`, transform `translate(24,24) scale(0.26)`, `1,758` minimap nodes, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-overview.png`.
+- Function search regression proof: `mode=function&search=hb_message` still opens at `scale(0.72)` with `60` nodes, `60` search matches, `52` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-search-after-overview.png`.
+- Event pulse-history proof: a local HyperBuddy-shaped counter feed at `127.0.0.1:8893` rendered four event rows with `12` pulse bars each, active bars matching recent ticks, row widths of `151px` on desktop after widening the event deck, and `0` overflow. Screenshot saved to `build/codeviz/validation-event-pulse-history-wide.png`.
+- Inspector pulse-history proof: `selected=hb_http` with the same counter feed rendered live inspector event rows with `12` pulse bars each, `284px` row width, and `0` overflow. Screenshot saved to `build/codeviz/validation-inspector-event-pulse-history.png`.
+- Event pulse mobile proof: at `390x844`, the event deck switched to full-width rows (`344px` each), kept `12` pulse bars per row, and had `0` overflow/offscreen rows. Screenshot saved to `build/codeviz/validation-event-pulse-history-mobile-wide.png`.
+- Recording error tick proof: `recording=demo` rendered one `.recording-tick.error` for `warning/process_sampler_failed`, retained aggregate error heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`), and had `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks.png`.
+- Recording error tick mobile proof: at `390x844`, the demo recorder timeline kept the warning tick visible, had no offscreen ticks, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks-mobile.png`.
+- Stack process deck proof: a local `~recorder@1.0/live`-shaped feed at `127.0.0.1:8894` rendered a stack-mode process deck with `3` rows, all rows clickable after preserving structured `currentFrame`, metadata including registered name/pid/status/reductions/memory/queue, `3` trace rows, process panel height `121px`, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck.png`.
+- Stack process deck mobile proof: at `390x844`, the process deck rendered full-width `344px` rows, all clickable, with wrapped stack live status, no offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck-mobile.png`.
+- Recording tick heat proof: `recording=demo` rendered stack-depth bars on recorder timeline ticks, preserved one error tick for `warning/process_sampler_failed`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat.png`.
+- Varied recording tick heat proof: a local recorder JSON report at `127.0.0.1:8895/report.json` rendered tick heat levels `33.333%`, `50%`, and `100%` for events with `2`, `3`, and `6` frame weights, with the deepest warning event marked `.recording-tick.error` and `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat-varied.png`.
+- Module drilldown proof: clicking `dev_recorder` once selected it, clicking it again opened function mode with `search=dev_recorder`, `80` search matches, `99` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-double-click-drilldown.png`.
+- System drilldown proof: clicking `kernel:resolver` twice opened module mode with `group=kernel:resolver`, `12` visible nodes, `43` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-system-drilldown.png`.
+- Edge click proof: clicking a wide invisible hit path for `hb_device_load -> hb_device_archive` selected `hb_device_archive`, added `selected=hb_device_archive` to the URL, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-click-target.png`.
+- Edge summary proof: the same edge click rendered an inspector `Selected call` section with `hb_device_load -> hb_device_archive` and `1 calls`, preserved the target selection, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-summary.png`.
+- Selected-edge highlight proof: the same edge click rendered exactly `1` `.selected-edge`, preserved the `hb_device_load -> hb_device_archive` inspector context, selected `hb_device_archive`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-selected-edge-highlight.png`.
+- Trace breadcrumb proof: `recording=demo` rendered `4` trace rows with stack breadcrumbs such as `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3`, projected the same stack frames into `4` SVG trace titles, widened desktop rows to at least `280.5px`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-trace-breadcrumbs.png`.
+- Trace breadcrumb mobile proof: at `390x844`, the same recording view rendered full-width `344px` trace rows with `4` stack breadcrumbs, `4` SVG trace titles carrying stack frames, no horizontally offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-trace-breadcrumbs-mobile.png`.
+- Trace row selection proof: clicking a `recording=demo` trace route row selected `hb_message`, marked `1` trace row active, highlighted `1` SVG trace edge, rendered a `Selected trace` inspector card with Source/Target actions, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-trace-row-selection.png`.
+- Trace row selection mobile proof: at `390x844`, clicking a trace route row selected `hb_message`, marked `1` trace row active, highlighted `1` SVG trace edge, rendered `Selected trace`, kept trace rows `344px` wide with no horizontally offscreen rows, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-trace-row-selection-mobile.png`.
+- Relation edge-context proof: selecting `hb_message` and clicking caller row `dev_scheduler · 43` selected `dev_scheduler`, highlighted exactly `1` selected call edge, rendered a `Selected call` inspector card for `dev_scheduler -> hb_message`, marked `1` relation row active, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-relation-edge-context.png`.
+- Relation edge-context mobile proof: at `390x844`, the same caller-row click selected `dev_scheduler`, highlighted `1` selected call edge, rendered `Selected call`, marked `1` active relation row at `336px`, had no horizontally offscreen active relation, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-relation-edge-context-mobile.png`.
+- Edge URL-state proof: after selecting caller edge `dev_scheduler -> hb_message`, the URL included `edge=call|dev_scheduler|hb_message|43`; reloading that URL restored `dev_scheduler`, `1` selected edge, the `Selected call` card, `1` active relation row, and `0` overflow. Screenshot saved to `build/codeviz/validation-edge-url-state.png`.
+- Trace edge URL-state proof: after selecting recorder trace row `hb_ao -> hb_message`, the URL included both `recording=demo` and `edge=trace|hb_ao|hb_message|4`; reloading restored `hb_message`, `1` active trace row, `1` selected SVG trace edge, `Selected trace`, and `0` overflow. Screenshot saved to `build/codeviz/validation-trace-edge-url-state.png`.
+- Edge jump proof: clicking a visible edge rendered Source/Target inspector actions, clicking Source selected `hb_ao`, kept exactly `1` selected edge highlighted, preserved the selected-call card, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-jump-actions.png`.
+- Edge jump mobile proof: at `390x844`, clicking a visible edge rendered two `143px` Source/Target actions, kept exactly `1` selected edge highlighted, had no horizontally offscreen jump buttons, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-edge-jump-actions-mobile.png`.
+- Recording event stack proof: `recording=demo&recording-event=1` rendered an `Event stack` deck with `3` clickable frames (`hb_message:commit/3`, `hb_ao:resolve/3`, `dev_recorder:record/3`); clicking the first row selected `hb_message`, retained `recording-event=1`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-event-stack.png`.
+- Recording event stack mobile proof: at `390x844`, the same focused recording event rendered `3` full-width `344px` event-stack rows with no horizontally offscreen rows and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-recording-event-stack-mobile.png`.
+- Recording stack trace-edge proof: clicking the first focused `recording-event=1` stack row selected `hb_message`, marked `1` event-stack row active, highlighted `1` selected SVG trace edge, marked `1` trace route row active, rendered `Selected trace`, preserved `recording-event=1`, added `edge=trace|hb_ao|hb_message|1`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-stack-trace-edge.png`.
+- Recording stack trace-edge mobile proof: at `390x844`, the same stack-row click marked `1` active `344px` event-stack row, highlighted `1` selected SVG trace edge, rendered `Selected trace`, preserved `recording-event=1` plus `edge=trace|hb_ao|hb_message|1`, had no horizontally offscreen active row, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-recording-stack-trace-edge-mobile.png`.
+- Edge count-label proof: the selected trace card now renders `1 sampled frame` for a single-frame stack-row edge while the aggregate trace row still renders `+4 sampled frames`, with `1` active process row, `1` selected trace edge, and `0` overflow. Screenshot saved to `build/codeviz/validation-edge-count-labels.png`.
+- Device path proof: with `recorder@1.0,scheduler@1.0` loaded and `hb_message` selected, the inspector rendered `dev_scheduler -> hb_message` as a `1` hop / `43` call device path; clicking the row kept `hb_message` selected, highlighted `1` path edge and `2` path nodes, marked the row active, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-device-path-highlight.png`.
+- Device path mobile proof: at `390x844`, the same selected `hb_message` view rendered one `310px` device-path row; clicking it marked `1` row active, highlighted `1` path edge and `2` path nodes, had no horizontally offscreen rows, and kept `0` document/body overflow. Screenshot saved to `build/codeviz/validation-device-path-highlight-mobile.png`.
+- Device path minimap proof: clicking the `dev_scheduler -> hb_message` path row kept `hb_message` selected, marked `1` path edge and `2` path nodes in the main graph, rendered `2` `.mini-node.path-node` markers plus `1` selected minimap marker, kept the minimap visible, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-device-path-minimap.png`.
+- Path clear proof: after selecting a device path, switching to function mode cleared path state to `0` path edges, `0` path nodes, `0` active path rows, hid the detail view, set the selection label to `No selection`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-path-clear-mode.png`.
+- Post URL/step canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no stale path or selected-edge classes, live metric chips, selected `hb_message`, no horizontally offscreen controls, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-url-step.png`.
+- Post URL/step canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no stale path or selected-edge classes, no horizontally offscreen controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-url-step-mobile.png`.
+- Recorder function-flow proof: `mode=function&devices=recorder@1.0` now renders a compact device-context graph with `11` modules, `99` functions, `158` calls in stats, `99` SVG function nodes, `133` visible SVG call edges, `0` bridge rows stealing graph height, `0` overflow, and the `dev_recorder` module spread across `6` call-stage columns over `1430px` instead of one vertical stack. Screenshot saved to `build/codeviz/validation-recorder-function-flow-final.png`.
+- Post path/trace canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no stale path or selected-edge classes, live metric chips, selected `hb_message`, no horizontally offscreen controls, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-path-trace.png`.
+- Post path/trace canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no stale path or selected-edge classes, no horizontally offscreen controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-path-trace-mobile.png`.
+- Post edge/stack canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, no horizontally offscreen controls, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-post-edge-stack.png`.
+- Post edge/stack canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `38` visible calls, `39` edge hit paths, `1` trace row, no horizontally offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-post-edge-stack-mobile.png`.
+- Latest canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-latest.png`.
+- Latest canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `39` edge hit paths, no offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-latest-mobile.png`.
+
+## Last Presentation Pass
+
+- Added live engine overlay controls.
+- Added event counter and Prometheus text normalizers.
+- Added URL-addressable live mode with explicit demo feed and real endpoint mode.
+- Added `~recorder@1.0/live` JSON endpoint for bounded BEAM process stack snapshots.
+- Added visualizer stack mode that paints live process stacks onto modules/functions and surfaces matching process rows in the inspector.
+- Added recorder report import support for saved `~recorder@1.0` HTML/JSON reports with embedded stack traces.
+- Added graph heat panel for the hottest live, stack, or recorded nodes with click-to-focus behavior.
+- Added animated trace edges that project live/recorded stack frames into the current subsystem, module, or function view.
+- Moved heat and trace route telemetry into a compact docked engine panel above the graph so live data no longer blocks the map.
+- Added event-delta rows for live counter feeds so `~hyperbuddy@1.0/events` activity can be inspected and clicked even when no stack traces are present.
+- Added support for linkified HyperBuddy event counter responses by fetching the formatted event message and parsing numeric counters from it.
+- Added static event-topic aliases to modules/functions so live HyperBuddy counters can resolve through instrumentation names instead of only module-name guesses.
+- Added event-row decay so recent live pulses remain inspectable across quiet poll ticks.
+- Added compact animated event meters to the live event deck so relative event frequency is visible at a glance.
+- Added selected-node live event rows to the inspector so hot modules explain which event streams are driving their heat.
+- Added recorder black-box actions directly to the `dev_recorder` inspector so recordings and live stack overlays can be launched from the recorder node itself.
+- Added event aliases to graph search so runtime counter names can be used as static navigation terms.
+- Added clickable event-alias pills in the inspector for modules/functions/subsystems with known event emitters.
+- Added `recording=<url>` support for loading recorder JSON/HTML artifacts directly from a URL.
+- Tightened structured stack-frame heat so exact module/function frames do not expand through unrelated loose event aliases.
+- Added approximate event/sec readouts to live event rows and inspector live-event rows.
+- Added aggregate event/sec readout to live status text.
+- Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
+- Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
+- Expanded selected device contexts with same-group modules that reference the selected device so helper/server pieces appear with their root device.
+- Added a recorder timeline rail that can repaint aggregate recordings or focus an individual recorded event.
+- Added `recording-event=N` URL state for shareable focused recorder playback.
+- Tightened mobile stat sizing so the context count fits in the four-card summary row.
+- Made live/recorded stack rows clickable debugger targets that can pull their resolved module/function into the graph.
+- Added shareable `follow=heat` engine-view mode that follows the hottest live/recorded module while keeping the control explicit.
+- Renamed live inspector metrics to numeric `Live heat` / `Error heat` labels for clearer engine-view telemetry.
+- Added recorder timeline playback so imported or demo recordings can repaint their stack traces event-by-event.
+- Added recorder timeline Prev/Next stepping with mobile wrapping so recording controls fit without horizontal scrolling.
+- Cleared selected edge/path state whenever recorder timeline focus moves between aggregate and individual events.
+- Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
+- Added compact stack-path trails to live/recorded inspector stack rows.
+- Made selected-node live event rows in the inspector clickable graph targets.
+- Clamped long inspector docs and made follow mode focus the hot node after render instead of broad-fitting the whole lens.
+- Pinned selected devices to the top of the context device list with an active row treatment.
+- Added numeric live heat badges directly on hot graph nodes.
+- Manual graph/engine/inspector selections now pause Follow mode so live ticks do not immediately steal focus back.
+- Stopping live mode now clears Follow mode and its URL state.
+- Recording loads now preserve Follow mode so recorded heat can auto-focus like live heat.
+- Added a graph-local engine source switcher for HyperBuddy counters, live recorder stacks, demo telemetry, recorder playback, and report imports.
+- Stacked the engine source label above full-width source controls on mobile so the active telemetry feed remains legible.
+- Routed all recorder import controls through one guarded helper so restricted browsers do not throw when opening a report picker.
+- Painted live/recorded heat and the selected node onto the minimap so offscreen activity is visible from the engine view.
+- Added selected-node recording event rows in the inspector with click-to-focus playback for the matching recorder event.
+- Added source-specific engine metric chips for event counters, stack snapshots, recorder playback, and device bridge context.
+- Added in-place hover-neighborhood relation highlighting so hovering a node temporarily lights callers/callees without changing the selected inspector target.
+- Added a dedicated error heat deck for warning/failure activity from live counters, recorder stack samples, and recorded events.
+- Raised the readable first-load scale for function-mode search results so function call graphs open as inspectable diagrams instead of tiny thumbnails.
+- Highlighted search-matching graph and minimap nodes so filtered results are visually distinct from supporting context.
+- Added active-search match counts to the graph metadata.
+- Made graph titles mode-specific so function views are labeled as function call graphs.
+- Added memory and message-queue metadata to live stack inspector rows, with wrapped stack metadata so the values remain readable.
+- Added registered process names to live stack inspector metadata when the recorder live endpoint provides them.
+- Added focused recorder event names to the recording timeline title and tick tooltips.
+- Made heat labels source-specific across live, stack, and recording modes.
+- Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
+- Added a live cadence selector with shareable `interval=<seconds>` state, source metric chips for cadence/freshness, and custom URL interval handling.
+- Added an overview-scale first fit for very large unsearched function graphs while preserving readable scale for searched function call graphs.
+- Updated the codeviz README with live cadence and function-overview behavior.
+- Added per-event pulse-history bars to the live event deck and inspector live-event rows, with a wider desktop event layout and full-width mobile rows.
+- Updated the codeviz README with event pulse-history behavior.
+- Marked warning/failure recorder timeline ticks as error ticks and routed recording warning events through error heat.
+- Updated the codeviz README with recorder error tick behavior.
+- Added a stack-mode process deck for live recorder samples, preserving structured current frames so unknown function names can still click through to their modules.
+- Added mobile-safe live status wrapping and graph-stage clipping/containment work while validating stack process rows.
+- Updated the codeviz README with stack process deck behavior.
+- Added stack-depth heat bars to recorder timeline ticks.
+- Updated the codeviz README with recorder tick heat behavior.
+- Added graph drilldown gestures where clicking an already-selected subsystem/module dives to the next graph mode.
+- Updated the codeviz README with graph drilldown behavior.
+- Added wide invisible hit paths for call/trace edges so edge clicks select the callee without requiring pixel-perfect stroke targeting.
+- Updated the codeviz README with edge-click behavior.
+- Added selected-edge context to the inspector so edge clicks preserve the source/target/count that led to the selected node.
+- Highlighted the selected call/trace edge directly on the graph so the inspector context is visually anchored.
+- Added representative stack breadcrumbs to trace route rows and SVG trace titles, with full-width trace route decks for readable recorder/live paths.
+- Made trace route rows select the corresponding trace edge, open the selected-trace inspector card, and show an active row state.
+- Made caller/callee relation rows preserve selected-call edge context, highlight the call edge, and show an active relation state.
+- Added shareable selected-edge URL state for call and trace edge cards.
+- Added Source/Target jump actions to the selected-edge inspector card while preserving selected-edge highlighting across endpoint jumps.
+- Added a focused recording event-stack deck with clickable frame rows for `recording-event=N` playback.
+- Made focused recording event-stack frame rows select the adjacent trace edge when the graph can project it.
+- Added shared singular/plural count labels for call, bridge, path, and sampled-frame edge text.
+- Added a selected-node device-path inspector section that shows short directed paths from loaded device modules into kernel nodes and paints a selected route onto the rendered graph.
+- Painted selected device-path nodes onto the minimap so offscreen route endpoints remain visible.
+- Cleared selected-path and selected-edge state on mode/device/background selection clears, and emptied stale inspector DOM when no node is selected.
+- Reworked unselected function-mode device context from a full-kernel overview into a compact flow graph of selected device functions plus direct kernel touchpoints.
+- Laid out functions inside each module in left-to-right call-stage columns and routed reverse/cyclic calls around the outside of their source column.
+- Suppressed the static device bridge rows in function mode so the actual function flow starts higher and remains the primary visual surface.
+- Moved dense static call edges from SVG paths to a canvas-backed traffic layer, keeping SVG for nodes, labels, and capped live trace routes.
+- Cached live event-key resolution and changed live counter/stack/demo ticks to repaint heat, minimap classes, engine panels, and the canvas edge layer without recomputing the full graph layout unless Follow changes selection.
+- Tuned very large function namespace maps with wider anchors and reduced late collision polishing so thousands of functions render as a broad map instead of spending most time on imperceptible overlap cleanup.
+- Browser perf proof: `mode=function&layout=namespace&devices=all&scope=kernel` rendered `3,268` nodes and `8,333` visible calls with `0` static call-edge DOM nodes, a nonblank canvas, `6,212` visible canvas edge strokes, and `lastRenderMs=3467.8`. Screenshot saved to `build/codeviz/validation-canvas-edge-perf-spaced.png`.
+- Live perf proof on the same heavy map with `live=demo&interval=1&pulse=rate`: `3` live ticks produced `0` full renders, `3` canvas redraws, and live frame work around `19.1ms`; the URL retained `live=demo&interval=1&pulse=rate&panel=engine`.
+- Real Delta event-feed proof: `live=https://delta.neo2.zephyrdev.xyz/~hyperbuddy@1.0/events&interval=1&pulse=rate` on the recorder/scheduler module map advanced to `+5,193 events · 6,683/s · 17 hot`, with `3` live frames, `3` canvas redraws, `0` full renders, `lastLiveFrameMs=1.7`, and `lastEdgeMs=1.8`.
+
+## Next Work
+
+- Improve stack heat ranking and multi-event recording navigation.
+- Add richer source-specific legends for event heat, stack heat, and recording heat.
+- Continue browser validation after each presentation pass.

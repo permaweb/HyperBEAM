@@ -1,0 +1,232 @@
+<!--
+Agents: this report embeds the static HyperBEAM call graph as base64 JSON in
+the script tag with id="embedded-graph".
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperBEAM code visualizer</title>
+  <link rel="icon" href="data:,">
+  <style>{{CODEVIZ_CSS}}</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="title-lockup">
+        <div class="title-mark" aria-hidden="true">HB</div>
+        <div>
+          <p class="eyebrow">HyperBEAM source graph</p>
+          <h1><span>~codeviz@1.0/</span><span class="flight-name">call-flow</span></h1>
+        </div>
+      </div>
+      <div class="toolbar" aria-label="Graph controls">
+        <button type="button" id="fit-graph" title="Fit graph">Fit</button>
+        <button type="button" id="reset-graph" title="Reset view">Reset</button>
+        <div class="segmented" role="tablist" aria-label="Graph mode">
+          <button type="button" class="active" data-mode="system">Subsystems</button>
+          <button type="button" data-mode="module">Modules</button>
+          <button type="button" data-mode="function">Functions</button>
+        </div>
+        <div class="segmented layout-switch" role="tablist" aria-label="Graph layout">
+          <button type="button" class="active" data-layout="map">Map</button>
+          <button type="button" data-layout="namespace">Namespaces</button>
+          <button type="button" data-layout="flow">Flow</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats" aria-label="Graph summary">
+      <article>
+        <span>Modules</span>
+        <strong id="stat-modules">0</strong>
+      </article>
+      <article>
+        <span>Functions</span>
+        <strong id="stat-functions">0</strong>
+      </article>
+      <article>
+        <span>Calls</span>
+        <strong id="stat-calls">0</strong>
+      </article>
+      <article>
+        <span>Context</span>
+        <strong id="stat-context">kernel</strong>
+      </article>
+    </section>
+
+    <section class="live-strip" aria-label="Live engine overlay">
+      <span id="live-status" class="live-status">live off</span>
+      <input id="live-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="/~hyperbuddy@1.0/events">
+      <select id="live-interval" aria-label="Refresh interval" title="Refresh interval">
+        <option value="1000">1s</option>
+        <option value="2200" selected>2.2s</option>
+        <option value="3000">3s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+        <option value="15000">15s</option>
+        <option value="30000">30s</option>
+      </select>
+      <button type="button" id="live-follow" class="live-follow" title="Follow hottest live node" aria-pressed="false">Follow</button>
+      <button type="button" id="live-connect" title="Connect live endpoint">Connect</button>
+      <button type="button" id="live-stack" title="Poll recorder stacks">Stack</button>
+      <button type="button" id="live-rate-mode" title="Color nodes based on change in event rates." aria-label="Color nodes based on change in event rates." aria-pressed="true">Δ</button>
+      <button type="button" id="recording-import" title="Import recorder report">Import</button>
+      <button type="button" id="live-demo" title="Run demo telemetry">Demo</button>
+      <button type="button" id="live-stop" title="Stop live overlay" hidden>Stop</button>
+      <input id="recording-file" type="file" accept=".html,.json,application/json,text/html" hidden>
+    </section>
+
+    <section class="workspace">
+      <aside class="context-panel" hidden aria-hidden="true"></aside>
+      <div class="workspace-splitter" data-splitter="context" aria-hidden="true"></div>
+
+      <section class="graph-panel">
+        <div class="section-head graph-head">
+          <h2 id="graph-title">Kernel call graph</h2>
+          <span id="graph-meta">0 visible calls</span>
+        </div>
+        <div id="graph-stage" class="graph-stage">
+          <canvas id="edge-canvas" class="edge-canvas" aria-hidden="true"></canvas>
+          <svg id="graph" role="img" aria-label="HyperBEAM call graph">
+            <defs>
+              <marker id="arrow-normal" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z"></path>
+              </marker>
+              <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z"></path>
+              </marker>
+            </defs>
+            <g id="viewport">
+              <g id="bands"></g>
+              <g id="edges"></g>
+              <g id="nodes"></g>
+            </g>
+          </svg>
+          <div id="minimap" class="minimap" hidden>
+            <svg id="minimap-svg" aria-label="Graph minimap">
+              <g id="minimap-nodes"></g>
+              <rect id="minimap-view"></rect>
+            </svg>
+          </div>
+        </div>
+      </section>
+      <div class="workspace-splitter" data-splitter="detail" aria-hidden="true"></div>
+
+      <aside class="detail-panel">
+        <div class="section-head detail-head">
+          <div class="detail-tabs" role="tablist" aria-label="Detail panels">
+            <button type="button" class="active" data-detail-tab="scope">Scope</button>
+            <button type="button" data-detail-tab="inspector">Inspector</button>
+            <button type="button" data-detail-tab="engine">Engine</button>
+          </div>
+          <span id="selection-label">No selection</span>
+        </div>
+        <div id="scope-tab" class="detail-tab scope-tab active">
+          <div class="scope-panel">
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Map Scope</h3>
+                <span id="device-count">0 devices</span>
+              </div>
+              <div class="scope-actions scope-mode" role="group" aria-label="Map scope mode">
+                <button type="button" id="clear-devices">Kernel Only</button>
+                <button type="button" id="selected-devices-mode">Selected Devices</button>
+                <button type="button" id="all-devices">All Devices</button>
+              </div>
+              <div id="scope-selection-summary" class="scope-summary">Kernel modules only</div>
+              <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Find modules, functions, paths...">
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Devices</h3>
+                <span>Selected packages</span>
+              </div>
+              <div id="group-chips" class="group-chips"></div>
+              <input id="device-search" type="search" autocomplete="off" spellcheck="false" placeholder="Filter devices...">
+              <div id="device-list" class="device-list"></div>
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Module Filters</h3>
+                <span>Visibility</span>
+              </div>
+              <label class="scope-control">
+                <span>Subsystem</span>
+                <select id="group-filter" aria-label="Subsystem">
+                  <option value="">All subsystems</option>
+                </select>
+              </label>
+              <label class="scope-control">
+                <span>Device modules</span>
+                <select id="context-scope" aria-label="Context scope">
+                  <option value="auto">Auto</option>
+                  <option value="kernel">Kernel + selected devices</option>
+                  <option value="touchpoints">Device touchpoints only</option>
+                </select>
+              </label>
+              <div class="scope-toggle-row">
+                <label class="toggle">
+                  <input id="show-private" type="checkbox" checked>
+                  <span>Private functions</span>
+                </label>
+                <label class="toggle">
+                  <input id="show-forge" type="checkbox">
+                  <span>Forge modules</span>
+                </label>
+              </div>
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Calls</h3>
+                <span>Edge filter</span>
+              </div>
+              <label class="scope-control">
+                <span>Show</span>
+                <select id="edge-filter" aria-label="Edges">
+                  <option value="context">Context calls</option>
+                  <option value="selected">Selected neighborhood</option>
+                  <option value="cross">Cross-module calls</option>
+                  <option value="strong">Repeated calls</option>
+                </select>
+              </label>
+            </section>
+          </div>
+        </div>
+        <div id="inspector-tab" class="detail-tab" hidden>
+          <div id="detail-empty" class="empty">Select a node</div>
+          <div id="detail-view" class="detail-view" hidden>
+            <div id="detail-card" class="detail-card"></div>
+            <div class="relation-grid">
+              <section>
+                <h3>Callers</h3>
+                <div id="callers" class="relation-list"></div>
+              </section>
+              <section>
+                <h3>Callees</h3>
+                <div id="callees" class="relation-list"></div>
+              </section>
+            </div>
+          </div>
+        </div>
+        <div id="engine-tab" class="detail-tab" hidden>
+          <div id="engine-panel" class="engine-panel" hidden>
+            <div id="engine-source" class="engine-source"></div>
+            <div id="heat-panel" class="heat-panel"></div>
+            <div id="trace-panel" class="trace-panel"></div>
+            <div id="process-panel" class="process-panel"></div>
+            <div id="error-panel" class="error-panel"></div>
+            <div id="recording-timeline" class="recording-timeline" hidden></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script type="application/octet-stream" id="embedded-graph">{{GRAPH_JSON_BASE64}}</script>
+  <script>{{CODEVIZ_JS}}</script>
+</body>
+</html>
