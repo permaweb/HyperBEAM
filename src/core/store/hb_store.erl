@@ -780,7 +780,7 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             {read_ops, ReadOps}
         }
     ),
-    % Generate random data to write and the keys to read ahead of time.
+    % Generate random data, keys, and store requests ahead of time.
     RandomData = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Keys =
         lists:map(
@@ -789,14 +789,21 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             end,
             lists:seq(1, ReadOps)
         ),
+    WriteReqs =
+        lists:map(
+            fun(Key) ->
+                write_req(Key, RandomData)
+            end,
+            Keys
+        ),
     {WriteTime, ok} =
         timer:tc(
             fun() ->
                 lists:foreach(
-                    fun(Key) ->
-                        ok = write(Store, write_req(Key, RandomData), #{})
+                    fun(Req) ->
+                        ok = write(Store, Req, #{})
                     end,
-                    Keys
+                    WriteReqs
                 )
             end
         ),
@@ -810,11 +817,14 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             hb_util:human_int(WriteRate)
         ]
     ),
-    % Generate keys to read ahead of time.
-    ReadKeys =
+    % Generate read requests ahead of time.
+    ReadReqs =
         lists:map(
             fun(_) ->
-                << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+                #{
+                    <<"read">> =>
+                        << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+                }
             end,
             lists:seq(1, ReadOps)
         ),
@@ -823,14 +833,14 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         timer:tc(
             fun() ->
                 lists:foldl(
-                    fun(Key, Count) -> 
-                        case read(Store, Key, #{}) of
+                    fun(Req, Count) ->
+                        case read(Store, Req, #{}) of
                             {ok, _} -> Count;
                             _ -> Count + 1
                         end
                     end,
                     0,
-                    ReadKeys
+                    ReadReqs
                 )
             end
         ),
