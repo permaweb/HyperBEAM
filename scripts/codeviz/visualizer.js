@@ -2516,14 +2516,14 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "bridge-row";
-      button.title = `${edge.source} -> ${edge.target} (${nf.format(edge.count || 1)} calls)`;
+      button.title = `${edge.source} -> ${edge.target} (${countLabel(edge.count || 1, "call", "calls")})`;
       button.addEventListener("click", () => {
         selectNode(edge.target, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = `${edge.source} -> ${edge.target}`;
       const meta = document.createElement("span");
-      meta.textContent = `${nf.format(edge.count || 1)} calls`;
+      meta.textContent = countLabel(edge.count || 1, "call", "calls");
       button.append(name, meta);
       return button;
     });
@@ -2538,14 +2538,14 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "bridge-row touchpoint";
-      button.title = `${node.id} (${nf.format(count)} bridge calls)`;
+      button.title = `${node.id} (${countLabel(count, "bridge call", "bridge calls")})`;
       button.addEventListener("click", () => {
         selectNode(node.id, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = node.title || node.id;
       const meta = document.createElement("span");
-      meta.textContent = `${nf.format(count)} bridge calls · ${node.kind}`;
+      meta.textContent = `${countLabel(count, "bridge call", "bridge calls")} · ${node.kind}`;
       button.append(name, meta);
       return button;
     });
@@ -2775,7 +2775,7 @@
       button.className = edgeIsSelected(edge, "trace") ? "trace-row active" : "trace-row";
       const path = tracePath(edge);
       button.title =
-        `${edge.source} -> ${edge.target} (+${nf.format(Math.round(edge.count))} sampled frames)` +
+        `${edge.source} -> ${edge.target} (+${countLabel(edge.count, "sampled frame", "sampled frames")})` +
         tracePathTitle(edge);
       button.addEventListener("click", () => {
         selectNode(edge.target, {
@@ -2791,7 +2791,7 @@
       const name = document.createElement("strong");
       name.textContent = `${edge.source} -> ${edge.target}`;
       const meta = document.createElement("span");
-      meta.textContent = `+${nf.format(Math.round(edge.count))} sampled frames`;
+      meta.textContent = `+${countLabel(edge.count, "sampled frame", "sampled frames")}`;
       button.append(name, meta);
       if (path.length > 1) {
         const route = document.createElement("span");
@@ -3062,7 +3062,7 @@
   function renderEdges() {
     const fragment = document.createDocumentFragment();
     state.layout.edges.forEach((edge) => {
-      fragment.append(edgeHitPath(edge, `${edge.source} -> ${edge.target} (${edge.count} calls)`));
+      fragment.append(edgeHitPath(edge, `${edge.source} -> ${edge.target} (${countLabel(edge.count, "call", "calls")})`));
       const path = svgEl("path", { class: edgeClass(edge), d: edgePath(edge) });
       const width = edgeWidth(edge);
       path.style.setProperty("--edge-width", `${width}px`);
@@ -3071,13 +3071,13 @@
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
       const title = svgEl("title");
-      title.textContent = `${edge.source} -> ${edge.target} (${edge.count} calls)`;
+      title.textContent = `${edge.source} -> ${edge.target} (${countLabel(edge.count, "call", "calls")})`;
       path.append(title);
       fragment.append(path);
     });
     liveTraceEdges().forEach((edge) => {
       const traceLabel =
-        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)` +
+        `${edge.source} -> ${edge.target} (${countLabel(edge.count, "sampled stack frame", "sampled stack frames")})` +
         tracePathTitle(edge);
       fragment.append(edgeHitPath(
         edge,
@@ -3809,8 +3809,8 @@
     route.textContent = `${edge.source} -> ${edge.target}`;
     const meta = document.createElement("span");
     meta.textContent = edge.kind === "trace" ?
-      `${nf.format(Math.round(edge.count))} sampled frames` :
-      `${nf.format(edge.count)} calls`;
+      countLabel(edge.count, "sampled frame", "sampled frames") :
+      countLabel(edge.count, "call", "calls");
     const jumps = document.createElement("div");
     jumps.className = "edge-jumps";
     [
@@ -3920,7 +3920,7 @@
       const route = document.createElement("strong");
       route.textContent = path.labels.join(" -> ");
       const meta = document.createElement("span");
-      meta.textContent = `${Math.max(0, path.ids.length - 1)} hops · ${nf.format(path.count)} calls`;
+      meta.textContent = `${countLabel(Math.max(0, path.ids.length - 1), "hop", "hops")} · ${countLabel(path.count, "call", "calls")}`;
       row.append(route, meta);
       list.append(row);
     });
@@ -3985,6 +3985,11 @@
     strong.title = String(value);
     div.append(label, strong);
     return div;
+  }
+
+  function countLabel(value, singular, plural) {
+    const count = Math.round(Number(value) || 0);
+    return `${nf.format(count)} ${count === 1 ? singular : plural}`;
   }
 
   function relationList(root, relations, direction, selectedId) {
