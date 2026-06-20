@@ -2138,9 +2138,7 @@
     els.context.textContent = state.selectedDevices.size ?
       `${state.selectedDevices.size} devices` :
       "kernel";
-    els.graphTitle.textContent =
-      state.mode === "system" ? "Subsystem flow map" :
-      state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
+    els.graphTitle.textContent = graphTitleText();
     const searchMatches = state.search ?
       state.layout.nodes.filter((node) => nodeMatchesSearch(node)).length :
       0;
@@ -2151,6 +2149,16 @@
       liveMetaText()
     ].filter(Boolean).join(" · ");
     renderLiveControls();
+  }
+
+  function graphTitleText() {
+    if (state.mode === "system") return "Subsystem flow map";
+    if (state.mode === "function") {
+      return state.selectedDevices.size ?
+        "Function call graph with device context" :
+        "Function call graph";
+    }
+    return state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
   }
 
   function renderGraph() {

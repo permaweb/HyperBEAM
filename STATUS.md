@@ -127,6 +127,7 @@ Branch: `expr/visualizer`
 - Raised the readable first-load scale for function-mode search results so function call graphs open as inspectable diagrams instead of tiny thumbnails.
 - Highlighted search-matching graph and minimap nodes so filtered results are visually distinct from supporting context.
 - Added active-search match counts to the graph metadata.
+- Made graph titles mode-specific so function views are labeled as function call graphs.
 - Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
 
 ## Next Work
