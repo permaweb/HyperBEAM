@@ -2563,7 +2563,9 @@
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
       render();
     });
-    const ticks = state.live.recordingEvents.slice(0, 48).map((event, idx) => {
+    const timelineEvents = state.live.recordingEvents.slice(0, 48);
+    const maxTickHeat = Math.max(1, ...timelineEvents.map(recordingTimelineHeat));
+    const ticks = timelineEvents.map((event, idx) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = [
@@ -2571,8 +2573,12 @@
         recordingEventIsError(event) ? "error" : "",
         state.live.recordingFocus === idx ? "active" : ""
       ].filter(Boolean).join(" ");
+      button.style.setProperty(
+        "--tick-level",
+        `${Math.max(18, Math.min(100, (recordingTimelineHeat(event) / maxTickHeat) * 100))}%`
+      );
       button.textContent = String(event.sequence || idx + 1);
-      button.title = recordingEventName(event);
+      button.title = `${recordingEventName(event)} · ${recordingTimelineHeat(event)} frames`;
       button.addEventListener("click", () => {
         stopRecordingPlayback(false);
         focusRecordingEvent(idx);
@@ -2618,6 +2624,10 @@
     state.live.recordingFocus = idx;
     paintRecordingEntries([{ event, idx }]);
     render();
+  }
+
+  function recordingTimelineHeat(event) {
+    return recordingFrames(event).length + 1;
   }
 
   function renderHeatPanel() {

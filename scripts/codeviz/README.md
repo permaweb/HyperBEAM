@@ -85,10 +85,11 @@ Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
 report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
 as aggregate heat, replayed event-by-event with the timeline Play control, or
 focused to one event with `recording-event=N`. Timeline ticks that carry
-warning/failure activity are marked as error ticks. The source switcher in the
-graph panel can jump between HyperBuddy counters, live stack snapshots, demo
-telemetry, recorder playback, and report import. The source header shows metric
-chips for event rates, stack frames, trace counts, hot nodes, and errors.
+warning/failure activity are marked as error ticks, and each tick carries a
+small stack-depth heat bar. The source switcher in the graph panel can jump
+between HyperBuddy counters, live stack snapshots, demo telemetry, recorder
+playback, and report import. The source header shows metric chips for event
+rates, stack frames, trace counts, hot nodes, and errors.
 
 Runtime overlays also mark hot nodes in the minimap, show numeric heat badges on
 graph nodes, and add a dedicated error heat deck when warning/failure activity

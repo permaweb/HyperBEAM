@@ -804,6 +804,7 @@ body.resizing {
 }
 
 .recording-tick {
+  position: relative;
   flex: 0 0 auto;
   min-width: 32px;
   min-height: 26px;
@@ -813,6 +814,18 @@ body.resizing {
   color: var(--muted);
   font-family: var(--mono);
   font-size: 11px;
+}
+
+.recording-tick::after {
+  position: absolute;
+  left: 5px;
+  bottom: 3px;
+  width: var(--tick-level, 0%);
+  max-width: calc(100% - 10px);
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(189, 52, 66, 0.28);
+  content: "";
 }
 
 .recording-tick.error {
@@ -825,6 +838,10 @@ body.resizing {
   border-color: rgba(189, 52, 66, 0.52);
   background: var(--red);
   color: #ffffff;
+}
+
+.recording-tick.active::after {
+  background: rgba(255, 255, 255, 0.68);
 }
 
 .heat-title {

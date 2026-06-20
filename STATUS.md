@@ -88,6 +88,8 @@ Branch: `expr/visualizer`
 - Recording error tick mobile proof: at `390x844`, the demo recorder timeline kept the warning tick visible, had no offscreen ticks, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks-mobile.png`.
 - Stack process deck proof: a local `~recorder@1.0/live`-shaped feed at `127.0.0.1:8894` rendered a stack-mode process deck with `3` rows, all rows clickable after preserving structured `currentFrame`, metadata including registered name/pid/status/reductions/memory/queue, `3` trace rows, process panel height `121px`, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck.png`.
 - Stack process deck mobile proof: at `390x844`, the process deck rendered full-width `344px` rows, all clickable, with wrapped stack live status, no offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck-mobile.png`.
+- Recording tick heat proof: `recording=demo` rendered stack-depth bars on recorder timeline ticks, preserved one error tick for `warning/process_sampler_failed`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat.png`.
+- Varied recording tick heat proof: a local recorder JSON report at `127.0.0.1:8895/report.json` rendered tick heat levels `33.333%`, `50%`, and `100%` for events with `2`, `3`, and `6` frame weights, with the deepest warning event marked `.recording-tick.error` and `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat-varied.png`.
 
 ## Last Presentation Pass
 
@@ -159,6 +161,8 @@ Branch: `expr/visualizer`
 - Added a stack-mode process deck for live recorder samples, preserving structured current frames so unknown function names can still click through to their modules.
 - Added mobile-safe live status wrapping and graph-stage clipping/containment work while validating stack process rows.
 - Updated the codeviz README with stack process deck behavior.
+- Added stack-depth heat bars to recorder timeline ticks.
+- Updated the codeviz README with recorder tick heat behavior.
 
 ## Next Work
 
