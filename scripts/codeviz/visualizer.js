@@ -1897,16 +1897,17 @@
   }
 
   function addTraceEdgesForFrames(frames, amount) {
-    const resolved = frames
-      .filter(Boolean)
+    const cleanFrames = frames.filter(Boolean);
+    const resolved = cleanFrames
       .map(primaryTraceIds)
       .filter((ids) => ids.length);
     for (let idx = 0; idx < resolved.length - 1; idx += 1) {
       const targets = resolved[idx];
       const sources = resolved[idx + 1];
       const weight = Math.max(0.35, amount * (1 - idx * 0.07));
+      const route = cleanFrames.slice(idx, idx + 5).map(frameLabel);
       sources.forEach((source) => {
-        targets.forEach((target) => addTraceEdge(source, target, weight));
+        targets.forEach((target) => addTraceEdge(source, target, weight, route));
       });
     }
   }
@@ -1918,11 +1919,15 @@
     return ids.filter((id) => byModule.has(id)).slice(0, 3);
   }
 
-  function addTraceEdge(source, target, amount) {
+  function addTraceEdge(source, target, amount, route = []) {
     if (!source || !target || source === target) return;
     const key = `${source}->${target}`;
-    const edge = state.live.traceEdges.get(key) || { source, target, count: 0 };
+    const edge = state.live.traceEdges.get(key) || { source, target, count: 0, path: [], pathWeight: 0 };
     edge.count += amount;
+    if (route.length && (!edge.path.length || amount >= edge.pathWeight)) {
+      edge.path = route;
+      edge.pathWeight = amount;
+    }
     state.live.traceEdges.set(key, edge);
   }
 
@@ -2733,8 +2738,10 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "trace-row";
+      const path = tracePath(edge);
       button.title =
-        `${edge.source} -> ${edge.target} (+${nf.format(Math.round(edge.count))} sampled frames)`;
+        `${edge.source} -> ${edge.target} (+${nf.format(Math.round(edge.count))} sampled frames)` +
+        tracePathTitle(edge);
       button.addEventListener("click", () => {
         selectNode(edge.target, { manual: true });
       });
@@ -2743,10 +2750,25 @@
       const meta = document.createElement("span");
       meta.textContent = `+${nf.format(Math.round(edge.count))} sampled frames`;
       button.append(name, meta);
+      if (path.length > 1) {
+        const route = document.createElement("span");
+        route.className = "trace-path";
+        route.textContent = path.slice(0, 5).join(" <- ");
+        button.append(route);
+      }
       return button;
     });
     els.tracePanel.replaceChildren(title, ...rows);
     return true;
+  }
+
+  function tracePath(edge) {
+    return Array.isArray(edge.path) ? edge.path.filter(Boolean) : [];
+  }
+
+  function tracePathTitle(edge) {
+    const path = tracePath(edge);
+    return path.length > 1 ? `\n${path.join("\n")}` : "";
   }
 
   function renderProcessPanel() {
@@ -2947,9 +2969,12 @@
       fragment.append(path);
     });
     liveTraceEdges().forEach((edge) => {
+      const traceLabel =
+        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)` +
+        tracePathTitle(edge);
       fragment.append(edgeHitPath(
         edge,
-        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`,
+        traceLabel,
         "trace"
       ));
       const path = svgEl("path", {
@@ -2960,8 +2985,7 @@
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
       const title = svgEl("title");
-      title.textContent =
-        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`;
+      title.textContent = traceLabel;
       path.append(title);
       fragment.append(path);
     });
@@ -3006,9 +3030,19 @@
             target: targetId,
             sourceNode: nodeById.get(sourceId),
             targetNode: nodeById.get(targetId),
-            count: 0
+            count: 0,
+            path: [],
+            pathWeight: 0
           };
           edge.count += trace.count;
+          if (
+            Array.isArray(trace.path) &&
+            trace.path.length &&
+            (!edge.path.length || trace.count >= edge.pathWeight)
+          ) {
+            edge.path = trace.path;
+            edge.pathWeight = trace.count;
+          }
           folded.set(key, edge);
         });
       });

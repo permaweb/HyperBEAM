@@ -95,6 +95,8 @@ Branch: `expr/visualizer`
 - Edge click proof: clicking a wide invisible hit path for `hb_device_load -> hb_device_archive` selected `hb_device_archive`, added `selected=hb_device_archive` to the URL, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-click-target.png`.
 - Edge summary proof: the same edge click rendered an inspector `Selected call` section with `hb_device_load -> hb_device_archive` and `1 calls`, preserved the target selection, highlighted `5` related edges, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-edge-summary.png`.
 - Selected-edge highlight proof: the same edge click rendered exactly `1` `.selected-edge`, preserved the `hb_device_load -> hb_device_archive` inspector context, selected `hb_device_archive`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-selected-edge-highlight.png`.
+- Trace breadcrumb proof: `recording=demo` rendered `4` trace rows with stack breadcrumbs such as `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3`, projected the same stack frames into `4` SVG trace titles, widened desktop rows to at least `280.5px`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-trace-breadcrumbs.png`.
+- Trace breadcrumb mobile proof: at `390x844`, the same recording view rendered full-width `344px` trace rows with `4` stack breadcrumbs, `4` SVG trace titles carrying stack frames, no horizontally offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-trace-breadcrumbs-mobile.png`.
 - Latest canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `31` nodes, `38` visible calls, `39` edge hit paths, live metric chips (`Events`, `Rate`, `Streams`, `Cadence`, `Fresh`, `Hot`, `Errors`), selected `hb_message`, and `0` overflow on desktop. Screenshot saved to `build/codeviz/validation-canonical-latest.png`.
 - Latest canonical mobile proof: at `390x844`, the same canonical URL rendered `31` nodes, `39` edge hit paths, no offscreen live/source/metric controls, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-canonical-latest-mobile.png`.
 
@@ -176,6 +178,7 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with edge-click behavior.
 - Added selected-edge context to the inspector so edge clicks preserve the source/target/count that led to the selected node.
 - Highlighted the selected call/trace edge directly on the graph so the inspector context is visually anchored.
+- Added representative stack breadcrumbs to trace route rows and SVG trace titles, with full-width trace route decks for readable recorder/live paths.
 
 ## Next Work
 

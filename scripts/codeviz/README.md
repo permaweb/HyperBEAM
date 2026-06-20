@@ -77,12 +77,14 @@ also render a small pulse history so repeated event streams read as a rhythm
 instead of a single momentary delta.
 `live=stack` polls
 `/~recorder@1.0/live?limit=90&stack-limit=18`, paints sampled BEAM stack traces,
-and draws animated trace routes between visible graph nodes. `follow=heat`
-keeps the inspector and graph centered on the hottest live node. Live stack rows
-show compact stack trails and can be clicked to pull their module/function into
-the current graph view. Stack mode also shows a process deck with the busiest
-sampled processes, including pid/name/status/reductions/memory/queue metadata,
-and those rows click back into the graph. `interval=<seconds>` controls the polling cadence for
+and draws animated trace routes between visible graph nodes. Trace route rows
+carry the representative stack breadcrumb, and SVG trace titles include the
+same frames. `follow=heat` keeps the inspector and graph centered on the
+hottest live node. Live stack rows show compact stack trails and can be clicked
+to pull their module/function into the current graph view. Stack mode also shows
+a process deck with the busiest sampled processes, including
+pid/name/status/reductions/memory/queue metadata, and those rows click back into
+the graph. `interval=<seconds>` controls the polling cadence for
 live counters, stack sampling, and demo telemetry; the engine header exposes
 the selected cadence and freshness of the last sample.
 
