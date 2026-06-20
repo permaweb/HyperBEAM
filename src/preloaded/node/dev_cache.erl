@@ -96,6 +96,7 @@ fire_admissible_response_hook(Base, Opts) ->
     HookOpts =
         #{
             <<"on">> => hb_maps:get(<<"on">>, Base, #{}, Opts),
+            <<"trusted-devices">> => hb_opts:get(trusted_devices, #{}, Opts),
             <<"commit-hook-response">> =>
                 hb_opts:get(commit_hook_response, false, Base),
             cache_control => [<<"no-cache">>, <<"no-store">>]
