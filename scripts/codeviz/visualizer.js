@@ -111,6 +111,8 @@
       traceEdges: new Map(),
       eventDeltas: new Map(),
       eventRates: new Map(),
+      eventHistory: new Map(),
+      eventTick: 0,
       lastCounterAt: 0,
       totalDelta: 0,
       processCount: 0,
@@ -1307,6 +1309,8 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.eventHistory = new Map();
+    state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
@@ -1356,6 +1360,8 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.eventHistory = new Map();
+    state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
@@ -1377,6 +1383,7 @@
   async function pollLive() {
     if (!state.live.enabled || !["events", "stack"].includes(state.live.mode)) return;
     state.live.lastPollStarted = Date.now();
+    state.live.eventTick += 1;
     decayLiveActivity();
     try {
       const response = await fetch(state.live.endpoint, {
@@ -1533,6 +1540,8 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.eventHistory = new Map();
+    state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
     processes.forEach((proc) => {
       const pid = String(proc.pid || "");
@@ -1654,6 +1663,8 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.eventHistory = new Map();
+    state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
@@ -1691,6 +1702,8 @@
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
+    state.live.eventHistory = new Map();
+    state.live.eventTick = 0;
     state.live.lastCounterAt = 0;
     state.live.totalDelta = entries.length;
     state.live.frameCount = 0;
@@ -1900,6 +1913,7 @@
   function demoLiveTick() {
     if (!state.live.enabled || state.live.mode !== "demo") return;
     state.live.lastPollStarted = Date.now();
+    state.live.eventTick += 1;
     decayLiveActivity();
     const candidates = [
       "hb_message",
@@ -1968,6 +1982,15 @@
   function rememberLiveEvent(key, amount, seconds = 1) {
     state.live.eventDeltas.set(key, (state.live.eventDeltas.get(key) || 0) + amount);
     if (seconds > 0) state.live.eventRates.set(key, amount / seconds);
+    const tick = state.live.eventTick || 0;
+    const history = (state.live.eventHistory.get(key) || []).slice(-15);
+    const last = history[history.length - 1];
+    if (last && last.tick === tick) {
+      last.amount += amount;
+    } else {
+      history.push({ tick, amount });
+    }
+    state.live.eventHistory.set(key, history);
   }
 
   function formatEventRate(rate) {
@@ -2660,10 +2683,12 @@
 
   function renderTracePanel() {
     if (!state.live.enabled) {
+      els.tracePanel.classList.remove("event-panel");
       els.tracePanel.replaceChildren();
       return false;
     }
     if (!state.live.traceEdges.size) return renderEventPanel();
+    els.tracePanel.classList.remove("event-panel");
     const traces = liveTraceEdges()
       .slice()
       .sort((a, b) => b.count - a.count)
@@ -2701,9 +2726,11 @@
       .sort((a, b) => b[1] - a[1])
       .slice(0, 4);
     if (!events.length) {
+      els.tracePanel.classList.remove("event-panel");
       els.tracePanel.replaceChildren();
       return false;
     }
+    els.tracePanel.classList.add("event-panel");
     const title = document.createElement("div");
     title.className = "heat-title";
     title.textContent = "Event deltas";
@@ -2728,13 +2755,35 @@
         "--event-level",
         `${Math.max(7, Math.min(100, (delta / maxDelta) * 100))}%`
       );
+      const sparkline = eventSparkline(key);
       const meta = document.createElement("span");
       meta.textContent = `+${nf.format(Math.round(delta))} · ${formatEventRate(state.live.eventRates.get(key) || 0)}`;
-      button.append(name, meter, meta);
+      button.append(name, meter, sparkline, meta);
       return button;
     });
     els.tracePanel.replaceChildren(title, ...rows);
     return true;
+  }
+
+  function eventSparkline(key, count = 12) {
+    const wrap = document.createElement("span");
+    wrap.className = "event-sparkline";
+    const byTick = new Map((state.live.eventHistory.get(key) || [])
+      .map((entry) => [entry.tick, entry.amount]));
+    const latest = state.live.eventTick || 0;
+    const values = Array.from({ length: count }, (_, idx) => {
+      const tick = latest - count + idx + 1;
+      return byTick.get(tick) || 0;
+    });
+    const max = Math.max(1, ...values);
+    values.forEach((value) => {
+      const bar = document.createElement("i");
+      const level = value > 0 ? Math.max(12, Math.min(100, (value / max) * 100)) : 0;
+      bar.style.setProperty("--spark-level", `${level}%`);
+      if (!value) bar.className = "quiet";
+      wrap.append(bar);
+    });
+    return wrap;
   }
 
   function liveEventTarget(key) {
@@ -3262,9 +3311,10 @@
           "--event-level",
           `${Math.max(7, Math.min(100, (event.delta / maxDelta) * 100))}%`
         );
+        const sparkline = eventSparkline(event.key);
         const meta = document.createElement("span");
         meta.textContent = `+${nf.format(Math.round(event.delta))} recent · ${formatEventRate(event.rate)}`;
-        row.append(name, meter, meta);
+        row.append(name, meter, sparkline, meta);
         eventList.append(row);
       });
       eventSection.append(eventTitle, eventList);

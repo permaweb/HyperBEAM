@@ -730,6 +730,11 @@ body.resizing {
   gap: 5px;
 }
 
+.trace-panel.event-panel {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-height: 142px;
+}
+
 .error-panel {
   grid-column: 1 / -1;
   display: grid;
@@ -898,6 +903,40 @@ body.resizing {
 .event-row.error span.event-meter::before,
 .event-sample-row.error .event-meter::before {
   background: linear-gradient(90deg, rgba(189, 52, 66, 0.86), rgba(178, 98, 20, 0.8));
+}
+
+.event-sparkline {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: end;
+  width: 100%;
+  height: 13px;
+  gap: 2px;
+  padding-top: 1px;
+}
+
+.event-sparkline i {
+  display: block;
+  min-width: 0;
+  height: var(--spark-level, 0%);
+  min-height: 2px;
+  border-radius: 999px 999px 2px 2px;
+  background: linear-gradient(180deg, rgba(0, 154, 247, 0.88), rgba(19, 138, 109, 0.84));
+}
+
+.event-sparkline i.quiet {
+  height: 2px;
+  background: rgba(19, 138, 109, 0.14);
+}
+
+.event-row.error .event-sparkline i,
+.event-sample-row.error .event-sparkline i {
+  background: linear-gradient(180deg, rgba(189, 52, 66, 0.88), rgba(178, 98, 20, 0.78));
+}
+
+.event-row.error .event-sparkline i.quiet,
+.event-sample-row.error .event-sparkline i.quiet {
+  background: rgba(189, 52, 66, 0.16);
 }
 
 .bridge-row {
@@ -1635,6 +1674,12 @@ button.ref-pill {
   .trace-panel {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     max-height: 104px;
+  }
+
+  .trace-panel.event-panel {
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
+    max-height: 220px;
   }
 
   .error-panel {

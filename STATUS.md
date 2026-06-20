@@ -81,6 +81,9 @@ Branch: `expr/visualizer`
 - Live cadence mobile proof: at `390x844`, `live=demo&follow=heat&interval=1` had `0` horizontal overflow, no offscreen live/source controls, and visible cadence/freshness chips. Screenshot saved to `build/codeviz/validation-live-cadence-mobile.png`.
 - Function overview proof: unsearched `mode=function` with recorder/scheduler context rendered `1,758` function nodes, `3,708` visible calls, graph title `Function call graph overview`, graph metadata `overview`, transform `translate(24,24) scale(0.26)`, `1,758` minimap nodes, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-overview.png`.
 - Function search regression proof: `mode=function&search=hb_message` still opens at `scale(0.72)` with `60` nodes, `60` search matches, `52` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-search-after-overview.png`.
+- Event pulse-history proof: a local HyperBuddy-shaped counter feed at `127.0.0.1:8893` rendered four event rows with `12` pulse bars each, active bars matching recent ticks, row widths of `151px` on desktop after widening the event deck, and `0` overflow. Screenshot saved to `build/codeviz/validation-event-pulse-history-wide.png`.
+- Inspector pulse-history proof: `selected=hb_http` with the same counter feed rendered live inspector event rows with `12` pulse bars each, `284px` row width, and `0` overflow. Screenshot saved to `build/codeviz/validation-inspector-event-pulse-history.png`.
+- Event pulse mobile proof: at `390x844`, the event deck switched to full-width rows (`344px` each), kept `12` pulse bars per row, and had `0` overflow/offscreen rows. Screenshot saved to `build/codeviz/validation-event-pulse-history-mobile-wide.png`.
 
 ## Last Presentation Pass
 
@@ -145,6 +148,8 @@ Branch: `expr/visualizer`
 - Added a live cadence selector with shareable `interval=<seconds>` state, source metric chips for cadence/freshness, and custom URL interval handling.
 - Added an overview-scale first fit for very large unsearched function graphs while preserving readable scale for searched function call graphs.
 - Updated the codeviz README with live cadence and function-overview behavior.
+- Added per-event pulse-history bars to the live event deck and inspector live-event rows, with a wider desktop event layout and full-width mobile rows.
+- Updated the codeviz README with event pulse-history behavior.
 
 ## Next Work
 

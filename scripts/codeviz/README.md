@@ -67,7 +67,9 @@ visualizer fetches the formatted event message and extracts the numeric counters
 The static graph also indexes `?event(...)` and `hb_event:record(...)` topics so
 counter names such as `scheduling/assigned` can resolve to the modules/functions
 that emit them. Event rows decay over several poll ticks, leaving recent pulses
-visible long enough to inspect.
+visible long enough to inspect. The event deck and selected-node live event rows
+also render a small pulse history so repeated event streams read as a rhythm
+instead of a single momentary delta.
 `live=stack` polls
 `/~recorder@1.0/live?limit=90&stack-limit=18`, paints sampled BEAM stack traces,
 and draws animated trace routes between visible graph nodes. `follow=heat`
