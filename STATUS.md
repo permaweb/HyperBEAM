@@ -44,6 +44,7 @@ Branch: `expr/visualizer`
 - Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
 - Focused recording URL proof: `recording=demo&recording-event=1` opened directly with tick `1` active, status `demo: 1 events · 3 frames · 4 traces · 44 hot`, and retained `recording-event=1` in the URL.
 - Mobile QA proof: at `390x844`, the page had `0` horizontal overflow, no offscreen controls, and the `2 devices` context stat fit its container. Screenshot saved to `build/codeviz/validation-mobile.png`.
+- Refreshed mobile QA proof: at `390x844`, `dev_recorder` with `recording=demo` had `0` horizontal overflow, no offscreen controls, and the three recorder action buttons fit at about `99px` each. Screenshot saved to `build/codeviz/validation-mobile-recorder-actions.png`.
 
 ## Last Presentation Pass
 
