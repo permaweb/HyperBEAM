@@ -649,11 +649,17 @@
 
   function visibleData() {
     const activeModules = new Set();
+    const deviceModules = activeDeviceModules();
+    const compactDeviceFunctions =
+      state.mode === "function" &&
+      state.selectedDevices.size &&
+      !state.search &&
+      !state.selected;
     graph.modules.forEach((mod) => {
-      if (mod.role === "kernel") activeModules.add(mod.id);
+      if (!compactDeviceFunctions && mod.role === "kernel") activeModules.add(mod.id);
       if (state.showForge && mod.role === "forge") activeModules.add(mod.id);
     });
-    activeDeviceModules().forEach((module) => activeModules.add(module));
+    deviceModules.forEach((module) => activeModules.add(module));
     const selectedFun = byFunction.get(state.selected);
     const selectedModule = byModule.get(state.selected) || (selectedFun && byModule.get(selectedFun.module));
     if (selectedModule) activeModules.add(selectedModule.id);
@@ -678,12 +684,22 @@
       if (!needle) return true;
       return functionSearchText(fun).includes(needle);
     });
+    if (compactDeviceFunctions) {
+      functions = expandDeviceFunctionTouchpoints(functions);
+    }
     let modules = graph.modules.filter((mod) => {
       if (!moduleInScope(mod)) return false;
       if (!needle) return true;
       return moduleSearchText(mod).includes(needle) ||
         functions.some((fun) => fun.module === mod.id);
     });
+    if (compactDeviceFunctions) {
+      const functionModules = new Set(functions.map((fun) => fun.module));
+      modules = graph.modules.filter((mod) =>
+        functionModules.has(mod.id) &&
+        (!groupFilter || `${mod.role}:${mod.group}` === groupFilter)
+      );
+    }
     if (state.selected) {
       functions = expandSelectedFunctions(functions, functionInScope);
       modules = expandSelectedModules(modules, functions, moduleInScope);
@@ -718,6 +734,29 @@
       edges = edges.filter((edge) => edge.count > 1);
     }
     return { modules, functions, edges };
+  }
+
+  function expandDeviceFunctionTouchpoints(functions) {
+    const ids = new Set(functions.map((fun) => fun.id));
+    const additions = new Set();
+    graph.edges.forEach((edge) => {
+      const sourceInside = ids.has(edge.source);
+      const targetInside = ids.has(edge.target);
+      if (sourceInside === targetInside) return;
+      const other = byFunction.get(sourceInside ? edge.target : edge.source);
+      const mod = other && byModule.get(other.module);
+      if (!other || !mod) return;
+      if (!state.showPrivate && !other.exported) return;
+      if (state.group && `${other.role}:${other.group}` !== state.group) return;
+      if (!["kernel", "device"].includes(mod.role)) return;
+      additions.add(other.id);
+    });
+    if (!additions.size) return functions;
+    const expanded = functions.slice();
+    graph.functions.forEach((fun) => {
+      if (additions.has(fun.id)) expanded.push(fun);
+    });
+    return expanded;
   }
 
   function activeDeviceModules() {
@@ -785,7 +824,9 @@
       return selectedFunctionLayout(visible);
     }
     const nodes = state.mode === "module" ? moduleGraphNodes(visible) : functionGraphNodes(visible);
-    const positioned = positionNodes(nodes);
+    const positioned = state.mode === "function" ?
+      positionFunctionNodes(nodes, visible.edges) :
+      positionNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
     const edges = filterLayoutEdges(state.mode === "module" ? moduleEdges(visible.edges) : visible.edges)
       .map((edge) => {
@@ -1286,6 +1327,157 @@
       height: Math.max(520, maxY + 40)
     };
     return { nodes: placed, modules: bands, bands: columnBands(columns, maxY), bounds };
+  }
+
+  function positionFunctionNodes(nodes, edges) {
+    const columnMap = new Map();
+    nodes.forEach((node) => {
+      const column = columnKey(node);
+      if (!columnMap.has(column)) columnMap.set(column, []);
+      columnMap.get(column).push(node);
+    });
+    const columns = [...columnMap.keys()].sort(columnSort);
+    const planned = columns.map((column) => {
+      const columnNodes = columnMap.get(column).sort(nodeSort);
+      const moduleGroups = groupBy(columnNodes, (node) => node.module);
+      const groups = moduleGroups.map((moduleNodes) => functionModuleFlow(moduleNodes, edges));
+      const width = Math.max(292, ...groups.map((group) => group.width));
+      return { column, groups, width };
+    });
+    const placed = [];
+    const modules = [];
+    const bands = [];
+    let x = 32;
+    let maxY = 0;
+    planned.forEach((column) => {
+      let y = 58;
+      column.groups.forEach((group) => {
+        modules.push({
+          ...group.frame,
+          x: x - 12,
+          y: y - 32,
+          width: Math.max(group.width, column.width),
+          height: group.height
+        });
+        group.nodes.forEach((node) => {
+          placed.push({
+            ...node,
+            x: x + node.flowX,
+            y: y + node.flowY,
+            cx: x + node.flowX + node.width / 2,
+            cy: y + node.flowY + node.height / 2
+          });
+        });
+        y += group.height + 18;
+      });
+      const bandHeight = Math.max(500, y + 8);
+      bands.push({
+        x: x - 20,
+        y: 12,
+        width: column.width + 24,
+        height: bandHeight,
+        label: columnLabel(column.column)
+      });
+      maxY = Math.max(maxY, bandHeight);
+      x += column.width + 42;
+    });
+    return {
+      nodes: placed,
+      modules,
+      bands,
+      bounds: {
+        x: 0,
+        y: 0,
+        width: Math.max(760, x + 20),
+        height: Math.max(520, maxY + 24)
+      }
+    };
+  }
+
+  function functionModuleFlow(moduleNodes, edges) {
+    const ids = new Set(moduleNodes.map((node) => node.id));
+    const moduleId = moduleNodes[0].module;
+    const module = byModule.get(moduleId) || moduleNodes[0];
+    const ranks = functionFlowRanks(moduleNodes, edges, ids);
+    const maxRank = Math.max(0, ...ranks.values());
+    const laneStep = 286;
+    const rowStep = 34;
+    const lanes = Array.from({ length: maxRank + 1 }, () => []);
+    moduleNodes
+      .slice()
+      .sort(nodeSort)
+      .forEach((node) => lanes[ranks.get(node.id) || 0].push(node));
+    const laidOut = [];
+    lanes.forEach((lane, rank) => {
+      lane.forEach((node, row) => {
+        laidOut.push({
+          ...node,
+          flowRank: rank,
+          flowX: rank * laneStep,
+          flowY: row * rowStep
+        });
+      });
+    });
+    const rows = Math.max(1, ...lanes.map((lane) => lane.length));
+    const width = maxRank * laneStep + 286;
+    const height = Math.max(78, 38 + rows * rowStep);
+    return {
+      nodes: laidOut,
+      width,
+      height,
+      frame: {
+        id: moduleId,
+        role: module.role,
+        title: moduleId,
+        subtitle: module.group
+      }
+    };
+  }
+
+  function functionFlowRanks(moduleNodes, edges, ids) {
+    const incomingInternal = new Map(moduleNodes.map((node) => [node.id, 0]));
+    const outgoingInternal = new Map(moduleNodes.map((node) => [node.id, []]));
+    const incomingExternal = new Set();
+    edges.forEach((edge) => {
+      const sourceInside = ids.has(edge.source);
+      const targetInside = ids.has(edge.target);
+      if (sourceInside && targetInside && edge.source !== edge.target) {
+        incomingInternal.set(edge.target, (incomingInternal.get(edge.target) || 0) + 1);
+        outgoingInternal.get(edge.source).push(edge.target);
+      } else if (!sourceInside && targetInside) {
+        incomingExternal.add(edge.target);
+      }
+    });
+    let roots = moduleNodes
+      .filter((node) => !incomingInternal.get(node.id) || incomingExternal.has(node.id))
+      .map((node) => node.id);
+    if (!roots.length) {
+      roots = moduleNodes
+        .filter((node) => node.exported)
+        .map((node) => node.id);
+    }
+    if (!roots.length) roots = [moduleNodes.slice().sort(nodeSort)[0].id];
+    const maxRank = Math.min(7, Math.max(2, Math.ceil(Math.sqrt(moduleNodes.length))));
+    const ranks = new Map(moduleNodes.map((node) => [node.id, maxRank]));
+    const queue = roots.map((id) => ({ id, rank: 0 }));
+    roots.forEach((id) => ranks.set(id, 0));
+    while (queue.length) {
+      const { id, rank } = queue.shift();
+      (outgoingInternal.get(id) || []).forEach((target) => {
+        const nextRank = Math.min(maxRank, rank + 1);
+        const currentRank = ranks.has(target) ? ranks.get(target) : maxRank;
+        if (nextRank < currentRank) {
+          ranks.set(target, nextRank);
+          queue.push({ id: target, rank: nextRank });
+        }
+      });
+    }
+    moduleNodes.forEach((node) => {
+      if (ranks.get(node.id) === maxRank && !incomingInternal.get(node.id)) {
+        ranks.set(node.id, 0);
+      }
+    });
+    return ranks;
   }
 
   function groupBy(items, keyFun) {
@@ -2479,7 +2671,7 @@
   }
 
   function renderBridgePanel() {
-    if (!state.selectedDevices.size) {
+    if (!state.selectedDevices.size || state.mode === "function") {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
       els.processPanel.replaceChildren();
@@ -3464,9 +3656,9 @@
     const x1 = s.x + s.width;
     const y1 = s.cy;
     const y2 = t.cy;
-    if (state.mode === "system" && t.x <= s.x) {
+    if (t.x <= s.x) {
       const x2 = t.x + t.width;
-      const gutter = x1 + 30 + Math.min(70, Math.abs(y2 - y1) * 0.18);
+      const gutter = Math.max(x1, x2) + 34 + Math.min(92, Math.abs(y2 - y1) * 0.16);
       return `M ${x1} ${y1} C ${gutter} ${y1}, ${gutter} ${y2}, ${x2} ${y2}`;
     }
     const x2 = t.x;

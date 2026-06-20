@@ -57,7 +57,10 @@ selections also show short directed device paths when the rendered graph
 contains a route from a loaded device module into that node; clicking a path row
 paints the route on the graph and minimap. Large unsearched function views open
 as an overview, while searched function graphs stay at a readable first-fit
-scale.
+scale. Function mode with selected devices uses a compact device-context graph:
+the selected device functions plus their direct kernel touchpoints are laid out
+as left-to-right call stages, so a device's internal flow remains readable
+instead of disappearing into the full-kernel overview.
 
 ## Live and Recorder Overlays
 
