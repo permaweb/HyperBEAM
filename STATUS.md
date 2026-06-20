@@ -77,6 +77,10 @@ Branch: `expr/visualizer`
 - Recording title proof: `recording=demo&recording-event=3` rendered `Recording timeline · warning/process_sampler_failed`, kept timeline tick `3` active, and had no title clipping or overflow. Screenshot saved to `build/codeviz/validation-recording-focused-title.png`.
 - Source heat label proof: `recording=demo&selected=hb_ao` rendered `Recorded heat` in the heat panel and inspector, with hot-row tooltip `hb_ao (+10 recorded heat)` and `0` overflow. Screenshot saved to `build/codeviz/validation-source-heat-labels.png`.
 - Canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `21` nodes, `21` calls, `6` live badges, `6` hot/warm minimap markers, engine metrics, and `0` overflow on desktop and at `390x844` with no offscreen controls. Screenshots saved to `build/codeviz/validation-canonical-current.png` and `build/codeviz/validation-canonical-current-mobile.png`.
+- Live cadence proof: `live=demo&follow=heat&interval=1` preserved `interval=1` in the URL, selected the `1s` cadence control, rendered source metric chips including `Cadence 1s` and `Fresh now`, and kept desktop overflow at `0`. Screenshot saved to `build/codeviz/validation-live-cadence.png`.
+- Live cadence mobile proof: at `390x844`, `live=demo&follow=heat&interval=1` had `0` horizontal overflow, no offscreen live/source controls, and visible cadence/freshness chips. Screenshot saved to `build/codeviz/validation-live-cadence-mobile.png`.
+- Function overview proof: unsearched `mode=function` with recorder/scheduler context rendered `1,758` function nodes, `3,708` visible calls, graph title `Function call graph overview`, graph metadata `overview`, transform `translate(24,24) scale(0.26)`, `1,758` minimap nodes, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-overview.png`.
+- Function search regression proof: `mode=function&search=hb_message` still opens at `scale(0.72)` with `60` nodes, `60` search matches, `52` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-search-after-overview.png`.
 
 ## Last Presentation Pass
 
@@ -138,6 +142,9 @@ Branch: `expr/visualizer`
 - Added focused recorder event names to the recording timeline title and tick tooltips.
 - Made heat labels source-specific across live, stack, and recording modes.
 - Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
+- Added a live cadence selector with shareable `interval=<seconds>` state, source metric chips for cadence/freshness, and custom URL interval handling.
+- Added an overview-scale first fit for very large unsearched function graphs while preserving readable scale for searched function call graphs.
+- Updated the codeviz README with live cadence and function-overview behavior.
 
 ## Next Work
 

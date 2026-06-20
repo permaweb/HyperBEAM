@@ -250,7 +250,7 @@ h3 {
 
 .live-strip {
   display: grid;
-  grid-template-columns: max-content minmax(220px, 1fr) repeat(6, max-content);
+  grid-template-columns: max-content minmax(220px, 1fr) minmax(72px, max-content) repeat(6, max-content);
   align-items: center;
   gap: 8px;
   padding: 10px;
@@ -1503,7 +1503,7 @@ button.ref-pill {
   }
 
   .live-strip {
-    grid-template-columns: max-content minmax(0, 1fr) repeat(6, max-content);
+    grid-template-columns: max-content minmax(0, 1fr) minmax(72px, max-content) repeat(6, max-content);
   }
 
   .workspace {
@@ -1589,6 +1589,10 @@ button.ref-pill {
   .live-status,
   .live-strip input {
     grid-column: 1 / -1;
+  }
+
+  .live-strip select {
+    min-width: 0;
   }
 
   .engine-source {

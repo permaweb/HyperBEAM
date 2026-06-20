@@ -18,6 +18,7 @@
     showForge: document.getElementById("show-forge"),
     liveStatus: document.getElementById("live-status"),
     liveEndpoint: document.getElementById("live-endpoint"),
+    liveInterval: document.getElementById("live-interval"),
     liveFollow: document.getElementById("live-follow"),
     liveConnect: document.getElementById("live-connect"),
     liveStack: document.getElementById("live-stack"),
@@ -75,6 +76,7 @@
   const liveIndex = buildLiveIndex();
   const defaultLiveEndpoint = "/~hyperbuddy@1.0/events";
   const defaultStackEndpoint = "/~recorder@1.0/live?limit=90&stack-limit=18";
+  const defaultLiveInterval = 2200;
 
   const state = {
     mode: "system",
@@ -99,6 +101,7 @@
       enabled: false,
       mode: "off",
       endpoint: "",
+      intervalMs: defaultLiveInterval,
       follow: false,
       timer: null,
       previous: new Map(),
@@ -120,6 +123,7 @@
       recordingTimer: null,
       pendingRecordingFocus: -1,
       lastSeen: 0,
+      lastPollStarted: 0,
       lastError: "",
       demoTick: 0
     }
@@ -252,6 +256,10 @@
       state.live.endpoint = liveParamValue(params.get("live"));
       if (state.live.endpoint !== "demo") els.liveEndpoint.value = state.live.endpoint;
     }
+    if (params.has("interval")) {
+      state.live.intervalMs = intervalParamValue(params.get("interval"));
+      setLiveIntervalSelect(state.live.intervalMs);
+    }
     if (params.get("follow") === "heat") state.live.follow = true;
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
@@ -273,6 +281,25 @@
     if (!value || value === "true" || value === "1") return defaultLiveEndpoint;
     if (value === "stack") return defaultStackEndpoint;
     return value;
+  }
+
+  function intervalParamValue(value) {
+    const raw = String(value || "").trim().replace(/s$/i, "");
+    const numeric = Number(raw);
+    const ms = numeric > 50 ? numeric : numeric * 1000;
+    if (!Number.isFinite(ms)) return defaultLiveInterval;
+    return Math.max(1000, Math.min(30000, Math.round(ms)));
+  }
+
+  function setLiveIntervalSelect(ms) {
+    const value = String(ms);
+    if (!els.liveInterval.querySelector(`option[value="${value}"]`)) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = formatInterval(ms);
+      els.liveInterval.append(option);
+    }
+    els.liveInterval.value = value;
   }
 
   function bindEvents() {
@@ -319,6 +346,14 @@
     });
     els.liveEndpoint.addEventListener("keydown", (event) => {
       if (event.key === "Enter") startLive(els.liveEndpoint.value.trim() || defaultLiveEndpoint);
+    });
+    els.liveInterval.addEventListener("change", () => {
+      state.live.intervalMs = intervalParamValue(els.liveInterval.value);
+      if (state.live.enabled && ["demo", "events", "stack"].includes(state.live.mode)) {
+        startLive(state.live.endpoint || "demo");
+      } else {
+        render();
+      }
     });
     els.liveFollow.addEventListener("click", () => {
       state.live.follow = !state.live.follow;
@@ -537,6 +572,9 @@
     if (state.showForge) params.set("forge", "true");
     if (state.live.enabled && state.live.mode !== "recording") {
       params.set("live", liveUrlParam());
+      if (state.live.intervalMs !== defaultLiveInterval) {
+        params.set("interval", String(state.live.intervalMs / 1000));
+      }
     }
     if (state.live.enabled && state.live.follow) params.set("follow", "heat");
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
@@ -1254,11 +1292,13 @@
 
   function startLive(endpoint) {
     const follow = state.live.follow;
+    const intervalMs = intervalParamValue(els.liveInterval.value || state.live.intervalMs);
     stopLive({ renderAfter: false, clearFollow: false });
     const normalized = liveParamValue(endpoint);
     state.live.enabled = true;
     state.live.mode = liveModeForEndpoint(normalized);
     state.live.endpoint = normalized;
+    state.live.intervalMs = intervalMs;
     state.live.follow = follow;
     state.live.previous = new Map();
     state.live.activity = new Map();
@@ -1276,15 +1316,18 @@
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
     state.live.pendingRecordingFocus = -1;
+    state.live.lastSeen = 0;
+    state.live.lastPollStarted = 0;
     state.live.lastError = "";
     state.live.demoTick = 0;
+    setLiveIntervalSelect(state.live.intervalMs);
     if (normalized !== "demo") els.liveEndpoint.value = normalized;
     if (state.live.mode === "demo") {
       demoLiveTick();
-      state.live.timer = window.setInterval(demoLiveTick, 1300);
+      state.live.timer = window.setInterval(demoLiveTick, state.live.intervalMs);
     } else {
       pollLive();
-      state.live.timer = window.setInterval(pollLive, 2200);
+      state.live.timer = window.setInterval(pollLive, state.live.intervalMs);
     }
     renderLiveControls();
     render();
@@ -1324,6 +1367,8 @@
     state.live.recordingPlaying = false;
     state.live.recordingTimer = null;
     state.live.pendingRecordingFocus = -1;
+    state.live.lastSeen = 0;
+    state.live.lastPollStarted = 0;
     state.live.lastError = "";
     renderLiveControls();
     if (options.renderAfter !== false) render();
@@ -1331,6 +1376,7 @@
 
   async function pollLive() {
     if (!state.live.enabled || !["events", "stack"].includes(state.live.mode)) return;
+    state.live.lastPollStarted = Date.now();
     decayLiveActivity();
     try {
       const response = await fetch(state.live.endpoint, {
@@ -1853,6 +1899,7 @@
 
   function demoLiveTick() {
     if (!state.live.enabled || state.live.mode !== "demo") return;
+    state.live.lastPollStarted = Date.now();
     decayLiveActivity();
     const candidates = [
       "hb_message",
@@ -1868,18 +1915,19 @@
     if (!candidates.length) return;
     const tick = state.live.demoTick;
     state.live.demoTick += 1;
+    const tickSeconds = state.live.intervalMs / 1000;
     state.live.traceEdges = new Map();
     let totalDelta = 0;
     candidates.slice(0, 7).forEach((_, offset) => {
       const id = candidates[(tick + offset * 2) % candidates.length];
       const amount = 2 + ((tick + offset) % 5);
       totalDelta += amount;
-      rememberLiveEvent(`${id}/events`, amount, 1.3);
+      rememberLiveEvent(`${id}/events`, amount, tickSeconds);
       bumpLive(id, amount, false);
     });
     if (tick % 5 === 3) {
       bumpLive("warning/process_sampler_failed", 5, true);
-      rememberLiveEvent("warning/process_sampler_failed", 5, 1.3);
+      rememberLiveEvent("warning/process_sampler_failed", 5, tickSeconds);
       totalDelta += 5;
     }
     addTraceEdgesForFrames([
@@ -1926,6 +1974,18 @@
     if (!Number.isFinite(rate) || rate <= 0) return "0/s";
     const value = rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10;
     return `${nf.format(value)}/s`;
+  }
+
+  function formatInterval(ms) {
+    const seconds = Math.round(ms / 100) / 10;
+    return `${nf.format(seconds)}s`;
+  }
+
+  function liveFreshnessLabel() {
+    const timestamp = state.live.lastSeen || state.live.lastPollStarted;
+    if (!timestamp) return "pending";
+    const seconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
+    return seconds < 1 ? "now" : `${nf.format(seconds)}s ago`;
   }
 
   function formatBytes(bytes) {
@@ -2164,6 +2224,7 @@
       0;
     els.graphMeta.textContent = [
       `${nf.format(state.layout.nodes.length)} visible nodes`,
+      functionOverviewActive() ? "overview" : "",
       state.search ? `${nf.format(searchMatches)} matches` : "",
       `${nf.format(state.layout.edges.length)} visible calls`,
       liveMetaText()
@@ -2174,11 +2235,19 @@
   function graphTitleText() {
     if (state.mode === "system") return "Subsystem flow map";
     if (state.mode === "function") {
+      if (functionOverviewActive()) return "Function call graph overview";
       return state.selectedDevices.size ?
         "Function call graph with device context" :
         "Function call graph";
     }
     return state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
+  }
+
+  function functionOverviewActive() {
+    return state.mode === "function" &&
+      !state.search &&
+      !state.selected &&
+      state.layout.nodes.length > 420;
   }
 
   function renderGraph() {
@@ -2295,6 +2364,8 @@
         { label: "Processes", value: nf.format(state.live.processCount) },
         { label: "Reductions", value: `+${nf.format(Math.round(state.live.totalDelta))}` },
         { label: "Traces", value: nf.format(state.live.traceEdges.size) },
+        { label: "Cadence", value: formatInterval(state.live.intervalMs) },
+        { label: "Fresh", value: liveFreshnessLabel() },
         { label: "Hot", value: nf.format(hot) },
         { label: "Errors", value: `+${nf.format(Math.round(errors))}`, kind: "error" }
       ];
@@ -2313,6 +2384,8 @@
       { label: "Events", value: `+${nf.format(Math.round(state.live.totalDelta))}` },
       { label: "Rate", value: formatEventRate(rate) },
       { label: "Streams", value: nf.format(state.live.eventDeltas.size) },
+      { label: "Cadence", value: formatInterval(state.live.intervalMs) },
+      { label: "Fresh", value: liveFreshnessLabel() },
       { label: "Hot", value: nf.format(hot) },
       { label: "Errors", value: `+${nf.format(Math.round(errors))}`, kind: "error" }
     ];
@@ -3552,6 +3625,7 @@
     }
     if (state.mode === "system") return 0.52;
     if (state.mode === "module") return 0.72;
+    if (functionOverviewActive()) return 0.26;
     return 0.72;
   }
 

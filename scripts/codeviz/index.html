@@ -75,6 +75,15 @@ the script tag with id="embedded-graph".
     <section class="live-strip" aria-label="Live engine overlay">
       <span id="live-status" class="live-status">live off</span>
       <input id="live-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="/~hyperbuddy@1.0/events">
+      <select id="live-interval" aria-label="Refresh interval" title="Refresh interval">
+        <option value="1000">1s</option>
+        <option value="2200" selected>2.2s</option>
+        <option value="3000">3s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+        <option value="15000">15s</option>
+        <option value="30000">30s</option>
+      </select>
       <button type="button" id="live-follow" class="live-follow" title="Follow hottest live node" aria-pressed="false">Follow</button>
       <button type="button" id="live-connect" title="Connect live endpoint">Connect</button>
       <button type="button" id="live-stack" title="Poll recorder stacks">Stack</button>

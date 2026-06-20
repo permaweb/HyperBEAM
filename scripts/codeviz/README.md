@@ -34,6 +34,7 @@ hyperbeam-codeviz.html?devices=all&mode=system
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&selected=hb_message
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system&selected=kernel:resolver&edges=strong
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat&interval=1
 ```
 
 Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
@@ -43,7 +44,9 @@ panes can be resized with the recorder-style splitters around the graph.
 Selected devices are pinned to the top of the device list. Search matches are
 highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights
-its callers and callees without changing the selected inspector target.
+its callers and callees without changing the selected inspector target. Large
+unsearched function views open as an overview, while searched function graphs
+stay at a readable first-fit scale.
 
 ## Live and Recorder Overlays
 
@@ -70,7 +73,9 @@ visible long enough to inspect.
 and draws animated trace routes between visible graph nodes. `follow=heat`
 keeps the inspector and graph centered on the hottest live node. Live stack rows
 show compact stack trails and can be clicked to pull their module/function into
-the current graph view.
+the current graph view. `interval=<seconds>` controls the polling cadence for
+live counters, stack sampling, and demo telemetry; the engine header exposes
+the selected cadence and freshness of the last sample.
 
 Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
 report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
