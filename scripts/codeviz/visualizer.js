@@ -319,7 +319,15 @@
     });
     els.liveFollow.addEventListener("click", () => {
       state.live.follow = !state.live.follow;
-      if (state.live.follow) requestFit();
+      if (state.live.follow) {
+        const target = heatFollowTarget();
+        if (target) {
+          state.selected = target;
+          state.focusAfterRender = target;
+        } else {
+          requestFit();
+        }
+      }
       render();
     });
     els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
