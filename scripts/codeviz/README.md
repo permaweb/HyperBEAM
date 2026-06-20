@@ -33,11 +33,14 @@ hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system
 hyperbeam-codeviz.html?devices=all&mode=system
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&selected=hb_message
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system&selected=kernel:resolver&edges=strong
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat
 ```
 
 Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
 module, or function opens a local callers/callees lens, and `edges=strong`
-filters the graph to repeated call relationships.
+filters the graph to repeated call relationships. The context and inspector
+panes can be resized with the recorder-style splitters around the graph.
+Selected devices are pinned to the top of the device list.
 
 ## Live and Recorder Overlays
 
@@ -61,8 +64,12 @@ that emit them. Event rows decay over several poll ticks, leaving recent pulses
 visible long enough to inspect.
 `live=stack` polls
 `/~recorder@1.0/live?limit=90&stack-limit=18`, paints sampled BEAM stack traces,
-and draws animated trace routes between visible graph nodes.
+and draws animated trace routes between visible graph nodes. `follow=heat`
+keeps the inspector and graph centered on the hottest live node. Live stack rows
+show compact stack trails and can be clicked to pull their module/function into
+the current graph view.
 
 Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
 report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
-as aggregate heat or focused to one event with the recording timeline.
+as aggregate heat, replayed event-by-event with the timeline Play control, or
+focused to one event with `recording-event=N`.
