@@ -75,6 +75,7 @@ Branch: `expr/visualizer`
 - Stack metadata proof: a local live stack JSON feed at `127.0.0.1:8892` rendered a `hb_message:commit/3` stack row with `2 MB` memory and `q 7` queue metadata, no metadata clipping, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-memory-queue.png`.
 - Stack process-name proof: the same local live stack feed rendered registered process name `hb_worker_demo` beside pid/status/reduction/memory/queue metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-name.png`.
 - Recording title proof: `recording=demo&recording-event=3` rendered `Recording timeline · warning/process_sampler_failed`, kept timeline tick `3` active, and had no title clipping or overflow. Screenshot saved to `build/codeviz/validation-recording-focused-title.png`.
+- Source heat label proof: `recording=demo&selected=hb_ao` rendered `Recorded heat` in the heat panel and inspector, with hot-row tooltip `hb_ao (+10 recorded heat)` and `0` overflow. Screenshot saved to `build/codeviz/validation-source-heat-labels.png`.
 
 ## Last Presentation Pass
 
@@ -134,6 +135,7 @@ Branch: `expr/visualizer`
 - Added memory and message-queue metadata to live stack inspector rows, with wrapped stack metadata so the values remain readable.
 - Added registered process names to live stack inspector metadata when the recorder live endpoint provides them.
 - Added focused recorder event names to the recording timeline title and tick tooltips.
+- Made heat labels source-specific across live, stack, and recording modes.
 - Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
 
 ## Next Work

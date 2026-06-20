@@ -2523,15 +2523,12 @@
     }
     const title = document.createElement("div");
     title.className = "heat-title";
-    title.textContent =
-      state.live.mode === "recording" ? "Recorded heat" :
-      state.live.mode === "stack" ? "Stack heat" :
-      "Live heat";
+    title.textContent = sourceHeatLabel();
     const rows = hotNodes.map(({ node, score, errors }) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = errors > 0.6 ? "heat-row error" : "heat-row";
-      button.title = `${node.id} (+${nf.format(Math.round(score))} live heat)`;
+      button.title = `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})`;
       button.addEventListener("click", () => {
         selectNode(node.id, { manual: true });
       });
@@ -2544,6 +2541,12 @@
     });
     els.heatPanel.replaceChildren(title, ...rows);
     return true;
+  }
+
+  function sourceHeatLabel() {
+    if (state.live.mode === "recording") return "Recorded heat";
+    if (state.live.mode === "stack") return "Stack heat";
+    return "Live heat";
   }
 
   function renderErrorPanel() {
@@ -2946,7 +2949,9 @@
     const liveScore = liveNodeScore(node);
     const errorScore = liveErrorScore(node);
     const aliases = eventAliasesForNode(node).slice(0, 4);
-    const liveLine = liveScore > 0.6 ? `\nlive heat +${Math.round(liveScore)}` : "";
+    const liveLine = liveScore > 0.6 ?
+      `\n${sourceHeatLabel().toLowerCase()} +${Math.round(liveScore)}` :
+      "";
     const errorLine = errorScore > 0.6 ? `\nerror heat +${Math.round(errorScore)}` : "";
     const aliasLine = aliases.length ? `\nevents ${aliases.join(", ")}` : "";
     if (node.kind === "system") {
@@ -3103,7 +3108,7 @@
     ];
     const liveScore = liveNodeScore(node);
     if (liveScore > 0.6) {
-      cells.push(["Live heat", `+${nf.format(Math.round(liveScore))}`]);
+      cells.push([sourceHeatLabel(), `+${nf.format(Math.round(liveScore))}`]);
     }
     const errorScore = liveErrorScore(node);
     if (errorScore > 0.6) {
@@ -3459,7 +3464,7 @@
       const title = svgEl("title");
       const score = liveNodeScore(node);
       title.textContent = score > 0.6 ?
-        `${node.id} (+${nf.format(Math.round(score))} live heat)` :
+        `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})` :
         node.id;
       mini.append(title);
       fragment.append(mini);
