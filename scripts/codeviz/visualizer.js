@@ -2806,10 +2806,22 @@
       eventList.className = "stack-list";
       const maxDelta = Math.max(1, ...liveEvents.map((event) => event.delta));
       liveEvents.forEach((event) => {
-        const row = document.createElement("div");
+        const row = document.createElement("button");
+        row.type = "button";
         row.className = /error|failed|warning|throw|crash|exception/i.test(event.key) ?
           "event-sample-row error" :
           "event-sample-row";
+        const target = liveEventTarget(event.key);
+        row.disabled = !target;
+        row.title = event.key;
+        if (target) {
+          row.addEventListener("click", () => {
+            state.selected = target;
+            render();
+            focusNode(target);
+            showGraph();
+          });
+        }
         const name = document.createElement("strong");
         name.textContent = event.key;
         const meter = document.createElement("span");

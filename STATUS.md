@@ -54,6 +54,7 @@ Branch: `expr/visualizer`
 - Workspace splitter proof: dragging the context splitter widened the context pane from `300px` to `364px` and kept page overflow at `0`; dragging the inspector splitter widened the detail pane from `340px` to `398px` and kept page overflow at `0`. Screenshot saved to `build/codeviz/validation-workspace-splitter.png`.
 - Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
 - Stack-path row proof: `recording=demo&selected=hb_ao` rendered a stack row path `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3` and preserved the full newline stack in the row title. Screenshot saved to `build/codeviz/validation-stack-path-rows.png`.
+- Inspector event-click proof: `live=demo&selected=dev_scheduler` rendered an enabled `dev_scheduler/events` inspector event row; clicking it focused `dev_scheduler` and preserved the event key in the row title. Screenshot saved to `build/codeviz/validation-inspector-event-click.png`.
 
 ## Last Presentation Pass
 
@@ -91,6 +92,7 @@ Branch: `expr/visualizer`
 - Added recorder timeline playback so imported or demo recordings can repaint their stack traces event-by-event.
 - Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
 - Added compact stack-path trails to live/recorded inspector stack rows.
+- Made selected-node live event rows in the inspector clickable graph targets.
 
 ## Next Work
 
