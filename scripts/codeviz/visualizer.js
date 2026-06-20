@@ -3430,7 +3430,10 @@
     }
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
-    if (state.selectedEdge && state.selectedEdge.target === node.id) {
+    if (
+      state.selectedEdge &&
+      (state.selectedEdge.source === node.id || state.selectedEdge.target === node.id)
+    ) {
       wrap.append(selectedEdgeCard());
     }
     const refs = node["device-refs"] || [];
@@ -3675,7 +3678,27 @@
     meta.textContent = edge.kind === "trace" ?
       `${nf.format(Math.round(edge.count))} sampled frames` :
       `${nf.format(edge.count)} calls`;
-    card.append(route, meta);
+    const jumps = document.createElement("div");
+    jumps.className = "edge-jumps";
+    [
+      ["Source", edge.source],
+      ["Target", edge.target]
+    ].forEach(([label, id]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = id === state.selected ? "edge-jump active" : "edge-jump";
+      button.title = id;
+      button.addEventListener("click", () => {
+        selectNode(id, { manual: true, showGraph: true, edge });
+      });
+      const buttonLabel = document.createElement("small");
+      buttonLabel.textContent = label;
+      const name = document.createElement("strong");
+      name.textContent = id;
+      button.append(buttonLabel, name);
+      jumps.append(button);
+    });
+    card.append(route, meta, jumps);
     section.append(heading, card);
     return section;
   }

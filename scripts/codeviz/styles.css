@@ -1519,12 +1519,49 @@ button.ref-pill {
   background: #f5fbff;
 }
 
+.edge-jumps {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.edge-jump {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 2px;
+  min-height: 36px;
+  padding: 5px 7px;
+  border-color: rgba(0, 154, 247, 0.14);
+  background: #ffffff;
+  text-align: left;
+}
+
+.edge-jump.active {
+  border-color: rgba(0, 154, 247, 0.4);
+  background: #eef9ff;
+}
+
+.edge-jump small {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .stack-row strong,
 .stack-row span,
 .event-sample-row strong,
 .event-sample-row span,
 .edge-summary strong,
-.edge-summary span {
+.edge-summary span,
+.edge-jump strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1534,7 +1571,8 @@ button.ref-pill {
 
 .stack-row strong,
 .event-sample-row strong,
-.edge-summary strong {
+.edge-summary strong,
+.edge-jump strong {
   color: var(--ink);
   font-size: 11px;
 }
