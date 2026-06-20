@@ -49,6 +49,7 @@ hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&live=/~hyperbuddy@1.0/ev
 hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&live=stack
 hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&recording=demo
 hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&recording=demo&recording-event=1
+hyperbeam-codeviz.html?devices=recorder@1.0&mode=module&recording=http%3A%2F%2F127.0.0.1%3A8891%2Freport.json
 ```
 
 `live=/~hyperbuddy@1.0/events` polls HyperBEAM event counters, computes deltas,
@@ -63,5 +64,5 @@ visible long enough to inspect.
 and draws animated trace routes between visible graph nodes.
 
 Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
-report. Imported recordings can be viewed as aggregate heat or focused to one
-event with the recording timeline.
+report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
+as aggregate heat or focused to one event with the recording timeline.

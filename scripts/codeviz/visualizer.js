@@ -101,6 +101,7 @@
       processCount: 0,
       frameCount: 0,
       sourceName: "",
+      recordingUrl: "",
       recordingEvents: [],
       recordingFocus: -1,
       pendingRecordingFocus: -1,
@@ -192,6 +193,7 @@
     bindEvents();
     render();
     if (state.live.endpoint) startLive(state.live.endpoint);
+    if (state.live.recordingUrl) loadRecordingUrl(state.live.recordingUrl);
     if (state.live.sourceName === "demo") applyRecordingReport(demoRecordingReport(), "demo");
   }
 
@@ -238,6 +240,8 @@
     }
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
+    } else if (params.has("recording")) {
+      state.live.recordingUrl = params.get("recording");
     }
     if (params.has("recording-event")) {
       const focus = Number(params.get("recording-event"));
@@ -467,6 +471,8 @@
     }
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
+    } else if (state.live.mode === "recording" && state.live.recordingUrl) {
+      params.set("recording", state.live.recordingUrl);
     }
     if (state.live.mode === "recording" && state.live.recordingFocus >= 0) {
       params.set("recording-event", String(state.live.recordingFocus + 1));
@@ -1181,6 +1187,7 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = "";
+    state.live.recordingUrl = "";
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
     state.live.pendingRecordingFocus = -1;
@@ -1222,6 +1229,7 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = "";
+    state.live.recordingUrl = "";
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
     state.live.pendingRecordingFocus = -1;
@@ -1446,6 +1454,25 @@
     }
   }
 
+  async function loadRecordingUrl(recordingUrl) {
+    try {
+      const url = new URL(recordingUrl, window.location.href);
+      const response = await fetch(url.href, {
+        cache: "no-store",
+        headers: { accept: "application/json, text/html;q=0.9, */*;q=0.8" }
+      });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      applyRecordingReport(parseRecordingReport(await response.text()), url.pathname.split("/").pop() || "recording", recordingUrl);
+    } catch (error) {
+      stopLive({ renderAfter: false });
+      state.live.enabled = true;
+      state.live.mode = "recording";
+      state.live.recordingUrl = recordingUrl;
+      state.live.lastError = `recording failed: ${error.message || error}`;
+      render();
+    }
+  }
+
   function parseRecordingReport(text) {
     const embedded = text.match(/<script[^>]+id=["']embedded-log["'][^>]*>([^<]*)<\/script>/i);
     if (embedded) {
@@ -1454,7 +1481,7 @@
     return JSON.parse(text);
   }
 
-  function applyRecordingReport(report, sourceName) {
+  function applyRecordingReport(report, sourceName, recordingUrl = "") {
     const pendingFocus = state.live.pendingRecordingFocus;
     stopLive({ renderAfter: false });
     state.live.enabled = true;
@@ -1470,6 +1497,7 @@
     state.live.processCount = 0;
     state.live.frameCount = 0;
     state.live.sourceName = sourceName;
+    state.live.recordingUrl = recordingUrl;
     state.live.recordingEvents = Array.isArray(report.events) ? report.events : [];
     state.live.recordingFocus = -1;
     state.live.pendingRecordingFocus = pendingFocus;
@@ -1647,15 +1675,25 @@
       resolveLiveIds(frame).forEach((id) => ids.add(id));
       return ids;
     }
-    const label = frame.label || frameLabel(frame);
-    resolveLiveIds(label).forEach((id) => ids.add(id));
     if (frame.module) {
-      addLiveMatches(ids, frame.module);
+      addFrameModuleMatch(ids, frame.module);
       if (frame.function && frame.arity !== undefined) {
         addLiveMatches(ids, `${frame.module}:${frame.function}/${frame.arity}`);
       }
+      return ids;
     }
+    const label = frame.label || frameLabel(frame);
+    resolveLiveIds(label).forEach((id) => ids.add(id));
     return ids;
+  }
+
+  function addFrameModuleMatch(ids, module) {
+    const exact = liveToken(module);
+    if (byModule.has(exact)) {
+      ids.add(exact);
+    } else {
+      addLiveMatches(ids, module);
+    }
   }
 
   function addTraceEdgesForFrames(frames, amount) {
@@ -1765,7 +1803,7 @@
   }
 
   function bumpLive(id, amount, error) {
-    const resolved = resolveLiveIds(id);
+    const resolved = byModule.has(id) || byFunction.has(id) ? new Set([id]) : resolveLiveIds(id);
     const targets = resolved.size ? resolved : new Set([id]);
     targets.forEach((target) => {
       state.live.activity.set(target, (state.live.activity.get(target) || 0) + amount);
