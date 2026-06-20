@@ -2221,11 +2221,19 @@
       });
       const text = await response.text();
       if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const headerPayload = responseHeaderPayload(response.headers);
       let payload = parseLivePayload(text);
-      if (linkifiedCounterPayload(payload)) {
+      if (
+        linkifiedCounterPayload(payload) ||
+        (
+          !processPayload(payload) &&
+          !payloadHasCounters(payload) &&
+          linkifiedCounterPayload(headerPayload)
+        )
+      ) {
         payload = parseLivePayload(await fetchFormattedCounters());
       }
-      if (Array.isArray(payload.processes)) {
+      if (processPayload(payload)) {
         state.live.mode = "stack";
         applyLiveProcesses(payload.processes);
       } else {
@@ -2251,8 +2259,22 @@
       }
       return parsed;
     } catch (_error) {
+      if (trimmed.includes("=>")) return parseFormattedCounters(trimmed);
       return parsePrometheusCounters(trimmed);
     }
+  }
+
+  function processPayload(payload) {
+    return payload && Array.isArray(payload.processes);
+  }
+
+  function responseHeaderPayload(headers) {
+    const payload = {};
+    if (!headers || typeof headers.forEach !== "function") return payload;
+    headers.forEach((value, key) => {
+      if (key.endsWith("+link") || key === "status") payload[key] = value;
+    });
+    return payload;
   }
 
   async function fetchFormattedCounters() {
@@ -2276,7 +2298,11 @@
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
     const keys = Object.keys(payload);
     if (!keys.some((key) => key.endsWith("+link"))) return false;
-    return flattenCounters(payload).filter(({ key }) => key !== "status").length === 0;
+    return !payloadHasCounters(payload);
+  }
+
+  function payloadHasCounters(payload) {
+    return flattenCounters(payload).some(({ key }) => key !== "status");
   }
 
   function parseFormattedCounters(text) {
