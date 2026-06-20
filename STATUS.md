@@ -76,6 +76,7 @@ Branch: `expr/visualizer`
 - Stack process-name proof: the same local live stack feed rendered registered process name `hb_worker_demo` beside pid/status/reduction/memory/queue metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-name.png`.
 - Recording title proof: `recording=demo&recording-event=3` rendered `Recording timeline · warning/process_sampler_failed`, kept timeline tick `3` active, and had no title clipping or overflow. Screenshot saved to `build/codeviz/validation-recording-focused-title.png`.
 - Source heat label proof: `recording=demo&selected=hb_ao` rendered `Recorded heat` in the heat panel and inspector, with hot-row tooltip `hb_ao (+10 recorded heat)` and `0` overflow. Screenshot saved to `build/codeviz/validation-source-heat-labels.png`.
+- Canonical regression proof: `devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat` rendered `21` nodes, `21` calls, `6` live badges, `6` hot/warm minimap markers, engine metrics, and `0` overflow on desktop and at `390x844` with no offscreen controls. Screenshots saved to `build/codeviz/validation-canonical-current.png` and `build/codeviz/validation-canonical-current-mobile.png`.
 
 ## Last Presentation Pass
 
