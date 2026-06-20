@@ -1498,6 +1498,7 @@
       totalDelta += delta;
       const sample = {
         pid,
+        name: proc["registered-name"] || "",
         entry: proc.entry || "unknown",
         current: frameLabel(proc.current),
         stack: [proc.current, ...(Array.isArray(proc.stack) ? proc.stack.slice(0, 12) : [])]
@@ -3245,6 +3246,7 @@
         meta.className = "stack-meta";
         meta.textContent = [
           sample.pid,
+          sample.name,
           sample.status,
           `+${nf.format(Math.round(sample.reductions))} reductions`,
           formatBytes(sample.memory),
