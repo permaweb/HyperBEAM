@@ -462,6 +462,11 @@ body.resizing {
   background: #f7fbff;
 }
 
+.device-row.active {
+  border-left: 3px solid var(--green);
+  background: #f5fbf8;
+}
+
 .device-row input {
   align-self: center;
   margin: 0;

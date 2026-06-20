@@ -411,7 +411,12 @@
         const haystack = `${device.label} ${device.id} ${device.group}`.toLowerCase();
         return !needle || haystack.includes(needle);
       })
-      .sort((a, b) => `${a.group}:${a.label}`.localeCompare(`${b.group}:${b.label}`))
+      .sort((a, b) => {
+        const selectedDelta =
+          Number(state.selectedDevices.has(b.id)) - Number(state.selectedDevices.has(a.id));
+        if (selectedDelta) return selectedDelta;
+        return `${a.group}:${a.label}`.localeCompare(`${b.group}:${b.label}`);
+      })
       .map((device) => deviceRow(device));
     els.deviceList.replaceChildren(...rows);
     els.deviceCount.textContent = `${nf.format(state.selectedDevices.size)} selected`;
@@ -421,6 +426,7 @@
   function deviceRow(device) {
     const label = document.createElement("label");
     label.className = "device-row";
+    label.classList.toggle("active", state.selectedDevices.has(device.id));
     const input = document.createElement("input");
     input.type = "checkbox";
     input.checked = state.selectedDevices.has(device.id);
