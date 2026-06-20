@@ -87,6 +87,7 @@
       activity: new Map(),
       errors: new Map(),
       samples: new Map(),
+      traceEdges: new Map(),
       totalDelta: 0,
       processCount: 0,
       frameCount: 0,
@@ -1137,6 +1138,7 @@
     state.live.activity = new Map();
     state.live.errors = new Map();
     state.live.samples = new Map();
+    state.live.traceEdges = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1173,6 +1175,7 @@
     state.live.activity = new Map();
     state.live.errors = new Map();
     state.live.samples = new Map();
+    state.live.traceEdges = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1254,6 +1257,7 @@
 
   function applyLiveCounters(counters) {
     let totalDelta = 0;
+    state.live.traceEdges = new Map();
     counters.forEach(({ key, value }) => {
       const previous = state.live.previous.get(key);
       const delta = previous === undefined ? 0 : Math.max(0, value - previous);
@@ -1273,6 +1277,7 @@
   function applyLiveProcesses(processes) {
     let totalDelta = 0;
     const nextSamples = new Map();
+    state.live.traceEdges = new Map();
     processes.forEach((proc) => {
       const pid = String(proc.pid || "");
       const reductions = Number(proc.reductions || 0);
@@ -1304,6 +1309,10 @@
           addLiveSample(nextSamples, id, sample);
         });
       });
+      addTraceEdgesForFrames(
+        [proc.current, ...(Array.isArray(proc.stack) ? proc.stack.slice(0, 12) : [])],
+        amount
+      );
       applyLiveKey(String(proc.entry || ""), amount * 0.5);
     });
     state.live.totalDelta = totalDelta;
@@ -1350,6 +1359,7 @@
     state.live.activity = new Map();
     state.live.errors = new Map();
     state.live.samples = new Map();
+    state.live.traceEdges = new Map();
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1374,6 +1384,7 @@
           addLiveSample(samples, id, sample);
         });
       });
+      addTraceEdgesForFrames(frames, 3.8);
       resolveFrameIds(recordingEventFrame(event)).forEach((id) => {
         bumpLive(id, 2.2, /error|failed|exception|crash/i.test(sample.entry));
         addLiveSample(samples, id, sample);
@@ -1513,6 +1524,36 @@
     return ids;
   }
 
+  function addTraceEdgesForFrames(frames, amount) {
+    const resolved = frames
+      .filter(Boolean)
+      .map(primaryTraceIds)
+      .filter((ids) => ids.length);
+    for (let idx = 0; idx < resolved.length - 1; idx += 1) {
+      const targets = resolved[idx];
+      const sources = resolved[idx + 1];
+      const weight = Math.max(0.35, amount * (1 - idx * 0.07));
+      sources.forEach((source) => {
+        targets.forEach((target) => addTraceEdge(source, target, weight));
+      });
+    }
+  }
+
+  function primaryTraceIds(frame) {
+    const ids = [...resolveFrameIds(frame)];
+    const functions = ids.filter((id) => byFunction.has(id));
+    if (functions.length) return functions.slice(0, 3);
+    return ids.filter((id) => byModule.has(id)).slice(0, 3);
+  }
+
+  function addTraceEdge(source, target, amount) {
+    if (!source || !target || source === target) return;
+    const key = `${source}->${target}`;
+    const edge = state.live.traceEdges.get(key) || { source, target, count: 0 };
+    edge.count += amount;
+    state.live.traceEdges.set(key, edge);
+  }
+
   function demoLiveTick() {
     if (!state.live.enabled || state.live.mode !== "demo") return;
     decayLiveActivity();
@@ -1530,6 +1571,7 @@
     if (!candidates.length) return;
     const tick = state.live.demoTick;
     state.live.demoTick += 1;
+    state.live.traceEdges = new Map();
     let totalDelta = 0;
     candidates.slice(0, 7).forEach((_, offset) => {
       const id = candidates[(tick + offset * 2) % candidates.length];
@@ -1541,6 +1583,17 @@
       bumpLive("warning/process_sampler_failed", 5, true);
       totalDelta += 5;
     }
+    addTraceEdgesForFrames([
+      "hb_message:commit/3",
+      "hb_ao:resolve/3",
+      "hb_http:handle/3",
+      "hb_http_server:handle/2"
+    ], 4.2);
+    addTraceEdgesForFrames([
+      "dev_scheduler:compute/3",
+      "hb_process:execute/3",
+      "hb_cache:read/2"
+    ], 3.4);
     state.live.totalDelta = totalDelta;
     state.live.lastSeen = Date.now();
     state.live.lastError = "";
@@ -1684,11 +1737,11 @@
     const active = [...state.live.activity.values()].filter((value) => value > 1).length;
     if (state.live.lastError) return `live error: ${state.live.lastError}`;
     if (state.live.mode === "stack") {
-      return `stacks: ${nf.format(state.live.processCount)} procs · +${nf.format(Math.round(state.live.totalDelta))} reductions · ${active} hot`;
+      return `stacks: ${nf.format(state.live.processCount)} procs · +${nf.format(Math.round(state.live.totalDelta))} reductions · ${state.live.traceEdges.size} traces · ${active} hot`;
     }
     if (state.live.mode === "recording") {
       const source = state.live.sourceName ? `${state.live.sourceName}: ` : "";
-      return `${source}${nf.format(state.live.totalDelta)} events · ${nf.format(state.live.frameCount)} frames · ${active} hot`;
+      return `${source}${nf.format(state.live.totalDelta)} events · ${nf.format(state.live.frameCount)} frames · ${state.live.traceEdges.size} traces · ${active} hot`;
     }
     const prefix = state.live.mode === "demo" ? "demo live" : "live";
     return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${active} hot`;
@@ -1822,7 +1875,70 @@
       path.append(title);
       fragment.append(path);
     });
+    liveTraceEdges().forEach((edge) => {
+      const path = svgEl("path", { class: "edge trace", d: edgePath(edge) });
+      path.style.setProperty("--trace-width", `${traceEdgeWidth(edge)}px`);
+      path.dataset.source = edge.source;
+      path.dataset.target = edge.target;
+      const title = svgEl("title");
+      title.textContent =
+        `${edge.source} -> ${edge.target} (${Math.round(edge.count)} sampled stack frames)`;
+      path.append(title);
+      fragment.append(path);
+    });
     els.edges.replaceChildren(fragment);
+  }
+
+  function liveTraceEdges() {
+    if (!state.live.enabled || !state.live.traceEdges.size) return [];
+    const nodeById = new Map(state.layout.nodes.map((node) => [node.id, node]));
+    const folded = new Map();
+    state.live.traceEdges.forEach((trace) => {
+      const sources = liveTraceNodeIds(trace.source, nodeById);
+      const targets = liveTraceNodeIds(trace.target, nodeById);
+      sources.forEach((sourceId) => {
+        targets.forEach((targetId) => {
+          if (sourceId === targetId) return;
+          const key = `${sourceId}->${targetId}`;
+          const edge = folded.get(key) || {
+            source: sourceId,
+            target: targetId,
+            sourceNode: nodeById.get(sourceId),
+            targetNode: nodeById.get(targetId),
+            count: 0
+          };
+          edge.count += trace.count;
+          folded.set(key, edge);
+        });
+      });
+    });
+    return [...folded.values()]
+      .filter((edge) => edge.sourceNode && edge.targetNode)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 90)
+      .sort((a, b) => a.count - b.count);
+  }
+
+  function liveTraceNodeIds(id, nodeById) {
+    if (nodeById.has(id)) return [id];
+    const fun = byFunction.get(id);
+    if (fun) {
+      return liveTraceModuleIds(fun.module, nodeById);
+    }
+    return liveTraceModuleIds(id, nodeById);
+  }
+
+  function liveTraceModuleIds(id, nodeById) {
+    const mod = byModule.get(id);
+    if (!mod) return [];
+    if (nodeById.has(mod.id)) return [mod.id];
+    const sysId = systemId(mod);
+    if (nodeById.has(sysId)) return [sysId];
+    return [];
+  }
+
+  function traceEdgeWidth(edge) {
+    return Math.min(6.5, 1.7 + Math.log1p(edge.count || 1) * 0.58);
   }
 
   function edgeWidth(edge) {

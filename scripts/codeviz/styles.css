@@ -589,6 +589,18 @@ svg {
   animation: live-edge-flow 1.1s linear infinite;
 }
 
+.edge.trace {
+  stroke: rgba(189, 52, 66, 0.86);
+  stroke-width: var(--trace-width, 3px);
+  stroke-linecap: round;
+  stroke-dasharray: 2 7;
+  stroke-opacity: 0.9;
+  marker-end: url("#arrow-hot");
+  pointer-events: none;
+  filter: drop-shadow(0 0 12px rgba(189, 52, 66, 0.2));
+  animation: live-edge-flow 0.82s linear infinite;
+}
+
 .edge.dim,
 .node.dim,
 .module-frame.dim {

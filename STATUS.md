@@ -22,6 +22,7 @@ Branch: `expr/visualizer`
 - Browser stack overlay proof against a recorder-shaped local JSON feed: `selected=hb_message` showed status `stacks: 2 procs · +2 reductions · 47 hot`, one `Live stacks` inspector row, `8` live rings, and `8` warm edges; screenshot saved to `build/codeviz/validation-stack-live.png`.
 - Recorder import proof: `recording=demo&selected=hb_message` showed status `demo: 3 events · 9 frames · 54 hot`, one recorded inspector stack row, `10` live rings, and `3` warm edges; screenshot saved to `build/codeviz/validation-recording-demo.png`.
 - Heat panel proof: `recording=demo` showed a `Recorded heat` panel with `8` rows; clicking the top row selected `hb_http` and focused its module lens. Screenshot saved to `build/codeviz/validation-heat-panel.png`.
+- Trace edge proof: `recording=demo` in module mode showed status `demo: 3 events · 9 frames · 16 traces · 54 hot`, with `4` visible animated trace paths including `hb_ao -> hb_message` and `dev_recorder -> hb_ao`; screenshot saved to `build/codeviz/validation-trace-edges.png`.
 
 ## Last Presentation Pass
 
@@ -32,6 +33,7 @@ Branch: `expr/visualizer`
 - Added visualizer stack mode that paints live process stacks onto modules/functions and surfaces matching process rows in the inspector.
 - Added recorder report import support for saved `~recorder@1.0` HTML/JSON reports with embedded stack traces.
 - Added graph heat panel for the hottest live, stack, or recorded nodes with click-to-focus behavior.
+- Added animated trace edges that project live/recorded stack frames into the current subsystem, module, or function view.
 
 ## Next Work
 
