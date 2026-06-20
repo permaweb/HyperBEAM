@@ -756,7 +756,11 @@ body.resizing {
 
 .recording-title {
   flex: 0 0 auto;
+  max-width: min(420px, 52vw);
+  overflow: hidden;
   color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 800;

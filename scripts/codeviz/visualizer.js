@@ -1725,6 +1725,10 @@
     return `${event.module || "unknown"}:${event.function || "unknown"}`;
   }
 
+  function recordingEventName(event) {
+    return `${event.topic || "recording"}/${event.name || "event"}`;
+  }
+
   function demoRecordingReport() {
     return {
       events: [
@@ -2420,7 +2424,11 @@
     }
     const title = document.createElement("div");
     title.className = "recording-title";
-    title.textContent = "Recording timeline";
+    const focusedEvent = state.live.recordingEvents[state.live.recordingFocus];
+    title.textContent = focusedEvent ?
+      `Recording timeline · ${recordingEventName(focusedEvent)}` :
+      "Recording timeline";
+    if (focusedEvent) title.title = recordingEventName(focusedEvent);
     const play = document.createElement("button");
     play.type = "button";
     play.className = state.live.recordingPlaying ?
@@ -2451,7 +2459,7 @@
         "recording-tick active" :
         "recording-tick";
       button.textContent = String(event.sequence || idx + 1);
-      button.title = `${event.topic || "recording"}/${event.name || "event"}`;
+      button.title = recordingEventName(event);
       button.addEventListener("click", () => {
         stopRecordingPlayback(false);
         focusRecordingEvent(idx);
