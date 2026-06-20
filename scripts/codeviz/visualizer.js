@@ -245,6 +245,13 @@
     if (params.has("selected")) {
       state.selected = params.get("selected");
     }
+    if (params.has("edge")) {
+      const edge = edgeParamValue(params.get("edge"));
+      if (edge) {
+        state.selectedEdge = edge;
+        if (!state.selected) state.selected = edge.target;
+      }
+    }
     if (params.has("group")) state.group = params.get("group");
     if (["context", "selected", "cross", "strong"].includes(params.get("edges"))) {
       state.edgeMode = params.get("edges");
@@ -577,6 +584,7 @@
       );
     }
     if (state.selected) params.set("selected", state.selected);
+    if (state.selectedEdge) params.set("edge", edgeUrlParam(state.selectedEdge));
     if (state.search) params.set("search", state.search);
     if (state.group) params.set("group", state.group);
     if (state.edgeMode !== "context") params.set("edges", state.edgeMode);
@@ -606,6 +614,27 @@
     if (state.live.mode === "demo") return "demo";
     if (state.live.mode === "stack" && state.live.endpoint === defaultStackEndpoint) return "stack";
     return state.live.endpoint;
+  }
+
+  function edgeParamValue(value) {
+    const [kind, source, target, count] = String(value || "").split("|");
+    if (!["call", "trace"].includes(kind) || !source || !target) return null;
+    const parsedCount = Number(count);
+    return {
+      kind,
+      source,
+      target,
+      count: Number.isFinite(parsedCount) && parsedCount > 0 ? parsedCount : 1
+    };
+  }
+
+  function edgeUrlParam(edge) {
+    return [
+      edge.kind || "call",
+      edge.source || "",
+      edge.target || "",
+      String(Math.round(edge.count || 1))
+    ].join("|");
   }
 
   function functionSearchText(fun) {

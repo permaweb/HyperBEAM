@@ -47,7 +47,8 @@ Clicking an already-selected graph node drills down one level: subsystems open
 their module graph, and modules open a function graph filtered to that module.
 Call edges have wide invisible hit paths; clicking one selects its callee,
 lights the surrounding relationship, and records the selected call in the
-inspector with source/target jump actions.
+inspector with source/target jump actions. Selected call/trace edge context is
+encoded in the URL as `edge=...`, so copied links preserve the exact edge card.
 Selected devices are pinned to the top of the device list. Search matches are
 highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights
