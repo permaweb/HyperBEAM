@@ -1510,6 +1510,15 @@ button.ref-pill {
   background: #f3fbff;
 }
 
+.path-row {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(19, 138, 109, 0.18);
+  border-radius: 6px;
+  background: #f6fffc;
+  text-align: left;
+}
+
 .edge-summary {
   min-width: 0;
   margin-top: 9px;
@@ -1559,6 +1568,8 @@ button.ref-pill {
 .stack-row span,
 .event-sample-row strong,
 .event-sample-row span,
+.path-row strong,
+.path-row span,
 .edge-summary strong,
 .edge-summary span,
 .edge-jump strong {
@@ -1571,6 +1582,7 @@ button.ref-pill {
 
 .stack-row strong,
 .event-sample-row strong,
+.path-row strong,
 .edge-summary strong,
 .edge-jump strong {
   color: var(--ink);
@@ -1579,6 +1591,7 @@ button.ref-pill {
 
 .stack-row span,
 .event-sample-row span,
+.path-row span,
 .edge-summary span {
   margin-top: 4px;
   color: var(--muted);

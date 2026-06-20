@@ -3481,6 +3481,10 @@
     ) {
       wrap.append(selectedEdgeCard());
     }
+    const devicePaths = devicePathsForNode(node);
+    if (devicePaths.length) {
+      wrap.append(devicePathSection(devicePaths));
+    }
     const refs = node["device-refs"] || [];
     if (refs.length) {
       const pills = document.createElement("div");
@@ -3745,6 +3749,94 @@
     });
     card.append(route, meta, jumps);
     section.append(heading, card);
+    return section;
+  }
+
+  function devicePathsForNode(node) {
+    if (!state.selectedDevices.size || !node || !state.layout.edges.length) return [];
+    const nodeById = new Map(state.layout.nodes.map((layoutNode) => [layoutNode.id, layoutNode]));
+    if (!nodeById.has(node.id)) return [];
+    const starts = state.layout.nodes
+      .filter((layoutNode) => layoutNode.id !== node.id && isSelectedDevicePathStart(layoutNode));
+    if (!starts.length) return [];
+    const adjacency = new Map();
+    state.layout.edges.forEach((edge) => {
+      if (!nodeById.has(edge.source) || !nodeById.has(edge.target)) return;
+      if (!adjacency.has(edge.source)) adjacency.set(edge.source, []);
+      adjacency.get(edge.source).push({ id: edge.target, count: edge.count || 1 });
+    });
+    adjacency.forEach((items) => {
+      items.sort((a, b) => (b.count || 0) - (a.count || 0));
+    });
+    const paths = [];
+    starts.forEach((start) => {
+      const queue = [{ ids: [start.id], count: 0 }];
+      let guard = 0;
+      while (queue.length && guard < 160) {
+        guard += 1;
+        const current = queue.shift();
+        const last = current.ids[current.ids.length - 1];
+        if (last === node.id) {
+          paths.push(current);
+          break;
+        }
+        if (current.ids.length >= 6) continue;
+        (adjacency.get(last) || []).slice(0, 10).forEach((next) => {
+          if (current.ids.includes(next.id)) return;
+          queue.push({
+            ids: [...current.ids, next.id],
+            count: current.count + next.count
+          });
+        });
+      }
+    });
+    return paths
+      .sort((a, b) => (a.ids.length - b.ids.length) || (b.count - a.count))
+      .slice(0, 3)
+      .map((path) => ({
+        ...path,
+        labels: path.ids.map((id) => nodeById.get(id)?.title || id)
+      }));
+  }
+
+  function isSelectedDevicePathStart(node) {
+    if (state.mode === "function") {
+      const mod = byModule.get(node.module);
+      return !!mod && mod.role === "device" && state.selectedDevices.has(mod.device);
+    }
+    if (state.mode === "module") {
+      return node.role === "device" && state.selectedDevices.has(node.device);
+    }
+    if (state.mode === "system") {
+      return node.role === "device" && (node.moduleIds || [])
+        .some((moduleId) => state.selectedDevices.has(byModule.get(moduleId)?.device));
+    }
+    return false;
+  }
+
+  function devicePathSection(paths) {
+    const section = document.createElement("div");
+    section.className = "source-section";
+    const heading = document.createElement("h3");
+    heading.textContent = "Device paths";
+    const list = document.createElement("div");
+    list.className = "stack-list";
+    paths.forEach((path) => {
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "path-row";
+      row.title = path.ids.join(" -> ");
+      row.addEventListener("click", () => {
+        selectNode(path.ids[0], { manual: true, showGraph: true });
+      });
+      const route = document.createElement("strong");
+      route.textContent = path.labels.join(" -> ");
+      const meta = document.createElement("span");
+      meta.textContent = `${Math.max(0, path.ids.length - 1)} hops · ${nf.format(path.count)} calls`;
+      row.append(route, meta);
+      list.append(row);
+    });
+    section.append(heading, list);
     return section;
   }
 
