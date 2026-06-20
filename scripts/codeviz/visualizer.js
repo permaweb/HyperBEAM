@@ -38,6 +38,7 @@
     engineSource: document.getElementById("engine-source"),
     heatPanel: document.getElementById("heat-panel"),
     tracePanel: document.getElementById("trace-panel"),
+    processPanel: document.getElementById("process-panel"),
     errorPanel: document.getElementById("error-panel"),
     recordingTimeline: document.getElementById("recording-timeline"),
     svg: document.getElementById("graph"),
@@ -116,6 +117,7 @@
       lastCounterAt: 0,
       totalDelta: 0,
       processCount: 0,
+      processSamples: [],
       frameCount: 0,
       sourceName: "",
       recordingUrl: "",
@@ -1314,6 +1316,7 @@
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
+    state.live.processSamples = [];
     state.live.frameCount = 0;
     state.live.sourceName = "";
     state.live.recordingUrl = "";
@@ -1365,6 +1368,7 @@
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
+    state.live.processSamples = [];
     state.live.frameCount = 0;
     state.live.sourceName = "";
     state.live.recordingUrl = "";
@@ -1529,6 +1533,7 @@
     });
     state.live.totalDelta = totalDelta;
     state.live.processCount = 0;
+    state.live.processSamples = [];
     state.live.frameCount = 0;
     state.live.sourceName = "";
     state.live.samples = new Map();
@@ -1537,6 +1542,7 @@
   function applyLiveProcesses(processes) {
     let totalDelta = 0;
     const nextSamples = new Map();
+    const processSamples = [];
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
     state.live.eventRates = new Map();
@@ -1555,6 +1561,7 @@
         pid,
         name: proc["registered-name"] || "",
         entry: proc.entry || "unknown",
+        currentFrame: proc.current,
         current: frameLabel(proc.current),
         stack: [proc.current, ...(Array.isArray(proc.stack) ? proc.stack.slice(0, 12) : [])]
           .filter(Boolean)
@@ -1564,6 +1571,7 @@
         memory: Number(proc.memory || 0),
         queue: Number(proc["message-queue-len"] || 0)
       };
+      processSamples.push(sample);
       const hotFrames = [
         { frame: proc.current, weight: 1 },
         { frame: proc["initial-call"], weight: 0.45 },
@@ -1593,6 +1601,7 @@
     );
     state.live.sourceName = "";
     state.live.samples = nextSamples;
+    state.live.processSamples = processSamples;
   }
 
   function openRecordingImport() {
@@ -1668,6 +1677,7 @@
     state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
+    state.live.processSamples = [];
     state.live.frameCount = 0;
     state.live.sourceName = sourceName;
     state.live.recordingUrl = recordingUrl;
@@ -2287,15 +2297,17 @@
   function renderTelemetryPanel() {
     const hasSource = renderEngineSourcePanel();
     if (!state.live.enabled) {
+      els.processPanel.replaceChildren();
       const hasBridge = renderBridgePanel();
       els.enginePanel.hidden = !hasSource && !hasBridge;
       return;
     }
     const hasHeat = renderHeatPanel();
     const hasTraces = renderTracePanel();
+    const hasProcesses = renderProcessPanel();
     const hasErrors = renderErrorPanel();
     const hasTimeline = renderRecordingTimeline();
-    els.enginePanel.hidden = !hasSource && !hasHeat && !hasTraces && !hasErrors && !hasTimeline;
+    els.enginePanel.hidden = !hasSource && !hasHeat && !hasTraces && !hasProcesses && !hasErrors && !hasTimeline;
   }
 
   function renderEngineSourcePanel() {
@@ -2428,6 +2440,7 @@
     if (!state.selectedDevices.size) {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
+      els.processPanel.replaceChildren();
       els.errorPanel.replaceChildren();
       els.recordingTimeline.hidden = true;
       els.recordingTimeline.replaceChildren();
@@ -2721,6 +2734,60 @@
       return button;
     });
     els.tracePanel.replaceChildren(title, ...rows);
+    return true;
+  }
+
+  function renderProcessPanel() {
+    if (!state.live.enabled || state.live.mode !== "stack" || !state.live.processSamples.length) {
+      els.processPanel.replaceChildren();
+      return false;
+    }
+    const samples = state.live.processSamples
+      .slice()
+      .sort((a, b) =>
+        (b.reductions - a.reductions) ||
+        (b.queue - a.queue) ||
+        (b.memory - a.memory)
+      )
+      .slice(0, 4);
+    if (!samples.length) {
+      els.processPanel.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Processes";
+    const rows = samples.map((sample) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = /error|failed|exception|crash/i.test(sample.current) ?
+        "process-row error" :
+        "process-row";
+      const target = liveFrameTarget(sample.currentFrame || sample.current);
+      button.disabled = !target;
+      if (target) {
+        button.addEventListener("click", () => {
+          selectNode(target, { manual: true });
+        });
+      }
+      if (Array.isArray(sample.stack) && sample.stack.length > 1) {
+        button.title = sample.stack.join("\n");
+      }
+      const current = document.createElement("strong");
+      current.textContent = sample.current;
+      const meta = document.createElement("span");
+      meta.textContent = [
+        sample.name || sample.pid,
+        sample.name ? sample.pid : "",
+        sample.status,
+        `+${nf.format(Math.round(sample.reductions))} red`,
+        formatBytes(sample.memory),
+        sample.queue ? `q ${nf.format(sample.queue)}` : ""
+      ].filter(Boolean).join(" · ");
+      button.append(current, meta);
+      return button;
+    });
+    els.processPanel.replaceChildren(title, ...rows);
     return true;
   }
 
@@ -3373,7 +3440,7 @@
         const row = document.createElement("button");
         row.type = "button";
         row.className = "stack-row";
-        const target = liveFrameTarget(sample.current);
+        const target = liveFrameTarget(sample.currentFrame || sample.current);
         row.disabled = !target;
         if (target) {
           row.addEventListener("click", () => {

@@ -75,7 +75,9 @@ instead of a single momentary delta.
 and draws animated trace routes between visible graph nodes. `follow=heat`
 keeps the inspector and graph centered on the hottest live node. Live stack rows
 show compact stack trails and can be clicked to pull their module/function into
-the current graph view. `interval=<seconds>` controls the polling cadence for
+the current graph view. Stack mode also shows a process deck with the busiest
+sampled processes, including pid/name/status/reductions/memory/queue metadata,
+and those rows click back into the graph. `interval=<seconds>` controls the polling cadence for
 live counters, stack sampling, and demo telemetry; the engine header exposes
 the selected cadence and freshness of the last sample.
 

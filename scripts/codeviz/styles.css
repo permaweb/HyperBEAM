@@ -30,6 +30,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: var(--sans);
@@ -265,6 +266,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
   min-height: 32px;
   color: var(--muted);
   white-space: nowrap;
@@ -274,6 +276,7 @@ h3 {
 }
 
 .live-status::before {
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 999px;
@@ -625,6 +628,7 @@ body.resizing {
 
 .graph-stage {
   position: relative;
+  contain: layout paint;
   min-height: 530px;
   overflow: hidden;
   background:
@@ -733,6 +737,16 @@ body.resizing {
 .trace-panel.event-panel {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   max-height: 142px;
+}
+
+.process-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  max-height: 142px;
+  overflow: auto;
+  gap: 5px;
 }
 
 .error-panel {
@@ -880,6 +894,23 @@ body.resizing {
   background: #fff4f4;
 }
 
+.process-row {
+  display: grid;
+  min-width: 0;
+  min-height: 42px;
+  justify-items: stretch;
+  gap: 4px;
+  padding: 6px 7px;
+  text-align: left;
+  border-color: rgba(105, 86, 197, 0.2);
+  background: #fbfaff;
+}
+
+.process-row.error {
+  border-color: rgba(189, 52, 66, 0.24);
+  background: #fff7f7;
+}
+
 .event-meter {
   position: relative;
   display: block;
@@ -970,6 +1001,8 @@ body.resizing {
 .event-row span,
 .error-row strong,
 .error-row span,
+.process-row strong,
+.process-row span,
 .bridge-row strong,
 .bridge-row span {
   overflow: hidden;
@@ -982,6 +1015,7 @@ body.resizing {
 .trace-row strong,
 .event-row strong,
 .error-row strong,
+.process-row strong,
 .bridge-row strong {
   font-size: 11px;
 }
@@ -990,9 +1024,15 @@ body.resizing {
 .trace-row span,
 .event-row span,
 .error-row span,
+.process-row span,
 .bridge-row span {
   color: var(--muted);
   font-size: 10px;
+}
+
+.process-row span {
+  white-space: normal;
+  line-height: 1.25;
 }
 
 svg {
@@ -1000,6 +1040,7 @@ svg {
   height: 100%;
   min-height: inherit;
   display: block;
+  overflow: hidden;
   user-select: none;
 }
 
@@ -1636,6 +1677,13 @@ button.ref-pill {
     grid-column: 1 / -1;
   }
 
+  .live-status {
+    align-items: flex-start;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.25;
+  }
+
   .live-strip select {
     min-width: 0;
   }
@@ -1686,6 +1734,11 @@ button.ref-pill {
     grid-column: 1 / -1;
     grid-template-columns: minmax(0, 1fr);
     max-height: 220px;
+  }
+
+  .process-panel {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: 170px;
   }
 
   .error-panel {

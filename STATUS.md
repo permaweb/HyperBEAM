@@ -86,6 +86,8 @@ Branch: `expr/visualizer`
 - Event pulse mobile proof: at `390x844`, the event deck switched to full-width rows (`344px` each), kept `12` pulse bars per row, and had `0` overflow/offscreen rows. Screenshot saved to `build/codeviz/validation-event-pulse-history-mobile-wide.png`.
 - Recording error tick proof: `recording=demo` rendered one `.recording-tick.error` for `warning/process_sampler_failed`, retained aggregate error heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`), and had `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks.png`.
 - Recording error tick mobile proof: at `390x844`, the demo recorder timeline kept the warning tick visible, had no offscreen ticks, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks-mobile.png`.
+- Stack process deck proof: a local `~recorder@1.0/live`-shaped feed at `127.0.0.1:8894` rendered a stack-mode process deck with `3` rows, all rows clickable after preserving structured `currentFrame`, metadata including registered name/pid/status/reductions/memory/queue, `3` trace rows, process panel height `121px`, and `0` overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck.png`.
+- Stack process deck mobile proof: at `390x844`, the process deck rendered full-width `344px` rows, all clickable, with wrapped stack live status, no offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -154,6 +156,9 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with event pulse-history behavior.
 - Marked warning/failure recorder timeline ticks as error ticks and routed recording warning events through error heat.
 - Updated the codeviz README with recorder error tick behavior.
+- Added a stack-mode process deck for live recorder samples, preserving structured current frames so unknown function names can still click through to their modules.
+- Added mobile-safe live status wrapping and graph-stage clipping/containment work while validating stack process rows.
+- Updated the codeviz README with stack process deck behavior.
 
 ## Next Work
 
