@@ -780,8 +780,8 @@ safe_clear_event_recording(Result) ->
     catch _:_ -> ok
     end.
 
-event_opts(Result) ->
-    (event_plain_opts(Result))#{
+event_opts(#{ result := Result }) ->
+    (test_opts(Result))#{
         <<"on">> =>
             #{
                 <<"event">> =>
@@ -793,22 +793,17 @@ event_opts(Result) ->
             }
     }.
 
-event_plain_opts(#{ result := Result, recorder_mod := RecorderMod }) ->
-    (test_opts(Result))#{
-        <<"forge-bootstrap">> => #{ <<"recorder@1.0">> => RecorderMod }
-    }.
-
 recorder_mod(#{ recorder_mod := RecorderMod }) ->
     RecorderMod.
 
-recorder_call(Result, Fun, Req) ->
+recorder_call(#{ result := Result } = Ctx, Fun, Req) ->
     apply(
-        recorder_mod(Result),
+        recorder_mod(Ctx),
         Fun,
         [
             #{ <<"device">> => <<"recorder@1.0">> },
             Req,
-            event_plain_opts(Result)
+            test_opts(Result)
         ]
     ).
 
