@@ -681,6 +681,11 @@ body.resizing {
   fill: rgba(128, 86, 33, 0.32);
 }
 
+.mini-node.search-match {
+  stroke: rgba(0, 154, 247, 0.86);
+  stroke-width: 1;
+}
+
 .mini-node.live-warm {
   fill: rgba(178, 98, 20, 0.56);
 }
@@ -1113,6 +1118,15 @@ svg {
 .node.system .subtext {
   font-size: 11px;
   font-weight: 600;
+}
+
+.node.search-match rect {
+  stroke: rgba(0, 154, 247, 0.72);
+  stroke-width: 2;
+}
+
+.node.search-match text {
+  font-weight: 800;
 }
 
 .node:hover rect,

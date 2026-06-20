@@ -70,6 +70,7 @@ Branch: `expr/visualizer`
 - Relation-highlight proof: after hover-neighborhood wiring, clicking `dev_scheduler_server` still produced `2` caller nodes, `11` callee nodes, `13` hot edges, and `0` overflow; the in-app browser harness did not emit hover events or expose event constructors for direct hover proof. Screenshot saved to `build/codeviz/validation-hover-relation-path.png`.
 - Error-deck proof: `recording=demo&recording-event=3` rendered `ERRORS +31`, timeline tick `3`, and `3` clickable error-heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`) with `0` overflow; at `390x844` the error rows had no clipping or offscreen controls. Screenshots saved to `build/codeviz/validation-error-heat-deck.png` and `build/codeviz/validation-error-heat-deck-mobile.png`.
 - Function-scale proof: `mode=function&search=hb_message` now opens at `scale(0.72)` with `60` function nodes, `52` visible calls, readable labels, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-readable-scale.png`.
+- Search-highlight proof: `mode=function&search=hb_message` rendered `60` search-match graph nodes and `60` search-match minimap markers with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-highlights.png`.
 
 ## Last Presentation Pass
 
@@ -123,6 +124,7 @@ Branch: `expr/visualizer`
 - Added in-place hover-neighborhood relation highlighting so hovering a node temporarily lights callers/callees without changing the selected inspector target.
 - Added a dedicated error heat deck for warning/failure activity from live counters, recorder stack samples, and recorded events.
 - Raised the readable first-load scale for function-mode search results so function call graphs open as inspectable diagrams instead of tiny thumbnails.
+- Highlighted search-matching graph and minimap nodes so filtered results are visually distinct from supporting context.
 
 ## Next Work
 

@@ -558,6 +558,16 @@
     return state.live.endpoint;
   }
 
+  function functionSearchText(fun) {
+    return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")} ${(fun.events || []).join(" ")}`
+      .toLowerCase();
+  }
+
+  function moduleSearchText(mod) {
+    return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")} ${(mod["event-topics"] || []).join(" ")}`
+      .toLowerCase();
+  }
+
   function visibleData() {
     const activeModules = new Set();
     graph.modules.forEach((mod) => {
@@ -587,16 +597,12 @@
     let functions = graph.functions.filter((fun) => {
       if (!functionInScope(fun)) return false;
       if (!needle) return true;
-      return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")} ${(fun.events || []).join(" ")}`
-        .toLowerCase()
-        .includes(needle);
+      return functionSearchText(fun).includes(needle);
     });
     let modules = graph.modules.filter((mod) => {
       if (!moduleInScope(mod)) return false;
       if (!needle) return true;
-      return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")} ${(mod["event-topics"] || []).join(" ")}`
-        .toLowerCase()
-        .includes(needle) ||
+      return moduleSearchText(mod).includes(needle) ||
         functions.some((fun) => fun.module === mod.id);
     });
     if (state.selected) {
@@ -2757,6 +2763,28 @@
     return [];
   }
 
+  function nodeMatchesSearch(node) {
+    if (!state.search) return false;
+    if (node.kind === "system") {
+      return (node.moduleIds || []).some((moduleId) => {
+        const mod = byModule.get(moduleId);
+        return mod && moduleMatchesSearch(mod);
+      });
+    }
+    if (node.kind === "module") {
+      const mod = byModule.get(node.id);
+      return mod ? moduleMatchesSearch(mod) : false;
+    }
+    const fun = byFunction.get(node.id);
+    return fun ? functionSearchText(fun).includes(state.search) : false;
+  }
+
+  function moduleMatchesSearch(mod) {
+    if (moduleSearchText(mod).includes(state.search)) return true;
+    return (functionsByModule.get(mod.id) || [])
+      .some((fun) => functionSearchText(fun).includes(state.search));
+  }
+
   function traceEdgeWidth(edge) {
     return Math.min(6.5, 1.7 + Math.log1p(edge.count || 1) * 0.58);
   }
@@ -2865,6 +2893,7 @@
   function nodeClass(node) {
     const classes = ["node", node.role, node.kind];
     if (node.exported) classes.push("exported");
+    if (nodeMatchesSearch(node)) classes.push("search-match");
     if (state.selected === node.id) classes.push("selected");
     if (state.hovered === node.id) classes.push("hovered");
     if (isCaller(node.id)) classes.push("caller");
@@ -3399,6 +3428,7 @@
 
   function minimapNodeClass(node) {
     const classes = ["mini-node", node.role || "", node.kind || ""];
+    if (nodeMatchesSearch(node)) classes.push("search-match");
     const liveScore = liveNodeScore(node);
     if (liveScore > 7) classes.push("live-hot");
     else if (liveScore > 0.6) classes.push("live-warm");
