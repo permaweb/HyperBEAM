@@ -30,6 +30,7 @@
     graphMeta: document.getElementById("graph-meta"),
     graphPanel: document.querySelector(".graph-panel"),
     stage: document.getElementById("graph-stage"),
+    heatPanel: document.getElementById("heat-panel"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
     bands: document.getElementById("bands"),
@@ -1726,7 +1727,50 @@
     renderBands();
     renderEdges();
     renderNodes();
+    renderHeatPanel();
     applyTransform();
+  }
+
+  function renderHeatPanel() {
+    if (!state.live.enabled) {
+      els.heatPanel.hidden = true;
+      els.heatPanel.replaceChildren();
+      return;
+    }
+    const hotNodes = state.layout.nodes
+      .map((node) => ({ node, score: liveNodeScore(node), errors: liveErrorScore(node) }))
+      .filter((item) => item.score > 0.6)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    if (!hotNodes.length) {
+      els.heatPanel.hidden = true;
+      els.heatPanel.replaceChildren();
+      return;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent =
+      state.live.mode === "recording" ? "Recorded heat" :
+      state.live.mode === "stack" ? "Stack heat" :
+      "Live heat";
+    const rows = hotNodes.map(({ node, score, errors }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = errors > 0.6 ? "heat-row error" : "heat-row";
+      button.addEventListener("click", () => {
+        state.selected = node.id;
+        render();
+        focusNode(node.id);
+      });
+      const name = document.createElement("strong");
+      name.textContent = node.title || node.id;
+      const meta = document.createElement("span");
+      meta.textContent = `+${nf.format(Math.round(score))} · ${node.kind}`;
+      button.append(name, meta);
+      return button;
+    });
+    els.heatPanel.replaceChildren(title, ...rows);
+    els.heatPanel.hidden = false;
   }
 
   function renderBands() {

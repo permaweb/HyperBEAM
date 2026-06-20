@@ -21,6 +21,7 @@ Branch: `expr/visualizer`
 - Recorder stack proof: `rebar3 device test --devices dev_recorder --module recorder@1.0 --test live_report_processes_test+live_json_response_test` passes (`2 tests passed`).
 - Browser stack overlay proof against a recorder-shaped local JSON feed: `selected=hb_message` showed status `stacks: 2 procs · +2 reductions · 47 hot`, one `Live stacks` inspector row, `8` live rings, and `8` warm edges; screenshot saved to `build/codeviz/validation-stack-live.png`.
 - Recorder import proof: `recording=demo&selected=hb_message` showed status `demo: 3 events · 9 frames · 54 hot`, one recorded inspector stack row, `10` live rings, and `3` warm edges; screenshot saved to `build/codeviz/validation-recording-demo.png`.
+- Heat panel proof: `recording=demo` showed a `Recorded heat` panel with `8` rows; clicking the top row selected `hb_http` and focused its module lens. Screenshot saved to `build/codeviz/validation-heat-panel.png`.
 
 ## Last Presentation Pass
 
@@ -30,6 +31,7 @@ Branch: `expr/visualizer`
 - Added `~recorder@1.0/live` JSON endpoint for bounded BEAM process stack snapshots.
 - Added visualizer stack mode that paints live process stacks onto modules/functions and surfaces matching process rows in the inspector.
 - Added recorder report import support for saved `~recorder@1.0` HTML/JSON reports with embedded stack traces.
+- Added graph heat panel for the hottest live, stack, or recorded nodes with click-to-focus behavior.
 
 ## Next Work
 

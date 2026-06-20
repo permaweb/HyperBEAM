@@ -457,6 +457,66 @@ h3 {
   cursor: grabbing;
 }
 
+.heat-panel {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  display: grid;
+  width: min(270px, calc(100% - 28px));
+  max-height: min(420px, calc(100% - 28px));
+  overflow: auto;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.heat-title {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.heat-row {
+  display: grid;
+  min-width: 0;
+  min-height: 40px;
+  justify-items: stretch;
+  gap: 3px;
+  padding: 6px 8px;
+  text-align: left;
+  border-color: rgba(105, 86, 197, 0.2);
+  background: #fbfaff;
+}
+
+.heat-row.error {
+  border-color: rgba(189, 52, 66, 0.24);
+  background: #fff7f7;
+}
+
+.heat-row strong,
+.heat-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.heat-row strong {
+  font-size: 11px;
+}
+
+.heat-row span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 svg {
   width: 100%;
   height: 100%;
