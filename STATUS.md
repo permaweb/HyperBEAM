@@ -39,6 +39,7 @@ Branch: `expr/visualizer`
 - Event-alias pill proof: selecting `dev_scheduler_server` shows event alias pills including `scheduling/assigned`; clicking that pill sets graph search to `scheduling/assigned` and preserves the selected scheduler server. Screenshot saved to `build/codeviz/validation-event-alias-pills.png`.
 - Recording URL proof: `recording=http://127.0.0.1:8891/report.json` loaded a recorder-shaped JSON report, painted `2 events · 6 frames · 4 traces`, retained the recording URL state, and heated the actual structured frames (`hb_message`, `dev_recorder`, `hb_store`, `hb_ao`). Screenshot saved to `build/codeviz/validation-recording-url.png`.
 - Event-rate proof: a local live feed rendered event rows with approximate rates (`3.6/s`, `1.8/s`, `0.9/s`) beside their recent deltas. Screenshot saved to `build/codeviz/validation-event-rates.png`.
+- Aggregate-rate proof: `live=demo` status now shows an aggregate rate (`demo live: +27 events · 20/s · 8 hot`) in both the live badge and graph metadata.
 - Minimap proof: module mode rendered `72` minimap nodes and a viewport rectangle; clicking the minimap moved the main transform from `translate(24,24) scale(0.72)` to `translate(-791.8999999999999,-523.3805696661829) scale(0.72)`. Screenshot saved to `build/codeviz/validation-minimap.png`.
 - Device bridge proof: with `recorder@1.0,scheduler@1.0` loaded and live off, the engine deck showed top bridges including `dev_scheduler -> hb_message` and kernel touchpoints including `hb_util`; clicking the first bridge selected `hb_message`. Screenshot saved to `build/codeviz/validation-device-bridges.png`.
 - Recording timeline proof: `recording=demo` rendered `All` plus `3` event ticks; focusing event `1` repainted the graph to `1 events · 3 frames · 4 traces` with visible `dev_recorder -> hb_ao` and `hb_ao -> hb_message` routes, and clicking `All` restored `3 events · 9 frames · 16 traces`. Screenshot saved to `build/codeviz/validation-recording-timeline.png`.
@@ -69,6 +70,7 @@ Branch: `expr/visualizer`
 - Added `recording=<url>` support for loading recorder JSON/HTML artifacts directly from a URL.
 - Tightened structured stack-frame heat so exact module/function frames do not expand through unrelated loose event aliases.
 - Added approximate event/sec readouts to live event rows and inspector live-event rows.
+- Added aggregate event/sec readout to live status text.
 - Added a clickable minimap with a live viewport rectangle for faster navigation around large module/function layouts.
 - Added static device bridge and kernel touchpoint rows for selected device contexts when no live overlay is active.
 - Expanded selected device contexts with same-group modules that reference the selected device so helper/server pieces appear with their root device.

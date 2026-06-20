@@ -1964,7 +1964,8 @@
       return `${source}${nf.format(state.live.totalDelta)} events · ${nf.format(state.live.frameCount)} frames · ${state.live.traceEdges.size} traces · ${active} hot`;
     }
     const prefix = state.live.mode === "demo" ? "demo live" : "live";
-    return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${active} hot`;
+    const rate = [...state.live.eventRates.values()].reduce((sum, value) => sum + value, 0);
+    return `${prefix}: +${nf.format(Math.round(state.live.totalDelta))} events · ${formatEventRate(rate)} · ${active} hot`;
   }
 
   function renderLiveControls() {
