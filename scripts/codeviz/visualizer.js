@@ -2159,6 +2159,7 @@
     const title = document.createElement("div");
     title.className = "heat-title";
     title.textContent = "Event deltas";
+    const maxDelta = Math.max(1, ...events.map(([, delta]) => delta));
     const rows = events.map(([key, delta]) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -2174,9 +2175,15 @@
       });
       const name = document.createElement("strong");
       name.textContent = key;
+      const meter = document.createElement("span");
+      meter.className = "event-meter";
+      meter.style.setProperty(
+        "--event-level",
+        `${Math.max(7, Math.min(100, (delta / maxDelta) * 100))}%`
+      );
       const meta = document.createElement("span");
       meta.textContent = `+${nf.format(Math.round(delta))} events`;
-      button.append(name, meta);
+      button.append(name, meter, meta);
       return button;
     });
     els.tracePanel.replaceChildren(title, ...rows);

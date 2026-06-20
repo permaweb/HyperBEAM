@@ -634,6 +634,35 @@ h3 {
   background: #fff7f7;
 }
 
+.event-row span.event-meter {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(19, 138, 109, 0.12);
+  font-size: 0;
+}
+
+.event-row span.event-meter::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--event-level, 0%);
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(19, 138, 109, 0.84), rgba(0, 154, 247, 0.8));
+  content: "";
+  animation: event-meter-pulse 1.15s ease-in-out infinite;
+}
+
+.event-row.error span.event-meter {
+  background: rgba(189, 52, 66, 0.12);
+}
+
+.event-row.error span.event-meter::before {
+  background: linear-gradient(90deg, rgba(189, 52, 66, 0.86), rgba(178, 98, 20, 0.8));
+}
+
 .bridge-row {
   display: grid;
   min-width: 0;
@@ -898,6 +927,17 @@ svg {
   0% { opacity: 0.95; }
   70% { opacity: 0.35; }
   100% { opacity: 0.95; }
+}
+
+@keyframes event-meter-pulse {
+  0%,
+  100% {
+    opacity: 0.94;
+  }
+
+  50% {
+    opacity: 0.46;
+  }
 }
 
 @keyframes live-edge-flow {
