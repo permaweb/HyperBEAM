@@ -116,14 +116,18 @@
 
   function applyInitialParams() {
     const params = new URLSearchParams(window.location.search);
-    const devices = (params.get("devices") || "")
-      .split(",")
-      .map((value) => value.trim().replace(/^~/, ""))
-      .filter(Boolean);
     const knownDevices = new Set(graph.devices.map((device) => device.id));
-    devices.forEach((device) => {
-      if (knownDevices.has(device)) state.selectedDevices.add(device);
-    });
+    if (params.get("devices") === "all") {
+      graph.devices.forEach((device) => state.selectedDevices.add(device.id));
+    } else {
+      const devices = (params.get("devices") || "")
+        .split(",")
+        .map((value) => value.trim().replace(/^~/, ""))
+        .filter(Boolean);
+      devices.forEach((device) => {
+        if (knownDevices.has(device)) state.selectedDevices.add(device);
+      });
+    }
     if (["system", "module", "function"].includes(params.get("mode"))) {
       state.mode = params.get("mode");
     }
@@ -197,12 +201,14 @@
       requestFit();
       renderDevices();
       render();
+      showGraph();
     });
     els.allDevices.addEventListener("click", () => {
       graph.devices.forEach((device) => state.selectedDevices.add(device.id));
       requestFit();
       renderDevices();
       render();
+      showGraph();
     });
     els.fitGraph.addEventListener("click", () => fitGraph(false));
     els.resetGraph.addEventListener("click", () => {
@@ -247,6 +253,7 @@
         renderGroupChips();
         renderDevices();
         render();
+        showGraph();
       });
       button.classList.toggle(
         "active",
@@ -287,6 +294,7 @@
       requestFit();
       renderDevices();
       render();
+      showGraph();
     });
     const body = document.createElement("div");
     const name = document.createElement("div");
@@ -328,7 +336,12 @@
     const params = new URLSearchParams();
     params.set("mode", state.mode);
     if (state.selectedDevices.size) {
-      params.set("devices", [...state.selectedDevices].sort().join(","));
+      params.set(
+        "devices",
+        state.selectedDevices.size === graph.devices.length ?
+          "all" :
+          [...state.selectedDevices].sort().join(",")
+      );
     }
     if (state.selected) params.set("selected", state.selected);
     if (state.search) params.set("search", state.search);

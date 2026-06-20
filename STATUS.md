@@ -19,9 +19,9 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Background clicking the graph clears the active lens/selection.
-- Pan gestures are guarded so they do not accidentally clear selection.
-- Validated clearing `kernel:resolver` selection in the browser.
+- Context changes now scroll the graph back into view.
+- `devices=all` compacts all-device URLs.
+- Validated all-device context: `84 selected`, `20` subsystem nodes, `87` edges.
 
 ## Next Work
 
