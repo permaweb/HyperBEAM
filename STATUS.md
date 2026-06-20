@@ -18,13 +18,12 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added call-count weighted edge strokes.
-- Tightened mobile stats and filter layout so the graph starts much earlier.
-- Fixed mobile Context stat truncation.
-- Validated desktop/default subsystem, module lens, and 390px mobile layouts in the browser.
+- Added selected-subsystem local flow lenses.
+- System lens de-duplicates caller/callee overlaps and preserves weighted edges.
+- Validated `kernel:resolver` subsystem neighborhood in the browser.
 
 ## Next Work
 
-- Improve selected-neighborhood controls for systems and dense graphs.
 - Add richer export/source affordances in the inspector.
+- Add richer dense-graph controls and URL state polish.
 - Continue browser validation after each presentation pass.

@@ -427,7 +427,9 @@
   }
 
   function layout(visible) {
-    if (state.mode === "system") return systemLayout(visible);
+    if (state.mode === "system") {
+      return state.selected ? selectedSystemLayout(visible) : systemLayout(visible);
+    }
     if (state.mode === "module" && byModule.has(state.selected)) {
       return selectedModuleLayout(visible);
     }
@@ -446,6 +448,88 @@
       })
       .filter(Boolean);
     return { ...positioned, edges };
+  }
+
+  function selectedSystemLayout(visible) {
+    const allNodes = systemGraphNodes(visible);
+    const byId = new Map(allNodes.map((node) => [node.id, node]));
+    const selected = byId.get(state.selected);
+    if (!selected) return systemLayout(visible);
+    const allEdges = systemEdges(visible.edges);
+    const callerIds = new Set(allEdges
+      .filter((edge) => edge.target === selected.id)
+      .map((edge) => edge.source));
+    const calleeIds = new Set(allEdges
+      .filter((edge) => edge.source === selected.id)
+      .map((edge) => edge.target));
+    const callers = [...callerIds]
+      .filter((id) => !calleeIds.has(id))
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .sort((a, b) => a.title.localeCompare(b.title));
+    const callees = [...calleeIds]
+      .map((id) => byId.get(id))
+      .filter(Boolean)
+      .sort((a, b) => a.title.localeCompare(b.title));
+    const selectedNode = systemLensNode(selected, 320, 84);
+    const callerNodes = callers.map((node) => systemLensNode(node, 290, 76));
+    const calleeNodes = callees.map((node) => systemLensNode(node, 290, 76));
+    const maxRows = Math.max(callerNodes.length, calleeNodes.length, 1);
+    const stackHeight = maxRows * 92;
+    const centerY = 72 + Math.max(0, (stackHeight - selectedNode.height) / 2);
+    const nodes = [
+      ...placeSystemStack(callerNodes, 40, 72),
+      {
+        ...selectedNode,
+        x: 390,
+        y: centerY,
+        cx: 390 + selectedNode.width / 2,
+        cy: centerY + selectedNode.height / 2
+      },
+      ...placeSystemStack(calleeNodes, 780, 72)
+    ];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const ids = new Set(nodes.map((node) => node.id));
+    const edges = allEdges
+      .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+      .filter((edge) => edge.source === selected.id || edge.target === selected.id)
+      .map((edge) => ({
+        ...edge,
+        sourceNode: nodeById.get(edge.source),
+        targetNode: nodeById.get(edge.target)
+      }))
+      .filter((edge) => edge.sourceNode && edge.targetNode);
+    const height = Math.max(540, stackHeight + 128);
+    return {
+      nodes,
+      modules: [],
+      edges,
+      lens: true,
+      bands: [
+        { id: "system-callers", x: 20, y: 16, width: 340, height, label: "Callers" },
+        { id: "system-selected", x: 370, y: 16, width: 370, height, label: selected.role },
+        { id: "system-callees", x: 760, y: 16, width: 340, height, label: "Callees" }
+      ],
+      bounds: { x: 0, y: 0, width: 1120, height: height + 24 }
+    };
+  }
+
+  function systemLensNode(node, width, height) {
+    return {
+      ...node,
+      width,
+      height
+    };
+  }
+
+  function placeSystemStack(nodes, x, y) {
+    return nodes.map((node, idx) => ({
+      ...node,
+      x,
+      y: y + idx * 92,
+      cx: x + node.width / 2,
+      cy: y + idx * 92 + node.height / 2
+    }));
   }
 
   function selectedModuleLayout(visible) {
