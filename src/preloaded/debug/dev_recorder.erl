@@ -749,7 +749,7 @@ ao_take_off_land_test() ->
             #{
                 <<"path">> => <<"/~recorder@1.0/take-off/keys/land~recorder@1.0&format=raw">>
             },
-            #{ <<"forge-bootstrap">> => #{ ?DEVICE => ?MODULE } }
+            #{}
         ),
     ?assert(length(Events) > 0),
     clear_recording().
@@ -849,7 +849,7 @@ record_installs_hook_test() ->
                         <<"path">> => <<"keys">>
                     }
             },
-            #{ <<"forge-bootstrap">> => #{ ?DEVICE => ?MODULE } }
+            #{}
         ),
     ?assert(length(Events) > 0),
     ?assert(
