@@ -33,6 +33,7 @@
     status,
     tx,
     proofs,
+    waiters = [],
     start_time
 }).
 
