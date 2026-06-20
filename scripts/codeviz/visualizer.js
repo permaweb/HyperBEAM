@@ -79,6 +79,7 @@
     mode: "system",
     selectedDevices: new Set(),
     selected: null,
+    hovered: null,
     search: "",
     deviceSearch: "",
     group: "",
@@ -359,6 +360,7 @@
     els.svg.addEventListener("wheel", onWheel, { passive: false });
     els.svg.addEventListener("pointerdown", startPan);
     els.svg.addEventListener("click", clearSelectionFromBackground);
+    els.svg.addEventListener("pointerleave", () => setHoveredNode(null));
     els.minimap.addEventListener("pointerdown", (event) => event.stopPropagation());
     els.minimap.addEventListener("click", onMinimapClick);
     document.querySelectorAll(".workspace-splitter").forEach((splitter) => {
@@ -470,6 +472,9 @@
     }
     const visible = visibleData();
     state.layout = layout(visible);
+    if (state.hovered && !state.layout.nodes.some((node) => node.id === state.hovered)) {
+      state.hovered = null;
+    }
     renderStats(visible);
     renderGraph();
     renderInspector();
@@ -498,10 +503,18 @@
 
   function selectNode(id, options = {}) {
     if (options.manual) state.live.follow = false;
+    state.hovered = null;
     state.selected = id;
     render();
     focusNode(id);
     if (options.showGraph) showGraph();
+  }
+
+  function setHoveredNode(id) {
+    const next = id || null;
+    if (state.hovered === next) return;
+    state.hovered = next;
+    applyRelationClasses();
   }
 
   function syncUrl() {
@@ -2610,6 +2623,7 @@
     });
     state.layout.modules.forEach((mod) => {
       const g = svgEl("g", { class: `module-frame ${mod.role}` });
+      g.dataset.id = mod.id;
       if (isDimmed(mod.id)) g.classList.add("dim");
       g.append(svgEl("rect", {
         x: mod.x,
@@ -2730,6 +2744,10 @@
         event.stopPropagation();
         selectNode(node.id, { manual: true });
       });
+      g.addEventListener("mouseenter", () => setHoveredNode(node.id));
+      g.addEventListener("mouseleave", () => setHoveredNode(null));
+      g.addEventListener("pointerenter", () => setHoveredNode(node.id));
+      g.addEventListener("pointerleave", () => setHoveredNode(null));
       const tooltip = svgEl("title");
       tooltip.textContent = nodeTooltip(node);
       g.append(tooltip);
@@ -2782,10 +2800,33 @@
     els.nodes.replaceChildren(fragment);
   }
 
+  function applyRelationClasses() {
+    els.nodes.querySelectorAll(".node").forEach((el) => {
+      const id = el.dataset.id;
+      el.classList.toggle("hovered", state.hovered === id);
+      el.classList.toggle("caller", isCaller(id));
+      el.classList.toggle("callee", isCallee(id));
+      el.classList.toggle("dim", isDimmed(id));
+    });
+    els.bands.querySelectorAll(".module-frame").forEach((el) => {
+      el.classList.toggle("dim", isDimmed(el.dataset.id));
+    });
+    els.edges.querySelectorAll(".edge:not(.trace)").forEach((el) => {
+      const focus = relationFocusId();
+      const outgoing = !!focus && el.dataset.source === focus;
+      const incoming = !!focus && el.dataset.target === focus;
+      el.classList.toggle("outgoing", outgoing);
+      el.classList.toggle("incoming", incoming);
+      el.classList.toggle("hot", outgoing || incoming);
+      el.classList.toggle("dim", !!focus && !outgoing && !incoming);
+    });
+  }
+
   function nodeClass(node) {
     const classes = ["node", node.role, node.kind];
     if (node.exported) classes.push("exported");
     if (state.selected === node.id) classes.push("selected");
+    if (state.hovered === node.id) classes.push("hovered");
     if (isCaller(node.id)) classes.push("caller");
     if (isCallee(node.id)) classes.push("callee");
     if (isDimmed(node.id)) classes.push("dim");
@@ -2824,12 +2865,13 @@
     if (state.mode === "system" && edge.sourceNode.role === edge.targetNode.role) {
       classes.push("internal");
     }
-    if (state.selected && edge.source === state.selected) classes.push("outgoing");
-    if (state.selected && edge.target === state.selected) classes.push("incoming");
-    if (state.selected && (edge.source === state.selected || edge.target === state.selected)) {
+    const focus = relationFocusId();
+    if (focus && edge.source === focus) classes.push("outgoing");
+    if (focus && edge.target === focus) classes.push("incoming");
+    if (focus && (edge.source === focus || edge.target === focus)) {
       classes.push("hot");
     }
-    if (state.selected && edge.source !== state.selected && edge.target !== state.selected) {
+    if (focus && edge.source !== focus && edge.target !== focus) {
       classes.push("dim");
     }
     const liveScore = liveEdgeScore(edge);
@@ -2855,13 +2897,17 @@
   }
 
   function isCaller(id) {
-    return !!state.selected &&
-      (activeIncoming().get(state.selected) || []).some((rel) => rel.id === id);
+    const focus = relationFocusId();
+    return !!focus && (activeIncoming().get(focus) || []).some((rel) => rel.id === id);
   }
 
   function isCallee(id) {
-    return !!state.selected &&
-      (activeOutgoing().get(state.selected) || []).some((rel) => rel.id === id);
+    const focus = relationFocusId();
+    return !!focus && (activeOutgoing().get(focus) || []).some((rel) => rel.id === id);
+  }
+
+  function relationFocusId() {
+    return state.hovered || state.selected;
   }
 
   function activeIncoming() {
@@ -2886,8 +2932,9 @@
   }
 
   function isDimmed(id) {
-    if (!state.selected) return false;
-    return id !== state.selected && !isCaller(id) && !isCallee(id);
+    const focus = relationFocusId();
+    if (!focus || id === state.selected) return false;
+    return id !== focus && !isCaller(id) && !isCallee(id);
   }
 
   function renderInspector() {
@@ -3514,7 +3561,13 @@
       state.ignoreNextClick = false;
       return;
     }
-    if (!state.selected || event.target.closest(".node")) return;
+    if (event.target.closest(".node")) return;
+    if (!state.selected && !state.hovered) return;
+    state.hovered = null;
+    if (!state.selected) {
+      applyRelationClasses();
+      return;
+    }
     state.selected = null;
     requestFit();
     render();

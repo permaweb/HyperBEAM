@@ -1095,6 +1095,11 @@ svg {
   stroke-width: 2;
 }
 
+.node.hovered:not(.selected) rect {
+  stroke: var(--violet);
+  stroke-width: 2;
+}
+
 .node.caller rect {
   stroke: var(--amber);
   stroke-width: 2;
