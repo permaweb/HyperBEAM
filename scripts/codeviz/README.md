@@ -40,7 +40,10 @@ Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
 module, or function opens a local callers/callees lens, and `edges=strong`
 filters the graph to repeated call relationships. The context and inspector
 panes can be resized with the recorder-style splitters around the graph.
-Selected devices are pinned to the top of the device list.
+Selected devices are pinned to the top of the device list. Search matches are
+highlighted in the graph and minimap so surrounding context is easier to
+distinguish from the actual result set. Hovering a node temporarily highlights
+its callers and callees without changing the selected inspector target.
 
 ## Live and Recorder Overlays
 
@@ -72,4 +75,13 @@ the current graph view.
 Use the Import button to load a saved `~recorder@1.0` HTML recording or JSON
 report, or pass a URL in `recording=<url>`. Imported recordings can be viewed
 as aggregate heat, replayed event-by-event with the timeline Play control, or
-focused to one event with `recording-event=N`.
+focused to one event with `recording-event=N`. The source switcher in the graph
+panel can jump between HyperBuddy counters, live stack snapshots, demo
+telemetry, recorder playback, and report import. The source header shows
+metric chips for event rates, stack frames, trace counts, hot nodes, and errors.
+
+Runtime overlays also mark hot nodes in the minimap, show numeric heat badges on
+graph nodes, and add a dedicated error heat deck when warning/failure activity
+is present. When a recording is loaded, the inspector lists recorded events that
+touched the selected node; clicking one focuses the timeline and repaints the
+graph to that event.
