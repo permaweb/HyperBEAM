@@ -4540,20 +4540,30 @@
     if (!state.layout || !state.layout.nodes.length) return;
     ctx.save();
     ctx.globalCompositeOperation = "destination-out";
-    state.layout.nodes.forEach((node) => {
-      const pad = state.layout.force ? 4 : 6;
-      const radius = node.kind === "module" || node.kind === "system" ? 9 : 7;
-      roundedCanvasRect(
-        ctx,
-        node.x - pad,
-        node.y - pad,
-        node.width + pad * 2,
-        node.height + pad * 2,
-        radius
-      );
-      ctx.fill();
-    });
+    state.layout.nodes
+      .filter((node) => nodeOccludesCanvas(node))
+      .forEach((node) => {
+        const pad = state.layout.force ? 4 : 6;
+        const radius = node.kind === "module" || node.kind === "system" ? 9 : 7;
+        roundedCanvasRect(
+          ctx,
+          node.x - pad,
+          node.y - pad,
+          node.width + pad * 2,
+          node.height + pad * 2,
+          radius
+        );
+        ctx.fill();
+      });
     ctx.restore();
+  }
+
+  function nodeOccludesCanvas(node) {
+    if (!relationFocusId() && !state.selectedEdge && !selectedPathHasNode(node.id)) return true;
+    if (node.id === state.selected || node.id === relationFocusId()) return true;
+    if (isCaller(node.id) || isCallee(node.id) || selectedPathHasNode(node.id)) return true;
+    return !!state.selectedEdge &&
+      (state.selectedEdge.source === node.id || state.selectedEdge.target === node.id);
   }
 
   function roundedCanvasRect(ctx, x, y, width, height, radius) {
