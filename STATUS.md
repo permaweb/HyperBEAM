@@ -71,6 +71,7 @@ Branch: `expr/visualizer`
 - Error-deck proof: `recording=demo&recording-event=3` rendered `ERRORS +31`, timeline tick `3`, and `3` clickable error-heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`) with `0` overflow; at `390x844` the error rows had no clipping or offscreen controls. Screenshots saved to `build/codeviz/validation-error-heat-deck.png` and `build/codeviz/validation-error-heat-deck-mobile.png`.
 - Function-scale proof: `mode=function&search=hb_message` now opens at `scale(0.72)` with `60` function nodes, `52` visible calls, readable labels, and `0` overflow. Screenshot saved to `build/codeviz/validation-function-readable-scale.png`.
 - Search-highlight proof: `mode=function&search=hb_message` rendered `60` search-match graph nodes and `60` search-match minimap markers with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-highlights.png`.
+- Search-meta proof: `mode=function&search=hb_message` now reports `60 visible nodes · 60 matches · 52 visible calls` in the graph metadata with `0` overflow. Screenshot saved to `build/codeviz/validation-search-match-meta.png`.
 
 ## Last Presentation Pass
 
@@ -125,6 +126,7 @@ Branch: `expr/visualizer`
 - Added a dedicated error heat deck for warning/failure activity from live counters, recorder stack samples, and recorded events.
 - Raised the readable first-load scale for function-mode search results so function call graphs open as inspectable diagrams instead of tiny thumbnails.
 - Highlighted search-matching graph and minimap nodes so filtered results are visually distinct from supporting context.
+- Added active-search match counts to the graph metadata.
 - Updated the codeviz README with the engine source switcher, metric chips, minimap heat, hover/search affordances, selected recording events, and error deck.
 
 ## Next Work

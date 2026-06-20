@@ -2141,8 +2141,12 @@
     els.graphTitle.textContent =
       state.mode === "system" ? "Subsystem flow map" :
       state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
+    const searchMatches = state.search ?
+      state.layout.nodes.filter((node) => nodeMatchesSearch(node)).length :
+      0;
     els.graphMeta.textContent = [
       `${nf.format(state.layout.nodes.length)} visible nodes`,
+      state.search ? `${nf.format(searchMatches)} matches` : "",
       `${nf.format(state.layout.edges.length)} visible calls`,
       liveMetaText()
     ].filter(Boolean).join(" · ");
