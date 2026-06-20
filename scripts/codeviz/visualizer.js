@@ -4162,14 +4162,7 @@
   function renderEdges() {
     const fragment = document.createDocumentFragment();
     liveTraceEdges().forEach((edge) => {
-      const traceLabel =
-        `${edge.source} -> ${edge.target} (${countLabel(edge.count, "sampled stack frame", "sampled stack frames")})` +
-        tracePathTitle(edge);
-      fragment.append(edgeHitPath(
-        edge,
-        traceLabel,
-        "trace"
-      ));
+      fragment.append(edgeHitPath(edge, "trace"));
       const path = svgEl("path", {
         class: `edge trace${edgeIsSelected(edge, "trace") ? " selected-edge" : ""}`,
         d: edgePath(edge)
@@ -4177,9 +4170,6 @@
       path.style.setProperty("--trace-width", `${traceEdgeWidth(edge)}px`);
       path.dataset.source = edge.source;
       path.dataset.target = edge.target;
-      const title = svgEl("title");
-      title.textContent = traceLabel;
-      path.append(title);
       fragment.append(path);
     });
     els.edges.replaceChildren(fragment);
@@ -4300,6 +4290,7 @@
     ctx.scale(state.transform.scale, state.transform.scale);
     drawn += drawCanvasEdges(ctx, world, scores, false);
     drawn += drawCanvasEdges(ctx, world, scores, true);
+    clearCanvasNodeOcclusion(ctx);
     ctx.restore();
     perfProbe.edgeDraws += 1;
     perfProbe.lastEdgeCount = drawn;
@@ -4545,7 +4536,42 @@
     return Math.hypot(point.x - x, point.y - y);
   }
 
-  function edgeHitPath(edge, label, kind = "call") {
+  function clearCanvasNodeOcclusion(ctx) {
+    if (!state.layout || !state.layout.nodes.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    state.layout.nodes.forEach((node) => {
+      const pad = state.layout.force ? 4 : 6;
+      const radius = node.kind === "module" || node.kind === "system" ? 9 : 7;
+      roundedCanvasRect(
+        ctx,
+        node.x - pad,
+        node.y - pad,
+        node.width + pad * 2,
+        node.height + pad * 2,
+        radius
+      );
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+
+  function roundedCanvasRect(ctx, x, y, width, height, radius) {
+    const r = Math.min(radius, width / 2, height / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + width - r, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+    ctx.lineTo(x + width, y + height - r);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+    ctx.lineTo(x + r, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function edgeHitPath(edge, kind = "call") {
     const hit = svgEl("path", { class: "edge-hit", d: edgePath(edge) });
     hit.dataset.source = edge.source;
     hit.dataset.target = edge.target;
@@ -4561,9 +4587,6 @@
         }
       });
     });
-    const title = svgEl("title");
-    title.textContent = label;
-    hit.append(title);
     return hit;
   }
 
@@ -4696,9 +4719,6 @@
       Object.entries(rateNodeStyle(node)).forEach(([key, value]) => {
         g.style.setProperty(key, value);
       });
-      const tooltip = svgEl("title");
-      tooltip.textContent = nodeTooltip(node);
-      g.append(tooltip);
       g.append(svgEl("rect", {
         width: node.width,
         height: node.height,
@@ -5631,16 +5651,7 @@
         height: Math.max(2, node.height * scale),
         rx: 1.5
       });
-      const title = svgEl("title");
-      const score = liveNodeScore(node);
-      const rateScore = liveRateScore(node);
-      title.textContent = state.live.rateMode && Math.abs(rateScore) > 0.05 ?
-        `${node.id} (${formatRateChange(rateScore)} rate change)` :
-        score > 0.6 ?
-        `${node.id} (+${nf.format(Math.round(score))} ${sourceHeatLabel().toLowerCase()})` :
-        node.id;
       mini.dataset.id = node.id;
-      mini.append(title);
       fragment.append(mini);
     });
     els.minimapNodes.replaceChildren(fragment);
