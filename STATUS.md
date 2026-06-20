@@ -84,6 +84,8 @@ Branch: `expr/visualizer`
 - Event pulse-history proof: a local HyperBuddy-shaped counter feed at `127.0.0.1:8893` rendered four event rows with `12` pulse bars each, active bars matching recent ticks, row widths of `151px` on desktop after widening the event deck, and `0` overflow. Screenshot saved to `build/codeviz/validation-event-pulse-history-wide.png`.
 - Inspector pulse-history proof: `selected=hb_http` with the same counter feed rendered live inspector event rows with `12` pulse bars each, `284px` row width, and `0` overflow. Screenshot saved to `build/codeviz/validation-inspector-event-pulse-history.png`.
 - Event pulse mobile proof: at `390x844`, the event deck switched to full-width rows (`344px` each), kept `12` pulse bars per row, and had `0` overflow/offscreen rows. Screenshot saved to `build/codeviz/validation-event-pulse-history-mobile-wide.png`.
+- Recording error tick proof: `recording=demo` rendered one `.recording-tick.error` for `warning/process_sampler_failed`, retained aggregate error heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`), and had `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks.png`.
+- Recording error tick mobile proof: at `390x844`, the demo recorder timeline kept the warning tick visible, had no offscreen ticks, and maintained `0` overflow. Screenshot saved to `build/codeviz/validation-recording-error-ticks-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -150,6 +152,8 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with live cadence and function-overview behavior.
 - Added per-event pulse-history bars to the live event deck and inspector live-event rows, with a wider desktop event layout and full-width mobile rows.
 - Updated the codeviz README with event pulse-history behavior.
+- Marked warning/failure recorder timeline ticks as error ticks and routed recording warning events through error heat.
+- Updated the codeviz README with recorder error tick behavior.
 
 ## Next Work
 

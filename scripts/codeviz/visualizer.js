@@ -1726,13 +1726,13 @@
     frames.forEach((frame, frameIdx) => {
       const amount = Math.max(0.45, 5 - frameIdx * 0.28);
       resolveFrameIds(frame).forEach((id) => {
-        bumpLive(id, amount, /error|failed|exception|crash/i.test(sample.entry));
+        bumpLive(id, amount, recordingEventIsError(event));
         addLiveSample(samples, id, sample);
       });
     });
     addTraceEdgesForFrames(frames, 3.8);
     resolveFrameIds(recordingEventFrame(event)).forEach((id) => {
-      bumpLive(id, 2.2, /error|failed|exception|crash/i.test(sample.entry));
+      bumpLive(id, 2.2, recordingEventIsError(event));
       addLiveSample(samples, id, sample);
     });
     state.live.frameCount += frames.length;
@@ -1786,6 +1786,10 @@
 
   function recordingEventName(event) {
     return `${event.topic || "recording"}/${event.name || "event"}`;
+  }
+
+  function recordingEventIsError(event) {
+    return /error|failed|warning|throw|crash|exception/i.test(recordingEventName(event));
   }
 
   function demoRecordingReport() {
@@ -2178,9 +2182,7 @@
           event,
           idx,
           matches: [...new Set(matches)].slice(0, 5),
-          error: /error|failed|warning|throw|crash|exception/i.test(
-            `${event.topic || ""}/${event.name || ""}`
-          )
+          error: recordingEventIsError(event)
         };
       })
       .filter(Boolean)
@@ -2551,9 +2553,11 @@
     const ticks = state.live.recordingEvents.slice(0, 48).map((event, idx) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = state.live.recordingFocus === idx ?
-        "recording-tick active" :
-        "recording-tick";
+      button.className = [
+        "recording-tick",
+        recordingEventIsError(event) ? "error" : "",
+        state.live.recordingFocus === idx ? "active" : ""
+      ].filter(Boolean).join(" ");
       button.textContent = String(event.sequence || idx + 1);
       button.title = recordingEventName(event);
       button.addEventListener("click", () => {

@@ -801,6 +801,12 @@ body.resizing {
   font-size: 11px;
 }
 
+.recording-tick.error {
+  border-color: rgba(189, 52, 66, 0.36);
+  background: #fff1f1;
+  color: var(--red);
+}
+
 .recording-tick.active {
   border-color: rgba(189, 52, 66, 0.52);
   background: var(--red);
