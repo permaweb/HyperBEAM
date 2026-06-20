@@ -1,0 +1,140 @@
+<!--
+Agents: this report embeds the static HyperBEAM call graph as base64 JSON in
+the script tag with id="embedded-graph".
+-->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperBEAM code visualizer</title>
+  <link rel="icon" href="data:,">
+  <style>{{CODEVIZ_CSS}}</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="title-lockup">
+        <div class="title-mark" aria-hidden="true">HB</div>
+        <div>
+          <p class="eyebrow">HyperBEAM source graph</p>
+          <h1><span>~codeviz@1.0/</span><span class="flight-name">call-flow</span></h1>
+        </div>
+      </div>
+      <div class="toolbar" aria-label="Graph controls">
+        <button type="button" id="fit-graph" title="Fit graph">Fit</button>
+        <button type="button" id="reset-graph" title="Reset view">Reset</button>
+        <div class="segmented" role="tablist" aria-label="Graph mode">
+          <button type="button" class="active" data-mode="function">Functions</button>
+          <button type="button" data-mode="module">Modules</button>
+        </div>
+      </div>
+    </header>
+
+    <section class="stats" aria-label="Graph summary">
+      <article>
+        <span>Modules</span>
+        <strong id="stat-modules">0</strong>
+      </article>
+      <article>
+        <span>Functions</span>
+        <strong id="stat-functions">0</strong>
+      </article>
+      <article>
+        <span>Calls</span>
+        <strong id="stat-calls">0</strong>
+      </article>
+      <article>
+        <span>Context</span>
+        <strong id="stat-context">kernel</strong>
+      </article>
+    </section>
+
+    <section class="filters" aria-label="Filter">
+      <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Search modules, functions, paths...">
+      <select id="group-filter" aria-label="Subsystem">
+        <option value="">All subsystems</option>
+      </select>
+      <select id="edge-filter" aria-label="Edges">
+        <option value="context">Context calls</option>
+        <option value="selected">Selected neighborhood</option>
+        <option value="cross">Cross-module calls</option>
+      </select>
+      <label class="toggle">
+        <input id="show-private" type="checkbox" checked>
+        <span>Private</span>
+      </label>
+      <label class="toggle">
+        <input id="show-forge" type="checkbox">
+        <span>Forge</span>
+      </label>
+    </section>
+
+    <section class="workspace">
+      <aside class="context-panel">
+        <div class="section-head">
+          <h2>Context</h2>
+          <span id="device-count">0 devices</span>
+        </div>
+        <div class="context-actions">
+          <button type="button" id="clear-devices">Kernel</button>
+          <button type="button" id="all-devices">All Devices</button>
+        </div>
+        <div id="group-chips" class="group-chips"></div>
+        <input id="device-search" type="search" autocomplete="off" spellcheck="false" placeholder="Device filter...">
+        <div id="device-list" class="device-list"></div>
+      </aside>
+
+      <section class="graph-panel">
+        <div class="section-head graph-head">
+          <h2 id="graph-title">Kernel call graph</h2>
+          <span id="graph-meta">0 visible calls</span>
+        </div>
+        <div id="graph-stage" class="graph-stage">
+          <svg id="graph" role="img" aria-label="HyperBEAM call graph">
+            <defs>
+              <marker id="arrow-normal" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z"></path>
+              </marker>
+              <marker id="arrow-hot" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z"></path>
+              </marker>
+            </defs>
+            <g id="viewport">
+              <g id="bands"></g>
+              <g id="edges"></g>
+              <g id="nodes"></g>
+            </g>
+          </svg>
+        </div>
+      </section>
+
+      <aside class="detail-panel">
+        <div class="section-head">
+          <h2>Inspector</h2>
+          <span id="selection-label">No selection</span>
+        </div>
+        <div id="detail-empty" class="empty">Select a node</div>
+        <div id="detail-view" class="detail-view" hidden>
+          <div id="detail-card" class="detail-card"></div>
+          <div class="relation-grid">
+            <section>
+              <h3>Callers</h3>
+              <div id="callers" class="relation-list"></div>
+            </section>
+            <section>
+              <h3>Callees</h3>
+              <div id="callees" class="relation-list"></div>
+            </section>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script type="application/octet-stream" id="embedded-graph">{{GRAPH_JSON_BASE64}}</script>
+  <script>{{CODEVIZ_JS}}</script>
+</body>
+</html>
