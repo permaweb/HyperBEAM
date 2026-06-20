@@ -530,8 +530,8 @@ write_result(Edges, Res, Opts) when is_list(Edges) ->
     {ok, Path} = write(Res, Opts),
     lists:foreach(
         fun({EdgeBase, EdgeReq}) ->
-            maybe_write_edge_part(EdgeBase, Opts),
-            maybe_write_edge_part(EdgeReq, Opts),
+            write(EdgeBase, Opts),
+            write(EdgeReq, Opts),
             ok = link_result(EdgeBase, EdgeReq, Path, Opts)
         end,
         Edges
@@ -539,11 +539,15 @@ write_result(Edges, Res, Opts) when is_list(Edges) ->
     {ok, Path}.
 
 %% @doc Link a `{Base, Req}' result edge to an existing stored result path.
-link_result(Base, Req, Existing, Opts) ->
+link_result(Base, Req, Existing, Opts) when not ?IS_ID(Base) ->
+    link_result(hb_message:id(Base, all, Opts), Req, Existing, Opts);
+link_result(BaseID, Req, Existing, Opts) when not ?IS_ID(Req) ->
+    link_result(BaseID, hb_message:id(Req, all, Opts), Existing, Opts);
+link_result(BaseID, ReqID, Existing, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    EdgePath = result_edge_path(Base, Req, Opts),
+    NewPath = << BaseID/binary, "/", ReqID/binary >>,
     ExistingPath = hb_path:to_binary(Existing),
-    hb_store:link(Store, #{ EdgePath => ExistingPath }, Opts).
+    hb_store:link(Store, #{ NewPath => ExistingPath }, Opts).
 
 %% @doc Write a raw binary keys into the store and link it at a given hashpath.
 write_binary(Hashpath, Bin, Opts) ->
@@ -896,7 +900,11 @@ read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsg
                 }
             ),
             case hb_store:resolve(Store, [BaseMsgID, Key], Opts) of
-                {ok, KeyPath} -> hashpath_read_result(read(KeyPath, Opts));
+                {ok, KeyPath} ->
+                    case read(KeyPath, Opts) of
+                        {error, not_found} -> miss;
+                        Other -> {hit, Other}
+                    end;
                 {error, not_found} -> miss;
                 Other -> {hit, Other}
             end
@@ -932,22 +940,17 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
     end.
 
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
-read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
-    ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
-    read_result_edge(BaseMsgID, ReqID, Opts);
-read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
-    ReqID = hb_message:id(Req, all, Opts),
-    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
-read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
-    hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
+read_hashpath(BaseID, ReqID, Opts) when ?IS_ID(BaseID) and ?IS_ID(ReqID) ->
+    ?event({cache_lookup, {base, BaseID}, {req, ReqID}}),
+    case read(<< BaseID/binary, "/", ReqID/binary >>, Opts) of
+        {error, not_found} -> miss;
+        Normal -> {hit, Normal}
+    end;
+read_hashpath(BaseID, Req, Opts) when ?IS_ID(BaseID) and not ?IS_ID(Req) ->
+    read_hashpath(BaseID, hb_message:id(Req, all, Opts), Opts);
+read_hashpath(Base, Req, Opts) when not ?IS_ID(Base) and ?IS_ID(Req)->
+    read_hashpath(hb_message:id(Base, all, Opts), Req, Opts);
 read_hashpath(_, _, _) -> miss.
-
-read_result_edge(BaseID, ReqID, Opts) ->
-    hashpath_read_result(read(result_edge_path_from_id(BaseID, ReqID, Opts), Opts)).
-
-hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
-hashpath_read_result({error, not_found}) -> miss;
-hashpath_read_result(Other) -> {hit, Other}.
 
 %% @doc Make a link from one path to another in the store.
 %% Note: Argument order is `link(Src, Dst, Opts)'.
