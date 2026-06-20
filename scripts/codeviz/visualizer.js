@@ -39,6 +39,11 @@
   const graph = JSON.parse(new TextDecoder().decode(base64ToBytes(els.embedded.textContent)));
   const byFunction = new Map(graph.functions.map((node) => [node.id, node]));
   const byModule = new Map(graph.modules.map((node) => [node.id, node]));
+  const functionsByModule = graph.functions.reduce((acc, fun) => {
+    if (!acc.has(fun.module)) acc.set(fun.module, []);
+    acc.get(fun.module).push(fun);
+    return acc;
+  }, new Map());
   const outgoing = relationMap("source", "target");
   const incoming = relationMap("target", "source");
   const moduleOutgoing = moduleRelationMap("source-module", "target-module");
@@ -146,10 +151,7 @@
   function bindEvents() {
     document.querySelectorAll("[data-mode]").forEach((button) => {
       button.addEventListener("click", () => {
-        state.mode = button.dataset.mode;
-        document.querySelectorAll("[data-mode]").forEach((el) => {
-          el.classList.toggle("active", el === button);
-        });
+        activateMode(button.dataset.mode);
         state.selected = null;
         requestFit();
         render();
@@ -309,6 +311,13 @@
     state.fitAfterRender = true;
   }
 
+  function activateMode(mode) {
+    state.mode = mode;
+    document.querySelectorAll("[data-mode]").forEach((el) => {
+      el.classList.toggle("active", el.dataset.mode === mode);
+    });
+  }
+
   function visibleData() {
     const activeModules = new Set();
     graph.modules.forEach((mod) => {
@@ -323,25 +332,37 @@
 
     const needle = state.search;
     const groupFilter = state.group;
-    const functions = graph.functions.filter((fun) => {
+    const functionInScope = (fun) => {
       if (!activeModules.has(fun.module)) return false;
       if (!state.showPrivate && !fun.exported) return false;
       if (groupFilter && `${fun.role}:${fun.group}` !== groupFilter) return false;
+      return true;
+    };
+    const moduleInScope = (mod) => {
+      if (!activeModules.has(mod.id)) return false;
+      if (groupFilter && `${mod.role}:${mod.group}` !== groupFilter) return false;
+      return true;
+    };
+    let functions = graph.functions.filter((fun) => {
+      if (!functionInScope(fun)) return false;
       if (!needle) return true;
       return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")}`
         .toLowerCase()
         .includes(needle);
     });
-    const functionIds = new Set(functions.map((fun) => fun.id));
-    const modules = graph.modules.filter((mod) => {
-      if (!activeModules.has(mod.id)) return false;
-      if (groupFilter && `${mod.role}:${mod.group}` !== groupFilter) return false;
+    let modules = graph.modules.filter((mod) => {
+      if (!moduleInScope(mod)) return false;
       if (!needle) return true;
       return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")}`
         .toLowerCase()
         .includes(needle) ||
         functions.some((fun) => fun.module === mod.id);
     });
+    if (state.selected) {
+      functions = expandSelectedFunctions(functions, functionInScope);
+      modules = expandSelectedModules(modules, functions, moduleInScope);
+    }
+    const functionIds = new Set(functions.map((fun) => fun.id));
     const moduleIds = new Set(modules.map((mod) => mod.id));
     let edges = graph.edges.filter((edge) => {
       if (state.mode === "module" || state.mode === "system") {
@@ -371,8 +392,45 @@
     return { modules, functions, edges };
   }
 
+  function expandSelectedFunctions(functions, functionInScope) {
+    const selected = byFunction.get(state.selected);
+    if (!selected) return functions;
+    const ids = new Set([selected.id]);
+    (incoming.get(selected.id) || []).forEach((rel) => ids.add(rel.id));
+    (outgoing.get(selected.id) || []).forEach((rel) => ids.add(rel.id));
+    const existing = new Set(functions.map((fun) => fun.id));
+    const expanded = functions.slice();
+    graph.functions.forEach((fun) => {
+      if (!ids.has(fun.id) || existing.has(fun.id) || !functionInScope(fun)) return;
+      expanded.push(fun);
+      existing.add(fun.id);
+    });
+    return expanded;
+  }
+
+  function expandSelectedModules(modules, functions, moduleInScope) {
+    const ids = new Set(functions.map((fun) => fun.module));
+    const selected = byModule.get(state.selected);
+    if (selected) {
+      ids.add(selected.id);
+      (moduleIncoming.get(selected.id) || []).forEach((rel) => ids.add(rel.id));
+      (moduleOutgoing.get(selected.id) || []).forEach((rel) => ids.add(rel.id));
+    }
+    const existing = new Set(modules.map((mod) => mod.id));
+    const expanded = modules.slice();
+    graph.modules.forEach((mod) => {
+      if (!ids.has(mod.id) || existing.has(mod.id) || !moduleInScope(mod)) return;
+      expanded.push(mod);
+      existing.add(mod.id);
+    });
+    return expanded;
+  }
+
   function layout(visible) {
     if (state.mode === "system") return systemLayout(visible);
+    if (state.mode === "function" && byFunction.has(state.selected)) {
+      return selectedFunctionLayout(visible);
+    }
     const nodes = state.mode === "module" ? moduleGraphNodes(visible) : functionGraphNodes(visible);
     const positioned = positionNodes(nodes);
     const nodeById = new Map(positioned.nodes.map((node) => [node.id, node]));
@@ -385,6 +443,93 @@
       })
       .filter(Boolean);
     return { ...positioned, edges };
+  }
+
+  function selectedFunctionLayout(visible) {
+    const selected = byFunction.get(state.selected);
+    const visibleById = new Map(visible.functions.map((fun) => [fun.id, fun]));
+    const callers = (incoming.get(selected.id) || [])
+      .map((rel) => visibleById.get(rel.id))
+      .filter(Boolean)
+      .sort(nodeSort);
+    const callees = (outgoing.get(selected.id) || [])
+      .map((rel) => visibleById.get(rel.id))
+      .filter(Boolean)
+      .sort(nodeSort);
+    const selectedNode = {
+      ...selected,
+      kind: "function",
+      lens: true,
+      title: selected.label,
+      subtitle: selected.module,
+      width: 300,
+      height: 42
+    };
+    const callerNodes = callers.map((fun) => ({
+      ...fun,
+      kind: "function",
+      lens: true,
+      title: fun.label,
+      subtitle: fun.module,
+      width: 280,
+      height: 34
+    }));
+    const calleeNodes = callees.map((fun) => ({
+      ...fun,
+      kind: "function",
+      lens: true,
+      title: fun.label,
+      subtitle: fun.module,
+      width: 280,
+      height: 34
+    }));
+    const maxRows = Math.max(callerNodes.length, calleeNodes.length, 1);
+    const stackHeight = maxRows * 40;
+    const centerY = 68 + Math.max(0, (stackHeight - selectedNode.height) / 2);
+    const nodes = [
+      ...placeFunctionStack(callerNodes, 40, 68),
+      {
+        ...selectedNode,
+        x: 390,
+        y: centerY,
+        cx: 390 + selectedNode.width / 2,
+        cy: centerY + selectedNode.height / 2
+      },
+      ...placeFunctionStack(calleeNodes, 760, 68)
+    ];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const ids = new Set(nodes.map((node) => node.id));
+    const edges = visible.edges
+      .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+      .filter((edge) => edge.source === selected.id || edge.target === selected.id)
+      .map((edge) => ({
+        ...edge,
+        sourceNode: nodeById.get(edge.source),
+        targetNode: nodeById.get(edge.target)
+      }))
+      .filter((edge) => edge.sourceNode && edge.targetNode);
+    const height = Math.max(540, stackHeight + 116);
+    return {
+      nodes,
+      modules: [],
+      edges,
+      bands: [
+        { id: "callers", x: 20, y: 16, width: 320, height, label: "Callers" },
+        { id: "selected", x: 370, y: 16, width: 340, height, label: selected.module },
+        { id: "callees", x: 740, y: 16, width: 320, height, label: "Callees" }
+      ],
+      bounds: { x: 0, y: 0, width: 1080, height: height + 24 }
+    };
+  }
+
+  function placeFunctionStack(nodes, x, y) {
+    return nodes.map((node, idx) => ({
+      ...node,
+      x,
+      y: y + idx * 40,
+      cx: x + node.width / 2,
+      cy: y + idx * 40 + node.height / 2
+    }));
   }
 
   function systemLayout(visible) {
@@ -771,6 +916,11 @@
         sub.textContent = node.subtitle;
         g.append(sub);
       }
+      if (node.kind === "function" && node.lens) {
+        const sub = svgEl("text", { class: "subtext", x: 9, y: 27 });
+        sub.textContent = node.subtitle;
+        g.append(sub);
+      }
       if (node.kind === "system") {
         const sub2 = svgEl("text", { class: "subtext", x: 9, y: 54 });
         sub2.textContent = `${nf.format(node.exports)} exports · ${nf.format(node.loc)} LoC`;
@@ -952,6 +1102,37 @@
       sourceSection.append(sourceTitle, pre);
       wrap.append(sourceSection);
     }
+    if (state.mode === "module") {
+      const functions = (functionsByModule.get(node.id) || [])
+        .slice()
+        .sort((a, b) => {
+          if (a.exported !== b.exported) return a.exported ? -1 : 1;
+          return a.label.localeCompare(b.label);
+        });
+      if (functions.length) {
+        const functionSection = document.createElement("div");
+        functionSection.className = "source-section";
+        const functionTitle = document.createElement("h3");
+        functionTitle.textContent = "Functions";
+        const functionList = document.createElement("div");
+        functionList.className = "relation-list";
+        functions.slice(0, 80).forEach((fun) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = fun.label;
+          button.addEventListener("click", () => {
+          activateMode("function");
+          state.selected = fun.id;
+          render();
+          focusNode(fun.id);
+          showGraph();
+        });
+          functionList.append(button);
+        });
+        functionSection.append(functionTitle, functionList);
+        wrap.append(functionSection);
+      }
+    }
     if (state.mode === "system") {
       const moduleSection = document.createElement("div");
       moduleSection.className = "source-section";
@@ -964,13 +1145,10 @@
         button.type = "button";
         button.textContent = moduleId;
         button.addEventListener("click", () => {
-          state.mode = "module";
-          document.querySelectorAll("[data-mode]").forEach((el) => {
-            el.classList.toggle("active", el.dataset.mode === "module");
-          });
+          activateMode("module");
           state.selected = moduleId;
           render();
-          centerNode(moduleId);
+          focusNode(moduleId);
           showGraph();
         });
         moduleList.append(button);
@@ -1015,7 +1193,7 @@
         button.addEventListener("click", () => {
           state.selected = rel.id;
           render();
-          centerNode(rel.id);
+          focusNode(rel.id);
           showGraph();
         });
         return button;
@@ -1068,6 +1246,32 @@
     const rect = els.stage.getBoundingClientRect();
     state.transform.x = rect.width / 2 - node.cx * state.transform.scale;
     state.transform.y = rect.height / 2 - node.cy * state.transform.scale;
+    applyTransform();
+  }
+
+  function focusNode(id) {
+    const related = new Set([id]);
+    (activeIncoming().get(id) || []).forEach((rel) => related.add(rel.id));
+    (activeOutgoing().get(id) || []).forEach((rel) => related.add(rel.id));
+    const nodes = state.layout.nodes.filter((node) => related.has(node.id));
+    if (nodes.length < 2) {
+      centerNode(id);
+      return;
+    }
+    const minX = Math.min(...nodes.map((node) => node.x));
+    const minY = Math.min(...nodes.map((node) => node.y));
+    const maxX = Math.max(...nodes.map((node) => node.x + node.width));
+    const maxY = Math.max(...nodes.map((node) => node.y + node.height));
+    const rect = els.stage.getBoundingClientRect();
+    const scale = Math.min(1.15, Math.max(
+      readableScale(true),
+      Math.min((rect.width - 96) / (maxX - minX), (rect.height - 96) / (maxY - minY))
+    ));
+    state.transform = {
+      x: rect.width / 2 - ((minX + maxX) / 2) * scale,
+      y: rect.height / 2 - ((minY + maxY) / 2) * scale,
+      scale
+    };
     applyTransform();
   }
 

@@ -18,14 +18,14 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Promoted readable subsystem map as the default presentation layer.
-- Added graph-first responsive layout for the in-app browser width.
-- Added readable auto-fit for dense modes while keeping the Fit button available.
-- Routed same-column subsystem edges through a gutter and subdued internal edges.
-- Validated subsystem selection and module drilldown back to the graph.
+- Added module inspector function lists for direct module-to-function drilldown.
+- Search-scoped selections now expand their caller/callee neighborhood.
+- Selected functions now render as a local `Callers -> Function -> Callees` lens.
+- Function lens nodes include module context on a second line.
+- Validated `hb_message -> commit/2` drilldown in the browser.
 
 ## Next Work
 
-- Improve module/function drilldown aesthetics and selected-neighborhood clarity.
-- Add richer graph affordances for callers/callees and dense edge reduction.
+- Improve selected-neighborhood controls for modules and systems.
+- Add richer dense-edge reduction and visual weighting.
 - Continue browser validation after each presentation pass.
