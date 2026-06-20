@@ -2682,10 +2682,11 @@
     ];
     const liveScore = liveNodeScore(node);
     if (liveScore > 0.6) {
-      cells.push(["Live delta", `+${nf.format(Math.round(liveScore))}`]);
+      cells.push(["Live heat", `+${nf.format(Math.round(liveScore))}`]);
     }
-    if (liveErrorScore(node) > 0.6) {
-      cells.push(["Errors", "hot"]);
+    const errorScore = liveErrorScore(node);
+    if (errorScore > 0.6) {
+      cells.push(["Error heat", `+${nf.format(Math.round(errorScore))}`]);
     }
     cells.forEach(([key, value]) => grid.append(kv(key, value)));
     wrap.append(grid);
