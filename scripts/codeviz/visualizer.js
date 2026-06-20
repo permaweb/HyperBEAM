@@ -97,6 +97,8 @@
       samples: new Map(),
       traceEdges: new Map(),
       eventDeltas: new Map(),
+      eventRates: new Map(),
+      lastCounterAt: 0,
       totalDelta: 0,
       processCount: 0,
       frameCount: 0,
@@ -1183,6 +1185,8 @@
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
+    state.live.eventRates = new Map();
+    state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1225,6 +1229,8 @@
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
+    state.live.eventRates = new Map();
+    state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1366,6 +1372,11 @@
   }
 
   function applyLiveCounters(counters) {
+    const now = Date.now();
+    const elapsedSeconds = state.live.lastCounterAt ?
+      Math.max(0.1, (now - state.live.lastCounterAt) / 1000) :
+      0;
+    state.live.lastCounterAt = now;
     let totalDelta = 0;
     state.live.traceEdges = new Map();
     counters.forEach(({ key, value }) => {
@@ -1374,7 +1385,7 @@
       state.live.previous.set(key, value);
       if (delta > 0) {
         totalDelta += delta;
-        rememberLiveEvent(key, delta);
+        rememberLiveEvent(key, delta, elapsedSeconds);
         applyLiveKey(key, delta);
       }
     });
@@ -1390,6 +1401,8 @@
     const nextSamples = new Map();
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
+    state.live.eventRates = new Map();
+    state.live.lastCounterAt = 0;
     processes.forEach((proc) => {
       const pid = String(proc.pid || "");
       const reductions = Number(proc.reductions || 0);
@@ -1493,6 +1506,8 @@
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
+    state.live.eventRates = new Map();
+    state.live.lastCounterAt = 0;
     state.live.totalDelta = 0;
     state.live.processCount = 0;
     state.live.frameCount = 0;
@@ -1526,6 +1541,8 @@
     state.live.samples = new Map();
     state.live.traceEdges = new Map();
     state.live.eventDeltas = new Map();
+    state.live.eventRates = new Map();
+    state.live.lastCounterAt = 0;
     state.live.totalDelta = entries.length;
     state.live.frameCount = 0;
     const samples = new Map();
@@ -1749,12 +1766,12 @@
       const id = candidates[(tick + offset * 2) % candidates.length];
       const amount = 2 + ((tick + offset) % 5);
       totalDelta += amount;
-      rememberLiveEvent(`${id}/events`, amount);
+      rememberLiveEvent(`${id}/events`, amount, 1.3);
       bumpLive(id, amount, false);
     });
     if (tick % 5 === 3) {
       bumpLive("warning/process_sampler_failed", 5, true);
-      rememberLiveEvent("warning/process_sampler_failed", 5);
+      rememberLiveEvent("warning/process_sampler_failed", 5, 1.3);
       totalDelta += 5;
     }
     addTraceEdgesForFrames([
@@ -1778,6 +1795,7 @@
     decayMap(state.live.activity, 0.7);
     decayMap(state.live.errors, 0.58);
     decayMap(state.live.eventDeltas, 0.66, 0.45);
+    decayMap(state.live.eventRates, 0.66, 0.05);
   }
 
   function decayMap(map, factor, minimum = 0.18) {
@@ -1791,8 +1809,15 @@
     });
   }
 
-  function rememberLiveEvent(key, amount) {
+  function rememberLiveEvent(key, amount, seconds = 1) {
     state.live.eventDeltas.set(key, (state.live.eventDeltas.get(key) || 0) + amount);
+    if (seconds > 0) state.live.eventRates.set(key, amount / seconds);
+  }
+
+  function formatEventRate(rate) {
+    if (!Number.isFinite(rate) || rate <= 0) return "0/s";
+    const value = rate >= 10 ? Math.round(rate) : Math.round(rate * 10) / 10;
+    return `${nf.format(value)}/s`;
   }
 
   function applyLiveKey(key, amount) {
@@ -1905,7 +1930,7 @@
     return [...state.live.eventDeltas.entries()]
       .filter(([, delta]) => delta > 0.45)
       .filter(([key]) => [...resolveLiveIds(key)].some((id) => ids.has(id)))
-      .map(([key, delta]) => ({ key, delta }))
+      .map(([key, delta]) => ({ key, delta, rate: state.live.eventRates.get(key) || 0 }))
       .sort((a, b) => b.delta - a.delta)
       .slice(0, 8);
   }
@@ -2236,7 +2261,7 @@
         `${Math.max(7, Math.min(100, (delta / maxDelta) * 100))}%`
       );
       const meta = document.createElement("span");
-      meta.textContent = `+${nf.format(Math.round(delta))} events`;
+      meta.textContent = `+${nf.format(Math.round(delta))} · ${formatEventRate(state.live.eventRates.get(key) || 0)}`;
       button.append(name, meter, meta);
       return button;
     });
@@ -2666,7 +2691,7 @@
           `${Math.max(7, Math.min(100, (event.delta / maxDelta) * 100))}%`
         );
         const meta = document.createElement("span");
-        meta.textContent = `+${nf.format(Math.round(event.delta))} recent events`;
+        meta.textContent = `+${nf.format(Math.round(event.delta))} recent · ${formatEventRate(event.rate)}`;
         row.append(name, meter, meta);
         eventList.append(row);
       });
