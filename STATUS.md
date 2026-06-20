@@ -51,6 +51,8 @@ Branch: `expr/visualizer`
 - Follow-heat mobile proof: at `390x844`, `live=demo&follow=heat` had `0` horizontal overflow, no offscreen controls, selected `dev_scheduler`, and fit six live-strip controls in two rows. Screenshot saved to `build/codeviz/validation-follow-heat-mobile.png`.
 - Inspector heat wording proof: `live=demo&follow=heat` showed numeric `Live heat` in the inspector and no longer rendered the ambiguous `Errors hot` wording. Screenshot saved to `build/codeviz/validation-inspector-heat-wording.png`.
 - Recording playback proof: `recording=demo` timeline now has a `Play` control; clicking it moved from aggregate `All` into a numbered event with `Pause` active and then returned to `All` with `Play` restored after replay. Screenshot saved to `build/codeviz/validation-recording-playback.png`.
+- Workspace splitter proof: dragging the context splitter widened the context pane from `300px` to `364px` and kept page overflow at `0`; dragging the inspector splitter widened the detail pane from `340px` to `398px` and kept page overflow at `0`. Screenshot saved to `build/codeviz/validation-workspace-splitter.png`.
+- Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -86,6 +88,7 @@ Branch: `expr/visualizer`
 - Added shareable `follow=heat` engine-view mode that follows the hottest live/recorded module while keeping the control explicit.
 - Renamed live inspector metrics to numeric `Live heat` / `Error heat` labels for clearer engine-view telemetry.
 - Added recorder timeline playback so imported or demo recordings can repaint their stack traces event-by-event.
+- Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
 
 ## Next Work
 

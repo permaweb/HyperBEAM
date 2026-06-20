@@ -321,9 +321,14 @@ h3 {
 
 .workspace {
   display: grid;
-  grid-template-areas: "context graph detail";
-  grid-template-columns: minmax(250px, 300px) minmax(580px, 1fr) minmax(280px, 340px);
-  gap: 10px;
+  grid-template-areas: "context split-context graph split-detail detail";
+  grid-template-columns:
+    minmax(250px, var(--context-width, 300px))
+    10px
+    minmax(500px, 1fr)
+    10px
+    minmax(280px, var(--detail-width, 340px));
+  gap: 0;
   min-height: calc(100vh - 244px);
 }
 
@@ -337,6 +342,45 @@ h3 {
 
 .detail-panel {
   grid-area: detail;
+}
+
+.workspace-splitter {
+  position: relative;
+  z-index: 3;
+  min-width: 10px;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.workspace-splitter[data-splitter="context"] {
+  grid-area: split-context;
+}
+
+.workspace-splitter[data-splitter="detail"] {
+  grid-area: split-detail;
+}
+
+.workspace-splitter::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  width: 1px;
+  content: "";
+  transform: translateX(-50%);
+  background: var(--line);
+}
+
+.workspace-splitter:hover::before,
+.workspace-splitter.active::before {
+  width: 2px;
+  background: var(--blue);
+}
+
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .context-panel,
@@ -1245,7 +1289,12 @@ button.ref-pill {
       "graph graph"
       "context detail";
     grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
+    gap: 10px;
     min-height: auto;
+  }
+
+  .workspace-splitter {
+    display: none;
   }
 
   .context-panel,

@@ -27,6 +27,8 @@
     liveStop: document.getElementById("live-stop"),
     fitGraph: document.getElementById("fit-graph"),
     resetGraph: document.getElementById("reset-graph"),
+    workspace: document.querySelector(".workspace"),
+    contextPanel: document.querySelector(".context-panel"),
     graphTitle: document.getElementById("graph-title"),
     graphMeta: document.getElementById("graph-meta"),
     graphPanel: document.querySelector(".graph-panel"),
@@ -47,6 +49,7 @@
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
     detailCard: document.getElementById("detail-card"),
+    detailPanel: document.querySelector(".detail-panel"),
     selectionLabel: document.getElementById("selection-label"),
     callers: document.getElementById("callers"),
     callees: document.getElementById("callees")
@@ -84,6 +87,7 @@
     transform: { x: 40, y: 40, scale: 1 },
     layout: { nodes: [], edges: [], modules: [], bands: [], bounds: null },
     dragging: null,
+    resizing: null,
     fitAfterRender: true,
     ignoreNextClick: false,
     minimap: null,
@@ -347,7 +351,12 @@
     els.svg.addEventListener("click", clearSelectionFromBackground);
     els.minimap.addEventListener("pointerdown", (event) => event.stopPropagation());
     els.minimap.addEventListener("click", onMinimapClick);
+    document.querySelectorAll(".workspace-splitter").forEach((splitter) => {
+      splitter.addEventListener("pointerdown", startWorkspaceResize);
+    });
+    window.addEventListener("pointermove", moveWorkspaceResize);
     window.addEventListener("pointermove", movePan);
+    window.addEventListener("pointerup", endWorkspaceResize);
     window.addEventListener("pointerup", endPan);
   }
 
@@ -3143,6 +3152,49 @@
       scale
     };
     applyTransform();
+  }
+
+  function startWorkspaceResize(event) {
+    state.resizing = {
+      kind: event.currentTarget.dataset.splitter,
+      startX: event.clientX,
+      contextWidth: els.contextPanel.getBoundingClientRect().width,
+      detailWidth: els.detailPanel.getBoundingClientRect().width,
+      workspaceWidth: els.workspace.getBoundingClientRect().width,
+      handle: event.currentTarget
+    };
+    event.currentTarget.classList.add("active");
+    document.body.classList.add("resizing");
+    event.preventDefault();
+  }
+
+  function moveWorkspaceResize(event) {
+    if (!state.resizing) return;
+    const dx = event.clientX - state.resizing.startX;
+    const reserve = 520;
+    if (state.resizing.kind === "context") {
+      const max = Math.max(260, Math.min(520, state.resizing.workspaceWidth - state.resizing.detailWidth - reserve));
+      setWorkspaceWidth("--context-width", clamp(state.resizing.contextWidth + dx, 220, max));
+    } else {
+      const max = Math.max(280, Math.min(560, state.resizing.workspaceWidth - state.resizing.contextWidth - reserve));
+      setWorkspaceWidth("--detail-width", clamp(state.resizing.detailWidth - dx, 240, max));
+    }
+    updateMinimapView();
+  }
+
+  function endWorkspaceResize() {
+    if (!state.resizing) return;
+    state.resizing.handle.classList.remove("active");
+    state.resizing = null;
+    document.body.classList.remove("resizing");
+  }
+
+  function setWorkspaceWidth(name, width) {
+    els.workspace.style.setProperty(name, `${Math.round(width)}px`);
+  }
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
   }
 
   function onWheel(event) {
