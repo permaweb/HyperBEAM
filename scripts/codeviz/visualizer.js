@@ -108,6 +108,8 @@
       recordingUrl: "",
       recordingEvents: [],
       recordingFocus: -1,
+      recordingPlaying: false,
+      recordingTimer: null,
       pendingRecordingFocus: -1,
       lastSeen: 0,
       lastError: "",
@@ -1238,6 +1240,7 @@
 
   function stopLive(options = {}) {
     if (state.live.timer) window.clearInterval(state.live.timer);
+    stopRecordingPlayback(false);
     state.live.timer = null;
     state.live.enabled = false;
     state.live.mode = "off";
@@ -1257,6 +1260,8 @@
     state.live.recordingUrl = "";
     state.live.recordingEvents = [];
     state.live.recordingFocus = -1;
+    state.live.recordingPlaying = false;
+    state.live.recordingTimer = null;
     state.live.pendingRecordingFocus = -1;
     state.live.lastError = "";
     renderLiveControls();
@@ -1534,6 +1539,8 @@
     state.live.recordingUrl = recordingUrl;
     state.live.recordingEvents = Array.isArray(report.events) ? report.events : [];
     state.live.recordingFocus = -1;
+    state.live.recordingPlaying = false;
+    state.live.recordingTimer = null;
     state.live.pendingRecordingFocus = pendingFocus;
     state.live.lastError = "";
     paintRecordingEntries(recordingEntries(state.live.recordingEvents));
@@ -2161,11 +2168,25 @@
     const title = document.createElement("div");
     title.className = "recording-title";
     title.textContent = "Recording timeline";
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = state.live.recordingPlaying ?
+      "recording-play active" :
+      "recording-play";
+    play.textContent = state.live.recordingPlaying ? "Pause" : "Play";
+    play.addEventListener("click", () => {
+      if (state.live.recordingPlaying) {
+        stopRecordingPlayback();
+      } else {
+        startRecordingPlayback();
+      }
+    });
     const all = document.createElement("button");
     all.type = "button";
     all.className = state.live.recordingFocus < 0 ? "recording-tick active" : "recording-tick";
     all.textContent = "All";
     all.addEventListener("click", () => {
+      stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
       render();
@@ -2178,12 +2199,43 @@
         "recording-tick";
       button.textContent = String(event.sequence || idx + 1);
       button.title = `${event.topic || "recording"}/${event.name || "event"}`;
-      button.addEventListener("click", () => focusRecordingEvent(idx));
+      button.addEventListener("click", () => {
+        stopRecordingPlayback(false);
+        focusRecordingEvent(idx);
+      });
       return button;
     });
-    els.recordingTimeline.replaceChildren(title, all, ...ticks);
+    els.recordingTimeline.replaceChildren(title, play, all, ...ticks);
     els.recordingTimeline.hidden = false;
     return true;
+  }
+
+  function startRecordingPlayback() {
+    if (state.live.mode !== "recording" || state.live.recordingEvents.length < 2) return;
+    stopRecordingPlayback(false);
+    state.live.recordingPlaying = true;
+    focusRecordingEvent(0);
+    state.live.recordingTimer = window.setInterval(advanceRecordingPlayback, 1700);
+  }
+
+  function stopRecordingPlayback(renderAfter = true) {
+    if (state.live.recordingTimer) window.clearInterval(state.live.recordingTimer);
+    state.live.recordingTimer = null;
+    state.live.recordingPlaying = false;
+    if (renderAfter) render();
+  }
+
+  function advanceRecordingPlayback() {
+    if (state.live.mode !== "recording" || !state.live.recordingPlaying) return;
+    const next = state.live.recordingFocus + 1;
+    if (next >= state.live.recordingEvents.length) {
+      stopRecordingPlayback(false);
+      state.live.recordingFocus = -1;
+      paintRecordingEntries(recordingEntries(state.live.recordingEvents));
+      render();
+      return;
+    }
+    focusRecordingEvent(next);
   }
 
   function focusRecordingEvent(idx) {

@@ -567,6 +567,23 @@ h3 {
   text-transform: uppercase;
 }
 
+.recording-play {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 9px;
+  border-color: rgba(189, 52, 66, 0.2);
+  background: #ffffff;
+  color: var(--red);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.recording-play.active {
+  border-color: rgba(189, 52, 66, 0.52);
+  background: #fff2f3;
+}
+
 .recording-tick {
   flex: 0 0 auto;
   min-width: 32px;
