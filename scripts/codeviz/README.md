@@ -41,6 +41,8 @@ Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
 module, or function opens a local callers/callees lens, and `edges=strong`
 filters the graph to repeated call relationships. The context and inspector
 panes can be resized with the recorder-style splitters around the graph.
+Clicking an already-selected graph node drills down one level: subsystems open
+their module graph, and modules open a function graph filtered to that module.
 Selected devices are pinned to the top of the device list. Search matches are
 highlighted in the graph and minimap so surrounding context is easier to
 distinguish from the actual result set. Hovering a node temporarily highlights

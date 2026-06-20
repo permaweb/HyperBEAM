@@ -3052,7 +3052,15 @@
       g.dataset.id = node.id;
       g.addEventListener("click", (event) => {
         event.stopPropagation();
+        if (event.detail >= 2 || state.selected === node.id) {
+          drillIntoNode(node);
+          return;
+        }
         selectNode(node.id, { manual: true });
+      });
+      g.addEventListener("dblclick", (event) => {
+        event.stopPropagation();
+        drillIntoNode(node);
       });
       g.addEventListener("mouseenter", () => setHoveredNode(node.id));
       g.addEventListener("mouseleave", () => setHoveredNode(null));
@@ -3108,6 +3116,33 @@
       fragment.append(g);
     });
     els.nodes.replaceChildren(fragment);
+  }
+
+  function drillIntoNode(node) {
+    state.live.follow = false;
+    state.selected = null;
+    state.hovered = null;
+    if (node.kind === "system") {
+      activateMode("module");
+      state.group = node.id;
+      els.groupFilter.value = state.group;
+      state.search = "";
+      els.search.value = "";
+    } else if (node.kind === "module") {
+      activateMode("function");
+      state.group = "";
+      els.groupFilter.value = "";
+      state.search = node.id.toLowerCase();
+      els.search.value = node.id;
+    } else if (node.kind === "function") {
+      const fun = byFunction.get(node.id);
+      if (!fun) return;
+      state.search = fun.module.toLowerCase();
+      els.search.value = fun.module;
+    }
+    requestFit();
+    render();
+    showGraph();
   }
 
   function applyRelationClasses() {

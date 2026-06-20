@@ -90,6 +90,8 @@ Branch: `expr/visualizer`
 - Stack process deck mobile proof: at `390x844`, the process deck rendered full-width `344px` rows, all clickable, with wrapped stack live status, no offscreen rows, and `0` document/body overflow. Screenshot saved to `build/codeviz/validation-stack-process-deck-mobile.png`.
 - Recording tick heat proof: `recording=demo` rendered stack-depth bars on recorder timeline ticks, preserved one error tick for `warning/process_sampler_failed`, and kept `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat.png`.
 - Varied recording tick heat proof: a local recorder JSON report at `127.0.0.1:8895/report.json` rendered tick heat levels `33.333%`, `50%`, and `100%` for events with `2`, `3`, and `6` frame weights, with the deepest warning event marked `.recording-tick.error` and `0` overflow. Screenshot saved to `build/codeviz/validation-recording-tick-heat-varied.png`.
+- Module drilldown proof: clicking `dev_recorder` once selected it, clicking it again opened function mode with `search=dev_recorder`, `80` search matches, `99` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-double-click-drilldown.png`.
+- System drilldown proof: clicking `kernel:resolver` twice opened module mode with `group=kernel:resolver`, `12` visible nodes, `43` visible calls, and `0` overflow. Screenshot saved to `build/codeviz/validation-system-drilldown.png`.
 
 ## Last Presentation Pass
 
@@ -163,6 +165,8 @@ Branch: `expr/visualizer`
 - Updated the codeviz README with stack process deck behavior.
 - Added stack-depth heat bars to recorder timeline ticks.
 - Updated the codeviz README with recorder tick heat behavior.
+- Added graph drilldown gestures where clicking an already-selected subsystem/module dives to the next graph mode.
+- Updated the codeviz README with graph drilldown behavior.
 
 ## Next Work
 
