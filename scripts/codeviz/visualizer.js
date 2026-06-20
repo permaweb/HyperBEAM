@@ -428,6 +428,9 @@
 
   function layout(visible) {
     if (state.mode === "system") return systemLayout(visible);
+    if (state.mode === "module" && byModule.has(state.selected)) {
+      return selectedModuleLayout(visible);
+    }
     if (state.mode === "function" && byFunction.has(state.selected)) {
       return selectedFunctionLayout(visible);
     }
@@ -445,10 +448,87 @@
     return { ...positioned, edges };
   }
 
+  function selectedModuleLayout(visible) {
+    const selected = byModule.get(state.selected);
+    const visibleById = new Map(visible.modules.map((mod) => [mod.id, mod]));
+    let callers = (moduleIncoming.get(selected.id) || [])
+      .map((rel) => visibleById.get(rel.id))
+      .filter(Boolean)
+      .sort(nodeSort);
+    const callees = (moduleOutgoing.get(selected.id) || [])
+      .map((rel) => visibleById.get(rel.id))
+      .filter(Boolean)
+      .sort(nodeSort);
+    const calleeIds = new Set(callees.map((mod) => mod.id));
+    callers = callers.filter((mod) => !calleeIds.has(mod.id));
+    const selectedNode = moduleLensNode(selected, 330, 58);
+    const callerNodes = callers.map((mod) => moduleLensNode(mod, 300, 52));
+    const calleeNodes = callees.map((mod) => moduleLensNode(mod, 300, 52));
+    const maxRows = Math.max(callerNodes.length, calleeNodes.length, 1);
+    const stackHeight = maxRows * 62;
+    const centerY = 72 + Math.max(0, (stackHeight - selectedNode.height) / 2);
+    const nodes = [
+      ...placeModuleStack(callerNodes, 40, 72),
+      {
+        ...selectedNode,
+        x: 390,
+        y: centerY,
+        cx: 390 + selectedNode.width / 2,
+        cy: centerY + selectedNode.height / 2
+      },
+      ...placeModuleStack(calleeNodes, 780, 72)
+    ];
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const ids = new Set(nodes.map((node) => node.id));
+    const edges = moduleEdges(visible.edges)
+      .filter((edge) => ids.has(edge.source) && ids.has(edge.target))
+      .filter((edge) => edge.source === selected.id || edge.target === selected.id)
+      .map((edge) => ({
+        ...edge,
+        sourceNode: nodeById.get(edge.source),
+        targetNode: nodeById.get(edge.target)
+      }))
+      .filter((edge) => edge.sourceNode && edge.targetNode);
+    const height = Math.max(540, stackHeight + 128);
+    return {
+      nodes,
+      modules: [],
+      edges,
+      lens: true,
+      bands: [
+        { id: "module-callers", x: 20, y: 16, width: 340, height, label: "Callers" },
+        { id: "module-selected", x: 370, y: 16, width: 370, height, label: selected.group },
+        { id: "module-callees", x: 760, y: 16, width: 340, height, label: "Callees" }
+      ],
+      bounds: { x: 0, y: 0, width: 1120, height: height + 24 }
+    };
+  }
+
+  function moduleLensNode(mod, width, height) {
+    return {
+      ...mod,
+      kind: "module",
+      title: mod.module,
+      subtitle: `${mod.functions} functions · ${mod.exports} exports`,
+      width,
+      height
+    };
+  }
+
+  function placeModuleStack(nodes, x, y) {
+    return nodes.map((node, idx) => ({
+      ...node,
+      x,
+      y: y + idx * 62,
+      cx: x + node.width / 2,
+      cy: y + idx * 62 + node.height / 2
+    }));
+  }
+
   function selectedFunctionLayout(visible) {
     const selected = byFunction.get(state.selected);
     const visibleById = new Map(visible.functions.map((fun) => [fun.id, fun]));
-    const callers = (incoming.get(selected.id) || [])
+    let callers = (incoming.get(selected.id) || [])
       .map((rel) => visibleById.get(rel.id))
       .filter(Boolean)
       .sort(nodeSort);
@@ -456,6 +536,8 @@
       .map((rel) => visibleById.get(rel.id))
       .filter(Boolean)
       .sort(nodeSort);
+    const calleeIds = new Set(callees.map((fun) => fun.id));
+    callers = callers.filter((fun) => !calleeIds.has(fun.id));
     const selectedNode = {
       ...selected,
       kind: "function",
@@ -513,6 +595,7 @@
       nodes,
       modules: [],
       edges,
+      lens: true,
       bands: [
         { id: "callers", x: 20, y: 16, width: 320, height, label: "Callers" },
         { id: "selected", x: 370, y: 16, width: 340, height, label: selected.module },
@@ -896,6 +979,7 @@
         event.stopPropagation();
         state.selected = node.id;
         render();
+        focusNode(node.id);
       });
       const tooltip = svgEl("title");
       tooltip.textContent = nodeTooltip(node);
@@ -1264,7 +1348,7 @@
     const maxY = Math.max(...nodes.map((node) => node.y + node.height));
     const rect = els.stage.getBoundingClientRect();
     const scale = Math.min(1.15, Math.max(
-      readableScale(true),
+      state.layout.lens ? 0.52 : readableScale(true),
       Math.min((rect.width - 96) / (maxX - minX), (rect.height - 96) / (maxY - minY))
     ));
     state.transform = {

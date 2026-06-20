@@ -18,14 +18,14 @@ Branch: `expr/visualizer`
 
 ## Last Presentation Pass
 
-- Added module inspector function lists for direct module-to-function drilldown.
-- Search-scoped selections now expand their caller/callee neighborhood.
-- Selected functions now render as a local `Callers -> Function -> Callees` lens.
-- Function lens nodes include module context on a second line.
-- Validated `hb_message -> commit/2` drilldown in the browser.
+- Added selected-module local flow lenses.
+- Direct graph clicks now focus the selected neighborhood.
+- De-duplicated modules/functions that are both callers and callees in lenses.
+- Tightened the responsive graph stage height for the in-app browser viewport.
+- Validated `hb_message` module neighborhood in the browser.
 
 ## Next Work
 
-- Improve selected-neighborhood controls for modules and systems.
+- Improve selected-neighborhood controls for systems.
 - Add richer dense-edge reduction and visual weighting.
 - Continue browser validation after each presentation pass.

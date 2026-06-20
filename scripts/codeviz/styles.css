@@ -741,7 +741,8 @@ svg {
   }
 
   .graph-stage {
-    min-height: 560px;
+    height: clamp(470px, calc(100vh - 280px), 620px);
+    min-height: 470px;
   }
 
   .device-list,
