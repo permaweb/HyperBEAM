@@ -98,11 +98,47 @@
   }
 
   function init() {
+    applyInitialParams();
     renderGroupFilter();
     renderGroupChips();
     renderDevices();
     bindEvents();
     render();
+  }
+
+  function applyInitialParams() {
+    const params = new URLSearchParams(window.location.search);
+    const devices = (params.get("devices") || "")
+      .split(",")
+      .map((value) => value.trim().replace(/^~/, ""))
+      .filter(Boolean);
+    const knownDevices = new Set(graph.devices.map((device) => device.id));
+    devices.forEach((device) => {
+      if (knownDevices.has(device)) state.selectedDevices.add(device);
+    });
+    if (["function", "module"].includes(params.get("mode"))) {
+      state.mode = params.get("mode");
+    }
+    if (params.has("search")) {
+      state.search = params.get("search").trim().toLowerCase();
+      els.search.value = params.get("search");
+    }
+    if (params.has("group")) state.group = params.get("group");
+    if (["context", "selected", "cross"].includes(params.get("edges"))) {
+      state.edgeMode = params.get("edges");
+      els.edgeFilter.value = state.edgeMode;
+    }
+    if (params.get("private") === "false") {
+      state.showPrivate = false;
+      els.showPrivate.checked = false;
+    }
+    if (params.get("forge") === "true") {
+      state.showForge = true;
+      els.showForge.checked = true;
+    }
+    document.querySelectorAll("[data-mode]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.mode === state.mode);
+    });
   }
 
   function bindEvents() {
@@ -170,6 +206,7 @@
       option.textContent = `${group.label} (${group.modules})`;
       els.groupFilter.appendChild(option);
     });
+    els.groupFilter.value = state.group;
   }
 
   function renderGroupChips() {
