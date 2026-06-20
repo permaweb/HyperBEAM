@@ -41,6 +41,8 @@ Supported modes are `system`, `module`, and `function`. Selecting a subsystem,
 module, or function opens a local callers/callees lens, and `edges=strong`
 filters the graph to repeated call relationships. The context and inspector
 panes can be resized with the recorder-style splitters around the graph.
+Caller/callee rows preserve the selected call edge when clicked, so side-list
+navigation keeps the graph edge and source/target inspector context visible.
 Clicking an already-selected graph node drills down one level: subsystems open
 their module graph, and modules open a function graph filtered to that module.
 Call edges have wide invisible hit paths; clicking one selects its callee,

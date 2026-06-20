@@ -3453,8 +3453,8 @@
     }
     els.selectionLabel.textContent = selected.id;
     els.detailCard.replaceChildren(detailCard(selected));
-    relationList(els.callers, activeIncoming().get(selected.id) || []);
-    relationList(els.callees, activeOutgoing().get(selected.id) || []);
+    relationList(els.callers, activeIncoming().get(selected.id) || [], "incoming", selected.id);
+    relationList(els.callees, activeOutgoing().get(selected.id) || [], "outgoing", selected.id);
   }
 
   function selectedNode() {
@@ -3939,7 +3939,7 @@
     return div;
   }
 
-  function relationList(root, relations) {
+  function relationList(root, relations, direction, selectedId) {
     if (!relations.length) {
       const empty = document.createElement("div");
       empty.className = "device-meta";
@@ -3962,9 +3962,20 @@
       .map((rel) => {
         const button = document.createElement("button");
         button.type = "button";
+        const edge = direction === "incoming" ?
+          { source: rel.id, target: selectedId, count: rel.edge.count || 1, kind: "call" } :
+          { source: selectedId, target: rel.id, count: rel.edge.count || 1, kind: "call" };
+        if (
+          state.selectedEdge &&
+          state.selectedEdge.kind === "call" &&
+          state.selectedEdge.source === edge.source &&
+          state.selectedEdge.target === edge.target
+        ) {
+          button.className = "active";
+        }
         button.textContent = `${rel.id} · ${nf.format(rel.edge.count || 1)}`;
         button.addEventListener("click", () => {
-          selectNode(rel.id, { manual: true, showGraph: true });
+          selectNode(rel.id, { manual: true, showGraph: true, edge });
         });
         return button;
       });
