@@ -937,6 +937,12 @@ svg {
   font-size: 10px;
 }
 
+.node .live-badge {
+  fill: var(--red);
+  font-size: 9px;
+  font-weight: 800;
+}
+
 .node.system rect {
   filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.08));
 }

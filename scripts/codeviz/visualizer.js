@@ -2574,6 +2574,14 @@
           r: Math.min(9, 3.5 + liveScore * 0.28)
         });
         g.append(ring);
+        const badge = svgEl("text", {
+          class: "live-badge",
+          x: node.width - 24,
+          y: 15,
+          "text-anchor": "end"
+        });
+        badge.textContent = `+${nf.format(Math.round(liveScore))}`;
+        g.append(badge);
       }
       const title = svgEl("text", {
         x: 9,

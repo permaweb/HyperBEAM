@@ -58,6 +58,7 @@ Branch: `expr/visualizer`
 - Inspector event-click proof: `live=demo&selected=dev_scheduler` rendered an enabled `dev_scheduler/events` inspector event row; clicking it focused `dev_scheduler` and preserved the event key in the row title. Screenshot saved to `build/codeviz/validation-inspector-event-click.png`.
 - Follow-focus/doc-clamp proof: `live=demo&follow=heat` kept the hot `dev_scheduler` node visible in the graph, clamped a long `320px` module doc to `170px`, and left live event rows visible in the inspector. Screenshot saved to `build/codeviz/validation-follow-focus-doc-clamp.png`.
 - Selected-device pinning proof: with `recorder@1.0,scheduler@1.0` loaded, the first two visible context rows are active `~recorder@1.0` and `~scheduler@1.0`, followed by inactive devices. Screenshot saved to `build/codeviz/validation-selected-device-pinning.png`.
+- Live heat badge proof: `live=demo&follow=heat` rendered `6` live rings with numeric node badges such as `+9`, `+7`, and `+6`. Screenshot saved to `build/codeviz/validation-live-heat-badges.png`.
 
 ## Last Presentation Pass
 
@@ -98,6 +99,7 @@ Branch: `expr/visualizer`
 - Made selected-node live event rows in the inspector clickable graph targets.
 - Clamped long inspector docs and made follow mode focus the hot node after render instead of broad-fitting the whole lens.
 - Pinned selected devices to the top of the context device list with an active row treatment.
+- Added numeric live heat badges directly on hot graph nodes.
 
 ## Next Work
 
