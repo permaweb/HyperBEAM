@@ -1124,6 +1124,25 @@ svg {
   font-size: 0;
 }
 
+.action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.action-row button {
+  min-height: 32px;
+  overflow: hidden;
+  padding: 0 8px;
+  border-color: rgba(105, 86, 197, 0.22);
+  background: #fbfaff;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
 .relation-list {
   display: grid;
   gap: 6px;

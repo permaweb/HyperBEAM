@@ -2576,6 +2576,9 @@
       });
       wrap.append(pills);
     }
+    if (isRecorderNode(node)) {
+      wrap.append(recorderActions());
+    }
     const liveSamples = liveSamplesForNode(node);
     const liveEvents = liveEventsForNode(node);
     if (liveEvents.length) {
@@ -2695,6 +2698,37 @@
       wrap.append(moduleSection);
     }
     return wrap;
+  }
+
+  function isRecorderNode(node) {
+    return node.id === "dev_recorder" ||
+      node.device === "recorder@1.0" ||
+      (node["device-refs"] || []).includes("recorder@1.0");
+  }
+
+  function recorderActions() {
+    const section = document.createElement("div");
+    section.className = "source-section";
+    const title = document.createElement("h3");
+    title.textContent = "Recorder black box";
+    const actions = document.createElement("div");
+    actions.className = "action-row";
+    [
+      ["Live stacks", () => startLive(defaultStackEndpoint)],
+      ["Import", () => els.recordingFile.click()],
+      ["Demo recording", () => applyRecordingReport(demoRecordingReport(), "demo")]
+    ].forEach(([label, action]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        action();
+        showGraph();
+      });
+      actions.append(button);
+    });
+    section.append(title, actions);
+    return section;
   }
 
   function kv(key, value) {
