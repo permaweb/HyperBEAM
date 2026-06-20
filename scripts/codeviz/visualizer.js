@@ -2633,14 +2633,18 @@
 
   function nodeTooltip(node) {
     const liveScore = liveNodeScore(node);
-    const liveLine = liveScore > 0.6 ? `\nlive delta ${Math.round(liveScore)}` : "";
+    const errorScore = liveErrorScore(node);
+    const aliases = eventAliasesForNode(node).slice(0, 4);
+    const liveLine = liveScore > 0.6 ? `\nlive heat +${Math.round(liveScore)}` : "";
+    const errorLine = errorScore > 0.6 ? `\nerror heat +${Math.round(errorScore)}` : "";
+    const aliasLine = aliases.length ? `\nevents ${aliases.join(", ")}` : "";
     if (node.kind === "system") {
-      return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}`;
+      return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
     }
     if (node.kind === "module") {
-      return `${node.id}\n${node.path}\n${node.functions} functions${liveLine}`;
+      return `${node.id}\n${node.path}\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
     }
-    return `${node.id}\n${node.path}:${node.line}${liveLine}`;
+    return `${node.id}\n${node.path}:${node.line}${liveLine}${errorLine}${aliasLine}`;
   }
 
   function edgeClass(edge) {
