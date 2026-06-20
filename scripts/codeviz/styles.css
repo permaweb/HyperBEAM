@@ -246,7 +246,13 @@ h3 {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(260px, 2fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) max-content max-content;
+  grid-template-columns:
+    minmax(260px, 2fr)
+    minmax(150px, 0.78fr)
+    minmax(150px, 0.78fr)
+    minmax(150px, 0.78fr)
+    max-content
+    max-content;
   align-items: center;
   gap: 9px;
   padding: 10px;
@@ -647,13 +653,23 @@ body.resizing {
   cursor: grabbing;
 }
 
-.graph-stage[data-layout="map"] {
+.graph-stage[data-layout="map"],
+.graph-stage[data-layout="namespace"] {
   background:
     radial-gradient(circle at 50% 50%, rgba(0, 154, 247, 0.04), transparent 34%),
     linear-gradient(rgba(0, 0, 0, 0.022) 1px, transparent 1px),
     linear-gradient(90deg, rgba(0, 0, 0, 0.018) 1px, transparent 1px),
     var(--surface);
   background-size: auto, 72px 72px, 72px 72px, auto;
+}
+
+.graph-stage[data-layout="namespace"] {
+  background:
+    linear-gradient(135deg, rgba(19, 138, 109, 0.04), transparent 32%),
+    linear-gradient(rgba(0, 0, 0, 0.022) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.018) 1px, transparent 1px),
+    var(--surface);
+  background-size: auto, 84px 84px, 84px 84px, auto;
 }
 
 .minimap {
@@ -1107,7 +1123,8 @@ svg {
   stroke-width: 1;
 }
 
-.graph-stage[data-layout="map"] .band rect {
+.graph-stage[data-layout="map"] .band rect,
+.graph-stage[data-layout="namespace"] .band rect {
   fill: rgba(246, 248, 248, 0.5);
   stroke: rgba(0, 0, 0, 0.06);
   stroke-dasharray: 8 8;
@@ -1130,7 +1147,8 @@ svg {
   pointer-events: none;
 }
 
-.graph-stage[data-layout="map"] .edge {
+.graph-stage[data-layout="map"] .edge,
+.graph-stage[data-layout="namespace"] .edge {
   stroke: rgba(0, 0, 0, 0.18);
   stroke-opacity: 0.34;
   stroke-linecap: round;
@@ -1143,11 +1161,19 @@ svg {
 .graph-stage[data-layout="map"] .edge.selected-edge,
 .graph-stage[data-layout="map"] .edge.path-edge,
 .graph-stage[data-layout="map"] .edge.live-warm,
-.graph-stage[data-layout="map"] .edge.live-hot {
+.graph-stage[data-layout="map"] .edge.live-hot,
+.graph-stage[data-layout="namespace"] .edge.hot,
+.graph-stage[data-layout="namespace"] .edge.incoming,
+.graph-stage[data-layout="namespace"] .edge.outgoing,
+.graph-stage[data-layout="namespace"] .edge.selected-edge,
+.graph-stage[data-layout="namespace"] .edge.path-edge,
+.graph-stage[data-layout="namespace"] .edge.live-warm,
+.graph-stage[data-layout="namespace"] .edge.live-hot {
   stroke-opacity: 1;
 }
 
-.graph-stage[data-layout="map"] .edge-hit {
+.graph-stage[data-layout="map"] .edge-hit,
+.graph-stage[data-layout="namespace"] .edge-hit {
   stroke-width: 24px;
 }
 
@@ -1299,11 +1325,13 @@ svg {
   stroke-width: 1;
 }
 
-.graph-stage[data-layout="map"] .node rect {
+.graph-stage[data-layout="map"] .node rect,
+.graph-stage[data-layout="namespace"] .node rect {
   filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.055));
 }
 
-.graph-stage[data-layout="map"] .node.function rect {
+.graph-stage[data-layout="map"] .node.function rect,
+.graph-stage[data-layout="namespace"] .node.function rect {
   fill: rgba(255, 255, 255, 0.94);
 }
 
@@ -1817,7 +1845,13 @@ button.ref-pill {
   }
 
   .filters {
-    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr) max-content max-content;
+    grid-template-columns:
+      minmax(0, 1.35fr)
+      minmax(0, 1fr)
+      minmax(0, 1fr)
+      minmax(0, 1fr)
+      max-content
+      max-content;
   }
 
   .live-strip {

@@ -14,6 +14,7 @@
     search: document.getElementById("search"),
     groupFilter: document.getElementById("group-filter"),
     edgeFilter: document.getElementById("edge-filter"),
+    contextScope: document.getElementById("context-scope"),
     showPrivate: document.getElementById("show-private"),
     showForge: document.getElementById("show-forge"),
     liveStatus: document.getElementById("live-status"),
@@ -91,6 +92,7 @@
     deviceSearch: "",
     group: "",
     edgeMode: "context",
+    contextScope: "auto",
     showPrivate: true,
     showForge: false,
     transform: { x: 40, y: 40, scale: 1 },
@@ -239,8 +241,12 @@
     if (["system", "module", "function"].includes(params.get("mode"))) {
       state.mode = params.get("mode");
     }
-    if (["map", "flow"].includes(params.get("layout"))) {
+    if (["map", "namespace", "flow"].includes(params.get("layout"))) {
       state.layoutMode = params.get("layout");
+    }
+    if (["auto", "kernel", "touchpoints"].includes(params.get("scope"))) {
+      state.contextScope = params.get("scope");
+      els.contextScope.value = state.contextScope;
     }
     if (params.has("search")) {
       state.search = params.get("search").trim().toLowerCase();
@@ -359,6 +365,11 @@
     });
     els.edgeFilter.addEventListener("change", () => {
       state.edgeMode = els.edgeFilter.value;
+      requestFit();
+      render();
+    });
+    els.contextScope.addEventListener("change", () => {
+      state.contextScope = els.contextScope.value;
       requestFit();
       render();
     });
@@ -612,6 +623,7 @@
     if (state.search) params.set("search", state.search);
     if (state.group) params.set("group", state.group);
     if (state.edgeMode !== "context") params.set("edges", state.edgeMode);
+    if (state.contextScope !== "auto") params.set("scope", state.contextScope);
     if (!state.showPrivate) params.set("private", "false");
     if (state.showForge) params.set("forge", "true");
     if (state.live.enabled && state.live.mode !== "recording") {
@@ -662,24 +674,46 @@
   }
 
   function functionSearchText(fun) {
-    return `${fun.id} ${fun.path} ${fun.doc} ${(fun["device-refs"] || []).join(" ")} ${(fun.events || []).join(" ")}`
+    return [
+      fun.id,
+      fun.path,
+      fun.namespace,
+      fun.category,
+      fun["component-kind"],
+      (fun["source-dirs"] || []).join("/"),
+      fun.doc,
+      (fun["device-refs"] || []).join(" "),
+      (fun.events || []).join(" ")
+    ].join(" ")
       .toLowerCase();
   }
 
   function moduleSearchText(mod) {
-    return `${mod.id} ${mod.path} ${mod.doc} ${(mod["device-refs"] || []).join(" ")} ${(mod["event-topics"] || []).join(" ")}`
+    return [
+      mod.id,
+      mod.path,
+      mod.namespace,
+      mod.category,
+      mod["component-kind"],
+      (mod["source-dirs"] || []).join("/"),
+      mod.doc,
+      (mod["device-refs"] || []).join(" "),
+      (mod["event-topics"] || []).join(" ")
+    ].join(" ")
       .toLowerCase();
   }
 
   function visibleData() {
     const activeModules = new Set();
-    const deviceModules = activeDeviceModules();
     const selectedFunction = byFunction.get(state.selected);
+    const scope = effectiveContextScope();
     const compactDeviceFunctions =
       state.mode === "function" &&
+      scope === "touchpoints" &&
       state.selectedDevices.size &&
       !state.search &&
-      (!state.selected || (state.layoutMode === "map" && selectedFunction));
+      (!state.selected || (mapLayoutModeActive() && selectedFunction));
+    const deviceModules = activeDeviceModules({ includeReferences: !compactDeviceFunctions });
     graph.modules.forEach((mod) => {
       if (!compactDeviceFunctions && mod.role === "kernel") activeModules.add(mod.id);
       if (state.showForge && mod.role === "forge") activeModules.add(mod.id);
@@ -724,7 +758,7 @@
         (!groupFilter || `${mod.role}:${mod.group}` === groupFilter)
       );
     }
-    if (state.selected && state.layoutMode !== "map") {
+    if (state.selected && !mapLayoutModeActive()) {
       functions = expandSelectedFunctions(functions, functionInScope);
       modules = expandSelectedModules(modules, functions, moduleInScope);
     }
@@ -795,20 +829,56 @@
     return expanded;
   }
 
-  function activeDeviceModules() {
+  function activeDeviceModules(options = {}) {
+    const includeReferences = options.includeReferences !== false;
     const modules = new Set();
     const selectedGroups = new Map();
+    const selectedNamespaces = new Set();
+    const selectedRefs = new Set();
     graph.devices.forEach((device) => {
       if (state.selectedDevices.has(device.id)) {
         selectedGroups.set(device.id, device.group);
+        device.modules.forEach((module) => {
+          modules.add(module);
+          const mod = byModule.get(module);
+          if (!mod) return;
+          if (mod.namespace) selectedNamespaces.add(mod.namespace);
+          (mod["device-refs"] || []).forEach((ref) => selectedRefs.add(ref));
+        });
+      }
+    });
+    graph.devices.forEach((device) => {
+      if (includeReferences && selectedRefs.has(device.id)) {
         device.modules.forEach((module) => modules.add(module));
       }
     });
     graph.modules.forEach((mod) => {
       const refs = mod["device-refs"] || [];
-      if (refs.some((ref) => selectedGroups.get(ref) === mod.group)) modules.add(mod.id);
+      if (includeReferences && refs.some((ref) => selectedGroups.get(ref) === mod.group)) {
+        modules.add(mod.id);
+      }
+      if (includeReferences && refs.some((ref) => state.selectedDevices.has(ref) || selectedRefs.has(ref))) {
+        modules.add(mod.id);
+      }
+      if (mod.role === "device" && selectedNamespaces.has(mod.namespace)) modules.add(mod.id);
     });
     return modules;
+  }
+
+  function mapLayoutModeActive() {
+    return state.layoutMode === "map" || state.layoutMode === "namespace";
+  }
+
+  function namespaceLayoutActive() {
+    return state.layoutMode === "namespace";
+  }
+
+  function effectiveContextScope() {
+    if (state.contextScope !== "auto") return state.contextScope;
+    if (state.mode === "function" && state.selectedDevices.size && !state.search) {
+      return "touchpoints";
+    }
+    return "kernel";
   }
 
   function filterLayoutEdges(edges) {
@@ -1205,7 +1275,8 @@
   }
 
   function systemLabel(mod) {
-    if (mod.role === "kernel") return `kernel/${mod.group}`;
+    if (mod.category) return mod.category;
+    if (mod.role === "kernel") return mod.group === "device" ? "kernel/device-runtime" : `kernel/${mod.group}`;
     if (mod.role === "device") return `devices/${mod.group}`;
     return `${mod.role}/${mod.group}`;
   }
@@ -1215,10 +1286,20 @@
       ...fun,
       kind: "function",
       title: fun.label,
-      subtitle: fun.module,
-      width: state.layoutMode === "map" ? 220 : 250,
-      height: state.layoutMode === "map" ? 22 : 24
+      subtitle: functionSubtitle(fun),
+      width: mapLayoutModeActive() ? 250 : 250,
+      height: mapLayoutModeActive() ? 36 : 24
     }));
+  }
+
+  function functionSubtitle(fun) {
+    if (namespaceLayoutActive() && fun.namespace) {
+      return `${fun.module} · ${fun.namespace}`;
+    }
+    if (mapLayoutModeActive()) {
+      return fun.namespace ? `${fun.module} · ${fun.namespace}` : fun.module;
+    }
+    return fun.module;
   }
 
   function moduleGraphNodes(visible) {
@@ -1226,9 +1307,11 @@
       ...mod,
       kind: "module",
       title: mod.module,
-      subtitle: `${mod.functions} functions`,
-      width: state.layoutMode === "map" ? 245 : 270,
-      height: state.layoutMode === "map" ? 42 : 44
+      subtitle: namespaceLayoutActive() && mod.namespace ?
+        `${mod.functions} functions · ${mod.namespace}` :
+        `${mod.functions} functions`,
+      width: mapLayoutModeActive() ? 260 : 270,
+      height: mapLayoutModeActive() ? 44 : 44
     }));
   }
 
@@ -1434,7 +1517,7 @@
   }
 
   function forceMapActive(nodes) {
-    return state.layoutMode === "map" && state.mode !== "system" && nodes.length > 1;
+    return mapLayoutModeActive() && state.mode !== "system" && nodes.length > 1;
   }
 
   function positionForceMapNodes(nodes, rawEdges) {
@@ -1490,7 +1573,7 @@
         node.y += node.vy;
       });
     }
-    relaxForceCollisions(simNodes, 90);
+    relaxForceCollisions(simNodes, simNodes.length > 260 ? 160 : 90);
     const placed = normalizeForceNodes(simNodes);
     return {
       nodes: placed,
@@ -1502,6 +1585,7 @@
   }
 
   function forceMapAnchors(nodes) {
+    const largeFunctionMap = state.mode === "function" && nodes.length > 360;
     const groups = groupBy(nodes, forceGroupKey)
       .map((items) => ({
         id: forceGroupKey(items[0]),
@@ -1522,8 +1606,12 @@
       const roleGroups = byRole.get(role);
       const cols = Math.max(1, Math.ceil(Math.sqrt(roleGroups.length * 1.25)));
       const rows = Math.max(1, Math.ceil(roleGroups.length / cols));
-      const xStep = state.mode === "function" ? 430 : 360;
-      const yStep = state.mode === "function" ? 300 : 250;
+      const xStep = namespaceLayoutActive() ?
+        state.mode === "function" ? 580 : 440 :
+        state.mode === "function" ? largeFunctionMap ? 660 : 430 : 360;
+      const yStep = namespaceLayoutActive() ?
+        state.mode === "function" ? 410 : 320 :
+        state.mode === "function" ? largeFunctionMap ? 460 : 300 : 250;
       roleGroups.forEach((group, idx) => {
         const col = idx % cols;
         const row = Math.floor(idx / cols);
@@ -1531,14 +1619,15 @@
         const y = (row - (rows - 1) / 2) * yStep + hashOffset(`${group.id}:y`, 46);
         groupAnchors.set(group.id, { x, y, role, group: group.group });
       });
-      xCursor += Math.max(1, cols) * xStep + 520;
+      xCursor += Math.max(1, cols) * xStep +
+        (namespaceLayoutActive() ? 660 : largeFunctionMap ? 780 : 520);
     });
     const nodeAnchors = new Map();
     groups.forEach((group) => {
       const anchor = groupAnchors.get(group.id) || { x: 0, y: 0 };
       group.items.forEach((node, idx) => {
         const angle = idx * 2.399963 + hashUnit(`${node.id}:ga`) * Math.PI;
-        const spread = state.mode === "function" ? 54 : 24;
+        const spread = state.mode === "function" ? largeFunctionMap ? 82 : 54 : 24;
         const radius = Math.sqrt(idx + 0.35) * spread;
         nodeAnchors.set(node.id, {
           x: anchor.x + Math.cos(angle) * radius,
@@ -1552,7 +1641,11 @@
   }
 
   function forceGroupKey(node) {
-    if (state.mode === "function") return node.module;
+    if (state.mode === "function") {
+      if (namespaceLayoutActive()) return `${node.namespace || node.group}:${node.module}`;
+      return node.module;
+    }
+    if (namespaceLayoutActive()) return node.namespace || `${node.role || "other"}:${node.group || "other"}`;
     return `${node.role || "other"}:${node.group || "other"}`;
   }
 
@@ -1565,19 +1658,26 @@
 
   function forceLinkDistance(edge) {
     const sameModule = edge["source-module"] && edge["source-module"] === edge["target-module"];
-    const base = state.mode === "function" ?
-      sameModule ? 172 : 360 :
-      310;
+    const base = namespaceLayoutActive() ?
+      state.mode === "function" ?
+        sameModule ? 210 : 470 :
+        380 :
+      state.mode === "function" ?
+        sameModule ? 172 : 360 :
+        310;
     return Math.max(120, base - Math.min(95, Math.log1p(edge.count || 1) * 20));
   }
 
   function forceLinkStrength(edge) {
     const sameModule = edge["source-module"] && edge["source-module"] === edge["target-module"];
     const base = state.mode === "function" && sameModule ? 0.052 : 0.034;
-    return base + Math.min(0.035, Math.log1p(edge.count || 1) * 0.006);
+    const objectiveScale = namespaceLayoutActive() ? 0.62 : 1;
+    return (base + Math.min(0.035, Math.log1p(edge.count || 1) * 0.006)) *
+      objectiveScale;
   }
 
   function forceIterationCount(count) {
+    if (count > 1500) return 90;
     if (count > 900) return 170;
     if (count > 520) return 210;
     if (count > 260) return 270;
@@ -1629,7 +1729,9 @@
 
   function applyForceAnchors(nodes, alpha) {
     nodes.forEach((node) => {
-      const strength = state.mode === "function" ? 0.012 : 0.018;
+      const strength = namespaceLayoutActive() ?
+        state.mode === "function" ? 0.03 : 0.034 :
+        state.mode === "function" ? 0.012 : 0.018;
       node.vx += (node.anchor.x - node.x) * strength * alpha;
       node.vy += (node.anchor.y - node.y) * strength * alpha;
       if (state.selected && node.id === state.selected) {
@@ -1775,9 +1877,7 @@
   }
 
   function forceMapRegions(nodes) {
-    const groups = groupBy(nodes, (node) =>
-      state.mode === "function" ? node.module : `${node.role}:${node.group}`
-    );
+    const groups = groupBy(nodes, forceRegionKey);
     return groups
       .filter((items) => items.length > 1)
       .map((items) => {
@@ -1789,37 +1889,87 @@
         const maxX = Math.max(...items.map((node) => node.x + node.width)) + padX;
         const maxY = Math.max(...items.map((node) => node.y + node.height)) + padY;
         return {
-          id: state.mode === "function" ? first.module : `${first.role}:${first.group}`,
+          id: forceRegionKey(first),
           role: first.role,
           x: minX,
           y: minY,
           width: maxX - minX,
           height: maxY - minY,
-          title: state.mode === "function" ? first.module : columnLabel(columnKey(first)),
-          subtitle: first.group,
+          title: forceRegionTitle(first),
+          subtitle: first.namespace || first.group,
           map: true
         };
       });
   }
 
+  function forceRegionKey(node) {
+    if (state.mode === "function") return node.module;
+    if (namespaceLayoutActive()) return node.namespace || `${node.role}:${node.group}`;
+    return `${node.role}:${node.group}`;
+  }
+
+  function forceRegionTitle(node) {
+    if (state.mode === "function") return node.module;
+    if (namespaceLayoutActive()) return node.namespace || columnLabel(columnKey(node));
+    return columnLabel(columnKey(node));
+  }
+
   function forceMapBands(nodes) {
-    const roles = groupBy(nodes, (node) => node.role || "other");
-    return roles
+    if (!namespaceLayoutActive()) {
+      return forceBandsForGroups(
+        groupBy(nodes, (node) => node.role || "other"),
+        (items) => forceBandLabel(items[0], items.length)
+      );
+    }
+    const roleBands = forceBandsForGroups(
+      groupBy(nodes, (node) => `role:${node.role || "other"}`),
+      (items) => roleBandLabel(items[0], items.length),
+      98
+    );
+    const namespaceBands = forceBandsForGroups(
+      groupBy(nodes, (node) => node.namespace || `${node.role || "other"}:${node.group || "other"}`),
+      (items) => namespaceBandLabel(items[0], items.length),
+      58
+    );
+    return [...roleBands, ...namespaceBands];
+  }
+
+  function forceBandsForGroups(groups, labelFun, padding = 78) {
+    return groups
       .filter((items) => items.length > 1)
       .map((items) => {
-        const role = items[0].role || "other";
-        const minX = Math.min(...items.map((node) => node.x)) - 78;
-        const minY = Math.min(...items.map((node) => node.y)) - 68;
-        const maxX = Math.max(...items.map((node) => node.x + node.width)) + 78;
-        const maxY = Math.max(...items.map((node) => node.y + node.height)) + 68;
+        const minX = Math.min(...items.map((node) => node.x)) - padding;
+        const minY = Math.min(...items.map((node) => node.y)) - Math.max(48, padding - 10);
+        const maxX = Math.max(...items.map((node) => node.x + node.width)) + padding;
+        const maxY = Math.max(...items.map((node) => node.y + node.height)) + Math.max(48, padding - 10);
         return {
           x: minX,
           y: minY,
           width: maxX - minX,
           height: maxY - minY,
-          label: role === "device" ? "loaded devices" : role === "kernel" ? "kernel subsystems" : role
+          label: labelFun(items)
         };
       });
+  }
+
+  function forceBandLabel(node, count) {
+    const role = node.role || "other";
+    if (role === "device") return `loaded devices · ${count} nodes`;
+    if (role === "kernel") return `kernel subsystems · ${count} nodes`;
+    return `${role} · ${count} nodes`;
+  }
+
+  function roleBandLabel(node, count) {
+    const role = node.role || "other";
+    if (role === "device") return `devices · ${count} nodes`;
+    if (role === "kernel") return `kernel · ${count} nodes`;
+    return `${role} · ${count} nodes`;
+  }
+
+  function namespaceBandLabel(node, count) {
+    const label = node.namespace || node.category || node.group || "namespace";
+    const noun = state.mode === "function" ? "functions" : "modules";
+    return `${label} · ${count} ${noun}`;
   }
 
   function hashNumber(value) {
@@ -1965,7 +2115,7 @@
   function columnLabel(column) {
     const parts = column.split(":");
     if (parts[1] === "device") return `devices/${parts[2]}`;
-    if (parts[1] === "kernel") return `kernel/${parts[2]}`;
+    if (parts[1] === "kernel") return parts[2] === "device" ? "kernel/device-runtime" : `kernel/${parts[2]}`;
     return `${parts[1]}/${parts[2]}`;
   }
 
@@ -2930,8 +3080,9 @@
     els.modules.textContent = nf.format(visible.modules.length);
     els.functions.textContent = nf.format(visible.functions.length);
     els.calls.textContent = nf.format(visible.edges.reduce((sum, edge) => sum + edge.count, 0));
+    const scope = effectiveContextScope();
     els.context.textContent = state.selectedDevices.size ?
-      `${state.selectedDevices.size} devices` :
+      `${state.selectedDevices.size} ${scope === "touchpoints" ? "touchpoints" : "devices"}` :
       "kernel";
     els.graphTitle.textContent = graphTitleText();
     const searchMatches = state.search ?
@@ -2939,8 +3090,9 @@
       0;
     els.graphMeta.textContent = [
       `${nf.format(state.layout.nodes.length)} visible nodes`,
-      state.layout.force ? "force map" : "",
+      state.layout.force ? layoutMetaLabel() : "",
       functionOverviewActive() ? "overview" : "",
+      state.selectedDevices.size ? contextScopeLabel() : "",
       state.search ? `${nf.format(searchMatches)} matches` : "",
       `${nf.format(state.layout.edges.length)} visible calls`,
       liveMetaText()
@@ -2953,10 +3105,25 @@
     if (state.mode === "function") {
       if (functionOverviewActive()) return "Function call graph overview";
       return state.selectedDevices.size ?
-        "Function call graph with device context" :
+        effectiveContextScope() === "touchpoints" ?
+          "Function touchpoint map" :
+          "Kernel/device function map" :
         "Function call graph";
     }
     return state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
+  }
+
+  function layoutMetaLabel() {
+    if (namespaceLayoutActive()) return "namespace map";
+    return "force map";
+  }
+
+  function contextScopeLabel() {
+    const scope = effectiveContextScope();
+    if (state.contextScope === "auto") {
+      return scope === "touchpoints" ? "auto touchpoints" : "auto kernel";
+    }
+    return scope === "touchpoints" ? "device touchpoints" : "kernel context";
   }
 
   function functionOverviewActive() {
@@ -2967,7 +3134,7 @@
   }
 
   function renderGraph() {
-    els.stage.dataset.layout = state.layout.force ? "map" : "flow";
+    els.stage.dataset.layout = state.layout.force ? state.layoutMode : "flow";
     renderBands();
     renderEdges();
     renderNodes();
@@ -3049,7 +3216,11 @@
 
   function engineSourceDetail() {
     if (!state.live.enabled) {
-      return `${nf.format(state.selectedDevices.size)} selected devices projected against the kernel`;
+      return [
+        `${nf.format(state.selectedDevices.size)} selected devices`,
+        contextScopeLabel(),
+        namespaceLayoutActive() ? "source namespaces visible" : "call-force objective"
+      ].join(" · ");
     }
     if (state.live.lastError) return state.live.lastError;
     if (state.live.mode === "recording") {
@@ -3939,9 +4110,11 @@
         badge.textContent = `+${nf.format(Math.round(liveScore))}`;
         g.append(badge);
       }
+      const hasFunctionSubtitle = node.kind === "function" && (node.lens || state.layout.force);
       const title = svgEl("text", {
         x: 9,
-        y: node.kind === "module" || node.kind === "system" ? 18 : 16
+        y: node.kind === "module" || node.kind === "system" ? 18 :
+          hasFunctionSubtitle ? 15 : 16
       });
       title.textContent = truncateText(node.title, node.width - (liveScore > 0.6 ? 56 : 18), 6.8);
       g.append(title);
@@ -3950,8 +4123,8 @@
         sub.textContent = truncateText(node.subtitle, node.width - 18, 6.2);
         g.append(sub);
       }
-      if (node.kind === "function" && node.lens) {
-        const sub = svgEl("text", { class: "subtext", x: 9, y: 27 });
+      if (hasFunctionSubtitle) {
+        const sub = svgEl("text", { class: "subtext", x: 9, y: node.lens ? 27 : 30 });
         sub.textContent = truncateText(node.subtitle, node.width - 18, 6.2);
         g.append(sub);
       }
@@ -4046,9 +4219,11 @@
       return `${node.title}\n${node.modules} modules\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
     }
     if (node.kind === "module") {
-      return `${node.id}\n${node.path}\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
+      const namespace = node.namespace ? `\n${node.namespace}` : "";
+      return `${node.id}\n${node.path}${namespace}\n${node.functions} functions${liveLine}${errorLine}${aliasLine}`;
     }
-    return `${node.id}\n${node.path}:${node.line}${liveLine}${errorLine}${aliasLine}`;
+    const namespace = node.namespace ? `\n${node.namespace}` : "";
+    return `${node.id}\n${node.path}:${node.line}${namespace}${liveLine}${errorLine}${aliasLine}`;
   }
 
   function truncateText(value, width, charWidth) {
@@ -4243,6 +4418,9 @@
     ] : state.mode === "module" ? [
       ["Role", node.role],
       ["Group", node.group],
+      ["Namespace", node.namespace || ""],
+      ["Category", node.category || ""],
+      ["Component", node["component-kind"] || ""],
       ["Functions", nf.format(node.functions)],
       ["Exports", nf.format(node.exports)],
       ["Path", node.path],
@@ -4250,6 +4428,8 @@
     ] : [
       ["Module", node.module],
       ["Group", node.group],
+      ["Namespace", node.namespace || ""],
+      ["Component", node["component-kind"] || ""],
       ["Exported", node.exported ? "yes" : "no"],
       ["Line", nf.format(node.line)],
       ["Calls out", nf.format(node["calls-out"])],
@@ -4465,7 +4645,7 @@
         functionTitle.textContent = "Functions";
         const functionList = document.createElement("div");
         functionList.className = "relation-list";
-        functions.slice(0, 80).forEach((fun) => {
+        functions.forEach((fun) => {
           const button = document.createElement("button");
           button.type = "button";
           button.textContent = fun.label;

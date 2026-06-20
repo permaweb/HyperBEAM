@@ -31,6 +31,7 @@ the script tag with id="embedded-graph".
         </div>
         <div class="segmented layout-switch" role="tablist" aria-label="Graph layout">
           <button type="button" class="active" data-layout="map">Map</button>
+          <button type="button" data-layout="namespace">Namespaces</button>
           <button type="button" data-layout="flow">Flow</button>
         </div>
       </div>
@@ -65,6 +66,11 @@ the script tag with id="embedded-graph".
         <option value="selected">Selected neighborhood</option>
         <option value="cross">Cross-module calls</option>
         <option value="strong">Repeated calls</option>
+      </select>
+      <select id="context-scope" aria-label="Context scope">
+        <option value="auto">Auto scope</option>
+        <option value="kernel">Kernel context</option>
+        <option value="touchpoints">Touchpoints</option>
       </select>
       <label class="toggle">
         <input id="show-private" type="checkbox" checked>

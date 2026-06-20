@@ -56,14 +56,27 @@ parse_modules(Root) ->
     lists:sort(fun(A, B) -> maps:get(module, A) =< maps:get(module, B) end, Parsed).
 
 erl_files(Root) ->
-    Patterns = [
-        filename:join([Root, "src", "core", "*", "*.erl"]),
-        filename:join([Root, "src", "preloaded", "*", "*.erl"]),
-        filename:join([Root, "src", "forge", "*.erl"]),
-        filename:join([Root, "src", "forge", "plugin", "src", "*.erl"])
+    Dirs = [
+        filename:join([Root, "src", "core"]),
+        filename:join([Root, "src", "preloaded"]),
+        filename:join([Root, "src", "forge"])
     ],
-    Files = lists:usort(lists:append([filelib:wildcard(P) || P <- Patterns])),
+    Files = lists:usort(lists:append([erl_files_in(Dir) || Dir <- Dirs])),
     [File || File <- Files, not excluded_file(Root, File)].
+
+erl_files_in(Dir) ->
+    case filelib:is_dir(Dir) of
+        true ->
+            filelib:fold_files(
+                Dir,
+                ".*\\.erl$",
+                true,
+                fun(File, Acc) -> [File | Acc] end,
+                []
+            );
+        false ->
+            []
+    end.
 
 excluded_file(Root, File) ->
     Rel = relpath(Root, File),
@@ -83,7 +96,9 @@ parse_module(Root, File) ->
     Exports = exports(Forms),
     Role = role(Root, File),
     Group = group(Root, File, Role),
+    SourceInfo = source_info(Root, File, Role, Group),
     Device = device_name(Module, Source, Forms, Role),
+    ComponentKind = component_kind(Role, Device),
     DeviceRefs = device_refs(Source),
     Functions = functions(Module, Exports, Forms, Lines),
     #{
@@ -92,6 +107,11 @@ parse_module(Root, File) ->
         path => unicode:characters_to_binary(relpath(Root, File)),
         role => Role,
         group => Group,
+        category => maps:get(category, SourceInfo),
+        namespace => maps:get(namespace, SourceInfo),
+        source_root => maps:get(root, SourceInfo),
+        source_dirs => maps:get(dirs, SourceInfo),
+        component_kind => ComponentKind,
         device => Device,
         device_refs => DeviceRefs,
         event_topics => module_event_topics(Functions),
@@ -392,6 +412,12 @@ function_node(Module, Fun, Counts) ->
         <<"line">> => maps:get(line, Fun),
         <<"role">> => maps:get(role, Module),
         <<"group">> => maps:get(group, Module),
+        <<"category">> => maps:get(category, Module),
+        <<"source-category">> => maps:get(category, Module),
+        <<"namespace">> => maps:get(namespace, Module),
+        <<"source-root">> => maps:get(source_root, Module),
+        <<"source-dirs">> => maps:get(source_dirs, Module),
+        <<"component-kind">> => maps:get(component_kind, Module),
         <<"device">> => maps:get(device, Module),
         <<"device-refs">> => maps:get(device_refs, Module),
         <<"events">> => maps:get(events, Fun),
@@ -430,6 +456,12 @@ module_nodes(Modules, Functions, Edges) ->
             <<"role">> => maps:get(role, Module),
             <<"group">> => maps:get(group, Module),
             <<"subsystem">> => maps:get(group, Module),
+            <<"category">> => maps:get(category, Module),
+            <<"source-category">> => maps:get(category, Module),
+            <<"namespace">> => maps:get(namespace, Module),
+            <<"source-root">> => maps:get(source_root, Module),
+            <<"source-dirs">> => maps:get(source_dirs, Module),
+            <<"component-kind">> => maps:get(component_kind, Module),
             <<"device">> => maps:get(device, Module),
             <<"device-refs">> => maps:get(device_refs, Module),
             <<"event-topics">> => maps:get(event_topics, Module),
@@ -478,7 +510,8 @@ count_module_edges(Key, Edges) ->
     ).
 
 device_nodes(Modules) ->
-    DeviceModules = [M || M <- Modules, maps:get(<<"role">>, M) =:= <<"device">>],
+    DeviceModules = [M || M <- Modules,
+        maps:get(<<"component-kind">>, M) =:= <<"device-root">>],
     DeviceIds = lists:usort([maps:get(<<"device">>, M) || M <- DeviceModules]),
     [
         device_node(Device, [M || M <- DeviceModules, maps:get(<<"device">>, M) =:= Device])
@@ -489,6 +522,8 @@ device_node(Device, Modules) ->
         <<"id">> => Device,
         <<"label">> => device_label(Device),
         <<"group">> => device_group(Modules),
+        <<"namespaces">> => lists:usort([maps:get(<<"namespace">>, M) || M <- Modules]),
+        <<"categories">> => lists:usort([maps:get(<<"category">>, M) || M <- Modules]),
         <<"modules">> => [maps:get(<<"id">>, M) || M <- Modules],
         <<"functions">> => lists:sum([maps:get(<<"functions">>, M) || M <- Modules])
     }.
@@ -517,6 +552,7 @@ group_node(Role, Group, Modules) ->
         <<"functions">> => lists:sum([maps:get(<<"functions">>, M) || M <- Modules])
     }.
 
+group_label(<<"kernel">>, <<"device">>) -> <<"kernel/device-runtime">>;
 group_label(<<"kernel">>, Group) -> <<"kernel/", Group/binary>>;
 group_label(<<"device">>, Group) -> <<"devices/", Group/binary>>;
 group_label(Role, Group) -> <<Role/binary, "/", Group/binary>>.
@@ -548,6 +584,65 @@ group(Root, File, Role) ->
         _ -> <<"other">>
     end.
 
+source_info(Root, File, Role, Group) ->
+    Rel = relpath(Root, File),
+    Parts = filename:split(Rel),
+    Dirs = source_dirs(Parts, Role),
+    DirBins = [unicode:characters_to_binary(Dir) || Dir <- Dirs],
+    #{
+        root => source_root(Role),
+        dirs => DirBins,
+        category => source_category(Role, Group),
+        namespace => source_namespace(Role, DirBins, Group)
+    }.
+
+source_dirs(["src", "core" | Rest], <<"kernel">>) ->
+    drop_filename(Rest);
+source_dirs(["src", "preloaded" | Rest], <<"device">>) ->
+    drop_filename(Rest);
+source_dirs(["src", "forge" | Rest], <<"forge">>) ->
+    drop_filename(Rest);
+source_dirs(_Parts, _Role) ->
+    [].
+
+drop_filename(Parts) ->
+    case lists:reverse(Parts) of
+        [_File | Rest] -> lists:reverse(Rest);
+        [] -> []
+    end.
+
+source_root(<<"kernel">>) -> <<"core">>;
+source_root(<<"device">>) -> <<"preloaded">>;
+source_root(<<"forge">>) -> <<"forge">>;
+source_root(_Role) -> <<"other">>.
+
+source_category(<<"kernel">>, <<"device">>) -> <<"kernel/device-runtime">>;
+source_category(<<"kernel">>, Group) -> <<"kernel/", Group/binary>>;
+source_category(<<"device">>, Group) -> <<"devices/", Group/binary>>;
+source_category(<<"forge">>, _Group) -> <<"forge">>;
+source_category(Role, Group) -> <<Role/binary, "/", Group/binary>>.
+
+source_namespace(<<"kernel">>, [<<"device">>], <<"device">>) ->
+    <<"kernel/device-runtime">>;
+source_namespace(<<"kernel">>, Dirs, Group) ->
+    path_namespace(<<"kernel">>, Dirs, Group);
+source_namespace(<<"device">>, Dirs, Group) ->
+    path_namespace(<<"devices">>, Dirs, Group);
+source_namespace(<<"forge">>, Dirs, _Group) ->
+    path_namespace(<<"forge">>, Dirs, <<"root">>);
+source_namespace(Role, Dirs, Group) ->
+    path_namespace(Role, Dirs, Group).
+
+path_namespace(Prefix, [], Group) ->
+    <<Prefix/binary, "/", Group/binary>>;
+path_namespace(Prefix, Dirs, _Group) ->
+    <<Prefix/binary, "/", (join_bin(Dirs, <<"/">>))/binary>>.
+
+join_bin([], _Sep) -> <<>>;
+join_bin([Part], _Sep) -> Part;
+join_bin([Part | Rest], Sep) ->
+    <<Part/binary, Sep/binary, (join_bin(Rest, Sep))/binary>>.
+
 device_name(Module, Source, Forms, <<"device">>) ->
     case [Device || {attribute, _, implements, Device} <- Forms, is_binary(Device)] of
         [Device | _] ->
@@ -561,6 +656,17 @@ device_name(Module, Source, Forms, <<"device">>) ->
     end;
 device_name(_Module, _Source, _Forms, _Role) ->
     <<>>.
+
+component_kind(<<"kernel">>, _Device) ->
+    <<"kernel-module">>;
+component_kind(<<"device">>, <<"support:", _Rest/binary>>) ->
+    <<"device-support">>;
+component_kind(<<"device">>, _Device) ->
+    <<"device-root">>;
+component_kind(<<"forge">>, _Device) ->
+    <<"forge-tool">>;
+component_kind(_Role, _Device) ->
+    <<"other">>.
 
 device_refs(Source) ->
     case re:run(

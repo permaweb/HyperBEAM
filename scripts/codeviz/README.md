@@ -20,11 +20,14 @@ escript scripts/codeviz/generate.escript --json-out=build/codeviz/graph.json
 ```
 
 The generator parses Erlang source under `src/core`, `src/preloaded`, and
-`src/forge`, excluding test directories. The visualizer starts with a subsystem
-map of the kernel and lets device modules from `src/preloaded` be added to the
-context. Selecting a device also includes same-group modules that reference it,
-so helper/server pieces stay visible with the root device without pulling in
-unrelated device groups.
+`src/forge`, excluding test directories. Generated nodes carry source taxonomy
+fields (`source-root`, `source-category`, `namespace`, `source-dirs`, and
+`component-kind`) so the UI can distinguish kernel modules, device roots,
+device support modules, and forge tooling. The visualizer starts with a
+subsystem map of the kernel and lets root devices from `src/preloaded` be added
+to the context. Selecting a device also includes its source-package siblings and
+support modules, while support files such as `lib_process` remain grouped with
+their package instead of becoming fake picker devices.
 
 Focused views can be opened with query parameters when served over HTTP:
 
@@ -36,14 +39,24 @@ hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=system&selected=k
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&live=demo&follow=heat&interval=1
 hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=function&layout=flow
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=module&layout=namespace
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=function&scope=kernel
+hyperbeam-codeviz.html?devices=recorder@1.0,scheduler@1.0&mode=function&scope=touchpoints
 ```
 
 Supported modes are `system`, `module`, and `function`. Module and function
-views default to a force-balanced map layout, with soft module/role regions,
+views default to a force-balanced call map, with soft module/role regions,
 curved bidirectional edge ports, collision-relaxed labels, a quieter background
 traffic layer, and in-place caller/callee highlighting when a node is selected.
-Use `layout=flow` to restore the staged column/lens layouts for narrow
-call-chain inspection. `edges=strong` filters the graph to repeated call
+Use `layout=namespace` for a source-ownership objective: outer role bands remain
+visible while inner namespace hulls group modules or functions by
+`kernel/...`, `devices/...`, and `forge/...` paths. Use `layout=flow` to restore
+the staged column/lens layouts for narrow call-chain inspection. `scope=auto`
+keeps broad function/device views readable by showing the selected device
+package and direct touchpoints, while module views keep the kernel context.
+Use `scope=kernel` to force the full kernel/device function context, or
+`scope=touchpoints` to intentionally stay compact. `edges=strong` filters the
+graph to repeated call
 relationships. The context and inspector panes can be resized with the
 recorder-style splitters around the graph.
 Caller/callee rows preserve the selected call edge when clicked, so side-list
@@ -62,10 +75,10 @@ selections also show short directed device paths when the rendered graph
 contains a route from a loaded device module into that node; clicking a path row
 paints the route on the graph and minimap. Large unsearched function views open
 as an overview, while searched function graphs stay at a readable first-fit
-scale. Function mode with selected devices uses a compact device-context graph:
-the selected device functions plus their direct kernel touchpoints are projected
-into the force map, so a device's internal flow remains readable instead of
-disappearing into the full-kernel overview.
+scale. Function nodes show their local `function/arity` label with the owning
+module and namespace attached as visible subtitle text in map layouts, while
+the full `module:function/arity` ID remains available in search, URLs, tooltips,
+and the inspector.
 
 ## Live and Recorder Overlays
 
