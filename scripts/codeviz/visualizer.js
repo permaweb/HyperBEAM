@@ -1249,6 +1249,7 @@
     els.detailEmpty.hidden = !!selected;
     els.detailView.hidden = !selected;
     if (!selected) {
+      if (state.selected) state.selected = null;
       els.selectionLabel.textContent = "No selection";
       return;
     }
