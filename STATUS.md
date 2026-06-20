@@ -62,6 +62,8 @@ Branch: `expr/visualizer`
 - Follow-pause proof: with `live=demo&follow=heat`, clicking a live heat row selected `dev_scheduler`, turned the `Follow` control off, and removed `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-manual-pauses-follow.png`.
 - Stop-live proof: clicking `Stop` from `live=demo&follow=heat` set status to `live off`, cleared Follow, and removed both `live=` and `follow=heat` from the URL. Screenshot saved to `build/codeviz/validation-stop-clears-follow.png`.
 - Recording follow proof: `recording=demo&follow=heat` kept Follow active, preserved `follow=heat` in the URL, and selected the hottest recorded node (`hb_process_sampler` in the demo sample).
+- Engine-source switcher proof: `live=demo&follow=heat` rendered the source row with `Demo` active, switching to `Recording` painted the recorder timeline with `recording=demo`, switching back restored `Demo` as active, and desktop overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-switcher.png`.
+- Engine-source mobile proof: at `390x844`, the source row showed `DEMO ENGINE FEED`, all five source buttons fit onscreen, and horizontal overflow stayed `0`. Screenshot saved to `build/codeviz/validation-engine-source-mobile-fixed.png`.
 
 ## Last Presentation Pass
 
@@ -106,9 +108,12 @@ Branch: `expr/visualizer`
 - Manual graph/engine/inspector selections now pause Follow mode so live ticks do not immediately steal focus back.
 - Stopping live mode now clears Follow mode and its URL state.
 - Recording loads now preserve Follow mode so recorded heat can auto-focus like live heat.
+- Added a graph-local engine source switcher for HyperBuddy counters, live recorder stacks, demo telemetry, recorder playback, and report imports.
+- Stacked the engine source label above full-width source controls on mobile so the active telemetry feed remains legible.
+- Routed all recorder import controls through one guarded helper so restricted browsers do not throw when opening a report picker.
 
 ## Next Work
 
 - Improve stack heat ranking and selected-node timeline affordances.
-- Add stronger UI affordances for switching between event heat, stack heat, and recording heat.
+- Add richer source-specific legends for event heat, stack heat, and recording heat.
 - Continue browser validation after each presentation pass.

@@ -34,6 +34,7 @@
     graphPanel: document.querySelector(".graph-panel"),
     stage: document.getElementById("graph-stage"),
     enginePanel: document.getElementById("engine-panel"),
+    engineSource: document.getElementById("engine-source"),
     heatPanel: document.getElementById("heat-panel"),
     tracePanel: document.getElementById("trace-panel"),
     recordingTimeline: document.getElementById("recording-timeline"),
@@ -331,7 +332,7 @@
       render();
     });
     els.liveStack.addEventListener("click", () => startLive(defaultStackEndpoint));
-    els.recordingImport.addEventListener("click", () => els.recordingFile.click());
+    els.recordingImport.addEventListener("click", openRecordingImport);
     els.recordingFile.addEventListener("change", importRecordingFile);
     els.liveDemo.addEventListener("click", () => startLive("demo"));
     els.liveStop.addEventListener("click", stopLive);
@@ -1517,6 +1518,15 @@
     state.live.samples = nextSamples;
   }
 
+  function openRecordingImport() {
+    if (typeof els.recordingFile.click === "function") {
+      els.recordingFile.click();
+      return;
+    }
+    els.recordingFile.hidden = false;
+    if (typeof els.recordingFile.focus === "function") els.recordingFile.focus();
+  }
+
   async function importRecordingFile() {
     const file = els.recordingFile.files && els.recordingFile.files[0];
     if (!file) return;
@@ -2105,15 +2115,80 @@
   }
 
   function renderTelemetryPanel() {
+    const hasSource = renderEngineSourcePanel();
     if (!state.live.enabled) {
       const hasBridge = renderBridgePanel();
-      els.enginePanel.hidden = !hasBridge;
+      els.enginePanel.hidden = !hasSource && !hasBridge;
       return;
     }
     const hasHeat = renderHeatPanel();
     const hasTraces = renderTracePanel();
     const hasTimeline = renderRecordingTimeline();
-    els.enginePanel.hidden = !hasHeat && !hasTraces && !hasTimeline;
+    els.enginePanel.hidden = !hasSource && !hasHeat && !hasTraces && !hasTimeline;
+  }
+
+  function renderEngineSourcePanel() {
+    if (!state.live.enabled && !state.selectedDevices.size) {
+      els.engineSource.replaceChildren();
+      return false;
+    }
+    const copy = document.createElement("div");
+    copy.className = "engine-source-copy";
+    const title = document.createElement("strong");
+    title.textContent = engineSourceTitle();
+    const detail = document.createElement("span");
+    detail.textContent = engineSourceDetail();
+    copy.append(title, detail);
+
+    const controls = document.createElement("div");
+    controls.className = "engine-source-controls";
+    [
+      ["events", "Events", "Stream HyperBuddy event counters", () => startLive(defaultLiveEndpoint)],
+      ["stack", "Stacks", "Poll recorder live process stacks", () => startLive(defaultStackEndpoint)],
+      ["demo", "Demo", "Run demo telemetry", () => startLive("demo")],
+      ["recording", "Recording", "Paint the demo recorder black box", () => applyRecordingReport(demoRecordingReport(), "demo")],
+      ["import", "Import", "Import a recorder HTML or JSON report", openRecordingImport]
+    ].forEach(([mode, label, titleText, action]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `engine-source-button${engineSourceActive(mode) ? " active" : ""}`;
+      button.title = titleText;
+      button.textContent = label;
+      button.addEventListener("click", action);
+      controls.appendChild(button);
+    });
+    els.engineSource.replaceChildren(copy, controls);
+    return true;
+  }
+
+  function engineSourceTitle() {
+    if (!state.live.enabled) return "Device context";
+    if (state.live.mode === "recording") return "Recorder black box";
+    if (state.live.mode === "stack") return "Live stack sampler";
+    if (state.live.mode === "demo") return "Demo engine feed";
+    return "HyperBuddy counters";
+  }
+
+  function engineSourceDetail() {
+    if (!state.live.enabled) {
+      return `${nf.format(state.selectedDevices.size)} selected devices projected against the kernel`;
+    }
+    if (state.live.lastError) return state.live.lastError;
+    if (state.live.mode === "recording") {
+      if (state.live.recordingFocus >= 0) {
+        return `${state.live.sourceName || "recording"} event ${state.live.recordingFocus + 1}`;
+      }
+      return state.live.sourceName || state.live.recordingUrl || "imported recorder report";
+    }
+    if (state.live.mode === "stack") return state.live.endpoint || defaultStackEndpoint;
+    if (state.live.mode === "demo") return "synthetic counters, traces, stack heat, and errors";
+    return state.live.endpoint || defaultLiveEndpoint;
+  }
+
+  function engineSourceActive(mode) {
+    if (mode === "import") return false;
+    if (!state.live.enabled) return false;
+    return state.live.mode === mode;
   }
 
   function renderBridgePanel() {
@@ -3008,7 +3083,7 @@
     actions.className = "action-row";
     [
       ["Live stacks", () => startLive(defaultStackEndpoint)],
-      ["Import", () => els.recordingFile.click()],
+      ["Import", openRecordingImport],
       ["Demo recording", () => applyRecordingReport(demoRecordingReport(), "demo")]
     ].forEach(([label, action]) => {
       const button = document.createElement("button");

@@ -511,6 +511,63 @@ body.resizing {
   display: none;
 }
 
+.engine-source {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+
+.engine-source-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.engine-source-copy strong,
+.engine-source-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.engine-source-copy strong {
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.engine-source-copy span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.engine-source-controls {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 0;
+  gap: 5px;
+}
+
+.engine-source-button {
+  min-height: 26px;
+  padding: 0 9px;
+  border-color: rgba(0, 0, 0, 0.09);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.engine-source-button.active {
+  border-color: rgba(0, 154, 247, 0.42);
+  background: #f3fbff;
+  color: var(--blue);
+}
+
 .graph-stage {
   position: relative;
   min-height: 530px;
@@ -1391,6 +1448,24 @@ button.ref-pill {
   .live-status,
   .live-strip input {
     grid-column: 1 / -1;
+  }
+
+  .engine-source {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .engine-source-controls {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .engine-source-button {
+    min-width: 0;
+    padding: 0 3px;
+    font-size: 9px;
   }
 
   .filters input[type="search"] {
