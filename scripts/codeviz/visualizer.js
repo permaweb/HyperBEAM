@@ -30,7 +30,9 @@
     graphMeta: document.getElementById("graph-meta"),
     graphPanel: document.querySelector(".graph-panel"),
     stage: document.getElementById("graph-stage"),
+    enginePanel: document.getElementById("engine-panel"),
     heatPanel: document.getElementById("heat-panel"),
+    tracePanel: document.getElementById("trace-panel"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
     bands: document.getElementById("bands"),
@@ -1780,25 +1782,29 @@
     renderBands();
     renderEdges();
     renderNodes();
-    renderHeatPanel();
+    renderTelemetryPanel();
     applyTransform();
+  }
+
+  function renderTelemetryPanel() {
+    const hasHeat = renderHeatPanel();
+    const hasTraces = renderTracePanel();
+    els.enginePanel.hidden = !hasHeat && !hasTraces;
   }
 
   function renderHeatPanel() {
     if (!state.live.enabled) {
-      els.heatPanel.hidden = true;
       els.heatPanel.replaceChildren();
-      return;
+      return false;
     }
     const hotNodes = state.layout.nodes
       .map((node) => ({ node, score: liveNodeScore(node), errors: liveErrorScore(node) }))
       .filter((item) => item.score > 0.6)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
+      .slice(0, 4);
     if (!hotNodes.length) {
-      els.heatPanel.hidden = true;
       els.heatPanel.replaceChildren();
-      return;
+      return false;
     }
     const title = document.createElement("div");
     title.className = "heat-title";
@@ -1823,7 +1829,43 @@
       return button;
     });
     els.heatPanel.replaceChildren(title, ...rows);
-    els.heatPanel.hidden = false;
+    return true;
+  }
+
+  function renderTracePanel() {
+    if (!state.live.enabled || !state.live.traceEdges.size) {
+      els.tracePanel.replaceChildren();
+      return false;
+    }
+    const traces = liveTraceEdges()
+      .slice()
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 4);
+    if (!traces.length) {
+      els.tracePanel.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Trace routes";
+    const rows = traces.map((edge) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "trace-row";
+      button.addEventListener("click", () => {
+        state.selected = edge.target;
+        render();
+        focusNode(edge.target);
+      });
+      const name = document.createElement("strong");
+      name.textContent = `${edge.source} -> ${edge.target}`;
+      const meta = document.createElement("span");
+      meta.textContent = `+${nf.format(Math.round(edge.count))} sampled frames`;
+      button.append(name, meta);
+      return button;
+    });
+    els.tracePanel.replaceChildren(title, ...rows);
+    return true;
   }
 
   function renderBands() {

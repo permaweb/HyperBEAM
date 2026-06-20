@@ -438,7 +438,22 @@ h3 {
 
 .graph-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.engine-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background:
+    linear-gradient(90deg, rgba(105, 86, 197, 0.08), transparent 38%),
+    linear-gradient(90deg, transparent 54%, rgba(189, 52, 66, 0.075));
+}
+
+.engine-panel[hidden] {
+  display: none;
 }
 
 .graph-stage {
@@ -458,24 +473,25 @@ h3 {
 }
 
 .heat-panel {
-  position: absolute;
-  right: 14px;
-  bottom: 14px;
-  z-index: 2;
   display: grid;
-  width: min(270px, calc(100% - 28px));
-  max-height: min(420px, calc(100% - 28px));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  max-height: 76px;
   overflow: auto;
-  gap: 6px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.08);
-  backdrop-filter: blur(8px);
+  gap: 5px;
+}
+
+.trace-panel {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  max-height: 76px;
+  overflow: auto;
+  gap: 5px;
 }
 
 .heat-title {
+  grid-column: 1 / -1;
   color: var(--muted);
   font-family: var(--mono);
   font-size: 10px;
@@ -486,10 +502,10 @@ h3 {
 .heat-row {
   display: grid;
   min-width: 0;
-  min-height: 40px;
+  min-height: 34px;
   justify-items: stretch;
   gap: 3px;
-  padding: 6px 8px;
+  padding: 5px 7px;
   text-align: left;
   border-color: rgba(105, 86, 197, 0.2);
   background: #fbfaff;
@@ -500,19 +516,35 @@ h3 {
   background: #fff7f7;
 }
 
+.trace-row {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  justify-items: stretch;
+  gap: 3px;
+  padding: 5px 7px;
+  text-align: left;
+  border-color: rgba(189, 52, 66, 0.22);
+  background: #fff8f8;
+}
+
 .heat-row strong,
-.heat-row span {
+.heat-row span,
+.trace-row strong,
+.trace-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--mono);
 }
 
-.heat-row strong {
+.heat-row strong,
+.trace-row strong {
   font-size: 11px;
 }
 
-.heat-row span {
+.heat-row span,
+.trace-row span {
   color: var(--muted);
   font-size: 10px;
 }
