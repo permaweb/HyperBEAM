@@ -38,6 +38,10 @@
     bands: document.getElementById("bands"),
     edges: document.getElementById("edges"),
     nodes: document.getElementById("nodes"),
+    minimap: document.getElementById("minimap"),
+    minimapSvg: document.getElementById("minimap-svg"),
+    minimapNodes: document.getElementById("minimap-nodes"),
+    minimapView: document.getElementById("minimap-view"),
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
     detailCard: document.getElementById("detail-card"),
@@ -80,6 +84,7 @@
     dragging: null,
     fitAfterRender: true,
     ignoreNextClick: false,
+    minimap: null,
     live: {
       enabled: false,
       mode: "off",
@@ -312,6 +317,8 @@
     els.svg.addEventListener("wheel", onWheel, { passive: false });
     els.svg.addEventListener("pointerdown", startPan);
     els.svg.addEventListener("click", clearSelectionFromBackground);
+    els.minimap.addEventListener("pointerdown", (event) => event.stopPropagation());
+    els.minimap.addEventListener("click", onMinimapClick);
     window.addEventListener("pointermove", movePan);
     window.addEventListener("pointerup", endPan);
   }
@@ -1794,6 +1801,7 @@
     renderEdges();
     renderNodes();
     renderTelemetryPanel();
+    renderMinimap();
     applyTransform();
   }
 
@@ -2429,9 +2437,79 @@
     return el;
   }
 
+  function renderMinimap() {
+    const bounds = state.layout.bounds;
+    if (!bounds || !state.layout.nodes.length) {
+      state.minimap = null;
+      els.minimap.hidden = true;
+      els.minimapNodes.replaceChildren();
+      return;
+    }
+    const width = 172;
+    const height = 116;
+    const pad = 8;
+    const scale = Math.min(
+      (width - pad * 2) / Math.max(1, bounds.width),
+      (height - pad * 2) / Math.max(1, bounds.height)
+    );
+    state.minimap = { bounds, width, height, pad, scale };
+    els.minimapSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    const fragment = document.createDocumentFragment();
+    state.layout.nodes.forEach((node) => {
+      fragment.append(svgEl("rect", {
+        class: `mini-node ${node.role || ""} ${node.kind || ""}`,
+        x: minimapX(node.x),
+        y: minimapY(node.y),
+        width: Math.max(2, node.width * scale),
+        height: Math.max(2, node.height * scale),
+        rx: 1.5
+      }));
+    });
+    els.minimapNodes.replaceChildren(fragment);
+    els.minimap.hidden = false;
+    updateMinimapView();
+  }
+
+  function updateMinimapView() {
+    if (!state.minimap) return;
+    const rect = els.stage.getBoundingClientRect();
+    const left = (0 - state.transform.x) / state.transform.scale;
+    const top = (0 - state.transform.y) / state.transform.scale;
+    const right = (rect.width - state.transform.x) / state.transform.scale;
+    const bottom = (rect.height - state.transform.y) / state.transform.scale;
+    els.minimapView.setAttribute("x", minimapX(left));
+    els.minimapView.setAttribute("y", minimapY(top));
+    els.minimapView.setAttribute("width", Math.max(4, (right - left) * state.minimap.scale));
+    els.minimapView.setAttribute("height", Math.max(4, (bottom - top) * state.minimap.scale));
+  }
+
+  function minimapX(x) {
+    return state.minimap.pad + (x - state.minimap.bounds.x) * state.minimap.scale;
+  }
+
+  function minimapY(y) {
+    return state.minimap.pad + (y - state.minimap.bounds.y) * state.minimap.scale;
+  }
+
+  function onMinimapClick(event) {
+    if (!state.minimap) return;
+    const rect = els.minimapSvg.getBoundingClientRect();
+    const x = (event.clientX - rect.left) * (state.minimap.width / rect.width);
+    const y = (event.clientY - rect.top) * (state.minimap.height / rect.height);
+    const graphX =
+      state.minimap.bounds.x + (x - state.minimap.pad) / state.minimap.scale;
+    const graphY =
+      state.minimap.bounds.y + (y - state.minimap.pad) / state.minimap.scale;
+    const stageRect = els.stage.getBoundingClientRect();
+    state.transform.x = stageRect.width / 2 - graphX * state.transform.scale;
+    state.transform.y = stageRect.height / 2 - graphY * state.transform.scale;
+    applyTransform();
+  }
+
   function applyTransform() {
     const { x, y, scale } = state.transform;
     els.viewport.setAttribute("transform", `translate(${x},${y}) scale(${scale})`);
+    updateMinimapView();
   }
 
   function showGraph() {
