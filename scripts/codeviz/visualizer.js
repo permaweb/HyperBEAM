@@ -2078,6 +2078,7 @@
       state.mode === "system" ? "Subsystem flow map" :
       state.selectedDevices.size ? "Kernel plus device context" : "Kernel call graph";
     els.graphMeta.textContent = [
+      `${nf.format(state.layout.nodes.length)} visible nodes`,
       `${nf.format(state.layout.edges.length)} visible calls`,
       liveMetaText()
     ].filter(Boolean).join(" · ");
