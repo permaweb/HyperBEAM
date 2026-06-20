@@ -725,6 +725,16 @@ body.resizing {
   gap: 5px;
 }
 
+.error-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  max-height: 76px;
+  overflow: auto;
+  gap: 5px;
+}
+
 .recording-timeline {
   grid-column: 1 / -1;
   display: flex;
@@ -838,6 +848,18 @@ body.resizing {
   background: #fff7f7;
 }
 
+.error-row {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  justify-items: stretch;
+  gap: 3px;
+  padding: 5px 7px;
+  text-align: left;
+  border-color: rgba(189, 52, 66, 0.26);
+  background: #fff4f4;
+}
+
 .event-meter {
   position: relative;
   display: block;
@@ -892,6 +914,8 @@ body.resizing {
 .trace-row span,
 .event-row strong,
 .event-row span,
+.error-row strong,
+.error-row span,
 .bridge-row strong,
 .bridge-row span {
   overflow: hidden;
@@ -903,6 +927,7 @@ body.resizing {
 .heat-row strong,
 .trace-row strong,
 .event-row strong,
+.error-row strong,
 .bridge-row strong {
   font-size: 11px;
 }
@@ -910,6 +935,7 @@ body.resizing {
 .heat-row span,
 .trace-row span,
 .event-row span,
+.error-row span,
 .bridge-row span {
   color: var(--muted);
   font-size: 10px;
@@ -1576,6 +1602,17 @@ button.ref-pill {
 
   .engine-metric strong {
     font-size: 10px;
+  }
+
+  .heat-panel,
+  .trace-panel {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    max-height: 104px;
+  }
+
+  .error-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: 116px;
   }
 
   .engine-source-button {

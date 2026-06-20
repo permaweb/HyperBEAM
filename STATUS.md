@@ -68,6 +68,7 @@ Branch: `expr/visualizer`
 - Selected recording-event proof: `recording=demo&selected=hb_ao` rendered a `Recording events` inspector row; clicking it made timeline tick `1` active, marked the row active, added `recording-event=1` to the URL, and kept overflow at `0`. Screenshot saved to `build/codeviz/validation-selected-recording-events.png`.
 - Engine metric chip proof: `live=demo&follow=heat` rendered metric chips for events, rate, streams, hot nodes, and errors with no text clipping and `0` overflow on desktop and at `390x844`. Screenshots saved to `build/codeviz/validation-engine-metric-chips.png` and `build/codeviz/validation-engine-metric-chips-mobile.png`.
 - Relation-highlight proof: after hover-neighborhood wiring, clicking `dev_scheduler_server` still produced `2` caller nodes, `11` callee nodes, `13` hot edges, and `0` overflow; the in-app browser harness did not emit hover events or expose event constructors for direct hover proof. Screenshot saved to `build/codeviz/validation-hover-relation-path.png`.
+- Error-deck proof: `recording=demo&recording-event=3` rendered `ERRORS +31`, timeline tick `3`, and `3` clickable error-heat rows (`hb_process_sampler`, `hb_event`, `hb_prometheus`) with `0` overflow; at `390x844` the error rows had no clipping or offscreen controls. Screenshots saved to `build/codeviz/validation-error-heat-deck.png` and `build/codeviz/validation-error-heat-deck-mobile.png`.
 
 ## Last Presentation Pass
 
@@ -119,6 +120,7 @@ Branch: `expr/visualizer`
 - Added selected-node recording event rows in the inspector with click-to-focus playback for the matching recorder event.
 - Added source-specific engine metric chips for event counters, stack snapshots, recorder playback, and device bridge context.
 - Added in-place hover-neighborhood relation highlighting so hovering a node temporarily lights callers/callees without changing the selected inspector target.
+- Added a dedicated error heat deck for warning/failure activity from live counters, recorder stack samples, and recorded events.
 
 ## Next Work
 

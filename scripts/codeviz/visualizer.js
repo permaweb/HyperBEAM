@@ -37,6 +37,7 @@
     engineSource: document.getElementById("engine-source"),
     heatPanel: document.getElementById("heat-panel"),
     tracePanel: document.getElementById("trace-panel"),
+    errorPanel: document.getElementById("error-panel"),
     recordingTimeline: document.getElementById("recording-timeline"),
     svg: document.getElementById("graph"),
     viewport: document.getElementById("viewport"),
@@ -2160,8 +2161,9 @@
     }
     const hasHeat = renderHeatPanel();
     const hasTraces = renderTracePanel();
+    const hasErrors = renderErrorPanel();
     const hasTimeline = renderRecordingTimeline();
-    els.enginePanel.hidden = !hasSource && !hasHeat && !hasTraces && !hasTimeline;
+    els.enginePanel.hidden = !hasSource && !hasHeat && !hasTraces && !hasErrors && !hasTimeline;
   }
 
   function renderEngineSourcePanel() {
@@ -2290,6 +2292,7 @@
     if (!state.selectedDevices.size) {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
+      els.errorPanel.replaceChildren();
       els.recordingTimeline.hidden = true;
       els.recordingTimeline.replaceChildren();
       return false;
@@ -2304,6 +2307,7 @@
     if (!bridges.length && !touchpoints.length) {
       els.heatPanel.replaceChildren();
       els.tracePanel.replaceChildren();
+      els.errorPanel.replaceChildren();
       els.recordingTimeline.hidden = true;
       els.recordingTimeline.replaceChildren();
       return false;
@@ -2497,6 +2501,42 @@
       return button;
     });
     els.heatPanel.replaceChildren(title, ...rows);
+    return true;
+  }
+
+  function renderErrorPanel() {
+    if (!state.live.enabled) {
+      els.errorPanel.replaceChildren();
+      return false;
+    }
+    const errorNodes = state.layout.nodes
+      .map((node) => ({ node, score: liveErrorScore(node) }))
+      .filter((item) => item.score > 0.6)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 4);
+    if (!errorNodes.length) {
+      els.errorPanel.replaceChildren();
+      return false;
+    }
+    const title = document.createElement("div");
+    title.className = "heat-title";
+    title.textContent = "Error heat";
+    const rows = errorNodes.map(({ node, score }) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "error-row";
+      button.title = `${node.id} (+${nf.format(Math.round(score))} error heat)`;
+      button.addEventListener("click", () => {
+        selectNode(node.id, { manual: true });
+      });
+      const name = document.createElement("strong");
+      name.textContent = node.title || node.id;
+      const meta = document.createElement("span");
+      meta.textContent = `+${nf.format(Math.round(score))} · ${node.kind}`;
+      button.append(name, meta);
+      return button;
+    });
+    els.errorPanel.replaceChildren(title, ...rows);
     return true;
   }
 
