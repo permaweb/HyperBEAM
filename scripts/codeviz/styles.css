@@ -1198,6 +1198,11 @@ button.ref-pill {
   font-size: 10px;
 }
 
+.stack-row span.stack-path {
+  color: var(--red);
+  opacity: 0.74;
+}
+
 .event-sample-row .event-meter {
   margin-top: 6px;
 }

@@ -1448,6 +1448,9 @@
         pid,
         entry: proc.entry || "unknown",
         current: frameLabel(proc.current),
+        stack: [proc.current, ...(Array.isArray(proc.stack) ? proc.stack.slice(0, 12) : [])]
+          .filter(Boolean)
+          .map(frameLabel),
         status: proc.status || "unknown",
         reductions: delta,
         queue: Number(proc["message-queue-len"] || 0)
@@ -1591,6 +1594,7 @@
       pid: `event ${event.sequence || idx + 1}`,
       entry: `${event.topic || "recording"}/${event.name || "event"}`,
       current: frames.length ? frameLabel(frames[0]) : recordingEventLabel(event),
+      stack: frames.map(frameLabel),
       status: "recorded",
       reductions: 1,
       queue: 0
@@ -2848,7 +2852,16 @@
         const meta = document.createElement("span");
         meta.textContent =
           `${sample.pid} · ${sample.status} · +${nf.format(Math.round(sample.reductions))} reductions`;
+        if (Array.isArray(sample.stack) && sample.stack.length > 1) {
+          row.title = sample.stack.join("\n");
+        }
         row.append(current, meta);
+        if (Array.isArray(sample.stack) && sample.stack.length > 1) {
+          const path = document.createElement("span");
+          path.className = "stack-path";
+          path.textContent = sample.stack.slice(0, 6).join(" <- ");
+          row.append(path);
+        }
         stackList.append(row);
       });
       stackSection.append(stackTitle, stackList);

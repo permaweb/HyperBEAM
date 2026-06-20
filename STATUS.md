@@ -53,6 +53,7 @@ Branch: `expr/visualizer`
 - Recording playback proof: `recording=demo` timeline now has a `Play` control; clicking it moved from aggregate `All` into a numbered event with `Pause` active and then returned to `All` with `Play` restored after replay. Screenshot saved to `build/codeviz/validation-recording-playback.png`.
 - Workspace splitter proof: dragging the context splitter widened the context pane from `300px` to `364px` and kept page overflow at `0`; dragging the inspector splitter widened the detail pane from `340px` to `398px` and kept page overflow at `0`. Screenshot saved to `build/codeviz/validation-workspace-splitter.png`.
 - Splitter mobile proof: at `390x844`, the workspace splitters were hidden, page overflow stayed `0`, and no controls/panels were offscreen. Screenshot saved to `build/codeviz/validation-splitter-mobile.png`.
+- Stack-path row proof: `recording=demo&selected=hb_ao` rendered a stack row path `hb_message:commit/3 <- hb_ao:resolve/3 <- dev_recorder:record/3` and preserved the full newline stack in the row title. Screenshot saved to `build/codeviz/validation-stack-path-rows.png`.
 
 ## Last Presentation Pass
 
@@ -89,6 +90,7 @@ Branch: `expr/visualizer`
 - Renamed live inspector metrics to numeric `Live heat` / `Error heat` labels for clearer engine-view telemetry.
 - Added recorder timeline playback so imported or demo recordings can repaint their stack traces event-by-event.
 - Added recorder-style draggable workspace splitters for resizing the context, graph, and inspector panes.
+- Added compact stack-path trails to live/recorded inspector stack rows.
 
 ## Next Work
 
