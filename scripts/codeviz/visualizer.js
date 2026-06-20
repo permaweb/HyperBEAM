@@ -487,6 +487,14 @@
     });
   }
 
+  function selectNode(id, options = {}) {
+    if (options.manual) state.live.follow = false;
+    state.selected = id;
+    render();
+    focusNode(id);
+    if (options.showGraph) showGraph();
+  }
+
   function syncUrl() {
     const params = new URLSearchParams();
     params.set("mode", state.mode);
@@ -2130,9 +2138,7 @@
       button.type = "button";
       button.className = "bridge-row";
       button.addEventListener("click", () => {
-        state.selected = edge.target;
-        render();
-        focusNode(edge.target);
+        selectNode(edge.target, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = `${edge.source} -> ${edge.target}`;
@@ -2153,9 +2159,7 @@
       button.type = "button";
       button.className = "bridge-row touchpoint";
       button.addEventListener("click", () => {
-        state.selected = node.id;
-        render();
-        focusNode(node.id);
+        selectNode(node.id, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = node.title || node.id;
@@ -2296,9 +2300,7 @@
       button.type = "button";
       button.className = errors > 0.6 ? "heat-row error" : "heat-row";
       button.addEventListener("click", () => {
-        state.selected = node.id;
-        render();
-        focusNode(node.id);
+        selectNode(node.id, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = node.title || node.id;
@@ -2333,9 +2335,7 @@
       button.type = "button";
       button.className = "trace-row";
       button.addEventListener("click", () => {
-        state.selected = edge.target;
-        render();
-        focusNode(edge.target);
+        selectNode(edge.target, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = `${edge.source} -> ${edge.target}`;
@@ -2370,9 +2370,7 @@
       button.addEventListener("click", () => {
         const target = liveEventTarget(key);
         if (!target) return;
-        state.selected = target;
-        render();
-        focusNode(target);
+        selectNode(target, { manual: true });
       });
       const name = document.createElement("strong");
       name.textContent = key;
@@ -2553,9 +2551,7 @@
       g.dataset.id = node.id;
       g.addEventListener("click", (event) => {
         event.stopPropagation();
-        state.selected = node.id;
-        render();
-        focusNode(node.id);
+        selectNode(node.id, { manual: true });
       });
       const tooltip = svgEl("title");
       tooltip.textContent = nodeTooltip(node);
@@ -2836,10 +2832,7 @@
         row.title = event.key;
         if (target) {
           row.addEventListener("click", () => {
-            state.selected = target;
-            render();
-            focusNode(target);
-            showGraph();
+            selectNode(target, { manual: true, showGraph: true });
           });
         }
         const name = document.createElement("strong");
@@ -2873,10 +2866,7 @@
         row.disabled = !target;
         if (target) {
           row.addEventListener("click", () => {
-            state.selected = target;
-            render();
-            focusNode(target);
-            showGraph();
+            selectNode(target, { manual: true, showGraph: true });
           });
         }
         const current = document.createElement("strong");
@@ -2930,12 +2920,9 @@
           button.textContent = fun.label;
           if (fun.exported) button.classList.add("exported");
           button.addEventListener("click", () => {
-          activateMode("function");
-          state.selected = fun.id;
-          render();
-          focusNode(fun.id);
-          showGraph();
-        });
+            activateMode("function");
+            selectNode(fun.id, { manual: true, showGraph: true });
+          });
           functionList.append(button);
         });
         functionSection.append(functionTitle, functionList);
@@ -2955,10 +2942,7 @@
         button.textContent = moduleId;
         button.addEventListener("click", () => {
           activateMode("module");
-          state.selected = moduleId;
-          render();
-          focusNode(moduleId);
-          showGraph();
+          selectNode(moduleId, { manual: true, showGraph: true });
         });
         moduleList.append(button);
       });
@@ -3046,10 +3030,7 @@
         button.type = "button";
         button.textContent = `${rel.id} · ${nf.format(rel.edge.count || 1)}`;
         button.addEventListener("click", () => {
-          state.selected = rel.id;
-          render();
-          focusNode(rel.id);
-          showGraph();
+          selectNode(rel.id, { manual: true, showGraph: true });
         });
         return button;
       });
