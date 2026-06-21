@@ -104,6 +104,7 @@
     selected: null,
     detailTab: "scope",
     relationFocus: null,
+    groupFocus: null,
     selectedEdge: null,
     selectedPath: [],
     hovered: null,
@@ -140,7 +141,7 @@
       previousRates: new Map(),
       rateChanges: new Map(),
       rateActivity: new Map(),
-      rateMode: false,
+      rateMode: true,
       eventHistory: new Map(),
       eventTick: 0,
       lastCounterAt: 0,
@@ -309,6 +310,9 @@
     }
     if (params.get("follow") === "heat") state.live.follow = true;
     if (params.get("pulse") === "rate") state.live.rateMode = true;
+    if (["event", "events", "activity"].includes(params.get("pulse"))) {
+      state.live.rateMode = false;
+    }
     if (["scope", "inspector", "engine"].includes(params.get("panel"))) {
       state.detailTab = params.get("panel");
     }
@@ -364,6 +368,7 @@
         activateMode(button.dataset.mode);
         state.selected = null;
         state.relationFocus = null;
+        state.groupFocus = null;
         state.selectedEdge = null;
         state.selectedPath = [];
         requestFit();
@@ -374,6 +379,7 @@
       button.addEventListener("click", () => {
         activateLayout(button.dataset.layout);
         state.relationFocus = null;
+        state.groupFocus = null;
         state.selectedEdge = null;
         state.selectedPath = [];
         requestFit();
@@ -438,6 +444,7 @@
         const target = heatFollowTarget();
         if (target) {
           state.selected = target;
+          state.groupFocus = null;
           state.focusAfterRender = target;
         } else {
           requestFit();
@@ -458,6 +465,7 @@
       state.selectedDevices.clear();
       state.selected = null;
       state.relationFocus = null;
+      state.groupFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       requestFit();
@@ -467,6 +475,11 @@
     });
     els.allDevices.addEventListener("click", () => {
       graph.devices.forEach((device) => state.selectedDevices.add(device.id));
+      state.selected = null;
+      state.relationFocus = null;
+      state.groupFocus = null;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       requestFit();
       renderDevices();
       render();
@@ -535,6 +548,11 @@
             state.selectedDevices.add(device.id);
           }
         });
+        state.selected = null;
+        state.relationFocus = null;
+        state.groupFocus = null;
+        state.selectedEdge = null;
+        state.selectedPath = [];
         requestFit();
         renderGroupChips();
         renderDevices();
@@ -605,6 +623,11 @@
       } else {
         state.selectedDevices.delete(device.id);
       }
+      state.selected = null;
+      state.relationFocus = null;
+      state.groupFocus = null;
+      state.selectedEdge = null;
+      state.selectedPath = [];
       requestFit();
       renderDevices();
       render();
@@ -630,11 +653,13 @@
     if (followTarget && followTarget !== state.selected) {
       state.selected = followTarget;
       state.relationFocus = null;
+      state.groupFocus = null;
       state.focusAfterRender = followTarget;
     }
     const visible = visibleData();
     state.visible = visible;
     state.layout = layout(visible);
+    pruneGroupFocusToLayout();
     if (state.hovered && !state.layout.nodes.some((node) => node.id === state.hovered)) {
       state.hovered = null;
     }
@@ -695,6 +720,7 @@
     state.detailTab = "inspector";
     syncDetailTabs();
     state.relationFocus = options.relationFocus ? id : null;
+    state.groupFocus = null;
     state.selectedEdge = options.edge || null;
     state.selectedPath = options.path || [];
     state.hovered = null;
@@ -712,6 +738,7 @@
     state.live.follow = false;
     state.selected = null;
     state.relationFocus = null;
+    state.groupFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     state.hovered = null;
@@ -728,6 +755,69 @@
     applyRelationClasses();
     renderInspector();
     syncUrl();
+  }
+
+  function selectGroupFrame(frame, options = {}) {
+    const nodeIds = groupFrameNodeIds(frame);
+    if (state.mode !== "module" || !nodeIds.length) return;
+    if (options.manual) state.live.follow = false;
+    const id = groupFrameKey(frame);
+    if (state.groupFocus && state.groupFocus.id === id) {
+      clearSelectedNode();
+      return;
+    }
+    state.selected = null;
+    state.relationFocus = null;
+    state.selectedEdge = null;
+    state.selectedPath = [];
+    state.hovered = null;
+    state.detailTab = "scope";
+    state.groupFocus = {
+      id,
+      title: frame.title || frame.label || frame.id || "Selection",
+      subtitle: frame.subtitle || "",
+      nodeIds,
+      nodeSet: new Set(nodeIds)
+    };
+    refreshSelectionState();
+  }
+
+  function groupFrameNodeIds(frame) {
+    if (Array.isArray(frame.nodeIds)) return frame.nodeIds.filter((id) => layoutHasNode(id));
+    if (frame.id && layoutHasNode(frame.id)) return [frame.id];
+    return [];
+  }
+
+  function groupFrameKey(frame) {
+    return `${frame.id || frame.title || frame.label}:${(frame.nodeIds || []).join(",")}`;
+  }
+
+  function groupFrameIsSelected(frame) {
+    return !!state.groupFocus && state.groupFocus.id === groupFrameKey(frame);
+  }
+
+  function groupFocusHasNode(id) {
+    return !!state.groupFocus && state.groupFocus.nodeSet.has(id);
+  }
+
+  function groupFocusHasEdge(edge) {
+    return !!state.groupFocus && (
+      groupFocusHasNode(edge.source) ||
+      groupFocusHasNode(edge.target)
+    );
+  }
+
+  function pruneGroupFocusToLayout() {
+    if (!state.groupFocus) return;
+    const visible = state.groupFocus.nodeIds.filter((id) => layoutHasNode(id));
+    if (!visible.length) {
+      state.groupFocus = null;
+      return;
+    }
+    if (visible.length !== state.groupFocus.nodeIds.length) {
+      state.groupFocus.nodeIds = visible;
+      state.groupFocus.nodeSet = new Set(visible);
+    }
   }
 
   function setHoveredNode(id) {
@@ -764,7 +854,7 @@
       }
     }
     if (state.live.enabled && state.live.follow) params.set("follow", "heat");
-    if (state.live.rateMode) params.set("pulse", "rate");
+    if (!state.live.rateMode) params.set("pulse", "events");
     if (state.detailTab !== "inspector") params.set("panel", state.detailTab);
     if (state.live.mode === "recording" && state.live.sourceName === "demo") {
       params.set("recording", "demo");
@@ -1492,7 +1582,8 @@
         y: 16,
         width,
         height,
-        label: roleLabels[role] || role
+        label: roleLabels[role] || role,
+        nodeIds: columnNodes.map((node) => node.id)
       });
       maxY = Math.max(maxY, height + 24);
       xCursor += width + roleGap;
@@ -1560,7 +1651,8 @@
           width: 292,
           height: frameHeight,
           title: moduleId,
-          subtitle: module.group
+          subtitle: module.group,
+          nodeIds: moduleNodes.map((node) => node.id)
         });
         moduleNodes.forEach((node, idx) => {
           placed.push({
@@ -1581,7 +1673,7 @@
       width: Math.max(680, columns.length * 330 + 40),
       height: Math.max(520, maxY + 40)
     };
-    return { nodes: placed, modules: bands, bands: columnBands(columns, maxY), bounds };
+    return { nodes: placed, modules: bands, bands: columnBands(columns, maxY, columnMap), bounds };
   }
 
   function positionFunctionNodes(nodes, edges) {
@@ -1631,7 +1723,8 @@
         y: 12,
         width: column.width + 24,
         height: bandHeight,
-        label: columnLabel(column.column)
+        label: columnLabel(column.column),
+        nodeIds: column.groups.flatMap((group) => group.nodes.map((node) => node.id))
       });
       maxY = Math.max(maxY, bandHeight);
       x += column.width + 42;
@@ -2040,6 +2133,7 @@
           height: maxY - minY,
           title: forceRegionTitle(first),
           subtitle: first.namespace || first.group,
+          nodeIds: items.map((node) => node.id),
           map: true
         };
       });
@@ -2086,11 +2180,13 @@
         const maxX = Math.max(...items.map((node) => node.x + node.width)) + padding;
         const maxY = Math.max(...items.map((node) => node.y + node.height)) + Math.max(48, padding - 10);
         return {
+          id: labelFun(items),
           x: minX,
           y: minY,
           width: maxX - minX,
           height: maxY - minY,
-          label: labelFun(items)
+          label: labelFun(items),
+          nodeIds: items.map((node) => node.id)
         };
       });
   }
@@ -2168,7 +2264,8 @@
         id: moduleId,
         role: module.role,
         title: moduleId,
-        subtitle: module.group
+        subtitle: module.group,
+        nodeIds: moduleNodes.map((node) => node.id)
       }
     };
   }
@@ -2245,13 +2342,14 @@
       .localeCompare(`${b.module || b.id}:${b.line || 0}:${b.label || b.id}`);
   }
 
-  function columnBands(columns, maxY) {
+  function columnBands(columns, maxY, columnMap) {
     return columns.map((column, idx) => ({
       x: 12 + idx * 330,
       y: 12,
       width: 306,
       height: Math.max(500, maxY),
-      label: columnLabel(column)
+      label: columnLabel(column),
+      nodeIds: (columnMap.get(column) || []).map((node) => node.id)
     }));
   }
 
@@ -3691,6 +3789,7 @@
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
       state.relationFocus = null;
+      state.groupFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
@@ -3758,6 +3857,7 @@
       stopRecordingPlayback(false);
       state.live.recordingFocus = -1;
       state.relationFocus = null;
+      state.groupFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
       paintRecordingEntries(recordingEntries(state.live.recordingEvents));
@@ -3771,6 +3871,7 @@
     const event = state.live.recordingEvents[idx];
     if (!event) return;
     state.relationFocus = null;
+    state.groupFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     state.live.recordingFocus = idx;
@@ -4176,6 +4277,7 @@
     const fragment = document.createDocumentFragment();
     state.layout.bands.forEach((band) => {
       const g = svgEl("g", { class: "band" });
+      decorateGroupFrame(g, band);
       g.append(svgEl("rect", {
         x: band.x,
         y: band.y,
@@ -4191,6 +4293,7 @@
     state.layout.modules.forEach((mod) => {
       const g = svgEl("g", { class: `module-frame ${mod.role}${mod.map ? " map-region" : ""}` });
       g.dataset.id = mod.id;
+      decorateGroupFrame(g, mod);
       if (!mod.map && isDimmed(mod.id)) g.classList.add("dim");
       g.append(svgEl("rect", {
         x: mod.x,
@@ -4205,6 +4308,19 @@
       fragment.append(g);
     });
     els.bands.replaceChildren(fragment);
+  }
+
+  function decorateGroupFrame(el, frame) {
+    const nodeIds = groupFrameNodeIds(frame);
+    if (frame.id) el.dataset.id = frame.id;
+    el.dataset.groupKey = groupFrameKey(frame);
+    if (!nodeIds.length || state.mode !== "module") return;
+    el.classList.add("selectable");
+    el.classList.toggle("selected-group", groupFrameIsSelected(frame));
+    el.addEventListener("click", (event) => {
+      event.stopPropagation();
+      selectGroupFrame(frame, { manual: true });
+    });
   }
 
   function renderEdges() {
@@ -4231,6 +4347,7 @@
     if (followTarget && followTarget !== state.selected) {
       state.selected = followTarget;
       state.relationFocus = null;
+      state.groupFocus = null;
       state.focusAfterRender = followTarget;
       render();
       perfProbe.lastLiveFrameMs = performance.now() - started;
@@ -4377,7 +4494,8 @@
     const liveScore = state.live.rateMode ? 0 : cachedLiveEdgeScore(edge, scores);
     const liveHot = liveScore > 7;
     const liveWarm = liveScore > 0.6;
-    const highlighted = incoming || outgoing || selected || path || liveWarm || liveHot;
+    const groupHighlighted = groupFocusHasEdge(edge);
+    const highlighted = incoming || outgoing || selected || path || liveWarm || liveHot || groupHighlighted;
     if (highlightPass && !highlighted) return null;
     const force = state.layout.force;
     const baseAlpha = force ? 0.34 : Number(edgeOpacity(edge));
@@ -4387,9 +4505,11 @@
           "rgba(0, 0, 0, 0.09)" :
           "rgba(0, 0, 0, 0.18)",
         width: edgeWidth(edge),
-        alpha: focus && !incoming && !outgoing ? 0.055 : baseAlpha,
+        alpha: (focus && !incoming && !outgoing) || (state.groupFocus && !groupHighlighted) ?
+          0.055 :
+          baseAlpha,
         dash: state.mode === "system" && edge.sourceNode.role === edge.targetNode.role ? [4, 5] : null,
-        arrow: !force && !focus && state.layout.edges.length < 900
+        arrow: !force && !focus && !state.groupFocus && state.layout.edges.length < 900
       };
     }
     if (selected) {
@@ -4421,6 +4541,15 @@
         color: "rgba(178, 98, 20, 0.9)",
         width: edgeWidth(edge) + 1.2,
         alpha: 0.96,
+        arrow: true
+      };
+    }
+    if (groupHighlighted) {
+      const internal = groupFocusHasNode(edge.source) && groupFocusHasNode(edge.target);
+      return {
+        color: internal ? "rgba(19, 138, 109, 0.82)" : "rgba(0, 154, 247, 0.74)",
+        width: edgeWidth(edge) + (internal ? 1 : 0.65),
+        alpha: internal ? 0.88 : 0.68,
         arrow: true
       };
     }
@@ -4607,6 +4736,7 @@
   }
 
   function nodeOccludesCanvas(node) {
+    if (state.groupFocus) return groupFocusHasNode(node.id);
     if (!relationFocusId() && !state.selectedEdge && !selectedPathHasNode(node.id)) return true;
     if (node.id === state.selected || node.id === relationFocusId()) return true;
     if (isCaller(node.id) || isCallee(node.id) || selectedPathHasNode(node.id)) return true;
@@ -4863,22 +4993,30 @@
       const id = el.dataset.id;
       el.classList.toggle("hovered", state.hovered === id);
       el.classList.toggle("selected", state.selected === id);
+      el.classList.toggle("group-selected", groupFocusHasNode(id));
       el.classList.toggle("caller", isCaller(id));
       el.classList.toggle("callee", isCallee(id));
       el.classList.toggle("dim", isDimmed(id));
       el.classList.toggle("path-node", selectedPathHasNode(id));
     });
     els.bands.querySelectorAll(".module-frame").forEach((el) => {
-      el.classList.toggle("dim", isDimmed(el.dataset.id));
+      const selectedGroup = !!state.groupFocus && state.groupFocus.id === el.dataset.groupKey;
+      el.classList.toggle("dim", !selectedGroup && isDimmed(el.dataset.id));
+    });
+    els.bands.querySelectorAll(".band.selectable, .module-frame.selectable").forEach((el) => {
+      const id = el.dataset.groupKey || el.dataset.id;
+      el.classList.toggle("selected-group", !!state.groupFocus && state.groupFocus.id === id);
     });
     els.edges.querySelectorAll(".edge:not(.trace)").forEach((el) => {
       const focus = relationFocusId();
       const outgoing = !!focus && el.dataset.source === focus;
       const incoming = !!focus && el.dataset.target === focus;
+      const groupHot = !!state.groupFocus &&
+        (groupFocusHasNode(el.dataset.source) || groupFocusHasNode(el.dataset.target));
       el.classList.toggle("outgoing", outgoing);
       el.classList.toggle("incoming", incoming);
-      el.classList.toggle("hot", outgoing || incoming);
-      el.classList.toggle("dim", !!focus && !outgoing && !incoming);
+      el.classList.toggle("hot", outgoing || incoming || groupHot);
+      el.classList.toggle("dim", (!!focus && !outgoing && !incoming) || (!!state.groupFocus && !groupHot));
     });
     scheduleEdgeCanvasDraw();
   }
@@ -4889,6 +5027,7 @@
     if (nodeMatchesSearch(node)) classes.push("search-match");
     if (state.selected === node.id) classes.push("selected");
     if (state.hovered === node.id) classes.push("hovered");
+    if (groupFocusHasNode(node.id)) classes.push("group-selected");
     if (isCaller(node.id)) classes.push("caller");
     if (isCallee(node.id)) classes.push("callee");
     if (isDimmed(node.id)) classes.push("dim");
@@ -4972,6 +5111,8 @@
     if (focus && edge.source !== focus && edge.target !== focus) {
       classes.push("dim");
     }
+    if (groupFocusHasEdge(edge)) classes.push("hot");
+    if (state.groupFocus && !groupFocusHasEdge(edge)) classes.push("dim");
     const liveScore = liveEdgeScore(edge);
     if (!state.live.rateMode && liveScore > 7) classes.push("live-hot");
     else if (!state.live.rateMode && liveScore > 0.6) classes.push("live-warm");
@@ -5114,6 +5255,7 @@
   }
 
   function isDimmed(id) {
+    if (state.groupFocus) return !groupFocusHasNode(id);
     const focus = relationFocusId();
     if (!focus || id === state.selected) return false;
     return id !== focus && !isCaller(id) && !isCallee(id);
@@ -5128,7 +5270,9 @@
       state.relationFocus = null;
       state.selectedEdge = null;
       state.selectedPath = [];
-      els.selectionLabel.textContent = "No selection";
+      els.selectionLabel.textContent = state.groupFocus ?
+        state.groupFocus.title :
+        "No selection";
       els.detailCard.replaceChildren();
       els.callers.replaceChildren();
       els.callees.replaceChildren();
@@ -5553,6 +5697,7 @@
       row.addEventListener("click", () => {
         state.live.follow = false;
         state.relationFocus = null;
+        state.groupFocus = null;
         state.selectedPath = path.ids;
         render();
         focusNode(path.ids[path.ids.length - 1]);
@@ -6001,15 +6146,17 @@
       });
       return;
     }
-    if (!state.selected && !state.hovered && !state.relationFocus) return;
+    if (!state.selected && !state.hovered && !state.relationFocus && !state.groupFocus) return;
     state.hovered = null;
     if (!state.selected) {
       state.relationFocus = null;
-      applyRelationClasses();
+      state.groupFocus = null;
+      refreshSelectionState();
       return;
     }
     state.selected = null;
     state.relationFocus = null;
+    state.groupFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
     state.detailTab = "scope";

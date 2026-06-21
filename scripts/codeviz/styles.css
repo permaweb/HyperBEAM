@@ -1322,6 +1322,24 @@ svg {
   text-transform: uppercase;
 }
 
+.band.selectable,
+.module-frame.selectable {
+  cursor: pointer;
+}
+
+.band.selectable:hover rect,
+.band.selected-group rect,
+.module-frame.selectable:hover rect,
+.module-frame.selected-group rect {
+  stroke: rgba(19, 138, 109, 0.54);
+  stroke-width: 2;
+}
+
+.band.selected-group text,
+.module-frame.selected-group text {
+  fill: rgba(19, 138, 109, 0.86);
+}
+
 .edge {
   fill: none;
   stroke: rgba(0, 0, 0, 0.16);
@@ -1573,6 +1591,20 @@ svg {
 }
 
 .node.search-match text {
+  font-weight: 800;
+}
+
+.node.group-selected {
+  opacity: 1;
+}
+
+.node.group-selected rect {
+  stroke: rgba(19, 138, 109, 0.76);
+  stroke-width: 2.2;
+  filter: drop-shadow(0 0 14px rgba(19, 138, 109, 0.16));
+}
+
+.node.group-selected text {
   font-weight: 800;
 }
 
