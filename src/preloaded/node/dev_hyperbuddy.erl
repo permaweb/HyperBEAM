@@ -116,12 +116,10 @@ format(Base, Req, Opts) ->
         end,
     MsgLoaded = hb_cache:ensure_all_loaded(MsgBeforeLoad, Opts),
     TruncateKeys =
-        hb_maps:get(
-            <<"truncate-keys">>,
-            Req,
-            hb_opts:get(debug_print_truncate, infinity, Opts),
-            Opts
-        ),
+        case hb_maps:get(<<"truncate-keys">>, Req, infinity, Opts) of
+            infinity -> infinity;
+            Value -> hb_util:int(Value)
+        end,
     ?event(debug_format, {using_truncation, TruncateKeys}),
     {ok,
         #{
