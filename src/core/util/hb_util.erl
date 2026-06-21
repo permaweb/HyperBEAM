@@ -279,14 +279,24 @@ human_int(Int) ->
 add_commas([A,B,C,Z|Rest]) -> [A,B,C,$,|add_commas([Z|Rest])];
 add_commas(List) -> List.
 
-%% @doc Encode a binary to URL safe base64 binary string.
-encode(Bin) ->
-    b64rs:encode(Bin).
+%% @doc Encode a binary or iolist to URL safe base64 binary string.
+encode(Bin) when is_binary(Bin) ->
+    b64veryfast:encode64_url(Bin);
+encode(List) when is_list(List) ->
+    b64veryfast:encode64_url(iolist_to_binary(List));
+encode(_) ->
+    error(badarg).
 
-%% @doc Try to decode a URL safe base64 into a binary or throw an error when
-%% invalid.
-decode(Input) ->
-    b64rs:decode(Input).
+%% @doc Decode a URL safe base64 binary or iolist into a binary. Uses the
+%% unchecked decoder: the input is assumed to be valid base64url (as produced
+%% by `encode/1'), so malformed input yields garbage rather than reliably
+%% raising.
+decode(Bin) when is_binary(Bin) ->
+    b64veryfast:decode64_url_unchecked(Bin);
+decode(List) when is_list(List) ->
+    b64veryfast:decode64_url_unchecked(iolist_to_binary(List));
+decode(_) ->
+    error(badarg).
 
 %% @doc Decode an HTTP structured field value by AO-Core structured type.
 decode(Type, Value) when is_list(Type) ->
