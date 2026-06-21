@@ -393,7 +393,7 @@ list(_Base, _Request, Opts) ->
 
 %% @doc Sign a message with a wallet.
 commit(Base, Request, Opts) ->
-    ?event({commit_invoked, {base, Base}, {priv_request, Request}}),
+    ?event({commit_invoked, {priv_base, Base}, {priv_request, Request}}),
     case request_to_wallets(Base, Request, Opts) of
         [] -> {error, <<"No wallets found to sign with.">>};
         WalletDetailsList ->
@@ -409,7 +409,7 @@ commit(Base, Request, Opts) ->
                     fun(WalletDetails, Acc) ->
                         ?event(
                             {invoking_commit_message,
-                                {message, Acc},
+                                {priv_message, Acc},
                                 {priv_wallet, WalletDetails}
                             }
                         ),
@@ -425,7 +425,7 @@ commit(Base, Request, Opts) ->
 %% of access rights for the wallets before returning them.
 request_to_wallets(Base, Request, Opts) ->
     % Get the wallet references or keys from the request or cookie.
-    ?event({request_to_wallets, {base, Base}, {priv_request, Request}}),
+    ?event({request_to_wallets, {priv_base, Base}, {priv_request, Request}}),
     Keys =
         hb_ao:get_first(
             [
@@ -571,7 +571,7 @@ commit_message(Message, NonMap, Opts) when not is_map(NonMap) ->
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) when is_binary(Key) ->
     commit_message(Message, ar_wallet:from_json(Key), Opts);
 commit_message(Message, #{ <<"wallet">> := Key }, Opts) ->
-    ?event({committing_with_proxy, {message, Message}, {priv_wallet, Key}}),
+    ?event({committing_with_proxy, {priv_message, Message}, {priv_wallet, Key}}),
     hb_message:commit(Message, Opts#{ <<"priv-wallet">> => Key }).
 
 %% @doc Export wallets from a request. The request should contain a source of
@@ -586,7 +586,7 @@ export(Base, Request, Opts) ->
                 Request#{ <<"keyids">> => AllLocalWallets };
             _ -> Request
         end,
-    ?event({export, {base, Base}, {priv_request, ModReq}}),
+    ?event({export, {priv_base, Base}, {priv_request, ModReq}}),
     case request_to_wallets(Base, ModReq, Opts) of
         [] -> {error, <<"No wallets found to export.">>};
         Wallets ->
