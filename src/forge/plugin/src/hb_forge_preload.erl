@@ -44,6 +44,7 @@ run(Args, NodeOpts) ->
     Dirs = maps:get(<<"device-src">>, Args),
     OutputDir = maps:get(<<"output-dir">>, Args),
     KeyPath = maps:get(<<"key">>, Args),
+    Verbose = maps:get(<<"verbose">>, Args, false),
     Wallet = hb_forge_args:load_wallet(KeyPath),
     case hb_forge_args:default_preloaded_dirs(Dirs) of
         {ok, DefaultDirs} ->
@@ -67,6 +68,10 @@ run(Args, NodeOpts) ->
                 "device preload: store ~s, index ~s",
                 [OutputDir, maps:get(index, Result)]
             ),
+            case Verbose of
+                true -> print_device_ids(Result);
+                false -> ok
+            end,
             {ok, Result};
         {error, _} = Error ->
             Error
@@ -95,3 +100,18 @@ header_path(OutputDir) ->
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->
     io_lib:format("device preload failed: ~p", [Reason]).
+
+print_device_ids(Result) ->
+    Specs = maps:get(specs, Result),
+    Impls = maps:get(impls, Result),
+    Pkgs = maps:get(pkgs, Result),
+    lists:foreach(
+        fun({Pkg, ImplID}) ->
+            Name = maps:get(device_name, Pkg),
+            rebar_api:info(
+                "device preload: ~s spec=~s impl=~s",
+                [Name, maps:get(Name, Specs), ImplID]
+            )
+        end,
+        lists:zip(Pkgs, Impls)
+    ).

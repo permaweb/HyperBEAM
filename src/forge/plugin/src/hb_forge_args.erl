@@ -74,7 +74,9 @@ opts() ->
         {help, $h, "help", {boolean, false},
             "Show command help."},
         {dry_run, undefined, "dry-run", {boolean, false},
-            "Sign and print package IDs without uploading to Arweave."}
+            "Sign and print package IDs without uploading to Arweave."},
+        {verbose, undefined, "verbose", {boolean, false},
+            "Print locally preloaded devices IDs."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -100,6 +102,7 @@ parse(State, DefaultOutput) ->
             false -> undefined
         end,
     DryRun = proplists:get_value(dry_run, Args, false),
+    Verbose = proplists:get_value(verbose, Args, false),
     Bundler = maybe_bin(BundlerRaw),
     #{
         <<"device-src">> => split_list(SrcRaw),
@@ -116,6 +119,7 @@ parse(State, DefaultOutput) ->
         <<"timeout">> => parse_number(TimeoutRaw),
         <<"timeout-multiplier">> => parse_number(TimeoutMultiplierRaw),
         <<"dry-run">> => DryRun,
+        <<"verbose">> => Verbose,
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
