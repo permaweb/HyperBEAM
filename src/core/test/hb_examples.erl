@@ -305,6 +305,176 @@ bundler_completion_payment_hook() ->
         hb_mock_server:stop(ServerHandle)
     end.
 
+%% @doc Route an awaited bundle upload across two bundlers in serial. The router
+%% has no balance with the first peer, so it falls through to the second.
+bundler_routing_fallback_test_() ->
+    {timeout, 30, fun bundler_routing_fallback/0}.
+bundler_routing_fallback() ->
+    Parent = self(),
+    RouterWallet = ar_wallet:new(),
+    RouterAddress = hb_util:human_id(ar_wallet:to_address(RouterWallet)),
+    UploaderWallet = ar_wallet:new(),
+    {ServerHandle, GatewayOpts} =
+        hb_mock_server:start_arweave_gateway(
+            #{
+                price => {200, <<"12345">>},
+                tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+            }
+        ),
+    try
+        FirstBundler =
+            hb_http_server:start_node(
+                bundler_route_peer_opts(
+                    first,
+                    Parent,
+                    GatewayOpts,
+                    #{}
+                )
+            ),
+        SecondBundler =
+            hb_http_server:start_node(
+                bundler_route_peer_opts(
+                    second,
+                    Parent,
+                    GatewayOpts,
+                    #{ RouterAddress => 1 }
+                )
+            ),
+        Router =
+            hb_http_server:start_node(
+                bundler_route_router_opts(
+                    RouterWallet,
+                    FirstBundler,
+                    SecondBundler
+                )
+            ),
+        StructuredItem =
+            hb_message:convert(
+                bundler_route_item(),
+                <<"structured@1.0">>,
+                <<"ans104@1.0">>,
+                GatewayOpts
+            ),
+        UploadReq =
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~bundler@1.0/tx">>,
+                    <<"bundler-subject">> => <<"body">>,
+                    <<"commit-request">> => true,
+                    <<"await">> => true,
+                    <<"body">> => StructuredItem
+                },
+                #{ <<"priv-wallet">> => UploaderWallet }
+            ),
+        ?assertMatch(
+            {ok, #{
+                <<"bundle-id">> := _,
+                <<"bundle-status">> := <<"complete">>
+            }},
+            hb_http:post(Router, UploadReq, #{})
+        ),
+        ?assertEqual([first, second], bundler_route_seen_peers()),
+        ?assertEqual(1, length(hb_mock_server:get_requests(price, 1, ServerHandle))),
+        ?assertEqual(1, length(hb_mock_server:get_requests(tx_anchor, 1, ServerHandle))),
+        ?assertEqual(1, length(hb_mock_server:get_requests(tx, 1, ServerHandle))),
+        ?assertEqual(1, length(hb_mock_server:get_requests(chunk, 1, ServerHandle)))
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
+%% @doc Build a bundler node that records admission attempts and gates uploads
+%% through simple-pay.
+bundler_route_peer_opts(Peer, Parent, GatewayOpts, Ledger) ->
+    ProcessorMsg =
+        #{
+            <<"device">> => <<"p4@1.0">>,
+            <<"ledger-device">> => <<"simple-pay@1.0">>,
+            <<"pricing-device">> => <<"simple-pay@1.0">>
+        },
+    Wallet = ar_wallet:new(),
+    GatewayOpts#{
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => hb_test_utils:test_store(),
+        <<"bundler-max-items">> => 1,
+        <<"simple-pay-ledger">> => Ledger,
+        <<"simple-pay-price">> => 0,
+        <<"operator">> => ar_wallet:to_address(Wallet),
+        <<"router-opts">> => #{
+            <<"offered">> => [
+                #{
+                    <<"template">> => <<"/~bundler@1.0/tx">>,
+                    <<"price">> => 1
+                }
+            ]
+        },
+        <<"on">> => #{
+            <<"request">> => [
+                bundler_route_record_hook(Peer, Parent),
+                ProcessorMsg
+            ],
+            <<"response">> => ProcessorMsg
+        }
+    }.
+
+%% @doc Build the routing node that relays bundle uploads to peers in order.
+bundler_route_router_opts(RouterWallet, FirstBundler, SecondBundler) ->
+    #{
+        <<"priv-wallet">> => RouterWallet,
+        <<"store">> => hb_test_utils:test_store(),
+        <<"relay-allow-commit-request">> => true,
+        <<"routes">> => [
+            #{
+                <<"template">> => #{
+                    <<"path">> => <<"^/~bundler@1\\.0/tx">>,
+                    <<"method">> => <<"POST">>
+                },
+                <<"nodes">> => [
+                    #{ <<"prefix">> => FirstBundler },
+                    #{ <<"prefix">> => SecondBundler }
+                ],
+                <<"parallel">> => false,
+                <<"responses">> => 1,
+                <<"admissible-status">> => 200
+            }
+        ],
+        <<"on">> => #{ <<"request">> => #{ <<"device">> => <<"relay@1.0">> } }
+    }.
+
+%% @doc Record a peer admission attempt before payment admission runs.
+bundler_route_record_hook(Peer, Parent) ->
+    #{
+        <<"device">> => #{
+            request =>
+                fun(_Base, Req, _Opts) ->
+                    Parent ! {bundler_route_peer, Peer},
+                    {ok, Req}
+                end
+        }
+    }.
+
+%% @doc Receive the observed peer order for the routed bundle upload.
+bundler_route_seen_peers() ->
+    lists:map(
+        fun(_) ->
+            receive
+                {bundler_route_peer, Peer} -> Peer
+            after 1000 ->
+                error(bundler_route_peer_timeout)
+            end
+        end,
+        [first, second]
+    ).
+
+%% @doc Build a signed data item for the routed bundle example.
+bundler_route_item() ->
+    ar_bundles:sign_item(
+        #tx{
+            data = <<"routed-bundle">>,
+            tags = [{<<"example">>, <<"bundler-routing-fallback">>}]
+        },
+        ar_wallet:new()
+    ).
+
 %% @doc Build a per-message hook that validates the item payload and releases pay.
 bundle_payment_message_hook(
         ExpectedItemID,
