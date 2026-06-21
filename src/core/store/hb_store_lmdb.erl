@@ -377,13 +377,14 @@ scope(_) -> scope().
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Path)) of
+    PathBin = hb_path:to_binary(Path),
+    case read_resolved(Opts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
             list_children(Opts, ResolvedPath);
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
         not_found ->
-            {error, not_found}
+            list_children(Opts, PathBin)
     end.
 
 list_children(Opts, ResolvedPath) ->
