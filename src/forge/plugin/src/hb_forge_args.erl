@@ -72,7 +72,9 @@ opts() ->
         {record, undefined, "record", string,
             "Write recorder@1.0 test flights; --record means errors, --record=all means every test."},
         {help, $h, "help", {boolean, false},
-            "Show command help."}
+            "Show command help."},
+        {dry_run, undefined, "dry-run", {boolean, false},
+            "Sign and print package IDs without uploading to Arweave."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -97,6 +99,7 @@ parse(State, DefaultOutput) ->
             true -> proplists:get_value(record, Args, "errors");
             false -> undefined
         end,
+    DryRun = proplists:get_value(dry_run, Args, false),
     Bundler = maybe_bin(BundlerRaw),
     #{
         <<"device-src">> => split_list(SrcRaw),
@@ -112,6 +115,7 @@ parse(State, DefaultOutput) ->
         <<"test-specs">> => parse_test_specs(TestRaw),
         <<"timeout">> => parse_number(TimeoutRaw),
         <<"timeout-multiplier">> => parse_number(TimeoutMultiplierRaw),
+        <<"dry-run">> => DryRun,
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
