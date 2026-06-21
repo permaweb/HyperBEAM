@@ -197,6 +197,16 @@ id(Data, Type) when is_list(Data) ->
     id(list_to_binary(Data), Type).
 
 %% @doc Convert a binary to a lowercase.
+%% Pure-ASCII binaries take the fast `hb_util_string' NIF path (identical to
+%% `string:lowercase' for ASCII). Anything with a byte >= 0x80 is delegated to
+%% `string:lowercase', preserving its exact Unicode folding and its `badarg'
+%% throw on invalid UTF-8 — which callers such as `ar_tx' tag parsing rely on
+%% to reject non-string tags.
+to_lower(Str) when is_binary(Str) ->
+    case hb_util_string:lowercase(Str) of
+        non_ascii -> string:lowercase(Str);
+        Lowered -> Lowered
+    end;
 to_lower(Str) ->
     string:lowercase(Str).
 
@@ -238,7 +248,13 @@ to_sorted_keys(Msg, _Opts) when is_list(Msg) ->
 key_to_atom(Key) -> key_to_atom(Key, existing).
 key_to_atom(Key, _Mode) when is_atom(Key) -> Key;
 key_to_atom(Key, Mode) ->
-    WithoutDashes = to_lower(binary:replace(Key, <<"-">>, <<"_">>, [global])),
+    WithoutDashes =
+        case hb_util_string:key_chars(Key) of
+            non_ascii ->
+                string:lowercase(binary:replace(Key, <<"-">>, <<"_">>, [global]));
+            Chars ->
+                Chars
+        end,
     case Mode of
         new_atoms -> binary_to_atom(WithoutDashes, utf8);
         _ -> binary_to_existing_atom(WithoutDashes, utf8)
@@ -304,10 +320,7 @@ decode(Type, Value) when is_list(Type) ->
 decode(Type, Value) when is_binary(Type) ->
     ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
     decode(
-        binary_to_existing_atom(
-            list_to_binary(string:to_lower(binary_to_list(Type))),
-            latin1
-        ),
+        binary_to_existing_atom(to_lower(Type), latin1),
         Value
     );
 decode(integer, Value) ->
@@ -342,11 +355,7 @@ decode(map, Value) ->
     );
 decode(BinType, Value) when is_binary(BinType) ->
     decode(
-        list_to_existing_atom(
-            string:to_lower(
-                binary_to_list(BinType)
-            )
-        ),
+        binary_to_existing_atom(to_lower(BinType), latin1),
         Value
     );
 decode(OtherType, Value) ->
@@ -926,14 +935,23 @@ base58_encode_int(N) ->
 
 %% @doc Convert an atom with underscope to dashed binary form.
 atom_to_dashed_binary(Key) when is_atom(Key) ->
-    re:replace(
-        atom_to_binary(Key),
-        <<"_">>,
-        <<"-">>,
-        [global, {return, binary}]
-    ).
+    hb_util_string:dash_chars(atom_to_binary(Key)).
 
 %% Tests
 
 atom_to_dashed_binary_test_parallel() ->
     ?assertEqual(atom_to_dashed_binary(atom_1), <<"atom-1">>).
+
+%% `to_lower/1' must remain byte-for-byte equivalent to `string:lowercase',
+%% including the `badarg' throw on invalid UTF-8 that `ar_tx' tag parsing
+%% relies on to reject non-string tags.
+to_lower_equivalence_test_parallel() ->
+    Throws = fun(F) -> try F(), false catch error:_ -> true end end,
+    Valid = [<<"Content-Type">>, <<"slot">>, <<"ALLCAPS-123">>, <<>>,
+             <<"Größe"/utf8>>, <<"ÀÉÎ"/utf8>>],
+    [ ?assertEqual(string:lowercase(V), to_lower(V)) || V <- Valid ],
+    % invalid UTF-8: both string:lowercase and to_lower must throw
+    Invalid = [<<255>>, <<"AB", 200>>, <<200, 201, 202>>],
+    [ ?assertEqual(Throws(fun() -> string:lowercase(I) end),
+                   Throws(fun() -> to_lower(I) end)) || I <- Invalid ],
+    [ ?assert(Throws(fun() -> to_lower(I) end)) || I <- Invalid ].

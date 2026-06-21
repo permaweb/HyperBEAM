@@ -261,9 +261,11 @@ term_to_path_parts({as, DevName, Msgs}, _Opts) ->
     [{as, hb_ao:normalize_key(DevName), Msgs}].
 
 %% @doc Convert a path of any form to a binary.
+%% The final normalization -- collapse `//' runs, strip leading/trailing `/' --
+%% is the `hb_util_string:normalize_path' NIF, which returns an already-clean
+%% path verbatim (the common case) instead of splitting and rejoining it.
 to_binary(Path) ->
-    Parts = binary:split(do_to_binary(Path), <<"/">>, [global, trim_all]),
-    iolist_to_binary(lists:join(<<"/">>, Parts)).
+    hb_util_string:normalize_path(do_to_binary(Path)).
 
 do_to_binary(Path) when is_list(Path) ->
     case hb_util:is_string_list(Path) of
