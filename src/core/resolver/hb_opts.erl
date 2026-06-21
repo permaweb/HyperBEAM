@@ -176,25 +176,36 @@ canonical_key(Key) when is_binary(Key) ->
     hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
 canonical_key(Key) -> Key.
 
-%% @doc Return the default message with all environment variables set.
+%% @doc The node's resolved global configuration: the static `default_message/0'
+%% merged with the (immutable, per-node) environment-variable values. Resolved
+%% once and memoised per process, exactly as `default_message/0' is. This is the
+%% single static fallback map behind `get/3', so there is no per-key environment
+%% dispatch on the hot path — the env values live in the map.
 default_message_with_env() ->
-    maps:fold(
-        fun(Key, _Spec, NodeMsg) ->
-            case global_get(Key, undefined, #{}) of
-                undefined -> NodeMsg;
-                Value -> NodeMsg#{ Key => Value }
-            end
-        end,
-        default_message(),
-        ?ENV_KEYS
-    ).
+    case erlang:get(default_message_with_env) of
+        undefined ->
+            Resolved =
+                maps:fold(
+                    fun(Key, Spec, NodeMsg) ->
+                        case resolve_env(Key, Spec) of
+                            undefined -> NodeMsg;
+                            Value -> NodeMsg#{ Key => Value }
+                        end
+                    end,
+                    default_message(),
+                    ?ENV_KEYS
+                ),
+            erlang:put(default_message_with_env, Resolved),
+            Resolved;
+        Resolved -> Resolved
+    end.
 
 %% @doc The default configuration options of the hyperbeam node. The result is
 %% memoised in the process dictionary on first call — every subsequent
 %% invocation in the same process returns the cached map without rebuilding
 %% it. The immutable portion of the node config is genuinely constant for the
-%% lifetime of a process, so this is safe; the `cached_os_env/2' helper
-%% applies the same pattern to environment-variable lookups below.
+%% lifetime of a process, so this is safe; `default_message_with_env/0' applies
+%% the same memoisation to the env-resolved configuration above.
 default_message() ->
     case erlang:get(default_message) of
         undefined ->
@@ -564,13 +575,9 @@ get(Key, Default, Opts)
              is_map(Opts),
              not is_map_key(<<"only">>, Opts),
              not is_map_key(<<"prefer">>, Opts) ->
-    case maps:find(Key, Opts) of
-        {ok, Value} -> Value;
-        error ->
-            case is_map_key(Key, ?ENV_KEYS) of
-                true -> do_get(Key, Default, Opts);
-                false -> maps:get(Key, default_message(), Default)
-            end
+    case Opts of
+        #{ Key := Value } -> Value;
+        _ -> maps:get(Key, default_message_with_env(), Default)
     end;
 get(Key, Default, Opts) when is_binary(Key) ->
     do_get(Key, Default, Opts);
@@ -585,11 +592,8 @@ do_get(Key, Default, Opts = #{ <<"only">> := local }) ->
         {ok, Value} -> Value;
         error -> Default
     end;
-do_get(Key, Default, Opts = #{ <<"only">> := global }) ->
-    case global_get(Key, hb_opts_not_found, Opts) of
-        hb_opts_not_found -> Default;
-        Value -> Value
-    end;
+do_get(Key, Default, #{ <<"only">> := global }) ->
+    maps:get(canonical_key(Key), default_message_with_env(), Default);
 do_get(Key, Default, Opts = #{ <<"prefer">> := global }) ->
     case do_get(Key, hb_opts_not_found, #{ <<"only">> => global }) of
         hb_opts_not_found ->
@@ -606,54 +610,24 @@ do_get(Key, Default, Opts) ->
     % No preference was set in Opts, so we default to local.
     do_get(Key, Default, Opts#{ <<"prefer">> => local }).
 
-%% @doc Get an environment variable or configuration key. Depending on whether
-%% the value is derived from an environment variable, we may be able to cache
-%% the result in the process dictionary.
-global_get(Key, Default, Opts) ->
-    NormKey = canonical_key(Key),
-    case erlang:get({processed_env, NormKey}) of
-        {cached, Value} -> Value;
-        undefined ->
-            % Thee value is not cached, so we need to process it.
-            {IsCachable, Value} =
-                case maps:get(NormKey, ?ENV_KEYS, Default) of
-                    Default -> {false, config_lookup(NormKey, Default, Opts)};
-                    {EnvKey, ValParser, DefaultValue} when is_function(ValParser) ->
-                        {true, ValParser(
-                            cached_os_env(
-                                EnvKey,
-                                normalize_default(DefaultValue)
-                            )
-                        )};
-                    {EnvKey, ValParser} when is_function(ValParser) ->
-                        case cached_os_env(EnvKey, not_found) of
-                            not_found ->
-                                {false, config_lookup(NormKey, Default, Opts)};
-                            V -> {true, ValParser(V)}
-                        end;
-                    {EnvKey, DefaultValue} ->
-                        {true, cached_os_env(EnvKey, DefaultValue)}
-                    end,
-            % Cache the result if it is immutable and return.
-            if IsCachable ->
-                    erlang:put({processed_env, NormKey}, {cached, Value});
-            true -> ok
-            end,
-            Value
-    end.
+%% @doc Resolve a single `?ENV_KEYS' entry to its value. The environment is
+%% immutable for the lifetime of a node, so each key is resolved once when
+%% `default_message_with_env/0' is built — never on the `get/3' hot path.
+resolve_env(_Key, {EnvKey, ValParser, DefaultValue}) when is_function(ValParser) ->
+    ValParser(os_env(EnvKey, normalize_default(DefaultValue)));
+resolve_env(Key, {EnvKey, ValParser}) when is_function(ValParser) ->
+    case os_env(EnvKey, not_found) of
+        not_found -> maps:get(Key, default_message(), undefined);
+        Value -> ValParser(Value)
+    end;
+resolve_env(_Key, {EnvKey, DefaultValue}) ->
+    os_env(EnvKey, DefaultValue).
 
-%% @doc Cache the result of os:getenv/1 in the process dictionary, as it never
-%% changes during the lifetime of a node.
-cached_os_env(Key, DefaultValue) ->
-    case erlang:get({os_env, Key}) of
-        {cached, false} -> DefaultValue;
-        {cached, Value} -> Value;
-        undefined ->
-            % The process dictionary returns `undefined' for a key that is not
-            % set, so we need to check the environment and store the result.
-            erlang:put({os_env, Key}, {cached, os:getenv(Key)}),
-            % We recurse to follow the normal path.
-            cached_os_env(Key, DefaultValue)
+%% @doc Read an environment variable, returning `DefaultValue' when it is unset.
+os_env(EnvKey, DefaultValue) ->
+    case os:getenv(EnvKey) of
+        false -> DefaultValue;
+        Value -> Value
     end.
 
 %% @doc Get an option from environment variables, optionally consulting the
@@ -664,12 +638,6 @@ normalize_default({conditional, Feature, IfTest, Else}) ->
         false -> Else
     end;
 normalize_default(Default) -> Default.
-
-%% @doc An abstraction for looking up configuration variables. In the future,
-%% this is the function that we will want to change to support a more dynamic
-%% configuration system.
-config_lookup(Key, Default, _Opts) ->
-    maps:get(canonical_key(Key), default_message(), Default).
 
 %% @doc Parse a configuration source into a map, matching the types of the
 %% keys to those in the default message. The source may be a single path or
@@ -1097,10 +1065,8 @@ preloaded_env_override_test() ->
     Index = "abc123",
     os:putenv("HB_PRELOADED_STORE", StorePath),
     os:putenv("HB_PRELOADED_DEVICES_INDEX", Index),
-    erase({os_env, "HB_PRELOADED_STORE"}),
-    erase({os_env, "HB_PRELOADED_DEVICES_INDEX"}),
-    erase({processed_env, <<"preloaded-store">>}),
-    erase({processed_env, <<"preloaded-devices-index">>}),
+    erase(default_message_with_env),
+    erase(default_message),
     try
             ?assertEqual(
                 #{
@@ -1116,10 +1082,8 @@ preloaded_env_override_test() ->
     after
         os:unsetenv("HB_PRELOADED_STORE"),
         os:unsetenv("HB_PRELOADED_DEVICES_INDEX"),
-        erase({os_env, "HB_PRELOADED_STORE"}),
-        erase({os_env, "HB_PRELOADED_DEVICES_INDEX"}),
-        erase({processed_env, <<"preloaded-store">>}),
-        erase({processed_env, <<"preloaded-devices-index">>})
+        erase(default_message_with_env),
+        erase(default_message)
     end.
 
 as_identity_test() ->
