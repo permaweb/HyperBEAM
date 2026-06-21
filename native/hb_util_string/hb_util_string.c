@@ -4,10 +4,11 @@
  * pass (the compiler auto-vectorizes the compare-and-select at -O3, so no
  * `-march=native' is needed):
  *
- *   lowercase/1   `A'..`Z' -> `a'..`z'                  (to_lower)
- *   key_chars/1   `A'..`Z' -> `a'..`z', and `-' -> `_'  (key_to_atom)
- *   canon_chars/1 `A'..`Z' -> `a'..`z', and `_' -> `-'  (hb_opts canonical_key)
- *   dash_chars/1  `_' -> `-'                            (atom_to_dashed_binary)
+ *   lowercase/1      `A'..`Z' -> `a'..`z'                 (to_lower)
+ *   key_chars/1      `A'..`Z' -> `a'..`z', and `-' -> `_' (key_to_atom)
+ *   canon_chars/1    `A'..`Z' -> `a'..`z', and `_' -> `-' (hb_opts canonical_key)
+ *   dash_chars/1     `_' -> `-'                           (atom_to_dashed_binary)
+ *   normalize_path/1 collapse `//' runs, trim leading/trailing `/' (hb_path)
  *
  * UTF-8 safety: `lowercase' and `key_chars' fold ASCII only and do NOT
  * validate UTF-8, whereas `string:lowercase' folds full Unicode and *throws*
@@ -18,8 +19,9 @@
  * ASCII -- the overwhelming common case for HB keys -- takes the fast path and
  * is provably identical to `string:lowercase' (only `A'..`Z' has an ASCII case
  * mapping, and ASCII is always valid UTF-8, so it never throws). `dash_chars'
- * only swaps the ASCII byte `_'<->`-' and never folds, so it is exact for all
- * input and needs no fallback.
+ * and `normalize_path' only rewrite ASCII byte positions (`_'<->`-' and `/'
+ * runs respectively) and never fold, so they are exact for all input and need
+ * no fallback.
  *
  * A fresh binary is allocated; the caller's input memory is never mutated. The
  * module carries no mutable static state; its `upgrade' callback is a no-op so
@@ -32,8 +34,8 @@
 
 /* `lowercase/1' is general purpose and may be handed an arbitrarily large
  * binary, so inputs at or above this size run on a dirty CPU scheduler. The
- * key/atom transforms only ever see bounded keys (atoms are <= 255 bytes), so
- * they always run inline. */
+ * key/atom transforms see only bounded keys (atoms are <= 255 bytes) and
+ * `normalize_path' only bounded paths, so they always run inline. */
 #ifndef HB_UTIL_STRING_DIRTY_THRESHOLD
 #define HB_UTIL_STRING_DIRTY_THRESHOLD (256U * 1024U)
 #endif

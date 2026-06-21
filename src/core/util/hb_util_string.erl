@@ -46,7 +46,7 @@ normalize_path(_Bin) ->
 lowercase_test() ->
     ?assertEqual(<<"content-type">>, lowercase(<<"Content-Type">>)),
     ?assertEqual(<<>>, lowercase(<<>>)),
-    %% any byte >= 0x80 -> bail to `non_ascii' (caller delegates to string:lc)
+    % any byte >= 0x80 -> bail to `non_ascii' (caller delegates to string:lc)
     ?assertEqual(non_ascii, lowercase(<<"AB", 16#C5>>)),
     ?assertEqual(non_ascii, lowercase(<<16#FF>>)).
 
@@ -66,7 +66,7 @@ dash_chars_test() ->
     ?assertEqual(<<"atom-1">>, dash_chars(<<"atom_1">>)),
     ?assertEqual(<<"a-b-c">>, dash_chars(<<"a_b_c">>)),
     ?assertEqual(<<>>, dash_chars(<<>>)),
-    %% non-ASCII passes through (no fold, no bail)
+    % non-ASCII passes through (no fold, no bail)
     ?assertEqual(<<"k", 16#FF>>, dash_chars(<<"k", 16#FF>>)).
 
 normalize_path_test() ->
@@ -79,7 +79,7 @@ normalize_path_test() ->
     ?assertEqual(<<>>, normalize_path(<<"/">>)),
     ?assertEqual(<<>>, normalize_path(<<"///">>)),
     ?assertEqual(<<"x">>, normalize_path(<<"x">>)),
-    %% non-ASCII passes through untouched (only `/' positions matter)
+    % non-ASCII passes through untouched (only `/' positions matter)
     ?assertEqual(<<"k", 16#FF, "/v">>, normalize_path(<<"/k", 16#FF, "//v/">>)).
 
 %% The NIF must equal the Erlang split/join expression it replaces, for both

@@ -950,7 +950,7 @@ to_lower_equivalence_test_parallel() ->
     Valid = [<<"Content-Type">>, <<"slot">>, <<"ALLCAPS-123">>, <<>>,
              <<"Größe"/utf8>>, <<"ÀÉÎ"/utf8>>],
     [ ?assertEqual(string:lowercase(V), to_lower(V)) || V <- Valid ],
-    %% invalid UTF-8: both string:lowercase and to_lower must throw
+    % invalid UTF-8: both string:lowercase and to_lower must throw
     Invalid = [<<255>>, <<"AB", 200>>, <<200, 201, 202>>],
     [ ?assertEqual(Throws(fun() -> string:lowercase(I) end),
                    Throws(fun() -> to_lower(I) end)) || I <- Invalid ],
