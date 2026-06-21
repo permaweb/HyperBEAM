@@ -4,6 +4,14 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% The public, legacy Arweave GraphQL gateway used to exercise fallback
+%%% routing: a HyperBEAM node serves what it has locally, then the router falls
+%%% through to this endpoint for everything it does not. Kept behind macros so
+%%% the specific provider is named in exactly one place.
+-define(LEGACY_GRAPHQL_ENDPOINT, <<"https://arweave-search.goldsky.com">>).
+%% A transaction resolvable via the legacy gateway but absent locally, used to
+%% prove the fallback returns remote results.
+-define(LEGACY_GRAPHQL_TX, <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>).
 %% An opaque cursor in a legacy GraphQL gateway's own (non-native) format;
 %% HyperBEAM must reject it rather than misinterpret it (it is not native).
 -define(LEGACY_GRAPHQL_CURSOR,
@@ -1060,6 +1068,84 @@ transactions_query_legacy_cursor_test_parallel() ->
         },
         Res
     ).
+
+transactions_query_gateway_fallback_test_() ->
+    {timeout, 60, fun transactions_query_gateway_fallback/0}.
+transactions_query_gateway_fallback() ->
+    {ok, LocalNode, _LocalOpts, LocalID} = test_env_with_message(),
+    LegacyTX = ?LEGACY_GRAPHQL_TX,
+    Opts = #{ <<"routes">> => [graphql_gateway_route(LocalNode)] },
+    % The client only follows cursors; it has no knowledge of the route's
+    % fallback chain. Page 1 is served locally by HyperBEAM, page 2 by the
+    % legacy gateway -- the two backends' results arrive back to back.
+    Pages =
+        collect_graphql_pages(
+            transactions_cursor_query(),
+            #{ <<"ids">> => [LocalID, LegacyTX], <<"first">> => 2 },
+            Opts
+        ),
+    ?assertEqual(
+        [LocalID, LegacyTX],
+        lists:append([transaction_ids(P, Opts) || P <- Pages])
+    ),
+    ?assertEqual(
+        [true, false],
+        [transaction_has_next_page(P, Opts) || P <- Pages]
+    ).
+
+graphql_gateway_route(LocalNode) ->
+    #{
+        <<"template">> => <<"/graphql">>,
+        <<"nodes">> =>
+            [
+                % The local node is the fallback front: the route tells it to
+                % `force-next-page' so it always signals "there may be more",
+                % letting the (router-agnostic) client page on to the legacy
+                % gateway. The flag is injected here, not by the client.
+                #{
+                    <<"uri">> =>
+                        << LocalNode/binary,
+                            "~query@1.0/graphql?force-next-page=true" >>
+                },
+                #{
+                    <<"prefix">> => ?LEGACY_GRAPHQL_ENDPOINT,
+                    <<"opts">> =>
+                        #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
+                }
+            ],
+        <<"parallel">> => 1,
+        <<"responses">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200,
+        <<"admissible">> =>
+            #{
+                <<"device">> => <<"query@1.0">>,
+                <<"path">> => <<"has-results">>
+            }
+    }.
+
+collect_graphql_pages(Query, Vars, Opts) ->
+    collect_graphql_pages(Query, Vars, Opts, [], 4).
+
+collect_graphql_pages(_Query, _Vars, _Opts, Acc, 0) ->
+    lists:reverse(Acc);
+collect_graphql_pages(Query, Vars, Opts, Acc, Remaining) ->
+    {ok, Page} = hb_client_gateway:query(Query, Vars, Opts),
+    case transaction_has_next_page(Page, Opts) of
+        true ->
+            Edges = transaction_edges(Page, Opts),
+            ?assert(Edges =/= []),
+            #{ <<"cursor">> := Cursor } = lists:last(Edges),
+            collect_graphql_pages(
+                Query,
+                Vars#{ <<"after">> => Cursor },
+                Opts,
+                [Page | Acc],
+                Remaining - 1
+            );
+        false ->
+            lists:reverse([Page | Acc])
+    end.
 
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test_parallel() ->
