@@ -56,32 +56,6 @@ the script tag with id="embedded-graph".
       </article>
     </section>
 
-    <section class="filters" aria-label="Filter">
-      <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Search modules, functions, paths...">
-      <select id="group-filter" aria-label="Subsystem">
-        <option value="">All subsystems</option>
-      </select>
-      <select id="edge-filter" aria-label="Edges">
-        <option value="context">Context calls</option>
-        <option value="selected">Selected neighborhood</option>
-        <option value="cross">Cross-module calls</option>
-        <option value="strong">Repeated calls</option>
-      </select>
-      <select id="context-scope" aria-label="Context scope">
-        <option value="auto">Auto scope</option>
-        <option value="kernel">Kernel context</option>
-        <option value="touchpoints">Touchpoints</option>
-      </select>
-      <label class="toggle">
-        <input id="show-private" type="checkbox" checked>
-        <span>Private</span>
-      </label>
-      <label class="toggle">
-        <input id="show-forge" type="checkbox">
-        <span>Forge</span>
-      </label>
-    </section>
-
     <section class="live-strip" aria-label="Live engine overlay">
       <span id="live-status" class="live-status">live off</span>
       <input id="live-endpoint" type="url" autocomplete="off" spellcheck="false" placeholder="/~hyperbuddy@1.0/events">
@@ -105,19 +79,7 @@ the script tag with id="embedded-graph".
     </section>
 
     <section class="workspace">
-      <aside class="context-panel">
-        <div class="section-head">
-          <h2>Context</h2>
-          <span id="device-count">0 devices</span>
-        </div>
-        <div class="context-actions">
-          <button type="button" id="clear-devices">Kernel</button>
-          <button type="button" id="all-devices">All Devices</button>
-        </div>
-        <div id="group-chips" class="group-chips"></div>
-        <input id="device-search" type="search" autocomplete="off" spellcheck="false" placeholder="Device filter...">
-        <div id="device-list" class="device-list"></div>
-      </aside>
+      <aside class="context-panel" hidden aria-hidden="true"></aside>
       <div class="workspace-splitter" data-splitter="context" aria-hidden="true"></div>
 
       <section class="graph-panel">
@@ -157,12 +119,84 @@ the script tag with id="embedded-graph".
       <aside class="detail-panel">
         <div class="section-head detail-head">
           <div class="detail-tabs" role="tablist" aria-label="Detail panels">
-            <button type="button" class="active" data-detail-tab="inspector">Inspector</button>
+            <button type="button" class="active" data-detail-tab="scope">Scope</button>
+            <button type="button" data-detail-tab="inspector">Inspector</button>
             <button type="button" data-detail-tab="engine">Engine</button>
           </div>
           <span id="selection-label">No selection</span>
         </div>
-        <div id="inspector-tab" class="detail-tab active">
+        <div id="scope-tab" class="detail-tab scope-tab active">
+          <div class="scope-panel">
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Map Scope</h3>
+                <span id="device-count">0 devices</span>
+              </div>
+              <div class="scope-actions scope-mode" role="group" aria-label="Map scope mode">
+                <button type="button" id="clear-devices">Kernel Only</button>
+                <button type="button" id="selected-devices-mode">Selected Devices</button>
+                <button type="button" id="all-devices">All Devices</button>
+              </div>
+              <div id="scope-selection-summary" class="scope-summary">Kernel modules only</div>
+              <input id="search" type="search" autocomplete="off" spellcheck="false" placeholder="Find modules, functions, paths...">
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Devices</h3>
+                <span>Selected packages</span>
+              </div>
+              <div id="group-chips" class="group-chips"></div>
+              <input id="device-search" type="search" autocomplete="off" spellcheck="false" placeholder="Filter devices...">
+              <div id="device-list" class="device-list"></div>
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Module Filters</h3>
+                <span>Visibility</span>
+              </div>
+              <label class="scope-control">
+                <span>Subsystem</span>
+                <select id="group-filter" aria-label="Subsystem">
+                  <option value="">All subsystems</option>
+                </select>
+              </label>
+              <label class="scope-control">
+                <span>Device modules</span>
+                <select id="context-scope" aria-label="Context scope">
+                  <option value="auto">Auto</option>
+                  <option value="kernel">Kernel + selected devices</option>
+                  <option value="touchpoints">Device touchpoints only</option>
+                </select>
+              </label>
+              <div class="scope-toggle-row">
+                <label class="toggle">
+                  <input id="show-private" type="checkbox" checked>
+                  <span>Private functions</span>
+                </label>
+                <label class="toggle">
+                  <input id="show-forge" type="checkbox">
+                  <span>Forge modules</span>
+                </label>
+              </div>
+            </section>
+            <section class="scope-section">
+              <div class="scope-section-head">
+                <h3>Calls</h3>
+                <span>Edge filter</span>
+              </div>
+              <label class="scope-control">
+                <span>Show</span>
+                <select id="edge-filter" aria-label="Edges">
+                  <option value="context">Context calls</option>
+                  <option value="selected">Selected neighborhood</option>
+                  <option value="cross">Cross-module calls</option>
+                  <option value="strong">Repeated calls</option>
+                </select>
+              </label>
+            </section>
+          </div>
+        </div>
+        <div id="inspector-tab" class="detail-tab" hidden>
           <div id="detail-empty" class="empty">Select a node</div>
           <div id="detail-view" class="detail-view" hidden>
             <div id="detail-card" class="detail-card"></div>

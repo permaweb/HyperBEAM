@@ -207,7 +207,6 @@ h3 {
 }
 
 .stats article,
-.filters,
 .context-panel,
 .graph-panel,
 .detail-panel {
@@ -242,21 +241,6 @@ h3 {
   font-size: 25px;
   font-weight: 600;
   line-height: 1;
-}
-
-.filters {
-  display: grid;
-  grid-template-columns:
-    minmax(260px, 2fr)
-    minmax(150px, 0.78fr)
-    minmax(150px, 0.78fr)
-    minmax(150px, 0.78fr)
-    max-content
-    max-content;
-  align-items: center;
-  gap: 9px;
-  padding: 10px;
-  margin-bottom: 10px;
 }
 
 .live-strip {
@@ -465,6 +449,144 @@ body.resizing {
   display: none;
 }
 
+.scope-tab {
+  overflow: auto;
+}
+
+.scope-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  background:
+    linear-gradient(180deg, rgba(19, 138, 109, 0.055), transparent 170px),
+    linear-gradient(180deg, #ffffff, #fbfbfb);
+}
+
+.scope-section {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.scope-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scope-section h3 {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.scope-section-head span,
+.scope-control > span {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.scope-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.scope-actions button,
+.scope-section input[type="search"],
+.scope-section select,
+.scope-section .toggle {
+  min-height: 32px;
+  font-size: 11px;
+}
+
+.scope-mode {
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  gap: 3px;
+}
+
+.scope-mode button {
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 10px;
+}
+
+.scope-mode button.active {
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.scope-summary {
+  min-height: 28px;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(19, 138, 109, 0.14);
+  border-radius: 7px;
+  background: #f6fbf8;
+  color: var(--green);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.scope-control {
+  display: grid;
+  gap: 5px;
+}
+
+.scope-toggle-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 7px;
+}
+
+.scope-panel .group-chips {
+  padding: 0;
+}
+
+.scope-panel .device-list {
+  height: min(280px, max(150px, calc(100vh - 620px)));
+  min-height: 150px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.scope-panel .device-row {
+  min-height: 42px;
+  padding: 7px 9px;
+}
+
+.scope-panel .device-name {
+  font-size: 11px;
+}
+
+.scope-panel .device-meta {
+  font-size: 10px;
+}
+
 .context-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -495,6 +617,14 @@ body.resizing {
 
 .group-chip.active {
   background: #eef8f4;
+  border-color: rgba(19, 138, 109, 0.42);
+  color: var(--green);
+  font-weight: 900;
+}
+
+.group-chip.partial {
+  background: #f7fbf8;
+  border-style: dashed;
 }
 
 .device-list {
@@ -1952,11 +2082,11 @@ h1 {
 .stats {
   position: absolute;
   bottom: 16px;
-  left: calc(var(--context-width, 300px) + 224px);
+  left: 224px;
   z-index: 28;
   display: flex;
   width: auto;
-  max-width: calc(100vw - var(--context-width, 300px) - var(--detail-width, 340px) - 284px);
+  max-width: calc(100vw - var(--detail-width, 340px) - 284px);
   gap: 6px;
   margin: 0;
 }
@@ -1980,11 +2110,10 @@ h1 {
   font-size: 13px;
 }
 
-.filters,
 .live-strip {
   position: absolute;
   right: calc(var(--detail-width, 340px) + 34px);
-  left: calc(var(--context-width, 300px) + 34px);
+  left: 34px;
   z-index: 36;
   margin: 0;
   border-color: rgba(0, 0, 0, 0.08);
@@ -1993,28 +2122,8 @@ h1 {
   backdrop-filter: blur(18px);
 }
 
-.filters {
-  top: 62px;
-  grid-template-columns:
-    minmax(180px, 2fr)
-    minmax(120px, 0.75fr)
-    minmax(120px, 0.75fr)
-    minmax(120px, 0.75fr)
-    max-content
-    max-content;
-  gap: 6px;
-  padding: 6px;
-}
-
-.filters input[type="search"],
-.filters select,
-.toggle {
-  min-height: 30px;
-  font-size: 11px;
-}
-
 .live-strip {
-  top: 108px;
+  top: 62px;
   grid-template-columns: max-content minmax(180px, 1fr) minmax(62px, max-content) repeat(7, max-content);
   gap: 6px;
   padding: 6px;
@@ -2063,9 +2172,9 @@ h1 {
 
 .graph-head {
   position: absolute;
-  top: 154px;
+  top: 108px;
   right: calc(var(--detail-width, 340px) + 34px);
-  left: calc(var(--context-width, 300px) + 34px);
+  left: 34px;
   z-index: 25;
   min-height: 30px;
   padding: 0 10px;
@@ -2100,6 +2209,10 @@ h1 {
 .context-panel {
   left: 14px;
   width: var(--context-width, 300px);
+}
+
+.context-panel[hidden] {
+  display: none;
 }
 
 .detail-panel {
@@ -2207,25 +2320,23 @@ h1 {
 }
 
 .minimap {
-  left: calc(var(--context-width, 300px) + 34px);
+  left: 34px;
   bottom: 16px;
 }
 
 @media (min-width: 2300px) {
-  .filters,
   .live-strip,
   .graph-head {
     right: calc(var(--detail-width, 340px) + 64px);
-    left: calc(var(--context-width, 300px) + 64px);
+    left: 64px;
   }
 }
 
 @media (max-width: 1500px) {
-  .filters,
   .live-strip,
   .graph-head {
     right: calc(var(--detail-width, 340px) + 24px);
-    left: calc(var(--context-width, 300px) + 24px);
+    left: 24px;
   }
 
   .stats {
@@ -2260,14 +2371,7 @@ h1 {
     padding: 0 8px;
   }
 
-  .filters {
-    top: 54px;
-    padding: 5px;
-  }
-
-  .filters input[type="search"],
-  .filters select,
-  .toggle {
+  .scope-section .toggle {
     min-height: 28px;
   }
 
@@ -2333,16 +2437,6 @@ h1 {
 
   .stats strong {
     font-size: 20px;
-  }
-
-  .filters {
-    grid-template-columns:
-      minmax(0, 1.35fr)
-      minmax(0, 1fr)
-      minmax(0, 1fr)
-      minmax(0, 1fr)
-      max-content
-      max-content;
   }
 
   .live-strip {
@@ -2417,11 +2511,6 @@ h1 {
   .stats article:last-child strong {
     font-size: 12px;
     letter-spacing: 0;
-  }
-
-  .filters {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
   }
 
   .live-strip {
@@ -2526,12 +2615,7 @@ h1 {
     font-size: 9px;
   }
 
-  .filters input[type="search"] {
-    grid-column: 1 / -1;
-  }
-
-  .filters select,
-  .toggle {
+  .scope-section .toggle {
     min-height: 34px;
   }
 

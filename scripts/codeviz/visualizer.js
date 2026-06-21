@@ -10,7 +10,9 @@
     deviceSearch: document.getElementById("device-search"),
     groupChips: document.getElementById("group-chips"),
     clearDevices: document.getElementById("clear-devices"),
+    selectedDevicesMode: document.getElementById("selected-devices-mode"),
     allDevices: document.getElementById("all-devices"),
+    scopeSelectionSummary: document.getElementById("scope-selection-summary"),
     search: document.getElementById("search"),
     groupFilter: document.getElementById("group-filter"),
     edgeFilter: document.getElementById("edge-filter"),
@@ -55,6 +57,7 @@
     minimapView: document.getElementById("minimap-view"),
     detailEmpty: document.getElementById("detail-empty"),
     detailView: document.getElementById("detail-view"),
+    scopeTab: document.getElementById("scope-tab"),
     inspectorTab: document.getElementById("inspector-tab"),
     engineTab: document.getElementById("engine-tab"),
     detailCard: document.getElementById("detail-card"),
@@ -99,7 +102,7 @@
     layoutMode: "map",
     selectedDevices: new Set(),
     selected: null,
-    detailTab: "inspector",
+    detailTab: "scope",
     relationFocus: null,
     selectedEdge: null,
     selectedPath: [],
@@ -306,9 +309,10 @@
     }
     if (params.get("follow") === "heat") state.live.follow = true;
     if (params.get("pulse") === "rate") state.live.rateMode = true;
-    if (["inspector", "engine"].includes(params.get("panel"))) {
+    if (["scope", "inspector", "engine"].includes(params.get("panel"))) {
       state.detailTab = params.get("panel");
     }
+    if (state.selected && !params.has("panel")) state.detailTab = "inspector";
     if (params.get("recording") === "demo") {
       state.live.sourceName = "demo";
     } else if (params.has("recording")) {
@@ -468,6 +472,9 @@
       render();
       showGraph();
     });
+    els.selectedDevicesMode.addEventListener("click", () => {
+      els.deviceSearch.focus();
+    });
     els.fitGraph.addEventListener("click", () => fitGraph(false));
     els.resetGraph.addEventListener("click", () => {
       const viewport = graphViewport();
@@ -505,10 +512,22 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "group-chip";
-      button.textContent = group;
+      const devices = graph.devices.filter((device) => device.group === group);
+      const selectedCount = devices
+        .filter((device) => state.selectedDevices.has(device.id))
+        .length;
+      const allActive = selectedCount === devices.length;
+      const partiallyActive = selectedCount > 0 && !allActive;
+      button.textContent = partiallyActive ?
+        `${group} (${selectedCount}/${devices.length})` :
+        `${allActive ? "✓ " : ""}${group} (${devices.length})`;
+      button.setAttribute("aria-pressed", partiallyActive ? "mixed" : selectedCount ? "true" : "false");
+      button.title = allActive ?
+        `Remove ${group} devices from the map` :
+        partiallyActive ?
+        `Add remaining ${group} devices to the map` :
+        `Add ${group} devices to the map`;
       button.addEventListener("click", () => {
-        const devices = graph.devices.filter((device) => device.group === group);
-        const allActive = devices.every((device) => state.selectedDevices.has(device.id));
         devices.forEach((device) => {
           if (allActive) {
             state.selectedDevices.delete(device.id);
@@ -522,12 +541,8 @@
         render();
         showGraph();
       });
-      button.classList.toggle(
-        "active",
-        graph.devices
-          .filter((device) => device.group === group)
-          .some((device) => state.selectedDevices.has(device.id))
-      );
+      button.classList.toggle("active", selectedCount > 0);
+      button.classList.toggle("partial", partiallyActive);
       return button;
     }));
   }
@@ -547,8 +562,34 @@
       })
       .map((device) => deviceRow(device));
     els.deviceList.replaceChildren(...rows);
-    els.deviceCount.textContent = `${nf.format(state.selectedDevices.size)} selected`;
+    renderScopeState();
     renderGroupChips();
+  }
+
+  function renderScopeState() {
+    const count = state.selectedDevices.size;
+    els.deviceCount.textContent = count ?
+      countLabel(count, "device", "devices") :
+      "kernel only";
+    els.clearDevices.classList.toggle("active", count === 0);
+    els.selectedDevicesMode.classList.toggle("active", count > 0 && count < graph.devices.length);
+    els.allDevices.classList.toggle("active", count === graph.devices.length);
+    els.scopeSelectionSummary.textContent = scopeSelectionSummary();
+    const autoOption = els.contextScope.querySelector('option[value="auto"]');
+    if (autoOption) {
+      autoOption.textContent = state.selectedDevices.size ?
+        "Auto: kernel + selected devices" :
+        "Auto: kernel only";
+    }
+  }
+
+  function scopeSelectionSummary() {
+    const selected = graph.devices.filter((device) => state.selectedDevices.has(device.id));
+    if (!selected.length) return "Kernel modules only";
+    if (selected.length === graph.devices.length) return "All packaged devices loaded";
+    const names = selected.slice(0, 3).map((device) => `~${device.id}`);
+    const suffix = selected.length > names.length ? ` +${selected.length - names.length} more` : "";
+    return names.join(", ") + suffix;
   }
 
   function deviceRow(device) {
@@ -632,7 +673,7 @@
   }
 
   function activateDetailTab(tab) {
-    state.detailTab = tab === "engine" ? "engine" : "inspector";
+    state.detailTab = ["scope", "inspector", "engine"].includes(tab) ? tab : "scope";
     syncDetailTabs();
     syncUrl();
   }
@@ -641,6 +682,8 @@
     document.querySelectorAll("[data-detail-tab]").forEach((button) => {
       button.classList.toggle("active", button.dataset.detailTab === state.detailTab);
     });
+    els.scopeTab.hidden = state.detailTab !== "scope";
+    els.scopeTab.classList.toggle("active", state.detailTab === "scope");
     els.inspectorTab.hidden = state.detailTab !== "inspector";
     els.inspectorTab.classList.toggle("active", state.detailTab === "inspector");
     els.engineTab.hidden = state.detailTab !== "engine";
@@ -672,6 +715,7 @@
     state.selectedEdge = null;
     state.selectedPath = [];
     state.hovered = null;
+    state.detailTab = "scope";
     refreshSelectionState();
   }
 
@@ -3295,7 +3339,11 @@
     els.calls.textContent = nf.format(visible.edges.reduce((sum, edge) => sum + edge.count, 0));
     const scope = effectiveContextScope();
     els.context.textContent = state.selectedDevices.size ?
-      `${state.selectedDevices.size} ${scope === "touchpoints" ? "touchpoints" : "devices"}` :
+      countLabel(
+        state.selectedDevices.size,
+        scope === "touchpoints" ? "touchpoint" : "device",
+        scope === "touchpoints" ? "touchpoints" : "devices"
+      ) :
       "kernel";
     els.graphTitle.textContent = graphTitleText();
     const searchMatches = state.search ?
@@ -5964,6 +6012,7 @@
     state.relationFocus = null;
     state.selectedEdge = null;
     state.selectedPath = [];
+    state.detailTab = "scope";
     refreshSelectionState();
   }
 
