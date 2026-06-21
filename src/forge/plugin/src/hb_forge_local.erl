@@ -1,8 +1,8 @@
 %%% @doc `rebar3 device local' - start a local shell with packaged devices.
 %%%
 %%% Builds a preloaded-store exactly like `device preload', points
-%%% `HB_PRELOADED_STORE' and `HB_PRELOADED_DEVICES_INDEX' at that store for the
-%%% duration of the shell, then delegates to Rebar's normal shell provider.
+%%% `HB_PRELOADED_STORE' at that store for the duration of the shell, then
+%%% delegates to Rebar's normal shell provider.
 -module(hb_forge_local).
 -export([init/1, do/1, format_error/1]).
 

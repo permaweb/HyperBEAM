@@ -1,10 +1,12 @@
-.PHONY: compile
+.PHONY: compile buildinfo clean-generated preloaded-store
 
 compile:
 	rebar3 compile
 
 WAMR_VERSION = 2.2.0
 WAMR_DIR = _build/wamr
+BUILD_SOURCE = $(shell git rev-parse HEAD)
+BUILD_SOURCE_SHORT = $(shell git rev-parse --short HEAD)
 
 GENESIS_WASM_BRANCH = feat/hb-unit
 GENESIS_WASM_REPO = https://github.com/permaweb/ao.git
@@ -14,6 +16,30 @@ HYPERBUDDY_UI_REPO = https://github.com/permaweb/hb-explorer
 HYPERBUDDY_UI_PACKAGE_JSON = https://raw.githubusercontent.com/permaweb/hb-explorer/main/package.json
 HYPERBUDDY_UI_TARGET = src/html/hyperbuddy@1.0/bundle.js
 ARWEAVE_GATEWAY = https://arweave.net
+PRELOADED_INPUTS = \
+	scripts/build-preloaded-store.escript \
+	rebar.config \
+	rebar.lock \
+	include \
+	src/preloaded \
+	src/forge \
+	src/core/device \
+	src/core/include
+CLEAN_GENERATED = \
+	priv \
+	$(WAMR_DIR) \
+	_build/genesis_wasm \
+	_build/preloaded-store \
+	_build/device-test-store \
+	_build/device-implementations \
+	_build/hb_buildinfo.hrl \
+	_build/hb_buildinfo.hrl.* \
+	_build/hb_preloaded_index.hrl \
+	_build/hb_preloaded_index.hrl.* \
+	native/hb_beamr/*.o \
+	native/hb_beamr/*.d \
+	native/hb_keccak/*.o \
+	native/hb_keccak/*.d
 
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug
@@ -38,13 +64,34 @@ endif
 
 wamr: $(WAMR_DIR)/lib/libvmlib.a
 
+buildinfo:
+	@mkdir -p priv
+	@tmp=$$(mktemp priv/hb_buildinfo.XXXXXX) && \
+		printf '%s\n' \
+			'#{' \
+			'    <<"source">> => <<"$(BUILD_SOURCE)">>,' \
+			'    <<"source-short">> => <<"$(BUILD_SOURCE_SHORT)">>,' \
+			'    <<"build-time">> => '$$(date +%s) \
+			'}.' \
+			> "$$tmp" && \
+		mv "$$tmp" priv/hb_buildinfo
+
+preloaded-store:
+	@if [ ! -f _build/preloaded-store/data.mdb ] || \
+		[ -n "$$(find $(PRELOADED_INPUTS) -type f -newer _build/preloaded-store/data.mdb -print -quit)" ] || \
+		{ key=$${HB_KEY:-hyperbeam-key.json}; [ ! -f "$$key" ] || [ "$$key" -nt _build/preloaded-store/data.mdb ]; }; then \
+		scripts/build-preloaded-store.escript; \
+	fi
+
+clean-generated:
+	rm -rf $(CLEAN_GENERATED)
+
 debug: debug-clean $(WAMR_DIR)
 	HB_DEBUG=1 make $(WAMR_DIR)/lib/libvmlib.a
 	CFLAGS="-DHB_DEBUG=1" rebar3 compile
 
 debug-clean:
-	rm -rf priv
-	rm -rf $(WAMR_DIR)
+	rm -rf priv $(WAMR_DIR)
 
 # Clone the WAMR repository at our target release
 $(WAMR_DIR):

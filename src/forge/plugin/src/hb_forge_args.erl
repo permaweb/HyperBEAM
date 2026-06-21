@@ -21,7 +21,6 @@
 -define(PLUGIN_NAMESPACE, device).
 -define(DEPS, [{default, app_discovery}, {default, compile}]).
 -define(ENV_PRELOADED_STORE, <<"HB_PRELOADED_STORE">>).
--define(ENV_PRELOADED_DEVICES_INDEX, <<"HB_PRELOADED_DEVICES_INDEX">>).
 
 %% @doc Register a `rebar3 device <provider>' command.
 provider(State, Provider, Module, Example, ShortDesc, Desc) ->
@@ -241,7 +240,7 @@ package_opts(Args) ->
         Bundler -> Opts#{ <<"bundler-ans104">> => Bundler }
     end.
 
-%% @doc Run `Fun' with `HB_PRELOADED_*' pointed at a preload result.
+%% @doc Run `Fun' with `HB_PRELOADED_STORE' pointed at a preload result.
 with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->
     Env = set_preloaded_env(Result),
     try Fun()
@@ -251,18 +250,14 @@ with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->
 %% @doc Point this VM at a generated preloaded-store.
 set_preloaded_env(Result) ->
     StorePath = hb_util:bin(hb_maps:get(<<"name">>, maps:get(store, Result))),
-    Index = hb_util:bin(maps:get(index, Result)),
     OldStore = getenv(?ENV_PRELOADED_STORE),
-    OldIndex = getenv(?ENV_PRELOADED_DEVICES_INDEX),
     putenv(?ENV_PRELOADED_STORE, StorePath),
-    putenv(?ENV_PRELOADED_DEVICES_INDEX, Index),
     erase_preloaded_env_cache(),
-    {OldStore, OldIndex}.
+    OldStore.
 
 %% @doc Restore the previous preloaded-store environment.
-restore_preloaded_env({OldStore, OldIndex}) ->
+restore_preloaded_env(OldStore) ->
     restore_env(?ENV_PRELOADED_STORE, OldStore),
-    restore_env(?ENV_PRELOADED_DEVICES_INDEX, OldIndex),
     erase_preloaded_env_cache().
 
 %% @doc Restore one environment variable captured by {@link set_preloaded_env/1}.
@@ -273,10 +268,7 @@ restore_env(Name, Value) ->
 
 %% @doc Clear hb_opts' cached view of preloaded-store environment variables.
 erase_preloaded_env_cache() ->
-    erase({os_env, hb_util:list(?ENV_PRELOADED_STORE)}),
-    erase({os_env, hb_util:list(?ENV_PRELOADED_DEVICES_INDEX)}),
-    erase({processed_env, <<"preloaded-store">>}),
-    erase({processed_env, <<"preloaded-devices-index">>}).
+    erase(default_message_with_env).
 
 %% @doc Read an OS environment variable using HB binary naming internally.
 getenv(Name) ->

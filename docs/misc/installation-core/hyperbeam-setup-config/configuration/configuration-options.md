@@ -79,7 +79,6 @@ These options control how HyperBEAM manages devices.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preloaded_store` | Store map | `{store-module: hb_store_lmdb, name: "_build/preloaded-store"}` | LMDB store of signed device specs and impl messages baked at build time. |
-| `preloaded_devices_index` | Binary | (filled by build) | Committed ID of the preloaded-store resolver message. |
 | `device_store` | Store map | falls back to `store` | Volatile cache of name/spec-ID → loaded module atom. |
 | `devices` | List | [] | Additional devices to load |
 

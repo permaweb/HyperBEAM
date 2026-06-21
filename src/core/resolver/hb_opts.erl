@@ -20,16 +20,6 @@
 -include("include/hb.hrl").
 -include("include/hb_opts.hrl").
 -include("include/hb_arweave_nodes.hrl").
--include("../../_build/hb_preloaded_index.hrl").
-
--ifndef(PRELOADED_DEVICES_INDEX_MESSAGE_ID).
--define(PRELOADED_DEVICES_INDEX_MESSAGE_ID, undefined).
--endif.
-
-%%% @doc Returns the build-time-generated preloaded-store index ID, or
-%%% `undefined' if the preloaded store has not yet been built.
-preloaded_index_default() ->
-    ?PRELOADED_DEVICES_INDEX_MESSAGE_ID.
 
 %%% Environment variables that can be used to override the default message.
 -ifdef(TEST).
@@ -86,8 +76,6 @@ preloaded_index_default() ->
         <<"hb-config-location">> => {"HB_CONFIG", "config.flat"},
         <<"preloaded-store">> =>
             {"HB_PRELOADED_STORE", fun preloaded_store_from_env/1},
-        <<"preloaded-devices-index">> =>
-            {"HB_PRELOADED_DEVICES_INDEX", fun hb_util:bin/1},
         <<"port">> => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
         <<"mode">> => {"HB_MODE", fun list_to_existing_atom/1},
         <<"paranoid-verify">> =>
@@ -256,8 +244,6 @@ raw_default_message() ->
                 <<"capacity">> => 1024 * 1024 * 1024,
                 <<"read-only">> => true
             },
-        % Build-time ID of the preloaded name resolver message.
-        <<"preloaded-devices-index">> => preloaded_index_default(),
         % Store for resolved device reference -> loaded module atom,
         % shared across processes so the first caller to resolve a
         % device spares the rest the index read and archive
@@ -1067,11 +1053,8 @@ load_multi_mixed_extensions_test() ->
 
 preloaded_env_override_test() ->
     StorePath = "/tmp/hb-preloaded-env-test",
-    Index = "abc123",
     os:putenv("HB_PRELOADED_STORE", StorePath),
-    os:putenv("HB_PRELOADED_DEVICES_INDEX", Index),
     erase(default_message_with_env),
-    erase(default_message),
     try
             ?assertEqual(
                 #{
@@ -1079,16 +1062,10 @@ preloaded_env_override_test() ->
                     <<"name">> => hb_util:bin(StorePath)
                 },
             ?MODULE:get(preloaded_store, undefined, #{})
-        ),
-        ?assertEqual(
-            hb_util:bin(Index),
-            ?MODULE:get(preloaded_devices_index, undefined, #{})
         )
     after
         os:unsetenv("HB_PRELOADED_STORE"),
-        os:unsetenv("HB_PRELOADED_DEVICES_INDEX"),
-        erase(default_message_with_env),
-        erase(default_message)
+        erase(default_message_with_env)
     end.
 
 as_identity_test() ->
