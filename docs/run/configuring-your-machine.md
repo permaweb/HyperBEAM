@@ -107,9 +107,8 @@ These options control how HyperBEAM executes messages and processes.
 
 These options control how HyperBEAM manages devices.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
+Remote device loading is enabled by configuring `trusted_device_signers`;
+omit it or set it to `[]` to disable remote signer lookup.
 <!-- Complex options like preloaded-store, devices are omitted -->
 
 ### Debug & Development

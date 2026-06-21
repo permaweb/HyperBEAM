@@ -179,11 +179,10 @@ preloaded(Opts) ->
 %% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
 %% already loaded via the high-trust path), then load the first signed,
 %% compatible implementation. Local caches are always searched -- gateway
-%% lookup is gated by `load-remote-devices'.
+%% lookup is gated by an explicit `trusted-device-signers' list.
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
-        TrustedSigners = trusted_signer_entries(Ref, SpecID, Opts),
         LocalIterators =
             [
                 fun() ->
@@ -193,15 +192,22 @@ from_low_trust(Ref, Opts) ->
                     )
                 end
             ],
+        RemoteSigners =
+            case hb_opts:get(trusted_device_signers, [], Opts) of
+                [_ | _] = Signers ->
+                    trusted_signer_entries(Ref, SpecID, Signers, Opts);
+                _ ->
+                    []
+            end,
         RemoteIterators =
-            case {hb_opts:get(<<"load-remote-devices">>, false, Opts), TrustedSigners} of
-                {true, [_ | _]} ->
+            case RemoteSigners of
+                [_ | _] ->
                     [
                         fun() ->
                             hb_util:ok_or(
                                 hb_client_gateway:device(
                                     SpecID,
-                                    TrustedSigners,
+                                    RemoteSigners,
                                     Opts
                                 ),
                                 []
@@ -328,10 +334,13 @@ trusted_signers(Ref, SpecID, Opts) ->
     ].
 
 trusted_signer_entries(Ref, SpecID, Opts) ->
+    trusted_signer_entries(Ref, SpecID, trusted_signer_entries(Opts), Opts).
+
+trusted_signer_entries(Ref, SpecID, Signers, Opts) ->
     [
         Signer
     ||
-        Signer <- trusted_signer_entries(Opts),
+        Signer <- Signers,
         trusted_signer_accepts(Ref, SpecID, Signer, Opts)
     ].
 

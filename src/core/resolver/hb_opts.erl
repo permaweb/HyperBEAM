@@ -262,8 +262,6 @@ raw_default_message() ->
         % Should the node attempt to access data from remote caches for
         % client requests?
         <<"access-remote-cache-for-client">> => false,
-        % Should the node attempt to load devices from remote signers?
-        <<"load-remote-devices">> => false,
         % The list of device signers that the node should trust.
         <<"trusted-device-signers">> => [],
         % Map of device name/spec ID -> trusted implementation ID,
