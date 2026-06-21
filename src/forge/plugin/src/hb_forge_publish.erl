@@ -27,6 +27,7 @@ publish(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-publish-store">>),
     KeyPath = maps:get(<<"key">>, Args),
     PublishCodec = maps:get(<<"publish-codec">>, Args),
+    DryRun = maps:get(<<"dry-run">>, Args),
     Wallet = hb_forge_args:load_wallet(KeyPath),
     Signer = hb:address(Wallet),
     Opts =
@@ -51,7 +52,6 @@ publish(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = upload(Spec, NodeOpts, PublishCodec),
             SpecID = hb_message:id(Spec, all, NodeOpts),
             % Sign and upload the implementation message.
             Impl =
@@ -60,11 +60,22 @@ publish(State) ->
                     NodeOpts,
                     PublishCodec
                 ),
-            {ok, _} = upload(Impl, NodeOpts, PublishCodec),
             ImplID = hb_message:id(Impl, all, NodeOpts),
+            case DryRun of
+                true ->
+                    ok;
+                false ->
+                    {ok, _} = upload(Spec, NodeOpts, PublishCodec),
+                    {ok, _} = upload(Impl, NodeOpts, PublishCodec)
+            end,
+            Action =
+                case DryRun of
+                    true -> "Signed device (dry run)";
+                    false -> "Published device"
+                end,
             rebar_api:info(
-                "device publish: ~s spec=~s impl=~s signer=~s",
-                [maps:get(device_name, Pkg), SpecID, ImplID, Signer]
+                "~s: ~s; Specification ID: ~s; Implementation ID: ~s; Signer: ~s.",
+                [Action, maps:get(device_name, Pkg), SpecID, ImplID, Signer]
             )
         end,
         hb_packager:package_all(
