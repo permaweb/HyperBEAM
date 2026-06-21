@@ -320,10 +320,7 @@ decode(Type, Value) when is_list(Type) ->
 decode(Type, Value) when is_binary(Type) ->
     ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
     decode(
-        binary_to_existing_atom(
-            list_to_binary(string:to_lower(binary_to_list(Type))),
-            latin1
-        ),
+        binary_to_existing_atom(to_lower(Type), latin1),
         Value
     );
 decode(integer, Value) ->
@@ -358,11 +355,7 @@ decode(map, Value) ->
     );
 decode(BinType, Value) when is_binary(BinType) ->
     decode(
-        list_to_existing_atom(
-            string:to_lower(
-                binary_to_list(BinType)
-            )
-        ),
+        binary_to_existing_atom(to_lower(BinType), latin1),
         Value
     );
 decode(OtherType, Value) ->
