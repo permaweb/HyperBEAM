@@ -173,7 +173,12 @@ canonical_key(Key) when is_list(Key) ->
         false -> Key
     end;
 canonical_key(Key) when is_binary(Key) ->
-    hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
+    case hb_util_string:canon_chars(Key) of
+        non_ascii ->
+            hb_util:to_lower(binary:replace(Key, <<"_">>, <<"-">>, [global]));
+        Chars ->
+            Chars
+    end;
 canonical_key(Key) -> Key.
 
 %% @doc Return the default message with all environment variables set.
