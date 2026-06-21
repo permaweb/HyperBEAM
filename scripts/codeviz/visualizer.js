@@ -2163,12 +2163,7 @@
       (items) => roleBandLabel(items[0], items.length),
       98
     );
-    const namespaceBands = forceBandsForGroups(
-      groupBy(nodes, (node) => node.namespace || `${node.role || "other"}:${node.group || "other"}`),
-      (items) => namespaceBandLabel(items[0], items.length),
-      58
-    );
-    return [...roleBands, ...namespaceBands];
+    return roleBands;
   }
 
   function forceBandsForGroups(groups, labelFun, padding = 78) {
@@ -2203,12 +2198,6 @@
     if (role === "device") return `devices · ${count} nodes`;
     if (role === "kernel") return `kernel · ${count} nodes`;
     return `${role} · ${count} nodes`;
-  }
-
-  function namespaceBandLabel(node, count) {
-    const label = node.namespace || node.category || node.group || "namespace";
-    const noun = state.mode === "function" ? "functions" : "modules";
-    return `${label} · ${count} ${noun}`;
   }
 
   function hashNumber(value) {
