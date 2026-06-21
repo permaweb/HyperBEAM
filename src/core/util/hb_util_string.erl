@@ -6,6 +6,7 @@
 %%% the ASCII byte `_'<->`-' and never folds, so it is exact for all input.
 -module(hb_util_string).
 -export([lowercase/1, key_chars/1, canon_chars/1, dash_chars/1]).
+-export([normalize_path/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -on_load(init/0).
@@ -31,6 +32,13 @@ canon_chars(_Bin) ->
 %% @doc Map `_' to `-' — the `atom_to_dashed_binary' transform. Exact for all
 %% bytes (non-ASCII passes through), so it never returns `non_ascii'.
 dash_chars(_Bin) ->
+    erlang:nif_error(not_loaded).
+
+%% @doc Collapse runs of `/' to a single `/' and strip leading/trailing `/' in
+%% one pass — the `hb_path:to_binary' normalization. Equivalent to
+%% `iolist_to_binary(lists:join(<<"/">>,
+%%      binary:split(Bin, <<"/">>, [global, trim_all])))'. Exact for all bytes.
+normalize_path(_Bin) ->
     erlang:nif_error(not_loaded).
 
 %% Tests
@@ -60,6 +68,33 @@ dash_chars_test() ->
     ?assertEqual(<<>>, dash_chars(<<>>)),
     %% non-ASCII passes through (no fold, no bail)
     ?assertEqual(<<"k", 16#FF>>, dash_chars(<<"k", 16#FF>>)).
+
+normalize_path_test() ->
+    ?assertEqual(<<"cache/abc">>, normalize_path(<<"cache/abc">>)),
+    ?assertEqual(<<"cache/abc">>, normalize_path(<<"/cache/abc">>)),
+    ?assertEqual(<<"cache/abc">>, normalize_path(<<"cache/abc/">>)),
+    ?assertEqual(<<"cache/abc">>, normalize_path(<<"//cache//abc//">>)),
+    ?assertEqual(<<"a/b/c">>, normalize_path(<<"a/b/c">>)),
+    ?assertEqual(<<>>, normalize_path(<<>>)),
+    ?assertEqual(<<>>, normalize_path(<<"/">>)),
+    ?assertEqual(<<>>, normalize_path(<<"///">>)),
+    ?assertEqual(<<"x">>, normalize_path(<<"x">>)),
+    %% non-ASCII passes through untouched (only `/' positions matter)
+    ?assertEqual(<<"k", 16#FF, "/v">>, normalize_path(<<"/k", 16#FF, "//v/">>)).
+
+%% The NIF must equal the Erlang split/join expression it replaces, for both
+%% ASCII and arbitrary-byte inputs.
+normalize_path_equivalence_test() ->
+    Old = fun(B) ->
+        iolist_to_binary(
+            lists:join(<<"/">>, binary:split(B, <<"/">>, [global, trim_all]))
+        )
+    end,
+    Inputs = [<<"cache/abc">>, <<"/cache/abc">>, <<"cache/abc/">>,
+              <<"//cache//abc//">>, <<"a/b/c/d/e">>, <<>>, <<"/">>, <<"///">>,
+              <<"no-slashes">>, <<"trailing/">>, <<"/leading">>,
+              <<"k", 16#FF, "//v">>],
+    [ ?assertEqual(Old(I), normalize_path(I)) || I <- Inputs ].
 
 %% The NIF transforms must equal the Erlang expressions they replace, for all
 %% ASCII inputs (the domain of HB keys / atom names).
