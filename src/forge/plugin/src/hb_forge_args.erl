@@ -74,9 +74,9 @@ opts() ->
         {help, $h, "help", {boolean, false},
             "Show command help."},
         {dry_run, undefined, "dry-run", {boolean, false},
-            "Sign and print package IDs without uploading to Arweave."},
+            "Sign packages and print their IDs without uploading to Arweave."},
         {verbose, undefined, "verbose", {boolean, false},
-            "Print locally preloaded devices IDs."}
+            "Print locally preloaded device IDs."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.

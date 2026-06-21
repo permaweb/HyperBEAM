@@ -65,7 +65,7 @@ run(Args, NodeOpts) ->
                     HeaderPath
                 ),
             rebar_api:info(
-                "device preload: store ~s, index ~s",
+                "Device preload complete: Store: ~s; Index: ~s.",
                 [OutputDir, maps:get(index, Result)]
             ),
             case Verbose of
@@ -109,7 +109,7 @@ print_device_ids(Result) ->
         fun({Pkg, ImplID}) ->
             Name = maps:get(device_name, Pkg),
             rebar_api:info(
-                "device preload: ~s spec=~s impl=~s",
+                "Preloaded device: ~s; Specification ID: ~s; Implementation ID: ~s.",
                 [Name, maps:get(Name, Specs), ImplID]
             )
         end,

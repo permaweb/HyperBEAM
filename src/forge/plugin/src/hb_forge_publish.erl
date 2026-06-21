@@ -68,9 +68,14 @@ publish(State) ->
                     {ok, _} = upload(Spec, NodeOpts, PublishCodec),
                     {ok, _} = upload(Impl, NodeOpts, PublishCodec)
             end,
+            Action =
+                case DryRun of
+                    true -> "Signed device (dry run)";
+                    false -> "Published device"
+                end,
             rebar_api:info(
-                "device publish: ~s spec=~s impl=~s signer=~s",
-                [maps:get(device_name, Pkg), SpecID, ImplID, Signer]
+                "~s: ~s; Specification ID: ~s; Implementation ID: ~s; Signer: ~s.",
+                [Action, maps:get(device_name, Pkg), SpecID, ImplID, Signer]
             )
         end,
         hb_packager:package_all(
