@@ -83,7 +83,7 @@ maybe_retry(Remaining, Args, OriginalResponse, Opts) ->
         {retrying_http_request,
             {after_ms, RetryTime},
             {error, ErrDetails},
-            {request, Args}
+            {priv_request, Args}
         }
     ),
     timer:sleep(RetryTime),
@@ -97,7 +97,7 @@ httpc_req(Args, Opts) ->
         headers := Headers,
         body := Body
     } = Args,
-    ?event({httpc_req, Args}),
+    ?event({httpc_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
         {ok, {Host, Port}} ->
@@ -135,7 +135,7 @@ httpc_req(Args, Opts) ->
                         upload_metric(Body, Opts),
                         {URL, HeaderKV, binary_to_list(ContentType), Body}
                 end,
-            ?event({http_client_outbound, Method, URL, Request}),
+            ?event({http_client_outbound, Method, URL, {priv_req, Request}}),
             HTTPCOpts = [{full_result, true}, {body_format, binary}],
             StartTime = os:system_time(native),
             case httpc:request(Method, Request, [], HTTPCOpts) of
@@ -172,7 +172,7 @@ hackney_req(Args, Opts) ->
         headers := Headers,
         body := Body
     } = Args,
-    ?event({hackney_req, Args}),
+    ?event({hackney_req, {priv_args, Args}}),
     case parse_peer(Peer, Opts) of
         {error, _} = Err -> Err;
         {ok, {Host, Port}} ->
@@ -463,7 +463,7 @@ do_gun_request(PID, Args, Opts) ->
         {gun_request,
             {method, Method},
             {path, Path},
-            {headers, {explicit, Headers}},
+            {priv_headers, {explicit, Headers}},
             {body, {explicit, {body, Body}}}
         },
         Opts
@@ -491,7 +491,7 @@ await_response(Args, Opts) ->
 	case gun:await(PID, Ref, inet:timeout(Timer)) of
 		{response, fin, Status, Headers} ->
 			upload_metric(Args, Opts),
-			?event(http, {gun_response, {status, Status}, {headers, Headers}, {body, none}}),
+			?event(http, {gun_response, {status, Status}, {priv_headers, Headers}, {body, none}}),
 			{ok, Status, Headers, <<>>};
 		{response, nofin, Status, Headers} ->
 			await_response(Args#{ status => Status, headers => Headers }, Opts);
@@ -511,7 +511,8 @@ await_response(Args, Opts) ->
                                 Opts
                             );
 						false ->
-							?event(error, {http_fetched_too_much_data, Args,
+							?event(error, {http_fetched_too_much_data, 
+                                    {priv_args, Args},
 									<<"Fetched too much data">>, Opts}),
 							{error, too_much_data}
 					end

@@ -88,7 +88,7 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
         ),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
 request(Method, Peer, Path, RawMessage, Opts) ->
-    ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {message, RawMessage}}),
+    ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {priv_message, RawMessage}}),
     Req =
         prepare_request(
             hb_maps:get(
@@ -114,8 +114,8 @@ request(Method, Peer, Path, RawMessage, Opts) ->
             ?event(http_outbound,
                 {
                     http_response,
-                    {req, Req},
-                    {response,
+                    {priv_req, Req},
+                    {priv_response,
                         #{
                             status => Status,
                             headers => Headers,
