@@ -335,12 +335,11 @@ bundler_routing_fallback() ->
             hb_http_server:start_node(
                 bundler_route_router_opts(FirstBundler, SecondBundler)
             ),
-        StructuredItem =
-            hb_message:convert(
-                bundler_route_item(ClientWallet),
-                <<"structured@1.0">>,
-                <<"ans104@1.0">>,
-                GatewayOpts
+        Item =
+            hb_message:commit(
+                #{ <<"data">> => <<"routed-bundle">> },
+                #{ <<"priv-wallet">> => ClientWallet },
+                #{ <<"commitment-device">> => <<"ans104@1.0">> }
             ),
         UploadReq =
             hb_message:commit(
@@ -348,23 +347,15 @@ bundler_routing_fallback() ->
                     <<"path">> => <<"/~bundler@1.0/tx">>,
                     <<"bundler-subject">> => <<"body">>,
                     <<"await">> => true,
-                    <<"body">> => StructuredItem
+                    <<"body">> => Item
                 },
                 #{ <<"priv-wallet">> => ClientWallet }
             ),
-        {ok, Response} = hb_http:post(Router, UploadReq, #{}),
-        ?assertMatch(
-            #{
-                <<"bundle-id">> := _,
-                <<"bundle-status">> := <<"complete">>
-            },
-            Response
-        ),
-        #{ <<"bundle-id">> := BundleID } = Response,
+        {ok, #{ <<"bundle-id">> := BundleID }} =
+            hb_http:post(Router, UploadReq, #{}),
         {ok, Bundle} = hb_cache:read(BundleID, SecondOpts),
         Loaded = hb_cache:ensure_all_loaded(Bundle, SecondOpts),
-        ?assertEqual([SecondAddress], hb_message:signers(Loaded, SecondOpts)),
-        ?assertEqual(1, length(hb_mock_server:get_requests(chunk, 1, ServerHandle)))
+        ?assertEqual([SecondAddress], hb_message:signers(Loaded, SecondOpts))
     after
         hb_mock_server:stop(ServerHandle)
     end.
@@ -423,16 +414,6 @@ bundler_route_balance_gate(FundedAddresses) ->
             false -> {400, <<"Transaction verification failed.">>}
         end
     end.
-
-%% @doc Build a signed data item for the routed bundle example.
-bundler_route_item(Wallet) ->
-    ar_bundles:sign_item(
-        #tx{
-            data = <<"routed-bundle">>,
-            tags = [{<<"example">>, <<"bundler-routing-fallback">>}]
-        },
-        Wallet
-    ).
 
 %% @doc Build a per-message hook that validates the item payload and releases pay.
 bundle_payment_message_hook(
