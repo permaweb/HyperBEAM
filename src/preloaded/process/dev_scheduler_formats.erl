@@ -28,20 +28,23 @@ assignments_to_bundle(ProcID, Assignments, More, TimeInfo, RawOpts) ->
         <<"block-height">> => hb_util:int(Height),
         <<"block-hash">> => hb_util:human_id(Hash),
         <<"assignments">> =>
-            hb_maps:from_list(
-                lists:map(
-                    fun(Assignment) ->
-                        {
-                            hb_ao:get(
-                                <<"slot">>,
-                                Assignment,
-                                Opts#{ <<"hashpath">> => ignore }
-                            ),
-                            Assignment
-                        }
-                    end,
-                    Assignments
-                )
+            hb_message:normalize_commitments(
+                hb_maps:from_list(
+                    lists:map(
+                        fun(Assignment) ->
+                            {
+                                hb_ao:get(
+                                    <<"slot">>,
+                                    Assignment,
+                                    Opts#{ <<"hashpath">> => ignore }
+                                ),
+                                Assignment
+                            }
+                        end,
+                        Assignments
+                    )
+                ),
+                Opts
             )
     }}.
 
