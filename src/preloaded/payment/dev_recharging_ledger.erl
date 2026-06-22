@@ -228,3 +228,33 @@ negative_quantity_returns_400_test() ->
         {error, #{ <<"status">> := 400}},
         charge(#{}, #{<<"account">> => Account, <<"quantity">> => -1}, Opts)
     ).
+
+exempt_account_returns_infinity_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 100,
+        <<"recharging-ledger-exempt">> => [Account]
+        },
+
+    ?assertEqual(
+        {ok, infinity},
+        balance(#{}, #{ <<"target">> => Account}, Opts)
+    ).
+
+exempt_account_charge_does_not_mutate_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 100,
+        <<"recharging-ledger-exempt">> => [Account]
+        },
+
+    {ok, true} = charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 1000}, Opts),
+
+    ?assertEqual(
+        {ok, infinity},
+        balance(#{}, #{ <<"target">> => Account}, Opts)
+    ).
