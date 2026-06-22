@@ -258,3 +258,67 @@ exempt_account_charge_does_not_mutate_balance_test() ->
         {ok, infinity},
         balance(#{}, #{ <<"target">> => Account}, Opts)
     ).
+
+recharge_restores_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500)).
+
+recharge_caps_at_max_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => 95, last => 0 } }
+    },
+    ?assertEqual(100, account_balance(Account, State, 1000)).
+
+p4_charges_recharging_ledger_simple_pay_test() ->
+    HostWallet = ar_wallet:new(),
+    OperatorWallet = ar_wallet:new(),
+    ClientWallet = ar_wallet:new(),
+    ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"pricing-device">> => <<"simple-pay@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>
+    },
+    Opts = #{
+        <<"priv-wallet">> => HostWallet,
+        <<"operator">> => ar_wallet:to_address(OperatorWallet),
+        <<"simple-pay-price">> => 0,
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"router-opts">> => #{
+            <<"offered">> => [
+                #{
+                    <<"template">> => <<"/greeting">>,
+                    <<"price">> => 3
+                }
+            ]
+        },
+        <<"on">> => #{
+            <<"request">> => Processor,
+            <<"response">> => Processor
+        }
+    },
+    Node = hb_http_server:start_node(Opts),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/greeting">>,
+                <<"greeting">> => <<"Hello from P4">>
+            },
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual({ok, <<"Hello from P4">>}, hb_http:get(Node, Req, #{})),
+    ?assertEqual(
+        {ok, 7},
+        balance(#{}, #{ <<"target">> => ClientAddress }, Opts)
+    ).
