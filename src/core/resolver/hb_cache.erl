@@ -356,7 +356,7 @@ do_write_message(Msg, Store = #{ <<"store-module">> := hb_store_lmdb }, Opts)
             _ -> []
         end,
     {UncommittedID, Writes, Links, IndexEntries} =
-        prepare_message(Msg, Store, Opts, #{}, #{}, InitialIndexEntries),
+        prepare_message(Msg, Opts, #{}, #{}, InitialIndexEntries),
     LinkWrites = link_write_ops(Links),
     case match_index_ops(IndexEntries, Opts) of
         {Store, MatchWrites} ->
@@ -424,7 +424,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     ),
     {ok, UncommittedID}.
 
-prepare_message(Msg, Store, Opts, Writes, Links, IndexEntries) ->
+prepare_message(Msg, Opts, Writes, Links, IndexEntries) ->
     ?event_debug(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
@@ -438,7 +438,6 @@ prepare_message(Msg, Store, Opts, Writes, Links, IndexEntries) ->
                     UncommittedID,
                     Key,
                     Value,
-                    Store,
                     Opts,
                     Acc
                 )
@@ -453,20 +452,19 @@ prepare_message(Msg, Store, Opts, Writes, Links, IndexEntries) ->
         add_index_entry(AllIDs, Msg, PreparedIndexEntries)
     }.
 
-prepare_value(Bin, _Store, Opts, Writes, Links, IndexEntries) when is_binary(Bin) ->
+prepare_value(Bin, Opts, Writes, Links, IndexEntries) when is_binary(Bin) ->
     Path = generate_binary_path(Bin, Opts),
     {Path, Writes#{ Path => Bin }, Links, IndexEntries};
-prepare_value(List, Store, Opts, Writes, Links, IndexEntries) when is_list(List) ->
+prepare_value(List, Opts, Writes, Links, IndexEntries) when is_list(List) ->
     prepare_value(
         hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
-        Store,
         Opts,
         Writes,
         Links,
         IndexEntries
     );
-prepare_value(Msg, Store, Opts, Writes, Links, IndexEntries) when is_map(Msg) ->
-    prepare_message(Msg, Store, Opts, Writes, Links, IndexEntries).
+prepare_value(Msg, Opts, Writes, Links, IndexEntries) when is_map(Msg) ->
+    prepare_message(Msg, Opts, Writes, Links, IndexEntries).
 
 add_alt_links(UncommittedID, AltIDs, Links) ->
     lists:foldl(
@@ -512,7 +510,7 @@ link_ops(Store, Ops, Opts) ->
     hb_store:link(Store, Ops, Opts).
 
 %% @doc Prepare a single key for a message write.
-prepare_key(Base, <<"commitments">>, RawCommitments, Store, Opts,
+prepare_key(Base, <<"commitments">>, RawCommitments, Opts,
         {Writes, Links, IndexEntries}) ->
     % The commitments are a special case: We calculate the single-part hashpath
     % for the `baseID/commitments` key, then write each commitment to the store
@@ -533,7 +531,6 @@ prepare_key(Base, <<"commitments">>, RawCommitments, Store, Opts,
                 {CommMsgID, NewWrites, NewLinks, NewIndexEntries} =
                     prepare_value(
                         Commitment,
-                        Store,
                         Opts,
                         WriteAcc,
                         LinkAcc,
@@ -556,7 +553,7 @@ prepare_key(Base, <<"commitments">>, RawCommitments, Store, Opts,
         PreparedLinks#{ <<Base/binary, "/commitments">> => CommitmentsBase },
         PreparedIndexEntries
     };
-prepare_key(Base, Key, Value, Store, Opts, {Writes, Links, IndexEntries}) ->
+prepare_key(Base, Key, Value, Opts, {Writes, Links, IndexEntries}) ->
     KeyHashPath = message_key_path(Base, Key),
     case direct_cache_value(Key, Value) of
         true ->
@@ -567,7 +564,7 @@ prepare_key(Base, Key, Value, Store, Opts, {Writes, Links, IndexEntries}) ->
             };
         false ->
             {Path, PreparedWrites, PreparedLinks, PreparedIndexEntries} =
-                prepare_value(Value, Store, Opts, Writes, Links, IndexEntries),
+                prepare_value(Value, Opts, Writes, Links, IndexEntries),
             {
                 PreparedWrites,
                 PreparedLinks#{ KeyHashPath => Path },
