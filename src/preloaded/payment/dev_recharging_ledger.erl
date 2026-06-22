@@ -3,7 +3,7 @@
 %%% Accounts accrue units continuously up to a configured cap. `p4@1.0' can
 %%% query the current effective balance and charge metered usage against it.
 -module(dev_recharging_ledger).
--export([balance/3]).
+-export([balance/3, charge/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -25,6 +25,14 @@ balance(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, Opts),
     {ok, get_balance(account_id(Target), Opts)}.
 
+%% @doc Charge metered usage against a P4 account. P4 supplies the `account'
+%% key on the post-response commit path and the `quantity' to deduct. The charge
+%% succeeds only when the current effective balance can cover the quantity.
+charge(_, Req, Opts) ->
+    Account = hb_ao:get(<<"account">>, Req, Opts),
+    Quantity = hb_util:int(hb_ao:get(<<"quantity">>, Req, 0, Opts)),
+    charge_balance(account_id(Account), Quantity, Opts).
+
 get_balance(AccountID, Opts) ->
     PID = ensure_server_started(Opts),
     PID ! {balance, self(), AccountID},
@@ -35,6 +43,23 @@ get_balance(AccountID, Opts) ->
         ?event(warning, {recharging_ledger_timeout, restarting}),
         hb_name:unregister(server_id(Opts)),
         get_balance(AccountID, Opts)
+    end.
+
+charge_balance(_AccountID, Quantity, _Opts) when Quantity < 0 ->
+    {error, #{
+        <<"status">> => 400,
+        <<"body">> => <<"Charge quantity must be non-negative.">>
+    }};
+charge_balance(AccountID, Quantity, Opts) ->
+    PID = ensure_server_started(Opts),
+    PID ! {charge, self(), AccountID, Quantity},
+    receive
+        {charged, Result} ->
+            Result
+    after ?LOOKUP_TIMEOUT ->
+        ?event(warning, {recharging_ledger_timeout, restarting}),
+        hb_name:unregister(server_id(Opts)),
+        charge_balance(AccountID, Quantity, Opts)
     end.
 
 server_id(Opts) ->
@@ -81,7 +106,40 @@ server_loop(State) ->
     receive
         {balance, PID, AccountID} ->
             PID ! {balance, account_balance(AccountID, State)},
-            server_loop(State)
+            server_loop(State);
+        {charge, PID, AccountID, Quantity} ->
+            {Result, NewState} =
+                charge_account(
+                    AccountID,
+                    Quantity,
+                    State,
+                    erlang:system_time(millisecond)
+                ),
+            PID ! {charged, Result},
+            server_loop(NewState)
+    end.
+
+charge_account(AccountID, Quantity, State = #{ accounts := Accounts }, Now) ->
+    case account_balance(AccountID, State, Now) of
+        infinity ->
+            {{ok, true}, State};
+        Balance when Balance >= Quantity ->
+            {{ok, true},
+                State#{
+                    accounts =>
+                        Accounts#{
+                            AccountID =>
+                                #{
+                                    balance => Balance - Quantity,
+                                    last => Now
+                                }
+                        }
+                }};
+        _Balance ->
+            {{error, #{
+                <<"status">> => 402,
+                <<"body">> => <<"Insufficient recharging ledger balance.">>
+            }}, State}
     end.
 
 account_balance(AccountID, State) ->
@@ -111,4 +169,20 @@ balance_new_target_returns_max_test() ->
     ?assertEqual(
         {ok, 100},
         balance(#{}, #{ <<"target">> => Target }, Opts)
+    ).
+
+charge_new_account_deducts_units_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertEqual(
+        {ok, true},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, 75.0},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
