@@ -313,10 +313,186 @@ do_write_message(List, Store, Opts) when is_list(List) ->
         Store,
         Opts
     );
+do_write_message(Msg, Store = #{ <<"store-module">> := hb_store_lmdb }, Opts)
+        when is_map(Msg) ->
+    InitialIndexEntries =
+        case hb_opts:get(match_index, false, Opts) of
+            false -> skip;
+            _ -> []
+        end,
+    {UncommittedID, Writes, Links, IndexEntries} =
+        prepare_message(Msg, Opts, #{}, #{}, InitialIndexEntries),
+    LinkWrites = link_write_ops(Links),
+    case match_index_ops(IndexEntries, Opts) of
+        {Store, MatchWrites} ->
+            write_ops(Store, maps:merge(maps:merge(Writes, LinkWrites), MatchWrites), Opts);
+        {MatchStore, MatchWrites} ->
+            write_ops(Store, maps:merge(Writes, LinkWrites), Opts),
+            write_ops(MatchStore, MatchWrites, Opts);
+        legacy ->
+            write_ops(Store, maps:merge(Writes, LinkWrites), Opts),
+            write_match_indexes(IndexEntries, Opts);
+        skip ->
+            write_ops(Store, maps:merge(Writes, LinkWrites), Opts)
+    end,
+    {ok, UncommittedID};
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     {ok, UncommittedID, Ops} = write_message_ops(Msg, Opts),
     run_write_ops(Store, Ops, Opts),
     {ok, UncommittedID}.
+
+prepare_message(Msg, Opts, Writes, Links, IndexEntries) ->
+    ?event_debug(debug_cache, {writing_message, Msg}),
+    UncommittedID =
+        hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
+    AllIDs = calculate_all_ids(Msg, UncommittedID, Opts),
+    AltIDs = AllIDs -- [UncommittedID],
+    ?event_debug(debug_cache,
+        {writing_message,
+            {id, UncommittedID},
+            {alt_ids, AltIDs},
+            {original, Msg}
+        }
+    ),
+    {PreparedWrites, PreparedLinks, PreparedIndexEntries} =
+        maps:fold(
+            fun(Key, Value, Acc) ->
+                prepare_key(UncommittedID, Key, Value, Opts, Acc)
+            end,
+            {Writes#{ UncommittedID => <<"group">> }, Links, IndexEntries},
+            maps:without([<<"priv">>], Msg)
+        ),
+    {
+        UncommittedID,
+        PreparedWrites,
+        add_alt_links(UncommittedID, AltIDs, PreparedLinks),
+        add_index_entry(AllIDs, Msg, PreparedIndexEntries)
+    }.
+
+prepare_value(Bin, Opts, Writes, Links, IndexEntries) when is_binary(Bin) ->
+    Path = generate_binary_path(Bin, Opts),
+    {Path, Writes#{ Path => Bin }, Links, IndexEntries};
+prepare_value(List, Opts, Writes, Links, IndexEntries) when is_list(List) ->
+    prepare_value(
+        hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
+        Opts,
+        Writes,
+        Links,
+        IndexEntries
+    );
+prepare_value(Msg, Opts, Writes, Links, IndexEntries) when is_map(Msg) ->
+    prepare_message(Msg, Opts, Writes, Links, IndexEntries).
+
+add_alt_links(UncommittedID, AltIDs, Links) ->
+    lists:foldl(
+        fun(AltID, Acc) ->
+            ?event_debug(debug_cache,
+                {linking_commitment,
+                    {uncommitted_id, UncommittedID},
+                    {committed_id, AltID}
+            }),
+            Acc#{ AltID => UncommittedID }
+        end,
+        Links,
+        AltIDs
+    ).
+
+link_write_ops(Links) ->
+    maps:fold(
+        fun(New, Existing, Acc) ->
+            ExistingBin =
+                case is_binary(Existing) of
+                    true -> Existing;
+                    false -> hb_path:to_binary(Existing)
+                end,
+            Acc#{ New => <<"link:", ExistingBin/binary>> }
+        end,
+        #{},
+        Links
+    ).
+
+add_index_entry(_AllIDs, _Msg, skip) ->
+    skip;
+add_index_entry(AllIDs, Msg, IndexEntries) ->
+    [{AllIDs, Msg} | IndexEntries].
+
+write_ops(_Store, Ops, _Opts) when map_size(Ops) =:= 0 ->
+    ok;
+write_ops(Store, Ops, Opts) ->
+    hb_store:write(Store, Ops, Opts).
+
+%% @doc Prepare a single key for an LMDB message write.
+prepare_key(Base, <<"commitments">>, RawCommitments, Opts,
+        {Writes, Links, IndexEntries}) ->
+    Commitments = prepare_commitments(RawCommitments, Opts),
+    CommitmentsBase = commitment_path(Base, Opts),
+    ?event(
+        {writing_commitments,
+            {base, Base},
+            {commitments_message, Commitments},
+            {commitments_base, CommitmentsBase}
+        }
+    ),
+    {PreparedWrites, PreparedLinks, PreparedIndexEntries} =
+        maps:fold(
+            fun(BaseCommID, Commitment, {WriteAcc, LinkAcc, IndexAcc}) ->
+                ?event_debug(debug_cache, {writing_commitment, {commitment, Commitment}}),
+                {CommMsgID, NewWrites, NewLinks, NewIndexEntries} =
+                    prepare_value(
+                        Commitment,
+                        Opts,
+                        WriteAcc,
+                        LinkAcc,
+                        IndexAcc
+                    ),
+                {
+                    NewWrites,
+                    NewLinks#{
+                        <<CommitmentsBase/binary, "/", BaseCommID/binary>> =>
+                            CommMsgID
+                    },
+                    NewIndexEntries
+                }
+            end,
+            {Writes#{ CommitmentsBase => <<"group">> }, Links, IndexEntries},
+            Commitments
+        ),
+    {
+        PreparedWrites,
+        PreparedLinks#{ <<Base/binary, "/commitments">> => CommitmentsBase },
+        PreparedIndexEntries
+    };
+prepare_key(Base, Key, Value, Opts, {Writes, Links, IndexEntries}) ->
+    KeyPath = message_key_path(Base, Key),
+    case direct_cache_value(Key, Value) of
+        true ->
+            {
+                Writes#{ KeyPath => <<"raw:", Value/binary>> },
+                Links,
+                IndexEntries
+            };
+        false ->
+            {Path, PreparedWrites, PreparedLinks, PreparedIndexEntries} =
+                prepare_value(Value, Opts, Writes, Links, IndexEntries),
+            {
+                PreparedWrites,
+                PreparedLinks#{ KeyPath => Path },
+                PreparedIndexEntries
+            }
+    end.
+
+message_key_path(Base, Key) when is_binary(Key) ->
+    <<Base/binary, "/", Key/binary>>;
+message_key_path(Base, Key) ->
+    KeyBin = hb_path:to_binary(Key),
+    <<Base/binary, "/", KeyBin/binary>>.
+
+direct_cache_value(<<"ao-types">>, Value) when is_binary(Value) ->
+    true;
+direct_cache_value(Key, Value) ->
+    is_binary(Value) andalso
+        byte_size(Value) < ?DIRECT_VALUE_LENGTH andalso
+        not hb_link:is_link_key(Key).
 
 write_message_ops(Bin, Opts) when is_binary(Bin) ->
     Path = generate_binary_path(Bin, Opts),
@@ -466,6 +642,81 @@ apply_write_ops(Store, Ops, Opts) ->
     ok.
 
 %% @doc Write all message keys to the optional match index.
+match_index_ops(skip, _Opts) ->
+    skip;
+match_index_ops(IndexEntries, Opts) ->
+    case hb_opts:get(match_index, false, Opts) of
+        false ->
+            skip;
+        _ ->
+            case match_store(Opts) of
+                [] ->
+                    skip;
+                [Store = #{ <<"store-module">> := hb_store_lmdb }] ->
+                    {Store, match_index_rows(IndexEntries, Opts)};
+                Store = #{ <<"store-module">> := hb_store_lmdb } ->
+                    {Store, match_index_rows(IndexEntries, Opts)};
+                _ ->
+                    legacy
+            end
+    end.
+
+write_match_indexes(IndexEntries, Opts) ->
+    case match_store(Opts) of
+        [] ->
+            {skip, <<"No store configured for match index.">>};
+        _ ->
+            lists:foreach(
+                fun({IDs, IndexedMsg}) ->
+                    write_match_index(IDs, IndexedMsg, Opts)
+                end,
+                IndexEntries
+            )
+    end.
+
+match_index_rows(IndexEntries, Opts) ->
+    lists:foldl(
+        fun({IDs, Base}, Acc) ->
+            IndexBase =
+                maps:without(
+                    [<<"ao-types">>],
+                    hb_message:uncommitted(hb_private:reset(Base))
+                ),
+            hb_maps:fold(
+                fun(RawKey, Value, KeyAcc) ->
+                    {Key, ValuePath} =
+                        match_index_key_value(RawKey, Value, Opts),
+                    MatchAddress = match_address(Key, ValuePath),
+                    lists:foldl(
+                        fun(ID, IDAcc) ->
+                            Address = match_address_id(MatchAddress, ID),
+                            ?event_debug(
+                                debug_match,
+                                {writing_reverse_index, {address, Address}},
+                                Opts
+                            ),
+                            IDAcc#{ Address => <<>> }
+                        end,
+                        KeyAcc#{ MatchAddress => <<"group">> },
+                        IDs
+                    )
+                end,
+                Acc,
+                IndexBase
+            )
+        end,
+        #{},
+        IndexEntries
+    ).
+
+match_index_key_value(RawKey, Value, Opts)
+        when is_map(Value) orelse is_list(Value) ->
+    Key = hb_ao:normalize_key(RawKey),
+    LinkID = hb_message:id(Value, none, Opts#{ <<"linkify-mode">> => discard }),
+    {<<Key/binary, "+link">>, match_value_path(LinkID, Opts)};
+match_index_key_value(RawKey, Value, Opts) ->
+    {hb_ao:normalize_key(RawKey), match_value_path(Value, Opts)}.
+
 write_match_index(IDs, Base, Opts) ->
     case match_store(Opts) of
         [] -> {skip, <<"No store configured for match index.">>};
@@ -500,13 +751,27 @@ write_match_index(IDs, Base, Opts) ->
 %% `false' disables index writes, `true' uses the normal configured
 %% store, and a store definition/list writes the index there.
 match_store(Opts) ->
-    Global = hb_opts:get(match_index, false, #{ <<"only">> => global }),
-    LocalStore = hb_opts:get(store, Global, Opts#{ <<"only">> => local }),
-    case hb_opts:get(match_index, LocalStore, Opts#{ <<"only">> => local }) of
+    LocalMatchIndex = maps:get(<<"match-index">>, Opts, undefined),
+    LocalStore = maps:get(<<"store">>, Opts, undefined),
+    GlobalMatchIndex = hb_opts:get(match_index, false, #{ <<"only">> => global }),
+    MatchIndexStore =
+        case {LocalMatchIndex, LocalStore} of
+            {undefined, undefined} ->
+                GlobalMatchIndex;
+            {undefined, _} ->
+                LocalStore;
+            {Local, Store}
+                    when Store =/= undefined andalso
+                        Local =:= GlobalMatchIndex ->
+                Store;
+            {Local, _} ->
+                Local
+        end,
+    case MatchIndexStore of
         false -> [];
         true -> hb_opts:get(store, [], Opts);
-        Store when is_list(Store) -> Store;
-        Store -> [Store]
+        ResolvedStore when is_list(ResolvedStore) -> ResolvedStore;
+        ResolvedStore -> [ResolvedStore]
     end.
 
 %% @doc Calculate the address of a key-value pair in the match index.

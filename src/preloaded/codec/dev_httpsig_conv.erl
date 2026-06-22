@@ -908,12 +908,14 @@ encode_message_with_links_test() ->
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
         <<"long-key">> => binary:copy(<<"a">>, 61),
-        <<"short-key">> => <<"short-value">>
+        <<"short-key">> => <<"short-value">>,
+        <<"typed-key">> => 4
     },
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
     ?assertMatch(<<"short-value">>, maps:get(<<"short-key">>, Read, #{})),
+    ?assertEqual(4, maps:get(<<"typed-key">>, Read, #{})),
     ?assertMatch({link, _, _}, maps:get(<<"long-key">>, Read, #{})),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
