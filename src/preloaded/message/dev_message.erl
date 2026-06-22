@@ -99,7 +99,7 @@ id(RawBase, Req, NodeOpts) ->
     % filtering for the committers specified in the request.
     #{ <<"commitments">> := Commitments }
         = with_relevant_commitments(Base, Req, IDOpts),
-    ?event(debug_id,
+    ?event_debug(debug_id,
         {generating_ids,
             {selected_commitments, Commitments},
             {req, Req},
@@ -109,7 +109,7 @@ id(RawBase, Req, NodeOpts) ->
     case hb_maps:keys(Commitments) of
         [] ->
             % If there are no commitments, we must (re)calculate the ID.
-            ?event(debug_id, regenerating_id),
+            ?event_debug(debug_id, regenerating_id),
             calculate_id(hb_maps:without([<<"commitments">>], Base), Req, IDOpts);
         IDs ->
             % Accumulate the relevant IDs into a single value. This is performed 
@@ -124,7 +124,7 @@ id(RawBase, Req, NodeOpts) ->
             % accumulation function starts with a buffer of zero encoded as a 
             % 256-bit binary. Subsequently, a single ID on its own 'accumulates' 
             % to itself.
-            ?event(debug_id, returning_existing_ids),
+            ?event_debug(debug_id, returning_existing_ids),
             {ok,
                 hb_util:human_id(
                     hb_crypto:accumulate(
@@ -155,8 +155,8 @@ calculate_id(RawBase, Req, NodeOpts) ->
             NodeOpts
         ),
     Base = hb_message:convert(RawBase, tabm, SourceSpec, NodeOpts),
-    ?event(debug_id, {calculate_ids, {base, Base}}),
-    ?event(debug_id, {generating_id, {id_device, IDDev}, {base, Base}}),
+    ?event_debug(debug_id, {calculate_ids, {base, Base}}),
+    ?event_debug(debug_id, {generating_id, {id_device, IDDev}, {base, Base}}),
     % Get the commitment device name from the message, or use the default if
     % it is not set. We can tell if the device is not set (or is the default)
     % by checking whether the resolved device module is this module itself.
@@ -166,7 +166,7 @@ calculate_id(RawBase, Req, NodeOpts) ->
             ?MODULE -> ?DEFAULT_ID_DEVICE;
             _ -> IDDev
         end,
-    ?event(debug_id, {called_id_device, CommitDev}, NodeOpts),
+    ?event_debug(debug_id, {called_id_device, CommitDev}, NodeOpts),
     {ok, #{ <<"commitments">> := Comms} } =
         hb_ao:raw(
             CommitDev,
@@ -175,7 +175,7 @@ calculate_id(RawBase, Req, NodeOpts) ->
             Req#{ <<"type">> => <<"unsigned">> },
             NodeOpts
         ),
-    ?event(debug_id,
+    ?event_debug(debug_id,
         {generated_id,
             {type, unsigned},
             {commitments, maps:keys(Comms)}
@@ -386,7 +386,7 @@ committed(Self, Req, Opts) ->
         ),
     Base = ensure_commitments_loaded(RawBase, Opts),
     CommitmentIDs = commitment_ids_from_request(Base, Req, Opts),
-    ?event(debug_commitments,
+    ?event_debug(debug_commitments,
         {calculating_committed,
             {commitment_ids, CommitmentIDs},
             {req, Req}
@@ -447,7 +447,7 @@ committed(Self, Req, Opts) ->
                     OnlyCommittedKeys
                 )
         end,
-    ?event(debug_commitments, {only_committed_keys, CommittedNormalizedKeys}),
+    ?event_debug(debug_commitments, {only_committed_keys, CommittedNormalizedKeys}),
     {ok, CommittedNormalizedKeys}.
 
 %% @doc Return a message with only the relevant commitments for a given request.
@@ -476,7 +476,7 @@ commitment_ids_from_request(Base, Req, Opts) ->
             X2 when is_list(X2) -> X2;
             CommitmentDescriptor -> hb_ao:normalize_key(CommitmentDescriptor)
         end,
-    ?event(debug_commitments,
+    ?event_debug(debug_commitments,
         {commitment_ids_from_request,
             {req_commitments, ReqCommitments},
             {req_committers, ReqCommitters}}
@@ -494,11 +494,11 @@ commitment_ids_from_request(Base, Req, Opts) ->
     FromCommitterAddrs =
         case ReqCommitters of
             <<"none">> ->
-                ?event(debug_commitments, no_commitment_ids_for_committers),
+                ?event_debug(debug_commitments, no_commitment_ids_for_committers),
                 [];
             <<"all">> ->
                 {ok, Committers} = committers(Base, Req, Opts),
-                ?event(debug_commitments, {commitment_ids_from_committers, Committers}),
+                ?event_debug(debug_commitments, {commitment_ids_from_committers, Committers}),
                 commitment_ids_from_committers(Committers, Commitments, Opts);
             RawCommitterAddrs ->
                 ?event(
@@ -615,7 +615,7 @@ set(Base, NewValuesMsg, Opts) ->
 		),
 	% Find keys in the message that are already set (case-insensitive), and 
 	% note them for removal.
-	ConflictingKeys =
+	_ConflictingKeys =
 		lists:filter(
 			fun(Key) -> lists:member(Key, KeysToSet) end,
 			hb_maps:keys(Base, Opts)
@@ -632,9 +632,9 @@ set(Base, NewValuesMsg, Opts) ->
         ),
     % Base message with keys-to-unset removed
     BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
-    ?event(debug_message_set,
+    ?event_debug(debug_message_set,
         {performing_set,
-            {conflicting_keys, ConflictingKeys},
+            {conflicting_keys, _ConflictingKeys},
             {keys_to_unset, UnsetKeys},
             {new_values, NewValuesMsg},
             {original_message, Base}
@@ -662,7 +662,7 @@ set(Base, NewValuesMsg, Opts) ->
             },
             Opts
         ),
-    ?event(message_set,
+    ?event_debug(message_set,
         {setting,
             {committed_keys, CommittedKeys},
             {keys_to_set, KeysToSet},
@@ -673,7 +673,7 @@ set(Base, NewValuesMsg, Opts) ->
         lists:filtermap(
             fun(Key) ->
                 NormKey = hb_ao:normalize_key(Key),
-                ?event({checking_committed_key, {key, Key}, {norm_key, NormKey}}),
+                ?event_debug({checking_committed_key, {key, Key}, {norm_key, NormKey}}),
                 Res = case lists:member(NormKey, KeysToSet) of
                     true -> {true, NormKey};
                     false -> false
@@ -682,7 +682,7 @@ set(Base, NewValuesMsg, Opts) ->
             end,
             CommittedKeys
         ),
-    ?event({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
+    ?event_debug({setting, {overwritten_committed_keys, OverwrittenCommittedKeys}}),
     % Combine with deep merge or if `set-mode` is `explicit' then just merge.
     Merged =
         hb_private:set_priv(
@@ -694,7 +694,7 @@ set(Base, NewValuesMsg, Opts) ->
         ),
     case OverwrittenCommittedKeys of
         [] ->
-            ?event(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
+            ?event_debug(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
             {ok, Merged};
         _ ->
             % We did overwrite some keys, but do their values match the original?
@@ -704,7 +704,7 @@ set(Base, NewValuesMsg, Opts) ->
             Matches = hb_message:match(ChangedMergedKeys, ChangedBaseKeys, strict, Opts),
             case Matches of
                 true ->
-                    ?event(message_set, {set_keys_matched, {merged, Merged}}),
+                    ?event_debug(message_set, {set_keys_matched, {merged, Merged}}),
                     {ok, Merged};
                 % {error, {Details, {trace, Stacktrace}}} ->
                 %     erlang:raise(error, Details, Stacktrace);
@@ -985,9 +985,9 @@ test_verify(KeyType) ->
     Unsigned = #{ <<"a">> => <<"b">> },
     Wallet = ar_wallet:new(KeyType),
     Signed = hb_message:commit(Unsigned, #{ <<"priv-wallet">> => Wallet }),
-    ?event({signed, Signed}),
+    ?event_debug({signed, Signed}),
     BadSigned = Signed#{ <<"a">> => <<"c">> },
-    ?event({bad_signed, BadSigned}),
+    ?event_debug({bad_signed, BadSigned}),
     ?assertEqual(false, hb_message:verify(BadSigned)),
     ?assertEqual({ok, true},
         hb_ao:resolve(

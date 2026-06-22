@@ -149,7 +149,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, to_path(PathParts), Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
+    ?event_debug({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
@@ -420,10 +420,10 @@ match(Opts, MatchKVs, _NodeOpts) ->
             end,
             MatchKVs
         ),
-    ?event({elmdb_match, MatchKVs}),
+    ?event_debug({elmdb_match, MatchKVs}),
     case elmdb:match(DBInstance, WithPrefixes) of
         {ok, Matches} ->
-            ?event({elmdb_matched, Matches}),
+            ?event_debug({elmdb_matched, Matches}),
             {ok, Matches};
         {error, not_found} -> {error, not_found};
         not_found -> {error, not_found}
@@ -704,19 +704,19 @@ list_test() ->
     test_read(StoreOpts, <<"colors">>),
     % Test listing colors/ - should return immediate children only
     {ok, ListResult} = test_list(StoreOpts, <<"colors">>),
-    ?event({list_result, ListResult}),
+    ?event_debug({list_result, ListResult}),
     % Expected: red, blue, green (files) + multi, primary, nested (directories)
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
     % Test listing a nested directory - should only show immediate children
     {ok, NestedListResult} = test_list(StoreOpts, <<"colors/multi">>),
-    ?event({nested_list_result, NestedListResult}),
+    ?event_debug({nested_list_result, NestedListResult}),
     ExpectedNestedChildren = [<<"bar">>, <<"foo">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedNestedChildren) end, NestedListResult)),
     % Test listing a deeper nested directory
     {ok, DeepListResult} = test_list(StoreOpts, <<"colors/nested">>),
-    ?event({deep_list_result, DeepListResult}),
+    ?event_debug({deep_list_result, DeepListResult}),
     ExpectedDeepChildren = [<<"deep">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedDeepChildren) end, DeepListResult)),
     ok = test_stop(StoreOpts).
@@ -749,7 +749,7 @@ link_test() ->
     test_write(StoreOpts, <<"foo/bar/baz">>, <<"Bam">>),
     test_link(StoreOpts, <<"foo/bar/baz">>, <<"foo/beep/baz">>),
     {ok, Result} = test_read(StoreOpts, <<"foo/beep/baz">>),
-    ?event({ result, Result}),
+    ?event_debug({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
 link_fragment_test() ->
@@ -758,7 +758,7 @@ link_fragment_test() ->
     test_write(StoreOpts, [<<"data">>, <<"bar">>, <<"baz">>], <<"Bam">>),
     test_link(StoreOpts, [<<"data">>, <<"bar">>], <<"my-link">>),
     {ok, Result} = test_read(StoreOpts, [<<"my-link">>, <<"baz">>]),
-    ?event({ result, Result}),
+    ?event_debug({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
 %% @doc Type test - verifies type detection for both simple and composite entries.
@@ -771,11 +771,11 @@ type_test() ->
     test_reset(StoreOpts),
     test_group(StoreOpts, <<"assets">>),
     Type = test_type(StoreOpts, <<"assets">>),
-    ?event({type, Type}),
+    ?event_debug({type, Type}),
     ?assertEqual(composite, Type),
     test_write(StoreOpts, <<"assets/1">>, <<"bam">>),
     Type2 = test_type(StoreOpts, <<"assets/1">>),
-    ?event({type2, Type2}),
+    ?event_debug({type2, Type2}),
     ?assertEqual(simple, Type2).
 
 %% @doc Link key list test - verifies symbolic link creation using structured key paths.
@@ -799,7 +799,7 @@ link_key_list_test() ->
     test_write(StoreOpts, [ <<"parent">>, <<"key">> ], <<"value">>),
     test_link(StoreOpts, [ <<"parent">>, <<"key">> ], <<"my-link">>),
     {ok, Result} = test_read(StoreOpts, <<"my-link">>),
-    ?event({result, Result}),
+    ?event_debug({result, Result}),
     ?assertEqual(<<"value">>, Result).
 
 %% @doc Path traversal link test - verifies link resolution during path traversal.
@@ -821,7 +821,7 @@ path_traversal_link_test() ->
     test_link(StoreOpts, <<"group">>, <<"link">>),
     % Reading via the link path should resolve to the target value
     {ok, Result} = test_read(StoreOpts, [<<"link">>, <<"key">>]),
-    ?event({path_traversal_result, Result}),
+    ?event_debug({path_traversal_result, Result}),
     ?assertEqual(<<"target-value">>, Result),
     ok = test_stop(StoreOpts).
 
@@ -838,17 +838,17 @@ exact_hb_store_test() ->
     % Debug: test that the link behaves like the target (groups are unreadable)
     ?event(step4_check_link),
     LinkResult = test_read(StoreOpts, <<"test-link">>),
-    ?event({link_result, LinkResult}),
+    ?event_debug({link_result, LinkResult}),
     % Since test-dir1 is a group and groups are unreadable, the link should also be unreadable
     ?assertEqual(not_found, LinkResult),
     % Debug: test intermediate steps
     ?event(step5_test_direct_read),
-    DirectResult = test_read(StoreOpts, <<"test-dir1/test-file">>),
-    ?event({direct_result, DirectResult}),
+    _DirectResult = test_read(StoreOpts, <<"test-dir1/test-file">>),
+    ?event_debug({direct_result, _DirectResult}),
     % This should work: reading via the link path  
     ?event(step6_test_link_read),
     Result = test_read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
-    ?event({final_result, Result}),
+    ?event_debug({final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
     ok = test_stop(StoreOpts).
 
@@ -863,7 +863,7 @@ cache_style_test() ->
     ok = hb_store:write(StoreOpts, #{ <<"test-key">> => <<"test-value">> }, #{}),
     % Test reading through hb_store interface
     Result = hb_store:read(StoreOpts, <<"test-key">>, #{}),
-    ?event({cache_style_read_result, Result}),
+    ?event_debug({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
     hb_store:stop(StoreOpts).
 
@@ -894,7 +894,7 @@ nested_map_cache_test() ->
             <<"other-key-key">> => <<"other-key-value">>
         }
     },
-    ?event({original_map, OriginalMap}),
+    ?event_debug({original_map, OriginalMap}),
     % Step 1: Store each leaf value at data/{hash}
     TargetValue = <<"Foo">>,
     TargetHash = base64:encode(crypto:hash(sha256, TargetValue)),
@@ -937,7 +937,7 @@ nested_map_cache_test() ->
     ?assertEqual(composite, test_type(StoreOpts, <<"root">>)),
     % List the root contents
     {ok, RootKeys} = test_list(StoreOpts, <<"root">>),
-    ?event({root_keys, RootKeys}),
+    ?event_debug({root_keys, RootKeys}),
     ExpectedRootKeys = [<<"commitments">>, <<"other-key">>, <<"target">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedRootKeys) end, RootKeys)),
     % Read the target directly
@@ -949,7 +949,7 @@ nested_map_cache_test() ->
     ?assertEqual(composite, test_type(StoreOpts, <<"root/other-key">>)),
     % Step 4: Test programmatic reconstruction of the nested map
     ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
-    ?event({reconstructed_map, ReconstructedMap}),
+    ?event_debug({reconstructed_map, ReconstructedMap}),
     % Verify the reconstructed map matches the original structure
     ?assert(hb_message:match(OriginalMap, ReconstructedMap)),
     test_stop(StoreOpts).
@@ -961,7 +961,7 @@ reconstruct_map(StoreOpts, Path) ->
             % This is a group, reconstruct it as a map
             {ok, ImmediateChildren} = test_list(StoreOpts, Path),
             % The list function now correctly returns only immediate children
-            ?event({path, Path, immediate_children, ImmediateChildren}),
+            ?event_debug({path, Path, immediate_children, ImmediateChildren}),
             maps:from_list([
                 {Key, reconstruct_map(StoreOpts, <<Path/binary, "/", Key/binary>>)}
                 || Key <- ImmediateChildren
@@ -993,20 +993,20 @@ cache_debug_test() ->
     % 4. Create link from data path to key hash path
     test_link(StoreOpts, DataPath, KeyHashPath),
     % 5. Test what the cache would see:
-    ?event(debug_cache_test, {step, check_message_type}),
-    MsgType = test_type(StoreOpts, MessageID),
-    ?event(debug_cache_test, {message_type, MsgType}),
-    ?event(debug_cache_test, {step, list_message_contents}),
-    {ok, Subkeys} = test_list(StoreOpts, MessageID),
-    ?event(debug_cache_test, {message_subkeys, Subkeys}),
-    ?event(debug_cache_test, {step, read_key_hashpath}),
-    KeyHashResult = test_read(StoreOpts, KeyHashPath),
-    ?event(debug_cache_test, {key_hash_read_result, KeyHashResult}),
+    ?event_debug(debug_cache_test, {step, check_message_type}),
+    _MsgType = test_type(StoreOpts, MessageID),
+    ?event_debug(debug_cache_test, {message_type, _MsgType}),
+    ?event_debug(debug_cache_test, {step, list_message_contents}),
+    {ok, _Subkeys} = test_list(StoreOpts, MessageID),
+    ?event_debug(debug_cache_test, {message_subkeys, _Subkeys}),
+    ?event_debug(debug_cache_test, {step, read_key_hashpath}),
+    _KeyHashResult = test_read(StoreOpts, KeyHashPath),
+    ?event_debug(debug_cache_test, {key_hash_read_result, _KeyHashResult}),
     % 6. Test with path as list (what cache does):
-    ?event(debug_cache_test, {step, read_path_as_list}),
+    ?event_debug(debug_cache_test, {step, read_path_as_list}),
     PathAsList = [MessageID, <<"key_hash_abc">>],
-    PathAsListResult = test_read(StoreOpts, PathAsList),
-    ?event(debug_cache_test, {path_as_list_result, PathAsListResult}),
+    _PathAsListResult = test_read(StoreOpts, PathAsList),
+    ?event_debug(debug_cache_test, {path_as_list_result, _PathAsListResult}),
     test_stop(StoreOpts).
 
 %% @doc Isolated test focusing on the exact cache issue
@@ -1020,29 +1020,29 @@ isolated_type_debug_test() ->
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,
     OtherKeyPath = <<MessageID/binary, "/other-test-key">>,
-    ?event(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
+    ?event_debug(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
     test_group(StoreOpts, CommitmentsPath),
     test_group(StoreOpts, OtherKeyPath),
     % 3. Add some actual data within those groups
     test_write(StoreOpts, <<CommitmentsPath/binary, "/sig1">>, <<"signature_data_1">>),
     test_write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
     % 4. Test type detection on the nested paths
-    ?event(debug_isolated, {testing_main_message_type}),
-    MainType = test_type(StoreOpts, MessageID),
-    ?event(debug_isolated, {main_message_type, MainType}),
-    ?event(debug_isolated, {testing_commitments_type}),
-    CommitmentsType = test_type(StoreOpts, CommitmentsPath),
-    ?event(debug_isolated, {commitments_type, CommitmentsType}),
-    ?event(debug_isolated, {testing_other_key_type}),
-    OtherKeyType = test_type(StoreOpts, OtherKeyPath),
-    ?event(debug_isolated, {other_key_type, OtherKeyType}),
+    ?event_debug(debug_isolated, {testing_main_message_type}),
+    _MainType = test_type(StoreOpts, MessageID),
+    ?event_debug(debug_isolated, {main_message_type, _MainType}),
+    ?event_debug(debug_isolated, {testing_commitments_type}),
+    _CommitmentsType = test_type(StoreOpts, CommitmentsPath),
+    ?event_debug(debug_isolated, {commitments_type, _CommitmentsType}),
+    ?event_debug(debug_isolated, {testing_other_key_type}),
+    _OtherKeyType = test_type(StoreOpts, OtherKeyPath),
+    ?event_debug(debug_isolated, {other_key_type, _OtherKeyType}),
     % 5. Test what happens when reading these nested paths
-    ?event(debug_isolated, {reading_commitments_directly}),
-    CommitmentsResult = test_read(StoreOpts, CommitmentsPath),
-    ?event(debug_isolated, {commitments_read_result, CommitmentsResult}),
-    ?event(debug_isolated, {reading_other_key_directly}),
-    OtherKeyResult = test_read(StoreOpts, OtherKeyPath),
-    ?event(debug_isolated, {other_key_read_result, OtherKeyResult}),
+    ?event_debug(debug_isolated, {reading_commitments_directly}),
+    _CommitmentsResult = test_read(StoreOpts, CommitmentsPath),
+    ?event_debug(debug_isolated, {commitments_read_result, _CommitmentsResult}),
+    ?event_debug(debug_isolated, {reading_other_key_directly}),
+    _OtherKeyResult = test_read(StoreOpts, OtherKeyPath),
+    ?event_debug(debug_isolated, {other_key_read_result, _OtherKeyResult}),
     test_stop(StoreOpts).
 
 %% @doc Test that list function resolves links correctly
@@ -1058,11 +1058,11 @@ list_with_link_test() ->
     test_link(StoreOpts, <<"real-group">>, <<"link-to-group">>),
     % List the real group to verify expected children
     {ok, RealGroupChildren} = test_list(StoreOpts, <<"real-group">>),
-    ?event({real_group_children, RealGroupChildren}),
+    ?event_debug({real_group_children, RealGroupChildren}),
     ExpectedChildren = [<<"child1">>, <<"child2">>, <<"child3">>],
     ?assertEqual(ExpectedChildren, lists:sort(RealGroupChildren)),
     % List via the link - should return the same children
     {ok, LinkChildren} = test_list(StoreOpts, <<"link-to-group">>),
-    ?event({link_children, LinkChildren}),
+    ?event_debug({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
     test_stop(StoreOpts).

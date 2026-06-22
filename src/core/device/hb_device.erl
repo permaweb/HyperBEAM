@@ -81,7 +81,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 			{Status, Func} = info_handler_to_fun(Handler, Msg, Key, Opts),
             {Status, Dev, Func};
 		_ ->
-			?event(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
+			?event_debug(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
 			case {find_exported_function(Msg, Dev, Key, 3, 1, Opts), Exported} of
 				{{ok, Func}, true} ->
 					% Case 3: The device has a function of the name `Key'.
@@ -90,14 +90,14 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 					case {hb_maps:find(default, Info, Opts), Exported} of
 						{{ok, DefaultFunc}, true} when is_function(DefaultFunc) ->
 							% Case 4: The device has a default handler.
-                            ?event({found_default_handler, {func, DefaultFunc}}),
+                            ?event_debug({found_default_handler, {func, DefaultFunc}}),
 							{add_key, Dev, DefaultFunc};
                         {{ok, DefaultDevice}, true} when is_binary(DefaultDevice)
                                 orelse is_atom(DefaultDevice) ->
                             % Case 5: The device gives a specific further device
                             % to default to. Recurse with it and apply the same
                             % rules.
-							?event({found_default_device, {mod, DefaultDevice}}),
+							?event_debug({found_default_device, {mod, DefaultDevice}}),
                             message_to_fun(
                                 Msg#{ <<"device">> => DefaultDevice },
                                 Key,
@@ -115,7 +115,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 										{key, Key}
 									});
 								_ ->
-									?event({using_default_device, ?DEFAULT_DEVICE}),
+									?event_debug({using_default_device, ?DEFAULT_DEVICE}),
 									message_to_fun(
 										Msg#{ <<"device">> => ?DEFAULT_DEVICE },
 										Key,
@@ -287,11 +287,11 @@ do_is_direct_key_access(error, Key, Opts) ->
 do_is_direct_key_access(<<"message@1.0">>, Key, _Opts) ->
     not lists:member(Key, ?MESSAGE_KEYS);
 do_is_direct_key_access(Dev, NormKey, Opts) ->
-    ?event(debug_read_cached, {calculating_info, {device, Dev}}),
+    ?event_debug(debug_read_cached, {calculating_info, {device, Dev}}),
     case info(#{ <<"device">> => Dev}, Opts) of
         Info = #{ exports := Exports }
             when not is_map_key(handler, Info) andalso not is_map_key(default, Info) ->
-            ?event(debug_read_cached,
+            ?event_debug(debug_read_cached,
                 {exports,
                     {device, Dev},
                     {key, NormKey},

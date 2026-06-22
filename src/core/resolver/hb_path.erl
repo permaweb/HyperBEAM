@@ -43,7 +43,7 @@
 
 %% @doc Extract the first key from a `Request''s `Path' field.
 hd(Req, Opts) ->
-    %?event({key_from_path, Req, Opts}),
+    %?event_debug({key_from_path, Req, Opts}),
     case pop_request(Req, Opts) of
         undefined -> undefined;
         {Head, _} ->
@@ -132,7 +132,7 @@ hashpath(Base, Req, HashpathAlg, Opts) when is_map(Req) ->
             hashpath(Base, message_id(Req, Opts), HashpathAlg, Opts)
     end;
 hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
-    ?event({hashpath, {basehp, {explicit, BaseHashpath}}, {reqid, {explicit, HumanReqID}}}),
+    ?event_debug({hashpath, {basehp, {explicit, BaseHashpath}}, {reqid, {explicit, HumanReqID}}}),
     HP = 
         case term_to_path_parts(BaseHashpath, Opts) of
             [_] ->
@@ -152,7 +152,7 @@ hashpath(BaseHashpath, HumanReqID, HashpathAlg, Opts) ->
                 HumanNewBase = hb_util:human_id(NativeNewBase),
                 << HumanNewBase/binary, "/", HumanReqID/binary >>
         end,
-    ?event({generated_hashpath, HP, {basehp, BaseHashpath}, {reqid, HumanReqID}}),
+    ?event_debug({generated_hashpath, HP, {basehp, BaseHashpath}, {reqid, HumanReqID}}),
     HP.
 
 %%% @doc Get the hashpath function for a message from its HashPath-Alg.
@@ -181,13 +181,13 @@ push_request(Msg, Path, Opts) ->
 %%% @doc Pop the next element from a request path or path list.
 pop_request(undefined, _Opts) -> undefined;
 pop_request(Msg, Opts) when is_map(Msg) ->
-    %?event({popping_request, {msg, Msg}, {opts, Opts}}),
+    %?event_debug({popping_request, {msg, Msg}, {opts, Opts}}),
     case pop_request(from_message(request, Msg, Opts), Opts) of
         undefined -> undefined;
         {undefined, _} -> undefined;
         {Head, []} -> {Head, undefined};
         {Head, Rest} ->
-            ?event({popped_request, Head, Rest}),
+            ?event_debug({popped_request, Head, Rest}),
             {Head, hb_maps:put(<<"path">>, Rest, Msg, Opts)}
     end;
 pop_request([], _Opts) -> undefined;

@@ -136,9 +136,9 @@ from(RawMsg, Opts) when is_binary(RawMsg) ->
     from(#{ <<"path">> => RawMsg }, Opts);
 from(RawMsg, Opts) ->
     RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
-    ?event(parsing, {raw_path, RawPath}),
+    ?event_debug(parsing, {raw_path, RawPath}),
     {ok, Path, Query} = from_path(RawPath),
-    ?event(parsing, {parsed_path, Path, Query}),
+    ?event_debug(parsing, {parsed_path, Path, Query}),
     MsgWithoutBasePath =
         hb_maps:merge(
             hb_maps:remove(<<"path">>, RawMsg),
@@ -152,26 +152,26 @@ from(RawMsg, Opts) ->
                 Path
             )
         ),
-    ?event(parsing, {raw_messages, RawMsgs}),
+    ?event_debug(parsing, {raw_messages, RawMsgs}),
     Msgs = normalize_base(RawMsgs),
-    ?event(parsing, {normalized_messages, Msgs}),
+    ?event_debug(parsing, {normalized_messages, Msgs}),
     % 3. Type keys and values
     Typed = apply_types(MsgWithoutBasePath, Opts),
-    ?event(parsing, {typed_messages, Typed}),
+    ?event_debug(parsing, {typed_messages, Typed}),
     % 4. Group keys by N-scope and global scope
     ScopedModifications = group_scoped(Typed, Msgs),
-    ?event(parsing, {scoped_modifications, ScopedModifications}),
+    ?event_debug(parsing, {scoped_modifications, ScopedModifications}),
     % 5. Generate the list of messages (plus-notation, device, typed keys).
     Result = build_messages(Msgs, ScopedModifications, Opts),
-    ?event(parsing, {result, Result}),
+    ?event_debug(parsing, {result, Result}),
     Result.
 
 %% @doc Parse the relative reference into path, query, and fragment.
 from_path(RelativeRef) ->
-    %?event(parsing, {raw_relative_ref, RawRelativeRef}),
+    %?event_debug(parsing, {raw_relative_ref, RawRelativeRef}),
     %RelativeRef = hb_escape:decode(RawRelativeRef),
     Decoded = decode_string(RelativeRef),
-    ?event(parsing, {parsed_relative_ref, Decoded}),
+    ?event_debug(parsing, {parsed_relative_ref, Decoded}),
     {Path, QKVList} =
         case hb_util:split_depth_string_aware_single("?", Decoded) of
             {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
@@ -213,7 +213,7 @@ path_parts(Sep, PathBin) when is_binary(PathBin) ->
         end,
         all_path_parts(Sep, PathBin)
     ),
-    ?event({path_parts, Res}),
+    ?event_debug({path_parts, Res}),
     Res.
 
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
@@ -314,7 +314,7 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
         <<"structured@1.0">>, 
         Opts#{ <<"topic">> => ao_internal }
     ),
-    ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
+    ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
@@ -326,7 +326,7 @@ do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
         <<"structured@1.0">>, 
         Opts#{ <<"topic">> => ao_internal }
     ),
-    ?event(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
+    ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
 
 %% @doc Parse a path part into a message or an ID.
@@ -371,7 +371,7 @@ parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg, Opts) ->
         lists:foldl(
             fun(InlinedKey, Acc) ->
                 {Key, Val} = parse_inlined_key_val(InlinedKey, Opts),
-                ?event({inlined_key, {explicit, Key}, {explicit, Val}}),
+                ?event_debug({inlined_key, {explicit, Key}, {explicit, Val}}),
                 hb_maps:put(Key, Val, Acc)
             end,
             Msg,
@@ -818,7 +818,7 @@ inlined_assumed_key_test() ->
     Msgs = from(Req, #{}),
     ?assertEqual(4, length(Msgs)),
     [_, Base, Msg2, Res] = Msgs,
-    ?event({parsed, Msgs}),
+    ?event_debug({parsed, Msgs}),
     ?assertEqual(<<"4">>, hb_maps:get(<<"b">>, Msg2)),
     ?assertEqual(not_found, hb_maps:get(<<"b">>, Base, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"b">>, Res, not_found)),
@@ -828,7 +828,7 @@ inlined_assumed_key_test() ->
     },
     MsgsB = from(ReqB, #{}),
     [_, Msg1b, Msg2b, Msg3b] = MsgsB,
-    ?event({parsed, MsgsB}),
+    ?event_debug({parsed, MsgsB}),
     ?assertEqual(4, hb_maps:get(<<"b">>, Msg2b)),
     ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg1b, not_found)),
     ?assertEqual(not_found, hb_maps:get(<<"b">>, Msg3b, not_found)).
