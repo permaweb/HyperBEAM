@@ -2,6 +2,8 @@
 %%%
 %%% Accounts accrue units continuously up to a configured cap. `p4@1.0' can
 %%% query the current effective balance and charge metered usage against it.
+%%% Balances are integer ledger units. Operators should choose units fine-grained
+%%% enough for their pricing and recharge policy.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3]).
 -include("include/hb.hrl").
@@ -153,8 +155,9 @@ account_balance(
         infinity -> infinity;
         not_found -> Max;
         #{ balance := Balance, last := LastInteraction } ->
-            RechargeRate = Recharge / (Period * 1000),
-            RechargedSinceLast = (Time - LastInteraction) * RechargeRate,
+            PeriodMs = Period * 1000,
+            Elapsed = Time - LastInteraction,
+            RechargedSinceLast = (Elapsed * Recharge) div PeriodMs,
             min(Max, Balance + RechargedSinceLast)
     end.
 
@@ -183,7 +186,7 @@ charge_new_account_deducts_units_test() ->
         charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
     ),
     ?assertEqual(
-        {ok, 75.0},
+        {ok, 75},
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
