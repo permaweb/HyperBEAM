@@ -81,7 +81,12 @@ from(List, Req, Opts) when is_list(List) ->
     end;
 from(Msg, Req, Opts) when is_map(Msg) ->
     HintedReq = apply_bundle_hint(Msg, Req, Opts),
-    NormLinks = hb_link:normalize(Msg, linkify_mode(HintedReq, Opts), Opts),
+    NormLinks =
+        hb_link:normalize(
+            encode_map_ao_types(Msg, Opts),
+            linkify_mode(HintedReq, Opts),
+            Opts
+        ),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
     {Types, Values} = lists:foldl(
@@ -176,6 +181,14 @@ from(Other, _Req, _Opts) -> {ok, hb_path:to_binary(Other)}.
 %% @doc Find the types that should be encoded from the request and options.
 find_encode_types(Req, Opts) ->
     hb_maps:get(<<"encode-types">>, Req, ?SUPPORTED_TYPES, Opts).
+
+%% @doc Encode map-valued `ao-types' before link normalization. `ao-types'
+%% describes the current message, so it must remain inline rather than being
+%% treated as a child message and offloaded as `ao-types+link'.
+encode_map_ao_types(Msg = #{ <<"ao-types">> := Types }, Opts) when is_map(Types) ->
+    Msg#{ <<"ao-types">> := encode_ao_types(Types, Opts) };
+encode_map_ao_types(Msg, _Opts) ->
+    Msg.
 
 %% @doc Determine the type for a value.
 type(Int) when is_integer(Int) -> <<"integer">>;
