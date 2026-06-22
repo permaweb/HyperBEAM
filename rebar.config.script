@@ -7,8 +7,21 @@ ScriptDir = filename:dirname(SCRIPT),
     file:consult(
         filename:join(ScriptDir, "shared_rebar.config")
     ),
-lists:foldl(
-    fun({Key, _} = Term, Acc) -> lists:keystore(Key, 1, Acc, Term) end,
-    CONFIG,
-    SharedConfig
-).
+Merged =
+    lists:foldl(
+        fun({Key, _} = Term, Acc) -> lists:keystore(Key, 1, Acc, Term) end,
+        CONFIG,
+        SharedConfig
+    ),
+%% `HB_VERBOSE=1' turns on the `?event_debug' trace macros for this build,
+%% the same effect as the `verbose' rebar3 profile.
+case os:getenv("HB_VERBOSE") of
+    "1" ->
+        ErlOpts = proplists:get_value(erl_opts, Merged, []),
+        lists:keystore(
+            erl_opts, 1, Merged,
+            {erl_opts, [{d, 'HB_VERBOSE', true} | ErlOpts]}
+        );
+    _ ->
+        Merged
+end.

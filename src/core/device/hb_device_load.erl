@@ -131,11 +131,11 @@ from_preloaded(Ref, Opts) ->
     case preloaded(Opts) of
         undefined ->
             {error, not_found};
-        {Store, IndexID} ->
+        Store ->
             PreOpts =
                 Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
             maybe
-                {ok, SpecID} ?= preloaded_spec(Ref, Store, IndexID, PreOpts),
+                {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
                 lazy_first(
                     fun(ID) -> load_archive(ID, PreOpts) end,
                     [
@@ -150,27 +150,16 @@ from_preloaded(Ref, Opts) ->
             end
     end.
 
-preloaded_spec(Ref, _Store, _IndexID, _Opts) when ?IS_ID(Ref) ->
+preloaded_spec(Ref, _Store, _Opts) when ?IS_ID(Ref) ->
     {ok, Ref};
-preloaded_spec(Ref, Store, IndexID, Opts) ->
-    hb_store:read(Store, <<IndexID/binary, "/", Ref/binary>>, Opts).
+preloaded_spec(Ref, Store, Opts) ->
+    hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
-%% @doc The preloaded store and its signed index ID, from node config
-%% (request-local cache keys stripped so it is visible inside a
-%% request-scoped resolution).
+%% @doc The preloaded store, with request-local cache keys stripped so it is
+%% visible inside a request-scoped resolution.
 preloaded(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
-    case
-        {
-            hb_opts:get(preloaded_store, undefined, Node),
-            hb_opts:get(preloaded_devices_index, undefined, Node)
-        }
-    of
-        {Store, IndexID} when Store =/= undefined, IndexID =/= undefined ->
-            {Store, IndexID};
-        _ ->
-            undefined
-    end.
+    hb_opts:get(preloaded_store, undefined, Node).
 
 %%% --------------------------------------------------------------------
 %%% Low trust
@@ -179,11 +168,10 @@ preloaded(Opts) ->
 %% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
 %% already loaded via the high-trust path), then load the first signed,
 %% compatible implementation. Local caches are always searched -- gateway
-%% lookup is gated by `load-remote-devices'.
+%% lookup is gated by an explicit `trusted-device-signers' list.
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
-        TrustedSigners = trusted_signer_entries(Ref, SpecID, Opts),
         LocalIterators =
             [
                 fun() ->
@@ -193,15 +181,22 @@ from_low_trust(Ref, Opts) ->
                     )
                 end
             ],
+        RemoteSigners =
+            case hb_opts:get(trusted_device_signers, [], Opts) of
+                [_ | _] = Signers ->
+                    trusted_signer_entries(Ref, SpecID, Signers, Opts);
+                _ ->
+                    []
+            end,
         RemoteIterators =
-            case {hb_opts:get(<<"load-remote-devices">>, false, Opts), TrustedSigners} of
-                {true, [_ | _]} ->
+            case RemoteSigners of
+                [_ | _] ->
                     [
                         fun() ->
                             hb_util:ok_or(
                                 hb_client_gateway:device(
                                     SpecID,
-                                    TrustedSigners,
+                                    RemoteSigners,
                                     Opts
                                 ),
                                 []
@@ -328,10 +323,13 @@ trusted_signers(Ref, SpecID, Opts) ->
     ].
 
 trusted_signer_entries(Ref, SpecID, Opts) ->
+    trusted_signer_entries(Ref, SpecID, trusted_signer_entries(Opts), Opts).
+
+trusted_signer_entries(Ref, SpecID, Signers, Opts) ->
     [
         Signer
     ||
-        Signer <- trusted_signer_entries(Opts),
+        Signer <- Signers,
         trusted_signer_accepts(Ref, SpecID, Signer, Opts)
     ].
 

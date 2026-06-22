@@ -24,12 +24,9 @@ init(State) ->
 
 %% @doc Package selected devices and load each archive via the runtime loader.
 do(State) ->
-    case hb_forge_args:maybe_help(State, ?MODULE) of
-        true -> {ok, State};
-        false -> do_run(State)
-    end.
+    hb_forge_args:run_provider(State, ?MODULE, fun verify/1).
 
-do_run(State) ->
+verify(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-packages">>),
     Failures =
         hb_forge_seed:with_forge_bootstrap(

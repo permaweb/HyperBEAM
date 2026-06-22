@@ -152,7 +152,7 @@ request(Base, HookReq, Opts) ->
         {ok, #{ <<"body">> => FinalSequence, <<"request">> => SignedReq }}
     else
         {error, AuthError} ->
-            ?event({auth_hook_auth_error, AuthError}),
+            ?event({auth_hook_auth_error, {priv_error, AuthError}}),
             {error, AuthError};
         {skip, {committers, Committers}, {keys, Keys}} ->
             ?event({auth_hook_skipping, {committers, Committers}, {keys, Keys}}),
@@ -220,7 +220,7 @@ is_relevant_from_keys(Base, Request, Opts) ->
             auth_hook_is_relevant_from_keys,
             {config, Config},
             {base, Base},
-            {request, Request}
+            {priv_request, Request}
         }
     ),
     case Config of
@@ -246,7 +246,7 @@ generate_secret(Provider, Request, Opts) ->
         {error, Err} ->
             % Forward the error. The main handler will fail to match this and
             % return the error to the user.
-            ?event({generate_error, Err}),
+            ?event({generate_error, {priv_error, Err}}),
             {error, Err};
         {ok, Secret} when is_binary(Secret) ->
             % The provider returned a direct key, calculate the committer and
@@ -333,7 +333,7 @@ maybe_sign_messages(Provider, Key, [Msg | Rest], Opts) when is_map(Msg) ->
     case hb_util:atom(hb_maps:get(Key, Msg, false, Opts)) of
         true ->
             Uncommitted = hb_message:uncommitted(Msg, Opts),
-            ?event({auth_hook_signing_message, {uncommitted, Msg}}),
+            ?event({auth_hook_signing_message, {priv_uncommitted, Msg}}),
             case sign_request(Provider, Uncommitted, Opts) of
                 {ok, Signed} ->
                     [
@@ -420,7 +420,7 @@ call_provider(Key, Provider, Request, Opts) ->
             % The result is a non-message. We return it as-is.
             Res;
         {error, Err} ->
-            ?event({call_provider_error, Err}),
+            ?event({call_provider_error, {priv_error, Err}}),
             {error, Err}
     end.
 

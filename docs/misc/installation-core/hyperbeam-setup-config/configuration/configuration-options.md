@@ -44,7 +44,7 @@ These options control identity and security settings.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `trusted_device_signers` | List | [] | List of device signer addresses or signer policy objects the node should trust; policy objects may set `valid-until-height` and `devices` |
+| `trusted_device_signers` | List | [] | List of device signer addresses or signer policy objects the node should trust; non-empty enables remote device lookup; policy objects may set `valid-until-height` and `devices` |
 | `trusted` | Map | {} | Trusted entities |
 | `scheduler_location_ttl` | Integer | 604800000 | TTL for scheduler registration (7 days in ms) |
 
@@ -79,9 +79,7 @@ These options control how HyperBEAM manages devices.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `preloaded_store` | Store map | `{store-module: hb_store_lmdb, name: "_build/preloaded-store"}` | LMDB store of signed device specs and impl messages baked at build time. |
-| `preloaded_devices_index` | Binary | (filled by build) | Committed ID of the preloaded-store resolver message. |
 | `device_store` | Store map | falls back to `store` | Volatile cache of name/spec-ID → loaded module atom. |
-| `load_remote_devices` | Boolean | false | Whether to load devices from remote signers |
 | `devices` | List | [] | Additional devices to load |
 
 ## Routing & Connectivity

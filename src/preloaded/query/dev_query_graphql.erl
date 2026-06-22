@@ -147,7 +147,8 @@ handle(_Base, RawReq, Opts) ->
                                 ?DEFAULT_QUERY_TIMEOUT,
                                 Opts
                             ),
-                        opts => Opts
+                        opts => Opts,
+                        req => Req
                     },
                 ?event(graphql_context_created),
                 Response = graphql:execute(Ctx, AST2),
@@ -171,12 +172,21 @@ handle(_Base, RawReq, Opts) ->
 %% GraphQL library. We split the resolution flows into two separated functions:
 %% `message_query/4' for the HyperBEAM native API, and `dev_query_arweave:query/4'
 %% for the Arweave-compatible API.
-execute(#{opts := Opts}, Obj, Field, Args) ->
+execute(Ctx = #{opts := Opts}, Obj, Field, Args) ->
     ?event({graphql_query, {object, Obj}, {field, Field}, {args, Args}}),
     case lists:member(Field, ?MESSAGE_QUERY_KEYS) of
         true -> message_query(Obj, Field, Args, Opts);
-        false -> dev_query_arweave:query(Obj, Field, Args, Opts)
+        false ->
+            dev_query_arweave:query(
+                Obj,
+                Field,
+                maps:merge(request_args(Ctx), Args),
+                Opts
+            )
     end.
+
+request_args(Ctx) ->
+    maps:with([<<"force-next-page">>], maps:get(req, Ctx, #{})).
 
 %% @doc No-op on input validation.
 input(_TypeID, Val) -> {ok, Val}.
@@ -349,10 +359,10 @@ lookup_test() ->
 
 pending_cursor_prefers_existing_cursor_test() ->
     ?assertEqual(
-        {ok, <<"pending:txid">>},
+        {ok, <<"pending=txid">>},
         message_query(
             #{
-                <<"cursor">> => <<"pending:txid">>,
+                <<"cursor">> => <<"pending=txid">>,
                 <<"offset">> => #{
                     <<"relative">> => <<"txid">>,
                     <<"offset">> => 1

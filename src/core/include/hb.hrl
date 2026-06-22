@@ -1,6 +1,7 @@
 -include("ar.hrl").
 
 -define(HYPERBEAM_VERSION, <<"0.10">>).
+-define(PRELOADED_INDEX_KEY, <<"~meta@1.0/preloaded-devices-index">>).
 
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.
 -define(IS_EMPTY_MESSAGE(Msg), (map_size(Msg) == 0) orelse (map_size(Msg) == 1 andalso (is_map_key(priv, Msg) orelse is_map_key(<<"priv">>, Msg)))).
@@ -41,6 +42,21 @@
 -define(event(X), hb_event:log(global, X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(event(Topic, X), hb_event:log(Topic, X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(event(Topic, X, Opts), hb_event:log(maps:get(<<"topic">>, Opts, Topic), X, ?MODULE, ?FUNCTION_NAME, ?LINE, Opts)).
+%%% Debug-only trace events. Under the `HB_VERBOSE' build flag (the `verbose'
+%%% rebar3 profile, or `HB_VERBOSE=1' in the build environment) these are
+%%% identical to `?event'; otherwise they compile to a literal no-op -- the
+%%% payload term is never even constructed. Use these for hot-path tracing that
+%%% is not consumed as metering information, so it costs nothing in a production
+%%% build.
+-ifdef(HB_VERBOSE).
+-define(event_debug(X), ?event(X)).
+-define(event_debug(Topic, X), ?event(Topic, X)).
+-define(event_debug(Topic, X, Opts), ?event(Topic, X, Opts)).
+-else.
+-define(event_debug(X), ok).
+-define(event_debug(Topic, X), ok).
+-define(event_debug(Topic, X, Opts), ok).
+-endif.
 -define(debug_wait(T), hb:debug_wait(T, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(debug_print(X), hb_event:debug_print(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(no_prod(X), hb:no_prod(X, ?MODULE, ?LINE)).

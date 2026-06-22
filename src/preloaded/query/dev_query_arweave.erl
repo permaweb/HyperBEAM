@@ -54,29 +54,39 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches = match_args(Args, Opts),
-    WithExplicit =
-        case explicit_ids(Args, Opts) of
-            [] -> Matches;
-            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-        end,
-    Ordered =
-        case annotate_ids(WithExplicit, Opts) of
-            unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-            Annotated ->
-                Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                sort_offset_annotated(
-                    filter_offset_annotated(
-                        Annotated,
-                        maps:get(<<"block">>, Args, undefined),
-                        Opts
-                    ),
-                    Order,
-                    Opts
-                )
-        end,
-    ?event({transactions_matches, Matches}),
-    {ok, connection(Ordered, Args, Opts)};
+    case valid_after_cursor(Args, Opts) of
+        true ->
+            Matches = match_args(Args, Opts),
+            WithExplicit =
+                case explicit_ids(Args, Opts) of
+                    [] -> Matches;
+                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+                end,
+            Ordered =
+                case annotate_ids(WithExplicit, Opts) of
+                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
+                    Annotated ->
+                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+                        sort_offset_annotated(
+                            filter_offset_annotated(
+                                Annotated,
+                                maps:get(<<"block">>, Args, undefined),
+                                Opts
+                            ),
+                            Order,
+                            Opts
+                        )
+                end,
+            ?event({transactions_matches, Matches}),
+            {ok, connection(Ordered, Args, Opts)};
+        false ->
+            ?event(
+                {invalid_after_cursor,
+                    hb_maps:get(<<"after">>, Args, not_found, Opts)
+                }
+            ),
+            {ok, connection([], Args, Opts)}
+    end;
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
         {ok, []} -> {ok, null};
@@ -223,15 +233,29 @@ connection(Ordered, Args, Opts) ->
     CountToReturn = page_size(Args, Opts),
     ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
     ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
+    HasNextPage = length(ResultsPagePlusOne) > CountToReturn,
+    ForceNextPage = force_next_page(Args, Opts),
+    Edges =
+        case ForceNextPage andalso (not HasNextPage) of
+            true -> force_terminal_cursor(ResultsPage);
+            false -> ResultsPage
+        end,
     #{
         <<"count">> => hb_util:bin(ResultsCount),
-        <<"edges">> => ResultsPage,
+        <<"edges">> => Edges,
         <<"pageInfo">> =>
             #{
-                <<"hasNextPage">> =>
-                    length(ResultsPagePlusOne) > CountToReturn
+                <<"hasNextPage">> => HasNextPage orelse ForceNextPage
             }
     }.
+
+force_next_page(Args, Opts) ->
+    hb_util:bool(hb_maps:get(<<"force-next-page">>, Args, false, Opts)).
+
+force_terminal_cursor([]) -> [];
+force_terminal_cursor(Edges) ->
+    [Last = #{ <<"cursor">> := Cursor } | RestRev] = lists:reverse(Edges),
+    lists:reverse([Last#{ <<"cursor">> => << Cursor/binary, "&remaining=0" >> } | RestRev]).
 
 %% @doc Read IDs into their Arweave GraphQL-compliant object form, from a list
 %% of offset-annotated messages.
@@ -251,15 +275,52 @@ drop_to_cursor(Args, Ordered, Opts) ->
         hb_maps:get(<<"after">>, Args, null, Opts),
         Ordered
     ).
-drop_to_cursor(Cursor, Ordered)
-        when Cursor =:= null orelse Cursor =:= undefined orelse Ordered =:= [] ->
+drop_to_cursor(null, Ordered) ->
     Ordered;
-drop_to_cursor(After, [AnnotatedID | Rest]) ->
-    ID = maps:get(<<"id">>, AnnotatedID, undefined),
-    Cursor = maps:get(<<"cursor">>, AnnotatedID, undefined),
-    case (After =:= ID) orelse (After =:= Cursor) of
-        true -> Rest;
-        false -> drop_to_cursor(After, Rest)
+drop_to_cursor(undefined, Ordered) ->
+    Ordered;
+drop_to_cursor(<<>>, Ordered) ->
+    Ordered;
+drop_to_cursor(_After, []) ->
+    [];
+drop_to_cursor(After, [#{ <<"cursor">> := After } | Rest]) ->
+    Rest;
+drop_to_cursor(After, [_ | Rest]) ->
+    drop_to_cursor(After, Rest).
+
+valid_after_cursor(Args, Opts) ->
+    valid_cursor(hb_maps:get(<<"after">>, Args, null, Opts)).
+
+valid_cursor(null) ->
+    true;
+valid_cursor(undefined) ->
+    true;
+valid_cursor(<<>>) ->
+    true;
+valid_cursor(<<"offset=", Cursor/binary>>) ->
+    valid_offset_cursor(Cursor);
+valid_cursor(<<"pending=", ID/binary>>) when ?IS_ID(ID) ->
+    true;
+valid_cursor(<<"ephemeral=", ID/binary>>) when ?IS_ID(ID) ->
+    true;
+valid_cursor(_) ->
+    false.
+
+valid_offset_cursor(Cursor) ->
+    case binary:split(Cursor, <<"-">>) of
+        [Offset] ->
+            valid_integer_cursor_part(Offset);
+        [Offset, Ordinate] ->
+            valid_integer_cursor_part(Offset)
+                andalso valid_integer_cursor_part(Ordinate);
+        _ ->
+            false
+    end.
+
+valid_integer_cursor_part(<<>>) -> false;
+valid_integer_cursor_part(Bin) ->
+    try binary_to_integer(Bin) >= 0
+    catch _:_ -> false
     end.
 
 %% @doc Return the page size, clamped to the maximum allowed.
@@ -517,11 +578,11 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
-offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral:", ID/binary>>;
+offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral=", ID/binary>>;
 offset_cursor(ID, Offset) when is_binary(ID) ->
     case pending_offset(Offset) of
-        true -> <<"pending:", ID/binary>>;
-        false -> hb_util:bin(Offset)
+        true -> <<"pending=", ID/binary>>;
+        false -> <<"offset=", (hb_util:bin(Offset))/binary>>
     end.
 
 pending_offset(relative) -> true;

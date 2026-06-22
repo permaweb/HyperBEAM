@@ -87,7 +87,7 @@ verify(Base, Req, RawOpts) ->
     SigBase = signature_base(EncMsg, EncComm, Opts),
     KeyRes = dev_httpsig_keyid:req_to_key_material(Req, Opts),
     RawSignature = hb_util:decode(Signature = maps:get(<<"signature">>, Req)),
-    ?event(debug_httpsig,
+    ?event_debug(debug_httpsig,
         {
             httpsig_verifying,
             {signature, Signature},
@@ -160,7 +160,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         end,
     % Generate the unsigned commitment and signature base.
     ToCommit = hb_ao:normalize_keys(keys_to_commit(MsgToSign, Req, Opts)),
-    ?event({to_commit, ToCommit}),
+    ?event_debug({to_commit, ToCommit}),
     UnsignedCommitment =
         maybe_bundle_tag_commitment(
             MaybeTagMap#{
@@ -180,16 +180,16 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
         ),
     {ok, EncMsg, EncComm, ModCommittedKeys} =
         normalize_for_encoding(MsgToSign, UnsignedCommitment, Opts),
-    ?event({encoded_to_httpsig_for_commitment, MsgToSign}),
+    ?event_debug({encoded_to_httpsig_for_commitment, MsgToSign}),
     % Generate the signature base
     SignatureBase = signature_base(EncMsg, EncComm, Opts),
-    ?event({rsa_signature_base, {string, SignatureBase}}),
-    ?event({mod_committed_keys, ModCommittedKeys}),
+    ?event_debug({rsa_signature_base, {string, SignatureBase}}),
+    ?event_debug({mod_committed_keys, ModCommittedKeys}),
     % Sign the signature base
     Signature = ar_wallet:sign(Wallet, SignatureBase, sha512),
     % Generate the ID of the signature
     ID = hb_util:human_id(crypto:hash(sha256, Signature)),
-    ?event({rsa_commit, {committed, ToCommit}}),
+    ?event_debug({rsa_commit, {committed, ToCommit}}),
     % Calculate the ID and place the signature into the `commitments' key of the
     % message. After, we call `commit' again to add the hmac to the new
     % message.
@@ -210,7 +210,7 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),
-    ?event({req_to_key_material, {priv_req, Req}}),
+    ?event_debug({req_to_key_material, {priv_req, Req}}),
     {ok, Scheme, Key, KeyID} = dev_httpsig_keyid:req_to_key_material(Req, Opts),
     Committer = dev_httpsig_keyid:keyid_to_committer(Scheme, KeyID),
     % Remove any existing hmac commitments with the given keyid before adding
@@ -277,7 +277,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
                     }
             }
         },
-    ?event(debug_commitments, {hmac_generation_complete, Res}),
+    ?event_debug(debug_commitments, {hmac_generation_complete, Res}),
     Res.
 
 %% @doc Annotate the commitment with the `bundle' key if the request contains
@@ -359,14 +359,14 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             end,
             RawInputs
         ),
-    ?event({inputs, {list, Inputs}}),
+    ?event_debug({inputs, {list, Inputs}}),
     % Filter the message down to only the requested keys, then encode it.
     MsgWithOnlyInputs =
         maps:with(
             Inputs ++ lists:map(fun hb_escape:encode/1, Inputs),
             Msg
         ),
-    ?event({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
+    ?event_debug({msg_with_only_inputs, {priv_msg, maps:without([<<"commitments">>], MsgWithOnlyInputs)}}),
     {ok, EncodedWithSigInfo} =
         to(
             maps:without([<<"commitments">>], MsgWithOnlyInputs),
@@ -417,7 +417,7 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             ),
             Opts
         ),
-    ?event(debug_httpsig,
+    ?event_debug(debug_httpsig,
         {normalized_for_encoding,
             {raw_inputs, Inputs},
             {inputs_for_encoding, KeysForEncoding},
@@ -460,14 +460,14 @@ signature_base(EncodedMsg, Commitment, Opts) ->
             Commitment,
             Opts
         ),
-    ?event({component_identifiers_for_sig_base, {priv_components, ComponentsLines}}),
+    ?event_debug({component_identifiers_for_sig_base, {priv_components, ComponentsLines}}),
 	ParamsLine = signature_params_line(Commitment, Opts),
     SignatureBase = 
         <<
             ComponentsLines/binary, "\n",
             "\"@signature-params\": ", ParamsLine/binary
         >>,
-    ?event(signature_base, {signature_base, {string, SignatureBase}}),
+    ?event_debug(signature_base, {signature_base, {string, SignatureBase}}),
 	SignatureBase.
 
 %% @doc Given a list of Component Identifiers and a Request/Response Message
@@ -507,7 +507,7 @@ signature_params_line(RawCommitment, Opts) ->
             [<<"signature">>, <<"signature-input">>],
             RawCommitment
         ),
-    ?event(debug_enc, {signature_params_line, {commitment, Commitment}}),
+    ?event_debug(debug_enc, {signature_params_line, {commitment, Commitment}}),
 	hb_util:bin(
         hb_structured_fields:list(
             [
@@ -583,28 +583,28 @@ validate_large_message_from_http_test() ->
     }),
     {ok, Res} = hb_http:get(Node, <<"/~meta@1.0/info">>, Opts),
     Signers = hb_message:signers(Res, Opts),
-    ?event({received, {signers, Signers}, {res, Res}}),
+    ?event_debug({received, {signers, Signers}, {res, Res}}),
     ?assert(length(Signers) == 1),
     ?assert(hb_message:verify(Res, Signers, Opts)),
-    ?event({sig_verifies, Signers}),
+    ?event_debug({sig_verifies, Signers}),
     ?assert(hb_message:verify(Res, all, Opts)),
-    ?event({hmac_verifies, <<"hmac-sha256">>}),
+    ?event_debug({hmac_verifies, <<"hmac-sha256">>}),
     {ok, OnlyCommitted} = hb_message:with_only_committed(Res, Opts),
-    ?event({msg_with_only_committed, OnlyCommitted}),
+    ?event_debug({msg_with_only_committed, OnlyCommitted}),
     ?assert(hb_message:verify(OnlyCommitted, Signers, Opts)),
-    ?event({msg_with_only_committed_verifies, Signers}),
+    ?event_debug({msg_with_only_committed_verifies, Signers}),
     ?assert(hb_message:verify(OnlyCommitted, all, Opts)),
-    ?event({msg_with_only_committed_verifies_hmac, <<"hmac-sha256">>}).
+    ?event_debug({msg_with_only_committed_verifies_hmac, <<"hmac-sha256">>}).
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Signed = hb_message:commit(Msg, Opts),
     ?assert(hb_message:verify(Signed, all, Opts)),
-    ?event({signed_msg, Signed}),
+    ?event_debug({signed_msg, Signed}),
     UnsignedID = hb_message:id(Signed, none),
     SignedID = hb_message:id(Signed, all),
-    ?event({ids, {unsigned_id, UnsignedID}, {signed_id, SignedID}}),
+    ?event_debug({ids, {unsigned_id, UnsignedID}, {signed_id, SignedID}}),
     ?assertNotEqual(UnsignedID, SignedID).
 
 commit_secret_key_test() ->
@@ -621,10 +621,10 @@ commit_secret_key_test() ->
                 <<"scheme">> => <<"secret">>
             }
         ),
-    ?event({committed_msg, CommittedMsg}),
+    ?event_debug({committed_msg, CommittedMsg}),
     Committers = hb_message:signers(CommittedMsg, #{}),
     ?assert(length(Committers) == 1),
-    ?event({committers, Committers}),
+    ?event_debug({committers, Committers}),
     ?assert(
         hb_message:verify(
             CommittedMsg,
@@ -646,10 +646,10 @@ multicommitted_id_test() ->
     Signed2 = hb_message:commit(Signed1, #{ <<"priv-wallet">> => Wallet2 = ar_wallet:new() }),
     Addr1 = hb_util:human_id(ar_wallet:to_address(Wallet1)),
     Addr2 = hb_util:human_id(ar_wallet:to_address(Wallet2)),
-    ?event({signed_msg, Signed2}),
+    ?event_debug({signed_msg, Signed2}),
     UnsignedID = hb_message:id(Signed2, none),
     SignedID = hb_message:id(Signed2, all),
-    ?event({ids, {unsigned_id, UnsignedID}, {signed_id, SignedID}}),
+    ?event_debug({ids, {unsigned_id, UnsignedID}, {signed_id, SignedID}}),
     ?assertNotEqual(UnsignedID, SignedID),
     ?assert(hb_message:verify(Signed2, [])),
     ?assert(hb_message:verify(Signed2, [Addr1])),
@@ -667,7 +667,7 @@ sign_and_verify_link_test() ->
     },
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     NormMsg = hb_message:convert(Msg, <<"structured@1.0">>, #{}),
-    ?event({msg, NormMsg}),
+    ?event_debug({msg, NormMsg}),
     Signed = hb_message:commit(NormMsg, Opts),
-    ?event({signed_msg, Signed}),
+    ?event_debug({signed_msg, Signed}),
     ?assert(hb_message:verify(Signed, Opts)).

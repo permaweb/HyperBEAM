@@ -66,12 +66,12 @@ ensure_loaded(Ref,
     % form.
     UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
     Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ?event(debug_cache,
+    _Store = hb_opts:get(store, no_viable_store, Opts),
+    ?event_debug(debug_cache,
         {loading_multi_link,
             {link, ID},
             {link_opts, LkOpts},
-            {store, Store}
+            {store, _Store}
         }
     ),
     CacheReadResult = 
@@ -83,10 +83,10 @@ ensure_loaded(Ref,
         end,
     case CacheReadResult of
         {ok, Next} ->
-            ?event(debug_cache,
+            ?event_debug(debug_cache,
                 {loaded,
                     {link, ID},
-                    {store, Store}
+                    {store, _Store}
                 }),
             case Lazy of
                 true ->
@@ -124,7 +124,7 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
         end,
     case CacheReadResult of
         {ok, LoadedMsg} ->
-            ?event(debug_caching,
+            ?event_debug(debug_caching,
                 {lazy_loaded,
                     {link, ID},
                     {msg, LoadedMsg},
@@ -268,7 +268,7 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
     hb_message:paranoid_verify(cache_write, RawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
-    ?event(debug_cache, {writing_full_message, {msg, TABM}}),
+    ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
             TABM,
@@ -306,13 +306,13 @@ do_write_message(List, Store, Opts) when is_list(List) ->
         Opts
     );
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
-    ?event(debug_cache, {writing_message, Msg}),
+    ?event_debug(debug_cache, {writing_message, Msg}),
     % Calculate the IDs of the message.
     UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
     AllIDs = calculate_all_ids(Msg, Opts),
     AltIDs = AllIDs -- [UncommittedID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
-    ?event(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
+    ?event_debug(debug_cache, {writing_message, {id, UncommittedID}, {alt_ids, AltIDs}, {original, Msg}}),
     % Write all of the keys of the message into the store.
     hb_store:group(Store, UncommittedID, Opts),
     maps:map(
@@ -330,7 +330,7 @@ do_write_message(Msg, Store, Opts) when is_map(Msg) ->
     % uncommitted message.
     lists:map(
         fun(AltID) ->
-            ?event(debug_cache,
+            ?event_debug(debug_cache,
                 {linking_commitment,
                     {uncommitted_id, UncommittedID},
                     {committed_id, AltID}
@@ -358,7 +358,7 @@ write_key(Base, <<"commitments">>, _HPAlg, RawCommitments, Store, Opts) ->
     ),
     maps:map(
         fun(BaseCommID, Commitment) ->
-            ?event(debug_cache, {writing_commitment, {commitment, Commitment}}),
+            ?event_debug(debug_cache, {writing_commitment, {commitment, Commitment}}),
             {ok, CommMsgID} = do_write_message(Commitment, Store, Opts),
             hb_store:link(
                 Store,
@@ -496,7 +496,7 @@ calculate_all_ids(Msg, Opts) ->
 			Opts
         ),
     CommIDs = hb_maps:keys(Commitments, Opts),
-    ?event({calculating_ids, {msg, Msg}, {commitments, Commitments}, {comm_ids, CommIDs}}),
+    ?event_debug({calculating_ids, {msg, Msg}, {commitments, Commitments}, {comm_ids, CommIDs}}),
     All = hb_message:id(Msg, all, Opts#{ <<"linkify-mode">> => discard }),
     case lists:member(All, CommIDs) of
         true -> CommIDs;
@@ -510,7 +510,7 @@ write_hashpath(MsgWithoutHP, Opts) ->
     write(MsgWithoutHP, Opts).
 write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ?event({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
+    ?event_debug({writing_hashpath, {hashpath, HP}, {msg, Msg}, {store, Store}}),
     {ok, Path} = write(Msg, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(HP) => Path }, Opts),
     {ok, Path}.
@@ -519,7 +519,7 @@ write_hashpath(HP, Msg, Opts) when is_binary(HP) or is_list(HP) ->
 write_binary(Hashpath, Bin, Opts) ->
     write_binary(Hashpath, Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
 write_binary(Hashpath, Bin, Store, Opts) ->
-    ?event({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
+    ?event_debug({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
     {ok, Path} = do_write_message(Bin, Store, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
@@ -600,17 +600,17 @@ store_read(Target, Path, Store, Opts) ->
     PathBin = hb_path:to_binary(Path),
     case hb_store:resolve(Store, PathBin, Opts) of
         {ok, ResolvedFullPath} ->
-            ?event({reading,
+            ?event_debug({reading,
                 {original_path, {string, PathBin}},
                 {fully_resolved_path, ResolvedFullPath},
                 {store, Store}
             }),
             case hb_store:read(Store, ResolvedFullPath, Opts) of
                 {ok, Bin} ->
-                    ?event({reading_data, ResolvedFullPath}),
+                    ?event_debug({reading_data, ResolvedFullPath}),
                     {ok, Bin};
                 {composite, RawSubpaths} ->
-                    ?event({reading_composite, ResolvedFullPath}),
+                    ?event_debug({reading_composite, ResolvedFullPath}),
                     Subpaths = lists:map(fun hb_util:bin/1, RawSubpaths),
                     ?event(
                         {listed,
@@ -790,16 +790,16 @@ prepare_typed_links(Target, RootPath, Subpaths, Store, Opts) ->
 %% @doc Read and parse the ao-types for a given path if it is in the supplied
 %% list of subpaths, returning a map of keys and their types.
 read_ao_types(Path, Subpaths, Store, Opts) ->
-    ?event({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
+    ?event_debug({reading_ao_types, {path, Path}, {subpaths, {explicit, Subpaths}}}),
     case lists:member(<<"ao-types">>, Subpaths) of
         true ->
             {ok, TypesBin} =
                 hb_store:read(Store, hb_path:to_binary([Path, <<"ao-types">>]), Opts),
             Types = structured_decode_types(TypesBin, Opts),
-            ?event({parsed_ao_types, {types, Types}}),
+            ?event_debug({parsed_ao_types, {types, Types}}),
             {ok, types_to_implicit(Types), Types};
         false ->
-            ?event({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
+            ?event_debug({no_ao_types_key_found, {path, Path}, {subpaths, Subpaths}}),
             {ok, #{}, #{}}
     end.
 
@@ -843,13 +843,13 @@ read_resolved({link, ID, LinkOpts}, Req, Opts) ->
     read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
 read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
-    NormKey = hb_ao:normalize_key(Key, Opts),
+    _NormKey = hb_ao:normalize_key(Key, Opts),
     case hb_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
         unknown -> miss;
         false ->
-            ?event(read_cached,
+            ?event_debug(read_cached,
                 {found_non_message_device,
-                    {key, NormKey}
+                    {key, _NormKey}
                 }
             ),
             read_hashpath(BaseMsgID, Req, Opts);
@@ -859,10 +859,10 @@ read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsg
             % that the default (`message@1.0`) device will be used to execute
             % the key. Subsequently, we can simply read the key and return it if
             % it exists.
-            ?event(read_cached,
+            ?event_debug(read_cached,
                 {skipping_execution_store_lookup,
                     {base_msg, BaseMsgID},
-                    {key, NormKey}
+                    {key, _NormKey}
                 }
             ),
             case hb_store:resolve(Store, [BaseMsgID, Key], Opts) of
@@ -878,7 +878,7 @@ read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) 
     case hb_device:is_direct_key_access(BaseMsg, Req, Opts) of
         false -> read_hashpath(BaseMsg, Req, Opts);
         true ->
-            ?event(read_cached,
+            ?event_debug(read_cached,
                 {skip_execution_memory_lookup,
                     {path, NormKey}
                 }
@@ -894,16 +894,16 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
     % For now, just wrap maps:find.
     case maps:find(NormKey, BaseMsg) of
         error ->
-            ?event(read_cached, {key_not_found, {key, NormKey}}),
+            ?event_debug(read_cached, {key_not_found, {key, NormKey}}),
             {error, not_found};
         {ok, Value} ->
-            ?event(read_cached, {key_found, {key, NormKey}}),
+            ?event_debug(read_cached, {key_found, {key, NormKey}}),
             {ok, Value}
     end.
 
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
 read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
-    ?event({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
+    ?event_debug({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
     hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
     ReqID = hb_message:id(Req, all, Opts),
@@ -940,14 +940,14 @@ test_signed(Data, Opts) ->
 
 test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     Opts = #{ <<"store">> => Store },
     {ok, ID} = write(Bin, Opts),
     {ok, RetrievedBin} = read(ID, Opts),
     ?assertEqual(Bin, RetrievedBin).
 
 test_store_unsigned_empty_message(Store) ->
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Item = #{},
     Opts = #{ <<"store">> => Store },
@@ -961,11 +961,11 @@ test_store_unsigned_empty_message(Store) ->
         }
     ),
     MatchRes = hb_message:match(Item, RetrievedItem, strict, Opts),
-    ?event({match_result, MatchRes}),
+    ?event_debug({match_result, MatchRes}),
     ?assert(MatchRes).
 
 test_store_unsigned_nested_empty_message(Store) ->
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Item =
         #{ <<"layer1">> =>
@@ -985,7 +985,7 @@ test_store_unsigned_nested_empty_message(Store) ->
 %% @doc Test storing and retrieving a simple unsigned item
 test_store_simple_unsigned_message(Store) ->
     Item = test_unsigned(<<"Simple unsigned data item">>),
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     Opts = #{ <<"store">> => Store },
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
@@ -996,7 +996,7 @@ test_store_simple_unsigned_message(Store) ->
     ok.
 
 test_store_ans104_message(Store) ->
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Opts = #{ <<"store">> => Store },
     Item = #{ <<"type">> => <<"ANS104">>, <<"content">> => <<"Hello, world!">> },
@@ -1004,7 +1004,7 @@ test_store_ans104_message(Store) ->
     {ok, _Path} = write(Committed, Opts),
     CommittedID = hb_util:human_id(hb_message:id(Committed, all)),
     UncommittedID = hb_util:human_id(hb_message:id(Committed, none)),
-    ?event({test_message_ids, {uncommitted, UncommittedID}, {committed, CommittedID}}),
+    ?event_debug({test_message_ids, {uncommitted, UncommittedID}, {committed, CommittedID}}),
     {ok, RetrievedItem} = read(CommittedID, Opts),
     {ok, RetrievedItemU} = read(UncommittedID, Opts),
     ?assert(hb_message:match(Committed, RetrievedItem, strict, Opts)),
@@ -1013,25 +1013,25 @@ test_store_ans104_message(Store) ->
 
 %% @doc Test storing and retrieving a simple unsigned item
 test_store_simple_signed_message(Store) ->
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     Opts = #{ <<"store">> => Store },
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Item = test_signed(<<"Simple signed data item">>, #{ <<"priv-wallet">> => Wallet }),
-    ?event({writing_test_message, Item}),
+    ?event_debug({writing_test_message, Item}),
     %% Write the simple unsigned item
     {ok, _Path} = write(Item, Opts),
     % %% Read the item back
     % UID = hb_message:id(Item, none, Opts),
     % {ok, RetrievedItemUnsig} = read(UID, Opts),
-    % ?event({retreived_unsigned_message, {expected, Item}, {got, RetrievedItemUnsig}}),
+    % ?event_debug({retreived_unsigned_message, {expected, Item}, {got, RetrievedItemUnsig}}),
     % MatchRes = hb_message:match(Item, RetrievedItemUnsig, strict, Opts),
-    % ?event({match_result, MatchRes}),
+    % ?event_debug({match_result, MatchRes}),
     % ?assert(MatchRes),
     CommittedID = hb_message:id(Item, [Address], Opts),
     {ok, RetrievedItemSigned} = read(CommittedID, Opts),
-    ?event({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
+    ?event_debug({retrieved_signed_message, {expected, Item}, {got, RetrievedItemSigned}}),
     MatchResSigned = 
         hb_message:match(
             Item,
@@ -1039,13 +1039,13 @@ test_store_simple_signed_message(Store) ->
             strict,
             Opts
         ),
-    ?event({match_result_signed, MatchResSigned}),
+    ?event_debug({match_result_signed, MatchResSigned}),
     ?assert(MatchResSigned),
     ok.
 
 %% @doc Test deeply nested item storage and retrieval
 test_deeply_nested_complex_message(Store) ->
-    ?event(debug_store_test, {store, Store}),
+    ?event_debug(debug_store_test, {store, Store}),
     hb_store:reset(Store),
     Wallet = ar_wallet:new(),
     Opts = #{ <<"store">> => Store, <<"priv-wallet">> => Wallet },
@@ -1074,17 +1074,17 @@ test_deeply_nested_complex_message(Store) ->
             Opts
         ),
     UID = hb_message:id(Outer, none, Opts),
-    ?event({string, <<"================================================">>}),
+    ?event_debug({string, <<"================================================">>}),
     CommittedID = hb_message:id(Outer, signed, Opts),
-    ?event({string, <<"================================================">>}),
-    ?event({test_message_ids, {uncommitted, UID}, {committed, CommittedID}}),
+    ?event_debug({string, <<"================================================">>}),
+    ?event_debug({test_message_ids, {uncommitted, UID}, {committed, CommittedID}}),
     %% Write the nested item
     {ok, _} = write(Outer, Opts),
     %% Read the deep value back using subpath
 	OuterID = hb_util:human_id(UID),
     {ok, OuterMsg} = read(OuterID, Opts),
 	EnsuredLoadedOuter = hb_cache:ensure_all_loaded(OuterMsg, Opts),
-    ?event({deep_message, {explicit, EnsuredLoadedOuter}}),
+    ?event_debug({deep_message, {explicit, EnsuredLoadedOuter}}),
     %% Assert that the retrieved item matches the original deep value
     ?assertEqual(
         [1,2,3],
@@ -1100,7 +1100,7 @@ test_deeply_nested_complex_message(Store) ->
             {write, Level3SignedSubmessage}
         }
     ),
-    ?event({reading_committed_outer, {id, CommittedID}, {expect, Outer}}),
+    ?event_debug({reading_committed_outer, {id, CommittedID}, {expect, Outer}}),
     {ok, CommittedMsg} = read(hb_util:human_id(CommittedID), Opts),
 	EnsuredLoadedCommitted = hb_cache:ensure_all_loaded(CommittedMsg, Opts),
 	?assertEqual(
@@ -1116,7 +1116,7 @@ test_message_with_list(Store) ->
     hb_store:reset(Store),
     Opts = #{ <<"store">> => Store },
     Msg = test_unsigned([<<"a">>, <<"b">>, <<"c">>]),
-    ?event({writing_message, Msg}),
+    ?event_debug({writing_message, Msg}),
     {ok, Path} = write(Msg, Opts),
     {ok, RetrievedItem} = read(Path, Opts),
     ?assert(hb_message:match(Msg, RetrievedItem, strict, Opts)).

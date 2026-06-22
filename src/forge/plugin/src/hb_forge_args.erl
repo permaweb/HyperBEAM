@@ -14,14 +14,13 @@
 %%% {@link parse/2} to convert the parsed options into a normalised map.
 -module(hb_forge_args).
 -export([provider/6, opts/0, parse/2, scan_devices/1, package_opts/0, package_opts/1]).
--export([maybe_help/2]).
+-export([run_provider/3]).
 -export([set_preloaded_env/1, restore_preloaded_env/1, with_preloaded_env/2]).
 -export([load_wallet/1, bootstrap_preloaded_dirs/0, bootstrap_preloaded_dirs/1]).
 -export([default_preloaded_dirs/1]).
 -define(PLUGIN_NAMESPACE, device).
 -define(DEPS, [{default, app_discovery}, {default, compile}]).
 -define(ENV_PRELOADED_STORE, <<"HB_PRELOADED_STORE">>).
--define(ENV_PRELOADED_DEVICES_INDEX, <<"HB_PRELOADED_DEVICES_INDEX">>).
 
 %% @doc Register a `rebar3 device <provider>' command.
 provider(State, Provider, Module, Example, ShortDesc, Desc) ->
@@ -72,7 +71,11 @@ opts() ->
         {record, undefined, "record", string,
             "Write recorder@1.0 test flights; --record means errors, --record=all means every test."},
         {help, $h, "help", {boolean, false},
-            "Show command help."}
+            "Show command help."},
+        {dry_run, undefined, "dry-run", {boolean, false},
+            "Sign packages and print their IDs without uploading to Arweave."},
+        {verbose, undefined, "verbose", {boolean, false},
+            "Print locally preloaded device IDs."}
     ].
 
 %% @doc Convert parsed rebar command arguments into Forge's binary-keyed map.
@@ -97,6 +100,8 @@ parse(State, DefaultOutput) ->
             true -> proplists:get_value(record, Args, "errors");
             false -> undefined
         end,
+    DryRun = proplists:get_value(dry_run, Args, false),
+    Verbose = proplists:get_value(verbose, Args, false),
     Bundler = maybe_bin(BundlerRaw),
     #{
         <<"device-src">> => split_list(SrcRaw),
@@ -112,6 +117,8 @@ parse(State, DefaultOutput) ->
         <<"test-specs">> => parse_test_specs(TestRaw),
         <<"timeout">> => parse_number(TimeoutRaw),
         <<"timeout-multiplier">> => parse_number(TimeoutMultiplierRaw),
+        <<"dry-run">> => DryRun,
+        <<"verbose">> => Verbose,
         <<"device-roots">> =>
             case RootsRaw of
                 undefined -> all;
@@ -119,8 +126,8 @@ parse(State, DefaultOutput) ->
             end
     }.
 
-%% @doc Print the current provider's generated help if `--help' was given.
-maybe_help(State, Module) ->
+%% @doc Run a provider body after shared `rebar3 device' boundary handling.
+run_provider(State, Module, Fun) when is_function(Fun, 1) ->
     {Args, _Rest} = rebar_state:command_parsed_args(State),
     case proplists:get_value(help, Args, false) of
         true ->
@@ -130,9 +137,13 @@ maybe_help(State, Module) ->
                     rebar_state:providers(State)
                 ),
             providers:help(Provider),
-            true;
+            {ok, State};
         false ->
-            false
+            try Fun(State)
+            catch
+                error:{device_compile_failed, _, _, _, _} = Reason ->
+                    {error, hb_packager:format_error(Reason)}
+            end
     end.
 
 %% @doc Parse a comma-separated provider option into atoms, or `all'.
@@ -229,7 +240,7 @@ package_opts(Args) ->
         Bundler -> Opts#{ <<"bundler-ans104">> => Bundler }
     end.
 
-%% @doc Run `Fun' with `HB_PRELOADED_*' pointed at a preload result.
+%% @doc Run `Fun' with `HB_PRELOADED_STORE' pointed at a preload result.
 with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->
     Env = set_preloaded_env(Result),
     try Fun()
@@ -239,18 +250,14 @@ with_preloaded_env(Result, Fun) when is_function(Fun, 0) ->
 %% @doc Point this VM at a generated preloaded-store.
 set_preloaded_env(Result) ->
     StorePath = hb_util:bin(hb_maps:get(<<"name">>, maps:get(store, Result))),
-    Index = hb_util:bin(maps:get(index, Result)),
     OldStore = getenv(?ENV_PRELOADED_STORE),
-    OldIndex = getenv(?ENV_PRELOADED_DEVICES_INDEX),
     putenv(?ENV_PRELOADED_STORE, StorePath),
-    putenv(?ENV_PRELOADED_DEVICES_INDEX, Index),
     erase_preloaded_env_cache(),
-    {OldStore, OldIndex}.
+    OldStore.
 
 %% @doc Restore the previous preloaded-store environment.
-restore_preloaded_env({OldStore, OldIndex}) ->
+restore_preloaded_env(OldStore) ->
     restore_env(?ENV_PRELOADED_STORE, OldStore),
-    restore_env(?ENV_PRELOADED_DEVICES_INDEX, OldIndex),
     erase_preloaded_env_cache().
 
 %% @doc Restore one environment variable captured by {@link set_preloaded_env/1}.
@@ -261,10 +268,7 @@ restore_env(Name, Value) ->
 
 %% @doc Clear hb_opts' cached view of preloaded-store environment variables.
 erase_preloaded_env_cache() ->
-    erase({os_env, hb_util:list(?ENV_PRELOADED_STORE)}),
-    erase({os_env, hb_util:list(?ENV_PRELOADED_DEVICES_INDEX)}),
-    erase({processed_env, <<"preloaded-store">>}),
-    erase({processed_env, <<"preloaded-devices-index">>}).
+    erase(default_message_with_env).
 
 %% @doc Read an OS environment variable using HB binary naming internally.
 getenv(Name) ->

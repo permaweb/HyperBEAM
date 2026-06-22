@@ -186,9 +186,9 @@ from_tabm(Msg, TargetFormat, OldPriv, Opts) ->
 restore_priv(Msg, EmptyPriv, _Opts) when map_size(EmptyPriv) == 0 -> Msg;
 restore_priv(Msg, OldPriv, Opts) ->
     MsgPriv = hb_maps:get(<<"priv">>, Msg, #{}, Opts),
-    ?event({restoring_priv, {priv_msg, MsgPriv}, {priv_old, OldPriv}}),
+    ?event_debug({restoring_priv, {priv_msg, MsgPriv}, {priv_old, OldPriv}}),
     NewPriv = hb_util:deep_merge(MsgPriv, OldPriv, Opts),
-    ?event({priv_new, NewPriv}),
+    ?event_debug({priv_new, NewPriv}),
     Msg#{ <<"priv">> => NewPriv }.
 
 %% @doc Get a codec device and request params from the given conversion request. 
@@ -239,7 +239,7 @@ id(Msg, RawCommitters, Opts) ->
             signed -> #{ <<"committers">> => <<"all">> };
             List when is_list(List) -> #{ <<"committers">> => List }
         end,
-    ?event({getting_id, {msg, Msg}, {spec, CommSpec}}),
+    ?event_debug({getting_id, {msg, Msg}, {spec, CommSpec}}),
     {ok, ID} =
         hb_ao:raw(<<"message@1.0">>, <<"id">>, Msg, CommSpec, Opts),
     hb_util:human_id(ID).
@@ -251,7 +251,7 @@ id(Msg, RawCommitters, Opts) ->
 normalize_commitments(Msg, Opts) ->
     normalize_commitments(Msg, Opts, passive).
 normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
-    ?event(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
+    ?event_debug(debug_normalize_commitments, {normalize_commitments, {msg, Msg}}),
     NormMsg = 
         maps:map(
             fun(Key, Val) when Key == <<"commitments">> orelse Key == <<"priv">> ->
@@ -262,7 +262,7 @@ normalize_commitments(Msg, Opts, Mode) when is_map(Msg) ->
         ),
     do_normalize_commitments(NormMsg, Opts, Mode);
 normalize_commitments(Msg, Opts, Mode) when is_list(Msg) ->
-    ?event(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
+    ?event_debug(debug_normalize_commitments, {normalize_commitments, {list, Msg}}),
     lists:map(fun(X) -> normalize_commitments(X, Opts, Mode) end, Msg);
 normalize_commitments(Msg, _Opts, _Mode) ->
     Msg.
@@ -278,7 +278,7 @@ do_normalize_commitments(Msg, Opts, passive) ->
             end,
             hb_maps:to_list(Commitments)
         ),
-    ?event({do_normalize_commitments,
+    ?event_debug({do_normalize_commitments,
         {unsigned_commitments, UnsignedCommitments},
         {maybe_signed_commitment, SignedCommitments}
     }),
@@ -382,7 +382,7 @@ attach_phash2(Msg, ExpectedHash, Opts) ->
 %% is such that expensive operations like signature verification are not
 %% performed unless necessary.
 with_only_committed(Msg, Opts) when is_map(Msg) ->
-    ?event({with_only_committed, {msg, Msg}, {opts, Opts}}),
+    ?event_debug({with_only_committed, {msg, Msg}, {opts, Opts}}),
     Comms = hb_maps:get(<<"commitments">>, Msg, not_found, Opts),
     case is_map(Msg) andalso Comms /= not_found of
         true ->
@@ -395,7 +395,7 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
                     ),
                 % Add the ao-body-key to the committed list if it is not
                 % already present.
-                ?event(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
+                ?event_debug(debug_bundle, {committed_keys, CommittedKeys, {msg, Msg}}),
                 {ok,
                     with_links(
                         [<<"commitments">> | CommittedKeys],
@@ -579,13 +579,13 @@ paranoid_verify(Topic, Msg, Opts) ->
         false -> true;
         [] -> true;
         true ->
-            ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+            ?event_debug(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
             do_paranoid_verify(Topic, Msg, Opts);
         Topics ->
             case lists:member(Topic, Topics) of
                 false -> true;
                 true ->
-                    ?event(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
+                    ?event_debug(debug_paranoia, {paranoid_verify_called, Msg}, Opts),
                     do_paranoid_verify(Topic, Msg, Opts)
             end
     end.
@@ -593,7 +593,7 @@ paranoid_verify(Topic, Msg, Opts) ->
 do_paranoid_verify(Topic, Msg, Opts) ->
     try
         do_paranoid_verify(Topic, [], Msg, Opts),
-        ?event(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
+        ?event_debug(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
         true
     catch
         throw:{verification_failure, _Topic, RawPath, FailedMsg, Details, Stack} ->
@@ -773,7 +773,7 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
                 fun(Key) -> lists:member(Key, Keys1) end,
                 Keys1
             ),
-    ?event(debug_match,
+    ?event_debug(debug_match,
         {match,
             {keys1, Keys1},
             {keys2, Keys2},
@@ -788,7 +788,7 @@ unsafe_match(RawMap1, RawMap2, Mode, Path, Opts) ->
             lists:all(
                 fun(<<"commitments">>) -> true;
                 (Key) ->
-                    ?event(debug_match, {matching_key, Key}),
+                    ?event_debug(debug_match, {matching_key, Key}),
                     Val1 =
                         hb_ao:normalize_keys(
                             hb_maps:get(Key, NormMap1, not_found, Opts),
@@ -884,7 +884,7 @@ diff(_Val1, _Val2, _Opts) ->
 with_commitments(ID, Msg, Opts) when ?IS_ID(ID) ->
     with_commitments([ID], Msg, Opts);
 with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
-    ?event({with_commitments, {spec, Spec}, {commitments, Commitments}}),
+    ?event_debug({with_commitments, {spec, Spec}, {commitments, Commitments}}),
     FilteredCommitments =
         hb_maps:filter(
             fun(ID, CommMsg) ->
@@ -897,7 +897,7 @@ with_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
             Commitments,
             Opts
         ),
-    ?event({with_commitments, {filtered_commitments, FilteredCommitments}}),
+    ?event_debug({with_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 with_commitments(_Spec, Msg, _Opts) ->
     Msg.
@@ -905,7 +905,7 @@ with_commitments(_Spec, Msg, _Opts) ->
 %% @doc Filter messages that match the 'spec' given. Inverts the `with_commitments/2'
 %% function, such that only messages that do _not_ match the spec are returned.
 without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
-    ?event({without_commitments, {spec, Spec}, {msg, Msg}, {commitments, Commitments}}),
+    ?event_debug({without_commitments, {spec, Spec}, {msg, Msg}, {commitments, Commitments}}),
     FilteredCommitments =
         hb_maps:without(
             hb_maps:keys(
@@ -918,7 +918,7 @@ without_commitments(Spec, Msg = #{ <<"commitments">> := Commitments }, Opts) ->
             ),
             Commitments
         ),
-    ?event({without_commitments, {filtered_commitments, FilteredCommitments}}),
+    ?event_debug({without_commitments, {filtered_commitments, FilteredCommitments}}),
     Msg#{ <<"commitments">> => FilteredCommitments };
 without_commitments(_Spec, Msg, _Opts) ->
     Msg.
@@ -959,7 +959,7 @@ commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
     end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
-    ?event(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
+    ?event_debug(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
     if
         map_size(Matches) == 0 -> not_found;
         map_size(Matches) == 1 ->
