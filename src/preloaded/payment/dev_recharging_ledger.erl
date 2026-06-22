@@ -5,6 +5,7 @@
 -module(dev_recharging_ledger).
 -export([balance/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(LOOKUP_TIMEOUT, 1000).
 -define(DEFAULT_MAX, 1_000).
@@ -15,7 +16,12 @@
 account_id(Address) ->
     hb_util:human_id(Address).
 
-%% @doc Get the current effective balance for a P4 target account.
+%% @doc Get the current effective balance for a P4 target account. P4 supplies
+%% the `target' key during its pre-request balance check. This function
+%% normalizes that target to the account key used by the ledger server, then
+%% asks the server for a read-only balance. The server returns `infinity' for
+%% exempt accounts, the configured max balance for accounts it has not seen
+%% before, or the stored balance plus elapsed recharge for existing accounts.
 balance(_, Req, Opts) ->
     Target = hb_ao:get(<<"target">>, Req, Opts),
     {ok, get_balance(account_id(Target), Opts)}.
@@ -97,3 +103,16 @@ account_balance(
             RechargedSinceLast = (Time - LastInteraction) * RechargeRate,
             min(Max, Balance + RechargedSinceLast)
     end.
+
+%%% Tests
+
+balance_new_target_returns_max_test() ->
+    Target = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100
+    },
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Target }, Opts)
+    ).
