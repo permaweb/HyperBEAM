@@ -199,7 +199,8 @@ insufficient_balance_returns_402_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
-        charge(#{}, #{<<"account">> => Account, <<"quantity">> => 25}, Opts)).
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+    ).
 
 insufficient_balance_does_not_mutate_balance_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -209,7 +210,7 @@ insufficient_balance_does_not_mutate_balance_test() ->
         <<"recharging-ledger-recharge">> => 0
     },
     ?assertMatch(
-        {error, #{ <<"status">> := 402}},
+        {error, #{ <<"status">> := 402 }},
         charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
     ),
     ?assertEqual(
@@ -225,8 +226,8 @@ negative_quantity_returns_400_test() ->
         <<"recharging-ledger-recharge">> => 10
     },
     ?assertMatch(
-        {error, #{ <<"status">> := 400}},
-        charge(#{}, #{<<"account">> => Account, <<"quantity">> => -1}, Opts)
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => -1 }, Opts)
     ).
 
 exempt_account_returns_infinity_test() ->
@@ -236,11 +237,10 @@ exempt_account_returns_infinity_test() ->
         <<"recharging-ledger-max">> => 100,
         <<"recharging-ledger-recharge">> => 100,
         <<"recharging-ledger-exempt">> => [Account]
-        },
-
+    },
     ?assertEqual(
         {ok, infinity},
-        balance(#{}, #{ <<"target">> => Account}, Opts)
+        balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
 exempt_account_charge_does_not_mutate_balance_test() ->
@@ -250,13 +250,16 @@ exempt_account_charge_does_not_mutate_balance_test() ->
         <<"recharging-ledger-max">> => 100,
         <<"recharging-ledger-recharge">> => 100,
         <<"recharging-ledger-exempt">> => [Account]
-        },
-
-    {ok, true} = charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 1000}, Opts),
-
+    },
+    {ok, true} =
+        charge(
+            #{},
+            #{ <<"account">> => Account, <<"quantity">> => 1000 },
+            Opts
+        ),
     ?assertEqual(
         {ok, infinity},
-        balance(#{}, #{ <<"target">> => Account}, Opts)
+        balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
 recharge_restores_balance_test() ->
