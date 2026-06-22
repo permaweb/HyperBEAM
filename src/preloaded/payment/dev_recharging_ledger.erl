@@ -4,6 +4,8 @@
 %%% query the current effective balance and charge metered usage against it.
 %%% Balances are integer ledger units. Operators should choose units fine-grained
 %%% enough for their pricing and recharge policy.
+%%% An optional `recharging-ledger-rates' message can provide account-specific
+%%% recharge rates.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3]).
 -include("include/hb.hrl").
@@ -32,12 +34,19 @@ balance(_, Req, Opts) ->
 %% succeeds only when the current effective balance can cover the quantity.
 charge(_, Req, Opts) ->
     Account = hb_ao:get(<<"account">>, Req, Opts),
-    Quantity = hb_util:int(hb_ao:get(<<"quantity">>, Req, 0, Opts)),
-    charge_balance(account_id(Account), Quantity, Opts).
+    case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
+        {ok, Quantity} ->
+            charge_balance(account_id(Account), Quantity, Opts);
+        {error, _} ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => <<"Invalid charge quantity.">>
+            }}
+    end.
 
 get_balance(AccountID, Opts) ->
     PID = ensure_server_started(Opts),
-    PID ! {balance, self(), AccountID},
+    PID ! {balance, self(), AccountID, Opts},
     receive
         {balance, Balance} ->
             Balance
@@ -54,7 +63,7 @@ charge_balance(_AccountID, Quantity, _Opts) when Quantity < 0 ->
     }};
 charge_balance(AccountID, Quantity, Opts) ->
     PID = ensure_server_started(Opts),
-    PID ! {charge, self(), AccountID, Quantity},
+    PID ! {charge, self(), AccountID, Quantity, Opts},
     receive
         {charged, Result} ->
             Result
@@ -84,6 +93,7 @@ start_server(ServerID, Opts) ->
             Opts
         ),
     Period = hb_opts:get(recharging_ledger_period, ?DEFAULT_PERIOD, Opts),
+    RatesMessage = hb_opts:get(recharging_ledger_rates, undefined, Opts),
     Exempt = hb_opts:get(recharging_ledger_exempt, [], Opts),
     ?event(
         recharging_ledger,
@@ -92,6 +102,7 @@ start_server(ServerID, Opts) ->
             {max, Max},
             {recharge, Recharge},
             {period, Period},
+            {rates, RatesMessage},
             {exempt, Exempt}
         }
     ),
@@ -100,29 +111,31 @@ start_server(ServerID, Opts) ->
             max => Max,
             recharge => Recharge,
             period => Period,
+            rates => RatesMessage,
             accounts => #{ account_id(Account) => infinity || Account <- Exempt }
         }
     ).
 
 server_loop(State) ->
     receive
-        {balance, PID, AccountID} ->
-            PID ! {balance, account_balance(AccountID, State)},
+        {balance, PID, AccountID, Opts} ->
+            PID ! {balance, account_balance(AccountID, State, Opts)},
             server_loop(State);
-        {charge, PID, AccountID, Quantity} ->
+        {charge, PID, AccountID, Quantity, Opts} ->
             {Result, NewState} =
                 charge_account(
                     AccountID,
                     Quantity,
                     State,
-                    erlang:system_time(millisecond)
+                    erlang:system_time(millisecond),
+                    Opts
                 ),
             PID ! {charged, Result},
             server_loop(NewState)
     end.
 
-charge_account(AccountID, Quantity, State = #{ accounts := Accounts }, Now) ->
-    case account_balance(AccountID, State, Now) of
+charge_account(AccountID, Quantity, State = #{ accounts := Accounts }, Now, Opts) ->
+    case account_balance(AccountID, State, Now, Opts) of
         infinity ->
             {{ok, true}, State};
         Balance when Balance >= Quantity ->
@@ -144,21 +157,39 @@ charge_account(AccountID, Quantity, State = #{ accounts := Accounts }, Now) ->
             }}, State}
     end.
 
-account_balance(AccountID, State) ->
-    account_balance(AccountID, State, erlang:system_time(millisecond)).
+account_balance(AccountID, State, Time) when is_integer(Time) ->
+    account_balance(AccountID, State, Time, #{});
+account_balance(AccountID, State, Opts) ->
+    account_balance(AccountID, State, erlang:system_time(millisecond), Opts).
 account_balance(
         AccountID,
-        #{ max := Max, recharge := Recharge, period := Period, accounts := Accounts },
-        Time
+        State = #{ max := Max, recharge := Recharge, period := Period, accounts := Accounts },
+        Time,
+        Opts
     ) ->
     case maps:get(AccountID, Accounts, not_found) of
         infinity -> infinity;
         not_found -> Max;
         #{ balance := Balance, last := LastInteraction } ->
+            AccountRecharge = account_recharge(AccountID, Recharge, State, Opts),
             PeriodMs = Period * 1000,
             Elapsed = Time - LastInteraction,
-            RechargedSinceLast = (Elapsed * Recharge) div PeriodMs,
+            RechargedSinceLast = (Elapsed * AccountRecharge) div PeriodMs,
             min(Max, Balance + RechargedSinceLast)
+    end.
+
+account_recharge(AccountID, DefaultRecharge, State, Opts) ->
+    case maps:get(rates, State, undefined) of
+        undefined -> DefaultRecharge;
+        RatesMessage ->
+            case
+                hb_util:safe_int(
+                    hb_ao:get(AccountID, RatesMessage, DefaultRecharge, Opts)
+                )
+            of
+                {ok, Recharge} when Recharge >= 0 -> Recharge;
+                _ -> DefaultRecharge
+            end
     end.
 
 %%% Tests
@@ -230,6 +261,18 @@ negative_quantity_returns_400_test() ->
         charge(#{}, #{ <<"account">> => Account, <<"quantity">> => -1 }, Opts)
     ).
 
+invalid_quantity_returns_400_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => <<"bad">> }, Opts)
+    ).
+
 exempt_account_returns_infinity_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Opts = #{
@@ -281,6 +324,39 @@ recharge_caps_at_max_test() ->
         accounts => #{ Account => #{ balance => 95, last => 0 } }
     },
     ?assertEqual(100, account_balance(Account, State, 1000)).
+
+rates_message_overrides_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ Account => 20 },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(30, account_balance(Account, State, 500)).
+
+rates_message_missing_account_uses_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ <<"other-account">> => 20 },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500)).
+
+rates_message_invalid_account_rate_uses_default_recharge_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => #{ Account => <<"bad">> },
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(25, account_balance(Account, State, 500)).
 
 p4_charges_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
