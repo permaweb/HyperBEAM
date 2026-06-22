@@ -79,7 +79,7 @@
 -define(STORE_BENCH_LIST_GROUP_SIZE, 10).
 -define(STORE_BENCH_LIST_OPS, 20_000).
 -define(BENCH_MSG_WRITE_OPS, 250).
--define(BENCH_MSG_READ_OPS, 250).
+-define(BENCH_MSG_READ_OPS, 100_000).
 -define(BENCH_MSG_DATA_SIZE, 1024).
 
 behavior_info(callbacks) ->

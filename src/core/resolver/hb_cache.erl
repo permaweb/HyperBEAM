@@ -322,10 +322,14 @@ write_message_ops(Bin, Opts) when is_binary(Bin) ->
     Path = generate_binary_path(Bin, Opts),
     {ok, Path, [{write, Path, Bin}]};
 write_message_ops(List, Opts) when is_list(List) ->
-    write_message_ops(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
+    write_message_ops(
+        hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
+        Opts
+    );
 write_message_ops(Msg, Opts) when is_map(Msg) ->
     ?event_debug(debug_cache, {writing_message, Msg}),
-    UncommittedID = hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
+    UncommittedID =
+        hb_message:id(Msg, none, Opts#{ <<"linkify-mode">> => discard }),
     AllIDs = calculate_all_ids(Msg, UncommittedID, Opts),
     AltIDs = AllIDs -- [UncommittedID],
     MsgHashpathAlg = hb_path:hashpath_alg(Msg, Opts),
@@ -592,15 +596,13 @@ commitment_path(Base, Opts) ->
 %% @doc Calculate the IDs for a message.
 calculate_all_ids(Bin, _UncommittedID, _Opts) when is_binary(Bin) -> [];
 calculate_all_ids(Msg, UncommittedID, Opts) ->
-    Commitments =
-        hb_maps:without(
-            [<<"priv">>],
+    CommIDs = 
+        hb_maps:keys(
             hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-			Opts
+            Opts
         ),
-    CommIDs = hb_maps:keys(Commitments, Opts),
-    ?event_debug({calculating_ids, {msg, Msg}, {commitments, Commitments}, {comm_ids, CommIDs}}),
-    case hb_maps:size(Commitments, Opts) of
+    ?event_debug({calculating_ids, {msg, Msg}, {comm_ids, CommIDs}}),
+    case length(CommIDs) of
         0 ->
             % With no commitments the `all' id is the uncommitted id we already
             % computed; skip re-serializing the message to recompute it.
@@ -738,10 +740,7 @@ read_resolved_path(Target, ResolvedFullPath, Store, Opts) ->
             ?event_debug({reading_composite, ResolvedFullPath}),
             Subpaths =
                 [
-                    case Child of
-                        {Subpath, _Value} -> hb_util:bin(Subpath);
-                        Subpath -> hb_util:bin(Subpath)
-                    end
+                    hb_util:bin(child_name(Child))
                 ||
                     Child <- Children
                 ],

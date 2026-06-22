@@ -200,17 +200,31 @@ read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
 %% reached through an intermediate link) falls through to the resolver.
 read_result(Opts, Path) ->
     EnvOpts = ensure_env(Opts),
-    case read_prefix_rows(EnvOpts, Path) of
-        {ok, Rows} ->
-            case prefix_read_result(EnvOpts, Path, Rows) of
-                {error, not_found} -> read_prefix_miss(EnvOpts, Path);
-                Result -> Result
-            end;
-        not_found ->
-            read_prefix_miss(EnvOpts, Path);
-        {error, _} = Error ->
-            Error
-    end.
+    StartTime = erlang:monotonic_time(),
+    Result = 
+        case read_prefix_rows(EnvOpts, Path) of
+            {ok, Rows} ->
+                case prefix_read_result(EnvOpts, Path, Rows) of
+                    {error, not_found} -> read_prefix_miss(EnvOpts, Path);
+                    R -> R
+                end;
+            not_found ->
+                read_prefix_miss(EnvOpts, Path);
+            {error, _} = Error ->
+                Error;
+            {error, Type, _} ->
+                {error, Type}
+        end,
+    MetricStatus = 
+        case Result of
+            {ok, _} -> hit;
+            {composite, _} -> hit;
+            {error, not_found} -> miss;
+            not_found -> miss;
+            _ -> unknown
+        end,
+    sample_metrics(EnvOpts, StartTime, MetricStatus),
+    Result.
 
 %% The literal `Path' was not present in the scan. Resolve any intermediate
 %% links in the path and, if that yields a different key, retry the read against
@@ -753,7 +767,8 @@ sample_metrics(Name, StartTime, Type) ->
     hb_prometheus:observe(ReadTime, hb_store_lmdb_duration_seconds, [read, Name]),
     case Type of
         hit -> hb_prometheus:inc(counter, hb_store_lmdb_hit, [Name], 1024);
-        miss -> ok
+        miss -> ok;
+        error -> ok
     end.
 
 init_prometheus() ->
