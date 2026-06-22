@@ -213,3 +213,15 @@ insufficient_balance_does_not_mutate_balance_test() ->
         {ok, 10},
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
+
+negative_quantity_returns_400_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400}},
+        charge(#{}, #{<<"account">> => Account, <<"quantity">> => -1}, Opts)
+    ).
