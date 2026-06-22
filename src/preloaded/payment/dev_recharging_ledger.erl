@@ -1,6 +1,6 @@
 %%% @doc A P4-compatible ledger with balances that recharge over time.
 %%%
-%%% Accounts accrue units continuously up to a configured cap. `p4@1.0' can 
+%%% Accounts accrue units continuously up to a configured cap. `p4@1.0' can
 %%% query the current effective balance and charge metered usage against it.
 -module(dev_recharging_ledger).
 -export([balance/3]).
@@ -9,7 +9,6 @@
 
 -define(LOOKUP_TIMEOUT, 1000).
 -define(DEFAULT_MAX, 1_000).
--define(DEFAULT_MIN, -1_000).
 -define(DEFAULT_RECHARGE, 1_000).
 -define(DEFAULT_PERIOD, 60).
 
@@ -51,7 +50,6 @@ ensure_server_started(Opts) ->
 
 start_server(ServerID, Opts) ->
     Max = hb_opts:get(recharging_ledger_max, ?DEFAULT_MAX, Opts),
-    Min = hb_opts:get(recharging_ledger_min, ?DEFAULT_MIN, Opts),
     Recharge =
         hb_opts:get(
             recharging_ledger_recharge,
@@ -65,7 +63,6 @@ start_server(ServerID, Opts) ->
         {started_recharging_ledger,
             {server_id, ServerID},
             {max, Max},
-            {min, Min},
             {recharge, Recharge},
             {period, Period},
             {exempt, Exempt}
@@ -74,7 +71,6 @@ start_server(ServerID, Opts) ->
     server_loop(
         #{
             max => Max,
-            min => Min,
             recharge => Recharge,
             period => Period,
             accounts => #{ account_id(Account) => infinity || Account <- Exempt }
