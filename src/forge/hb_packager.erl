@@ -672,8 +672,8 @@ include_dir_entries(Entries) ->
         [
             {<<"src">>, <<"src">>},
             {<<"src">>, hb_util:bin(filename:absname("src"))},
-            {<<"src-core">>, <<"src/core">>},
-            {<<"src-core">>, hb_util:bin(filename:absname("src/core"))}
+            {<<"src/core">>, <<"src/core">>},
+            {<<"src/core">>, hb_util:bin(filename:absname("src/core"))}
         ]
         ++ [
             {
@@ -687,7 +687,7 @@ include_dir_entries(Entries) ->
             fun({_Mod, Path}) ->
                 case source_core_dir(Path) of
                     false -> false;
-                    {true, Dir} -> {true, {<<"src-core">>, hb_util:bin(Dir)}}
+                    {true, Dir} -> {true, {<<"src/core">>, hb_util:bin(Dir)}}
                 end
             end,
             Entries
