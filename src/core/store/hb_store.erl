@@ -29,8 +29,11 @@
 %%%                   if it is a `simple' value, or a message if it is a complex
 %%%                   term, using a request map of the form `#{<<"read">> => Path}`.
 %%%     write/3:      Write a request map of the form `#{Path => Value}`.
-%%%     list/3:       For `composite' type keys, return a list of child keys
-%%%                   using a request map of the form `#{<<"list">> => Path}`.
+%%%     list/3:       For `composite' type keys, return child keys using a
+%%%                   request map of the form `#{<<"list">> => Path}`.
+%%%                   Composite read results may also return children as
+%%%                   `{Key, Value}' pairs when the store can provide a child
+%%%                   value without an additional read.
 %%% '''
 %%% Each function takes a `store' message first, containing an arbitrary set
 %%% of its necessary configuration keys, as well as the `store-module' key which
@@ -293,16 +296,20 @@ sort(Stores, ScoreMap) ->
 %%% The store interface that modules should implement.
 
 %% @doc Read a key from the store.
+read(Path, Opts) when is_binary(Path) ->
+    read(store(Opts), #{ <<"read">> => Path }, Opts);
 read(Path, Opts) ->
-    read(hb_opts:get(store, [], Opts), Path, Opts).
+    read(store(Opts), Path, Opts).
 read(Modules, Req = #{ <<"read">> := _ }, Opts) ->
     call_function(Modules, read, [Req, Opts]);
+read(Modules, Path, Opts) when is_binary(Path) ->
+    read(Modules, #{ <<"read">> => Path }, Opts);
 read(Modules, Path, Opts) ->
     read(Modules, #{ <<"read">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Write a key with a value to the store.
 write(Req, Opts) ->
-    write(hb_opts:get(store, [], Opts), Req, Opts).
+    write(store(Opts), Req, Opts).
 write(Modules, Req, Opts) ->
     call_function(Modules, write, [Req, Opts]).
 
@@ -343,8 +350,10 @@ type(Modules, Path, Opts) ->
     type(Modules, #{ <<"type">> => hb_path:to_binary(Path) }, Opts).
 
 %% @doc Follow links through the store to resolve a path to its ultimate target.
+resolve(Path, Opts) when is_binary(Path) ->
+    resolve(store(Opts), #{ <<"resolve">> => Path }, Opts);
 resolve(Path, Opts) ->
-    resolve(hb_opts:get(store, [], Opts), Path, Opts).
+    resolve(store(Opts), Path, Opts).
 resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
     call_function(Modules, resolve, [Req, Opts]);
 resolve(Modules, Path, Opts) ->
@@ -353,8 +362,10 @@ resolve(Modules, Path, Opts) ->
 %% @doc List the keys in a group in the store. Use only in debugging.
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
+list(Path, Opts) when is_binary(Path) ->
+    list(store(Opts), #{ <<"list">> => Path }, Opts);
 list(Path, Opts) ->
-    list(hb_opts:get(store, [], Opts), Path, Opts).
+    list(store(Opts), Path, Opts).
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
     call_function(Modules, list, [Req, Opts]);
 list(Modules, Path, Opts) ->
@@ -368,6 +379,13 @@ match(Match, Opts) ->
     match(hb_opts:get(store, [], Opts), Match, Opts).
 match(Modules, Match, Opts) ->
     call_function(Modules, match, [Match, Opts]).
+
+store(Opts = #{ <<"store">> := Store })
+        when not is_map_key(<<"only">>, Opts),
+             not is_map_key(<<"prefer">>, Opts) ->
+    Store;
+store(Opts) ->
+    hb_opts:get(store, [], Opts).
 
 %% @doc Call a function on the first store module that succeeds. Returns its
 %% result, or `not_found` if none of the stores succeed. If `TIME_CALLS` is set,
@@ -1083,29 +1101,9 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
         timer:tc(
             fun() ->
                 lists:foldl(
-                    fun({MsgID, Msg}, Count) -> 
-                        NormalizedMsg =
-                            hb_cache:ensure_all_loaded(
-                                hb_message:normalize_commitments(Msg, Opts),
-                                Opts
-                            ),
+                    fun({MsgID, _Msg}, Count) ->
                         case hb_cache:read(MsgID, Opts) of
-                            {ok, CacheMsg} ->
-                                NormalizedCacheMsg = 
-                                    hb_message:normalize_commitments(
-                                        hb_cache:read_all_commitments(
-                                            hb_cache:ensure_all_loaded(
-                                                CacheMsg,
-                                                Opts
-                                            ),
-                                            Opts
-                                        ),
-                                        Opts
-                                    ),
-                                case NormalizedCacheMsg of
-                                    NormalizedMsg -> Count;
-                                    _ -> Count + 1
-                                end;
+                            {ok, _CachedMsg} -> Count;
                             _ -> Count + 1
                         end
                     end,

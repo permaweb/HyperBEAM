@@ -109,7 +109,12 @@ ensure_dir(DataDirPath) ->
 %% @returns `{ok, composite}` for group entries, `{ok, simple}` for regular
 %%          values, or `{error, not_found}`.
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Key)) of
+    KeyBin =
+        case is_binary(Key) of
+            true -> Key;
+            false -> hb_path:to_binary(Key)
+        end,
+    case read_resolved(Opts, KeyBin) of
         {ok, _ResolvedKey, <<"group">>} -> {ok, composite};
         {ok, _ResolvedKey, _Value} -> {ok, simple};
         not_found -> {error, not_found}
@@ -134,15 +139,7 @@ type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
 write(#{ <<"read-only">> := true }, _Req, _NodeOpts) when is_map(_Req) ->
     {error, not_found};
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
-    maps:fold(
-        fun(Path, Value, ok) ->
-            write(Opts, hb_path:to_binary(Path), Value);
-           (_Path, _Value, Error) ->
-            Error
-        end,
-        ok,
-        Req
-    );
+    write_batch(Opts, maps:to_list(Req));
 write(#{ <<"read-only">> := true }, _PathParts, _Value) ->
     {error, not_found};
 write(Opts, PathParts, Value) when is_list(PathParts) ->
@@ -152,6 +149,42 @@ write(Opts, Path, Value) ->
     ?event_debug({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
+        {error, Type, Description} ->
+            ?event(
+                error,
+                {lmdb_error,
+                    {type, Type},
+                    {description, Description}
+                }
+            ),
+            retry
+    end.
+
+write_batch(_Opts, []) ->
+    ok;
+write_batch(Opts, KVs) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    case elmdb:put_batch(
+        DBInstance,
+        [
+            {
+                case is_binary(Path) of
+                    true -> Path;
+                    false -> hb_path:to_binary(Path)
+                end,
+                Value
+            }
+        ||
+            {Path, Value} <- KVs
+        ]
+    ) of
+        ok ->
+            ok;
+        {ok, _SuccessCount, []} ->
+            ok;
+        {ok, _SuccessCount, Errors} ->
+            ?event(error, {lmdb_batch_errors, {errors, Errors}}),
+            retry;
         {error, Type, Description} ->
             ?event(
                 error,
@@ -181,19 +214,65 @@ write(Opts, Path, Value) ->
 %% @param PathReq Request of the form `#{<<"read">> => Path}`.
 %% @returns `{ok, Value}` on success, `{composite, Keys}` for groups, or
 %%          `{error, not_found}` on failure
+read(Opts, #{ <<"read">> := Path }, _NodeOpts) when is_binary(Path) ->
+    read_result(Opts, Path);
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Path)) of
-        {ok, ResolvedPath, <<"group">>} ->
-            {composite, hb_util:ok(list_children(Opts, ResolvedPath))};
-        {ok, _ResolvedPath, Value} ->
-            {ok, Value};
+    read_result(Opts, hb_path:to_binary(Path)).
+
+read_result(Opts, Path) ->
+    EnvOpts = ensure_env(Opts),
+    case read_prefix_rows(EnvOpts, Path) of
+        {ok, Rows} ->
+            case prefix_read_result(EnvOpts, Path, Rows) of
+                {error, not_found} -> read_prefix_miss(EnvOpts, Path);
+                Result -> Result
+            end;
         not_found ->
-            {error, not_found}
+            read_prefix_miss(EnvOpts, Path);
+        {error, _} = Error ->
+            Error
+    end.
+
+read_prefix_miss(Opts, Path) ->
+    case is_data_path(Path) of
+        true ->
+            {error, not_found};
+        false ->
+            try
+                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
+                case resolve_path_links(Opts, PathParts) of
+                    {ok, ResolvedPathParts} ->
+                        case to_path(ResolvedPathParts) of
+                            Path -> {error, not_found};
+                            ResolvedPath -> read_result(Opts, ResolvedPath)
+                        end;
+                    {error, _} ->
+                        {error, not_found}
+                end
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error,
+                        {
+                            resolve_path_links_failed,
+                            {class, Class},
+                            {reason, Reason},
+                            {stacktrace, {trace, Stacktrace}},
+                            {path, Path}
+                        }
+                    ),
+                    {error, not_found}
+            end
     end.
 
 read_resolved(#{<<"name">> := Name} = Opts, Path) ->
+    EnvOpts = ensure_env(Opts),
+    PathBin =
+        case is_binary(Path) of
+            true -> Path;
+            false -> hb_path:to_binary(Path)
+        end,
     StartTime = erlang:monotonic_time(),
-    case do_read_resolved(Opts, hb_path:to_binary(Path)) of
+    case do_read_resolved(EnvOpts, PathBin) of
         {ok, _ResolvedPath, _Value} = Result ->
             sample_metrics(Name, StartTime, hit),
             Result;
@@ -207,45 +286,41 @@ do_read_resolved(Opts, Path) ->
         {ok, _ResolvedPath, _Value} = Result ->
             Result;
         not_found ->
-            try
-                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
-                case resolve_path_links(Opts, PathParts) of
-                    {ok, ResolvedPathParts} ->
-                        read_with_links(Opts, to_path(ResolvedPathParts));
-                    {error, _} ->
-                        not_found
-                end
-            catch
-                Class:Reason:Stacktrace ->
-                    ?event(error,
-                        {
-                            resolve_path_links_failed, 
-                            {class, Class},
-                            {reason, Reason},
-                            {stacktrace, {trace, Stacktrace}},
-                            {path, Path}
-                        }
-                    ),
-                    not_found
+            case Path of
+                <<"data">> ->
+                    not_found;
+                <<"data/", _/binary>> ->
+                    not_found;
+                _ ->
+                    try
+                        PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
+                        case resolve_path_links(Opts, PathParts) of
+                            {ok, ResolvedPathParts} ->
+                                read_with_links(Opts, to_path(ResolvedPathParts));
+                            {error, _} ->
+                                not_found
+                        end
+                    catch
+                        Class:Reason:Stacktrace ->
+                            ?event(error,
+                                {
+                                    resolve_path_links_failed,
+                                    {class, Class},
+                                    {reason, Reason},
+                                    {stacktrace, {trace, Stacktrace}},
+                                    {path, Path}
+                                }
+                            ),
+                            not_found
+                    end
             end
     end.
 
 %% @doc Helper function to check if a value is a link and extract the target.
-is_link(Value) ->
-    LinkPrefixSize = byte_size(<<"link:">>),
-    case byte_size(Value) > LinkPrefixSize andalso
-        binary:part(Value, 0, LinkPrefixSize) =:= <<"link:">> of
-        true -> 
-            Link =
-                binary:part(
-                    Value,
-                    LinkPrefixSize,
-                    byte_size(Value) - LinkPrefixSize
-                ),
-            {true, Link};
-        false ->
-            false
-    end.
+is_link(<<"link:", Link/binary>>) when byte_size(Link) > 0 ->
+    {true, Link};
+is_link(_) ->
+    false.
 
 %% @doc Helper function to convert to a path
 to_path(PathParts) ->
@@ -255,8 +330,15 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %%
 %% Returns `{ok, Value}` or `not_found`.
+read_direct(#{<<"db">> := DBInstance, <<"name">> := Name}, Path) ->
+    read_direct(DBInstance, Name, Path);
+read_direct(#{<<"db">> := DBInstance}, Path) ->
+    read_direct(DBInstance, undefined, Path);
 read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    read_direct(DBInstance, Name, Path).
+
+read_direct(DBInstance, Name, Path) ->
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;
@@ -281,6 +363,15 @@ read_direct(#{<<"name">> := Name} = Opts, Path) ->
 %% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
     case read_direct(Opts, Path) of
+        {ok, <<"raw:", Value/binary>>} ->
+            case is_data_path(Path) of
+                true -> {ok, Path, <<"raw:", Value/binary>>};
+                false -> {ok, Path, Value}
+            end;
+        {ok, <<"link:data">>} ->
+            read_with_links(Opts, <<"data">>);
+        {ok, <<"link:data/", Link/binary>>} ->
+            read_with_links(Opts, <<"data/", Link/binary>>);
         {ok, Value} ->
             case is_link(Value) of
                 {true, Link} -> 
@@ -291,6 +382,10 @@ read_with_links(Opts, Path) ->
         not_found ->
             not_found
     end.
+
+is_data_path(<<"data">>) -> true;
+is_data_path(<<"data/", _/binary>>) -> true;
+is_data_path(_) -> false.
 
 %% @doc Resolve links in a path, checking each segment except the last.
 %% Returns the resolved path where any intermediate links have been followed.
@@ -377,9 +472,15 @@ scope(_) -> scope().
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Path)) of
+    EnvOpts = ensure_env(Opts),
+    PathBin =
+        case is_binary(Path) of
+            true -> Path;
+            false -> hb_path:to_binary(Path)
+        end,
+    case read_resolved(EnvOpts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
-            list_children(Opts, ResolvedPath);
+            list_children(EnvOpts, ResolvedPath);
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
         not_found ->
@@ -387,22 +488,65 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
     end.
 
 list_children(Opts, ResolvedPath) ->
-    SearchPath = 
-        case ResolvedPath of
-            <<>> -> <<>>;
-            <<"/">> -> <<>>;
-            _ -> 
-                case binary:last(ResolvedPath) of
-                    $/ -> ResolvedPath;
-                    _ -> <<ResolvedPath/binary, "/">>
-                end
-        end,
+    SearchPath = child_prefix(ResolvedPath),
     % Use native elmdb:list function
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
         {error, not_found} -> {ok, []};
         not_found -> {ok, []}
+    end.
+
+read_prefix_rows(Opts, Path) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    case elmdb:read_prefix(DBInstance, Path) of
+        {ok, Rows} -> {ok, Rows};
+        {error, not_found} -> not_found;
+        not_found -> not_found;
+        {error, _Type, _Description} = Error -> Error
+    end.
+
+prefix_read_result(Opts, Path, [{Path, <<"link:", Link/binary>>} | _])
+        when byte_size(Link) > 0 ->
+    read_result(Opts, Link);
+prefix_read_result(_Opts, Path, [{Path, <<"raw:", Value/binary>>} | _]) ->
+    case is_data_path(Path) of
+        true -> {ok, <<"raw:", Value/binary>>};
+        false -> {ok, Value}
+    end;
+prefix_read_result(_Opts, Path, [{Path, <<"group">>} | Rows]) ->
+    {composite, prefix_rows_children(Path, Rows)};
+prefix_read_result(_Opts, Path, [{Path, Value} | _]) ->
+    {ok, Value};
+prefix_read_result(_Opts, Path, Rows) ->
+    case {is_data_path(Path), prefix_rows_children(Path, Rows)} of
+        {false, [_ | _] = Children} -> {composite, Children};
+        _ -> {error, not_found}
+    end.
+
+prefix_rows_children(<<>>, Rows) ->
+    prefix_rows_children(<<>>, 0, Rows, []);
+prefix_rows_children(<<"/">>, Rows) ->
+    prefix_rows_children(<<>>, 0, Rows, []);
+prefix_rows_children(Path, Rows) ->
+    prefix_rows_children(Path, byte_size(Path), Rows, []).
+
+prefix_rows_children(_Path, _PathSize, [], Children) ->
+    lists:reverse(Children);
+prefix_rows_children(Path, PathSize, [{Key, Value} | Rest], Children) ->
+    case Key of
+        <<Path:PathSize/binary, $/, Child/binary>> when Child =/= <<>> ->
+            prefix_rows_children(Path, PathSize, Rest, [{Child, Value} | Children]);
+        _ ->
+            prefix_rows_children(Path, PathSize, Rest, Children)
+    end.
+
+child_prefix(<<>>) -> <<>>;
+child_prefix(<<"/">>) -> <<>>;
+child_prefix(Path) ->
+    case binary:last(Path) of
+        $/ -> Path;
+        _ -> <<Path/binary, "/">>
     end.
 
 %% @doc Match a series of keys and values against the database. Returns 
@@ -413,22 +557,22 @@ match(Opts, MatchMap, _NodeOpts) when is_map(MatchMap) ->
     match(Opts, maps:to_list(MatchMap), #{});
 match(Opts, MatchKVs, _NodeOpts) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    WithPrefixes =
+    Patterns =
         lists:map(
-            fun({Key, Path}) ->
-                {Key, <<"link:", Path/binary>>}
-            end,
+            fun({Key, Value}) -> {Key, hb_util:bin(Value)} end,
             MatchKVs
         ),
     ?event_debug({elmdb_match, MatchKVs}),
-    case elmdb:match(DBInstance, WithPrefixes) of
+    match_patterns(DBInstance, Patterns).
+
+match_patterns(DBInstance, Patterns) ->
+    case elmdb:match(DBInstance, Patterns) of
         {ok, Matches} ->
             ?event_debug({elmdb_matched, Matches}),
             {ok, Matches};
         {error, not_found} -> {error, not_found};
         not_found -> {error, not_found}
     end.
-
 
 %% @doc Create a group entry that can contain other keys hierarchically.
 %%
@@ -447,7 +591,10 @@ match(Opts, MatchKVs, _NodeOpts) ->
 %% @param GroupName Binary name for the group
 %% @returns Result of the write operation
 group(Opts, #{ <<"group">> := GroupName }, _NodeOpts) ->
-    write(Opts, hb_path:to_binary(GroupName), <<"group">>).
+    case is_binary(GroupName) of
+        true -> write(Opts, GroupName, <<"group">>);
+        false -> write(Opts, hb_path:to_binary(GroupName), <<"group">>)
+    end.
 
 %% @doc Ensure all parent groups exist for a given path.
 %%
@@ -508,23 +655,31 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
 %% @param New The new key that should link to the existing key
 %% @returns Result of the write operation
 link(Opts, Req, _NodeOpts) when is_map(Req) ->
-    maps:fold(
-        fun(New, Existing, ok) ->
-            link(Opts, hb_path:to_binary(Existing), hb_path:to_binary(New));
-           (_New, _Existing, Error) ->
-            Error
-        end,
-        ok,
-        Req
+    write(
+        Opts,
+        maps:from_list(
+            [
+                begin
+                    ExistingBin = hb_path:to_binary(Existing),
+                    {
+                        hb_path:to_binary(New),
+                        <<"link:", ExistingBin/binary>>
+                    }
+                end
+            ||
+                {New, Existing} <- maps:to_list(Req)
+            ]
+        ),
+        #{}
     );
 link(#{ <<"read-only">> := true }, _Existing, _New) ->
     {error, not_found};
 link(Opts, Existing, New) when is_list(Existing) ->
     link(Opts, to_path(Existing), New);
 link(Opts, Existing, New) ->
-   ExistingBin = hb_util:bin(Existing),
-   ensure_parent_groups(Opts, hb_path:to_binary(New)),
-   write(Opts, hb_path:to_binary(New), <<"link:", ExistingBin/binary>>).
+    ExistingBin = hb_util:bin(Existing),
+    ensure_parent_groups(Opts, hb_path:to_binary(New)),
+    write(Opts, hb_path:to_binary(New), <<"link:", ExistingBin/binary>>).
 
 %% @doc Resolve a path by following any symbolic links.
 %%
@@ -545,7 +700,11 @@ resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
     end.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
+find_env(Opts = #{ <<"db">> := _ }) -> Opts;
 find_env(Opts) -> hb_store:find(Opts).
+
+ensure_env(Opts = #{ <<"db">> := _ }) -> Opts;
+ensure_env(Opts) -> maps:merge(Opts, find_env(Opts)).
 
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }, _Req, _Opts) ->
@@ -1065,4 +1224,62 @@ list_with_link_test() ->
     {ok, LinkChildren} = test_list(StoreOpts, <<"link-to-group">>),
     ?event_debug({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
+    test_stop(StoreOpts).
+
+read_prefix_composite_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    test_group(StoreOpts, <<"root">>),
+    test_write(StoreOpts, <<"root/a">>, <<"1">>),
+    test_group(StoreOpts, <<"root/b">>),
+    test_write(StoreOpts, <<"root/b/c">>, <<"2">>),
+    ?assertEqual(
+        {composite, [
+            {<<"a">>, <<"1">>},
+            {<<"b">>, <<"group">>},
+            {<<"b/c">>, <<"2">>}
+        ]},
+        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
+    ),
+    ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
+    test_stop(StoreOpts).
+
+read_prefix_id_composite_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    ID = hb_util:human_id(crypto:hash(sha256, <<"read-prefix-id-composite">>)),
+    ?assert(?IS_ID(ID)),
+    test_group(StoreOpts, ID),
+    test_write(StoreOpts, <<ID/binary, "/a">>, <<"1">>),
+    test_group(StoreOpts, <<ID/binary, "/b">>),
+    test_write(StoreOpts, <<ID/binary, "/b/c">>, <<"2">>),
+    ?assertEqual(
+        {composite, [
+            {<<"a">>, <<"1">>},
+            {<<"b">>, <<"group">>},
+            {<<"b/c">>, <<"2">>}
+        ]},
+        read(StoreOpts, #{ <<"read">> => ID }, #{})
+    ),
+    test_stop(StoreOpts).
+
+raw_value_write_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    ok = group(StoreOpts, #{ <<"group">> => <<"root">> }, #{}),
+    ok =
+        write(
+            StoreOpts,
+            #{
+                <<"data/small">> => <<"value">>,
+                <<"root/small">> => <<"raw:value">>
+            },
+            #{}
+        ),
+    ?assertEqual(
+        {composite, [{<<"small">>, <<"raw:value">>}]},
+        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
+    ),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"root/small">>)),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"data/small">>)),
     test_stop(StoreOpts).
