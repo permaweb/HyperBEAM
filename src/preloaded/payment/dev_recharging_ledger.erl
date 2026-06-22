@@ -186,3 +186,30 @@ charge_new_account_deducts_units_test() ->
         {ok, 75.0},
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
+
+insufficient_balance_returns_402_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        charge(#{}, #{<<"account">> => Account, <<"quantity">> => 25}, Opts)).
+
+insufficient_balance_does_not_mutate_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402}},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, 10},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
