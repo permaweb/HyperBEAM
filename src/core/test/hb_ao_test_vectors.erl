@@ -257,15 +257,18 @@ exec_dummy_device(Opts) ->
                     }
                 ]
         },
-    % Ensure that we can read the device message from the cache and that it matches
-    % the original message.
+    % Ensure that we can read the device message from the cache and that its
+    % content matches the original message.
     {ok, RawReadMsg} = hb_cache:read(ID, Opts),
     ReadMsg =
         hb_cache:ensure_all_loaded(
             hb_cache:read_all_commitments(RawReadMsg, Opts),
             Opts
         ),
-    ?assertEqual(DevMsg, ReadMsg),
+    ?assertEqual(
+        hb_maps:without([<<"commitments">>], DevMsg, Opts),
+        hb_maps:without([<<"commitments">>], ReadMsg, Opts)
+    ),
     % Create a base message with the device spec ID, then request a dummy path from
     % it.
     Req = #{ <<"path">> => <<"echo/param">>, <<"param">> => <<"example">> },

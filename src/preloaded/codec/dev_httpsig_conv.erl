@@ -904,14 +904,17 @@ group_maps_flat_compatible_test() ->
     ok.
 
 encode_message_with_links_test() ->
+    % hb_cache will only linkify the key if it is longer than 60 characters
     Msg = #{
         <<"immediate-key">> => <<"immediate-value">>,
-        <<"typed-key">> => 4
+        <<"long-key">> => binary:copy(<<"a">>, 61),
+        <<"short-key">> => <<"short-value">>
     },
     {ok, Path} = hb_cache:write(Msg, #{}),
     {ok, Read} = hb_cache:read(Path, #{}),
     % Ensure that the message now has a lazy link
-    ?assertMatch({link, _, _}, maps:get(<<"typed-key">>, Read, #{})),
+    ?assertMatch(<<"short-value">>, maps:get(<<"short-key">>, Read, #{})),
+    ?assertMatch({link, _, _}, maps:get(<<"long-key">>, Read, #{})),
     % Encode and decode the message as `httpsig@1.0`
     Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),
