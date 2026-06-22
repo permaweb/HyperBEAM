@@ -890,15 +890,13 @@ restore_test_print_env(Old) ->
 
 %% @doc Clear hb_opts' cached view of `HB_PRINT'.
 erase_print_env_cache() ->
-    erase({os_env, "HB_PRINT"}),
-    erase({processed_env, <<"debug-print">>}).
+    erase(default_message_with_env).
 
 %% @doc Build runtime opts pointing at the freshly-built preloaded
 %% store; its devices resolve through the high-trust preloaded path.
 test_opts(Result) ->
     #{
-        <<"preloaded-store">> => maps:get(store, Result),
-        <<"preloaded-devices-index">> => maps:get(index, Result)
+        <<"preloaded-store">> => maps:get(store, Result)
     }.
 
 %% @doc Resolve each device name through the freshly-built preloaded-store.

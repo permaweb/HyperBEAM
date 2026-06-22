@@ -4,9 +4,9 @@
 %%%
 %%% Invoked from the rebar.config post-compile hook so every build of
 %%% HyperBEAM ends with a working `preloaded-store' on disk and a
-%%% matching `_build/hb_preloaded_index.hrl' header. The store is signed
-%%% with the node wallet, so the runtime's default device-author trust
-%%% rule (trust the node wallet unless configured otherwise) applies.
+%%% matching in-store preloaded index. The store is signed with the node wallet,
+%%% so the runtime's default device-author trust rule (trust the node wallet
+%%% unless configured otherwise) applies.
 
 -include("../include/hb.hrl").
 
@@ -51,20 +51,13 @@ run(_Args) ->
     ),
     Index = maps:get(index, Result),
     ?event(preload, {preloaded_index, Index}),
-    HeaderPath = <<"_build/hb_preloaded_index.hrl">>,
-    ok = hb_preload:write_index_header(Index, HeaderPath),
-    ?event(preload, {preloaded_index_header, HeaderPath}),
-    recompile_hb_opts(),
     halt(0).
 
 add_code_paths() ->
-    DefaultPaths =
-        filelib:wildcard("_build/default/lib/*/ebin") ++
-            filelib:wildcard("_build/default/plugins/*/ebin"),
     AllPaths =
         filelib:wildcard("_build/*/lib/*/ebin") ++
             filelib:wildcard("_build/*/plugins/*/ebin"),
-    Paths = DefaultPaths ++ lists:sort(fun newer_path/2, AllPaths -- DefaultPaths),
+    Paths = lists:sort(fun newer_path/2, AllPaths),
     lists:foreach(
         fun(P) -> code:add_pathz(P) end,
         Paths
@@ -78,34 +71,3 @@ newest_beam_time(Path) ->
         [] -> filelib:last_modified(Path);
         Beams -> lists:max([filelib:last_modified(B) || B <- Beams])
     end.
-
-recompile_hb_opts() ->
-    lists:foreach(
-        fun(Ebin) ->
-            {ok, hb_opts} =
-                compile:file(
-                    "src/core/resolver/hb_opts.erl",
-                    [{outdir, Ebin} | hb_opts_compile_opts(Ebin)]
-                )
-        end,
-        filelib:wildcard("_build/*/lib/hb/ebin")
-    ).
-
-hb_opts_compile_opts(Ebin) ->
-    Beam = filename:join(Ebin, "hb_opts.beam"),
-    case beam_lib:chunks(Beam, [compile_info]) of
-        {ok, {_, [{compile_info, Info}]}} ->
-            drop_outdir(proplists:get_value(options, Info, fallback_opts()));
-        _ ->
-            fallback_opts()
-    end.
-
-drop_outdir([{outdir, _} | Rest]) -> drop_outdir(Rest);
-drop_outdir([Opt | Rest]) -> [Opt | drop_outdir(Rest)];
-drop_outdir([]) -> [].
-
-fallback_opts() ->
-    [
-        debug_info,
-        {i, "src/core"}
-    ].

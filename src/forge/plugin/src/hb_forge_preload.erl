@@ -7,10 +7,7 @@
 %%% message.
 %%%
 %%% On success the provider prints (and returns from `do/1') the path to
-%%% the generated store and the index message ID. The corresponding
-%%% `_build/hb_preloaded_index.hrl' header is regenerated so that the
-%%% core default node configuration can pick up the index ID at
-%%% compile-time.
+%%% the generated store and the index message ID.
 -module(hb_forge_preload).
 -export([init/1, do/1, format_error/1, run/2]).
 
@@ -58,12 +55,6 @@ run(Args, NodeOpts) ->
                 hb_forge_args:scan_devices(Args),
             {ok, Result} =
                 hb_preload:build_groups(Groups, Wallet, OutputDir, PackageOpts),
-            HeaderPath = header_path(OutputDir),
-            ok =
-                hb_preload:write_index_header(
-                    maps:get(index, Result),
-                    HeaderPath
-                ),
             rebar_api:info(
                 "Device preload complete: Store: ~s; Index: ~s.",
                 [OutputDir, maps:get(index, Result)]
@@ -91,11 +82,6 @@ package_opts(Args, NodeOpts) ->
         <<"requires-system-architecture">> =>
             maps:get(<<"requires-system-architecture">>, Args, false)
     }.
-
-%% @doc Construct the path to the preloaded-store index header.
-header_path(OutputDir) ->
-    BuildDir = filename:dirname(hb_util:list(OutputDir)),
-    hb_util:bin(filename:join(BuildDir, "hb_preloaded_index.hrl")).
 
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->

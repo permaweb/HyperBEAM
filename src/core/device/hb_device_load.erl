@@ -131,11 +131,11 @@ from_preloaded(Ref, Opts) ->
     case preloaded(Opts) of
         undefined ->
             {error, not_found};
-        {Store, IndexID} ->
+        Store ->
             PreOpts =
                 Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
             maybe
-                {ok, SpecID} ?= preloaded_spec(Ref, Store, IndexID, PreOpts),
+                {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
                 lazy_first(
                     fun(ID) -> load_archive(ID, PreOpts) end,
                     [
@@ -150,27 +150,16 @@ from_preloaded(Ref, Opts) ->
             end
     end.
 
-preloaded_spec(Ref, _Store, _IndexID, _Opts) when ?IS_ID(Ref) ->
+preloaded_spec(Ref, _Store, _Opts) when ?IS_ID(Ref) ->
     {ok, Ref};
-preloaded_spec(Ref, Store, IndexID, Opts) ->
-    hb_store:read(Store, <<IndexID/binary, "/", Ref/binary>>, Opts).
+preloaded_spec(Ref, Store, Opts) ->
+    hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
-%% @doc The preloaded store and its signed index ID, from node config
-%% (request-local cache keys stripped so it is visible inside a
-%% request-scoped resolution).
+%% @doc The preloaded store, with request-local cache keys stripped so it is
+%% visible inside a request-scoped resolution.
 preloaded(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
-    case
-        {
-            hb_opts:get(preloaded_store, undefined, Node),
-            hb_opts:get(preloaded_devices_index, undefined, Node)
-        }
-    of
-        {Store, IndexID} when Store =/= undefined, IndexID =/= undefined ->
-            {Store, IndexID};
-        _ ->
-            undefined
-    end.
+    hb_opts:get(preloaded_store, undefined, Node).
 
 %%% --------------------------------------------------------------------
 %%% Low trust

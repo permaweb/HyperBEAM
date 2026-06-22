@@ -96,10 +96,8 @@ LMDB-backed `preloaded-store`. Output:
   `name@1.0` is one of those names, so the runtime can read that
   first resolver entry directly before the name device itself is
   loaded.
-* `_build/hb_preloaded_index.hrl` — a generated compile-time macro
-  containing the index ID. The build hook recompiles `hb_opts` after
-  writing it, so the default node config embeds the correct index
-  without reading a separate metadata file at runtime.
+* `<output-dir>/~meta@1.0/preloaded-devices-index` — a stable link
+  to the signed flat resolver message. The runtime reads this link.
 
 ### `rebar3 device test`
 
@@ -122,8 +120,8 @@ for failures, or `--record=all` to write one HTML archive for every test.
 
 ### `rebar3 device local`
 
-Builds a fresh preloaded-store, points `HB_PRELOADED_STORE` and
-`HB_PRELOADED_DEVICES_INDEX` at it, then starts the normal Rebar shell.
+Builds a fresh preloaded-store, points `HB_PRELOADED_STORE` at it,
+then starts the normal Rebar shell.
 Use this when you want a local node that can resolve your packaged
 devices immediately:
 
@@ -155,7 +153,6 @@ Use `--bundler` to override the endpoint. Forge posts ANS-104 items to
 | Key | Type | Role |
 |-----|------|------|
 | `<<"preloaded-store">>` | store map | LMDB preloaded device store. |
-| `<<"preloaded-devices-index">>` | binary | Committed ID of the flat preloaded resolver message. Embedded into `hb_opts` from `_build/hb_preloaded_index.hrl` during compilation. |
 | `<<"loaded-device-store">>` | store map | Optional shared cache of name/spec-ID → loaded module atom. |
 | `<<"trusted-device-signers">>` | `[Address \| SignerPolicy]` | Acceptable signer addresses for impl messages. A non-empty configured list enables remote implementation lookup; omitted or empty disables it. A signer policy object may include `<<"address">>`, `<<"valid-until-height">>` to cap remote GraphQL lookup by block height, and `<<"devices">>` to scope that signer to device refs or spec IDs. |
 | `<<"trusted-devices">>` | `#{NameOrSpecID => ImplID}` | Operator-pinned implementation IDs trusted directly for the named device or spec ID. |
@@ -183,9 +180,8 @@ by an address in `trusted-device-signers`. `devices` scopes a signer
 to matching device refs or resolved spec IDs; omitted means all devices.
 Omit `trusted-device-signers` or set it to `[]` to disable remote lookup.
 
-`HB_PRELOADED_STORE` and `HB_PRELOADED_DEVICES_INDEX` override the
-first two fields for provider-driven test runs, so the nested EUnit
-node uses the freshly generated preloaded-store.
+`HB_PRELOADED_STORE` points provider-driven test runs at the freshly
+generated preloaded-store.
 
 Operators control the bake via the source set their build runs
 `rebar3 device preload` over.
