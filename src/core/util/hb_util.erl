@@ -303,14 +303,11 @@ encode(List) when is_list(List) ->
 encode(_) ->
     error(badarg).
 
-%% @doc Decode a URL safe base64 binary or iolist into a binary. Uses the
-%% unchecked decoder: the input is assumed to be valid base64url (as produced
-%% by `encode/1'), so malformed input yields garbage rather than reliably
-%% raising.
+%% @doc Decode a URL safe base64 binary or iolist into a binary.
 decode(Bin) when is_binary(Bin) ->
-    b64veryfast:decode64_url_unchecked(Bin);
+    b64veryfast:decode64_url(Bin);
 decode(List) when is_list(List) ->
-    b64veryfast:decode64_url_unchecked(iolist_to_binary(List));
+    b64veryfast:decode64_url(iolist_to_binary(List));
 decode(_) ->
     error(badarg).
 
@@ -990,6 +987,17 @@ message_to_ordered_list_metadata_test() ->
         <<"priv">> => #{ <<"state">> => ignored }
     },
     ?assertEqual([one, two], message_to_ordered_list(Msg)).
+
+base64url_roundtrip_test_parallel() ->
+    Values = [
+        <<>>,
+        <<1>>,
+        <<1, 2>>,
+        <<1, 2, 3>>,
+        << <<I:8>> || I <- lists:seq(0, 63) >>,
+        << <<(I rem 256):8>> || I <- lists:seq(0, 511) >>
+    ],
+    [ ?assertEqual(Value, decode(encode(Value))) || Value <- Values ].
 
 %% `to_lower/1' must remain byte-for-byte equivalent to `string:lowercase',
 %% including the `badarg' throw on invalid UTF-8 that `ar_tx' tag parsing
