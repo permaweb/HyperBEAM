@@ -396,6 +396,86 @@ recharging_ledger_rates_device_integration_test() ->
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
+p4_metering_bundler_charges_recharging_ledger_bytes_test() ->
+    HostWallet = ar_wallet:new(),
+    Wallet = ar_wallet:new(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Rate = 2,
+    Item =
+        hb_message:commit(
+            #{
+                <<"data">> => <<"metered-recharging-ledger-bundler-item">>,
+                <<"test">> => <<"p4-recharging-ledger-metering">>
+            },
+            #{ <<"priv-wallet">> => ar_wallet:new() }
+        ),
+    {ServerHandle, GatewayOpts} =
+        hb_mock_server:start_arweave_gateway(
+            #{
+                price => {200, <<"12345">>},
+                tx_anchor => {200, hb_util:encode(rand:bytes(32))}
+            }
+        ),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>,
+        <<"pricing-device">> => <<"metering@1.0">>
+    },
+    BaseOpts =
+        GatewayOpts#{
+            <<"priv-wallet">> => HostWallet,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1,
+            <<"metering-rates">> => #{
+                <<"arweave-bytes">> => Rate,
+                <<"beam-reductions">> => 0
+            },
+            <<"operator">> => ar_wallet:to_address(HostWallet),
+            <<"recharging-ledger-recharge">> => 0,
+            <<"on">> => #{
+                <<"request">> => Processor,
+                <<"response">> => Processor
+            }
+        },
+    ItemSize =
+        byte_size(
+            ar_bundles:serialize(
+                hb_message:convert(
+                    Item,
+                    #{
+                        <<"device">> => <<"ans104@1.0">>,
+                        <<"bundle">> => true
+                    },
+                    <<"structured@1.0">>,
+                    BaseOpts
+                )
+            )
+        ),
+    Opts =
+        BaseOpts#{
+            <<"recharging-ledger-max">> => (ItemSize * Rate) + 50
+        },
+    try
+        Node = hb_http_server:start_node(Opts),
+        UploadReq =
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~bundler@1.0/tx">>,
+                    <<"bundler-subject">> => <<"body">>,
+                    <<"body">> => Item
+                },
+                Opts#{ <<"priv-wallet">> => Wallet }
+            ),
+        ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, Opts)),
+        [_] = hb_mock_server:get_requests(tx, 1, ServerHandle),
+        ?assertEqual(
+            {ok, 50},
+            balance(#{}, #{ <<"target">> => Address }, Opts)
+        )
+    after
+        hb_mock_server:stop(ServerHandle)
+    end.
+
 p4_charges_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
     OperatorWallet = ar_wallet:new(),
