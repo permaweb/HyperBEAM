@@ -50,7 +50,15 @@ charge(_, Req, Opts) ->
 balance_account(Req, Opts) ->
     case hb_ao:get(<<"target">>, Req, not_found, Opts) of
         not_found ->
-            request_account(hb_ao:get(<<"request">>, Req, not_found, Opts), Opts);
+            request_account(
+                hb_ao:get(
+                    <<"request">>,
+                    Req,
+                    not_found,
+                    Opts#{ <<"hashpath">> => ignore }
+                ),
+                Opts
+            );
         Target ->
             {ok, account_id(Target)}
     end.
@@ -61,27 +69,18 @@ request_account(not_found, _Opts) ->
         <<"body">> => <<"Balance request must include target or signed request.">>
     }};
 request_account(Request, Opts) ->
-    Signers = hb_message:signers(Request, Opts),
-    case hb_message:verify(Request, Signers, Opts) of
-        true ->
-            case Signers of
-                [Signer] ->
-                    {ok, account_id(Signer)};
-                [] ->
-                    {error, #{
-                        <<"status">> => 400,
-                        <<"body">> => <<"Balance request has no signer.">>
-                    }};
-                _ ->
-                    {error, #{
-                        <<"status">> => 400,
-                        <<"body">> => <<"Balance request has multiple signers.">>
-                    }}
-            end;
-        false ->
+    case hb_message:signers(Request, Opts) of
+        [Signer] ->
+            {ok, account_id(Signer)};
+        [] ->
             {error, #{
                 <<"status">> => 400,
-                <<"body">> => <<"Balance request signature is invalid.">>
+                <<"body">> => <<"Balance request has no signer.">>
+            }};
+        _ ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => <<"Balance request has multiple signers.">>
             }}
     end.
 
@@ -281,6 +280,17 @@ p4_balance_request_uses_signed_request_signer_test() ->
     ?assertEqual(
         {ok, 75},
         balance(#{}, #{ <<"request">> => Request }, Opts)
+    ).
+
+balance_request_without_signer_returns_400_test() ->
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        balance(#{}, #{ <<"request">> => #{ <<"path">> => <<"/greeting">> } }, Opts)
     ).
 
 insufficient_balance_returns_402_test() ->
@@ -576,7 +586,14 @@ p4_charges_recharging_ledger_simple_pay_test() ->
             #{ <<"priv-wallet">> => ClientWallet }
         ),
     ?assertEqual({ok, <<"Hello from P4">>}, hb_http:get(Node, Req, #{})),
-    ?assertEqual(
-        {ok, 7},
-        balance(#{}, #{ <<"target">> => ClientAddress }, Opts)
-    ).
+    {ok, Balance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                #{ <<"priv-wallet">> => ClientWallet }
+            ),
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual(7, Balance),
+    ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).
