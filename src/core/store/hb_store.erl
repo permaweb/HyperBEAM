@@ -78,9 +78,9 @@
 -define(STORE_BENCH_LIST_KEYS, 100_000).
 -define(STORE_BENCH_LIST_GROUP_SIZE, 10).
 -define(STORE_BENCH_LIST_OPS, 20_000).
--define(BENCH_MSG_WRITE_OPS, 250).
--define(BENCH_MSG_READ_OPS, 100_000).
--define(BENCH_MSG_DATA_SIZE, 1024).
+-define(BENCH_MSG_WRITE_OPS, 20_000).
+-define(BENCH_MSG_READ_OPS, 20_000).
+-define(BENCH_MSG_DATA_SIZE, 32).
 
 behavior_info(callbacks) ->
     [
@@ -1019,7 +1019,11 @@ benchmark_message_read_write(Store) ->
     benchmark_message_read_write(Store, ?BENCH_MSG_WRITE_OPS, ?BENCH_MSG_READ_OPS).
 benchmark_message_read_write(Store, WriteOps, ReadOps) ->
     start(Store),
-    Opts = #{ <<"store">> => Store, <<"priv-wallet">> => hb:wallet() },
+    Opts = #{
+        <<"store">> => Store,
+        <<"priv-wallet">> => hb:wallet(),
+        <<"match-index">> => []
+    },
     TestDataSize = ?BENCH_MSG_DATA_SIZE * 8, % in _bits_
     timer:sleep(100),
     ?event(
@@ -1036,13 +1040,7 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
                 #{
                     <<"process">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
                     <<"slot">> => N,
-                    <<"message">> =>
-                        hb_message:commit(
-                            #{
-                                <<"body">> => <<"test", 0:TestDataSize, N:32>>
-                            },
-                            Opts
-                        )
+                    <<"body">> => <<"test", 0:TestDataSize, N:32>>
                 }
             end,
             lists:seq(1, WriteOps)
