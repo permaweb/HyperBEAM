@@ -19,6 +19,12 @@ SECP256K1_CMAKE_OPTIONS ?= \
 	-DSECP256K1_ENABLE_MODULE_SCHNORRSIG=OFF \
 	-DSECP256K1_APPEND_CFLAGS=-fPIC
 
+SECP256K1_SOURCE_FILES := $(shell \
+	if [ -d secp256k1/include ] && [ -d secp256k1/src ]; then \
+		find secp256k1/include secp256k1/src \
+			-type f \( -name '*.c' -o -name '*.h' \) -print; \
+	fi)
+
 GIT_SUBMODULE_OPTIONS ?= --checkout --init
 
 PHONY += all
@@ -52,7 +58,7 @@ secp256k1/build/Makefile: secp256k1/build
 	cd secp256k1/build \
 		&& cmake $(SECP256K1_CMAKE_OPTIONS) ..
 
-secp256k1/build/lib/libsecp256k1.a: secp256k1/build/Makefile
+secp256k1/build/lib/libsecp256k1.a: secp256k1/build/Makefile $(SECP256K1_SOURCE_FILES)
 	cd secp256k1/build \
 		&& cmake --build .
 

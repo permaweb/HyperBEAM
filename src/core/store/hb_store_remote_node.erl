@@ -194,7 +194,7 @@ write(Opts = #{ <<"node">> := Node }, Req, _NodeOpts) when is_map(Req) ->
     ?event({write, {node, Node}, {request, Req}}),
     maps:fold(
         fun(Destination, Value, ok) ->
-            case remote_write_value(Opts, Value) of
+            case remote_write_value(Opts, store_value(Destination, Value)) of
                 {ok, SourcePath} ->
                     remote_link(Opts, hb_path:to_binary(SourcePath), hb_path:to_binary(Destination));
                 {error, _} = Error ->
@@ -206,6 +206,20 @@ write(Opts = #{ <<"node">> := Node }, Req, _NodeOpts) when is_map(Req) ->
         ok,
         Req
     ).
+
+%% @doc The remote node re-content-addresses every written value, so a cache
+%% `raw:' inline marker -- written at a key path -- must be reduced to its
+%% logical value first. Otherwise the marker itself is hashed and stored,
+%% corrupting later reads. `data/' destinations already hold the logical value
+%% (which may itself begin with `raw:'), so they are forwarded verbatim.
+store_value(Destination, <<"raw:", Value/binary>>) when is_binary(Destination) ->
+    case Destination of
+        <<"data">> -> <<"raw:", Value/binary>>;
+        <<"data/", _/binary>> -> <<"raw:", Value/binary>>;
+        _ -> Value
+    end;
+store_value(_Destination, Value) ->
+    Value.
 
 %% @doc Link a source to a destination in the remote node.
 %%

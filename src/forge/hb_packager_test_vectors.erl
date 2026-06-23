@@ -370,6 +370,37 @@ source_id_changes_with_content_test() ->
     ?assert(?IS_ID(ID2)),
     ?assertNotEqual(ID1, ID2).
 
+source_id_changes_with_include_content_test() ->
+    Dir = test_fixture_dir(),
+    RootPath = filename:join(Dir, <<"dev_test_pkg.erl">>),
+    HeaderPath = filename:join(Dir, <<"fixture.hrl">>),
+    ok =
+        file:write_file(
+            HeaderPath,
+            <<"-define(HB_PACKAGER_TEST_HEADER, <<\"one\">>).\n">>
+        ),
+    {ok, Root} = file:read_file(RootPath),
+    ok =
+        file:write_file(
+            RootPath,
+            binary:replace(
+                Root,
+                <<"-module(dev_test_pkg).\n">>,
+                <<"-module(dev_test_pkg).\n-include(\"fixture.hrl\").\n">>
+            )
+        ),
+    [Group] = hb_packager:scan([Dir], #{}),
+    Pkg1 = package_for_test(Group),
+    ok =
+        file:write_file(
+            HeaderPath,
+            <<"-define(HB_PACKAGER_TEST_HEADER, <<\"two\">>).\n">>
+        ),
+    [Group2] = hb_packager:scan([Dir], #{}),
+    Pkg2 = package_for_test(Group2),
+    ?assertNotEqual(maps:get(source_id, Pkg1), maps:get(source_id, Pkg2)),
+    ?assertNotEqual(maps:get(module_name, Pkg1), maps:get(module_name, Pkg2)).
+
 %% The cryptographic anchor: the generated module name embeds the
 %% lowercase-base32 of the source ID's native bytes, so the loaded
 %% module is provably bound to the exact source it was built from.

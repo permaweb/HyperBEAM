@@ -293,11 +293,16 @@ package_all(Groups, Opts) ->
 package(#{ root := Root, root_file := RootFile, helpers := Helpers,
     files := Files } = Group, Opts) ->
     Libraries = maps:get(libraries, Group, []),
+    Entries = [{Root, RootFile} | Helpers ++ Libraries],
     {_RootForms, RootAttrs} = parse_module(RootFile),
     Implements = derived_or_declared_implements(Root, RootAttrs),
     {SpecBody, SpecContentType} = derive_spec(RootFile, RootAttrs, Opts),
     PrivFiles = priv_files(Root, RootFile),
-    SourceID = source_id(maps:merge(Files, PrivFiles), Opts),
+    SourceID =
+        source_id(
+            maps:merge(maps:merge(Files, PrivFiles), include_source_files(Entries)),
+            Opts
+        ),
     ModName =
         hb_device_name:generated(Implements, source_id_to_hash(SourceID)),
     ?event(
@@ -660,20 +665,31 @@ generated_constituent_module_name(RootMod, Root, Mod) ->
 
 %% @doc Return include dirs needed to compile package sources.
 include_dirs(Entries) ->
+    lists:usort([Dir || {_DirKey, Dir} <- include_dir_entries(Entries)]).
+
+include_dir_entries(Entries) ->
     lists:usort(
         [
-            <<"src">>,
-            hb_util:bin(filename:absname("src")),
-            <<"src/core">>,
-            hb_util:bin(filename:absname("src/core"))
+            {<<"src">>, <<"src">>},
+            {<<"src">>, hb_util:bin(filename:absname("src"))},
+            {<<"src/core">>, <<"src/core">>},
+            {<<"src/core">>, hb_util:bin(filename:absname("src/core"))}
         ]
         ++ [
-            hb_util:bin(filename:dirname(hb_util:list(Path)))
+            {
+                <<"module/", (atom_to_binary(Mod, utf8))/binary>>,
+                hb_util:bin(filename:dirname(hb_util:list(Path)))
+            }
          ||
-            {_Mod, Path} <- Entries
+            {Mod, Path} <- Entries
         ]
         ++ lists:filtermap(
-            fun({_Mod, Path}) -> source_core_dir(Path) end,
+            fun({_Mod, Path}) ->
+                case source_core_dir(Path) of
+                    false -> false;
+                    {true, Dir} -> {true, {<<"src/core">>, hb_util:bin(Dir)}}
+                end
+            end,
             Entries
         )
     ).
@@ -690,6 +706,30 @@ source_core_dir(Source) ->
                 )
             }
     end.
+
+%% @doc Return local header files that can affect the compiled package forms.
+include_source_files(Entries) ->
+    Files =
+        [
+            {
+                hb_util:bin(
+                    filename:join(hb_util:list(DirKey), relative_path(Dir, Path))
+                ),
+                filename:absname(Path)
+            }
+         ||
+            {DirKey, Dir} <- include_dir_entries(Entries),
+            Pattern <- ["*.hrl", "include/*.hrl"],
+            Path <- filelib:wildcard(filename:join(hb_util:list(Dir), Pattern)),
+            is_regular_file(Path)
+        ],
+    maps:from_list(
+        [
+            {Key, read_file(Path)}
+         ||
+            {Key, Path} <- lists:usort(Files)
+        ]
+    ).
 
 %% @doc Add test-only compile flags when packaging for `device test'.
 test_compile_opts(Opts) ->

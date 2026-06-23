@@ -651,11 +651,12 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     ?assert(MatchRes),
     ?assert(hb_message:verify(Decoded, all, Opts)),
     % % Ensure that both of the messages can be verified (and retreived).
-    FoundInner =
-        hb_message:normalize_commitments(
-            hb_maps:get(<<"body">>, Msg, not_found, Opts),
-            Opts
-        ),
+    % `hb_cache:read' no longer normalizes commitments, so `hb_maps:get' returns
+    % the inner message exactly as it was signed. Re-normalizing it here would
+    % mint an unsigned commitment for the nested `parameters' submessage -- a key
+    % the outer signature was made over in its uncommitted form -- changing the
+    % signed content and breaking verification. The faithful read needs none.
+    FoundInner = hb_maps:get(<<"body">>, Msg, not_found, Opts),
     LoadedFoundInner = hb_cache:ensure_all_loaded(FoundInner, Opts),
     % Verify that the fully loaded version of the inner message, and the one
     % gained by applying `hb_maps:get` match and verify.
