@@ -111,7 +111,7 @@ install(Base, State, Opts) ->
 %% @doc Helper function for returning a result from a Lua function.
 return(Result, ExecState, Opts) ->
     ?event(lua_import, {import_returning, {result, Result}}),
-    TableEncoded = dev_lua:encode(hb_cache:ensure_all_loaded(Result, Opts), Opts),
+    TableEncoded = dev_lua:encode(Result, Opts),
     {ReturnParams, ResultingState} =
         lists:foldr(
             fun(LuaEncoded, {Params, StateIn}) ->

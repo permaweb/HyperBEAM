@@ -248,6 +248,8 @@ target_slot(Req, Opts) ->
 %% @doc Continually get and apply the next assignment from the scheduler until
 %% we reach the target slot that the user has requested.
 compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
+    compute_to_slot(ProcID, Base, Req, TargetSlot, Opts, false).
+compute_to_slot(ProcID, Base, Req, TargetSlot, Opts, Stored) ->
     case hb_ao:get(<<"at-slot">>, Base, Opts#{ <<"hashpath">> => ignore }) of
         CurrentSlot when CurrentSlot == TargetSlot ->
             % We reached the target height so we force a snapshot and return.
@@ -258,7 +260,10 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 },
                 Opts
             ),
-            store_result(true, ProcID, TargetSlot, Base, Req, Opts),
+            case Stored of
+                false -> store_result(true, ProcID, TargetSlot, Base, Req, Opts);
+                true -> ok
+            end,
             {ok, without_snapshot(lib_process:as_process(Base, Opts), Opts)};
         CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
@@ -293,7 +298,8 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                                 NewState,
                                 Req,
                                 TargetSlot,
-                                Opts
+                                Opts,
+                                true
                             );
                         {error, Error} ->
                             % Forward error details back to the caller.
@@ -368,7 +374,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                 timer:tc(
                     fun() ->
                         store_result(
-                            false,
+                            Slot == TargetSlot,
                             ProcID,
                             Slot,
                             NewProcStateMsgWithSlot,
@@ -385,7 +391,6 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {prep_ms, PrepTimeMicroSecs div 1000},
                     {execution_ms, RuntimeMicroSecs div 1000},
                     {store_ms, StoreTimeMicroSecs div 1000},
-                    {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
                         hb_ao:get(
                             <<"body/action">>,
@@ -582,7 +587,7 @@ should_snapshot(Slot, Res, Opts) ->
 
 %% @doc Calculate if we should snapshot based on the number of slots.
 should_snapshot_slots(Slot, Opts) ->
-    case hb_opts:get(process_snapshot_slots, ?DEFAULT_SNAPSHOT_SLOTS, Opts) of
+    case hb_opts:get(<<"process-snapshot-slots">>, ?DEFAULT_SNAPSHOT_SLOTS, Opts) of
         Undef when (Undef == undefined) or (Undef == <<"false">>) ->
             false;
         RawSnapshotSlots ->
@@ -593,7 +598,7 @@ should_snapshot_slots(Slot, Opts) ->
 %% @doc Calculate if we should snapshot based on the elapsed time since the last
 %% snapshot.
 should_snapshot_time(Res, Opts) ->
-    case hb_opts:get(process_snapshot_time, ?DEFAULT_SNAPSHOT_TIME, Opts) of
+    case hb_opts:get(<<"process-snapshot-time">>, ?DEFAULT_SNAPSHOT_TIME, Opts) of
         Undef when (Undef == undefined) or (Undef == <<"false">>) ->
             false;
         RawSecs ->

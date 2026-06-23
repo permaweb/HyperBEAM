@@ -21,23 +21,29 @@ write(ProcID, Slot, Msg, Opts) ->
     {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
     % Link the item to the path in the store by slot number.
     SlotNumPath = path(ProcID, Slot, Opts),
-    hb_cache:link(Root, SlotNumPath, Opts),
     % Link the item to the message ID path in the store.
     MsgIDPath =
         path(
             ProcID,
-            ID = hb_message:id(Msg, uncommitted, Opts),
+            Root,
             Opts
         ),
     ?event(
         {linking_id,
             {proc_id, ProcID},
             {slot, Slot},
-            {id, ID},
+            {id, Root},
             {path, MsgIDPath}
         }
     ),
-    hb_cache:link(Root, MsgIDPath, Opts),
+    hb_store:link(
+        hb_opts:get(<<"store">>, no_viable_store, Opts),
+        #{
+            SlotNumPath => Root,
+            MsgIDPath => Root
+        },
+        Opts
+    ),
     % Return the slot number path.
     {ok, SlotNumPath}.
 
@@ -65,10 +71,10 @@ latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
 latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
-    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    Scope = hb_opts:get(<<"process-cache-scope">>, local, RawOpts),
     % Normalize the store descriptor to a list of stores.
     UnscopedStore =
-        case hb_opts:get(store, no_viable_store, RawOpts) of
+        case hb_opts:get(<<"store">>, no_viable_store, RawOpts) of
             StoreMsg when is_map(StoreMsg) -> [StoreMsg];
             Other -> Other
         end,
@@ -132,7 +138,7 @@ first_with_path(ProcID, RequiredPath, Slots, Opts) ->
         RequiredPath,
         Slots,
         Opts,
-        hb_opts:get(store, no_viable_store, Opts)
+        hb_opts:get(<<"store">>, no_viable_store, Opts)
     ).
 first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
     not_found;
@@ -193,7 +199,7 @@ test_write_and_read_output(Opts) ->
 %% @doc Test for retrieving the latest computed output for a process.
 find_latest_outputs(Opts) ->
     % Create test environment.
-    Store = hb_opts:get(store, no_viable_store, Opts),
+    Store = hb_opts:get(<<"store">>, no_viable_store, Opts),
     ResetRes = hb_store:reset(Store),
     ?event({reset_store, {result, ResetRes}, {store, Store}}),
     Proc1 = hb_process_test_vectors:aos_process(),

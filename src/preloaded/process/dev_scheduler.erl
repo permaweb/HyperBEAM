@@ -153,7 +153,7 @@ validate_next_slot(Base, [NextAssignment|Assignments], Lookahead, Last, Opts) ->
             ?event(next_profiling, setting_cache),
             ?event(next, {setting_cache, {assignments, length(Assignments)}}),
             NextState =
-                case hb_util:atom(hb_opts:get(scheduler_in_memory_cache, true, Opts)) of
+                case hb_util:atom(hb_opts:get(<<"scheduler-in-memory-cache">>, true, Opts)) of
                     true ->
                         hb_private:set(
                             Base,
@@ -206,7 +206,7 @@ find_next_assignment(_Base, _Req, Schedule = [_Next|_], _LastSlot, _Opts) ->
 find_next_assignment(Base, Req, _Schedule, LastSlot, Opts) ->
     ProcID = lib_process:process_id(Base, Req, Opts),
     LocalCacheRes =
-        case hb_util:atom(hb_opts:get(scheduler_ignore_local_cache, false, Opts)) of
+        case hb_util:atom(hb_opts:get(<<"scheduler-ignore-local-cache">>, false, Opts)) of
             true -> not_found;
             false ->
                 check_lookahead_and_local_cache(Base, ProcID, LastSlot + 1, Opts)
@@ -274,8 +274,7 @@ spawn_lookahead_worker(ProcID, Slot, Opts) ->
             ),
             case dev_scheduler_cache:read(ProcID, Slot, Opts) of
                 {ok, Assignment} ->
-                    LoadedAssignment = hb_cache:ensure_all_loaded(Assignment, Opts),
-                    Caller ! {assignment, ProcID, Slot, LoadedAssignment};
+                    Caller ! {assignment, ProcID, Slot, Assignment};
                 not_found ->
                     fail
             end
@@ -333,7 +332,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
             % start a new lookahead worker to fetch the next assignments
             % if we have them locally, ahead of time.
             Worker =
-                case hb_opts:get(scheduler_lookahead, true, Opts) of
+                case hb_opts:get(<<"scheduler-lookahead">>, true, Opts) of
                     false -> undefined;
                     true ->
                         % We found the assignment in our local cache, so
@@ -342,7 +341,7 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
                         % ahead of time.
                         spawn_lookahead_worker(ProcID, TargetSlot + 1, Opts)
                 end,
-            {ok, Worker, hb_cache:ensure_all_loaded(Assignment, Opts)}
+            {ok, Worker, Assignment}
     end.
 
 %% @doc Returns information about the entire scheduler.
@@ -628,7 +627,7 @@ is_local_scheduler(ProcID, ProcMsg, Scheduler, Opts) ->
 
 %% @doc If a hint is present in the string, return it. Else, return not_found.
 get_hint(Str, Opts) when is_binary(Str) ->
-    case hb_opts:get(scheduler_follow_hints, true, Opts) of
+    case hb_opts:get(<<"scheduler-follow-hints">>, true, Opts) of
         true ->
             case binary:split(Str, <<"?">>, [global]) of
                 [_, QS] ->
@@ -1104,7 +1103,7 @@ cache_remote_schedule(_, _ProcID, Schedule, Opts) ->
                 {caching_remote_schedule, {assignments, length(AssignmentList)}}
             )
         end,
-    case hb_opts:get(scheduler_async_remote_cache, true, Opts) of
+    case hb_opts:get(<<"scheduler-async-remote-cache">>, true, Opts) of
         true -> spawn(Cacher);
         false -> Cacher()
     end.

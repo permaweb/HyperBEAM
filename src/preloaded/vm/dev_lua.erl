@@ -93,7 +93,7 @@ find_modules(Base, Opts) ->
             CT when ?IS_LUA_TYPE(CT) -> [Base];
             _ -> []
         end,
-    ?event(
+    ?event_debug(
         debug_lua,
         {finding_modules, {base, Base}, {body_mod, MaybeBodyMod}},
         Opts
@@ -193,7 +193,7 @@ initialize(Base, Modules, Opts) ->
     State1 =
         lists:foldl(
             fun({ModuleID, ModuleBin}, StateIn) ->
-                ?event(
+                ?event_debug(
                     debug_lua,
                     {loading_module,
                         {module_id, ModuleID},
@@ -269,14 +269,14 @@ sandbox(State, [Path | Rest], Opts) ->
 
 %% @doc Call the Lua script with the given arguments.
 compute(Key, RawBase, RawReq, Opts) ->
-    ?event(debug_lua, compute_called),
+    ?event_debug(debug_lua, compute_called),
     Req = 
         hb_cache:read_all_commitments(
             RawReq,
             Opts
         ),
     {ok, Base} = ensure_initialized(RawBase, Req, Opts),
-    ?event(debug_lua, ensure_initialized_done),
+    ?event_debug(debug_lua, ensure_initialized_done),
     % Get the state from the base message's private element.
     OldPriv = #{ <<"state">> := State } = hb_private:from_message(Base),
     % TODO: looks like the script is injected in multiple places, does the 
@@ -292,7 +292,7 @@ compute(Key, RawBase, RawReq, Opts) ->
             Key,
             Opts#{ <<"hashpath">> => ignore }
         ),
-    ?event(debug_lua, function_found),
+    ?event_debug(debug_lua, function_found),
     Params =
         hb_ao:get_first(
             [
@@ -307,21 +307,19 @@ compute(Key, RawBase, RawReq, Opts) ->
             ],
             Opts#{ <<"hashpath">> => ignore }
         ),
-    ?event(debug_lua, parameters_found),
-    % Resolve all hyperstate links
-    ResolvedParams = hb_cache:ensure_all_loaded(Params, Opts),
+    ?event_debug(debug_lua, parameters_found),
     % Call the VM function with the given arguments.
-    ?event(lua,
+    ?event_debug(lua,
         {calling_lua_func,
             {function, Function},
-            {args, ResolvedParams},
+            {args, Params},
             {req, Req}
         }
     ),
     process_response(
         try luerl:call_function_dec(
             [Function],
-            encode(ResolvedParams, Opts),
+            encode(Params, Opts),
             State
         )
         catch
@@ -340,7 +338,7 @@ process_response({ok, [Status, MsgResult], NewState}, Priv, Opts) ->
     % and add the previous `priv' element back into the resulting message.
     case decode(MsgResult, Opts) of
         Msg when is_map(Msg) ->
-            ?event(lua, {response, {status, Status}, {msg, Msg}}),
+            ?event_debug(lua, {response, {status, Status}, {msg, Msg}}),
             {hb_util:atom(Status), Msg#{
                 <<"priv">> => Priv#{
                     <<"state">> => NewState
@@ -419,18 +417,12 @@ normalize(Base, _Req, RawOpts) ->
 %% @doc Decode a Lua result into a HyperBEAM `structured@1.0' message.
 decode(EncMsg, Opts) ->
     hb_message:normalize_commitments(do_decode(EncMsg, Opts), Opts, verify).
-do_decode(EncMsg, _Opts) when is_list(EncMsg) andalso length(EncMsg) == 0 ->
+do_decode([], _Opts) ->
     % The value is an empty table, so we assume it is a message rather than
     % a list.
     #{};
 do_decode(EncMsg = [{_K, _V} | _], Opts) when is_list(EncMsg) ->
-    do_decode(
-        maps:map(
-            fun(_, V) -> do_decode(V, Opts) end,
-            maps:from_list(EncMsg)
-        ),
-        Opts
-    );
+    do_decode(decode_table(EncMsg, Opts, #{}), Opts);
 do_decode(Msg, Opts) when is_map(Msg) ->
     % If the message is an ordered list encoded as a map, decode it to a list.
     case hb_util:is_ordered_list(Msg, Opts) of
@@ -445,22 +437,23 @@ do_decode(Msg, Opts) when is_map(Msg) ->
 do_decode(Other, _Opts) ->
     Other.
 
+decode_table([], _Opts, Acc) ->
+    Acc;
+decode_table([{Key, Value} | Rest], Opts, Acc) ->
+    decode_table(Rest, Opts, Acc#{ Key => do_decode(Value, Opts) }).
+
 %% @doc Encode a HyperBEAM `structured@1.0' message into a Lua term.
 encode(Map, Opts) ->
-    hb_message:normalize_commitments(do_encode(Map, Opts), Opts).
+    do_encode(Map, Opts).
 do_encode(Map, Opts) when is_map(Map) ->
-    hb_cache:ensure_all_loaded(
-        case hb_util:is_ordered_list(Map, Opts) of
-            true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
-            false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
-        end,
-        Opts
-    );
+    case hb_util:is_ordered_list(Map, Opts) of
+        true -> do_encode(hb_util:message_to_ordered_list(Map), Opts);
+        false -> maps:to_list(maps:map(fun(_, V) -> do_encode(V, Opts) end, Map))
+    end;
 do_encode(List, Opts) when is_list(List) ->
-    hb_cache:ensure_all_loaded(
-        lists:map(fun(V) -> do_encode(V, Opts) end, List),
-        Opts
-    );
+    lists:map(fun(V) -> do_encode(V, Opts) end, List);
+do_encode(Link, Opts) when ?IS_LINK(Link) ->
+    do_encode(hb_cache:ensure_all_loaded(Link, Opts), Opts);
 do_encode(Atom, _Opts) when is_atom(Atom) and (Atom /= false) and (Atom /= true)->
     hb_util:bin(Atom);
 do_encode(Other, _Opts) ->

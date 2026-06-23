@@ -13,7 +13,7 @@
 group(Base, undefined, Opts) ->
     hb_persistent:default_grouper(Base, undefined, Opts);
 group(Base, Req, Opts) ->
-    ProcessWorkers = hb_opts:get(process_workers, false, Opts),
+    ProcessWorkers = hb_opts:get(<<"process-workers">>, false, Opts),
     IsCompute = hb_path:matches(<<"compute">>, hb_path:hd(Req, Opts)),
     case ProcessWorkers andalso IsCompute of
         true ->
