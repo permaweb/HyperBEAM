@@ -150,8 +150,15 @@ from_preloaded(Ref, Opts) ->
             end
     end.
 
-preloaded_spec(Ref, _Store, _Opts) when ?IS_ID(Ref) ->
-    {ok, Ref};
+%% Versioned device names can be 32 bytes and satisfy `?IS_ID' by length.
+%% Names include `@', so keep those on the preloaded index lookup path.
+preloaded_spec(Ref, Store, Opts) when ?IS_ID(Ref) ->
+    case binary:match(Ref, <<"@">>) of
+        nomatch ->
+            {ok, Ref};
+        _ ->
+            hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts)
+    end;
 preloaded_spec(Ref, Store, Opts) ->
     hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
