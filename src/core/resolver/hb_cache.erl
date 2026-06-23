@@ -275,12 +275,19 @@ generate_binary_path(Bin, Opts) ->
 write(RawMsg, Opts) when is_map(RawMsg) ->
     hb_message:paranoid_verify(cache_write, RawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
-    TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    TABM =
+        hb_message:convert(
+            Msg,
+            tabm,
+            <<"structured@1.0">>,
+            Opts
+        ),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
             TABM,
-            hb_opts:get(store, no_viable_store, Opts),
+            Store,
             Opts
         )
     catch
@@ -322,18 +329,18 @@ do_write_message(Msg, Store = #{ <<"store-module">> := hb_store_lmdb }, Opts)
         end,
     {UncommittedID, Writes, Links, IndexEntries} =
         prepare_message(Msg, Opts, #{}, #{}, InitialIndexEntries),
-    LinkWrites = link_write_ops(Links),
+    WriteMap = link_write_ops(Links, Writes),
     case match_index_ops(IndexEntries, Opts) of
         {Store, MatchWrites} ->
-            write_ops(Store, maps:merge(maps:merge(Writes, LinkWrites), MatchWrites), Opts);
+            write_ops(Store, maps:merge(WriteMap, MatchWrites), Opts);
         {MatchStore, MatchWrites} ->
-            write_ops(Store, maps:merge(Writes, LinkWrites), Opts),
+            write_ops(Store, WriteMap, Opts),
             write_ops(MatchStore, MatchWrites, Opts);
         legacy ->
-            write_ops(Store, maps:merge(Writes, LinkWrites), Opts),
+            write_ops(Store, WriteMap, Opts),
             write_match_indexes(IndexEntries, Opts);
         skip ->
-            write_ops(Store, maps:merge(Writes, LinkWrites), Opts)
+            write_ops(Store, WriteMap, Opts)
     end,
     {ok, UncommittedID};
 do_write_message(Msg, Store, Opts) when is_map(Msg) ->
@@ -397,7 +404,9 @@ add_alt_links(UncommittedID, AltIDs, Links) ->
         AltIDs
     ).
 
-link_write_ops(Links) ->
+link_write_ops(Links, Writes) when map_size(Links) =:= 0 ->
+    Writes;
+link_write_ops(Links, Writes) ->
     maps:fold(
         fun(New, Existing, Acc) ->
             ExistingBin =
@@ -407,7 +416,7 @@ link_write_ops(Links) ->
                 end,
             Acc#{ New => <<"link:", ExistingBin/binary>> }
         end,
-        #{},
+        Writes,
         Links
     ).
 

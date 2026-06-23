@@ -78,8 +78,8 @@
 -define(STORE_BENCH_LIST_KEYS, 100_000).
 -define(STORE_BENCH_LIST_GROUP_SIZE, 10).
 -define(STORE_BENCH_LIST_OPS, 20_000).
--define(BENCH_MSG_WRITE_OPS, 250).
--define(BENCH_MSG_READ_OPS, 100_000).
+-define(BENCH_MSG_WRITE_OPS, 50_000).
+-define(BENCH_MSG_READ_OPS, 50_000).
 -define(BENCH_MSG_DATA_SIZE, 1024).
 
 behavior_info(callbacks) ->
@@ -654,13 +654,13 @@ strongest_error(Current, _Error) -> Current.
 test_stores() ->
     [
         (hb_test_utils:test_store(hb_store_fs))#{
-            <<"benchmark-scale">> => 0.001
+            <<"benchmark-scale">> => 0.0001
         },
         (hb_test_utils:test_store(hb_store_lmdb))#{
             <<"benchmark-scale">> => 0.5
         },
         (hb_test_utils:test_store(hb_store_volatile))#{
-            <<"benchmark-scale">> => 0.01
+            <<"benchmark-scale">> => 0.001
         }
     ] ++ rocks_stores().
 
@@ -757,7 +757,8 @@ benchmark_suite_test_() ->
     generate_test_suite([
         {"benchmark key read write", fun benchmark_key_read_write/1},
         {"benchmark list", fun benchmark_list/1},
-        {"benchmark message read write", fun benchmark_message_read_write/1}
+        {"benchmark flat message read write", fun benchmark_flat_message_read_write/1},
+        {"benchmark nested message read write", fun benchmark_nested_message_read_write/1}
     ]).
 
 %% @doc Benchmark a store. By default, we write 10,000 keys and read 10,000
@@ -1009,15 +1010,27 @@ benchmark_list(Store, WriteOps, ListOps, GroupSize) ->
     ),
     ?assertEqual(0, NotFoundCount, "Groups listed in correctly.").
 
-benchmark_message_read_write(Store = #{ <<"benchmark-scale">> := Scale }) ->
+benchmark_flat_message_read_write(Store) ->
+    benchmark_message_read_write(Store, flat).
+
+benchmark_nested_message_read_write(Store) ->
+    benchmark_message_read_write(Store, nested).
+
+benchmark_message_read_write(Store = #{ <<"benchmark-scale">> := Scale }, Shape) ->
     benchmark_message_read_write(
         Store,
         erlang:ceil(Scale * ?BENCH_MSG_WRITE_OPS),
-        erlang:ceil(Scale * ?BENCH_MSG_READ_OPS)
+        erlang:ceil(Scale * ?BENCH_MSG_READ_OPS),
+        Shape
     );
-benchmark_message_read_write(Store) ->
-    benchmark_message_read_write(Store, ?BENCH_MSG_WRITE_OPS, ?BENCH_MSG_READ_OPS).
-benchmark_message_read_write(Store, WriteOps, ReadOps) ->
+benchmark_message_read_write(Store, Shape) ->
+    benchmark_message_read_write(
+        Store,
+        ?BENCH_MSG_WRITE_OPS,
+        ?BENCH_MSG_READ_OPS,
+        Shape
+    ).
+benchmark_message_read_write(Store, WriteOps, ReadOps, Shape) ->
     start(Store),
     Opts = #{ <<"store">> => Store, <<"priv-wallet">> => hb:wallet() },
     TestDataSize = ?BENCH_MSG_DATA_SIZE * 8, % in _bits_
@@ -1025,34 +1038,28 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
     ?event(
         {benchmarking,
             {store, Store},
+            {shape, Shape},
             {write_ops, WriteOps},
             {read_ops, ReadOps}
         }
     ),
     % Generate a random message to write and the keys to read ahead of time.
-    Msgs =
-        lists:map(
-            fun(N) ->
-                #{
-                    <<"process">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
-                    <<"slot">> => N,
-                    <<"message">> =>
-                        hb_message:commit(
-                            #{
-                                <<"body">> => <<"test", 0:TestDataSize, N:32>>
-                            },
-                            Opts
-                        )
-                }
-            end,
-            lists:seq(1, WriteOps)
+    {GenerateTime, Msgs} =
+        timer:tc(
+            fun() ->
+                lists:map(
+                    fun(N) ->
+                        benchmark_message(Shape, N, TestDataSize)
+                    end,
+                    lists:seq(1, WriteOps)
+                )
+            end
         ),
-    hb_format:eunit_print(
-        "Generated ~s messages (size ~s bits)",
-        [
-            hb_util:human_int(WriteOps),
-            hb_util:human_int(TestDataSize)
-        ]
+    hb_test_utils:benchmark_print(
+        <<"Generated">>,
+        <<"messages">>,
+        WriteOps,
+        GenerateTime / 1_000_000
     ),
     {WriteTime, MsgPairs} =
         timer:tc(
@@ -1105,6 +1112,19 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
         ReadTime / 1_000_000
     ),
     ?assertEqual(0, NotFoundCount, "Written keys not found in store.").
+
+benchmark_message(flat, N, _TestDataSize) ->
+    #{
+        <<"process">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
+        <<"slot">> => N
+    };
+benchmark_message(nested, N, TestDataSize) ->
+    (benchmark_message(flat, N, TestDataSize))#{
+        <<"message">> =>
+            #{
+                <<"body">> => <<"test", 0:TestDataSize, N:32>>
+            }
+    }.
 
 %%% Access Control Tests
 
