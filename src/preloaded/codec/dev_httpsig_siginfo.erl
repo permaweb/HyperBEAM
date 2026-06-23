@@ -64,7 +64,7 @@ commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts) ->
     Signature = hb_util:decode(maps:get(<<"signature">>, Commitment)),
     % Extract the keys present in the commitment.
     CommittedKeys = to_siginfo_keys(Msg, Commitment, Opts),
-    ?event({normalized_for_enc, CommittedKeys, {commitment, Commitment}}),
+    ?event_debug({normalized_for_enc, CommittedKeys, {commitment, Commitment}}),
     % Extract the hashpath, used as a tag, from the commitment.
     Tag = maps:get(<<"tag">>, Commitment, undefined),
     % Extract other permissible values, if present.
@@ -119,7 +119,7 @@ commitment_to_sf_siginfo(Msg, CommID, Commitment, Opts) ->
             ],
             Params
         },
-    ?event(
+    ?event_debug(
         {sig_input,
             {string,
                 hb_util:bin(
@@ -356,15 +356,17 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
     % 1. Remove specifiers from the list and decode percent-encoded keys.
     BaseCommitted =
         lists:map(
-            fun hb_escape:decode/1,
-            remove_derived_specifiers(SigInfoCommitted)
+            fun(<<"@", Key/binary>>) -> hb_escape:decode(Key);
+               (Key) -> hb_escape:decode(Key)
+            end,
+            SigInfoCommitted
         ),
     % 2. Replace the `content-digest' key with the `body' key, if present.
     WithBody =
         hb_util:list_replace(BaseCommitted, <<"content-digest">>, BodyKeys),
     % 3. Replace the `body' key again with the value of the `ao-body-key' key,
     %    if present.
-    ?event(
+    ?event_debug(
         {from_siginfo_keys,
             {body_keys, BodyKeys},
             {raw_committed, SigInfoCommitted},
@@ -380,7 +382,7 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
                         <<"body">>,
                         maps:get(<<"ao-body-key">>, HTTPEncMsg)
                     ),
-                ?event({with_orig_body_key, WithOrigBodyKey}),
+                ?event_debug({with_orig_body_key, WithOrigBodyKey}),
                 WithOrigBodyKey -- [<<"ao-body-key">>];
             false ->
                 WithBody
@@ -401,7 +403,7 @@ from_siginfo_keys(HTTPEncMsg, BodyKeys, SigInfoCommitted) ->
             )
         ),
     List = hb_util:message_to_ordered_list(Normalized),
-    ?event({from_siginfo_keys, {list, List}}),
+    ?event_debug({from_siginfo_keys, {list, List}}),
     List.
 
 %% @doc Convert committed keys to their siginfo format. This involves removing

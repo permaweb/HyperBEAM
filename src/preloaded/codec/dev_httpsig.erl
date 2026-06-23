@@ -251,7 +251,7 @@ commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
         normalize_for_encoding(Msg, UnauthedCommitment, Opts),
     SigBase = signature_base(EncMsg, EncComm, Opts),    
     HMac = hb_util:human_id(crypto:mac(hmac, sha256, Key, SigBase)),
-    ?event(
+    ?event_debug(
         debug_commitments,
         {hmac_commit,
             {type, <<"hmac-sha256">>},
@@ -295,25 +295,33 @@ keys_to_commit(_Base, #{ <<"committed">> := Explicit}, _Opts) ->
     % Add `+link` specifiers to the user given list as necessary, in order for
     % their given keys to match the HTTPSig encoded TABM form.
     hb_util:list_to_numbered_message(Explicit);
+keys_to_commit(Base = #{ <<"commitments">> := Commitments }, _Req, Opts)
+        when ?IS_EMPTY_MESSAGE(Commitments) ->
+    default_keys_to_commit(Base, Opts);
+keys_to_commit(Base, _Req, Opts) when not is_map_key(<<"commitments">>, Base) ->
+    default_keys_to_commit(Base, Opts);
 keys_to_commit(Base, _Req, Opts) ->
     % Extract the set of committed keys from the message.
     case hb_message:committed(Base, #{ <<"committers">> => <<"all">> }, opts(Opts)) of
         [] ->
             % Case 3: Default to all keys in the TABM-encoded message, aside
             % metadata.
-            hb_util:list_to_numbered_message(
-                lists:map(
-                    fun hb_link:remove_link_specifier/1,
-                    hb_util:to_sorted_keys(Base, Opts)
-                        -- [<<"commitments">>, <<"priv">>]
-                )
-            );
+            default_keys_to_commit(Base, Opts);
         Keys ->
             % Case 2: Replicate the raw keys that the existing commitments have
             % used. This leads to a message whose commitments can be 'stacked'
             % and represented together in HTTPSig format.
             hb_util:list_to_numbered_message(Keys)
     end.
+
+default_keys_to_commit(Base, Opts) ->
+    hb_util:list_to_numbered_message(
+        lists:map(
+            fun hb_link:remove_link_specifier/1,
+            hb_util:to_sorted_keys(Base, Opts)
+                -- [<<"commitments">>, <<"priv">>]
+        )
+    ).
 
 %% @doc If the `body' key is present and a binary, replace it with a
 %% content-digest.
@@ -409,13 +417,10 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
             RawInputs
         ),
     KeysForCommitment =
-        decode_committed_keys(
-            dev_httpsig_siginfo:from_siginfo_keys(
-                EncodedWithSigInfo,
-                BodyKeys,
-                KeysForEncoding
-            ),
-            Opts
+        dev_httpsig_siginfo:from_siginfo_keys(
+            EncodedWithSigInfo,
+            BodyKeys,
+            KeysForEncoding
         ),
     ?event_debug(debug_httpsig,
         {normalized_for_encoding,
@@ -431,11 +436,6 @@ normalize_for_encoding(Msg, Commitment, Opts) ->
         Commitment#{ <<"committed">> => KeysForEncoding },
         KeysForCommitment
     }.
-
-%% @doc Decode the committed keys from their percent-encoded form, for use in
-%% the `committed` key of the commitment.
-decode_committed_keys(ModCommittedKeys, _Opts) when is_list(ModCommittedKeys) ->
-    lists:map(fun hb_escape:decode/1, ModCommittedKeys).
 
 %% @doc Calculate if a key or its `+link' TABM variant is present in a message.
 key_present(Key, Keys) -> key_present(true, Key, Keys).
@@ -502,12 +502,7 @@ signature_components_line(Req, Commitment, _Opts) ->
 %%
 %% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
 signature_params_line(RawCommitment, Opts) ->
-    Commitment =
-        maps:without(
-            [<<"signature">>, <<"signature-input">>],
-            RawCommitment
-        ),
-    ?event_debug(debug_enc, {signature_params_line, {commitment, Commitment}}),
+    ?event_debug(debug_enc, {signature_params_line, {commitment, RawCommitment}}),
 	hb_util:bin(
         hb_structured_fields:list(
             [
@@ -517,38 +512,41 @@ signature_params_line(RawCommitment, Opts) ->
                         fun(Key) -> {item, {string, Key}, []} end,
                         dev_httpsig_siginfo:add_derived_specifiers(
                             hb_util:message_to_ordered_list(
-                                maps:get(<<"committed">>, Commitment),
+                                maps:get(<<"committed">>, RawCommitment),
                                 Opts
                             )
                         )
                     ),
-                    lists:map(
-                        fun ({<<"alg">>, Param}) when is_binary(Param) ->
-                            {<<"alg">>, {string, Param}};
-                        ({Name, Param}) when is_binary(Param) ->
-                            {Name, {string, Param}};
-                        ({Name, Param}) when is_integer(Param) ->
-                            {Name, Param}
-                        end,
-                        lists:sort(maps:to_list(
-                            maps:with(
-                                [
-                                    <<"created">>,
-                                    <<"expires">>,
-                                    <<"nonce">>,
-                                    <<"alg">>,
-                                    <<"keyid">>,
-                                    <<"tag">>,
-                                    <<"bundle">>
-                                ],
-                                Commitment#{ <<"alg">> => maps:get(<<"type">>, Commitment) }
-                            )
-                        ))
-                    )
+                    signature_params(RawCommitment)
                 }
             ]
         )
     ).
+
+signature_params(Commitment) ->
+    lists:filtermap(
+        fun(Name) ->
+            case signature_param(Name, Commitment) of
+                undefined -> false;
+                Param when is_binary(Param) -> {true, {Name, {string, Param}}};
+                Param when is_integer(Param) -> {true, {Name, Param}}
+            end
+        end,
+        [
+            <<"alg">>,
+            <<"bundle">>,
+            <<"created">>,
+            <<"expires">>,
+            <<"keyid">>,
+            <<"nonce">>,
+            <<"tag">>
+        ]
+    ).
+
+signature_param(<<"alg">>, Commitment) ->
+    maps:get(<<"type">>, Commitment);
+signature_param(Name, Commitment) ->
+    maps:get(Name, Commitment, undefined).
 
 %%%
 %%% TESTS

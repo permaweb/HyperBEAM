@@ -558,7 +558,7 @@ inner_list({list, List, Params}) ->
     [$(, lists:join($\s, [item(Value) || Value <- List]), $), params(Params)].
 
 bare_item({string, String}) ->
-    [$", escape_string(String, <<>>), $"];
+    [$", escape_string(String), $"];
 %% @todo Must fail if Token has invalid characters.
 bare_item({token, Token}) ->
     Token;
@@ -638,10 +638,22 @@ bare_item(false) ->
 exp_div(0) -> 1;
 exp_div(N) -> 10 * exp_div(N + 1).
 
-escape_string(<<>>, Acc) -> Acc;
-escape_string(<<$\\, R/bits>>, Acc) -> escape_string(R, <<Acc/binary, $\\, $\\>>);
-escape_string(<<$", R/bits>>, Acc) -> escape_string(R, <<Acc/binary, $\\, $">>);
-escape_string(<<C, R/bits>>, Acc) -> escape_string(R, <<Acc/binary, C>>).
+escape_string(Bin) ->
+    escape_string(Bin, Bin).
+
+escape_string(<<>>, Original) ->
+    Original;
+escape_string(<<$\\, _/binary>>, Original) ->
+    escape_chars(Original, []);
+escape_string(<<$", _/binary>>, Original) ->
+    escape_chars(Original, []);
+escape_string(<<_C, Rest/binary>>, Original) ->
+    escape_string(Rest, Original).
+
+escape_chars(<<>>, Acc) -> lists:reverse(Acc);
+escape_chars(<<$\\, R/bits>>, Acc) -> escape_chars(R, [$\\, $\\ | Acc]);
+escape_chars(<<$", R/bits>>, Acc) -> escape_chars(R, [$", $\\ | Acc]);
+escape_chars(<<C, R/bits>>, Acc) -> escape_chars(R, [C | Acc]).
 
 params(Params) ->
     [
