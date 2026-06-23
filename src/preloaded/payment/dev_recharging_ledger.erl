@@ -19,15 +19,18 @@
 account_id(Address) ->
     hb_util:human_id(Address).
 
-%% @doc Get the current effective balance for a P4 target account. P4 supplies
-%% the `target' key during its pre-request balance check. This function
-%% normalizes that target to the account key used by the ledger server, then
-%% asks the server for a read-only balance. The server returns `infinity' for
-%% exempt accounts, the configured max balance for accounts it has not seen
-%% before, or the stored balance plus elapsed recharge for existing accounts.
+%% @doc Get the current effective balance for a P4 account. P4 supplies the
+%% `target' key during pre-request checks and the signed `request' key when its
+%% balance endpoint delegates to the ledger. This function normalizes that
+%% account to the key used by the ledger server, then asks the server for a
+%% read-only balance. The server returns `infinity' for exempt accounts, the
+%% configured max balance for accounts it has not seen before, or the stored
+%% balance plus elapsed recharge for existing accounts.
 balance(_, Req, Opts) ->
-    Target = hb_ao:get(<<"target">>, Req, Opts),
-    {ok, get_balance(account_id(Target), Opts)}.
+    case balance_account(Req, Opts) of
+        {ok, AccountID} -> {ok, get_balance(AccountID, Opts)};
+        {error, Error} -> {error, Error}
+    end.
 
 %% @doc Charge metered usage against a P4 account. P4 supplies the `account'
 %% key on the post-response commit path and the `quantity' to deduct. The charge
@@ -41,6 +44,44 @@ charge(_, Req, Opts) ->
             {error, #{
                 <<"status">> => 400,
                 <<"body">> => <<"Invalid charge quantity.">>
+            }}
+    end.
+
+balance_account(Req, Opts) ->
+    case hb_ao:get(<<"target">>, Req, not_found, Opts) of
+        not_found ->
+            request_account(hb_ao:get(<<"request">>, Req, not_found, Opts), Opts);
+        Target ->
+            {ok, account_id(Target)}
+    end.
+
+request_account(not_found, _Opts) ->
+    {error, #{
+        <<"status">> => 400,
+        <<"body">> => <<"Balance request must include target or signed request.">>
+    }};
+request_account(Request, Opts) ->
+    Signers = hb_message:signers(Request, Opts),
+    case hb_message:verify(Request, Signers, Opts) of
+        true ->
+            case Signers of
+                [Signer] ->
+                    {ok, account_id(Signer)};
+                [] ->
+                    {error, #{
+                        <<"status">> => 400,
+                        <<"body">> => <<"Balance request has no signer.">>
+                    }};
+                _ ->
+                    {error, #{
+                        <<"status">> => 400,
+                        <<"body">> => <<"Balance request has multiple signers.">>
+                    }}
+            end;
+        false ->
+            {error, #{
+                <<"status">> => 400,
+                <<"body">> => <<"Balance request signature is invalid.">>
             }}
     end.
 
@@ -220,6 +261,26 @@ charge_new_account_deducts_units_test() ->
     ?assertEqual(
         {ok, 75},
         balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+p4_balance_request_uses_signed_request_signer_test() ->
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    {ok, true} =
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts),
+    Request =
+        hb_message:commit(
+            #{ <<"path">> => <<"/greeting">> },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    ?assertEqual(
+        {ok, 75},
+        balance(#{}, #{ <<"request">> => Request }, Opts)
     ).
 
 insufficient_balance_returns_402_test() ->
