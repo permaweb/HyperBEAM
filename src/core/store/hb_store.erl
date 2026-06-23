@@ -80,7 +80,7 @@
 -define(STORE_BENCH_LIST_OPS, 20_000).
 -define(BENCH_MSG_WRITE_OPS, 50_000).
 -define(BENCH_MSG_READ_OPS, 50_000).
--define(BENCH_MSG_DATA_SIZE, 1024).
+-define(BENCH_MSG_DATA_SIZE, 32).
 
 behavior_info(callbacks) ->
     [
@@ -1032,7 +1032,10 @@ benchmark_message_read_write(Store, Shape) ->
     ).
 benchmark_message_read_write(Store, WriteOps, ReadOps, Shape) ->
     start(Store),
-    Opts = #{ <<"store">> => Store, <<"priv-wallet">> => hb:wallet() },
+    Opts = #{ 
+        <<"store">> => Store, 
+        <<"priv-wallet">> => hb:wallet()
+    },
     TestDataSize = ?BENCH_MSG_DATA_SIZE * 8, % in _bits_
     timer:sleep(100),
     ?event(
@@ -1113,9 +1116,9 @@ benchmark_message_read_write(Store, WriteOps, ReadOps, Shape) ->
     ),
     ?assertEqual(0, NotFoundCount, "Written keys not found in store.").
 
-benchmark_message(flat, N, _TestDataSize) ->
+benchmark_message(flat, N, TestDataSize) ->
     #{
-        <<"process">> => hb_util:human_id(crypto:strong_rand_bytes(32)),
+        <<"process">> => <<0:TestDataSize, N:32>>,
         <<"slot">> => N
     };
 benchmark_message(nested, N, TestDataSize) ->
