@@ -182,6 +182,7 @@ account_recharge(AccountID, DefaultRecharge, State, Opts) ->
     case maps:get(rates, State, undefined) of
         undefined -> DefaultRecharge;
         RatesMessage ->
+            % Ask the optional rates provider for this account's recharge rate.
             case
                 hb_util:safe_int(
                     hb_ao:get(AccountID, RatesMessage, DefaultRecharge, Opts)
@@ -357,6 +358,43 @@ rates_message_invalid_account_rate_uses_default_recharge_test() ->
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
     ?assertEqual(25, account_balance(Account, State, 500)).
+
+account_balance_uses_rates_device_message_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    RatesMessage = #{
+        <<"device">> => <<"recharging-ledger-rates@1.0">>,
+        <<"rates">> => #{ Account => 20 }
+    },
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        rates => RatesMessage,
+        accounts => #{ Account => #{ balance => 20, last => 0 } }
+    },
+    ?assertEqual(30, account_balance(Account, State, 500, #{})).
+
+recharging_ledger_rates_device_integration_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-period">> => 1,
+        <<"recharging-ledger-rates">> => #{
+            <<"device">> => <<"recharging-ledger-rates@1.0">>,
+            <<"rates">> => #{ Account => 10_000 }
+        }
+    },
+    ?assertEqual(
+        {ok, true},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 90 }, Opts)
+    ),
+    timer:sleep(20),
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
 
 p4_charges_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
