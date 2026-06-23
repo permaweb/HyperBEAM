@@ -205,13 +205,28 @@ apply_bundle_hint(Msg, Req, Opts) ->
     case hb_maps:get(<<"hint-device">>, Req, undefined, Opts) of
         undefined -> Req;
         DeviceBin ->
-            % May add a `bundle` key to the request
-            try hb_util:ok(
-                hb_ao:raw(DeviceBin, <<"to-hint">>, Msg, Req, Opts)
-            )
-            catch _:_ ->
-                Req
+            case hint_device_exports_to_hint(DeviceBin, Opts) of
+                true ->
+                    % May add a `bundle` key to the request
+                    try hb_util:ok(
+                        hb_ao:raw(DeviceBin, <<"to-hint">>, Msg, Req, Opts)
+                    )
+                    catch _:_ ->
+                        Req
+                    end;
+                false ->
+                    Req
             end
+    end.
+
+hint_device_exports_to_hint(DeviceBin, Opts) ->
+    try hb_device:message_to_device(#{ <<"device">> => DeviceBin }, Opts) of
+        DeviceMod when is_atom(DeviceMod) ->
+            erlang:function_exported(DeviceMod, to_hint, 3);
+        _ ->
+            true
+    catch _:_ ->
+        false
     end.
 
 %% @doc Discern the linkify mode from the request and the options.
