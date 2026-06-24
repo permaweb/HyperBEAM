@@ -243,3 +243,8 @@
   passed with 3 tests; `dev_bundler` passed with 27 tests; `dev_secret` passed
   with 12 tests; and `dev_router` passed with 30 tests after one flaky
   performance-weight assertion passed on isolated and repeated full reruns.
+- Acceptance checkpoint reached: `HB_PARANOID=cache_read,cache_write rebar3
+  eunit-all` passed end-to-end with `All 3487 tests passed.` This is the first
+  full-suite green point on the clean vary/overlay branch. Next pass is branch
+  minimization and review against `hyperbeam-main/edge`, preserving this green
+  state.
