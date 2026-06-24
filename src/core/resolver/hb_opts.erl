@@ -289,7 +289,7 @@ raw_default_message() ->
         % Every modification to `Opts' called directly by the node operator
         % should be recorded here.
         <<"node-history">> => [],
-        <<"debug-stack-depth">> => 40,
+        <<"debug-stack-depth">> => 8,
         <<"debug-print">> => false,
         <<"debug-log">> => false,
         <<"log-dir">> => <<"logs">>,

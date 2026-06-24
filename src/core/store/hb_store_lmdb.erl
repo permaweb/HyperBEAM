@@ -360,15 +360,6 @@ read_direct(DBInstance, Name, Path) ->
 %% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
     case read_direct(Opts, Path) of
-        {ok, <<"raw:", Value/binary>>} ->
-            case is_data_path(Path) of
-                true -> {ok, Path, <<"raw:", Value/binary>>};
-                false -> {ok, Path, Value}
-            end;
-        {ok, <<"link:data">>} ->
-            read_with_links(Opts, <<"data">>);
-        {ok, <<"link:data/", Link/binary>>} ->
-            read_with_links(Opts, <<"data/", Link/binary>>);
         {ok, Value} ->
             case is_link(Value) of
                 {true, Link} -> 
@@ -513,11 +504,6 @@ read_prefix_rows(Opts, Path) ->
 prefix_read_result(Opts, Path, [{Path, <<"link:", Link/binary>>} | _])
         when byte_size(Link) > 0 ->
     read_result(Opts, Link);
-prefix_read_result(_Opts, Path, [{Path, <<"raw:", Value/binary>>} | _]) ->
-    case is_data_path(Path) of
-        true -> {ok, <<"raw:", Value/binary>>};
-        false -> {ok, Value}
-    end;
 prefix_read_result(_Opts, Path, [{Path, <<"group">>} | Rows]) ->
     {composite, immediate_children(child_prefix(Path), Rows)};
 prefix_read_result(_Opts, Path, [{Path, Value} | _]) ->
@@ -1257,25 +1243,4 @@ read_prefix_composite_test() ->
         read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
-    test_stop(StoreOpts).
-
-raw_value_write_test() ->
-    StoreOpts = hb_test_utils:test_store(?MODULE),
-    test_reset(StoreOpts),
-    ok = group(StoreOpts, #{ <<"group">> => <<"root">> }, #{}),
-    ok =
-        write(
-            StoreOpts,
-            #{
-                <<"data/small">> => <<"value">>,
-                <<"root/small">> => <<"raw:value">>
-            },
-            #{}
-        ),
-    ?assertEqual(
-        {composite, [{<<"small">>, <<"raw:value">>}]},
-        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
-    ),
-    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"root/small">>)),
-    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"data/small">>)),
     test_stop(StoreOpts).
