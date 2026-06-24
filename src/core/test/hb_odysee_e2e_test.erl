@@ -79,3 +79,47 @@ publish_over_http_round_trips_test() ->
         <<"hb-native-signed">>,
         hb_maps:get(<<"provenance">>, Loaded, undefined, #{})
     ).
+
+%% @doc The hook-layer publish gate over real HTTP: with the `~odysee-publish-gate@1.0'
+%% request hook ahead of the auth hook, a `publish' POST WITHOUT an Odysee cookie
+%% is rejected 401 before resolution, while a POST WITH a cookie passes the gate,
+%% is signed by the auth hook, and succeeds with a content-id. This is the
+%% correct layer for "uploads require auth" (credential presence on the request
+%% singleton, not an in-device signer check).
+publish_gate_requires_cookie_over_http_test() ->
+    ServerWallet = ar_wallet:new(),
+    Node =
+        hb_http_server:start_node(#{
+            <<"port">> => 0,
+            <<"priv-wallet">> => ServerWallet,
+            <<"on">> => #{ <<"request">> => [gate(), hook()] },
+            <<"store">> =>
+                [hb_test_utils:test_store(hb_store_volatile, <<"odysee-e2e-gate">>)]
+        }),
+    PublishMsg =
+        fun(Extra) ->
+            maps:merge(
+                #{ <<"body">> => <<"gated bytes">>,
+                   <<"content-type">> => <<"text/plain">> },
+                Extra
+            )
+        end,
+    % No cookie -> the gate rejects before the upload runs.
+    NoCookie =
+        hb_http:post(Node, <<"/~odysee@1.0/publish">>, PublishMsg(#{}), #{}),
+    ?event({publish_gate_no_cookie, {resp, NoCookie}}),
+    ?assertMatch({error, #{ <<"status">> := 401 }}, NoCookie),
+    % With a cookie -> the gate passes and the upload succeeds.
+    {ok, WithCookie} =
+        hb_http:post(
+            Node,
+            <<"/~odysee@1.0/publish">>,
+            PublishMsg(#{ <<"cookie">> => <<"auth_token=odysee-gated-publisher">> }),
+            #{}
+        ),
+    ?assertEqual(200, hb_maps:get(<<"status">>, WithCookie, undefined, #{})),
+    ?assert(?IS_ID(hb_maps:get(<<"content-id">>, WithCookie, undefined, #{}))).
+
+%% @doc The publish-gate request hook, wired ahead of the auth hook.
+gate() ->
+    #{ <<"device">> => <<"odysee-publish-gate@1.0">>, <<"path">> => <<"request">> }.
