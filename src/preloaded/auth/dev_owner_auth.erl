@@ -93,7 +93,7 @@ protected_term(Term, Protected, Opts) ->
 protected_term(Link, Protected, Opts, LinksLeft) when ?IS_LINK(Link) ->
     case LinksLeft > 0 of
         true ->
-            ?event(error, {protected2, Protected}),
+            ?event({protected2, Protected}),
             try protected_term(
                 hb_cache:ensure_loaded(Link, Opts),
                 Protected,
@@ -146,10 +146,10 @@ path_value_protected(Path, Protected) ->
     end.
 
 device_protected(not_found, _Protected) ->
-    ?event(error, {device_protected, not_found}),
+    ?event(dev_owner_auth, {device_protected, not_found}),
     false;
 device_protected(Device, Protected) ->
-    ?event(error, {device_protected, {device, Device}, {protected, Protected}}),
+    ?event(dev_owner_auth, {device_protected, {device, Device}, {protected, Protected}}),
     DevicePath = canonical_path(Device),
     lists:member(DevicePath, Protected).
 

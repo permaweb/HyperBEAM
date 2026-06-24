@@ -266,15 +266,7 @@ register_wallet(Wallet, Base, Request, Opts) ->
     % Get the authentication message from the request. If the message is a path
     % or a message with a `path' field, we resolve it to get the base.
     {ok, BaseAccessControl} =
-        case hb_ao:get_first(
-            [
-                {Request, <<"access-control">>},
-                {Request, <<"access-origin">>},
-                {Base, <<"access-control">>}
-            ],
-            undefined,
-            Opts
-        ) of
+        case hb_ao:get(<<"access-control">>, Base, undefined, Opts) of
             undefined ->
                 ?event(
                     debug_auth,
