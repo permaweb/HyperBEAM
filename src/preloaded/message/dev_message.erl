@@ -604,7 +604,7 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
 	% Filter keys that are in the default device (this one).
-    {ok, NewValuesKeys} = keys(NewValuesMsg, Opts),
+    NewValuesKeys = direct_set_keys(NewValuesMsg, Opts),
 	KeysToSet =
 		lists:filter(
 			fun(Key) ->
@@ -722,7 +722,13 @@ set(Base, NewValuesMsg, Opts) ->
                 _ ->
                     {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
             end
-    end.
+	    end.
+
+direct_set_keys(Msg, Opts) ->
+    lists:filter(
+        fun(Key) -> not hb_private:is_private(Key) andalso Key =/= <<"...">> end,
+        maps:keys(hb_message:uncommitted(Msg, Opts))
+    ).
 
 %% @doc Deep merge keys in a message, utilizing the set device of any child
 %% keys that are themselves messages.
@@ -905,6 +911,18 @@ extension_get_test() ->
     ),
     {ok, Keys} = keys(Child, #{}),
     ?assertEqual([<<"a">>, <<"b">>, <<"commitments">>], lists:sort(Keys)).
+
+set_uses_direct_patch_keys_test() ->
+    {ok, Res} =
+        set(
+            #{ <<"a">> => 1 },
+            #{
+                <<"b">> => 2,
+                <<"...">> => #{ <<"c">> => 3 }
+            },
+            #{}
+        ),
+    ?assertEqual(#{ <<"a">> => 1, <<"b">> => 2 }, Res).
 
 is_private_mod_test() ->
     ?assertEqual(true, hb_private:is_private(<<"private">>)),

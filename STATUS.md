@@ -127,3 +127,19 @@
   passed with 3 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
   --module dev_meta` passed with 11 tests; `rebar3 compile` passed; `git diff
   --check` passed.
+- The next full `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` reached
+  1207 passes, then timed out in `lua@5.3a:ao_core_sandbox_test`. Root cause:
+  local HMAC commitments created while normalizing internal singleton messages
+  were treated as signed parents, so the denied relay singleton carried a lazy
+  `...` parent into subresolution and `message@1.0/set`/`keys` tried to walk it.
+  Tightened signed-ancestor detection to require a committer as well as a
+  signature, and made `message@1.0/set` apply only direct patch keys while
+  leaving read-side `keys` extension-visible. Validation:
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_message`
+  passed with 19 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test+with_only_signed_ignores_hmac_commitments_test`
+  passed with 3 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_lua --test dev_lua:ao_core_sandbox_test` passed; and
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_lua`
+  passed with 17 tests.

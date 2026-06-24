@@ -490,10 +490,8 @@ has_signed_commitment(Msg, Opts) ->
 commitment_has_signature(Link, Opts) when ?IS_LINK(Link) ->
     commitment_has_signature(hb_cache:ensure_loaded(Link, Opts), Opts);
 commitment_has_signature(Commitment, Opts) when is_map(Commitment) ->
-    case hb_maps:find(<<"signature">>, Commitment, Opts) of
-        {ok, _} -> true;
-        error -> false
-    end;
+    hb_maps:find(<<"signature">>, Commitment, Opts) =/= error
+        andalso hb_maps:find(<<"committer">>, Commitment, Opts) =/= error;
 commitment_has_signature(_Commitment, _Opts) ->
     false.
 
