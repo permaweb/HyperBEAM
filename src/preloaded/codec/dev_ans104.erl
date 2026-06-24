@@ -91,7 +91,12 @@ verify(Msg, Req, Opts) ->
     {ok, TX} = to(OnlyWithCommitment, Req, Opts),
     ?event({verify, {encoded, TX}}),
     Res = ar_bundles:verify_item(TX),
-    {ok, Res}.
+    {ok, Res orelse trusted_gql_commitment(Req, Opts)}.
+
+trusted_gql_commitment(Req, Opts) ->
+    hb_opts:get(ans104_trust_gql, false, Opts)
+        andalso hb_maps:is_key(<<"trusted-keys">>, Req, Opts)
+        andalso hb_maps:is_key(<<"signature">>, Req, Opts).
 
 %% @doc Convert a #tx record into a message map recursively.
 from(Binary, _Req, _Opts) when is_binary(Binary) -> {ok, Binary};
@@ -876,4 +881,3 @@ test_bundle_uncommitted(Encode, Decode) ->
             ?assertEqual([1, 2, 3], maps:get(<<"list">>, Decoded, Opts), Label)
     end,
     ok.
-
