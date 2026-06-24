@@ -207,3 +207,16 @@
   Validation: `HB_PARANOID=cache_read,cache_write rebar3 device test --module
   'recorder@1.0' --test dev_recorder:record_installs_hook_test` passed, and
   `git diff --check` passed.
+- Fixed the HTTP compute timeout without carrying the temporary HTTPSig loader
+  work. The timeout was caused by client-side `GET` requests implicitly asking
+  the server to bundle replies; with overlay semantics the `/compute` response
+  may include a large inherited process state, so the HTTP layer was
+  materializing far more than the caller asked to inspect. `prepare_request/6`
+  now defaults `accept-bundle` to `false` for `GET` while preserving the old
+  bundled default for writes and explicit callers. Validation:
+  `rebar3 device test --module hb_process_test_vectors --test
+  hb_process_test_vectors:http_wasm_process_by_id_test_parallel` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  hb_process_test_vectors --test
+  hb_process_test_vectors:http_wasm_process_by_id_test_parallel` passed; and
+  `git diff --check` passed.

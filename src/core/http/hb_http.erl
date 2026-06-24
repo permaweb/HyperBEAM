@@ -392,7 +392,10 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
     % set an explicit preference.
     WithAcceptBundle =
         case hb_maps:get(<<"accept-bundle">>, Message, not_found, Opts) of
-            not_found -> WithoutPriv#{ <<"accept-bundle">> => true };
+            not_found when Method == <<"GET">> ->
+                WithoutPriv#{ <<"accept-bundle">> => false };
+            not_found ->
+                WithoutPriv#{ <<"accept-bundle">> => true };
             _ -> WithoutPriv
         end,
     % Determine the `ao-peer-port' from the message to send or the node message.
