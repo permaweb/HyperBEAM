@@ -266,7 +266,15 @@ register_wallet(Wallet, Base, Request, Opts) ->
     % Get the authentication message from the request. If the message is a path
     % or a message with a `path' field, we resolve it to get the base.
     {ok, BaseAccessControl} =
-        case hb_ao:get(<<"access-control">>, Base, undefined, Opts) of
+        case hb_ao:get_first(
+            [
+                {Request, <<"access-control">>},
+                {Request, <<"access-origin">>},
+                {Base, <<"access-control">>}
+            ],
+            undefined,
+            Opts
+        ) of
             undefined ->
                 ?event(
                     debug_auth,
@@ -841,7 +849,7 @@ import_wallet_with_key_test() ->
     % Create a test wallet key to import (in real scenario from user).
     TestWallet = ar_wallet:new(),
     % WalletAddress = hb_util:human_id(TestWallet),
-    WalletKey = hb_escape:encode_quotes(ar_wallet:to_json(TestWallet)),
+    WalletKey = ar_wallet:to_json(TestWallet),
     WalletAddress = hb_util:human_id(ar_wallet:to_address(TestWallet)),
     % Import the wallet with a specific name.
     ImportUrl =
@@ -1103,14 +1111,14 @@ export_batch_all_wallets_test() ->
                 }
         ),
     % Generate multiple wallets and collect auth cookies.
-    {ok, #{ <<"wallet-address">> := WalletAddr1 }} =
+    {ok, #{ <<"body">> := WalletKeyID1, <<"wallet-address">> := WalletAddr1 }} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory&exportable=",
                 (hb_util:human_id(AdminWallet))/binary>>,
             #{}
         ),
-    {ok, #{ <<"wallet-address">> := WalletAddr2 }} =
+    {ok, #{ <<"body">> := WalletKeyID2, <<"wallet-address">> := WalletAddr2 }} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory&exportable=",
@@ -1124,7 +1132,7 @@ export_batch_all_wallets_test() ->
             (hb_message:commit(
                 #{
                     <<"device">> => <<"secret@1.0">>,
-                    <<"keyids">> => <<"all">>
+                    <<"keyids">> => [WalletKeyID1, WalletKeyID2]
                 },
                 AdminOpts
             ))#{ <<"path">> => <<"/~secret@1.0/export">> },
@@ -1173,7 +1181,11 @@ sync_wallets_test() ->
     {ok, _} =
         hb_http:get(
             Node,
-            <<"/~secret@1.0/sync?node=", Node2/binary, "&wallets=all">>,
+            #{
+                <<"path">> => <<"/~secret@1.0/sync">>,
+                <<"node">> => Node2,
+                <<"keyids">> => [WalletKeyID]
+            },
             #{}
         ),
     % Get the wallet list from the first node.
@@ -1207,7 +1219,11 @@ sync_non_volatile_wallets_test() ->
     {ok, _} =
         hb_http:get(
             Node,
-            <<"/~secret@1.0/sync?node=", Node2/binary, "&wallets=all">>,
+            #{
+                <<"path">> => <<"/~secret@1.0/sync">>,
+                <<"node">> => Node2,
+                <<"keyids">> => [WalletName]
+            },
             #{}
         ),
     % Get the wallet list from the first node.

@@ -711,7 +711,7 @@ valid_commitment(
     Committed = commitment_keys(Commitment, Opts),
     Present = committed_keys_present(Committed, RequiredKeys),
     case Present andalso verify_commitment(Request, CommitmentID, Opts) of
-        true -> {true, dev_httpsig_keyid:keyid_to_committer(KeyID)};
+        true -> {true, lib_httpsig_keyid:keyid_to_committer(KeyID)};
         false -> false
     end;
 valid_commitment(_Request, _CommitmentID, _Commitment, _RequiredKeys, _Opts) ->

@@ -10,7 +10,6 @@
 -export([info/1, info/3, build/3, handle/2, adopt_node_message/2, is/2, is/3]).
 -export([is_operator/3]).
 -export([is_operator/2]).
--export([verified_committers/2, verified_committers/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -34,9 +33,15 @@ is_operator(Request, RequiredKeys, NodeMsg) when is_list(RequiredKeys) ->
     case operator(NodeMsg) of
         unclaimed -> false;
         EncOperator ->
+            VerifiedCommiters = hb_message:verified_committers(Request, RequiredKeys, NodeMsg),
+            ?event(
+                {is_operator,
+                    {enc_operator, EncOperator},
+                    {verified_committers, VerifiedCommiters}
+            }),
             lists:member(
                 EncOperator,
-                hb_message:verified_committers(Request, RequiredKeys, NodeMsg)
+                VerifiedCommiters
             )
     end;
 
