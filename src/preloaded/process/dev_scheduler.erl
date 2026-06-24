@@ -1763,8 +1763,9 @@ http_get_schedule_test_parallel_() ->
 				?assertMatch({ok, #{ <<"current">> := 3 }}, http_get_slot(Node, PMsg)),
 				{ok, Schedule} = http_get_schedule(Node, PMsg, 0, 3),
 				Assignments = hb_ao:get(<<"assignments">>, Schedule, Opts),
+				?assertNot(maps:is_key(<<"commitments">>, Assignments)),
 				?assertEqual(
-					6, % 4 assignments, +1 for the hashpath, +1 for the commitments
+					5, % 4 assignments, +1 for the hashpath
 					hb_maps:size(Assignments, Opts)
 				)
 			end}.
@@ -1796,8 +1797,9 @@ http_get_legacy_schedule_slot_range_test_parallel_() ->
 	            "&from=0&to=3">>, Opts),
 			LoadedRes = hb_cache:ensure_all_loaded(Res, Opts),
 	        ?event({res, LoadedRes}),
-	        % 4 assignments, +1 for the commitments
-	        ?assertMatch(#{ <<"assignments">> := As } when map_size(As) == 5, LoadedRes)
+	        #{ <<"assignments">> := Assignments } = LoadedRes,
+	        ?assertNot(maps:is_key(<<"commitments">>, Assignments)),
+	        ?assertEqual(4, map_size(Assignments))
 	    end}.
 
 http_get_legacy_schedule_as_aos2_test_parallel_() ->

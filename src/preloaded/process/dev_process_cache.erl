@@ -17,8 +17,10 @@ read(ProcID, SlotRef, Opts) ->
 
 %% @doc Write a process computation result to the cache.
 write(ProcID, Slot, Msg, Opts) ->
-    % Write the item to the cache in the root of the store.
-    {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
+    % Derived process state is mutable. Keep signed nested messages intact,
+    % but do not carry stale top-level commitments from the source process.
+    ToStore = hb_message:uncommitted(hb_private:reset(Msg), Opts),
+    {ok, Root} = hb_cache:write(ToStore, Opts),
     % Link the item to the path in the store by slot number.
     SlotNumPath = path(ProcID, Slot, Opts),
     hb_cache:link(Root, SlotNumPath, Opts),
