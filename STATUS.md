@@ -26,3 +26,12 @@
   `rebar3 device test --module hb_codec_test_vectors --test
   hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
   passed with 2 tests.
+- Added overlay cache coverage for varied executions. A focused failing vector
+  showed map compute results were written by message ID but not linked at the
+  execution hashpath; switched map result writes to existing
+  `hb_cache:write_hashpath/2`. Validation:
+  `rebar3 eunit --test hb_ao_test_vectors:vary_overlay_cache_applies_to_each_original_test`
+  passed; `rebar3 eunit --module=hb_ao_test_vectors` passed with 191 tests;
+  `rebar3 eunit --module=hb_types` passed with 3 tests; `git diff --check`
+  passed. A parallel `hb_types`/AO-vector run hit the shared default HTTP port
+  with `eaddrinuse`; the same `hb_types` command passed when rerun alone.

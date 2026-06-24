@@ -2,6 +2,7 @@
 %%% execution under different circumstances.
 -module(hb_ao_test_vectors).
 -export([info/0, vary_key/3, varying_cache_key/3]).
+-export([overlay_key/3, overlay_cache_key/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -400,6 +401,70 @@ vary_cache_collapse_test() ->
         end
     ).
 
+vary_overlay_applies_to_original_test() ->
+    BaseOpts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"spawn-worker">> => false,
+        <<"forge-bootstrap">> => vary_test_bootstrap()
+    },
+    hb_forge_seed:with_forge_bootstrap(
+        BaseOpts,
+        fun(Opts) ->
+            {ok, Res} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"same">>,
+                        <<"noise">> => <<"one">>
+                    },
+                    <<"overlay-key">>,
+                    Opts
+                ),
+            ?assertEqual(<<"same">>, maps:get(<<"c">>, Res)),
+            ?assertEqual(<<"one">>, maps:get(<<"noise">>, Res))
+        end
+    ).
+
+vary_overlay_cache_applies_to_each_original_test() ->
+    Store = hb_test_utils:test_store(),
+    BaseOpts = #{
+        <<"store">> => Store,
+        <<"cache-control">> => [<<"always">>],
+        <<"spawn-worker">> => false,
+        <<"forge-bootstrap">> => vary_test_bootstrap()
+    },
+    hb_forge_seed:with_forge_bootstrap(
+        BaseOpts,
+        fun(Opts) ->
+            erlang:erase({?MODULE, overlay_cache_key}),
+            {ok, Res1} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"same">>,
+                        <<"noise">> => <<"one">>
+                    },
+                    <<"overlay-cache-key">>,
+                    Opts
+                ),
+            {ok, Res2} =
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"same">>,
+                        <<"noise">> => <<"two">>
+                    },
+                    <<"overlay-cache-key">>,
+                    Opts
+                ),
+            ?assertEqual(<<"1">>, maps:get(<<"count">>, Res1)),
+            ?assertEqual(<<"1">>, maps:get(<<"count">>, Res2)),
+            ?assertEqual(<<"one">>, maps:get(<<"noise">>, Res1)),
+            ?assertEqual(<<"two">>, maps:get(<<"noise">>, Res2))
+        end
+    ).
+
 %%% Test vector suite
 
 info() ->
@@ -423,6 +488,23 @@ varying_cache_key(_Base, _Req, _Opts) ->
         end,
     erlang:put({?MODULE, varying_cache_key}, Next),
     {ok, integer_to_binary(Next)}.
+
+-spec overlay_key(#{ a := binary() }, #{ path := binary() }, map()) ->
+    {ok, #{ '...' => base }}.
+overlay_key(Base, _Req, _Opts) ->
+    {ok, #{ <<"c">> => maps:get(<<"a">>, Base) }}.
+
+-spec overlay_cache_key(#{ a := binary() }, #{ path := binary() }, map()) ->
+    {ok, #{ '...' => base }}.
+overlay_cache_key(_Base, _Req, _Opts) ->
+    Count = erlang:get({?MODULE, overlay_cache_key}),
+    Next =
+        case Count of
+            undefined -> 1;
+            _ -> Count + 1
+        end,
+    erlang:put({?MODULE, overlay_cache_key}, Next),
+    {ok, #{ <<"count">> => integer_to_binary(Next) }}.
 
 vary_test_bootstrap() ->
     #{
