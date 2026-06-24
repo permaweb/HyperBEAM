@@ -74,14 +74,26 @@ route(Key, M1, M2, Opts) ->
                     {error, not_found};
                 fallback ->
                     ?event({manifest_fallback, {key, Key}}),
-                    route(<<"index">>, M1, M2, Opts)
+                    case route(<<"index">>, M1, M2, Opts) of
+                        {ok, Fallback} -> {ok, no_store(Fallback, Opts)};
+                        Error -> Error
+                    end
             end;
         Result ->
             ?event({manifest_lookup_success, {key, Key}, {result, Result}}),
-            try {ok, hb_cache:ensure_loaded(Result, Opts)}
-            catch _:_:_ -> {error, not_found}
+            case is_map(Result) of
+                true -> {ok, no_store(Result, Opts)};
+                false ->
+                    try {ok, hb_cache:ensure_loaded(Result, Opts)}
+                    catch _:_:_ -> {error, not_found}
+                    end
             end
     end.
+
+no_store(Msg, Opts) when is_map(Msg) ->
+    hb_private:set(Msg, #{ <<"cache-control">> => [<<"no-store">>] }, Opts);
+no_store(Msg, _Opts) ->
+    Msg.
 
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
 %% requests for legacy (non-device-tagged) manifests and casting them to

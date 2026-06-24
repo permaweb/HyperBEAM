@@ -22,12 +22,17 @@
 %% Base is not used, such that it can specify cache control information about 
 %% itself, without affecting its outputs.
 maybe_store(Base, Req, Res, Opts) ->
-    case derive_cache_settings([Res, Req], Opts) of
-        #{ <<"store">> := true } ->
-            ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
-            dispatch_cache_write(Base, Req, Res, Opts);
-        _ -> 
-            not_caching
+    case private_no_store(Res) of
+        true ->
+            not_caching;
+        false ->
+            case derive_cache_settings([Res, Req], Opts) of
+                #{ <<"store">> := true } ->
+                    ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
+                    dispatch_cache_write(Base, Req, Res, Opts);
+                _ ->
+                    not_caching
+            end
     end.
 
 %% @doc Handles cache lookup, modulated by the caching options requested by
@@ -184,26 +189,7 @@ necessary_messages_not_found_error(Base, Req, Opts) ->
 %% @doc Determine whether we are likely to be faster looking up the result in
 %% our cache (hoping we have it), or executing it directly.
 exec_likely_faster_heuristic(_M1, _M2, _) ->
-    false;
-exec_likely_faster_heuristic({as, _, Base}, Req, Opts) ->
-    exec_likely_faster_heuristic(Base, Req, Opts);
-exec_likely_faster_heuristic(Base, Req, Opts) ->
-    case hb_opts:get(cache_lookup_hueristics, true, Opts) of
-        false -> false;
-        true ->
-            case ?IS_ID(Base) of
-                true -> false;
-                false -> is_explicit_lookup(Base, Req, Opts)
-            end
-    end.
-is_explicit_lookup(Base, #{ <<"path">> := Key }, Opts) ->
-    % For now, just check whether the key is explicitly in the map. That is 
-    % a good signal that we will likely be asked by the device to grab it.
-    % If we have `only-if-cached' in the opts, we always force lookup, too.
-    case specifiers_to_cache_settings(hb_opts:get(cache_control, [], Opts)) of
-        #{ <<"only-if-cached">> := true } -> false;
-        _ -> is_map(Base) andalso hb_maps:is_key(Key, Base, Opts)
-    end.
+    false.
 
 %% @doc Derive cache settings from a series of option sources and the opts,
 %% honoring precidence order. The Opts is used as the first source. Returns a
@@ -248,9 +234,26 @@ cache_source_to_cache_settings({opts, Opts}, _) ->
         _ -> CCMap
     end;
 cache_source_to_cache_settings(Msg, Opts) ->
-    case hb_maps:find(<<"cache-control">>, Msg, Opts) of
-        {ok, CC} -> specifiers_to_cache_settings(CC);
-        _ -> #{}
+    case hb_private:from_message(Msg) of
+        #{ <<"cache-control">> := CC } ->
+            specifiers_to_cache_settings(CC);
+        _ ->
+            case hb_maps:find(<<"cache-control">>, Msg, Opts) of
+                {ok, CC} -> specifiers_to_cache_settings(CC);
+                _ -> #{}
+            end
+    end.
+
+private_no_store(Msg) ->
+    case hb_private:from_message(Msg) of
+        #{ <<"cache-control">> := CC } ->
+            not maps:get(
+                <<"store">>,
+                specifiers_to_cache_settings(CC),
+                true
+            );
+        _ ->
+            false
     end.
 
 %% @doc Convert a cache control list as received via HTTP headers into a 
