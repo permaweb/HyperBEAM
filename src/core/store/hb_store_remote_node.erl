@@ -4,7 +4,7 @@
 %%% been written to the remote node. In that case, the node would probably want
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
--export([scope/1, type/3, read/3, write/3, link/3, group/3, resolve/3]).
+-export([scope/1, type/3, read/3, write/3, link/3, group/3, resolve/3, start/1]).
 %%% Public utilities.
 -export([maybe_cache/2, maybe_cache/3, read_local_cache/3]).
 -include("include/hb.hrl").
@@ -18,6 +18,8 @@
 %% @returns remote.
 scope(_StoreOpts) ->
     remote.
+start(_StoreOpts) ->
+    ok.
 
 %% @doc Resolve a key path in the remote store.
 %%
