@@ -63,6 +63,7 @@
 -export([verify/1, verify/2, verify/3, paranoid_verify/2, paranoid_verify/3]).
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
+-export([has_signed_commitment/2]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, with_only_signed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
@@ -441,6 +442,7 @@ first_signed(Msg, Opts) when is_map(Msg) ->
 first_signed(_Msg, _Opts) ->
     not_found.
 
+%% @doc Return true if the message has a commitment with a signature field.
 has_signed_commitment(Msg, Opts) ->
     hb_maps:fold(
         fun(_ID, Commitment, Acc) ->

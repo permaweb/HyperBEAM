@@ -35,3 +35,12 @@
   `rebar3 eunit --module=hb_types` passed with 3 tests; `git diff --check`
   passed. A parallel `hb_types`/AO-vector run hit the shared default HTTP port
   with `eaddrinuse`; the same `hb_types` command passed when rerun alone.
+- Added signed singleton ancestry preservation. `hb_singleton:from/2` now
+  strips direct commitments from path-derived child steps and attaches the
+  original signed subset through `...`; `hb_message:with_only_signed/2` can
+  recover the signed parent from a modified step. Validation:
+  `rebar3 eunit --module=hb_singleton` passed with 37 tests;
+  `rebar3 device test --module hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
+  passed with 2 tests; `rebar3 eunit --module=hb_ao_test_vectors` passed with
+  191 tests; `git diff --check` passed.

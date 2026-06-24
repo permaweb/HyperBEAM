@@ -162,7 +162,12 @@ from(RawMsg, Opts) ->
     ScopedModifications = group_scoped(Typed, Msgs),
     ?event_debug(parsing, {scoped_modifications, ScopedModifications}),
     % 5. Generate the list of messages (plus-notation, device, typed keys).
-    Result = build_messages(Msgs, ScopedModifications, Opts),
+    Result = build_messages(
+        Msgs,
+        ScopedModifications,
+        signed_parent(RawMsg, Opts),
+        Opts
+    ),
     ?event_debug(parsing, {result, Result}),
     Result.
 
@@ -277,11 +282,12 @@ parse_scope(KeyBin) ->
     end.
 
 %% @doc Step 5: Merge the base message with the scoped messages.
-build_messages(Msgs, ScopedModifications, Opts) ->
-    do_build(1, Msgs, ScopedModifications, Opts).
+build_messages(Msgs, ScopedModifications, SignedParent, Opts) ->
+    do_build(1, Msgs, ScopedModifications, SignedParent, Opts).
 
-do_build(_, [], _, _) -> [];
-do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) ->
+do_build(_, [], _, _, _) -> [];
+do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, SignedParent, Opts)
+        when is_map(RawMsg) ->
     % We are processing an `as' message. If the path is empty, we need to
     % remove it from the message and the additional message, such that AO-Core
     % returns only the message with the device specifier changed. If the message
@@ -308,26 +314,57 @@ do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) 
                 % totality. The path-part's path will be subresolved.
                 {RawMsg, RawAdditional}
         end,
-    Merged = hb_maps:merge(Additional, Msg, Opts),
+    Merged = maybe_extend_signed(
+        hb_maps:merge(Additional, Msg, Opts),
+        SignedParent,
+        Opts
+    ),
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
         Opts#{ <<"topic">> => ao_internal }
     ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
-do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
-    [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
-do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
+    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)];
+do_build(I, [Msg | Rest], ScopedKeys, SignedParent, Opts) when not is_map(Msg) ->
+    [Msg | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)];
+do_build(I, [Msg | Rest], ScopedKeys, SignedParent, Opts) ->
     Additional = lists:nth(I, ScopedKeys),
-    Merged = hb_maps:merge(Additional, Msg, Opts),
+    Merged = maybe_extend_signed(
+        hb_maps:merge(Additional, Msg, Opts),
+        SignedParent,
+        Opts
+    ),
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
         Opts#{ <<"topic">> => ao_internal }
     ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [StepMsg | do_build(I + 1, Rest, ScopedKeys, Opts)].
+    [StepMsg | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)].
+
+signed_parent(RawMsg, Opts) when is_map(RawMsg) ->
+    case hb_message:with_only_signed(RawMsg, Opts) of
+        {ok, Signed} when is_map(Signed) ->
+            case hb_message:has_signed_commitment(Signed, Opts) of
+                true -> Signed;
+                false -> none
+            end;
+        _ ->
+            none
+    end;
+signed_parent(_RawMsg, _Opts) ->
+    none.
+
+maybe_extend_signed(Msg, none, _Opts) ->
+    Msg;
+maybe_extend_signed(Msg, SignedParent, Opts) ->
+    hb_maps:put(
+        <<"...">>,
+        SignedParent,
+        hb_maps:without([<<"commitments">>], Msg, Opts),
+        Opts
+    ).
 
 %% @doc Parse a path part into a message or an ID.
 %% Applies the syntax rules outlined in the module doc, in the following order:
@@ -478,6 +515,36 @@ parse_explicit_message_test() ->
     ?assertEqual(
         [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
         from(Singleton3, #{})
+    ).
+
+signed_singleton_extends_steps_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => hb:wallet()
+    },
+    Signed =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/a/b">>,
+                <<"body">> => <<"signed">>
+            },
+            Opts,
+            <<"httpsig@1.0">>
+        ),
+    [Base, First, Second] = from(Signed, Opts),
+    ?assertNot(maps:is_key(<<"commitments">>, Base)),
+    ?assertNot(maps:is_key(<<"commitments">>, First)),
+    ?assertNot(maps:is_key(<<"commitments">>, Second)),
+    ?assertEqual(<<"a">>, maps:get(<<"path">>, First)),
+    ?assertEqual(<<"b">>, maps:get(<<"path">>, Second)),
+    SignedParent = maps:get(<<"...">>, First),
+    ?assert(hb_message:has_signed_commitment(SignedParent, Opts)),
+    ?assertEqual(SignedParent, maps:get(<<"...">>, Base)),
+    ?assertEqual(SignedParent, maps:get(<<"...">>, Second)),
+    {ok, OnlySigned} = hb_message:with_only_signed(First, Opts),
+    ?assertEqual(
+        <<"/a/b">>,
+        hb_cache:ensure_loaded(maps:get(<<"path">>, OnlySigned), Opts)
     ).
 
 %%% `to/1' function tests
