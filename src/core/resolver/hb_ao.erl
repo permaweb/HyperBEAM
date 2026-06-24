@@ -155,15 +155,20 @@ resolve(Base, Req, Opts) ->
         ao_core,
         {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}
     ),
-    MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
-    ?event_debug(debug_ao_core,
-        {stage,
-            1,
-            prepare_multimessage_resolution,
-            {messages_to_exec, MessagesToExec}
-        }
-    ),
-    resolve_many([Base | MessagesToExec], Opts).
+    case PathParts of
+        undefined ->
+            resolve_many([Base, without_path(Req, Opts)], Opts);
+        _ ->
+            MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
+            ?event_debug(debug_ao_core,
+                {stage,
+                    1,
+                    prepare_multimessage_resolution,
+                    {messages_to_exec, MessagesToExec}
+                }
+            ),
+            resolve_many([Base | MessagesToExec], Opts)
+    end.
 
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
@@ -241,8 +246,6 @@ resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
             )
         end,
     resolve_many(ListOfMessages, Opts);
-resolve_many({as, DevID, Msg}, Opts) ->
-    subresolve(#{}, DevID, Msg, Opts);
 resolve_many([{resolve, Subres}], Opts) ->
     resolve_many(Subres, Opts);
 resolve_many(MsgList, Opts) ->
@@ -286,76 +289,6 @@ resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % continue with the resolution.
     ?event_debug(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
     resolve_stage(1, Base, hb_cache:ensure_loaded(Link, Opts), Opts);
-resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) orelse ?IS_LINK(Ref) ->
-    % Normalize `as' requests with a raw ID or link as the path. Links will be
-    % loaded in following stages.
-    resolve_stage(1, {as, DevID, #{ <<"path">> => Ref }}, Req, Opts);
-resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
-    % If the first message is an `as' with a link, we should load the message and
-    % continue with the resolution.
-    ?event_debug(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
-    resolve_stage(1, {as, DevID, hb_cache:ensure_loaded(Link, Opts)}, Req, Opts);
-resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
-    % If the first message is an `as' with an ID, we should load the message and
-    % apply the non-path elements of the sub-request to it.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
-    ?event_debug(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
-    Baseb = ensure_message_loaded(ID, Opts),
-    ?event_debug(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
-    Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event_debug(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
-    Based = set(Basec, <<"device">>, DevID, Opts),
-    ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
-    resolve_stage(1, Based, Req, Opts);
-resolve_stage(1, {as, DevID, RawBase}, Req, Opts)
-        when is_map(RawBase),
-             DevID =/= <<"message@1.0">>,
-             not is_map_key(<<"path">>, RawBase),
-             not is_map_key(path, RawBase),
-             not is_map_key(<<"Path">>, RawBase) ->
-    resolve_stage(1, set(RawBase, <<"device">>, DevID, Opts), Req, Opts);
-resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
-    % Set the device of the message to the specified one and resolve the sub-path.
-    % As this is the first message, we will then continue to execute the request
-    % on the result.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_base, {dev, DevID}, {subreq, SubReq}}, Opts),
-    ?event_debug(debug_subresolution, {as, {dev, DevID}, {subreq, SubReq}, {req, Req}}),
-    case subresolve(SubReq, DevID, SubReq, Opts) of
-        {ok, SubRes} ->
-            % The subresolution has returned a new message. Continue with it.
-            ?event(subresolution,
-                {continuing_with_subresolved_message, {base, SubRes}}
-            ),
-            resolve_stage(1, SubRes, Req, Opts);
-        OtherRes ->
-            % The subresolution has returned an error. Return it.
-            ?event(subresolution,
-                {subresolution_error, {base, Raw}, {res, OtherRes}}
-            ),
-            OtherRes
-    end;
-resolve_stage(1, RawBase, ReqOuter = #{ <<"path">> := {as, DevID, ReqInner} }, Opts) ->
-    % Set the device to the specified `DevID' and resolve the message. Merging
-    % the `ReqInner' into the `ReqOuter' message first. We return the result
-    % of the sub-resolution directly.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
-    LoadedInner = ensure_message_loaded(ReqInner, Opts),
-    Req =
-        hb_maps:merge(
-            set(ReqOuter, <<"path">>, unset, Opts),
-            if is_binary(LoadedInner) -> #{ <<"path">> => LoadedInner };
-            true -> LoadedInner
-            end,
-			Opts
-        ),
-    ?event(subresolution,
-        {subresolving_request_before_execution,
-            {dev, DevID},
-            {req, Req}
-        }
-    ),
-    subresolve(RawBase, DevID, Req, Opts);
 resolve_stage(1, {resolve, Subres}, Req, Opts) ->
     % If the first message is a `{resolve, Subres}' tuple, we should execute it
     % directly, then apply the request to the result.
@@ -421,12 +354,29 @@ resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
     ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
     resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
 resolve_stage(1, RawBase, RawReq, Opts) ->
-    % Normalize the path to a private key containing the list of remaining
-    % keys to resolve.
-    ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
-    Base = normalize_keys(RawBase, Opts),
-    Req = normalize_keys(RawReq, Opts),
-    resolve_stage(2, Base, Req, Opts);
+    case hb_path:from_message(request, RawReq, Opts) of
+        undefined ->
+            compose_message(RawBase, RawReq, Opts);
+        _ ->
+            case hb_maps:find(<<"device">>, RawReq, Opts) of
+                {ok, Device} ->
+                    Base =
+                        hb_maps:merge(
+                            ensure_message_loaded(RawBase, Opts),
+                            #{ <<"device">> => Device },
+                            Opts
+                        ),
+                    Req = hb_maps:without([<<"device">>], RawReq, Opts),
+                    resolve_stage(1, Base, Req, Opts);
+                error ->
+                    % Normalize the path to a private key containing the list
+                    % of remaining keys to resolve.
+                    ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
+                    Base = normalize_keys(RawBase, Opts),
+                    Req = normalize_keys(RawReq, Opts),
+                    resolve_stage(2, Base, Req, Opts)
+            end
+    end;
 resolve_stage(2, Base, Req, Opts) ->
     ?event_debug(debug_ao_core, {stage, 2, vary_and_cache_lookup}, Opts),
     % Preserve the existing direct member-read fast path before varying. If a
@@ -787,61 +737,6 @@ resolve_stage(12, _Base, _Req, OtherRes, _ExecName, _Opts) ->
     ?event_debug(debug_ao_core, {stage, 12, _ExecName, abnormal_status_skip_spawning}, _Opts),
     OtherRes.
 
-%% @doc Execute a sub-resolution.
-subresolve(RawBase, DevID, ReqPath, Opts) when is_binary(ReqPath) ->
-    % If the request is a binary, we assume that it is a path.
-    subresolve(RawBase, DevID, #{ <<"path">> => ReqPath }, Opts);
-subresolve(RawBase, DevID, Req, Opts) ->
-    % First, ensure that the message is loaded from the cache.
-    Base = ensure_message_loaded(RawBase, Opts),
-    ?event(subresolution,
-        {subresolving, {base, Base}, {dev, DevID}, {req, Req}}
-    ),
-    % Next, set the device ID if it is given.
-    Base2 =
-        case DevID of
-            undefined -> Base;
-            _ ->
-                set(
-                    Base,
-                    <<"device">>,
-                    DevID,
-                    hb_maps:without(?TEMP_OPTS, Opts, Opts)
-                )
-        end,
-    % If there is no path but there are elements to the request, we set these on
-    % the base message. If there is a path, we do not modify the base message 
-    % and instead apply the request message directly.
-    case hb_path:from_message(request, Req, Opts) of
-        undefined ->
-            Base3 =
-                case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
-                    0 -> Base2;
-                    _ ->
-                        set(
-							Base2,
-							set(Req, <<"path">>, unset, Opts),
-							Opts#{ <<"force-message">> => false }
-						)
-                end,
-            ?event(subresolution,
-                {subresolve_modified_base, Base3},
-                Opts
-            ),
-            {ok, Base3};
-        Path ->
-            ?event(subresolution,
-                {exec_subrequest_on_base,
-                    {mod_base, Base2},
-                    {req, Path},
-                    {req, Req}
-                }
-            ),
-            Res = resolve(Base2, Req, Opts),
-            ?event(subresolution, {subresolved_with_new_device, {res, Res}}),
-            Res
-    end.
-
 %% @doc If the `AO_PROFILING' macro is defined (set by building/launching with
 %% `rebar3 as ao_profiling') we record statistics about the execution of the
 %% function. This is a costly operation, so if it is not defined, we simply
@@ -935,6 +830,24 @@ ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
     Msg.
+
+%% @doc Apply a request with no executable path directly to the base message.
+compose_message(RawBase, RawReq, Opts) ->
+    Req = without_path(RawReq, Opts),
+    {ok,
+        hb_maps:merge(
+            ensure_message_loaded(RawBase, Opts),
+            Req,
+            Opts
+        )
+    }.
+
+without_path(Msg, Opts) ->
+    hb_maps:without(
+        [<<"path">>, path, <<"Path">>, <<"hashpath">>, <<"priv">>],
+        Msg,
+        Opts
+    ).
 
 %% @doc Try the cheap direct member-read cache path before varying inputs.
 direct_cache_lookup(Base, Req = #{ <<"path">> := _ }, Opts) ->
@@ -1119,27 +1032,12 @@ force_message({Status, Map}, _Opts) ->
 %% `ok'. This makes it easier to write complex logic on top of messages while
 %% maintaining a functional style.
 %% 
-%% Additionally, this function supports the `{as, Device, Msg}' syntax, which
-%% allows the key to be resolved using another device to resolve the key,
-%% while maintaining the traceability of the `HashPath' of the output message.
-%% 
 %% Returns the value of the key if it is found, otherwise returns the default
 %% provided by the user, or `not_found' if no default is provided.
 get(Path, Msg) ->
     get(Path, Msg, #{}).
 get(Path, Msg, Opts) ->
     get(Path, Msg, not_found, Opts).
-get(Path, {as, Device, Msg}, Default, Opts) ->
-    get(
-        Path,
-        set(
-            Msg,
-            #{ <<"device">> => Device },
-            internal_opts(Opts)
-        ),
-        Default,
-        Opts
-    );
 get(Path, Msg, Default, Opts) ->
 	case resolve(Msg, #{ <<"path">> => Path }, Opts#{ <<"spawn-worker">> => false }) of
 		{ok, Value} -> Value;

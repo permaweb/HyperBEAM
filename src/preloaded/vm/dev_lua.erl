@@ -89,7 +89,7 @@ ensure_initialized(Base, _Req, Opts) ->
 %% 3. A message containing a series of named Lua modules.
 find_modules(Base, Opts) ->
     MaybeBodyMod =
-        case hb_ao:get(<<"content-type">>, {as, <<"message@1.0">>, Base}, Opts) of
+        case hb_ao:get(<<"content-type">>, Base#{ <<"device">> => <<"message@1.0">> }, Opts) of
             CT when ?IS_LUA_TYPE(CT) -> [Base];
             _ -> []
         end,
@@ -98,7 +98,7 @@ find_modules(Base, Opts) ->
         {finding_modules, {base, Base}, {body_mod, MaybeBodyMod}},
         Opts
     ),
-    case {hb_ao:get(<<"module">>, {as, <<"message@1.0">>, Base}, Opts), MaybeBodyMod} of
+    case {hb_ao:get(<<"module">>, Base#{ <<"device">> => <<"message@1.0">> }, Opts), MaybeBodyMod} of
         {not_found, []} ->
             {error, <<"No Lua modules found when preparing environment for call.">>};
         {not_found, _} ->
@@ -217,7 +217,7 @@ initialize(Base, Modules, Opts) ->
         ),
     % Apply any sandboxing rules to the state.
     State2 =
-        case hb_ao:get(<<"sandbox">>, {as, <<"message@1.0">>, Base}, false, Opts) of
+        case hb_ao:get(<<"sandbox">>, Base#{ <<"device">> => <<"message@1.0">> }, false, Opts) of
             false -> State1;
             true -> sandbox(State1, ?DEFAULT_SANDBOX, Opts);
             Spec -> sandbox(State1, Spec, Opts)
@@ -287,7 +287,7 @@ compute(Key, RawBase, RawReq, Opts) ->
             [
                 {Req, <<"body/function">>},
                 {Req, <<"function">>},
-                {{as, <<"message@1.0">>, Base}, <<"function">>}
+                {Base#{ <<"device">> => <<"message@1.0">> }, <<"function">>}
             ],
             Key,
             Opts#{ <<"hashpath">> => ignore }
@@ -298,7 +298,7 @@ compute(Key, RawBase, RawReq, Opts) ->
             [
                 {Req, <<"body/parameters">>},
                 {Req, <<"parameters">>},
-                {{as, <<"message@1.0">>, Base}, <<"parameters">>}
+                {Base#{ <<"device">> => <<"message@1.0">> }, <<"parameters">>}
             ],
             [
                 hb_private:reset(Base),
@@ -388,7 +388,7 @@ normalize(Base, _Req, RawOpts) ->
     case hb_private:get(<<"state">>, Base, Opts) of
         not_found ->
             DeviceKey =
-                case hb_ao:get(<<"device-key">>, {as, <<"message@1.0">>, Base}, Opts) of
+                case hb_ao:get(<<"device-key">>, Base#{ <<"device">> => <<"message@1.0">> }, Opts) of
                     not_found -> [];
                     Key -> [Key]
                 end,
@@ -400,7 +400,7 @@ normalize(Base, _Req, RawOpts) ->
             SerializedState =
                 hb_ao:get(
                     [<<"snapshot">>] ++ DeviceKey ++ [<<"body">>],
-                    {as, <<"message@1.0">>, Base},
+                    Base#{ <<"device">> => <<"message@1.0">> },
                     Opts
                 ),
             case SerializedState of

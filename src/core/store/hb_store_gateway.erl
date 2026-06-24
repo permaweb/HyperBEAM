@@ -410,7 +410,7 @@ external_http_access_test() ->
 %         % message.
 %         {ok, X} =
 %             hb_ao:resolve(
-%                 {as, <<"process@1.0">>, TestProc},
+%                 TestProc#{ <<"device">> => <<"process@1.0">> },
 %                 <<"schedule">>,
 %                 Opts
 %             ),

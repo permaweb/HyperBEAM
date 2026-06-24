@@ -737,7 +737,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                 hb_util:atom(
                                     hb_ao:get(
                                         <<"accept-bundle">>,
-                                        {as, <<"message@1.0">>, TABMReq},
+                                        TABMReq#{ <<"device">> => <<"message@1.0">> },
                                         true,
                                         Opts
                                     )

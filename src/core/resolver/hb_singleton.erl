@@ -17,10 +17,10 @@
 %%%         - `Part=Value&... => #{ path => Part, Part => Value, ... }'
 %%%         - `Part&Key => #{ path => Part, Key => true }'
 %%%         - `Part&k1=v1&k2=v2 => #{ path => Part, k1 => `<<"v1">>', k2 => `<<"v2">>' }'
-%%%         - `Part~Device => {as, Device, #{ path => Part }}'
-%%%         - `Part~D&K1=V1 => {as, D, #{ path => Part, K1 => `<<"v1">>' }}'
+%%%         - `Part~Device => #{ device => Device }, #{ path => Part }'
+%%%         - `Part~D&K1=V1 => #{ device => D }, #{ path => Part, K1 => `<<"v1">>' }'
 %%%         - `pt&k1+int=1 => #{ path => pt, k1 => 1 }'
-%%%         - `pt~d&k1+int=1 => {as, d, #{ path => pt, k1 => 1 }}'
+%%%         - `pt~d&k1+int=1 => #{ device => d }, #{ path => pt, k1 => 1 }'
 %%%         - `(/nested/path) => Resolution of the path /nested/path'
 %%%         - `(/nested/path&k1=v1) => (resolve /nested/path)#{k1 => v1}'
 %%%         - `(/nested/path~D&K1=V1) => (resolve /nested/path)#{K1 => V1}'
@@ -165,7 +165,7 @@ from(RawMsg, Opts) ->
     Result = build_messages(
         Msgs,
         ScopedModifications,
-        signed_parent(RawMsg, Opts),
+        extension_base(RawMsg, Opts),
         Opts
     ),
     ?event_debug(parsing, {result, Result}),
@@ -179,8 +179,8 @@ from_path(RelativeRef) ->
     ?event_debug(parsing, {parsed_relative_ref, Decoded}),
     {Path, QKVList} =
         case hb_util:split_depth_string_aware_single("?", Decoded) of
-            {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })};
-            {no_match, P, <<>>} -> {P, []}
+            {no_match, P, <<>>} -> {P, []};
+            {_Sep, P, QStr} -> {P, cowboy_req:parse_qs(#{ qs => QStr })}
         end,
     {
         ok,
@@ -195,12 +195,17 @@ from_path(RelativeRef) ->
 %% subpath components, such that their own path parts are not dissociated from
 %% their parent path.
 path_messages(Bin, Opts) when is_binary(Bin) ->
-    lists:map(fun(Part) -> parse_part(Part, Opts) end, path_parts([$/], Bin)).
+    lists:flatmap(
+        fun(Part) -> expand_part(parse_part(Part, Opts)) end,
+        path_parts([$/], Bin)
+    ).
+
+expand_part(Msgs) when is_list(Msgs) -> Msgs;
+expand_part(Msg) -> [Msg].
 
 %% @doc Normalize the base path.
 normalize_base([]) -> [];
 normalize_base([First|Rest]) when ?IS_ID(First) -> [First|Rest];
-normalize_base([{as, DevID, First}|Rest]) -> [{as, DevID, First}|Rest];
 normalize_base([Subres = {resolve, _}|Rest]) -> [Subres|Rest];
 normalize_base(Rest) -> [#{}|Rest].
 
@@ -282,57 +287,17 @@ parse_scope(KeyBin) ->
     end.
 
 %% @doc Step 5: Merge the base message with the scoped messages.
-build_messages(Msgs, ScopedModifications, SignedParent, Opts) ->
-    do_build(1, Msgs, ScopedModifications, SignedParent, Opts).
+build_messages(Msgs, ScopedModifications, ExtensionBase, Opts) ->
+    do_build(1, Msgs, ScopedModifications, ExtensionBase, Opts).
 
 do_build(_, [], _, _, _) -> [];
-do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, SignedParent, Opts)
-        when is_map(RawMsg) ->
-    % We are processing an `as' message. If the path is empty, we need to
-    % remove it from the message and the additional message, such that AO-Core
-    % returns only the message with the device specifier changed. If the message
-    % does have a path, AO-Core will subresolve it.
-    RawAdditional = lists:nth(I, ScopedKeys),
-    {Msg, Additional} =
-        case hb_maps:get(<<"path">>, RawMsg, <<"">>, Opts) of
-            ID when ?IS_ID(ID) ->
-                % When we have an ID, we do not merge the globally scoped elements.
-                {
-                    RawMsg,
-                    #{}
-                };
-            <<"">> ->
-                % When we have an empty path, we remove the path from both
-                % messages. AO-Core will then simply set the device specifier
-                % and not execute a subresolve.
-                {
-                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
-                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
-                };
-            _BasePath ->
-                % When we have a non-empty path, we merge the messages in
-                % totality. The path-part's path will be subresolved.
-                {RawMsg, RawAdditional}
-        end,
-    Merged = maybe_extend_signed(
-        hb_maps:merge(Additional, Msg, Opts),
-        SignedParent,
-        Opts
-    ),
-    StepMsg = hb_message:convert(
-        Merged, 
-        <<"structured@1.0">>, 
-        Opts#{ <<"topic">> => ao_internal }
-    ),
-    ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)];
-do_build(I, [Msg | Rest], ScopedKeys, SignedParent, Opts) when not is_map(Msg) ->
-    [Msg | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)];
-do_build(I, [Msg | Rest], ScopedKeys, SignedParent, Opts) ->
+do_build(I, [Msg | Rest], ScopedKeys, ExtensionBase, Opts) when not is_map(Msg) ->
+    [Msg | do_build(I + 1, Rest, ScopedKeys, ExtensionBase, Opts)];
+do_build(I, [Msg | Rest], ScopedKeys, ExtensionBase, Opts) ->
     Additional = lists:nth(I, ScopedKeys),
-    Merged = maybe_extend_signed(
+    Merged = maybe_extend(
         hb_maps:merge(Additional, Msg, Opts),
-        SignedParent,
+        ExtensionBase,
         Opts
     ),
     StepMsg = hb_message:convert(
@@ -341,27 +306,27 @@ do_build(I, [Msg | Rest], ScopedKeys, SignedParent, Opts) ->
         Opts#{ <<"topic">> => ao_internal }
     ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [StepMsg | do_build(I + 1, Rest, ScopedKeys, SignedParent, Opts)].
+    [StepMsg | do_build(I + 1, Rest, ScopedKeys, ExtensionBase, Opts)].
 
-signed_parent(RawMsg, Opts) when is_map(RawMsg) ->
+extension_base(RawMsg, Opts) when is_map(RawMsg) ->
     case hb_message:with_only_signed(RawMsg, Opts) of
         {ok, Signed} when is_map(Signed) ->
             case hb_message:has_signed_commitment(Signed, Opts) of
                 true -> Signed;
-                false -> none
+                false -> hb_message:uncommitted(RawMsg, Opts)
             end;
         _ ->
-            none
+            hb_message:uncommitted(RawMsg, Opts)
     end;
-signed_parent(_RawMsg, _Opts) ->
+extension_base(_RawMsg, _Opts) ->
     none.
 
-maybe_extend_signed(Msg, none, _Opts) ->
+maybe_extend(Msg, none, _Opts) ->
     Msg;
-maybe_extend_signed(Msg, SignedParent, Opts) ->
+maybe_extend(Msg, ExtensionBase, Opts) ->
     hb_maps:put(
         <<"...">>,
-        SignedParent,
+        ExtensionBase,
         hb_maps:without([<<"commitments">>], Msg, Opts),
         Opts
     ).
@@ -391,7 +356,7 @@ parse_part(Part, Opts) ->
     end.
 
 %% @doc Parse part modifiers:
-%% 1. `~Device' => `{as, Device, Msg}'
+%% 1. `~Device' => `#{ device => Device }, Msg'
 %% 2. `&K=V' => `Msg#{ K => V }'
 parse_part_mods([], Msg, _Opts) -> Msg;
 parse_part_mods(<<>>, Msg, _Opts) -> Msg;
@@ -401,7 +366,10 @@ parse_part_mods(<<"~", PartMods/binary>>, Msg, Opts) ->
     % Calculate the inlined keys
     MsgWithInlines = parse_part_mods(<<"&", InlinedMsgBin/binary >>, Msg, Opts),
     % Apply the device specifier
-    {as, maybe_subpath(DeviceBin, Opts), MsgWithInlines};
+    [
+        #{ <<"device">> => maybe_subpath(DeviceBin, Opts) }
+        | maybe_pathless(MsgWithInlines, Opts)
+    ];
 parse_part_mods(<< "&", InlinedMsgBin/binary >>, Msg, Opts) ->
     InlinedKeys = path_parts($&, InlinedMsgBin),
     MsgWithInlined =
@@ -422,6 +390,17 @@ parse_part_mods(<<$+, InlinedMsgBin/binary>>, M = #{ <<"path">> := Path }, Opts)
         when map_size(M) =:= 1, is_binary(InlinedMsgBin) ->
     parse_part_mods(<< "&", Path/binary, "+", InlinedMsgBin/binary >>, M, Opts);
 parse_part_mods(_, Msg, _Opts) -> Msg.
+
+maybe_pathless(Msg, Opts) ->
+    Pathless =
+        case hb_maps:get(<<"path">>, Msg, <<>>, Opts) of
+            <<>> -> hb_maps:without([<<"path">>], Msg, Opts);
+            _ -> Msg
+        end,
+    case map_size(Pathless) of
+        0 -> [];
+        _ -> [Pathless]
+    end.
 
 %% @doc Extrapolate the inlined key-value pair from a path segment. If the
 %% key has a value, it may provide a type (as with typical keys), but if a
@@ -480,23 +459,29 @@ maybe_typed(Key, Value, Opts) ->
             end
     end.
 
-%% @doc Join a list of items with a separator, or return the first item if there
-%% is only one item. If there are no items, return an empty binary.
-maybe_join(Items, Sep) ->
-    case length(Items) of
-        0 -> <<>>;
-        1 -> hd(Items);
-        _ -> iolist_to_binary(lists:join(Sep, Items))
-    end.
-
 %%% Tests
+
+assert_equal_without_extensions(Expected, Actual) ->
+    ?assertEqual(Expected, without_extensions(Actual)).
+
+without_extensions({resolve, Msgs}) ->
+    {resolve, without_extensions(Msgs)};
+without_extensions(Msgs) when is_list(Msgs) ->
+    [without_extensions(Msg) || Msg <- Msgs];
+without_extensions(Msg) when is_map(Msg) ->
+    maps:map(
+        fun(_Key, Value) -> without_extensions(Value) end,
+        maps:remove(<<"...">>, Msg)
+    );
+without_extensions(Other) ->
+    Other.
 
 parse_explicit_message_test() ->
     Singleton1 = #{
         <<"path">> => <<"/a">>,
         <<"a">> => <<"b">>
     },
-    ?assertEqual(
+    assert_equal_without_extensions(
         [
             #{ <<"a">> => <<"b">>},
             #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }
@@ -507,12 +492,15 @@ parse_explicit_message_test() ->
     Singleton2 = #{
         <<"path">> => <<"/", DummyID/binary, "/a">>
     },
-    ?assertEqual([DummyID, #{ <<"path">> => <<"a">> }], from(Singleton2, #{})),
+    assert_equal_without_extensions(
+        [DummyID, #{ <<"path">> => <<"a">> }],
+        from(Singleton2, #{})
+    ),
     Singleton3 = #{
         <<"path">> => <<"/", DummyID/binary, "/a">>,
         <<"a">> => <<"b">>
     },
-    ?assertEqual(
+    assert_equal_without_extensions(
         [DummyID, #{ <<"path">> => <<"a">>, <<"a">> => <<"b">> }],
         from(Singleton3, #{})
     ).
@@ -569,7 +557,7 @@ simple_to_test() ->
     ],
     Expected = #{<<"path">> => <<"/a">>, <<"test-key">> => <<"test-value">>},
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 multiple_messages_to_test() ->
     Messages =
@@ -584,7 +572,7 @@ multiple_messages_to_test() ->
         <<"test-key">> => <<"test-value">>
     },
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 basic_hashpath_to_test() ->
     Messages = [
@@ -596,7 +584,7 @@ basic_hashpath_to_test() ->
         <<"method">> => <<"GET">>
     },
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 scoped_key_to_test() ->
     Messages = [
@@ -607,7 +595,7 @@ scoped_key_to_test() ->
     ],
     Expected = #{<<"2.test-key">> => <<"test-value">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 typed_key_to_test() ->
     Messages =
@@ -616,10 +604,10 @@ typed_key_to_test() ->
             #{<<"path">> => <<"a">>},
             #{<<"path">> => <<"b">>, <<"test-key">> => 123},
             #{<<"path">> => <<"c">>}
-        ],
+    ],
     Expected = #{<<"2.test-key+integer">> => <<"123">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 subpath_in_key_to_test() ->
     Messages = [
@@ -641,7 +629,7 @@ subpath_in_key_to_test() ->
     ],
     Expected = #{<<"2.test-key+resolve">> => <<"/x/y/z">>, <<"path">> => <<"/a/b/c">>},
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 subpath_in_path_to_test() ->
     Messages = [
@@ -661,7 +649,7 @@ subpath_in_path_to_test() ->
         <<"path">> => <<"/a/(x/y/z)/z">>
     },
     ?assertEqual(Expected, to(Messages)),
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 inlined_keys_to_test() ->
     Messages =
@@ -685,7 +673,7 @@ inlined_keys_to_test() ->
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 multiple_inlined_keys_to_test() ->
     Messages = [
@@ -701,7 +689,7 @@ multiple_inlined_keys_to_test() ->
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 subpath_in_inlined_to_test() ->
     Messages = [
@@ -718,7 +706,7 @@ subpath_in_inlined_to_test() ->
     % NOTE: The implementation above does not convert the given list of messages
     % into the original format, however it assures that the `to/1' and `from/1'
     % operations are idempotent.
-    ?assertEqual(Messages, from(to(Messages), #{})).
+    assert_equal_without_extensions(Messages, from(to(Messages), #{})).
 
 %%% `from/1' function tests
 single_message_test() ->
@@ -794,7 +782,7 @@ subpath_in_key_test() ->
     ?assertEqual(4, length(Msgs)),
     [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(not_found, hb_maps:get(<<"test-key">>, Base, not_found)),
-    ?assertEqual(
+    assert_equal_without_extensions(
         {resolve,
             [
                 #{},
@@ -817,7 +805,7 @@ subpath_in_path_test() ->
     ?assertEqual(4, length(Msgs)),
     [_, Base, Msg2, Res] = Msgs,
     ?assertEqual(<<"a">>, hb_maps:get(<<"path">>, Base)),
-    ?assertEqual(
+    assert_equal_without_extensions(
         {resolve,
             [
                 #{},
@@ -829,6 +817,14 @@ subpath_in_path_test() ->
         Msg2
     ),
     ?assertEqual(<<"z">>, hb_maps:get(<<"path">>, Res)).
+
+device_path_part_test() ->
+    Msgs = from(#{ <<"path">> => <<"/key~dev@1.0">> }, #{}),
+    ?assertEqual(3, length(Msgs)),
+    [_, DeviceStep, PathStep] = Msgs,
+    ?assertEqual(<<"dev@1.0">>, hb_maps:get(<<"device">>, DeviceStep)),
+    ?assertEqual(not_found, hb_maps:get(<<"path">>, DeviceStep, not_found)),
+    ?assertEqual(<<"key">>, hb_maps:get(<<"path">>, PathStep)).
 
 inlined_keys_test() ->
     Req = #{
@@ -874,7 +870,7 @@ inlined_quoted_key_test() ->
         <<"path">> => <<"/~profile@1.0/eval=%22~meta@1.0/info%22">>
     },
     MsgsB = from(ReqB, #{}),
-    [_, Msg2b] = MsgsB,
+    [_, _, Msg2b] = MsgsB,
     ?assertEqual(<<"~meta@1.0/info">>, hb_maps:get(<<"eval">>, Msg2b)).
 
 inlined_assumed_key_test() ->
@@ -925,7 +921,7 @@ subpath_in_inlined_test() ->
     [_, First, Second, Third] = Msgs,
     ?assertEqual(<<"part1">>, hb_maps:get(<<"path">>, First)),
     ?assertEqual(<<"part3">>, hb_maps:get(<<"path">>, Third)),
-    ?assertEqual(
+    assert_equal_without_extensions(
         {resolve, [#{}, #{ <<"path">> => <<"x">> }, #{ <<"path">> => <<"y">> }] },
         hb_maps:get(<<"b">>, Second)
     ).

@@ -31,20 +31,20 @@ test_suite() ->
             fun resolve_simple_test/1},
         {resolve_id, "resolve id",
             fun resolve_id_test/1},
-        {start_as, "start as",
-            fun start_as_test/1},
-        {start_as_with_parameters, "start as with parameters",
-            fun start_as_with_parameters_test/1},
-        {load_as, "load as",
-            fun load_as_test/1},
-        {as_path, "as path",
-            fun as_path_test/1},
-        {continue_as, "continue as",
-            fun continue_as_test/1},
-        {as_commitments, "as commitment normalization",
-            fun as_commitments_test/1},
-        {multiple_as_subresolutions, "multiple as subresolutions",
-            fun multiple_as_subresolutions_test/1},
+        {start_overlay, "start overlay",
+            fun start_overlay_test/1},
+        {start_overlay_with_parameters, "start overlay with parameters",
+            fun start_overlay_with_parameters_test/1},
+        {load_overlay, "load overlay",
+            fun load_overlay_test/1},
+        {overlay_path, "overlay path",
+            fun overlay_path_test/1},
+        {continue_overlay, "continue overlay",
+            fun continue_overlay_test/1},
+        {overlay_commitments, "overlay commitment normalization",
+            fun overlay_commitments_test/1},
+        {multiple_overlay_subresolutions, "multiple overlay subresolutions",
+            fun multiple_overlay_subresolutions_test/1},
         {resolve_key_twice, "resolve key twice",
             fun resolve_key_twice_test/1},
         {resolve_from_multiple_keys, "resolve from multiple keys",
@@ -74,8 +74,8 @@ test_suite() ->
             fun basic_set_test/1},
         {get_with_device, "get with device",
             fun get_with_device_test/1},
-        {get_as_with_device, "get as with device",
-            fun get_as_with_device_test/1},
+        {get_overlay_with_device, "get overlay with device",
+            fun get_overlay_with_device_test/1},
         {set_with_device, "set with device",
             fun set_with_device_test/1},
         {deep_set, "deep set",
@@ -147,7 +147,7 @@ test_opts() ->
                 <<"spawn-worker">> => false,
                 <<"store">> => hb_test_utils:test_store()
             },
-            skip => [load_as]
+            skip => [load_overlay]
         },
         #{
             name => only_store,
@@ -161,7 +161,7 @@ test_opts() ->
             skip => [
                 denormalized_device_name,
                 deep_set_with_device,
-                load_as
+                load_overlay
             ],
             reset => false
         },
@@ -177,10 +177,10 @@ test_opts() ->
             skip => [
                 % Skip test with locally defined device, amongst others.
                 resolve_id,
-                start_as,
-                start_as_with_parameters,
-                as_path,
-                multiple_as_subresolutions,
+                start_overlay,
+                start_overlay_with_parameters,
+                overlay_path,
+                multiple_overlay_subresolutions,
                 key_from_id_device_with_args,
                 get_with_denormalized_key,
                 set_new_messages,
@@ -190,14 +190,13 @@ test_opts() ->
                 device_with_handler_function,
                 denormalized_device_name,
                 get_with_device,
-                get_as_with_device,
+                get_overlay_with_device,
                 set_with_device,
                 device_exports,
                 device_excludes,
                 device_inheritance,
                 deep_set_with_device,
-                as,
-                as_commitments,
+                overlay_commitments,
                 step_hook,
                 paranoid_message_verification,
                 paranoid_input_verification,
@@ -772,7 +771,7 @@ get_with_device_test(Opts) ->
     ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, Msg, Opts)),
     ?assertEqual(<<"STATE">>, hb_ao:get(<<"key_using_only_state">>, Msg, Opts)).
 
-get_as_with_device_test(Opts) ->
+get_overlay_with_device_test(Opts) ->
     Msg =
         #{
             <<"device">> => gen_handler_device(),
@@ -784,7 +783,7 @@ get_as_with_device_test(Opts) ->
     ),
     ?assertEqual(
         <<"ACTUAL VALUE">>,
-        hb_ao:get(test_key, {as, <<"message@1.0">>, Msg}, Opts)
+        hb_ao:get(test_key, Msg#{ <<"device">> => <<"message@1.0">> }, Opts)
     ).
 
 set_with_device_test(Opts) ->
@@ -1053,19 +1052,19 @@ list_transform_test(Opts) ->
     ?assertEqual(<<"D">>, hb_ao:get(4, Msg, Opts)),
     ?assertEqual(<<"E">>, hb_ao:get(5, Msg, Opts)).
 
-start_as_test(Opts) ->
+start_overlay_test(Opts) ->
     ?assertEqual(
         {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
-                {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
+                #{ <<"device">> => <<"test-device@1.0">> },
                 #{ <<"path">> => <<"test_func">> }
             ],
             Opts
         )
     ).
-start_as_with_parameters_test(Opts) ->
-    % Resolve a key on a message that has its device set with `as'.
+start_overlay_with_parameters_test(Opts) ->
+    % Resolve a key on a message after overlaying the message device.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
@@ -1074,15 +1073,16 @@ start_as_with_parameters_test(Opts) ->
         {ok, <<"GOOD FUNCTION">>},
         hb_ao:resolve_many(
             [
-                {as, <<"message@1.0">>, Msg},
+                #{},
+                Msg,
                 #{ <<"path">> => <<"test_func">> }
             ],
             Opts
         )
     ).
 
-load_as_test(Opts) ->
-    % Load a message as a device with the `as' keyword.
+load_overlay_test(Opts) ->
+    % Load a message, overlay a device, then continue resolving it.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
@@ -1098,7 +1098,8 @@ load_as_test(Opts) ->
         {ok, <<"MESSAGE">>},
         hb_ao:resolve_many(
             [
-                {as, <<"message@1.0">>, #{ <<"path">> => <<ID/binary>> }},
+                ID,
+                #{ <<"device">> => <<"message@1.0">> },
                 <<"test_func">>,
                 <<"test_key">>
             ],
@@ -1106,7 +1107,7 @@ load_as_test(Opts) ->
         )
     ).
 
-as_path_test(Opts) ->
+overlay_path_test(Opts) ->
     % Create a message with the test device, which implements the test_func
     % function. It normally returns `GOOD FUNCTION'.
     Msg = #{
@@ -1114,17 +1115,20 @@ as_path_test(Opts) ->
         <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
     },
     ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
-    % Now use the `as' keyword to subresolve a key with the message device.
+    % Now overlay the message device while resolving the requested path.
     ?assertMatch(
         {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
         hb_ao:resolve(
             Msg,
-            {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+            #{
+                <<"device">> => <<"message@1.0">>,
+                <<"path">> => <<"test_func">>
+            },
             Opts
         )
     ).
 
-continue_as_test(Opts) ->
+continue_overlay_test(Opts) ->
     % Resolve a list of messages in sequence, swapping the device in the middle.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
@@ -1135,7 +1139,7 @@ continue_as_test(Opts) ->
         hb_ao:resolve_many(
             [
                 Msg,
-                {as, <<"message@1.0">>, <<>>},
+                #{ <<"device">> => <<"message@1.0">> },
                 #{ <<"path">> => <<"test_func">> },
                 #{ <<"path">> => <<"test_key">> }
             ],
@@ -1143,8 +1147,8 @@ continue_as_test(Opts) ->
         )
     ).
 
-as_commitments_test(RawOpts) ->
-    % Test that attempting to cast a message as a device which it already is
+overlay_commitments_test(RawOpts) ->
+    % Test that overlaying the same device on a message
     % does not lose its commitments.
     OptsWithWallet = RawOpts#{ <<"priv-wallet">> => hb:wallet() },
     Msg =
@@ -1158,24 +1162,25 @@ as_commitments_test(RawOpts) ->
     InitialComms = hb_ao:get(<<"commitments">>, Msg, OptsWithWallet),
     {ok, ResolvedMsg} =
         hb_ao:resolve(
-            {as, <<"test-device@1.0">>, Msg},
+            Msg#{ <<"device">> => <<"test-device@1.0">> },
             <<"commitments">>,
             OptsWithWallet
         ),
     ?assertEqual(InitialComms, ResolvedMsg),
     ?assertEqual(
-        {ok, []},
+        {ok, hb_message:signers(Msg, OptsWithWallet)},
         hb_ao:resolve_many(
             [
-                {as, <<"message@1.0">>, Msg},
+                Msg#{ <<"device">> => <<"message@1.0">> },
                 <<"committers">>
             ],
             OptsWithWallet
         )
     ).
 
-multiple_as_subresolutions_test(Opts) ->
-    % Test that multiple as subresolutions in a sequence are handled correctly.
+multiple_overlay_subresolutions_test(Opts) ->
+    % Test that multiple overlay subresolutions in a sequence are handled
+    % correctly.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
         <<"test-message">> =>
@@ -1187,7 +1192,7 @@ multiple_as_subresolutions_test(Opts) ->
     },
     Res = hb_ao:resolve_many(
         [
-            {as, <<"message@1.0">>, Msg},
+            Msg#{ <<"device">> => <<"message@1.0">> },
             #{ <<"path">> => <<"test-message">> },
             #{ <<"path">> => <<"test-message-2">>, <<"extraneous">> => <<"1">> },
             <<"test-key-2">>

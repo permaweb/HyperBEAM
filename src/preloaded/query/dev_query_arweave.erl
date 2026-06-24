@@ -174,8 +174,8 @@ query(Msg, <<"data">>, _Args, Opts) ->
     Data =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, Msg}, <<"data">>},
-                {{as, <<"message@1.0">>, Msg}, <<"body">>}
+                {Msg#{ <<"device">> => <<"message@1.0">> }, <<"data">>},
+                {Msg#{ <<"device">> => <<"message@1.0">> }, <<"body">>}
             ],
             <<>>,
             Opts

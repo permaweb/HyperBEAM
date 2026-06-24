@@ -116,8 +116,6 @@ handle_initialize([Base = #{ <<"device">> := Dev}, Req = #{ <<"path">> := Path }
         {<<"meta@1.0">>, <<"info">>} -> info(Base, Req, NodeMsg);
         _ -> {error, <<"Node must be initialized before use.">>}
     end;
-handle_initialize([{as, <<"meta@1.0">>, _}|Rest], NodeMsg) ->
-    handle_initialize([#{ <<"device">> => <<"meta@1.0">>}|Rest], NodeMsg);
 handle_initialize([_|Rest], NodeMsg) ->
     handle_initialize(Rest, NodeMsg);
 handle_initialize([], _NodeMsg) ->

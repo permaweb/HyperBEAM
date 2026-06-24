@@ -43,8 +43,8 @@ handle(Key, M1, M2, Opts) ->
     SubjectKey =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, M1}, <<"dedup-subject">>},
-                {{as, <<"message@1.0">>, M2}, <<"dedup-subject">>}
+                {M1#{ <<"device">> => <<"message@1.0">> }, <<"dedup-subject">>},
+                {M2#{ <<"device">> => <<"message@1.0">> }, <<"dedup-subject">>}
             ],
             <<"body">>,
             Opts
@@ -59,19 +59,19 @@ handle(Key, M1, M2, Opts) ->
             % defaulted to the `body' key if not set in the base message.
             hb_ao:get_first(
                 [
-                    {{as, <<"message@1.0">>, M1}, SubjectKey},
-                    {{as, <<"message@1.0">>, M2}, SubjectKey}
+                    {M1#{ <<"device">> => <<"message@1.0">> }, SubjectKey},
+                    {M2#{ <<"device">> => <<"message@1.0">> }, SubjectKey}
                 ],
                 Opts
             )
         end,
     % Is this the first pass, if we are executing in a stack?
-    FirstPass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts) == 1,
+    FirstPass = hb_ao:get(<<"pass">>, M1#{ <<"device">> => <<"message@1.0">> }, 1, Opts) == 1,
     % Get the trie of already seen subjects.
     DedupTrie =
         hb_ao:get(
             <<"dedup">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             #{ <<"device">> => <<"trie@1.0">> },
             Opts
         ),

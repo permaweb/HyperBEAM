@@ -55,7 +55,7 @@ init(M1, _M2, Opts) ->
     InPrefix =
         hb_ao:get(
             <<"input-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -63,7 +63,7 @@ init(M1, _M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -145,7 +145,7 @@ default_import_resolver(Base, Req, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -182,7 +182,7 @@ compute(RawM1, M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -277,7 +277,7 @@ normalize(RawM1, M2, Opts) ->
                 Memory = 
                     hb_ao:get(
                         [<<"snapshot">>] ++ DeviceKey ++ [<<"body">>],
-                        {as, <<"message@1.0">>, RawM1},
+                        RawM1#{ <<"device">> => <<"message@1.0">> },
                         Opts
                     ),
                 case Memory of
@@ -311,7 +311,7 @@ terminate(M1, M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -331,7 +331,7 @@ instance(M1, _M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -352,7 +352,7 @@ import(Base, Req, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -392,7 +392,7 @@ undefined_import_stub(Base, Req, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),

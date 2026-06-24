@@ -41,7 +41,7 @@ info() ->
 %% as follows:
 %% 1. Find the `default_index' key of the node message. If it is a binary,
 %%    it is assumed to be the name of a device, and we execute the resolution
-%%    `as` that ID.
+%%    with that device overlaid on the message.
 %% 2. Merge the base message with the default index message, favoring the default
 %%    index message's keys over those in the base message, unless the default
 %%    was a device name.
@@ -55,7 +55,7 @@ index(Msg, Req, Opts) ->
             hb_ao:resolve(
                 case is_map(DefaultIndex) of
                     true -> maps:merge(Msg, DefaultIndex);
-                    false -> {as, DefaultIndex, Msg}
+                    false -> Msg#{ <<"device">> => DefaultIndex }
                 end,
                 Req#{
                     <<"path">> =>

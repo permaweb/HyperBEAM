@@ -480,12 +480,12 @@ first_signed(Msg, Opts) when is_map(Msg) ->
 first_signed(_Msg, _Opts) ->
     not_found.
 
-%% @doc Return the child-wins view of a message through its `...' parents.
+%% @doc Return the direct-key-wins view of a message through its `...' chain.
 visible(Msg, Opts) when is_map(Msg) ->
     Inherited =
         case maps:find(<<"...">>, Msg) of
-            {ok, Parent} ->
-                visible(hb_cache:ensure_loaded(Parent, Opts), Opts);
+            {ok, Extension} ->
+                visible(hb_cache:ensure_loaded(Extension, Opts), Opts);
             error ->
                 #{}
         end,
@@ -506,7 +506,7 @@ visible(Msg, Opts) when is_map(Msg) ->
 visible(Msg, Opts) ->
     visible(hb_cache:ensure_loaded(Msg, Opts), Opts).
 
-%% @doc Find a key in the child-wins view of a message extension chain.
+%% @doc Find a key in the direct-key-wins view of a message extension chain.
 find_visible(Key, Msg, Opts) when is_map(Msg) ->
     case maps:find(Key, Msg) of
         {ok, unset} ->
@@ -515,10 +515,10 @@ find_visible(Key, Msg, Opts) when is_map(Msg) ->
             {ok, hb_cache:ensure_loaded(Value, Opts)};
         error ->
             case maps:find(<<"...">>, Msg) of
-                {ok, Parent} ->
+                {ok, Extension} ->
                     find_visible(
                         Key,
-                        hb_cache:ensure_loaded(Parent, Opts),
+                        hb_cache:ensure_loaded(Extension, Opts),
                         Opts
                     );
                 error ->

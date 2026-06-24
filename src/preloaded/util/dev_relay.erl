@@ -38,7 +38,7 @@ call(M1, RawM2, Opts) ->
             [
                 {RawM2, <<"relay-path">>},
                 {M1, <<"relay-path">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"path">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"path">>},
                 {M1, <<"path">>}
             ],
             Opts
@@ -47,7 +47,7 @@ call(M1, RawM2, Opts) ->
         hb_ao:get_first(
             [
                 {M1, <<"relay-device">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"relay-device">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"relay-device">>},
                 {RawM2, <<"relay-device">>}
             ],
             Opts
@@ -56,7 +56,7 @@ call(M1, RawM2, Opts) ->
         hb_ao:get_first(
             [
                 {M1, <<"peer">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"peer">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"peer">>},
                 {RawM2, <<"peer">>}
             ],
             Opts
@@ -65,7 +65,7 @@ call(M1, RawM2, Opts) ->
         hb_ao:get_first(
             [
                 {M1, <<"method">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"method">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"method">>},
                 {RawM2, <<"relay-method">>},
                 {M1, <<"relay-method">>},
                 {RawM2, <<"method">>}
@@ -77,7 +77,7 @@ call(M1, RawM2, Opts) ->
         hb_ao:get_first(
             [
                 {M1, <<"body">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"body">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"body">>},
                 {RawM2, <<"relay-body">>},
                 {M1, <<"relay-body">>},
                 {RawM2, <<"body">>}
@@ -107,7 +107,7 @@ call(M1, RawM2, Opts) ->
     Commit =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, BaseTarget}, <<"commit-request">>},
+                {BaseTarget#{ <<"device">> => <<"message@1.0">> }, <<"commit-request">>},
                 {RawM2, <<"relay-commit-request">>},
                 {M1, <<"relay-commit-request">>},
                 {RawM2, <<"commit-request">>},

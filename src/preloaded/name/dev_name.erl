@@ -154,11 +154,10 @@ maybe_append_named_message(ResolvedMsg, OldReq = [OldBase|ReqMsgsRest], Opts) ->
             end
     end.
 
-%% @doc Takes a message or resolution request (`as` or `resolve`) -- whether in
+%% @doc Takes a message or resolution request -- whether in
 %% the form of an ID, link, or loaded map -- and returns its ID.
 permissive_id(ID, _Opts) when ?IS_ID(ID) -> ID;
 permissive_id({link, ID, _LinkOpts}, _Opts) -> ID;
-permissive_id({as, _Device, Msg}, Opts) -> permissive_id(Msg, Opts);
 permissive_id(Msg, Opts) when is_map(Msg) -> hb_message:id(Msg, signed, Opts).
 
 %% @doc Takes a request-given host and the host value in the node message and

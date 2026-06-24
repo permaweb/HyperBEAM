@@ -68,7 +68,7 @@ route(Key, M1, M2, Opts) ->
     case maps:get(Key, Res, no_path_match) of
         no_path_match ->
             % Support materialized view in some JavaScript frameworks.
-            case hb_opts:get(manifest_404, fallback, Opts) of
+            case manifest_404(M2, Opts) of
                 error ->
                     ?event({manifest_404_error, {key, Key}}),
                     {error, not_found};
@@ -108,10 +108,21 @@ request(Base, Req, Opts) ->
                 {ok, Req#{ <<"body">> => [Loaded|Rest] }};
             {[], {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
+                {ok,
+                    Req#{
+                        <<"body">> =>
+                            [
+                                Casted,
+                                with_manifest_404(
+                                    #{ <<"path">> => <<"index">> },
+                                    Opts
+                                )
+                            ]
+                    }
+                };
             {_, {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted|Rest] }}
+                {ok, Req#{ <<"body">> => [Casted|with_manifest_404(Rest, Opts)] }}
         end
     else
         {error, not_found} ->
@@ -133,7 +144,6 @@ request(Base, Req, Opts) ->
 %% no other device is specified.
 load(Msg, _Opts) when is_map(Msg) -> {ok, Msg};
 load(List, _Opts) when is_list(List) -> skip;
-load({as, _, _}, _Opts) -> skip;
 load(ID, Opts) when ?IS_ID(ID) ->
     case hb_cache:read(ID, Opts) of
         {ok, Msg} -> load(Msg, Opts);
@@ -156,11 +166,31 @@ maybe_cast_manifest(Msg, Opts) ->
             case hb_maps:find(<<"content-type">>, Msg, Opts) of
                 {ok, <<"application/x.arweave-manifest", _/binary>>} ->
                     ?event(debug_maybe_cast_manifest, {manifest_casting, {msg, Msg}}),
-                    {ok, {as, <<"manifest@1.0">>, Msg}};
+                    {ok, Msg#{ <<"device">> => <<"manifest@1.0">> }};
                 _IgnoredContentType ->
                     ignored
             end
     end.
+
+manifest_404(Msg, Opts) ->
+    hb_maps:get(
+        <<"manifest-404">>,
+        Msg,
+        hb_opts:get(manifest_404, fallback, Opts),
+        Opts
+    ).
+
+with_manifest_404([], _Opts) ->
+    [];
+with_manifest_404([Msg|Rest], Opts) ->
+    [with_manifest_404(Msg, Opts)|Rest];
+with_manifest_404(Msg, Opts) when is_map(Msg) ->
+    case hb_opts:get(manifest_404, fallback, Opts) of
+        fallback -> Msg;
+        Mode -> Msg#{ <<"manifest-404">> => Mode }
+    end;
+with_manifest_404(Msg, _Opts) ->
+    Msg.
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.

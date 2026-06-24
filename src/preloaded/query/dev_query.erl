@@ -54,8 +54,8 @@ has_results(Base, Req, Opts) ->
     JSON =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, Base}, <<"body">>},
-                {{as, <<"message@1.0">>, Req}, <<"body">>}
+                {Base#{ <<"device">> => <<"message@1.0">> }, <<"body">>},
+                {Req#{ <<"device">> => <<"message@1.0">> }, <<"body">>}
             ],
             <<"{}">>,
             Opts

@@ -210,8 +210,6 @@ is_relevant_from_committers(Base, Request, Opts) ->
 %% of keys specified in the hook base.
 is_relevant_from_keys(_Base, ID, _Opts) when is_binary(ID) ->
     false;
-is_relevant_from_keys(Base, {as, _, Msg}, Opts) ->
-    is_relevant_from_keys(Base, Msg, Opts);
 is_relevant_from_keys(Base, {resolve, Msg}, Opts) ->
     is_relevant_from_keys(Base, Msg, Opts);
 is_relevant_from_keys(Base, Request, Opts) ->

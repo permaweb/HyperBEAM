@@ -121,7 +121,7 @@ commitment_wallets(ProcMsg, Opts) ->
 commitment_spec(Proc, Opts) ->
     hb_ao:get(
         <<"scheduler-commitment-spec">>,
-        {as, <<"message@1.0">>, Proc},
+        Proc#{ <<"device">> => <<"message@1.0">> },
         hb_opts:get(
             scheduler_default_commitment_spec,
             <<"ans104@1.0">>,

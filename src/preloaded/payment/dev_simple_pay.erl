@@ -73,8 +73,6 @@ estimate(_Base, EstimateReq, NodeMsg) ->
 
 %% @doc If the request is for the `apply@1.0' device, we should price the
 %% inner request in addition to the price of the outer request.
-apply_price([{as, Device, Msg} | Rest], NodeMsg) ->
-    apply_price([Msg#{ <<"device">> => Device } | Rest], NodeMsg);
 apply_price(
         [Req = #{ <<"device">> := <<"apply@1.0">> }, #{ <<"path">> := Path } | Rest],
         NodeMsg

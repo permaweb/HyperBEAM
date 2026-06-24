@@ -1641,8 +1641,8 @@ small_block_full_mode_test() ->
     L3Data =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, L3Header}, <<"data">>},
-                {{as, <<"message@1.0">>, L3Header}, <<"body">>}
+                {L3Header#{ <<"device">> => <<"message@1.0">> }, <<"data">>},
+                {L3Header#{ <<"device">> => <<"message@1.0">> }, <<"body">>}
             ],
             <<>>,
             Opts

@@ -18,8 +18,8 @@ handle(<<"keys">>, M1, _M2, Opts) ->
 handle(<<"set">>, M1, M2, Opts) ->
     hb_ao:raw(<<"message@1.0">>, <<"set">>, M1, M2, Opts);
 handle(_Key, M1, _M2, Opts) ->
-    Passes = hb_ao:get(<<"passes">>, {as, <<"message@1.0">>, M1}, 1, Opts),
-    Pass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, M1}, 1, Opts),
+    Passes = hb_ao:get(<<"passes">>, M1#{ <<"device">> => <<"message@1.0">> }, 1, Opts),
+    Pass = hb_ao:get(<<"pass">>, M1#{ <<"device">> => <<"message@1.0">> }, 1, Opts),
     case Pass < Passes of
         true -> {pass, M1};
         false -> {ok, M1}

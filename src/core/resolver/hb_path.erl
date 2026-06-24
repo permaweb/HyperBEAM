@@ -256,9 +256,7 @@ term_to_path_parts(List, Opts) when is_list(List) ->
     ));
 term_to_path_parts(Atom, _Opts) when is_atom(Atom) -> [Atom];
 term_to_path_parts(Integer, _Opts) when is_integer(Integer) ->
-    [hb_ao:normalize_key(Integer)];
-term_to_path_parts({as, DevName, Msgs}, _Opts) ->
-    [{as, hb_ao:normalize_key(DevName), Msgs}].
+    [hb_ao:normalize_key(Integer)].
 
 %% @doc Convert a path of any form to a binary.
 %% The final normalization -- collapse `//' runs, strip leading/trailing `/' --

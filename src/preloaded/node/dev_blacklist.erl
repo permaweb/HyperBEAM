@@ -208,7 +208,6 @@ trim_ascii_right(Bin, Len) ->
 collect_ids(Msg, Opts) -> lists:usort(collect_ids(Msg, [], Opts)).
 collect_ids(Bin, Acc, _Opts) when ?IS_ID(Bin) -> [hb_util:human_id(Bin) | Acc];
 collect_ids(Bin, Acc, _Opts) when is_binary(Bin) -> Acc;
-collect_ids({as, _, Msg}, Acc, Opts) -> collect_ids(Msg, Acc, Opts);
 collect_ids({link, Path, _}, Acc, _Opts) ->
     collect_path_id(Path, Acc);
 collect_ids(Msg, Acc, Opts) when is_map(Msg) ->

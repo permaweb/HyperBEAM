@@ -40,7 +40,7 @@
 push(Base, Req, Opts) ->
     Process = lib_process:as_process(Base, Opts),
     ?event(push, {push_base, {base, Process}, {req, Req}}, Opts),
-    case hb_ao:get(<<"slot">>, {as, <<"message@1.0">>, Req}, no_slot, Opts) of
+    case hb_ao:get(<<"slot">>, Req#{ <<"device">> => <<"message@1.0">> }, no_slot, Opts) of
         no_slot ->
             case schedule_initial_message(Process, Req, Opts) of
                 {ok, Assignment} ->
@@ -109,7 +109,7 @@ do_push(PrimaryProcess, Assignment, Opts) ->
     {Status, Result} =
         try
             hb_ao:resolve(
-                {as, <<"process@1.0">>, PrimaryProcess},
+                PrimaryProcess#{ <<"device">> => <<"process@1.0">> },
                     #{ <<"path">> => <<"compute/results">>, <<"slot">> => Slot },
                     Opts#{ <<"hashpath">> => ignore }
                 )
@@ -472,9 +472,12 @@ push_downstream_local(TargetID, NextSlotOnProc, Origin, Opts) ->
             N when is_integer(N), N > 0 ->
                 BaseReq#{ <<"max-depth">> => N - 1 }
         end,
-    hb_ao:resolve(
-        {as, <<"process@1.0">>, TargetID},
-        Req,
+    hb_ao:resolve_many(
+        [
+            TargetID,
+            #{ <<"device">> => <<"process@1.0">> },
+            Req
+        ],
         Opts#{ <<"cache-control">> => <<"always">> }
     ).
 
@@ -611,7 +614,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
                 };
             _Committers ->
                 hb_ao:resolve(
-                    {as, <<"process@1.0">>, TargetProcess},
+                    TargetProcess#{ <<"device">> => <<"process@1.0">> },
                     ScheduleReq,
                     Opts#{ <<"cache-control">> => <<"always">> }
                 )
@@ -1136,7 +1139,7 @@ test_push_prompts_encoding_change() ->
         hb_ao:resolve_many(
             [
                 <<"QQiMcAge5ZtxcUV7ruxpi16KYRE8UBP0GAAqCIJPXz0">>,
-                {as, <<"process@1.0">>, <<>>},
+                #{ <<"device">> => <<"process@1.0">> },
                 Msg
             ],
             Opts
@@ -1573,7 +1576,7 @@ test_nested_push_prompts_encoding_change() ->
         hb_ao:resolve_many(
             [
                 hb_message:id(Base, all, Opts),
-                {as, <<"process@1.0">>, <<>>},
+                #{ <<"device">> => <<"process@1.0">> },
                 Msg
             ],
             Opts

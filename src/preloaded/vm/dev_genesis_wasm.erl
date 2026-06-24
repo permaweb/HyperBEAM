@@ -90,7 +90,7 @@ do_compute(State, Req, Opts) ->
         {ok, State2} ?=
             hb_ao:resolve(
                 State,
-                {as, <<"dedup@1.0">>, Req},
+                Req#{ <<"device">> => <<"dedup@1.0">> },
                 Opts
             ),
         ?event(dedup_short,
@@ -104,7 +104,7 @@ do_compute(State, Req, Opts) ->
         {ok, State3} ?=
             hb_ao:resolve(
                 State2,
-                {as, <<"delegated-compute@1.0">>, Req},
+                Req#{ <<"device">> => <<"delegated-compute@1.0">> },
                 Opts
             ),
         {ok, State4} ?=

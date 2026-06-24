@@ -87,8 +87,8 @@ as(RawBase, Req, Opts) ->
     Key = 
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, Req}, <<"as">>},
-                {{as, <<"message@1.0">>, Req}, <<"as-device">>}
+                {Req#{ <<"device">> => <<"message@1.0">> }, <<"as">>},
+                {Req#{ <<"device">> => <<"message@1.0">> }, <<"as-device">>}
             ],
             <<"execution">>,
             Opts
@@ -255,8 +255,8 @@ compute(Base, Req, Opts) ->
 target_slot(Req, Opts) ->
     hb_ao:get_first(
         [
-            {{as, <<"message@1.0">>, Req}, <<"compute">>},
-            {{as, <<"message@1.0">>, Req}, <<"slot">>}
+            {Req#{ <<"device">> => <<"message@1.0">> }, <<"compute">>},
+            {Req#{ <<"device">> => <<"message@1.0">> }, <<"slot">>}
         ],
         Opts
     ).

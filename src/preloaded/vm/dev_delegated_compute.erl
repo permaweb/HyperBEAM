@@ -56,7 +56,7 @@ compute(Base, Req, Opts) ->
     OutputPrefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),

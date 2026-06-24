@@ -38,7 +38,7 @@ install(Base, State, Opts) ->
     DevSandboxDef =
         hb_ao:get(
             <<"device-sandbox">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             false,
             Opts
         ),
@@ -156,9 +156,11 @@ get([Key, Base], ExecState, ExecOpts) ->
     ?event({ao_core_get_result, {result, NewRes}}),
     {[NewRes], ExecState}.
 
-%% @doc Converts any `as' terms from Lua to their HyperBEAM equivalents.
-convert_as([<<"as">>, Device, RawMsg]) ->
-    {as, Device, RawMsg};
+%% @doc Convert legacy Lua `as' lists into normal device overlays.
+convert_as([<<"as">>, Device, RawMsg]) when is_map(RawMsg) ->
+    RawMsg#{ <<"device">> => Device };
+convert_as([<<"as">>, Device, Path]) ->
+    #{ <<"device">> => Device, <<"path">> => Path };
 convert_as(Other) ->
     Other.
 

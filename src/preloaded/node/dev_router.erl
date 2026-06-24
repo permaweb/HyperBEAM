@@ -422,7 +422,7 @@ match(Base, Req, Opts) ->
     Match =
         match_routes(
             Req#{ <<"path">> => TargetPath },
-            hb_ao:get(<<"routes">>, {as, <<"message@1.0">>, Base}, [], Opts),
+            hb_ao:get(<<"routes">>, Base#{ <<"device">> => <<"message@1.0">> }, [], Opts),
             Opts
         ),
     case Match of

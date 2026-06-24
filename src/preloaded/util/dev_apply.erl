@@ -110,8 +110,8 @@ find_path(Path, Base, Request, Opts) ->
     Res =
         hb_ao:get_first(
             [
-                {{as, <<"message@1.0">>, Request}, Path},
-                {{as, <<"message@1.0">>, Base}, Path}
+                {Request#{ <<"device">> => <<"message@1.0">> }, Path},
+                {Base#{ <<"device">> => <<"message@1.0">> }, Path}
             ],
             path_not_found,
             Opts
@@ -124,8 +124,8 @@ find_path(Path, Base, Request, Opts) ->
 %% @doc Find the value of the source key, supporting `base:' and `request:'
 %% prefixes.
 find_key(Path, Base, Request, Opts) ->
-    BaseAs = {as, <<"message@1.0">>, Base},
-    RequestAs = {as, <<"message@1.0">>, Request},
+    BaseAs = Base#{ <<"device">> => <<"message@1.0">> },
+    RequestAs = Request#{ <<"device">> => <<"message@1.0">> },
     MaybeResolve =
         case hb_path:term_to_path_parts(Path) of
             [BinKey|RestKeys] ->

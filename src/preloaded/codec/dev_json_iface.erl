@@ -148,14 +148,14 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     Last =
         hb_ao:get(
             <<"anchor">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            MsgWithoutCommitments#{ <<"device">> => <<"message@1.0">> },
             <<>>,
             Opts
         ),
     DataBytes =
         hb_ao:get(
             <<"data">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            MsgWithoutCommitments#{ <<"device">> => <<"message@1.0">> },
             <<>>,
             Opts
         ),
@@ -167,7 +167,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     Target =
         hb_ao:get(
             <<"target">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            MsgWithoutCommitments#{ <<"device">> => <<"message@1.0">> },
             <<>>,
             Opts
         ),
@@ -175,7 +175,7 @@ message_to_json_struct(RawMsg, Features, Opts) ->
     From =
         hb_ao:get(
             <<"from-process">>,
-            {as, <<"message@1.0">>, MsgWithoutCommitments},
+            MsgWithoutCommitments#{ <<"device">> => <<"message@1.0">> },
             hb_util:encode(Owner),
             Opts
         ),
@@ -321,7 +321,7 @@ results(M1, M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -378,7 +378,7 @@ env_read(M1, _M2, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, M1},
+            M1#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
@@ -396,7 +396,7 @@ env_write(ProcessStr, MsgStr, Base, _Req, Opts) ->
     Prefix =
         hb_ao:get(
             <<"output-prefix">>,
-            {as, <<"message@1.0">>, Base},
+            Base#{ <<"device">> => <<"message@1.0">> },
             <<"">>,
             Opts
         ),
