@@ -395,3 +395,14 @@
   eunit --module=hb_http` passed with 14 tests; `rebar3 eunit
   --module=hb_cache_control` passed with 14 tests; and `rebar3 eunit
   --module=hb_ao_test_vectors` passed with 196 tests.
+- Removed or narrowed the first audit batch of non-core reward hacks. Ordinary
+  `manifest@1.0` route hits are cacheable again; only invalid-path fallback
+  results stay private `no-store` because `manifest_404` is local node policy
+  outside the AO cache key. Restored `dev_bundler:invalid_item_test_parallel/0`
+  to exercise both the HTTP/server ingress path and the direct device contract.
+  Removed the `ans104-trust-gql` fallback from `ans104@1.0` verification so
+  GraphQL trust markers no longer substitute for cryptographic item
+  verification. Validation: `git diff --check` passed; `rebar3 compile`
+  passed; `rebar3 device test --module dev_manifest` passed with 6 tests;
+  `rebar3 device test --module dev_bundler` passed with 27 tests; and
+  `rebar3 device test --module dev_ans104` passed with 24 tests.

@@ -1,26 +1,19 @@
-# ANS-104 Trusted GraphQL Commitments Under Paranoid Verification
+# ANS-104 GraphQL Trust Is Not Verification
 
-## Issue
+## Superseded Decision
 
-Gateway GraphQL reads may synthesize ANS-104-shaped messages from data the node
-is configured to trust with `ans104-trust-gql`. These messages can carry
-`trusted-keys` and signature fields, but they may not have enough raw bundle
-material for `ar_bundles:verify_item/1` to prove the item cryptographically.
+The previous decision allowed `dev_ans104:verify/3` to return true when
+`ans104-trust-gql` was enabled and GraphQL trust markers were present, even if
+`ar_bundles:verify_item/1` failed. Morning review treats that as papering over
+the real issue.
 
-Under paranoid cache writes, rejecting those trusted GraphQL commitments changed
-the expected remote commitment identity for real gateway-backed manifest asset
-tests.
+GraphQL trust may be an input-selection or gateway policy, but it is not a
+cryptographic ANS-104 verification result. A message that cannot be verified as
+an ANS-104 item should not pass `dev_ans104:verify/3` because of trust markers.
 
-## Options
+## Current Rule
 
-- Suppress GraphQL trust under paranoid mode. This changes gateway semantics
-  and loses expected remote commitments.
-- Treat every failed ANS-104 verification as trusted. This is too broad.
-- Preserve the existing trust policy only when `ans104-trust-gql` is enabled
-  and the request carries the GraphQL trust markers.
-
-## Decision
-
-Use the third option. `dev_ans104:verify/3` still prefers
-`ar_bundles:verify_item/1`; it only accepts the trusted path when node opts
-enable GraphQL trust and the request has both `trusted-keys` and `signature`.
+`dev_ans104:verify/3` returns the result of `ar_bundles:verify_item/1`. If
+trusted GraphQL data lacks enough material to verify, the caller must avoid
+presenting it as a verified ANS-104 commitment or must resolve the missing raw
+material.

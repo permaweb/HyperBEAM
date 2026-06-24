@@ -1,21 +1,18 @@
-# Bundler Invalid Item Under Cache-Write Paranoia
+# Bundler Invalid Item Must Exercise HTTP
 
-## Issue
+## Superseded Decision
 
-`dev_bundler:invalid_item_test_parallel/0` intentionally tampers with a signed
-ANS-104 item, then expects `bundler@1.0` to reject it with
-`signature-verification-failed`.
+The previous decision narrowed `dev_bundler:invalid_item_test_parallel/0` to a
+direct device call so cache-write paranoia would not see an intentionally
+invalid signed body before `bundler@1.0` handled it. Morning review rejected
+that as reduced integration coverage.
 
-With `HB_PARANOID=cache_read,cache_write`, sending that deliberately invalid
-signed message as a nested HTTP request body can fail before the request reaches
-`bundler@1.0`: lower-level link normalization/cache writes refuse to persist the
-invalid signed body.
+Invalid signed input should be rejected by the real ingress path with a client
+error, or by the bundler device when the request reaches it. The test must keep
+both surfaces covered: the HTTP/server path and the direct device contract.
 
-## Decision
+## Current Rule
 
-Keep the test focused on the device contract. Build the invalid structured item
-in memory with linkification disabled, call `dev_bundler:item/3` directly, and
-assert the device returns the intended `400 invalid-item` response.
-
-Do not weaken paranoid cache verification and do not add a special cache-write
-escape hatch for invalid signed messages.
+Keep the invalid-item HTTP integration assertion. Do not weaken paranoid cache
+verification and do not replace the integration path with only a direct device
+call.

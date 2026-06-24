@@ -1566,30 +1566,49 @@ independent_task_retry_counts_test_parallel() ->
     end.
 
 invalid_item_test_parallel() ->
-    ClientOpts = #{ <<"linkify-mode">> => false },
-    TestOpts = #{
-        <<"priv-wallet">> => ar_wallet:new(),
-        <<"store">> => hb_test_utils:test_store()
-    },
-    Item = ar_bundles:sign_item(
-        #tx{
-            data = <<"testdata">>,
-            tags = [{<<"tag1">>, <<"value1">>}]
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        ClientOpts = #{},
+        TestOpts = NodeOpts#{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store()
         },
-        ar_wallet:new()
-    ),
-    TamperedItem = Item#tx{data = <<"tampereddata">>},
-    StructuredItem = hb_message:convert(
-        TamperedItem,
-        <<"structured@1.0">>,
-        <<"ans104@1.0">>,
-        ClientOpts
-    ),
-    Result = dev_bundler:item(#{}, StructuredItem, TestOpts),
-    ?assertMatch({error, #{
-        <<"status">> := 400,
-        <<"error">> := <<"invalid-item">>,
-        <<"details">> := <<"signature-verification-failed">>}}, Result).
+        Node = hb_http_server:start_node(TestOpts#{
+            <<"debug-print">> => false
+        }),
+        Item = ar_bundles:sign_item(
+            #tx{
+                data = <<"testdata">>,
+                tags = [{<<"tag1">>, <<"value1">>}]
+            },
+            ar_wallet:new()
+        ),
+        TamperedItem = Item#tx{data = <<"tampereddata">>},
+        StructuredItem = hb_message:convert(
+            TamperedItem,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            TestOpts
+        ),
+        PostResult = post_data_item(Node, TamperedItem, ClientOpts),
+        ?assertMatch({error, #{
+            <<"status">> := 400,
+            <<"error">> := <<"invalid-item">>,
+            <<"details">> := <<"signature-verification-failed">>}}, PostResult),
+        DirectResult = dev_bundler:item(#{}, StructuredItem, TestOpts),
+        ?assertMatch({error, #{
+            <<"status">> := 400,
+            <<"error">> := <<"invalid-item">>,
+            <<"details">> := <<"signature-verification-failed">>}}, DirectResult),
+        ok
+    after
+        stop_test_servers(ServerHandle, NodeOpts)
+    end.
 
 cache_write_failure_test_parallel() ->
     Wallet = ar_wallet:new(),

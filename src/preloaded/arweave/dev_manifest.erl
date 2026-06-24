@@ -81,12 +81,8 @@ route(Key, M1, M2, Opts) ->
             end;
         Result ->
             ?event({manifest_lookup_success, {key, Key}, {result, Result}}),
-            case is_map(Result) of
-                true -> {ok, no_store(Result, Opts)};
-                false ->
-                    try {ok, hb_cache:ensure_loaded(Result, Opts)}
-                    catch _:_:_ -> {error, not_found}
-                    end
+            try {ok, hb_cache:ensure_loaded(Result, Opts)}
+            catch _:_:_ -> {error, not_found}
             end
     end.
 
