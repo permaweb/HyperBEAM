@@ -293,3 +293,7 @@
   whole-message force-load unnecessary. Validation: `git diff --check` passed;
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module
   dev_json_iface` passed with 2 tests.
+- Latest-tip acceptance after the cache-control and json-iface minimization
+  commits is green: on `224520782`, `HB_PARANOID=cache_read,cache_write
+  rebar3 eunit-all` passed end-to-end with `All 3488 tests passed.` The
+  previously noisy router performance assertion passed inside this full run.
