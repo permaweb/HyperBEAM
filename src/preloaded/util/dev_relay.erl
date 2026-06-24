@@ -36,10 +36,10 @@ call(M1, RawM2, Opts) ->
     RelayPath =
         hb_ao:get_first(
             [
-                {M1, <<"path">>},
-                {{as, <<"message@1.0">>, BaseTarget}, <<"path">>},
                 {RawM2, <<"relay-path">>},
-                {M1, <<"relay-path">>}
+                {M1, <<"relay-path">>},
+                {{as, <<"message@1.0">>, BaseTarget}, <<"path">>},
+                {M1, <<"path">>}
             ],
             Opts
         ),

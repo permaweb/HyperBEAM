@@ -95,7 +95,7 @@ find_target(Base, RawReq, Opts) ->
             Target ->
                 hb_maps:get(Target, RawReq, RawReq, Opts)
         end,
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
+    {ok, OnlyCommitted} = hb_message:with_only_signed(Req, Opts),
     OnlyCommitted.
 
 %% @doc Generate a new scheduler location record and register it. We both send 
@@ -112,7 +112,7 @@ node(Base, RawReq, RawOpts) ->
         end,
     Req = find_target(Base, RawReq, Opts),
     % Ensure that the request is signed by the operator.
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Req, Opts),
+    {ok, OnlyCommitted} = hb_message:with_only_signed(Req, Opts),
     ?event(
         location,
         {scheduler_location_registration_request, OnlyCommitted},

@@ -208,7 +208,8 @@ wrap_store_result(OtherResult) ->
 %% @returns true if the request is from an authorized writer, false
 %%          otherwise.
 is_trusted_writer(Req, Opts) ->
-    Signers = hb_message:signers(Req, Opts),
+    {ok, SignedReq} = hb_message:with_only_signed(Req, Opts),
+    Signers = hb_message:signers(SignedReq, Opts),
     ?event(dev_cache, {is_trusted_writer, {signers, Signers}, {req, Req}}),
     CacheWriters = hb_opts:get(cache_writers, [], Opts),
     ?event(dev_cache, {is_trusted_writer, {cache_writers, CacheWriters}}),
@@ -249,7 +250,7 @@ setup_test_env() ->
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     ?event(dev_cache, {setup_test_env, {address, Address}}),
     Node = hb_http_server:start_node(#{ 
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"cache-control">> => [<<"no-cache">>],
         <<"store">> => LocalStore,
         <<"cache-writers">> => [
 			Address,
@@ -259,7 +260,7 @@ setup_test_env() ->
     }),
     ?event(dev_cache, {setup_test_env, {node_started, Node}}),
     TestOpts = #{
-        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"cache-control">> => [<<"no-cache">>],
         <<"store-all-signed">> => false,
         <<"store">> => [
             #{

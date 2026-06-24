@@ -48,11 +48,14 @@ once(_Base, Req, Opts) ->
 			hb_name:register(Name, Pid),
 			{
                 ok,
-                #{
-                    <<"status">> => 200,
-                    <<"cache-control">> => [<<"no-store">>],
-                    <<"body">> => ReqMsgID
-                }
+                non_cacheable(
+                    #{
+                        <<"status">> => 200,
+                        <<"cache-control">> => [<<"no-store">>],
+                        <<"body">> => ReqMsgID
+                    },
+                    Opts
+                )
             }
 	end.
 
@@ -119,11 +122,14 @@ every(_Base, Req, Opts) ->
 				hb_name:register(Name, Pid),
 				{
                     ok,
-                    #{
-                        <<"status">> => 200,
-                        <<"cache-control">> => [<<"no-store">>],
-                        <<"body">> => ReqMsgID
-                    }
+                    non_cacheable(
+                        #{
+                            <<"status">> => 200,
+                            <<"cache-control">> => [<<"no-store">>],
+                            <<"body">> => ReqMsgID
+                        },
+                        Opts
+                    )
                 }
 			catch
 				_:{invalid_time_unit, Unit} ->
@@ -147,10 +153,19 @@ stop(_Base, Req, Opts) ->
 					?event({cron_stopping_task, {task_id, TaskID}, {pid, Pid}}),
 					exit(Pid, kill),
 					hb_name:unregister(Name),
-					{ok, #{<<"status">> => 200, <<"body">> => #{
-						<<"message">> => <<"Task stopped successfully">>,
-						<<"task_id">> => TaskID
-					}}};
+					{ok,
+                        non_cacheable(
+                            #{
+                                <<"status">> => 200,
+                                <<"cache-control">> => [<<"no-store">>],
+                                <<"body">> => #{
+                                    <<"message">> => <<"Task stopped successfully">>,
+                                    <<"task_id">> => TaskID
+                                }
+                            },
+                            Opts
+                        )
+                    };
 				undefined ->
 					{error, <<"Task not found.">>};
 				Error ->
@@ -162,6 +177,13 @@ stop(_Base, Req, Opts) ->
                     }}
 			end
 	end.
+
+non_cacheable(Msg, Opts) ->
+    hb_private:set(
+        Msg,
+        #{ <<"cache-control">> => [<<"no-store">>] },
+        Opts
+    ).
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
     Req1 = Req#{<<"path">> => CronPath},

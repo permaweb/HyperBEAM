@@ -104,3 +104,26 @@
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_ans104`
   passed with 24 tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
   --module=hb_ao_test_vectors` passed with 191 tests.
+- Closed the next paranoid failure cluster with narrowly scoped semantics:
+  wildcard carry in `hb_types` now preserves unmatched direct keys and the lazy
+  `...` parent without force-enumerating inherited keys; relay now prefers the
+  current explicit `relay-path` over an inherited target path; cache-writer,
+  meta, and location authorization paths strip back to signed ancestors before
+  inspecting signers; `cron@1.0` and mutable `meta@1.0/info` responses set
+  private `no-store`; and the invalid bundler item test now exercises the
+  device contract directly so cache-write paranoia is not asked to persist an
+  intentionally invalid signed body. Decision recorded in
+  `decisions/bundler-invalid-item-paranoid.md`. Validation:
+  `rebar3 eunit --module=hb_types` passed with 5 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_examples`
+  passed with 6 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_bundler` passed with 27 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_cache`
+  passed with 2 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_cron` passed with 4 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  dev_local_name` passed with 5 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_location`
+  passed with 3 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_meta` passed with 11 tests; `rebar3 compile` passed; `git diff
+  --check` passed.

@@ -27,7 +27,8 @@ info(_) -> #{ exports => [<<"info">>, <<"build">>, <<"is-operator">>] }.
 %% @doc Utility function for determining if a request is from the `operator' of
 %% the node.
 is_operator(Request, NodeMsg) ->
-    RequestSigners = hb_message:signers(Request, NodeMsg),
+    {ok, SignedRequest} = hb_message:with_only_signed(Request, NodeMsg),
+    RequestSigners = hb_message:signers(SignedRequest, NodeMsg),
     Operator =
         hb_opts:get(
             operator,
@@ -138,13 +139,27 @@ info(_, Request, NodeMsg) ->
                         NodeMsg
                     );
                 false ->
-                    update_node_message(Request, NodeMsg)
+                    non_cacheable(update_node_message(Request, NodeMsg), NodeMsg)
             end;
         _ ->
             ?event({get_config_req, Request, NodeMsg}),
             DynamicKeys = add_dynamic_keys(NodeMsg),
-            embed_status({ok, filter_node_msg(DynamicKeys, NodeMsg)}, NodeMsg)
+            non_cacheable(
+                embed_status({ok, filter_node_msg(DynamicKeys, NodeMsg)}, NodeMsg),
+                NodeMsg
+            )
     end.
+
+non_cacheable({ok, Msg}, Opts) ->
+    {ok,
+        hb_private:set(
+            Msg,
+            #{ <<"cache-control">> => [<<"no-store">>] },
+            Opts
+        )
+    };
+non_cacheable(Other, _Opts) ->
+    Other.
 
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
@@ -424,7 +439,8 @@ is(Request, NodeMsg) ->
     is(operator, Request, NodeMsg).
 is(admin, Request, NodeMsg) ->
     % Does the caller have the right to change the node message?
-    RequestSigners = hb_message:signers(Request, NodeMsg),
+    {ok, SignedRequest} = hb_message:with_only_signed(Request, NodeMsg),
+    RequestSigners = hb_message:signers(SignedRequest, NodeMsg),
     ValidOperator =
         hb_util:bin(
             hb_opts:get(
@@ -454,7 +470,8 @@ is(operator, Req, NodeMsg) ->
     % Get the operator from the node message
     Operator = hb_opts:get(operator, unclaimed, NodeMsg),
     % Get the request signers
-    RequestSigners = hb_message:signers(Req, NodeMsg),
+    {ok, SignedReq} = hb_message:with_only_signed(Req, NodeMsg),
+    RequestSigners = hb_message:signers(SignedReq, NodeMsg),
     % Ensure the operator is present in the request
     lists:member(Operator, RequestSigners);
 is(initiator, Request, NodeMsg) ->
@@ -467,9 +484,13 @@ is(initiator, Request, NodeMsg) ->
             false;
         [InitializationRequest | _] ->
             % Extract signature from first entry
-            InitializationRequestSigners = hb_message:signers(InitializationRequest, NodeMsg),
+            {ok, SignedInitializationRequest} =
+                hb_message:with_only_signed(InitializationRequest, NodeMsg),
+            InitializationRequestSigners =
+                hb_message:signers(SignedInitializationRequest, NodeMsg),
             % Get request signers
-            RequestSigners = hb_message:signers(Request, NodeMsg),
+            {ok, SignedRequest} = hb_message:with_only_signed(Request, NodeMsg),
+            RequestSigners = hb_message:signers(SignedRequest, NodeMsg),
             % Ensure all signers of the initalization request are present in the
             % request.
             AllSignersPresent =

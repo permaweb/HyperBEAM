@@ -444,7 +444,7 @@ apply_schema(
             Explicit;
         #{ <<"presence">> := optional } ->
             maps:merge(
-                maps:without(maps:keys(Keys), hb_message:visible(Message, Opts)),
+                maps:without(maps:keys(Keys), Message),
                 Explicit
             );
         #{ <<"presence">> := required } ->
@@ -741,6 +741,7 @@ extension_wildcard_carry_test() ->
         #{
             <<"b">> => 2,
             <<"...">> =>
+                Parent =
                 #{
                     <<"a">> => 1,
                     <<"b">> => 1,
@@ -748,6 +749,6 @@ extension_wildcard_carry_test() ->
                 }
         },
     ?assertEqual(
-        #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 1 },
+        #{ <<"a">> => 1, <<"b">> => 2, <<"...">> => Parent },
         apply_schema(Schema, Msg, #{})
     ).
