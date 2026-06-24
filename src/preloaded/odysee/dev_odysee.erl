@@ -138,7 +138,7 @@ source(Base, Req, Opts) ->
                 with_lbry_stores(Opts)
             ) of
                 {ok, Msg} ->
-                    {ok, Msg};
+                    verify_source(Key, Msg, Opts);
                 {error, Reason} ->
                     ?event(odysee_device,
                         {source_read_failed, {key, Key}, {reason, Reason}},
@@ -155,6 +155,22 @@ source(Base, Req, Opts) ->
         {error, Reason} ->
             ?event(odysee_device, {source_key_rejected, {reason, Reason}}, Opts),
             error_response(Reason)
+    end.
+
+%% Node A must verify after loading from node B: the cache read may have
+%% been satisfied by an untrusted peer store, so the loaded object's native
+%% commitment is re-checked locally before it is served. Fail closed -- an
+%% object that does not verify is never returned.
+verify_source(Key, Msg, Opts) ->
+    case hb_message:verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts) of
+        true ->
+            {ok, Msg};
+        false ->
+            ?event(odysee_device,
+                {source_unverified, {key, Key}},
+                Opts
+            ),
+            error_response(unverified_source_object)
     end.
 
 %% @doc Make `source' self-contained: append the device's own LBRY stores
@@ -840,6 +856,7 @@ status_for({invalid_attestation, _, _}) -> 502;
 status_for({channel_binding_mismatch, _, _}) -> 502;
 status_for(invalid_claim_signature) -> 502;
 status_for(native_commitment_failure) -> 502;
+status_for(unverified_source_object) -> 502;
 status_for(_) -> 500.
 
 error_term(Reason) when is_atom(Reason) ->

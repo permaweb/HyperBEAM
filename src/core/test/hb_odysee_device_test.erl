@@ -521,6 +521,53 @@ source_route_ignores_accept_for_internal_read_test() ->
     ?assertEqual(Raw, maps:get(<<"raw">>, Source)),
     ?assertEqual(false, maps:is_key(<<"body">>, Source)).
 
+%% Node A must verify after loading from node B: an object placed under a
+%% valid source key but tampered so its native commitment no longer verifies
+%% must be REJECTED, not served. `source' fails closed with a 502 rather than
+%% returning the unverified object.
+source_route_rejects_tampered_object_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    Tampered = Msg#{ <<"raw">> => <<Raw/binary, 0>> },
+    ?assertEqual(
+        false,
+        hb_message:verify(Tampered, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => uppercase(TxID) },
+            source_test_opts(TxID, Tampered)
+        ),
+    ?assertEqual(502, maps:get(<<"status">>, Response)),
+    ?assertEqual(
+        <<"unverified_source_object">>,
+        maps:get(<<"error">>, Response)
+    ).
+
+%% A valid committed object placed under a source key still verifies and is
+%% returned: the new verify-on-read gate does not break the happy path.
+source_route_returns_verified_object_test() ->
+    Raw = binary:decode_hex(hb_lbry_tx:task0_tx_hex()),
+    {ok, Msg} = hb_lbry_commitment:transaction_message(Raw),
+    TxID = maps:get(<<"txid">>, Msg),
+    {ok, Source} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"source">>,
+            #{},
+            #{ <<"id">> => uppercase(TxID) },
+            source_test_opts(TxID, Msg)
+        ),
+    ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+    ?assertEqual(
+        true,
+        hb_message:verify(Source, #{ <<"commitment-ids">> => <<"all">> }, #{})
+    ).
+
 %% The device is self-contained: with NO `store' configured on the node, a
 %% `source' read still resolves a native, commitment-bearing transaction by
 %% supplying the LBRY stores itself (built via `hb_lbry_bridge'). This is the

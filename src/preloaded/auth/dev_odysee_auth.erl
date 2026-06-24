@@ -4,8 +4,17 @@
 %%% commitment scheme interface (`commit'/`verify') used by `~secret@1.0' to
 %%% manage the wallet that is bound to a derived secret.
 %%%
-%%% The device derives a DETERMINISTIC secret from a user's Odysee session token,
-%%% read from the `cookie' header (falling back to the `authorization' header).
+%%% The device derives a DETERMINISTIC secret from a user's Odysee session token.
+%%% The token is sourced from whichever of the following is present, in order:
+%%% the raw `cookie' header, the raw `authorization' header, or the parsed cookie
+%%% map that the HTTP layer stores under `priv/cookie'. The last source is the one
+%%% that arrives over real HTTP: `hb_http' converts an inbound `cookie' header
+%%% through the `~cookie@1.0' codec (`from'), stripping the raw key and storing
+%%% the parsed cookie under `priv/cookie' BEFORE the `~auth-hook@1.0' request hook
+%%% runs. Both the raw header and the parsed map are canonicalised to the SAME
+%%% deterministic token string, so the same Odysee session yields the same secret
+%%% regardless of which path delivered it.
+%%%
 %%% The same token always yields the same secret, such that requests carrying the
 %%% same Odysee session are consistently signed by the same node-hosted wallet.
 %%% This mirrors the `~http-auth@1.0' device's PBKDF2 derivation, but sources its
@@ -26,9 +35,9 @@
 %%%               `64'.
 %%% </pre>
 %%%
-%%% If no Odysee token is present in either the `cookie' or `authorization'
-%%% header, the `generate' key returns an error so the `~auth-hook@1.0' device
-%%% leaves the request uncommitted (pass-through).
+%%% If no Odysee token is present in the `cookie' header, the `authorization'
+%%% header, or the parsed `priv/cookie' map, the `generate' key returns an error
+%%% so the `~auth-hook@1.0' device leaves the request uncommitted (pass-through).
 -module(dev_odysee_auth).
 -implements(<<"odysee-auth@1.0">>).
 -export([commit/3, verify/3]).
@@ -110,22 +119,107 @@ generate(_Msg, Req, Opts) ->
             }
     end.
 
-%% @doc Read the Odysee token from the request. We first look in the `cookie'
-%% header, falling back to the `authorization' header. Either source is used
-%% verbatim as the password for the PBKDF2 derivation, so that the same token
-%% always yields the same secret.
+%% @doc Read the Odysee token from the request. Sources are tried in order: the
+%% raw `cookie' header, the raw `authorization' header, then the parsed cookie
+%% map stored under `priv/cookie' by the HTTP layer. The raw `cookie' header and
+%% the parsed `priv/cookie' map are both canonicalised through `canonical_token/2'
+%% to the SAME deterministic token string, so a given Odysee session yields the
+%% same derived secret whether it arrived in-process (raw header) or over real
+%% HTTP (parsed into `priv/cookie' before the hook ran). The `authorization'
+%% header is used verbatim, as it is never reshaped by the cookie codec.
 token(Req, Opts) ->
     case hb_maps:get(<<"cookie">>, Req, undefined, Opts) of
         Cookie when is_binary(Cookie), Cookie =/= <<>> ->
-            {ok, Cookie};
+            canonical_token(Cookie, Opts);
         _ ->
             case hb_maps:get(<<"authorization">>, Req, undefined, Opts) of
                 Auth when is_binary(Auth), Auth =/= <<>> ->
                     {ok, Auth};
                 _ ->
-                    {error, no_token}
+                    priv_cookie_token(Req, Opts)
             end
     end.
+
+%% @doc Read the parsed cookie map that the HTTP layer stores under
+%% `priv/cookie'. This is the form the token takes over real HTTP: `hb_http'
+%% runs the inbound `cookie' header through the `~cookie@1.0' codec before the
+%% request hook executes, leaving a parsed map (e.g.
+%% `#{ <<"auth_token">> => <<...>> }') rather than the raw header. We canonicalise
+%% that map to the same token string the raw-cookie path produces.
+priv_cookie_token(Req, Opts) ->
+    case hb_private:get(<<"cookie">>, Req, #{}, Opts) of
+        ParsedCookie when is_map(ParsedCookie), map_size(ParsedCookie) > 0 ->
+            {ok, canonical_cookie(ParsedCookie, Opts)};
+        _ ->
+            {error, no_token}
+    end.
+
+%% @doc Canonicalise a raw `cookie' header binary to a deterministic token. We
+%% parse the `key=value; key2=value2' header into the same map form the HTTP layer
+%% stores under `priv/cookie' (the `~cookie@1.0' codec's `from_cookie' parse:
+%% split on `;', then on the first `=', trimming and URL-decoding values), then
+%% serialise it canonically. This makes the raw-header path and the parsed
+%% `priv/cookie' path converge on an identical token for the same Odysee session.
+%% The parse is done inline with core utilities rather than via the `~cookie@1.0'
+%% device, as device-to-device source calls are not available from within the
+%% build-signed preloaded device context.
+canonical_token(Cookie, Opts) ->
+    case parse_cookie_header(Cookie) of
+        ParsedCookie when map_size(ParsedCookie) > 0 ->
+            {ok, canonical_cookie(ParsedCookie, Opts)};
+        _ ->
+            {ok, Cookie}
+    end.
+
+%% @doc Parse a raw `cookie' header binary into a key-value map, mirroring the
+%% `~cookie@1.0' codec's `from_cookie' parse so that a header and its parsed
+%% `priv/cookie' form canonicalise identically. Malformed pairs (no `=') are
+%% skipped, leaving the raw header to be used verbatim if nothing parses.
+parse_cookie_header(Cookie) ->
+    lists:foldl(
+        fun(Pair, Acc) ->
+            case binary:split(Pair, <<"=">>) of
+                [RawKey, RawValue] ->
+                    Key = trim(RawKey),
+                    Value = hb_escape:decode(trim(RawValue)),
+                    Acc#{ Key => Value };
+                _ ->
+                    Acc
+            end
+        end,
+        #{},
+        binary:split(Cookie, <<";">>, [global])
+    ).
+
+%% @doc Trim leading and trailing ASCII whitespace from a binary.
+trim(Bin) ->
+    hb_util:bin(string:trim(hb_util:list(Bin))).
+
+%% @doc Serialise a parsed cookie map to a single deterministic token string. The
+%% map's entries are sorted by key and rendered as `key=value' pairs joined by
+%% `;', so the same set of cookie entries always produces byte-identical output
+%% regardless of map ordering. A cookie value may itself be a map (when it carried
+%% `set-cookie' attributes/flags), in which case we take its `value' field, so the
+%% token depends only on the session value and not on transport attributes.
+canonical_cookie(ParsedCookie, Opts) ->
+    Pairs = lists:keysort(1, hb_maps:to_list(ParsedCookie, Opts)),
+    Components =
+        [
+            <<(hb_util:bin(Key))/binary, "=", (cookie_value(Value))/binary>>
+        ||
+            {Key, Value} <- Pairs
+        ],
+    hb_util:bin(
+        lists:join(<<";">>, Components)
+    ).
+
+%% @doc Extract the canonical value of a single parsed cookie entry. When the
+%% entry is a map (carrying `set-cookie' attributes/flags), only its `value' field
+%% contributes to the token; a bare binary value is used as-is.
+cookie_value(Value) when is_map(Value) ->
+    hb_util:bin(hb_maps:get(<<"value">>, Value, <<>>));
+cookie_value(Value) ->
+    hb_util:bin(Value).
 
 %% @doc Derive a key from the Odysee token using the PBKDF2 algorithm and user
 %% specified parameters, mirroring `~http-auth@1.0'.

@@ -141,6 +141,50 @@ authorization_fallback_test() ->
     ?assert(is_binary(Key1)),
     ?assertEqual(Key1, Key2).
 
+%% @doc The token delivered as a parsed cookie under `priv/cookie' (exactly as
+%% the HTTP layer leaves it after running an inbound `cookie' header through the
+%% `~cookie@1.0' codec, before the request hook runs) derives the SAME secret/key
+%% as the equivalent raw `cookie' header. This proves cross-path determinism: the
+%% same Odysee session yields the same node-hosted wallet whether the token
+%% arrived in-process (raw header) or over real HTTP (parsed into `priv/cookie').
+priv_cookie_matches_raw_cookie_test() ->
+    Provider = #{ <<"device">> => <<"odysee-auth@1.0">> },
+    Cookie = <<"auth_token=odysee-session-crosspath">>,
+    % The raw-header path: the token arrives as the `cookie' header verbatim.
+    {ok, RawKey} =
+        hb_ao:resolve(
+            Provider,
+            #{ <<"path">> => <<"generate">>, <<"cookie">> => Cookie },
+            #{}
+        ),
+    % The real-HTTP path: the `~cookie@1.0' codec has already parsed the inbound
+    % `cookie' header, stripped the raw key, and stored the parsed token under
+    % `priv/cookie'. We reproduce that exact post-parse shape directly (the
+    % probed server shape: `priv => #{ <<"cookie">> => #{ <<"auth_token">> => ...}}'),
+    % with no raw `cookie' key present.
+    Reshaped =
+        hb_private:set(
+            #{ <<"path">> => <<"generate">> },
+            <<"cookie">>,
+            #{ <<"auth_token">> => <<"odysee-session-crosspath">> },
+            #{}
+        ),
+    ?assertEqual(undefined, maps:get(<<"cookie">>, Reshaped, undefined)),
+    {ok, PrivKey} = hb_ao:resolve(Provider, Reshaped, #{}),
+    ?event({priv_cookie_crosspath, {raw_key, RawKey}, {priv_key, PrivKey}}),
+    ?assert(is_binary(PrivKey)),
+    ?assertEqual(RawKey, PrivKey),
+    % A different session delivered via `priv/cookie' must derive a different key.
+    OtherReshaped =
+        hb_private:set(
+            #{ <<"path">> => <<"generate">> },
+            <<"cookie">>,
+            #{ <<"auth_token">> => <<"odysee-session-other">> },
+            #{}
+        ),
+    {ok, OtherKey} = hb_ao:resolve(Provider, OtherReshaped, #{}),
+    ?assertNotEqual(PrivKey, OtherKey).
+
 %% @doc A request with no cookie (and no authorization header) is left
 %% uncommitted: the `when' condition does not match, so the hook passes the
 %% request through unchanged and adds no client signature.
