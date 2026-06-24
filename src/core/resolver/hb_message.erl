@@ -66,6 +66,7 @@
 -export([has_signed_commitment/2]).
 -export([commitment/2, commitment/3, commitments/3]).
 -export([with_only_committed/2, with_only_signed/2, without_unless_signed/3]).
+-export([visible/2, find_visible/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
@@ -441,6 +442,39 @@ first_signed(Msg, Opts) when is_map(Msg) ->
     end;
 first_signed(_Msg, _Opts) ->
     not_found.
+
+%% @doc Return the child-wins view of a message through its `...' parents.
+visible(Msg, Opts) when is_map(Msg) ->
+    Inherited =
+        case maps:find(<<"...">>, Msg) of
+            {ok, Parent} ->
+                visible(hb_cache:ensure_loaded(Parent, Opts), Opts);
+            error ->
+                #{}
+        end,
+    maps:merge(Inherited, maps:without([<<"...">>], Msg));
+visible(Msg, Opts) ->
+    visible(hb_cache:ensure_loaded(Msg, Opts), Opts).
+
+%% @doc Find a key in the child-wins view of a message extension chain.
+find_visible(Key, Msg, Opts) when is_map(Msg) ->
+    case maps:find(Key, Msg) of
+        {ok, Value} ->
+            {ok, hb_cache:ensure_loaded(Value, Opts)};
+        error ->
+            case maps:find(<<"...">>, Msg) of
+                {ok, Parent} ->
+                    find_visible(
+                        Key,
+                        hb_cache:ensure_loaded(Parent, Opts),
+                        Opts
+                    );
+                error ->
+                    error
+            end
+    end;
+find_visible(Key, Msg, Opts) ->
+    find_visible(Key, hb_cache:ensure_loaded(Msg, Opts), Opts).
 
 %% @doc Return true if the message has a commitment with a signature field.
 has_signed_commitment(Msg, Opts) ->

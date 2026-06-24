@@ -427,7 +427,7 @@ apply_schema(
     Explicit =
         maps:fold(
             fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-                case hb_maps:find(Key, Message, Opts) of
+                case hb_message:find_visible(Key, Message, Opts) of
                     {ok, Value} ->
                         Acc#{ Key => apply_schema(Type, Value, Opts) };
                     error when Presence =:= required ->
@@ -443,12 +443,15 @@ apply_schema(
         none ->
             Explicit;
         #{ <<"presence">> := optional } ->
-            maps:merge(maps:without(maps:keys(Keys), Message), Explicit);
+            maps:merge(
+                maps:without(maps:keys(Keys), hb_message:visible(Message, Opts)),
+                Explicit
+            );
         #{ <<"presence">> := required } ->
             Rest =
                 maps:map(
                     fun(_, Value) -> hb_cache:ensure_all_loaded(Value, Opts) end,
-                    maps:without(maps:keys(Keys), Message)
+                    maps:without(maps:keys(Keys), hb_message:visible(Message, Opts))
                 ),
             maps:merge(Rest, Explicit)
     end;
@@ -701,4 +704,50 @@ apply_empty_projection_test() ->
             #{ <<"device">> => <<"test@1.0">>, <<"extra">> => <<"drop">> },
             #{}
         )
+    ).
+
+extension_projection_test() ->
+    Schema =
+        message_type(
+            #{
+                <<"a">> =>
+                    #{ <<"presence">> => required, <<"type">> => wildcard_type() },
+                <<"c">> =>
+                    #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
+            },
+            none
+        ),
+    Msg =
+        #{
+            <<"b">> => 2,
+            <<"...">> =>
+                #{
+                    <<"a">> => 1,
+                    <<"b">> => 1
+                }
+        },
+    ?assertEqual(#{ <<"a">> => 1 }, apply_schema(Schema, Msg, #{})).
+
+extension_wildcard_carry_test() ->
+    Schema =
+        message_type(
+            #{
+                <<"a">> =>
+                    #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
+            },
+            #{ <<"presence">> => optional, <<"type">> => wildcard_type() }
+        ),
+    Msg =
+        #{
+            <<"b">> => 2,
+            <<"...">> =>
+                #{
+                    <<"a">> => 1,
+                    <<"b">> => 1,
+                    <<"c">> => 1
+                }
+        },
+    ?assertEqual(
+        #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 1 },
+        apply_schema(Schema, Msg, #{})
     ).

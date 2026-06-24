@@ -838,7 +838,7 @@ keys(Msg, Opts) ->
         ok,
         lists:filter(
             fun(Key) -> not hb_private:is_private(Key) end,
-            hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
+            maps:keys(safe_visible(hb_message:uncommitted(Msg, Opts), Opts))
         )
     }.
 
@@ -850,9 +850,9 @@ get(Key, Msg, _Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
         false ->
-            case hb_maps:get(Key, Msg, not_found, Opts) of
-                not_found -> case_insensitive_get(Key, Msg, Opts);
-                Value -> {ok, Value}
+            case safe_find_visible(Key, Msg, Opts) of
+                {ok, Value} -> {ok, Value};
+                error -> case_insensitive_get(Key, Msg, Opts)
             end
     end.
 
@@ -861,10 +861,22 @@ get(Key, Msg, _Req, Opts) ->
 %% `hb_maps:get/2'. Encode the key to a binary if it is not already.
 case_insensitive_get(Key, Msg, Opts) ->
     NormKey = hb_util:to_lower(hb_util:bin(Key)),
-    NormMsg = hb_ao:normalize_keys(Msg, Opts),
-    case hb_maps:get(NormKey, NormMsg, not_found, Opts) of
-        not_found -> {error, not_found};
-        Value -> {ok, Value}
+    NormMsg = hb_ao:normalize_keys(safe_visible(Msg, Opts), Opts),
+    case safe_find_visible(NormKey, NormMsg, Opts) of
+        {ok, Value} -> {ok, Value};
+        error -> {error, not_found}
+    end.
+
+safe_find_visible(Key, Msg, Opts) ->
+    try hb_message:find_visible(Key, Msg, Opts)
+    catch throw:{necessary_message_not_found, _, _} -> error
+    end.
+
+safe_visible(Msg, Opts) ->
+    try hb_message:visible(Msg, Opts)
+    catch
+        throw:{necessary_message_not_found, _, _} when is_map(Msg) ->
+            maps:without([<<"...">>], Msg)
     end.
 
 %%% Tests
@@ -872,6 +884,27 @@ case_insensitive_get(Key, Msg, Opts) ->
 %%% Internal module functionality tests:
 get_keys_mod_test() ->
     ?assertEqual([a], hb_maps:keys(#{a => 1}, #{})).
+
+extension_get_test() ->
+    Parent =
+        #{
+            <<"a">> => 1,
+            <<"commitments">> => #{ <<"id">> => #{} }
+        },
+    Child =
+        #{
+            <<"a">> => 2,
+            <<"b">> => 3,
+            <<"...">> => Parent
+        },
+    ?assertEqual({ok, 2}, get(<<"a">>, Child, #{})),
+    ?assertEqual({ok, 1}, get(<<"a">>, #{ <<"...">> => Parent }, #{})),
+    ?assertEqual(
+        {ok, #{ <<"id">> => #{} }},
+        get(<<"commitments">>, #{ <<"...">> => Parent }, #{})
+    ),
+    {ok, Keys} = keys(Child, #{}),
+    ?assertEqual([<<"a">>, <<"b">>, <<"commitments">>], lists:sort(Keys)).
 
 is_private_mod_test() ->
     ?assertEqual(true, hb_private:is_private(<<"private">>)),
