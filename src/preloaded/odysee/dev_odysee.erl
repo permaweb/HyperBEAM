@@ -21,6 +21,7 @@
 -include("include/hb.hrl").
 
 -define(DEFAULT_RANGE_SIZE, 1048576).
+-define(PUBLISH_COMMITMENT_DEVICE, <<"httpsig@1.0">>).
 
 info(_) ->
     #{
@@ -82,6 +83,13 @@ claim(Base, Req, Opts) ->
 %% id -- never the uncommitted id that `hb_cache:write' reports. The
 %% `provenance' marker records that this object carries an HB-native
 %% signature, not native LBRY provenance.
+%%
+%% The published object is always committed with `httpsig@1.0'
+%% (rsa-pss-sha512), regardless of any node-level `commitment-device' override
+%% in `Opts': the verify-on-read trust story depends on this scheme being
+%% deterministic. When the node configures a non-empty
+%% `odysee-publish-content-types' allow-list, a `content-type' outside it is
+%% rejected with a 415; an unset or empty list is permissive and allows all.
 publish(Base, Req, Opts) ->
     case param(Base, Req, [<<"body">>], Opts) of
         {ok, Body} ->
@@ -92,32 +100,59 @@ publish(Base, Req, Opts) ->
                     <<"application/octet-stream">>,
                     Opts
                 ),
-            Object =
-                with_optional_name(
-                    Base,
-                    Req,
-                    #{
-                        <<"device">> => <<"odysee@1.0">>,
-                        <<"provenance">> => <<"hb-native-signed">>,
-                        <<"content-type">> => ContentType,
-                        <<"content-length">> => byte_size(Body),
-                        <<"body">> => Body
-                    },
-                    Opts
-                ),
-            Signed = hb_message:commit(Object, Opts),
-            {ok, _UncommittedID} = hb_cache:write(Signed, Opts),
-            ContentID = hb_message:id(Signed, signed, Opts),
-            ?event(odysee_device,
-                {published, {content_id, ContentID}, {byte_size, byte_size(Body)}},
-                Opts
-            ),
-            {ok, Signed#{
-                <<"status">> => 200,
-                <<"content-id">> => ContentID
-            }};
+            case allowed_content_type(ContentType, Opts) of
+                true ->
+                    publish_signed(Base, Req, Body, ContentType, Opts);
+                false ->
+                    ?event(odysee_device,
+                        {publish_content_type_rejected, {content_type, ContentType}},
+                        Opts
+                    ),
+                    error_response(content_type_not_allowed)
+            end;
         Error ->
             error_response(Error)
+    end.
+
+publish_signed(Base, Req, Body, ContentType, Opts) ->
+    Object =
+        with_optional_name(
+            Base,
+            Req,
+            #{
+                <<"device">> => <<"odysee@1.0">>,
+                <<"provenance">> => <<"hb-native-signed">>,
+                <<"content-type">> => ContentType,
+                <<"content-length">> => byte_size(Body),
+                <<"body">> => Body
+            },
+            Opts
+        ),
+    Signed =
+        hb_message:commit(
+            Object,
+            Opts,
+            #{ <<"commitment-device">> => ?PUBLISH_COMMITMENT_DEVICE }
+        ),
+    {ok, _UncommittedID} = hb_cache:write(Signed, Opts),
+    ContentID = hb_message:id(Signed, signed, Opts),
+    ?event(odysee_device,
+        {published, {content_id, ContentID}, {byte_size, byte_size(Body)}},
+        Opts
+    ),
+    {ok, Signed#{
+        <<"status">> => 200,
+        <<"content-id">> => ContentID
+    }}.
+
+%% Permissive by default: only enforce when the node sets a non-empty
+%% `odysee-publish-content-types' list.
+allowed_content_type(ContentType, Opts) ->
+    case hb_opts:get(<<"odysee-publish-content-types">>, [], Opts) of
+        [] -> true;
+        AllowList when is_list(AllowList) ->
+            lists:member(ContentType, AllowList);
+        _ -> true
     end.
 
 with_optional_name(Base, Req, Object, Opts) ->
@@ -195,17 +230,40 @@ with_lbry_stores(Opts) ->
 %% A trusted Odysee-SDK JSON-RPC passthrough for operations without a native,
 %% verifiable path. The result is explicitly stamped `native => false' so callers
 %% never mistake it for verified provenance.
+%%
+%% When the node configures a non-empty `odysee-sdk-allowed-methods' list, a
+%% `method' outside it is rejected with a 403 before any proxy call is made;
+%% an unset or empty list is permissive and allows all methods.
 sdk(Base, Req, Opts) ->
     case {param(Base, Req, [<<"method">>], Opts), param(Base, Req, [<<"params64">>], Opts)} of
         {{ok, Method}, {ok, Params64}} ->
-            case decode_params64(Params64) of
-                {ok, Params} -> sdk_result(Method, Params, Opts);
-                Error -> error_response(Error)
+            case allowed_sdk_method(Method, Opts) of
+                true ->
+                    case decode_params64(Params64) of
+                        {ok, Params} -> sdk_result(Method, Params, Opts);
+                        Error -> error_response(Error)
+                    end;
+                false ->
+                    ?event(odysee_device,
+                        {sdk_method_rejected, {method, Method}},
+                        Opts
+                    ),
+                    error_response(sdk_method_not_allowed)
             end;
         {{error, _} = Error, _} ->
             error_response(Error);
         {_, {error, _} = Error} ->
             error_response(Error)
+    end.
+
+%% Permissive by default: only enforce when the node sets a non-empty
+%% `odysee-sdk-allowed-methods' list.
+allowed_sdk_method(Method, Opts) ->
+    case hb_opts:get(<<"odysee-sdk-allowed-methods">>, [], Opts) of
+        [] -> true;
+        AllowList when is_list(AllowList) ->
+            lists:member(Method, AllowList);
+        _ -> true
     end.
 transaction(Base, Req, Opts) ->
     with_txid(Base, Req, Opts, fun(TxID) ->
@@ -925,6 +983,8 @@ status_for(not_found) -> 404;
 status_for({http_status, 403, _}) -> 403;
 status_for(protected) -> 403;
 status_for(protected_content) -> 403;
+status_for(sdk_method_not_allowed) -> 403;
+status_for(content_type_not_allowed) -> 415;
 status_for({hash_mismatch, _, _}) -> 502;
 status_for({txid_mismatch, _, _}) -> 502;
 status_for({failure, _}) -> 502;

@@ -707,6 +707,82 @@ publish_device_requires_body_test() ->
     ?assertEqual(400, maps:get(<<"status">>, Response)),
     ?assertEqual(<<"missing_required">>, maps:get(<<"error">>, Response)).
 
+%% (7a) The publish signature scheme is pinned to httpsig@1.0
+%% (rsa-pss-sha512): even when the node forces a different
+%% `commitment-device', the returned object carries an httpsig rsa-pss-sha512
+%% commitment, so the verify-on-read trust story stays deterministic.
+publish_device_pins_httpsig_commitment_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = (publish_test_opts(Wallet))#{
+        <<"commitment-device">> => <<"lbry-transaction@1.0">>,
+        commitment_device => <<"lbry-transaction@1.0">>
+    },
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"publish">>,
+            #{},
+            #{ <<"body">> => <<"pinned bytes">>, <<"content-type">> => <<"video/mp4">> },
+            Opts
+        ),
+    ?assertEqual(200, maps:get(<<"status">>, Response)),
+    Signed = maps:without([<<"status">>, <<"content-id">>], Response),
+    ?assert(source_has_commitment(Signed, <<"httpsig@1.0">>)),
+    ?assert(commitment_has_type(Signed, <<"rsa-pss-sha512">>)),
+    ?assert(
+        hb_message:verify(Signed, #{ <<"commitment-ids">> => <<"all">> }, Opts)
+    ).
+
+%% (7b) A non-empty content-type allow-list rejects a disallowed
+%% content-type with a 415, before signing.
+publish_device_rejects_disallowed_content_type_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = (publish_test_opts(Wallet))#{
+        <<"odysee-publish-content-types">> => [<<"video/mp4">>]
+    },
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"publish">>,
+            #{},
+            #{ <<"body">> => <<"bytes">>, <<"content-type">> => <<"text/html">> },
+            Opts
+        ),
+    ?assertEqual(415, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"content_type_not_allowed">>, maps:get(<<"error">>, Response)).
+
+%% (7b) The same allow-list accepts a content-type that is on it.
+publish_device_accepts_allowed_content_type_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = (publish_test_opts(Wallet))#{
+        <<"odysee-publish-content-types">> => [<<"video/mp4">>]
+    },
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"publish">>,
+            #{},
+            #{ <<"body">> => <<"bytes">>, <<"content-type">> => <<"video/mp4">> },
+            Opts
+        ),
+    ?assertEqual(200, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"video/mp4">>, maps:get(<<"content-type">>, Response)).
+
+%% (6) A non-empty sdk allowed-methods list rejects a disallowed method with
+%% a 403 before any proxy call is made -- so no network is touched.
+sdk_device_rejects_disallowed_method_test() ->
+    Params64 = hb_util:encode(hb_json:encode(#{})),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"sdk">>,
+            #{},
+            #{ <<"method">> => <<"wallet_send">>, <<"params64">> => Params64 },
+            #{ <<"odysee-sdk-allowed-methods">> => [<<"claim_search">>] }
+        ),
+    ?assertEqual(403, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"sdk_method_not_allowed">>, maps:get(<<"error">>, Response)).
+
 publish_test_opts(Wallet) ->
     Store = hb_test_utils:test_store(hb_store_volatile, <<"odysee-publish">>),
     #{
@@ -837,6 +913,14 @@ source_has_commitment(Msg, Device) ->
     lists:any(
         fun(Commitment) ->
             maps:get(<<"commitment-device">>, Commitment, undefined) == Device
+        end,
+        maps:values(maps:get(<<"commitments">>, Msg, #{}))
+    ).
+
+commitment_has_type(Msg, Type) ->
+    lists:any(
+        fun(Commitment) ->
+            maps:get(<<"type">>, Commitment, undefined) == Type
         end,
         maps:values(maps:get(<<"commitments">>, Msg, #{}))
     ).
