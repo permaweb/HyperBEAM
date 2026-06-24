@@ -46,7 +46,8 @@ tx(Base, Request, Opts) ->
 %% node's default bundler. If instead you want to use this node as a bundler
 %% you should use the ~bundler@1.0 device.
 post_tx(Base, RawRequest, Opts) ->
-    {ok, Request} = extract_target(Base, RawRequest, Opts),
+    {ok, Target} = extract_target(Base, RawRequest, Opts),
+    {ok, Request} = hb_message:with_only_signed(Target, Opts),
     case hb_maps:find(<<"commitment-device">>, Request, Opts) of
         {ok, Device} ->
             post_tx(Base, Request, Opts, Device);
