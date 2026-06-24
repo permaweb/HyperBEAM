@@ -76,3 +76,31 @@
   rebar3 device test --module dev_httpsig` passed with 5 tests. One attempted
   parallel focused run hit the shared default listener with `eaddrinuse`; it
   passed when rerun through the device-test wrapper alone.
+- Tightened the first extension-aware read semantics. Added shared
+  `hb_message:visible/2` and `hb_message:find_visible/3` child-wins helpers,
+  used them for type projection and `message@1.0` member reads, and kept
+  `message@1.0` tolerant of missing inherited parent links when only direct
+  child keys are requested. Validation: `rebar3 compile` passed; `git diff
+  --check` passed; `rebar3 eunit --module=hb_types` passed with 5 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_message`
+  passed with 18 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_auth_hook` passed with 4 tests.
+- Fixed three paranoid-cache failures without widening vary specs: Arweave
+  uploads now strip back to the first signed target with
+  `hb_message:with_only_signed/2`; manifest intermediate/fallback route maps
+  use private `no-store`; paranoid verification checks committed subsets and
+  already-present children without force-loading unrelated lazy links; ANS-104
+  verification preserves the existing configured GraphQL-trust path when the
+  request carries trust markers. Decisions recorded in
+  `decisions/paranoid-lazy-extension-verification.md`,
+  `decisions/manifest-private-no-store.md`, and
+  `decisions/ans104-trusted-gql-paranoid.md`. Validation:
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_manifest`
+  passed with 6 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_b32_name` passed with 9 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_store_gateway`
+  passed with 10 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_arweave` passed with 39 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_ans104`
+  passed with 24 tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 191 tests.
