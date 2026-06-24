@@ -603,23 +603,23 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 %% them in the message, overwriting any existing values.
 set(Base, NewValuesMsg, Opts) ->
     OriginalPriv = hb_private:from_message(Base),
-	% Filter keys that are in the default device (this one).
+    % Filter keys that are in the default device (this one).
     NewValuesKeys = direct_set_keys(NewValuesMsg, Opts),
-	KeysToSet =
-		lists:filter(
-			fun(Key) ->
-				not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
-					(maps:get(Key, NewValuesMsg, undefined) =/= undefined)
-			end,
-			NewValuesKeys
-		),
-	% Find keys in the message that are already set (case-insensitive), and 
-	% note them for removal.
-	_ConflictingKeys =
-		lists:filter(
-			fun(Key) -> lists:member(Key, KeysToSet) end,
-			hb_maps:keys(Base, Opts)
-		),
+    KeysToSet =
+        lists:filter(
+            fun(Key) ->
+                not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
+                    (maps:get(Key, NewValuesMsg, undefined) =/= undefined)
+            end,
+            NewValuesKeys
+        ),
+    % Find keys in the message that are already set (case-insensitive), and
+    % note them for removal.
+    _ConflictingKeys =
+        lists:filter(
+            fun(Key) -> lists:member(Key, KeysToSet) end,
+            hb_maps:keys(Base, Opts)
+        ),
     UnsetKeys =
         lists:filter(
             fun(Key) ->
@@ -696,8 +696,8 @@ set(Base, NewValuesMsg, Opts) ->
         hb_private:set_priv(
             maps:merge(
                 case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
-                <<"explicit">> -> maps:merge(BaseValues, NewValues);
-                _ -> do_deep_merge(BaseValues, NewValues, Opts)
+                    <<"explicit">> -> maps:merge(BaseValues, NewValues);
+                    _ -> do_deep_merge(BaseValues, NewValues, Opts)
                 end,
                 UnsetTombstones
             ),
@@ -733,7 +733,7 @@ set(Base, NewValuesMsg, Opts) ->
                 _ ->
                     {ok, hb_maps:without([<<"commitments">>], Merged, Opts)}
             end
-	    end.
+    end.
 
 direct_set_keys(Msg, Opts) ->
     lists:filter(

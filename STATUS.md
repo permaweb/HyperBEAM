@@ -248,3 +248,12 @@
   full-suite green point on the clean vary/overlay branch. Next pass is branch
   minimization and review against `hyperbeam-main/edge`, preserving this green
   state.
+- Post-acceptance minimization audit began. Current branch diff is 3196 added /
+  242 removed vs `hyperbeam-main/edge`, of which code is 1931 added / 242
+  removed after excluding `MEMORY.md`, `STATUS.md`, and `decisions/`. Guardrail
+  search found no branch-introduced `persistent_term`, result-edge helper,
+  `dev_green_zone`, or `dev_snp` implementation churn; `dev_process_cache`
+  references are inherited from current `edge`. Cleaned only local indentation
+  in the modified `message@1.0/set` block. Validation: `git diff --check`
+  passed; `rebar3 compile` passed; `HB_PARANOID=cache_read,cache_write rebar3
+  device test --module dev_message` passed with 20 tests.
