@@ -342,3 +342,8 @@
   `git diff --check` passed; `HB_PARANOID=cache_read,cache_write rebar3 device
   test --module hb_codec_test_vectors --test
   hb_codec_test_vectors:with_only_signed_ignores_hmac_commitments_test` passed.
+- Latest-tip acceptance after the HMAC signed-ancestry tightening is green: on
+  `0412da3c1`, `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed
+  end-to-end with `All 3493 tests passed.` This run also covered the full
+  `hb_codec_test_vectors` signed-subset cases, router performance assertion,
+  secret-device flows, and process HTTP vectors.
