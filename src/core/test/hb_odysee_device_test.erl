@@ -521,6 +521,74 @@ source_route_ignores_accept_for_internal_read_test() ->
     ?assertEqual(Raw, maps:get(<<"raw">>, Source)),
     ?assertEqual(false, maps:is_key(<<"body">>, Source)).
 
+%% The device is self-contained: with NO `store' configured on the node, a
+%% `source' read still resolves a native, commitment-bearing transaction by
+%% supplying the LBRY stores itself (built via `hb_lbry_bridge'). This is the
+%% publish->trust->load property: loading the device is enough; the operator
+%% need not wire `hb_store_lbry_*' into the node `store' list. Only the
+%% data-source (`lbry-proxy-node') is node/deployment config.
+source_route_txid_self_contained_no_store_config_test() ->
+    application:ensure_all_started(inets),
+    Hex = hb_lbry_tx:task0_tx_hex(),
+    TxID = hb_lbry_tx:txid(binary:decode_hex(Hex)),
+    {ok, Server, Handle} = source_proxy_server(Hex),
+    try
+        Opts = #{ <<"lbry-proxy-node">> => Server, <<"http-client">> => httpc },
+        {ok, Source} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"source">>,
+                #{},
+                #{ <<"native-id">> => TxID },
+                Opts
+            ),
+        ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+        ?assert(source_has_commitment(Source, <<"lbry-transaction@1.0">>)),
+        ?assertEqual(
+            true,
+            hb_message:verify(Source, #{ <<"commitment-ids">> => <<"all">> }, #{})
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+%% Same self-contained property for the meeting's canonical entry identity:
+%% the outpoint `txid:nout' resolving to a native `lbry-claim@1.0' object with
+%% no node `store' config.
+source_route_outpoint_self_contained_no_store_config_test() ->
+    application:ensure_all_started(inets),
+    Hex = hb_lbry_tx:task0_tx_hex(),
+    TxID = hb_lbry_tx:txid(binary:decode_hex(Hex)),
+    {ok, Server, Handle} = source_proxy_server(Hex),
+    try
+        Opts = #{ <<"lbry-proxy-node">> => Server, <<"http-client">> => httpc },
+        {ok, Source} =
+            hb_ao:raw(
+                <<"odysee@1.0">>,
+                <<"source">>,
+                #{},
+                #{ <<"native-id">> => <<TxID/binary, ":0">> },
+                Opts
+            ),
+        ?assertEqual(TxID, maps:get(<<"txid">>, Source)),
+        ?assert(source_has_commitment(Source, <<"lbry-claim@1.0">>)),
+        ?assertEqual(
+            true,
+            hb_message:verify(Source, #{ <<"commitment-ids">> => <<"all">> }, #{})
+        )
+    after
+        hb_mock_server:stop(Handle)
+    end.
+
+source_proxy_server(Hex) ->
+    Response =
+        hb_json:encode(#{
+            <<"jsonrpc">> => <<"2.0">>,
+            <<"result">> => #{ <<"hex">> => Hex },
+            <<"id">> => 1
+        }),
+    hb_mock_server:start([{"/api/v1/proxy", proxy, {200, Response}}]).
+
 media_device_defaults_missing_range_test() ->
     {RawDescriptor, DescriptorHash, BlobHash, BlobBytes, Plaintext} =
         sample_descriptor(),
@@ -548,6 +616,56 @@ media_device_defaults_missing_range_test() ->
     after
         hb_mock_server:stop(Handle)
     end.
+
+publish_device_round_trips_signed_content_test() ->
+    Wallet = ar_wallet:new(),
+    Body = <<"uploaded odysee bytes">>,
+    Opts = publish_test_opts(Wallet),
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"publish">>,
+            #{},
+            #{
+                <<"body">> => Body,
+                <<"content-type">> => <<"video/mp4">>,
+                <<"name">> => <<"clip.mp4">>
+            },
+            Opts
+        ),
+    ContentID = maps:get(<<"content-id">>, Response),
+    ?assertEqual(200, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"hb-native-signed">>, maps:get(<<"provenance">>, Response)),
+    Signed = maps:without([<<"status">>, <<"content-id">>], Response),
+    ?assertEqual(hb_message:id(Signed, signed, Opts), ContentID),
+    {ok, RawReadBack} = hb_cache:read(ContentID, Opts),
+    ReadBack = hb_cache:ensure_all_loaded(RawReadBack, Opts),
+    ?assertEqual(Body, maps:get(<<"body">>, ReadBack)),
+    ?assertEqual(<<"video/mp4">>, maps:get(<<"content-type">>, ReadBack)),
+    ?assertEqual(<<"clip.mp4">>, maps:get(<<"name">>, ReadBack)),
+    ?assertEqual(<<"hb-native-signed">>, maps:get(<<"provenance">>, ReadBack)),
+    ?assert(
+        hb_message:verify(ReadBack, #{ <<"commitment-ids">> => <<"all">> }, Opts)
+    ).
+
+publish_device_requires_body_test() ->
+    {ok, Response} =
+        hb_ao:raw(
+            <<"odysee@1.0">>,
+            <<"publish">>,
+            #{},
+            #{ <<"content-type">> => <<"video/mp4">> },
+            #{}
+        ),
+    ?assertEqual(400, maps:get(<<"status">>, Response)),
+    ?assertEqual(<<"missing_required">>, maps:get(<<"error">>, Response)).
+
+publish_test_opts(Wallet) ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"odysee-publish">>),
+    #{
+        <<"store">> => [Store],
+        <<"priv-wallet">> => Wallet
+    }.
 
 blob_server(RawDescriptor, DescriptorHash, BlobHash, BlobBytes) ->
     hb_mock_server:start([

@@ -13,7 +13,10 @@
     verified_stream/2,
     stream_size/2,
     reassemble_stream/2,
-    stream_range/4
+    stream_range/4,
+    transaction_store/1,
+    claim_output_store/1,
+    blob_store/1
 ]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").

@@ -5,6 +5,7 @@
     index/3,
     resolve/3,
     claim/3,
+    publish/3,
     source/3,
     transaction/3,
     descriptor/3,
@@ -26,6 +27,7 @@ info(_) ->
             <<"index">>,
             <<"resolve">>,
             <<"claim">>,
+            <<"publish">>,
             <<"source">>,
             <<"transaction">>,
             <<"descriptor">>,
@@ -45,6 +47,7 @@ index(_Base, _Req, _Opts) ->
         <<"paths">> => #{
             <<"resolve">> => [<<"claim-id">>, <<"name">>, <<"url">>],
             <<"claim">> => [<<"claim-id">>, <<"name">>, <<"url">>],
+            <<"publish">> => [<<"body">>, <<"content-type">>, <<"name">>],
             <<"source">> => [<<"id">>, <<"native-id">>],
             <<"transaction">> => [<<"txid">>],
             <<"descriptor">> => [<<"sd-hash">>],
@@ -69,6 +72,57 @@ resolve(Base, Req, Opts) ->
 claim(Base, Req, Opts) ->
     resolve(Base, Req, Opts).
 
+%% Accept an uploaded blob and persist it as HB-native signed content. The
+%% bytes are wrapped in a message carrying their content-type (and optional
+%% name), committed with the node wallet via the RSA/HB-native httpsig path,
+%% and written to the cache. The returned `content-id' is the signed message
+%% id -- never the uncommitted id that `hb_cache:write' reports. The
+%% `provenance' marker records that this object carries an HB-native
+%% signature, not native LBRY provenance.
+publish(Base, Req, Opts) ->
+    case param(Base, Req, [<<"body">>], Opts) of
+        {ok, Body} ->
+            ContentType =
+                hb_maps:get(
+                    <<"content-type">>,
+                    Req,
+                    <<"application/octet-stream">>,
+                    Opts
+                ),
+            Object =
+                with_optional_name(
+                    Base,
+                    Req,
+                    #{
+                        <<"device">> => <<"odysee@1.0">>,
+                        <<"provenance">> => <<"hb-native-signed">>,
+                        <<"content-type">> => ContentType,
+                        <<"content-length">> => byte_size(Body),
+                        <<"body">> => Body
+                    },
+                    Opts
+                ),
+            Signed = hb_message:commit(Object, Opts),
+            {ok, _UncommittedID} = hb_cache:write(Signed, Opts),
+            ContentID = hb_message:id(Signed, signed, Opts),
+            ?event(odysee_device,
+                {published, {content_id, ContentID}, {byte_size, byte_size(Body)}},
+                Opts
+            ),
+            {ok, Signed#{
+                <<"status">> => 200,
+                <<"content-id">> => ContentID
+            }};
+        Error ->
+            error_response(Error)
+    end.
+
+with_optional_name(Base, Req, Object, Opts) ->
+    case param(Base, Req, [<<"name">>], Opts) of
+        {ok, Name} -> Object#{ <<"name">> => Name };
+        _ -> Object
+    end.
+
 source(Base, Req, Opts) ->
     case native_source_id(Base, Req, Opts) of
         {ok, Kind, Key} ->
@@ -81,7 +135,7 @@ source(Base, Req, Opts) ->
                 <<"read">>,
                 Base,
                 #{ <<"read">> => Key },
-                Opts
+                with_lbry_stores(Opts)
             ) of
                 {ok, Msg} ->
                     {ok, Msg};
@@ -102,6 +156,22 @@ source(Base, Req, Opts) ->
             ?event(odysee_device, {source_key_rejected, {reason, Reason}}, Opts),
             error_response(Reason)
     end.
+
+%% @doc Make `source' self-contained: append the device's own LBRY stores
+%% (built by `hb_lbry_bridge') after any caller-supplied stores. A node that
+%% has merely loaded and trusted the device then resolves native LBRY objects
+%% without the operator wiring `hb_store_lbry_*' into its `store' list. Caller
+%% stores and the local cache are tried first; the LBRY stores are the
+%% self-contained fallback, each self-filtering by key shape.
+with_lbry_stores(Opts) ->
+    Stores =
+        hb_opts:get(<<"store">>, [], Opts) ++
+            [
+                hb_lbry_bridge:transaction_store(Opts),
+                hb_lbry_bridge:claim_output_store(Opts),
+                hb_lbry_bridge:blob_store(Opts)
+            ],
+    Opts#{ <<"store">> => Stores }.
 
 transaction(Base, Req, Opts) ->
     with_txid(Base, Req, Opts, fun(TxID) ->
