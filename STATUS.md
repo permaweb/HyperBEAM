@@ -220,3 +220,9 @@
   hb_process_test_vectors --test
   hb_process_test_vectors:http_wasm_process_by_id_test_parallel` passed; and
   `git diff --check` passed.
+- Revalidated the HTTP/codec surface after the GET bundling default change.
+  Validation: `git diff --check` passed; `HB_PARANOID=cache_read,cache_write
+  rebar3 eunit --module=hb_http_client_tests` passed with 3 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  dev_httpsig` passed with 5 tests; and `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module hb_codec_test_vectors` passed with 1958 tests.
