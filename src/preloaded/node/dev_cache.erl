@@ -91,10 +91,13 @@ expected_response(Base, Req, Opts) ->
 %% by default so the read returns without waiting for the downstream handler;
 %% set `admissible_response_hook_async => false' to run it synchronously.
 fire_admissible_response_hook(Base, Opts) ->
-    % Fresh clean opts for the hook; the config rides `Base' (the admissibility
-    % spec), so we never inherit the remote-node store the relay must not chase.
+    % Relay + handler-device loading resolve against the node default store (local
+    % cache + gateway). Drop the request's remote-node store, or those reads
+    % re-enter the multi_read fan-out. (Gateway and remote-node are both `remote'
+    % scope, so hb_store:scope can't separate them , dropping the override is the way.)
+    Local = maps:without([<<"store">>], Opts),
     HookOpts =
-        #{
+        Local#{
             <<"on">> => hb_maps:get(<<"on">>, Base, #{}, Opts),
             <<"commit-hook-response">> =>
                 hb_opts:get(commit_hook_response, false, Base),
