@@ -990,11 +990,14 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
         ),
     ?event(debug_http, {decoded, Decoded}, Opts),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
-    case (not ForceSignedRequests) orelse hb_message:verify(Decoded, all, Opts) of
+    Verified = hb_message:verify(Decoded, all, Opts),
+    case (not ForceSignedRequests) orelse Verified of
         true ->
             ?event(http_verify, {verified_signature, Decoded}),
             Signers = hb_message:signers(Decoded, Opts),
-            case Signers =/= [] andalso hb_opts:get(store_all_signed, false, Opts) of
+            case Signers =/= []
+                    andalso Verified
+                    andalso hb_opts:get(store_all_signed, false, Opts) of
                 true ->
                     ?event(http_verify, {storing_signed_from_wire, Decoded}),
                     {ok, _} =

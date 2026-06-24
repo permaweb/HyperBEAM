@@ -308,3 +308,12 @@
   `hb_codec_test_vectors` rerun exposed linked committed keys that must be
   deferred, and after the lazy-aware fix `HB_PARANOID=cache_read,cache_write
   rebar3 device test --module hb_codec_test_vectors` passed with 1958 tests.
+- The follow-up full paranoid suite on `2e6a30e56` exposed an HTTP cache-write
+  honesty issue in `hb_http:send_large_signed_request_test`: `hb_http` would
+  store a signed message decoded from the wire whenever `store-all-signed` was
+  enabled, even if request verification was not forced and the decoded
+  commitments did not verify in that post-transport shape. Kept request
+  acceptance semantics unchanged, but now only performs the signed cache write
+  after verification succeeds. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_http` passed
+  with 14 tests, including `send_large_signed_request_test`.
