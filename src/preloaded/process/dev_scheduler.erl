@@ -366,15 +366,27 @@ no_store(Msg, Opts) ->
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
--spec schedule(_,
+-spec schedule(
+    #{
+        process => _,
+        type => _,
+        scheduler => _,
+        'scheduler-location' => _,
+        _ => _
+    },
     #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
     _) -> _.
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
     case hb_util:key_to_atom(hb_ao:get(<<"method">>, Req, <<"GET">>, Opts)) of
-        post -> post_schedule(Base, Req, Opts);
+        post -> no_store_result(post_schedule(Base, Req, Opts), Opts);
         get -> get_schedule(Base, Req, Opts)
     end.
+
+no_store_result({ok, Msg}, Opts) when is_map(Msg) ->
+    {ok, no_store(Msg, Opts)};
+no_store_result(Res, _Opts) ->
+    Res.
 
 %% @doc Schedules a new message on the SU. Searches Base for the appropriate ID,
 %% then uses the wallet address of the scheduler to determine if the message is

@@ -161,3 +161,19 @@
   --module=hb_ao_test_vectors` passed with 191 tests; and
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_push`
   passed with 10 tests.
+- Closed the next scheduler/secret cluster from the full paranoid suite.
+  Scheduler POST responses now carry the existing private `no-store` marker so
+  repeated identical schedule POSTs execute instead of collapsing to one cached
+  assignment; `schedule/3` now carries the base process shape it actually
+  consumes; `dev_scheduler_cache` only body-loads committed `ao.N.1`
+  assignments and otherwise loads the full local assignment; and `secret@1.0`
+  strips unsigned response commitments before attaching generated wallet bodies
+  while checking controllers against the signed ancestor. Validation:
+  `git diff --check` passed; `HB_PARANOID=cache_read,cache_write rebar3 device
+  test --module dev_scheduler` passed with 18 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  dev_scheduler_cache` passed with 8 tests; and
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_secret`
+  passed with 12 tests. A parallel validation attempt of scheduler-cache and
+  secret collided on the default test HTTP port (`eaddrinuse`); rerunning
+  `dev_secret` serially passed.

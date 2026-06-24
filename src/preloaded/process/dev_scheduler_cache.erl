@@ -100,9 +100,16 @@ read(ProcID, Slot, RawOpts) ->
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->
-                            Body = hb_maps:get(<<"body">>, Assignment, Opts),
-                            Loaded = Assignment#{ <<"body">> => Body },
-                            {ok, Loaded}
+                            case lists:member(
+                                <<"body">>,
+                                hb_message:committed(Assignment, all, Opts)
+                            ) of
+                                true ->
+                                    Body = hb_maps:get(<<"body">>, Assignment, Opts),
+                                    {ok, Assignment#{ <<"body">> => Body }};
+                                false ->
+                                    {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
+                            end
                     end;
                 {error, not_found} ->
                     ?event(debug_sched, {read_assignment, {res, not_found}}),

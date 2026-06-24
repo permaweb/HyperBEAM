@@ -353,7 +353,15 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             Opts
         ),
     KeyID = hb_maps:get(<<"keyid">>, Commitment, Opts),
-    Base = RespBase#{ <<"body">> => KeyID },
+    % `RespBase' is the auth-control message we built while registering the
+    % wallet. It may carry commitments that do not cover this response body.
+    Base = (maps:remove(<<"commitments">>, RespBase))#{ <<"body">> => KeyID },
+    NoStoreBase =
+        hb_private:set(
+            Base,
+            #{ <<"cache-control">> => [<<"no-store">>] },
+            Opts
+        ),
     % Determine how to persist the wallet.
     case hb_maps:get(<<"persist">>, WalletDetails, <<"in-memory">>, Opts) of
         <<"client">> ->
@@ -362,7 +370,7 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             JSONKey = hb_maps:get(<<"wallet">>, WalletDetails, undefined, Opts),
             % Don't store, set the cookie in the response.
             hb_ao:resolve(
-                Base#{ <<"device">> => <<"cookie@1.0">> },
+                NoStoreBase#{ <<"device">> => <<"cookie@1.0">> },
                 #{
                     <<"path">> => <<"store">>,
                     <<"wallet-", Address/binary>> => hb_escape:encode_quotes(JSONKey)
@@ -379,12 +387,12 @@ persist_registered_wallet(WalletDetails, RespBase, Opts) ->
             ),
             ?event(
                 {stored_and_returning,
-                    {auth_response, Base},
+                    {auth_response, NoStoreBase},
                     {priv_wallet_details, WalletDetails}
                 }
             ),
             % Return auth response with wallet info added.
-            {ok, Base}
+            {ok, NoStoreBase}
     end.
 
 %% @doc List all hosted wallets
@@ -507,6 +515,7 @@ load_and_verify({secret, KeyID, _}, _Base, Request, Opts) ->
 %% @doc Validate if a calling message has the required `controllers' for the
 %% given wallet.
 verify_controllers(WalletDetails, Request, Opts) ->
+    {ok, SignedRequest} = hb_message:with_only_signed(Request, Opts),
     RequiredControllers =
         hb_util:int(hb_maps:get(<<"required-controllers">>, WalletDetails, 1, Opts)),
     Controllers =
@@ -519,7 +528,7 @@ verify_controllers(WalletDetails, Request, Opts) ->
             fun(Signer) ->
                 lists:member(Signer, Controllers)
             end,
-            hb_message:signers(Request, Opts)
+            hb_message:signers(SignedRequest, Opts)
         ),
     length(PresentControllers) >= RequiredControllers.
 
