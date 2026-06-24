@@ -43,12 +43,7 @@ maybe_store(Base, Req, Res, Opts) ->
 %%      `no_cache':       If set, the cached values are never used. Returns
 %%                        `continue' to the caller.
 maybe_lookup(Base, Req, Opts) ->
-    case exec_likely_faster_heuristic(Base, Req, Opts) of
-        true ->
-            ?event(caching, {skip_cache_check, exec_likely_faster_heuristic}),
-            {continue, Base, Req};
-        false -> lookup(Base, Req, Opts)
-    end.
+    lookup(Base, Req, Opts).
 
 lookup(Base, Req, Opts) ->
     case derive_cache_settings([Base, Req], Opts) of
@@ -185,11 +180,6 @@ necessary_messages_not_found_error(Base, Req, Opts) ->
                 <<"Necessary messages not found in cache.">>
         }
     }.
-
-%% @doc Determine whether we are likely to be faster looking up the result in
-%% our cache (hoping we have it), or executing it directly.
-exec_likely_faster_heuristic(_M1, _M2, _) ->
-    false.
 
 %% @doc Derive cache settings from a series of option sources and the opts,
 %% honoring precidence order. The Opts is used as the first source. Returns a

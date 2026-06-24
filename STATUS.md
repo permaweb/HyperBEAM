@@ -279,3 +279,13 @@
   tests passed.` The previous copycat cancellation did not reproduce; the same
   `copycat@1.0 [graphql]:basic_test_parallel` passed in 5.765 s inside the
   full run.
+- Minimized the cache-control surface after the full green checkpoint by
+  removing the dead execution-vs-lookup heuristic wrapper. The old heuristic is
+  intentionally gone because varied execution requires cache lookup on the
+  canonical varied pair; the direct member-read fast path now lives in
+  `hb_ao`. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_cache_control`
+  passed with 13 tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 191 tests. One attempted parallel
+  validation collided on the default HTTP port (`eaddrinuse`) before tests
+  started; the successful rerun above was sequential.
