@@ -289,3 +289,7 @@
   --module=hb_ao_test_vectors` passed with 191 tests. One attempted parallel
   validation collided on the default HTTP port (`eaddrinuse`) before tests
   started; the successful rerun above was sequential.
+- Trimmed a leftover alias from `json-iface@1.0` after vary specs made the old
+  whole-message force-load unnecessary. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  dev_json_iface` passed with 2 tests.
