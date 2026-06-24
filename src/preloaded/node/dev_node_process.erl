@@ -14,10 +14,15 @@
 info(_Opts) ->
     #{
         default => fun lookup/4,
+        grouper => fun ungrouped/3,
         excludes => [<<"set">>, <<"keys">>]
     }.
 
+ungrouped(_Base, _Req, _Opts) ->
+    ungrouped_exec.
+
 %% @doc Lookup a process by name.
+-spec lookup(binary(), _, #{ spawn => boolean(), _ => _ }, _) -> _.
 lookup(Name, _Base, Req, Opts) ->
     ?event(node_process, {lookup, {name, Name}}),
     LookupRes =
@@ -28,15 +33,20 @@ lookup(Name, _Base, Req, Opts) ->
         ),
     case LookupRes of
         {ok, ProcessID} ->
-            hb_cache:read(ProcessID, Opts);
+            no_store_result(hb_cache:read(ProcessID, Opts), Opts);
         {error, not_found} ->
             case hb_ao:get(<<"spawn">>, Req, true, Opts) of
                 true ->
-                    spawn_register(Name, Opts);
+                    no_store_result(spawn_register(Name, Opts), Opts);
                 false ->
                     {error, not_found}
             end
     end.
+
+no_store_result({ok, Msg}, Opts) when is_map(Msg) ->
+    {ok, hb_private:set(Msg, #{ <<"cache-control">> => [<<"no-store">>] }, Opts)};
+no_store_result(Res, _Opts) ->
+    Res.
 
 %% @doc Spawn a new process according to the process definition found in the 
 %% node message, and register it with the given name.

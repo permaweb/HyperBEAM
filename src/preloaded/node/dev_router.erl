@@ -34,6 +34,7 @@
 %% exposed via the device API.
 info(_) -> 
     #{
+        grouper => fun ungrouped/3,
         exports =>
             [
                 <<"info">>,
@@ -44,6 +45,9 @@ info(_) ->
                 <<"preprocess">>
             ]
     }.
+
+ungrouped(_Base, _Req, _Opts) ->
+    ungrouped_exec.
 
 %% @doc HTTP info response providing information about this device
 info(_Base, _Req, _Opts) ->
@@ -154,7 +158,8 @@ routes(M1, M2, Opts) ->
                     ?event(debug_route_reg, no_registrar),
                     Owner = hb_opts:get(operator, undefined, Opts),
                     RouteOwners = hb_opts:get(route_owners, [Owner], Opts),
-                    Signers = hb_message:signers(M2, Opts),
+                    {ok, SignedReq} = hb_message:with_only_signed(M2, Opts),
+                    Signers = hb_message:signers(SignedReq, Opts),
                     IsTrusted =
                         lists:any(
                             fun(Signer) -> lists:member(Signer, Signers) end,
@@ -209,6 +214,16 @@ routes(M1, M2, Opts) ->
             {ok, Routes}
     end.
 
+no_store(Msg, Opts) when is_map(Msg) ->
+    hb_private:set(Msg, #{ <<"cache-control">> => [<<"no-store">>] }, Opts);
+no_store(Msg, _Opts) ->
+    Msg.
+
+no_store_result({ok, Msg}, Opts) when is_map(Msg) ->
+    {ok, no_store(Msg, Opts)};
+no_store_result(Res, _Opts) ->
+    Res.
+
 %% @doc Find the appropriate route for the given message. If we are able to 
 %% resolve to a single host+path, we return that directly. Otherwise, we return
 %% the matching route (including a list of nodes under `nodes') from the list of
@@ -237,7 +252,10 @@ routes(M1, M2, Opts) ->
 %% routing based on the Opts and request message provided, or as a standalone
 %% function, taking only the request message and the `Opts' map.
 route(Msg, Opts) -> route(undefined, Msg, Opts).
-route(_, Msg, Opts) ->
+route(Base, Msg, Opts) ->
+    no_store_result(do_route(Base, Msg, Opts), Opts).
+
+do_route(_, Msg, Opts) ->
     Routes = load_routes(Opts),
     MatchedRoute = match_routes(Msg, Routes, Opts),
     ?event({find_route, {msg, Msg}, {routes, Routes}, {res, MatchedRoute}}),

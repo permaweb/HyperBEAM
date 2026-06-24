@@ -177,3 +177,13 @@
   passed with 12 tests. A parallel validation attempt of scheduler-cache and
   secret collided on the default test HTTP port (`eaddrinuse`); rerunning
   `dev_secret` serially passed.
+- Closed the router/node-process cluster from the full paranoid suite.
+  `router@1.0` and `node-process@1.0` now opt out of in-flight grouping because
+  both resolve node-local operational state from `Opts`; node-process lookup
+  results are private `no-store`; router route-map results are private
+  `no-store`; and route registration authorizes against the first signed
+  ancestor rather than the locally extended request wrapper. Validation:
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_router`
+  passed with 30 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_node_process` passed with 3 tests; and `git diff --check`
+  passed.
