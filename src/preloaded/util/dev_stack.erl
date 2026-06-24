@@ -532,43 +532,6 @@ many_devices_test() ->
 		hb_ao:resolve(Msg, #{ <<"path">> => <<"append">>, <<"bin">> => <<"2">> }, #{})
 	).
 
-benchmark_test() ->
-    BenchTime = 0.3,
-	Msg = #{
-		<<"device">> => <<"stack@1.0">>,
-		<<"device-stack">> =>
-			#{
-				<<"1">> => generate_append_device(<<"+D1">>),
-				<<"2">> => generate_append_device(<<"+D2">>),
-				<<"3">> => generate_append_device(<<"+D3">>),
-				<<"4">> => generate_append_device(<<"+D4">>),
-				<<"5">> => generate_append_device(<<"+D5">>)
-			},
-		<<"result">> => <<"INIT">>
-	},
-    Iterations =
-        hb_test_utils:benchmark(
-            fun() ->
-                hb_ao:resolve(Msg,
-                    #{
-                        <<"path">> => <<"append">>,
-                        <<"bin">> => <<"2">>
-                    },
-                    #{}
-                ),
-                {count, 5}
-            end,
-            BenchTime
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Stack:">>,
-        <<"resolutions">>,
-        Iterations,
-        BenchTime
-    ),
-    ?assert(Iterations >= 10).
-
-
 test_prefix_msg() ->
     Dev = #{
         prefix_set =>

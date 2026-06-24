@@ -161,22 +161,3 @@ derive_key(Decoded, Req, Opts) ->
                 }
             }
     end.
-
-%%% Tests
-
-benchmark_pbkdf2_test() ->
-    Key = crypto:strong_rand_bytes(32),
-    Iterations = 2 * 600_000,
-    KeyLength = 32,
-    Derivations = 
-        hb_test_utils:benchmark(
-            fun() ->
-                hb_crypto:pbkdf2(sha256, Key, <<"salt">>, Iterations, KeyLength)
-            end,
-            0.5
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Derived">>,
-        <<"keys (1.2m iterations each)">>,
-        Derivations
-    ).

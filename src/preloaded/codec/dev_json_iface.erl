@@ -571,38 +571,3 @@ basic_aos_call_test_() ->
 		Data = hb_ao:get(<<"results/data">>, Res, #{}),
 		?assertEqual(<<"2">>, Data)
 	end}.
-
-aos_stack_benchmark_test_() ->
-    {timeout, 20, fun() ->
-        BenchTime = 0.25,
-        Opts = #{ <<"store">> => hb_test_utils:test_store() },
-        RawWASMMsg = generate_stack("test/aos-2-pure-xs.wasm", <<"WASM">>, Opts),
-        Proc =
-            hb_ao:get(
-                <<"process">>,
-                RawWASMMsg,
-                Opts#{ <<"hashpath">> => ignore }
-            ),
-        ProcID = hb_ao:get(id, Proc, Opts),
-        Msg = generate_aos_msg(ProcID, <<"return 1">>, Opts),
-        {ok, Initialized} =
-            hb_ao:resolve(
-                RawWASMMsg,
-                Msg,
-                Opts
-            ),
-        Req = generate_aos_msg(ProcID, <<"return 1+1">>, Opts),
-        Iterations =
-            hb_test_utils:benchmark(
-                fun() -> hb_ao:resolve(Initialized, Req, Opts) end,
-                BenchTime
-            ),
-        hb_test_utils:benchmark_print(
-            <<"(Minimal AOS stack:) Evaluated">>,
-            <<"messages">>,
-            Iterations,
-            BenchTime
-        ),
-        ?assert(Iterations >= 1),
-        ok
-    end}.

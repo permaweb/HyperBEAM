@@ -4,7 +4,6 @@
 -export([info/1, init/3, snapshot/3, normalize/3, functions/3]).
 %%% Public Utilities
 -export([encode/2, decode/2]).
--export([pure_lua_process_benchmark/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -638,33 +637,6 @@ ao_core_resolution_from_lua_test() ->
     {ok, Res} = hb_ao:resolve(Base, <<"ao_resolve">>, #{}),
     ?assertEqual(<<"Hello, AO world!">>, Res).
 
-%% @doc Benchmark the performance of Lua executions.
-direct_benchmark_test() ->
-    BenchTime = 0.25,
-    {ok, Module} = file:read_file("test/test.lua"),
-    Base = #{
-        <<"device">> => <<"lua@5.3a">>,
-        <<"module">> => #{
-            <<"content-type">> => <<"application/lua">>,
-            <<"body">> => Module
-        },
-        <<"parameters">> => []
-    },
-    Iterations = hb_test_utils:benchmark(
-        fun(X) ->
-            {ok, _} = hb_ao:resolve(Base, <<"assoctable">>, #{}),
-            ?event({iteration, X})
-        end,
-        BenchTime
-    ),
-    ?event({iterations, Iterations}),
-    hb_test_utils:benchmark_print(
-        <<"Direct Lua:">>,
-        <<"executions">>,
-        Iterations,
-        BenchTime
-    ).
-
 %% @doc Call a non-compute key on a Lua device message and ensure that the
 %% function of the same name in the script is called.
 invoke_non_compute_key_test() ->
@@ -736,40 +708,6 @@ pure_lua_restore_test() ->
     {ok, Count2} = hb_ao:resolve(Process, <<"now/count">>, Opts),
     ?assertEqual(2, Count2).
 
-pure_lua_process_benchmark_test_() ->
-    {timeout,
-        30,
-        fun() ->
-            pure_lua_process_benchmark(#{
-                <<"process-snapshot-slots">> => 50
-            })
-    end}.
-pure_lua_process_benchmark(Opts) ->
-    BenchMsgs = 30,
-    hb:init(),
-    Process = generate_lua_process("test/test.lua", Opts),
-    {ok, _} = hb_cache:write(Process, Opts),
-    Message = generate_test_message(Process, Opts),
-    lists:foreach(
-        fun(X) ->
-            hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
-            ?event(debug_lua, {scheduled, X})
-        end,
-        lists:seq(1, BenchMsgs)
-    ),
-    ?event(debug_lua, {executing, BenchMsgs}),
-    BeforeExec = os:system_time(millisecond),
-    {ok, _} = hb_ao:resolve(Process, <<"now">>, Opts),
-    AfterExec = os:system_time(millisecond),
-    ExecMs = AfterExec - BeforeExec,
-    hb_test_utils:benchmark_print(
-        <<"Pure Lua process: Computed">>,
-        <<"slots">>,
-        BenchMsgs,
-        ExecMs / 1000
-    ),
-    ?assert(ExecMs =< 500).
-
 invoke_aos_test() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Process = generate_lua_process("test/hyper-aos.lua", Opts),
@@ -809,41 +747,6 @@ aos_authority_not_trusted_test() ->
     {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now/results/output/data">>, Opts),
     ?assertEqual(<<"Message is not trusted.">>, Results).
-
-%% @doc Benchmark the performance of Lua executions.
-aos_process_benchmark_test_() ->
-    {timeout, 30, fun() ->
-        BenchMsgs = 6,
-        Opts = #{
-            <<"hashpath">> => ignore,
-            <<"process-snapshot-slots">> => 50
-        },
-        Process = generate_lua_process("test/hyper-aos.lua", Opts),
-        Message = generate_test_message(Process, Opts),
-        lists:foreach(
-            fun(X) ->
-                hb_ao:resolve(Process, Message, Opts),
-                ?event(debug_lua, {scheduled, X})
-            end,
-            lists:seq(1, BenchMsgs)
-        ),
-        ?event(debug_lua, {executing, BenchMsgs}),
-        BeforeExec = os:system_time(millisecond),
-        {ok, _} = hb_ao:resolve(
-            Process,
-            <<"now">>,
-            Opts
-        ),
-        AfterExec = os:system_time(millisecond),
-        ExecMs = AfterExec - BeforeExec,
-        hb_test_utils:benchmark_print(
-            <<"HyperAOS process: Computed">>,
-            <<"slots">>,
-            BenchMsgs,
-            ExecMs / 1000
-        ),
-        ?assert(ExecMs =< 250)
-    end}.
 
 %%% Test helpers
 

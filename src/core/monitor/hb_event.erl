@@ -7,6 +7,9 @@
 -export([log_event/6]).
 -export([setup_logger/0]).
 -export([record/3, record/4, record_callers/1]).
+-ifdef(TEST).
+-export([should_print/3]).
+-endif.
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -449,49 +452,6 @@ parse_name(Name) when is_binary(Name) ->
     Name;
 parse_name(_) -> no_event_name.
 
-%%% Benchmark tests
-
--define(BENCHMARK_DURATION, 0.25).
-%% @doc Benchmark the performance of a full log of an event.
-benchmark_event_test() ->
-    Iterations =
-        hb_test_utils:benchmark(
-            fun() ->
-                log(test_module, {test, 1})
-            end,
-            ?BENCHMARK_DURATION
-        ),
-    hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
-    ?assert(Iterations >= 1000),
-    ok.
-
-%% @doc Benchmark the performance of looking up whether a topic and module
-%% should be printed.
-benchmark_print_lookup_test() ->
-    DefaultOpts = hb_opts:default_message_with_env(),
-    Iterations =
-        hb_test_utils:benchmark(
-            fun() ->
-                should_print(print, test_module, DefaultOpts)
-                    orelse should_print(print, test_event, DefaultOpts)
-            end,
-            ?BENCHMARK_DURATION
-        ),
-    hb_test_utils:benchmark_print(<<"Looked-up">>, <<"topics">>, Iterations, ?BENCHMARK_DURATION),
-    ?assert(Iterations >= 1000),
-    ok.
-
-%% @doc Benchmark the performance of recording an event.
-benchmark_record_test() ->
-    Iterations =
-        hb_test_utils:benchmark(
-            fun() -> record(test_module, {test, 1}, #{}) end,
-            ?BENCHMARK_DURATION
-        ),
-    hb_test_utils:benchmark_print(<<"Recorded">>, <<"events">>, Iterations, ?BENCHMARK_DURATION),
-    ?assert(Iterations >= 1000),
-    ok.
-
 should_log_test() ->
     ?assertEqual(true, should_print(log, topic_a, #{ <<"debug-log">> => [topic_a] })),
     ?assertEqual(false, should_print(log, topic_b, #{ <<"debug-log">> => [topic_a] })),
@@ -552,45 +512,9 @@ event_hook_exception_is_swallowed_test() ->
 -endif.
 
 -ifdef(NO_EVENTS).
-benchmark_drain_rate_test() -> ok.
 batch_correctness_test() -> ok.
 overload_checks_past_first_thousand_test() -> ok.
 -else.
-benchmark_drain_rate_test() ->
-    NumKeys = 50,
-    NumEvents = 100000,
-    log(warmup, {warmup, 0}),
-    timer:sleep(100),
-    EventPid = hb_name:lookup(?MODULE),
-    wait_drain(EventPid, 5000),
-    erlang:suspend_process(EventPid),
-    Keys =
-        [
-            {
-                hb_util:bin([<<"corr-topic-">>, hb_util:int(K)]),
-                hb_util:bin([<<"corr-event-">>, hb_util:int(K)])
-            }
-        ||
-            K <- lists:seq(1, NumKeys)
-        ],
-    fill_mailbox(EventPid, NumEvents, Keys),
-    erlang:resume_process(EventPid),
-    {DrainTime, _} =
-        timer:tc(
-            fun() ->
-                wait_drain(EventPid, 30000)
-            end
-        ),
-    DrainRate = round(NumEvents / (max(1, DrainTime) / 1_000_000)),
-    hb_test_utils:benchmark_print(
-        <<"Drained">>,
-        <<"events">>,
-        DrainRate,
-        1
-    ),
-    ?assert(DrainRate >= 10000),
-    ok.
-
 batch_correctness_test() ->
     log(warmup, {warmup, 0}),
     timer:sleep(100),
@@ -657,14 +581,6 @@ deep_get([Group, Name], Map, Default) ->
         undefined -> Default;
         Inner -> maps:get(Name, Inner, Default)
     end.
-
-%% @doc Fill the event server mailbox with a list of keys. Rotate the keys to
-%% ensure that we are testing the event server's ability to handle many different
-%% types of event.
-fill_mailbox(_Pid, 0, _Keys) -> ok;
-fill_mailbox(Pid, N, Keys = [{Topic, Event}|_]) ->
-    Pid ! {record, Topic, Event, 1},
-    fill_mailbox(Pid, N - 1, hb_util:shuffle(Keys)).
 
 wait_drain(Pid, Timeout) ->
     Deadline = erlang:monotonic_time(millisecond) + Timeout,

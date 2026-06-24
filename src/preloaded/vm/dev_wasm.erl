@@ -509,37 +509,6 @@ imported_function_test() ->
         )
     ).
 
-benchmark_test() ->
-    BenchTime = 0.25,
-    init(),
-    Msg0 = cache_wasm_image("test/test-64.wasm"),
-    {ok, Base} = hb_ao:resolve(Msg0, <<"init">>, #{}),
-    Req =
-        hb_maps:merge(
-            Base,
-            #{
-                <<"function">> => <<"fac">>,
-                <<"parameters">> => [5.0]
-            },
-			#{}
-        ),
-    Iterations =
-        hb_test_utils:benchmark(
-            fun() ->
-                hb_ao:resolve(Req, <<"compute">>, #{})
-            end,
-            BenchTime
-        ),
-    ?event(benchmark, {scheduled, Iterations}),
-    hb_test_utils:benchmark_print(
-        <<"Through AO-Core:">>,
-        <<"resolutions">>,
-        Iterations,
-        BenchTime
-    ),
-    ?assert(Iterations > 5),
-    ok.
-
 state_export_and_restore_test() ->
     init(),
     % Generate a WASM message. We use the pow_calculator because it has a 

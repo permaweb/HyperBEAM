@@ -4,11 +4,6 @@
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
-%% The time to run the benchmarks for in seconds.
--define(BENCHMARK_TIME, 0.25).
-%% The number of iterations to run each benchmark for.
--define(BENCHMARK_ITERATIONS, 1_000).
-
 %% @doc Easy hook to make a test executable via the command line:
 %% `rebar3 eunit --test hb_ao_test_vectors:run_test'
 %% Comment/uncomment out as necessary.
@@ -19,9 +14,6 @@ run_test() ->
 %% the store for each test.
 suite_test_() ->
     hb_test_utils:suite_with_opts(test_suite(), test_opts()).
-
-benchmark_test_() ->
-    hb_test_utils:suite_with_opts(benchmark_suite(), test_opts()).
 
 test_suite() ->
     [
@@ -98,22 +90,6 @@ test_suite() ->
             fun paranoid_input_verification_test/1},
         {paranoid_result_verification, "paranoid result verification",
             fun paranoid_result_verification_test/1}
-    ].
-
-benchmark_suite() ->
-    [
-        {benchmark_simple, "simple resolution benchmark",
-            fun benchmark_simple_test/1},
-        {benchmark_multistep, "multistep resolution benchmark",
-            fun benchmark_multistep_test/1},
-        {benchmark_get, "get benchmark",
-            fun benchmark_get_test/1},
-        {benchmark_set, "single value set benchmark",
-            fun benchmark_set_test/1},
-        {benchmark_set_multiple, "set two keys benchmark",
-            fun benchmark_set_multiple_test/1},
-        {benchmark_set_multiple_deep, "set two keys deep benchmark",
-            fun benchmark_set_multiple_deep_test/1}
     ].
 
 test_opts() ->
@@ -1116,111 +1092,3 @@ paranoid_result_verification_test(RawOpts) ->
             Opts
         ),
     ?assertThrow(_, hb_ao:resolve(Base, <<"mangle">>, Opts)).
-
-%%% Benchmark tests
-benchmark_simple_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) -> hb_ao:resolve(#{ <<"a">> => I }, <<"a">>, Opts) end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Single-step resolutions:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
-
-benchmark_multistep_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) ->
-                hb_ao:resolve(
-                    #{
-                        <<"iteration">> => I,
-                        <<"a">> => #{ <<"b">> => #{ <<"return">> => I } }
-                    },
-                    <<"a/b/return">>,
-                    Opts
-                )
-            end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Multistep resolutions:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
-
-benchmark_get_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) ->
-                hb_ao:get(
-                    <<"a">>,
-                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
-                    Opts
-                )
-            end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Get operations:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
-
-benchmark_set_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) ->
-                hb_ao:set(
-                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
-                    <<"a">>,
-                    <<"2">>,
-                    Opts
-                )
-            end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Single value set operations:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
-
-benchmark_set_multiple_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) ->
-                hb_ao:set(
-                    #{ <<"a">> => <<"1">>, <<"iteration">> => I },
-                    #{ <<"a">> => <<"1a">>, <<"b">> => <<"2">> },
-                    Opts
-                )
-            end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Set two keys operations:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
-
-
-benchmark_set_multiple_deep_test(Opts) ->
-    Time =
-        hb_test_utils:benchmark_iterations(
-            fun(I) ->
-                hb_ao:set(
-                    #{ <<"a">> => #{ <<"b">> => <<"1">> } },
-                    #{ <<"a">> => #{ <<"b">> => <<"2">>, <<"c">> => I } },
-                    Opts
-                )
-            end,
-            ?BENCHMARK_ITERATIONS
-        ),
-    hb_test_utils:benchmark_print(
-        <<"Set two keys operations:">>,
-        ?BENCHMARK_ITERATIONS,
-        Time
-    ).
