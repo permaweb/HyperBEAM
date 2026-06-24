@@ -763,9 +763,6 @@ do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
 
-maybe_verify_children(Topic, _Path, _Msg, _Opts)
-        when Topic == cache_read; Topic == cache_write ->
-    ok;
 maybe_verify_children(Topic, Path, Msg, Opts) ->
     hb_maps:fold(
         fun(Key, Value, ok) ->
@@ -809,48 +806,15 @@ verify_commitment_subset(Topic, Path, Msg, ID, RawCommitment, Opts) ->
                 Opts
             )
         ),
-    case should_defer_commitment_verification(Topic, Keys, Msg, Commitment, Opts) of
-        true ->
-            true;
-        false ->
-            verify_materialized_commitment_subset(
-                Topic,
-                Path,
-                Msg,
-                ID,
-                Commitment,
-                Keys,
-                Opts
-            )
-    end.
-
-has_linked_committed_key(Keys, Msg) ->
-    lists:any(
-        fun(Key) ->
-            case maps:find(Key, Msg) of
-                {ok, Value} when ?IS_LINK(Value) -> true;
-                _ -> false
-            end
-        end,
-        Keys
+    verify_materialized_commitment_subset(
+        Topic,
+        Path,
+        Msg,
+        ID,
+        Commitment,
+        Keys,
+        Opts
     ).
-
-should_defer_commitment_verification(Topic, Keys, Msg, Commitment, Opts) ->
-    has_linked_committed_key(Keys, Msg)
-        orelse secret_key_commitment_without_secret(Topic, Commitment, Opts).
-
-secret_key_commitment_without_secret(Topic, Commitment, Opts)
-        when Topic == cache_read; Topic == cache_write ->
-    case {
-        hb_maps:get(<<"type">>, Commitment, undefined, Opts),
-        hb_maps:get(<<"keyid">>, Commitment, undefined, Opts),
-        hb_maps:find(<<"secret">>, Commitment, Opts)
-    } of
-        {<<"hmac-sha256">>, <<"secret:", _/binary>>, error} -> true;
-        _ -> false
-    end;
-secret_key_commitment_without_secret(_Topic, _Commitment, _Opts) ->
-    false.
 
 verify_materialized_commitment_subset(Topic, Path, Msg, ID, Commitment, Keys, Opts) ->
     CommittedMsg =

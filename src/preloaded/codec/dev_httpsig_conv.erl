@@ -801,8 +801,12 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
     % Note that a "where" Opts may force the location of the encoded
     % value -- this is only a default location if not specified in Opts 
     DefaultWhere =
-        case {maps:get(where, Opts, headers), byte_size(Value)} of
-            {headers, Fits} when Fits =< ?MAX_HEADER_LENGTH -> headers;
+        case {
+            maps:get(where, Opts, headers),
+            byte_size(Value),
+            header_safe_binary(Value)
+        } of
+            {headers, Fits, true} when Fits =< ?MAX_HEADER_LENGTH -> headers;
             _ -> body
         end,
     case maps:get(where, Opts, DefaultWhere) of
@@ -812,6 +816,28 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
             OldBody = hb_maps:get(<<"body">>, Httpsig, #{}, Opts),
             Httpsig#{ <<"body">> => OldBody#{ NormalizedName => Value } }
     end.
+
+header_safe_binary(Value) ->
+    binary:match(Value, [?CRLF, <<"\r">>, <<"\n">>]) =:= nomatch.
+
+small_binary_body_part_roundtrip_test() ->
+    Msg =
+        #{
+            <<"outer">> =>
+                #{
+                    <<"small-bin">> =>
+                        <<0, 1, 2, "\r\n", 3, 4, 5, "\n", 6, 7, 8>>
+                }
+        },
+    Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
+    Dec =
+        hb_message:convert(
+            Enc,
+            <<"structured@1.0">>,
+            <<"httpsig@1.0">>,
+            #{}
+        ),
+    ?assert(hb_message:match(Msg, Dec, strict, #{})).
 
 group_maps_test() ->
    Map = #{

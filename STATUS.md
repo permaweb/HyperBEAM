@@ -379,3 +379,19 @@
   `rebar3 eunit-all` with clean semantics and no known reward hacks, then
   re-enable `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` as a detector
   and fix root causes.
+- Restored the first clean core guardrails after the morning reset. Cache
+  paranoia no longer skips materialized children for `cache_read`/`cache_write`,
+  no longer defers a whole commitment because one committed key is linked, and
+  no longer silently accepts secret-key HMAC commitments without the secret in
+  generic cache verification. HTTPSig inbound requests with signed commitments
+  now verify or reject instead of being accepted but not cached. While validating
+  that stricter HTTP rule, `hb_http:send_large_signed_request_test` exposed a
+  real codec bug: small arbitrary binary values in nested multipart messages
+  were encoded as part headers, so CR/LF bytes truncated the value and broke
+  signatures. Fixed `httpsig@1.0` to body-encode non-header-safe binaries.
+  Validation: `git diff --check` passed; `rebar3 compile` passed; `rebar3
+  device test --module dev_httpsig_conv --test
+  dev_httpsig_conv:small_binary_body_part_roundtrip_test` passed; `rebar3
+  eunit --module=hb_http` passed with 14 tests; `rebar3 eunit
+  --module=hb_cache_control` passed with 14 tests; and `rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 196 tests.

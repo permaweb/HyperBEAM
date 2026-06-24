@@ -1292,11 +1292,13 @@ paranoid_cache_verification_test(RawOpts) ->
                             <<"type">> => <<"hmac-sha256">>
                         }
                 }
-        },
+    },
     ?assert(hb_message:paranoid_verify(cache_read, Base, Opts)),
     ?assert(hb_message:paranoid_verify(cache_write, Base, Opts)),
-    ?assert(hb_message:paranoid_verify(cache_read, SecretKeyMsg, Opts)),
-    ?assert(hb_message:paranoid_verify(cache_write, SecretKeyMsg, Opts)),
+    % Generic cache verification must not silently accept secret-key HMACs
+    % when the secret needed to verify them is absent.
+    ?assertThrow(_, hb_message:paranoid_verify(cache_read, SecretKeyMsg, Opts)),
+    ?assertThrow(_, hb_message:paranoid_verify(cache_write, SecretKeyMsg, Opts)),
     ?assertThrow(_, hb_message:paranoid_verify(cache_read, Tampered, Opts)),
     ?assertThrow(_, hb_message:paranoid_verify(cache_write, Tampered, Opts)).
 

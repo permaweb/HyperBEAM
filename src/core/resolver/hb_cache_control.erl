@@ -237,11 +237,11 @@ cache_source_to_cache_settings(Msg, Opts) ->
 private_no_store(Msg) ->
     case hb_private:from_message(Msg) of
         #{ <<"cache-control">> := CC } ->
-            not maps:get(
+            maps:get(
                 <<"store">>,
                 specifiers_to_cache_settings(CC),
-                true
-            );
+                undefined
+            ) =:= false;
         _ ->
             false
     end.
@@ -378,6 +378,22 @@ message_source_cache_control_test() ->
         <<"lookup">> => false,
         <<"only-if-cached">> => undefined
     }, Result).
+
+private_no_store_test() ->
+    NoStore =
+        hb_private:set(
+            #{},
+            #{ <<"cache-control">> => [<<"no-store">>] },
+            #{}
+        ),
+    NoCache =
+        hb_private:set(
+            #{},
+            #{ <<"cache-control">> => [<<"no-cache">>] },
+            #{}
+        ),
+    ?assert(private_no_store(NoStore)),
+    ?assertNot(private_no_store(NoCache)).
 
 %%% Basic cached AO-Core resolution tests
 

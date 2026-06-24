@@ -991,18 +991,16 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
     ?event(debug_http, {decoded, Decoded}, Opts),
     ForceSignedRequests = hb_opts:get(force_signed_requests, false, Opts),
     StoreAllSigned = hb_opts:get(store_all_signed, false, Opts),
+    MustVerify =
+        ForceSignedRequests orelse hb_message:has_signed_commitment(Decoded, Opts),
     Verified =
-        case {ForceSignedRequests, StoreAllSigned} of
-            {false, false} ->
+        case MustVerify of
+            false ->
                 not_checked;
-            {false, true} ->
-                try hb_message:verify(Decoded, all, Opts)
-                catch _:_ -> false
-                end;
-            {true, _} ->
-                hb_message:verify(Decoded, all, Opts)
+            true ->
+                verify_decoded_httpsig(Decoded, Opts)
         end,
-    case (not ForceSignedRequests) orelse Verified of
+    case (not MustVerify) orelse Verified of
         true ->
             ?event(http_verify, {verified_signature, Decoded}),
             Signers = hb_message:signers(Decoded, Opts),
@@ -1033,6 +1031,11 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
                 }
             ),
             throw({invalid_commitments, Decoded})
+    end.
+
+verify_decoded_httpsig(Msg, Opts) ->
+    try hb_message:verify(Msg, all, Opts)
+    catch _:_ -> false
     end.
 
 %% @doc Add the method and path to a message, if they are not already present.
