@@ -337,7 +337,8 @@ http_wasm_process_by_id_test_parallel() ->
             Node,
             #{
                 <<"path">> => << ProcID/binary, "/compute">>,
-                <<"slot">> => 1
+                <<"slot">> => 1,
+                <<"accept-bundle">> => false
             },
             Opts
         ),

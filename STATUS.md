@@ -226,3 +226,20 @@
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module
   dev_httpsig` passed with 5 tests; and `HB_PARANOID=cache_read,cache_write
   rebar3 device test --module hb_codec_test_vectors` passed with 1958 tests.
+- The next full `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` exposed
+  that the global GET `accept-bundle => false` default was too broad: ordinary
+  404/error responses and bundled device replies reached clients as unbundled
+  HTML bodies, breaking Arweave, auth-hook, b32-name, bundler, location,
+  manifest, and secret tests. Reverted the core HTTP default to the edge
+  behavior (`accept-bundle => true` unless callers opt out) and moved the
+  no-bundle request to the one process HTTP vector that only inspects the
+  returned output. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  hb_process_test_vectors --test
+  hb_process_test_vectors:http_wasm_process_by_id_test_parallel` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_arweave`
+  passed with 39 tests; `dev_b32_name` passed with 9 tests; `dev_manifest`
+  passed with 6 tests; `dev_auth_hook` passed with 4 tests; `dev_location`
+  passed with 3 tests; `dev_bundler` passed with 27 tests; `dev_secret` passed
+  with 12 tests; and `dev_router` passed with 30 tests after one flaky
+  performance-weight assertion passed on isolated and repeated full reruns.
