@@ -11,3 +11,7 @@
 ## Log
 
 - Created baseline notes and plan. No code changes yet.
+- Added standalone `hb_types` draft for Dialyzer spec extraction and input
+  varying. `rebar3 compile` passed.
+- Fixed atom/key normalization in the type parser. `rebar3 eunit
+  --module=hb_types` passed with 3 tests.
