@@ -265,3 +265,17 @@
   `git diff --check` passed; `rebar3 eunit --module=hb_types` passed with 6
   tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
   --module=hb_ao_test_vectors` passed with 191 tests.
+- The follow-up full paranoid suite after the `hb_types` tightening reached
+  `Failed: 0. Skipped: 0. Passed: 3487` but eunit reported one cancelled test:
+  `copycat@1.0 [graphql]:basic_test_parallel` timed out in the HTTP client.
+  Isolated validation of the same module under paranoid cache checking passed:
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  'copycat@1.0 [graphql]'` passed with 9 tests, including
+  `basic_test_parallel` in 31.259 s. Rerunning full `eunit-all` now to regain a
+  clean latest-tip acceptance point rather than treating the cancelled run as
+  green.
+- Latest-tip acceptance is green again after the `hb_types` tightening:
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed with `All 3488
+  tests passed.` The previous copycat cancellation did not reproduce; the same
+  `copycat@1.0 [graphql]:basic_test_parallel` passed in 5.765 s inside the
+  full run.
