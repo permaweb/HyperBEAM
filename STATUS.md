@@ -187,3 +187,16 @@
   passed with 30 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
   --module dev_node_process` passed with 3 tests; and `git diff --check`
   passed.
+- Closed the Lua ledger failure from the full paranoid suite. The first
+  signed-subset helper version still returned all committed keys from the
+  signed ancestor, including local HMAC/node-only commitments; this let cached
+  process metadata leak into process identity comparisons. `with_only_signed/2`
+  now returns only keys covered by signature-bearing commitments, and
+  `lib_process:ensure_process_key/2` keeps the `process` key trimmed to that
+  signed core using explicit `message@1.0/set` replacement. Validation:
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test+with_only_signed_ignores_hmac_commitments_test+with_only_signed_excludes_local_commitments_test`
+  passed with 4 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module 'lua@5.3a [test_ledgers]'` passed with 8 tests; and `git diff
+  --check` passed.

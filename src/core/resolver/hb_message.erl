@@ -425,10 +425,47 @@ with_only_committed(Msg, _) ->
 with_only_signed(Msg, Opts) when is_map(Msg) ->
     case first_signed(Msg, Opts) of
         not_found -> {ok, Msg};
-        Signed -> with_only_committed(Signed, Opts)
+        Signed -> with_only_signed_commitments(Signed, Opts)
     end;
 with_only_signed(Msg, _Opts) ->
     {ok, Msg}.
+
+with_only_signed_commitments(Msg, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    SignedIDs =
+        hb_maps:fold(
+            fun(ID, Commitment, Acc) ->
+                case commitment_has_signature(Commitment, Opts) of
+                    true -> [ID | Acc];
+                    false -> Acc
+                end
+            end,
+            [],
+            Commitments,
+            Opts
+        ),
+    try
+        CommittedKeys = hb_message:committed(Msg, SignedIDs, Opts),
+        OnlySigned =
+            hb_maps:without(
+                [<<"commitments+link">>],
+                with_links([<<"commitments">> | CommittedKeys], Msg, Opts),
+                Opts
+            ),
+        {ok,
+            OnlySigned#{
+                <<"commitments">> => hb_maps:with(SignedIDs, Commitments, Opts)
+            }}
+    catch Class:Reason:St ->
+        {error,
+            {could_not_normalize,
+                {class, Class},
+                {reason, Reason},
+                {msg, Msg},
+                {stacktrace, St}
+            }
+        }
+    end.
 
 first_signed(Msg, Opts) when is_map(Msg) ->
     case has_signed_commitment(Msg, Opts) of

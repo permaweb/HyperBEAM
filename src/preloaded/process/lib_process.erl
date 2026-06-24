@@ -121,12 +121,7 @@ ensure_process_key(Base, Opts) ->
                     {committed, Committed}
                 }
             ),
-            Res =
-                hb_ao:set(
-                    hb_message:uncommitted(Base, Opts),
-                    #{ <<"process">> => Committed },
-                    Opts#{ <<"hashpath">> => ignore }
-                ),
+            Res = set_process_key(Base, Committed, Opts),
             ?event(
                 {set_process_key_res,
                     {base, Base},
@@ -135,8 +130,27 @@ ensure_process_key(Base, Opts) ->
                 }
             ),
             Res;
-        _ -> Base
+        Process ->
+            {ok, Committed} = hb_message:with_only_signed(Process, Opts),
+            case Committed == Process of
+                true -> Base;
+                false -> set_process_key(Base, Committed, Opts)
+            end
     end.
+
+set_process_key(Base, Process, Opts) ->
+    hb_util:ok(
+        hb_ao:resolve(
+            hb_message:uncommitted(Base, Opts),
+            #{
+                <<"path">> => <<"set">>,
+                <<"set-mode">> => <<"explicit">>,
+                <<"process">> => Process
+            },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+        Opts
+    ).
 
 %% @doc Returns the default device for a given piece of process functionality.
 default_device(Base, Key, Opts) ->

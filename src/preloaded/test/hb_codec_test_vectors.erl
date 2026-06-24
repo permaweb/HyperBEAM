@@ -59,6 +59,28 @@ with_only_signed_ignores_hmac_commitments_test() ->
     },
     ?assertEqual({ok, Msg}, hb_message:with_only_signed(Msg, Opts)).
 
+with_only_signed_excludes_local_commitments_test() ->
+    Opts = test_opts(normal),
+    Signed =
+        hb_message:commit(
+            #{ <<"a">> => 1 },
+            Opts,
+            <<"httpsig@1.0">>
+        ),
+    WithLocal =
+        hb_message:commit(
+            Signed#{ <<"local">> => <<"node-only">> },
+            Opts,
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"type">> => <<"hmac-sha256">>
+            }
+        ),
+    {ok, OnlySigned} = hb_message:with_only_signed(WithLocal, Opts),
+    ?assertEqual(1, maps:get(<<"a">>, OnlySigned)),
+    ?assertNot(maps:is_key(<<"local">>, OnlySigned)),
+    ?assertEqual(1, maps:size(maps:get(<<"commitments">>, OnlySigned))).
+
 %% @doc Return a list of codecs to test. Disable these as necessary if you need
 %% to test the functionality of a single codec, etc.
 test_codecs() ->
