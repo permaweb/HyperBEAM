@@ -330,3 +330,8 @@
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_router`
   passed with 30 tests, confirming the full-run router failure is the existing
   timing-sensitive assertion rather than a deterministic branch regression.
+- Latest-tip acceptance after the HTTP signed-wire and secret-HMAC cache
+  verification fixes is green: on `5b8c8dde7`,
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed end-to-end with
+  `All 3493 tests passed.` The full run also cleared the previously noisy
+  router performance assertion and the copycat GraphQL case.
