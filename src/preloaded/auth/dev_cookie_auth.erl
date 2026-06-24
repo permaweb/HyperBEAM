@@ -11,6 +11,11 @@
 %% key for the `httpsig@1.0' commitment. If a `committer' is given, we search 
 %% for it in the cookie message instead of generating a new secret. See the
 %% module documentation of `dev_cookie' for more details on its scheme.
+-spec generate(
+    _,
+    #{ committer => binary(), generator => binary() | #{ path => binary(), _ => _ }, _ => _ },
+    _
+) -> _.
 generate(Base, Request, Opts) ->
     {WithCookie, Secrets} =
         case find_secrets(Request, Opts) of
@@ -33,6 +38,7 @@ generate(Base, Request, Opts) ->
 %% messages. The inbound request has the same structure as a normal request
 %% hook: The message sequence is the body of the request, and the request is
 %% the request message.
+-spec finalize(_, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 finalize(Base, Request, Opts) ->
     ?event(debug_auth, {finalize, {base, Base}, {request, Request}}),
     maybe

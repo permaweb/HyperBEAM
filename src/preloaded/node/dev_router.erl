@@ -138,6 +138,7 @@ register(_M1, M2, Opts) ->
     {ok, <<"Routes registered.">>}.
 
 %% @doc Device function that returns all known routes.
+-spec routes(_, #{ method => binary(), _ => _ }, _) -> _.
 routes(M1, M2, Opts) ->
     ?event({routes_msg, M1, M2}),
     Routes = load_routes(Opts),
@@ -724,6 +725,11 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
     Num.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
+-spec preprocess(
+    #{ 'commit-request' => boolean(), _ => _ },
+    #{ request := #{ path := binary(), _ => _ }, body := _, _ => _ },
+    _
+) -> _.
 preprocess(Base, RawReq, Opts) ->
     Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
     ?event(debug_preprocess, {called_preprocess,Req}),

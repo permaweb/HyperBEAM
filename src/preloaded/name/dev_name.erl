@@ -78,6 +78,11 @@ execute_resolver(Key, Resolver, Opts) when is_map(Resolver) ->
 
 %% @doc Implements an `on/request' compatible hook that resolves names given in
 %% the `host` key to their corresponding ID and prepends it to the execution path.
+-spec request(
+    _,
+    #{ request := #{ host := binary(), _ => _ }, body := _, _ => _ },
+    _
+) -> _.
 request(HookMsg, HookReq, Opts) ->
     ?event({request_hook, {hook_msg, HookMsg}, {hook_req, HookReq}}),
     maybe

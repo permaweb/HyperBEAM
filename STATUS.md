@@ -44,3 +44,17 @@
   hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
   passed with 2 tests; `rebar3 eunit --module=hb_ao_test_vectors` passed with
   191 tests; `git diff --check` passed.
+- Added the first precise preloaded device spec batch, targeting request/base
+  keys actually consumed by process, scheduler, router/hooks, cookie, codec,
+  delegated-compute, and arweave call boundaries. A process-device run exposed
+  one real singleton-extension consequence: scheduled messages could now carry
+  their signed process as a `...` ancestor while the scheduler/process identity
+  path still used direct-only committed subsets. Migrated only those scheduling
+  and process-ID call sites to `hb_message:with_only_signed/2`. Validation:
+  `rebar3 compile` passed; `git diff --check` passed; `rebar3 eunit
+  --module=hb_types` passed with 3 tests; `rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 191 tests; `rebar3 device test
+  --module hb_process_test_vectors` passed with 17 tests; `rebar3 device test
+  --module hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
+  passed with 2 tests.

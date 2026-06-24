@@ -21,6 +21,7 @@
 -include("include/hb.hrl").
 
 %% @doc Decide whether or not to service a request from a given address.
+-spec estimate(_, #{ request := #{ _ => _ }, _ => _ }, _) -> _.
 estimate(_, Msg, NodeMsg) ->
     ?event(payment, {estimate, {msg, Msg}}),
     % Check if the address is in the allow-list.

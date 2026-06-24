@@ -17,17 +17,18 @@ process_id(Base, Req, Opts) ->
         not_found ->
             process_id(ensure_process_key(Base, Opts), Req, Opts);
         Process ->
-            Signers = hb_message:signers(Process, Opts),
-            case {hb_message:verify(Process, all, Opts), Signers} of
+            {ok, SignedProcess} = hb_message:with_only_signed(Process, Opts),
+            Signers = hb_message:signers(SignedProcess, Opts),
+            case {hb_message:verify(SignedProcess, all, Opts), Signers} of
                 {false, _} ->
-                    ?event({process_not_verified, {process, Process}}),
-                    throw({process_not_verified, Process});
+                    ?event({process_not_verified, {process, SignedProcess}}),
+                    throw({process_not_verified, SignedProcess});
                 {true, []} ->
-                    ?event({process_has_no_signers, {process, Process}}),
-                    throw({process_has_no_signers, Process});
+                    ?event({process_has_no_signers, {process, SignedProcess}}),
+                    throw({process_has_no_signers, SignedProcess});
                 {true, _} ->
                     hb_message:id(
-                        Process,
+                        SignedProcess,
                         hb_util:atom(maps:get(<<"commitments">>, Req, <<"signed">>)),
                         Opts
                     )
@@ -110,10 +111,9 @@ set_results(State, Results, Opts) ->
 ensure_process_key(Base, Opts) ->
     case hb_maps:get(<<"process">>, Base, not_found, Opts) of
         not_found ->
-            % If the message has lost its signers, we need to re-read it from
-            % the cache. This can happen if the message was 'cast' to a different
-            % device, leading the signers to be unset.
-            {ok, Committed} = hb_message:with_only_committed(Base, Opts),
+            % If the message has been extended or cast, keep the signed core as
+            % the process key while leaving local additions on the outer message.
+            {ok, Committed} = hb_message:with_only_signed(Base, Opts),
             ?event(
                 {process_key_before_set,
                     {base, Base},

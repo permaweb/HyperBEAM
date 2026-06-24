@@ -201,10 +201,9 @@ assign(State, Message, ReplyPID) ->
 
 %% @doc Generate and store the actual assignment message.
 do_assign(State, Message, ReplyPID) ->
-    % Ensure that only committed keys from the message are included in the
-    % assignment.
+    % Keep the signed source message when the scheduled request extends one.
     {ok, OnlyAttested} =
-        hb_message:with_only_committed(
+        hb_message:with_only_signed(
             Message,
             Opts = maps:get(opts, State)
         ),

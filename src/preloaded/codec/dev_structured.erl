@@ -46,6 +46,9 @@ verify(Msg, Req, Opts) ->
     }.
 
 %% @doc Convert a rich message into a 'Type-Annotated-Binary-Message' (TABM).
+-spec from(_,
+    #{ 'encode-types' => [binary()], bundle => boolean(), _ => _ },
+    _) -> _.
 from(Bin, _Req, _Opts) when is_binary(Bin) -> {ok, Bin};
 from(List, Req, Opts) when is_list(List) ->
     % Encode the list as a map, then -- if our request indicates that we are

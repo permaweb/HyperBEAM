@@ -79,6 +79,7 @@ router(_, Base, Req, Opts) ->
 %% assignment. Assumes that Base is a `dev_process' or similar message, having
 %% a `Current-Slot' key. It stores a local cache of the schedule in the
 %% `priv/To-Process' key.
+-spec next(#{ 'at-slot' := integer(), _ => _ }, _, _) -> _.
 next(Base, Req, Opts) ->
     ?event(debug_next, {scheduler_next_called, {base, Base}, {req, Req}}),
     ?event(next, started_next),
@@ -363,6 +364,9 @@ status(_M1, _M2, _Opts) ->
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
+-spec schedule(_,
+    #{ method => binary(), from => integer(), to => integer(), accept => binary(), _ => _ },
+    _) -> _.
 schedule(Base, Req, Opts) ->
     ?event({resolving_schedule_request, {req, Req}, {state_msg, Base}}),
     case hb_util:key_to_atom(hb_ao:get(<<"method">>, Req, <<"GET">>, Opts)) of
@@ -399,8 +403,8 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
     % - If not, use the target as the ProcessID.
     ProcID = find_target_id(Base, Req, ToSched, Opts),
     ?event({proc_id, ProcID}),
-    % Filter all unsigned keys from the source message.
-    case hb_message:with_only_committed(ToSched, Opts) of
+    % Filter back to the signed source message when this request extends one.
+    case hb_message:with_only_signed(ToSched, Opts) of
         {ok, OnlyCommitted} ->
             ?event(
                 {post_schedule,

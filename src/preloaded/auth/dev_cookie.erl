@@ -56,11 +56,17 @@ verify(Base, Req, RawOpts) -> dev_cookie_auth:verify(Base, Req, RawOpts).
 %% @doc Preprocessor keys that utilize cookies and the `~secret@1.0' device to
 %% sign inbound HTTP requests from users if they are not already signed. We use
 %% the hook authentication framework to implement this.
+-spec generate(
+    _,
+    #{ committer => binary(), generator => binary() | #{ path => binary(), _ => _ }, _ => _ },
+    _
+) -> _.
 generate(Base, Req, Opts) ->
     dev_cookie_auth:generate(Base, Req, Opts).
 
 %% @doc Finalize an `on-request' hook by adding the `set-cookie' header to the
 %% end of the message sequence.
+-spec finalize(_, #{ request := #{ _ => _ }, body := _, _ => _ }, _) -> _.
 finalize(Base, Request, Opts) ->
     dev_cookie_auth:finalize(Base, Request, Opts).
 
@@ -76,6 +82,7 @@ finalize(Base, Request, Opts) ->
 %% 
 %% The `format' may be specified in the request message as the `req:format' key.
 %% If no `format' is specified, the default is `default'.
+-spec get_cookie(_, #{ key := binary(), format => binary(), _ => _ }, _) -> _.
 get_cookie(Base, Req, RawOpts) ->
     Opts = opts(RawOpts),
     {ok, Cookies} = extract(Base, Req, Opts),
@@ -158,6 +165,11 @@ reset(Base, _Req, Opts) ->
 %% 
 %% Note that the `format: cookie' form is information lossy: All provided
 %% attributes and flags are discarded.
+-spec to(
+    #{ cookie => binary() | [binary()], 'set-cookie' => binary() | [binary()], _ => _ },
+    #{ format => binary(), _ => _ },
+    _
+) -> _.
 to(Msg, Req, Opts) ->
     ?event({to, {priv_msg, Msg}, {priv_req, Req}}),
     CookieOpts = opts(Opts),
@@ -258,6 +270,11 @@ to_cookie_line(Key, Cookie) ->
 
 %% @doc Normalize a message containing a `cookie', `set-cookie', and potentially
 %% a `priv/cookie' key into a message with only the `priv/cookie' key.
+-spec from(
+    #{ cookie => binary() | [binary()], 'set-cookie' => binary() | [binary()], _ => _ },
+    _,
+    _
+) -> _.
 from(Msg, Req, Opts) ->
     CookieOpts = opts(Opts),
     LoadedMsg = ensure_cookie_loaded(Msg, CookieOpts),

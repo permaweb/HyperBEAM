@@ -719,6 +719,11 @@ get_chunk(Offset, Opts) ->
 %% block hash length (43 characters), it is used as an ID. If it is parsable as
 %% an integer, it is used as a block height. If it is not present, the current
 %% block is used.
+-spec block(
+    #{ block => binary() | integer(), _ => _ },
+    #{ block => binary() | integer(), 'cache-control' => [binary()], _ => _ },
+    map()
+) -> term().
 block(Base, Request, Opts) when is_map(Base) ->
     Block =
         hb_ao:get_first(

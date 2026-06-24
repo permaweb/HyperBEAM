@@ -16,6 +16,7 @@ init(Base, _Req, _Opts) ->
 %% @doc We assume that the compute engine stores its own internal state,
 %% with snapshots triggered only when HyperBEAM requests them. Subsequently,
 %% to load a snapshot, we just need to return the original message.
+-spec normalize(#{ snapshot => #{ type => binary(), data => _, _ => _ }, _ => _ }, _, _) -> _.
 normalize(Base, _Req, Opts) ->
     case hb_maps:find(<<"snapshot">>, Base, Opts) of
         error -> {ok, Base};
@@ -50,6 +51,7 @@ load_state(Snapshot, Opts) ->
 %% @doc Call the delegated server to compute the result. The endpoint is
 %% `POST /compute' and the body is the JSON-encoded message that we want to
 %% evaluate.
+-spec compute(_, #{ type => binary(), slot => integer(), 'process-id' => binary(), _ => _ }, _) -> _.
 compute(Base, Req, Opts) ->
     OutputPrefix =
         hb_ao:get(
