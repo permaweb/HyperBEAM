@@ -257,3 +257,11 @@
   in the modified `message@1.0/set` block. Validation: `git diff --check`
   passed; `rebar3 compile` passed; `HB_PARANOID=cache_read,cache_write rebar3
   device test --module dev_message` passed with 20 tests.
+- Tightened the new type coercion path while auditing `hb_types`: after a value
+  is coerced, it is rechecked against the target schema before being accepted.
+  This prevents literal specs and bounded scalar specs from accepting a
+  coerced value that still violates the declared type. Added a regression test
+  covering non-negative integer coercion and literal equality. Validation:
+  `git diff --check` passed; `rebar3 eunit --module=hb_types` passed with 6
+  tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 191 tests.

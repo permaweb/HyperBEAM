@@ -462,7 +462,11 @@ apply_schema(Type, Value, Opts) ->
         false ->
             case coerce_type(Type, Value, Opts) of
                 error -> throw({invalid_type, Type, Value});
-                Coerced -> Coerced
+                Coerced ->
+                    case check_type(Type, Coerced) of
+                        true -> Coerced;
+                        false -> throw({invalid_type, Type, Value})
+                    end
             end
     end.
 
@@ -561,25 +565,29 @@ coerce_union([Member | Rest], Value, Opts) ->
     end.
 
 coerce_literal(Expected, Value) when is_integer(Expected) ->
-    try_coerce(fun hb_util:int/1, Value);
+    coerce_exact(Expected, try_coerce(fun hb_util:int/1, Value));
 coerce_literal(Expected, Value) when is_float(Expected) ->
-    try_coerce(fun hb_util:float/1, Value);
+    coerce_exact(Expected, try_coerce(fun hb_util:float/1, Value));
 coerce_literal(Expected, Value) when is_binary(Expected) ->
-    try_coerce(fun hb_util:bin/1, Value);
+    coerce_exact(Expected, try_coerce(fun hb_util:bin/1, Value));
 coerce_literal(Expected, Value) when is_atom(Expected) ->
     case is_boolean(Expected) andalso is_boolean_coercible(Value) of
-        true -> try_coerce(fun hb_util:bool/1, Value);
-        false -> try_coerce(fun hb_util:atom/1, Value)
+        true -> coerce_exact(Expected, try_coerce(fun hb_util:bool/1, Value));
+        false -> coerce_exact(Expected, try_coerce(fun hb_util:atom/1, Value))
     end;
 coerce_literal(Expected, Value) when is_list(Expected) ->
     case try_coerce(fun hb_util:list/1, Value) of
         error -> error;
-        Coerced when length(Coerced) =:= length(Expected) -> Coerced;
-        _ -> error
+        Coerced -> coerce_exact(Expected, Coerced)
     end;
 coerce_literal(Expected, Value) when Value =:= Expected ->
     Value;
 coerce_literal(_Expected, _Value) ->
+    error.
+
+coerce_exact(Expected, Expected) ->
+    Expected;
+coerce_exact(_Expected, _Value) ->
     error.
 
 is_boolean_coercible(Value) ->
@@ -704,6 +712,24 @@ apply_empty_projection_test() ->
             #{ <<"device">> => <<"test@1.0">>, <<"extra">> => <<"drop">> },
             #{}
         )
+    ).
+
+coerce_rechecks_type_test() ->
+    ?assertEqual(
+        1,
+        apply_schema(scalar_type(<<"non-neg-integer">>), <<"1">>, #{})
+    ),
+    ?assertThrow(
+        {invalid_type, _, _},
+        apply_schema(scalar_type(<<"non-neg-integer">>), <<"-1">>, #{})
+    ),
+    ?assertEqual(
+        <<"base">>,
+        apply_schema(literal_type(<<"base">>), <<"base">>, #{})
+    ),
+    ?assertThrow(
+        {invalid_type, _, _},
+        apply_schema(literal_type(<<"base">>), <<"request">>, #{})
     ).
 
 extension_projection_test() ->
