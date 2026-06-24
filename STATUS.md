@@ -363,3 +363,6 @@
   `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_http` passed
   with 14 tests; and `HB_PARANOID=cache_read,cache_write rebar3 device test
   --module dev_httpsig` passed with 5 tests.
+- Latest-tip acceptance after the HTTP minimization is green: on `7878ba715`,
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed end-to-end with
+  `All 3493 tests passed.`
