@@ -702,29 +702,49 @@ do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
 do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
-    LoadedMsg =
-        hb_cache:ensure_all_loaded(
-            hb_link:decode_all_links(Msg),
-            Opts#{
-                paranoid_verify => false,
-                <<"paranoid-verify">> => false
-            }
-        ),
+    DecodedMsg = hb_link:decode_all_links(Msg),
     hb_maps:map(
         fun(Key, Value) ->
-            do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
+            do_paranoid_verify_child(Topic, Path ++ [Key], Value, Opts)
         end,
-        uncommitted(hb_private:reset(LoadedMsg), Opts),
+        uncommitted(hb_private:reset(DecodedMsg), Opts),
         Opts
     ),
-    {ok, CommittedMsg} = with_only_committed(LoadedMsg, Opts),
-    try true = verify(CommittedMsg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
-    catch
-        _:Details:St ->
-            throw({verification_failure, Topic, Path, CommittedMsg, Details, St})
-    end;
+    verify_committed_subset(Topic, Path, DecodedMsg, Opts);
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
+
+do_paranoid_verify_child(_Topic, _Path, Link, _Opts) when ?IS_LINK(Link) ->
+    true;
+do_paranoid_verify_child(Topic, Path, Value, Opts) ->
+    do_paranoid_verify(Topic, Path, Value, Opts).
+
+verify_committed_subset(Topic, Path, Msg, Opts) ->
+    case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
+        Commitments when map_size(Commitments) > 0 ->
+            {ok, CommittedMsg0} = with_only_committed(Msg, Opts),
+            CommittedMsg =
+                hb_cache:ensure_all_loaded(
+                    CommittedMsg0,
+                    Opts#{
+                        paranoid_verify => false,
+                        <<"paranoid-verify">> => false
+                    }
+                ),
+            try
+                true =
+                    verify(
+                        CommittedMsg,
+                        #{ <<"commitment-ids">> => <<"all">> },
+                        Opts
+                    )
+            catch
+                _:Details:St ->
+                    throw({verification_failure, Topic, Path, CommittedMsg, Details, St})
+            end;
+        _ ->
+            true
+    end.
 
 %% @doc Return the unsigned version of a message in AO-Core format.
 uncommitted(Msg) -> uncommitted(Msg, #{}).
