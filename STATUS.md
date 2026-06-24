@@ -347,3 +347,11 @@
   end-to-end with `All 3493 tests passed.` This run also covered the full
   `hb_codec_test_vectors` signed-subset cases, router performance assertion,
   secret-device flows, and process HTTP vectors.
+- Post-compaction unattended audit reread `decisions/ao-core-upgrade-north-star.md`,
+  `decisions/ao-core-upgrade-plan.md`, and `MEMORY.md`, then confirmed the
+  worktree was clean at `2813be5e9`. `git diff --check` passed. Erlang
+  abstract-code probing confirmed `#{}` is represented distinctly from
+  `map()`, matching the empty-projection semantics in `hb_types`; no code
+  change was needed. Broad `_ => _` specs were reviewed and remain concentrated
+  in hook/codec/forwarding surfaces or process/scheduler carry-forward cases,
+  rather than generic vary-on-everything force loads.
