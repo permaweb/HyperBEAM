@@ -542,8 +542,13 @@ has_signed_commitment(Msg, Opts) ->
 commitment_has_signature(Link, Opts) when ?IS_LINK(Link) ->
     commitment_has_signature(hb_cache:ensure_loaded(Link, Opts), Opts);
 commitment_has_signature(Commitment, Opts) when is_map(Commitment) ->
-    hb_maps:find(<<"signature">>, Commitment, Opts) =/= error
-        andalso hb_maps:find(<<"committer">>, Commitment, Opts) =/= error;
+    case hb_maps:get(<<"type">>, Commitment, undefined, Opts) of
+        <<"hmac-sha256">> ->
+            false;
+        _ ->
+            hb_maps:find(<<"signature">>, Commitment, Opts) =/= error
+                andalso hb_maps:find(<<"committer">>, Commitment, Opts) =/= error
+    end;
 commitment_has_signature(_Commitment, _Opts) ->
     false.
 

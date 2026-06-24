@@ -335,3 +335,10 @@
   `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed end-to-end with
   `All 3493 tests passed.` The full run also cleared the previously noisy
   router performance assertion and the copycat GraphQL case.
+- Post-green audit found that the `with_only_signed/2` HMAC regression only
+  excluded the fixture because it lacked a `committer`. Tightened signed
+  ancestry detection to reject `hmac-sha256` commitments directly, and made the
+  fixture include both `signature` and `committer`. Validation:
+  `git diff --check` passed; `HB_PARANOID=cache_read,cache_write rebar3 device
+  test --module hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_ignores_hmac_commitments_test` passed.

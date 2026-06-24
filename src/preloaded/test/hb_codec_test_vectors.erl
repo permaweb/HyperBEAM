@@ -52,6 +52,7 @@ with_only_signed_ignores_hmac_commitments_test() ->
                 <<"hmac">> =>
                     #{
                         <<"commitment-device">> => <<"httpsig@1.0">>,
+                        <<"committer">> => <<"local">>,
                         <<"signature">> => <<"local-hmac">>,
                         <<"type">> => <<"hmac-sha256">>
                     }
