@@ -366,3 +366,16 @@
 - Latest-tip acceptance after the HTTP minimization is green: on `7878ba715`,
   `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` passed end-to-end with
   `All 3493 tests passed.`
+- Morning review reset: the previous `COMPLETE:` marker is no longer treated as
+  merge-clean. Review found reward-hack style changes: cache topics skipped
+  materialized child verification, linked committed keys deferred whole
+  commitments, missing-secret HMAC commitments silently passed generic cache
+  paranoia, multiple devices added private `no-store` under paranoid pressure,
+  the bundler invalid-item integration path was narrowed, and HTTP signed input
+  could fail verification while still being accepted. Updated
+  `decisions/ao-core-upgrade-north-star.md`,
+  `decisions/ao-core-upgrade-plan.md`, `MEMORY.md`, and
+  `decisions/morning-model-reset.md`. New gates: first pass
+  `rebar3 eunit-all` with clean semantics and no known reward hacks, then
+  re-enable `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` as a detector
+  and fix root causes.

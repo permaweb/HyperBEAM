@@ -18,6 +18,14 @@ the model rather than the earlier prototype branches.
   message upon the base message.
 - Results are messages or literals. There is no separate "result object" in the
   protocol model.
+- Device casting is ordinary message composition. The legacy tuple form
+  `{as, Device, Msg}` should be removed from the protocol-facing model and
+  replaced by extending/overlaying `Msg` with `#{ <<"device">> => Device }`
+  and any other local keys. A path-bearing device path segment such as
+  `key~device@1.0` should mean: first compose the current message with the
+  device key, then resolve the request path `key`.
+- There should be no second "cast" or "as" execution universe. If a request
+  without a path extends, changing the device is just one instance of extension.
 
 ## Message Extension
 
@@ -28,6 +36,11 @@ the model rather than the earlier prototype branches.
 - Ordinary device calls should receive the flattened, varied view unless the
   function spec explicitly asks to see extension structure.
 - `...+link` is a cache/TABM boundary concern, not structured-message semantics.
+- Private state is carried forward when a message extends another message. The
+  `priv` element belongs to local execution state, not the public message ID,
+  but extension should not accidentally drop it. When the new base is not a
+  message value, for example a list, binary, or scalar key result, there is no
+  message `priv` to carry.
 - `hb_message:with_only_signed/2` should supersede signed-subset call sites
   that currently use `with_only_committed/2`. It should walk the `...` chain
   from newest parent to oldest ancestor until it finds the first message with a
@@ -122,6 +135,19 @@ the model rather than the earlier prototype branches.
 - This lets all inputs that vary to the same base/request share one execution
   while still producing caller-specific extended results.
 - Unvaried and varied inputs must not be conflated.
+- Loaded messages should not be routinely annotated with unsigned commitment
+  IDs by `normalize_commitments/2`. Unsigned IDs and cache-addressing facts
+  should be cache/link structure, not ordinary Erlang map state. This reduces
+  cache-poisoning risk from normal map operations such as `maps:put/3` or
+  `Msg#{ Key => Value }` against a message that merely carries an unsigned ID.
+- `with_only_committed/2` remains a signed/committed-subset helper where truly
+  needed, but normal cache operation should offload data and use links rather
+  than deepening loaded messages with synthetic unsigned commitments.
+- Cache expiration is the honest answer for time-bound data. Do not use private
+  `no-store` merely to avoid cache/paranoid failures. If a result is reusable
+  for a bounded interval, implement or honor `max-age` on cache reads rather
+  than disabling storage. Use `no-store` only for genuinely private,
+  non-deterministic, or time-local results.
 
 ## Hashpaths
 
@@ -151,6 +177,32 @@ the model rather than the earlier prototype branches.
   message.
 - The HTTP signature commits to that message response and the execution
   hashpath, binding "what is known" to "how it was reached."
+- Inbound signed HTTP messages that fail verification should be rejected with a
+  client error, not merely accepted without caching. If a message presents
+  commitments as signed input, the node must either verify them or reject them.
+- `store-all-signed` must not store unverified signed wire messages. This is a
+  consequence of the previous point, not a separate cache-only policy.
+
+## Paranoid Verification
+
+- `HB_PARANOID=cache_read,cache_write` is a detector for production cache
+  poisoning and commitment breakage. It must never be satisfied by disabling
+  features, skipping commitments, weakening assertions, broadening specs, or
+  marking otherwise-cacheable results as `no-store`.
+- It is acceptable not to recursively verify unloaded links while checking the
+  current message. A link is a normal cache resource boundary unless a bundle
+  or explicit recursive-verification mode asks to verify the full subtree.
+- It is not acceptable to skip verification of the current message's committed
+  surface because one committed value is linked. Verify the exact committed
+  link representation, load the value if the committed surface requires it, or
+  fail loudly.
+- Materialized nested messages that are present in the current message should be
+  verified when paranoia is asked to recurse into present children. Only
+  unloaded links are deferred to the later read that materializes them.
+- Secret HMAC commitments must not silently pass in generic cache paranoia. If
+  a secret is required for verification, the verifier should obtain it from the
+  intended private/opts path or report that the commitment is unverifiable in
+  that context. Silent success is a reward hack.
 
 ## Implementation Guardrails
 
@@ -169,6 +221,13 @@ the model rather than the earlier prototype branches.
 - Avoid carrying forward broad cache rewrites, result/message nomenclature
   drift, archive schema side indexes, generic "vary on everything" specs, and
   large unrelated device churn.
+- Before claiming paranoid acceptance, the ordinary suite must first pass with
+  clean semantics and no known reward hacks:
+
+  ```sh
+  rebar3 eunit-all
+  ```
+
 - Absolute success marker: every core and preloaded device test must pass with
   paranoid cache checking enabled:
 

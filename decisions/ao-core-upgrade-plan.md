@@ -11,6 +11,29 @@ Reread these files before each implementation batch and before each commit:
 If a change does not follow from those notes, stop and write a decision note
 before implementing it.
 
+## Morning Reset: Clean Semantics First
+
+The previous `COMPLETE:` checkpoint is no longer review-complete. It proved
+that the branch could be made green, but review found reward-hack style changes
+that weakened the model:
+
+- `HB_PARANOID` cache topics skipped materialized child verification.
+- Linked committed keys caused whole commitments to be deferred.
+- Missing-secret HMAC commitments silently passed generic cache paranoia.
+- Several devices marked results private `no-store` to avoid cache writes
+  without proving that the result was truly private or time-bound.
+- One bundler integration test was narrowed to a direct device call.
+- HTTP signed input could fail verification while still being accepted if the
+  node was not forcing signed requests.
+
+The new order of work is:
+
+1. Restore clean model semantics and remove reward hacks.
+2. Pass `rebar3 eunit-all` without `HB_PARANOID`.
+3. Re-enable `HB_PARANOID=cache_read,cache_write` as a detector and fix the
+   real failures it exposes.
+4. Only then claim completion.
+
 ## Branch Discipline
 
 - Start a fresh branch from latest `hyperbeam-main/edge`.
@@ -47,6 +70,10 @@ before implementing it.
   `message@1.0` member reads.
 - Use the varied pair for cache lookup, persistent grouping, validation,
   execution, hashpath generation, and cache write.
+- Remove the legacy protocol-facing `{as, Device, Msg}` model. Device changes
+  are ordinary extension/overlay of `#{ <<"device">> => Device }`; path-bearing
+  device segments first compose the device key and then resolve the requested
+  path.
 
 ## Phase 1b: Overlay
 
@@ -56,6 +83,9 @@ before implementing it.
 - Prefer existing `set` semantics for phase 1.
 - Avoid deep structural extension mechanics until message extension unless
   coherence forces it. If forced, isolate in labeled commits.
+- Preserve `priv` when extending one message with another. Do not carry `priv`
+  through non-message values such as binaries, lists, or scalars. Never include
+  `priv` in public cache IDs or serialized public message surfaces.
 
 ## Phase 1c: Signed Subsets
 
@@ -98,6 +128,17 @@ before implementing it.
   for `...`.
 - Convert overlay from eager `set` to structural extension.
 - Handle nested structural overlay carefully and atomically.
+- Strip routine loaded-message commitment normalization from the model.
+  Unsigned IDs should live in cache/link addressing, not as synthetic
+  commitments on ordinary Erlang maps.
+
+## Phase 2b: Cache Expiry And Dynamic Results
+
+- Revert private `no-store` markings that were added only to make tests pass.
+- Keep `no-store` only for genuinely private, nondeterministic, or time-local
+  outputs.
+- If a result is deterministic but time-bounded, support or honor `max-age` on
+  cache hits/reads instead of disabling cache writes.
 
 ## Phase 3: Hashpaths
 
@@ -118,10 +159,20 @@ before implementing it.
 - Do not carry forward large `hb_cache` rewrites unless a minimal failing test
   proves one exact edit is required.
 - Do not add generic vary-on-everything specs to silence failures.
+- Do not satisfy tests by weakening `HB_PARANOID`, skipping commitments, hiding
+  cache writes behind private `no-store`, or narrowing integration tests to
+  avoid the path that failed.
 
 ## Acceptance
 
-- The overnight pass is not complete until this command passes:
+- First clean gate:
+
+  ```sh
+  rebar3 eunit-all
+  ```
+
+- The overnight pass is not complete until the clean gate passes and then this
+  command passes:
 
   ```sh
   HB_PARANOID=cache_read,cache_write rebar3 eunit-all

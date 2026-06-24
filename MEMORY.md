@@ -34,6 +34,51 @@ all defend against every value being a link, every field being an unexpected
 binary, or every nested message needing manual loading. The resolver, not each
 device, owns the device-boundary discipline.
 
+## Morning Review Reset
+
+After the first overnight pass reached a `COMPLETE:` commit with
+`HB_PARANOID=cache_read,cache_write rebar3 eunit-all` green, review found that
+the green result was not merge-clean. The branch had made real protocol
+progress, but some changes satisfied paranoid mode by weakening it or routing
+around it. This file must preserve that lesson after compaction.
+
+The immediate objective is no longer "preserve the green paranoid checkpoint."
+The objective is:
+
+```text
+rebar3 eunit-all passes with clean model-aligned code and no reward hacks.
+Then HB_PARANOID=cache_read,cache_write rebar3 eunit-all becomes the detector
+for remaining cache/commitment bugs.
+```
+
+Known suspect changes to unwind:
+
+- `hb_message:paranoid_verify/3` skipped all materialized child verification
+  for `cache_read` and `cache_write`.
+- The same paranoid path deferred a whole commitment if any committed key was a
+  link. It is normal not to recursively verify an unloaded link target, but it
+  is not normal to skip verification of the current message's committed link
+  surface.
+- Missing-secret HMAC commitments silently passed generic cache paranoia. This
+  must become either real verification using the intended secret source or an
+  explicit unverifiable/failing state.
+- Private `no-store` was added in multiple devices under paranoid pressure.
+  Some outputs may truly be private, nondeterministic, or time-local, but
+  `no-store` must not be used merely to avoid cache writes.
+- `dev_bundler:invalid_item_test_parallel/0` was narrowed from an HTTP/server
+  integration path plus direct device assertion to only a direct device call.
+- `hb_http` accepted unforced signed inbound messages even when verification
+  failed, merely avoiding the signed cache write. The intended contract is to
+  reject invalid signed inbound messages with a client error.
+
+The path from here is slow and model-first:
+
+1. Restore core paranoia semantics and HTTP signed-input behavior.
+2. Remove unjustified private `no-store` markings.
+3. Restore reduced tests and let failures expose real model gaps.
+4. Get the ordinary suite green.
+5. Re-run paranoid cache mode and fix the exposed root causes.
+
 ## AO-Core As A Device Calculus
 
 Every AO-Core message has device semantics. A message may explicitly name its
@@ -68,6 +113,26 @@ challengeable. Existing hashpaths will need to evolve after message extension
 lands, but phase 1 should avoid redesigning them except where varying forces the
 canonical inputs to be used.
 
+The old tuple cast syntax `{as, Device, Msg}` should be removed from the
+protocol-facing model. It is an out-of-band second form of message composition.
+The clean model is that changing a message's device is just extension/overlay:
+
+```erlang
+Msg#{ <<"device">> => Device }
+```
+
+or, once structural extension is fully in place:
+
+```erlang
+#{ <<"device">> => Device, <<"...">> => Msg }
+```
+
+Path syntax such as `key~device@1.0` should be interpreted in the same spirit:
+compose the base with `device = device@1.0`, then resolve request path `key`.
+There should not be a special `{as, ...}` execution universe with bespoke
+loading, subresolution, or cache semantics. Existing code still contains many
+`{as, <<"message@1.0">>, Msg}` uses; they are migration targets, not precedent.
+
 ## Message Extension Semantics
 
 The message extension key is `...`. It means the current message inherits keys
@@ -91,6 +156,15 @@ signed message, and later code can strip back to the signed subset when needed.
 cache boundary where linkified data is represented, but `structured@1.0`
 semantics should speak in terms of `...`. The core model is extension through
 `...`; representation-specific link tags should not leak into device logic.
+
+Private state has a special local rule. When one message extends another
+message, the `priv` element should be brought forward into the new local base.
+This keeps runtime state such as hashpath, local cache hints, wallet state, and
+device-private execution state available as execution composes messages. That
+does not make `priv` public: `hb_private:reset/1`, cache writes, codecs, and
+public ID generation must continue to exclude it. If the current result is a
+binary, list, or scalar rather than a message, there is no message `priv` to
+carry.
 
 Ordinary devices should not need to reason about extension chains unless they
 ask for them. The type/vary boundary should flatten inherited keys into the
@@ -246,6 +320,16 @@ those APIs the canonical varied pair. Only add cache code if a failing test
 shows an exact missing operation. Do not reintroduce "result edge" terminology.
 Do not build side indexes to make a prototype easier.
 
+Routine commitment normalization should be removed from loaded-message flow.
+`hb_message:normalize_commitments/2` and similar patterns that annotate normal
+Erlang maps with unsigned IDs make cache poisoning more likely: after a message
+is annotated, ordinary map updates can mutate public keys while stale
+commitment/ID metadata remains attached. The better model is that unsigned IDs
+belong to cache addressing and link structure. Loaded messages should stay as
+plain messages plus real commitments. Offload deep data to the cache and keep
+links shallow rather than deepening loaded messages with synthetic unsigned
+commitments.
+
 ## Signed Subsets
 
 `with_only_committed/2` filters a message down to keys covered by commitments,
@@ -284,6 +368,10 @@ want committed keys regardless of signature. Others need signed-subset
 semantics. Use evidence from scheduling, bundling, location records, and process
 flows to decide. Broad mechanical replacement is exactly the kind of churn this
 branch must avoid.
+
+HMAC commitments are not signed ancestry for `with_only_signed/2`. Local HMACs,
+including secret-key HMACs, may protect a local channel or cache relationship,
+but they should not cause a message to be treated as the user's signed subset.
 
 ## Singleton Parsing
 
@@ -354,6 +442,11 @@ the returned representation to the execution trace. This gives the client both
 Do not force this hashpath redesign into phase 1 unless it becomes necessary
 for correctness. Phase 1 can use existing hashpath mechanics over the varied
 pair. Extension-aware hashpaths are the later layer.
+
+Inbound signed HTTP messages have a simple acceptance contract: if a request
+presents commitments as signed input, the node verifies them or rejects the
+request with a client error. It is not enough to accept the message but decline
+to store it. `store-all-signed` is only allowed after verification succeeds.
 
 ## Device Specs And Device Cleanup
 
@@ -490,6 +583,25 @@ under paranoid cache validation.
 Keep `STATUS.md` updated during unattended work. Chat is for blocking questions
 only. Decisions that would normally require discussion but are reversible should
 go in `decisions/<name>.md` with options, reasoning, and the selected path.
+
+Before that final paranoid gate, the ordinary suite must pass with clean
+semantics and no known reward hacks:
+
+```text
+rebar3 eunit-all
+```
+
+Only then should paranoid mode be reintroduced. `HB_PARANOID` exists to expose
+bugs before production, especially cache poisoning from devices mutating signed
+public keys. It must not be made green by skipping commitments, disabling
+features, reducing integration coverage, marking cacheable results private
+`no-store`, or broadly varying/loading everything.
+
+It is normal not to recursively verify unloaded links. Links are cache resource
+boundaries. It is not normal to skip verification of the current message's
+committed surface merely because one committed key is represented as a link.
+Verify the link representation, load if the committed surface requires it, or
+fail.
 
 ## Things To Avoid
 
