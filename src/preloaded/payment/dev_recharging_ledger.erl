@@ -4,6 +4,7 @@
 %%% query the current effective balance and charge metered usage against it.
 %%% Balances are integer ledger units. Operators should choose units fine-grained
 %%% enough for their pricing and recharge policy.
+%%% Defaults provide a 24-hour bucket that recharges at 1 unit per second.
 %%% An optional `recharging-ledger-rates' message can provide account-specific
 %%% recharge rates.
 -module(dev_recharging_ledger).
@@ -12,9 +13,9 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(LOOKUP_TIMEOUT, 1000).
--define(DEFAULT_MAX, 1_000).
--define(DEFAULT_RECHARGE, 1_000).
--define(DEFAULT_PERIOD, 60).
+-define(DEFAULT_MAX, 86_400).
+-define(DEFAULT_RECHARGE, 1).
+-define(DEFAULT_PERIOD, 1).
 
 account_id(Address) ->
     hb_util:human_id(Address).
@@ -245,6 +246,17 @@ balance_new_target_returns_max_test() ->
         {ok, 100},
         balance(#{}, #{ <<"target">> => Target }, Opts)
     ).
+
+default_bucket_is_one_day_at_one_unit_per_second_test() ->
+    Account = <<"account">>,
+    State = #{
+        max => ?DEFAULT_MAX,
+        recharge => ?DEFAULT_RECHARGE,
+        period => ?DEFAULT_PERIOD,
+        accounts => #{ Account => #{ balance => 0, last => 0 } }
+    },
+    ?assertEqual(86_400, account_balance(<<"new">>, State, 0, #{})),
+    ?assertEqual(1, account_balance(Account, State, 1000, #{})).
 
 charge_new_account_deducts_units_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
