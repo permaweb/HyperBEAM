@@ -70,6 +70,7 @@ call(M1, RawM2, Opts) ->
                 {M1, <<"relay-method">>},
                 {RawM2, <<"method">>}
             ],
+            <<"GET">>,
             Opts
         ),
     RelayBody =

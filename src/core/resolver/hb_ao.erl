@@ -308,6 +308,13 @@ resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_I
     Based = set(Basec, <<"device">>, DevID, Opts),
     ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
     resolve_stage(1, Based, Req, Opts);
+resolve_stage(1, {as, DevID, RawBase}, Req, Opts)
+        when is_map(RawBase),
+             DevID =/= <<"message@1.0">>,
+             not is_map_key(<<"path">>, RawBase),
+             not is_map_key(path, RawBase),
+             not is_map_key(<<"Path">>, RawBase) ->
+    resolve_stage(1, set(RawBase, <<"device">>, DevID, Opts), Req, Opts);
 resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
     % Set the device of the message to the specified one and resolve the sub-path.
     % As this is the first message, we will then continue to execute the request
@@ -1183,14 +1190,14 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
         ),
     ?event_debug(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
     % Get the next key to set. 
-    case keys(Req, internal_opts(Opts)) of
+    case set_keys(Req, internal_opts(Opts)) of
         [] -> Base;
         [Key|_] ->
             % Get the value to set. Use AO-Core by default, but fall back to
             % getting via `maps' if it is not found.
             Val =
                 case get(Key, Req, internal_opts(Opts)) of
-                    not_found -> hb_maps:get(Key, Req, undefined, Opts);
+                    not_found -> maps:get(Key, Req, undefined);
                     Body -> Body
                 end,
             ?event_debug({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
@@ -1201,6 +1208,13 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
                 Opts
             )
     end.
+
+set_keys(Req, Opts) ->
+    lists:filter(
+        fun(Key) -> not hb_private:is_private(Key) end,
+        maps:keys(hb_message:uncommitted(Req, Opts))
+    ).
+
 set(Base, Key, Value, Opts) ->
     % For an individual key, we run deep_set with the key as the path.
     % This handles both the case that the key is a path as well as the case

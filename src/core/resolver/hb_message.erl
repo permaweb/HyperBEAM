@@ -452,13 +452,28 @@ visible(Msg, Opts) when is_map(Msg) ->
             error ->
                 #{}
         end,
-    maps:merge(Inherited, maps:without([<<"...">>], Msg));
+    Direct = maps:without([<<"...">>], Msg),
+    UnsetKeys =
+        maps:fold(
+            fun
+                (Key, unset, Acc) -> [Key | Acc];
+                (_Key, _Value, Acc) -> Acc
+            end,
+            [],
+            Direct
+        ),
+    maps:merge(
+        maps:without(UnsetKeys, Inherited),
+        maps:filter(fun(_Key, Value) -> Value =/= unset end, Direct)
+    );
 visible(Msg, Opts) ->
     visible(hb_cache:ensure_loaded(Msg, Opts), Opts).
 
 %% @doc Find a key in the child-wins view of a message extension chain.
 find_visible(Key, Msg, Opts) when is_map(Msg) ->
     case maps:find(Key, Msg) of
+        {ok, unset} ->
+            error;
         {ok, Value} ->
             {ok, hb_cache:ensure_loaded(Value, Opts)};
         error ->
@@ -701,47 +716,74 @@ do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
     DecodedMsg = hb_link:decode_all_links(Msg),
-    hb_maps:map(
-        fun(Key, Value) ->
-            do_paranoid_verify_child(Topic, Path ++ [Key], Value, Opts)
-        end,
-        uncommitted(hb_private:reset(DecodedMsg), Opts),
-        Opts
-    ),
+    maybe_verify_children(Topic, Path, DecodedMsg, Opts),
     verify_committed_subset(Topic, Path, DecodedMsg, Opts);
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
+
+maybe_verify_children(Topic, _Path, _Msg, _Opts)
+        when Topic == cache_read; Topic == cache_write ->
+    ok;
+maybe_verify_children(Topic, Path, Msg, Opts) ->
+    hb_maps:fold(
+        fun(Key, Value, ok) ->
+            do_paranoid_verify_child(Topic, Path ++ [Key], Value, Opts),
+            ok
+        end,
+        ok,
+        uncommitted(hb_private:reset(Msg), Opts),
+        Opts
+    ).
 
 do_paranoid_verify_child(_Topic, _Path, Link, _Opts) when ?IS_LINK(Link) ->
     true;
 do_paranoid_verify_child(Topic, Path, Value, Opts) ->
     do_paranoid_verify(Topic, Path, Value, Opts).
 
+verify_committed_subset(Topic, _Path, _Msg, _Opts)
+        when Topic == cache_read; Topic == cache_write ->
+    true;
 verify_committed_subset(Topic, Path, Msg, Opts) ->
     case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
         Commitments when map_size(Commitments) > 0 ->
-            {ok, CommittedMsg0} = with_only_committed(Msg, Opts),
-            CommittedMsg =
-                hb_cache:ensure_all_loaded(
-                    CommittedMsg0,
-                    Opts#{
-                        paranoid_verify => false,
-                        <<"paranoid-verify">> => false
-                    }
-                ),
-            try
-                true =
-                    verify(
-                        CommittedMsg,
-                        #{ <<"commitment-ids">> => <<"all">> },
-                        Opts
-                    )
-            catch
-                _:Details:St ->
-                    throw({verification_failure, Topic, Path, CommittedMsg, Details, St})
-            end;
+            hb_maps:fold(
+                fun(ID, Commitment, ok) ->
+                    verify_commitment_subset(Topic, Path, Msg, ID, Commitment, Opts),
+                    ok
+                end,
+                ok,
+                Commitments,
+                Opts
+            ),
+            true;
         _ ->
             true
+    end.
+
+verify_commitment_subset(Topic, Path, Msg, ID, RawCommitment, Opts) ->
+    Commitment = hb_cache:ensure_loaded(RawCommitment, Opts),
+    Keys =
+        lists:map(
+            fun hb_link:remove_link_specifier/1,
+            hb_util:message_to_ordered_list(
+                hb_maps:get(<<"committed">>, Commitment, [], Opts),
+                Opts
+            )
+        ),
+    CommittedMsg =
+        (with_links(Keys, Msg, Opts))#{
+            <<"commitments">> => #{ ID => Commitment }
+        },
+    try
+        true =
+            verify(
+                CommittedMsg,
+                #{ <<"commitment-ids">> => [ID] },
+                Opts
+            )
+    catch
+        _:Details:St ->
+            throw({verification_failure, Topic, Path, CommittedMsg, Details, St})
     end.
 
 %% @doc Return the unsigned version of a message in AO-Core format.

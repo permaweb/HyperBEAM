@@ -143,3 +143,21 @@
   --module dev_lua --test dev_lua:ao_core_sandbox_test` passed; and
   `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_lua`
   passed with 17 tests.
+- Cleaned up the pushed-process/scheduler cache boundary after the `dev_push`
+  probe pass. Removed temporary diagnostics; kept the protocol fixes narrow:
+  no-path `{as, Device, Msg}` now means "treat this concrete message as
+  `Device` and apply the outer request"; scheduler dynamic status/slot
+  responses mark private `no-store` so stale slot reads are not cached under
+  caller `always` opts; AOS scheduler-cache reads load only assignment `body`;
+  and `json-iface@1.0` relies on its precise compute spec instead of eager
+  whole-message loading. The no-path `as` shortcut deliberately excludes
+  `message@1.0`, preserving the established message-view subresolution used by
+  AO core test vectors. Decision recorded in
+  `decisions/pushed-process-cache-semantics.md`. Validation: `rebar3 compile`
+  passed; `git diff --check` passed; `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module dev_message` passed with 20 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_relay`
+  passed with 3 tests; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 191 tests; and
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_push`
+  passed with 10 tests.

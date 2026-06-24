@@ -609,7 +609,7 @@ set(Base, NewValuesMsg, Opts) ->
 		lists:filter(
 			fun(Key) ->
 				not lists:member(Key, ?DEVICE_KEYS ++ [<<"set-mode">>]) andalso
-					(hb_maps:get(Key, NewValuesMsg, undefined, Opts) =/= undefined)
+					(maps:get(Key, NewValuesMsg, undefined) =/= undefined)
 			end,
 			NewValuesKeys
 		),
@@ -623,12 +623,12 @@ set(Base, NewValuesMsg, Opts) ->
     UnsetKeys =
         lists:filter(
             fun(Key) ->
-                case hb_maps:get(Key, NewValuesMsg, not_found, Opts) of
+                case maps:get(Key, NewValuesMsg, not_found) of
                     unset -> true;
                     _ -> false
                 end
             end,
-            hb_maps:keys(Base, Opts)
+            NewValuesKeys
         ),
     % Base message with keys-to-unset removed
     BaseValues = hb_maps:without(UnsetKeys, Base, Opts),
@@ -641,18 +641,26 @@ set(Base, NewValuesMsg, Opts) ->
         }
     ),
     % Create the map of new values
-    NewValues = hb_maps:from_list(
-        lists:filtermap(
-            fun(Key) ->
-                case hb_maps:get(Key, NewValuesMsg, undefined, Opts) of
-                    undefined -> false;
-                    unset -> false;
-                    Value -> {true, {Key, Value}}
-                end
-            end,
-            KeysToSet
-        )
-    ),
+    UnsetTombstones =
+        case maps:is_key(<<"...">>, Base) of
+            true ->
+                maps:from_list([{Key, unset} || Key <- UnsetKeys]);
+            false ->
+                #{}
+        end,
+    NewValues =
+        hb_maps:from_list(
+            lists:filtermap(
+                fun(Key) ->
+                    case maps:get(Key, NewValuesMsg, undefined) of
+                        undefined -> false;
+                        unset -> false;
+                        Value -> {true, {Key, Value}}
+                    end
+                end,
+                KeysToSet
+            )
+        ),
     % Calculate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
@@ -686,10 +694,13 @@ set(Base, NewValuesMsg, Opts) ->
     % Combine with deep merge or if `set-mode` is `explicit' then just merge.
     Merged =
         hb_private:set_priv(
-            case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
+            maps:merge(
+                case maps:get(<<"set-mode">>, NewValuesMsg, <<"deep">>) of
                 <<"explicit">> -> maps:merge(BaseValues, NewValues);
                 _ -> do_deep_merge(BaseValues, NewValues, Opts)
-            end,
+                end,
+                UnsetTombstones
+            ),
             OriginalPriv
         ),
     case OverwrittenCommittedKeys of
@@ -923,6 +934,17 @@ set_uses_direct_patch_keys_test() ->
             #{}
         ),
     ?assertEqual(#{ <<"a">> => 1, <<"b">> => 2 }, Res).
+
+extension_unset_masks_parent_test() ->
+    {ok, Res} =
+        set(
+            #{ <<"...">> => #{ <<"results">> => #{ <<"outbox">> => old } } },
+            #{ <<"results">> => unset },
+            #{}
+        ),
+    ?assertEqual({error, not_found}, get(<<"results">>, Res, #{}, #{})),
+    {ok, Keys} = keys(Res, #{}),
+    ?assertNot(lists:member(<<"results">>, Keys)).
 
 is_private_mod_test() ->
     ?assertEqual(true, hb_private:is_private(<<"private">>)),

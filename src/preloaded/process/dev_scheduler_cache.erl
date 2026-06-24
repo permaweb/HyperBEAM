@@ -100,7 +100,9 @@ read(ProcID, Slot, RawOpts) ->
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->
-                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
+                            Body = hb_maps:get(<<"body">>, Assignment, Opts),
+                            Loaded = Assignment#{ <<"body">> => Body },
+                            {ok, Loaded}
                     end;
                 {error, not_found} ->
                     ?event(debug_sched, {read_assignment, {res, not_found}}),

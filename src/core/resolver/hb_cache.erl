@@ -936,13 +936,26 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                             % value. Returning the data this way avoids having to
                             % read each of the link keys themselves, which may be
                             % a large quantity.
+                            LinkOpts = #{
+                                <<"type">> => <<"link">>,
+                                <<"lazy">> => true,
+                                <<"store">> => Store
+                            },
+                            Link =
+                                case maps:get(Subpath, Values, none) of
+                                    <<"raw:", ImmediateValue/binary>> ->
+                                        {link, ImmediateValue, LinkOpts#{ <<"lazy">> => false }};
+                                    <<"link:", Path/binary>> ->
+                                        {link, Path, LinkOpts};
+                                    ImmediateValue when is_binary(ImmediateValue) ->
+                                        {link, ImmediateValue, LinkOpts#{ <<"lazy">> => false }};
+                                    _ ->
+                                        {link, SubkeyPath, LinkOpts}
+                                end,
                             {true,
                                 {
                                     binary:part(Subpath, 0, byte_size(Subpath) - 5),
-                                    {link, SubkeyPath, #{
-                                        <<"type">> => <<"link">>,
-                                        <<"lazy">> => true
-                                    }}
+                                    Link
                                 }
                             }
                     end

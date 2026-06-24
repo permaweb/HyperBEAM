@@ -275,8 +275,7 @@ spawn_lookahead_worker(ProcID, Slot, Opts) ->
             ),
             case dev_scheduler_cache:read(ProcID, Slot, Opts) of
                 {ok, Assignment} ->
-                    LoadedAssignment = hb_cache:ensure_all_loaded(Assignment, Opts),
-                    Caller ! {assignment, ProcID, Slot, LoadedAssignment};
+                    Caller ! {assignment, ProcID, Slot, Assignment};
                 not_found ->
                     fail
             end
@@ -343,15 +342,15 @@ check_lookahead_and_local_cache(undefined, ProcID, TargetSlot, Opts) ->
                         % ahead of time.
                         spawn_lookahead_worker(ProcID, TargetSlot + 1, Opts)
                 end,
-            {ok, Worker, hb_cache:ensure_all_loaded(Assignment, Opts)}
+            {ok, Worker, Assignment}
     end.
 
 %% @doc Returns information about the entire scheduler.
-status(_M1, _M2, _Opts) ->
+status(_M1, _M2, Opts) ->
     ?event(getting_scheduler_status),
     Wallet = dev_scheduler_registry:get_wallet(),
     {ok,
-        #{
+        no_store(#{
             <<"address">> => hb_util:id(ar_wallet:to_address(Wallet)),
             <<"processes">> =>
                 lists:map(
@@ -359,8 +358,11 @@ status(_M1, _M2, _Opts) ->
                     dev_scheduler_registry:get_processes()
                 ),
             <<"cache-control">> => <<"no-store">>
-        }
+        }, Opts)
     }.
+
+no_store(Msg, Opts) ->
+    hb_private:set(Msg, #{ <<"cache-control">> => [<<"no-store">>] }, Opts).
 
 %% @doc A router for choosing between getting the existing schedule, or
 %% scheduling a new message.
@@ -728,7 +730,7 @@ slot(M1, M2, Opts) ->
             {Timestamp, Height, Hash} = ar_timestamp:get(),
             #{ current := CurrentSlot, wallets := Wallets } =
                 dev_scheduler_server:info(PID),
-            {ok, #{
+            {ok, no_store(#{
                 <<"process">> => ProcID,
                 <<"current">> => CurrentSlot,
                 <<"timestamp">> => Timestamp,
@@ -736,7 +738,7 @@ slot(M1, M2, Opts) ->
                 <<"block-hash">> => Hash,
                 <<"cache-control">> => <<"no-store">>,
                 <<"addresses">> => lists:map(fun hb_util:human_id/1, Wallets)
-            }};
+            }, Opts)};
         {redirect, Redirect} ->
             case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 false -> {ok, Redirect};
@@ -785,14 +787,14 @@ remote_slot(<<"ao.TN.1">>, ProcID, Node, Opts) ->
                             Opts
                         ),
                     ?event({got_slot_response, {assignment, A}}),
-                    {ok, #{
+                    {ok, no_store(#{
                         <<"process">> => ProcID,
                         <<"current">> => hb_maps:get(<<"slot">>, A, undefined, Opts),
                         <<"timestamp">> => hb_maps:get(<<"timestamp">>, A, undefined, Opts),
                         <<"block-height">> => hb_maps:get(<<"block-height">>, A, undefined, Opts),
                         <<"block-hash">> => hb_util:encode(<<0:256>>),
                         <<"cache-control">> => <<"no-store">>
-                    }};
+                    }, Opts)};
                 307 ->
                     ?event({generating_new_redirect, {redirect, Res}}),
                     % Maintain the same variant, but generate the redirect using

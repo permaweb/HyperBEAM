@@ -46,6 +46,16 @@ init(M1, _M2, Opts) ->
     {ok, hb_ao:set(M1, #{<<"function">> => <<"handle">>}, Opts)}.
 
 %% @doc On first pass prepare the call, on second pass get the results.
+-spec compute(
+    #{
+        pass := integer(),
+        process := #{ image => _, _ => _ },
+        'output-prefix' => binary(),
+        _ => _
+    },
+    #{ body := _, 'block-height' => _, _ => _ },
+    _
+) -> _.
 compute(M1, M2, Opts) ->
     case hb_ao:get(<<"pass">>, M1, Opts) of
         1 -> prep_call(M1, M2, Opts);
@@ -56,8 +66,8 @@ compute(M1, M2, Opts) ->
 %% @doc Prepare the WASM environment for execution by writing the process string and
 %% the message as JSON representations into the WASM environment.
 prep_call(RawM1, RawM2, Opts) ->
-    M1 = hb_cache:ensure_all_loaded(RawM1, Opts),
-    M2 = hb_cache:ensure_all_loaded(RawM2, Opts),
+    M1 = RawM1,
+    M2 = RawM2,
     ?event({prep_call, M1, M2, Opts}),
     Process = hb_ao:get(<<"process">>, M1, Opts#{ <<"hashpath">> => ignore }),
     Message = hb_ao:get(<<"body">>, M2, Opts#{ <<"hashpath">> => ignore }),
