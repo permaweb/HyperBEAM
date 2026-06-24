@@ -297,3 +297,14 @@
   commits is green: on `224520782`, `HB_PARANOID=cache_read,cache_write
   rebar3 eunit-all` passed end-to-end with `All 3488 tests passed.` The
   previously noisy router performance assertion passed inside this full run.
+- Fixed a cache-paranoia shortcut found during audit: `cache_read` and
+  `cache_write` verification now still checks materialized committed subsets
+  instead of skipping commitment verification entirely, while deferring
+  committed keys that are still link placeholders until they are loaded. Added
+  a regression that direct committed-key tampering fails under both cache
+  topics. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 196 tests; the first
+  `hb_codec_test_vectors` rerun exposed linked committed keys that must be
+  deferred, and after the lazy-aware fix `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module hb_codec_test_vectors` passed with 1958 tests.

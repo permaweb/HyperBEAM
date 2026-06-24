@@ -777,9 +777,6 @@ do_paranoid_verify_child(_Topic, _Path, Link, _Opts) when ?IS_LINK(Link) ->
 do_paranoid_verify_child(Topic, Path, Value, Opts) ->
     do_paranoid_verify(Topic, Path, Value, Opts).
 
-verify_committed_subset(Topic, _Path, _Msg, _Opts)
-        when Topic == cache_read; Topic == cache_write ->
-    true;
 verify_committed_subset(Topic, Path, Msg, Opts) ->
     case hb_maps:get(<<"commitments">>, Msg, #{}, Opts) of
         Commitments when map_size(Commitments) > 0 ->
@@ -807,6 +804,33 @@ verify_commitment_subset(Topic, Path, Msg, ID, RawCommitment, Opts) ->
                 Opts
             )
         ),
+    case has_linked_committed_key(Keys, Msg) of
+        true ->
+            true;
+        false ->
+            verify_materialized_commitment_subset(
+                Topic,
+                Path,
+                Msg,
+                ID,
+                Commitment,
+                Keys,
+                Opts
+            )
+    end.
+
+has_linked_committed_key(Keys, Msg) ->
+    lists:any(
+        fun(Key) ->
+            case maps:find(Key, Msg) of
+                {ok, Value} when ?IS_LINK(Value) -> true;
+                _ -> false
+            end
+        end,
+        Keys
+    ).
+
+verify_materialized_commitment_subset(Topic, Path, Msg, ID, Commitment, Keys, Opts) ->
     CommittedMsg =
         (with_links(Keys, Msg, Opts))#{
             <<"commitments">> => #{ ID => Commitment }

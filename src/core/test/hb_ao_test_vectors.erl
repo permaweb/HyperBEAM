@@ -96,6 +96,8 @@ test_suite() ->
             fun step_hook_test/1},
         {paranoid_message_verification, "paranoid message verification",
             fun paranoid_message_verification_test/1},
+        {paranoid_cache_verification, "paranoid cache verification",
+            fun paranoid_cache_verification_test/1},
         {paranoid_input_verification, "paranoid input verification",
             fun paranoid_input_verification_test/1},
         {paranoid_result_verification, "paranoid result verification",
@@ -1268,6 +1270,15 @@ paranoid_message_verification_test(RawOpts) ->
     Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
     ?assert(hb_message:paranoid_verify(Base, Opts)),
     ?assertThrow(_, hb_message:paranoid_verify(Base#{ <<"a">> => 2 }, Opts)).
+
+paranoid_cache_verification_test(RawOpts) ->
+    Opts = paranoid_opts(RawOpts),
+    Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
+    Tampered = Base#{ <<"a">> => 2 },
+    ?assert(hb_message:paranoid_verify(cache_read, Base, Opts)),
+    ?assert(hb_message:paranoid_verify(cache_write, Base, Opts)),
+    ?assertThrow(_, hb_message:paranoid_verify(cache_read, Tampered, Opts)),
+    ?assertThrow(_, hb_message:paranoid_verify(cache_write, Tampered, Opts)).
 
 paranoid_input_verification_test(RawOpts) ->
     Opts = paranoid_opts(RawOpts),
