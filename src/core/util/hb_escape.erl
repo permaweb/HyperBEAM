@@ -16,11 +16,20 @@
 
 %% @doc Encode a binary as a URI-encoded string.
 encode(Bin) when is_binary(Bin) ->
-    list_to_binary(percent_escape(binary_to_list(Bin))).
+    case uri_safe(Bin) of
+        true -> Bin;
+        false -> iolist_to_binary(lists:reverse(percent_escape(Bin, [])))
+    end.
 
 %% @doc Decode a URI-encoded string back to a binary.
 decode(Bin) when is_binary(Bin) ->
-    list_to_binary(percent_unescape(binary_to_list(Bin))).
+    decode(Bin, Bin).
+decode(<<>>, Original) ->
+    Original;
+decode(<<$%, _/binary>>, Original) ->
+    iolist_to_binary(lists:reverse(percent_unescape(Original, [])));
+decode(<<_C, Rest/binary>>, Original) ->
+    decode(Rest, Original).
 
 %% @doc Encode a string with escaped quotes.
 encode_quotes(String) when is_binary(String) ->
@@ -64,15 +73,30 @@ encode_keys(Msg, Opts) when is_map(Msg) ->
     );
 encode_keys(Other, _Opts) -> Other.
 
-%% @doc Escape a list of characters as a URI-encoded string.
-percent_escape([]) -> [];
-percent_escape([C | Cs]) when C >= $a, C =< $z -> [C | percent_escape(Cs)];
-percent_escape([C | Cs]) when C >= $0, C =< $9 -> [C | percent_escape(Cs)];
-percent_escape([C | Cs]) when
+%% @doc Escape a binary as a URI-encoded string.
+uri_safe(<<>>) -> true;
+uri_safe(<<C, Rest/binary>>) when C >= $a, C =< $z ->
+    uri_safe(Rest);
+uri_safe(<<C, Rest/binary>>) when C >= $0, C =< $9 ->
+    uri_safe(Rest);
+uri_safe(<<C, Rest/binary>>) when
         C == $.; C == $-; C == $_; C == $/;
         C == $?; C == $& ->
-    [C | percent_escape(Cs)];
-percent_escape([C | Cs]) -> [escape_byte(C) | percent_escape(Cs)].
+    uri_safe(Rest);
+uri_safe(_) ->
+    false.
+
+percent_escape(<<>>, Acc) -> Acc;
+percent_escape(<<C, Rest/binary>>, Acc) when C >= $a, C =< $z ->
+    percent_escape(Rest, [C | Acc]);
+percent_escape(<<C, Rest/binary>>, Acc) when C >= $0, C =< $9 ->
+    percent_escape(Rest, [C | Acc]);
+percent_escape(<<C, Rest/binary>>, Acc) when
+        C == $.; C == $-; C == $_; C == $/;
+        C == $?; C == $& ->
+    percent_escape(Rest, [C | Acc]);
+percent_escape(<<C, Rest/binary>>, Acc) ->
+    percent_escape(Rest, [escape_byte(C) | Acc]).
 
 %% @doc Escape a single byte as a URI-encoded string.
 escape_byte(C) when C >= 0, C =< 255 ->
@@ -84,13 +108,13 @@ hex_digit(N) when N > 9, N =< 15 ->
     N + $a - 10.
 
 %% @doc Unescape a URI-encoded string.
-percent_unescape([$%, H1, H2 | Cs]) ->
+percent_unescape(<<$%, H1, H2, Rest/binary>>, Acc) ->
     Byte = (hex_value(H1) bsl 4) + hex_value(H2),
-    [Byte | percent_unescape(Cs)];
-percent_unescape([C | Cs]) ->
-    [C | percent_unescape(Cs)];
-percent_unescape([]) ->
-    [].
+    percent_unescape(Rest, [Byte | Acc]);
+percent_unescape(<<C, Rest/binary>>, Acc) ->
+    percent_unescape(Rest, [C | Acc]);
+percent_unescape(<<>>, Acc) ->
+    Acc.
 
 hex_value(C) when C >= $0, C =< $9 ->
     C - $0;

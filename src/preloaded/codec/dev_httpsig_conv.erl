@@ -72,7 +72,7 @@ from(HTTP, _Req, Opts) ->
             false -> MsgWithoutSigs#{ <<"commitments">> => Commitments };
             true -> MsgWithoutSigs
         end,
-    ?event({message_with_commitments, MsgWithSigs}),
+    ?event_debug({message_with_commitments, MsgWithSigs}),
     Res =
         hb_maps:without(
             Removed =
@@ -89,7 +89,7 @@ from(HTTP, _Req, Opts) ->
             MsgWithSigs,
             Opts
         ),
-    ?event({message_without_commitments, Res, Removed}),
+    ?event_debug({message_without_commitments, Res, Removed}),
     {ok, Res}.
 
 %% @doc Generate the body TABM from the `body' key of the encoded message.
@@ -98,7 +98,7 @@ body_to_tabm(HTTP, Opts) ->
     Body = hb_maps:get(<<"body">>, HTTP, no_body, Opts),
     ContentType = hb_maps:get(<<"content-type">>, HTTP, undefined, Opts),
     {_, InlinedKey} = inline_key(HTTP),
-    ?event({inlined_body_key, InlinedKey}),
+    ?event_debug({inlined_body_key, InlinedKey}),
     % Parse the body into a TABM.
     {OrderedBodyKeys, BodyTABM} =
         case body_to_parts(ContentType, Body, Opts) of
@@ -148,7 +148,7 @@ body_to_tabm(HTTP, Opts) ->
 %% @doc Split the body into parts, if it is a multipart.
 body_to_parts(_ContentType, no_body, _Opts) -> no_body;
 body_to_parts(ContentType, Body, _Opts) ->
-    ?event(
+    ?event_debug(
         {from_body,
             {content_type, {explicit, ContentType}},
             {body, Body}
@@ -433,7 +433,7 @@ to(TABM, Req, FormatOpts, Opts) when is_map(TABM) ->
             Commitments ->
                 Commitments
         end,
-    ?event({converting_commitments_to_siginfo, Msg}),
+    ?event_debug({converting_commitments_to_siginfo, Msg}),
     {ok,
         maps:merge(
             Intermediate,
@@ -471,7 +471,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
             end,
             maps:without([<<"priv">>], TABM)
         ),
-    ?event({prepared_body_map, {msg, Enc0}}),
+    ?event_debug({prepared_body_map, {msg, Enc0}}),
     BodyMap = maps:get(<<"body">>, Enc0, #{}),
     GroupedBodyMap = group_maps(BodyMap, <<>>, #{}, Opts),
     Enc1 =
@@ -479,7 +479,7 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
             EmptyBody when map_size(EmptyBody) =:= 0 ->
                 % If the body map is empty, then simply set the body to be a 
                 % corresponding empty binary.
-                ?event({encoding_empty_body, {msg, Enc0}}),
+                ?event_debug({encoding_empty_body, {msg, Enc0}}),
                 Enc0;
             #{ InlineKey := UserBody }
                     when map_size(GroupedBodyMap) =:= 1 andalso is_binary(UserBody) ->
@@ -493,12 +493,12 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
                 % 
                 % In all other cases, the mapping fallsthrough to the case below 
                 % that properly encodes a nested body within a sub-part
-                ?event({encoding_single_body, {body, UserBody}, {http, Enc0}}),
+                ?event_debug({encoding_single_body, {body, UserBody}, {http, Enc0}}),
                 hb_maps:put(<<"body">>, UserBody, Enc0, Opts);
             _ ->
                 % Otherwise, we need to encode the body map as the
                 % multipart body of the HTTP message
-                ?event({encoding_multipart, {bodymap, {explicit, GroupedBodyMap}}}),
+                ?event_debug({encoding_multipart, {bodymap, {explicit, GroupedBodyMap}}}),
                 PartList = hb_util:to_sorted_list(
                     hb_maps:map(
                         fun(Key, M = #{ <<"body">> := _ }) when map_size(M) =:= 1 ->
@@ -554,14 +554,14 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
     Enc2 = case hb_maps:get(<<"body">>, Enc1, <<>>, Opts) of
         <<>> -> Enc1;
         _ ->
-            ?event({adding_content_digest, {msg, Enc1}}),
+            ?event_debug({adding_content_digest, {msg, Enc1}}),
             hb_maps:merge(
                 Enc1,
                 dev_httpsig:add_content_digest(Enc1, Opts),
                 Opts
             )
     end,
-    ?event({final_body_map, {msg, Enc2}}),
+    ?event_debug({final_body_map, {msg, Enc2}}),
     Enc2.
 
 %% @doc Transform all ID fields into their percent-encoded form.
@@ -589,10 +589,10 @@ decode_ids(Msg, _Opts) ->
 group_maps(Map) ->
     group_maps(Map, <<>>, #{}, #{}).
 group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
-    ?event({group_maps, {map, Map}, {parent, Parent}, {top, Top}}),
+    ?event_debug({group_maps, {map, Map}, {parent, Parent}, {top, Top}}),
     {Flattened, NewTop} = hb_maps:fold(
         fun(Key, Value, {CurMap, CurTop}) ->
-            ?event({group_maps, {key, Key}, {value, Value}}),
+            ?event_debug({group_maps, {key, Key}, {value, Value}}),
             NormKey = hb_ao:normalize_key(Key),
             FlatK =
                 case Parent of
@@ -628,7 +628,7 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                             {CurMap, NewTop}
                     end;
                 _ ->
-                    ?event({group_maps, {norm_key, NormKey}, {value, Value}}),
+                    ?event_debug({group_maps, {norm_key, NormKey}, {value, Value}}),
                     case byte_size(Value) > ?MAX_HEADER_LENGTH of
                         % the value is too large to be encoded as a header
                         % within a part, so instead lift it to be a top level
@@ -653,7 +653,7 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
             <<>> -> hb_maps:merge(NewTop, Flattened, Opts);
             _ ->
                 Res = NewTop#{ Parent => Flattened },
-                ?event({returning_res, {res, Res}}),
+                ?event_debug({returning_res, {res, Res}}),
                 Res
         end
     end.
@@ -731,7 +731,7 @@ inline_key(Msg, Opts) ->
     % inline part. Otherwise, the Msg <<"body">> is used. If not present, the
     % Msg <<"data">> is used.
     InlineBodyKey = hb_maps:get(<<"ao-body-key">>, Msg, false, Opts),
-    ?event({inlined, InlineBodyKey}),
+    ?event_debug({inlined, InlineBodyKey}),
     case {
         InlineBodyKey,
         hb_maps:is_key(<<"body">>, Msg, Opts)
@@ -768,7 +768,7 @@ encode_http_flat_msg(Httpsig, Opts) ->
         lists:foldl(
             fun ({HeaderName, RawHeaderVal}, Acc) ->
                 HVal = hb_cache:ensure_loaded(RawHeaderVal, Opts),
-                ?event({encoding_http_header, {header, HeaderName}, {value, HVal}}),
+                ?event_debug({encoding_http_header, {header, HeaderName}, {value, HVal}}),
                 [<<HeaderName/binary, ": ", HVal/binary>> | Acc]
             end,
             [],
@@ -918,8 +918,8 @@ encode_message_with_links_test() ->
     ?assertEqual(4, maps:get(<<"typed-key">>, Read, #{})),
     ?assertMatch({link, _, _}, maps:get(<<"long-key">>, Read, #{})),
     ?assertEqual(Msg, hb_cache:ensure_all_loaded(Read, #{})),
-    % Encode and decode the message as `httpsig@1.0`
-    Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
+    % Encode and decode the cached message as `httpsig@1.0`.
+    Enc = hb_message:convert(Read, <<"httpsig@1.0">>, #{}),
     ?event({encoded, Enc}),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     % Ensure that the result is the same as the original message

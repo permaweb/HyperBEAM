@@ -81,7 +81,17 @@ from(List, Req, Opts) when is_list(List) ->
     end;
 from(Msg, Req, Opts) when is_map(Msg) ->
     HintedReq = apply_bundle_hint(Msg, Req, Opts),
-    NormLinks = hb_link:normalize(Msg, linkify_mode(HintedReq, Opts), Opts),
+    NormLinks =
+        hb_link:normalize(
+            case Msg of
+                #{ <<"ao-types">> := AOTypeMap } when is_map(AOTypeMap) ->
+                    Msg#{ <<"ao-types">> := encode_ao_types(AOTypeMap, Opts) };
+                _ ->
+                    Msg
+            end,
+            linkify_mode(HintedReq, Opts),
+            Opts
+        ),
     NormKeysMap = hb_ao:normalize_keys(NormLinks, Opts),
     EncodeTypes = find_encode_types(HintedReq, Opts),
     {Types, Values} = lists:foldl(
@@ -90,7 +100,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                 {ok, Value} when is_binary(Value) ->
                     {Types, [{Key, Value} | Values]};
                 {ok, Nested} when is_map(Nested) orelse is_list(Nested) ->
-                    ?event({from_recursing, {nested, Nested}}),
+                    ?event_debug({from_recursing, {nested, Nested}}),
                     % We pass the HintedReq to the recursive call rather than
                     % Req so that this message's bundle status serves as the
                     % default for any children that don't explicitly set the
@@ -105,7 +115,7 @@ from(Msg, Req, Opts) when is_map(Msg) ->
                         orelse is_integer(Value)
                         orelse is_float(Value) ->
                     BinKey = hb_ao:normalize_key(Key),
-                    ?event({encode_value, Value}),
+                    ?event_debug({encode_value, Value}),
                     case maybe_encode_value(Value, EncodeTypes) of
                         {Type, BinValue} ->
                             {
@@ -210,7 +220,7 @@ linkify_mode(Req, Opts) ->
         _ ->
             % The request is either asking for a flat message or has not
             % specified. In both cases we should linkify.
-            hb_opts:get(linkify_mode, offload, Opts)
+            hb_opts:get(<<"linkify-mode">>, offload, Opts)
     end.
 
 %% @doc Convert a TABM into a native HyperBEAM message.

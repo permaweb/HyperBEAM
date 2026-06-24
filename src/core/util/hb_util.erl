@@ -39,7 +39,7 @@
 
 %% @doc Coerce a string to an integer.
 int(Str) when is_binary(Str) ->
-    list_to_integer(binary_to_list(Str));
+    binary_to_integer(Str);
 int(Str) when is_list(Str) ->
     list_to_integer(Str);
 int(Int) when is_integer(Int) ->
@@ -318,7 +318,7 @@ decode(_) ->
 decode(Type, Value) when is_list(Type) ->
     decode(list_to_binary(Type), Value);
 decode(Type, Value) when is_binary(Type) ->
-    ?event({decoding, {type, Type}, {value, {explicit, Value}}}),
+    ?event_debug({decoding, {type, Type}, {value, {explicit, Value}}}),
     decode(
         binary_to_existing_atom(to_lower(Type), latin1),
         Value
@@ -496,10 +496,12 @@ template_message_match(ToMatch, TemplateWithoutPath, Opts) ->
 
 %% @doc Label a list of elements with a number.
 number(List) ->
-    lists:map(
-        fun({N, Item}) -> {integer_to_binary(N), Item} end,
-        lists:zip(lists:seq(1, length(List)), List)
-    ).
+    number(List, 1, []).
+
+number([], _N, Acc) ->
+    lists:reverse(Acc);
+number([Item|Rest], N, Acc) ->
+    number(Rest, N + 1, [{integer_to_binary(N), Item}|Acc]).
 
 %% @doc Convert a list of elements to a map with numbered keys.
 list_to_numbered_message(Msg) when is_map(Msg) ->
@@ -514,21 +516,32 @@ list_to_numbered_message(List) ->
 %% @doc Determine if the message given is an ordered list, starting from 1.
 is_ordered_list(Msg, _Opts) when is_list(Msg) -> true;
 is_ordered_list(Msg, Opts) ->
-    is_ordered_list(1, hb_ao:normalize_keys(Msg, Opts), Opts).
-is_ordered_list(N, Msg, _Opts) ->
-    case maps:get(NormKey = hb_ao:normalize_key(N), Msg, not_found) of
-        not_found ->
-            WithoutPriv = hb_private:reset(Msg),
-            case maps:without([<<"commitments">>, <<"ao-types">>], WithoutPriv) of
-                EmptyMsg when map_size(EmptyMsg) == 0 -> true;
-                _ -> false
-            end;
-        _ ->
-            is_ordered_list(
-                N + 1,
-                maps:without([NormKey], Msg),
-				_Opts
-            )
+    is_ordered_list(maps:next(maps:iterator(hb_ao:normalize_keys(Msg, Opts))), 0, 0).
+is_ordered_list(none, Count, Max) ->
+    Count == Max;
+is_ordered_list({Key, _Val, Iter}, Count, Max) ->
+    case is_ordered_list_key(Key) of
+        skip -> is_ordered_list(maps:next(Iter), Count, Max);
+        false -> false;
+        N -> is_ordered_list(maps:next(Iter), Count + 1, max(N, Max))
+    end.
+
+is_ordered_list_key(<<"commitments">>) -> skip;
+is_ordered_list_key(<<"ao-types">>) -> skip;
+is_ordered_list_key(Key) ->
+    case hb_private:is_private(Key) of
+        true -> skip;
+        false ->
+            try binary_to_integer(Key) of
+                N when N >= 1 ->
+                    case integer_to_binary(N) of
+                        Key -> N;
+                        _ -> false
+                    end;
+                _ ->
+                    false
+            catch _:_ -> false
+            end
     end.
 
 %% @doc Replace a key in a list with a new value.
@@ -580,39 +593,65 @@ message_to_ordered_list(List, _Opts) when is_list(List) ->
     List;
 message_to_ordered_list(Message, Opts) ->
     NormMessage = hb_ao:normalize_keys(Message, Opts),
-    Keys = hb_maps:keys(NormMessage, Opts) -- [<<"priv">>, <<"commitments">>],
-    SortedKeys =
-        lists:map(
-            fun hb_ao:normalize_key/1,
-            lists:sort(lists:map(fun int/1, Keys))
-        ),
-    message_to_ordered_list(NormMessage, SortedKeys, erlang:hd(SortedKeys), Opts).
-message_to_ordered_list(_Message, [], _Key, _Opts) ->
+    Pairs = message_to_ordered_pairs(maps:next(maps:iterator(NormMessage)), []),
+    message_to_ordered_list(NormMessage, lists:sort(Pairs), Opts).
+message_to_ordered_list(_Message, [], _Opts) ->
     [];
-message_to_ordered_list(Message, [Key|Keys], Key, Opts) ->
+message_to_ordered_list(Message, [{N, Key, MaybeValue}|Rest], Opts) ->
+    message_to_ordered_list(Message, Rest, N, Key, MaybeValue, Opts, []).
+
+message_to_ordered_pairs(none, Acc) ->
+    Acc;
+message_to_ordered_pairs({Key, Val, Iter}, Acc) ->
+    Next = maps:next(Iter),
+    case message_to_ordered_key(Key) of
+        skip ->
+            message_to_ordered_pairs(Next, Acc);
+        N ->
+            CanonicalKey = integer_to_binary(N),
+            MaybeValue =
+                case Key of
+                    CanonicalKey -> Val;
+                    _ -> lookup
+                end,
+            message_to_ordered_pairs(Next, [{N, CanonicalKey, MaybeValue}|Acc])
+    end.
+
+message_to_ordered_key(<<"commitments">>) -> skip;
+message_to_ordered_key(<<"ao-types">>) -> skip;
+message_to_ordered_key(<<"priv", _/binary>>) -> skip;
+message_to_ordered_key(Key) -> int(Key).
+
+message_to_ordered_list(Message, [{Next, NextKey, NextVal}|Rest], N, Key, MaybeValue, Opts, Acc)
+        when Next == N + 1 ->
+    Value = ordered_list_value(Key, MaybeValue, Message, Opts),
+    message_to_ordered_list(Message, Rest, Next, NextKey, NextVal, Opts, [Value|Acc]);
+message_to_ordered_list(Message, [{Next, NextKey, _NextVal}|_Rest], N, Key, MaybeValue, Opts, _Acc)
+        when Next =/= N + 1 ->
+    _ = ordered_list_value(Key, MaybeValue, Message, Opts),
+    ExpectedKey = integer_to_binary(N + 1),
+    throw({missing_key, {expected, ExpectedKey, {next, NextKey}, {message, Message}}});
+message_to_ordered_list(Message, [], _N, Key, MaybeValue, Opts, Acc) ->
+    Value = ordered_list_value(Key, MaybeValue, Message, Opts),
+    lists:reverse([Value|Acc]).
+
+ordered_list_value(Key, lookup, Message, Opts) ->
     case hb_maps:get(Key, Message, undefined, Opts#{ <<"hashpath">> => ignore }) of
         undefined ->
             throw(
                 {missing_key,
                     {key, Key},
-                    {remaining_keys, Keys},
                     {message, Message}
                 }
             );
-        Value ->
-            [
-                Value
-            |
-                message_to_ordered_list(
-                    Message,
-                    Keys,
-                    hb_ao:normalize_key(int(Key) + 1),
-                    Opts
-                )
-            ]
+        Value -> Value
     end;
-message_to_ordered_list(Message, [Key|_Keys], ExpectedKey, _Opts) ->
-    throw({missing_key, {expected, ExpectedKey, {next, Key}, {message, Message}}}).
+ordered_list_value(Key, undefined, Message, _Opts) ->
+    throw({missing_key, {key, Key}, {message, Message}});
+ordered_list_value(_Key, Value, _Message, Opts) when ?IS_LINK(Value) ->
+    hb_cache:ensure_loaded(Value, Opts#{ <<"hashpath">> => ignore });
+ordered_list_value(_Key, Value, _Message, _Opts) ->
+    Value.
 
 %% @doc Convert a message with numbered keys and others to a sorted list with only
 %% the numbered values.
@@ -941,6 +980,16 @@ atom_to_dashed_binary(Key) when is_atom(Key) ->
 
 atom_to_dashed_binary_test_parallel() ->
     ?assertEqual(atom_to_dashed_binary(atom_1), <<"atom-1">>).
+
+message_to_ordered_list_metadata_test() ->
+    Msg = #{
+        <<"1">> => one,
+        <<"2">> => two,
+        <<"ao-types">> => #{},
+        <<"commitments">> => #{},
+        <<"priv">> => #{ <<"state">> => ignored }
+    },
+    ?assertEqual([one, two], message_to_ordered_list(Msg)).
 
 %% `to_lower/1' must remain byte-for-byte equivalent to `string:lowercase',
 %% including the `badarg' throw on invalid UTF-8 that `ar_tx' tag parsing

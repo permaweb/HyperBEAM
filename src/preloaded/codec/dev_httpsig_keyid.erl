@@ -25,25 +25,28 @@
 %% @doc Extract the key and keyid from a request, returning
 %% `{ok, Scheme, Key, KeyID}' or `{error, Reason}'.
 req_to_key_material(Req, Opts) ->
-    ?event({req_to_key_material, {priv_req, Req}}),
+    ?event_debug({req_to_key_material, {priv_req, Req}}),
     KeyID = maps:get(<<"keyid">>, Req, undefined),
-    ?event({keyid_to_key_material, {keyid, KeyID}}),
+    ?event_debug({keyid_to_key_material, {keyid, KeyID}}),
     case find_scheme(KeyID, Req, Opts) of
         {ok, Scheme} ->
-            ?event({scheme_found, {scheme, Scheme}}),
-            ApplyRes = apply_scheme(Scheme, KeyID, Req),
-            ?event({apply_scheme_result, {priv_apply_res, ApplyRes}}),
-            case ApplyRes of
-                {ok, _, CalcKeyID} when KeyID /= undefined, CalcKeyID /= KeyID ->
-                    {error, key_mismatch};
-                {ok, Key, CalcKeyID} ->
-                    {ok, Scheme, Key, CalcKeyID};
-                {error, Reason} ->
-                    {error, Reason}
-            end;
+            ?event_debug({scheme_found, {scheme, Scheme}}),
+            apply_key_scheme(Scheme, KeyID, Req);
         {error, undefined_scheme} ->
             {ok, DefaultScheme} = req_to_default_scheme(Req, Opts),
-            req_to_key_material(Req#{ <<"scheme">> => DefaultScheme }, Opts);
+            apply_key_scheme(DefaultScheme, KeyID, Req);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+apply_key_scheme(Scheme, KeyID, Req) ->
+    ApplyRes = apply_scheme(Scheme, KeyID, Req),
+    ?event_debug({apply_scheme_result, {priv_apply_res, ApplyRes}}),
+    case ApplyRes of
+        {ok, _, CalcKeyID} when KeyID /= undefined, CalcKeyID /= KeyID ->
+            {error, key_mismatch};
+        {ok, Key, CalcKeyID} ->
+            {ok, Scheme, Key, CalcKeyID};
         {error, Reason} ->
             {error, Reason}
     end.
