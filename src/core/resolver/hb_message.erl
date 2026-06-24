@@ -764,14 +764,13 @@ do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.
 
 maybe_verify_children(Topic, Path, Msg, Opts) ->
-    hb_maps:fold(
+    maps:fold(
         fun(Key, Value, ok) ->
             do_paranoid_verify_child(Topic, Path ++ [Key], Value, Opts),
             ok
         end,
         ok,
-        uncommitted(hb_private:reset(Msg), Opts),
-        Opts
+        uncommitted(hb_private:reset(Msg), Opts)
     ).
 
 do_paranoid_verify_child(_Topic, _Path, Link, _Opts) when ?IS_LINK(Link) ->

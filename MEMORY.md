@@ -79,6 +79,42 @@ The path from here is slow and model-first:
 4. Get the ordinary suite green.
 5. Re-run paranoid cache mode and fix the exposed root causes.
 
+The first strict paranoid run after the reset exposed a separate but related
+gateway issue. Several data items fetched through the Arweave GraphQL gateway
+path were reconstructed into ANS-104-shaped messages whose commitments did not
+actually verify:
+
+```text
+myb2p8_TSM0KSgBMoG-nu6TLuqWwPmdZM5V2QSUeNmM
+1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs
+UpA13THX-pTw6URg4pT474kqga_A72-y0XSWAzrXATc
+hNPxyDzSOoFXQKzVH3ImMaCeKQnNMjjaTm7I5L_wgVc
+DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg
+```
+
+Direct probes showed `hb_message:verify(Msg, all, #{}) =:= false` immediately
+after `hb_client_gateway` reconstruction, before any cache write/read
+machinery. The gateway emitted `gql_verify_failed, adding_trusted_fields` for
+these reads. That means the cache paranoia failure is doing its job: it is
+rejecting a message that presents a signed commitment whose cryptographic
+surface is broken.
+
+The correct fix is not in `hb_message`. It is at the GraphQL reconstruction
+boundary. GraphQL may be a useful remote fetch/index source, but it cannot
+manufacture cryptographic truth. If `ar_bundles:verify_item(TX)` succeeds,
+`hb_client_gateway` may return the structured message with its normal ANS-104
+commitment. If verification fails, the gateway may return fetched fields as
+uncommitted data, and the local store may link the requested remote ID to that
+cached object as an addressing fact. It must not keep or decorate the broken
+commitment with `trusted-keys`, and `ans104-trust-gql` must not be treated as a
+replacement for signature verification.
+
+This distinction is important for avoiding cache poisoning. A device author or
+remote source should not be able to mutate signed-looking fields, keep the old
+commitment in place, and have cache paranoia bless the result. If the message
+is unsigned/uncommitted fetched data, downstream code can make an explicit
+trust decision. If it carries `commitments`, those commitments must be honest.
+
 ## Current Morning Directive
 
 The current unattended pass must move slowly through the system in this order:
@@ -132,6 +168,11 @@ results that are not represented in the AO cache key. If a result is stable for
 a bounded period, the right direction is cache expiry/max-age semantics, not
 private no-store. Remove or narrow any no-store that exists only to avoid a
 cache write.
+
+Gateway-fetched remote data follows the same rule. Do not mark GraphQL
+fallback reads `no-store` just to avoid paranoid verification. If they are
+useful cacheable fetched data, store them as data. The thing to remove is the
+false signed commitment, not the cache write.
 
 Signed inbound HTTP messages have a verify-or-reject contract. If an inbound
 wire message presents a signed commitment, the node must verify it or reject it

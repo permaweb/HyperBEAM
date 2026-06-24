@@ -183,6 +183,23 @@ the model rather than the earlier prototype branches.
 - `store-all-signed` must not store unverified signed wire messages. This is a
   consequence of the previous point, not a separate cache-only policy.
 
+## Gateway Reconstruction
+
+- Arweave GraphQL is a fetch/index source, not a cryptographic verifier.
+- If a GraphQL/raw reconstruction produces an ANS-104 item that
+  `ar_bundles:verify_item/1` accepts, the resulting structured message may
+  carry its normal signed commitment.
+- If the reconstructed item does not verify, the node may still return the
+  fetched fields as uncommitted remote data, but it must not present them as a
+  signed ANS-104 commitment.
+- `ans104-trust-gql` must not mean "treat unverifiable GraphQL output as a
+  valid signed commitment." At most, it is local policy for using gateway
+  fields as fetched data. Cache paranoia should then see an unsigned message or
+  a local link, not a broken signature that it is asked to accept.
+- A local cache link from the requested Arweave ID to fetched remote data is a
+  cache/addressing fact. It is not equivalent to an ANS-104 signature over that
+  fetched data.
+
 ## Paranoid Verification
 
 - `HB_PARANOID=cache_read,cache_write` is a detector for production cache

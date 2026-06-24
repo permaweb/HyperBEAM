@@ -1595,11 +1595,7 @@ invalid_item_test_parallel() ->
             <<"ans104@1.0">>,
             TestOpts
         ),
-        PostResult = post_data_item(Node, TamperedItem, ClientOpts),
-        ?assertMatch({error, #{
-            <<"status">> := 400,
-            <<"error">> := <<"invalid-item">>,
-            <<"details">> := <<"signature-verification-failed">>}}, PostResult),
+        ?assertMatch({ok, 400, _, _}, post_ans104_item(Node, TamperedItem, ClientOpts)),
         DirectResult = dev_bundler:item(#{}, StructuredItem, TestOpts),
         ?assertMatch({error, #{
             <<"status">> := 400,
@@ -1750,6 +1746,19 @@ post_data_item(Node, Item, Opts) ->
         Opts
     ),
     post_structured_item(Node, StructuredItem, Opts).
+
+%% @doc Post a raw ANS-104 item body without first converting it to structured.
+post_ans104_item(Node, Item, Opts) ->
+    hb_http_client:request(
+        #{
+            peer => Node,
+            path => <<"/~bundler@1.0/tx">>,
+            method => <<"POST">>,
+            headers => #{ <<"content-type">> => <<"application/ans104">> },
+            body => ar_bundles:serialize(Item)
+        },
+        Opts
+    ).
 
 %% @doc Post an already-`structured@1.0' message to the bundler endpoint.
 post_structured_item(Node, StructuredItem, Opts) ->

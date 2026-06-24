@@ -19,6 +19,10 @@ without weakening what paranoid mode is meant to detect.
   That is valid only for truly private, nondeterministic, or time-local data.
 - HTTP signed input should be verified or rejected. Accepting failed signed
   input while merely not caching it is not the intended contract.
+- GraphQL gateway reconstruction can fetch useful remote data without being a
+  cryptographic verifier. If a reconstructed ANS-104 item fails
+  `ar_bundles:verify_item/1`, return uncommitted fetched fields rather than a
+  signed-looking message with broken or `trusted-keys` commitments.
 - The old `{as, Device, Msg}` tuple is not aligned with message extension:
   device changes should be ordinary message composition.
 - Loaded-message commitment normalization increases cache-poisoning risk by
@@ -59,3 +63,7 @@ or reduce integration coverage to get green.
 - The clean implementation should get simpler as varying becomes precise. If a
   device became more complex, inspect whether the resolver boundary is doing
   too little or the device spec is too broad.
+- A local cache link to gateway-fetched data is an addressing fact, not an
+  ANS-104 signature. Do not use `no-store` or paranoid bypasses to hide broken
+  gateway commitments; strip the false commitment and keep the data model
+  honest.

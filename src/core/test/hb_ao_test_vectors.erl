@@ -1293,8 +1293,36 @@ paranoid_cache_verification_test(RawOpts) ->
                         }
                 }
     },
+    Child = hb_message:normalize_commitments(#{ <<"child-key">> => 1 }, Opts),
+    UnloadedLinkChild =
+        #{
+            <<"child">> =>
+                {
+                    link,
+                    <<"paranoid-must-not-load-this-link">>,
+                    #{ <<"lazy">> => true }
+                }
+        },
     ?assert(hb_message:paranoid_verify(cache_read, Base, Opts)),
     ?assert(hb_message:paranoid_verify(cache_write, Base, Opts)),
+    ?assert(hb_message:paranoid_verify(cache_read, UnloadedLinkChild, Opts)),
+    ?assert(hb_message:paranoid_verify(cache_write, UnloadedLinkChild, Opts)),
+    ?assertThrow(
+        _,
+        hb_message:paranoid_verify(
+            cache_read,
+            #{ <<"child">> => Child#{ <<"child-key">> => 2 } },
+            Opts
+        )
+    ),
+    ?assertThrow(
+        _,
+        hb_message:paranoid_verify(
+            cache_write,
+            #{ <<"child">> => Child#{ <<"child-key">> => 2 } },
+            Opts
+        )
+    ),
     % Generic cache verification must not silently accept secret-key HMACs
     % when the secret needed to verify them is absent.
     ?assertThrow(_, hb_message:paranoid_verify(cache_read, SecretKeyMsg, Opts)),

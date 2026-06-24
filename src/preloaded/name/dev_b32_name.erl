@@ -220,19 +220,12 @@ test_manifest_subdomain_matches_path_id() ->
 %% In this case, sinse no assets exists with this TX ID, it should load the 
 %% index.
 test_manifest_subdomain_does_not_match_path_id() ->
-    TestPath = <<"/1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
+    AssetID = <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">>,
+    TestPath = <<"/", AssetID/binary>>,
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok,
-            #{
-                <<"commitments">> :=
-                    #{
-                        <<"1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs">> := _
-                    }
-            }
-        }, 
+    {ok, Res} =
         hb_http:get(
             Node, 
             #{
@@ -240,8 +233,16 @@ test_manifest_subdomain_does_not_match_path_id() ->
                 <<"host">> => <<Subdomain/binary, ".localhost">>
             },
             Opts
-        )
-    ).
+        ),
+    ?assertMatch(
+        #{
+            <<"status">> := 200,
+            <<"content-type">> := <<"image/png">>,
+            <<"data">> := <<137, 80, 78, 71, 13, 10, 26, 10, _/binary>>
+        },
+        Res
+    ),
+    ?assertNot(maps:is_key(AssetID, maps:get(<<"commitments">>, Res, #{}))).
 
 test_opts() ->
     Store = [hb_test_utils:test_store()],

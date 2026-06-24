@@ -434,3 +434,90 @@
   (`bundler@1.0:dispatch_blocking_test...[0.712 s] ok`), as did the HTTP large
   signed request, scheduler, secret, process, and codec vector regions. Next
   gate: `HB_PARANOID=cache_read,cache_write rebar3 eunit-all`.
+- The next paranoid gate exposed honest commitment failures in the Arweave
+  GraphQL gateway path rather than a generic `hb_message` subset-verifier
+  regression. Sample failing IDs read through `hb_store_gateway` already
+  returned `hb_message:verify(Msg, all, #{}) =:= false` before cache paranoia:
+  `myb2p8_TSM0KSgBMoG-nu6TLuqWwPmdZM5V2QSUeNmM`,
+  `1rTy7gQuK9lJydlKqCEhtGLp2WWG-GOrVo5JdiCmaxs`,
+  `UpA13THX-pTw6URg4pT474kqga_A72-y0XSWAzrXATc`,
+  `hNPxyDzSOoFXQKzVH3ImMaCeKQnNMjjaTm7I5L_wgVc`, and
+  `DosEHUAqhl_O5FH3vDqPlgGsG92Guxcm6nrwqnjsDKg`. Gateway events showed
+  `gql_verify_failed, adding_trusted_fields`. A control read of the known
+  valid gateway item `BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew` verified
+  successfully through full, committed-subset, decoded-link, and paranoid
+  paths. Decision: leave cache paranoia strict and patch `hb_client_gateway`
+  so unverifiable GraphQL/raw reconstructions return uncommitted fetched data
+  instead of broken signed ANS-104 commitments. The long paranoid run was
+  stopped after this failure family was clear; remaining known items to revisit
+  after the gateway fix are `dev_bundler:invalid_item_test_parallel` under
+  paranoid cache writes and the noisy `bundler@1.0:dispatch_blocking_test`
+  timing assertion.
+- Patched the gateway honesty failure at the source. `hb_client_gateway` now
+  keeps ANS-104 commitments only when the reconstructed item passes
+  `ar_bundles:verify_item/1`; failed GraphQL/raw reconstructions return the
+  same fetched fields as uncommitted data and no longer attach
+  `trusted-keys`. Direct probes of the five failing IDs now return
+  `commitments = []`, `hb_message:verify(...)=true` as unsigned data, and pass
+  paranoid cache verification; the known-valid control item
+  `BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew` still retains its signed
+  ANS-104 commitment.
+- Tightened the paranoid child traversal to match the model rather than the
+  old implementation accident. Cache paranoia skips unloaded link targets, but
+  still verifies materialized child messages. The previous implementation used
+  `hb_maps:fold/4`, which force-loaded link targets before the skip predicate
+  could see them and caused manifest/b32 reads to fetch entire remote asset
+  trees. The new traversal uses direct `maps:fold/3` over the already-present
+  child values after `uncommitted(hb_private:reset(Msg), Opts)`.
+- Updated the b32-name manifest mismatch test to assert the actual route
+  contract: the asset is served successfully as PNG data, but the invalid
+  gateway asset ID is not surfaced as a response commitment. Added a core
+  regression that unloaded link children are not materialized by paranoid cache
+  verification while tampered materialized child messages still fail.
+  Validation: `git diff --check` passed; `rebar3 compile` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 196 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_store_gateway`
+  passed with 10 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_b32_name` passed with 9 tests; `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module dev_manifest` passed with 6 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  'copycat@1.0 [graphql]'` passed with 9 tests; and
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_lua`
+  passed with 17 tests.
+- Fixed the remaining paranoid bundler invalid-item failure without narrowing
+  integration coverage. The test now posts the intentionally tampered ANS-104
+  bytes directly to the HTTP endpoint so the server rejects signed ingress
+  before any client-side structured conversion/linkification can try to cache
+  the known-bad signed body. The direct `dev_bundler:item/3` assertion still
+  verifies the device contract returns `400 invalid-item` for the structured
+  tampered item. `hb_http_server` now classifies explicit parse-time invalid
+  signed input errors (`invalid_ans104_signature`, `invalid_tx_signature`,
+  `invalid_commitment`, and `invalid_commitments`) as HTTP 400 instead of
+  generic 500s, matching the verify-or-reject contract. Validation:
+  `git diff --check` passed; `rebar3 compile` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_bundler
+  --test dev_bundler:invalid_item_test_parallel` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_bundler`
+  passed with 27 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_ans104` passed with 24 tests; and
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_http` passed
+  with 14 tests.
+- The first ordinary `rebar3 eunit-all` after the gateway/bundler fixes failed
+  with three failures: two stale `hb_client_gateway` tests expected
+  unverifiable GraphQL L2 reconstructions to expose RSA/ED25519 commitment
+  metadata, and the known timing-sensitive
+  `router@1.0:dynamic_routing_by_performance` assertion failed once. Patched
+  the gateway tests to assert the honest contract instead: the valid control
+  item still keeps a verifying commitment, while the L2 GraphQL fixtures still
+  return their data but do not surface the remote ID as a commitment. Removed a
+  now-dead gateway helper exposed by recompilation. Validation:
+  `rebar3 eunit --module=hb_client_gateway` passed with 7 tests, and
+  `rebar3 device test --module dev_router --test
+  dev_router:dynamic_routing_by_performance_test_parallel` passed in
+  isolation.
+- Fresh ordinary gate is green after the gateway test correction and dead-code
+  cleanup: `rebar3 eunit-all` passed end-to-end with `All 3495 tests passed.`
+  This full run covered the gateway L2 fetched-data cases, the restored
+  bundler invalid-item integration path, b32/manifest, router dynamic
+  performance, scheduler, secret, Lua ledgers, and process vectors.

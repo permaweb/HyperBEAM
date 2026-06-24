@@ -495,9 +495,10 @@ handle_request(RawReq, Body, ServerID) ->
 handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     DetailsStr = hb_util:bin(hb_format:message(Details, NodeMsg, 1)),
     StacktraceStr = hb_util:bin(hb_format:trace(Stacktrace)),
+    Status = error_status(Type, Details),
     ErrorMsg =
         #{
-            <<"status">> => 500,
+            <<"status">> => Status,
             <<"type">> => hb_util:bin(hb_format:message(Type)),
             <<"details">> => DetailsStr,
             <<"stacktrace">> => StacktraceStr
@@ -522,9 +523,20 @@ handle_error(Req, Singleton, Type, Details, Stacktrace, NodeMsg) ->
     FormattedErrorMsg =
         ErrorMsg#{
             <<"stacktrace">> => hb_util:bin(hb_format:remove_noise(StacktraceStr)),
-            <<"details">> => hb_format:truncate(hb_util:bin(hb_format:remove_noise(DetailsStr)), ErrorDetailsMaxSize)
+            <<"details">> =>
+                hb_format:truncate(
+                    hb_util:bin(hb_format:remove_noise(DetailsStr)),
+                    ErrorDetailsMaxSize
+                )
         },
     hb_http:reply(Req, Singleton, FormattedErrorMsg, NodeMsg).
+
+%% @doc Parse-time invalid signed input is a client error, not a node fault.
+error_status(throw, {invalid_ans104_signature, _}) -> 400;
+error_status(throw, {invalid_tx_signature, _}) -> 400;
+error_status(throw, {invalid_commitment, _}) -> 400;
+error_status(throw, {invalid_commitments, _}) -> 400;
+error_status(_, _) -> 500.
 
 %% @doc Return the list of allowed methods for the HTTP server.
 allowed_methods(Req, State) ->

@@ -429,62 +429,20 @@ result_to_message(ExpectedID, Item, Opts) ->
                 ?event({gql_verify_succeeded, Structured}),
                 Structured;
             _ ->
-                % The item does not verify on its own, but does the node choose
-                % to trust the GraphQL API anyway?
-                case hb_opts:get(ans104_trust_gql, false, Opts) of
-                    false ->
-                        ?event(
-                            warning,
-                            {gql_verify_failed, returning_unverifiable_tx}
-                        ),
-                        Structured;
-                    true ->
-                        % The node trusts the GraphQL API, so we add the explicit
-                        % keys as committed fields.
-                        ?event(warning,
-                            {gql_verify_failed,
-                                adding_trusted_fields,
-                                {tags, Tags}
-                            }
-                        ),
-                        Comms = hb_maps:get(<<"commitments">>, Structured, #{}, Opts),
-                        AttName = hd(hb_maps:keys(Comms, Opts)),
-                        Comm = hb_maps:get(AttName, Comms, not_found, Opts),
-                        Structured#{
-                            <<"commitments">> => #{
-                                AttName =>
-                                    Comm#{
-                                        <<"trusted-keys">> =>
-                                            hb_ao:normalize_keys(
-                                                [
-                                                    hb_ao:normalize_key(Name)
-                                                ||
-                                                    #{ <<"name">> := Name } <-
-                                                        hb_maps:values(
-                                                            hb_ao:normalize_keys(
-                                                                Tags,
-                                                                Opts
-                                                            ),
-                                                            Opts
-                                                        )
-                                                ],
-												Opts
-                                            )
-                                    }
-                            }
-                        }
-                end
+                ?event(warning,
+                    {gql_verify_failed,
+                        returning_uncommitted_fields,
+                        {trust_gql, hb_opts:get(ans104_trust_gql, false, Opts)},
+                        {tags, Tags}
+                    }
+                ),
+                hb_maps:remove(<<"commitments">>, Structured, Opts)
         end,
     {ok, Embedded}.
 
 normalize_null(null) -> <<>>;
 normalize_null(not_found) -> <<>>;
 normalize_null(Bin) when is_binary(Bin) -> Bin.
-
-decode_id_or_null(Bin) when byte_size(Bin) > 0 ->
-    hb_util:human_id(Bin);
-decode_id_or_null(_) ->
-    <<>>.
 
 decode_or_null(Bin) when is_binary(Bin) ->
     hb_util:decode(Bin);
@@ -539,10 +497,12 @@ device_valid_until_height_query_test() ->
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.
     _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>, #{}),
+    ID = <<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
+    {ok, Res} = read(ID, #{}),
     ?event(gateway, {get_ans104_test, Res}),
     ?event(gateway, {signer, hb_message:signers(Res, #{})}),
-    ?assert(true).
+    ?assert(maps:is_key(ID, maps:get(<<"commitments">>, Res, #{}))),
+    ?assert(hb_message:verify(Res, all, #{})).
 
 %% @doc Test that we can get the scheduler location.
 scheduler_location_test() ->
@@ -572,40 +532,20 @@ l2_dataitem_test() ->
     _Node = hb_http_server:start_node(#{}),
     {ok, Res} = read(ID = <<"oyo3_hCczcU7uYhfByFZ3h0ELfeMMzNacT-KpRoJK6g">>, #{}),
     ?event(gateway, {l2_dataitem, Res}),
-    Opts = #{},
-    CommitmentType = hb_util:deep_get(
-        [<<"commitments">>, ID, <<"type">>],
-        Res,
-        not_found,
-        Opts
-    ),
-    ?assertEqual(?RSA_SIGN_TYPE, CommitmentType),
     Data = maps:get(<<"data">>, Res),
+    ?assertNot(maps:is_key(ID, maps:get(<<"commitments">>, Res, #{}))),
+    ?assert(hb_message:verify(Res, all, #{})),
     ?assertEqual(<<"Hello World">>, Data).
 
-%% @doc ed25519 L2 Transaction test
+%% @doc ed25519 L2 GraphQL data test.
 l2_dataitem_ed25519_test() ->
     _Node = hb_http_server:start_node(#{}),
     ID = <<"AwrAs-HaBlc8xeI8sw6Wpbi7A0weQWeXYwW20CpX5oM">>,
     {ok, Res} = read(ID, #{}),
     ?event(gateway, {l2_dataitem, Res}),
-    Opts = #{},
-    CommitmentType = hb_util:deep_get(
-        [<<"commitments">>, ID, <<"type">>],
-        Res,
-        not_found,
-        Opts
-    ),
-    ?assertEqual(?EDDSA_SIGN_TYPE, CommitmentType),
-    CommitmentCommitter = hb_util:deep_get(
-        [<<"commitments">>, ID, <<"committer">>],
-        Res,
-        not_found,
-        Opts
-    ),
-    ?assertEqual(<<"ejhYD9Cw9VCsVik6yGLoclo3CLRvAITHTZamLY_6ro4">>, CommitmentCommitter),
-    %% Check Data
     Data = maps:get(<<"data">>, Res),
+    ?assertNot(maps:is_key(ID, maps:get(<<"commitments">>, Res, #{}))),
+    ?assert(hb_message:verify(Res, all, #{})),
     ?assertEqual(<<"{\"displayName\":\"Test Hub\",\"description\":\"This is a test hub created in the test suite\",\"externalurl\":\"\",\"image\":\"\"}">>, Data).
 
 %% @doc Test optimistic index

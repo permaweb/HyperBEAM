@@ -67,6 +67,14 @@ breakage that would otherwise reach production. An unloaded link target need
 not be recursively verified by default, but materialized children and the
 current committed surface must be verified honestly.
 
+The latest paranoid run exposed a gateway-source distinction that is now part
+of the repair plan. Several remote GraphQL fixtures are useful as fetched
+message data but are not self-contained verifiable ANS-104 commitments after
+GraphQL/raw reconstruction. The repair is not to weaken `hb_message` paranoia.
+The repair is to stop `hb_client_gateway` from surfacing unverifiable
+reconstructions as signed commitments. Valid reconstructed ANS-104 items keep
+their commitments; invalid reconstructions become uncommitted fetched data.
+
 ## Branch Discipline
 
 - Start a fresh branch from latest `hyperbeam-main/edge`.
@@ -84,6 +92,22 @@ current committed surface must be verified honestly.
   `hb_singleton`, and relevant preloaded devices.
 - Locate the smallest useful type/vary code from prior branches, but do not
   transplant broad cache rewrites or extension prototypes.
+
+## Current Repair Batch: Gateway Honesty
+
+- Keep `hb_message:paranoid_verify/3` strict for current materialized
+  commitments.
+- Patch `hb_client_gateway:result_to_message/3` so
+  `ar_bundles:verify_item(TX) =:= true` is the only path that returns a
+  signature-bearing ANS-104 commitment from reconstructed GraphQL data.
+- When reconstruction fails verification, return the same fetched fields
+  without `commitments`. Do not attach `trusted-keys`; do not add a new
+  pseudo-commitment device.
+- Preserve cache/addressing behavior separately: the gateway store may still
+  link the requested remote ID to the locally cached fetched object, but that
+  link must not masquerade as a cryptographic ANS-104 signature.
+- Validate first against the exact failing gateway IDs and affected modules,
+  then run the ordinary suite, then paranoid.
 
 ## Phase 1: Types And Varying
 
