@@ -14,6 +14,35 @@ run_test() ->
         test_opts(normal)
     ).
 
+with_only_signed_walks_extension_test() ->
+    Opts = test_opts(normal),
+    Signed =
+        hb_message:commit(
+            #{ <<"a">> => 1, <<"remove-me">> => <<"signed">> },
+            Opts,
+            <<"httpsig@1.0">>
+        ),
+    Outer = #{
+        <<"b">> => 2,
+        <<"remove-me">> => <<"outer">>,
+        <<"commitments">> =>
+            #{ <<"unsigned">> => #{ <<"committer">> => <<"unsigned">> } },
+        <<"...">> => Signed
+    },
+    {ok, OnlySigned} = hb_message:with_only_signed(Outer, Opts),
+    ?assert(maps:is_key(<<"a">>, OnlySigned)),
+    ?assert(maps:is_key(<<"commitments">>, OnlySigned)),
+    ?assertNot(maps:is_key(<<"b">>, OnlySigned)),
+    ?assertNotEqual(<<"outer">>, maps:get(<<"remove-me">>, OnlySigned, not_found)).
+
+with_only_signed_preserves_unsigned_test() ->
+    Opts = test_opts(normal),
+    Msg = #{
+        <<"a">> => 1,
+        <<"...">> => #{ <<"b">> => 2 }
+    },
+    ?assertEqual({ok, Msg}, hb_message:with_only_signed(Msg, Opts)).
+
 %% @doc Return a list of codecs to test. Disable these as necessary if you need
 %% to test the functionality of a single codec, etc.
 test_codecs() ->

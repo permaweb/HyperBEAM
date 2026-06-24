@@ -22,3 +22,7 @@
   --module=hb_ao_test_vectors` passed with 189 tests, including projection and
   cache-collapse coverage for varied inputs. `rebar3 eunit --module=hb_types`
   passed with 3 tests.
+- Added `hb_message:with_only_signed/2`. Narrowed validation:
+  `rebar3 device test --module hb_codec_test_vectors --test
+  hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
+  passed with 2 tests.

@@ -64,7 +64,7 @@
 -export([commit/2, commit/3, signers/2, type/1, minimize/1]).
 -export([normalize_commitments/2, normalize_commitments/3, is_signed_key/3]).
 -export([commitment/2, commitment/3, commitments/3]).
--export([with_only_committed/2, without_unless_signed/3]).
+-export([with_only_committed/2, with_only_signed/2, without_unless_signed/3]).
 -export([with_commitments/3, without_commitments/3, uncommitted_deep/2]).
 -export([diff/3, match/2, match/3, match/4, find_target/3]).
 %%% Helpers:
@@ -418,6 +418,48 @@ with_only_committed(Msg, Opts) when is_map(Msg) ->
 with_only_committed(Msg, _) ->
     % If the message is not a map, it cannot be signed.
     {ok, Msg}.
+
+%% @doc Return the first signed subset in a message's extension chain.
+with_only_signed(Msg, Opts) when is_map(Msg) ->
+    case first_signed(Msg, Opts) of
+        not_found -> {ok, Msg};
+        Signed -> with_only_committed(Signed, Opts)
+    end;
+with_only_signed(Msg, _Opts) ->
+    {ok, Msg}.
+
+first_signed(Msg, Opts) when is_map(Msg) ->
+    case has_signed_commitment(Msg, Opts) of
+        true ->
+            Msg;
+        false ->
+            case hb_maps:find(<<"...">>, Msg, Opts) of
+                {ok, Parent} -> first_signed(Parent, Opts);
+                error -> not_found
+            end
+    end;
+first_signed(_Msg, _Opts) ->
+    not_found.
+
+has_signed_commitment(Msg, Opts) ->
+    hb_maps:fold(
+        fun(_ID, Commitment, Acc) ->
+            Acc orelse commitment_has_signature(Commitment, Opts)
+        end,
+        false,
+        hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+        Opts
+    ).
+
+commitment_has_signature(Link, Opts) when ?IS_LINK(Link) ->
+    commitment_has_signature(hb_cache:ensure_loaded(Link, Opts), Opts);
+commitment_has_signature(Commitment, Opts) when is_map(Commitment) ->
+    case hb_maps:find(<<"signature">>, Commitment, Opts) of
+        {ok, _} -> true;
+        error -> false
+    end;
+commitment_has_signature(_Commitment, _Opts) ->
+    false.
 
 %% @doc Filter keys from a map that do not match either the list of keys or
 %% their relative `+link` variants.
