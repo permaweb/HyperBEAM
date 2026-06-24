@@ -144,7 +144,7 @@ charge(_, RawReq, NodeMsg) ->
             RawReq,
             NodeMsg#{ <<"hashpath">> => ignore }
         ),
-    case hb_message:signers(Req, NodeMsg) of
+    case signed_signers(Req, NodeMsg) of
         [] ->
             ?event(payment, {charge, {error, <<"No signers">>}}),
             {ok, false};
@@ -205,11 +205,11 @@ balance(_, RawReq, NodeMsg) ->
             )
         of
             not_found ->
-                case hb_message:signers(RawReq, NodeMsg) of
+                case signed_signers(RawReq, NodeMsg) of
                     [] -> hb_ao:get(<<"target">>, RawReq, undefined, NodeMsg);
                     [Signer] -> Signer
                 end;
-            Req -> hd(hb_message:signers(Req, NodeMsg))
+            Req -> hd(signed_signers(Req, NodeMsg))
         end,
     {ok, get_balance(Target, NodeMsg)}.
 
@@ -291,7 +291,7 @@ is_operator(Req, NodeMsg) ->
     is_operator(Req, NodeMsg, hb_opts:get(operator, undefined, NodeMsg)).
 
 is_operator(Req, NodeMsg, OperatorAddr) when ?IS_ID(OperatorAddr) ->
-    Signers = hb_message:signers(Req, NodeMsg),
+    Signers = signed_signers(Req, NodeMsg),
     HumanOperatorAddr = hb_util:human_id(OperatorAddr),
     lists:any(
         fun(Signer) ->
@@ -301,6 +301,10 @@ is_operator(Req, NodeMsg, OperatorAddr) when ?IS_ID(OperatorAddr) ->
     );
 is_operator(_, _, _) ->
     false.
+
+signed_signers(Msg, Opts) ->
+    {ok, SignedMsg} = hb_message:with_only_signed(Msg, Opts),
+    hb_message:signers(SignedMsg, Opts).
 
 %%% Tests
 

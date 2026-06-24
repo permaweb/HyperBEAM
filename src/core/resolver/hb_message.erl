@@ -668,17 +668,26 @@ do_paranoid_verify(Topic, Path, Link, Opts) when ?IS_LINK(Link) ->
 do_paranoid_verify(Topic, Path, ListMsg, Opts) when is_list(ListMsg) ->
     do_paranoid_verify(Topic, Path, hb_util:list_to_numbered_message(ListMsg), Opts);
 do_paranoid_verify(Topic, Path, Msg, Opts) when is_map(Msg) ->
+    LoadedMsg =
+        hb_cache:ensure_all_loaded(
+            hb_link:decode_all_links(Msg),
+            Opts#{
+                paranoid_verify => false,
+                <<"paranoid-verify">> => false
+            }
+        ),
     hb_maps:map(
         fun(Key, Value) ->
             do_paranoid_verify(Topic, Path ++ [Key], Value, Opts)
         end,
-        uncommitted(hb_private:reset(Msg), Opts),
+        uncommitted(hb_private:reset(LoadedMsg), Opts),
         Opts
     ),
-    try true = verify(Msg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
+    {ok, CommittedMsg} = with_only_committed(LoadedMsg, Opts),
+    try true = verify(CommittedMsg, #{ <<"commitment-ids">> => <<"all">> }, Opts)
     catch
         _:Details:St ->
-            throw({verification_failure, Topic, Path, Msg, Details, St})
+            throw({verification_failure, Topic, Path, CommittedMsg, Details, St})
     end;
 do_paranoid_verify(_Topic, _Path, _Msg, _Opts) ->
     true.

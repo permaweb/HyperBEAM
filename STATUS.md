@@ -58,3 +58,21 @@
   --module hb_codec_test_vectors --test
   hb_codec_test_vectors:with_only_signed_walks_extension_test+with_only_signed_preserves_unsigned_test`
   passed with 2 tests.
+- Started the full paranoid suite. It exposed three concrete failure families:
+  varying tried to inspect raw binary literals such as WASM module bodies;
+  payment devices looked for direct request signers after singleton ancestry
+  moved signatures into `...`; and cache-write paranoia verified linkified or
+  HTTP-enveloped signed messages without first materializing their committed
+  subset. Kept the fixes narrow: non-message base/request pairs use the
+  existing cache path instead of type varying; payment admission/balance paths
+  use `hb_message:with_only_signed/2`; paranoid verification decodes TABM link
+  keys, loads values, recurses over uncommitted nested content, and verifies
+  the materialized committed subset. Validation: `rebar3 compile` passed;
+  `git diff --check` passed; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_examples` passed with 6 tests; `HB_PARANOID=cache_read,cache_write
+  rebar3 eunit --module=hb_ao_test_vectors` passed with 191 tests;
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  hb_process_test_vectors` passed with 17 tests; `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module dev_httpsig` passed with 5 tests. One attempted
+  parallel focused run hit the shared default listener with `eaddrinuse`; it
+  passed when rerun through the device-test wrapper alone.

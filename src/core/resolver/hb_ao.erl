@@ -426,8 +426,13 @@ resolve_stage(2, Base, Req, Opts) ->
     % request is device-computed, canonicalize its inputs before cache lookup.
     case direct_cache_lookup(Base, Req, Opts) of
         continue ->
-            {VariedBase, VariedReq, VariedOpts} = prepare_vary(Base, Req, Opts),
-            varied_cache_lookup(VariedBase, VariedReq, VariedOpts);
+            case can_prepare_vary(Base, Req) of
+                true ->
+                    {VariedBase, VariedReq, VariedOpts} = prepare_vary(Base, Req, Opts),
+                    varied_cache_lookup(VariedBase, VariedReq, VariedOpts);
+                false ->
+                    hb_cache_lookup(Base, Req, Opts)
+            end;
         DirectRes ->
             DirectRes
     end;
@@ -945,6 +950,21 @@ direct_key_access(Base, Req, Opts) when is_map(Base) ->
     hb_device:is_direct_key_access(Base, Req, Opts);
 direct_key_access(_Base, _Req, _Opts) ->
     false.
+
+can_prepare_vary(Base, Req) ->
+    (is_map(Base) orelse ?IS_ID(Base) orelse ?IS_LINK(Base))
+        andalso (is_map(Req) orelse ?IS_ID(Req) orelse ?IS_LINK(Req)).
+
+hb_cache_lookup(Base, Req, Opts) ->
+    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {ok, Res} ->
+            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
+            {ok, Res};
+        {continue, NewBase, NewReq} ->
+            resolve_stage(3, NewBase, NewReq, Opts);
+        {error, CacheResp} ->
+            {error, CacheResp}
+    end.
 
 %% @doc Resolve the device function, then canonicalize inputs from its spec.
 prepare_vary(Base, Req, Opts) ->
