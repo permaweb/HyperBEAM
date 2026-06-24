@@ -355,3 +355,11 @@
   change was needed. Broad `_ => _` specs were reviewed and remain concentrated
   in hook/codec/forwarding surfaces or process/scheduler carry-forward cases,
   rather than generic vary-on-everything force loads.
+- Minimized the HTTP signed-wire cache fix so normal unforced HTTPSig requests
+  do not pay an extra verification step unless `force-signed-requests` or
+  `store-all-signed` requires it. Forced requests retain the old rejection
+  semantics; unforced `store-all-signed` requests verify only to decide whether
+  to cache. Validation: `git diff --check` passed;
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_http` passed
+  with 14 tests; and `HB_PARANOID=cache_read,cache_write rebar3 device test
+  --module dev_httpsig` passed with 5 tests.
