@@ -7,6 +7,8 @@
 %%% Defaults provide a 24-hour bucket that recharges at 1 unit per second.
 %%% An optional `recharging-ledger-rates' message can provide account-specific
 %%% recharge rates.
+%%% An optional `recharging-ledger-grace' allows small post-metering negative
+%%% balance drift without making that grace appear as spendable balance.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3]).
 -include("include/hb.hrl").
@@ -16,6 +18,7 @@
 -define(DEFAULT_MAX, 86_400).
 -define(DEFAULT_RECHARGE, 1).
 -define(DEFAULT_PERIOD, 1).
+-define(DEFAULT_GRACE, 3_600).
 
 account_id(Address) ->
     hb_util:human_id(Address).
@@ -35,7 +38,8 @@ balance(_, Req, Opts) ->
 
 %% @doc Charge metered usage against a P4 account. P4 supplies the `account'
 %% key on the post-response commit path and the `quantity' to deduct. The charge
-%% succeeds only when the current effective balance can cover the quantity.
+%% succeeds only when the current effective balance can cover the quantity, plus
+%% any configured negative-balance grace.
 charge(_, Req, Opts) ->
     Account = hb_ao:get(<<"account">>, Req, Opts),
     case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
@@ -134,6 +138,7 @@ start_server(ServerID, Opts) ->
             Opts
         ),
     Period = hb_opts:get(recharging_ledger_period, ?DEFAULT_PERIOD, Opts),
+    Grace = hb_opts:get(recharging_ledger_grace, ?DEFAULT_GRACE, Opts),
     RatesMessage = hb_opts:get(recharging_ledger_rates, undefined, Opts),
     Exempt = hb_opts:get(recharging_ledger_exempt, [], Opts),
     ?event(
@@ -143,6 +148,7 @@ start_server(ServerID, Opts) ->
             {max, Max},
             {recharge, Recharge},
             {period, Period},
+            {grace, Grace},
             {rates, RatesMessage},
             {exempt, Exempt}
         }
@@ -152,6 +158,7 @@ start_server(ServerID, Opts) ->
             max => Max,
             recharge => Recharge,
             period => Period,
+            grace => Grace,
             rates => RatesMessage,
             accounts => #{ account_id(Account) => infinity || Account <- Exempt }
         }
@@ -175,11 +182,18 @@ server_loop(State) ->
             server_loop(NewState)
     end.
 
-charge_account(AccountID, Quantity, State = #{ accounts := Accounts }, Now, Opts) ->
+charge_account(
+        AccountID,
+        Quantity,
+        State = #{ accounts := Accounts },
+        Now,
+        Opts
+    ) ->
+    Grace = maps:get(grace, State, ?DEFAULT_GRACE),
     case account_balance(AccountID, State, Now, Opts) of
         infinity ->
             {{ok, true}, State};
-        Balance when Balance >= Quantity ->
+        Balance when Balance - Quantity >= -Grace ->
             {{ok, true},
                 State#{
                     accounts =>
@@ -310,7 +324,8 @@ insufficient_balance_returns_402_test() ->
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
-        <<"recharging-ledger-recharge">> => 0
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
@@ -322,7 +337,8 @@ insufficient_balance_does_not_mutate_balance_test() ->
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
-        <<"recharging-ledger-recharge">> => 0
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
@@ -330,6 +346,40 @@ insufficient_balance_does_not_mutate_balance_test() ->
     ),
     ?assertEqual(
         {ok, 10},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+grace_allows_small_negative_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 10
+    },
+    ?assertEqual(
+        {ok, true},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 105 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, -5},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+grace_rejects_beyond_negative_limit_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 10
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 402 }},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 111 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, 100},
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
@@ -398,6 +448,16 @@ recharge_restores_balance_test() ->
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
     ?assertEqual(25, account_balance(Account, State, 500)).
+
+recharge_restores_negative_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    State = #{
+        max => 100,
+        recharge => 10,
+        period => 1,
+        accounts => #{ Account => #{ balance => -5, last => 0 } }
+    },
+    ?assertEqual(0, account_balance(Account, State, 500)).
 
 recharge_caps_at_max_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
