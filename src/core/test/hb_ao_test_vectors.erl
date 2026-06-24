@@ -1275,8 +1275,28 @@ paranoid_cache_verification_test(RawOpts) ->
     Opts = paranoid_opts(RawOpts),
     Base = hb_message:normalize_commitments(#{ <<"a">> => 1 }, Opts),
     Tampered = Base#{ <<"a">> => 2 },
+    SecretKeyMsg =
+        #{
+            <<"device">> => <<"cookie@1.0">>,
+            <<"wallet-address">> => <<"addr">>,
+            <<"commitments">> =>
+                #{
+                    <<"secret-commitment">> =>
+                        #{
+                            <<"commitment-device">> => <<"cookie@1.0">>,
+                            <<"committed">> =>
+                                [<<"device">>, <<"wallet-address">>],
+                            <<"committer">> => <<"addr">>,
+                            <<"keyid">> => <<"secret:addr">>,
+                            <<"signature">> => <<"secret-commitment">>,
+                            <<"type">> => <<"hmac-sha256">>
+                        }
+                }
+        },
     ?assert(hb_message:paranoid_verify(cache_read, Base, Opts)),
     ?assert(hb_message:paranoid_verify(cache_write, Base, Opts)),
+    ?assert(hb_message:paranoid_verify(cache_read, SecretKeyMsg, Opts)),
+    ?assert(hb_message:paranoid_verify(cache_write, SecretKeyMsg, Opts)),
     ?assertThrow(_, hb_message:paranoid_verify(cache_read, Tampered, Opts)),
     ?assertThrow(_, hb_message:paranoid_verify(cache_write, Tampered, Opts)).
 

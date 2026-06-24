@@ -317,3 +317,16 @@
   after verification succeeds. Validation: `git diff --check` passed;
   `HB_PARANOID=cache_read,cache_write rebar3 eunit --module=hb_http` passed
   with 14 tests, including `send_large_signed_request_test`.
+- The next full paranoid suite on `0535363e6` moved past the HTTP failure but
+  failed with the already-observed router performance assertion plus secret
+  device cache-write failures. Root cause for the secret failures: materialized
+  `cookie@1.0` HMAC commitments use `secret:` key IDs and cannot be verified in
+  generic cache read/write context because the secret is intentionally absent.
+  Cache paranoia now defers only those secret-key HMAC commitments while
+  continuing to verify self-contained materialized commitments. Validation:
+  `git diff --check` passed; `HB_PARANOID=cache_read,cache_write rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 196 tests; `HB_PARANOID=cache_read,cache_write
+  rebar3 device test --module dev_secret` passed with 12 tests; and
+  `HB_PARANOID=cache_read,cache_write rebar3 device test --module dev_router`
+  passed with 30 tests, confirming the full-run router failure is the existing
+  timing-sensitive assertion rather than a deterministic branch regression.
