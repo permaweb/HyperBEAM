@@ -113,7 +113,11 @@
         <<"cache-control">>,
         <<"spawn-worker">>,
         <<"only">>,
-        <<"prefer">>
+        <<"prefer">>,
+        <<"ao-vary-original-base">>,
+        <<"ao-vary-original-request">>,
+        <<"ao-vary-overlay">>,
+        <<"ao-vary-func">>
     ]
 ).
 
@@ -123,7 +127,7 @@
 %% `{ok | error, NewMessage}.'
 %% The resolver is composed of a series of discrete phases:
 %%      1: Normalization.
-%%      2: Cache lookup.
+%%      2: Direct cache lookup, input varying, and varied cache lookup.
 %%      3: Validation check.
 %%      4: Persistent-resolver lookup.
 %%      5: Device lookup.
@@ -417,18 +421,15 @@ resolve_stage(1, RawBase, RawReq, Opts) ->
     Req = normalize_keys(RawReq, Opts),
     resolve_stage(2, Base, Req, Opts);
 resolve_stage(2, Base, Req, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
-    % Lookup request in the cache. If we find a result, return it.
-    % If we do not find a result, we continue to the next stage,
-    % unless the cache lookup returns `halt' (the user has requested that we 
-    % only return a result if it is already in the cache).
-    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
-        {ok, Res} ->
-            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
-            {ok, Res};
-        {continue, NewBase, NewReq} ->
-            resolve_stage(3, NewBase, NewReq, Opts);
-        {error, CacheResp} -> {error, CacheResp}
+    ?event_debug(debug_ao_core, {stage, 2, vary_and_cache_lookup}, Opts),
+    % Preserve the existing direct member-read fast path before varying. If a
+    % request is device-computed, canonicalize its inputs before cache lookup.
+    case direct_cache_lookup(Base, Req, Opts) of
+        continue ->
+            {VariedBase, VariedReq, VariedOpts} = prepare_vary(Base, Req, Opts),
+            varied_cache_lookup(VariedBase, VariedReq, VariedOpts);
+        DirectRes ->
+            DirectRes
     end;
 resolve_stage(3, Base, Req, _Opts) when not is_map(Base) or not is_map(Req) ->
     % Validation check: If the messages are not maps, we cannot find a key
@@ -487,7 +488,7 @@ resolve_stage(4, Base, Req, Opts) ->
                 Res ->
                     % Now that we have the result, we can skip right to potential
                     % recursion (step 11) in the outer-wrapper.
-                    Res
+                    maybe_apply_overlay(Res, Opts)
             end;
         {infinite_recursion, GroupName} ->
             % We are the leader for this resolution, but we executing the 
@@ -512,6 +513,9 @@ resolve_stage(4, Base, Req, Opts) ->
                     error_infinite(Base, Req, Opts)
             end
     end.
+resolve_stage(5, Base, Req, ExecName, Opts = #{ <<"ao-vary-func">> := ResolvedFunc }) ->
+    ?event_debug(debug_ao_core, {stage, 5, reused_device_lookup}, Opts),
+    resolve_stage(6, ResolvedFunc, Base, Req, ExecName, Opts);
 resolve_stage(5, Base, Req, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
     % Device lookup: Find the Erlang function that should be utilized to 
@@ -750,20 +754,23 @@ resolve_stage(11, Base, Req, Res, ExecName, Opts) ->
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
     resolve_stage(12, Base, Req, Res, ExecName, Opts);
-resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
+resolve_stage(12, _Base, _Req, {ok, Res} = RawRes, ExecName, Opts) ->
     ?event_debug(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
-    case
-        {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
-    of
-        {A, B} when (A == false) or (B == false) ->
-            Res;
-        {_, _} ->
-            % Spawn a worker for the current execution
-            WorkerPID = hb_persistent:start_worker(ExecName, Res, Opts),
-            hb_persistent:forward_work(WorkerPID, Opts),
-            Res
-    end;
+    maybe_apply_overlay(
+        case
+            {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
+        of
+            {A, B} when (A == false) or (B == false) ->
+                RawRes;
+            {_, _} ->
+                % Spawn a worker for the current execution
+                WorkerPID = hb_persistent:start_worker(ExecName, Res, Opts),
+                hb_persistent:forward_work(WorkerPID, Opts),
+                RawRes
+        end,
+        Opts
+    );
 resolve_stage(12, _Base, _Req, OtherRes, _ExecName, _Opts) ->
     ?event_debug(debug_ao_core, {stage, 12, _ExecName, abnormal_status_skip_spawning}, _Opts),
     OtherRes.
@@ -916,6 +923,86 @@ ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
     hb_cache:ensure_loaded(MsgLink, Opts);
 ensure_message_loaded(Msg, _Opts) ->
     Msg.
+
+%% @doc Try the cheap direct member-read cache path before varying inputs.
+direct_cache_lookup(Base, Req = #{ <<"path">> := _ }, Opts) ->
+    case direct_key_access(Base, Req, Opts) of
+        true ->
+            case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+                {continue, _NewBase, _NewReq} -> continue;
+                Res -> Res
+            end;
+        _ ->
+            continue
+    end;
+direct_cache_lookup(_Base, _Req, _Opts) ->
+    continue.
+
+direct_key_access(Base, Req, Opts) when ?IS_ID(Base) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    hb_device:is_direct_key_access(Base, Req, Opts, Store);
+direct_key_access(Base, Req, Opts) when is_map(Base) ->
+    hb_device:is_direct_key_access(Base, Req, Opts);
+direct_key_access(_Base, _Req, _Opts) ->
+    false.
+
+%% @doc Resolve the device function, then canonicalize inputs from its spec.
+prepare_vary(Base, Req, Opts) ->
+    LoadedBase = ensure_message_loaded(Base, Opts),
+    LoadedReq = ensure_message_loaded(Req, Opts),
+    UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
+    Key = hb_path:hd(LoadedReq, UserOpts),
+    {Status, Device, Func} = hb_device:message_to_fun(LoadedBase, Key, UserOpts),
+    AddKey =
+        case Status of
+            add_key -> Key;
+            _ -> false
+        end,
+    {ok, VariedBase, VariedReq, Overlay} =
+        hb_types:vary(Device, Key, Func, AddKey, LoadedBase, LoadedReq, UserOpts),
+    {
+        VariedBase,
+        VariedReq,
+        Opts#{
+            <<"add-key">> => AddKey,
+            <<"ao-vary-func">> => Func,
+            <<"ao-vary-original-base">> => LoadedBase,
+            <<"ao-vary-original-request">> => LoadedReq,
+            <<"ao-vary-overlay">> => Overlay
+        }
+    }.
+
+%% @doc Lookup and cache by the varied execution pair.
+varied_cache_lookup(Base, Req, Opts) ->
+    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {ok, Res} ->
+            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
+            maybe_apply_overlay({ok, Res}, Opts);
+        {continue, NewBase, NewReq} ->
+            resolve_stage(3, NewBase, NewReq, Opts);
+        {error, CacheResp} ->
+            {error, CacheResp}
+    end.
+
+%% @doc Apply a varied execution result onto this caller's original input.
+maybe_apply_overlay({ok, Res}, Opts = #{ <<"ao-vary-overlay">> := base })
+        when is_map(Res) ->
+    {ok,
+        set(
+            maps:get(<<"ao-vary-original-base">>, Opts),
+            Res,
+            internal_opts(Opts)
+        )};
+maybe_apply_overlay({ok, Res}, Opts = #{ <<"ao-vary-overlay">> := request })
+        when is_map(Res) ->
+    {ok,
+        set(
+            maps:get(<<"ao-vary-original-request">>, Opts),
+            Res,
+            internal_opts(Opts)
+        )};
+maybe_apply_overlay(Res, _Opts) ->
+    Res.
 
 %% @doc Catch all return if we are in an infinite loop.
 error_infinite(Base, Req, Opts) ->

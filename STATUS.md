@@ -15,3 +15,10 @@
   varying. `rebar3 compile` passed.
 - Fixed atom/key normalization in the type parser. `rebar3 eunit
   --module=hb_types` passed with 3 tests.
+- Wired varying into `hb_ao` before non-direct cache lookup/execution. First
+  `hb_ao_test_vectors` run exposed repeated abstract-code extraction timeouts.
+- Added process-local type schema memoization, documented in
+  `decisions/type-schema-memoization.md`. `rebar3 compile && rebar3 eunit
+  --module=hb_ao_test_vectors` passed with 189 tests, including projection and
+  cache-collapse coverage for varied inputs. `rebar3 eunit --module=hb_types`
+  passed with 3 tests.

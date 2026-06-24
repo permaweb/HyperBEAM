@@ -1,6 +1,7 @@
 %%% @doc Uses a series of different `Opts' values to test the resolution engine's 
 %%% execution under different circumstances.
 -module(hb_ao_test_vectors).
+-export([info/0, vary_key/3, varying_cache_key/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("include/hb.hrl").
 
@@ -335,7 +336,98 @@ no_trusted_device_signers_skips_gateway_test() ->
         hb_device_load:reference(SpecID, Opts)
     ).
 
+vary_projection_test() ->
+    BaseOpts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        <<"spawn-worker">> => false,
+        <<"forge-bootstrap">> => vary_test_bootstrap()
+    },
+    hb_forge_seed:with_forge_bootstrap(
+        BaseOpts,
+        fun(Opts) ->
+            ?assertEqual(
+                {ok, <<"1">>},
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"1">>,
+                        <<"noise">> => <<"must-not-leak">>
+                    },
+                    <<"vary-key">>,
+                    Opts
+                )
+            )
+        end
+    ).
+
+vary_cache_collapse_test() ->
+    Store = hb_test_utils:test_store(),
+    BaseOpts = #{
+        <<"store">> => Store,
+        <<"cache-control">> => [<<"always">>],
+        <<"spawn-worker">> => false,
+        <<"forge-bootstrap">> => vary_test_bootstrap()
+    },
+    hb_forge_seed:with_forge_bootstrap(
+        BaseOpts,
+        fun(Opts) ->
+            erlang:erase({?MODULE, varying_cache_key}),
+            ?assertEqual(
+                {ok, <<"1">>},
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"same">>,
+                        <<"noise">> => <<"one">>
+                    },
+                    <<"varying-cache-key">>,
+                    Opts
+                )
+            ),
+            ?assertEqual(
+                {ok, <<"1">>},
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"test-vary@1.0">>,
+                        <<"a">> => <<"same">>,
+                        <<"noise">> => <<"two">>
+                    },
+                    <<"varying-cache-key">>,
+                    Opts
+                )
+            )
+        end
+    ).
+
 %%% Test vector suite
+
+info() ->
+    #{ default => <<"message@1.0">> }.
+
+-spec vary_key(#{ a := binary() }, #{ path := binary() }, map()) -> {ok, binary()}.
+vary_key(Base, _Req, _Opts) ->
+    case maps:is_key(<<"noise">>, Base) of
+        true -> {ok, <<"noise-leaked">>};
+        false -> {ok, maps:get(<<"a">>, Base)}
+    end.
+
+-spec varying_cache_key(#{ a := binary() }, #{ path := binary() }, map()) ->
+    {ok, binary()}.
+varying_cache_key(_Base, _Req, _Opts) ->
+    Count = erlang:get({?MODULE, varying_cache_key}),
+    Next =
+        case Count of
+            undefined -> 1;
+            _ -> Count + 1
+        end,
+    erlang:put({?MODULE, varying_cache_key}, Next),
+    {ok, integer_to_binary(Next)}.
+
+vary_test_bootstrap() ->
+    #{
+        <<"test-vary@1.0">> => ?MODULE
+    }.
 
 resolve_simple_test(Opts) ->
     Res = hb_ao:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),

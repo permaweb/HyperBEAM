@@ -28,7 +28,7 @@ extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
 extract(Module, _Opts) when is_atom(Module) ->
     case code:ensure_loaded(Module) of
-        {module, Module} -> do_extract(Module);
+        {module, Module} -> cached_extract(Module);
         {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
     end;
 extract(Device, Opts) when is_binary(Device) ->
@@ -38,6 +38,23 @@ extract(Device, Opts) when is_binary(Device) ->
     end;
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
+
+cached_extract(Module) ->
+    Version = module_version(Module),
+    CacheKey = {?MODULE, extract, Module},
+    case erlang:get(CacheKey) of
+        {Version, Schema} ->
+            Schema;
+        _ ->
+            Schema = do_extract(Module),
+            erlang:put(CacheKey, {Version, Schema}),
+            Schema
+    end.
+
+module_version(Module) ->
+    try Module:module_info(md5)
+    catch _:_ -> code:which(Module)
+    end.
 
 do_extract(Module) ->
     case module_beam(Module) of
