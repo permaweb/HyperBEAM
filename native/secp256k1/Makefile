@@ -71,6 +71,11 @@ LIBSECP256K1_STATIC = $(LIBSECP256K1_DIR)/build/lib/libsecp256k1.a
 # Source files
 SECP256K1_SOURCES = $(C_SRC_DIR)/secp256k1_nif.c $(BASEDIR)/native/hb_nif/hb_nif.c
 SECP256K1_OBJECTS = $(C_SRC_DIR)/secp256k1_nif.o $(BASEDIR)/native/hb_nif/hb_nif.o
+SECP256K1_HEADERS = \
+	$(BASEDIR)/native/hb_nif/hb_nif.h \
+	$(LIBSECP256K1_DIR)/include/secp256k1.h \
+	$(LIBSECP256K1_DIR)/include/secp256k1_recovery.h
+HB_NIF_HEADERS = $(BASEDIR)/native/hb_nif/hb_nif.h
 
 # Build up SECP256K1 flags (matching Arweave's pattern)
 SECP256K1_CFLAGS += $(CFLAGS)
@@ -108,10 +113,10 @@ else
 	$(link_verbose) $(CC) $(SECP256K1_OBJECTS) $(LIBSECP256K1_STATIC) -shared $(SECP256K1_LDLIBS) -o $(SECP256K1_OUTPUT)
 endif
 
-%secp256k1_nif.o: %secp256k1_nif.c
+$(C_SRC_DIR)/secp256k1_nif.o: $(C_SRC_DIR)/secp256k1_nif.c $(SECP256K1_HEADERS)
 	$(c_verbose) $(CC) $(SECP256K1_CFLAGS) -c $(OUTPUT_OPTION) $<
 
-%hb_nif.o: %hb_nif.c
+$(BASEDIR)/native/hb_nif/hb_nif.o: $(BASEDIR)/native/hb_nif/hb_nif.c $(HB_NIF_HEADERS)
 	$(c_verbose) $(CC) $(SECP256K1_CFLAGS) -c $(OUTPUT_OPTION) $<
 
 %.o: %.c

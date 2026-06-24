@@ -4,6 +4,23 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+%%% The public, legacy Arweave GraphQL gateway used to exercise fallback
+%%% routing: a HyperBEAM node serves what it has locally, then the router falls
+%%% through to this endpoint for everything it does not. Kept behind macros so
+%%% the specific provider is named in exactly one place.
+-define(LEGACY_GRAPHQL_ENDPOINT, <<"https://arweave-search.goldsky.com">>).
+%% A transaction resolvable via the legacy gateway but absent locally, used to
+%% prove the fallback returns remote results.
+-define(LEGACY_GRAPHQL_TX, <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>).
+%% An opaque cursor in a legacy GraphQL gateway's own (non-native) format;
+%% HyperBEAM must reject it rather than misinterpret it (it is not native).
+-define(LEGACY_GRAPHQL_CURSOR,
+    <<
+        "eyJzZWFyY2hfYWZ0ZXIiOlsxOTQyODI5LCItaVlWTHQtREt4ZEZkRU4xOHdB",
+        "QWtkYUw4anlMSEdVd29uSEgzN3BLWmNvIl0sImluZGV4IjowfQ=="
+    >>
+).
+
 %%% Test helpers.
 
 write_test_message(Opts) ->
@@ -70,6 +87,98 @@ test_env_with_blocks(InitialHeight, FinalHeight) ->
         Opts
     ),
     {ok, Node, Opts}.
+
+post_graphql(Node, Query, Variables, Req, Opts) ->
+    Path =
+        case hb_util:bool(hb_maps:get(<<"force-next-page">>, Req, false, Opts)) of
+            true -> <<"~query@1.0/graphql?force-next-page=true">>;
+            false -> <<"~query@1.0/graphql">>
+        end,
+    {ok, Res} =
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => Path,
+                <<"content-type">> => <<"application/json">>,
+                <<"codec-device">> => <<"json@1.0">>,
+                <<"body">> =>
+                    hb_json:encode(
+                        #{
+                            <<"query">> => Query,
+                            <<"variables">> => Variables
+                        }
+                    )
+            },
+            Opts
+        ),
+    hb_json:decode(hb_maps:get(<<"body">>, Res, <<>>, Opts)).
+
+test_env_with_message() ->
+    LocalStore = hb_test_utils:test_store(),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => hb_test_utils:test_store(),
+            <<"local-store">> => LocalStore
+        },
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [LocalStore, ArweaveStore]
+        },
+    Node = hb_http_server:start_node(Opts),
+    {ok, Msg} = write_test_message(Opts),
+    {ok, Node, Opts, hb_message:id(Msg, all, Opts)}.
+
+transactions_cursor_query() ->
+    <<"""
+        query($ids: [ID!], $sort: SortOrder, $first: Int, $after: String) {
+            transactions(
+                ids: $ids,
+                sort: $sort,
+                first: $first,
+                after: $after
+            ) {
+                count
+                pageInfo {
+                    hasNextPage
+                }
+                edges {
+                    cursor
+                    node {
+                        id
+                    }
+                }
+            }
+        }
+    """>>.
+
+transaction_edges(Res, Opts) ->
+    hb_maps:get(
+        <<"edges">>,
+        hb_util:deep_get(<<"data/transactions">>, Res, #{}, Opts),
+        [],
+        Opts
+    ).
+
+transaction_ids(Res, Opts) ->
+    [
+        ID
+    ||
+        #{ <<"node">> := #{ <<"id">> := ID }} <- transaction_edges(Res, Opts)
+    ].
+
+transaction_has_next_page(Res, Opts) ->
+    hb_util:deep_get(
+        <<"data/transactions/pageInfo/hasNextPage">>,
+        Res,
+        false,
+        Opts
+    ).
+
+transaction_cursor(Res, Opts) ->
+    [#{ <<"cursor">> := Cursor }] = transaction_edges(Res, Opts),
+    Cursor.
 
 %% Helper function to write test message with Recipient
 write_test_message_with_recipient(Recipient, Opts) ->
@@ -776,28 +885,7 @@ transactions_query_cursor_by_offset_test_parallel() ->
         hb_store_arweave:read_offset(StoreOpts, EarlierID, Opts),
     {ok, #{ <<"start-offset">> := LaterOffset }} =
         hb_store_arweave:read_offset(StoreOpts, LaterID, Opts),
-    Query =
-        <<"""
-            query($ids: [ID!], $sort: SortOrder, $first: Int, $after: String) {
-                transactions(
-                    ids: $ids,
-                    sort: $sort,
-                    first: $first,
-                    after: $after
-                ) {
-                    count
-                    pageInfo {
-                        hasNextPage
-                    }
-                    edges {
-                        cursor
-                        node {
-                            id
-                        }
-                    }
-                }
-            }
-        """>>,
+    Query = transactions_cursor_query(),
     VerifyFun =
         fun(Order, FirstID, FirstOffset, SecondID, SecondOffset) ->
             FirstRes =
@@ -829,7 +917,10 @@ transactions_query_cursor_by_offset_test_parallel() ->
                     }
                 }
             } = FirstRes,
-            ?assertEqual(hb_util:bin(FirstOffset), FirstCursor),
+            ?assertEqual(
+                <<"offset=", (hb_util:bin(FirstOffset))/binary>>,
+                FirstCursor
+            ),
             SecondRes =
                 dev_query_graphql:test_query(
                     Node,
@@ -838,7 +929,7 @@ transactions_query_cursor_by_offset_test_parallel() ->
                         <<"ids">> => [EarlierID, LaterID],
                         <<"sort">> => Order,
                         <<"first">> => 1,
-                        <<"after">> => FirstID
+                        <<"after">> => FirstCursor
                     },
                     Opts
                 ),
@@ -860,7 +951,10 @@ transactions_query_cursor_by_offset_test_parallel() ->
                     }
                 }
             } = SecondRes,
-            ?assertEqual(hb_util:bin(SecondOffset), SecondCursor)
+            ?assertEqual(
+                <<"offset=", (hb_util:bin(SecondOffset))/binary>>,
+                SecondCursor
+            )
         end,
     VerifyFun(
         <<"HEIGHT_ASC">>,
@@ -876,6 +970,182 @@ transactions_query_cursor_by_offset_test_parallel() ->
         EarlierID,
         EarlierOffset
     ).
+
+transactions_query_terminal_page_test_parallel() ->
+    {ok, Node, Opts, ID} = test_env_with_message(),
+    Res =
+        dev_query_graphql:test_query(
+            Node,
+            transactions_cursor_query(),
+            #{ <<"ids">> => [ID], <<"first">> => 2 },
+            Opts
+        ),
+    ?assertEqual([ID], transaction_ids(Res, Opts)),
+    ?assertEqual(false, transaction_has_next_page(Res, Opts)),
+    ?assertEqual(nomatch, binary:match(transaction_cursor(Res, Opts), <<"&remaining=0">>)).
+
+transactions_query_force_next_page_test_parallel() ->
+    {ok, Node, Opts, ID} = test_env_with_message(),
+    Res =
+        post_graphql(
+            Node,
+            transactions_cursor_query(),
+            #{ <<"ids">> => [ID], <<"first">> => 2 },
+            #{ <<"force-next-page">> => true },
+            Opts
+        ),
+    ?assertEqual([ID], transaction_ids(Res, Opts)),
+    ?assertEqual(true, transaction_has_next_page(Res, Opts)).
+
+transactions_query_force_cursor_test_parallel() ->
+    {ok, Node, Opts, ID} = test_env_with_message(),
+    Query = transactions_cursor_query(),
+    Vars = #{ <<"ids">> => [ID], <<"first">> => 2 },
+    Normal = dev_query_graphql:test_query(Node, Query, Vars, Opts),
+    Forced = post_graphql(
+        Node,
+        Query,
+        Vars,
+        #{ <<"force-next-page">> => true },
+        Opts
+    ),
+    ?assertEqual(
+        << (transaction_cursor(Normal, Opts))/binary, "&remaining=0" >>,
+        transaction_cursor(Forced, Opts)
+    ).
+
+transactions_query_remaining_cursor_test_parallel() ->
+    {ok, Node, Opts, ID} = test_env_with_message(),
+    Query = transactions_cursor_query(),
+    Vars = #{ <<"ids">> => [ID], <<"first">> => 2 },
+    Normal = dev_query_graphql:test_query(Node, Query, Vars, Opts),
+    FastFail =
+        post_graphql(
+            Node,
+            Query,
+            Vars#{
+                <<"after">> =>
+                    << (transaction_cursor(Normal, Opts))/binary, "&remaining=0" >>
+            },
+            #{ <<"force-next-page">> => true },
+            Opts
+        ),
+    ?assertMatch(
+        #{
+            <<"data">> := #{
+                <<"transactions">> := #{
+                    <<"count">> := <<"0">>,
+                    <<"pageInfo">> := #{ <<"hasNextPage">> := true },
+                    <<"edges">> := []
+                }
+            }
+        },
+        FastFail
+    ).
+
+transactions_query_legacy_cursor_test_parallel() ->
+    {ok, Node, Opts, ID} = test_env_with_message(),
+    Res =
+        dev_query_graphql:test_query(
+            Node,
+            transactions_cursor_query(),
+            #{
+                <<"ids">> => [ID],
+                <<"first">> => 2,
+                <<"after">> => ?LEGACY_GRAPHQL_CURSOR
+            },
+            Opts
+        ),
+    ?assertMatch(
+        #{
+            <<"data">> := #{
+                <<"transactions">> := #{
+                    <<"count">> := <<"0">>,
+                    <<"pageInfo">> := #{ <<"hasNextPage">> := false },
+                    <<"edges">> := []
+                }
+            }
+        },
+        Res
+    ).
+
+transactions_query_gateway_fallback_test_() ->
+    {timeout, 60, fun transactions_query_gateway_fallback/0}.
+transactions_query_gateway_fallback() ->
+    {ok, LocalNode, _LocalOpts, LocalID} = test_env_with_message(),
+    LegacyTX = ?LEGACY_GRAPHQL_TX,
+    Opts = #{ <<"routes">> => [graphql_gateway_route(LocalNode)] },
+    % The client only follows cursors; it has no knowledge of the route's
+    % fallback chain. Page 1 is served locally by HyperBEAM, page 2 by the
+    % legacy gateway -- the two backends' results arrive back to back.
+    Pages =
+        collect_graphql_pages(
+            transactions_cursor_query(),
+            #{ <<"ids">> => [LocalID, LegacyTX], <<"first">> => 2 },
+            Opts
+        ),
+    ?assertEqual(
+        [LocalID, LegacyTX],
+        lists:append([transaction_ids(P, Opts) || P <- Pages])
+    ),
+    ?assertEqual(
+        [true, false],
+        [transaction_has_next_page(P, Opts) || P <- Pages]
+    ).
+
+graphql_gateway_route(LocalNode) ->
+    #{
+        <<"template">> => <<"/graphql">>,
+        <<"nodes">> =>
+            [
+                % The local node is the fallback front: the route tells it to
+                % `force-next-page' so it always signals "there may be more",
+                % letting the (router-agnostic) client page on to the legacy
+                % gateway. The flag is injected here, not by the client.
+                #{
+                    <<"uri">> =>
+                        << LocalNode/binary,
+                            "~query@1.0/graphql?force-next-page=true" >>
+                },
+                #{
+                    <<"prefix">> => ?LEGACY_GRAPHQL_ENDPOINT,
+                    <<"opts">> =>
+                        #{ <<"http-client">> => httpc, <<"protocol">> => http2 }
+                }
+            ],
+        <<"parallel">> => 1,
+        <<"responses">> => 1,
+        <<"stop-after">> => true,
+        <<"admissible-status">> => 200,
+        <<"admissible">> =>
+            #{
+                <<"device">> => <<"query@1.0">>,
+                <<"path">> => <<"has-results">>
+            }
+    }.
+
+collect_graphql_pages(Query, Vars, Opts) ->
+    collect_graphql_pages(Query, Vars, Opts, [], 4).
+
+collect_graphql_pages(_Query, _Vars, _Opts, Acc, 0) ->
+    lists:reverse(Acc);
+collect_graphql_pages(Query, Vars, Opts, Acc, Remaining) ->
+    {ok, Page} = hb_client_gateway:query(Query, Vars, Opts),
+    case transaction_has_next_page(Page, Opts) of
+        true ->
+            Edges = transaction_edges(Page, Opts),
+            ?assert(Edges =/= []),
+            #{ <<"cursor">> := Cursor } = lists:last(Edges),
+            collect_graphql_pages(
+                Query,
+                Vars#{ <<"after">> => Cursor },
+                Opts,
+                [Page | Acc],
+                Remaining - 1
+            );
+        false ->
+            lists:reverse([Page | Acc])
+    end.
 
 %% @doc Test single transaction query by ID
 transaction_query_by_id_test_parallel() ->

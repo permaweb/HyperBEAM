@@ -54,29 +54,39 @@ query(Obj, <<"transactions">>, Args, Opts) ->
         {field, <<"transactions">>},
         {args, Args}
     }),
-    Matches = match_args(Args, Opts),
-    WithExplicit =
-        case explicit_ids(Args, Opts) of
-            [] -> Matches;
-            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-        end,
-    Ordered =
-        case annotate_ids(WithExplicit, Opts) of
-            unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-            Annotated ->
-                Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                sort_offset_annotated(
-                    filter_offset_annotated(
-                        Annotated,
-                        maps:get(<<"block">>, Args, undefined),
-                        Opts
-                    ),
-                    Order,
-                    Opts
-                )
-        end,
-    ?event({transactions_matches, Matches}),
-    {ok, connection(Ordered, Args, Opts)};
+    case valid_after_cursor(Args, Opts) of
+        true ->
+            Matches = match_args(Args, Opts),
+            WithExplicit =
+                case explicit_ids(Args, Opts) of
+                    [] -> Matches;
+                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+                end,
+            Ordered =
+                case annotate_ids(WithExplicit, Opts) of
+                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
+                    Annotated ->
+                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+                        sort_offset_annotated(
+                            filter_offset_annotated(
+                                Annotated,
+                                maps:get(<<"block">>, Args, undefined),
+                                Opts
+                            ),
+                            Order,
+                            Opts
+                        )
+                end,
+            ?event({transactions_matches, Matches}),
+            {ok, connection(Ordered, Args, Opts)};
+        false ->
+            ?event(
+                {invalid_after_cursor,
+                    hb_maps:get(<<"after">>, Args, not_found, Opts)
+                }
+            ),
+            {ok, connection([], Args, Opts)}
+    end;
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
         {ok, []} -> {ok, null};
@@ -219,18 +229,33 @@ find_field_key(Field, Msg, Opts) ->
 %% results.
 connection(Ordered, Args, Opts) ->
     ResultsCount = length(Ordered),
-    {DroppedCount, Remaining} = drop_to_cursor(Args, Ordered, Opts),
+    Remaining = drop_to_cursor(Args, Ordered, Opts),
     CountToReturn = page_size(Args, Opts),
-    ResultsPage = read_ids(Remaining, CountToReturn, Opts),
+    ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
+    ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
+    HasNextPage = length(ResultsPagePlusOne) > CountToReturn,
+    ForceNextPage = force_next_page(Args, Opts),
+    Edges =
+        case ForceNextPage andalso (not HasNextPage) of
+            true -> force_terminal_cursor(ResultsPage);
+            false -> ResultsPage
+        end,
     #{
         <<"count">> => hb_util:bin(ResultsCount),
-        <<"edges">> => ResultsPage,
+        <<"edges">> => Edges,
         <<"pageInfo">> =>
             #{
-                <<"hasNextPage">> =>
-                    (DroppedCount + length(ResultsPage)) < ResultsCount
+                <<"hasNextPage">> => HasNextPage orelse ForceNextPage
             }
     }.
+
+force_next_page(Args, Opts) ->
+    hb_util:bool(hb_maps:get(<<"force-next-page">>, Args, false, Opts)).
+
+force_terminal_cursor([]) -> [];
+force_terminal_cursor(Edges) ->
+    [Last = #{ <<"cursor">> := Cursor } | RestRev] = lists:reverse(Edges),
+    lists:reverse([Last#{ <<"cursor">> => << Cursor/binary, "&remaining=0" >> } | RestRev]).
 
 %% @doc Read IDs into their Arweave GraphQL-compliant object form, from a list
 %% of offset-annotated messages.
@@ -244,24 +269,58 @@ read_ids([AnnotatedID = #{ <<"id">> := ID } | Rest], Count, Opts) ->
             read_ids(Rest, Count, Opts)
     end.
 
-%% @doc Drop to the cursor position, returning the number of items dropped and
-%% the list of items after the cursor.
+%% @doc Drop to the cursor position, returning the list of items after the cursor.
 drop_to_cursor(Args, Ordered, Opts) ->
     drop_to_cursor(
         hb_maps:get(<<"after">>, Args, null, Opts),
-        Ordered,
-        Opts,
-        0
+        Ordered
     ).
-drop_to_cursor(Cursor, Ordered, _Opts, Index)
-        when Cursor =:= null orelse Cursor =:= undefined orelse Ordered =:= [] ->
-    {Index, Ordered};
-drop_to_cursor(After, [AnnotatedID | Rest], Opts, Index) ->
-    ID = maps:get(<<"id">>, AnnotatedID, undefined),
-    Cursor = maps:get(<<"cursor">>, AnnotatedID, undefined),
-    case (After =:= ID) orelse (After =:= Cursor) of
-        true -> {Index + 1, Rest};
-        false -> drop_to_cursor(After, Rest, Opts, Index + 1)
+drop_to_cursor(null, Ordered) ->
+    Ordered;
+drop_to_cursor(undefined, Ordered) ->
+    Ordered;
+drop_to_cursor(<<>>, Ordered) ->
+    Ordered;
+drop_to_cursor(_After, []) ->
+    [];
+drop_to_cursor(After, [#{ <<"cursor">> := After } | Rest]) ->
+    Rest;
+drop_to_cursor(After, [_ | Rest]) ->
+    drop_to_cursor(After, Rest).
+
+valid_after_cursor(Args, Opts) ->
+    valid_cursor(hb_maps:get(<<"after">>, Args, null, Opts)).
+
+valid_cursor(null) ->
+    true;
+valid_cursor(undefined) ->
+    true;
+valid_cursor(<<>>) ->
+    true;
+valid_cursor(<<"offset=", Cursor/binary>>) ->
+    valid_offset_cursor(Cursor);
+valid_cursor(<<"pending=", ID/binary>>) when ?IS_ID(ID) ->
+    true;
+valid_cursor(<<"ephemeral=", ID/binary>>) when ?IS_ID(ID) ->
+    true;
+valid_cursor(_) ->
+    false.
+
+valid_offset_cursor(Cursor) ->
+    case binary:split(Cursor, <<"-">>) of
+        [Offset] ->
+            valid_integer_cursor_part(Offset);
+        [Offset, Ordinate] ->
+            valid_integer_cursor_part(Offset)
+                andalso valid_integer_cursor_part(Ordinate);
+        _ ->
+            false
+    end.
+
+valid_integer_cursor_part(<<>>) -> false;
+valid_integer_cursor_part(Bin) ->
+    try binary_to_integer(Bin) >= 0
+    catch _:_ -> false
     end.
 
 %% @doc Return the page size, clamped to the maximum allowed.
@@ -329,7 +388,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         BlockSize = hb_util:int(
                             hb_maps:get(<<"block_size">>, MinBlock, 0, Opts)),
                         WeaveSize - BlockSize;
-                    not_found -> 0
+                    {error, not_found} -> 0
                 end
         end,
     EndOffset =
@@ -341,7 +400,7 @@ block_range_to_offset_range(Heights, Opts) ->
                         hb_util:int(
                             hb_maps:get(<<"weave_size">>, MaxBlock, 0, Opts)
                         );
-                    not_found -> infinity
+                    {error, not_found} -> infinity
                 end
         end,
     ?event(
@@ -368,7 +427,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end;
         not_found ->
             case hb_opts:get(query_arweave_remote_block_ranges, true, Opts) of
@@ -379,7 +438,7 @@ read_block(Height, Opts) ->
                         #{ <<"path">> => <<"block">>, <<"block">> => Height },
                         Opts
                     );
-                _ -> not_found
+                _ -> {error, not_found}
             end
     end.
 
@@ -428,27 +487,15 @@ match_args(Args, Opts) when is_map(Args) ->
         Opts
     ).
 match_args([], [], _Opts) -> [];
-match_args([], Results, Opts) ->
+match_args([], Results, _Opts) ->
     ?event({match_args_results, Results}),
-    Store = scoped_store(Opts),
-    % For every ID in every result, we resolve it to its uncommitted ID form.
-    ResolvedResults =
-        [
-            [ hb_util:ok(hb_store:resolve(Store, ID, Opts)) || ID <- Result ]
-        ||
-            Result <- Results
-        ],
-    % Next, we find the intersection of all the results. Having the uncommitted 
-    % ID gives us their 'neutral' form: correctly returning a result with `SignedID1`
-    % from one matcher and `SignedID2` from another matcher -- while they are
-    % unequal, but pertain to the same message.
-    Matches =
+    hb_util:unique(
         lists:foldl(
             fun(Result, Acc) -> hb_util:list_with(Result, Acc) end,
-            hd(ResolvedResults),
-            tl(ResolvedResults)
-        ),
-    hb_util:unique(lists:flatten([ all_signed_ids(ID, Store, Opts) || ID <- Matches ]));
+            hd(Results),
+            tl(Results)
+        )
+    );
 match_args([{Field, X} | Rest], Acc, Opts) ->
     ?event({match, {field, Field}, {arg, X}}),
     case match(Field, X, Opts) of
@@ -531,11 +578,11 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         },
     [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
 
-offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral:", ID/binary>>;
+offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral=", ID/binary>>;
 offset_cursor(ID, Offset) when is_binary(ID) ->
     case pending_offset(Offset) of
-        true -> <<"pending:", ID/binary>>;
-        false -> hb_util:bin(Offset)
+        true -> <<"pending=", ID/binary>>;
+        false -> <<"offset=", (hb_util:bin(Offset))/binary>>
     end.
 
 pending_offset(relative) -> true;
@@ -616,45 +663,6 @@ commitment_id_to_base_id(ID, Opts) ->
             hb_util:encode(hb_crypto:sha256(Sig));
         _ -> not_found
     end.
-
-%% @doc Find all IDs for a message, by any of its other IDs. It achieves this
-%% by resolving the given ID, recursing through its links, then returning all
-%% of the IDs found in that `BaseID/commitments' key.
-all_signed_ids(ID, Store, Opts) ->
-    ResolvedID = hb_util:ok_or(hb_store:resolve(Store, ID, Opts), ID),
-    case hb_store:read(Store, << ResolvedID/binary, "/commitments">>, Opts) of
-        {composite, CommitmentIDs} ->
-            lists:filter(
-                fun(CommitmentID) ->
-                    CommitmentPath =
-                        <<
-                            ResolvedID/binary,
-                            "/commitments/",
-                            CommitmentID/binary,
-                            "/committer"
-                        >>,
-                    CommitmentMsgID =
-                        hb_util:ok_or(
-                            hb_store:resolve(Store, CommitmentPath, Opts),
-                            CommitmentPath
-                        ),
-                    case hb_store:read(Store, CommitmentMsgID, Opts) of
-                        {ok, _} -> true;
-                        _ ->
-                            false
-                    end
-                end,
-                CommitmentIDs
-            );
-        _ ->
-            [ID]
-    end.
-
-%% @doc Scope the stores used for block matching. The searched stores can be
-%% scoped by setting the `query_arweave_scope' option.
-scoped_store(Opts) ->
-    Scope = hb_opts:get(query_arweave_scope, [local], Opts),
-    hb_opts:get(store, no_store, hb_store:scope(Opts, Scope)).
 
 %% @doc Return the explicit IDs from the arguments, if given. Searches for
 %% both `ids' and `id' keys.

@@ -29,8 +29,11 @@
 %%%                   if it is a `simple' value, or a message if it is a complex
 %%%                   term, using a request map of the form `#{<<"read">> => Path}`.
 %%%     write/3:      Write a request map of the form `#{Path => Value}`.
-%%%     list/3:       For `composite' type keys, return a list of child keys
-%%%                   using a request map of the form `#{<<"list">> => Path}`.
+%%%     list/3:       For `composite' type keys, return child keys using a
+%%%                   request map of the form `#{<<"list">> => Path}`.
+%%%                   Composite read results may also return children as
+%%%                   `{Key, Value}' pairs when the store can provide a child
+%%%                   value without an additional read.
 %%% '''
 %%% Each function takes a `store' message first, containing an arbitrary set
 %%% of its necessary configuration keys, as well as the `store-module' key which
@@ -76,7 +79,7 @@
 -define(STORE_BENCH_LIST_GROUP_SIZE, 10).
 -define(STORE_BENCH_LIST_OPS, 20_000).
 -define(BENCH_MSG_WRITE_OPS, 250).
--define(BENCH_MSG_READ_OPS, 250).
+-define(BENCH_MSG_READ_OPS, 100_000).
 -define(BENCH_MSG_DATA_SIZE, 1024).
 
 behavior_info(callbacks) ->
@@ -780,7 +783,7 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             {read_ops, ReadOps}
         }
     ),
-    % Generate random data to write and the keys to read ahead of time.
+    % Generate random data, keys, and store requests ahead of time.
     RandomData = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Keys =
         lists:map(
@@ -789,14 +792,21 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             end,
             lists:seq(1, ReadOps)
         ),
+    WriteReqs =
+        lists:map(
+            fun(Key) ->
+                write_req(Key, RandomData)
+            end,
+            Keys
+        ),
     {WriteTime, ok} =
         timer:tc(
             fun() ->
                 lists:foreach(
-                    fun(Key) ->
-                        ok = write(Store, write_req(Key, RandomData), #{})
+                    fun(Req) ->
+                        ok = write(Store, Req, #{})
                     end,
-                    Keys
+                    WriteReqs
                 )
             end
         ),
@@ -810,11 +820,14 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
             hb_util:human_int(WriteRate)
         ]
     ),
-    % Generate keys to read ahead of time.
-    ReadKeys =
+    % Generate read requests ahead of time.
+    ReadReqs =
         lists:map(
             fun(_) ->
-                << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+                #{
+                    <<"read">> =>
+                        << "key-", (integer_to_binary(rand:uniform(ReadOps)))/binary >>
+                }
             end,
             lists:seq(1, ReadOps)
         ),
@@ -823,14 +836,14 @@ benchmark_key_read_write(Store, WriteOps, ReadOps) ->
         timer:tc(
             fun() ->
                 lists:foldl(
-                    fun(Key, Count) -> 
-                        case read(Store, Key, #{}) of
+                    fun(Req, Count) ->
+                        case read(Store, Req, #{}) of
                             {ok, _} -> Count;
                             _ -> Count + 1
                         end
                     end,
                     0,
-                    ReadKeys
+                    ReadReqs
                 )
             end
         ),
@@ -1073,29 +1086,9 @@ benchmark_message_read_write(Store, WriteOps, ReadOps) ->
         timer:tc(
             fun() ->
                 lists:foldl(
-                    fun({MsgID, Msg}, Count) -> 
-                        NormalizedMsg =
-                            hb_cache:ensure_all_loaded(
-                                hb_message:normalize_commitments(Msg, Opts),
-                                Opts
-                            ),
+                    fun({MsgID, _Msg}, Count) ->
                         case hb_cache:read(MsgID, Opts) of
-                            {ok, CacheMsg} ->
-                                NormalizedCacheMsg = 
-                                    hb_message:normalize_commitments(
-                                        hb_cache:read_all_commitments(
-                                            hb_cache:ensure_all_loaded(
-                                                CacheMsg,
-                                                Opts
-                                            ),
-                                            Opts
-                                        ),
-                                        Opts
-                                    ),
-                                case NormalizedCacheMsg of
-                                    NormalizedMsg -> Count;
-                                    _ -> Count + 1
-                                end;
+                            {ok, _CacheMsg} -> Count;
                             _ -> Count + 1
                         end
                     end,

@@ -32,8 +32,7 @@
 %%% 
 %%% Devices can be expressed as either modules or maps. They can also be 
 %%% referenced by an Arweave ID, which can be used to load a device from 
-%%% the network (depending on the value of the `load-remote-devices' and
-%%% `trusted-device-signers' environment settings).
+%%% the network when `trusted-device-signers' are configured.
 %%% 
 %%% HyperBEAM device implementations are defined as follows:
 %%% <pre>
@@ -153,7 +152,7 @@ resolve(Base, Req, Opts) ->
         {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}
     ),
     MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
-    ?event(debug_ao_core,
+    ?event_debug(debug_ao_core,
         {stage,
             1,
             prepare_multimessage_resolution,
@@ -217,7 +216,7 @@ resolve_many([ID], Opts) when ?IS_ID(ID) ->
     % 2. The main AO-Core logic looks for linkages between message input
     %    pairs and outputs. With only a single ID, there is not a valid pairing
     %    to use in looking up a cached result.
-    ?event(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
+    ?event_debug(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
     try {ok, ensure_message_loaded(ID, Opts)}
     catch _:_:_ -> {error, not_found}
     end;
@@ -243,20 +242,20 @@ resolve_many({as, DevID, Msg}, Opts) ->
 resolve_many([{resolve, Subres}], Opts) ->
     resolve_many(Subres, Opts);
 resolve_many(MsgList, Opts) ->
-    ?event(debug_ao_core, {resolve_many, MsgList}, Opts),
+    ?event_debug(debug_ao_core, {resolve_many, MsgList}, Opts),
     Res = do_resolve_many(MsgList, Opts),
-    ?event(debug_ao_core, {resolve_many_complete, {res, Res}, {reqs, MsgList}}, Opts),
+    ?event_debug(debug_ao_core, {resolve_many_complete, {res, Res}, {reqs, MsgList}}, Opts),
     Res.
 do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
 do_resolve_many([Res], Opts) ->
-    ?event(debug_ao_core, {stage, 11, resolve_complete, Res}),
+    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}),
     hb_cache:ensure_loaded(maybe_force_message(Res, Opts), Opts);
 do_resolve_many([Base, Req | MsgList], Opts) ->
-    ?event(debug_ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
+    ?event_debug(debug_ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
     case resolve_stage(1, Base, Req, Opts) of
         {ok, Res} ->
-            ?event(debug_ao_core,
+            ?event_debug(debug_ao_core,
                 {
                     stage,
                     13,
@@ -269,19 +268,19 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             do_resolve_many([Res | MsgList], Opts);
         Res ->
             % The result is not a resolvable message. Return it.
-            ?event(debug_ao_core, {stage, 13, resolve_many_terminating_early, Res}),
+            ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating_early, Res}),
             maybe_force_message(Res, Opts)
     end.
 
 resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
     % If the first message is a link, we should load the message and
     % continue with the resolution.
-    ?event(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
     resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
     % continue with the resolution.
-    ?event(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
     resolve_stage(1, Base, hb_cache:ensure_loaded(Link, Opts), Opts);
 resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) orelse ?IS_LINK(Ref) ->
     % Normalize `as' requests with a raw ID or link as the path. Links will be
@@ -290,27 +289,27 @@ resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) orelse ?IS_LINK(R
 resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
     % If the first message is an `as' with a link, we should load the message and
     % continue with the resolution.
-    ?event(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
     resolve_stage(1, {as, DevID, hb_cache:ensure_loaded(Link, Opts)}, Req, Opts);
 resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
     % If the first message is an `as' with an ID, we should load the message and
     % apply the non-path elements of the sub-request to it.
-    ?event(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
     RemBase = hb_maps:without([<<"path">>], Raw, Opts),
-    ?event(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
+    ?event_debug(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
     Baseb = ensure_message_loaded(ID, Opts),
-    ?event(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
+    ?event_debug(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
     Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
+    ?event_debug(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
     Based = set(Basec, <<"device">>, DevID, Opts),
-    ?event(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
+    ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
     resolve_stage(1, Based, Req, Opts);
 resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
     % Set the device of the message to the specified one and resolve the sub-path.
     % As this is the first message, we will then continue to execute the request
     % on the result.
-    ?event(debug_ao_core, {stage, 1, subresolving_base, {dev, DevID}, {subreq, SubReq}}, Opts),
-    ?event(debug_subresolution, {as, {dev, DevID}, {subreq, SubReq}, {req, Req}}),
+    ?event_debug(debug_ao_core, {stage, 1, subresolving_base, {dev, DevID}, {subreq, SubReq}}, Opts),
+    ?event_debug(debug_subresolution, {as, {dev, DevID}, {subreq, SubReq}, {req, Req}}),
     case subresolve(SubReq, DevID, SubReq, Opts) of
         {ok, SubRes} ->
             % The subresolution has returned a new message. Continue with it.
@@ -329,7 +328,7 @@ resolve_stage(1, RawBase, ReqOuter = #{ <<"path">> := {as, DevID, ReqInner} }, O
     % Set the device to the specified `DevID' and resolve the message. Merging
     % the `ReqInner' into the `ReqOuter' message first. We return the result
     % of the sub-resolution directly.
-    ?event(debug_ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
     LoadedInner = ensure_message_loaded(ReqInner, Opts),
     Req =
         hb_maps:merge(
@@ -349,17 +348,17 @@ resolve_stage(1, RawBase, ReqOuter = #{ <<"path">> := {as, DevID, ReqInner} }, O
 resolve_stage(1, {resolve, Subres}, Req, Opts) ->
     % If the first message is a `{resolve, Subres}' tuple, we should execute it
     % directly, then apply the request to the result.
-    ?event(debug_ao_core, {stage, 1, subresolving_base_message, {subres, Subres}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, subresolving_base_message, {subres, Subres}}, Opts),
     % Unlike the `request' case for pre-subresolutions, we do not need to unset
     % the `force-message' option, because the result should be a message, anyway.
     % If it is not, it is more helpful to have the message placed into the `body'
     % of a result, which can then be executed upon.
     case resolve_many(Subres, Opts) of
         {ok, Base} ->
-            ?event(debug_ao_core, {stage, 1, subresolve_success, {new_base, Base}}, Opts),
+            ?event_debug(debug_ao_core, {stage, 1, subresolve_success, {new_base, Base}}, Opts),
             resolve_stage(1, Base, Req, Opts);
         OtherRes ->
-            ?event(debug_ao_core,
+            ?event_debug(debug_ao_core,
                 {stage,
                     1,
                     subresolve_failed,
@@ -374,7 +373,7 @@ resolve_stage(1, Base, {resolve, Subres}, Opts) ->
     % execute the subresolution directly to gain the underlying `Req' for 
     % our execution. We assume that the subresolution is already in a normalized,
     % executable form, so we pass it to `resolve_many' for execution.
-    ?event(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
     % We make sure to unset the `force-message' option so that if the subresolution
     % returns a literal, the rest of `resolve' will normalize it to a path.
     case resolve_many(Subres, maps:without([<<"force-message">>], Opts)) of
@@ -401,43 +400,43 @@ resolve_stage(1, Base, {resolve, Subres}, Opts) ->
     end;
 resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
     % Normalize lists to numbered maps (base=1) if necessary.
-    ?event(debug_ao_core, {stage, 1, list_normalize}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, list_normalize}, Opts),
     resolve_stage(1,
         normalize_keys(Base, Opts),
         Req,
         Opts
     );
 resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
-    ?event(debug_ao_core, {stage, 1, path_normalize}),
+    ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
     resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
 resolve_stage(1, RawBase, RawReq, Opts) ->
     % Normalize the path to a private key containing the list of remaining
     % keys to resolve.
-    ?event(debug_ao_core, {stage, 1, normalize}, Opts),
+    ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
     Base = normalize_keys(RawBase, Opts),
     Req = normalize_keys(RawReq, Opts),
     resolve_stage(2, Base, Req, Opts);
 resolve_stage(2, Base, Req, Opts) ->
-    ?event(debug_ao_core, {stage, 2, cache_lookup}, Opts),
+    ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
     % Lookup request in the cache. If we find a result, return it.
     % If we do not find a result, we continue to the next stage,
     % unless the cache lookup returns `halt' (the user has requested that we 
     % only return a result if it is already in the cache).
     case hb_cache_control:maybe_lookup(Base, Req, Opts) of
         {ok, Res} ->
-            ?event(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
+            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
             {ok, Res};
         {continue, NewBase, NewReq} ->
             resolve_stage(3, NewBase, NewReq, Opts);
         {error, CacheResp} -> {error, CacheResp}
     end;
-resolve_stage(3, Base, Req, Opts) when not is_map(Base) or not is_map(Req) ->
+resolve_stage(3, Base, Req, _Opts) when not is_map(Base) or not is_map(Req) ->
     % Validation check: If the messages are not maps, we cannot find a key
     % in them, so return not_found.
-    ?event(debug_ao_core, {stage, 3, validation_check_type_error}, Opts),
+    ?event_debug(debug_ao_core, {stage, 3, validation_check_type_error}, _Opts),
     {error, not_found};
 resolve_stage(3, Base, Req, Opts) ->
-    ?event(debug_ao_core, {stage, 3, validation_check}, Opts),
+    ?event_debug(debug_ao_core, {stage, 3, validation_check}, Opts),
     % Validation checks: If `paranoid_message_verification' is enabled, we should
     % verify the base and request messages prior to execution.
     hb_message:paranoid_verify(
@@ -451,7 +450,7 @@ resolve_stage(3, Base, Req, Opts) ->
     ),
     resolve_stage(4, Base, Req, Opts);
 resolve_stage(4, Base, Req, Opts) ->
-    ?event(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
+    ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
     % Persistent-resolver lookup: Search for local (or Distributed
     % Erlang cluster) processes that are already performing the execution.
     % Before we search for a live executor, we check if the device specifies 
@@ -514,7 +513,7 @@ resolve_stage(4, Base, Req, Opts) ->
             end
     end.
 resolve_stage(5, Base, Req, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 5, device_lookup}, Opts),
+    ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
     % Device lookup: Find the Erlang function that should be utilized to 
     % execute Req on Base.
 	{ResolvedFunc, NewOpts} =
@@ -581,7 +580,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
 		end,
 	resolve_stage(6, ResolvedFunc, Base, Req, ExecName, NewOpts).
 resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
+    ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
 	% Execution.
     ExecOpts = execution_opts(Opts),
 	Args =
@@ -655,9 +654,9 @@ resolve_stage(
     Req,
     {St, Res},
     ExecName,
-    Opts = #{ <<"on">> := On = #{ <<"step">> := _ }}
+    Opts = #{ <<"on">> := _On = #{ <<"step">> := _ }}
 ) ->
-    ?event(debug_ao_core, {stage, 7, ExecName, executing_step_hook, {on, On}}, Opts),
+    ?event_debug(debug_ao_core, {stage, 7, ExecName, executing_step_hook, {on, _On}}, Opts),
     % If the `step' hook is defined, we execute it. Note: This function clause
     % matches directly on the `on' key of the `Opts' map. This is in order to
     % remove the expensive lookup check that would otherwise be performed on every
@@ -683,18 +682,18 @@ resolve_stage(
             Error
     end;
 resolve_stage(7, Base, Req, Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 7, ExecName, no_step_hook}, Opts),
+    ?event_debug(debug_ao_core, {stage, 7, ExecName, no_step_hook}, Opts),
     resolve_stage(8, Base, Req, Res, ExecName, Opts);
 resolve_stage(8, Base, Req, {ok, {resolve, Sublist}}, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 8, ExecName, subresolve_result}, Opts),
+    ?event_debug(debug_ao_core, {stage, 8, ExecName, subresolve_result}, Opts),
     % If the result is a `{resolve, Sublist}' tuple, we need to execute it
     % as a sub-resolution.
     resolve_stage(9, Base, Req, resolve_many(Sublist, Opts), ExecName, Opts);
 resolve_stage(8, Base, Req, Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 8, ExecName, no_subresolution_necessary}, Opts),
+    ?event_debug(debug_ao_core, {stage, 8, ExecName, no_subresolution_necessary}, Opts),
     resolve_stage(9, Base, Req, Res, ExecName, Opts);
 resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
-    ?event(debug_ao_core, {stage, 9, ExecName, generate_hashpath}, Opts),
+    ?event_debug(debug_ao_core, {stage, 9, ExecName, generate_hashpath}, Opts),
     % Cryptographic linking. Now that we have generated the result, we
     % need to cryptographically link the output to its input via a hashpath.
     resolve_stage(10, Base, Req,
@@ -723,7 +722,7 @@ resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
         Opts
     );
 resolve_stage(9, Base, Req, {Status, Res}, ExecName, Opts) when is_map(Res) ->
-    ?event(debug_ao_core, {stage, 9, ExecName, abnormal_status_reset_hashpath}, Opts),
+    ?event_debug(debug_ao_core, {stage, 9, ExecName, abnormal_status_reset_hashpath}, Opts),
     ?event(hashpath, {resetting_hashpath_res, {base, Base}, {req, Req}, {opts, Opts}}),
     % Skip cryptographic linking and reset the hashpath if the result is abnormal.
     Priv = hb_private:from_message(Res),
@@ -732,27 +731,27 @@ resolve_stage(9, Base, Req, {Status, Res}, ExecName, Opts) when is_map(Res) ->
         {Status, Res#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
         ExecName, Opts);
 resolve_stage(9, Base, Req, Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 9, ExecName, non_map_result_skipping_hash_path}, Opts),
+    ?event_debug(debug_ao_core, {stage, 9, ExecName, non_map_result_skipping_hash_path}, Opts),
     % Skip cryptographic linking and continue if we don't have a map that can have
     % a hashpath at all.
     resolve_stage(10, Base, Req, Res, ExecName, Opts);
 resolve_stage(10, Base, Req, {ok, Res}, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 10, ExecName, result_caching}, Opts),
+    ?event_debug(debug_ao_core, {stage, 10, ExecName, result_caching}, Opts),
     % Result caching: Optionally, cache the result of the computation locally.
     hb_cache_control:maybe_store(Base, Req, Res, Opts),
     resolve_stage(11, Base, Req, {ok, Res}, ExecName, Opts);
 resolve_stage(10, Base, Req, Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 10, ExecName, abnormal_status_skip_caching}, Opts),
+    ?event_debug(debug_ao_core, {stage, 10, ExecName, abnormal_status_skip_caching}, Opts),
     % Skip result caching if the result is abnormal.
     resolve_stage(11, Base, Req, Res, ExecName, Opts);
 resolve_stage(11, Base, Req, Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 11, ExecName}, Opts),
+    ?event_debug(debug_ao_core, {stage, 11, ExecName}, Opts),
     % Notify processes that requested the resolution while we were executing and
     % unregister ourselves from the group.
     hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
     resolve_stage(12, Base, Req, Res, ExecName, Opts);
 resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
+    ?event_debug(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
     case
         {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
@@ -765,8 +764,8 @@ resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
             hb_persistent:forward_work(WorkerPID, Opts),
             Res
     end;
-resolve_stage(12, _Base, _Req, OtherRes, ExecName, Opts) ->
-    ?event(debug_ao_core, {stage, 12, ExecName, abnormal_status_skip_spawning}, Opts),
+resolve_stage(12, _Base, _Req, OtherRes, _ExecName, _Opts) ->
+    ?event_debug(debug_ao_core, {stage, 12, _ExecName, abnormal_status_skip_spawning}, _Opts),
     OtherRes.
 
 %% @doc Execute a sub-resolution.
@@ -942,7 +941,7 @@ error_infinite(Base, Req, Opts) ->
 error_execution(ExecGroup, Req, Whence, {Class, Exception, Stacktrace}, Opts) ->
     Error = {error, Whence, {Class, Exception, Stacktrace}},
     hb_persistent:unregister_notify(ExecGroup, Req, Error, Opts),
-    ?event(debug_ao_core, {handle_error, Error, {opts, Opts}}, Opts),
+    ?event_debug(debug_ao_core, {handle_error, Error, {opts, Opts}}, Opts),
     case hb_opts:get(error_strategy, throw, Opts) of
         throw -> erlang:raise(Class, Exception, Stacktrace);
         _ -> Error
@@ -1075,7 +1074,7 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
             normalize_keys(RawReq, Opts),
             Opts
         ),
-    ?event(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
+    ?event_debug(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
     % Get the next key to set. 
     case keys(Req, internal_opts(Opts)) of
         [] -> Base;
@@ -1087,7 +1086,7 @@ set(RawBase, RawReq, Opts) when is_map(RawReq) ->
                     not_found -> hb_maps:get(Key, Req, undefined, Opts);
                     Body -> Body
                 end,
-            ?event({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
+            ?event_debug({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
             % Next, set the key and recurse, removing the key from the Req.
             set(
                 set(Base, Key, Val, internal_opts(Opts)),
@@ -1124,7 +1123,7 @@ deep_set(Msg, [Key], Value, Opts) ->
 deep_set(Msg, [Key|Rest], Value, Opts) ->
     case resolve(Msg, Key, Opts) of 
         {ok, SubMsg} ->
-            ?event(debug_set,
+            ?event_debug(debug_set,
                 {traversing_deeper_to_set,
                     {current_key, Key},
                     {current_value, SubMsg},
@@ -1140,10 +1139,10 @@ deep_set(Msg, [Key|Rest], Value, Opts) ->
                     <<"explicit">>,
                     Opts
                 ),
-            ?event(debug_set, {deep_set, {msg, Msg}, {key, Key}, {res, Res}}, Opts),
+            ?event_debug(debug_set, {deep_set, {msg, Msg}, {key, Key}, {res, Res}}, Opts),
             Res;
         _ ->
-            ?event(debug_set,
+            ?event_debug(debug_set,
                 {creating_new_map,
                     {current_key, Key},
                     {rest, Rest}

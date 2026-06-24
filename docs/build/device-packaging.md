@@ -96,10 +96,8 @@ LMDB-backed `preloaded-store`. Output:
   `name@1.0` is one of those names, so the runtime can read that
   first resolver entry directly before the name device itself is
   loaded.
-* `_build/hb_preloaded_index.hrl` — a generated compile-time macro
-  containing the index ID. The build hook recompiles `hb_opts` after
-  writing it, so the default node config embeds the correct index
-  without reading a separate metadata file at runtime.
+* `<output-dir>/~meta@1.0/preloaded-devices-index` — a stable link
+  to the signed flat resolver message. The runtime reads this link.
 
 ### `rebar3 device test`
 
@@ -122,8 +120,8 @@ for failures, or `--record=all` to write one HTML archive for every test.
 
 ### `rebar3 device local`
 
-Builds a fresh preloaded-store, points `HB_PRELOADED_STORE` and
-`HB_PRELOADED_DEVICES_INDEX` at it, then starts the normal Rebar shell.
+Builds a fresh preloaded-store, points `HB_PRELOADED_STORE` at it,
+then starts the normal Rebar shell.
 Use this when you want a local node that can resolve your packaged
 devices immediately:
 
@@ -141,26 +139,49 @@ HB_CONFIG=custom.json rebar3 device local
 ### `rebar3 device publish`
 
 Packages, signs, and uploads spec + implementation messages to
-Arweave via `dev_arweave`. Before signing, the provider builds the
+the configured ANS-104 bundler. Before signing, the provider builds the
 same local preloaded-store used by `device test`, so the signing path
 can resolve HyperBEAM's built-in devices without extra environment
-variables. Returns each device's spec and impl IDs on stdout.
+variables. Returns each device's spec, impl, and signer IDs on stdout.
+
+By default, publish uses HyperBEAM's configured `bundler-ans104`.
+Use `--bundler` to override the endpoint. Forge posts ANS-104 items to
+`/~bundler@1.0/tx`.
 
 ## Configuration the runtime cares about
 
 | Key | Type | Role |
 |-----|------|------|
 | `<<"preloaded-store">>` | store map | LMDB preloaded device store. |
-| `<<"preloaded-devices-index">>` | binary | Committed ID of the flat preloaded resolver message. Embedded into `hb_opts` from `_build/hb_preloaded_index.hrl` during compilation. |
 | `<<"loaded-device-store">>` | store map | Optional shared cache of name/spec-ID → loaded module atom. |
-| `<<"trusted-device-signers">>` | `[Address]` | Acceptable signer addresses for impl messages. Defaults to the node wallet. |
+| `<<"trusted-device-signers">>` | `[Address \| SignerPolicy]` | Acceptable signer addresses for impl messages. A non-empty configured list enables remote implementation lookup; omitted or empty disables it. A signer policy object may include `<<"address">>`, `<<"valid-until-height">>` to cap remote GraphQL lookup by block height, and `<<"devices">>` to scope that signer to device refs or spec IDs. |
 | `<<"trusted-devices">>` | `#{NameOrSpecID => ImplID}` | Operator-pinned implementation IDs trusted directly for the named device or spec ID. |
-| `<<"load-remote-devices">>` | bool | Whether unmatched devices may be fetched via the Arweave gateway. |
 | `<<"admissible-devices">>` | `all` or `[Name]` | Per-execution allowlist (used by the Lua sandbox). |
 
-`HB_PRELOADED_STORE` and `HB_PRELOADED_DEVICES_INDEX` override the
-first two fields for provider-driven test runs, so the nested EUnit
-node uses the freshly generated preloaded-store.
+In `config.json`, signer entries may be plain addresses or policy
+objects:
+
+```json
+{
+  "trusted-device-signers": [
+    "PLAIN_SIGNER_ADDR",
+    {
+      "address": "SCOPED_SIGNER_ADDR",
+      "valid-until-height": 1940492,
+      "devices": ["arweave@2.9"]
+    }
+  ]
+}
+```
+
+Plain signer entries have no lookup cutoff. `valid-until-height` only limits
+remote implementation lookup; loaded implementations must still be signed
+by an address in `trusted-device-signers`. `devices` scopes a signer
+to matching device refs or resolved spec IDs; omitted means all devices.
+Omit `trusted-device-signers` or set it to `[]` to disable remote lookup.
+
+`HB_PRELOADED_STORE` points provider-driven test runs at the freshly
+generated preloaded-store.
 
 Operators control the bake via the source set their build runs
 `rebar3 device preload` over.

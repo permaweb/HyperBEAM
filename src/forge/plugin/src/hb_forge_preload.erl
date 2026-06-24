@@ -7,10 +7,7 @@
 %%% message.
 %%%
 %%% On success the provider prints (and returns from `do/1') the path to
-%%% the generated store and the index message ID. The corresponding
-%%% `_build/hb_preloaded_index.hrl' header is regenerated so that the
-%%% core default node configuration can pick up the index ID at
-%%% compile-time.
+%%% the generated store and the index message ID.
 -module(hb_forge_preload).
 -export([init/1, do/1, format_error/1, run/2]).
 
@@ -29,10 +26,7 @@ init(State) ->
 
 %% @doc Parse CLI args and build a signed preloaded-store.
 do(State) ->
-    case hb_forge_args:maybe_help(State, ?MODULE) of
-        true -> {ok, State};
-        false -> do_run(State)
-    end.
+    hb_forge_args:run_provider(State, ?MODULE, fun do_run/1).
 
 do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/preloaded-store">>),
@@ -47,6 +41,7 @@ run(Args, NodeOpts) ->
     Dirs = maps:get(<<"device-src">>, Args),
     OutputDir = maps:get(<<"output-dir">>, Args),
     KeyPath = maps:get(<<"key">>, Args),
+    Verbose = maps:get(<<"verbose">>, Args, false),
     Wallet = hb_forge_args:load_wallet(KeyPath),
     case hb_forge_args:default_preloaded_dirs(Dirs) of
         {ok, DefaultDirs} ->
@@ -60,16 +55,14 @@ run(Args, NodeOpts) ->
                 hb_forge_args:scan_devices(Args),
             {ok, Result} =
                 hb_preload:build_groups(Groups, Wallet, OutputDir, PackageOpts),
-            HeaderPath = header_path(OutputDir),
-            ok =
-                hb_preload:write_index_header(
-                    maps:get(index, Result),
-                    HeaderPath
-                ),
             rebar_api:info(
-                "device preload: store ~s, index ~s",
+                "Device preload complete: Store: ~s; Index: ~s.",
                 [OutputDir, maps:get(index, Result)]
             ),
+            case Verbose of
+                true -> print_device_ids(Result);
+                false -> ok
+            end,
             {ok, Result};
         {error, _} = Error ->
             Error
@@ -90,11 +83,21 @@ package_opts(Args, NodeOpts) ->
             maps:get(<<"requires-system-architecture">>, Args, false)
     }.
 
-%% @doc Construct the path to the preloaded-store index header.
-header_path(OutputDir) ->
-    BuildDir = filename:dirname(hb_util:list(OutputDir)),
-    hb_util:bin(filename:join(BuildDir, "hb_preloaded_index.hrl")).
-
 %% @doc Render provider failures for rebar3.
 format_error(Reason) ->
     io_lib:format("device preload failed: ~p", [Reason]).
+
+print_device_ids(Result) ->
+    Specs = maps:get(specs, Result),
+    Impls = maps:get(impls, Result),
+    Pkgs = maps:get(pkgs, Result),
+    lists:foreach(
+        fun({Pkg, ImplID}) ->
+            Name = maps:get(device_name, Pkg),
+            rebar_api:info(
+                "Preloaded device: ~s; Specification ID: ~s; Implementation ID: ~s.",
+                [Name, maps:get(Name, Specs), ImplID]
+            )
+        end,
+        lists:zip(Pkgs, Impls)
+    ).

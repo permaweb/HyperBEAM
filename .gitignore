@@ -30,6 +30,10 @@ rebar3.crashdump
 
 native/hb_beamr/*.o
 native/hb_beamr/*.d
+native/hb_keccak/*.d
+
+native/hb_util_string/*.o
+native/hb_util_string/*.d
 
 priv/*
 .DS_STORE

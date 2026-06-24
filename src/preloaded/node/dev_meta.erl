@@ -12,8 +12,6 @@
 -export([is_operator/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
-%%% Include the auto-generated build info header file.
--include_lib("../../_build/hb_buildinfo.hrl").
 
 %% @doc Ensure that the helper function `adopt_node_message/2' is not exported.
 %% The naming of this method carefully avoids a clash with the exported `info/3'
@@ -59,15 +57,28 @@ is_operator(_Base, Req, NodeMsg) ->
 %% avoidance of doubt, we include the short hash separately, as well as its long
 %% hash.
 build(_, _, _NodeMsg) ->
+    BuildInfo = build_info(),
     {ok,
         #{
             <<"node">> => <<"HyperBEAM">>,
             <<"version">> => ?HYPERBEAM_VERSION,
-            <<"source">> => ?HB_BUILD_SOURCE,
-            <<"source-short">> => ?HB_BUILD_SOURCE_SHORT,
-            <<"build-time">> => ?HB_BUILD_TIME
+            <<"source">> => maps:get(<<"source">>, BuildInfo, <<"unknown">>),
+            <<"source-short">> =>
+                maps:get(<<"source-short">>, BuildInfo, <<"unknown">>),
+            <<"build-time">> => maps:get(<<"build-time">>, BuildInfo, 0)
         }
     }.
+
+build_info() ->
+    case code:priv_dir(hb) of
+        {error, _} ->
+            #{};
+        PrivDir ->
+            case file:consult(filename:join(PrivDir, "hb_buildinfo")) of
+                {ok, [Info]} when is_map(Info) -> Info;
+                _ -> #{}
+            end
+    end.
 
 %% @doc Normalize and route messages downstream based on their path. Messages
 %% with a `Meta' key are routed to the `handle_meta/2' function, while all
@@ -755,6 +766,7 @@ modify_request_test() ->
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->
     Node = hb_http_server:start_node(#{}),
+    BuildInfo = build_info(),
     ?assertEqual(
         {ok, <<"HyperBEAM">>},
         hb_http:get(Node, <<"/~meta@1.0/build/node">>, #{})
@@ -764,14 +776,14 @@ buildinfo_test() ->
         hb_http:get(Node, <<"/~meta@1.0/build/version">>, #{})
     ),
     ?assertEqual(
-        {ok, ?HB_BUILD_SOURCE},
+        {ok, maps:get(<<"source">>, BuildInfo)},
         hb_http:get(Node, <<"/~meta@1.0/build/source">>, #{})
     ),
     ?assertEqual(
-        {ok, ?HB_BUILD_SOURCE_SHORT},
+        {ok, maps:get(<<"source-short">>, BuildInfo)},
         hb_http:get(Node, <<"/~meta@1.0/build/source-short">>, #{})
     ),
     ?assertEqual(
-        {ok, ?HB_BUILD_TIME},
+        {ok, maps:get(<<"build-time">>, BuildInfo)},
         hb_http:get(Node, <<"/~meta@1.0/build/build-time">>, #{})
     ).

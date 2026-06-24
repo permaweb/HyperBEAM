@@ -38,8 +38,7 @@ float, atom, or list of such values).
 
 Devices can be expressed as either modules or maps. They can also be
 referenced by an Arweave ID, which can be used to load a device from
-the network (depending on the value of the `load_remote_devices` and
-`trusted_device_signers` environment settings).
+the network when `trusted_device_signers` are configured.
 
 HyperBEAM device implementations are defined as follows:
 
@@ -530,4 +529,3 @@ actually takes.
 `verify_device_compatibility(Msg, Opts) -> any()`
 
 Verify that a device is compatible with the current machine.
-

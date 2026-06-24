@@ -23,12 +23,9 @@ init(State) ->
 
 %% @doc Build a test preloaded-store and run selected package EUnit modules.
 do(State) ->
-    case hb_forge_args:maybe_help(State, ?MODULE) of
-        true -> {ok, State};
-        false -> do_run(State)
-    end.
+    hb_forge_args:run_provider(State, ?MODULE, fun run_tests/1).
 
-do_run(State) ->
+run_tests(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-test-store">>),
     % Build a complete store from the configured source set so selected
     % device tests can resolve their dependencies.
@@ -783,8 +780,8 @@ safe_clear_event_recording(Result) ->
     catch _:_ -> ok
     end.
 
-event_opts(Result) ->
-    (event_plain_opts(Result))#{
+event_opts(#{ result := Result }) ->
+    (test_opts(Result))#{
         <<"on">> =>
             #{
                 <<"event">> =>
@@ -796,22 +793,17 @@ event_opts(Result) ->
             }
     }.
 
-event_plain_opts(#{ result := Result, recorder_mod := RecorderMod }) ->
-    (test_opts(Result))#{
-        <<"forge-bootstrap">> => #{ <<"recorder@1.0">> => RecorderMod }
-    }.
-
 recorder_mod(#{ recorder_mod := RecorderMod }) ->
     RecorderMod.
 
-recorder_call(Result, Fun, Req) ->
+recorder_call(#{ result := Result } = Ctx, Fun, Req) ->
     apply(
-        recorder_mod(Result),
+        recorder_mod(Ctx),
         Fun,
         [
             #{ <<"device">> => <<"recorder@1.0">> },
             Req,
-            event_plain_opts(Result)
+            test_opts(Result)
         ]
     ).
 
@@ -898,15 +890,13 @@ restore_test_print_env(Old) ->
 
 %% @doc Clear hb_opts' cached view of `HB_PRINT'.
 erase_print_env_cache() ->
-    erase({os_env, "HB_PRINT"}),
-    erase({processed_env, <<"debug-print">>}).
+    erase(default_message_with_env).
 
 %% @doc Build runtime opts pointing at the freshly-built preloaded
 %% store; its devices resolve through the high-trust preloaded path.
 test_opts(Result) ->
     #{
-        <<"preloaded-store">> => maps:get(store, Result),
-        <<"preloaded-devices-index">> => maps:get(index, Result)
+        <<"preloaded-store">> => maps:get(store, Result)
     }.
 
 %% @doc Resolve each device name through the freshly-built preloaded-store.

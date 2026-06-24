@@ -1,8 +1,8 @@
 %%% @doc `rebar3 device local' - start a local shell with packaged devices.
 %%%
 %%% Builds a preloaded-store exactly like `device preload', points
-%%% `HB_PRELOADED_STORE' and `HB_PRELOADED_DEVICES_INDEX' at that store for the
-%%% duration of the shell, then delegates to Rebar's normal shell provider.
+%%% `HB_PRELOADED_STORE' at that store for the duration of the shell, then
+%%% delegates to Rebar's normal shell provider.
 -module(hb_forge_local).
 -export([init/1, do/1, format_error/1]).
 
@@ -21,10 +21,7 @@ init(State) ->
 
 %% @doc Build a preloaded-store and start a shell pointed at it.
 do(State) ->
-    case hb_forge_args:maybe_help(State, ?MODULE) of
-        true -> {ok, State};
-        false -> do_run(State)
-    end.
+    hb_forge_args:run_provider(State, ?MODULE, fun do_run/1).
 
 do_run(State) ->
     Args = hb_forge_args:parse(State, <<"_build/device-local-store">>),

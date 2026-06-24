@@ -25,6 +25,7 @@
 -module(hb_device_load).
 -export([reference/2]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 %% @doc A message is already a device. A binary reference is resolved,
 %% then memoised in the process cache unless it is a forge seed.
@@ -130,11 +131,11 @@ from_preloaded(Ref, Opts) ->
     case preloaded(Opts) of
         undefined ->
             {error, not_found};
-        {Store, IndexID} ->
+        Store ->
             PreOpts =
                 Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
             maybe
-                {ok, SpecID} ?= preloaded_spec(Ref, Store, IndexID, PreOpts),
+                {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
                 lazy_first(
                     fun(ID) -> load_archive(ID, PreOpts) end,
                     [
@@ -149,27 +150,16 @@ from_preloaded(Ref, Opts) ->
             end
     end.
 
-preloaded_spec(Ref, _Store, _IndexID, _Opts) when ?IS_ID(Ref) ->
+preloaded_spec(Ref, _Store, _Opts) when ?IS_ID(Ref) ->
     {ok, Ref};
-preloaded_spec(Ref, Store, IndexID, Opts) ->
-    hb_store:read(Store, <<IndexID/binary, "/", Ref/binary>>, Opts).
+preloaded_spec(Ref, Store, Opts) ->
+    hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
-%% @doc The preloaded store and its signed index ID, from node config
-%% (request-local cache keys stripped so it is visible inside a
-%% request-scoped resolution).
+%% @doc The preloaded store, with request-local cache keys stripped so it is
+%% visible inside a request-scoped resolution.
 preloaded(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
-    case
-        {
-            hb_opts:get(preloaded_store, undefined, Node),
-            hb_opts:get(preloaded_devices_index, undefined, Node)
-        }
-    of
-        {Store, IndexID} when Store =/= undefined, IndexID =/= undefined ->
-            {Store, IndexID};
-        _ ->
-            undefined
-    end.
+    hb_opts:get(preloaded_store, undefined, Node).
 
 %%% --------------------------------------------------------------------
 %%% Low trust
@@ -178,7 +168,7 @@ preloaded(Opts) ->
 %% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
 %% already loaded via the high-trust path), then load the first signed,
 %% compatible implementation. Local caches are always searched -- gateway
-%% lookup is gated by `load-remote-devices'.
+%% lookup is gated by an explicit `trusted-device-signers' list.
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
@@ -191,26 +181,33 @@ from_low_trust(Ref, Opts) ->
                     )
                 end
             ],
+        RemoteSigners =
+            case hb_opts:get(trusted_device_signers, [], Opts) of
+                [_ | _] = Signers ->
+                    trusted_signer_entries(Ref, SpecID, Signers, Opts);
+                _ ->
+                    []
+            end,
         RemoteIterators =
-            case hb_opts:get(<<"load-remote-devices">>, false, Opts) of
-                true ->
+            case RemoteSigners of
+                [_ | _] ->
                     [
                         fun() ->
                             hb_util:ok_or(
                                 hb_client_gateway:device(
                                     SpecID,
-                                    trusted_signers(Opts),
+                                    RemoteSigners,
                                     Opts
                                 ),
                                 []
                             )
                         end
                     ];
-                false ->
+                _ ->
                     []
             end,
         lazy_first(
-            fun(ID) -> verify_and_load(SpecID, ID, Opts) end,
+            fun(ID) -> verify_and_load(Ref, SpecID, ID, Opts) end,
             LocalIterators ++ RemoteIterators
         )
     end.
@@ -231,7 +228,7 @@ resolve_spec(Ref, Opts) ->
 
 %% @doc A low-trust implementation must be signed by a trusted signer,
 %% implement the requested specification, and be machine-compatible.
-verify_and_load(SpecID, ID, Opts) ->
+verify_and_load(Ref, SpecID, ID, Opts) ->
     maybe
         {ok, Msg} ?= hb_cache:read(ID, Opts),
         Signers = signers(Msg, Opts),
@@ -240,7 +237,7 @@ verify_and_load(SpecID, ID, Opts) ->
                 orelse {error, <<"implementation-signature-invalid">>},
         true ?=
             lists:any(
-                fun(S) -> lists:member(S, trusted_signers(Opts)) end,
+                fun(S) -> lists:member(S, trusted_signers(Ref, SpecID, Opts)) end,
                 Signers
             ) orelse {error, <<"device-signer-untrusted">>},
         ok ?= implements(SpecID, Msg, Opts),
@@ -313,13 +310,77 @@ signers(Msg, Opts) ->
         ),
         Opts
     ).
+
 %% @doc Trusted signers, defaulting to the node's own address.
 %% Computed lazily so the default config need not call `hb:address/0'.
-trusted_signers(Opts) ->
+trusted_signers(Ref, SpecID, Opts) ->
+    [
+        Address
+    ||
+        Signer <- trusted_signer_entries(Ref, SpecID, Opts),
+        Address <- [trusted_signer_address(Signer, Opts)],
+        Address =/= undefined
+    ].
+
+trusted_signer_entries(Ref, SpecID, Opts) ->
+    trusted_signer_entries(Ref, SpecID, trusted_signer_entries(Opts), Opts).
+
+trusted_signer_entries(Ref, SpecID, Signers, Opts) ->
+    [
+        Signer
+    ||
+        Signer <- Signers,
+        trusted_signer_accepts(Ref, SpecID, Signer, Opts)
+    ].
+
+trusted_signer_entries(Opts) ->
     case hb_opts:get(trusted_device_signers, [], Opts) of
         [] -> [hb:address()];
         Signers when is_list(Signers) -> Signers
     end.
+
+trusted_signer_accepts(_Ref, _SpecID, Signer, _Opts) when is_binary(Signer) ->
+    true;
+trusted_signer_accepts(Ref, SpecID, Signer, Opts) when is_map(Signer) ->
+    case hb_maps:get(<<"devices">>, Signer, undefined, Opts) of
+        undefined -> true;
+        Devices when is_list(Devices) ->
+            lists:member(Ref, Devices) orelse lists:member(SpecID, Devices);
+        _ ->
+            false
+    end;
+trusted_signer_accepts(_Ref, _SpecID, _Signer, _Opts) ->
+    false.
+
+trusted_signer_address(Signer, _Opts) when is_binary(Signer) ->
+    Signer;
+trusted_signer_address(Signer, Opts) when is_map(Signer) ->
+    hb_maps:get(<<"address">>, Signer, undefined, Opts);
+trusted_signer_address(_Signer, _Opts) ->
+    undefined.
+
+trusted_signer_devices_test() ->
+    Ref = <<"copycat@1.0">>,
+    SpecID = <<"SPEC_ID">>,
+    ?assertEqual(
+        [<<"plain">>, <<"unscoped">>, <<"by-ref">>, <<"by-spec">>],
+        trusted_signers(
+            Ref,
+            SpecID,
+            #{
+                <<"trusted-device-signers">> => [
+                    <<"plain">>,
+                    #{<<"address">> => <<"unscoped">>},
+                    #{<<"address">> => <<"by-ref">>, <<"devices">> => [Ref]},
+                    #{<<"address">> => <<"by-spec">>, <<"devices">> => [SpecID]},
+                    #{
+                        <<"address">> => <<"other">>,
+                        <<"devices">> => [<<"arweave@2.9">>]
+                    }
+                ]
+            }
+        )
+    ).
 
 %% @doc Every `requires-*' key must match this machine's `system_info'.
 compatible(Msg, Opts) ->

@@ -85,7 +85,12 @@ read(ProcID, Slot, RawOpts) ->
         {ok, ResolvedPath} ->
             ?event({resolved_path, {p1, P1}, {p2, ResolvedPath}, {resolved, ResolvedPath}}),
             case hb_cache:read(ResolvedPath, Opts) of
-                {ok, Assignment} ->
+                {ok, RawAssignment} ->
+                    % `hb_cache:read' no longer normalizes commitments; the
+                    % scheduler relies on each assignment carrying its unsigned
+                    % commitment ID, so we restore it here.
+                    Assignment =
+                        hb_message:normalize_commitments(RawAssignment, Opts),
                     % If the slot key is not present, the format of the assignment is
                     % AOS2, so we need to convert it to the canonical format.
                     case hb_ao:get(<<"variant">>, Assignment, Opts) of

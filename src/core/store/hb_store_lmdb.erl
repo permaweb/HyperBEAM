@@ -109,7 +109,12 @@ ensure_dir(DataDirPath) ->
 %% @returns `{ok, composite}` for group entries, `{ok, simple}` for regular
 %%          values, or `{error, not_found}`.
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Key)) of
+    KeyBin =
+        case is_binary(Key) of
+            true -> Key;
+            false -> hb_path:to_binary(Key)
+        end,
+    case read_resolved(Opts, KeyBin) of
         {ok, _ResolvedKey, <<"group">>} -> {ok, composite};
         {ok, _ResolvedKey, _Value} -> {ok, simple};
         not_found -> {error, not_found}
@@ -135,7 +140,9 @@ write(#{ <<"read-only">> := true }, _Req, _NodeOpts) when is_map(_Req) ->
     {error, not_found};
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     maps:fold(
-        fun(Path, Value, ok) ->
+        fun(Path, Value, ok) when is_binary(Path) ->
+            write(Opts, Path, Value);
+           (Path, Value, ok) ->
             write(Opts, hb_path:to_binary(Path), Value);
            (_Path, _Value, Error) ->
             Error
@@ -149,7 +156,7 @@ write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, to_path(PathParts), Value);
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    ?event({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
+    ?event_debug({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
@@ -181,19 +188,88 @@ write(Opts, Path, Value) ->
 %% @param PathReq Request of the form `#{<<"read">> => Path}`.
 %% @returns `{ok, Value}` on success, `{composite, Keys}` for groups, or
 %%          `{error, not_found}` on failure
+read(Opts, #{ <<"read">> := Path }, _NodeOpts) when is_binary(Path) ->
+    read_result(Opts, Path);
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Path)) of
-        {ok, ResolvedPath, <<"group">>} ->
-            {composite, hb_util:ok(list_children(Opts, ResolvedPath))};
-        {ok, _ResolvedPath, Value} ->
-            {ok, Value};
-        not_found ->
-            {error, not_found}
+    read_result(Opts, hb_path:to_binary(Path)).
+
+%% A single `read_prefix' over the bare `Path' (no trailing slash) returns the
+%% marker row (key == `Path') alongside every descendant in one cursor scan, so
+%% the marker that classifies the entry — value, link, or group — arrives in the
+%% same seek as the children. Only a genuine miss (the key is absent and must be
+%% reached through an intermediate link) falls through to the resolver.
+read_result(Opts, Path) ->
+    EnvOpts = ensure_env(Opts),
+    StartTime = erlang:monotonic_time(),
+    Result = 
+        case read_prefix_rows(EnvOpts, Path) of
+            {ok, Rows} ->
+                case prefix_read_result(EnvOpts, Path, Rows) of
+                    {error, not_found} -> read_prefix_miss(EnvOpts, Path);
+                    R -> R
+                end;
+            not_found ->
+                read_prefix_miss(EnvOpts, Path);
+            {error, _} = Error ->
+                Error;
+            {error, Type, _} ->
+                {error, Type}
+        end,
+    MetricStatus = 
+        case Result of
+            {ok, _} -> hit;
+            {composite, _} -> hit;
+            {error, not_found} -> miss;
+            not_found -> miss;
+            _ -> unknown
+        end,
+    sample_metrics(EnvOpts, StartTime, MetricStatus),
+    Result.
+
+%% The literal `Path' was not present in the scan. Resolve any intermediate
+%% links in the path and, if that yields a different key, retry the read against
+%% the resolved target. Content-addressed `data' keys never carry links, so they
+%% short-circuit straight to `not_found' without a resolver walk.
+read_prefix_miss(Opts, Path) ->
+    case is_data_path(Path) of
+        true ->
+            {error, not_found};
+        false ->
+            try
+                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
+                case resolve_path_links(Opts, PathParts) of
+                    {ok, ResolvedPathParts} ->
+                        case to_path(ResolvedPathParts) of
+                            Path -> {error, not_found};
+                            ResolvedPath -> read_result(Opts, ResolvedPath)
+                        end;
+                    {error, _} ->
+                        {error, not_found}
+                end
+            catch
+                Class:Reason:Stacktrace ->
+                    ?event(error,
+                        {
+                            resolve_path_links_failed,
+                            {class, Class},
+                            {reason, Reason},
+                            {stacktrace, {trace, Stacktrace}},
+                            {path, Path}
+                        }
+                    ),
+                    {error, not_found}
+            end
     end.
 
 read_resolved(#{<<"name">> := Name} = Opts, Path) ->
+    EnvOpts = ensure_env(Opts),
+    PathBin =
+        case is_binary(Path) of
+            true -> Path;
+            false -> hb_path:to_binary(Path)
+        end,
     StartTime = erlang:monotonic_time(),
-    case do_read_resolved(Opts, hb_path:to_binary(Path)) of
+    case do_read_resolved(EnvOpts, PathBin) of
         {ok, _ResolvedPath, _Value} = Result ->
             sample_metrics(Name, StartTime, hit),
             Result;
@@ -207,45 +283,41 @@ do_read_resolved(Opts, Path) ->
         {ok, _ResolvedPath, _Value} = Result ->
             Result;
         not_found ->
-            try
-                PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
-                case resolve_path_links(Opts, PathParts) of
-                    {ok, ResolvedPathParts} ->
-                        read_with_links(Opts, to_path(ResolvedPathParts));
-                    {error, _} ->
-                        not_found
-                end
-            catch
-                Class:Reason:Stacktrace ->
-                    ?event(error,
-                        {
-                            resolve_path_links_failed, 
-                            {class, Class},
-                            {reason, Reason},
-                            {stacktrace, {trace, Stacktrace}},
-                            {path, Path}
-                        }
-                    ),
-                    not_found
+            case Path of
+                <<"data">> ->
+                    not_found;
+                <<"data/", _/binary>> ->
+                    not_found;
+                _ ->
+                    try
+                        PathParts = binary:split(Path, <<"/">>, [global, trim_all]),
+                        case resolve_path_links(Opts, PathParts) of
+                            {ok, ResolvedPathParts} ->
+                                read_with_links(Opts, to_path(ResolvedPathParts));
+                            {error, _} ->
+                                not_found
+                        end
+                    catch
+                        Class:Reason:Stacktrace ->
+                            ?event(error,
+                                {
+                                    resolve_path_links_failed,
+                                    {class, Class},
+                                    {reason, Reason},
+                                    {stacktrace, {trace, Stacktrace}},
+                                    {path, Path}
+                                }
+                            ),
+                            not_found
+                    end
             end
     end.
 
 %% @doc Helper function to check if a value is a link and extract the target.
-is_link(Value) ->
-    LinkPrefixSize = byte_size(<<"link:">>),
-    case byte_size(Value) > LinkPrefixSize andalso
-        binary:part(Value, 0, LinkPrefixSize) =:= <<"link:">> of
-        true -> 
-            Link =
-                binary:part(
-                    Value,
-                    LinkPrefixSize,
-                    byte_size(Value) - LinkPrefixSize
-                ),
-            {true, Link};
-        false ->
-            false
-    end.
+is_link(<<"link:", Link/binary>>) when byte_size(Link) > 0 ->
+    {true, Link};
+is_link(_) ->
+    false.
 
 %% @doc Helper function to convert to a path
 to_path(PathParts) ->
@@ -255,8 +327,15 @@ to_path(PathParts) ->
 %% in-process pending writes, if necessary.
 %%
 %% Returns `{ok, Value}` or `not_found`.
+read_direct(#{<<"db">> := DBInstance, <<"name">> := Name}, Path) ->
+    read_direct(DBInstance, Name, Path);
+read_direct(#{<<"db">> := DBInstance}, Path) ->
+    read_direct(DBInstance, undefined, Path);
 read_direct(#{<<"name">> := Name} = Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
+    read_direct(DBInstance, Name, Path).
+
+read_direct(DBInstance, Name, Path) ->
     case elmdb:get(DBInstance, Path) of
         {ok, Value} -> {ok, Value};
         {error, not_found} -> not_found;
@@ -281,6 +360,15 @@ read_direct(#{<<"name">> := Name} = Opts, Path) ->
 %% This is the internal implementation that handles actual database reads.
 read_with_links(Opts, Path) ->
     case read_direct(Opts, Path) of
+        {ok, <<"raw:", Value/binary>>} ->
+            case is_data_path(Path) of
+                true -> {ok, Path, <<"raw:", Value/binary>>};
+                false -> {ok, Path, Value}
+            end;
+        {ok, <<"link:data">>} ->
+            read_with_links(Opts, <<"data">>);
+        {ok, <<"link:data/", Link/binary>>} ->
+            read_with_links(Opts, <<"data/", Link/binary>>);
         {ok, Value} ->
             case is_link(Value) of
                 {true, Link} -> 
@@ -291,6 +379,10 @@ read_with_links(Opts, Path) ->
         not_found ->
             not_found
     end.
+
+is_data_path(<<"data">>) -> true;
+is_data_path(<<"data/", _/binary>>) -> true;
+is_data_path(_) -> false.
 
 %% @doc Resolve links in a path, checking each segment except the last.
 %% Returns the resolved path where any intermediate links have been followed.
@@ -377,9 +469,15 @@ scope(_) -> scope().
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
 list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
-    case read_resolved(Opts, hb_path:to_binary(Path)) of
+    EnvOpts = ensure_env(Opts),
+    PathBin =
+        case is_binary(Path) of
+            true -> Path;
+            false -> hb_path:to_binary(Path)
+        end,
+    case read_resolved(EnvOpts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
-            list_children(Opts, ResolvedPath);
+            list_children(EnvOpts, ResolvedPath);
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
         not_found ->
@@ -387,22 +485,76 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
     end.
 
 list_children(Opts, ResolvedPath) ->
-    SearchPath = 
-        case ResolvedPath of
-            <<>> -> <<>>;
-            <<"/">> -> <<>>;
-            _ -> 
-                case binary:last(ResolvedPath) of
-                    $/ -> ResolvedPath;
-                    _ -> <<ResolvedPath/binary, "/">>
-                end
-        end,
+    SearchPath = child_prefix(ResolvedPath),
     % Use native elmdb:list function
     #{ <<"db">> := DBInstance } = find_env(Opts),
     case elmdb:list(DBInstance, SearchPath) of
         {ok, Children} -> {ok, Children};
         {error, not_found} -> {ok, []};
         not_found -> {ok, []}
+    end.
+
+read_prefix_rows(Opts, Path) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    case elmdb:read_prefix(DBInstance, Path) of
+        {ok, Rows} -> {ok, Rows};
+        {error, not_found} -> not_found;
+        not_found -> not_found;
+        {error, _Type, _Description} = Error -> Error
+    end.
+
+%% Classify the first (marker) row of a bare-prefix scan. `read_prefix' returns
+%% keys in lexicographic order, so the row whose key equals `Path' — when it
+%% exists — always sorts ahead of the `Path/...' descendants and lands first.
+%% A `link:' marker chases its target, a `group' marker becomes a composite of
+%% its immediate children, and any other marker is a simple value. When no
+%% marker row is present the path is an implicit group: its descendants (if any)
+%% still resolve to a composite, otherwise the read is a miss.
+prefix_read_result(Opts, Path, [{Path, <<"link:", Link/binary>>} | _])
+        when byte_size(Link) > 0 ->
+    read_result(Opts, Link);
+prefix_read_result(_Opts, Path, [{Path, <<"raw:", Value/binary>>} | _]) ->
+    case is_data_path(Path) of
+        true -> {ok, <<"raw:", Value/binary>>};
+        false -> {ok, Value}
+    end;
+prefix_read_result(_Opts, Path, [{Path, <<"group">>} | Rows]) ->
+    {composite, immediate_children(child_prefix(Path), Rows)};
+prefix_read_result(_Opts, Path, [{Path, Value} | _]) ->
+    {ok, Value};
+prefix_read_result(_Opts, Path, Rows) ->
+    case {is_data_path(Path), immediate_children(child_prefix(Path), Rows)} of
+        {false, [_ | _] = Children} -> {composite, Children};
+        _ -> {error, not_found}
+    end.
+
+%% `elmdb:read_prefix' returns every descendant row (full key) under the prefix.
+%% Reduce that to the immediate children: strip the prefix and drop any relative
+%% key that still contains a `/' (a grandchild reached only through a subgroup,
+%% whose own `group' marker is returned as an immediate child in its own right).
+immediate_children(Prefix, Rows) ->
+    PrefixSize = byte_size(Prefix),
+    lists:filtermap(
+        fun({Key, Value}) ->
+            case Key of
+                <<Prefix:PrefixSize/binary, Child/binary>> when Child =/= <<>> ->
+                    case binary:match(Child, <<"/">>) of
+                        nomatch -> {true, {Child, Value}};
+                        _ -> false
+                    end;
+                _ ->
+                    false
+            end
+        end,
+        Rows
+    ).
+
+child_prefix(<<>>) -> <<>>;
+child_prefix(<<"/">>) -> <<>>;
+child_prefix(Path) ->
+    case binary:last(Path) of
+        $/ -> Path;
+        _ -> <<Path/binary, "/">>
     end.
 
 %% @doc Match a series of keys and values against the database. Returns 
@@ -413,22 +565,22 @@ match(Opts, MatchMap, _NodeOpts) when is_map(MatchMap) ->
     match(Opts, maps:to_list(MatchMap), #{});
 match(Opts, MatchKVs, _NodeOpts) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    WithPrefixes =
+    Patterns =
         lists:map(
-            fun({Key, Path}) ->
-                {Key, <<"link:", Path/binary>>}
-            end,
+            fun({Key, Value}) -> {Key, hb_util:bin(Value)} end,
             MatchKVs
         ),
-    ?event({elmdb_match, MatchKVs}),
-    case elmdb:match(DBInstance, WithPrefixes) of
+    ?event_debug({elmdb_match, MatchKVs}),
+    match_patterns(DBInstance, Patterns).
+
+match_patterns(DBInstance, Patterns) ->
+    case elmdb:match(DBInstance, Patterns) of
         {ok, Matches} ->
-            ?event({elmdb_matched, Matches}),
+            ?event_debug({elmdb_matched, Matches}),
             {ok, Matches};
         {error, not_found} -> {error, not_found};
         not_found -> {error, not_found}
     end.
-
 
 %% @doc Create a group entry that can contain other keys hierarchically.
 %%
@@ -447,7 +599,10 @@ match(Opts, MatchKVs, _NodeOpts) ->
 %% @param GroupName Binary name for the group
 %% @returns Result of the write operation
 group(Opts, #{ <<"group">> := GroupName }, _NodeOpts) ->
-    write(Opts, hb_path:to_binary(GroupName), <<"group">>).
+    case is_binary(GroupName) of
+        true -> write(Opts, GroupName, <<"group">>);
+        false -> write(Opts, hb_path:to_binary(GroupName), <<"group">>)
+    end.
 
 %% @doc Ensure all parent groups exist for a given path.
 %%
@@ -458,34 +613,45 @@ group(Opts, #{ <<"group">> := GroupName }, _NodeOpts) ->
 %% @param Opts Database configuration map
 %% @param Path The path whose parents should exist
 %% @returns ok
--spec ensure_parent_groups(map(), binary()) -> ok.
-ensure_parent_groups(Opts, Path) ->
-    PathParts = binary:split(Path, <<"/">>, [global]),
-    case PathParts of
-        [_] -> 
-            % Single segment, no parents to create
-            ok;
-        _ ->
-            % Multiple segments, create parent groups
-            ParentParts = lists:droplast(PathParts),
-            create_parent_groups(Opts, [], ParentParts)
+-spec ensure_parent_groups(map(), binary() | [binary()]) -> ok.
+ensure_parent_groups(Opts, Path) when is_binary(Path) ->
+    ensure_parent_groups(Opts, [Path]);
+ensure_parent_groups(Opts, Paths) when is_list(Paths) ->
+    % Collect the unique set of ancestor group paths across all of the given
+    % paths, then create each at most once: a single existence check and write
+    % per group for the whole batch, rather than once per path. Links that share
+    % ancestors (e.g. every key of a message under its id) thus pay for their
+    % parent groups only once.
+    Groups =
+        lists:usort(
+            lists:foldl(
+                fun(Path, Acc) -> parent_group_paths(Path, Acc) end,
+                [],
+                Paths
+            )
+        ),
+    lists:foreach(
+        fun(GroupPath) ->
+            case read_direct(Opts, GroupPath) of
+                not_found -> write(Opts, GroupPath, <<"group">>);
+                {ok, _} -> ok
+            end
+        end,
+        Groups
+    ).
+
+%% @doc Collect the ancestor group paths of a single path onto an accumulator.
+parent_group_paths(Path, Acc) ->
+    case binary:split(Path, <<"/">>, [global]) of
+        [_] -> Acc;
+        Parts -> prefix_group_paths(lists:droplast(Parts), [], Acc)
     end.
 
-%% @doc Helper function to recursively create parent groups.
-create_parent_groups(_Opts, _Current, []) ->
-    ok;
-create_parent_groups(Opts, Current, [Next | Rest]) ->
+prefix_group_paths([], _Current, Acc) ->
+    Acc;
+prefix_group_paths([Next | Rest], Current, Acc) ->
     NewCurrent = Current ++ [Next],
-    GroupPath = to_path(NewCurrent),
-    % Only create group if it doesn't already exist.
-    case read_direct(Opts, GroupPath) of
-        not_found ->
-            write(Opts, GroupPath, <<"group">>);
-        {ok, _} ->
-            % Already exists, skip
-            ok
-    end,
-    create_parent_groups(Opts, NewCurrent, Rest).
+    prefix_group_paths(Rest, NewCurrent, [to_path(NewCurrent) | Acc]).
 
 %% @doc Create a symbolic link from a new key to an existing key.
 %%
@@ -508,15 +674,22 @@ create_parent_groups(Opts, Current, [Next | Rest]) ->
 %% @param New The new key that should link to the existing key
 %% @returns Result of the write operation
 link(Opts, Req, _NodeOpts) when is_map(Req) ->
-    maps:fold(
-        fun(New, Existing, ok) ->
-            link(Opts, hb_path:to_binary(Existing), hb_path:to_binary(New));
-           (_New, _Existing, Error) ->
-            Error
-        end,
-        ok,
-        Req
-    );
+    % Resolve every link to a binary `New => "link:Existing"' value. The parent
+    % groups of all the links are created once for the whole batch (de-duplicated
+    % across links that share ancestors) rather than re-checked for every link.
+    Links =
+        maps:fold(
+            fun(New, Existing, Acc) ->
+                Acc#{
+                    hb_path:to_binary(New) =>
+                        <<"link:", (hb_path:to_binary(Existing))/binary>>
+                }
+            end,
+            #{},
+            Req
+        ),
+    ensure_parent_groups(Opts, maps:keys(Links)),
+    write(Opts, Links, #{});
 link(#{ <<"read-only">> := true }, _Existing, _New) ->
     {error, not_found};
 link(Opts, Existing, New) when is_list(Existing) ->
@@ -545,7 +718,11 @@ resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
     end.
 
 %% @doc Retrieve or create the LMDB environment handle for a database.
+find_env(Opts = #{ <<"db">> := _ }) -> Opts;
 find_env(Opts) -> hb_store:find(Opts).
+
+ensure_env(Opts = #{ <<"db">> := _ }) -> Opts;
+ensure_env(Opts) -> maps:merge(Opts, find_env(Opts)).
 
 %% Shutdown LMDB environment and cleanup resources
 stop(#{ <<"store-module">> := ?MODULE, <<"name">> := DataDir }, _Req, _Opts) ->
@@ -590,7 +767,8 @@ sample_metrics(Name, StartTime, Type) ->
     hb_prometheus:observe(ReadTime, hb_store_lmdb_duration_seconds, [read, Name]),
     case Type of
         hit -> hb_prometheus:inc(counter, hb_store_lmdb_hit, [Name], 1024);
-        miss -> ok
+        miss -> ok;
+        error -> ok
     end.
 
 init_prometheus() ->
@@ -704,19 +882,19 @@ list_test() ->
     test_read(StoreOpts, <<"colors">>),
     % Test listing colors/ - should return immediate children only
     {ok, ListResult} = test_list(StoreOpts, <<"colors">>),
-    ?event({list_result, ListResult}),
+    ?event_debug({list_result, ListResult}),
     % Expected: red, blue, green (files) + multi, primary, nested (directories)
     % Should NOT include deeply nested items like foo, bar, deep, value
     ExpectedChildren = [<<"blue">>, <<"green">>, <<"multi">>, <<"nested">>, <<"primary">>, <<"red">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedChildren) end, ListResult)),
     % Test listing a nested directory - should only show immediate children
     {ok, NestedListResult} = test_list(StoreOpts, <<"colors/multi">>),
-    ?event({nested_list_result, NestedListResult}),
+    ?event_debug({nested_list_result, NestedListResult}),
     ExpectedNestedChildren = [<<"bar">>, <<"foo">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedNestedChildren) end, NestedListResult)),
     % Test listing a deeper nested directory
     {ok, DeepListResult} = test_list(StoreOpts, <<"colors/nested">>),
-    ?event({deep_list_result, DeepListResult}),
+    ?event_debug({deep_list_result, DeepListResult}),
     ExpectedDeepChildren = [<<"deep">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedDeepChildren) end, DeepListResult)),
     ok = test_stop(StoreOpts).
@@ -749,7 +927,7 @@ link_test() ->
     test_write(StoreOpts, <<"foo/bar/baz">>, <<"Bam">>),
     test_link(StoreOpts, <<"foo/bar/baz">>, <<"foo/beep/baz">>),
     {ok, Result} = test_read(StoreOpts, <<"foo/beep/baz">>),
-    ?event({ result, Result}),
+    ?event_debug({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
 link_fragment_test() ->
@@ -758,7 +936,7 @@ link_fragment_test() ->
     test_write(StoreOpts, [<<"data">>, <<"bar">>, <<"baz">>], <<"Bam">>),
     test_link(StoreOpts, [<<"data">>, <<"bar">>], <<"my-link">>),
     {ok, Result} = test_read(StoreOpts, [<<"my-link">>, <<"baz">>]),
-    ?event({ result, Result}),
+    ?event_debug({ result, Result}),
     ?assertEqual(<<"Bam">>, Result).
 
 %% @doc Type test - verifies type detection for both simple and composite entries.
@@ -771,11 +949,11 @@ type_test() ->
     test_reset(StoreOpts),
     test_group(StoreOpts, <<"assets">>),
     Type = test_type(StoreOpts, <<"assets">>),
-    ?event({type, Type}),
+    ?event_debug({type, Type}),
     ?assertEqual(composite, Type),
     test_write(StoreOpts, <<"assets/1">>, <<"bam">>),
     Type2 = test_type(StoreOpts, <<"assets/1">>),
-    ?event({type2, Type2}),
+    ?event_debug({type2, Type2}),
     ?assertEqual(simple, Type2).
 
 %% @doc Link key list test - verifies symbolic link creation using structured key paths.
@@ -799,7 +977,7 @@ link_key_list_test() ->
     test_write(StoreOpts, [ <<"parent">>, <<"key">> ], <<"value">>),
     test_link(StoreOpts, [ <<"parent">>, <<"key">> ], <<"my-link">>),
     {ok, Result} = test_read(StoreOpts, <<"my-link">>),
-    ?event({result, Result}),
+    ?event_debug({result, Result}),
     ?assertEqual(<<"value">>, Result).
 
 %% @doc Path traversal link test - verifies link resolution during path traversal.
@@ -821,7 +999,7 @@ path_traversal_link_test() ->
     test_link(StoreOpts, <<"group">>, <<"link">>),
     % Reading via the link path should resolve to the target value
     {ok, Result} = test_read(StoreOpts, [<<"link">>, <<"key">>]),
-    ?event({path_traversal_result, Result}),
+    ?event_debug({path_traversal_result, Result}),
     ?assertEqual(<<"target-value">>, Result),
     ok = test_stop(StoreOpts).
 
@@ -838,17 +1016,17 @@ exact_hb_store_test() ->
     % Debug: test that the link behaves like the target (groups are unreadable)
     ?event(step4_check_link),
     LinkResult = test_read(StoreOpts, <<"test-link">>),
-    ?event({link_result, LinkResult}),
+    ?event_debug({link_result, LinkResult}),
     % Since test-dir1 is a group and groups are unreadable, the link should also be unreadable
     ?assertEqual(not_found, LinkResult),
     % Debug: test intermediate steps
     ?event(step5_test_direct_read),
-    DirectResult = test_read(StoreOpts, <<"test-dir1/test-file">>),
-    ?event({direct_result, DirectResult}),
+    _DirectResult = test_read(StoreOpts, <<"test-dir1/test-file">>),
+    ?event_debug({direct_result, _DirectResult}),
     % This should work: reading via the link path  
     ?event(step6_test_link_read),
     Result = test_read(StoreOpts, [<<"test-link">>, <<"test-file">>]),
-    ?event({final_result, Result}),
+    ?event_debug({final_result, Result}),
     ?assertEqual({ok, <<"test-data">>}, Result),
     ok = test_stop(StoreOpts).
 
@@ -863,7 +1041,7 @@ cache_style_test() ->
     ok = hb_store:write(StoreOpts, #{ <<"test-key">> => <<"test-value">> }, #{}),
     % Test reading through hb_store interface
     Result = hb_store:read(StoreOpts, <<"test-key">>, #{}),
-    ?event({cache_style_read_result, Result}),
+    ?event_debug({cache_style_read_result, Result}),
     ?assertEqual({ok, <<"test-value">>}, Result),
     hb_store:stop(StoreOpts).
 
@@ -894,7 +1072,7 @@ nested_map_cache_test() ->
             <<"other-key-key">> => <<"other-key-value">>
         }
     },
-    ?event({original_map, OriginalMap}),
+    ?event_debug({original_map, OriginalMap}),
     % Step 1: Store each leaf value at data/{hash}
     TargetValue = <<"Foo">>,
     TargetHash = base64:encode(crypto:hash(sha256, TargetValue)),
@@ -937,7 +1115,7 @@ nested_map_cache_test() ->
     ?assertEqual(composite, test_type(StoreOpts, <<"root">>)),
     % List the root contents
     {ok, RootKeys} = test_list(StoreOpts, <<"root">>),
-    ?event({root_keys, RootKeys}),
+    ?event_debug({root_keys, RootKeys}),
     ExpectedRootKeys = [<<"commitments">>, <<"other-key">>, <<"target">>],
     ?assert(lists:all(fun(Key) -> lists:member(Key, ExpectedRootKeys) end, RootKeys)),
     % Read the target directly
@@ -949,7 +1127,7 @@ nested_map_cache_test() ->
     ?assertEqual(composite, test_type(StoreOpts, <<"root/other-key">>)),
     % Step 4: Test programmatic reconstruction of the nested map
     ReconstructedMap = reconstruct_map(StoreOpts, <<"root">>),
-    ?event({reconstructed_map, ReconstructedMap}),
+    ?event_debug({reconstructed_map, ReconstructedMap}),
     % Verify the reconstructed map matches the original structure
     ?assert(hb_message:match(OriginalMap, ReconstructedMap)),
     test_stop(StoreOpts).
@@ -961,7 +1139,7 @@ reconstruct_map(StoreOpts, Path) ->
             % This is a group, reconstruct it as a map
             {ok, ImmediateChildren} = test_list(StoreOpts, Path),
             % The list function now correctly returns only immediate children
-            ?event({path, Path, immediate_children, ImmediateChildren}),
+            ?event_debug({path, Path, immediate_children, ImmediateChildren}),
             maps:from_list([
                 {Key, reconstruct_map(StoreOpts, <<Path/binary, "/", Key/binary>>)}
                 || Key <- ImmediateChildren
@@ -993,20 +1171,20 @@ cache_debug_test() ->
     % 4. Create link from data path to key hash path
     test_link(StoreOpts, DataPath, KeyHashPath),
     % 5. Test what the cache would see:
-    ?event(debug_cache_test, {step, check_message_type}),
-    MsgType = test_type(StoreOpts, MessageID),
-    ?event(debug_cache_test, {message_type, MsgType}),
-    ?event(debug_cache_test, {step, list_message_contents}),
-    {ok, Subkeys} = test_list(StoreOpts, MessageID),
-    ?event(debug_cache_test, {message_subkeys, Subkeys}),
-    ?event(debug_cache_test, {step, read_key_hashpath}),
-    KeyHashResult = test_read(StoreOpts, KeyHashPath),
-    ?event(debug_cache_test, {key_hash_read_result, KeyHashResult}),
+    ?event_debug(debug_cache_test, {step, check_message_type}),
+    _MsgType = test_type(StoreOpts, MessageID),
+    ?event_debug(debug_cache_test, {message_type, _MsgType}),
+    ?event_debug(debug_cache_test, {step, list_message_contents}),
+    {ok, _Subkeys} = test_list(StoreOpts, MessageID),
+    ?event_debug(debug_cache_test, {message_subkeys, _Subkeys}),
+    ?event_debug(debug_cache_test, {step, read_key_hashpath}),
+    _KeyHashResult = test_read(StoreOpts, KeyHashPath),
+    ?event_debug(debug_cache_test, {key_hash_read_result, _KeyHashResult}),
     % 6. Test with path as list (what cache does):
-    ?event(debug_cache_test, {step, read_path_as_list}),
+    ?event_debug(debug_cache_test, {step, read_path_as_list}),
     PathAsList = [MessageID, <<"key_hash_abc">>],
-    PathAsListResult = test_read(StoreOpts, PathAsList),
-    ?event(debug_cache_test, {path_as_list_result, PathAsListResult}),
+    _PathAsListResult = test_read(StoreOpts, PathAsList),
+    ?event_debug(debug_cache_test, {path_as_list_result, _PathAsListResult}),
     test_stop(StoreOpts).
 
 %% @doc Isolated test focusing on the exact cache issue
@@ -1020,29 +1198,29 @@ isolated_type_debug_test() ->
     % 2. Create nested groups for "commitments" and "other-test-key"
     CommitmentsPath = <<MessageID/binary, "/commitments">>,
     OtherKeyPath = <<MessageID/binary, "/other-test-key">>,
-    ?event(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
+    ?event_debug(debug_isolated, {creating_nested_groups, CommitmentsPath, OtherKeyPath}),
     test_group(StoreOpts, CommitmentsPath),
     test_group(StoreOpts, OtherKeyPath),
     % 3. Add some actual data within those groups
     test_write(StoreOpts, <<CommitmentsPath/binary, "/sig1">>, <<"signature_data_1">>),
     test_write(StoreOpts, <<OtherKeyPath/binary, "/sub_value">>, <<"nested_value">>),
     % 4. Test type detection on the nested paths
-    ?event(debug_isolated, {testing_main_message_type}),
-    MainType = test_type(StoreOpts, MessageID),
-    ?event(debug_isolated, {main_message_type, MainType}),
-    ?event(debug_isolated, {testing_commitments_type}),
-    CommitmentsType = test_type(StoreOpts, CommitmentsPath),
-    ?event(debug_isolated, {commitments_type, CommitmentsType}),
-    ?event(debug_isolated, {testing_other_key_type}),
-    OtherKeyType = test_type(StoreOpts, OtherKeyPath),
-    ?event(debug_isolated, {other_key_type, OtherKeyType}),
+    ?event_debug(debug_isolated, {testing_main_message_type}),
+    _MainType = test_type(StoreOpts, MessageID),
+    ?event_debug(debug_isolated, {main_message_type, _MainType}),
+    ?event_debug(debug_isolated, {testing_commitments_type}),
+    _CommitmentsType = test_type(StoreOpts, CommitmentsPath),
+    ?event_debug(debug_isolated, {commitments_type, _CommitmentsType}),
+    ?event_debug(debug_isolated, {testing_other_key_type}),
+    _OtherKeyType = test_type(StoreOpts, OtherKeyPath),
+    ?event_debug(debug_isolated, {other_key_type, _OtherKeyType}),
     % 5. Test what happens when reading these nested paths
-    ?event(debug_isolated, {reading_commitments_directly}),
-    CommitmentsResult = test_read(StoreOpts, CommitmentsPath),
-    ?event(debug_isolated, {commitments_read_result, CommitmentsResult}),
-    ?event(debug_isolated, {reading_other_key_directly}),
-    OtherKeyResult = test_read(StoreOpts, OtherKeyPath),
-    ?event(debug_isolated, {other_key_read_result, OtherKeyResult}),
+    ?event_debug(debug_isolated, {reading_commitments_directly}),
+    _CommitmentsResult = test_read(StoreOpts, CommitmentsPath),
+    ?event_debug(debug_isolated, {commitments_read_result, _CommitmentsResult}),
+    ?event_debug(debug_isolated, {reading_other_key_directly}),
+    _OtherKeyResult = test_read(StoreOpts, OtherKeyPath),
+    ?event_debug(debug_isolated, {other_key_read_result, _OtherKeyResult}),
     test_stop(StoreOpts).
 
 %% @doc Test that list function resolves links correctly
@@ -1058,11 +1236,46 @@ list_with_link_test() ->
     test_link(StoreOpts, <<"real-group">>, <<"link-to-group">>),
     % List the real group to verify expected children
     {ok, RealGroupChildren} = test_list(StoreOpts, <<"real-group">>),
-    ?event({real_group_children, RealGroupChildren}),
+    ?event_debug({real_group_children, RealGroupChildren}),
     ExpectedChildren = [<<"child1">>, <<"child2">>, <<"child3">>],
     ?assertEqual(ExpectedChildren, lists:sort(RealGroupChildren)),
     % List via the link - should return the same children
     {ok, LinkChildren} = test_list(StoreOpts, <<"link-to-group">>),
-    ?event({link_children, LinkChildren}),
+    ?event_debug({link_children, LinkChildren}),
     ?assertEqual(ExpectedChildren, lists:sort(LinkChildren)),
+    test_stop(StoreOpts).
+
+read_prefix_composite_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    test_group(StoreOpts, <<"root">>),
+    test_write(StoreOpts, <<"root/a">>, <<"1">>),
+    test_group(StoreOpts, <<"root/b">>),
+    test_write(StoreOpts, <<"root/b/c">>, <<"2">>),
+    ?assertEqual(
+        {composite, [{<<"a">>, <<"1">>}, {<<"b">>, <<"group">>}]},
+        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
+    ),
+    ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
+    test_stop(StoreOpts).
+
+raw_value_write_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    ok = group(StoreOpts, #{ <<"group">> => <<"root">> }, #{}),
+    ok =
+        write(
+            StoreOpts,
+            #{
+                <<"data/small">> => <<"value">>,
+                <<"root/small">> => <<"raw:value">>
+            },
+            #{}
+        ),
+    ?assertEqual(
+        {composite, [{<<"small">>, <<"raw:value">>}]},
+        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
+    ),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"root/small">>)),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"data/small">>)),
     test_stop(StoreOpts).

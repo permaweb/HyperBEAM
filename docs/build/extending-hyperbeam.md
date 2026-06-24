@@ -46,7 +46,7 @@ A top-level `%%% @doc` block becomes the spec body; alternatively
 The HyperBEAM repository keeps every device source under
 `src/preloaded`. The `compile` step runs the same Forge preload pipeline
 over that directory and emits an LMDB `preloaded-store` plus the index
-ID the core default config consumes:
+link the core default config consumes:
 
 ```bash
 rebar3 compile          # builds core + forge, then preloads

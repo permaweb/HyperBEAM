@@ -52,13 +52,18 @@ item(_Base, Req, Opts) ->
                     {ok, Metering} =
                         hb_device_load:reference(<<"metering@1.0">>, Opts),
                     Metering:consume(<<"arweave-bytes">>, BundledSize, Opts),
-                    % Queue the item for bundling
-                    % (fire-and-forget, ignore errors)
-                    ServerPID ! {enqueue_item, Item, BundledSize},
-                    {ok, #{
+                    Response = #{
                         <<"id">> => ItemID,
                         <<"timestamp">> => erlang:system_time(millisecond)
-                    }};
+                    },
+                    enqueue_item(
+                        ServerPID,
+                        Item,
+                        BundledSize,
+                        Response,
+                        Req,
+                        Opts
+                    );
                 {error, Reason} ->
                     ?event(
                         bundler_short,
@@ -128,6 +133,30 @@ cache_item(Item, Opts) ->
     catch
         Type:ExceptionReason ->
             {error, {Type, ExceptionReason}}
+    end.
+
+%% @doc Queue an item, optionally blocking until its bundle is complete.
+enqueue_item(ServerPID, Item, BundledSize, Response, Req, Opts) ->
+    case hb_util:bool(hb_maps:get(<<"await">>, Req, false, Opts)) of
+        true ->
+            Ref = make_ref(),
+            MonitorRef = erlang:monitor(process, ServerPID),
+            ServerPID ! {enqueue_item, Item, BundledSize, {self(), Ref}},
+            receive
+                {bundle_complete, Ref, Completion} ->
+                    erlang:demonitor(MonitorRef, [flush]),
+                    {ok, maps:merge(Response, Completion)};
+                {'DOWN', MonitorRef, process, ServerPID, Reason} ->
+                    {error, #{
+                        <<"status">> => 500,
+                        <<"error">> => <<"bundle-dispatch-failed">>,
+                        <<"details">> => error_to_bin(Reason)
+                    }}
+            end;
+        false ->
+            % Queue the item for bundling (fire-and-forget, ignore errors).
+            ServerPID ! {enqueue_item, Item, BundledSize, undefined},
+            {ok, Response}
     end.
 
 %%% Bundling server.
@@ -207,12 +236,13 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
                 add_to_queue(
                     Item,
                     bundled_item_size(Item, Opts),
+                    undefined,
                     State,
                     Opts
                 ),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
-        {enqueue_item, Item, BundledSize} ->
-            State1 = add_to_queue(Item, BundledSize, State, Opts),
+        {enqueue_item, Item, BundledSize, Waiter} ->
+            State1 = add_to_queue(Item, BundledSize, Waiter, State, Opts),
             server(assign_tasks(maybe_dispatch(State1)), Opts);
         {dispatch_queue, Timestamp} ->
             ?event(bundler_short, {dispatched_queue_start, calendar:now_to_universal_time(Timestamp)}),
@@ -245,12 +275,12 @@ server(State = #state{max_idle_time = MaxIdleTime}, Opts) ->
 %% @doc Add an item to the queue. Update the state with the queue's total
 %% bundled byte size.
 %% Note: Item has already been verified and cached before reaching here.
-add_to_queue(Item, BundledSize, State = #state{
+add_to_queue(Item, BundledSize, Waiter, State = #state{
         queue = Queue,
         bytes = Bytes,
         dispatch_ref = DispatchRef
     }, Opts) ->
-    NewQueue = [{Item, BundledSize} | Queue],
+    NewQueue = [{Item, BundledSize, Waiter} | Queue],
     NewBytes = Bytes + BundledSize,
     ?event(bundler_short, {queueing_item, 
         {id, {explicit, hb_message:id(Item, signed, Opts)}},
@@ -307,11 +337,7 @@ dispatchable(_State) ->
 
 %% @doc Return the total size of a queue of items.
 queue_bytes(Items) ->
-    lists:foldl(
-        fun({_Item, BundledSize}, Acc) -> Acc + BundledSize end,
-        0,
-        Items
-    ).
+    lists:sum([BundledSize || {_Item, BundledSize, _Waiter} <- Items]).
 
 %% @doc Dispatch all currently queued items immediately.
 dispatch_queue(State = #state{queue = []}) ->
@@ -327,7 +353,7 @@ dispatch_queue(State = #state{queue = Queue, dispatch_ref = DispatchRef}) ->
 create_bundle([], State) ->
     State;
 create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
-    {Items, ItemSizes} = lists:unzip(QueuedItems),
+    {Items, ItemSizes, Waiters} = lists:unzip3(QueuedItems),
     BundleID = make_ref(),
     Bundle = #bundle{
         id = BundleID,
@@ -336,6 +362,7 @@ create_bundle(QueuedItems, State = #state{bundles = Bundles, opts = Opts}) ->
         status = initializing,
         tx = undefined,
         proofs = #{},
+        waiters = Waiters,
         start_time = erlang:timestamp()
     },
     State1 = State#state{
@@ -509,6 +536,10 @@ task_completed(
 %% @doc Mark a bundle as complete and remove it from state.
 bundle_complete(Bundle, State = #state{opts = Opts}) ->
     ok = dev_bundler_cache:complete_tx(Bundle#bundle.tx, Opts),
+    Completion = #{
+        <<"bundle-id">> => hb_message:id(Bundle#bundle.tx, signed, Opts),
+        <<"bundle-status">> => <<"complete">>
+    },
     ElapsedTime =
         timer:now_diff(erlang:timestamp(), Bundle#bundle.start_time) / 1000000,
     ?event(
@@ -520,8 +551,21 @@ bundle_complete(Bundle, State = #state{opts = Opts}) ->
             {elapsed_time_s, ElapsedTime}
         }
     ),
+    notify_waiters(Bundle#bundle.waiters, Completion),
     run_completion_hooks(Bundle, Opts),
     State#state{bundles = maps:remove(Bundle#bundle.id, State#state.bundles)}.
+
+%% @doc Notify callers waiting for a bundle to finish seeding chunks.
+notify_waiters(Waiters, Completion) ->
+    lists:foreach(
+        fun
+            (undefined) ->
+                ok;
+            ({PID, Ref}) ->
+                PID ! {bundle_complete, Ref, Completion}
+        end,
+        Waiters
+    ).
 
 %% @doc Execute hooks for each completed bundled item and the full bundle.
 run_completion_hooks(Bundle, Opts) ->
@@ -1030,6 +1074,78 @@ complete_task_sequence_test_parallel() ->
         ?assert(queue:is_empty(Queue)),
         Bundles = State#state.bundles,
         ?assertEqual(0, maps:size(Bundles)),
+        ok
+    after
+        stop_test_servers(ServerHandle, NodeOpts)
+    end.
+
+await_bundle_test_parallel() ->
+    Anchor = rand:bytes(32),
+    Price = 12345,
+    Parent = self(),
+    {ServerHandle, NodeOpts} = hb_mock_server:start_arweave_gateway(#{
+        chunk => fun(_Req) ->
+            Parent ! {chunk_started, self()},
+            receive release_chunk -> ok after 1000 -> ok end,
+            {200, <<"OK">>}
+        end,
+        price => {200, integer_to_binary(Price)},
+        tx_anchor => {200, hb_util:encode(Anchor)}
+    }),
+    try
+        ClientOpts = #{},
+        Node = hb_http_server:start_node(NodeOpts#{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"bundler-max-items">> => 1
+        }),
+        Item = new_data_item(1, 10),
+        StructuredItem = hb_message:convert(
+            Item,
+            <<"structured@1.0">>,
+            <<"ans104@1.0">>,
+            ClientOpts
+        ),
+        AwaitReq = #{
+            <<"path">> => <<"/~bundler@1.0/tx">>,
+            <<"bundler-subject">> => <<"body">>,
+            <<"await">> => true,
+            <<"body">> => StructuredItem
+        },
+        spawn_link(fun() ->
+            Result = hb_http:post(Node, AwaitReq, ClientOpts),
+            Parent ! {await_bundle_result, Result}
+        end),
+        ChunkHandler =
+            receive
+                {chunk_started, PID} -> PID
+            after 1000 ->
+                error(await_bundle_chunk_not_started)
+            end,
+        receive
+            {await_bundle_result, _EarlyResult} ->
+                error(await_bundle_returned_before_chunks_seeded)
+        after 50 ->
+            ok
+        end,
+        ChunkHandler ! release_chunk,
+        Result =
+            receive
+                {await_bundle_result, AwaitResult} -> AwaitResult
+            after 2000 ->
+                error(await_bundle_result_timeout)
+            end,
+        ?assertMatch(
+            {ok, #{
+                <<"bundle-id">> := _,
+                <<"bundle-status">> := <<"complete">>
+            }},
+            Result
+        ),
+        ?assertEqual(
+            1,
+            length(hb_mock_server:get_requests(chunk, 1, ServerHandle))
+        ),
         ok
     after
         stop_test_servers(ServerHandle, NodeOpts)
