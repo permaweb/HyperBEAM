@@ -200,3 +200,10 @@
   passed with 4 tests; `HB_PARANOID=cache_read,cache_write rebar3 device test
   --module 'lua@5.3a [test_ledgers]'` passed with 8 tests; and `git diff
   --check` passed.
+- Restored recorder visibility for the varied lookup path. Varying resolves
+  the device function in stage 2, so stage 5 reuses it and no longer emits the
+  normal lookup events there; `prepare_vary/3` now emits the same
+  `resolving_key` and `found_func_for_exec` events around the actual lookup.
+  Validation: `HB_PARANOID=cache_read,cache_write rebar3 device test --module
+  'recorder@1.0' --test dev_recorder:record_installs_hook_test` passed, and
+  `git diff --check` passed.

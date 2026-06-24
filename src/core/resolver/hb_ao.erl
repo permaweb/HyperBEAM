@@ -979,7 +979,26 @@ prepare_vary(Base, Req, Opts) ->
     LoadedReq = ensure_message_loaded(Req, Opts),
     UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
     Key = hb_path:hd(LoadedReq, UserOpts),
+    ?event(
+        {
+            resolving_key,
+            {key, Key},
+            {base, LoadedBase},
+            {req, LoadedReq},
+            {opts, Opts}
+        }
+    ),
     {Status, Device, Func} = hb_device:message_to_fun(LoadedBase, Key, UserOpts),
+    ?event(
+        {found_func_for_exec,
+            {key, Key},
+            {device, Device},
+            {func, Func},
+            {base, LoadedBase},
+            {req, LoadedReq},
+            {opts, Opts}
+        }
+    ),
     AddKey =
         case Status of
             add_key -> Key;
