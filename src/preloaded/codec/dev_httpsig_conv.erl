@@ -629,17 +629,18 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                     end;
                 _ ->
                     ?event_debug({group_maps, {norm_key, NormKey}, {value, Value}}),
-                    case byte_size(Value) > ?MAX_HEADER_LENGTH of
-                        % the value is too large to be encoded as a header
-                        % within a part, so instead lift it to be a top level
-                        % part
+                    case byte_size(Value) =< ?MAX_HEADER_LENGTH
+                            andalso header_safe_binary(Value) of
+                        % The value can be encoded in the current part's
+                        % headers.
                         true ->
-                            NewTop = hb_maps:put(FlatK, Value, CurTop, Opts),
-                            {CurMap, NewTop};
-                        % Encode the value in the current part
-                        false ->
                             NewCurMap = hb_maps:put(NormKey, Value, CurMap, Opts),
-                            {NewCurMap, CurTop}
+                            {NewCurMap, CurTop};
+                        % The value is too large or unsafe for a header within
+                        % a part, so lift it to a top level part.
+                        false ->
+                            NewTop = hb_maps:put(FlatK, Value, CurTop, Opts),
+                            {CurMap, NewTop}
                     end
             end
         end,

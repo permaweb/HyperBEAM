@@ -34,6 +34,39 @@ The new order of work is:
    real failures it exposes.
 4. Only then claim completion.
 
+## Morning Operating Alignment
+
+The current pass is model-repair first, not feature expansion. The sequence is:
+
+1. Core components must be protocol-aligned before chasing device failures.
+2. Then get the `~process@1.0` and scheduler/process-oriented tests clean.
+3. Then work outward through the wider preloaded device suite.
+
+Do not let a later device failure justify weakening an earlier core invariant.
+If a device exposes a model mismatch, fix the model or the device contract
+directly. Do not hide the failure behind cache-control, broad vary specs,
+special test paths, or reduced verification.
+
+Three morning clarifications are now hard constraints:
+
+- `{as, Device, Msg}` is migration debt. The target model is ordinary message
+  overlay/extension with `#{ <<"device">> => Device, ... }`. A path-bearing
+  part such as `key~device@1.0` should mean: compose the device, then resolve
+  path `key`.
+- `priv` is local execution state and must be carried forward when extending
+  one message with another. It must not leak into public IDs, serialized public
+  surfaces, or cache commitments. Non-message results such as binaries, lists,
+  and scalars do not carry message `priv`.
+- Routine loaded-message commitment normalization should be stripped back, not
+  expanded. Unsigned IDs belong to cache/link addressing, not as synthetic
+  commitments attached to mutable Erlang maps.
+
+`HB_PARANOID=cache_read,cache_write` is not a mode in which features may be
+disabled. It is the detector for the same cache-poisoning and commitment
+breakage that would otherwise reach production. An unloaded link target need
+not be recursively verified by default, but materialized children and the
+current committed surface must be verified honestly.
+
 ## Branch Discipline
 
 - Start a fresh branch from latest `hyperbeam-main/edge`.

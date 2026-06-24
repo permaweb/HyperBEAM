@@ -43,3 +43,19 @@ or reduce integration coverage to get green.
 - Then `~process@1.0` and scheduler process tests.
 - Then wider devices.
 
+## Non-Negotiables For This Pass
+
+- Ordinary `rebar3 eunit-all` must pass first without known test-hacking
+  residue.
+- `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` is the final detector,
+  not a feature-reduced mode.
+- `no-store` requires a real model reason: private, nondeterministic,
+  time-local, or local node policy outside the cache key.
+- Signed inbound HTTP messages verify or reject.
+- Unloaded links may remain unloaded; materialized children and the current
+  committed surface may not be skipped.
+- Missing-secret HMAC verification in generic cache context must not silently
+  succeed.
+- The clean implementation should get simpler as varying becomes precise. If a
+  device became more complex, inspect whether the resolver boundary is doing
+  too little or the device spec is too broad.

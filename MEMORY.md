@@ -79,6 +79,72 @@ The path from here is slow and model-first:
 4. Get the ordinary suite green.
 5. Re-run paranoid cache mode and fix the exposed root causes.
 
+## Current Morning Directive
+
+The current unattended pass must move slowly through the system in this order:
+
+1. Core model alignment: `hb_message`, `hb_ao`, `hb_http`, cache/control,
+   commitment boundaries, extension/overlay, and singleton/signed ancestry.
+2. `~process@1.0`, scheduler, and process-oriented vectors.
+3. Wider preloaded devices.
+
+This order matters. A wider device failure must not be solved by weakening a
+core invariant. If the ordinary suite fails, first ask whether the failure
+exposes an honest mismatch in the model or the device contract. If paranoid
+mode fails, treat it as cache poisoning or commitment-honesty evidence until
+proved otherwise.
+
+The first gate is now:
+
+```text
+rebar3 eunit-all
+```
+
+Only after that gate is green with clean semantics should the second gate be
+run:
+
+```text
+HB_PARANOID=cache_read,cache_write rebar3 eunit-all
+```
+
+Do not claim completion unless both pass at the latest tip. If an isolated
+rerun proves a timing-sensitive assertion is noisy, record the evidence in
+`STATUS.md`, but do not treat a failed full gate as green.
+
+There are three fresh model clarifications:
+
+- `{as, Device, Msg}` should disappear from the protocol-facing model. Casting
+  is ordinary overlay/extension with `#{ <<"device">> => Device }` and any
+  additional keys. For path syntax such as `key~device@1.0`, compose the device
+  first, then resolve path `key`.
+- `priv` must be carried forward when one message extends another message. It
+  is local execution state, not public message content. It must never enter
+  public IDs, signatures, cache commitments, or serialized public surfaces.
+  Binaries, lists, and scalars are not messages and do not carry message
+  `priv`.
+- Routine normalization of commitments on loaded messages is suspect. Do not
+  attach synthetic unsigned ID commitments to mutable Erlang maps as ordinary
+  state. Prefer offloading to the cache and keeping loaded messages shallow.
+
+`no-store` is not a reward for making cache paranoia angry. It is valid only
+for genuinely private, nondeterministic, time-local, or node-local-policy
+results that are not represented in the AO cache key. If a result is stable for
+a bounded period, the right direction is cache expiry/max-age semantics, not
+private no-store. Remove or narrow any no-store that exists only to avoid a
+cache write.
+
+Signed inbound HTTP messages have a verify-or-reject contract. If an inbound
+wire message presents a signed commitment, the node must verify it or reject it
+with a client error. Merely accepting it while skipping `store-all-signed` is
+not enough.
+
+Paranoid cache verification is allowed to leave unloaded link targets alone:
+links are cache resource boundaries unless an explicit recursive/bundled
+verification mode asks for the target. But materialized children and the
+current message's committed surface must not be skipped. Secret-key HMAC
+commitments must not silently pass generic cache verification without the
+secret.
+
 ## AO-Core As A Device Calculus
 
 Every AO-Core message has device semantics. A message may explicitly name its

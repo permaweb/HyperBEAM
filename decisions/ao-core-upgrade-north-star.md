@@ -203,6 +203,26 @@ the model rather than the earlier prototype branches.
   a secret is required for verification, the verifier should obtain it from the
   intended private/opts path or report that the commitment is unverifiable in
   that context. Silent success is a reward hack.
+- Cache-control is not an escape hatch. `no-store` belongs only on genuinely
+  private, nondeterministic, time-local, or local-policy results that are not
+  fully represented by the AO cache key. A device must not mark a cacheable
+  result private merely because paranoid verification catches a broken write.
+- Inbound signed HTTP messages follow a verify-or-reject contract. If a message
+  presents a signed commitment, accepting it after verification failure is not
+  model-aligned even if the node declines to cache it.
+
+## Current Repair Pass
+
+- First make `rebar3 eunit-all` pass without `HB_PARANOID`, with clean
+  semantics and no known reward hacks.
+- Only after that, re-enable
+  `HB_PARANOID=cache_read,cache_write rebar3 eunit-all` and treat failures as
+  real model or device-contract bugs.
+- Work order is core first, then `~process@1.0` and scheduler/process tests,
+  then wider preloaded devices.
+- If a fix makes the suite green by hiding cache writes, weakening signed
+  verification, broadening specs to vary/load everything, or narrowing a test
+  away from the path that failed, it is not a fix.
 
 ## Implementation Guardrails
 

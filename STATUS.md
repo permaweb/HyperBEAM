@@ -406,3 +406,31 @@
   passed; `rebar3 device test --module dev_manifest` passed with 6 tests;
   `rebar3 device test --module dev_bundler` passed with 27 tests; and
   `rebar3 device test --module dev_ans104` passed with 24 tests.
+- Post-compaction reset reread `decisions/ao-core-upgrade-north-star.md`,
+  `decisions/ao-core-upgrade-plan.md`, `MEMORY.md`, and
+  `decisions/morning-model-reset.md`. Updated the durable markdowns with the
+  current operating order: core model alignment first, then `~process@1.0` and
+  scheduler/process tests, then wider devices. Reasserted the no-reward-hack
+  constraints around `no-store`, signed HTTP ingress, materialized child
+  verification, missing-secret HMACs, `{as}` migration debt, `priv`
+  carry-forward, and loaded-message commitment normalization.
+- Fixed the nested multipart half of the HTTPSig binary-body issue exposed by
+  stricter signed HTTP ingress. Top-level HTTP field encoding already rejected
+  CR/LF-bearing small binaries as headers, but nested `group_maps/4` still
+  placed any small binary in multipart part headers. Random 1KB signed payloads
+  could therefore corrupt the nested header block and fail verification after
+  decode. Nested grouping now lifts small non-header-safe binaries into body
+  parts. Validation: `rebar3 device test --module dev_httpsig_conv --test
+  dev_httpsig_conv:small_binary_body_part_roundtrip_test` passed; `rebar3
+  eunit --module=hb_http` passed with 14 tests. The following ordinary
+  `rebar3 eunit-all` passed all functional tests except one timing-sensitive
+  `bundler@1.0:dispatch_blocking_test` assertion
+  (`Time4 =< 2 * Slowest`); immediately rerunning that isolated test passed.
+  A fresh full ordinary gate is still required before treating the current tip
+  as green.
+- Fresh ordinary gate is green after the nested HTTPSig binary fix and markdown
+  reset: `rebar3 eunit-all` passed end-to-end with `All 3495 tests passed.`
+  The earlier bundler timing assertion passed inside this run
+  (`bundler@1.0:dispatch_blocking_test...[0.712 s] ok`), as did the HTTP large
+  signed request, scheduler, secret, process, and codec vector regions. Next
+  gate: `HB_PARANOID=cache_read,cache_write rebar3 eunit-all`.
