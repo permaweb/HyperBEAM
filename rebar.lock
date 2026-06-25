@@ -2,7 +2,7 @@
 [{<<"accept">>,{pkg,<<"accept">>,<<"0.3.7">>},1},
  {<<"b64veryfast">>,
   {git,"https://github.com/permaweb/b64veryfast.git",
-       {ref,"673388c8d46968f90e1da902146a8367d63226d2"}},
+       {ref,"20ea7c4b5420501c9a4d5f19d8f043a2e96f3271"}},
   0},
  {<<"base32">>,{pkg,<<"base32">>,<<"1.0.0">>},0},
  {<<"certifi">>,{pkg,<<"certifi">>,<<"2.15.0">>},1},
