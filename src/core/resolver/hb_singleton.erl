@@ -135,15 +135,10 @@ type(_Value) -> unknown.
 from(RawMsg, Opts) when is_binary(RawMsg) ->
     from(#{ <<"path">> => RawMsg }, Opts);
 from(RawMsg, Opts) ->
-    RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>),
+    RawPath = hb_maps:get(<<"path">>, RawMsg, <<>>, Opts),
     ?event_debug(parsing, {raw_path, RawPath}),
     {ok, Path, Query} = from_path(RawPath),
     ?event_debug(parsing, {parsed_path, Path, Query}),
-    MsgWithoutBasePath =
-        hb_maps:merge(
-            hb_maps:remove(<<"path">>, RawMsg),
-            Query
-        ),
     % 2. Decode, split, and sanitize path segments. Each yields one step message.
     RawMsgs =
         lists:flatten(
@@ -155,11 +150,11 @@ from(RawMsg, Opts) ->
     ?event_debug(parsing, {raw_messages, RawMsgs}),
     Msgs = normalize_base(RawMsgs),
     ?event_debug(parsing, {normalized_messages, Msgs}),
-    % 3. Type keys and values
-    Typed = apply_types(MsgWithoutBasePath, Opts),
+    % 3. Type keys and values over base
+    Typed = apply_types(Query#{ <<"...">> => RawMsg }, Opts),
     ?event_debug(parsing, {typed_messages, Typed}),
     % 4. Group keys by N-scope and global scope
-    ScopedModifications = group_scoped(Typed, Msgs),
+    ScopedModifications = group_scoped(Typed, Msgs, Opts),
     ?event_debug(parsing, {scoped_modifications, ScopedModifications}),
     % 5. Generate the list of messages (plus-notation, device, typed keys).
     Result = build_messages(Msgs, ScopedModifications, Opts),
@@ -168,8 +163,6 @@ from(RawMsg, Opts) ->
 
 %% @doc Parse the relative reference into path, query, and fragment.
 from_path(RelativeRef) ->
-    %?event_debug(parsing, {raw_relative_ref, RawRelativeRef}),
-    %RelativeRef = hb_escape:decode(RawRelativeRef),
     Decoded = decode_string(RelativeRef),
     ?event_debug(parsing, {parsed_relative_ref, Decoded}),
     {Path, QKVList} =
@@ -218,49 +211,56 @@ path_parts(Sep, PathBin) when is_binary(PathBin) ->
 
 %% @doc Extract all of the parts from the binary, given (a list of) separators.
 all_path_parts(_Sep, <<>>) -> [];
-all_path_parts(Sep, Bin) ->
-    hb_util:split_depth_string_aware(Sep, Bin).
+all_path_parts(Sep, Bin) -> hb_util:split_depth_string_aware(Sep, Bin).
 
 %% @doc Extract the characters from the binary until a separator is found.
 %% The first argument of the function is an explicit separator character, or
 %% a list of separator characters. Returns a tuple with the separator, the
 %% accumulated characters, and the rest of the binary.
-part(Sep, Bin) when not is_list(Sep) ->
-    part([Sep], Bin);
-part(Seps, Bin) ->
-    hb_util:split_depth_string_aware_single(Seps, Bin).
+part(Sep, Bin) when not is_list(Sep) -> part([Sep], Bin);
+part(Seps, Bin) -> hb_util:split_depth_string_aware_single(Seps, Bin).
 
 %% @doc Step 3: Apply types to values and remove specifiers.
 apply_types(Msg, Opts) ->
-    hb_maps:fold(
-        fun(Key, Val, Acc) ->
-            {_, K, V} = maybe_typed(Key, Val, Opts),
-            hb_maps:put(K, V, Acc, Opts)
-        end,
-        #{},
+    hb_ao:set(
         Msg,
+        hb_maps:fold(
+            fun(Key, Val, Acc) ->
+                {_, K, V} = maybe_typed(Key, Val, Opts),
+                Acc#{ K => V }
+            end,
+            #{},
+            Msg,
+            Opts
+        ),
         Opts
     ).
 
 %% @doc Step 4: Group headers/query by N-scope.
 %% `N.Key' => applies to Nth step. Otherwise => `global'
-group_scoped(Map, Msgs) ->
+group_scoped(Map, Msgs, Opts) ->
     {NScope, Global} =
         hb_maps:fold(
             fun(KeyBin, Val, {Ns, Gs}) ->
                 case parse_scope(KeyBin) of
                     {OkN, RealKey} when OkN > 0 ->
-                        Curr = hb_maps:get(OkN, Ns, #{}),
-                        Ns2 = hb_maps:put(OkN, hb_maps:put(RealKey, Val, Curr), Ns),
+                        Curr = hb_maps:get(OkN, Ns, #{}, Opts),
+                        Ns2 =
+                            hb_maps:put(
+                                OkN,
+                                hb_maps:put(RealKey, Val, Curr, Opts),
+                                Ns,
+                                Opts
+                            ),
                         {Ns2, Gs};
-                    global -> {Ns, hb_maps:put(KeyBin, Val, Gs)}
+                    global -> {Ns, hb_maps:put(KeyBin, Val, Gs, Opts)}
                 end
           end,
           {#{}, #{}},
           Map
         ),
     [
-        hb_maps:merge(Global, hb_maps:get(N, NScope, #{}))
+        hb_ao:set(Global, hb_maps:get(N, NScope, #{}, Opts), Opts)
     ||
         N <- lists:seq(1, length(Msgs))
     ].
@@ -269,7 +269,7 @@ group_scoped(Map, Msgs) ->
 parse_scope(KeyBin) ->
     case binary:split(KeyBin, <<".">>, [global]) of
         [Front, Remainder] ->
-            case catch erlang:binary_to_integer(Front) of
+            case catch hb_util:int(Front) of
                 NInt when is_integer(NInt) -> {NInt + 1, Remainder};
                 _ -> throw({error, invalid_scope, KeyBin})
             end;
@@ -281,46 +281,29 @@ build_messages(Msgs, ScopedModifications, Opts) ->
     do_build(1, Msgs, ScopedModifications, Opts).
 
 do_build(_, [], _, _) -> [];
-do_build(I, [{as, DevID, RawMsg} | Rest], ScopedKeys, Opts) when is_map(RawMsg) ->
+do_build(I, [{as, DevID, Direct} | Rest], ScopedKeys, Opts) when is_map(Direct) ->
     % We are processing an `as' message. If the path is empty, we need to
     % remove it from the message and the additional message, such that AO-Core
     % returns only the message with the device specifier changed. If the message
     % does have a path, AO-Core will subresolve it.
-    RawAdditional = lists:nth(I, ScopedKeys),
-    {Msg, Additional} =
-        case hb_maps:get(<<"path">>, RawMsg, <<"">>, Opts) of
-            ID when ?IS_ID(ID) ->
-                % When we have an ID, we do not merge the globally scoped elements.
-                {
-                    RawMsg,
-                    #{}
-                };
-            <<"">> ->
-                % When we have an empty path, we remove the path from both
-                % messages. AO-Core will then simply set the device specifier
-                % and not execute a subresolve.
-                {
-                    hb_ao:set(RawMsg, <<"path">>, unset, Opts),
-                    hb_ao:set(RawAdditional, <<"path">>, unset, Opts)
-                };
-            _BasePath ->
-                % When we have a non-empty path, we merge the messages in
-                % totality. The path-part's path will be subresolved.
-                {RawMsg, RawAdditional}
-        end,
-    Merged = hb_maps:merge(Additional, Msg, Opts),
-    StepMsg = hb_message:convert(
-        Merged, 
-        <<"structured@1.0">>, 
-        Opts#{ <<"topic">> => ao_internal }
-    ),
+    StepMsg =
+        hb_message:convert(
+            lists:nth(I, ScopedKeys), 
+            <<"structured@1.0">>, 
+            Opts#{ <<"topic">> => ao_internal }
+        ),
     ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
-    [{as, DevID, StepMsg} | do_build(I + 1, Rest, ScopedKeys, Opts)];
+    [
+        #{ <<"device">> => DevID },
+        Direct#{ <<"...">> => StepMsg }
+    |
+        do_build(I + 1, Rest, ScopedKeys, Opts)
+    ];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) when not is_map(Msg) ->
     [Msg | do_build(I + 1, Rest, ScopedKeys, Opts)];
 do_build(I, [Msg | Rest], ScopedKeys, Opts) ->
     Additional = lists:nth(I, ScopedKeys),
-    Merged = hb_maps:merge(Additional, Msg, Opts),
+    Merged = hb_ao:set(Additional, Msg, Opts),
     StepMsg = hb_message:convert(
         Merged, 
         <<"structured@1.0">>, 
@@ -441,15 +424,6 @@ maybe_typed(Key, Value, Opts) ->
                         hb_util:decode(Type, Decoded)
                     }
             end
-    end.
-
-%% @doc Join a list of items with a separator, or return the first item if there
-%% is only one item. If there are no items, return an empty binary.
-maybe_join(Items, Sep) ->
-    case length(Items) of
-        0 -> <<>>;
-        1 -> hd(Items);
-        _ -> iolist_to_binary(lists:join(Sep, Items))
     end.
 
 %%% Tests
