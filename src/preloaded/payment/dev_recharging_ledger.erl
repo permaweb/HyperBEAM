@@ -10,7 +10,7 @@
 %%% An optional `recharging-ledger-grace' allows small post-metering negative
 %%% balance drift without making that grace appear as spendable balance.
 -module(dev_recharging_ledger).
--export([balance/3, charge/3]).
+-export([balance/3, charge/3, estimate/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -333,6 +333,9 @@ rate_result(Result, DefaultRecharge) ->
         _ -> DefaultRecharge
     end.
 
+estimate(_Base, _Req, Opts) ->
+    {ok, hb_opts:get(<<"recharging-ledger-price">>, 1, Opts)}.
+
 %%% Tests
 
 signed_charge_req(Wallet, Quantity, Opts) ->
@@ -379,6 +382,12 @@ default_bucket_is_one_day_at_one_unit_per_second_test() ->
     },
     ?assertEqual(86_400, account_balance(<<"new">>, State, 0, #{})),
     ?assertEqual(1, account_balance(Account, State, 1000, #{})).
+
+estimate_uses_configured_price_test() ->
+    ?assertEqual(
+        {ok, 123},
+        estimate(#{}, #{}, #{ <<"recharging-ledger-price">> => 123 })
+    ).
 
 charge_new_account_deducts_units_test() ->
     Wallet = ar_wallet:new(),
