@@ -14,7 +14,7 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(LOOKUP_TIMEOUT, 1000).
+-define(LOOKUP_TIMEOUT, 5000).
 -define(DEFAULT_MAX, 86_400).
 -define(DEFAULT_RECHARGE, 1).
 -define(DEFAULT_PERIOD, 1).
