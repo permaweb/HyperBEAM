@@ -36,20 +36,24 @@ balance(_, Req, Opts) ->
         {error, Error} -> {error, Error}
     end.
 
-%% @doc Charge metered usage against a P4 account. P4 supplies the `account'
-%% key on the post-response commit path and the `quantity' to deduct. The charge
-%% succeeds only when the current effective balance can cover the quantity, plus
-%% any configured negative-balance grace.
+%% @doc Charge metered usage against a P4 account. The payer is derived from the
+%% signed original `request', matching `simple-pay@1.0'. The charge succeeds
+%% only when the current effective balance can cover the quantity, plus any
+%% configured negative-balance grace.
 charge(_, Req, Opts) ->
-    Account = hb_ao:get(<<"account">>, Req, Opts),
-    case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
-        {ok, Quantity} ->
-            charge_balance(account_id(Account), Quantity, Opts);
-        {error, _} ->
-            {error, #{
-                <<"status">> => 400,
-                <<"body">> => <<"Invalid charge quantity.">>
-            }}
+    case charge_account(Req, Opts) of
+        {ok, AccountID} ->
+            case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
+                {ok, Quantity} ->
+                    charge_balance(AccountID, Quantity, Opts);
+                {error, _} ->
+                    {error, #{
+                        <<"status">> => 400,
+                        <<"body">> => <<"Invalid charge quantity.">>
+                    }}
+            end;
+        {error, Error} ->
+            {error, Error}
     end.
 
 balance_account(Req, Opts) ->
@@ -69,25 +73,56 @@ balance_account(Req, Opts) ->
     end.
 
 request_account(not_found, _Opts) ->
+    request_signer_account(
+        not_found,
+        _Opts,
+        <<"Balance request must include target or signed request.">>,
+        <<"Balance request has no signer.">>,
+        <<"Balance request has multiple signers.">>
+    );
+request_account(Request, Opts) ->
+    request_signer_account(
+        Request,
+        Opts,
+        <<"Balance request must include target or signed request.">>,
+        <<"Balance request has no signer.">>,
+        <<"Balance request has multiple signers.">>
+    ).
+
+request_signer_account(not_found, _Opts, Missing, _NoSigner, _Multiple) ->
     {error, #{
         <<"status">> => 400,
-        <<"body">> => <<"Balance request must include target or signed request.">>
+        <<"body">> => Missing
     }};
-request_account(Request, Opts) ->
+request_signer_account(Request, Opts, _Missing, NoSigner, Multiple) ->
     case hb_message:signers(Request, Opts) of
         [Signer] ->
             {ok, account_id(Signer)};
         [] ->
             {error, #{
                 <<"status">> => 400,
-                <<"body">> => <<"Balance request has no signer.">>
+                <<"body">> => NoSigner
             }};
         _ ->
             {error, #{
                 <<"status">> => 400,
-                <<"body">> => <<"Balance request has multiple signers.">>
+                <<"body">> => Multiple
             }}
     end.
+
+charge_account(Req, Opts) ->
+    request_signer_account(
+        hb_ao:get(
+            <<"request">>,
+            Req,
+            not_found,
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+        Opts,
+        <<"Charge request must include signed request.">>,
+        <<"Charge request has no signer.">>,
+        <<"Charge request has multiple signers.">>
+    ).
 
 get_balance(AccountID, Opts) ->
     PID = ensure_server_started(Opts),
@@ -250,6 +285,29 @@ account_recharge(AccountID, DefaultRecharge, State, Opts) ->
 
 %%% Tests
 
+signed_charge_req(Wallet, Quantity, Opts) ->
+    signed_charge_req(
+        Wallet,
+        hb_util:human_id(ar_wallet:to_address(Wallet)),
+        Quantity,
+        Opts
+    ).
+
+signed_charge_req(Wallet, Account, Quantity, Opts) ->
+    Request =
+        hb_message:commit(
+            #{ <<"path">> => <<"/greeting">> },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    hb_message:commit(
+        #{
+            <<"account">> => Account,
+            <<"quantity">> => Quantity,
+            <<"request">> => Request
+        },
+        Opts
+    ).
+
 balance_new_target_returns_max_test() ->
     Target = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Opts = #{
@@ -273,7 +331,8 @@ default_bucket_is_one_day_at_one_unit_per_second_test() ->
     ?assertEqual(1, account_balance(Account, State, 1000, #{})).
 
 charge_new_account_deducts_units_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -281,7 +340,7 @@ charge_new_account_deducts_units_test() ->
     },
     ?assertEqual(
         {ok, true},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
     ),
     ?assertEqual(
         {ok, 75},
@@ -297,7 +356,7 @@ p4_balance_request_uses_signed_request_signer_test() ->
         <<"recharging-ledger-recharge">> => 0
     },
     {ok, true} =
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts),
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts),
     Request =
         hb_message:commit(
             #{ <<"path">> => <<"/greeting">> },
@@ -319,8 +378,24 @@ balance_request_without_signer_returns_400_test() ->
         balance(#{}, #{ <<"request">> => #{ <<"path">> => <<"/greeting">> } }, Opts)
     ).
 
-insufficient_balance_returns_402_test() ->
+charge_without_signed_request_returns_400_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 100,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, 100},
+        balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+insufficient_balance_returns_402_test() ->
+    Wallet = ar_wallet:new(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
@@ -329,11 +404,12 @@ insufficient_balance_returns_402_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
     ).
 
 insufficient_balance_does_not_mutate_balance_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
@@ -342,7 +418,7 @@ insufficient_balance_does_not_mutate_balance_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 25 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 25, Opts), Opts)
     ),
     ?assertEqual(
         {ok, 10},
@@ -350,7 +426,8 @@ insufficient_balance_does_not_mutate_balance_test() ->
     ).
 
 grace_allows_small_negative_balance_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -359,7 +436,7 @@ grace_allows_small_negative_balance_test() ->
     },
     ?assertEqual(
         {ok, true},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 105 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 105, Opts), Opts)
     ),
     ?assertEqual(
         {ok, -5},
@@ -367,7 +444,8 @@ grace_allows_small_negative_balance_test() ->
     ).
 
 grace_rejects_beyond_negative_limit_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -376,7 +454,7 @@ grace_rejects_beyond_negative_limit_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 402 }},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 111 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 111, Opts), Opts)
     ),
     ?assertEqual(
         {ok, 100},
@@ -384,7 +462,7 @@ grace_rejects_beyond_negative_limit_test() ->
     ).
 
 negative_quantity_returns_400_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
@@ -392,11 +470,11 @@ negative_quantity_returns_400_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 400 }},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => -1 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, -1, Opts), Opts)
     ).
 
 invalid_quantity_returns_400_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 10,
@@ -404,7 +482,7 @@ invalid_quantity_returns_400_test() ->
     },
     ?assertMatch(
         {error, #{ <<"status">> := 400 }},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => <<"bad">> }, Opts)
+        charge(#{}, signed_charge_req(Wallet, <<"bad">>, Opts), Opts)
     ).
 
 exempt_account_returns_infinity_test() ->
@@ -421,7 +499,8 @@ exempt_account_returns_infinity_test() ->
     ).
 
 exempt_account_charge_does_not_mutate_balance_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -431,7 +510,7 @@ exempt_account_charge_does_not_mutate_balance_test() ->
     {ok, true} =
         charge(
             #{},
-            #{ <<"account">> => Account, <<"quantity">> => 1000 },
+            signed_charge_req(Wallet, 1000, Opts),
             Opts
         ),
     ?assertEqual(
@@ -518,7 +597,8 @@ account_balance_uses_rates_device_message_test() ->
     ?assertEqual(30, account_balance(Account, State, 500, #{})).
 
 recharging_ledger_rates_device_integration_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Wallet = ar_wallet:new(),
+    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -531,7 +611,7 @@ recharging_ledger_rates_device_integration_test() ->
     },
     ?assertEqual(
         {ok, true},
-        charge(#{}, #{ <<"account">> => Account, <<"quantity">> => 90 }, Opts)
+        charge(#{}, signed_charge_req(Wallet, 90, Opts), Opts)
     ),
     timer:sleep(20),
     ?assertEqual(
