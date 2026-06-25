@@ -174,8 +174,12 @@ print_greeter(Config, PrivWallet) ->
             string:pad(
                 lists:flatten(
                     io_lib:format(
-                        "http://~s:~p",
+                        "~s://~s:~p",
                         [
+                            case maps:get(<<"tls">>, Config, none) of
+                                none -> "http";
+                                _ -> "https"
+                            end,
                             hb_opts:get(node_host, <<"localhost">>, Config),
                             hb_opts:get(port, 8734, Config)
                         ]
@@ -275,14 +279,20 @@ new_server(RawNodeMsg) ->
             true -> http3;
             false -> http2
         end,
+    Protocol = hb_opts:get(protocol, DefaultProto, NodeMsg),
     {ok, Port, Listener} =
-        case Protocol = hb_opts:get(protocol, DefaultProto, NodeMsg) of
-            http3 ->
-                start_http3(ServerID, PrometheusOpts, NodeMsg);
-            Pro when Pro =:= http2; Pro =:= http1 ->
-                % The HTTP/2 server has fallback mode to 1.1 as necessary.
-                start_http2(ServerID, PrometheusOpts, NodeMsg);
-            _ -> {error, {unknown_protocol, Protocol}}
+        case hb_tls:socket_opts(NodeMsg) of
+            no_tls ->
+                case Protocol of
+                    http3 ->
+                        start_http3(ServerID, PrometheusOpts, NodeMsg);
+                    Pro when Pro =:= http2; Pro =:= http1 ->
+                        % The HTTP/2 server has fallback mode to 1.1 as necessary.
+                        start_http2(ServerID, PrometheusOpts, NodeMsg);
+                    _ -> {error, {unknown_protocol, Protocol}}
+                end;
+            SslOpts ->
+                start_https(ServerID, PrometheusOpts, NodeMsg, SslOpts)
         end,
     % Update the node message with the actual port that was used, in the event
     % that the OS assigned a different port. This happens, for example, when we
@@ -395,14 +405,44 @@ start_http2(ServerID, ProtoOpts, NodeMsg) ->
             start_http2(ServerID, ProtoOpts, NodeMsg)
     end.
 
+%% @doc Start an HTTPS listener (HTTP/2 over TLS with HTTP/1.1 fallback) using
+%% the certificate options built by `hb_tls'. Mirrors `start_http2/3'.
+start_https(ServerID, ProtoOpts, NodeMsg, SslOpts) ->
+    ?event(http, {start_https, ServerID}),
+    TransportOpts = #{
+        socket_opts => [{port, hb_opts:get(port, 0, NodeMsg)} | SslOpts],
+        max_connections => maps:get(<<"max-connections">>, NodeMsg, 10000),
+        num_acceptors =>
+            maps:get(
+                <<"num-acceptors">>,
+                NodeMsg,
+                erlang:system_info(schedulers) * 4
+            )
+    },
+    case cowboy:start_tls(ServerID, TransportOpts, ProtoOpts) of
+        {ok, Listener} ->
+            {ok, ranch:get_port(ServerID), Listener};
+        {error, {already_started, _Listener}} ->
+            cowboy:set_env(ServerID, node_msg, #{}),
+            cowboy:stop_listener(ServerID),
+            start_https(ServerID, ProtoOpts, NodeMsg, SslOpts)
+    end.
+
 %% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and
 %% the server ID, which can be used to lookup the node message.
 init(Req, ServerID) ->
     case cowboy_req:method(Req) of
         <<"OPTIONS">> -> cors_reply(Req, ServerID);
         _ ->
-            {ok, Body} = read_body(Req),
-            handle_request(Req, Body, ServerID)
+            put(server_id, ServerID),
+            NodeMsg = get_opts(#{ <<"http-server">> => ServerID }),
+            case require_http2(Req, NodeMsg) of
+                reject ->
+                    reject_http1(Req);
+                ok ->
+                    {ok, Body} = read_body(Req),
+                    handle_request(Req, Body, NodeMsg)
+            end
     end.
 
 %% @doc Helper to grab the full body of a HTTP request, even if it's chunked.
@@ -424,17 +464,44 @@ cors_reply(Req, _ServerID) ->
     ?event(debug_http, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
 
-%% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 
+%% @doc Enforce a minimum of HTTP/2 on TLS (h2-only) listeners. ALPN [h2]
+%% already rejects clients that offer http/1.1, but a client that sends no ALPN
+%% falls through to HTTP/1.1; this catches that case. Plaintext listeners (no
+%% `tls' block) are unaffected. HTTP/3 (served by a separate listener) passes.
+require_http2(Req, NodeMsg) ->
+    case maps:get(<<"tls">>, NodeMsg, none) of
+        none -> ok;
+        _ ->
+            case cowboy_req:version(Req) of
+                'HTTP/2' -> ok;
+                'HTTP/3' -> ok;
+                _ -> reject
+            end
+    end.
+
+%% @doc Refuse a sub-HTTP/2 request with 426 Upgrade Required.
+reject_http1(Req) ->
+    Reply =
+        cowboy_req:reply(
+            426,
+            #{
+                <<"content-type">> => <<"text/plain">>,
+                <<"connection">> => <<"close">>
+            },
+            <<"HTTP/2 required">>,
+            Req
+        ),
+    {ok, Reply, no_state}.
+
+%% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution
 %% starts by parsing the HTTP request into HyerBEAM's message format, then
 %% passing the message directly to `meta@1.0' which handles calling AO-Core in
 %% the appropriate way.
-handle_request(RawReq, Body, ServerID) ->
+handle_request(RawReq, Body, NodeMsg) ->
     % Insert the start time into the request so that it can be used by the
     % `hb_http' module to calculate the duration of the request.
     StartTime = os:system_time(millisecond),
     Req = RawReq#{ start_time => StartTime },
-    NodeMsg = get_opts(#{ <<"http-server">> => ServerID }),
-    put(server_id, ServerID),
     % The request is of normal AO-Core form, so we parse it and invoke
     % the meta@1.0 device to handle it.
     ?event(http,
