@@ -15,6 +15,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(LOOKUP_TIMEOUT, 5000).
+-define(DEFAULT_RATE_LOOKUP_TIMEOUT, 1000).
 -define(DEFAULT_MAX, 86_400).
 -define(DEFAULT_RECHARGE, 1).
 -define(DEFAULT_PERIOD, 1).
@@ -272,15 +273,64 @@ account_recharge(AccountID, DefaultRecharge, State, Opts) ->
     case maps:get(rates, State, undefined) of
         undefined -> DefaultRecharge;
         RatesMessage ->
-            % Ask the optional rates provider for this account's recharge rate.
-            case
-                hb_util:safe_int(
-                    hb_ao:get(AccountID, RatesMessage, DefaultRecharge, Opts)
-                )
-            of
-                {ok, Recharge} when Recharge >= 0 -> Recharge;
-                _ -> DefaultRecharge
-            end
+            rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts)
+    end.
+
+rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts) ->
+    rate_lookup(
+        fun() ->
+            hb_ao:raw(
+                RatesMessage,
+                #{ <<"path">> => AccountID },
+                rate_lookup_opts(Opts)
+            )
+        end,
+        DefaultRecharge
+    ).
+
+rate_lookup(Fun, DefaultRecharge) ->
+    try rate_result(Fun(), DefaultRecharge)
+    catch _:_ ->
+        DefaultRecharge
+    end.
+
+rate_lookup_opts(Opts) ->
+    %% Bound HTTP-backed rates providers below the ledger request timeout.
+    Timeout = rates_timeout(Opts),
+    Opts#{
+        <<"http-client-connect-timeout">> =>
+            rate_lookup_timeout(<<"http-client-connect-timeout">>, Timeout, Opts),
+        <<"http-client-hackney-checkout-timeout">> =>
+            rate_lookup_timeout(<<"http-client-hackney-checkout-timeout">>, Timeout, Opts),
+        <<"http-client-hackney-recv-timeout">> =>
+            rate_lookup_timeout(<<"http-client-hackney-recv-timeout">>, Timeout, Opts)
+    }.
+
+rate_lookup_timeout(Key, Timeout, Opts) ->
+    case hb_util:safe_int(hb_opts:get(Key, Timeout, Opts)) of
+        {ok, Existing} when Existing > 0 -> min(Timeout, Existing);
+        _ -> Timeout
+    end.
+
+rates_timeout(Opts) ->
+    Raw = hb_opts:get(
+        recharging_ledger_rates_timeout,
+        ?DEFAULT_RATE_LOOKUP_TIMEOUT,
+        Opts
+    ),
+    case hb_util:safe_int(Raw) of
+        {ok, Timeout} when Timeout > 0 ->
+            min(?LOOKUP_TIMEOUT - 1, Timeout);
+        _ ->
+            ?DEFAULT_RATE_LOOKUP_TIMEOUT
+    end.
+
+rate_result({ok, Result}, DefaultRecharge) ->
+    rate_result(Result, DefaultRecharge);
+rate_result(Result, DefaultRecharge) ->
+    case hb_util:safe_int(Result) of
+        {ok, Recharge} when Recharge >= 0 -> Recharge;
+        _ -> DefaultRecharge
     end.
 
 %%% Tests
@@ -580,6 +630,24 @@ rates_message_invalid_account_rate_uses_default_recharge_test() ->
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
     ?assertEqual(25, account_balance(Account, State, 500)).
+
+rates_provider_error_uses_default_recharge_test() ->
+    ?assertEqual(
+        10,
+        rate_lookup(
+            fun() -> error(provider_down) end,
+            10
+        )
+    ).
+
+rates_timeout_is_configurable_test() ->
+    Opts =
+        rate_lookup_opts(#{
+            <<"recharging-ledger-rates-timeout">> => <<"250">>,
+            <<"http-client-connect-timeout">> => 100
+        }),
+    ?assertEqual(100, maps:get(<<"http-client-connect-timeout">>, Opts)),
+    ?assertEqual(250, maps:get(<<"http-client-hackney-recv-timeout">>, Opts)).
 
 account_balance_uses_rates_device_message_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
