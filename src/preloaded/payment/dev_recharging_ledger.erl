@@ -262,11 +262,21 @@ account_balance(
         infinity -> infinity;
         not_found -> Max;
         #{ balance := Balance, last := LastInteraction } ->
-            AccountRecharge = account_recharge(AccountID, Recharge, State, Opts),
-            PeriodMs = Period * 1000,
-            Elapsed = Time - LastInteraction,
-            RechargedSinceLast = (Elapsed * AccountRecharge) div PeriodMs,
-            min(Max, Balance + RechargedSinceLast)
+            case Balance >= Max orelse Time =:= LastInteraction orelse
+                    (
+                        Recharge =:= 0 andalso
+                        maps:get(rates, State, undefined) =:= undefined
+                    )
+            of
+                true ->
+                    min(Max, Balance);
+                false ->
+                    AccountRecharge = account_recharge(AccountID, Recharge, State, Opts),
+                    PeriodMs = Period * 1000,
+                    Elapsed = Time - LastInteraction,
+                    RechargedSinceLast = (Elapsed * AccountRecharge) div PeriodMs,
+                    min(Max, Balance + RechargedSinceLast)
+            end
     end.
 
 account_recharge(AccountID, DefaultRecharge, State, Opts) ->
