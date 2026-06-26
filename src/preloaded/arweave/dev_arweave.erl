@@ -1765,21 +1765,20 @@ pending_offset_handling_test() ->
             <<"stop-after">> => true
         }
     ],
-    IndexStore =
+    ArweaveStore =
         #{
-            <<"index-store">> => [hb_test_utils:test_store()],
-            <<"routes">> => Routes
+            <<"index-store">> => [hb_test_utils:test_store()]
         },
     try
         ok = hb_store_arweave:write_offset(
-            IndexStore,
+            ArweaveStore,
             TXID,
             <<"tx@1.0">>,
             relative,
             PendingLength
         ),
         {ok, StoreTX} =
-            hb_store_arweave:read(IndexStore, #{ <<"read">> => TXID }, ClientOpts),
+            hb_store_arweave:read(ArweaveStore, #{ <<"read">> => TXID }, ClientOpts#{<<"routes">> => Routes}),
         ?assertEqual(TXID, hb_message:id(StoreTX, signed, ClientOpts)),
         ?assertEqual(PendingData, maps:get(<<"data">>, StoreTX))
     after
