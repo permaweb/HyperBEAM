@@ -7,7 +7,7 @@
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3, height/3]).
 -export([pending/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
@@ -26,8 +26,8 @@ info() ->
     }.
 
 %% @doc Proxy the `/info' endpoint from the Arweave node.
-status(_Base, _Request, Opts) ->
-    request(<<"GET">>, <<"/info">>, Opts).
+status(_Base, Request, Opts) ->
+    request(<<"GET">>, <<"/info">>, Request, Opts).
 
 %% @doc Returns the given transaction as an AO-Core message. By default, this
 %% embeds the `/raw` payload. Set `exclude-data` to true to return just the
@@ -128,6 +128,7 @@ post_tx_header(TX, Opts) ->
         <<"/tx">>,
         #{ <<"body">> => Serialized },
         LogExtra,
+        #{},
         Opts
     ).
 
@@ -141,6 +142,7 @@ get_tx(Base, Request, Opts) ->
             request(
                 <<"GET">>,
                 <<"/tx/", TXID/binary>>,
+                Request,
                 Opts#{
                     <<"exclude-data">> =>
                         hb_util:bool(
@@ -712,7 +714,7 @@ get_chunk(Offset, Opts) ->
     % leaeve the header out and continue to search for a case where it is
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
-    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+    request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, #{}, Opts).
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
@@ -754,10 +756,10 @@ block({id, ID}, Req, Opts) ->
         {error, not_found} when is_map(Req) ->
             case only_if_cached(Req, Opts) of
                 true -> {error, not_found};
-                false -> request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
+                false -> request(<<"GET">>, <<"/block/hash/", ID/binary>>, Req, Opts)
             end;
         {error, not_found} ->
-            request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
+            request(<<"GET">>, <<"/block/hash/", ID/binary>>, Req, Opts)
     end;
 block({height, Height}, Req, Opts) ->
     case dev_arweave_block_cache:read(Height, Opts) of
@@ -775,6 +777,7 @@ block({height, Height}, Req, Opts) ->
                         <<"/block/height/",
                             (hb_util:bin(Height))/binary>>,
                         #{ <<"route-by">> => Height },
+                        Req,
                         Opts
                     )
             end;
@@ -784,6 +787,7 @@ block({height, Height}, Req, Opts) ->
                 <<"/block/height/",
                     (hb_util:bin(Height))/binary>>,
                 #{ <<"route-by">> => Height },
+                Req,
                 Opts
             )
     end.
@@ -796,8 +800,11 @@ only_if_cached(Req, Opts) ->
     ).
 
 %% @doc Retrieve the current block information from Arweave.
-current(_Base, _Request, Opts) ->
-    request(<<"GET">>, <<"/block/current">>, Opts).
+current(_Base, Request, Opts) ->
+    request(<<"GET">>, <<"/block/current">>, Request, Opts).
+
+height(_Base, Request, Opts) ->
+    request(<<"GET">>, <<"/height">>, Request, Opts).
 
 price(Base, Request, Opts) ->
     Size =
@@ -813,17 +820,17 @@ price(Base, Request, Opts) ->
         not_found ->
             {error, not_found};
         _ ->
-            request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Opts)
+            request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Request, Opts)
     end.
 
-tx_anchor(_Base, _Request, Opts) ->
-    request(<<"GET">>, <<"/tx_anchor">>, Opts).
+tx_anchor(_Base, Request, Opts) ->
+    request(<<"GET">>, <<"/tx_anchor">>, Request, Opts).
 
 %% @doc Retrieve either a list of the pending TXIDs on the configured Arweave
 %% nodes, or a specific unconfirmed transaction header by its TXID.
 pending(Base, Request, Opts) ->
     case find_key(<<"pending">>, Base, Request, Opts) of
-        not_found -> request(<<"GET">>, <<"/tx/pending">>, Opts);
+        not_found -> request(<<"GET">>, <<"/tx/pending">>, Request, Opts);
         TXID ->
             case hb_maps:find(<<"offset">>, Request, Opts) of
                 error ->
@@ -834,6 +841,7 @@ pending(Base, Request, Opts) ->
                     request(
                         <<"GET">>,
                         <<"/unconfirmed_tx/", TXID/binary>>,
+                        Request,
                         Opts#{ <<"exclude-data">> => ExcludeData }
                     );
                 {ok, RawOffset} ->
@@ -847,6 +855,7 @@ pending(Base, Request, Opts) ->
                             "/",
                             (hb_util:bin(Offset))/binary
                         >>,
+                        Request,
                         Opts
                     )
             end
@@ -868,11 +877,11 @@ find_key(Key, Base, Request, Opts) ->
 %% AO-Core message. Most Arweave API responses are in JSON format, but without
 %% a `content-type' header. Subsequently, we parse the response manually and
 %% pass it back as a message.
-request(Method, Path, Opts) ->
-    request(Method, Path, #{}, [], Opts).
-request(Method, Path, Extra, Opts) ->
-    request(Method, Path, Extra, [], Opts).
-request(Method, Path, Extra, LogExtra, Opts) ->
+request(Method, Path, Request, Opts) ->
+    request(Method, Path, #{}, [], Request, Opts).
+request(Method, Path, Extra, Request, Opts) ->
+    request(Method, Path, Extra, [], Request, Opts).
+request(Method, Path, Extra, LogExtra, Request, Opts) ->
     ?event(debug_arweave, {request,
         {method, Method}, {path, {explicit, Path}}, {log_extra, LogExtra}}),
     Res =
@@ -885,7 +894,20 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    to_message(Path, Method, best_response(Res), LogExtra, Opts).
+    ?event(error, {res, Res}),
+    % To keep the same response structure from Arweave Node, we skip
+    % the processing of the results. Useful to provide same strcture
+    % as we had before HyperBEAM.
+    case should_process_message(Request, true) of
+        true -> to_message(Path, Method, best_response(Res), LogExtra, Opts);
+        false -> Res
+    end.
+
+should_process_message(#{<<"process-message">> := Value}, _Default) ->
+    ?event(error, {process_message, hb_util:bool(Value)}),
+    hb_util:bool(Value);
+should_process_message(_Req, Default) ->
+    Default.
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
@@ -1018,13 +1040,13 @@ to_tx_message(Type, ID, Path, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
         }
     ),
     {ok, Data} =
-        case hb_opts:get(exclude_data, false, Opts) of
+        case hb_opts:get(exclude_data, false, Opts) orelse TXHeader#tx.data_size == 0 of
             true -> {ok, ?DEFAULT_DATA};
             false ->
                 DataRes =
                     case Type of
                         tx ->
-                            request(<<"GET">>, <<"/raw/", ID/binary>>, Opts);
+                            request(<<"GET">>, <<"/raw/", ID/binary>>, #{}, Opts);
                         pending ->
                             get_chunk_range_relative(
                                 0,
@@ -2268,3 +2290,17 @@ get_post_split_mid_chunk_large_module_test_parallel() ->
         #{}
     ),
     ?assertEqual(ExpectedLength, byte_size(Data)).
+
+replicate_arweave_node_response_test_parallel() ->
+    Server = hb_http_server:start_node(),
+    Args =
+        #{
+             peer => <<"http://chain-1.arweave.xyz:1984">>,
+             path => <<"/height">>,
+             method => <<"GET">>,
+             headers => #{},
+             body => <<>>
+        },
+    {ok, 200, _ResponseHeaders, Body1} = hb_http_client:request(Args, #{}),
+    {ok, #{<<"body">> := Body2}} = hb_http:get(Server, <<"/~arweave@2.9/height?process-message=false">>, #{}),
+    ?assertEqual(Body1, Body2).
