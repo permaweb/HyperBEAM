@@ -836,3 +836,59 @@ p4_charges_recharging_ledger_simple_pay_test() ->
         ),
     ?assertEqual(7, Balance),
     ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).
+
+%% @doc With `p4-sign-charge' disabled, p4 sends the ledger an unsigned charge.
+%% A local ledger re-derives the payer from the signed `request', so the charge
+%% must deduct identically to the signed path -- proving the opt is behavior
+%% preserving for the recharging ledger (it only skips the node's RSA signature).
+p4_unsigned_charge_recharging_ledger_simple_pay_test() ->
+    HostWallet = ar_wallet:new(),
+    OperatorWallet = ar_wallet:new(),
+    ClientWallet = ar_wallet:new(),
+    ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"pricing-device">> => <<"simple-pay@1.0">>,
+        <<"ledger-device">> => <<"recharging-ledger@1.0">>
+    },
+    Opts = #{
+        <<"priv-wallet">> => HostWallet,
+        <<"operator">> => ar_wallet:to_address(OperatorWallet),
+        <<"p4-sign-charge">> => false,
+        <<"simple-pay-price">> => 0,
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"router-opts">> => #{
+            <<"offered">> => [
+                #{
+                    <<"template">> => <<"/greeting">>,
+                    <<"price">> => 3
+                }
+            ]
+        },
+        <<"on">> => #{
+            <<"request">> => Processor,
+            <<"response">> => Processor
+        }
+    },
+    Node = hb_http_server:start_node(Opts),
+    Req =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/greeting">>,
+                <<"greeting">> => <<"Hello from P4">>
+            },
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual({ok, <<"Hello from P4">>}, hb_http:get(Node, Req, #{})),
+    {ok, Balance} =
+        hb_http:get(
+            Node,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                #{ <<"priv-wallet">> => ClientWallet }
+            ),
+            #{ <<"priv-wallet">> => ClientWallet }
+        ),
+    ?assertEqual(7, Balance),
+    ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).

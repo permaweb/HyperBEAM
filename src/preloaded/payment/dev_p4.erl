@@ -211,35 +211,47 @@ response(State, RawResponse, NodeMsg) ->
                     {ok, #{ <<"body">> => Response }};
                 {ok, Price} ->
                     % We have successfully determined the cost of the request,
-                    % so we proceed to charge the user's account. We sign the
-                    % request with the node's private key, as it is the node
-                    % that is performing the charge, not the user.
+                    % so we proceed to charge the user's account.
+                    ChargeReq =
+                        #{
+                            <<"path">> => <<"charge">>,
+                            <<"quantity">> => Price,
+                            <<"account">> =>
+                                case hb_message:signers(Request, NodeMsg) of
+                                    [Signer] -> Signer;
+                                    Multiple -> Multiple
+                                end,
+                            <<"recipient">> =>
+                                case hb_opts:get(p4_recipient, undefined, NodeMsg) of
+                                    Addr when ?IS_ID(Addr) ->
+                                        hb_util:human_id(Addr);
+                                    _ ->
+                                        case hb_opts:get(operator, undefined, NodeMsg) of
+                                            undefined ->
+                                                <<"unknown">>;
+                                            Operator->
+                                                hb_util:human_id(Operator)
+                                        end
+                                end,
+                            <<"request">> => Request
+                        },
+                    % By default we sign the charge with the node's private key,
+                    % as it is the node -- not the user -- that performs the
+                    % charge. That signature lets a ledger in a separate trust
+                    % domain (e.g. an AO/Lua payment process or a remote ledger)
+                    % verify the node operator authorized the charge, and is
+                    % required when `paranoid_message_verification' is enabled.
+                    % Local in-memory ledgers (e.g. `recharging-ledger@1.0',
+                    % `simple-pay@1.0') re-derive the payer from the already
+                    % signed `request' and never read this signature, so an
+                    % operator running such a ledger on a non-paranoid node may
+                    % set `p4_sign_charge' to false to skip the per-charge
+                    % signature -- the single largest cost on the charging path.
                     LedgerReq =
-                        hb_message:commit(
-                            #{
-                                <<"path">> => <<"charge">>,
-                                <<"quantity">> => Price,
-                                <<"account">> =>
-                                    case hb_message:signers(Request, NodeMsg) of
-                                        [Signer] -> Signer;
-                                        Multiple -> Multiple
-                                    end,
-                                <<"recipient">> =>
-                                    case hb_opts:get(p4_recipient, undefined, NodeMsg) of
-                                        Addr when ?IS_ID(Addr) ->
-                                            hb_util:human_id(Addr);
-                                        _ ->
-                                            case hb_opts:get(operator, undefined, NodeMsg) of
-                                                undefined ->
-                                                    <<"unknown">>;
-                                                Operator->
-                                                    hb_util:human_id(Operator)
-                                            end
-                                    end,
-                                <<"request">> => Request
-                            },
-                            NodeMsg
-                        ),
+                        case hb_opts:get(p4_sign_charge, true, NodeMsg) of
+                            false -> ChargeReq;
+                            _ -> hb_message:commit(ChargeReq, NodeMsg)
+                        end,
                     ?event(payment,
                         {post_charge,
                             {msg, LedgerMsg},
