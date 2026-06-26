@@ -401,14 +401,18 @@ removing_trailing_noise(BinList, Noise) when is_list(BinList) ->
 %% @doc Format a string with an indentation level.
 indent(Str, Indent) -> indent(Str, #{}, Indent).
 indent(Str, Opts, Indent) -> indent(Str, [], Opts, Indent).
+indent(FmtStr, [], Opts, Ind) ->
+    do_indent(escape_format(FmtStr), [], Opts, Ind);
 indent(FmtStr, Terms, Opts, Ind) ->
+    do_indent(FmtStr, Terms, Opts, Ind).
+
+do_indent(FmtStr, Terms, Opts, Ind) ->
     IndentSpaces = hb_opts:get(debug_print_indent, Opts),
-    EscapedFmt = escape_format(FmtStr),
     lists:droplast(
         lists:flatten(
             io_lib:format(
                 [$\s || _ <- lists:seq(1, Ind * IndentSpaces)] ++
-                    lists:flatten(hb_util:list(EscapedFmt)) ++ "\n",
+                    lists:flatten(hb_util:list(FmtStr)) ++ "\n",
                 Terms
             )
         )
@@ -416,12 +420,18 @@ indent(FmtStr, Terms, Opts, Ind) ->
 
 %% @doc Escape a string for use as an io_lib:format specifier.
 escape_format(Str) when is_list(Str) ->
-    re:replace(
-        Str,
-        "~([a-z\\-_]+@[0-9]+\\.[0-9]+)", "~~\\1",
-        [global, {return, list}]
-    );
-escape_format(Else) -> Else.
+    escape_format_list(Str);
+escape_format(Bin) when is_binary(Bin) ->
+    escape_format_list(binary_to_list(Bin));
+escape_format(Else) ->
+    Else.
+
+escape_format_list([$~|Rest]) ->
+    [$~, $~|escape_format_list(Rest)];
+escape_format_list([Char|Rest]) ->
+    [Char|escape_format_list(Rest)];
+escape_format_list([]) ->
+    [].
 
 %% @doc Format an error message as a string.
 error(ErrorMsg, Opts) ->
@@ -1130,3 +1140,9 @@ truncate_with_truncation_test() ->
 
 truncate_empty_test() ->
     ?assertEqual(<<>>, truncate(<<>>, 5)).
+
+indent_literal_device_path_test() ->
+    ?assertEqual(
+        "  <<\"^/~bundler@1\\\\.0/tx$\">>}",
+        indent(<<"<<\"^/~bundler@1\\\\.0/tx$\">>}">>, #{}, 1)
+    ).
