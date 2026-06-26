@@ -6,8 +6,8 @@
 %%% behaviour of the device when these keys are set.
 -module(dev_message).
 %%% Base AO-Core state manipulation functions.
--export([info/0, keys/3, set/3, id/3]).
-%%% Commitment-specific keys:
+-export([info/0, keys/3, set/3, id/3, vary/3, schema/3]).
+%%% Commitments API keys:
 -export([commit/3, committed/3, committers/3, verify/3]).
 %%% Non-protocol enforced keys:
 -export([index/3]).
@@ -645,8 +645,6 @@ keys(Msg, _Req, Opts) ->
 %% @doc Return the value associated with the key as it exists in the message's
 %% underlying Erlang map. First check the public keys, then check case-
 %% insensitively if the key is a binary.
-default_accessor(Key, Msg, Opts) ->
-    default_accessor(Key, Msg, #{ <<"path">> => <<"get">> }, Opts).
 default_accessor(Key, Msg, Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
@@ -655,7 +653,16 @@ default_accessor(Key, Msg, Req, Opts) ->
                 {ok, Value} -> {ok, Value};
                 error ->
                     case hb_maps:find(<<"...">>, Msg, Opts) of
-                        {ok, Nested} -> hb_ao:raw(Nested, Req, Opts);
+                        {ok, AncestorMsg} when is_map(AncestorMsg) ->
+                            hb_ao:raw(AncestorMsg, Req, Opts);
+                        {ok, Ancestor}
+                                when is_binary(Ancestor)
+                                orelse ?IS_LINK(Ancestor) ->
+                            case hb_cache:read(Ancestor, Opts) of
+                                {ok, AncestorMsg} ->
+                                    hb_ao:raw(AncestorMsg, Req, Opts);
+                                OtherStatus -> OtherStatus
+                            end;
                         error -> {error, not_found}
                     end
             end
@@ -666,7 +673,27 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% as the resolvable function Erlang function at `priv/function` if it was found
 %% during the process of `vary`ing.
 vary(Base, Req, Opts) ->
-    todo.
+    Path = hb_maps:get(<<"path">>, Req, undefined, Opts),
+    case schema(Base, Req, Opts) of
+        {ok, #{ <<"keys">> := #{ Path := Schema }}} ->
+            
+            {ok, Schema};
+        _ -> {error, not_found}
+    end.
+
+%% @doc Returns the device schema for a `Base` message.
+-spec schema(#{ device => binary(), _ => _ }, #{}, #{}) -> #{}.
+schema(Base = #{ <<"device">> := Device }, _, Opts) ->
+    case hb_types:extract(Device, Opts) of
+        {ok, Schema} -> {ok, Schema};
+        _ -> generate_default_schema(Base, Opts)
+    end.
+
+%% @doc Calculate the default schema for a message given its explicit keys and
+%% the keys of the message device.
+generate_default_schema(Base, Opts) ->
+    % TODO: What form is necessary for 
+    {ok, keys(Base, #{}, Opts)}.
 
 %%% Tests
 
