@@ -95,11 +95,46 @@ type_reflects_presence_test() ->
         stop_mock_s3(Mock)
     end.
 
-resolve_is_identity_test() ->
+resolve_is_identity_without_endpoint_test() ->
+    %% With no endpoint there is nothing to follow, so resolve is the identity.
     ?assertEqual(
         {ok, <<"objects/key">>},
         hb_store_s3:resolve(#{}, #{ <<"resolve">> => <<"objects/key">> }, #{})
     ).
+
+link_read_and_resolve_follow_the_chain_test() ->
+    Mock = {Server, _Handle, _Table} = start_mock_s3(),
+    try
+        Store = store(Server),
+        Target = <<"objects/real">>,
+        Alias = <<"objects/alias">>,
+        Value = <<"linked payload">>,
+        ok = hb_store_s3:write(Store, #{ Target => Value }, #{}),
+        ok = hb_store_s3:link(Store, #{ Alias => Target }, #{}),
+        %% Reading the alias follows the link to the target's bytes.
+        ?assertEqual(
+            {ok, Value},
+            hb_store_s3:read(Store, #{ <<"read">> => Alias }, #{})
+        ),
+        %% Resolving the alias returns the terminal target key.
+        ?assertEqual(
+            {ok, Target},
+            hb_store_s3:resolve(Store, #{ <<"resolve">> => Alias }, #{})
+        )
+    after
+        stop_mock_s3(Mock)
+    end.
+
+group_is_noop_test() ->
+    ?assertEqual(
+        ok,
+        hb_store_s3:group(#{}, #{ <<"group">> => <<"objects/dir">> }, #{})
+    ).
+
+lifecycle_callbacks_are_noops_test() ->
+    ?assertEqual(ok, hb_store_s3:start(#{})),
+    ?assertEqual(ok, hb_store_s3:stop(#{})),
+    ?assertEqual(ok, hb_store_s3:reset(#{})).
 
 scope_is_remote_test() ->
     ?assertEqual(remote, hb_store_s3:scope()),
