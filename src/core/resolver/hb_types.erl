@@ -39,12 +39,6 @@ extract(Device, Opts) when is_binary(Device) ->
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
-function_schema(Device, Func, Key, Opts) ->
-    case schema_from_device(Device, Func, Key, Opts) of
-        undefined -> schema_from_fun_module(Device, Func, Key, Opts);
-        Schema -> Schema
-    end.
-
 schema_from_device(Device, Func, Key, Opts) ->
     case extract(Device, Opts) of
         {ok, #{ <<"keys">> := Schemas }} ->
@@ -52,18 +46,6 @@ schema_from_device(Device, Func, Key, Opts) ->
         {error, _Reason} ->
             undefined
     end.
-
-schema_from_fun_module(Device, Func, Key, Opts) when is_atom(Device) ->
-    case erlang:fun_info(Func, module) of
-        {module, Device} ->
-            undefined;
-        {module, Module} ->
-            schema_from_device(Module, Func, Key, Opts);
-        _ ->
-            undefined
-    end;
-schema_from_fun_module(_Device, _Func, _Key, _Opts) ->
-    undefined.
 
 select_schema(Func, _Key, Schemas) ->
     case {erlang:fun_info(Func, name), erlang:fun_info(Func, arity)} of
@@ -86,10 +68,8 @@ execution_schemas(Schema, AddKey) ->
         maps:get(<<"return">>, Schema, any_type())
     }.
 
-nth_or(N, List, _Default) when length(List) >= N ->
-    lists:nth(N, List);
-nth_or(_N, _List, Default) ->
-    Default.
+nth_or(N, List, _Default) when length(List) >= N -> lists:nth(N, List);
+nth_or(_N, _List, Default) -> Default.
 
 implicit_base(Schema) ->
     implicit_key(top_level_schema(Schema), <<"device">>, optional).
@@ -134,15 +114,23 @@ do_extract(Module) ->
                     {ok,
                         #{
                             <<"keys">> =>
-                                lists:foldl(
-                                    fun(Spec, Acc) ->
-                                        maps:merge(
-                                            Acc,
-                                            spec_schemas(Spec, TypeEnv)
-                                        )
+                                lists:filtermap(
+                                    fun(Attr = {attribute, _, spec, {{Name, _}, Heads}}) ->
+                                        {
+                                            true,
+                                            {
+                                                Name,
+                                                [
+                                                    fun_schema(Head, TypeEnv)
+                                                ||
+                                                    Head <- Heads
+                                                ]
+                                            }
+                                        };
+                                       (_) -> false
                                     end,
-                                    #{},
-                                    [Attr || Attr = {attribute, _, spec, _} <- Forms]
+                                    end,
+                                    Forms
                                 )
                         }};
                 Error ->
@@ -179,21 +167,6 @@ build_type_env(Forms) ->
         #{},
         Forms
     ).
-
-spec_schemas({attribute, _, spec, {{Name, Arity}, [Spec]}}, TypeEnv) ->
-    #{
-        {normalize_name(Name), Arity} => fun_schema(Spec, TypeEnv)
-    };
-spec_schemas({attribute, _, spec, {{Name, Arity}, [Spec | _Rest]}}, TypeEnv) ->
-    #{
-        {normalize_name(Name), Arity} => fun_schema(Spec, TypeEnv)
-    };
-spec_schemas({attribute, _, spec, {{Name, Arity}, Spec}}, TypeEnv) ->
-    maps:from_list(
-        [{{normalize_name(Name), Arity}, fun_schema(Spec, TypeEnv)}]
-    );
-spec_schemas(_Spec, _TypeEnv) ->
-    #{}.
 
 fun_schema(Spec, TypeEnv) ->
     {Args, Return} = parse_fun_spec(Spec, TypeEnv),

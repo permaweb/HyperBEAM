@@ -85,12 +85,12 @@ set_priv(Msg, PrivMap) ->
     Msg#{ <<"priv">> => PrivMap }.
 
 %% @doc Check if a key is private.
-is_private(Key) ->
-	try hb_util:bin(Key) of
-		<<"priv", _/binary>> -> true;
-		_ -> false
-    catch _:_ -> false
-	end.
+is_private(ListKey) when is_list(ListKey) ->
+    % Strings should always be lists, but in case for some reason the caller
+    % ignores that...
+    try is_private(hb_util:bin(ListKey)) catch _ -> false end;
+is_private(<<"priv", _>>) -> true;
+is_private(_) -> false.
 
 %% @doc Remove the first key from the path if it is a private specifier.
 remove_private_specifier(InputPath, Opts) ->

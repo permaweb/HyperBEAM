@@ -811,13 +811,11 @@ set(Base, Req, Opts) ->
 %% @doc Set an individual (potentially deep) key in a message to a new using
 %% the message's set device.
 set(Base, Key, Value, Opts) ->
-    deep_set(Base, deep_base(Key, Value), Opts).
-
-%% @doc Create a deeply nested message with a layer for each part of the given
-%% key. For example:
-%%      `deep_base(<<"a/b">>, Value) -> #{ <<"a">> => #{ <<"b">> => Value } }`
-deep_base([Key], Value) -> #{ Key => Value };
-deep_base([NextKey|Rest], Value) -> #{ NextKey => deep_base(Rest, Value) }.
+    DeepBase =
+        fun Deep([LeafKey]) -> #{ LeafKey => Value };
+            Deep([NextKey|Rest]) -> #{ NextKey => Deep(Rest, Value) }
+        end,
+    deep_set(Base, DeepBase(Key, Value), Opts).
 
 %% @doc Recursively extend nested message values.
 deep_set(Base, Req, Opts) when is_map(Req) ->
