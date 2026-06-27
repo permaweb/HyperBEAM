@@ -207,7 +207,7 @@ server_loop(State) ->
             server_loop(State);
         {charge, PID, AccountID, Quantity, Opts} ->
             {Result, NewState} =
-                charge_account(
+                apply_charge(
                     AccountID,
                     Quantity,
                     State,
@@ -218,7 +218,7 @@ server_loop(State) ->
             server_loop(NewState)
     end.
 
-charge_account(
+apply_charge(
         AccountID,
         Quantity,
         State = #{ accounts := Accounts },
@@ -248,8 +248,6 @@ charge_account(
             }}, State}
     end.
 
-account_balance(AccountID, State, Time) when is_integer(Time) ->
-    account_balance(AccountID, State, Time, #{});
 account_balance(AccountID, State, Opts) ->
     account_balance(AccountID, State, erlang:system_time(millisecond), Opts).
 account_balance(
@@ -344,7 +342,7 @@ rate_result(Result, DefaultRecharge) ->
     end.
 
 estimate(_Base, _Req, Opts) ->
-    {ok, hb_opts:get(<<"recharging-ledger-price">>, 1, Opts)}.
+    {ok, hb_opts:get(recharging_ledger_price, 1, Opts)}.
 
 %%% Tests
 
@@ -595,7 +593,7 @@ recharge_restores_balance_test() ->
         period => 1,
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
-    ?assertEqual(25, account_balance(Account, State, 500)).
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
 
 recharge_restores_negative_balance_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -605,7 +603,7 @@ recharge_restores_negative_balance_test() ->
         period => 1,
         accounts => #{ Account => #{ balance => -5, last => 0 } }
     },
-    ?assertEqual(0, account_balance(Account, State, 500)).
+    ?assertEqual(0, account_balance(Account, State, 500, #{})).
 
 recharge_caps_at_max_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -615,7 +613,7 @@ recharge_caps_at_max_test() ->
         period => 1,
         accounts => #{ Account => #{ balance => 95, last => 0 } }
     },
-    ?assertEqual(100, account_balance(Account, State, 1000)).
+    ?assertEqual(100, account_balance(Account, State, 1000, #{})).
 
 rates_message_overrides_default_recharge_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -626,7 +624,7 @@ rates_message_overrides_default_recharge_test() ->
         rates => #{ Account => 20 },
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
-    ?assertEqual(30, account_balance(Account, State, 500)).
+    ?assertEqual(30, account_balance(Account, State, 500, #{})).
 
 rates_message_missing_account_uses_default_recharge_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -637,7 +635,7 @@ rates_message_missing_account_uses_default_recharge_test() ->
         rates => #{ <<"other-account">> => 20 },
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
-    ?assertEqual(25, account_balance(Account, State, 500)).
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
 
 rates_message_invalid_account_rate_uses_default_recharge_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
@@ -648,7 +646,7 @@ rates_message_invalid_account_rate_uses_default_recharge_test() ->
         rates => #{ Account => <<"bad">> },
         accounts => #{ Account => #{ balance => 20, last => 0 } }
     },
-    ?assertEqual(25, account_balance(Account, State, 500)).
+    ?assertEqual(25, account_balance(Account, State, 500, #{})).
 
 rates_provider_error_uses_default_recharge_test() ->
     ?assertEqual(
