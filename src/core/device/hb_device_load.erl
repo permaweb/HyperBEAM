@@ -27,9 +27,11 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc A message is already a device. A binary reference is resolved,
-%% then memoised in the process cache unless it is a forge seed.
+%% @doc Resolve a device referece to an executable device representation 
+%% (either a module atom or a binary reference).
 reference(Loaded, _Opts) when is_map(Loaded) ->
+    % A message is already a viable device. A binary reference is resolved,
+    % then memoised in the process cache unless it is a forge seed.
     {ok, Loaded};
 reference(Ref, Opts) when is_binary(Ref) ->
     NormRef = hb_ao:normalize_key(Ref),
@@ -156,7 +158,7 @@ preloaded_spec(Ref, Store, Opts) ->
     hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
 %% @doc The preloaded store, with request-local cache keys stripped so it is
-%% visible inside a request-scoped resolution.
+%% active inside a request-scoped resolution.
 preloaded(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
     hb_opts:get(preloaded_store, undefined, Node).
