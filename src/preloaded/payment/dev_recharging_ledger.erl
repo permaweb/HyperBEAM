@@ -20,6 +20,7 @@
 -define(DEFAULT_RECHARGE, 1).
 -define(DEFAULT_PERIOD, 1).
 -define(DEFAULT_GRACE, 3_600).
+-define(DEFAULT_RATE_CACHE_TTL, 600).
 
 account_id(Address) ->
     hb_util:human_id(Address).
@@ -167,8 +168,75 @@ maybe_resolve_recharge(AccountID, Opts) ->
                 hb_opts:get(recharging_ledger_recharge, ?DEFAULT_RECHARGE, Opts),
             Opts#{
                 <<"recharging-ledger-resolved-recharge">> =>
-                    rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts)
+                    resolve_recharge(AccountID, RatesMessage, DefaultRecharge, Opts)
             }
+    end.
+
+%% @doc Return the account's recharge rate, served from the optional rates cache
+%% when a fresh entry exists, otherwise resolved via the provider and cached. The
+%% cache backend is a normal `hb_store' read from `recharging-ledger-rates-cache-store'. 
+%% It defaults to `[]', which `hb_store' treats as no viable store, so caching is opt-in 
+%% and a no-op -- behavior-identical to no cache -- when unset.
+resolve_recharge(AccountID, RatesMessage, DefaultRecharge, Opts) ->
+    case cached_recharge(AccountID, Opts) of
+        {ok, Rate} ->
+            Rate;
+        miss ->
+            Rate = rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts),
+            cache_recharge(AccountID, Rate, Opts),
+            Rate
+    end.
+
+%% @doc Return `{ok, Rate}' for a cached entry younger than the configured
+%% liveness window, or `miss'. A missing store, missing entry, undecodable value
+%% or stale timestamp all collapse to `miss'.
+cached_recharge(AccountID, Opts) ->
+    case hb_store:read(rates_cache_store(Opts), rates_cache_key(AccountID), Opts) of
+        {ok, Bin} ->
+            case rates_cache_decode(Bin) of
+                {Rate, FetchedAt} ->
+                    TTL =
+                        hb_opts:get(
+                            recharging_ledger_rates_cache_ttl,
+                            ?DEFAULT_RATE_CACHE_TTL,
+                            Opts
+                        ),
+                    case (erlang:system_time(second) - FetchedAt) < TTL of
+                        true -> {ok, Rate};
+                        false -> miss
+                    end;
+                error ->
+                    miss
+            end;
+        _ ->
+            miss
+    end.
+
+cache_recharge(AccountID, Rate, Opts) ->
+    hb_store:write(
+        rates_cache_store(Opts),
+        #{
+            rates_cache_key(AccountID) =>
+                term_to_binary({Rate, erlang:system_time(second)})
+        },
+        Opts
+    ),
+    ok.
+
+rates_cache_store(Opts) ->
+    hb_opts:get(recharging_ledger_rates_cache_store, [], Opts).
+
+rates_cache_key(AccountID) ->
+    <<"recharging-ledger-rates/", AccountID/binary>>.
+
+rates_cache_decode(Bin) ->
+    try binary_to_term(Bin) of
+        {Rate, FetchedAt} when is_integer(Rate), is_integer(FetchedAt) ->
+            {Rate, FetchedAt};
+        _ ->
+            error
+    catch _:_ ->
+        error
     end.
 
 server_id(Opts) ->
@@ -442,7 +510,6 @@ charge_new_account_deducts_units_test() ->
 
 p4_balance_request_uses_signed_request_signer_test() ->
     Wallet = ar_wallet:new(),
-    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Opts = #{
         <<"priv-wallet">> => ar_wallet:new(),
         <<"recharging-ledger-max">> => 100,
@@ -681,6 +748,56 @@ rates_provider_error_uses_default_recharge_test() ->
             fun() -> error(provider_down) end,
             10
         )
+    ).
+
+rates_cache_serves_within_ttl_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"recharging-ledger-rates">> => #{ Account => 5 },
+        <<"recharging-ledger-rates-cache-store">> => hb_test_utils:test_store(),
+        <<"recharging-ledger-rates-cache-ttl">> => 600
+    },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        5,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+rates_cache_disabled_by_default_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{ <<"recharging-ledger-rates">> => #{ Account => 5 } },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        9,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+rates_cache_expires_after_ttl_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"recharging-ledger-rates">> => #{ Account => 5 },
+        <<"recharging-ledger-rates-cache-store">> => hb_test_utils:test_store(),
+        <<"recharging-ledger-rates-cache-ttl">> => 0
+    },
+    ?assertEqual(5, resolved_rate(Account, Opts)),
+    ?assertEqual(
+        9,
+        resolved_rate(
+            Account,
+            Opts#{ <<"recharging-ledger-rates">> => #{ Account => 9 } }
+        )
+    ).
+
+resolved_rate(Account, Opts) ->
+    maps:get(
+        <<"recharging-ledger-resolved-recharge">>,
+        maybe_resolve_recharge(Account, Opts)
     ).
 
 rates_timeout_is_configurable_test() ->
