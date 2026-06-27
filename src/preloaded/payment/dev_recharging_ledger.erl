@@ -127,7 +127,7 @@ charge_account(Req, Opts) ->
 
 get_balance(AccountID, Opts) ->
     PID = ensure_server_started(Opts),
-    PID ! {balance, self(), AccountID, Opts},
+    PID ! {balance, self(), AccountID, maybe_resolve_recharge(AccountID, Opts)},
     receive
         {balance, Balance} ->
             Balance
@@ -144,7 +144,7 @@ charge_balance(_AccountID, Quantity, _Opts) when Quantity < 0 ->
     }};
 charge_balance(AccountID, Quantity, Opts) ->
     PID = ensure_server_started(Opts),
-    PID ! {charge, self(), AccountID, Quantity, Opts},
+    PID ! {charge, self(), AccountID, Quantity, maybe_resolve_recharge(AccountID, Opts)},
     receive
         {charged, Result} ->
             Result
@@ -152,6 +152,23 @@ charge_balance(AccountID, Quantity, Opts) ->
         ?event(warning, {recharging_ledger_timeout, restarting}),
         hb_name:unregister(server_id(Opts)),
         charge_balance(AccountID, Quantity, Opts)
+    end.
+
+%% @doc Resolve the account's recharge rate in the *caller's* process rather than
+%% the singleton ledger server, so a slow (possibly HTTP) rates provider can never
+%% block the server loop or trip its lookup timeout. A no-op when no provider is
+%% configured, in which case the server falls back to the default recharge.
+maybe_resolve_recharge(AccountID, Opts) ->
+    case hb_opts:get(recharging_ledger_rates, undefined, Opts) of
+        undefined ->
+            Opts;
+        RatesMessage ->
+            DefaultRecharge =
+                hb_opts:get(recharging_ledger_recharge, ?DEFAULT_RECHARGE, Opts),
+            Opts#{
+                <<"recharging-ledger-resolved-recharge">> =>
+                    rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts)
+            }
     end.
 
 server_id(Opts) ->
@@ -281,7 +298,16 @@ account_recharge(AccountID, DefaultRecharge, State, Opts) ->
     case maps:get(rates, State, undefined) of
         undefined -> DefaultRecharge;
         RatesMessage ->
-            rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts)
+            %% `maybe_resolve_recharge/2' runs the (possibly HTTP) provider
+            %% lookup in the caller's process and passes the result down, so the
+            %% ledger server never blocks here. Fall back to a direct lookup when
+            %% it is absent (e.g. tests calling `account_balance/4' directly).
+            case hb_opts:get(recharging_ledger_resolved_recharge, not_resolved, Opts) of
+                not_resolved ->
+                    rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts);
+                Resolved ->
+                    Resolved
+            end
     end.
 
 rate_lookup(AccountID, RatesMessage, DefaultRecharge, Opts) ->
