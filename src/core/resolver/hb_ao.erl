@@ -187,25 +187,44 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
     BaseWithDevice =
         case ForcedDevice of
             undefined -> Base;
-            _ when is_map(Base) ->
-                #{ <<"device">> => ForcedDevice, <<"...">> => Base };
-            _ ->
-                #{ <<"device">> => ForcedDevice }
+            _ when is_map(Base) -> set(Base, <<"device">>, ForcedDevice, Opts)
         end,
-    {ExecFun, PrefixArgs} =
-        case hb_device:message_to_fun(BaseWithDevice, Key, ExecOpts) of
-            {add_key, _DevMod, Fun} -> {Fun, [Key]};
-            {_Status, _DevMod, Fun} -> {Fun, []}
-        end,
+    Ctx0 = #{ <<"base">> => BaseWithDevice, <<"key">> => Key },
+    {ok, Ctx1} = hb_device:add_resolver(Ctx0, ExecOpts),
+    {ok, Ctx2} = hb_types:add_schema(Ctx1, Opts),
+    {ok, Ctx3} = hb_types:vary(Ctx2, Opts),
     % Apply the function and return the result directly, without any further
     % processing. We add the `PrefixArgs` to the list of arguments to be passed
     % to the function to accomodate default handlers, which take the key that
     % was invoked on the device as the first argument (ahead of `Base`, `Req`,
     % and `ExecOpts`).
-    apply(
-        ExecFun,
-        hb_device:truncate_args(ExecFun, PrefixArgs ++ [Base, Req, ExecOpts])
-    ).
+    #{
+        <<"varied-base">> := VariedBase,
+        <<"varied-req">> := VariedReq,
+        <<"return-extends">> := Extend,
+        <<"priv">> :=
+            #{
+                <<"resolver">> := Fun,
+                <<"add-key">> := AddKey
+            }
+    } = Ctx3,
+    ResWithStatus =
+        apply(
+            Fun,
+            hb_device:truncate_args(
+                Fun,
+                if AddKey -> [Key]; true -> [] end
+                    ++ [VariedBase, VariedReq, ExecOpts]
+            )
+        ),
+    % Extend with the unvaried base/req values if specified by the execution
+    % schema.
+    case ResWithStatus of
+        {ok, Res} when Extend == none -> {ok, Res};
+        {ok, Res} when Extend == base -> {ok, Res#{ <<"...">> => Base } };
+        {ok, Res} when Extend == request -> {ok, Res#{ <<"...">> => Req } };
+        OtherRet -> OtherRet
+    end.
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
@@ -797,8 +816,7 @@ get_first([{Base, Path}|Msgs], Default, Opts) ->
     end.
 
 %% @doc Shortcut to get the list of keys from a message.
-keys(Msg, Opts) ->
-    get(<<"keys">>, Msg, Opts).
+keys(Msg, Opts) -> get(<<"keys">>, Msg, Opts).
 
 %% @doc Extend a message using its underlying device's `set' key.
 set(Base, Req, Opts) ->

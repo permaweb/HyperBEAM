@@ -2,7 +2,7 @@
 %%% Offers services for loading, verifying executability, and extracting Erlang
 %%% functions from a device.
 -module(hb_device).
--export([truncate_args/2, message_to_fun/3, message_to_device/2]).
+-export([truncate_args/2, add_resolver/2, message_to_fun/3, module/2]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
@@ -28,6 +28,36 @@
 truncate_args(Fun, Args) ->
     {arity, Arity} = erlang:fun_info(Fun, arity),
     lists:sublist(Args, Arity).
+
+%% @doc Generates an execution context for a given key and device pair.
+%% Returns `{ok, ExecCtx}`, where `ExecCtx` is a message containing:
+%% #{
+%%     base:             The base message, unvaried.
+%%     key:              The key to be resolved in the execution.
+%%     base-device:      The device derived from the message itself.
+%%     priv/exec-device: The device from which the execution function originates.
+%%                       If the `base-device` resolvers from another device,
+%%                       this key will differ from the `base-device`.
+%%     priv/resolver:    The function to execute to resolve the `base-device`.
+%%     priv/add-key:     Whether the execution function expects that we should
+%%                       add the `key` as an additional argument to the start of
+%%                       the argument list.
+%% }
+add_resolver(Context = #{<<"base">> := Base, <<"key">> := Key }, Opts) ->
+    DeviceID = message_device_id(Base, Opts),
+    InitialDevice = module(DeviceID, Opts),
+    {Type, ExecDev, Fun} = message_to_fun(InitialDevice, Base, Key, Opts),
+    {ok,
+        Context#{
+            <<"base-device">> => DeviceID,
+            <<"priv">> =>
+                #{
+                    <<"exec-device">> => ExecDev,
+                    <<"add-key">> => Type == add_key,
+                    <<"resolver">> => Fun
+                }
+        }
+    }.
 
 %% @doc Calculate the Erlang function that should be called to get a value for
 %% a given key from a device.
@@ -99,7 +129,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
                             % rules.
 							?event_debug({found_default_device, {mod, DefaultDevice}}),
                             message_to_fun(
-                                Msg#{ <<"device">> => DefaultDevice },
+                                with_device(Msg, DefaultDevice),
                                 Key,
                                 Opts
                             );
@@ -107,7 +137,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 							% Case 6: The device has no default handler.
 							% We retry with the default unless the message
 							% already names it (loop guard).
-							case hb_maps:get(<<"device">>, Msg, undefined, Opts) of
+							case message_device_id(Msg, Opts) of
 								?DEFAULT_DEVICE ->
 									throw({
 										error,
@@ -117,7 +147,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 								_ ->
 									?event_debug({using_default_device, ?DEFAULT_DEVICE}),
 									message_to_fun(
-										Msg#{ <<"device">> => ?DEFAULT_DEVICE },
+										with_device(Msg, ?DEFAULT_DEVICE),
 										Key,
 										Opts
 									)
@@ -130,12 +160,35 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 %% message has no `<<"device">>' key, we resolve the default
 %% (`message@1.0') just like any other device: There is no privileged
 %% internal module-loading path.
-message_to_device(Msg, Opts) ->
-    DevID = hb_maps:get(<<"device">>, Msg, ?DEFAULT_DEVICE, Opts),
+module(DevID, Opts) ->
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({error, {device_not_loadable, DevID, Reason}});
         {ok, DevMod} -> DevMod
     end.
+
+%% @doc Return the device ID from a message, resolving through any ancestors
+%% as necessary.
+message_device_id(Msg, Opts) ->
+    case hb_maps:find(<<"device">>, Msg, Opts) of
+        {ok, Device} -> Device;
+        error ->
+            case hb_maps:find(<<"...">>, Msg, Opts) of
+                {ok, Ancestor} -> message_device_id(Ancestor, Opts);
+                error -> ?DEFAULT_DEVICE
+            end
+    end.
+
+%% @doc Small helper to extend a message with a device.
+with_device(Msg, Device) when is_map(Msg) ->
+    hb_private:set_priv(
+        #{
+            <<"device">> => Device,
+            <<"...">> => Msg
+        },
+        hb_private:from_message(Msg)
+    );
+with_device(_Msg, Device) ->
+    #{ <<"device">> => Device }.
 
 %% @doc Parse a handler key given by a device's `info'.
 info_handler_to_fun(Handler, _Msg, _Key, _Opts) when is_function(Handler) ->
@@ -144,11 +197,11 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 	case hb_maps:find(excludes, HandlerMap, Opts) of
 		{ok, Exclude} ->
 			case lists:member(Key, Exclude) of
-				true ->
-					MsgWithoutDevice =
-						hb_maps:without([<<"device">>], Msg, Opts),
+					true ->
+						MsgWithoutDevice =
+							hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
-						MsgWithoutDevice#{ <<"device">> => ?DEFAULT_DEVICE },
+						with_device(MsgWithoutDevice, ?DEFAULT_DEVICE),
 						Key,
 						Opts
 					);
@@ -240,7 +293,7 @@ maybe_normalize_device_key(Key, Mode) ->
 
 %% @doc Get the info map for a device, optionally giving it a message if the
 %% device's info function is parameterized by one.
-info(Msg, Opts) -> info(message_to_device(Msg, Opts), Msg, Opts).
+info(Msg, Opts) -> info(module(Msg, Opts), Msg, Opts).
 info(DevMod, Msg, Opts) ->
     case find_exported_function(Msg, DevMod, info, 2, Opts) of
 		{ok, Fun} -> apply(Fun, truncate_args(Fun, [Msg, Opts]));
