@@ -43,8 +43,12 @@ truncate_args(Fun, Args) ->
 %%                       add the `key` as an additional argument to the start of
 %%                       the argument list.
 %% }
-add_resolver(Context = #{<<"base">> := Base, <<"key">> := Key }, Opts) ->
-    DeviceID = message_device_id(Base, Opts),
+add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
+    DeviceID =
+        case maps:find(<<"base-device">>, Base) of
+            {ok, ForcedBaseDevice} -> ForcedBaseDevice;
+            error -> message_device_id(Base, Opts)
+        end,
     InitialDevice = module(DeviceID, Opts),
     {Type, ExecDev, Fun} = message_to_fun(InitialDevice, Base, Key, Opts),
     {ok,
