@@ -183,16 +183,16 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
         true -> hb_path:hd(Req, ExecOpts)
         end,
     % If an explicit device is provided we use it _only on the lookup_ -- not
-    % during execution.
-    BaseWithDevice =
-        case ForcedDevice of
-            undefined -> Base;
-            _ when is_map(Base) -> set(Base, <<"device">>, ForcedDevice, Opts)
+    % during execution. We do this by shortcutting the `base-device` field in 
+    % the initial context, if `ForcedDevice` is provided.
+    Ctx0 =
+        if ForcedDevice =/= undefined -> #{ <<"base-device">> => ForcedDevice };
+        true -> #{}
         end,
-    Ctx0 = #{ <<"base">> => BaseWithDevice, <<"key">> => Key },
-    {ok, Ctx1} = hb_device:add_resolver(Ctx0, ExecOpts),
-    {ok, Ctx2} = hb_types:add_schema(Ctx1, Opts),
-    {ok, Ctx3} = hb_types:vary(Ctx2, Opts),
+    Ctx1 = Ctx0#{ <<"base">> => Base, <<"req">> => Req, <<"key">> => Key },
+    {ok, Ctx2} = hb_device:add_resolver(Ctx1, ExecOpts),
+    {ok, Ctx3} = hb_types:add_schema(Ctx2, Opts),
+    {ok, Ctx4} = hb_types:vary(Ctx3, Opts),
     % Apply the function and return the result directly, without any further
     % processing. We add the `PrefixArgs` to the list of arguments to be passed
     % to the function to accomodate default handlers, which take the key that
@@ -207,7 +207,7 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
                 <<"resolver">> := Fun,
                 <<"add-key">> := AddKey
             }
-    } = Ctx3,
+    } = Ctx4,
     ResWithStatus =
         apply(
             Fun,
@@ -833,7 +833,7 @@ set(Base, Key, Value, Opts) ->
         fun Deep([LeafKey]) -> #{ LeafKey => Value };
             Deep([NextKey|Rest]) -> #{ NextKey => Deep(Rest, Value) }
         end,
-    deep_set(Base, DeepBase(Key, Value), Opts).
+    deep_set(Base, DeepBase(hb_path:term_to_path_parts(Key, Opts)), Opts).
 
 %% @doc Recursively extend nested message values.
 deep_set(Base, Req, Opts) when is_map(Req) ->
