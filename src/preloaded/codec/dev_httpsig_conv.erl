@@ -240,9 +240,13 @@ from_body_part(InlinedKey, Part, Opts) ->
                         {ok, InlinedKey};
                     _ ->
                         % Otherwise, we need to extract the name of the part
-                        % from the Content-Disposition parameters
+                        % from the Content-Disposition parameters. The name is
+                        % percent-encoded on encode (see `encode_body_part/4') so
+                        % that arbitrary key bytes survive as a legal
+                        % structured-field string, so we decode it here to recover
+                        % the original key.
                         case lists:keyfind(<<"name">>, 1, DispositionParams) of
-                            {_, {_type, PN}} -> {ok, PN};
+                            {_, {_type, PN}} -> {ok, hb_escape:decode(PN)};
                             false -> no_part_name_found
                         end
                 end,
@@ -564,12 +568,19 @@ do_to(TABM, FormatOpts, Opts) when is_map(TABM) ->
     ?event({final_body_map, {msg, Enc2}}),
     Enc2.
 
-%% @doc Transform all ID fields into their percent-encoded form.
+%% @doc Transform message keys into a form that can be transmitted as HTTP header
+%% field names. Any key that is not already a valid lowercase HTTP token is
+%% percent-encoded: this covers IDs (which contain uppercase base64url
+%% characters) as well as keys containing spaces, emoji, or any other bytes that
+%% are illegal in a header name. Previously only ID-shaped keys (matched by byte
+%% size) were encoded, so a tag whose name contained e.g. a space or an emoji was
+%% emitted verbatim as an invalid header and rejected downstream - observed as a
+%% 502 from a fronting proxy. The encoding is reversed by `decode_ids/2', which
+%% decodes every key unconditionally.
 encode_ids(Msg) ->
-    % Find all keys that are IDs.
     maps:from_list(
         lists:map(
-            fun({K, V}) when ?IS_ID(K) -> {hb_escape:encode(K), V};
+            fun({K, V}) when is_binary(K) -> {hb_escape:encode_http_key(K), V};
                 ({K, V}) -> {K, V}
             end,
             maps:to_list(Msg)
@@ -689,7 +700,27 @@ encode_body_part(PartName, BodyPart, InlineKey, Opts) ->
             % The body is always made the inline part of
             % the multipart body
             InlineKey -> <<"inline">>;
-            _ -> <<"form-data;name=", "\"", PartName/binary, "\"">>
+            _ ->
+                % The part name is emitted as a quoted structured-field string in
+                % the Content-Disposition `name' parameter. The structured-fields
+                % string grammar - and our parser,
+                % `hb_structured_fields:parse_string/2' - only permits printable
+                % ASCII (0x20-0x7E, excluding `"' and `\'). Part names are derived
+                % from message keys, which may contain arbitrary bytes: spaces,
+                % emoji, uppercase characters, and so on. This is especially
+                % relevant for large (> ?MAX_HEADER_LENGTH) and/or nested values,
+                % which `group_maps/4' lifts into their own body part keyed by
+                % their full flat path; such names are never seen by `encode_ids/1'
+                % (which only encodes top-level keys), so they would otherwise
+                % reach the wire unescaped and crash the parser on decode. We
+                % percent-encode the name here so that it is always a legal
+                % structured-field string, and reverse it symmetrically in
+                % `from_body_part/3'. This mirrors the existing treatment of
+                % committed key names in `dev_httpsig_siginfo'. Names that are
+                % already valid (lowercase letters, digits, `-_.' and the `/' path
+                % separator, which the encoder leaves intact) are unchanged.
+                EncodedPartName = hb_escape:encode(PartName),
+                <<"form-data;name=", "\"", EncodedPartName/binary, "\"">>
         end,
     % Sub-parts MUST have at least one header, according to the
     % multipart spec. Adding the Content-Disposition not only
@@ -920,5 +951,83 @@ encode_message_with_links_test() ->
     ?event({encoded, Enc}),
     Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     % Ensure that the result is the same as the original message
+    ?event({decoded, Dec}),
+    ?assert(hb_message:match(Msg, Dec, strict, #{})).
+
+encode_ids_round_trips_weird_keys_test() ->
+    % A key whose name is not a valid HTTP token (here, one containing a space
+    % and an emoji) must be percent-encoded by `encode_ids/1' so that it forms a
+    % legal HTTP header field name, and recovered exactly by `decode_ids/2'.
+    % Regression test: previously only ID-shaped keys (matched by byte size) were
+    % encoded, so such a key was emitted verbatim as an illegal header (observed
+    % as a 502 from a fronting proxy).
+    WeirdKey = <<"my ", 240, 159, 152, 128, " tag">>,
+    Msg = #{
+        <<"content-type">> => <<"text/plain">>,
+        WeirdKey => <<"value">>
+    },
+    Encoded = encode_ids(Msg),
+    % Every encoded key is now a legal HTTP header field name: printable,
+    % non-uppercase ASCII with no spaces, control characters, or non-ASCII bytes.
+    % (The percent-encoded form may contain `%', which is header-legal but is not
+    % itself an `is_http_token/1' character, so we check header-safety directly.)
+    HeaderSafe =
+        fun(Bin) ->
+            lists:all(
+                fun(C) ->
+                    C >= 16#21 andalso C =< 16#7e
+                        andalso not (C >= $A andalso C =< $Z)
+                end,
+                binary_to_list(Bin)
+            )
+        end,
+    lists:foreach(
+        fun(K) -> ?assert(HeaderSafe(K)) end,
+        maps:keys(Encoded)
+    ),
+    % The already-valid key is untouched; the weird key has been transformed.
+    ?assert(maps:is_key(<<"content-type">>, Encoded)),
+    ?assertNot(maps:is_key(WeirdKey, Encoded)),
+    % Decoding restores the original message exactly.
+    ?assertEqual(Msg, decode_ids(Encoded, #{})).
+
+encode_body_part_escapes_weird_name_test() ->
+    % A part name that is not a valid structured-field string (here it contains
+    % emoji bytes >= 0x80) must still produce a Content-Disposition that the
+    % structured-field parser accepts, and the name must decode back to the exact
+    % original. This is the path taken by large (> ?MAX_HEADER_LENGTH) and/or
+    % nested values, which are lifted into their own body part keyed by their full
+    % flat path - a name that `encode_ids/1' never sees. Regression test:
+    % previously the raw emoji bytes crashed the structured-field parser on decode.
+    % The `/' path separator must survive intact so that `from_body_part/3' can
+    % still split the nested path.
+    WeirdName = <<"outer/weird-", 240, 159, 152, 128, "-name">>,
+    Body = binary:copy(<<"a">>, ?MAX_HEADER_LENGTH + 1),
+    Part = encode_body_part(WeirdName, Body, <<"body">>, #{}),
+    % Split the part into its Content-Disposition header and body.
+    [DispLine | _] = binary:split(Part, ?CRLF, [global]),
+    <<"content-disposition: ", RawDisposition/binary>> = DispLine,
+    % The header must parse as a structured field; the raw (unescaped) emoji bytes
+    % would otherwise crash `parse_string/2'.
+    {item, {_, <<"form-data">>}, DispositionParams} =
+        hb_structured_fields:parse_item(RawDisposition),
+    % Decoding the `name' parameter - exactly as `from_body_part/3' does - must
+    % recover the original name, with the `/' separator preserved.
+    {_, {_type, EncodedName}} = lists:keyfind(<<"name">>, 1, DispositionParams),
+    ?assertEqual(WeirdName, hb_escape:decode(EncodedName)),
+    ?assertMatch([<<"outer">>, _], binary:split(WeirdName, <<"/">>, [global])).
+
+encode_large_nested_weird_key_round_trips_test() ->
+    % End-to-end: a value larger than ?MAX_HEADER_LENGTH living under a nested
+    % key whose name is not a valid structured-field string is lifted into its
+    % own multipart body part and must survive a full httpsig@1.0 encode/decode
+    % round-trip. This exercises the `encode_body_part/4' <-> `from_body_part/3'
+    % escaping introduced for the Content-Disposition `name' parameter.
+    Big = binary:copy(<<"a">>, ?MAX_HEADER_LENGTH + 1),
+    WeirdKey = <<"weird-", 240, 159, 152, 128, "-name">>,
+    Msg = #{ <<"outer">> => #{ WeirdKey => Big } },
+    Enc = hb_message:convert(Msg, <<"httpsig@1.0">>, #{}),
+    ?event({encoded, Enc}),
+    Dec = hb_message:convert(Enc, <<"structured@1.0">>, <<"httpsig@1.0">>, #{}),
     ?event({decoded, Dec}),
     ?assert(hb_message:match(Msg, Dec, strict, #{})).
