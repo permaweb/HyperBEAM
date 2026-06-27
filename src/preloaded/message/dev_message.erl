@@ -156,7 +156,7 @@ calculate_id(RawBase, Req, NodeOpts) ->
     % by checking whether the resolved device module is this module itself.
     % `hb_ao:raw/5' expects a device name, not a resolved module.
     CommitDev =
-        case hb_device:message_to_device(#{ <<"device">> => IDDev }, NodeOpts) of
+        case hb_device:module(#{ <<"device">> => IDDev }, NodeOpts) of
             ?MODULE -> ?DEFAULT_ID_DEVICE;
             _ -> IDDev
         end,
@@ -628,11 +628,30 @@ set(Base, NewValues, _Opts) ->
     end.
 
 %% @doc Get the public keys of a message.
-keys(Msg, Req, Opts) when not is_map(Msg) ->
+-spec keys(#{ _ => _ }, #{ keys => _, _ => _ }, _) -> {ok, [binary()]}.
+keys(Msg, Req, Opts) when is_list(Msg) ->
     case hb_ao:normalize_keys(Msg, Opts) of
         NormMsg when is_map(NormMsg) -> keys(NormMsg, Req, Opts);
         _ -> throw(badarg)
     end;
+keys(Msg, #{ <<"keys">> := <<"deep">> }, Opts) when is_map(Msg) ->
+    Inherited =
+        case maps:find(<<"...">>, Msg) of
+            {ok, Extension} -> hb_ao:keys(Extension, Opts);
+            error -> []
+        end,
+    InheritedPublic = Inherited -- [<<"commitments">>],
+    DirectKeys =
+        maps:fold(
+            fun
+                (_Key, unset, Acc) -> Acc;
+                (<<"...">>, _Value, Acc) -> Acc;
+                (Key, _Value, Acc) -> [Key | Acc]
+            end,
+            [],
+            Msg
+        ),
+    {ok, DirectKeys ++ InheritedPublic};
 keys(Msg, _Req, Opts) ->
     {
         ok,
