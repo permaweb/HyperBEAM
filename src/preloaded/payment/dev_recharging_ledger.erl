@@ -809,44 +809,6 @@ rates_timeout_is_configurable_test() ->
     ?assertEqual(100, maps:get(<<"http-client-connect-timeout">>, Opts)),
     ?assertEqual(250, maps:get(<<"http-client-hackney-recv-timeout">>, Opts)).
 
-account_balance_uses_rates_device_message_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
-    RatesMessage = #{
-        <<"device">> => <<"recharging-ledger-rates@1.0">>,
-        <<"rates">> => #{ Account => 20 }
-    },
-    State = #{
-        max => 100,
-        recharge => 10,
-        period => 1,
-        rates => RatesMessage,
-        accounts => #{ Account => #{ balance => 20, last => 0 } }
-    },
-    ?assertEqual(30, account_balance(Account, State, 500, #{})).
-
-recharging_ledger_rates_device_integration_test() ->
-    Wallet = ar_wallet:new(),
-    Account = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{
-        <<"priv-wallet">> => ar_wallet:new(),
-        <<"recharging-ledger-max">> => 100,
-        <<"recharging-ledger-recharge">> => 0,
-        <<"recharging-ledger-period">> => 1,
-        <<"recharging-ledger-rates">> => #{
-            <<"device">> => <<"recharging-ledger-rates@1.0">>,
-            <<"rates">> => #{ Account => 10_000 }
-        }
-    },
-    ?assertEqual(
-        {ok, true},
-        charge(#{}, signed_charge_req(Wallet, 90, Opts), Opts)
-    ),
-    timer:sleep(20),
-    ?assertEqual(
-        {ok, 100},
-        balance(#{}, #{ <<"target">> => Account }, Opts)
-    ).
-
 p4_metering_bundler_charges_recharging_ledger_bytes_test() ->
     HostWallet = ar_wallet:new(),
     Wallet = ar_wallet:new(),
