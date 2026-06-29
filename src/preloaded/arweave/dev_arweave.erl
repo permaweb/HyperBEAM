@@ -7,8 +7,9 @@
 -implements(<<"arweave@2.9">>).
 -device_libraries([lib_arweave_common]).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3, height/3]).
--export([pending/3]).
+-export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, price2/3, tx_anchor/3, height/3]).
+-export([pending/3, chunk_bare/3]).
+-export([wallet_balance/3, wallet_last_tx/3, wallet_list/3, total_suply/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
@@ -431,6 +432,7 @@ get_chunk(_Base, Request, Opts) ->
     Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
     Length = hb_util:int(hb_maps:get(<<"length">>, Request, 1, Opts)),
     MaybeRelativeTXID = hb_maps:get(<<"pending">>, Request, undefined, Opts),
+    ?event(error, {get_chunk, {offset, Offset}, {length, Length}}),
     case fetch_chunk_range(Offset, Length, MaybeRelativeTXID, Opts) of
         {ok, Chunks} ->
             Data = iolist_to_binary(Chunks),
@@ -722,6 +724,7 @@ get_chunk(Offset, Opts) ->
 %% an integer, it is used as a block height. If it is not present, the current
 %% block is used.
 block(Base, Request, Opts) when is_map(Base) ->
+    ?event(error, {block, {request, Request}}),
     Block =
         hb_ao:get_first(
             [
@@ -823,6 +826,23 @@ price(Base, Request, Opts) ->
             request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Request, Opts)
     end.
 
+price2(Base, Request, Opts) ->
+    Size =
+        hb_ao:get_first(
+            [
+                {Request, <<"size">>},
+                {Base, <<"size">>}
+            ],
+            not_found,
+            Opts
+        ),
+    case Size of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(<<"GET">>, <<"/price2/", (hb_util:bin(Size))/binary>>, Request, Opts)
+    end.
+
 tx_anchor(_Base, Request, Opts) ->
     request(<<"GET">>, <<"/tx_anchor">>, Request, Opts).
 
@@ -861,6 +881,114 @@ pending(Base, Request, Opts) ->
             end
     end.
 
+%% @doc Request `/chunk` and `/chunk2` endpoints from Arweave Nodes by using 
+%% route-by strategy using offset.
+chunk_bare(Base, Request, Opts) ->
+    Offset =
+        hb_ao:get_first(
+            [
+                {Request, <<"offset">>},
+                {Base, <<"offset">>}
+            ],
+            not_found,
+            Opts
+        ),
+    Type = 
+            hb_ao:get_first(
+            [
+                {Request, <<"type">>},
+                {Base, <<"type">>}
+            ],
+            not_found,
+            Opts
+        ),
+    Path = 
+        case Type of 
+            <<"binary">> -> <<"/chunk2">>;
+            _ -> <<"/chunk">>
+        end,
+    case Offset of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(
+              <<"GET">>,
+              <<Path/binary, "/", (hb_util:bin(Offset))/binary>>,
+              #{ <<"route-by">> => hb_util:int(Offset) },
+              Request,
+              Opts)
+    end.
+
+wallet_balance(Base, Request, Opts) -> 
+    Wallet =
+        hb_ao:get_first(
+            [
+                {Request, <<"wallet">>},
+                {Base, <<"wallet">>}
+            ],
+            not_found,
+            Opts
+        ),
+    case Wallet of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(
+              <<"GET">>,
+              <<"/wallet/", (hb_util:bin(Wallet))/binary, "/balance">>,
+              Request,
+              Opts)
+    end.
+
+wallet_last_tx(Base, Request, Opts) ->
+    Wallet =
+        hb_ao:get_first(
+            [
+                {Request, <<"wallet">>},
+                {Base, <<"wallet">>}
+            ],
+            not_found,
+            Opts
+        ),
+    case Wallet of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(
+              <<"GET">>,
+              <<"/wallet/", (hb_util:bin(Wallet))/binary, "/last_tx">>,
+              Request,
+              Opts)
+    end.
+
+wallet_list(Base, Request, Opts) -> 
+    WalletRoot =
+        hb_ao:get_first(
+            [
+                {Request, <<"wallet-root">>},
+                {Base, <<"wallet-root">>}
+            ],
+            not_found,
+            Opts
+        ),
+    case WalletRoot of
+        not_found ->
+            {error, not_found};
+        _ ->
+            request(
+              <<"GET">>,
+              <<"/wallet_list/", (hb_util:bin(WalletRoot))/binary>>,
+              Request,
+              Opts)
+    end.
+
+%% @doc Return the sum of all the existing accounts in the latest state, in Winston.
+total_suply(_Base, Request, Opts) -> 
+    request(<<"GET">>, <<"/total_suply">>, Request, Opts).
+
+peers(_Base, Request, Opts) ->
+    request(<<"GET">>, <<"/peers">>, Request, Opts).
+
 %%% Internal Functions
 
 %% @doc Find the transaction ID to retrieve from Arweave based on the request or
@@ -894,7 +1022,6 @@ request(Method, Path, Extra, LogExtra, Request, Opts) ->
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    ?event(error, {res, Res}),
     % To keep the same response structure from Arweave Node, we skip
     % the processing of the results. Useful to provide same strcture
     % as we had before HyperBEAM.
