@@ -978,11 +978,11 @@ p4_charges_recharging_ledger_simple_pay_test() ->
     ?assertEqual(7, Balance),
     ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).
 
-%% @doc With `p4-sign-charge' disabled, p4 sends the ledger an unsigned charge.
+%% @doc With `p4-commit-charge' disabled, p4 sends the ledger an uncommitted charge.
 %% A local ledger re-derives the payer from the signed `request', so the charge
 %% must deduct identically to the signed path -- proving the opt is behavior
-%% preserving for the recharging ledger (it only skips the node's RSA signature).
-p4_unsigned_charge_recharging_ledger_simple_pay_test() ->
+%% preserving for the recharging ledger (it only skips the node's charge commit).
+p4_uncommitted_charge_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
     OperatorWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
@@ -995,7 +995,7 @@ p4_unsigned_charge_recharging_ledger_simple_pay_test() ->
     Opts = #{
         <<"priv-wallet">> => HostWallet,
         <<"operator">> => ar_wallet:to_address(OperatorWallet),
-        <<"p4-sign-charge">> => false,
+        <<"p4-commit-charge">> => false,
         <<"simple-pay-price">> => 0,
         <<"recharging-ledger-max">> => 10,
         <<"recharging-ledger-recharge">> => 0,

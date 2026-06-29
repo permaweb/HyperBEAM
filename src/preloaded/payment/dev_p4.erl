@@ -245,10 +245,10 @@ response(State, RawResponse, NodeMsg) ->
                     % `simple-pay@1.0') re-derive the payer from the already
                     % signed `request' and never read this signature, so an
                     % operator running such a ledger on a non-paranoid node may
-                    % set `p4_sign_charge' to false to skip the per-charge
-                    % signature -- the single largest cost on the charging path.
+                    % set `p4_commit_charge' to false to skip the per-charge
+                    % commit -- the single largest cost on the charging path.
                     LedgerReq =
-                        case hb_opts:get(p4_sign_charge, true, NodeMsg) of
+                        case hb_opts:get(p4_commit_charge, true, NodeMsg) of
                             false -> ChargeReq;
                             _ -> hb_message:commit(ChargeReq, NodeMsg)
                         end,
