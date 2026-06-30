@@ -1,26 +1,54 @@
 %%% @doc Extract device specs and vary AO-Core execution inputs.
 -module(hb_types).
--export([extract/2, vary/7]).
+-export([extract/2, vary/2, add_schema/2]).
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Apply the resolved function's base/request schemas to one execution.
-vary(Device, Key, Func, AddKey, Base, Req, Opts) ->
-    case function_schema(Device, Func, Key, Opts) of
-        undefined ->
-            {ok, Base, Req, none};
+%% @doc Add the schema for a resolution to an execution context, given a
+%% resolved key, function, and execution module (e.g, from
+%% `hb_device:add_resolver`).
+add_schema(
+    Ctx =
+        #{
+            <<"key">> := Key,
+            <<"priv">> :=
+                #{
+                    <<"resolver">> := Func,
+                    <<"add-key">> := AddKey,
+                    <<"exec-device">> := Device
+                }
+        },
+    Opts) ->
+    case schema_from_device(Device, Func, Key, Opts) of
+        undefined -> {ok, Ctx#{ <<"schema">> => undefined } };
         Schema ->
-            {BaseSchema, ReqSchema, ReturnSchema} =
-                execution_schemas(Schema, AddKey),
-            ReqWithKey =
-                case AddKey of
-                    false -> Req;
-                    _ -> Req#{ <<"path">> => Key }
-                end,
             {ok,
-                apply_schema(implicit_base(BaseSchema), Base, Opts),
-                apply_schema(implicit_request(ReqSchema), ReqWithKey, Opts),
-                overlay(ReturnSchema)}
+                Ctx#{
+                    <<"schema">> => execution_schema(Schema, AddKey)
+                }
+            }
     end.
+
+%% @doc Apply the resolved function's base/request schemas to one execution.
+vary(Ctx = #{ <<"schema">> := undefined, <<"base">> := Base, <<"req">> := Req }, _Opts) ->
+    {ok,
+        Ctx#{
+            <<"varied-base">> => Base,
+            <<"varied-req">> => Req,
+            <<"return-extends">> => none
+        }
+    };
+vary(Ctx = #{
+    <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
+    <<"base">> := Base,
+    <<"req">> := Req
+}, Opts) ->
+    {ok,
+        Ctx#{
+            <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
+            <<"varied-req">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
+            <<"return-extends">> => overlay(ReturnSchema)
+        }
+    }.
 
 %% @doc Extract a device module's function schemas. This intentionally has no
 %% cache; callers can add one once the algorithm is settled.
@@ -55,18 +83,18 @@ select_schema(Func, _Key, Schemas) ->
             undefined
     end.
 
-execution_schemas(Schema, AddKey) ->
+execution_schema(Schema, AddKey) ->
     Args = maps:get(<<"args">>, Schema, []),
     Offset =
         case AddKey of
             false -> 0;
             _ -> 1
         end,
-    {
+    [
         nth_or(1 + Offset, Args, any_type()),
         nth_or(2 + Offset, Args, any_type()),
         maps:get(<<"return">>, Schema, any_type())
-    }.
+    ].
 
 nth_or(N, List, _Default) when length(List) >= N -> lists:nth(N, List);
 nth_or(_N, _List, Default) -> Default.
@@ -128,7 +156,6 @@ do_extract(Module) ->
                                             }
                                         };
                                        (_) -> false
-                                    end,
                                     end,
                                     Forms
                                 )
@@ -332,7 +359,7 @@ apply_schema(Type, Value, Opts) ->
 explicit_keys(Keys, Message, Opts) ->
     maps:fold(
         fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-            case hb_message:find_active(Key, Message, Opts) of
+            case hb_ao:raw(Message, #{ <<"path">> => Key }, Opts) of
                 {ok, Value} ->
                     Acc#{ Key => apply_schema(Type, Value, Opts) };
                 error when Presence =:= required ->
@@ -354,7 +381,7 @@ wildcard_keys(#{ <<"presence">> := required, <<"type">> := Type }, Keys, Message
         fun(_Key, Value) ->
             apply_schema(Type, hb_cache:ensure_all_loaded(Value, Opts), Opts)
         end,
-        maps:without(maps:keys(Keys), hb_message:active(Message, Opts))
+        hb_util:list_without(maps:keys(Keys), hb_ao:keys(Message, Opts))
     ).
 
 overlay(ReturnSchema) ->
