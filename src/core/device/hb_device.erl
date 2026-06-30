@@ -45,7 +45,7 @@ truncate_args(Fun, Args) ->
 %% }
 add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
     DeviceID =
-        case maps:find(<<"base-device">>, Base) of
+        case maps:find(<<"base-device">>, Context) of
             {ok, ForcedBaseDevice} -> ForcedBaseDevice;
             error -> message_device_id(Base, Opts)
         end,
@@ -89,7 +89,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
 %% indicates that the key should be added to the start of the call's arguments.
 message_to_fun(Msg, Key, Opts) ->
     % Get the device module from the message and recurse.
-    message_to_fun(message_to_device(Msg, Opts), Msg, Key, Opts).
+    message_to_fun(module(Msg, Opts), Msg, Key, Opts).
 message_to_fun(Dev, Msg, Key, Opts) ->
     Info = info(Dev, Msg, Opts),
     % Is the key exported by the device?
@@ -141,7 +141,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 							% Case 6: The device has no default handler.
 							% We retry with the default unless the message
 							% already names it (loop guard).
-							case message_device_id(Msg, Opts) of
+							case message_device_id(Msg, undefined, Opts) of
 								?DEFAULT_DEVICE ->
 									throw({
 										error,
@@ -149,9 +149,10 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 										{key, Key}
 									});
 								_ ->
-									?event_debug({using_default_device, ?DEFAULT_DEVICE}),
+								    WithDev = with_device(Msg, ?DEFAULT_DEVICE),
 									message_to_fun(
-										with_device(Msg, ?DEFAULT_DEVICE),
+										module(?DEFAULT_DEVICE, Opts),
+										WithDev,
 										Key,
 										Opts
 									)
@@ -173,12 +174,16 @@ module(DevID, Opts) ->
 %% @doc Return the device ID from a message, resolving through any ancestors
 %% as necessary.
 message_device_id(Msg, Opts) ->
+    message_device_id(Msg, ?DEFAULT_DEVICE, Opts).
+message_device_id(Msg, Default, Opts) ->
+    ?event({finding_device_id, Msg}),
     case hb_maps:find(<<"device">>, Msg, Opts) of
         {ok, Device} -> Device;
         error ->
             case hb_maps:find(<<"...">>, Msg, Opts) of
-                {ok, Ancestor} -> message_device_id(Ancestor, Opts);
-                error -> ?DEFAULT_DEVICE
+                {ok, Ancestor} -> message_device_id(Ancestor, Default, Opts);
+                error ->
+                    Default
             end
     end.
 
