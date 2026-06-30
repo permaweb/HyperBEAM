@@ -1,6 +1,7 @@
 %%% @doc Extract device specs and vary AO-Core execution inputs.
 -module(hb_types).
--export([extract/2, vary/2, add_schema/2]).
+-export([extract/2, vary/2, add_schema/2, beam_to_schema/2]).
+-include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% @doc Add the schema for a resolution to an execution context, given a
@@ -50,14 +51,19 @@ vary(Ctx = #{
         }
     }.
 
-%% @doc Extract a device module's function schemas. This intentionally has no
-%% cache; callers can add one once the algorithm is settled.
+%% @doc Extract a device module's function schemas. We first check the
+%% `loaded-device-store` cache, then fall back to loading the module manually
+%% if it isn't already available.
 extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
-extract(Module, _Opts) when is_atom(Module) ->
-    case code:ensure_loaded(Module) of
-        {module, Module} -> do_extract(Module);
-        {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
+extract(Module, Opts) when is_atom(Module) ->
+    case hb_device_load:schema(Module, Opts) of
+        {ok, Schema} -> {ok, Schema};
+        _ ->
+            case code:ensure_loaded(Module) of
+                {module, Module} -> beam_to_schema(Module);
+                {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
+            end
     end;
 extract(Device, Opts) when is_binary(Device) ->
     case hb_device_load:reference(Device, Opts) of
@@ -76,9 +82,9 @@ schema_from_device(Device, Func, Key, Opts) ->
     end.
 
 select_schema(Func, _Key, Schemas) ->
-    case {erlang:fun_info(Func, name), erlang:fun_info(Func, arity)} of
-        {{name, Name}, {arity, Arity}} ->
-            maps:get({normalize_name(Name), Arity}, Schemas, undefined);
+    case erlang:fun_info(Func, name) of
+        {name, Name} ->
+            maps:get(normalize_name(Name), Schemas, undefined);
         _ ->
             undefined
     end.
@@ -131,38 +137,36 @@ implicit_key(Schema = #{ <<"kind">> := <<"message">>, <<"keys">> := Keys },
 implicit_key(Schema, _Key, _Presence) ->
     Schema.
 
-do_extract(Module) ->
+beam_to_schema(Module) ->
     case module_beam(Module) of
         unavailable ->
             {error, {abstract_code_unavailable, Module, unavailable}};
-        Beam ->
-            case beam_lib:chunks(Beam, [abstract_code]) of
-                {ok, {_, [{abstract_code, {_, Forms}}]}} ->
-                    TypeEnv = build_type_env(Forms),
-                    {ok,
-                        #{
-                            <<"keys">> =>
-                                lists:filtermap(
-                                    fun(Attr = {attribute, _, spec, {{Name, _}, Heads}}) ->
-                                        {
-                                            true,
-                                            {
-                                                Name,
-                                                [
-                                                    fun_schema(Head, TypeEnv)
-                                                ||
-                                                    Head <- Heads
-                                                ]
-                                            }
-                                        };
-                                       (_) -> false
-                                    end,
-                                    Forms
-                                )
-                        }};
-                Error ->
-                    {error, {abstract_code_unavailable, Module, Error}}
-            end
+        Beam -> beam_to_schema(Module, Beam)
+    end.
+
+beam_to_schema(Module, Beam) ->
+    case beam_lib:chunks(Beam, [abstract_code]) of
+        {ok, {_, [{abstract_code, {_, Forms}}]}} ->
+            TypeEnv = build_type_env(Forms),
+            {ok,
+                #{
+                    <<"keys">> =>
+                        lists:foldl(
+                            fun
+                                ({attribute, _, spec, {{Name, _}, [Head | _]}}, Acc) ->
+                                    Acc#{
+                                        normalize_name(Name) =>
+                                            fun_schema(Head, TypeEnv)
+                                    };
+                                (_, Acc) ->
+                                    Acc
+                            end,
+                            #{},
+                            Forms
+                        )
+                }};
+        Error ->
+            {error, {abstract_code_unavailable, Module, Error}}
     end.
 
 module_beam(Module) ->
@@ -362,9 +366,9 @@ explicit_keys(Keys, Message, Opts) ->
             case hb_ao:raw(Message, #{ <<"path">> => Key }, Opts) of
                 {ok, Value} ->
                     Acc#{ Key => apply_schema(Type, Value, Opts) };
-                error when Presence =:= required ->
+                {error, not_found} when Presence =:= required ->
                     throw({required_key_missing, Key});
-                error ->
+                {error, not_found} ->
                     Acc
             end
         end,
