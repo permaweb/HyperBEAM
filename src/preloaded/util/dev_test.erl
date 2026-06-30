@@ -49,8 +49,10 @@ info(_Base, _Req, _Opts) ->
 	{ok, #{<<"status">> => 200, <<"body">> => InfoBody}}.
 
 %% @doc Example index handler.
-index(Msg, _Req, Opts) ->
-    Name = hb_ao:get(<<"name">>, Msg, <<"turtles">>, Opts),
+-spec index(#{ name => binary() }, _, _) ->
+    {ok, #{ content_type => binary(), body => binary() }}.
+index(Msg, _Req, _Opts) ->
+    Name = maps:get(<<"name">>, Msg, <<"turtles">>),
     {ok,
         #{
             <<"content-type">> => <<"text/html">>,

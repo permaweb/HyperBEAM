@@ -691,28 +691,21 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% applies it to the inputs. Returns `base` and `request` submessages, as well
 %% as the resolvable function Erlang function at `priv/function` if it was found
 %% during the process of `vary`ing.
+-spec vary(#{ _ => _ }, #{ vary => binary() | [binary()]}, #{}) -> {ok, #{}}.
 vary(Base, Req, Opts) ->
     Path = hb_maps:get(<<"path">>, Req, undefined, Opts),
     case schema(Base, Req, Opts) of
-        {ok, #{ <<"keys">> := #{ Path := Schema }}} ->
-            
-            {ok, Schema};
+        {ok, #{ <<"keys">> := #{ Path := Schema }}} -> {ok, Schema};
         _ -> {error, not_found}
     end.
 
 %% @doc Returns the device schema for a `Base` message.
--spec schema(#{ device => binary(), _ => _ }, #{}, #{}) -> #{}.
-schema(Base = #{ <<"device">> := Device }, _, Opts) ->
+-spec schema(_, _, _) -> {ok, undefined | #{}}.
+schema(#{ <<"device">> := Device }, _, Opts) ->
     case hb_types:extract(Device, Opts) of
         {ok, Schema} -> {ok, Schema};
-        _ -> generate_default_schema(Base, Opts)
+        _ -> {ok, undefined}
     end.
-
-%% @doc Calculate the default schema for a message given its explicit keys and
-%% the keys of the message device.
-generate_default_schema(Base, Opts) ->
-    % TODO: What form is necessary for 
-    {ok, keys(Base, #{}, Opts)}.
 
 %%% Tests
 
