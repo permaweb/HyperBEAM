@@ -103,7 +103,7 @@ implicit_base(Schema) ->
     implicit_key(top_level_schema(Schema), <<"device">>, optional).
 
 implicit_request(Schema) ->
-    implicit_key(top_level_schema(Schema), <<"path">>, required).
+    implicit_key(top_level_schema(Schema), <<"path">>, optional).
 
 top_level_schema(#{ <<"kind">> := <<"empty">> }) ->
     message_type({#{}, none});

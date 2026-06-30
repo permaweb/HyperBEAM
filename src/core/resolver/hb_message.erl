@@ -207,13 +207,7 @@ conversion_spec_to_req(Spec, Opts) ->
         {
             case Device of
                 tabm -> tabm;
-                _ ->
-                    hb_device:message_to_device(
-                        #{
-                            <<"device">> => Device
-                        },
-                        Opts
-                    )
+                _ -> hb_device:module(Device, Opts)
             end,
             hb_maps:without([<<"device">>], Spec, Opts)
         }
