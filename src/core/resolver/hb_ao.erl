@@ -177,6 +177,13 @@ raw(Device, Base, Req, Opts) ->
     raw(Device, undefined, Base, Req, Opts).
 raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
     ExecOpts = execution_opts(Opts),
+    ?prim_dbg(
+        {executing,
+            {forced_device, ForcedDevice},
+            {forced_key, ForcedKey},
+            {req, Req}
+        }
+    ),
     % If a forced key is provided, use it; otherwise, extract from the request.
     Key =
         if ForcedKey =/= undefined -> ForcedKey;
