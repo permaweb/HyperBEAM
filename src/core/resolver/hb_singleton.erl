@@ -292,7 +292,6 @@ do_build(I, [{as, DevID, Direct} | Rest], ScopedKeys, Opts) when is_map(Direct) 
             <<"structured@1.0">>, 
             Opts#{ <<"topic">> => ao_internal }
         ),
-    ?event_debug(parsing, {build_messages, {base, Msg}, {additional, Additional}}),
     [
         #{ <<"device">> => DevID },
         Direct#{ <<"...">> => StepMsg }
