@@ -9,6 +9,8 @@
 %%% recharge rates.
 %%% An optional `recharging-ledger-grace' allows small post-metering negative
 %%% balance drift without making that grace appear as spendable balance.
+%%% An optional `recharging-ledger-fallback' ledger message can cover requests
+%%% when this ledger cannot.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3, estimate/3]).
 -include("include/hb.hrl").
@@ -32,9 +34,10 @@ account_id(Address) ->
 %% read-only balance. The server returns `infinity' for exempt accounts, the
 %% configured max balance for accounts it has not seen before, or the stored
 %% balance plus elapsed recharge for existing accounts.
-balance(_, Req, Opts) ->
+balance(Base, Req, Opts) ->
     case balance_account(Req, Opts) of
-        {ok, AccountID} -> {ok, get_balance(AccountID, Opts)};
+        {ok, AccountID} ->
+            maybe_fallback_balance(Base, Req, get_balance(AccountID, Opts), Opts);
         {error, Error} -> {error, Error}
     end.
 
@@ -42,12 +45,17 @@ balance(_, Req, Opts) ->
 %% signed original `request', matching `simple-pay@1.0'. The charge succeeds
 %% only when the current effective balance can cover the quantity, plus any
 %% configured negative-balance grace.
-charge(_, Req, Opts) ->
+charge(Base, Req, Opts) ->
     case charge_account(Req, Opts) of
         {ok, AccountID} ->
             case hb_util:safe_int(hb_ao:get(<<"quantity">>, Req, 0, Opts)) of
                 {ok, Quantity} ->
-                    charge_balance(AccountID, Quantity, Opts);
+                    maybe_fallback_charge(
+                        Base,
+                        Req,
+                        charge_balance(AccountID, Quantity, Opts),
+                        Opts
+                    );
                 {error, _} ->
                     {error, #{
                         <<"status">> => 400,
@@ -154,6 +162,53 @@ charge_balance(AccountID, Quantity, Opts) ->
         hb_name:unregister(server_id(Opts)),
         charge_balance(AccountID, Quantity, Opts)
     end.
+
+maybe_fallback_balance(Base, Req, Balance, Opts) ->
+    case fallback_ledger(Base, Opts) of
+        undefined ->
+            {ok, Balance};
+        Fallback ->
+            case resolve_fallback(Fallback, Req, Opts) of
+                {ok, FallbackBalance} -> {ok, max_balance(Balance, FallbackBalance)};
+                {error, _} -> {ok, Balance}
+            end
+    end.
+
+maybe_fallback_charge(Base, Req, Error = {error, #{ <<"status">> := 402 }}, Opts) ->
+    case fallback_ledger(Base, Opts) of
+        undefined -> Error;
+        Fallback -> resolve_fallback(Fallback, Req, Opts)
+    end;
+maybe_fallback_charge(_Base, _Req, Result, _Opts) ->
+    Result.
+
+fallback_ledger(Base, Opts) ->
+    case hb_opts:get(recharging_ledger_fallback_depth, 0, Opts) of
+        0 ->
+            hb_maps:get(
+                <<"recharging-ledger-fallback">>,
+                Base,
+                hb_opts:get(recharging_ledger_fallback, undefined, Opts),
+                Opts
+            );
+        _ ->
+            undefined
+    end.
+
+resolve_fallback(Fallback, Req, Opts) ->
+    hb_ao:resolve(
+        Fallback,
+        Req,
+        Opts#{ <<"recharging-ledger-fallback-depth">> => 1 }
+    ).
+
+max_balance(infinity, _Fallback) -> infinity;
+max_balance(_Balance, infinity) -> infinity;
+max_balance(<<"infinity">>, _Fallback) -> <<"infinity">>;
+max_balance(_Balance, <<"infinity">>) -> <<"infinity">>;
+max_balance(true, _Fallback) -> true;
+max_balance(_Balance, true) -> true;
+max_balance(Balance, Fallback) -> max(hb_util:int(Balance), hb_util:int(Fallback)).
 
 %% @doc Resolve the account's recharge rate in the *caller's* process rather than
 %% the singleton ledger server, so a slow (possibly HTTP) rates provider can never
@@ -583,6 +638,49 @@ insufficient_balance_does_not_mutate_balance_test() ->
     ?assertEqual(
         {ok, 10},
         balance(#{}, #{ <<"target">> => Account }, Opts)
+    ).
+
+fallback_balance_returns_max_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    Fallback = #{
+        <<"device">> => #{
+            balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
+        }
+    },
+    ?assertEqual(
+        {ok, 25},
+        balance(
+            #{ <<"recharging-ledger-fallback">> => Fallback },
+            #{ <<"target">> => Account },
+            Opts
+        )
+    ).
+
+fallback_charge_runs_only_on_402_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    Fallback = #{
+        <<"device">> => #{
+            charge => fun(_Base, FallbackReq, FallbackOpts) ->
+                {ok, hb_ao:get(<<"quantity">>, FallbackReq, undefined, FallbackOpts)}
+            end
+        }
+    },
+    Base = #{ <<"recharging-ledger-fallback">> => Fallback },
+    ?assertEqual({ok, 25}, charge(Base, signed_charge_req(Wallet, 25, Opts), Opts)),
+    ?assertMatch(
+        {error, #{ <<"status">> := 400 }},
+        charge(Base, signed_charge_req(Wallet, -1, Opts), Opts)
     ).
 
 grace_allows_small_negative_balance_test() ->
