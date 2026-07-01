@@ -88,16 +88,19 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
 %% indicates that the key should be added to the start of the call's arguments.
 message_to_fun(Msg, Key, Opts) ->
-    % Get the device module from the message and recurse.
-    message_to_fun(module(Msg, Opts), Msg, Key, Opts).
-message_to_fun(Dev, Msg, Key, Opts) ->
-    Info = info(Dev, Msg, Opts),
+    DeviceID = message_device_id(Msg, Opts),
+    message_to_fun(DeviceID, Msg, Key, Opts).
+message_to_fun(DevID, Msg, Key, Opts) ->
+    message_to_fun(DevID, module(DevID, Opts), Msg, Key, Opts).
+message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
+    Info = info(DevMod, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
 	?event(
         ao_devices,
         {message_to_fun,
-            {dev, Dev},
+            {device, DevID},
+            {module, DevMod},
             {key, Key},
             {is_exported, Exported},
             {opts, Opts}
@@ -110,22 +113,21 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 			% Case 2: The device has an explicit handler function.
 			?event(
                 ao_devices,
-                {handler_found, {dev, Dev}, {key, Key}, {handler, Handler}}
+                {handler_found, {dev, DevID}, {key, Key}, {handler, Handler}}
             ),
-			{Status, Func} = info_handler_to_fun(Handler, Msg, Key, Opts),
-            {Status, Dev, Func};
+			info_handler_to_fun(Handler, DevID, DevMod, Msg, Key, Opts);
 		_ ->
-			?event_debug(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
-			case {find_exported_function(Msg, Dev, Key, 3, 1, Opts), Exported} of
+			?event_debug(ao_devices, {no_override_handler, {dev, DevID}, {key, Key}}),
+			case {find_exported_function(Msg, DevMod, Key, 3, 1, Opts), Exported} of
 				{{ok, Func}, true} ->
 					% Case 3: The device has a function of the name `Key'.
-					{ok, Dev, Func};
+					{ok, DevID, DevMod, Func};
 				_ ->
 					case {hb_maps:find(default, Info, Opts), Exported} of
 						{{ok, DefaultFunc}, true} when is_function(DefaultFunc) ->
 							% Case 4: The device has a default handler.
                             ?event_debug({found_default_handler, {func, DefaultFunc}}),
-							{add_key, Dev, DefaultFunc};
+							{add_key, DevID, DevMod, DefaultFunc};
                         {{ok, DefaultDevice}, true} when is_binary(DefaultDevice)
                                 orelse is_atom(DefaultDevice) ->
                             % Case 5: The device gives a specific further device
@@ -133,6 +135,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
                             % rules.
 							?event_debug({found_default_device, {mod, DefaultDevice}}),
                             message_to_fun(
+                                DefaultDevice,
                                 with_device(Msg, DefaultDevice),
                                 Key,
                                 Opts
@@ -151,7 +154,7 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 								_ ->
 								    WithDev = with_device(Msg, ?DEFAULT_DEVICE),
 									message_to_fun(
-										module(?DEFAULT_DEVICE, Opts),
+                                        ?DEFAULT_DEVICE,
 										WithDev,
 										Key,
 										Opts
@@ -165,6 +168,10 @@ message_to_fun(Dev, Msg, Key, Opts) ->
 %% message has no `<<"device">>' key, we resolve the default
 %% (`message@1.0') just like any other device: There is no privileged
 %% internal module-loading path.
+module(DevMod, _Opts) when is_atom(DevMod) ->
+    DevMod;
+module(Dev, _Opts) when is_map(Dev) ->
+    Dev;
 module(DevID, Opts) ->
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({error, {device_not_loadable, DevID, Reason}});
@@ -200,9 +207,10 @@ with_device(_Msg, Device) ->
     #{ <<"device">> => Device }.
 
 %% @doc Parse a handler key given by a device's `info'.
-info_handler_to_fun(Handler, _Msg, _Key, _Opts) when is_function(Handler) ->
-	{add_key, Handler};
-info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
+info_handler_to_fun(Handler, DevID, DevMod, _Msg, _Key, _Opts)
+        when is_function(Handler) ->
+	{add_key, DevID, DevMod, Handler};
+info_handler_to_fun(HandlerMap, DevID, DevMod, Msg, Key, Opts) ->
 	case hb_maps:find(excludes, HandlerMap, Opts) of
 		{ok, Exclude} ->
 			case lists:member(Key, Exclude) of
@@ -210,13 +218,16 @@ info_handler_to_fun(HandlerMap, Msg, Key, Opts) ->
 						MsgWithoutDevice =
 							hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
+                        ?DEFAULT_DEVICE,
 						with_device(MsgWithoutDevice, ?DEFAULT_DEVICE),
 						Key,
 						Opts
 					);
-				false -> {add_key, hb_maps:get(func, HandlerMap, undefined, Opts)}
+				false ->
+                    {add_key, DevID, DevMod, hb_maps:get(func, HandlerMap, undefined, Opts)}
 			end;
-		error -> {add_key, hb_maps:get(func, HandlerMap, undefined, Opts)}
+		error ->
+            {add_key, DevID, DevMod, hb_maps:get(func, HandlerMap, undefined, Opts)}
 	end.
 
 %% @doc Find the function with the highest arity that has the given name, if it

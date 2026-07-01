@@ -681,12 +681,22 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% applies it to the inputs. Returns `base` and `request` submessages, as well
 %% as the resolvable function Erlang function at `priv/function` if it was found
 %% during the process of `vary`ing.
--spec vary(#{ _ => _ }, #{ vary => binary() | [binary()]}, #{}) -> {ok, #{}}.
+-spec vary(#{ _ => _ }, #{ vary => binary(), _ => _ }, #{}) -> {ok, #{}}.
 vary(Base, Req, Opts) ->
-    Path = hb_maps:get(<<"path">>, Req, undefined, Opts),
-    case schema(Base, Req, Opts) of
-        {ok, #{ <<"keys">> := #{ Path := Schema }}} -> {ok, Schema};
-        _ -> {error, not_found}
+    maybe
+        {ok, Key} ?= hb_maps:find(<<"vary">>, Req, Opts),
+        Ctx0 = #{ <<"base">> => Base, <<"key">> => Key },
+        case hb_device:add_resolver(Ctx0, Opts) of
+            {ok, Ctx1 = #{ <<"result">> := _ }} ->
+                % Finding the resolver led us to first find the complete
+                % solution. We return the context as-is.
+                {ok, Ctx1};
+            {ok, Ctx1} ->
+                % The resolver has been found. We must vary the `Base` and
+                % `Req` using its schema, then return the updated context.
+                hb_types:vary(Ctx1, Opts);
+            Err -> Err
+        end
     end.
 
 %% @doc Returns the device schema for a `Base` message.
