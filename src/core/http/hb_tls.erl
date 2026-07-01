@@ -4,8 +4,10 @@
 %%% `persistent_term', so a node can serve multiple domains (SNI) and rotate a
 %%% certificate live (by refreshing the table) without restarting the listener.
 -module(hb_tls).
--export([socket_opts/1, refresh/1, sni_lookup/1]).
+-export([socket_opts/1, refresh/1, install/3, sni_lookup/1, expiry/1]).
 -include_lib("eunit/include/eunit.hrl").
+
+-include_lib("public_key/include/public_key.hrl").
 
 -define(CERTS, {?MODULE, certs}).
 
@@ -38,12 +40,86 @@ refresh(NodeMsg) ->
     persistent_term:put(?CERTS, Table),
     ok.
 
+%% @doc Live-install a renewed certificate for a single host: rebuilds that
+%% host's entry in the in-memory table so the next TLS handshake serves the new
+%% cert, with no restart and no disk write. In-flight connections are
+%% unaffected. This is the seam an ACME renewal calls after fetching a cert.
+install(Domain, CertPem, KeyPem) ->
+    NewOpts = entry_opts(#{ <<"cert">> => CertPem, <<"key">> => KeyPem }),
+    Table = persistent_term:get(?CERTS, #{}),
+    OldOpts = maps:get(Domain, Table, undefined),
+    Table1 = Table#{ Domain => NewOpts },
+    %% If this host was also serving as the default entry, rotate that too.
+    Table2 =
+        case maps:get(default, Table, undefined) of
+            OldOpts when OldOpts =/= undefined -> Table1#{ default => NewOpts };
+            _ -> Table1
+        end,
+    persistent_term:put(?CERTS, Table2),
+    ok.
+
 %% @doc The ssl `sni_fun' callback. Returns the certificate options for the
 %% requested server name, falling back to a `default' entry. An unknown name
 %% with no default returns `[]', which fails the handshake closed.
 sni_lookup(ServerName) ->
     Table = persistent_term:get(?CERTS, #{}),
     maps:get(list_to_binary(ServerName), Table, maps:get(default, Table, [])).
+
+%% @doc Days until the certificate currently installed for `Domain' expires, or
+%% `undefined' when no certificate is found. Reads the leaf cert from the
+%% per-host table (inline DER or `certfile'), decodes its notAfter validity and
+%% returns `(NotAfter - now) div 86400'. This is the seam an ACME renewal scans
+%% to decide whether a domain is due.
+expiry(Domain) ->
+    Table = persistent_term:get(?CERTS, #{}),
+    Opts = maps:get(Domain, Table, maps:get(default, Table, undefined)),
+    case leaf_der(Opts) of
+        undefined -> undefined;
+        Der ->
+            #'OTPCertificate'{tbsCertificate = TBS} =
+                public_key:pkix_decode_cert(Der, otp),
+            #'OTPTBSCertificate'{validity = #'Validity'{notAfter = NotAfter}} = TBS,
+            (asn1_time_to_unix(NotAfter) - os:system_time(second)) div 86400
+    end.
+
+%% The leaf DER for a host entry: inline `{cert, [Leaf|_]}', or the first
+%% 'Certificate' read from a `{certfile, Path}'. `undefined' for no entry.
+leaf_der(undefined) -> undefined;
+leaf_der(Opts) ->
+    case proplists:get_value(cert, Opts) of
+        [Der | _] -> Der;
+        Der when is_binary(Der) -> Der;
+        undefined ->
+            case proplists:get_value(certfile, Opts) of
+                undefined -> undefined;
+                File ->
+                    {ok, Pem} = file:read_file(File),
+                    case [D || {'Certificate', D, _} <- public_key:pem_decode(Pem)] of
+                        [Leaf | _] -> Leaf;
+                        [] -> undefined
+                    end
+            end
+    end.
+
+%% ASN.1 cert time to unix seconds. utcTime is a 2-digit year (RFC 5280:
+%% >= 50 is 19YY, else 20YY); generalTime is a 4-digit year. Subtracting the
+%% gregorian seconds of 1970-01-01 (62167219200) converts to a unix timestamp.
+asn1_time_to_unix({utcTime, Time}) ->
+    [Y1, Y2 | Rest] = Time,
+    YY = list_to_integer([Y1, Y2]),
+    Year = if YY >= 50 -> 1900 + YY; true -> 2000 + YY end,
+    gregorian_seconds(Year, Rest) - 62167219200;
+asn1_time_to_unix({generalTime, Time}) ->
+    {Year, Rest} = lists:split(4, Time),
+    gregorian_seconds(list_to_integer(Year), Rest) - 62167219200.
+
+%% Rest is "MMDDHHMMSSZ" for both time forms.
+gregorian_seconds(Year, [M1, M2, D1, D2, H1, H2, Mi1, Mi2, S1, S2 | _]) ->
+    DateTime =
+        {{Year, list_to_integer([M1, M2]), list_to_integer([D1, D2])},
+         {list_to_integer([H1, H2]), list_to_integer([Mi1, Mi2]),
+          list_to_integer([S1, S2])}},
+    calendar:datetime_to_gregorian_seconds(DateTime).
 
 %% Build #{ Host => CertKeyOpts } from the configured entries. A single-cert
 %% node serves its certificate for any SNI; a multi-cert node serves the
@@ -125,3 +201,104 @@ url_port(URL) ->
     [_, AfterHost] = binary:split(URL, <<"localhost:">>),
     [PortBin | _] = binary:split(AfterHost, <<"/">>),
     binary_to_integer(PortBin).
+
+%% @doc Drive the real hb_http_client (gun backend, protocol http2) against a
+%% real HyperBEAM TLS node (h2) and a plain http/1.1-only TLS server. Both must
+%% return 200: the h2-only node proves h2 was negotiated, the http/1.1-only
+%% server proves the [http2, http] fallback.
+real_client_test() ->
+    {ok, CertPem} = file:read_file("test/test-tls.pem"),
+    {ok, KeyPem} = file:read_file("test/test-tls.key"),
+    H2Url =
+        hb_http_server:start_node(#{
+            <<"tls">> => #{
+                <<"certs">> => [#{
+                    <<"domains">> => [<<"localhost">>],
+                    <<"cert">> => CertPem,
+                    <<"key">> => KeyPem
+                }]
+            }
+        }),
+    H2Port = url_port(H2Url),
+    Dispatch =
+        cowboy_router:compile(
+            [{'_', [{"/", cowboy_static, {file, "test/test-tls.pem"}}]}]),
+    {ok, _} =
+        cowboy:start_tls(hb_tls_h1_peer,
+            #{socket_opts =>
+                [{port, 0},
+                 {certfile, "test/test-tls.pem"},
+                 {keyfile, "test/test-tls.key"},
+                 {alpn_preferred_protocols, [<<"http/1.1">>]}]},
+            #{env => #{dispatch => Dispatch}}),
+    H1Port = ranch:get_port(hb_tls_h1_peer),
+    Opts = #{http_client => gun, protocol => http2, http_retry => 0,
+             http_client_tls_opts => [{verify, verify_none}]},
+    {ok, H2Status, _, _} =
+        hb_http_client:request(
+            #{peer => peer(H2Port), path => <<"/~meta@1.0/info">>,
+              method => <<"GET">>, headers => #{}, body => <<>>}, Opts),
+    {ok, H1Status, _, _} =
+        hb_http_client:request(
+            #{peer => peer(H1Port), path => <<"/">>,
+              method => <<"GET">>, headers => #{}, body => <<>>}, Opts),
+    cowboy:stop_listener(hb_tls_h1_peer),
+    ?debugFmt(
+        "real hb_http_client (gun, protocol=http2): h2-only HB node -> ~p "
+        "(h2 negotiated), http/1.1-only peer -> ~p (fell back to http/1.1)",
+        [H2Status, H1Status]),
+    ?assertEqual(200, H2Status),
+    ?assertEqual(200, H1Status).
+
+peer(Port) ->
+    list_to_binary("https://localhost:" ++ integer_to_list(Port)).
+
+%% @doc Prove a renewed certificate is installed live: the running listener
+%% serves a different certificate after hb_tls:install/3, with no restart.
+live_rotation_test() ->
+    {ok, Cert1} = file:read_file("test/test-tls.pem"),
+    {ok, Key1} = file:read_file("test/test-tls.key"),
+    URL =
+        hb_http_server:start_node(#{
+            <<"tls">> => #{
+                <<"certs">> => [#{
+                    <<"domains">> => [<<"localhost">>],
+                    <<"cert">> => Cert1,
+                    <<"key">> => Key1
+                }]
+            }
+        }),
+    Port = url_port(URL),
+    Served1 = served_cert(Port),
+    {ok, Cert2} = file:read_file("test/test-tls-alt.pem"),
+    {ok, Key2} = file:read_file("test/test-tls-alt.key"),
+    ok = hb_tls:install(<<"localhost">>, Cert2, Key2),
+    Served2 = served_cert(Port),
+    ?debugFmt(
+        "live cert rotation, no restart: served DER changed (~p -> ~p bytes)",
+        [byte_size(Served1), byte_size(Served2)]),
+    ?assertNotEqual(Served1, Served2).
+
+served_cert(Port) ->
+    {ok, S} =
+        ssl:connect("127.0.0.1", Port,
+            [{verify, verify_none},
+             {server_name_indication, "localhost"},
+             {alpn_advertised_protocols, [<<"h2">>]}], 4000),
+    {ok, Der} = ssl:peercert(S),
+    ssl:close(S),
+    Der.
+
+%% @doc expiry/1 reads the installed leaf cert's notAfter and returns the days
+%% remaining. The alt test cert is valid years out, so a positive integer; an
+%% unknown domain with no default returns undefined.
+expiry_test() ->
+    {ok, CertPem} = file:read_file("test/test-tls-alt.pem"),
+    {ok, KeyPem} = file:read_file("test/test-tls-alt.key"),
+    persistent_term:put(?CERTS, #{}),
+    ok = install(<<"expiry-test.localhost">>, CertPem, KeyPem),
+    Days = expiry(<<"expiry-test.localhost">>),
+    ?debugFmt("installed cert expires in ~p days", [Days]),
+    ?assert(is_integer(Days)),
+    ?assert(Days > 0),
+    ?assertEqual(undefined, expiry(<<"no-such-domain.localhost">>)).
