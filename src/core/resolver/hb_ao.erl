@@ -119,7 +119,7 @@
 %% This function returns the raw result of the device function call:
 %% `{ok | error, NewMessage}.'
 %% The resolver is composed of a series of discrete phases:
-%%      1: Loading IDs/links.
+%%      1: Normalization and loading of IDs/links.
 %%      2: Device or direct key lookup.
 %%      3: Vary `Base` and `Request`.
 %%      4: Cache lookup
@@ -196,26 +196,73 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
         if ForcedDevice =/= undefined -> #{ <<"base-device">> => ForcedDevice };
         true -> #{}
         end,
-    Ctx1 = Ctx0#{ <<"base">> => Base, <<"req">> => Req, <<"key">> => Key },
-    {ok, Ctx2} = hb_device:add_resolver(Ctx1, ExecOpts),
-    {ok, Ctx3} = hb_types:add_schema(Ctx2, Opts),
-    {ok, Ctx4} = hb_types:vary(Ctx3, Opts),
+    vary_context(
+        Ctx0#{ <<"base">> => Base, <<"req">> => Req, <<"key">> => Key },
+        Opts
+    ).
+
+%% @doc Perform the `vary` step of an AO-Core execution. This step requires
+%% using the device (or the fallback device) to materialize the appropriate
+%% protocol values from the `Base` and `Request` messages, as well as the
+%% Erlang function to be executed, in order to evaluate an AO-Core resolution.
+vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req }, Opts) ->
+    VaryRes = 
+        case maps:find(<<"primitive">>, Ctx) of
+            {ok, true} ->
+                % Skip the varying step during `primitive` execution, but still
+                % find the resolver and add it to the context.
+                hb_device:add_resolver(Ctx, Opts);
+            _ ->
+                % First resolve the `vary` operation for the device and key
+                % upon the base and request, using the `Base` message's 
+                % `device` function. We do this by performing a `primitive`
+                % execution as a recursive call.
+                execute_context(
+                    #{
+                        <<"varied-req">> => Req#{
+                            <<"path">> => <<"vary">>,
+                            <<"vary">> =>
+                                hb_maps:get(
+                                    <<"path">>,
+                                    Req,
+                                    undefined,
+                                    Opts
+                                )
+                        },
+                        <<"base">> => Base,
+                        <<"primitive">> => true
+                    },
+                    Opts
+                )
+        end,
+    ?prim_dbg({vary_result, VaryRes}),
+    case VaryRes of
+        {ok, CtxWithRes = #{ <<"result">> := _Result }} ->
+            post_execution(CtxWithRes, Opts);
+        {ok, PreparedCtx} ->
+            execute_context(PreparedCtx, Opts);
+        Other ->
+            Other
+    end.
+
+execute_context(Ctx, Opts) ->
     % Apply the function and return the result directly, without any further
     % processing. We add the `PrefixArgs` to the list of arguments to be passed
     % to the function to accomodate default handlers, which take the key that
     % was invoked on the device as the first argument (ahead of `Base`, `Req`,
     % and `ExecOpts`).
     #{
+        <<"key">> := Key,
         <<"varied-base">> := VariedBase,
         <<"varied-req">> := VariedReq,
-        <<"return-extends">> := Extend,
         <<"priv">> :=
             #{
                 <<"resolver">> := Fun,
-                <<"add-key">> := AddKey
+                <<"add-key">> := AddKey,
+                <<"exec-opt">> := ExecOpts
             }
-    } = Ctx4,
-    ResWithStatus =
+    } = Ctx,
+    {Status, Res} =
         apply(
             Fun,
             hb_device:truncate_args(
@@ -224,14 +271,40 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
                     ++ [VariedBase, VariedReq, ExecOpts]
             )
         ),
-    % Extend with the unvaried base/req values if specified by the execution
-    % schema.
-    case ResWithStatus of
-        {ok, Res} when Extend == none -> {ok, Res};
-        {ok, Res} when Extend == base -> {ok, Res#{ <<"...">> => Base } };
-        {ok, Res} when Extend == request -> {ok, Res#{ <<"...">> => Req } };
-        OtherRet -> OtherRet
-    end.
+    post_execution(Ctx#{ <<"result">> => Res, <<"status">> => Status }, Opts).
+
+%% @doc Handle post-execution bookkeeping. If the mode is `primitive`, return
+%% the result directly; else, apply the `return-extends` schema to the result.
+post_execution(
+        #{
+            <<"primitive">> := true,
+            <<"result">> := Res,
+            <<"status">> := Status
+        },
+        _Opts) ->
+    {Status, Res};
+post_execution(
+        Context = #{
+            <<"base">> := Base,
+            <<"request">> := Req,
+            <<"result">> := RawResult,
+            <<"status">> := Status,
+            <<"return-extends">> := Extend
+        },
+        Opts) ->
+    maybe_cache(Context, Opts),
+    Res =
+        case Extend of
+            none -> RawResult;
+            base -> RawResult#{ <<"...">> => Base };
+            request -> RawResult#{ <<"...">> => Req }
+        end,
+    {Status, Res}.
+
+maybe_cache(#{ <<"priv">> := #{ <<"mode">> := <<"raw">> } }, _Opts) ->
+    skipped_caching;
+maybe_cache(_Context, _Opts) ->
+    todo.
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
