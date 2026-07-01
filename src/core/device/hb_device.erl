@@ -44,24 +44,35 @@ truncate_args(Fun, Args) ->
 %%                       the argument list.
 %% }
 add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
-    DeviceID =
+    % TODO: What if we force a device _and_ have a direct key hit?
+    DevRes =
         case maps:find(<<"base-device">>, Context) of
-            {ok, ForcedBaseDevice} -> ForcedBaseDevice;
-            error -> message_device_id(Base, Opts)
+            {ok, ForcedBaseDevice} -> {ok, ForcedBaseDevice};
+            error -> message_device_id(Base, Key, Opts)
         end,
-    {Type, ExecDev, ExecMod, Fun} = message_to_fun(DeviceID, Base, Key, Opts),
-    {ok,
-        Context#{
-            <<"base-device">> => DeviceID,
-            <<"resolver-device">> => ExecDev,
-            <<"priv">> =>
-                #{
-                    <<"resolver-module">> => ExecMod,
-                    <<"add-key">> => Type == add_key,
-                    <<"resolver">> => Fun
+    case DevRes of
+        {hit, Value} ->
+            {ok,
+                Context#{
+                    <<"result">> => Value
                 }
-        }
-    }.
+            };
+        {ok, DeviceID} ->
+            {Type, ExecDev, ExecMod, Fun} =
+                message_to_fun(DeviceID, Base, Key, Opts),
+            {ok,
+                Context#{
+                    <<"base-device">> => DeviceID,
+                    <<"resolver-device">> => ExecDev,
+                    <<"priv">> =>
+                        #{
+                            <<"resolver-module">> => ExecMod,
+                            <<"add-key">> => Type == add_key,
+                            <<"resolver">> => Fun
+                        }
+                }
+            }
+    end.
 
 %% @doc Calculate the Erlang function that should be called to get a value for
 %% a given key from a device.
@@ -88,7 +99,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
 %% indicates that the key should be added to the start of the call's arguments.
 message_to_fun(Msg, Key, Opts) ->
-    DeviceID = message_device_id(Msg, Opts),
+    DeviceID = message_device_id(Msg, Key, Opts),
     message_to_fun(DeviceID, Msg, Key, Opts).
 message_to_fun(DevID, Msg, Key, Opts) ->
     message_to_fun(DevID, module(DevID, Opts), Msg, Key, Opts).
@@ -144,8 +155,8 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 							% Case 6: The device has no default handler.
 							% We retry with the default unless the message
 							% already names it (loop guard).
-							case message_device_id(Msg, undefined, Opts) of
-								?DEFAULT_DEVICE ->
+							case message_device_id(Msg, Key, Opts) of
+								{ok, ?DEFAULT_DEVICE} ->
 									throw({
 										error,
 										default_device_could_not_resolve_key,
@@ -180,17 +191,20 @@ module(DevID, Opts) ->
 
 %% @doc Return the device ID from a message, resolving through any ancestors
 %% as necessary.
-message_device_id(Msg, Opts) ->
-    message_device_id(Msg, ?DEFAULT_DEVICE, Opts).
-message_device_id(Msg, Default, Opts) ->
+message_device_id(Msg, Key, Opts) ->
     ?event({finding_device_id, Msg}),
     case hb_maps:find(<<"device">>, Msg, Opts) of
-        {ok, Device} -> Device;
+        {ok, Device} -> {ok, Device};
         error ->
-            case hb_maps:find(<<"...">>, Msg, Opts) of
-                {ok, Ancestor} -> message_device_id(Ancestor, Default, Opts);
+            case hb_maps:find(Key, Msg, Opts) of
+                {ok, Value} -> {hit, Value};
                 error ->
-                    Default
+                    case hb_maps:find(<<"...">>, Msg, Opts) of
+                        {ok, Ancestor} ->
+                            message_device_id(Ancestor, Key, Opts);
+                        error ->
+                            {ok, Default}
+                    end
             end
     end.
 
