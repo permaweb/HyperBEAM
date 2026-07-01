@@ -5,6 +5,7 @@
 %%% certificate live (by refreshing the table) without restarting the listener.
 -module(hb_tls).
 -export([socket_opts/1, refresh/1, install/3, sni_lookup/1, expiry/1]).
+-export([self_signed/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -include_lib("public_key/include/public_key.hrl").
@@ -37,8 +38,33 @@ socket_opts(NodeMsg) ->
 refresh(NodeMsg) ->
     Tls = maps:get(<<"tls">>, NodeMsg, #{}),
     Table = build_table(maps:get(<<"certs">>, Tls, [])),
-    persistent_term:put(?CERTS, Table),
+    Acme = maps:get(<<"acme">>, Tls, #{}),
+    AcmeDomains = maps:get(<<"domains">>, Acme, []),
+    persistent_term:put(?CERTS, bootstrap(Table, AcmeDomains)),
     ok.
+
+%% For every ACME domain with no configured cert, add a short-lived self-signed
+%% bootstrap entry so the :443 listener can come up with no cert on disk; the
+%% ACME cron then replaces it live. The first bootstrap becomes the default when
+%% none was configured, so an unknown-SNI handshake still completes.
+bootstrap(Table, Domains) ->
+    lists:foldl(
+        fun(Domain, Acc) ->
+            case maps:is_key(Domain, Acc) of
+                true -> Acc;
+                false ->
+                    {CertPem, KeyPem} = self_signed(Domain),
+                    Opts = entry_opts(#{<<"cert">> => CertPem, <<"key">> => KeyPem}),
+                    Acc1 = Acc#{Domain => Opts},
+                    case maps:is_key(default, Acc1) of
+                        true -> Acc1;
+                        false -> Acc1#{default => Opts}
+                    end
+            end
+        end,
+        Table,
+        Domains
+    ).
 
 %% @doc Live-install a renewed certificate for a single host: rebuilds that
 %% host's entry in the in-memory table so the next TLS handshake serves the new
@@ -153,6 +179,65 @@ entry_opts(#{ <<"cert">> := CertPem, <<"key">> := KeyPem }) ->
     [{cert, CertDERs}, {key, {KeyTag, KeyDer}}];
 entry_opts(#{ <<"certfile">> := CertFile, <<"keyfile">> := KeyFile }) ->
     [{certfile, binary_to_list(CertFile)}, {keyfile, binary_to_list(KeyFile)}].
+
+%% @doc Generate a short-lived self-signed certificate for `Domain', returning
+%% {CertPem, KeyPem}. The RSA key is generated in memory and never written to
+%% disk. Used as a bootstrap so a node with an `acme' block but no configured
+%% cert can bring up its TLS listener; the ACME cron then replaces it live.
+%% OTP 28 ASN.1 is picky: the algorithm parameters must be an explicit ASN.1
+%% NULL as {asn1_OPENTYPE, <<5,0>>}, and the SAN extnValue must be the decoded
+%% [{dNSName, _}] list (pkix_sign re-encodes it), not pre-encoded DER.
+self_signed(Domain) ->
+    Key = public_key:generate_key({rsa, 2048, 65537}),
+    #'RSAPrivateKey'{modulus = N, publicExponent = E} = Key,
+    Now = os:system_time(second),
+    Subject = subject(Domain),
+    SigAlg = #'SignatureAlgorithm'{
+        algorithm = ?'sha256WithRSAEncryption',
+        parameters = {asn1_OPENTYPE, <<5, 0>>}
+    },
+    TBS = #'OTPTBSCertificate'{
+        version = v3,
+        serialNumber = erlang:unique_integer([positive]),
+        signature = SigAlg,
+        issuer = Subject,
+        validity = #'Validity'{
+            notBefore = unix_to_utc(Now - 300),
+            notAfter = unix_to_utc(Now + 7 * 86400)
+        },
+        subject = Subject,
+        subjectPublicKeyInfo = #'OTPSubjectPublicKeyInfo'{
+            algorithm = #'PublicKeyAlgorithm'{
+                algorithm = ?'rsaEncryption',
+                parameters = {asn1_OPENTYPE, <<5, 0>>}
+            },
+            subjectPublicKey = #'RSAPublicKey'{modulus = N, publicExponent = E}
+        },
+        extensions = [#'Extension'{
+            extnID = ?'id-ce-subjectAltName',
+            critical = false,
+            extnValue = [{dNSName, binary_to_list(Domain)}]
+        }]
+    },
+    Der = public_key:pkix_sign(TBS, Key),
+    CertPem = public_key:pem_encode([{'Certificate', Der, not_encrypted}]),
+    KeyPem = public_key:pem_encode([public_key:pem_entry_encode('RSAPrivateKey', Key)]),
+    {CertPem, KeyPem}.
+
+subject(CommonName) ->
+    {rdnSequence, [[#'AttributeTypeAndValue'{
+        type = ?'id-at-commonName',
+        value = {utf8String, CommonName}
+    }]]}.
+
+%% Unix seconds to an ASN.1 utcTime "YYMMDDHHMMSSZ" (RFC 5280 validity is < 2050,
+%% so utcTime is correct here and matches asn1_time_to_unix/1 above).
+unix_to_utc(Unix) ->
+    {{Y, Mo, D}, {H, Mi, S}} =
+        calendar:gregorian_seconds_to_datetime(Unix + 62167219200),
+    Str = lists:flatten(io_lib:format(
+        "~2..0w~2..0w~2..0w~2..0w~2..0w~2..0wZ", [Y rem 100, Mo, D, H, Mi, S])),
+    {utcTime, Str}.
 
 %% TLS version floor: 1.2 and 1.3 by default, or 1.3 only when requested.
 versions(Tls) ->
@@ -302,3 +387,17 @@ expiry_test() ->
     ?assert(is_integer(Days)),
     ?assert(Days > 0),
     ?assertEqual(undefined, expiry(<<"no-such-domain.localhost">>)).
+
+%% @doc self_signed/1 yields a decodable cert + key PEM pair, and once installed
+%% expiry/1 reports the ~7-day validity of the bootstrap cert.
+self_signed_test() ->
+    {CertPem, KeyPem} = self_signed(<<"boot.example">>),
+    ?assertMatch([{'Certificate', _, _} | _], public_key:pem_decode(CertPem)),
+    ?assertMatch([{'RSAPrivateKey', _, _} | _], public_key:pem_decode(KeyPem)),
+    persistent_term:put(?CERTS, #{}),
+    ok = install(<<"boot.example">>, CertPem, KeyPem),
+    Days = expiry(<<"boot.example">>),
+    ?debugFmt("self-signed bootstrap cert expires in ~p days", [Days]),
+    ?assert(is_integer(Days)),
+    ?assert(Days > 0),
+    ?assert(Days =< 7).

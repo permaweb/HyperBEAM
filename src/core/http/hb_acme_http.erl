@@ -160,15 +160,13 @@ pebble_auto_renew_test_() ->
     end.
 
 pebble_auto_renew() ->
-    {ok, BootCert} = file:read_file("test/test-tls-alt.pem"),
-    {ok, BootKey} = file:read_file("test/test-tls-alt.key"),
     Domain = <<"autorenew.example">>,
     set_default_dns("192.168.65.254"),   %% Pebble validates against the host
     catch stop(),
+    %% No tls.certs: the node self-signs an in-memory bootstrap for the ACME
+    %% domain, brings up :443 with it, then the wired cron flips it to Pebble's.
     URL = hb_http_server:start_node(#{
         <<"tls">> => #{
-            <<"certs">> => [#{<<"domains">> => [Domain],
-                              <<"cert">> => BootCert, <<"key">> => BootKey}],
             <<"acme">> => #{
                 <<"email">> => <<"acme@example.com">>,
                 <<"directory_url">> => <<"https://localhost:14000/dir">>,
