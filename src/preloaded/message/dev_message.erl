@@ -681,11 +681,15 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% applies it to the inputs. Returns `base` and `request` submessages, as well
 %% as the resolvable function Erlang function at `priv/function` if it was found
 %% during the process of `vary`ing.
--spec vary(#{ _ => _ }, #{ vary => binary(), _ => _ }, #{}) -> {ok, #{}}.
+-spec vary(
+    #{ _ => _ },
+    #{ vary => binary(), '...' => #{ _ => _ }, _ => _ },
+    #{}) -> {ok, #{}}.
 vary(Base, Req, Opts) ->
     maybe
         {ok, Key} ?= hb_maps:find(<<"vary">>, Req, Opts),
-        Ctx0 = #{ <<"base">> => Base, <<"key">> => Key },
+        {ok, VaryReq} ?= hb_maps:find(<<"...">>, Req, Opts),
+        Ctx0 = #{ <<"base">> => Base, <<"key">> => Key, <<"req">> => VaryReq },
         case hb_device:add_resolver(Ctx0, Opts) of
             {ok, Ctx1 = #{ <<"result">> := _ }} ->
                 % Finding the resolver led us to first find the complete

@@ -42,7 +42,8 @@ add_schema(
     end.
 
 %% @doc Apply the resolved function's base/request schemas to one execution.
-vary(Ctx = #{ <<"schema">> := undefined, <<"base">> := Base, <<"req">> := Req }, _Opts) ->
+vary(Ctx = #{ <<"base">> := Base, <<"req">> := Req }, _Opts)
+        when not is_map_key(<<"schema">>, Ctx) ->
     {ok,
         Ctx#{
             <<"varied-base">> => Base,
