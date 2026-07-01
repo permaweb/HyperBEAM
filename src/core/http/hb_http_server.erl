@@ -468,7 +468,14 @@ handle_request(RawReq, Body, ServerID) ->
                         },
                         ReqSingleton
                     ),
-                hb_http:reply(Req, ReqSingleton, Res, NodeMsg)
+                ReplyReq =
+                    hb_private:get(
+                        <<"http/reply-request">>,
+                        Res,
+                        ReqSingleton,
+                        NodeMsg
+                    ),
+                hb_http:reply(Req, ReplyReq, Res, NodeMsg)
             catch
                 Type:Details:Stacktrace ->
                     handle_error(
@@ -663,6 +670,51 @@ set_node_opts_test() ->
         }),
     {ok, LiveOpts} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assert(hb_ao:get(<<"test-success">>, LiveOpts, false, #{})).
+
+reply_uses_hook_rewritten_request_test() ->
+    Node =
+        start_node(#{
+            <<"on">> => #{
+                <<"request">> => #{
+                    <<"device">> =>
+                        #{
+                            <<"request">> =>
+                                fun(
+                                    _,
+                                    #{
+                                        <<"request">> := Request,
+                                        <<"body">> := Msgs
+                                    },
+                                    _
+                                ) ->
+                                    {ok, #{
+                                        <<"request">> =>
+                                            Request#{
+                                                <<"accept">> => <<"json@1.0">>
+                                            },
+                                        <<"body">> => Msgs
+                                    }}
+                                end
+                        }
+                }
+            }
+        }),
+    {ok, 200, Headers, Body} =
+        hb_http_client:request(
+            #{
+                peer => Node,
+                path => <<"/~meta@1.0/info">>,
+                method => <<"GET">>,
+                headers => #{},
+                body => <<>>
+            },
+            #{}
+        ),
+    ?assertEqual(
+        <<"application/json">>,
+        hb_maps:get(<<"content-type">>, hb_maps:from_list(Headers), #{})
+    ),
+    ?assert(is_map(hb_json:decode(Body))).
 
 %% @doc Test the set_opts/2 function that merges request with options,
 %% manages node history, and updates server state.

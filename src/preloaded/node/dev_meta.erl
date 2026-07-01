@@ -244,7 +244,7 @@ handle_resolve(Req, Msgs, NodeMsg) ->
     ),
     LoadedMsgs = hb_cache:ensure_all_loaded(Msgs, NodeMsg),
     case resolve_hook(<<"request">>, Req, LoadedMsgs, NodeMsg) of
-        {ok, []} ->
+        {ok, #{ <<"body">> := [] }} ->
             {ok,
                 #{
                     <<"status">> => 307,
@@ -256,8 +256,9 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                     )
                 }
             };
-        {ok, PreProcessedMsg} ->
+        {ok, RequestHookRes = #{ <<"body">> := PreProcessedMsg }} ->
             ?event(http_request, {request_after_preprocessing, PreProcessedMsg}),
+            ReplyReq = hb_maps:get(<<"request">>, RequestHookRes, Req, NodeMsg),
             AfterPreprocOpts = hb_http_server:get_opts(NodeMsg),
             % Resolve the request message.
             HTTPOpts = hb_maps:merge(
@@ -272,22 +273,40 @@ handle_resolve(Req, Msgs, NodeMsg) ->
                 ),
             {ok, StatusEmbeddedRes} = embed_status(Res, NodeMsg),
             AfterResolveOpts = hb_http_server:get_opts(NodeMsg),
+            ResponseHookRes =
+                resolve_hook(
+                    <<"response">>,
+                    ReplyReq,
+                    StatusEmbeddedRes,
+                    AfterResolveOpts
+                ),
+            ResponseReq =
+                case ResponseHookRes of
+                    {ok, ResponseHookMsg} ->
+                        hb_maps:get(
+                            <<"request">>,
+                            ResponseHookMsg,
+                            ReplyReq,
+                            NodeMsg
+                        );
+                    _ -> ReplyReq
+                end,
             % Apply the post-processor to the result.
-            Output = maybe_sign(
-                embed_status(
-                    resolve_hook(
-                        <<"response">>,
-                        Req,
-                        StatusEmbeddedRes,
-                        AfterResolveOpts
+            Output =
+                set_reply_request(
+                    maybe_sign(
+                        embed_status(
+                            hook_body(ResponseHookRes, NodeMsg),
+                            NodeMsg
+                        ),
+                        NodeMsg
                     ),
+                    ResponseReq,
                     NodeMsg
                 ),
-                NodeMsg
-            ),
             ?event(http_request,
                 {http_request,
-                    {request, Req},
+                    {request, ReplyReq},
                     {result, Output}
                 }
             ),
@@ -310,14 +329,14 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
         },
     ?event(hook, {resolve_hook, HookName, HookReq}),
     case hb_hook:on(HookName, HookReq, NodeMsg) of
-        {ok, #{ <<"body">> := ResponseBody }} ->
+        {ok, Response = #{ <<"body">> := ResponseBody }} ->
             ?event(hook,
                 {resolve_hook_success,
                     {name, HookName},
                     {response_body, ResponseBody}
                 }
             ),
-            {ok, ResponseBody};
+            {ok, Response};
         {error, _} = Error ->
             ?event(hook,
                 {resolve_hook_error,
@@ -329,6 +348,20 @@ resolve_hook(HookName, InitiatingRequest, Body, NodeMsg) ->
         Other ->
             {error, Other}
     end.
+
+hook_body({ok, #{ <<"body">> := ResponseBody }}, _NodeMsg) ->
+    {ok, ResponseBody};
+hook_body({error, _} = Error, _NodeMsg) ->
+    Error;
+hook_body(Other, _NodeMsg) ->
+    {error, Other}.
+
+set_reply_request({Status, Res}, ReplyReq, NodeMsg) when is_map(Res) ->
+    {Status, set_reply_request(Res, ReplyReq, NodeMsg)};
+set_reply_request(Res, ReplyReq, NodeMsg) when is_map(Res) ->
+    hb_private:set(Res, <<"http/reply-request">>, ReplyReq, NodeMsg);
+set_reply_request(Res, _ReplyReq, _NodeMsg) ->
+    Res.
 
 %% @doc Wrap the result of a device call in a status.
 embed_status({ErlStatus, Res}, NodeMsg) when is_map(Res) ->
@@ -762,6 +795,54 @@ modify_request_test() ->
         }),
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
+
+%% @doc Test that the request after preprocessing is preserved for HTTP reply
+%% negotiation.
+reply_request_from_request_hook_test() ->
+    Wallet = ar_wallet:new(),
+    ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Node = hb_http_server:start_node(
+        #{
+            <<"priv-wallet">> => Wallet,
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        #{
+                            <<"device">> => #{
+                                <<"request">> =>
+                                    fun(
+                                        _,
+                                        #{
+                                            <<"request">> := Request,
+                                            <<"body">> := Msgs
+                                        },
+                                        _
+                                    ) ->
+                                        {ok, #{
+                                            <<"request">> =>
+                                                Request#{
+                                                    <<"accept">> =>
+                                                        <<"json@1.0">>
+                                                },
+                                            <<"body">> => Msgs
+                                        }}
+                                    end
+                            }
+                        }
+                }
+        }),
+    LiveOpts = hb_http_server:get_opts(#{ <<"http-server">> => ServerID }),
+    {ok, Res} =
+        handle(
+            LiveOpts,
+            #{
+                <<"method">> => <<"GET">>,
+                <<"path">> => <<"/~meta@1.0/info">>
+            }
+        ),
+    ReplyReq = hb_private:get(<<"http/reply-request">>, Res, LiveOpts),
+    ?assertEqual(<<"json@1.0">>, hb_maps:get(<<"accept">>, ReplyReq, LiveOpts)),
+    ?assertMatch({ok, _}, hb_http:get(Node, <<"/~meta@1.0/info">>, #{})).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->
