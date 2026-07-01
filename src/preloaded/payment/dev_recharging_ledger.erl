@@ -90,14 +90,24 @@ request_account(not_found, _Opts) ->
         <<"Balance request has no signer.">>,
         <<"Balance request has multiple signers.">>
     );
+%% @doc A nested `request' may carry the account as an explicit `target' key
+%% (P4 nests the original request when delegating `/~p4@1.0/balance', so an
+%% unsigned `?target=<addr>' balance query - arrives as `request.target'). 
+%% Prefer that nested target, then fall back to the
+%% request signer. 
 request_account(Request, Opts) ->
-    request_signer_account(
-        Request,
-        Opts,
-        <<"Balance request must include target or signed request.">>,
-        <<"Balance request has no signer.">>,
-        <<"Balance request has multiple signers.">>
-    ).
+    case hb_ao:get(<<"target">>, Request, not_found, Opts) of
+        not_found ->
+            request_signer_account(
+                Request,
+                Opts,
+                <<"Balance request must include target or signed request.">>,
+                <<"Balance request has no signer.">>,
+                <<"Balance request has multiple signers.">>
+            );
+        Target ->
+            {ok, account_id(Target)}
+    end.
 
 request_signer_account(not_found, _Opts, Missing, _NoSigner, _Multiple) ->
     {error, #{
