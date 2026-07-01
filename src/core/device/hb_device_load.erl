@@ -290,40 +290,58 @@ load_archive_message(Msg, Opts) ->
                 Msg,
                 Opts
             ),
-        {ok, Schema} ?= archive_to_schema(Module, Archive, Opts),
-        cache_schema(Module, Schema, Opts),
+        maybe_cache_schema(Module, Archive, Opts),
         {ok, Module}
     end.
-    
-%% @doc Extract the schema for a newly loaded device module from a packaged
-%% device archive.
+
+%% @doc Extract and cache a packaged device schema when available.
+maybe_cache_schema(Module, Archive, Opts) ->
+    case archive_to_schema(Module, Archive, Opts) of
+        {ok, Schema} ->
+            cache_schema(Module, Schema, Opts),
+            ok;
+        _ -> ok
+    end.
+
+%% @doc Extract the schema for a loaded device module from a packaged archive.
 archive_to_schema(Module, Archive, _Opts) ->
     case hb_device_archive:contents(Archive) of
         {ok, Modules, _Resources} ->
             case lists:keyfind(Module, 1, Modules) of
                 {Module, _Path, Beam} -> hb_types:beam_to_schema(Module, Beam);
-                false -> ok
+                false -> {error, schema_not_found}
             end;
-        {error, _} ->
-            ok
+        {error, _} = Error ->
+            Error
     end.
-    
+
 %% @doc Read the cached schema for a device module if known.
 schema(Module, Opts) ->
-    hb_cache:read(schema_key(Module), loaded_device_opts(Opts)).
+    SchemaOpts = loaded_device_opts(Opts),
+    case hb_cache:read(schema_key(Module), SchemaOpts) of
+        {ok, Schema} -> {ok, hb_cache:ensure_all_loaded(Schema, SchemaOpts)};
+        Other -> Other
+    end.
 
 %% @doc Write the schema for a device to the cache, under its reference.
-%% Avoids caching the schema for devices during the write of another schema
-%% through the `cache-schemas' option in the node message.
-cache_schema(_Module, _Schema, #{ <<"cache-schemas">> := false }) ->
-    skip;
 cache_schema(Module, Schema, Opts) ->
-    SchemaOpts = (loaded_device_opts(Opts))#{ <<"cache-schemas">> => false },
-    case hb_cache:write(Schema, SchemaOpts) of
-        {ok, SchemaID} ->
-            hb_store:link(#{ SchemaID => schema_key(Module) }, Opts),
-            {ok, SchemaID};
-        Other -> Other
+    case hb_opts:get(<<"caching-schema">>, false, Opts) of
+        true -> skipping_recursive_cache;
+        false ->
+            SchemaOpts =
+                (loaded_device_opts(Opts))#{
+                    <<"caching-schema">> => true
+                },
+            case hb_cache:write(Schema, SchemaOpts) of
+                {ok, SchemaID} ->
+                    hb_store:link(
+                        loaded_device_store(Opts),
+                        #{ schema_key(Module) => SchemaID },
+                        SchemaOpts
+                    );
+                _ ->
+                    ok
+            end
     end.
 
 schema_key(Module) ->

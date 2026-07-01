@@ -49,14 +49,14 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
             {ok, ForcedBaseDevice} -> ForcedBaseDevice;
             error -> message_device_id(Base, Opts)
         end,
-    InitialDevice = module(DeviceID, Opts),
-    {Type, ExecDev, Fun} = message_to_fun(InitialDevice, Base, Key, Opts),
+    {Type, ExecDev, ExecMod, Fun} = message_to_fun(DeviceID, Base, Key, Opts),
     {ok,
         Context#{
             <<"base-device">> => DeviceID,
+            <<"resolver-device">> => ExecDev,
             <<"priv">> =>
                 #{
-                    <<"exec-device">> => ExecDev,
+                    <<"resolver-module">> => ExecMod,
                     <<"add-key">> => Type == add_key,
                     <<"resolver">> => Fun
                 }

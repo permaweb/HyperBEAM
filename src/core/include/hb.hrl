@@ -56,7 +56,7 @@
 %% changes.
 -define(prim_dbg(X), io:format(standard_error, "PRIM ~s: ~p~n", [?trace_short(), X])).
 -else.
--define(prim_dbg(X), ignored_primitive_debug).
+-define(prim_dbg(X), io:format(standard_error, "PRIM ~s: ~p~n", [?trace_short(), X])).
 -endif.
 
 %%% Macro shortcuts for debugging.

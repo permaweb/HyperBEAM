@@ -437,7 +437,12 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
                     {opts, Opts}
                 }
             ),
-			{Status, Device, Func} = hb_device:message_to_fun(Base, Key, UserOpts),
+			{Status, _Dev, Device, Func} =
+			    hb_device:message_to_fun(
+					Base,
+					Key,
+					UserOpts
+				),
 			?event(
 				{found_func_for_exec,
                     {key, Key},
