@@ -50,6 +50,8 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
             {ok, ForcedBaseDevice} -> {ok, ForcedBaseDevice};
             error -> message_device_id(Base, Key, Opts)
         end,
+    ?prim_dbg({adding_resolver_for, DevRes, Key}),
+    OldPriv = maps:get(<<"priv">>, Context, #{}),
     case DevRes of
         {hit, Value} ->
             {ok,
@@ -65,7 +67,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
                     <<"base-device">> => DeviceID,
                     <<"resolver-device">> => ExecDev,
                     <<"priv">> =>
-                        #{
+                        OldPriv#{
                             <<"resolver-module">> => ExecMod,
                             <<"add-key">> => Type == add_key,
                             <<"resolver">> => Fun
@@ -191,6 +193,8 @@ module(DevID, Opts) ->
 
 %% @doc Return the device ID from a message, resolving through any ancestors
 %% as necessary.
+message_device_id(List, _, _) when is_list(List) ->
+    {ok, <<"message@1.0">>};
 message_device_id(Msg, Key, Opts) ->
     ?event({finding_device_id, Msg}),
     case hb_maps:find(<<"device">>, Msg, Opts) of
@@ -200,10 +204,8 @@ message_device_id(Msg, Key, Opts) ->
                 {ok, Value} -> {hit, Value};
                 error ->
                     case hb_maps:find(<<"...">>, Msg, Opts) of
-                        {ok, Ancestor} ->
-                            message_device_id(Ancestor, Key, Opts);
-                        error ->
-                            {ok, Default}
+                        {ok, Ancestor} -> message_device_id(Ancestor, Key, Opts);
+                        error -> {ok, ?DEFAULT_DEVICE}
                     end
             end
     end.
