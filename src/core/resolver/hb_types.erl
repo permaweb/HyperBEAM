@@ -15,18 +15,30 @@ add_schema(
                 #{
                     <<"resolver">> := Func,
                     <<"add-key">> := AddKey,
-                    <<"exec-device">> := Device
+                    <<"exec-module">> := DevMod
                 }
         },
     Opts) ->
-    case schema_from_device(Device, Func, Key, Opts) of
-        undefined -> {ok, Ctx#{ <<"schema">> => undefined } };
-        Schema ->
-            {ok,
-                Ctx#{
-                    <<"schema">> => execution_schema(Schema, AddKey)
+    case schema_from_device(DevMod, Func, Key, Opts) of
+        undefined ->
+            ?prim_dbg(
+                {schema_not_found,
+                    {device, DevMod},
+                    {func, Func},
+                    {key, Key}
                 }
-            }
+            ),
+            {ok, Ctx#{ <<"schema">> => undefined } };
+        Schema ->
+            ?prim_dbg(
+                {schema_found,
+                    {device, DevMod},
+                    {func, Func},
+                    {key, Key},
+                    {schema, Schema}
+                }
+            ),
+            {ok, Ctx#{ <<"schema">> => execution_schema(Schema, AddKey) } }
     end.
 
 %% @doc Apply the resolved function's base/request schemas to one execution.
@@ -57,12 +69,19 @@ vary(Ctx = #{
 extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
 extract(Module, Opts) when is_atom(Module) ->
-    case hb_device_load:schema(Module, Opts) of
-        {ok, Schema} -> {ok, Schema};
-        _ ->
-            case code:ensure_loaded(Module) of
-                {module, Module} -> beam_to_schema(Module);
-                {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
+    % If we are already caching a schema at the moment, skip the recursive cache
+    % call and error early.
+    case hb_opts:get(<<"caching-schema">>, false, Opts) of
+        true ->
+            {error, caching_schema};
+        false ->
+            case hb_device_load:schema(Module, Opts) of
+                {ok, Schema} -> {ok, Schema};
+                _ ->
+                    case code:ensure_loaded(Module) of
+                        {module, Module} -> beam_to_schema(Module);
+                        {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
+                    end
             end
     end;
 extract(Device, Opts) when is_binary(Device) ->
