@@ -12,33 +12,57 @@ add_schema(
         #{
             <<"key">> := Key,
             <<"priv">> :=
-                #{
-                    <<"resolver">> := Func,
-                    <<"add-key">> := AddKey,
-                    <<"exec-module">> := DevMod
-                }
+                Priv =
+                    #{
+                        <<"add-key">> := AddKey,
+                        <<"resolver">> := Func
+                    }
         },
     Opts) ->
-    case schema_from_device(DevMod, Func, Key, Opts) of
+    SchemaKey = schema_key(Key, AddKey, Func),
+    Device = schema_device(Priv),
+    case schema_from_device(Device, SchemaKey, Opts) of
         undefined ->
             ?prim_dbg(
                 {schema_not_found,
-                    {device, DevMod},
-                    {func, Func},
-                    {key, Key}
+                    {device, Device},
+                    {schema_key, SchemaKey}
                 }
             ),
             {ok, Ctx#{ <<"schema">> => undefined } };
-        Schema ->
+        Schemas ->
+            ExecutionSchemas = [execution_schema(Schema, AddKey) || Schema <- Schemas],
             ?prim_dbg(
                 {schema_found,
-                    {device, DevMod},
-                    {func, Func},
-                    {key, Key},
-                    {schema, Schema}
+                    {device, Device},
+                    {schema_key, SchemaKey},
+                    {schemas, ExecutionSchemas}
                 }
             ),
-            {ok, Ctx#{ <<"schema">> => execution_schema(Schema, AddKey) } }
+            {ok,
+                Ctx#{
+                    <<"schema">> =>
+                        #{
+                            <<"candidates">> =>
+                                ExecutionSchemas
+                        }
+                }
+            }
+    end.
+
+schema_device(#{ <<"resolver-module">> := Module }) ->
+    Module;
+schema_device(#{ <<"exec-device">> := Device }) ->
+    Device;
+schema_device(_Priv) ->
+    undefined.
+
+schema_key(Key, false, _Func) ->
+    Key;
+schema_key(_Key, true, Func) ->
+    case erlang:fun_info(Func, name) of
+        {name, Name} -> Name;
+        _ -> undefined
     end.
 
 %% @doc Apply the resolved function's base/request schemas to one execution.
@@ -51,17 +75,36 @@ vary(Ctx = #{ <<"schema">> := undefined, <<"base">> := Base, <<"req">> := Req },
         }
     };
 vary(Ctx = #{
-    <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
+    <<"schema">> := #{ <<"candidates">> := Candidates },
     <<"base">> := Base,
     <<"req">> := Req
 }, Opts) ->
+    vary_first(Ctx, Candidates, Base, Req, Opts).
+
+vary_first(Ctx, [], Base, Req, _Opts) ->
     {ok,
         Ctx#{
-            <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
-            <<"varied-req">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
-            <<"return-extends">> => overlay(ReturnSchema)
+            <<"varied-base">> => Base,
+            <<"varied-req">> => Req,
+            <<"return-extends">> => none
         }
-    }.
+    };
+vary_first(Ctx, [[BaseSchema, ReqSchema, ReturnSchema] = Candidate | Rest], Base, Req, Opts) ->
+    try
+        {ok,
+            Ctx#{
+                <<"schema">> => Candidate,
+                <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
+                <<"varied-req">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
+                <<"return-extends">> => overlay(ReturnSchema)
+            }
+        }
+    catch
+        throw:{invalid_type, _, _} ->
+            vary_first(Ctx, Rest, Base, Req, Opts);
+        throw:{required_key_missing, _} ->
+            vary_first(Ctx, Rest, Base, Req, Opts)
+    end.
 
 %% @doc Extract a device module's function schemas. We first check the
 %% `loaded-device-store` cache, then fall back to loading the module manually
@@ -92,21 +135,20 @@ extract(Device, Opts) when is_binary(Device) ->
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
-schema_from_device(Device, Func, Key, Opts) ->
+schema_from_device(_Device, undefined, _Opts) ->
+    undefined;
+schema_from_device(undefined, _SchemaKey, _Opts) ->
+    undefined;
+schema_from_device(Device, SchemaKey, Opts) ->
     case extract(Device, Opts) of
         {ok, #{ <<"keys">> := Schemas }} ->
-            select_schema(Func, Key, Schemas);
+            select_schemas(SchemaKey, Schemas);
         {error, _Reason} ->
             undefined
     end.
 
-select_schema(Func, _Key, Schemas) ->
-    case erlang:fun_info(Func, name) of
-        {name, Name} ->
-            maps:get(normalize_name(Name), Schemas, undefined);
-        _ ->
-            undefined
-    end.
+select_schemas(SchemaKey, Schemas) ->
+    maps:get(normalize_name(SchemaKey), Schemas, undefined).
 
 execution_schema(Schema, AddKey) ->
     Args = maps:get(<<"args">>, Schema, []),
@@ -169,24 +211,150 @@ beam_to_schema(Module, Beam) ->
             TypeEnv = build_type_env(Forms),
             {ok,
                 #{
-                    <<"keys">> =>
-                        lists:foldl(
-                            fun
-                                ({attribute, _, spec, {{Name, _}, [Head | _]}}, Acc) ->
-                                    Acc#{
-                                        normalize_name(Name) =>
-                                            fun_schema(Head, TypeEnv)
-                                    };
-                                (_, Acc) ->
-                                    Acc
-                            end,
-                            #{},
-                            Forms
-                        )
+                    <<"keys">> => schemas_from_forms(Forms, TypeEnv)
                 }};
         Error ->
             {error, {abstract_code_unavailable, Module, Error}}
     end.
+
+schemas_from_forms(Forms, TypeEnv) ->
+    guard_schemas(Forms, spec_schemas(Forms, TypeEnv)).
+
+add_schemas(Key, Schemas, Acc) ->
+    maps:update_with(Key, fun(Existing) -> Existing ++ Schemas end, Schemas, Acc).
+
+spec_schemas(Forms, TypeEnv) ->
+    lists:foldl(
+        fun
+            ({attribute, _, spec, {{Name, _}, Heads}}, Acc) ->
+                add_schemas(
+                    normalize_name(Name),
+                    [fun_schema(Head, TypeEnv) || Head <- Heads],
+                    Acc
+                );
+            (_, Acc) ->
+                Acc
+        end,
+        #{},
+        Forms
+    ).
+
+guard_schemas(Forms, SpecSchemas) ->
+    lists:foldl(
+        fun
+            ({function, _, Name, _Arity, Clauses}, Acc) ->
+                Key = normalize_name(Name),
+                case maps:is_key(Key, Acc) of
+                    true ->
+                        Acc;
+                    false ->
+                        case clause_schemas(Clauses) of
+                            [] ->
+                                Acc;
+                            Schemas ->
+                                Acc#{ Key => Schemas }
+                        end
+                end;
+            (_, Acc) ->
+                Acc
+        end,
+        SpecSchemas,
+        Forms
+    ).
+
+clause_schemas(Clauses) ->
+    ClauseSchemas = [clause_schema(Clause) || Clause <- Clauses],
+    case lists:any(fun({_, Interesting}) -> Interesting end, ClauseSchemas) of
+        true -> [Schema || {Schema, _} <- ClauseSchemas];
+        false -> []
+    end.
+
+clause_schema({clause, _, Args, Guards, _Body}) ->
+    GuardTypes = guard_type_env(Guards),
+    {ArgSchemas, InterestingArgs} =
+        lists:mapfoldl(
+            fun(Arg, Interesting) ->
+                {ArgSchema, ArgInteresting} = pattern_schema(Arg, GuardTypes, arg),
+                {ArgSchema, Interesting orelse ArgInteresting}
+            end,
+            false,
+            Args
+        ),
+    {
+        #{
+            <<"args">> => ArgSchemas,
+            <<"return">> => any_type()
+        },
+        InterestingArgs
+    }.
+
+guard_type_env([GuardSeq]) ->
+    lists:foldl(fun add_guard_type/2, #{}, GuardSeq);
+guard_type_env(_Guards) ->
+    #{}.
+
+add_guard_type({call, _, {atom, _, Predicate}, [{var, _, Var}]}, Acc) ->
+    case guard_predicate_type(Predicate) of
+        undefined -> Acc;
+        Type -> Acc#{ Var => Type }
+    end;
+add_guard_type(_Guard, Acc) ->
+    Acc.
+
+guard_predicate_type(is_integer) -> scalar_type(<<"integer">>);
+guard_predicate_type(is_binary) -> scalar_type(<<"binary">>);
+guard_predicate_type(is_bitstring) -> scalar_type(<<"bitstring">>);
+guard_predicate_type(is_boolean) -> boolean_type();
+guard_predicate_type(is_atom) -> scalar_type(<<"atom">>);
+guard_predicate_type(is_float) -> scalar_type(<<"float">>);
+guard_predicate_type(is_number) -> scalar_type(<<"number">>);
+guard_predicate_type(is_pid) -> scalar_type(<<"pid">>);
+guard_predicate_type(is_list) -> #{ <<"kind">> => <<"list">>, <<"item">> => any_type() };
+guard_predicate_type(is_map) ->
+    message_type({#{}, #{ <<"presence">> => optional, <<"type">> => any_type() }});
+guard_predicate_type(_Predicate) -> undefined.
+
+pattern_schema({var, _, Name}, GuardTypes, Context) ->
+    case maps:get(Name, GuardTypes, undefined) of
+        undefined -> {default_var_type(Context), false};
+        Type -> {Type, true}
+    end;
+pattern_schema({map, _, Fields}, GuardTypes, _Context) ->
+    Keys =
+        lists:foldl(
+            fun
+                ({map_field_exact, _, KeyAst, ValueAst}, Acc) ->
+                    {ValueType, _} = pattern_schema(ValueAst, GuardTypes, field),
+                    Acc#{
+                        pattern_key_name(KeyAst) =>
+                            #{
+                                <<"presence">> => required,
+                                <<"type">> => ValueType
+                            }
+                    };
+                (_Field, Acc) ->
+                    Acc
+            end,
+            #{},
+            Fields
+        ),
+    {message_type({Keys, none}), map_size(Keys) > 0};
+pattern_schema(_Other, _GuardTypes, arg) ->
+    {empty_type(), false};
+pattern_schema(_Other, _GuardTypes, field) ->
+    {any_type(), false}.
+
+default_var_type(arg) -> empty_type();
+default_var_type(field) -> any_type().
+
+pattern_key_name({bin, _, [{bin_element, _, {string, _, String}, default, default}]}) ->
+    hb_util:bin(String);
+pattern_key_name({atom, _, Atom}) ->
+    normalize_name(Atom);
+pattern_key_name({string, _, String}) ->
+    hb_util:bin(String);
+pattern_key_name(Other) ->
+    hb_util:bin(io_lib:format("~tp", [Other])).
 
 module_beam(Module) ->
     case code:get_object_code(Module) of
@@ -382,18 +550,41 @@ apply_schema(Type, Value, Opts) ->
 explicit_keys(Keys, Message, Opts) ->
     maps:fold(
         fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-            case hb_ao:raw(Message, #{ <<"path">> => Key }, Opts) of
+            case project_key(Key, Message, Opts#{ <<"hashpath">> => ignore }) of
                 {ok, Value} ->
                     Acc#{ Key => apply_schema(Type, Value, Opts) };
                 {error, not_found} when Presence =:= required ->
                     throw({required_key_missing, Key});
                 {error, not_found} ->
+                    Acc;
+                error when Presence =:= required ->
+                    throw({required_key_missing, Key});
+                error ->
                     Acc
             end
         end,
         #{},
         Keys
     ).
+
+project_key(Key, Message, Opts) ->
+    case hb_private:is_private(Key) of
+        true -> {error, not_found};
+        false -> do_project_key(Key, Message, Opts)
+    end.
+
+do_project_key(Key, Message, Opts) when is_map(Message) ->
+    case hb_maps:find(Key, Message, Opts) of
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            case hb_maps:find(<<"...">>, Message, Opts) of
+                {ok, Ancestor} -> do_project_key(Key, Ancestor, Opts);
+                error -> {error, not_found}
+            end
+    end;
+do_project_key(Key, Message, Opts) ->
+    do_project_key(Key, hb_cache:ensure_loaded(Message, Opts), Opts).
 
 wildcard_keys(none, _Keys, _Message, _Opts) ->
     #{};
@@ -673,30 +864,180 @@ map_wildcards_test() ->
         Force
     ).
 
-default_handler_uses_resolved_function_schema_test() ->
-    Func = fun default_schema_fun/4,
+schema_key_selects_resolved_function_schema_test() ->
+    Schemas =
+        #{
+            <<"default-schema-fun">> => [default_schema],
+            <<"requested-key">> => [requested_key_schema]
+        },
     ?assertEqual(
-        default_schema,
-        select_schema(
-            Func,
-            <<"requested-key">>,
-            #{
-                {<<"default-schema-fun">>, 4} => default_schema,
-                {<<"requested-key">>, 3} => requested_key_schema
-            }
-        )
+        [requested_key_schema],
+        select_schemas(<<"requested-key">>, Schemas)
+    ),
+    ?assertEqual(
+        [default_schema],
+        select_schemas(default_schema_fun, Schemas)
     ),
     ?assertEqual(
         undefined,
-        select_schema(
-            Func,
-            <<"requested-key">>,
-            #{{<<"requested-key">>, 3} => requested_key_schema}
-        )
+        select_schemas(default_schema_fun, #{<<"requested-key">> => [requested_key_schema]})
     ).
 
-default_schema_fun(_Key, _Base, _Req, _Opts) ->
-    {ok, unused}.
+specs_skip_guard_schemas_for_function_name_test() ->
+    Forms =
+        [
+            {attribute, 1, spec,
+                {{sample, 2},
+                    [
+                        {type, 1, 'fun',
+                            [
+                                {type, 1, product,
+                                    [
+                                        {type, 1, integer, []},
+                                        {type, 1, any, []}
+                                    ]},
+                                {type, 1, any, []}
+                            ]}
+                    ]}},
+            {function, 1, sample, 3,
+                [
+                    {clause, 1,
+                        [
+                            {var, 1, 'Base'},
+                            {map, 1,
+                                [
+                                    {map_field_exact, 1,
+                                        {bin, 1,
+                                            [
+                                                {bin_element, 1,
+                                                    {string, 1, "match"},
+                                                    default,
+                                                    default
+                                                }
+                                            ]},
+                                        {var, 1, 'Match'}
+                                    }
+                                ]},
+                            {var, 1, 'Opts'}
+                        ],
+                        [[{call, 1, {atom, 1, is_binary}, [{var, 1, 'Match'}]}]],
+                        []
+                    }
+                ]}
+        ],
+    Schemas = schemas_from_forms(Forms, #{}),
+    ?assertMatch(#{ <<"sample">> := [_] }, Schemas),
+    [Schema] = maps:get(<<"sample">>, Schemas),
+    ?assertMatch(
+        #{
+            <<"args">> :=
+                [
+                    #{ <<"kind">> := <<"integer">> },
+                    #{ <<"kind">> := <<"any">> }
+                ]
+        },
+        Schema
+    ).
+
+candidate_schema_matches_first_request_shape_test() ->
+    Device = <<"test-device@1.0">>,
+    Base =
+        #{
+            <<"device">> => Device,
+            <<"base-extra">> => <<"drop-me">>
+        },
+    Opts = #{},
+    IntegerReq =
+        #{
+            <<"path">> => <<"match-by-shape">>,
+            <<"match">> => <<"3">>,
+            <<"req-extra">> => <<"drop-me">>
+        },
+    BinaryReq =
+        #{
+            <<"path">> => <<"match-by-shape">>,
+            <<"match">> => <<"nan">>,
+            <<"req-extra">> => <<"drop-me">>
+        },
+    NoMatchReq =
+        #{
+            <<"path">> => <<"match-by-shape">>,
+            <<"req-extra">> => <<"drop-me">>
+        },
+
+    {IntegerSchemaCtx, IntegerCtx} = vary_match_by_shape(Base, IntegerReq, Opts),
+    assert_match_by_shape_candidates(IntegerSchemaCtx),
+    ExpectedBase = #{ <<"device">> => Device },
+    assert_varied_match(
+        IntegerCtx,
+        <<"integer">>,
+        ExpectedBase,
+        #{ <<"path">> => <<"match-by-shape">>, <<"match">> => 3 }
+    ),
+
+    {_, BinaryCtx} = vary_match_by_shape(Base, BinaryReq, Opts),
+    assert_varied_match(
+        BinaryCtx,
+        <<"any">>,
+        ExpectedBase,
+        #{ <<"path">> => <<"match-by-shape">>, <<"match">> => <<"nan">> }
+    ),
+
+    {_, NoMatchCtx} = vary_match_by_shape(Base, NoMatchReq, Opts),
+    assert_varied_empty(
+        NoMatchCtx,
+        ExpectedBase,
+        #{ <<"path">> => <<"match-by-shape">> }
+    ).
+
+assert_varied_match(Ctx, ExpectedType, ExpectedBase, ExpectedReq) ->
+    [_, ReqSchema, _] = maps:get(<<"schema">>, Ctx),
+    ?assertEqual(#{ <<"kind">> => ExpectedType }, schema_key_type(<<"match">>, ReqSchema)),
+    ?assertEqual(ExpectedBase, maps:get(<<"varied-base">>, Ctx)),
+    ?assertEqual(ExpectedReq, maps:get(<<"varied-req">>, Ctx)).
+
+assert_varied_empty(Ctx, ExpectedBase, ExpectedReq) ->
+    [_, NoMatchReqSchema, _] = maps:get(<<"schema">>, Ctx),
+    ?assertMatch(#{ <<"kind">> := <<"empty">> }, NoMatchReqSchema),
+    ?assertEqual(ExpectedBase, maps:get(<<"varied-base">>, Ctx)),
+    ?assertEqual(ExpectedReq, maps:get(<<"varied-req">>, Ctx)).
+
+vary_match_by_shape(Base, Req, Opts) ->
+    {ok, ResolverCtx} =
+        hb_device:add_resolver(
+            #{
+                <<"base">> => Base,
+                <<"req">> => Req,
+                <<"key">> => <<"match-by-shape">>
+            },
+            Opts
+        ),
+    {ok, SchemaCtx} = add_schema(ResolverCtx, Opts),
+    {ok, VariedCtx} = vary(SchemaCtx, Opts),
+    {SchemaCtx, VariedCtx}.
+
+assert_match_by_shape_candidates(#{ <<"schema">> := #{ <<"candidates">> := Candidates } }) ->
+    ?assertMatch(
+        [
+            [#{ <<"kind">> := <<"empty">> }, _, _],
+            [#{ <<"kind">> := <<"empty">> }, _, _],
+            [#{ <<"kind">> := <<"empty">> }, #{ <<"kind">> := <<"empty">> }, _]
+        ],
+        Candidates
+    ),
+    [[_, IntegerReqSchema, _], [_, AnyReqSchema, _], _] = Candidates,
+    ?assertMatch(
+        #{ <<"kind">> := <<"integer">> },
+        schema_key_type(<<"match">>, IntegerReqSchema)
+    ),
+    ?assertMatch(
+        #{ <<"kind">> := <<"any">> },
+        schema_key_type(<<"match">>, AnyReqSchema)
+    ).
+
+schema_key_type(Key, #{ <<"kind">> := <<"message">>, <<"keys">> := Keys }) ->
+    maps:get(<<"type">>, maps:get(Key, Keys)).
+
 
 extension_projection_test() ->
     Schema =

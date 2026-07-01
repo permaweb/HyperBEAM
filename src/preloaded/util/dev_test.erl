@@ -1,7 +1,8 @@
 -module(dev_test).
 -implements(<<"test-device@1.0">>).
 -export([info/3]).
--export([info/1, test_func/1, compute/3, init/3, restore/3, snapshot/3, mul/2]).
+-export([info/1, test_func/1, match_by_shape/3]).
+-export([compute/3, init/3, restore/3, snapshot/3, mul/2]).
 -export([mangle/3, update_state/3, increment_counter/3, delay/3, append/3]).
 -export([index/3, postprocess/3, load/3]).
 -include_lib("eunit/include/eunit.hrl").
@@ -66,6 +67,14 @@ load(Base, _, _Opts) ->
 
 test_func(_) ->
 	{ok, <<"GOOD FUNCTION">>}.
+
+%% @doc Test schema matching from guarded clauses without declared specs.
+match_by_shape(_Base, #{ <<"match">> := Match }, _Opts) when is_integer(Match) ->
+    {ok, <<"MATCHED INTEGER">>};
+match_by_shape(_Base, #{ <<"match">> := _Match }, _Opts) ->
+    {ok, <<"MATCHED NON-INTEGER">>};
+match_by_shape(_Base, _Req, _Opts) ->
+    {ok, <<"NO MATCH">>}.
 
 %% @doc Example implementation of a `compute' handler. Makes a running list of
 %% the slots that have been computed in the state message and places the new

@@ -85,8 +85,9 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
 %% global default device to handle the key.
 %% Error: If the device is specified, but not loadable, we raise an error.
 %%
-%% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
-%% indicates that the key should be added to the start of the call's arguments.
+%% Returns {ok | add_key, Device, Module, Fun} where Fun is the function to call,
+%% and add_key indicates that the key should be added to the start of the call's
+%% arguments.
 message_to_fun(Msg, Key, Opts) ->
     % Get the device module from the message and recurse.
     message_to_fun(module(Msg, Opts), Msg, Key, Opts).
@@ -112,20 +113,24 @@ message_to_fun(Dev, Msg, Key, Opts) ->
                 ao_devices,
                 {handler_found, {dev, Dev}, {key, Key}, {handler, Handler}}
             ),
-			{Status, Func} = info_handler_to_fun(Handler, Msg, Key, Opts),
-            {Status, Dev, Func};
+            case info_handler_to_fun(Handler, Msg, Key, Opts) of
+                {Status, ExecDev, ExecMod, Func} ->
+                    {Status, ExecDev, ExecMod, Func};
+                {Status, Func} ->
+                    {Status, Dev, Dev, Func}
+            end;
 		_ ->
 			?event_debug(ao_devices, {no_override_handler, {dev, Dev}, {key, Key}}),
 			case {find_exported_function(Msg, Dev, Key, 3, 1, Opts), Exported} of
 				{{ok, Func}, true} ->
 					% Case 3: The device has a function of the name `Key'.
-					{ok, Dev, Func};
+					{ok, Dev, Dev, Func};
 				_ ->
 					case {hb_maps:find(default, Info, Opts), Exported} of
 						{{ok, DefaultFunc}, true} when is_function(DefaultFunc) ->
 							% Case 4: The device has a default handler.
                             ?event_debug({found_default_handler, {func, DefaultFunc}}),
-							{add_key, Dev, DefaultFunc};
+							{add_key, Dev, Dev, DefaultFunc};
                         {{ok, DefaultDevice}, true} when is_binary(DefaultDevice)
                                 orelse is_atom(DefaultDevice) ->
                             % Case 5: The device gives a specific further device
@@ -234,6 +239,11 @@ find_exported_function(Msg, Mod, Key, Arity, MinArity, Opts) when not is_atom(Ke
 		KeyAtom -> find_exported_function(Msg, Mod, KeyAtom, Arity, MinArity, Opts)
 	catch _:_ -> not_found
 	end;
+find_exported_function(Msg, Dev, Key, Arity, MinArity, Opts) when is_binary(Dev) ->
+    case hb_device_load:reference(Dev, Opts) of
+        {ok, Mod} -> find_exported_function(Msg, Mod, Key, Arity, MinArity, Opts);
+        {error, _Reason} -> not_found
+    end;
 find_exported_function(Msg, Dev, Key, MaxArity, MinArity, Opts) when is_map(Dev) ->
     NormKey = hb_ao:normalize_key(Key),
     NormDev = hb_ao:normalize_keys(Dev, Opts),
