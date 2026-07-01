@@ -11,19 +11,19 @@ add_schema(
     Ctx =
         #{
             <<"key">> := Key,
+            <<"resolver-device">> := Device,
             <<"priv">> :=
                 #{
                     <<"resolver">> := Func,
-                    <<"add-key">> := AddKey,
-                    <<"exec-module">> := DevMod
+                    <<"add-key">> := AddKey
                 }
         },
     Opts) ->
-    case schema_from_device(DevMod, Func, Key, Opts) of
+    case schema_from_device(Device, Func, Key, Opts) of
         undefined ->
             ?prim_dbg(
                 {schema_not_found,
-                    {device, DevMod},
+                    {device, Device},
                     {func, Func},
                     {key, Key}
                 }
@@ -32,7 +32,7 @@ add_schema(
         Schema ->
             ?prim_dbg(
                 {schema_found,
-                    {device, DevMod},
+                    {device, Device},
                     {func, Func},
                     {key, Key},
                     {schema, Schema}
