@@ -392,8 +392,9 @@ open_connection_gun(Host, Port, Peer, Opts) ->
                 )
         },
     Transport =
-        case Port of
-            443 -> tls;
+        case {Port, uri_string:parse(Peer)} of
+            {443, _} -> tls;
+            {_, #{ scheme := <<"https">> }} -> tls;
             _ -> tcp
         end,
     DefaultProto =
@@ -401,13 +402,33 @@ open_connection_gun(Host, Port, Peer, Opts) ->
             true -> http3;
             false -> http2
         end,
-    % Fallback through earlier HTTP versions if the protocol is not supported.
-    GunOpts =
-        case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
-            http3 -> BaseGunOpts#{protocols => [http3], transport => quic};
-            http2 -> BaseGunOpts#{protocols => [http2]};
-            http1 -> BaseGunOpts#{protocols => [http]}
+    %% Optional TLS transport options (e.g. verify_none or a pinned CA for a
+    %% self-signed cert). Absent in normal operation, so gun keeps its verifying
+    %% default for CA-signed mesh peers.
+    ExtraTls =
+        case hb_opts:get(http_client_tls_opts, undefined, Opts) of
+            TlsOpts when is_list(TlsOpts), Transport == tls ->
+                #{tls_opts => TlsOpts};
+            _ ->
+                #{}
         end,
+    GunOpts =
+        maps:merge(
+            case Proto = hb_opts:get(protocol, DefaultProto, Opts) of
+                http3 ->
+                    BaseGunOpts#{protocols => [http3], transport => quic};
+                http2 ->
+                    %% Over TLS, advertise h2 with an http/1.1 ALPN fallback so
+                    %% the client reaches both h2 and http/1.1 peers. Cleartext
+                    %% has no ALPN, so it must offer a single protocol.
+                    Protocols =
+                        case Transport of tls -> [http2, http]; _ -> [http2] end,
+                    BaseGunOpts#{protocols => Protocols, transport => Transport};
+                http1 ->
+                    BaseGunOpts#{protocols => [http], transport => Transport}
+            end,
+            ExtraTls
+        ),
     ?event(http_outbound,
         {gun_open,
             {host, Host},
