@@ -217,20 +217,29 @@ vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req }, Opts) ->
                 % upon the base and request, using the `Base` message's 
                 % `device` function. We do this by performing a `primitive`
                 % execution as a recursive call.
-                execute_context(
-                    #{
-                        <<"varied-req">> => Req#{
-                            <<"path">> => <<"vary">>,
-                            <<"vary">> =>
-                                hb_maps:get(
-                                    <<"path">>,
-                                    Req,
-                                    undefined,
-                                    Opts
-                                )
+                {ok, VaryCtxWithResolver} =
+                    hb_device:add_resolver(
+                        #{
+                            <<"key">> => <<"vary">>,
+                            <<"req">> => Req#{
+                                <<"path">> => <<"vary">>,
+                                <<"vary">> =>
+                                    hb_maps:get(
+                                        <<"path">>,
+                                        Req,
+                                        undefined,
+                                        Opts
+                                    )
+                            },
+                            <<"base">> => Base,
+                            <<"primitive">> => true
                         },
-                        <<"base">> => Base,
-                        <<"primitive">> => true
+                        Opts
+                    ),
+                execute_context(
+                    VaryCtxWithResolver#{
+                        <<"varied-base">> => Base,
+                        <<"varied-req">> => Req
                     },
                     Opts
                 )
@@ -240,11 +249,21 @@ vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req }, Opts) ->
         {ok, CtxWithRes = #{ <<"result">> := _Result }} ->
             post_execution(CtxWithRes, Opts);
         {ok, PreparedCtx} ->
-            execute_context(PreparedCtx, Opts);
+            lookup_or_exec(PreparedCtx, Opts);
         Other ->
             Other
     end.
 
+%% @doc Look up a result from the cache and if not found, execute the context.
+lookup_or_exec(Ctx = #{ <<"varied-base">> := VBase, <<"varied-req">> := VReq }, Opts) ->
+    case hb_cache_control:maybe_lookup(VBase, VReq, Opts) of
+        {hit, Res} -> Res;
+        _ -> execute_context(Ctx, Opts)
+    end.
+
+%% @doc Takes a fully prepated context (with `varied-base` and `varied-req`
+%% set, along with `priv/resolver` etc.) and executes it. Does not cache,
+%% extend, or otherwise post-process the result.
 execute_context(Ctx, Opts) ->
     % Apply the function and return the result directly, without any further
     % processing. We add the `PrefixArgs` to the list of arguments to be passed
@@ -258,8 +277,7 @@ execute_context(Ctx, Opts) ->
         <<"priv">> :=
             #{
                 <<"resolver">> := Fun,
-                <<"add-key">> := AddKey,
-                <<"exec-opt">> := ExecOpts
+                <<"add-key">> := AddKey
             }
     } = Ctx,
     {Status, Res} =
@@ -268,7 +286,7 @@ execute_context(Ctx, Opts) ->
             hb_device:truncate_args(
                 Fun,
                 if AddKey -> [Key]; true -> [] end
-                    ++ [VariedBase, VariedReq, ExecOpts]
+                    ++ [VariedBase, VariedReq, Opts]
             )
         ),
     post_execution(Ctx#{ <<"result">> => Res, <<"status">> => Status }, Opts).
@@ -514,6 +532,7 @@ resolve_stage(5, Base, Req, ExecName, Opts) ->
 			    hb_device:message_to_fun(
 					Base,
 					Key,
+					<<"message@1.0">>,
 					UserOpts
 				),
 			?event(

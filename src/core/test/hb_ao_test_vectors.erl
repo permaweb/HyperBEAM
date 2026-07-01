@@ -840,7 +840,7 @@ denormalized_device_name_test(Opts) ->
     ),
     ?assertEqual(
         {ok, Dev, maps:get(test_func, Dev)},
-        hb_device:message_to_fun(Msg, test_func, Opts)
+        hb_device:message_to_fun(Msg, test_func, <<"message@1.0">>, Opts)
     ).
 
 denormalized_key_test(Opts) ->
