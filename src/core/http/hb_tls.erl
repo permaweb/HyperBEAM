@@ -5,7 +5,7 @@
 %%% certificate live (by refreshing the table) without restarting the listener.
 -module(hb_tls).
 -export([socket_opts/1, refresh/1, install/3, sni_lookup/1, expiry/1]).
--export([self_signed/1]).
+-export([self_signed/1, fingerprints/0]).
 -include_lib("eunit/include/eunit.hrl").
 
 -include_lib("public_key/include/public_key.hrl").
@@ -107,6 +107,35 @@ expiry(Domain) ->
             #'OTPTBSCertificate'{validity = #'Validity'{notAfter = NotAfter}} = TBS,
             (asn1_time_to_unix(NotAfter) - os:system_time(second)) div 86400
     end.
+
+%% @doc The SPKI (public-key) fingerprint of each serving cert, keyed by host:
+%% `base64(sha256(SubjectPublicKeyInfo))'. Computed LIVE from the current cert
+%% table, so it reflects the self-signed bootstrap and any ACME-renewed cert.
+%% This matches what a client computes with
+%% `openssl x509 -pubkey | openssl pkey -pubin -outform der | dgst -sha256',
+%% so a client can pin the served cert against the node's signed info. The
+%% private key is never exposed.
+fingerprints() ->
+    Table = persistent_term:get(?CERTS, #{}),
+    maps:fold(
+        fun(default, _Opts, Acc) -> Acc;
+           (Domain, Opts, Acc) when is_binary(Domain) ->
+                case leaf_der(Opts) of
+                    undefined -> Acc;
+                    Der -> Acc#{ Domain => spki_fingerprint(Der) }
+                end
+        end,
+        #{},
+        Table
+    ).
+
+%% base64(sha256(DER of the cert's SubjectPublicKeyInfo)). `plain' decoding
+%% keeps the SPKI in its re-encodable ASN.1 form so der_encode reproduces the
+%% exact bytes a standard client hashes.
+spki_fingerprint(Der) ->
+    Cert = public_key:pkix_decode_cert(Der, plain),
+    SPKI = (Cert#'Certificate'.tbsCertificate)#'TBSCertificate'.subjectPublicKeyInfo,
+    base64:encode(crypto:hash(sha256, public_key:der_encode('SubjectPublicKeyInfo', SPKI))).
 
 %% The leaf DER for a host entry: inline `{cert, [Leaf|_]}', or the first
 %% 'Certificate' read from a `{certfile, Path}'. `undefined' for no entry.
@@ -401,3 +430,29 @@ self_signed_test() ->
     ?assert(is_integer(Days)),
     ?assert(Days > 0),
     ?assert(Days =< 7).
+
+%% @doc fingerprints/0 reads the live cert table and yields, for each host, the
+%% base64 SPKI pin. It must equal the pin a real client computes with the
+%% standard openssl pipeline, proving the published binding is client-verifiable.
+fingerprints_test() ->
+    {ok, CertPem} = file:read_file("test/test-tls.pem"),
+    {ok, KeyPem} = file:read_file("test/test-tls.key"),
+    persistent_term:put(?CERTS, #{}),
+    _ = socket_opts(#{
+        <<"tls">> => #{
+            <<"certs">> => [#{
+                <<"domains">> => [<<"localhost">>],
+                <<"cert">> => CertPem,
+                <<"key">> => KeyPem
+            }]
+        }
+    }),
+    Fps = fingerprints(),
+    Fp = maps:get(<<"localhost">>, Fps),
+    ?assert(is_binary(Fp)),
+    OpenSsl = list_to_binary(string:trim(os:cmd(
+        "openssl x509 -in test/test-tls.pem -pubkey -noout"
+        " | openssl pkey -pubin -outform der"
+        " | openssl dgst -sha256 -binary | openssl base64"))),
+    ?debugFmt("SPKI pin: fingerprints()=~s openssl=~s", [Fp, OpenSsl]),
+    ?assertEqual(OpenSsl, Fp).

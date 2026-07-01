@@ -168,7 +168,17 @@ add_dynamic_keys(NodeMsg) ->
                 Address = hb_util:id(ar_wallet:to_address(Wallet)),
                 NodeMsg#{ <<"address">> => Address }
         end,
-    add_identity_addresses(UpdatedNodeMsg).
+    add_tls_fingerprints(add_identity_addresses(UpdatedNodeMsg)).
+
+%% @doc Replace the raw `tls' block with the live SPKI fingerprints of the
+%% served certs. This publishes the cert-to-wallet binding (a client can pin the
+%% cert on :443 against this wallet-signed value) while ensuring no cert or
+%% private key material from the `tls' config is ever served in the info.
+add_tls_fingerprints(NodeMsg) ->
+    case maps:is_key(<<"tls">>, NodeMsg) of
+        false -> NodeMsg;
+        true -> NodeMsg#{ <<"tls">> => #{ <<"key-fingerprints">> => hb_tls:fingerprints() } }
+    end.
 
 add_identity_addresses(NodeMsg) ->
     Identities = hb_opts:get(identities, #{}, NodeMsg),
