@@ -285,7 +285,11 @@ lookup_or_exec(
         }, Opts) ->
     ?prim_dbg({lookup_or_exec, Key}),
     case hb_cache_control:maybe_lookup(VBase, VReq, Opts) of
-        {hit, Res} -> Res;
+        {hit, {Status, Msg}} ->
+            post_execution(
+                Ctx#{ <<"result">> => Msg, <<"status">> => Status },
+                Opts
+            );
         _ -> execute_context(Ctx, Opts)
     end.
 
@@ -323,6 +327,11 @@ execute_context(
 
 %% @doc Handle post-execution bookkeeping. If the mode is `primitive`, return
 %% the result directly; else, apply the `return-extends` schema to the result.
+%% Handles the three core variants via two separate function heads:
+%% 1. `primitive` mode: return the result directly
+%% 2a. `raw` mode: Apply the `return-extends` schema to the result, don't store.
+%% 2b. `normal` mode: Apply the `return-extends` schema to the result, store in
+%%     the cache if `cache-control` permits.
 post_execution(
         #{
             <<"primitive">> := true,
@@ -354,8 +363,13 @@ post_execution(
 
 maybe_cache(#{ <<"priv">> := #{ <<"mode">> := <<"raw">> } }, _Opts) ->
     skipped_caching;
-maybe_cache(_Context, _Opts) ->
-    todo.
+maybe_cache(
+    #{
+        <<"varied-base">> := Base,
+        <<"request">> := Req,
+        <<"result">> := Res
+    }, Opts) ->
+    hb_cache_control:maybe_store(Base, Req, Res, Opts).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
