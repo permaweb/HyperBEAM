@@ -9,8 +9,8 @@
 %%% recharge rates.
 %%% An optional `recharging-ledger-grace' allows small post-metering negative
 %%% balance drift without making that grace appear as spendable balance.
-%%% An optional `recharging-ledger-fallback' ledger message can cover requests
-%%% when this ledger cannot.
+%%% Optional `recharging-ledger-fallback' or `recharging-ledger-fallbacks'
+%%% ledger messages can cover requests when this ledger cannot.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3, estimate/3]).
 -include("include/hb.hrl").
@@ -92,9 +92,9 @@ request_account(not_found, _Opts) ->
     );
 %% @doc A nested `request' may carry the account as an explicit `target' key
 %% (P4 nests the original request when delegating `/~p4@1.0/balance', so an
-%% unsigned `?target=<addr>' balance query - arrives as `request.target'). 
-%% Prefer that nested target, then fall back to the
-%% request signer. 
+%% unsigned `?target=<addr>' balance query - e.g. from hyperbalance - arrives
+%% as `request.target'). Prefer that nested target, then fall back to the
+%% request signer. This matches `ao-payment@1.0' balance resolution.
 request_account(Request, Opts) ->
     case hb_ao:get(<<"target">>, Request, not_found, Opts) of
         not_found ->
@@ -174,42 +174,78 @@ charge_balance(AccountID, Quantity, Opts) ->
     end.
 
 maybe_fallback_balance(Base, Req, Balance, Opts) ->
-    case fallback_ledger(Base, Opts) of
-        undefined ->
-            {ok, Balance};
-        Fallback ->
-            case resolve_fallback(Fallback, Req, Opts) of
-                {ok, FallbackBalance} -> {ok, max_balance(Balance, FallbackBalance)};
-                {error, _} -> {ok, Balance}
-            end
-    end.
+    {ok, fallback_balance(fallback_ledgers(Base, Opts), Req, Balance, Opts)}.
 
 maybe_fallback_charge(Base, Req, Error = {error, #{ <<"status">> := 402 }}, Opts) ->
-    case fallback_ledger(Base, Opts) of
-        undefined -> Error;
-        Fallback -> resolve_fallback(Fallback, Req, Opts)
-    end;
+    fallback_charge(fallback_ledgers(Base, Opts), Req, Error, Opts);
 maybe_fallback_charge(_Base, _Req, Result, _Opts) ->
     Result.
 
-fallback_ledger(Base, Opts) ->
-    case hb_opts:get(recharging_ledger_fallback_depth, 0, Opts) of
-        0 ->
-            hb_maps:get(
-                <<"recharging-ledger-fallback">>,
-                Base,
-                hb_opts:get(recharging_ledger_fallback, undefined, Opts),
+fallback_ledgers(Base, Opts) ->
+    case hb_util:int(maps:get(<<"recharging-ledger-fallback-depth">>, Base, 0)) of
+        0 -> configured_fallbacks(Base, Opts);
+        _ ->
+            []
+    end.
+
+configured_fallbacks(Base, Opts) ->
+    case hb_maps:get(
+        <<"recharging-ledger-fallbacks">>,
+        Base,
+        hb_opts:get(recharging_ledger_fallbacks, undefined, Opts),
+        Opts
+    ) of
+        undefined ->
+            normalize_fallbacks(
+                hb_maps:get(
+                    <<"recharging-ledger-fallback">>,
+                    Base,
+                    hb_opts:get(recharging_ledger_fallback, undefined, Opts),
+                    Opts
+                ),
                 Opts
             );
-        _ ->
-            undefined
+        Fallbacks ->
+            normalize_fallbacks(Fallbacks, Opts)
+    end.
+
+normalize_fallbacks(undefined, _Opts) ->
+    [];
+normalize_fallbacks(Fallbacks, _Opts) when is_list(Fallbacks) ->
+    Fallbacks;
+normalize_fallbacks(Fallbacks, Opts) when is_map(Fallbacks) ->
+    case hb_util:is_ordered_list(Fallbacks, Opts) of
+        true -> hb_util:message_to_ordered_list(Fallbacks, Opts);
+        false -> [Fallbacks]
+    end;
+normalize_fallbacks(_Fallbacks, _Opts) ->
+    [].
+
+fallback_balance([], _Req, Balance, _Opts) ->
+    Balance;
+fallback_balance([Fallback | Rest], Req, Balance, Opts) ->
+    case resolve_fallback(Fallback, Req#{ <<"path">> => <<"balance">> }, Opts) of
+        {ok, FallbackBalance} ->
+            fallback_balance(Rest, Req, max_balance(Balance, FallbackBalance), Opts);
+        {error, _} ->
+            fallback_balance(Rest, Req, Balance, Opts)
+    end.
+
+fallback_charge([], _Req, Error, _Opts) ->
+    Error;
+fallback_charge([Fallback | Rest], Req, _Error, Opts) ->
+    case resolve_fallback(Fallback, Req#{ <<"path">> => <<"charge">> }, Opts) of
+        FallbackError = {error, #{ <<"status">> := 402 }} ->
+            fallback_charge(Rest, Req, FallbackError, Opts);
+        Result ->
+            Result
     end.
 
 resolve_fallback(Fallback, Req, Opts) ->
     hb_ao:resolve(
-        Fallback,
+        Fallback#{ <<"recharging-ledger-fallback-depth">> => 1 },
         Req,
-        Opts#{ <<"recharging-ledger-fallback-depth">> => 1 }
+        Opts
     ).
 
 max_balance(infinity, _Fallback) -> infinity;
@@ -671,6 +707,56 @@ fallback_balance_returns_max_balance_test() ->
         )
     ).
 
+fallbacks_balance_returns_max_balance_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0
+    },
+    Fallbacks = [
+        #{
+            <<"device">> => #{
+                balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
+            }
+        },
+        #{
+            <<"device">> => #{
+                balance => fun(_Base, _Req, _Opts) -> {ok, 18} end
+            }
+        }
+    ],
+    ?assertEqual(
+        {ok, 25},
+        balance(
+            #{ <<"recharging-ledger-fallbacks">> => Fallbacks },
+            #{ <<"target">> => Account },
+            Opts
+        )
+    ).
+
+fallback_survives_leaked_depth_in_opts_test() ->
+    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-fallback-depth">> => 1
+    },
+    Fallback = #{
+        <<"device">> => #{
+            balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
+        }
+    },
+    ?assertEqual(
+        {ok, 25},
+        balance(
+            #{ <<"recharging-ledger-fallback">> => Fallback },
+            #{ <<"target">> => Account },
+            Opts
+        )
+    ).
+
 fallback_charge_runs_only_on_402_test() ->
     Wallet = ar_wallet:new(),
     Opts = #{
@@ -691,6 +777,39 @@ fallback_charge_runs_only_on_402_test() ->
     ?assertMatch(
         {error, #{ <<"status">> := 400 }},
         charge(Base, signed_charge_req(Wallet, -1, Opts), Opts)
+    ).
+
+fallback_charge_tries_next_fallback_after_402_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"recharging-ledger-max">> => 10,
+        <<"recharging-ledger-recharge">> => 0,
+        <<"recharging-ledger-grace">> => 0
+    },
+    Fallbacks = [
+        #{
+            <<"device">> => #{
+                charge => fun(_Base, _Req, _Opts) ->
+                    {error, #{ <<"status">> => 402, <<"body">> => <<"empty">> }}
+                end
+            }
+        },
+        #{
+            <<"device">> => #{
+                charge => fun(_Base, FallbackReq, FallbackOpts) ->
+                    {ok, hb_ao:get(<<"quantity">>, FallbackReq, undefined, FallbackOpts)}
+                end
+            }
+        }
+    ],
+    ?assertEqual(
+        {ok, 25},
+        charge(
+            #{ <<"recharging-ledger-fallbacks">> => Fallbacks },
+            signed_charge_req(Wallet, 25, Opts),
+            Opts
+        )
     ).
 
 grace_allows_small_negative_balance_test() ->
@@ -920,7 +1039,6 @@ rates_timeout_is_configurable_test() ->
 p4_metering_bundler_charges_recharging_ledger_bytes_test() ->
     HostWallet = ar_wallet:new(),
     Wallet = ar_wallet:new(),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     Rate = 2,
     Item =
         hb_message:commit(
@@ -989,10 +1107,16 @@ p4_metering_bundler_charges_recharging_ledger_bytes_test() ->
             ),
         ?assertMatch({ok, _}, hb_http:post(Node, UploadReq, Opts)),
         [_] = hb_mock_server:get_requests(tx, 1, ServerHandle),
-        ?assertEqual(
-            {ok, 50},
-            balance(#{}, #{ <<"target">> => Address }, Opts)
-        )
+        {ok, Balance} =
+            hb_http:get(
+                Node,
+                hb_message:commit(
+                    #{ <<"path">> => <<"/~p4@1.0/balance">> },
+                    #{ <<"priv-wallet">> => Wallet }
+                ),
+                #{ <<"priv-wallet">> => Wallet }
+            ),
+        ?assertEqual(50, Balance)
     after
         hb_mock_server:stop(ServerHandle)
     end.
@@ -1001,7 +1125,6 @@ p4_charges_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
     OperatorWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
-    ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
     Processor = #{
         <<"device">> => <<"p4@1.0">>,
         <<"pricing-device">> => <<"simple-pay@1.0">>,
@@ -1045,8 +1168,7 @@ p4_charges_recharging_ledger_simple_pay_test() ->
             ),
             #{ <<"priv-wallet">> => ClientWallet }
         ),
-    ?assertEqual(7, Balance),
-    ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).
+    ?assertEqual(7, Balance).
 
 %% @doc With `p4-commit-charge' disabled, p4 sends the ledger an uncommitted charge.
 %% A local ledger re-derives the payer from the signed `request', so the charge
@@ -1056,7 +1178,6 @@ p4_uncommitted_charge_recharging_ledger_simple_pay_test() ->
     HostWallet = ar_wallet:new(),
     OperatorWallet = ar_wallet:new(),
     ClientWallet = ar_wallet:new(),
-    ClientAddress = hb_util:human_id(ar_wallet:to_address(ClientWallet)),
     Processor = #{
         <<"device">> => <<"p4@1.0">>,
         <<"pricing-device">> => <<"simple-pay@1.0">>,
@@ -1101,5 +1222,4 @@ p4_uncommitted_charge_recharging_ledger_simple_pay_test() ->
             ),
             #{ <<"priv-wallet">> => ClientWallet }
         ),
-    ?assertEqual(7, Balance),
-    ?assertEqual({ok, 7}, balance(#{}, #{ <<"target">> => ClientAddress }, Opts)).
+    ?assertEqual(7, Balance).
