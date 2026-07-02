@@ -124,10 +124,12 @@ ao_types(#{ <<"ao-types">> := AoTypes } = Tags, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
     {ok, AOTypes} =
         hb_ao:resolve(
-            #{ <<"device">> => <<"structured@1.0">> },
             #{
-                <<"path">> => <<"decode-types">>,
-                <<"body">> => AoTypes
+                <<"device">> => <<"structured@1.0">>,
+                <<"ao-types">> => AoTypes
+            },
+            #{
+                <<"path">> => <<"decode-types">>
             },
             ConvOpts
         ),
