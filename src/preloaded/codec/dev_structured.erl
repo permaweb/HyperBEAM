@@ -285,8 +285,11 @@ encode_ao_types(Types, _Opts) ->
     )).
 
 %% @doc Device key for parsing an `ao-types' field.
-decode_types(Base, Req, Opts) ->
-    {ok, decode_ao_types(hb_maps:get(<<"body">>, Req, Base, Opts), Opts)}.
+-spec decode_types(#{ ao_types => binary() | map() }, _, _) -> {ok, #{}}.
+decode_types(#{ <<"ao-types">> := Types }, _Req, Opts) ->
+    {ok, decode_ao_types(Types, Opts)};
+decode_types(_BaseWithoutTypes, _Req, _Opts) ->
+    {ok, #{}}.
 
 %% @doc Parse the `ao-types' field of a TABM if present, and return a map of
 %% keys and their types. If the given value is a list, we return an empty map
