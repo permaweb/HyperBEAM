@@ -3,7 +3,7 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/4, maybe_lookup/3]).
+-export([maybe_store/6, maybe_lookup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -21,11 +21,13 @@
 %% 3. The `Req' message (the user's request).
 %% Base is not used, such that it can specify cache control information about 
 %% itself, without affecting its outputs.
-maybe_store(Base, Req, Res, Opts) ->
+maybe_store(BaseID, ReqID, Base, Req, Res, Opts) ->
     case derive_cache_settings([Res, Req], Opts) of
         #{ <<"store">> := true } ->
-            ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
-            dispatch_cache_write(Base, Req, Res, Opts);
+            ?prim_dbg({caching_result, {base, Base}, {req, Req}, {res, Res}}),
+            dispatch_cache_write(Base, Req, Res, Opts),
+            ?prim_dbg({cached_result, {res, Res}}),
+            ok;
         _ -> 
             not_caching
     end.
@@ -74,27 +76,8 @@ lookup(Base, Req, Opts) ->
                         #{ <<"only-if-cached">> := true } ->
                             only_if_cached_not_found_error(Base, Req, Opts);
                         _ ->
-                            case ?IS_ID(Base) of
-                                    false -> {continue, Base, Req};
-                                    true ->
-                                        case hb_cache:read(Base, Opts) of
-                                            {ok, FullBase} ->
-                                                ?event(load_message,
-                                                    {cache_hit_base_message_load,
-                                                        {base_id, Base},
-                                                        {base_loaded, FullBase}
-                                                    }
-                                                ),
-                                                {continue, FullBase, Req};
-                                            not_found ->
-                                                necessary_messages_not_found_error(
-                                                    Base,
-                                                    Req,
-                                                    Opts
-                                                )
-                                        end
-                                end
-                        end
+                            {error, not_found}
+                    end
             end
     end.
 
@@ -132,8 +115,8 @@ async_writer() ->
 
 %% @doc Internal function to write a compute result to the cache.
 perform_cache_write(Base, Req, Res, Opts) ->
-    hb_cache:write(Base, Opts),
-    hb_cache:write(Req, Opts),
+    {ok, BaseID} = hb_cache:write(Base, Opts),
+    {ok, ReqID} = hb_cache:write(Req, Opts),
     case Res of
         <<_/binary>> ->
             hb_cache:write_binary(
@@ -141,8 +124,17 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Res,
                 Opts
             );
-        Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+        Msg when is_map(Msg) ->
+            ?prim_dbg(caching_result_msg),
+            {ok, ResID} = hb_cache:write(Res, Opts),
+            LinkPath = <<BaseID/binary, "/", ReqID/binary>>,
+            hb_cache:link(
+                ResID,
+                LinkPath,
+                Opts
+            ),
+            ?prim_dbg({linked, LinkPath, ResID}),
+            ok;
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching

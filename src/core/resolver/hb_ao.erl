@@ -162,6 +162,16 @@ resolve(Base, Req, Opts) ->
         }
     ),
     resolve_many([Base | MessagesToExec], Opts).
+    
+resolve_single(Base, Req, Opts) ->
+    vary_context(
+        #{
+            <<"base">> => Base,
+            <<"req">> => Req,
+            <<"key">> => hb_path:hd(Req, Opts)
+        },
+        Opts
+    ).
 
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
@@ -195,29 +205,44 @@ raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
         if ForcedKey =/= undefined -> ForcedKey;
         true -> hb_path:hd(Req, ExecOpts)
         end,
-    Res = vary_context(
-        Ctx0#{
-            <<"base">> => Base,
-            <<"req">> => Req,
-            <<"key">> => Key,
-            <<"priv">> => #{ <<"mode">> => <<"raw">> }
-        },
-        Opts
-    ),
+    Res =
+        vary_context(
+            Ctx0#{
+                <<"base">> => Base,
+                <<"req">> => Req,
+                <<"key">> => Key,
+                <<"priv">> => #{ <<"mode">> => <<"raw">> }
+            },
+            Opts
+        ),
     ?prim_dbg({execution_complete,
         {forced_device, ForcedDevice},
         {forced_key, ForcedKey}
     }),
     Res.
 
+primitive(Base, Req, Opts) ->
+    vary_context(
+        #{
+            <<"base">> => Base,
+            <<"req">> => Req,
+            <<"varied-base">> => Base,
+            <<"varied-req">> => Req,
+            <<"key">> => hb_path:hd(Req, Opts),
+            <<"priv">> => #{ <<"mode">> => <<"primitive">> }
+        },
+        Opts
+    ).
+
 %% @doc Perform the `vary` step of an AO-Core execution. This step requires
 %% using the device (or the fallback device) to materialize the appropriate
 %% protocol values from the `Base` and `Request` messages, as well as the
 %% Erlang function to be executed, in order to evaluate an AO-Core resolution.
-vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req, <<"key">> := Key, <<"priv">> := Priv }, Opts) ->
+vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req, <<"key">> := Key }, Opts) ->
+    Priv = hb_private:from_message(Ctx),
     VaryRes = 
-        case maps:find(<<"primitive">>, Ctx) of
-            {ok, true} ->
+        case maps:find(<<"mode">>, Priv) of
+            {ok, <<"primitive">>} ->
                 % Skip the varying step during `primitive` execution, but still
                 % find the resolver and add it to the context.
                 hb_device:add_resolver(Ctx, Opts);
@@ -247,7 +272,7 @@ vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req, <<"key">> := Key, <<
                                     <<"...">> => Req
                                 },
                             <<"base">> => BaseWithDevice,
-                            <<"primitive">> => true
+                            <<"priv">> => #{ <<"mode">> => <<"primitive">> }
                         },
                         Opts
                     ),
@@ -270,12 +295,12 @@ vary_context(Ctx = #{ <<"base">> := Base, <<"req">> := Req, <<"key">> := Key, <<
         {ok, PreparedCtx} ->
             lookup_or_exec(PreparedCtx, Opts);
         Other ->
-            Other
+            throw({unexpected_vary_result, Other})
     end.
 
 %% @doc Look up a result from the cache and if not found, execute the context.
-lookup_or_exec(Ctx = #{ <<"priv">> := #{ <<"mode">> := <<"raw">> } }, Opts) ->
-    ?prim_dbg({raw_skip_lookup, erlang:external_size(Ctx)}),
+lookup_or_exec(Ctx = #{ <<"priv">> := #{ <<"mode">> := SkipMode } }, Opts)
+        when SkipMode =:= <<"raw">>; SkipMode =:= <<"primitive">> ->
     execute_context(Ctx, Opts);
 lookup_or_exec(
         Ctx = #{
@@ -284,13 +309,28 @@ lookup_or_exec(
             <<"key">> := Key
         }, Opts) ->
     ?prim_dbg({lookup_or_exec, Key}),
-    case hb_cache_control:maybe_lookup(VBase, VReq, Opts) of
-        {hit, {Status, Msg}} ->
+    {ok, VBaseID} = primitive(VBase, #{ <<"path">> => <<"id">> }, Opts),
+    {ok, VReqID} = primitive(VReq, #{ <<"path">> => <<"id">> }, Opts),
+    CtxWithIDs =
+        Ctx#{
+            <<"varied-base-id">> => VBaseID,
+            <<"varied-req-id">> => VReqID
+        },
+    Priv = maps:get(<<"priv">>, Ctx, #{}),
+    case hb_cache_control:maybe_lookup(VBaseID, VReqID, Opts) of
+        {Status = ok, Msg} ->
+            ?prim_dbg({cache_hit, Key, {Status, Msg}}),
             post_execution(
-                Ctx#{ <<"result">> => Msg, <<"status">> => Status },
+                CtxWithIDs#{
+                    <<"result">> => Msg,
+                    <<"status">> => Status,
+                    <<"priv">> => Priv#{ <<"source">> => <<"cached">> }
+                },
                 Opts
             );
-        _ -> execute_context(Ctx, Opts)
+        Miss ->
+            ?prim_dbg({cache_miss, Key, Miss}),
+            execute_context(CtxWithIDs, Opts)
     end.
 
 %% @doc Takes a fully prepated context (with `varied-base` and `varied-req`
@@ -302,7 +342,7 @@ execute_context(
             <<"varied-base">> := VariedBase,
             <<"varied-req">> := VariedReq,
             <<"priv">> :=
-                #{  
+                Priv = #{  
                     <<"resolver">> := Fun,
                     <<"add-key">> := AddKey
                 }
@@ -323,7 +363,14 @@ execute_context(
                     ++ [VariedBase, VariedReq, Opts]
             )
         ),
-    post_execution(Ctx#{ <<"result">> => Res, <<"status">> => Status }, Opts).
+    post_execution(
+        Ctx#{
+            <<"result">> => Res,
+            <<"status">> => Status,
+            <<"priv">> => Priv#{ <<"source">> => <<"executed">> }
+        },
+        Opts
+    ).
 
 %% @doc Handle post-execution bookkeeping. If the mode is `primitive`, return
 %% the result directly; else, apply the `return-extends` schema to the result.
@@ -334,16 +381,17 @@ execute_context(
 %%     the cache if `cache-control` permits.
 post_execution(
         #{
-            <<"primitive">> := true,
+            <<"priv">> := #{ <<"mode">> := <<"primitive">> },
             <<"result">> := Res,
             <<"status">> := Status,
             <<"key">> := Key
         },
         _Opts) ->
-    ?prim_dbg({post_exec_primitive, {status, Status}, {key, Key}}),
+    ?prim_dbg({post_exec, primitive, {key, Key}}),
     {Status, Res};
 post_execution(
         Context = #{
+            <<"key">> := Key,
             <<"base">> := Base,
             <<"req">> := Req,
             <<"result">> := RawResult,
@@ -351,7 +399,7 @@ post_execution(
             <<"return-extends">> := Extend
         },
         Opts) ->
-    ?prim_dbg({post_execution, {extend, Extend}}),
+    ?prim_dbg({post_execution, non_primitive, {key, Key}, {extend, Extend}}),
     maybe_cache(Context, Opts),
     Res =
         case Extend of
@@ -361,15 +409,21 @@ post_execution(
         end,
     {Status, Res}.
 
+maybe_cache(#{ <<"priv">> := #{ <<"source">> := <<"cached">> } }, _Opts) ->
+    skipped_caching;
 maybe_cache(#{ <<"priv">> := #{ <<"mode">> := <<"raw">> } }, _Opts) ->
     skipped_caching;
 maybe_cache(
     #{
-        <<"varied-base">> := Base,
-        <<"request">> := Req,
+        <<"key">> := Key,
+        <<"varied-base">> := VBase,
+        <<"varied-req">> := VReq,
+        <<"varied-base-id">> := VBaseID,
+        <<"varied-req-id">> := VReqID,
         <<"result">> := Res
     }, Opts) ->
-    hb_cache_control:maybe_store(Base, Req, Res, Opts).
+    ?prim_dbg({maybe_cache, Key}),
+    hb_cache_control:maybe_store(VBaseID, VReqID, VBase, VReq, Res, Opts).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
@@ -410,12 +464,12 @@ resolve_many(MsgList, Opts) ->
     Res.
 do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
-do_resolve_many([Res], Opts) ->
-    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}),
-    hb_cache:ensure_loaded(Res, Opts);
+do_resolve_many([Res], _Opts) ->
+    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}, _Opts),
+    {ok, Res};
 do_resolve_many([Base, Req | MsgList], Opts) ->
     ?event_debug(debug_ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
-    case resolve_stage(1, Base, Req, Opts) of
+    case resolve_single(Base, Req, Opts) of
         {ok, Res} ->
             ?event_debug(debug_ao_core,
                 {
@@ -429,6 +483,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             ),
             do_resolve_many([Res | MsgList], Opts);
         Res ->
+            throw({unexpected_resolve_many_response, Res}),
             % The result is not a resolvable message. Return it.
             ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating_early, Res}),
             Res

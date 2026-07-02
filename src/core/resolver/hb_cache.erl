@@ -1010,14 +1010,11 @@ types_to_implicit(Types) ->
 structured_decode_types(Types, Opts) ->
     hb_util:ok(
         hb_ao:raw(
-            <<"structured@1.0">>,
-            <<"decode-types">>,
-            Types,
-            #{},
+            #{ <<"device">> => <<"structured@1.0">>, <<"ao-types">> => Types },
+            #{ <<"path">> => <<"decode-types">> },
             Opts
         )
     ).
-
 
 %% @doc Read the result of a computation, using heuristics. The supported
 %% heuristics are as follows:
@@ -1029,56 +1026,13 @@ structured_decode_types(Types, Opts) ->
 %% message and return it if it exists.
 %% 3. If the message has an explicit device, we attempt to read the hashpath to
 %% see if it has already been computed.
-read_resolved(BaseMsg, Key, Opts) when is_binary(Key) ->
-    read_resolved(BaseMsg, #{ <<"path">> => Key }, Opts);
-read_resolved({link, ID, LinkOpts}, Req, Opts) ->
-    read_resolved(ID, Req, maps:merge(LinkOpts, Opts));
-read_resolved(BaseMsgID, Req = #{ <<"path">> := Key }, Opts) when ?IS_ID(BaseMsgID) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    _NormKey = hb_ao:normalize_key(Key, Opts),
-    case hb_device:is_direct_key_access(BaseMsgID, Req, Opts, Store) of
-        unknown -> miss;
-        false ->
-            ?event_debug(read_cached,
-                {found_non_message_device,
-                    {key, _NormKey}
-                }
-            ),
-            read_hashpath(BaseMsgID, Req, Opts);
-        true ->
-            % Either the message does not exist in the store, or there is no
-            % explicit device in the message. If the message exists this implies
-            % that the default (`message@1.0`) device will be used to execute
-            % the key. Subsequently, we can simply read the key and return it if
-            % it exists.
-            ?event_debug(read_cached,
-                {skipping_execution_store_lookup,
-                    {base_msg, BaseMsgID},
-                    {key, _NormKey}
-                }
-            ),
-            case hb_store:resolve(Store, [BaseMsgID, Key], Opts) of
-                {ok, KeyPath} -> hashpath_read_result(read(KeyPath, Opts));
-                {error, not_found} -> miss;
-                Other -> {hit, Other}
-            end
-    end;
-read_resolved(BaseMsg, Req = #{ <<"path">> := Key }, Opts) when is_map(BaseMsg) ->
-    % The base message is loaded, so we determine if it has an explicit device
-    % and perform a direct lookup if it does not.
-    NormKey = hb_ao:normalize_key(Key, Opts),
-    case hb_device:is_direct_key_access(BaseMsg, Req, Opts) of
-        false -> read_hashpath(BaseMsg, Req, Opts);
-        true ->
-            ?event_debug(read_cached,
-                {skip_execution_memory_lookup,
-                    {path, NormKey}
-                }
-            ),
-            {hit, read_in_memory_key(BaseMsg, NormKey, Opts)}
-    end;
-read_resolved(Base, Req, Opts) ->
-    read_hashpath(Base, Req, Opts).
+read_resolved(BaseID, ReqID, Opts) ->
+    ExpectedPath = <<BaseID/binary, "/", ReqID/binary>>,
+    ?prim_dbg({read_resolved, ExpectedPath}),
+    case read(ExpectedPath, Opts) of
+        {error, not_found} -> miss;
+        Other -> {hit, Other}
+    end.
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').
