@@ -139,7 +139,10 @@ info(_, Request, NodeMsg) ->
                         NodeMsg
                     );
                 false ->
-                    update_node_message(Request, NodeMsg)
+                    %% NOTE: Since we check for signed request, path has changed 
+                    %% by AO from original full path (device/function) to just function 
+                    %% Here we force the original path, but this isn't perfect.
+                    update_node_message(Request#{<<"path">> => <<"/~meta@1.0/info">>}, NodeMsg)
             end;
         _ ->
             ?event({get_config_req, Request, NodeMsg}),
@@ -521,7 +524,9 @@ transport_keys() ->
         <<"path">>,
         <<"priv">>,
         <<"signature">>,
-        <<"signature-input">>
+        <<"signature-input">>,
+        <<"ao-types">>,
+        <<"user-agent">>
     ].
 
 claims_operator(Request, ValidCommitters, NodeMsg) ->
@@ -531,12 +536,6 @@ claims_operator(Request, ValidCommitters, NodeMsg) ->
         error ->
             false
     end.
-
-verified_committers(Request, NodeMsg) ->
-    verified_committers(Request, [], NodeMsg).
-
-verified_committers(Request, RequiredKeys, NodeMsg) ->
-    hb_message:verified_committers(Request, RequiredKeys, NodeMsg).
 
 %%% Tests
 

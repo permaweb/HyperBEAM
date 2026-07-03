@@ -17,6 +17,52 @@
 %% latest known block towards the Genesis block. If no range is provided, we
 %% fetch blocks from the latest known block towards the Genesis block.
 arweave(_Base, Request, Opts) ->
+    case is_operator(Request, Opts) of
+        false ->
+            {error,
+                #{
+                    <<"status">> => 403,
+                    <<"message">> => <<"Unauthorized.">>
+                }
+            };
+        true ->
+            arweave_authorized(Request, Opts)
+    end.
+
+is_operator(Request, Opts) ->
+    Meta = hb_device:message_to_device(#{ <<"device">> => <<"meta@1.0">> }, Opts),
+    Meta:is_operator(Request, operator_keys(Request, Opts), Opts) orelse
+        Meta:is_operator(Request#{ <<"path">> => <<"/~copycat@1.0/arweave">> }, Opts) orelse 
+        %% Requests via cron can be with or without / prefix
+        Meta:is_operator(Request#{ <<"path">> => <<"~copycat@1.0/arweave">> }, Opts).
+
+operator_keys(Request, Opts) ->
+    [
+        Key
+    ||
+        {Key, _Value} <- hb_maps:to_list(Request, Opts),
+        not lists:member(Key, operator_excluded_keys())
+    ].
+
+operator_excluded_keys() ->
+    [
+        <<"accept">>,
+        <<"accept-bundle">>,
+        <<"ao-peer">>,
+        <<"ao-peer-port">>,
+        <<"commitments">>,
+        <<"content-digest">>,
+        <<"content-type">>,
+        <<"cookie">>,
+        <<"host">>,
+        <<"method">>,
+        <<"path">>,
+        <<"priv">>,
+        <<"signature">>,
+        <<"signature-input">>
+    ].
+
+arweave_authorized(Request, Opts) ->
     case request_mode(Request, Opts) of
         {ok, list} ->
             case parse_range(Request, Opts) of
@@ -858,6 +904,21 @@ observe_event(MetricName, Fun) ->
 
 %%% Tests
 
+arweave_requires_operator_test_parallel() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    ?assertEqual(
+        {error, #{ <<"status">> => 403, <<"message">> => <<"Unauthorized.">> }},
+        arweave(#{}, #{ <<"mode">> => <<"invalid">> }, Opts)
+    ),
+    ?assertMatch(
+        {error, <<"Unsupported mode `invalid`", _/binary>>},
+        arweave(
+            #{},
+            hb_message:commit(#{ <<"mode">> => <<"invalid">> }, Opts),
+            Opts
+        )
+    ).
+
 index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
     %% Note: this block includes a data item with an Ethereum signature. This
@@ -866,7 +927,7 @@ index_ids_test_parallel() ->
     %% it).
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     {ok, 1827942} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
             Opts
         ),
@@ -994,7 +1055,7 @@ invalid_bundle_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1307606,
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(Block))/binary, "&"
@@ -1019,7 +1080,7 @@ block_with_large_integer_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 633719,
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
             Opts
         ),
@@ -1032,7 +1093,7 @@ empty_block_test_parallel() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1865858,
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
             Opts
         ),
@@ -1073,7 +1134,7 @@ tx_with_data_tag_test_disabled() ->
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
     Block = 1289677,
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<"~copycat@1.0/arweave&from=", (hb_util:bin(Block))/binary, "&to=", (hb_util:bin(Block))/binary>>,
             Opts
         ),
@@ -1108,7 +1169,7 @@ tx_with_no_data_test_parallel() ->
     Block = 1826700,
     BlockBin = hb_util:bin(Block),
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
@@ -1139,7 +1200,7 @@ tx_with_no_data_test_parallel() ->
         Opts),
     %% Now list the index using list mode
     {ok, Response} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
@@ -1177,7 +1238,7 @@ list_index_test_parallel() ->
     Block = 1827942,
     BlockBin = hb_util:bin(Block),
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
@@ -1188,7 +1249,7 @@ list_index_test_parallel() ->
         ),
     %% Now list the index using list mode
     {ok, Response} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", BlockBin/binary, "&"
@@ -1225,7 +1286,7 @@ auto_stop_on_indexed_block_test_parallel() ->
     Higher1 = IndexedBlock + 1,
     Higher2 = IndexedBlock + 2,
     {ok, IndexedBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock))/binary, "&"
@@ -1235,7 +1296,7 @@ auto_stop_on_indexed_block_test_parallel() ->
             Opts
         ),
     {ok, IndexedBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(Higher2))/binary, "&"
@@ -1254,7 +1315,7 @@ explicit_to_reindexes_all_test_parallel() ->
     IndexedBlock = 1827942,
     LowerBlock = IndexedBlock - 1,
     {ok, IndexedBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock))/binary, "&"
@@ -1265,7 +1326,7 @@ explicit_to_reindexes_all_test_parallel() ->
         ),
     ?assertNot(has_any_indexed_tx(LowerBlock, Opts)),
     {ok, LowerBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(IndexedBlock+1))/binary, "&"
@@ -1286,7 +1347,7 @@ auto_stop_partial_index_test_parallel() ->
     ok = hb_store_arweave:write_offset(
         StoreOpts, OneTXID, <<"tx@1.0">>, 0, 0),
     {ok, IndexedBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(HigherBlock))/binary, "&"
@@ -1329,7 +1390,9 @@ latest_height_failure_test_parallel() ->
         {"/block/current", block_current, {500, <<"Internal Server Error">>}}
     ]),
     TestStore = hb_test_utils:test_store(),
+    Wallet = ar_wallet:new(),
     Opts = #{
+        <<"priv-wallet">> => Wallet,
         <<"store">> => [TestStore],
         <<"routes">> => [
             #{
@@ -1354,7 +1417,7 @@ latest_height_failure_test_parallel() ->
         ),
         ?assertMatch(
             {error, unavailable},
-            hb_ao:resolve(
+            copycat_arweave(
                 <<"~copycat@1.0/arweave&mode=shallow">>, Opts)
         )
     after
@@ -1404,7 +1467,7 @@ negative_from_index_test_parallel() ->
     ?assert(OffsetFromTip > 0),
     NegativeFrom = <<"-", (hb_util:bin(OffsetFromTip))/binary>>,
     {ok, StopBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(StopBlock))/binary, "&"
@@ -1414,7 +1477,7 @@ negative_from_index_test_parallel() ->
             Opts
         ),
     {ok, StopBlock} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", NegativeFrom/binary, "&"
@@ -1432,6 +1495,7 @@ negative_from_index_test_parallel() ->
 
 setup_index_opts() ->
     TestStore = hb_test_utils:test_store(),
+    Wallet = ar_wallet:new(),
     StoreOpts = #{ <<"index-store">> => [TestStore] },
     Store = [
         TestStore,
@@ -1462,10 +1526,18 @@ setup_index_opts() ->
     ],
     Opts = #{
         <<"store">> => Store,
+        <<"priv-wallet">> => Wallet,
         <<"arweave-index-ids">> => true,
         <<"arweave-index-store">> => StoreOpts
     },
     {TestStore, StoreOpts, Opts}.
+
+copycat_arweave(Path, Opts) ->
+    [Req | RevBase] = lists:reverse(hb_singleton:from(Path, Opts)),
+    hb_ao:resolve_many(
+        lists:reverse([hb_message:commit(Req, Opts) | RevBase]),
+        Opts
+    ).
 
 assert_bundle_read(BundleID, ExpectedItems, Opts) ->
     ReadItems =
@@ -1590,10 +1662,10 @@ pending_range_indexes_bundle_children_test() ->
         },
     try
         {ok, #{ items_count := 1, total_txs := 1 }} =
-            hb_ao:resolve(
+            copycat_arweave(
                 <<"~copycat@1.0/arweave&from=pending&to=pending">>, Opts),
         {ok, #{ items_count := 1, total_txs := 1 }} =
-            hb_ao:resolve(
+            copycat_arweave(
                 <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
                 Opts),
         ?assertMatch(
@@ -1625,7 +1697,7 @@ small_block_full_mode_test() ->
     {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
     Block = 1889322,
     {ok, Block} =
-        hb_ao:resolve(
+        copycat_arweave(
             <<
                 "~copycat@1.0/arweave&"
                 "from=", (hb_util:bin(Block))/binary, "&"
@@ -1657,3 +1729,53 @@ small_block_full_mode_test() ->
     ?assert(hb_message:verify(L3Header, all, Opts), {verify_failed, L3ID}),
     ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
     ok.
+
+dev_secret_integration_test_parallel() ->
+    Owner = ar_wallet:new(),
+    NodeOpts =
+        #{
+            <<"priv-wallet">> => Owner,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{
+                                <<"device">> => <<"auth-hook@1.0">>,
+                                <<"path">> => <<"request">>,
+                                <<"when">> => #{
+                                    <<"keys">> => [<<"authorization">>, <<"!">>]
+                                },
+                                <<"secret-provider">> =>
+                                    #{
+                                        <<"device">> => <<"http-auth@1.0">>,
+                                        <<"access-control">> =>
+                                            #{ <<"device">> => <<"http-auth@1.0">> }
+                                    }
+                            }
+                        ]
+                }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    OwnerAddr = hb_util:human_id(ar_wallet:to_address(Owner)),
+    UserPassBase64 = b64veryfast:encode64_url(<<"user:pass">>),
+    HttpBasicAuth = <<"Basic ", UserPassBase64/binary>>,
+    % Req 1. Store secret
+    Req1 = 
+        #{
+            <<"path">> => <<"~secret@1.0/import">>,
+            <<"key">> => ar_wallet:to_json(Owner),
+            <<"access-control">> => <<"http-auth@1.0">>,
+            <<"authorization">> => HttpBasicAuth 
+        },
+    ?assertMatch({ok, #{ <<"body">> := OwnerAddr}}, hb_http:get(Node, Req1, #{})),
+    % Req 2. Sign request and request copycat
+    Req2 =
+        #{
+            <<"path">> => <<"~copycat@1.0/arweave">>,
+            <<"from">> => <<"1234567">>,
+            <<"to">> => <<"1234567">>,
+            <<"mode">> => <<"invalid">>,
+            <<"authorization">> => HttpBasicAuth
+        },
+    ?assertMatch({error, <<"Unsupported mode", _/binary>>}, hb_http:get(Node, Req2, #{})).

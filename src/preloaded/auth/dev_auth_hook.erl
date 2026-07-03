@@ -285,6 +285,7 @@ generate_wallet(Provider, Request, Opts) ->
             Request#{ <<"path">> => <<"generate">> },
             Opts
         ),
+    %% TODO: There is something weird here, in the second request in returns NodeOpts
     ?event({generated_wallet, WalletID}),
     {ok, Provider, refresh_opts(Opts)}.
 

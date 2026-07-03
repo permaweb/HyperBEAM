@@ -1313,10 +1313,12 @@ post_tx_json_request(Server, ClientOpts) ->
 setup_arweave_index_opts(TXIDs) ->
     TestStore = hb_test_utils:test_store(hb_store_volatile, <<"arweave-index">>),
     IndexStore = #{ <<"module">> => hb_store_arweave, <<"index-store">> => [TestStore] },
+    Wallet = ar_wallet:new(),
     Opts = #{
         <<"store">> => [TestStore],
         <<"arweave-index-ids">> => true,
-        <<"arweave-index-store">> => IndexStore
+        <<"arweave-index-store">> => IndexStore,
+        <<"priv-wallet">> => Wallet
     },
     % Either: Index the blocks containing the TXs...
     % lists:foreach(
@@ -1334,16 +1336,24 @@ setup_arweave_index_opts(TXIDs) ->
 index_test_block(Block, Opts) ->
     BlockBin = hb_util:bin(Block),
     {ok, Block} =
-        hb_ao:resolve(
+        signed_copycat_arweave(
             <<
                 "~copycat@1.0/arweave&from=",
                 BlockBin/binary,
                 "&to=",
-                BlockBin/binary
+                BlockBin/binary,
+                "&mode=deep"
             >>,
             Opts#{ <<"arweave-index-ids">> => true }
         ),
     ok.
+
+signed_copycat_arweave(Path, Opts) ->
+    [Req | RevBase] = lists:reverse(hb_singleton:from(Path, Opts)),
+    hb_ao:resolve_many(
+        lists:reverse([hb_message:commit(Req, Opts) | RevBase]),
+        Opts
+    ).
 
 index_test_tx(TXID, IndexStore, Opts) ->
     {ok, #{ <<"body">> := OffsetBody }} =
@@ -1535,8 +1545,12 @@ head_raw_ans104_test_parallel() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
-    hb_ao:resolve(
-        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary>>,
+    signed_copycat_arweave(
+        <<
+            "~copycat@1.0/arweave&from=", BlockBin/binary,
+            "&to=", BlockBin/binary,
+            "&mode=deep"
+        >>,
         Opts
     ),
     {ok, Result} =
@@ -1624,8 +1638,12 @@ get_raw_range_ans104_test_parallel() ->
     Opts = setup_arweave_index_opts([]),
     DataItemID = <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
     BlockBin = hb_util:bin(1_827_942),
-    hb_ao:resolve(
-        <<"~copycat@1.0/arweave&from=", BlockBin/binary, "&to=", BlockBin/binary>>,
+    signed_copycat_arweave(
+        <<
+            "~copycat@1.0/arweave&from=", BlockBin/binary,
+            "&to=", BlockBin/binary,
+            "&mode=deep"
+        >>,
         Opts
     ),
     {ok, Result} =
