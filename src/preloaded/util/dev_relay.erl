@@ -169,12 +169,17 @@ cast(M1, M2, Opts) ->
     {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
-request(_Base, Req, Opts) ->
+request(Base, Req, Opts) ->
+    RelayBase =
+        case hb_util:atom(hb_maps:get(<<"commit-request">>, Base, false, Opts)) of
+            true -> #{ <<"device">> => <<"relay@1.0">>, <<"commit-request">> => true };
+            false -> #{ <<"device">> => <<"relay@1.0">> }
+        end,
     {ok,
         #{
             <<"body">> =>
                 [
-                    #{ <<"device">> => <<"relay@1.0">> },
+                    RelayBase,
                     #{
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
@@ -251,6 +256,51 @@ relay_nearest_test() ->
         ),
     ?assert(HasValidSigner).
 
+%% @doc Test that `relay@1.0/request' passes `commit-request' through to the
+%% redirected `relay@1.0/call', causing the request sent to the routed node to be
+%% signed.
+redirect_commit_request_test() ->
+    Wallet = ar_wallet:new(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    ExecutorWallet = ar_wallet:new(),
+    Executor =
+        hb_http_server:start_node(
+            #{
+                <<"priv-wallet">> => ExecutorWallet
+            }
+        ),
+    Node =
+        hb_http_server:start_node(#{
+            <<"priv-wallet">> => Wallet,
+            <<"relay-allow-commit-request">> => true,
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"/commitments">>,
+                        <<"node">> => #{ <<"prefix">> => Executor }
+                    }
+                ],
+            <<"on">> => #{
+                <<"request">> =>
+                    #{
+                        <<"device">> => <<"relay@1.0">>,
+                        <<"path">> => <<"request">>,
+                        <<"commit-request">> => true
+                    }
+                }
+        }),
+    {ok, Res} =
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"commitments">>,
+                <<"test-key">> => <<"value">>
+            },
+            #{}
+        ),
+    ?event({redirect_commit_request_res, Res}),
+    ?assert(lists:member(Address, request_signers(Res, ExecutorWallet))).
+
 %% @doc Test that a `relay@1.0/call' correctly commits requests as specified.
 %% We validate this by configuring two nodes: One that will execute a given
 %% request from a user, but only if the request is committed. The other node
@@ -304,3 +354,21 @@ commit_request_test() ->
         ),
     ?event({res, Res}),
     ?assertEqual(<<"value">>, Res).
+
+request_signers(Response, ServerWallet) ->
+    ServerAddress = hb_util:human_id(ar_wallet:to_address(ServerWallet)),
+    hb_maps:values(hb_maps:filtermap(
+        fun(Key, Value) when ?IS_ID(Key) ->
+            Type = hb_maps:get(<<"type">>, Value, not_found, #{}),
+            Committer = hb_maps:get(<<"committer">>, Value, not_found, #{}),
+            case {Type, Committer} of
+                {<<"rsa-pss-sha512">>, ServerAddress} -> false;
+                {<<"rsa-pss-sha512">>, _} -> {true, Committer};
+                _ -> false
+            end;
+           (_Key, _Value) ->
+            false
+        end,
+        Response,
+        #{}
+    )).
