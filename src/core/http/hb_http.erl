@@ -439,11 +439,7 @@ prepare_request(Format, Method, Peer, Path, RawMessage, Opts) ->
         <<"ans104@1.0">> ->
             ?event(debug_accept, {request_message, {message, Message}}),
             {ok, FilteredMessage} =
-                case hb_message:signers(Message, Opts) of
-                    [] -> WithSelfPort;
-                    _ ->
-                        hb_message:with_only_committed(WithSelfPort, Opts)
-                end,
+                hb_message:with_only_committed(WithSelfPort, Opts),
             ReqBase#{
                 headers =>
                     MaybeCookie#{
