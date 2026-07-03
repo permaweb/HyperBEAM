@@ -56,6 +56,7 @@ run(_Args) ->
 add_code_paths() ->
     AllPaths =
         filelib:wildcard("_build/*/lib/*/ebin") ++
+            filelib:wildcard("_build/*/checkouts/*/ebin") ++
             filelib:wildcard("_build/*/plugins/*/ebin"),
     Paths = lists:sort(fun newer_path/2, AllPaths),
     lists:foreach(

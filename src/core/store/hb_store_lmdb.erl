@@ -26,6 +26,7 @@
 
 %% Test framework and project includes
 -include_lib("eunit/include/eunit.hrl").
+-include_lib("kernel/include/file.hrl").
 -include("include/hb.hrl").
 
 %% Configuration constants with reasonable defaults
@@ -33,6 +34,10 @@
 -define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
                                                 % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
+-define(DEFAULT_ENCRYPTION_SALT, <<"constant:ao">>).
+-define(DEFAULT_ENCRYPTION_ITERATIONS, 2 * 600_000).
+-define(DEFAULT_DERIVED_KEY_LENGTH, 64).
+-define(PAGE_ENCRYPTION_KEY_BYTES, 32).
 
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
@@ -49,9 +54,25 @@
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
 start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
     init_prometheus(),
+    case prepare_encryption(Opts) of
+        {ok, OpenOpts, Key} -> open_store(OpenOpts, DataDir, Key);
+        {error, _} = Error -> Error
+    end;
+start(_Store, _Req, _NodeOpts) ->
+    {error, {badarg, <<"StoreOpts must be a map">>}}.
+
+%% @doc Open the LMDB environment after config-only validation has succeeded.
+open_store(Opts, DataDir, EncryptionKey) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
-    ok = ensure_dir(DataDirPath),
+    case ensure_lmdb_path(Opts, DataDirPath) of
+        ok ->
+            open_store_after_path_check(Opts, DataDirPath, EncryptionKey);
+        {error, _} = Error ->
+            Error
+    end.
+
+open_store_after_path_check(Opts, DataDirPath, EncryptionKey) ->
     EnvOpts =
         [
             {
@@ -69,7 +90,8 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
             true -> [];
             false -> [no_readahead]
         end ++
-        case maps:get(<<"read-only">>, Opts, false) of
+        case maps:get(<<"read-only">>, Opts, false)
+                orelse maps:get(<<"raw">>, Opts, false) of
             true -> [no_lock];
             false -> []
         end ++
@@ -80,19 +102,211 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
         case maps:get(<<"lock">>, Opts, true) of
             true -> [];
             false -> [no_lock]
+        end ++
+        case maps:get(<<"no-subdir">>, Opts, false)
+                orelse maps:get(<<"raw">>, Opts, false) of
+            true -> [no_subdir];
+            false -> []
+        end ++
+        case EncryptionKey of
+            none -> [];
+            Key -> [{encrypt, Key}]
         end,
     % Create the LMDB environment with specified size limit
     {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
-    {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
-start(_Store, _Req, _NodeOpts) ->
-    {error, {badarg, <<"StoreOpts must be a map">>}}.
+    {ok, Opts#{
+        <<"env">> => Env,
+        <<"db">> => DBInstance
+    }}.
+
+%% @doc Ensure that an LMDB directory path exists without touching explicit raw
+%% devices or `no_subdir' files. Raw block and character devices are auto-
+%% detected by the LMDB backend once passed through untouched.
+ensure_lmdb_path(#{ <<"raw">> := true }, DataDirPath) ->
+    case file:read_file_info(DataDirPath) of
+        {ok, _Existing} ->
+            ok;
+        {error, enoent} ->
+            {error, enoent};
+        {error, _} = Error ->
+            Error
+    end;
+ensure_lmdb_path(#{ <<"no-subdir">> := true }, DataDirPath) ->
+    case file:read_file_info(DataDirPath) of
+        {ok, _Existing} ->
+            ok;
+        {error, enoent} ->
+            filelib:ensure_dir(DataDirPath);
+        {error, _} = Error ->
+            Error
+    end;
+ensure_lmdb_path(_Opts, DataDirPath) ->
+    ensure_dir(DataDirPath).
 
 %% @doc Ensure that the database directory exists.
 ensure_dir(DataDirPath) ->
     % `filelib` interprets the last path element as a filename, so we add a 
     % dummy one, else the final directory will not be created.
     filelib:ensure_dir(filename:join(DataDirPath, "dummy.mdb")).
+
+%% @doc Prepare the native LMDB page-encryption key when the store definition
+%% includes private encryption material. Direct 32-byte keys are accepted as
+%% `priv/key' or `priv/page-key'. Passwords are accepted only as
+%% `priv/password', then replaced in the registered in-memory store message with
+%% the derived `priv/key' so the password is not retained after startup.
+%%
+%% ```
+%% #{
+%%     <<"priv">> => #{
+%%         <<"password">> => <<"password">>
+%%     }
+%% }
+%% ```
+%%
+%% PBKDF2 parameters may be placed beside `password'. If omitted, they follow the
+%% HTTP auth device's defaults: PBKDF2-HMAC-SHA256, `sha256("constant:ao")',
+%% 1.2m iterations, and a 64-byte derived key.
+prepare_encryption(Opts) ->
+    case encryption_config(Opts) of
+        disabled ->
+            {ok, Opts, none};
+        Config ->
+            case encryption_key(Config) of
+                {ok, Key} -> {ok, canonical_encrypted_store(Opts, Key), Key};
+                {error, _} = Error -> Error
+            end
+    end.
+
+%% @doc Extract the encryption config from `priv' in a store definition.
+encryption_config(Opts) ->
+    encryption_config_from_private(hb_private:from_message(Opts)).
+
+%% @doc Interpret `priv' as the private encryption slot.
+encryption_config_from_private(Priv) when is_map(Priv) ->
+    normalize_encryption_config(Priv);
+encryption_config_from_private(_) ->
+    disabled.
+
+%% @doc Keep only PBKDF2 parameters from a private encryption map.
+encryption_params(Config) ->
+    maps:with(
+        [
+            <<"alg">>, alg,
+            <<"salt">>, salt,
+            <<"iterations">>, iterations,
+            <<"key-length">>, 'key-length', key_length
+        ],
+        Config
+    ).
+
+%% @doc Normalize a private encryption map to a standard config map.
+normalize_encryption_config(Config) when is_map(Config) ->
+    Params = encryption_params(Config),
+    case first_present([<<"key">>, key, <<"page-key">>, page_key], Config) of
+        {ok, PageKey} ->
+            Params#{ <<"key">> => hb_util:bin(PageKey) };
+        error ->
+            case first_present([<<"password">>, password], Config) of
+                {ok, Password} ->
+                    Params#{ <<"password">> => hb_util:bin(Password) };
+                error -> disabled
+            end
+    end;
+normalize_encryption_config(_) ->
+    disabled.
+
+%% @doc Find the first present key from a list of accepted config aliases.
+first_present([], _Map) ->
+    error;
+first_present([Key | Rest], Map) ->
+    case maps:find(Key, Map) of
+        {ok, Value} -> {ok, Value};
+        error -> first_present(Rest, Map)
+    end.
+
+%% @doc Resolve the native LMDB page-encryption key.
+encryption_key(Config) ->
+    case direct_encryption_key(Config) of
+        {ok, PageKey} ->
+            {ok, PageKey};
+        {error, _} = Error ->
+            Error;
+        error ->
+            derive_password_encryption_key(Config)
+    end.
+
+%% @doc Accept an already-derived native LMDB page key. This path is for
+%% high-entropy platform secrets, not user passwords.
+direct_encryption_key(Config) ->
+    case first_present([<<"key">>, key], Config) of
+        {ok, RawKey} ->
+            case hb_util:bin(RawKey) of
+                <<PageKey:?PAGE_ENCRYPTION_KEY_BYTES/binary>> -> {ok, PageKey};
+                _ -> {error, 'bad-encryption-key-length'}
+            end;
+        error ->
+            error
+    end.
+
+%% @doc Derive the native LMDB page-encryption key using PBKDF2.
+derive_password_encryption_key(Config) ->
+    Password = maps:get(<<"password">>, Config),
+    Alg =
+        hb_util:atom(
+            config_get([<<"alg">>, alg], Config, <<"sha256">>)
+        ),
+    Salt =
+        hb_util:bin(
+            config_get(
+                [<<"salt">>, salt],
+                Config,
+                hb_crypto:sha256(?DEFAULT_ENCRYPTION_SALT)
+            )
+        ),
+    Iterations =
+        hb_util:int(
+            config_get(
+                [<<"iterations">>, iterations],
+                Config,
+                ?DEFAULT_ENCRYPTION_ITERATIONS
+            )
+        ),
+    KeyLength =
+        hb_util:int(
+            config_get(
+                [<<"key-length">>, 'key-length', key_length],
+                Config,
+                ?DEFAULT_DERIVED_KEY_LENGTH
+            )
+        ),
+    case hb_crypto:pbkdf2(Alg, Password, Salt, Iterations, KeyLength) of
+        {ok, <<PageKey:?PAGE_ENCRYPTION_KEY_BYTES/binary, _/binary>>} ->
+            {ok, PageKey};
+        {ok, _TooShort} ->
+            {error, 'bad-encryption-key-length'};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Retain only the native key in the registered store instance.
+canonical_encrypted_store(Opts, Key) ->
+    Priv0 = hb_private:from_message(Opts),
+    Priv1 = maps:without(
+        [
+            <<"password">>, password,
+            <<"page-key">>, page_key
+        ],
+        Priv0
+    ),
+    maps:remove(priv, hb_private:set_priv(Opts, Priv1#{ <<"key">> => Key })).
+
+%% @doc Read a config value from any accepted key alias.
+config_get(Keys, Map, Default) ->
+    case first_present(Keys, Map) of
+        {ok, Value} -> Value;
+        error -> Default
+    end.
 
 %% @doc Determine whether a key represents a simple value or composite group.
 %%
@@ -117,6 +331,7 @@ type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
     case read_resolved(Opts, KeyBin) of
         {ok, _ResolvedKey, <<"group">>} -> {ok, composite};
         {ok, _ResolvedKey, _Value} -> {ok, simple};
+        {error, _} = Error -> Error;
         not_found -> {error, not_found}
     end.
 
@@ -273,6 +488,9 @@ read_resolved(#{<<"name">> := Name} = Opts, Path) ->
         {ok, _ResolvedPath, _Value} = Result ->
             sample_metrics(Name, StartTime, hit),
             Result;
+        {error, _} = Error ->
+            sample_metrics(Name, StartTime, error),
+            Error;
         not_found ->
             sample_metrics(Name, StartTime, miss),
             not_found
@@ -282,6 +500,10 @@ do_read_resolved(Opts, Path) ->
     case read_with_links(Opts, Path) of
         {ok, _ResolvedPath, _Value} = Result ->
             Result;
+        {error, _} = Error ->
+            Error;
+        {error, _, _} = Error ->
+            Error;
         not_found ->
             case Path of
                 <<"data">> ->
@@ -367,6 +589,10 @@ read_with_links(Opts, Path) ->
                 false ->
                     {ok, Path, Value}
             end;
+        {error, _} = Error ->
+            Error;
+        {error, _, _} = Error ->
+            Error;
         not_found ->
             not_found
     end.
@@ -415,6 +641,10 @@ resolve_path_links_acc(Opts, [Head | Tail], AccPath, Depth) ->
                     % Not a link, continue accumulating
                     resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
             end;
+        {error, _} = Error ->
+            Error;
+        {error, _, _} = Error ->
+            Error;
         not_found ->
             % Path doesn't exist as a complete link, continue accumulating
             resolve_path_links_acc(Opts, Tail, [Head | AccPath], Depth)
@@ -471,6 +701,8 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
             list_children(EnvOpts, ResolvedPath);
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
+        {error, _} = Error ->
+            Error;
         not_found ->
             {error, not_found}
     end.
@@ -739,9 +971,27 @@ reset(Opts, _Req, _NodeOpts) ->
         DataDir ->
             % Stop the store and remove the database.
             stop(Opts, #{}, #{}),
-            os:cmd(binary_to_list(<< "rm -Rf ", DataDir/binary >>)),
-            ensure_dir(DataDir),
+            reset_lmdb_path(Opts, hb_util:list(DataDir)),
             ok
+    end.
+
+reset_lmdb_path(#{ <<"raw">> := true }, _DataDirPath) ->
+    ok;
+reset_lmdb_path(#{ <<"no-subdir">> := true }, DataDirPath) ->
+    file:delete(DataDirPath),
+    file:delete(DataDirPath ++ "-lock"),
+    ok;
+reset_lmdb_path(_Opts, DataDirPath) ->
+    case file:read_file_info(DataDirPath) of
+        {ok, #file_info{ type = directory }} ->
+            ok = file:del_dir_r(DataDirPath),
+            ensure_dir(DataDirPath);
+        {ok, _ExistingDeviceOrFile} ->
+            ok;
+        {error, enoent} ->
+            ensure_dir(DataDirPath);
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc Sample roughly 1/1024 reads using the start timestamp and scale the
@@ -821,6 +1071,222 @@ test_list(StoreOpts, Path) ->
 test_write(StoreOpts, Path, Value) ->
     ok = write(StoreOpts, Path, Value),
     ok.
+
+encrypted_test_store(Secret) ->
+    encrypted_test_store(hb_test_utils:test_store(?MODULE, <<"encrypted">>), Secret).
+
+encrypted_test_store(Store, Secret) ->
+    Store#{
+        <<"priv">> =>
+            #{
+                <<"password">> => Secret,
+                <<"iterations">> => 1
+            }
+    }.
+
+encrypted_direct_key_test_store(Key) ->
+    (hb_test_utils:test_store(?MODULE, <<"encrypted-direct-key">>))#{
+        <<"priv">> =>
+            #{
+                <<"key">> => Key
+            }
+    }.
+
+encrypted_atom_config_test_store(Password) ->
+    (hb_test_utils:test_store(?MODULE, <<"encrypted-atom-config">>))#{
+        priv =>
+            #{
+                password => Password,
+                iterations => 1
+            }
+    }.
+
+encrypted_page_key_test_store(PageKey) ->
+    (hb_test_utils:test_store(?MODULE, <<"encrypted-page-key">>))#{
+        <<"priv">> =>
+            #{
+                <<"page-key">> => PageKey
+            }
+    }.
+
+encrypted_bad_key_length_test_store() ->
+    (hb_test_utils:test_store(?MODULE, <<"encrypted-bad-key-length">>))#{
+        <<"priv">> =>
+            #{
+                <<"password">> => <<"short">>,
+                <<"iterations">> => 1,
+                <<"key-length">> => 16
+            }
+    }.
+
+encrypted_bad_page_key_length_test_store() ->
+    encrypted_page_key_test_store(<<"short">>).
+
+unencrypted_test_store_with_key_shaped_config() ->
+    (hb_test_utils:test_store(?MODULE, <<"unencrypted-key-shaped-config">>))#{
+        <<"encryption">> =>
+            #{
+                <<"key">> => crypto:strong_rand_bytes(?PAGE_ENCRYPTION_KEY_BYTES)
+            }
+    }.
+
+%% @doc Native encrypted stores are plaintext through the store API and opaque
+%% in the LMDB data file.
+encrypted_store_uses_native_lmdb_page_encryption_test() ->
+    StoreOpts = encrypted_test_store(<<"open sesame">>),
+    test_reset(StoreOpts),
+    PlainKey = <<"secret-key-for-plaintext-scan">>,
+    PlainValue = <<"secret-value-for-plaintext-scan">>,
+    test_write(StoreOpts, PlainKey, PlainValue),
+    #{ <<"db">> := DBInstance } = ensure_env(StoreOpts),
+    ok = elmdb:flush(DBInstance),
+    ?assertEqual({ok, PlainValue}, test_read(StoreOpts, PlainKey)),
+    #{ <<"name">> := Name } = StoreOpts,
+    {ok, Bytes} = file:read_file(filename:join(hb_util:list(Name), "data.mdb")),
+    ?assertEqual(nomatch, binary:match(Bytes, PlainKey)),
+    ?assertEqual(nomatch, binary:match(Bytes, PlainValue)),
+    ok = hb_store:stop(StoreOpts),
+    ?assertEqual({ok, PlainValue}, hb_store:read(StoreOpts, PlainKey, #{})),
+    test_reset(StoreOpts).
+
+encrypted_config_shapes_test() ->
+    DirectKeyStoreOpts = encrypted_direct_key_test_store(crypto:strong_rand_bytes(32)),
+    test_reset(DirectKeyStoreOpts),
+    test_write(DirectKeyStoreOpts, <<"hello">>, <<"world">>),
+    ?assertEqual({ok, <<"world">>}, test_read(DirectKeyStoreOpts, <<"hello">>)),
+    test_stop(DirectKeyStoreOpts),
+    AtomConfigStoreOpts = encrypted_atom_config_test_store(<<"atom secret">>),
+    test_reset(AtomConfigStoreOpts),
+    test_write(AtomConfigStoreOpts, <<"hello">>, <<"world">>),
+    ?assertEqual({ok, <<"world">>}, test_read(AtomConfigStoreOpts, <<"hello">>)),
+    test_stop(AtomConfigStoreOpts),
+    PageKeyStoreOpts = encrypted_page_key_test_store(crypto:strong_rand_bytes(32)),
+    test_reset(PageKeyStoreOpts),
+    test_write(PageKeyStoreOpts, <<"hello">>, <<"world">>),
+    ?assertEqual({ok, <<"world">>}, test_read(PageKeyStoreOpts, <<"hello">>)),
+    test_stop(PageKeyStoreOpts),
+    ok.
+
+encrypted_password_is_canonicalized_test() ->
+    StoreOpts = encrypted_test_store(
+        hb_test_utils:test_store(?MODULE, <<"encrypted-canonical">>),
+        <<"open sesame">>
+    ),
+    test_reset(StoreOpts),
+    ok = hb_store:start(StoreOpts),
+    Instance = hb_store:find(StoreOpts),
+    Priv = hb_private:from_message(Instance),
+    ?assertEqual(error, maps:find(<<"password">>, Priv)),
+    ?assertMatch({ok, <<_:?PAGE_ENCRYPTION_KEY_BYTES/binary>>}, maps:find(<<"key">>, Priv)),
+    test_stop(StoreOpts),
+    test_reset(StoreOpts).
+
+encrypted_bad_key_length_test() ->
+    ?assertEqual(
+        {error, 'bad-encryption-key-length'},
+        start(encrypted_bad_key_length_test_store(), #{}, #{})
+    ),
+    ?assertEqual(
+        {error, 'bad-encryption-key-length'},
+        start(encrypted_bad_page_key_length_test_store(), #{}, #{})
+    ).
+
+raw_store_paths_are_never_created_or_deleted_by_helpers_test() ->
+    Missing = filename:join(
+        os:getenv("TMPDIR", "/tmp"),
+        "missing-raw-lmdb-" ++ integer_to_list(erlang:unique_integer([positive]))
+    ),
+    ?assertEqual(
+        {error, enoent},
+        start(
+            #{
+                <<"store-module">> => ?MODULE,
+                <<"name">> => Missing,
+                <<"raw">> => true,
+                <<"no-subdir">> => true
+            },
+            #{},
+            #{}
+        )
+    ),
+    ?assertEqual(false, filelib:is_file(Missing)),
+    Path = filename:join(
+        os:getenv("TMPDIR", "/tmp"),
+        "raw-lmdb-reset-" ++ integer_to_list(erlang:unique_integer([positive]))
+    ),
+    try
+        ok = file:write_file(Path, <<"sentinel">>),
+        ?assertEqual(ok, reset_lmdb_path(
+            #{<<"raw">> => true, <<"no-subdir">> => true},
+            Path
+        )),
+        ?assertEqual({ok, <<"sentinel">>}, file:read_file(Path))
+    after
+        file:delete(Path)
+    end.
+
+encryption_requires_private_config_test() ->
+    StoreOpts = unencrypted_test_store_with_key_shaped_config(),
+    test_reset(StoreOpts),
+    test_write(StoreOpts, <<"hello">>, <<"world">>),
+    #{ <<"db">> := DBInstance } = ensure_env(StoreOpts),
+    ok = elmdb:flush(DBInstance),
+    ?assertEqual({ok, <<"world">>}, elmdb:get(DBInstance, <<"hello">>)),
+    ?assertEqual({ok, <<"world">>}, test_read(StoreOpts, <<"hello">>)),
+    #{ <<"name">> := Name } = StoreOpts,
+    {ok, Bytes} = file:read_file(filename:join(hb_util:list(Name), "data.mdb")),
+    ?assertNotEqual(nomatch, binary:match(Bytes, <<"world">>)),
+    test_reset(StoreOpts).
+
+encrypted_prefix_and_match_test() ->
+    StoreOpts = encrypted_test_store(<<"query-key">>),
+    test_reset(StoreOpts),
+    test_group(StoreOpts, <<"root">>),
+    test_write(StoreOpts, <<"root/a">>, <<"1">>),
+    test_group(StoreOpts, <<"root/b">>),
+    test_write(StoreOpts, <<"root/b/c">>, <<"2">>),
+    ?assertEqual(
+        {composite, [{<<"a">>, <<"1">>}, {<<"b">>, <<"group">>}]},
+        read(StoreOpts, #{ <<"read">> => <<"root">> }, #{})
+    ),
+    test_write(StoreOpts, <<"items/1/type">>, <<"product">>),
+    test_write(StoreOpts, <<"items/1/status">>, <<"active">>),
+    test_write(StoreOpts, <<"items/2/type">>, <<"product">>),
+    test_write(StoreOpts, <<"items/2/status">>, <<"inactive">>),
+    ?assertEqual(
+        {ok, [<<"items/1">>]},
+        match(
+            StoreOpts,
+            [
+                {<<"type">>, <<"product">>},
+                {<<"status">>, <<"active">>}
+            ],
+            #{}
+        )
+    ),
+    test_stop(StoreOpts).
+
+encrypted_match_edge_cases_test() ->
+    StoreOpts = encrypted_test_store(<<"match-edge-key">>),
+    test_reset(StoreOpts),
+    test_write(StoreOpts, <<"test/id/field">>, <<"value">>),
+    ?assertEqual(
+        {ok, [<<"test/id">>]},
+        match(
+            StoreOpts,
+            [{<<"field">>, <<"value">>}, {<<"field">>, <<"value">>}],
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        match(
+            StoreOpts,
+            [{<<"field">>, <<"value">>}, {<<"missing">>, <<"value">>}],
+            #{}
+        )
+    ),
+    test_stop(StoreOpts).
 
 %% @doc Basic store test - verifies fundamental read/write functionality.
 %%

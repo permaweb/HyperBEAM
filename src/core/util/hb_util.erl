@@ -31,6 +31,8 @@
 -export([base58_encode/1, atom_to_dashed_binary/1]).
 -include("include/hb.hrl").
 
+-define(B64VERYFAST_AVAILABLE, {?MODULE, b64veryfast_available}).
+
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
@@ -297,9 +299,22 @@ add_commas(List) -> List.
 
 %% @doc Encode a binary or iolist to URL safe base64 binary string.
 encode(Bin) when is_binary(Bin) ->
-    b64veryfast:encode64_url(Bin);
+    case b64veryfast_available() of
+        true ->
+            try b64veryfast:encode64_url(Bin)
+            catch
+                error:undef ->
+                    disable_b64veryfast(),
+                    base64url_encode(Bin);
+                error:{not_loaded, _} ->
+                    disable_b64veryfast(),
+                    base64url_encode(Bin)
+            end;
+        false ->
+            base64url_encode(Bin)
+    end;
 encode(List) when is_list(List) ->
-    b64veryfast:encode64_url(iolist_to_binary(List));
+    encode(iolist_to_binary(List));
 encode(_) ->
     error(badarg).
 
@@ -308,11 +323,41 @@ encode(_) ->
 %% by `encode/1'), so malformed input yields garbage rather than reliably
 %% raising.
 decode(Bin) when is_binary(Bin) ->
-    b64veryfast:decode64_url_unchecked(Bin);
+    case b64veryfast_available() of
+        true ->
+            try b64veryfast:decode64_url_unchecked(Bin)
+            catch
+                error:undef ->
+                    disable_b64veryfast(),
+                    base64url_decode(Bin);
+                error:{not_loaded, _} ->
+                    disable_b64veryfast(),
+                    base64url_decode(Bin)
+            end;
+        false ->
+            base64url_decode(Bin)
+    end;
 decode(List) when is_list(List) ->
-    b64veryfast:decode64_url_unchecked(iolist_to_binary(List));
+    decode(iolist_to_binary(List));
 decode(_) ->
     error(badarg).
+
+b64veryfast_available() ->
+    persistent_term:get(?B64VERYFAST_AVAILABLE, true).
+
+disable_b64veryfast() ->
+    persistent_term:put(?B64VERYFAST_AVAILABLE, false).
+
+base64url_encode(Bin) ->
+    NoPad = binary:replace(base64:encode(Bin), <<"=">>, <<>>, [global]),
+    URLChars = binary:replace(NoPad, <<"+">>, <<"-">>, [global]),
+    binary:replace(URLChars, <<"/">>, <<"_">>, [global]).
+
+base64url_decode(Bin) ->
+    StdChars0 = binary:replace(Bin, <<"-">>, <<"+">>, [global]),
+    StdChars = binary:replace(StdChars0, <<"_">>, <<"/">>, [global]),
+    Padding = binary:copy(<<"=">>, (4 - (byte_size(StdChars) rem 4)) rem 4),
+    base64:decode(<<StdChars/binary, Padding/binary>>).
 
 %% @doc Decode an HTTP structured field value by AO-Core structured type.
 decode(Type, Value) when is_list(Type) ->
@@ -990,6 +1035,22 @@ message_to_ordered_list_metadata_test() ->
         <<"priv">> => #{ <<"state">> => ignored }
     },
     ?assertEqual([one, two], message_to_ordered_list(Msg)).
+
+base64url_fallback_test() ->
+    Old =
+        try {ok, persistent_term:get(?B64VERYFAST_AVAILABLE)}
+        catch error:badarg -> not_found
+        end,
+    try
+        persistent_term:put(?B64VERYFAST_AVAILABLE, false),
+        ?assertEqual(<<"aGk">>, encode(<<"hi">>)),
+        ?assertEqual(<<"hi">>, decode(<<"aGk">>))
+    after
+        case Old of
+            {ok, Value} -> persistent_term:put(?B64VERYFAST_AVAILABLE, Value);
+            not_found -> persistent_term:erase(?B64VERYFAST_AVAILABLE)
+        end
+    end.
 
 %% `to_lower/1' must remain byte-for-byte equivalent to `string:lowercase',
 %% including the `badarg' throw on invalid UTF-8 that `ar_tx' tag parsing

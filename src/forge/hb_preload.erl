@@ -94,6 +94,7 @@ build_dir(Pkgs, Wallet, OutputDir, Opts) ->
         #{ ?PRELOADED_INDEX_KEY => IndexID },
         Opts
     ),
+    ok = write_index_header(OutputBin, IndexID),
     ?event(preload, {build_complete, {output, OutputBin}, {index, IndexID}}),
     ok = hb_store:stop(StoreCfg, #{}, Opts),
     {
@@ -157,6 +158,27 @@ build_index_message(SpecIDs) ->
 %% @doc Return the default preloaded-store build path.
 default_dir() ->
     hb_util:bin(filename:join([<<"_build">>, <<"preloaded-store">>])).
+
+%% @doc Write the build-time include consumed by embedded runtime launchers.
+write_index_header(OutputDir, IndexID) ->
+    HeaderPath =
+        filename:join(
+            filename:dirname(hb_util:list(OutputDir)),
+            "hb_preloaded_index.hrl"
+        ),
+    TmpPath =
+        HeaderPath ++ "." ++
+            integer_to_list(erlang:unique_integer([positive])),
+    ok =
+        file:write_file(
+            TmpPath,
+            [
+                "-define(PRELOADED_DEVICES_INDEX_MESSAGE_ID, <<\"",
+                IndexID,
+                "\">>).\n"
+            ]
+        ),
+    ok = file:rename(TmpPath, HeaderPath).
 
 %%% --------------------------------------------------------------------
 %%% Tests

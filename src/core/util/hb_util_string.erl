@@ -13,33 +13,57 @@
 
 init() ->
     SoName = filename:join([code:priv_dir(hb), "hb_util_string"]),
-    erlang:load_nif(SoName, 0).
+    case erlang:load_nif(SoName, 0) of
+        ok -> ok;
+        {error, _} -> ok
+    end.
 
 %% @doc ASCII-lowercase a binary, or return `non_ascii' if any byte is >= 0x80.
-lowercase(_Bin) ->
-    erlang:nif_error(not_loaded).
+lowercase(Bin) ->
+    transform_ascii(Bin, lower).
 
 %% @doc ASCII-lowercase and map `-' to `_' (the `key_to_atom' transform), or
 %% return `non_ascii' if any byte is >= 0x80.
-key_chars(_Bin) ->
-    erlang:nif_error(not_loaded).
+key_chars(Bin) ->
+    transform_ascii(Bin, key).
 
 %% @doc ASCII-lowercase and map `_' to `-' (the `hb_opts' `canonical_key'
 %% transform), or return `non_ascii' if any byte is >= 0x80.
-canon_chars(_Bin) ->
-    erlang:nif_error(not_loaded).
+canon_chars(Bin) ->
+    transform_ascii(Bin, canon).
 
 %% @doc Map `_' to `-' — the `atom_to_dashed_binary' transform. Exact for all
 %% bytes (non-ASCII passes through), so it never returns `non_ascii'.
-dash_chars(_Bin) ->
-    erlang:nif_error(not_loaded).
+dash_chars(Bin) ->
+    binary:replace(Bin, <<"_">>, <<"-">>, [global]).
 
 %% @doc Collapse runs of `/' to a single `/' and strip leading/trailing `/' in
 %% one pass — the `hb_path:to_binary' normalization. Equivalent to
 %% `iolist_to_binary(lists:join(<<"/">>,
 %%      binary:split(Bin, <<"/">>, [global, trim_all])))'. Exact for all bytes.
-normalize_path(_Bin) ->
-    erlang:nif_error(not_loaded).
+normalize_path(Bin) ->
+    iolist_to_binary(
+        lists:join(<<"/">>, binary:split(Bin, <<"/">>, [global, trim_all]))
+    ).
+
+transform_ascii(Bin, Mode) ->
+    transform_ascii(Bin, Mode, []).
+
+transform_ascii(<<>>, _Mode, Acc) ->
+    list_to_binary(lists:reverse(Acc));
+transform_ascii(<<Byte, Rest/binary>>, Mode, Acc) when Byte < 16#80 ->
+    transform_ascii(Rest, Mode, [transform_ascii_byte(Byte, Mode) | Acc]);
+transform_ascii(_Bin, _Mode, _Acc) ->
+    non_ascii.
+
+transform_ascii_byte(Byte, _Mode) when Byte >= $A, Byte =< $Z ->
+    Byte + 32;
+transform_ascii_byte($-, key) ->
+    $_;
+transform_ascii_byte($_, canon) ->
+    $-;
+transform_ascii_byte(Byte, _Mode) ->
+    Byte.
 
 %% Tests
 
