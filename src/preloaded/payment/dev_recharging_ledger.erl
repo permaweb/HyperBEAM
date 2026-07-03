@@ -9,8 +9,8 @@
 %%% recharge rates.
 %%% An optional `recharging-ledger-grace' allows small post-metering negative
 %%% balance drift without making that grace appear as spendable balance.
-%%% Optional `recharging-ledger-fallback' or `recharging-ledger-fallbacks'
-%%% ledger messages can cover requests when this ledger cannot.
+%%% Optional `recharging-ledger-fallbacks' ledger messages can cover requests
+%%% when this ledger cannot.
 -module(dev_recharging_ledger).
 -export([balance/3, charge/3, estimate/3]).
 -include("include/hb.hrl").
@@ -189,25 +189,15 @@ fallback_ledgers(Base, Opts) ->
     end.
 
 configured_fallbacks(Base, Opts) ->
-    case hb_maps:get(
-        <<"recharging-ledger-fallbacks">>,
-        Base,
-        hb_opts:get(recharging_ledger_fallbacks, undefined, Opts),
+    normalize_fallbacks(
+        hb_maps:get(
+            <<"recharging-ledger-fallbacks">>,
+            Base,
+            hb_opts:get(recharging_ledger_fallbacks, undefined, Opts),
+            Opts
+        ),
         Opts
-    ) of
-        undefined ->
-            normalize_fallbacks(
-                hb_maps:get(
-                    <<"recharging-ledger-fallback">>,
-                    Base,
-                    hb_opts:get(recharging_ledger_fallback, undefined, Opts),
-                    Opts
-                ),
-                Opts
-            );
-        Fallbacks ->
-            normalize_fallbacks(Fallbacks, Opts)
-    end.
+    ).
 
 normalize_fallbacks(undefined, _Opts) ->
     [];
@@ -216,7 +206,7 @@ normalize_fallbacks(Fallbacks, _Opts) when is_list(Fallbacks) ->
 normalize_fallbacks(Fallbacks, Opts) when is_map(Fallbacks) ->
     case hb_util:is_ordered_list(Fallbacks, Opts) of
         true -> hb_util:message_to_ordered_list(Fallbacks, Opts);
-        false -> [Fallbacks]
+        false -> []
     end;
 normalize_fallbacks(_Fallbacks, _Opts) ->
     [].
@@ -686,27 +676,6 @@ insufficient_balance_does_not_mutate_balance_test() ->
         balance(#{}, #{ <<"target">> => Account }, Opts)
     ).
 
-fallback_balance_returns_max_balance_test() ->
-    Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
-    Opts = #{
-        <<"priv-wallet">> => ar_wallet:new(),
-        <<"recharging-ledger-max">> => 10,
-        <<"recharging-ledger-recharge">> => 0
-    },
-    Fallback = #{
-        <<"device">> => #{
-            balance => fun(_Base, _Req, _Opts) -> {ok, 25} end
-        }
-    },
-    ?assertEqual(
-        {ok, 25},
-        balance(
-            #{ <<"recharging-ledger-fallback">> => Fallback },
-            #{ <<"target">> => Account },
-            Opts
-        )
-    ).
-
 fallbacks_balance_returns_max_balance_test() ->
     Account = hb_util:human_id(ar_wallet:to_address(ar_wallet:new())),
     Opts = #{
@@ -751,7 +720,7 @@ fallback_survives_leaked_depth_in_opts_test() ->
     ?assertEqual(
         {ok, 25},
         balance(
-            #{ <<"recharging-ledger-fallback">> => Fallback },
+            #{ <<"recharging-ledger-fallbacks">> => [Fallback] },
             #{ <<"target">> => Account },
             Opts
         )
@@ -772,7 +741,7 @@ fallback_charge_runs_only_on_402_test() ->
             end
         }
     },
-    Base = #{ <<"recharging-ledger-fallback">> => Fallback },
+    Base = #{ <<"recharging-ledger-fallbacks">> => [Fallback] },
     ?assertEqual({ok, 25}, charge(Base, signed_charge_req(Wallet, 25, Opts), Opts)),
     ?assertMatch(
         {error, #{ <<"status">> := 400 }},
