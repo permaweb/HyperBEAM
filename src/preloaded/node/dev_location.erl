@@ -16,6 +16,11 @@
 %%% `POST /~location@1.0/known':    Cache a location record for a foreign peer
 %%%                                 if the record is valid and newer than the
 %%%                                 known nonce for the signer.
+%%%
+%%% An address may rotate to a new key by publishing a record with the type
+%%% `superseded', naming the `superseded-by' address to use in its place.
+%%% Resolution of a superseded address ignores its later location records,
+%%% re-deriving the location of the successor instead.
 -module(dev_location).
 -export([info/0, read/2, node/3, known/3, all/3]).
 -include("include/hb.hrl").
@@ -23,6 +28,7 @@
 
 -define(DEFAULT_TTL, 28 * 24 * 60 * 60). % 28 days.
 -define(DEFAULT_CODEC, <<"httpsig@1.0">>).
+-define(MAX_SUPERSESSIONS, 10). % Maximum length of a `superseded-by' chain.
 
 %% @doc Handle all requests aside `known` with the `location/4' resolver.
 info() ->
@@ -50,6 +56,47 @@ all(_Base, _Req, Opts) ->
 read(Address, _Base, _Req, Opts) ->
     read(Address, Opts).
 read(Address, Opts) ->
+    read(Address, [], Opts).
+
+%% @doc Read the location record for an address, following `superseded-by'
+%% references to successor keys until a live record is found. The `Seen' list
+%% guards against supersession cycles and overly long chains.
+read(Address, Seen, Opts) ->
+    maybe
+        true ?=
+            (not lists:member(Address, Seen))
+                andalso length(Seen) =< ?MAX_SUPERSESSIONS
+            orelse
+                {error,
+                    #{
+                        <<"status">> => 508,
+                        <<"body">> =>
+                            <<"Supersession loop found for address: ",
+                                Address/binary>>
+                    }
+                },
+        {ok, Location} ?= find_location(Address, Opts),
+        case hb_ao:get(<<"superseded-by">>, Location, not_found, Opts) of
+            not_found ->
+                {ok, Location};
+            Successor when ?IS_ID(Successor) ->
+                read(Successor, [Address | Seen], Opts);
+            Invalid ->
+                {error,
+                    #{
+                        <<"status">> => 422,
+                        <<"body">> =>
+                            <<"Invalid successor for superseded address: ",
+                                Address/binary>>,
+                        <<"superseded-by">> => Invalid
+                    }
+                }
+        end
+    end.
+
+%% @doc Find the location record for a single address from the local cache,
+%% falling back to the gateway.
+find_location(Address, Opts) ->
     % Search for the location of the scheduler in the scheduler-location cache.
     case dev_location_cache:read(Address, Opts) of
         {ok, Location} -> {ok, Location};
@@ -70,9 +117,10 @@ read(Address, Opts) ->
     end.
 
 %% @doc Find the latest known nonce for an address by checking the local cache
-%% first and then the gateway.
+%% first and then the gateway. Uses the raw record for the address itself,
+%% without following any `superseded-by' references.
 latest_known_nonce(Address, Opts) ->
-    case read(Address, Opts) of
+    case find_location(Address, Opts) of
         {ok, Location} -> hb_maps:get(<<"nonce">>, Location, -1, Opts);
         _ -> -1
     end.
@@ -514,3 +562,47 @@ register_location_on_boot_test() ->
         } when Nonce > 0,
         RemoteLocation
     ).
+
+%% @doc Test that a superseded address resolves to its successor's location:
+%% once a `superseded' record is known for an address, its location is
+%% re-derived from the `superseded-by' address, ignoring any location records
+%% published by the old key itself.
+superseded_address_resolves_successor_test() ->
+    OldWallet = ar_wallet:new(),
+    NewWallet = ar_wallet:new(),
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    OldAddress = hb_util:human_id(ar_wallet:to_address(OldWallet)),
+    NewAddress = hb_util:human_id(ar_wallet:to_address(NewWallet)),
+    % The rotated key terminates itself, naming its successor.
+    Superseded =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"superseded">>,
+                <<"superseded-by">> => NewAddress,
+                <<"nonce">> => 1
+            },
+            Opts#{ <<"priv-wallet">> => OldWallet }
+        ),
+    % The successor holds a live location record.
+    Location =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"location">>,
+                <<"url">> => <<"https://successor.example.com">>,
+                <<"nonce">> => 2,
+                <<"time-to-live">> => 3600000
+            },
+            Opts#{ <<"priv-wallet">> => NewWallet }
+        ),
+    ok = dev_location_cache:write(Superseded, Opts),
+    ok = dev_location_cache:write(Location, Opts),
+    {ok, Res} = read(OldAddress, Opts),
+    ?assertEqual(
+        <<"https://successor.example.com">>,
+        hb_ao:get(<<"url">>, Res, Opts)
+    ),
+    ?assertEqual(not_found, hb_ao:get(<<"superseded-by">>, Res, not_found, Opts)).

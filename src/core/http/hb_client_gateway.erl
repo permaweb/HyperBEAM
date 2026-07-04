@@ -130,13 +130,39 @@ data(ID, Opts) ->
     end.
 
 %% @doc Find the location of the scheduler based on its ID, through GraphQL.
+%% A single request searches for `superseded' records -- oldest first, such
+%% that a rotated key is dead from the moment its first supersession is
+%% confirmed -- as well as recent location records in both their `ao.N.1'
+%% (lowercase) and legacynet (capitalized) tag forms. If a `superseded' record
+%% exists it is returned, and `dev_location' re-derives the location of its
+%% `superseded-by' address. Otherwise, the location record with the highest
+%% nonce is returned.
 location(Address, Opts) ->
     Query =
         <<"query($Addresses: [String!]!) { ",
-                "transactions(",
+            "superseded: transactions(",
+                "owners: $Addresses, ",
+                "tags: { name: \"type\" values: [\"superseded\"] }, ",
+                "sort: HEIGHT_ASC, ",
+                "first: 1",
+            "){ ",
+                "edges { ",
+                    (item_spec())/binary ,
+                " } ",
+            "} ",
+            "location: transactions(",
+                "owners: $Addresses, ",
+                "tags: { name: \"type\" values: [\"location\"] }, ",
+                "first: 5",
+            "){ ",
+                "edges { ",
+                    (item_spec())/binary ,
+                " } ",
+            "} ",
+            "legacy: transactions(",
                 "owners: $Addresses, ",
                 "tags: { name: \"Type\" values: [\"Location\", \"Scheduler-Location\"] }, ",
-                "first: 1",
+                "first: 5",
             "){ ",
                 "edges { ",
                     (item_spec())/binary ,
@@ -150,7 +176,11 @@ location(Address, Opts) ->
             {error, Reason};
         {ok, GqlMsg} ->
             ?event({scheduler_location_req, {query, Query}, {response, GqlMsg}}),
-            case hb_ao:get(<<"data/transactions/edges/1/node">>, GqlMsg, Opts) of
+            Superseded = location_items(<<"superseded">>, GqlMsg, Opts),
+            Candidates =
+                location_items(<<"location">>, GqlMsg, Opts)
+                    ++ location_items(<<"legacy">>, GqlMsg, Opts),
+            case select_location(Superseded, Candidates, Opts) of
                 not_found ->
                     ?event(scheduler_location,
                         {graphql_scheduler_location_not_found,
@@ -167,6 +197,60 @@ location(Address, Opts) ->
                     ),
                     result_to_message(ID, Item, Opts)
             end
+    end.
+
+%% @doc Extract the item nodes from an aliased transaction list in a GraphQL
+%% response.
+location_items(Alias, GqlMsg, Opts) ->
+    case hb_ao:get(<<"data/", Alias/binary, "/edges">>, GqlMsg, [], Opts) of
+        Edges when is_list(Edges) ->
+            [ Node || #{ <<"node">> := Node } <- Edges ];
+        _ ->
+            []
+    end.
+
+%% @doc Choose the authoritative location item from the results returned by
+%% the gateway: the first confirmed `superseded' record if one exists, or the
+%% latest of the location records otherwise.
+select_location([Superseded | _], _Candidates, _Opts) ->
+    Superseded;
+select_location([], [], _Opts) ->
+    not_found;
+select_location([], Candidates, Opts) ->
+    latest_item(Candidates, Opts).
+
+%% @doc Select the candidate item bearing the highest nonce. Ties preserve the
+%% given order, which lists candidates newest-first (as returned by the
+%% gateway), current-generation records before legacynet records.
+latest_item([First | Rest], Opts) ->
+    element(
+        2,
+        lists:foldl(
+            fun(Item, Best = {BestNonce, _}) ->
+                case item_nonce(Item, Opts) of
+                    Nonce when Nonce > BestNonce -> {Nonce, Item};
+                    _ -> Best
+                end
+            end,
+            {item_nonce(First, Opts), First},
+            Rest
+        )
+    ).
+
+%% @doc Find the nonce of a GraphQL item from its tags. Items without a
+%% parsable nonce rank beneath all nonce-bearing records.
+item_nonce(Item, Opts) ->
+    Nonces =
+        [
+            hb_util:safe_int(Value)
+        ||
+            #{ <<"name">> := Name, <<"value">> := Value } <-
+                hb_maps:get(<<"tags">>, Item, [], Opts),
+            hb_util:to_lower(Name) =:= <<"nonce">>
+        ],
+    case [ Nonce || {ok, Nonce} <- Nonces ] of
+        [] -> -1;
+        [Nonce | _] -> Nonce
     end.
 
 %% @doc AO-Core devices are defined primarily by their specification IDs. To find

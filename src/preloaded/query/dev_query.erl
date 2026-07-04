@@ -47,9 +47,10 @@ info(_Opts) ->
 graphql(Req, Base, Opts) ->
     dev_query_graphql:handle(Req, Base, Opts).
 
-%% @doc Return whether a GraphQL esponse in a message has transaction results.
-%% This key is used in HB's gateway client multirequest configuration to
-%% determine if the response from the node should be considered admissible.
+%% @doc Return whether a GraphQL response in a message has transaction results
+%% in any of its (potentially aliased) transaction lists. This key is used in
+%% HB's gateway client multirequest configuration to determine if the response
+%% from the node should be considered admissible.
 has_results(Base, Req, Opts) ->
     JSON =
         hb_ao:get_first(
@@ -63,9 +64,17 @@ has_results(Base, Req, Opts) ->
     Decoded = hb_json:decode(JSON),
     ?event(debug_multi, {has_results, {decoded_json, Decoded}}),
     case Decoded of
-        #{ <<"data">> := #{ <<"transactions">> := #{ <<"edges">> := Nodes } } }
-                when length(Nodes) > 0 ->
-            {ok, true};
+        #{ <<"data">> := Data } when is_map(Data) ->
+            {ok,
+                lists:any(
+                    fun
+                        (#{ <<"edges">> := Nodes }) when is_list(Nodes) ->
+                            Nodes =/= [];
+                        (_) -> false
+                    end,
+                    maps:values(Data)
+                )
+            };
         _ -> {ok, false}
     end.
 
