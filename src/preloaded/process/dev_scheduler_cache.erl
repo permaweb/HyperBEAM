@@ -1,7 +1,7 @@
 %%% @doc A module that provides a cache for scheduler assignments and locations.
 -module(dev_scheduler_cache).
--export([write/2, write_spawn/2, read/3]).
--export([list/2, latest/2]).
+-export([write/2, write_spawn/2, read/3, read/4]).
+-export([list/2, latest/2, latest/3, latest_epoch/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,10 +27,12 @@ write(RawAssignment, RawOpts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     % Write the message into the main cache
     ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
+    Epoch = hb_util:int(hb_ao:get(<<"epoch">>, Assignment, <<"0">>, Opts)),
     Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
     ?event(
         {writing_assignment,
             {proc_id, ProcID},
+            {epoch, Epoch},
             {slot, Slot},
             {assignment, Assignment}
         }
@@ -39,18 +41,15 @@ write(RawAssignment, RawOpts) ->
         {ok, _UnsignedID} ->
             % Create symlinks from the message on the process and the 
             % slot on the process to the underlying data.
-            ok = hb_store:link(
-                Store,
-                #{
-                    hb_path:to_binary([
-                        ?SCHEDULER_CACHE_PREFIX,
-                        <<"assignments">>,
-                        hb_util:human_id(ProcID),
-                        hb_ao:normalize_key(Slot)
-                    ]) => hb_message:id(Assignment, signed, Opts)
-                },
-                Opts
-            ),
+            ok =
+                hb_store:link(
+                    Store,
+                    #{
+                        assignment_path(ProcID, Epoch, Slot) =>
+                            hb_message:id(Assignment, signed, Opts)
+                    },
+                    Opts
+                ),
             ok;
         {error, Reason} ->
             ?event(error, {failed_to_write_assignment, {reason, Reason}}),
@@ -66,24 +65,36 @@ write_spawn(RawInitMessage, Opts) ->
 read(ProcID, Slot, Opts) when is_integer(Slot) ->
     read(ProcID, hb_util:bin(Slot), Opts);
 read(ProcID, Slot, RawOpts) ->
+    read(ProcID, 0, Slot, RawOpts).
+
+%% @doc Get an assignment message from an epoch in the cache.
+read(ProcID, Epoch, Slot, Opts) when is_integer(Epoch) ->
+    read(ProcID, hb_util:bin(Epoch), Slot, Opts);
+read(ProcID, Epoch, Slot, Opts) when is_integer(Slot) ->
+    read(ProcID, Epoch, hb_util:bin(Slot), Opts);
+read(ProcID, Epoch, Slot, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    P1 = hb_path:to_binary([
-        ?SCHEDULER_CACHE_PREFIX,
-        <<"assignments">>,
-        hb_util:human_id(ProcID),
-        Slot
-    ]),
     ?event(
         {read_assignment,
             {proc_id, ProcID},
+            {epoch, Epoch},
             {slot, Slot},
             {store, Store}
         }
     ),
-    case hb_store:resolve(Store, P1, Opts) of
+    case read_path(Store, assignment_path(ProcID, Epoch, Slot), Opts) of
+        not_found when Epoch == <<"0">> ->
+            read_path(Store, assignment_path(ProcID, Slot), Opts);
+        Res ->
+            Res
+    end.
+
+%% @doc Read an assignment from a cache link path.
+read_path(Store, Path, Opts) ->
+    case hb_store:resolve(Store, Path, Opts) of
         {ok, ResolvedPath} ->
-            ?event({resolved_path, {p1, P1}, {p2, ResolvedPath}, {resolved, ResolvedPath}}),
+            ?event({resolved_path, {p1, Path}, {p2, ResolvedPath}, {resolved, ResolvedPath}}),
             case hb_cache:read(ResolvedPath, Opts) of
                 {ok, RawAssignment} ->
                     % `hb_cache:read' no longer normalizes commitments; the
@@ -113,21 +124,31 @@ read(ProcID, Slot, RawOpts) ->
 
 %% @doc Get the assignments for a process.
 list(ProcID, RawOpts) ->
+    list(ProcID, 0, RawOpts).
+
+%% @doc Get the assignments for a process in an epoch.
+list(ProcID, Epoch, RawOpts) when is_binary(Epoch) ->
+    list(ProcID, hb_util:int(Epoch), RawOpts);
+list(ProcID, Epoch, RawOpts) ->
     Opts = opts(RawOpts),
-    hb_cache:list_numbered(
-        hb_path:to_binary([
-            ?SCHEDULER_CACHE_PREFIX,
-            <<"assignments">>,
-            hb_util:human_id(ProcID)
-        ]),
-        Opts
-    ).
+    case numbered_list(epoch_path(ProcID, Epoch), Opts) of
+        [] when Epoch == 0 ->
+            numbered_list(assignment_path(ProcID), Opts);
+        Assignments ->
+            Assignments
+    end.
 
 %% @doc Get the latest assignment from the cache.
 latest(ProcID, RawOpts) ->
+    latest(ProcID, 0, RawOpts).
+
+%% @doc Get the latest assignment from the cache for an epoch.
+latest(ProcID, Epoch, RawOpts) when is_binary(Epoch) ->
+    latest(ProcID, hb_util:int(Epoch), RawOpts);
+latest(ProcID, Epoch, RawOpts) ->
     Opts = opts(RawOpts),
     ?event({getting_assignments_from_cache, {proc_id, ProcID}, {opts, Opts}}),
-    case dev_scheduler_cache:list(ProcID, Opts) of
+    case list(ProcID, Epoch, Opts) of
         [] ->
             ?event({no_assignments_in_cache, {proc_id, ProcID}}),
             not_found;
@@ -139,11 +160,7 @@ latest(ProcID, RawOpts) ->
                     {assignment_num, AssignmentNum}
                 }
             ),
-            {ok, Assignment} = dev_scheduler_cache:read(
-                ProcID,
-                AssignmentNum,
-                Opts
-            ),
+            {ok, Assignment} = dev_scheduler_cache:read(ProcID, Epoch, AssignmentNum, Opts),
             {
                 AssignmentNum,
                 hb_ao:get_first(
@@ -155,6 +172,72 @@ latest(ProcID, RawOpts) ->
                 )
             }
     end.
+
+%% @doc Get the latest assignment from the latest known epoch.
+latest_epoch(ProcID, RawOpts) ->
+    Opts = opts(RawOpts),
+    case numbered_list(epochs_path(ProcID), Opts) of
+        [] ->
+            case latest(ProcID, Opts) of
+                not_found -> not_found;
+                {Slot, Base} -> {0, Slot, Base}
+            end;
+        Epochs ->
+            Epoch = lists:max(Epochs),
+            case latest(ProcID, Epoch, Opts) of
+                not_found -> not_found;
+                {Slot, Base} -> {Epoch, Slot, Base}
+            end
+    end.
+
+%% @doc List numeric child names under a cache path.
+numbered_list(Path, Opts) ->
+    lists:filtermap(
+        fun(Name) ->
+            try {true, hb_util:int(Name)}
+            catch _:_ -> false
+            end
+        end,
+        hb_cache:list(Path, Opts)
+    ).
+
+%% @doc Return the cache path for a legacy epoch-0 assignment.
+assignment_path(ProcID) ->
+    hb_path:to_binary([
+        ?SCHEDULER_CACHE_PREFIX,
+        <<"assignments">>,
+        hb_util:human_id(ProcID)
+    ]).
+
+%% @doc Return the cache path for a legacy epoch-0 assignment slot.
+assignment_path(ProcID, Slot) ->
+    hb_path:to_binary([
+        assignment_path(ProcID),
+        hb_ao:normalize_key(Slot)
+    ]).
+
+%% @doc Return the cache path for an epoch-specific assignment.
+assignment_path(ProcID, Epoch, Slot) ->
+    hb_path:to_binary([
+        epoch_path(ProcID, Epoch),
+        hb_ao:normalize_key(Slot)
+    ]).
+
+%% @doc Return the cache path for an epoch's assignments.
+epoch_path(ProcID, Epoch) ->
+    hb_path:to_binary([
+        epochs_path(ProcID),
+        hb_ao:normalize_key(Epoch)
+    ]).
+
+%% @doc Return the cache path for all assignment epochs.
+epochs_path(ProcID) ->
+    hb_path:to_binary([
+        ?SCHEDULER_CACHE_PREFIX,
+        <<"assignments">>,
+        hb_util:human_id(ProcID),
+        <<"epochs">>
+    ]).
 
 %%% Tests
 

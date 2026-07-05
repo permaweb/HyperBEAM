@@ -88,7 +88,7 @@ is_async(Process, Req, Opts) ->
 
 %% @doc Push a message or slot number, including its downstream results.
 do_push(PrimaryProcess, Assignment, Opts) ->
-    Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
+    Slot = assignment_process_slot(Assignment, Opts),
     ID = lib_process:process_id(PrimaryProcess, #{}, Opts),
     UncommittedID =
         lib_process:process_id(
@@ -320,7 +320,7 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
             case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
                 {ok, Assignment} ->
                     % Analyze the result of the message push.
-                    NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
+                    NextSlotOnProc = assignment_process_slot(Assignment, Opts),
                     PushedMsg = hb_ao:get(<<"body">>, Assignment, Opts),
                     % Get the ID of the message that was pushed. We already have
                     % the 'origin' message, but we need the signed ID.
@@ -623,9 +623,7 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
         {ok, 307} ->
             Location = hb_ao:get(<<"location">>, Res, Opts),
             ?event(push, {redirect, {location, {explicit, Location}}}),
-            NormMsg = normalize_message(MsgToPush, Opts),
-            SignedNormMsg = hb_message:commit(NormMsg, Opts),
-            remote_schedule_result(Location, SignedNormMsg, Opts);
+            remote_schedule_result(Location, SignedMsg, Opts);
         {error, 422} ->
             ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
             case Codec of
@@ -652,6 +650,15 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
             {error, Res}
     end.
 
+%% @doc Return the monotonic process slot represented by an assignment.
+assignment_process_slot(Assignment, Opts) ->
+    hb_ao:get(
+        <<"process-slot">>,
+        Assignment,
+        hb_ao:get(<<"slot">>, Assignment, Opts),
+        Opts
+    ).
+
 %% @doc Set the necessary keys in order for the recipient to know where the
 %% message came from.
 augment_message(Origin, ToSched, Opts) ->
@@ -664,6 +671,8 @@ augment_message(Origin, ToSched, Opts) ->
                 <<"variant">> => <<"ao.N.1">>,
                 <<"type">> => <<"Message">>,
                 <<"from-process">> => maps:get(<<"process">>, Origin),
+                <<"from-slot">> => maps:get(<<"slot">>, Origin),
+                <<"from-outbox">> => maps:get(<<"outbox-key">>, Origin),
                 <<"from-uncommitted">> => maps:get(<<"from-uncommitted">>, Origin),
                 <<"from-base">> => maps:get(<<"from-base">>, Origin),
                 <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
@@ -847,6 +856,7 @@ dev_push_test_() ->
         {inparallel, max_depth_test_cases()}
     ].
 
+%% @doc Return the core push tests that share a parallel group.
 core_push_test_cases() ->
     [
         {timeout, 30, fun test_full_push/0},

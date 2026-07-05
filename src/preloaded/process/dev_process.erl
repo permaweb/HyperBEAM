@@ -325,6 +325,14 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
 
 %% @doc Compute a single slot for a process, given an initialized state.
 compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
+    ProcessSlot =
+        hb_util:int(
+            hb_ao:get(
+                <<"at-slot">>,
+                State,
+                Opts#{ <<"hashpath">> => ignore }
+            )
+        ) + 1,
     {PrepTimeMicroSecs, {ok, Slot, PreparedState, Req}} =
         timer:tc(
             fun() ->
@@ -358,10 +366,14 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
     case Res of
         {ok, NewProcStateMsg} ->
             % We have now transformed slot n -> n + 1. Increment the current slot.
+            SchedulerCursor = scheduler_cursor(RawInputMsg, Opts),
             NewProcStateMsgWithSlot =
                 hb_ao:set(
                     NewProcStateMsg,
-                    #{ <<"device">> => <<"process@1.0">>, <<"at-slot">> => Slot },
+                    SchedulerCursor#{
+                        <<"device">> => <<"process@1.0">>,
+                        <<"at-slot">> => ProcessSlot
+                    },
                     Opts
                 ),
             {StoreTimeMicroSecs, ProcStateWithSnapshot} =
@@ -370,7 +382,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                         store_result(
                             false,
                             ProcID,
-                            Slot,
+                            ProcessSlot,
                             NewProcStateMsgWithSlot,
                             InitReq,
                             Opts
@@ -380,7 +392,8 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
             ?event(compute_short,
                 {computed_slot,
                     {proc_id, ProcID},
-                    {slot, Slot},
+                    {slot, ProcessSlot},
+                    {scheduler_slot, Slot},
                     {target_slot, TargetSlot},
                     {prep_ms, PrepTimeMicroSecs div 1000},
                     {execution_ms, RuntimeMicroSecs div 1000},
@@ -401,7 +414,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
             % and those paths treat the cache as the completion boundary.
             dev_process_worker:notify_compute(
                 ProcID,
-                Slot,
+                ProcessSlot,
                 {ok, ProcStateWithSnapshot},
                 Opts
             ),
@@ -410,7 +423,7 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
             % short-circuit before we get here, so each slot is push-triggered
             % at most once per node lifetime regardless of how many times the
             % caller polls `/now' or `/compute'.
-            maybe_trigger_push(State, Slot, InitReq, Opts),
+            maybe_trigger_push(State, ProcessSlot, InitReq, Opts),
             {ok, ProcStateWithSnapshot};
         {error, Error} ->
             % An error occurred while computing the slot. Return the details.
@@ -434,6 +447,25 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     <<"attempted-slot">> => Slot
                 }
             }
+    end.
+
+%% @doc Return the scheduler cursor after consuming an assignment.
+scheduler_cursor(Assignment, Opts) ->
+    Epoch =
+        hb_util:int(
+            hb_ao:get(
+                <<"epoch">>,
+                Assignment,
+                <<"0">>,
+                Opts#{ <<"hashpath">> => ignore }
+            )
+        ),
+    Slot = hb_util:int(hb_ao:get(<<"slot">>, Assignment, Opts)),
+    case hb_ao:get(<<"next-scheduler">>, Assignment, not_found, Opts) of
+        not_found ->
+            #{ <<"scheduler-epoch">> => Epoch, <<"scheduler-slot">> => Slot };
+        _ ->
+            #{ <<"scheduler-epoch">> => Epoch + 1, <<"scheduler-slot">> => -1 }
     end.
 
 %% @doc Prepare the process state message for computing the next slot.
