@@ -854,7 +854,8 @@ core_push_test_cases() ->
         {timeout, 30, fun test_multi_process_push/0},
         {timeout, 30, fun test_push_prompts_encoding_change/0},
         {timeout, 60, fun test_remote_routed_push/0},
-        {timeout, 30, fun test_oracle_push/0}
+        {timeout, 30, fun test_oracle_push/0},
+        {timeout, 30, fun test_push_transfer/0}
     ].
 
 max_depth_test_cases() ->
@@ -1580,7 +1581,66 @@ test_nested_push_prompts_encoding_change() ->
         ),
     ?assertMatch({ok, #{ <<"1">> := #{ <<"resulted-in">> := _ }}}, Res2).
 -endif.
+
+%% @doc A process may request the transfer of its own schedule: the pushed
+%% outbox message arrives at the scheduler with `from-process' and the
+%% signature of the node's trusted transfer authority, terminating the
+%% schedule with a `Scheduler-Transfer' marker.
+test_push_transfer() ->
+    hb_process_test_vectors:init(),
+    Address = hb_util:human_id(ar_wallet:to_address(hb:wallet())),
+    Next = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Opts = #{
+        <<"priv-wallet">> => hb:wallet(),
+        <<"cache-control">> => <<"always">>,
+        <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)],
+        <<"scheduler-transfer-authority">> => [Address]
+    },
+    Base = hb_process_test_vectors:aos_process(Opts),
+    ProcID = hb_util:human_id(hb_message:id(Base, all)),
+    hb_cache:write(Base, Opts),
+    {ok, _} =
+        hb_ao:resolve(Base, #{
+            <<"method">> => <<"POST">>,
+            <<"path">> => <<"schedule">>,
+            <<"body">> => Base
+        },
+        Opts
+    ),
+    {ok, Req} =
+        hb_process_test_vectors:schedule_aos_call(
+            Base,
+            transfer_script(Next),
+            Opts
+        ),
+    {ok, StartingMsgSlot} =
+        hb_ao:resolve(Req, #{ <<"path">> => <<"slot">> }, Opts),
+    PushRes =
+        hb_ao:resolve(
+            Base,
+            #{ <<"path">> => <<"push">>, <<"slot">> => StartingMsgSlot },
+            Opts
+        ),
+    ?event(push, {transfer_push_result, PushRes}),
+    % The process's own request, delivered through the push, terminated its
+    % schedule with a transfer marker at the following slot.
+    {ok, Marker} =
+        hb_cache:read(
+            <<"~scheduler@1.0/assignments/", ProcID/binary, "/2">>,
+            Opts
+        ),
+    ?assertEqual(<<"Scheduler-Transfer">>, hb_ao:get(<<"type">>, Marker, Opts)),
+    ?assertEqual(Next, hb_ao:get(<<"next-scheduler">>, Marker, Opts)).
+
 %%% Test helpers
+
+%% @doc A script that requests the transfer of the process's own schedule to
+%% the given successor scheduler.
+transfer_script(Next) ->
+    <<
+        "Send({ Target = ao.id, Action = \"Request-Scheduler-Transfer\", ",
+        "[\"Next-Scheduler\"] = \"", Next/binary, "\" })\n"
+    >>.
 
 ping_pong_script(Limit) ->
     <<

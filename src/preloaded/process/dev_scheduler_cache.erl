@@ -2,6 +2,7 @@
 -module(dev_scheduler_cache).
 -export([write/2, write_spawn/2, read/3]).
 -export([list/2, latest/2]).
+-export([write_transfer/2, read_transfer/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -108,6 +109,53 @@ read(ProcID, Slot, RawOpts) ->
             end;
         {error, not_found} ->
             ?event(debug_sched, {read_assignment, {res, not_found}}),
+            not_found
+    end.
+
+%% @doc Store the transfer marker through which this node became the successor
+%% scheduler for a process.
+write_transfer(Marker, RawOpts) ->
+    Opts = opts(RawOpts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    ProcID = hb_ao:get(<<"process">>, Marker, Opts),
+    ?event({writing_transfer, {proc_id, ProcID}, {marker, Marker}}),
+    case hb_cache:write(Marker, Opts) of
+        {ok, _UnsignedID} ->
+            ok = hb_store:link(
+                Store,
+                #{
+                    hb_path:to_binary([
+                        ?SCHEDULER_CACHE_PREFIX,
+                        <<"transfers">>,
+                        hb_util:human_id(ProcID)
+                    ]) => hb_message:id(Marker, signed, Opts)
+                },
+                Opts
+            ),
+            ok;
+        {error, Reason} ->
+            ?event(error, {failed_to_write_transfer, {reason, Reason}}),
+            {error, Reason}
+    end.
+
+%% @doc Read the transfer marker through which this node became the successor
+%% scheduler for a process, if one exists.
+read_transfer(ProcID, RawOpts) ->
+    Opts = opts(RawOpts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    Path = hb_path:to_binary([
+        ?SCHEDULER_CACHE_PREFIX,
+        <<"transfers">>,
+        hb_util:human_id(ProcID)
+    ]),
+    ?event({read_transfer, {proc_id, ProcID}, {store, Store}}),
+    case hb_store:resolve(Store, Path, Opts) of
+        {ok, ResolvedPath} ->
+            case hb_cache:read(ResolvedPath, Opts) of
+                {ok, Marker} -> {ok, hb_cache:ensure_all_loaded(Marker, Opts)};
+                {error, not_found} -> not_found
+            end;
+        {error, not_found} ->
             not_found
     end.
 

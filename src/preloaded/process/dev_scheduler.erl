@@ -378,10 +378,17 @@ post_schedule(Base, Req, Opts) ->
     % Find the target message to schedule:
     RawToSched = find_message_to_schedule(Base, Req, Opts),
     % If the message can not be properly loaded, this will throw an error
-    % before scheduling the message.    
+    % before scheduling the message.
     try hb_cache:ensure_all_loaded(RawToSched, Opts) of
         ToSched ->
-            do_post_schedule(Base, Req, ToSched, Opts)
+            case hb_ao:get(<<"type">>, ToSched, not_found, Opts) of
+                <<"Scheduler-Transfer">> ->
+                    % The message is a signed transfer marker from a prior
+                    % scheduler: attempt to accept the process's next epoch.
+                    accept_transfer(ToSched, Opts);
+                _ ->
+                    do_post_schedule(Base, Req, ToSched, Opts)
+            end
     catch
         error:{necessary_message_not_found, _, _} ->
             {error,
@@ -414,7 +421,24 @@ do_post_schedule(Base, Req, ToSched, Opts) ->
             case find_server(ProcID, Base, ToSched, Opts) of
                 {local, PID} ->
                     ?event({scheduling_locally, {proc_id, ProcID}, {pid, PID}}),
-                    post_local_schedule(ProcID, PID, OnlyCommitted, Opts);
+                    Action =
+                        hb_ao:get(<<"action">>, OnlyCommitted, not_found, Opts),
+                    case Action of
+                        <<"Request-Scheduler-Transfer">> ->
+                            post_local_transfer(
+                                ProcID,
+                                PID,
+                                OnlyCommitted,
+                                Opts
+                            );
+                        _ ->
+                            post_local_schedule(
+                                ProcID,
+                                PID,
+                                OnlyCommitted,
+                                Opts
+                            )
+                    end;
                 {redirect, Redirect} ->
                     ?event({process_is_remote, {redirect, Redirect}}),
                     case hb_opts:get(scheduler_follow_redirects, true, Opts) of
@@ -497,7 +521,7 @@ post_local_schedule(ProcID, PID, Req, Opts) ->
                     {is_alive, is_process_alive(PID)}
                 }
             ),
-            {ok, dev_scheduler_server:schedule(PID, Req)};
+            schedule_or_redirect(ProcID, PID, Req, Opts);
         {true, _} ->
             ?event(
                 {scheduling_message,
@@ -507,8 +531,300 @@ post_local_schedule(ProcID, PID, Req, Opts) ->
                 }
             ),
             % If Request is not a process, use the ID of Base as the PID
-            {ok, dev_scheduler_server:schedule(PID, Req)}
+            schedule_or_redirect(ProcID, PID, Req, Opts)
     end.
+
+%% @doc Schedule a message with the local server, returning a redirect to the
+%% successor scheduler if the process's schedule has been transferred away.
+schedule_or_redirect(ProcID, PID, Req, Opts) ->
+    case dev_scheduler_server:schedule(PID, Req) of
+        {transferred, Next} -> redirect_to_successor(ProcID, Next, Opts);
+        Assignment -> {ok, Assignment}
+    end.
+
+%% @doc Generate a redirect response to the successor scheduler of a process.
+redirect_to_successor(ProcID, Next, Opts) ->
+    case find_remote_scheduler(ProcID, Next, Opts) of
+        {redirect, Redirect} -> {ok, Redirect};
+        {error, Error} -> {error, Error}
+    end.
+
+%% @doc Terminate the local schedule of a process with a transfer marker, if
+%% the request is authorized. The signed marker is returned to the caller and
+%% forwarded to the successor scheduler, best-effort: the marker is uploaded
+%% to Arweave and acceptance is idempotent, so any bearer may re-deliver it.
+post_local_transfer(ProcID, PID, Req, Opts) ->
+    Next = hb_ao:get(<<"next-scheduler">>, Req, not_found, Opts),
+    maybe
+        true ?= ?IS_ID(Next)
+            orelse {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> =>
+                        <<"Transfer request names no valid next-scheduler.">>
+                }
+            },
+        true ?= not is_own_identity(Next, Opts)
+            orelse {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> =>
+                        <<"Transfer request names this scheduler itself.">>
+                }
+            },
+        true ?= transfer_authorized(ProcID, Req, Opts)
+            orelse {error,
+                #{
+                    <<"status">> => 403,
+                    <<"body">> => <<"Transfer request is not authorized.">>
+                }
+            },
+        case dev_scheduler_server:transfer(PID, Req, hb_util:human_id(Next)) of
+            {transferred, Existing} ->
+                redirect_to_successor(ProcID, Existing, Opts);
+            Marker ->
+                spawn(
+                    fun() -> forward_transfer(ProcID, Marker, Next, Opts) end
+                ),
+                {ok, Marker}
+        end
+    end.
+
+%% @doc Determine whether a transfer request is authorized: signed by the node
+%% operator, or pushed from the process itself and signed by a member of the
+%% node message's `scheduler-transfer-authority' list. The process defines
+%% when a transfer occurs; the node defines who it trusts to deliver the
+%% decision. The authorizing signature must cover the keys that define the
+%% transfer (`action', `next-scheduler', `target'), so a signature over
+%% unrelated content cannot be replayed to authorize a transfer.
+transfer_authorized(ProcID, Req, Opts) ->
+    Signers =
+        verified_signers(
+            Req,
+            [<<"action">>, <<"next-scheduler">>, <<"target">>],
+            Opts
+        ),
+    Operator = hb_opts:get(operator, undefined, Opts),
+    (?IS_ID(Operator)
+        andalso lists:member(hb_util:human_id(Operator), Signers))
+        orelse authority_pushed(ProcID, Req, Signers, Opts).
+
+%% @doc Return the authenticated committers of `Msg' over `RequiredKeys': the
+%% committers whose commitment passes `authenticated_committer/4'. An unsigned
+%% or invalidly-signed message has no verified signers.
+verified_signers(Msg, RequiredKeys, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    lists:filtermap(
+        fun(Commitment) ->
+            authenticated_committer(Msg, Commitment, RequiredKeys, Opts)
+        end,
+        hb_maps:values(Commitments, Opts)
+    ).
+
+%% @doc Return `{true, Committer}' if a single commitment authenticates its
+%% committer over the required keys, or `false' otherwise. The commitment's
+%% `committer' field must be present, equal the address derived from its own
+%% `keyid', cover every required key, and verify. The keyid match defeats a
+%% relabeled `committer' field (which verification does not otherwise bind to
+%% the key); the required, matching committer field defeats an unverified
+%% keyid-only commitment; the key coverage defeats replaying a signature made
+%% over unrelated content.
+authenticated_committer(Msg, Commitment, RequiredKeys, Opts) ->
+    Claimed = hb_maps:get(<<"committer">>, Commitment, undefined, Opts),
+    Derived =
+        try
+            dev_httpsig_keyid:keyid_to_committer(
+                hb_maps:get(<<"keyid">>, Commitment, undefined, Opts)
+            )
+        catch _:_ -> undefined
+        end,
+    case {Claimed, Derived} of
+        {undefined, _} -> false;
+        {_, undefined} -> false;
+        _ ->
+            Committer = hb_util:human_id(Claimed),
+            case
+                Committer =:= hb_util:human_id(Derived)
+                    andalso commitment_covers(Commitment, RequiredKeys, Opts)
+                    andalso hb_message:verify(Msg, [Committer], Opts)
+            of
+                true -> {true, Committer};
+                false -> false
+            end
+    end.
+
+%% @doc Check that a commitment's `committed' list includes every one of the
+%% required keys, so the signature binds those keys' values.
+commitment_covers(Commitment, RequiredKeys, Opts) ->
+    Committed =
+        [
+            hb_ao:normalize_key(Key)
+        ||
+            Key <- hb_maps:get(<<"committed">>, Commitment, [], Opts)
+        ],
+    lists:all(
+        fun(Key) -> lists:member(hb_ao:normalize_key(Key), Committed) end,
+        RequiredKeys
+    ).
+
+%% @doc Check that a transfer request was pushed from the process itself and
+%% committed by a trusted transfer authority.
+authority_pushed(ProcID, Req, Signers, Opts) ->
+    FromProcess = hb_ao:get(<<"from-process">>, Req, not_found, Opts),
+    Authorities =
+        [
+            hb_util:human_id(Authority)
+        ||
+            Authority <- hb_opts:get(scheduler_transfer_authority, [], Opts)
+        ],
+    FromProcess =/= not_found
+        andalso hb_util:human_id(FromProcess) =:= hb_util:human_id(ProcID)
+        andalso lists:any(
+            fun(Signer) -> lists:member(Signer, Authorities) end,
+            Signers
+        ).
+
+%% @doc Check whether the given address is an identity operated by this node.
+is_own_identity(Address, Opts) ->
+    case hb_opts:as(Address, Opts) of
+        {ok, _} -> true;
+        {error, not_found} -> false
+    end.
+
+%% @doc Deliver a signed transfer marker to the successor scheduler, such that
+%% it can open the process's next epoch. Best-effort: failures are only
+%% logged, as the marker is uploaded to Arweave and acceptance is idempotent.
+forward_transfer(ProcID, Marker, Next, Opts) ->
+    case find_remote_scheduler(ProcID, Next, Opts) of
+        {redirect, Redirect} ->
+            Res = post_remote_schedule(ProcID, Redirect, Marker, Opts),
+            ?event(scheduling,
+                {forwarded_transfer,
+                    {proc_id, ProcID},
+                    {next, Next},
+                    {res, Res}
+                }
+            );
+        {error, Error} ->
+            ?event(warning,
+                {transfer_forward_failed,
+                    {proc_id, ProcID},
+                    {next, Next},
+                    {error, Error}
+                }
+            )
+    end.
+
+%% @doc Accept a transfer marker naming an identity of this node as the
+%% successor scheduler for a process. The marker must verify, be committed by
+%% a scheduler of the process, and name an identity that this node operates.
+%% The node must also hold no assignments for the process: a node's assignment
+%% table always contains exactly one epoch.
+accept_transfer(Marker, Opts) ->
+    RawProcID = hb_ao:get(<<"process">>, Marker, not_found, Opts),
+    Next = hb_ao:get(<<"next-scheduler">>, Marker, not_found, Opts),
+    maybe
+        true ?= ?IS_ID(RawProcID)
+            orelse {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Transfer marker names no valid process.">>
+                }
+            },
+        ProcID = hb_util:human_id(RawProcID),
+        % Fetch the process strictly by its content address: the marker's
+        % `process' is the process ID, so the scheduler set we trust must come
+        % from the message that hashes to it, never from request-supplied state.
+        Proc =
+            case hb_cache:read(ProcID, Opts) of
+                {ok, P} -> P;
+                _ -> not_found
+            end,
+        true ?= (Proc =/= not_found)
+            orelse {error,
+                #{
+                    <<"status">> => 404,
+                    <<"body">> =>
+                        <<"Process to transfer is not available: ",
+                            ProcID/binary>>
+                }
+            },
+        true ?= marker_from_scheduler(Marker, Proc, Opts)
+            orelse {error,
+                #{
+                    <<"status">> => 403,
+                    <<"body">> =>
+                        <<"Transfer marker is not committed by a scheduler ",
+                            "of the process.">>
+                }
+            },
+        true ?= (Next =/= not_found) andalso is_own_identity(Next, Opts)
+            orelse {error,
+                #{
+                    <<"status">> => 403,
+                    <<"body">> =>
+                        <<"Transfer marker names another scheduler.">>
+                }
+            },
+        true ?= (dev_scheduler_cache:list(ProcID, Opts) =:= [])
+            orelse {error,
+                #{
+                    <<"status">> => 409,
+                    <<"body">> =>
+                        <<"Assignments already exist for the process ",
+                            "on this node.">>
+                }
+            },
+        ok ?= dev_scheduler_cache:write_transfer(Marker, Opts),
+        PID = dev_scheduler_registry:find(ProcID, Proc, Opts),
+        ?event(scheduling,
+            {accepted_transfer,
+                {proc_id, ProcID},
+                {pid, PID}
+            }
+        ),
+        {ok,
+            #{
+                <<"status">> => 200,
+                <<"body">> => <<"Transfer accepted.">>
+            }
+        }
+    end.
+
+%% @doc Check that a transfer marker is verified and committed by one of the
+%% schedulers that the process message names. Committers are derived from the
+%% signing keys and must have committed the marker's defining keys, so neither
+%% a forged `committer' field nor a replayed signature can impersonate a
+%% scheduler.
+marker_from_scheduler(Marker, Proc, Opts) ->
+    Signers =
+        verified_signers(
+            Marker,
+            [<<"type">>, <<"next-scheduler">>, <<"process">>],
+            Opts
+        ),
+    SchedLoc =
+        hb_ao:get_first(
+            [
+                {Proc, <<"scheduler">>},
+                {Proc, <<"scheduler-location">>}
+            ],
+            not_found,
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    Schedulers =
+        lists:filtermap(
+            fun(Scheduler) ->
+                try {true, without_hint(Scheduler)}
+                catch throw:{invalid_operation_target, _} -> false
+                end
+            end,
+            case SchedLoc of
+                not_found -> [];
+                _ -> parse_schedulers(SchedLoc)
+            end
+        ),
+    lists:any(fun(Signer) -> lists:member(Signer, Schedulers) end, Signers).
 
 %% @doc Locate the correct scheduling server for a given process.
 find_server(ProcID, Base, Opts) ->
@@ -558,10 +874,40 @@ find_server(ProcID, Base, ToSched, Opts) ->
                                     % it has not already been started, with the
                                     % given options.
                                     {local, PID};
+                                {transferred, Next} ->
+                                    % The schedule was terminated on this node
+                                    % by a transfer: redirect to the successor.
+                                    find_remote_scheduler(ProcID, Next, Opts);
                                 false ->
-                                    % We are not the scheduler. Find it and
-                                    % return a redirect.
-                                    find_remote_scheduler(ProcID, ParsedLoc, Opts)
+                                    case
+                                        dev_scheduler_cache:read_transfer(
+                                            ProcID,
+                                            Opts
+                                        )
+                                    of
+                                        {ok, _} ->
+                                            % This node accepted the schedule
+                                            % through a transfer: it is the
+                                            % scheduler, despite the process's
+                                            % own scheduler definition.
+                                            server_result(
+                                                ProcID,
+                                                dev_scheduler_registry:find(
+                                                    ProcID,
+                                                    Proc,
+                                                    Opts
+                                                ),
+                                                Opts
+                                            );
+                                        not_found ->
+                                            % We are not the scheduler. Find it
+                                            % and return a redirect.
+                                            find_remote_scheduler(
+                                                ProcID,
+                                                ParsedLoc,
+                                                Opts
+                                            )
+                                    end
                             end
                     end
             end
@@ -607,24 +953,33 @@ find_process_message(ProcID, Base, ToSched, Opts) ->
         P -> P
     end.
 
-%% @doc Determine if a scheduler is local. If so, return the PID and options.
-%% We start the local server if we _can_ be the scheduler and it does not already
-%% exist.
+%% @doc Determine if a scheduler is local. If so, return `{ok, PID}'. If the
+%% schedule was terminated on this node by a transfer, return `{transferred,
+%% Next}'. Otherwise return `false'. We start the local server if we _can_ be
+%% the scheduler and it does not already exist.
 is_local_scheduler(_, _, [], _Opts) -> false;
 is_local_scheduler(ProcID, ProcMsg, [Scheduler | Rest], Opts) ->
     case is_local_scheduler(ProcID, ProcMsg, Scheduler, Opts) of
-        {ok, PID} -> {ok, PID};
-        false -> is_local_scheduler(ProcID, ProcMsg, Rest, Opts)
+        false -> is_local_scheduler(ProcID, ProcMsg, Rest, Opts);
+        Result -> Result
     end;
 is_local_scheduler(ProcID, ProcMsg, Scheduler, Opts) ->
     case hb_opts:as(Scheduler, Opts) of
         {ok, _} ->
-            {
-                ok,
-                dev_scheduler_registry:find(ProcID, ProcMsg, Opts)
-            };
+            case dev_scheduler_registry:find(ProcID, ProcMsg, Opts) of
+                {transferred, Next} -> {transferred, Next};
+                PID -> {ok, PID}
+            end;
         {error, _} -> false
     end.
+
+%% @doc Resolve a scheduler server lookup into a `find_server' result: a live
+%% server is local, while a server that has transferred its schedule away
+%% redirects to the successor.
+server_result(_ProcID, PID, _Opts) when is_pid(PID) ->
+    {local, PID};
+server_result(ProcID, {transferred, Next}, Opts) ->
+    find_remote_scheduler(ProcID, Next, Opts).
 
 %% @doc If a hint is present in the string, return it. Else, return not_found.
 get_hint(Str, Opts) when is_binary(Str) ->
@@ -722,11 +1077,12 @@ slot(M1, M2, Opts) ->
         {local, PID} ->
             ?event({getting_current_slot, {proc_id, ProcID}}),
             {Timestamp, Height, Hash} = ar_timestamp:get(),
-            #{ current := CurrentSlot, wallets := Wallets } =
+            #{ current := CurrentSlot, epoch := Epoch, wallets := Wallets } =
                 dev_scheduler_server:info(PID),
             {ok, #{
                 <<"process">> => ProcID,
                 <<"current">> => CurrentSlot,
+                <<"epoch">> => Epoch,
                 <<"timestamp">> => Timestamp,
                 <<"block-height">> => Height,
                 <<"block-hash">> => Hash,
@@ -737,7 +1093,9 @@ slot(M1, M2, Opts) ->
             case hb_opts:get(scheduler_follow_redirects, true, Opts) of
                 false -> {ok, Redirect};
                 true -> remote_slot(ProcID, Redirect, Opts)
-            end
+            end;
+        {error, Error} ->
+            {error, Error}
     end.
 
 %% @doc Get the current slot from a remote scheduler.
@@ -861,10 +1219,12 @@ get_schedule(Base, Req, Opts) ->
                     end;
                 false ->
                     {ok, Redirect}
-            end
+            end;
+        {error, Error} ->
+            {error, Error}
     end.
 
-%% @doc Get a schedule from a remote scheduler, but first read all of the 
+%% @doc Get a schedule from a remote scheduler, but first read all of the
 %% assignments from the local cache that we already know about.
 get_remote_schedule(RawProcID, From, To, Redirect, Opts) ->
     % If we are responding to a legacy scheduler request we must add one to the
@@ -1708,6 +2068,408 @@ http_post_schedule() ->
         ),
     ?assertEqual(<<"test-message">>, hb_ao:get(<<"body/inner">>, Res2, Opts)),
     ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(N, PMsg)).
+
+%% @doc Start a node with its own wallet and store, returning its URL, its
+%% address, and its full option map.
+transfer_test_node(Opts) ->
+    Wallet = ar_wallet:new(),
+    NodeOpts =
+        Opts#{
+            <<"priv-wallet">> => Wallet,
+            <<"store">> => [hb_test_utils:test_store()]
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    {Node, hb_util:human_id(ar_wallet:to_address(Wallet)), NodeOpts}.
+
+%% @doc POST a prepared message body to a node's scheduler as a schedule
+%% request, signed with the given options.
+post_transfer_body(Node, Body, Opts) ->
+    hb_http:post(
+        Node,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => Body
+            },
+            Opts
+        ),
+        #{}
+    ).
+
+%% @doc Send a `Request-Scheduler-Transfer' for a process to a node, signed
+%% with the given wallet.
+http_post_transfer(Node, ProcID, Next, Extra, Wallet) ->
+    Opts = #{ <<"priv-wallet">> => Wallet },
+    Body =
+        hb_message:commit(
+            maps:merge(
+                #{
+                    <<"target">> => ProcID,
+                    <<"action">> => <<"Request-Scheduler-Transfer">>,
+                    <<"next-scheduler">> => Next
+                },
+                Extra
+            ),
+            Opts
+        ),
+    post_transfer_body(Node, Body, Opts).
+
+%% @doc Rewrite a signed message's commitments to falsely name `Committer',
+%% without a matching signature. Used to prove that authorization derives
+%% committers from the signing key, not the `committer' field.
+forge_committer(Signed, Committer, Opts) ->
+    Commitments = hb_maps:get(<<"commitments">>, Signed, #{}, Opts),
+    Signed#{
+        <<"commitments">> =>
+            hb_maps:map(
+                fun(_ID, Commitment) ->
+                    Commitment#{ <<"committer">> => Committer }
+                end,
+                Commitments,
+                Opts
+            )
+    }.
+
+%% @doc The canonical fields of a transfer request for the given process and
+%% successor.
+transfer_fields(ProcID, Next) ->
+    #{
+        <<"target">> => ProcID,
+        <<"action">> => <<"Request-Scheduler-Transfer">>,
+        <<"next-scheduler">> => Next,
+        <<"from-process">> => ProcID
+    }.
+
+%% @doc Send a transfer request whose inner body is committed by a fresh
+%% wallet but whose commitment falsely claims the given authority as its
+%% committer. The forged committer must not pass verification.
+http_post_forged_transfer(Node, ProcID, Next, Authority) ->
+    Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Signed = hb_message:commit(transfer_fields(ProcID, Next), Opts),
+    post_transfer_body(Node, forge_committer(Signed, Authority, Opts), Opts).
+
+%% @doc Send a transfer request signed by a fresh wallet, into which the
+%% authority's _genuine_ commitment over the same content has been spliced
+%% with its `committer' field stripped. The commitment verifies (real
+%% signature) and its `keyid' derives to the authority, but with no committer
+%% field it must contribute no signer -- a committer counts only when its own
+%% commitment names it and verifies.
+http_post_keyid_splice_transfer(Node, ProcID, Next, AuthorityWallet) ->
+    Fields = transfer_fields(ProcID, Next),
+    Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Signed = hb_message:commit(Fields, Opts),
+    AuthSigned =
+        hb_message:commit(Fields, #{ <<"priv-wallet">> => AuthorityWallet }),
+    StrippedAuthComms =
+        hb_maps:map(
+            fun(_ID, Commitment) -> maps:remove(<<"committer">>, Commitment) end,
+            hb_maps:get(<<"commitments">>, AuthSigned, #{}, Opts),
+            Opts
+        ),
+    Spliced = splice_commitments(Signed, StrippedAuthComms, Opts),
+    post_transfer_body(Node, Spliced, Opts).
+
+%% @doc Send a transfer request into which the authority's genuine commitment
+%% is spliced, where that commitment covers `target' and `action' but _not_
+%% `next-scheduler'. The attacker sets and self-commits `next-scheduler'; as
+%% the authority's signature does not bind it, the request must be refused --
+%% the authority never consented to this successor.
+http_post_replay_transfer(Node, ProcID, Next, AuthorityWallet) ->
+    Opts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Partial =
+        #{
+            <<"target">> => ProcID,
+            <<"action">> => <<"Request-Scheduler-Transfer">>
+        },
+    AuthSigned =
+        hb_message:commit(Partial, #{ <<"priv-wallet">> => AuthorityWallet }),
+    Signed =
+        hb_message:commit(
+            Partial#{
+                <<"next-scheduler">> => Next,
+                <<"from-process">> => ProcID
+            },
+            Opts
+        ),
+    Replayed =
+        splice_commitments(
+            Signed,
+            hb_maps:get(<<"commitments">>, AuthSigned, #{}, Opts),
+            Opts
+        ),
+    post_transfer_body(Node, Replayed, Opts).
+
+%% @doc Merge extra commitments into a signed message, retaining its own.
+splice_commitments(Signed, ExtraComms, Opts) ->
+    Signed#{
+        <<"commitments">> =>
+            maps:merge(
+                hb_maps:get(<<"commitments">>, Signed, #{}, Opts),
+                ExtraComms
+            )
+    }.
+
+%% @doc Transfer a schedule between two nodes: the operator ends the epoch on
+%% the old scheduler with a signed marker, the old scheduler redirects further
+%% scheduling to the successor, and the successor opens the next epoch with
+%% slots restarting from zero.
+http_transfer_new_epoch_test_() ->
+    {timeout, 60, fun http_transfer_new_epoch/0}.
+http_transfer_new_epoch() ->
+    start(),
+    OperatorWallet = ar_wallet:new(),
+    Operator = hb_util:human_id(ar_wallet:to_address(OperatorWallet)),
+    OperatorOpts = #{ <<"priv-wallet">> => OperatorWallet },
+    {NodeA, AddrA, _OptsA} =
+        transfer_test_node(#{
+            <<"operator">> => Operator,
+            <<"scheduler-follow-redirects">> => false
+        }),
+    {NodeB, AddrB, OptsB} = transfer_test_node(#{}),
+    % Register the process and a first message on the current scheduler.
+    Proc = hb_message:commit(test_process(AddrA), OperatorOpts),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+    {ok, _} =
+        hb_http:post(
+            NodeA,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> => Proc
+                },
+                OperatorOpts
+            ),
+            #{}
+        ),
+    {ok, _} =
+        http_post_schedule_sign(
+            NodeA,
+            #{ <<"inner">> => <<"before-transfer">> },
+            Proc,
+            OperatorOpts
+        ),
+    ?assertMatch({ok, #{ <<"current">> := 1 }}, http_get_slot(NodeA, Proc)),
+    % Execute the transfer as the operator. The marker terminates the epoch
+    % at the next slot.
+    {ok, Marker} =
+        http_post_transfer(NodeA, ProcID, AddrB, #{}, OperatorWallet),
+    ?assertEqual(<<"Scheduler-Transfer">>, hb_ao:get(<<"type">>, Marker, #{})),
+    ?assertEqual(2, hb_util:int(hb_ao:get(<<"slot">>, Marker, #{}))),
+    ?assertEqual(0, hb_util:int(hb_ao:get(<<"epoch">>, Marker, #{}))),
+    ?assertEqual(AddrB, hb_ao:get(<<"next-scheduler">>, Marker, #{})),
+    % Make the successor's location known to the old scheduler, then verify
+    % that it redirects instead of scheduling.
+    LocB =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"location">>,
+                <<"url">> => NodeB,
+                <<"nonce">> => 1,
+                <<"time-to-live">> => 60000
+            },
+            OptsB
+        ),
+    {ok, _} = hb_http:post(NodeA, <<"/~location@1.0/known">>, LocB, #{}),
+    {_, Redirect} =
+        http_post_schedule_sign(
+            NodeA,
+            #{ <<"inner">> => <<"after-transfer">> },
+            Proc,
+            OperatorOpts
+        ),
+    ?assertEqual(307, hb_ao:get(<<"status">>, Redirect, #{})),
+    % Deliver the marker to the successor: acceptance requires the process
+    % message, and is idempotent with the old scheduler's own forward.
+    {ok, _} = hb_cache:write(hb_cache:ensure_all_loaded(Proc, #{}), OptsB),
+    % A marker whose commitment falsely names the process scheduler as its
+    % committer, without that scheduler's signature, is refused: acceptance
+    % derives committers from the signing key, not the `committer' field.
+    ForgedMarker =
+        forge_committer(
+            hb_message:commit(
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"Scheduler-Transfer">>,
+                    <<"process">> => ProcID,
+                    <<"next-scheduler">> => AddrB
+                },
+                #{ <<"priv-wallet">> => ar_wallet:new() }
+            ),
+            AddrA,
+            #{}
+        ),
+    {_, ForgedRes} =
+        hb_http:post(
+            NodeB,
+            #{
+                <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => ForgedMarker
+            },
+            #{}
+        ),
+    ?assertNotEqual(200, hb_ao:get(<<"status">>, ForgedRes, #{})),
+    {ok, _} =
+        hb_http:post(
+            NodeB,
+            #{
+                <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                <<"method">> => <<"POST">>,
+                <<"body">> => Marker
+            },
+            #{}
+        ),
+    % The successor opens the next epoch: slots restart from zero.
+    {ok, Assignment} =
+        http_post_schedule_sign(
+            NodeB,
+            #{ <<"inner">> => <<"new-epoch">> },
+            Proc,
+            OperatorOpts
+        ),
+    ?assertEqual(0, hb_util:int(hb_ao:get(<<"slot">>, Assignment, #{}))),
+    ?assertEqual(1, hb_util:int(hb_ao:get(<<"epoch">>, Assignment, #{}))),
+    ?assertMatch(
+        {ok, #{ <<"current">> := 0, <<"epoch">> := 1 }},
+        http_get_slot(NodeB, Proc)
+    ).
+
+%% @doc Test that marker acceptance trusts the process's scheduler set from
+%% the message that content-addresses to the marker's `process', not from a
+%% process message supplied in the request. An attacker who signs a marker for
+%% a victim process and supplies a fake process (naming themselves as its
+%% scheduler) in the request must not be accepted.
+http_transfer_process_binding_test_() ->
+    {timeout, 60, fun http_transfer_process_binding/0}.
+http_transfer_process_binding() ->
+    start(),
+    {Node, NodeAddr, NodeOpts} = transfer_test_node(#{}),
+    AttackerWallet = ar_wallet:new(),
+    AttackerOpts = #{ <<"priv-wallet">> => AttackerWallet },
+    Attacker = hb_util:human_id(ar_wallet:to_address(AttackerWallet)),
+    % The victim process is scheduled by an honest scheduler, not the attacker.
+    SchedulerAddr = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Victim = hb_message:commit(test_process(SchedulerAddr), AttackerOpts),
+    VictimID = hb_util:human_id(hb_message:id(Victim, all)),
+    {ok, _} = hb_cache:write(hb_cache:ensure_all_loaded(Victim, #{}), NodeOpts),
+    % The attacker signs a marker for the victim and names this node as the
+    % successor, then supplies a fake process (scheduled by the attacker) in
+    % the request in an attempt to control the trusted scheduler set.
+    Marker =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"variant">> => <<"ao.N.1">>,
+                <<"type">> => <<"Scheduler-Transfer">>,
+                <<"process">> => VictimID,
+                <<"next-scheduler">> => NodeAddr
+            },
+            AttackerOpts
+        ),
+    FakeProcess = hb_message:commit(test_process(Attacker), AttackerOpts),
+    {_, Res} =
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"process">> => FakeProcess,
+                    <<"body">> => Marker
+                },
+                AttackerOpts
+            ),
+            #{}
+        ),
+    ?assertNotEqual(200, hb_ao:get(<<"status">>, Res, #{})),
+    % The node did not become the victim's scheduler.
+    ?assertEqual(not_found, dev_scheduler_cache:read_transfer(VictimID, NodeOpts)).
+
+%% @doc Test the transfer authority model: unauthorized requests are refused
+%% without affecting the schedule, while a request pushed from the process
+%% itself (`from-process') and signed by a member of the node's
+%% `scheduler-transfer-authority' list is honored.
+http_transfer_authority_test_() ->
+    {timeout, 60, fun http_transfer_authority/0}.
+http_transfer_authority() ->
+    start(),
+    AuthorityWallet = ar_wallet:new(),
+    Authority = hb_util:human_id(ar_wallet:to_address(AuthorityWallet)),
+    {Node, Addr, _Opts} =
+        transfer_test_node(#{
+            <<"scheduler-transfer-authority">> => [Authority]
+        }),
+    Next = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    SignerOpts = #{ <<"priv-wallet">> => hb:wallet() },
+    Proc = hb_message:commit(test_process(Addr), SignerOpts),
+    ProcID = hb_util:human_id(hb_message:id(Proc, all)),
+    {ok, _} =
+        hb_http:post(
+            Node,
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~scheduler@1.0/schedule">>,
+                    <<"method">> => <<"POST">>,
+                    <<"body">> => Proc
+                },
+                SignerOpts
+            ),
+            #{}
+        ),
+    % A request from neither the operator nor a pushed authority is refused.
+    {_, Unauthorized} =
+        http_post_transfer(Node, ProcID, Next, #{}, ar_wallet:new()),
+    ?assertEqual(403, hb_ao:get(<<"status">>, Unauthorized, #{})),
+    % A push claiming to be from the process, but signed by an untrusted
+    % wallet, is also refused.
+    {_, Untrusted} =
+        http_post_transfer(
+            Node,
+            ProcID,
+            Next,
+            #{ <<"from-process">> => ProcID },
+            ar_wallet:new()
+        ),
+    ?assertEqual(403, hb_ao:get(<<"status">>, Untrusted, #{})),
+    % A request whose commitment falsely names the authority as committer,
+    % without a valid signature, is refused: authorization derives from
+    % verified committers, not the claimed `committer' field.
+    {_, Forged} =
+        http_post_forged_transfer(Node, ProcID, Next, Authority),
+    ?assertEqual(403, hb_ao:get(<<"status">>, Forged, #{})),
+    % A request bearing an unverified commitment that carries the authority's
+    % public key as `keyid' but no `committer' field is refused: a committer
+    % counts only when its own commitment verifies, so a key-only commitment
+    % contributes no signer.
+    {_, Splice} =
+        http_post_keyid_splice_transfer(Node, ProcID, Next, AuthorityWallet),
+    ?assertEqual(403, hb_ao:get(<<"status">>, Splice, #{})),
+    % A request bearing the authority's genuine signature that does not cover
+    % `next-scheduler' is refused: the authorizing signature must bind every
+    % transfer-defining key, so a signature made over a different key set
+    % cannot be replayed to choose the successor.
+    {_, Replay} =
+        http_post_replay_transfer(Node, ProcID, Next, AuthorityWallet),
+    ?assertNotEqual(200, hb_ao:get(<<"status">>, Replay, #{})),
+    % The schedule is unaffected by the refused requests.
+    ?assertMatch({ok, #{ <<"current">> := 0 }}, http_get_slot(Node, Proc)),
+    % The same push signed by the trusted transfer authority is honored.
+    {ok, Marker} =
+        http_post_transfer(
+            Node,
+            ProcID,
+            Next,
+            #{ <<"from-process">> => ProcID },
+            AuthorityWallet
+        ),
+    ?assertEqual(<<"Scheduler-Transfer">>, hb_ao:get(<<"type">>, Marker, #{})),
+    ?assertEqual(1, hb_util:int(hb_ao:get(<<"slot">>, Marker, #{}))),
+    ?assertEqual(Next, hb_ao:get(<<"next-scheduler">>, Marker, #{})).
 
 http_get_schedule_test_parallel_() ->
 	{timeout, 20, fun() ->

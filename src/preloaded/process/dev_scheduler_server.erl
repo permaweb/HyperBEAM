@@ -2,7 +2,7 @@
 %%% It acts as a deliberate 'bottleneck' to prevent the server accidentally
 %%% assigning multiple messages to the same slot.
 -module(dev_scheduler_server).
--export([start/3, schedule/2, stop/1]).
+-export([start/3, schedule/2, transfer/3, stop/1]).
 -export([info/1]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -58,40 +58,86 @@ start(ProcID, Proc, Opts) ->
                     {Slot, Base} ->
                         {Slot, Base}
                 end,
+            Transfer = dev_scheduler_cache:read_transfer(ProcID, Opts),
+            {Epoch, Transferred} =
+                epoch_state(ProcID, CurrentSlot, Transfer, Opts),
             ?event(
                 {scheduler_got_process_info,
                     {proc_id, ProcID},
                     {initial_slot, CurrentSlot},
+                    {epoch, Epoch},
                     {base_state_hashpath, BaseStateHashpath}
                 }
             ),
-            Caller ! {ok, Ref, self()},
-            server(
-                #{
-                    id => ProcID,
-                    current => CurrentSlot,
-                    base_state_hashpath => BaseStateHashpath,
-                    hashpath_alg => HashpathAlg,
-                    wallets => commitment_wallets(Proc, Opts),
-                    committment_spec => commitment_spec(Proc, Opts),
-                    mode =>
-                        hb_opts:get(
-                            scheduling_mode,
-                            remote_confirmation,
-                            Opts
-                        ),
-                    opts => Opts
-                }
-            )
+            case Transferred of
+                false ->
+                    Caller ! {ok, Ref, self()},
+                    server(
+                        #{
+                            id => ProcID,
+                            epoch => Epoch,
+                            current => CurrentSlot,
+                            base_state_hashpath => BaseStateHashpath,
+                            hashpath_alg => HashpathAlg,
+                            wallets => commitment_wallets(Proc, Transfer, Opts),
+                            committment_spec => commitment_spec(Proc, Opts),
+                            mode =>
+                                hb_opts:get(
+                                    scheduling_mode,
+                                    remote_confirmation,
+                                    Opts
+                                ),
+                            opts => Opts
+                        }
+                    );
+                Next ->
+                    % The schedule was terminated on this node by a transfer
+                    % marker: release the process name and inform the caller
+                    % of the successor.
+                    hb_name:unregister({<<"scheduler@1.0">>, ProcID}),
+                    ?event(scheduling,
+                        {schedule_transferred,
+                            {proc_id, ProcID},
+                            {next, Next}
+                        }
+                    ),
+                    Caller ! {ok, Ref, {transferred, Next}}
+            end
         end
     ),
     receive
         {ok, Ref, ServerPID} -> ServerPID
     end.
 
+%% @doc Derive the scheduling epoch of a process, and whether its schedule has
+%% been transferred away from this node. A node holding a transfer marker
+%% received from a prior scheduler serves the epoch after the marker's; a
+%% schedule whose final assignment is a transfer marker is terminated on this
+%% node in favor of the successor that the marker names.
+epoch_state(ProcID, CurrentSlot, _Transfer, Opts) when CurrentSlot >= 0 ->
+    {ok, Latest} = dev_scheduler_cache:read(ProcID, CurrentSlot, Opts),
+    Epoch = hb_util:int(hb_ao:get(<<"epoch">>, Latest, 0, Opts)),
+    case hb_ao:get(<<"type">>, Latest, not_found, Opts) of
+        <<"Scheduler-Transfer">> ->
+            {Epoch, hb_ao:get(<<"next-scheduler">>, Latest, Opts)};
+        _ ->
+            {Epoch, false}
+    end;
+epoch_state(_ProcID, _CurrentSlot, {ok, Marker}, Opts) ->
+    {hb_util:int(hb_ao:get(<<"epoch">>, Marker, 0, Opts)) + 1, false};
+epoch_state(_ProcID, _CurrentSlot, not_found, _Opts) ->
+    {0, false}.
+
 %% @doc Determine the appropriate list of keys to use to commit assignments for
-%% a process.
-commitment_wallets(ProcMsg, Opts) ->
+%% a process. A schedule received through a transfer commits with the identity
+%% that the marker names, rather than the process's own scheduler definition.
+commitment_wallets(_ProcMsg, {ok, Marker}, Opts) ->
+    Next = hb_ao:get(<<"next-scheduler">>, Marker, Opts),
+    case hb_opts:as(Next, Opts) of
+        {ok, AsOpts} -> [hb_opts:get(priv_wallet, hb:wallet(), AsOpts)];
+        {error, not_found} -> []
+    end;
+commitment_wallets(ProcMsg, not_found, Opts) ->
     SchedulerVal =
         hb_ao:get_first(
             [
@@ -143,9 +189,30 @@ schedule(ErlangProcID, Message) ->
     ),
     AbortTime = scheduler_time() + ?DEFAULT_TIMEOUT,
     ErlangProcID ! {schedule, Message, self(), AbortTime},
+    await_assignment(ErlangProcID, Message).
+
+%% @doc Request that the scheduling server terminate the process's schedule
+%% with a transfer marker naming the given successor. Returns the signed
+%% marker: the final assignment of the epoch.
+transfer(ErlangProcID, Message, Next) ->
+    ?event(
+        {transferring_schedule,
+            {proc_id, ErlangProcID},
+            {next, Next}
+        }
+    ),
+    AbortTime = scheduler_time() + ?DEFAULT_TIMEOUT,
+    ErlangProcID ! {transfer, Message, Next, self(), AbortTime},
+    await_assignment(ErlangProcID, Message).
+
+%% @doc Await the server's response to a scheduling request. Servers whose
+%% schedule has been transferred away answer with the successor's address.
+await_assignment(ErlangProcID, Message) ->
     receive
         {scheduled, Message, Assignment} ->
-            Assignment
+            Assignment;
+        {transferred, Message, Next} ->
+            {transferred, Next}
     after ?DEFAULT_TIMEOUT ->
         throw({scheduler_timeout, {proc_id, ErlangProcID}, {message, Message}})
     end.
@@ -179,7 +246,45 @@ server(State) ->
                     ),
                     server(State);
                 false ->
-                    server(assign(State, Message, Reply))
+                    server(assign(State, Message, #{}, Reply))
+            end;
+        {transfer, Message, Next, Reply, AbortTime} ->
+            case scheduler_time() > AbortTime of
+                true ->
+                    ?event(error,
+                        {received_old_transfer_request,
+                            {abort_time, AbortTime}
+                        }
+                    ),
+                    server(State);
+                false ->
+                    % Terminate the schedule with a transfer marker as its
+                    % final assignment, release the process name, and drain
+                    % raced requests with the successor's address. The marker
+                    % is written synchronously (regardless of scheduling mode):
+                    % unregistering is irreversible, so the epoch's terminating
+                    % assignment must be durable before we release the name.
+                    Opts = maps:get(opts, State),
+                    SyncState =
+                        State#{
+                            opts := Opts#{ <<"scheduling-mode">> => sync }
+                        },
+                    try do_assign(SyncState, Message, marker(Next), Reply) of
+                        NewState ->
+                            hb_name:unregister(
+                                {<<"scheduler@1.0">>, maps:get(id, State)}
+                            ),
+                            transferred(NewState, Next)
+                    catch
+                        _Class:Reason:Stack ->
+                            ?event(
+                                {error_transferring,
+                                    {reason, Reason},
+                                    {trace, Stack}
+                                }
+                            ),
+                            server(State)
+                    end
             end;
         {info, Reply} ->
             Reply ! {info, State},
@@ -189,18 +294,45 @@ server(State) ->
             ok
     end.
 
+%% @doc The assignment keys that turn the final assignment of an epoch into a
+%% transfer marker.
+marker(Next) ->
+    #{
+        <<"type">> => <<"Scheduler-Transfer">>,
+        <<"next-scheduler">> => Next
+    }.
+
+%% @doc The post-transfer server loop: scheduling requests are answered with
+%% the successor's address, such that requests racing the transfer receive a
+%% redirect rather than a timeout. The process name is already released, so
+%% no new requests are routed here.
+transferred(State, Next) ->
+    receive
+        {schedule, Message, Reply, _AbortTime} ->
+            Reply ! {transferred, Message, Next},
+            transferred(State, Next);
+        {transfer, Message, _OtherNext, Reply, _AbortTime} ->
+            Reply ! {transferred, Message, Next},
+            transferred(State, Next);
+        {info, Reply} ->
+            Reply ! {info, State},
+            transferred(State, Next);
+        stop -> ok
+    end.
+
 %% @doc Assign a message to the next slot.
-assign(State, Message, ReplyPID) ->
+assign(State, Message, Extra, ReplyPID) ->
     try
-        do_assign(State, Message, ReplyPID)
+        do_assign(State, Message, Extra, ReplyPID)
     catch
         _Class:Reason:Stack ->
             ?event({error_scheduling, {reason, Reason}, {trace, Stack}}),
             State
     end.
 
-%% @doc Generate and store the actual assignment message.
-do_assign(State, Message, ReplyPID) ->
+%% @doc Generate and store the actual assignment message. `Extra' contains
+%% assignment keys beyond the standard set, used to mark transfer markers.
+do_assign(State, Message, Extra, ReplyPID) ->
     % Ensure that only committed keys from the message are included in the
     % assignment.
     {ok, OnlyAttested} =
@@ -214,26 +346,29 @@ do_assign(State, Message, ReplyPID) ->
     {Timestamp, Height, Hash} = ar_timestamp:get(),
     Assignment =
         commit_assignment(
-            #{
-                <<"path">> =>
-                    case hb_path:from_message(request, Message, Opts) of
-                        undefined -> <<"compute">>;
-                        Path -> hb_path:to_binary(Path)
-                    end,
-                <<"data-protocol">> => <<"ao">>,
-                <<"variant">> => <<"ao.N.1">>,
-                <<"process">> => hb_util:id(maps:get(id, State)),
-                <<"epoch">> => <<"0">>,
-                <<"slot">> => NextSlot,
-                <<"block-height">> => Height,
-                <<"block-hash">> => hb_util:human_id(Hash),
-                <<"block-timestamp">> => Timestamp,
-                % Note: Local time on the SU, not Arweave
-                <<"timestamp">> => scheduler_time(),
-                <<"base-hashpath">> => BaseStateHashpath,
-                <<"body">> => OnlyAttested,
-                <<"type">> => <<"Assignment">>
-            },
+            maps:merge(
+                #{
+                    <<"path">> =>
+                        case hb_path:from_message(request, Message, Opts) of
+                            undefined -> <<"compute">>;
+                            Path -> hb_path:to_binary(Path)
+                        end,
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"process">> => hb_util:id(maps:get(id, State)),
+                    <<"epoch">> => hb_util:bin(maps:get(epoch, State)),
+                    <<"slot">> => NextSlot,
+                    <<"block-height">> => Height,
+                    <<"block-hash">> => hb_util:human_id(Hash),
+                    <<"block-timestamp">> => Timestamp,
+                    % Note: Local time on the SU, not Arweave
+                    <<"timestamp">> => scheduler_time(),
+                    <<"base-hashpath">> => BaseStateHashpath,
+                    <<"body">> => OnlyAttested,
+                    <<"type">> => <<"Assignment">>
+                },
+                Extra
+            ),
             State
         ),
     DispatchFun =
