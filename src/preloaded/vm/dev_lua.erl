@@ -11,27 +11,20 @@
 %%% Utility macro to check if a binary is a Lua script content-type.
 -define(IS_LUA_TYPE(CT), CT == <<"application/lua">> orelse CT == <<"text/x-lua">>).
 
-%%% The set of functions that will be sandboxed by default if `sandbox' is set 
-%%% to only `true'. Setting `sandbox' to a map allows the invoker to specify
-%%% which functions should be sandboxed and what to return instead. Providing
-%%% a list instead of a map will result in all functions being sandboxed and
-%%% returning `sandboxed'.
--define(DEFAULT_SANDBOX, [
-    {['_G', io], <<"sandboxed">>},
-    {['_G', file], <<"sandboxed">>},
+%%% The set of functions that will be sandboxed by default. If the node message 
+%%% parameter `lua-minimum-sandbox' is set to a different spec, it will be used.
+%%% Messages may add to this sandbox spec, but they may not remove functions.
+-define(DEFAULT_MIN_SANDBOX, [
+    {['_G', loadfile], <<"sandboxed">>},
+    {['_G', dofile], <<"sandboxed">>},
+    {['_G', package, searchers], <<"sandboxed">>},  % disk module searcher
+    {['_G', package, searchpath], <<"sandboxed">>}, % disk path prober
     {['_G', os, execute], <<"sandboxed">>},
     {['_G', os, exit], <<"sandboxed">>},
     {['_G', os, getenv], <<"sandboxed">>},
     {['_G', os, remove], <<"sandboxed">>},
     {['_G', os, rename], <<"sandboxed">>},
-    {['_G', os, tmpname], <<"sandboxed">>},
-    {['_G', package], <<"sandboxed">>},
-    {['_G', loadfile], <<"sandboxed">>},
-    {['_G', require], <<"sandboxed">>},
-    {['_G', dofile], <<"sandboxed">>},
-    {['_G', load], <<"sandboxed">>},
-    {['_G', loadfile], <<"sandboxed">>},
-    {['_G', loadstring], <<"sandboxed">>}
+    {['_G', os, tmpname], <<"sandboxed">>}
 ]).
 
 %% @doc All keys that are not directly available in the base message are 
@@ -188,7 +181,19 @@ load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
 
 %% @doc Initialize a new Lua state with a given base message and module.
 initialize(Base, Modules, Opts) ->
-    State0 = luerl:init(),
+    % Apply the node's minimum sandbox and install the disk-free `require'
+    % before loading any modules, such that code run while a module loads
+    % cannot escape them. The message may add further restrictions via
+    % `sandbox', but cannot lift these.
+    State0 =
+        case hb_opts:get(<<"lua-minimum-sandbox">>, ?DEFAULT_MIN_SANDBOX, Opts) of
+            false -> luerl:init();
+            MinSpec ->
+                dev_lua_require:install(
+                    sandbox(luerl:init(), MinSpec, Opts),
+                    Opts
+                )
+        end,
     % Load each script into the Lua state.
     State1 =
         lists:foldl(
@@ -215,11 +220,13 @@ initialize(Base, Modules, Opts) ->
             State0,
             Modules
         ),
-    % Apply any sandboxing rules to the state.
+    % Apply any additional sandboxing requested by the message after module load.
     State2 =
-        case hb_ao:get(<<"sandbox">>, {as, <<"message@1.0">>, Base}, false, Opts) of
+        case hb_maps:get(<<"sandbox">>, Base, false, Opts) of
             false -> State1;
-            true -> sandbox(State1, ?DEFAULT_SANDBOX, Opts);
+            true ->
+                % Default sandbox has already been applied, so no-op.
+                State1;
             Spec -> sandbox(State1, Spec, Opts)
         end,
     % Install the AO-Core Lua library into the state.
@@ -608,6 +615,185 @@ sandboxed_failure_test() ->
         <<"sandbox">> => true
     },
     ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+
+default_sandboxed_failure_test() ->
+    {ok, Module} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+
+minimum_sandbox_overrides_false_test() ->
+    {ok, Module} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => [],
+        <<"sandbox">> => false
+    },
+    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"sandboxed_fail">>, #{})).
+
+lua_minimum_sandbox_can_be_disabled_test() ->
+    {ok, Module} = file:read_file("test/test.lua"),
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => [],
+        <<"sandbox">> => false
+    },
+    ?assertMatch(
+        {ok, _},
+        hb_ao:resolve(
+            Base,
+            <<"sandboxed_fail">>,
+            #{ <<"lua-minimum-sandbox">> => false }
+        )
+    ).
+
+module_load_is_sandboxed_by_default_test() ->
+    Module =
+        <<
+            """
+            local ok = pcall(os.getenv, "PWD")
+            function load_sandboxed()
+                if ok then
+                    return "escaped"
+                else
+                    return "sandboxed"
+                end
+            end
+            """
+        >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    ?assertEqual(
+        {ok, <<"sandboxed">>},
+        hb_ao:resolve(Base, <<"load_sandboxed">>, #{})
+    ).
+
+io_popen_is_sandboxed_by_default_test() ->
+    Module =
+        <<
+            """
+            function popen_fail()
+                return io.popen("id")
+            end
+            """
+        >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"popen_fail">>, #{})).
+
+require_cannot_load_from_disk_test() ->
+    % Untrusted code cannot restore `require's filesystem search by
+    % reassigning `package.path': `test/test.lua' exists on disk, but the
+    % sandboxed `require' resolves only from `package.loaded'/`package.preload'.
+    Module =
+        <<
+            """
+            function disk_require()
+                package.path = "./test/?.lua"
+                local ok = pcall(require, "test")
+                if ok then return "loaded-from-disk" else return "blocked" end
+            end
+            """
+        >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    % Positive control: with the sandbox disabled, the native `require' does
+    % load `test/test.lua' from disk -- proving the vector is real and that
+    % `blocked' under the default is meaningful, not an incidental failure.
+    ?assertEqual(
+        {ok, <<"loaded-from-disk">>},
+        hb_ao:resolve(
+            Base,
+            <<"disk_require">>,
+            #{ <<"lua-minimum-sandbox">> => false }
+        )
+    ),
+    ?assertEqual(
+        {ok, <<"blocked">>},
+        hb_ao:resolve(Base, <<"disk_require">>, #{})
+    ).
+
+require_serves_preloaded_modules_test() ->
+    % The sandboxed `require' still resolves modules registered in
+    % `package.preload', as legitimate processes such as AOS rely upon.
+    Module =
+        <<
+            """
+            function preload_require()
+                package.preload["mymod"] = function() return "from-preload" end
+                return require("mymod")
+            end
+            """
+        >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    ?assertEqual(
+        {ok, <<"from-preload">>},
+        hb_ao:resolve(Base, <<"preload_require">>, #{})
+    ).
+
+package_disk_searcher_is_sandboxed_test() ->
+    % The native filesystem searcher cannot be invoked directly either:
+    % `package.searchers' is rendered inoperable, so no callable disk loader
+    % remains in the `package' table.
+    Module =
+        <<
+            """
+            function searcher_type()
+                return type(package.searchers)
+            end
+            """
+        >>,
+    Base = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"module">> => #{
+            <<"content-type">> => <<"application/lua">>,
+            <<"body">> => Module
+        },
+        <<"parameters">> => []
+    },
+    ?assertEqual(
+        {ok, <<"string">>},
+        hb_ao:resolve(Base, <<"searcher_type">>, #{})
+    ).
 
 %% @doc Run an AO-Core resolution from the Lua environment.
 ao_core_sandbox_test() ->
