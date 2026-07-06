@@ -625,6 +625,9 @@ add_cors_headers(Msg, ReqHdr, Opts) ->
 
 %% @doc Generate the headers and body for a HTTP response message.
 encode_reply(Status, TABMReq, Message, Opts) ->
+    % Verify the result while it is still in `structured@1.0' form, before it is
+    % converted to the target wire codec, if paranoid mode enables http_result.
+    hb_message:paranoid_verify(http_result, Message, Opts),
     Codec = accept_to_codec(TABMReq, Message, Opts),
     ?event(debug_http, {encoding_reply, {codec, Codec}, {message, Message}}),
     BaseHdrs =
@@ -1200,6 +1203,22 @@ simple_ao_resolve_signed_test() ->
             test_opts()
         ),
     ?assertEqual(<<"Value1">>, Res).
+
+paranoid_http_result_test() ->
+    % The `http_result' topic verifies each response at the reply boundary (in
+    % `encode_reply', before wire conversion): a validly committed result
+    % encodes cleanly, while corrupting its committed body is caught.
+    Opts =
+        (test_opts())#{
+            <<"paranoid-verify">> => [http_result],
+            <<"debug-print">> => []
+        },
+    Valid = hb_message:commit(#{ <<"body">> => <<"ok">> }, Opts),
+    ?assertMatch({_, _, _}, encode_reply(200, #{}, Valid, Opts)),
+    ?assertThrow(
+        {paranoid_verification_failure, http_result, _, _, _},
+        encode_reply(200, #{}, Valid#{ <<"body">> => <<"mangled">> }, Opts)
+    ).
 
 nested_ao_resolve_test() ->
     URL = hb_http_server:start_node(),
