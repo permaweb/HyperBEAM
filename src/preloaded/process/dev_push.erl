@@ -623,8 +623,12 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
         {ok, 307} ->
             Location = hb_ao:get(<<"location">>, Res, Opts),
             ?event(push, {redirect, {location, {explicit, Location}}}),
-            NormMsg = normalize_message(MsgToPush, Opts),
-            SignedNormMsg = hb_message:commit(NormMsg, Opts),
+            % Strip the now-resolved hint from the target and re-sign the
+            % already-augmented message to the target's policy -- preserving the
+            % `from-*' provenance and honoring the policy, rather than
+            % re-committing the raw message with the default wallet.
+            NormMsg = normalize_message(AugmentedMsg, Opts),
+            SignedNormMsg = apply_security(NormMsg, TargetProcess, Codec, Opts),
             remote_schedule_result(Location, SignedNormMsg, Opts);
         {error, 422} ->
             ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
