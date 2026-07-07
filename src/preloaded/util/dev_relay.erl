@@ -139,7 +139,7 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
-    maybe_block_localhost(RelayPath, Opts),
+    maybe_block_internal_host(RelayPath, Opts),
     Client = hb_opts:get(relay_http_client, Opts),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
@@ -180,40 +180,119 @@ sanitize_response(Msg, Opts) ->
         Opts
     ).
 
-maybe_block_localhost(URI, Opts) ->
-    case hb_opts:get(relay_block_localhost, true, Opts) of
-        true -> block_localhost(URI);
+maybe_block_internal_host(URI, Opts) ->
+    Default = hb_opts:get(relay_block_localhost, true, Opts),
+    case hb_opts:get(relay_block_internal_hosts, Default, Opts) of
+        true -> block_internal_host(URI, Opts);
         _ -> ok
     end.
 
-block_localhost(not_found) -> ok;
-block_localhost(URI) when is_binary(URI) ->
+block_internal_host(not_found, _Opts) -> ok;
+block_internal_host(URI, Opts) when is_binary(URI) ->
     case uri_string:parse(URI) of
         #{host := Host} ->
-            case is_localhost(string:lowercase(hb_util:bin(Host))) of
-                true -> throw(relay_localhost_not_allowed);
-                false -> ok
+            NormalHost = normalize_host(Host),
+            maybe_allow_host(NormalHost, Opts),
+            case public_host(NormalHost, Opts) of
+                true -> ok;
+                false -> throw(relay_internal_host_not_allowed)
             end;
         _ -> ok
     end;
-block_localhost(_) -> ok.
+block_internal_host(_, _Opts) -> ok.
 
-is_localhost(<<"localhost">>) -> true;
-is_localhost(<<"localhost.">>) -> true;
-is_localhost(Host) ->
-    case inet:parse_address(hb_util:list(Host)) of
-        {ok, Addr} -> is_loopback(Addr);
-        _ -> false
+normalize_host(Host) ->
+    strip_trailing_dot(string:lowercase(hb_util:bin(Host))).
+
+strip_trailing_dot(<<>>) -> <<>>;
+strip_trailing_dot(Host) ->
+    case binary:last(Host) of
+        $. -> binary:part(Host, 0, byte_size(Host) - 1);
+        _ -> Host
     end.
 
-is_loopback({127, _, _, _}) -> true;
-is_loopback({0, 0, 0, 0}) -> true;
-is_loopback({0, 0, 0, 0, 0, 0, 0, 0}) -> true;
-is_loopback({0, 0, 0, 0, 0, 0, 0, 1}) -> true;
-is_loopback({0, 0, 0, 0, 0, 0, A, _}) when A band 16#ff00 =:= 16#7f00 -> true;
-is_loopback({0, 0, 0, 0, 0, 16#ffff, 0, 0}) -> true;
-is_loopback({0, 0, 0, 0, 0, 16#ffff, A, _}) when A band 16#ff00 =:= 16#7f00 -> true;
-is_loopback(_) -> false.
+maybe_allow_host(Host, Opts) ->
+    case hb_opts:get(relay_allowed_hosts, false, Opts) of
+        false -> ok;
+        Hosts ->
+            case
+                lists:any(
+                    fun(Entry) -> host_matches(Host, Entry) end,
+                    host_list(Hosts)
+                )
+            of
+                true -> ok;
+                false -> throw(relay_host_not_allowed)
+            end
+    end.
+
+host_list(Host) when is_binary(Host) -> [Host];
+host_list(Hosts) when is_list(Hosts) -> Hosts;
+host_list(_) -> throw(relay_invalid_allowed_host).
+
+host_matches(_Host, Entry) when not is_binary(Entry) ->
+    throw(relay_invalid_allowed_host);
+host_matches(Host, Entry) ->
+    NormalEntry = normalize_host(Entry),
+    case valid_host_entry(NormalEntry) of
+        true ->
+            case NormalEntry of
+                <<".", Suffix/binary>> ->
+                    Host =:= Suffix orelse has_host_suffix(Host, Suffix);
+                _ ->
+                    Host =:= NormalEntry
+            end;
+        false -> throw(relay_invalid_allowed_host)
+    end.
+
+has_host_suffix(Host, Suffix) when byte_size(Host) =< byte_size(Suffix) ->
+    false;
+has_host_suffix(Host, Suffix) ->
+    Pos = byte_size(Host) - byte_size(Suffix) - 1,
+    binary:part(Host, Pos, byte_size(Suffix) + 1) =:= <<".", Suffix/binary>>.
+
+valid_host_entry(<<".", Host/binary>>) -> valid_dns_host(Host);
+valid_host_entry(Host) ->
+    case inet:parse_strict_address(hb_util:list(Host)) of
+        {ok, _} -> true;
+        _ -> valid_dns_host(Host)
+    end.
+
+valid_dns_host(Host) when byte_size(Host) > 0, byte_size(Host) =< 253 ->
+    Labels = binary:split(Host, <<".">>, [global]),
+    length(Labels) > 1 andalso lists:all(fun valid_dns_label/1, Labels);
+valid_dns_host(_) -> false.
+
+valid_dns_label(Label) when byte_size(Label) > 0, byte_size(Label) =< 63 ->
+    not is_hyphen(binary:first(Label)) andalso
+        not is_hyphen(binary:last(Label)) andalso
+        lists:all(fun valid_dns_char/1, binary:bin_to_list(Label));
+valid_dns_label(_) -> false.
+
+is_hyphen($-) -> true;
+is_hyphen(_) -> false.
+
+valid_dns_char(C) when C >= $a, C =< $z -> true;
+valid_dns_char(C) when C >= $0, C =< $9 -> true;
+valid_dns_char($-) -> true;
+valid_dns_char(_) -> false.
+
+public_host(Host, Opts) ->
+    try hb_hostname:is_public(Host, hostname_opts(Opts)) of
+        Res -> Res
+    catch
+        throw:invalid_dns_server -> throw(relay_invalid_dns_resolver)
+    end.
+
+hostname_opts(Opts) ->
+    Base = #{
+        <<"dns-timeout">> => hb_opts:get(relay_dns_timeout, 1000, Opts),
+        <<"dns-retries">> => hb_opts:get(relay_dns_retry, 1, Opts)
+    },
+    case hb_opts:get(relay_dns_resolvers, not_found, Opts) of
+        not_found -> Base;
+        Resolvers -> Base#{ <<"dns-servers">> => Resolvers }
+    end.
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
@@ -246,10 +325,13 @@ request(_Base, Req, Opts) ->
 
 %%% Tests
 
-localhost_block_test() ->
+internal_host_block_test() ->
     lists:foreach(
         fun(URL) ->
-            ?assertThrow(relay_localhost_not_allowed, block_localhost(URL))
+            ?assertThrow(
+                relay_internal_host_not_allowed,
+                block_internal_host(URL, #{})
+            )
         end,
         [
             <<"http://localhost/">>,
@@ -261,18 +343,66 @@ localhost_block_test() ->
             <<"http://0177.0.0.1/">>,
             <<"http://0/">>,
             <<"http://0.0.0.0/">>,
+            <<"http://10.0.0.1/">>,
+            <<"http://172.16.0.1/">>,
+            <<"http://192.168.0.1/">>,
+            <<"http://169.254.169.254/">>,
             <<"http://[::]/">>,
             <<"http://[::1]/">>,
-            <<"http://[::ffff:127.0.0.1]/">>
+            <<"http://[::ffff:127.0.0.1]/">>,
+            <<"http://[fd00:ec2::254]/">>,
+            <<"http://[fd20:ce::254]/">>,
+            <<"http://[fe80::1]/">>
         ]
     ),
-    ?assertEqual(ok, block_localhost(<<"https://example.com/">>)),
-    ?assertEqual(ok, block_localhost(<<"/arweave/info">>)),
+    ?assertEqual(ok, block_internal_host(<<"https://1.1.1.1/">>, #{})),
     ?assertEqual(
         ok,
-        maybe_block_localhost(
+        block_internal_host(<<"https://[2606:4700:4700::1111]/">>, #{})
+    ),
+    ?assertEqual(ok, block_internal_host(<<"/arweave/info">>, #{})),
+    ?assertEqual(
+        ok,
+        maybe_block_internal_host(
             <<"http://localhost/">>,
-            #{ <<"relay-block-localhost">> => false }
+            #{ <<"relay-block-internal-hosts">> => false }
+        )
+    ).
+
+relay_host_allowlist_test() ->
+    ?assertEqual(
+        ok,
+        block_internal_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"example.com">>] }
+        )
+    ),
+    ?assertEqual(
+        ok,
+        block_internal_host(
+            <<"https://www.example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<".example.com">>] }
+        )
+    ),
+    ?assertThrow(
+        relay_host_not_allowed,
+        block_internal_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"arweave.net">>] }
+        )
+    ),
+    ?assertThrow(
+        relay_invalid_allowed_host,
+        block_internal_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"https://example.com">>] }
+        )
+    ),
+    ?assertThrow(
+        relay_internal_host_not_allowed,
+        block_internal_host(
+            <<"http://127.0.0.1/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"127.0.0.1">>] }
         )
     ).
 
