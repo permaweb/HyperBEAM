@@ -139,11 +139,7 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
-    Client =
-        case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
-            not_found -> hb_opts:get(relay_http_client, Opts);
-            RequestedClient -> RequestedClient
-        end,
+    Client = hb_opts:get(relay_http_client, Opts),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
@@ -162,7 +158,7 @@ call(M1, RawM2, Opts) ->
     end,
     case Res of
         {ok, R} ->
-            {ok, hb_maps:without([<<"set-cookie">>], R)};
+            {ok, sanitize_response(R, Opts)};
         Err -> Err
     end.
 
@@ -170,6 +166,14 @@ call(M1, RawM2, Opts) ->
 sanitize_request(Msg, Opts) ->
     hb_private:set(
         hb_maps:without([<<"commitments">> | ?RELAY_DROP_KEYS], Msg, Opts),
+        <<"cookie">>,
+        unset,
+        Opts
+    ).
+
+sanitize_response(Msg, Opts) ->
+    hb_private:set(
+        hb_maps:without([<<"cookie">>, <<"set-cookie">>], Msg, Opts),
         <<"cookie">>,
         unset,
         Opts
