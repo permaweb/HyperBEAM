@@ -44,7 +44,7 @@ function ao_relay()
         ao.resolve({
             path = "/~relay@1.0/call?relay-path=http://localhost:10000/hello"
         })
-    return res
+    return status, res
 end
 
 --- @function compute

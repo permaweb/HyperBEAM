@@ -139,6 +139,7 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
+    maybe_block_localhost(RelayPath, Opts),
     Client = hb_opts:get(relay_http_client, Opts),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
@@ -179,6 +180,41 @@ sanitize_response(Msg, Opts) ->
         Opts
     ).
 
+maybe_block_localhost(URI, Opts) ->
+    case hb_opts:get(relay_block_localhost, true, Opts) of
+        true -> block_localhost(URI);
+        _ -> ok
+    end.
+
+block_localhost(not_found) -> ok;
+block_localhost(URI) when is_binary(URI) ->
+    case uri_string:parse(URI) of
+        #{host := Host} ->
+            case is_localhost(string:lowercase(hb_util:bin(Host))) of
+                true -> throw(relay_localhost_not_allowed);
+                false -> ok
+            end;
+        _ -> ok
+    end;
+block_localhost(_) -> ok.
+
+is_localhost(<<"localhost">>) -> true;
+is_localhost(<<"localhost.">>) -> true;
+is_localhost(Host) ->
+    case inet:parse_address(hb_util:list(Host)) of
+        {ok, Addr} -> is_loopback(Addr);
+        _ -> false
+    end.
+
+is_loopback({127, _, _, _}) -> true;
+is_loopback({0, 0, 0, 0}) -> true;
+is_loopback({0, 0, 0, 0, 0, 0, 0, 0}) -> true;
+is_loopback({0, 0, 0, 0, 0, 0, 0, 1}) -> true;
+is_loopback({0, 0, 0, 0, 0, 0, A, _}) when A band 16#ff00 =:= 16#7f00 -> true;
+is_loopback({0, 0, 0, 0, 0, 16#ffff, 0, 0}) -> true;
+is_loopback({0, 0, 0, 0, 0, 16#ffff, A, _}) when A band 16#ff00 =:= 16#7f00 -> true;
+is_loopback(_) -> false.
+
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
 cast(M1, M2, Opts) ->
@@ -209,6 +245,36 @@ request(_Base, Req, Opts) ->
 
 
 %%% Tests
+
+localhost_block_test() ->
+    lists:foreach(
+        fun(URL) ->
+            ?assertThrow(relay_localhost_not_allowed, block_localhost(URL))
+        end,
+        [
+            <<"http://localhost/">>,
+            <<"http://localhost./">>,
+            <<"http://127.0.0.1/">>,
+            <<"http://127.1/">>,
+            <<"http://2130706433/">>,
+            <<"http://0x7f000001/">>,
+            <<"http://0177.0.0.1/">>,
+            <<"http://0/">>,
+            <<"http://0.0.0.0/">>,
+            <<"http://[::]/">>,
+            <<"http://[::1]/">>,
+            <<"http://[::ffff:127.0.0.1]/">>
+        ]
+    ),
+    ?assertEqual(ok, block_localhost(<<"https://example.com/">>)),
+    ?assertEqual(ok, block_localhost(<<"/arweave/info">>)),
+    ?assertEqual(
+        ok,
+        maybe_block_localhost(
+            <<"http://localhost/">>,
+            #{ <<"relay-block-localhost">> => false }
+        )
+    ).
 
 call_get_test() ->
     application:ensure_all_started([hb]),
