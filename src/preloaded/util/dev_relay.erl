@@ -182,8 +182,13 @@ sanitize_response(Msg, Opts) ->
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
 cast(M1, M2, Opts) ->
-    spawn(fun() -> call(M1, M2, Opts) end),
-    {ok, <<"OK">>}.
+    case hb_opts:get(relay_allow_cast, false, Opts) of
+        true ->
+            spawn(fun() -> call(M1, M2, Opts) end),
+            {ok, <<"OK">>};
+        false ->
+            throw(relay_cast_not_allowed)
+    end.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 request(_Base, Req, Opts) ->
