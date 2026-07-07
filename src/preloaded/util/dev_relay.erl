@@ -21,6 +21,16 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
+-define(RELAY_DROP_KEYS, [
+    <<"authorization">>, <<"proxy-authorization">>,
+    <<"connection">>, <<"content-length">>, <<"cookie">>, <<"forwarded">>,
+    <<"host">>, <<"http-client">>, <<"keep-alive">>, <<"relay-body">>,
+    <<"relay-commit-request">>, <<"relay-device">>, <<"relay-method">>,
+    <<"relay-path">>, <<"set-cookie">>, <<"te">>, <<"trailer">>,
+    <<"transfer-encoding">>, <<"upgrade">>, <<"x-forwarded-for">>,
+    <<"x-forwarded-host">>, <<"x-forwarded-proto">>, <<"x-real-ip">>
+]).
+
 %% @doc Execute a `call' request using a node's routes.
 %% 
 %% Supports the following options:
@@ -97,12 +107,7 @@ call(M1, RawM2, Opts) ->
             not_found -> hb_maps:without([<<"device">>], TargetMod2);
             _ -> TargetMod2#{<<"device">> => RelayDevice}
         end,
-    TargetMod4 = 
-        hb_maps:without(
-            [<<"commitments">>],
-            TargetMod3,
-            Opts
-        ),
+    TargetMod4 = sanitize_request(TargetMod3, Opts),
     Commit =
         hb_ao:get_first(
             [
@@ -161,6 +166,14 @@ call(M1, RawM2, Opts) ->
         Err -> Err
     end.
 
+
+sanitize_request(Msg, Opts) ->
+    hb_private:set(
+        hb_maps:without([<<"commitments">> | ?RELAY_DROP_KEYS], Msg, Opts),
+        <<"cookie">>,
+        unset,
+        Opts
+    ).
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
