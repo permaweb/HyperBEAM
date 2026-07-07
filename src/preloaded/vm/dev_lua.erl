@@ -807,7 +807,7 @@ ao_core_sandbox_test() ->
         <<"parameters">> => [],
         <<"device-sandbox">> => [<<"message@1.0">>]
     },
-    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"ao_relay">>, #{})),
+    ?assertMatch({error, _}, hb_ao:resolve(Base, <<"ao_meta">>, #{})),
     ?assertMatch({ok, _}, hb_ao:resolve(Base, <<"ao_resolve">>, #{})).
 
 %% @doc Run an AO-Core resolution from the Lua environment.
