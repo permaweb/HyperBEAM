@@ -189,27 +189,18 @@ maybe_block_internal_host(URI, Opts) ->
 
 block_internal_host(not_found, _Opts) -> ok;
 block_internal_host(URI, Opts) when is_binary(URI) ->
-    case uri_string:parse(URI) of
-        #{host := Host} ->
-            NormalHost = normalize_host(Host),
-            maybe_allow_host(NormalHost, Opts),
-            case public_host(NormalHost, Opts) of
+    case hb_hostname:uri_host(URI) of
+        not_found -> ok;
+        Host ->
+            maybe_allow_host(Host, Opts),
+            try hb_hostname:is_public(Host, hostname_opts(Opts)) of
                 true -> ok;
                 false -> throw(relay_internal_host_not_allowed)
-            end;
-        _ -> ok
+            catch
+                throw:invalid_dns_server -> throw(relay_invalid_dns_resolver)
+            end
     end;
 block_internal_host(_, _Opts) -> ok.
-
-normalize_host(Host) ->
-    strip_trailing_dot(string:lowercase(hb_util:bin(Host))).
-
-strip_trailing_dot(<<>>) -> <<>>;
-strip_trailing_dot(Host) ->
-    case binary:last(Host) of
-        $. -> binary:part(Host, 0, byte_size(Host) - 1);
-        _ -> Host
-    end.
 
 maybe_allow_host(Host, Opts) ->
     case hb_opts:get(relay_allowed_hosts, false, Opts) of
@@ -233,7 +224,7 @@ host_list(_) -> throw(relay_invalid_allowed_host).
 host_matches(_Host, Entry) when not is_binary(Entry) ->
     throw(relay_invalid_allowed_host);
 host_matches(Host, Entry) ->
-    NormalEntry = normalize_host(Entry),
+    NormalEntry = hb_hostname:normalize(Entry),
     case valid_host_entry(NormalEntry) of
         true ->
             case NormalEntry of
@@ -276,13 +267,6 @@ valid_dns_char(C) when C >= $a, C =< $z -> true;
 valid_dns_char(C) when C >= $0, C =< $9 -> true;
 valid_dns_char($-) -> true;
 valid_dns_char(_) -> false.
-
-public_host(Host, Opts) ->
-    try hb_hostname:is_public(Host, hostname_opts(Opts)) of
-        Res -> Res
-    catch
-        throw:invalid_dns_server -> throw(relay_invalid_dns_resolver)
-    end.
 
 hostname_opts(Opts) ->
     Base = #{

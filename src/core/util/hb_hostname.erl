@@ -1,6 +1,6 @@
 %%% @doc Public DNS and local-network exclusion helpers.
 -module(hb_hostname).
--export([is_public/2, public_ips/2, is_public_ip/1]).
+-export([is_public/2, public_ips/2, is_public_ip/1, uri_host/1, normalize/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DNS_SERVERS, [{{1, 1, 1, 1}, 53}, {{8, 8, 8, 8}, 53}]).
@@ -8,6 +8,16 @@
 %% @doc True iff `Host' resolves publicly, and all answers are public IPs.
 is_public(Host, Opts) ->
     public_ips(Host, Opts) =/= [].
+
+%% @doc Return the normalized host from a URI, or `not_found' if absent.
+uri_host(URI) ->
+    case uri_string:parse(URI) of
+        #{host := Host} -> normalize(Host);
+        _ -> not_found
+    end.
+
+normalize(Host) ->
+    strip_trailing_dot(string:lowercase(hb_util:bin(Host))).
 
 %% @doc Return vetted public IPs for `Host', or `[]' if any answer is unsafe.
 public_ips(Host, Opts) ->
@@ -84,6 +94,12 @@ valid_ip(_) ->
 valid_part(Part, Max) ->
     is_integer(Part) andalso Part >= 0 andalso Part =< Max.
 
+strip_trailing_dot(<<>>) -> <<>>;
+strip_trailing_dot(Host) ->
+    case binary:last(Host) of
+        $. -> binary:part(Host, 0, byte_size(Host) - 1);
+        _ -> Host
+    end.
 
 %% @doc True iff `IP' is in a special-use range.
 blocked_ip(IP) ->
@@ -186,3 +202,7 @@ local_ip_test() ->
 public_ips_literal_test() ->
     ?assertEqual([{8, 8, 8, 8}], public_ips(<<"8.8.8.8">>, #{})),
     ?assertEqual([], public_ips(<<"127.0.0.1">>, #{})).
+
+uri_host_test() ->
+    ?assertEqual(<<"example.com">>, uri_host(<<"https://Example.COM./x">>)),
+    ?assertEqual(not_found, uri_host(<<"/x">>)).
