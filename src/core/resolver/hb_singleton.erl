@@ -339,7 +339,7 @@ parse_part(Part, Opts) ->
     case maybe_subpath(Part, Opts) of
         {resolve, Subpath} -> {resolve, Subpath};
         Part ->
-            case part([$&, $~, $+, $ , $=], Part) of
+            case part([$&, $~, $+, $=], Part) of
                 {no_match, PartKey, <<>>} when ?IS_ID(PartKey) ->
                     PartKey;
                 {no_match, PartKey, <<>>} ->
