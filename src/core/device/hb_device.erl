@@ -34,11 +34,11 @@ truncate_args(Fun, Args) ->
 %% #{
 %%     base:             The base message, unvaried.
 %%     key:              The key to be resolved in the execution.
-%%     base-device:      The device derived from the message itself.
+%%     forced-device:    The device derived from the message itself.
 %%     priv/exec-device: The device from which the execution function originates.
-%%                       If the `base-device` resolvers from another device,
-%%                       this key will differ from the `base-device`.
-%%     priv/resolver:    The function to execute to resolve the `base-device`.
+%%                       If the `forced-device` resolvers from another device,
+%%                       this key will differ from the `forced-device`.
+%%     priv/resolver:    The function to execute to resolve the `forced-device`.
 %%     priv/add-key:     Whether the execution function expects that we should
 %%                       add the `key` as an additional argument to the start of
 %%                       the argument list.
@@ -46,11 +46,10 @@ truncate_args(Fun, Args) ->
 add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
     % TODO: What if we force a device _and_ have a direct key hit?
     DevRes =
-        case maps:find(<<"base-device">>, Context) of
+        case maps:find(<<"forced-device">>, Context) of
             {ok, ForcedBaseDevice} -> {ok, ForcedBaseDevice};
             error -> message_device_id(Base, Key, Opts)
         end,
-    ?prim_dbg({adding_resolver_for, DevRes, Key}),
     OldPriv = maps:get(<<"priv">>, Context, #{}),
     case DevRes of
         {hit, Value} ->
@@ -64,7 +63,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
                 message_to_fun(DeviceID, Base, Key, Opts),
             {ok,
                 Context#{
-                    <<"base-device">> => DeviceID,
+                    <<"forced-device">> => DeviceID,
                     <<"resolver-device">> => ExecDev,
                     <<"priv">> =>
                         OldPriv#{
@@ -157,13 +156,13 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 							% Case 6: The device has no default handler.
 							% We retry with the default unless the message
 							% already names it (loop guard).
-							case message_device_id(Msg, Key, Opts) of
-								{ok, ?DEFAULT_DEVICE} ->
-									throw({
-										error,
-										default_device_could_not_resolve_key,
-										{key, Key}
-									});
+								case DevID of
+									?DEFAULT_DEVICE ->
+										throw({
+											error,
+											default_device_could_not_resolve_key,
+											{key, Key}
+										});
 								_ ->
 								    WithDev = with_device(Msg, ?DEFAULT_DEVICE),
 									message_to_fun(
