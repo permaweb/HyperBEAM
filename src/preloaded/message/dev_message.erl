@@ -22,6 +22,14 @@ info() ->
         default => fun default_accessor/4
     }.
 
+% router(#{ <<"path">> := Key }, #{ <<"path">> := <<"path">> }, _Opts) -> {ok, Key};
+% router(_, #{ <<"path">> := <<"path">> }, _Opts) -> {error, not_found};
+% router(Base, Req, Opts) ->
+%     case hb_ao:raw(Req, #{ <<"path">> => <<"path">> }, Opts) of
+%         {error, not_found} -> set(Base, Req, Opts);
+%         {ok, Key} -> default_accessor(Key, Base, Req, Opts)
+%     end.
+
 %% @doc Generate an index page for a message, in the event that the `body' and
 %% `content-type' of a message returned to the client are both empty. We do this
 %% as follows:
@@ -701,6 +709,10 @@ vary(Base, Req, Opts) ->
                 hb_types:vary(Ctx1, Opts);
             Err -> Err
         end
+    else
+        error ->
+            ?prim_dbg({vary_error, {base, Base}, {req, Req}}),
+            throw({invalid_vary_call, {base, Base}, {req, Req}})
     end.
 
 %% @doc Returns the device schema for a `Base` message.

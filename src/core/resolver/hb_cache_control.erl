@@ -24,9 +24,7 @@
 maybe_store(BaseID, ReqID, Base, Req, Res, Opts) ->
     case derive_cache_settings([Res, Req], Opts) of
         #{ <<"store">> := true } ->
-            ?prim_dbg({caching_result, {base, Base}, {req, Req}, {res, Res}}),
             dispatch_cache_write(Base, Req, Res, Opts),
-            ?prim_dbg({cached_result, {res, Res}}),
             ok;
         _ -> 
             not_caching
@@ -125,7 +123,6 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Msg when is_map(Msg) ->
-            ?prim_dbg(caching_result_msg),
             {ok, ResID} = hb_cache:write(Res, Opts),
             LinkPath = <<BaseID/binary, "/", ReqID/binary>>,
             hb_cache:link(
@@ -133,7 +130,6 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 LinkPath,
                 Opts
             ),
-            ?prim_dbg({linked, LinkPath, ResID}),
             ok;
         _ ->
             ?event({cannot_write_result, Res}),
