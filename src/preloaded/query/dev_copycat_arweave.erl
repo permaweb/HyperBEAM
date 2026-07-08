@@ -1730,6 +1730,7 @@ small_block_full_mode_test() ->
     ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
     ok.
 
+%% @doc Test to demonstrate how to sign request with dev_secret
 dev_secret_integration_test_parallel() ->
     Owner = ar_wallet:new(),
     NodeOpts =

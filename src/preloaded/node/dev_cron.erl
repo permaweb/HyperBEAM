@@ -63,7 +63,7 @@ once_worker(Path, Req, ReqMsgID, Opts) ->
     % as hb_http_server does.
 	try
 		Result = hb_ao:resolve(Req#{ <<"path">> => Path}, Opts),
-        hb_store:write(#{ReqMsgID => Result}, Opts)
+        hb_store:write(#{result_store_key(ReqMsgID) => Result}, Opts)
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -76,6 +76,8 @@ once_worker(Path, Req, ReqMsgID, Opts) ->
 			throw({error, Class, Reason, Stacktrace})
 	end.
 
+result_store_key(TaskID) ->
+    <<"dev_cron/result/", TaskID/binary>>.
 
 %% @doc Exported function for scheduling a recurring message.
 every(_Base, Req, Opts) ->
@@ -140,18 +142,15 @@ every(_Base, Req, Opts) ->
 
 maybe_sign_modified_request(OriginalReq, ModifiedReq, Opts) ->
     case signed_by_priv_wallet(OriginalReq, Opts) of
-        true -> 
-            ?event(error, sign_modified_request),
+        true ->
             hb_message:commit(hb_message:uncommitted(ModifiedReq, Opts), Opts);
         false -> 
-            ?event(error, wasnt_sign_by_priv_wallet),
             ModifiedReq
     end.
 
 signed_by_priv_wallet(Req, Opts) ->
     case hb_opts:get(priv_wallet, no_viable_wallet, Opts) of
         no_viable_wallet ->
-            ?event(error, no_viable_wallet),
             false;
         Wallet ->
             Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
@@ -199,7 +198,7 @@ details(_Base, Req, Opts) ->
 						<<"task_id">> => TaskID
 					}}};
 				undefined ->
-                    case hb_store:read(TaskID, Opts) of 
+                    case hb_store:read(result_store_key(TaskID), Opts) of 
                         {error, not_found} ->
 					        {error, <<"Task not found.">>};
                         {ok, Result} ->
@@ -516,9 +515,10 @@ resign_with_dev_secret_integration_test_parallel() ->
     {ok, #{<<"body">> := TaskID}} = hb_http:get(Node, Req2, #{}),
     hb_util:until(
         fun () -> 
-            {error, not_found} /= hb_store:read(TaskID, NodeOpts)
-        end),
-    ?assertMatch({ok, {error, <<"Unsupported mode", _/binary>>}}, hb_store:read(TaskID, NodeOpts)).
+            {error, not_found} /= hb_store:read(result_store_key(TaskID), NodeOpts)
+        end, 
+        10),
+    ?assertMatch({ok, {error, <<"Unsupported mode", _/binary>>}}, hb_store:read(result_store_key(TaskID), NodeOpts)).
 
 resign_with_dev_secret_should_fail_without_request_being_signed_integration_test_parallel() ->
     NodeOpts =
@@ -553,6 +553,6 @@ resign_with_dev_secret_should_fail_without_request_being_signed_integration_test
     {ok, #{<<"body">> := TaskID}} = hb_http:get(Node, Req, #{}),
     hb_util:until(
         fun () -> 
-            {error, not_found} /= hb_store:read(TaskID, NodeOpts)
+            {error, not_found} /= hb_store:read(result_store_key(TaskID), NodeOpts)
         end),
-    ?assertMatch({ok, {error, #{<<"status">> := 403}}}, hb_store:read(TaskID, NodeOpts)).
+    ?assertMatch({ok, {error, #{<<"status">> := 403}}}, hb_store:read(result_store_key(TaskID), NodeOpts)).
