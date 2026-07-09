@@ -21,7 +21,7 @@
 %% 3. The `Req' message (the user's request).
 %% Base is not used, such that it can specify cache control information about 
 %% itself, without affecting its outputs.
-maybe_store(BaseID, ReqID, Base, Req, Res, Opts) ->
+maybe_store(Base, Req, Res, Opts) ->
     case derive_cache_settings([Res, Req], Opts) of
         #{ <<"store">> := true } ->
             dispatch_cache_write(Base, Req, Res, Opts),
