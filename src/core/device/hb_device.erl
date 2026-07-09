@@ -3,6 +3,7 @@
 %%% functions from a device.
 -module(hb_device).
 -export([truncate_args/2, add_resolver/2, message_to_fun/3, module/2]).
+-export([message_device_id/3]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
