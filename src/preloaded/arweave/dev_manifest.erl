@@ -354,26 +354,30 @@ manifest_inner_redirect_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+    hb_test_utils:assert_manifest_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
             Opts
-        )
+        ),
+        <<"text/html">>,
+        <<"<title>Portal</title>">>,
+        Opts
     ).
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
 access_key_path_in_manifest_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _ }}},
+    hb_test_utils:assert_manifest_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
             Opts
-        )
+        ),
+        <<"application/javascript">>,
+        <<"const __vite__mapDeps">>,
+        Opts
     ).
 
 %% This works with `not_found.js` but doesn't follow the logic if under a 
@@ -381,11 +385,13 @@ access_key_path_in_manifest_test_parallel() ->
 manifest_should_fallback_on_not_found_path_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+    hb_test_utils:assert_manifest_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
             Opts
-        )
+        ),
+        <<"text/html">>,
+        <<"<title>Portal</title>">>,
+        Opts
     ).

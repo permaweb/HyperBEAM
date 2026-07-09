@@ -587,12 +587,13 @@ validate_large_message_from_http_test() ->
     ?event_debug({sig_verifies, Signers}),
     ?assert(hb_message:verify(Res, all, Opts)),
     ?event_debug({hmac_verifies, <<"hmac-sha256">>}),
-    {ok, OnlyCommitted} = hb_message:with_only_committed(Res, Opts),
-    ?event_debug({msg_with_only_committed, OnlyCommitted}),
-    ?assert(hb_message:verify(OnlyCommitted, Signers, Opts)),
-    ?event_debug({msg_with_only_committed_verifies, Signers}),
-    ?assert(hb_message:verify(OnlyCommitted, all, Opts)),
-    ?event_debug({msg_with_only_committed_verifies_hmac, <<"hmac-sha256">>}).
+    {ok, _, #{ <<"committed">> := HashpathCommitted }} =
+        hb_message:commitment(
+            #{ <<"committer">> => hd(Signers) },
+            Res,
+            Opts
+        ),
+    ?assertEqual([<<"hashpath">>], HashpathCommitted).
 
 committed_id_test() ->
     Msg = #{ <<"basic">> => <<"value">> },

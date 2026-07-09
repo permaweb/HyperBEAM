@@ -764,6 +764,7 @@ relay_schedule_ans104_test() ->
             ClientOpts,
             #{ <<"commitment-device">> => <<"ans104@1.0">> }
         ),
+    {ok, _} = hb_cache:write(Process, #{ <<"store">> => [ComputeStore] }),
     % Push the initial message via the scheduler node.
     ScheduleRes =
         hb_http:post(

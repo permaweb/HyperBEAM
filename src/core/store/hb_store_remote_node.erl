@@ -67,7 +67,11 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
+            {ok, Msg} =
+                hb_message:with_only_committed(
+                    without_transport_commitment(Res, Opts),
+                    Opts
+                ),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
             maybe_cache(Opts, Msg, [Key]),
             {ok, Msg};
@@ -78,6 +82,44 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
 read_request(_, _) -> {error, not_found}.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
+
+%% @doc Remove the transport commitments from the response.
+without_transport_commitment(Msg, Opts) when is_map(Msg) ->
+    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
+    % Get the keys of the commitments that are only on the hashpath.
+    TransportCommitments =
+        hb_maps:keys(
+            hb_maps:filter(
+                fun(_ID, Commitment) ->
+                    case maps:get(<<"committed">>, Commitment, not_found) of
+                        not_found -> false;
+                        [<<"hashpath">>] -> true;
+                        Map when is_map(Map) ->
+                            map_size(Map) == 1 andalso
+                            maps:is_key(<<"hashpath">>, Map);
+                        _ -> false
+                    end
+                end,
+                Commitments,
+                Opts
+            ),
+            Opts
+        ),
+    % If necessary, remove the hashpath commitments from the response.
+    case TransportCommitments of
+        [] ->
+            Msg;
+        _ ->
+            maps:without(
+                [<<"hashpath">>],
+                case maps:without(TransportCommitments, Commitments) of
+                    #{} -> maps:without([<<"commitments">>], Msg);
+                    Rest -> Msg#{ <<"commitments">> => Rest }
+                end
+            )
+    end;
+without_transport_commitment(Res, _Opts) ->
+    Res.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
