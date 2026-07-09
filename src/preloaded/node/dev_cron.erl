@@ -1,7 +1,7 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, status/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -17,6 +17,7 @@ info(_Base, _Req, _Opts) ->
 			<<"info">> => <<"Get device info">>,
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
+			<<"status">> => <<"Get scheduled task status {task}">>,
 			<<"stop">> => <<"Stop a scheduled task {task}">>
 		}
 	},
@@ -163,6 +164,24 @@ stop(_Base, Req, Opts) ->
 			end
 	end.
 
+%% @doc Exported function for getting a scheduled task status.
+status(_Base, Req, Opts) ->
+	case hb_ao:get(<<"task">>, Req, Opts) of
+		not_found ->
+			{error, <<"No task ID found in message.">>};
+		TaskID ->
+			Name = {<<"cron@1.0">>, TaskID},
+			Active =
+				case hb_name:lookup(Name) of
+					Pid when is_pid(Pid) -> erlang:is_process_alive(Pid);
+					undefined -> false
+				end,
+			{ok, #{<<"status">> => 200, <<"body">> => #{
+				<<"task_id">> => TaskID,
+				<<"active">> => Active
+			}}}
+	end.
+
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
     Req1 = Req#{<<"path">> => CronPath},
     ?event(
@@ -289,6 +308,29 @@ stop_every_test() ->
 	end,
 	% Call stop again using the same CronTaskID to verify the error
 	{error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
+
+status_every_test() ->
+	Node = hb_http_server:start_node(),
+	TestWorkerPid = spawn(fun test_worker/0),
+	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
+	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
+	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
+					   "&interval=200-milliseconds",
+				   "&cron-path=/~test-device@1.0/increment_counter">>,
+	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+	StatusPath = <<"/~cron@1.0/status?task=", CronTaskID/binary>>,
+	{ok, #{<<"body">> := ActiveStatus}} = hb_http:get(Node, StatusPath, #{}),
+	?assertMatch(
+		#{<<"task_id">> := CronTaskID, <<"active">> := true},
+		ActiveStatus
+	),
+	EveryStopPath = <<"/~cron@1.0/stop?task=", CronTaskID/binary>>,
+	{ok, _EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
+	{ok, #{<<"body">> := InactiveStatus}} = hb_http:get(Node, StatusPath, #{}),
+	?assertMatch(
+		#{<<"task_id">> := CronTaskID, <<"active">> := false},
+		InactiveStatus
+	).
 
 
 %% @doc This test verifies that a one-time task can be scheduled and executed.
