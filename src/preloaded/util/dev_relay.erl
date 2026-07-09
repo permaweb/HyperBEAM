@@ -193,7 +193,7 @@ block_internal_host(URI, Opts) when is_binary(URI) ->
         not_found -> ok;
         Host ->
             maybe_allow_host(Host, Opts),
-            try hb_hostname:is_public(Host, hostname_opts(Opts)) of
+            try hb_hostname:is_public(Host, Opts) of
                 true -> ok;
                 false -> throw(relay_internal_host_not_allowed)
             catch
@@ -224,16 +224,11 @@ host_list(_) -> throw(relay_invalid_allowed_host).
 host_matches(_Host, Entry) when not is_binary(Entry) ->
     throw(relay_invalid_allowed_host);
 host_matches(Host, Entry) ->
-    NormalEntry = hb_hostname:normalize(Entry),
-    case valid_host_entry(NormalEntry) of
-        true ->
-            case NormalEntry of
-                <<".", Suffix/binary>> ->
-                    Host =:= Suffix orelse has_host_suffix(Host, Suffix);
-                _ ->
-                    Host =:= NormalEntry
-            end;
-        false -> throw(relay_invalid_allowed_host)
+    case hb_hostname:normalize(Entry) of
+        <<".", Suffix/binary>> ->
+            Host =:= Suffix orelse has_host_suffix(Host, Suffix);
+        NormalEntry ->
+            Host =:= NormalEntry
     end.
 
 has_host_suffix(Host, Suffix) when byte_size(Host) =< byte_size(Suffix) ->
@@ -241,42 +236,6 @@ has_host_suffix(Host, Suffix) when byte_size(Host) =< byte_size(Suffix) ->
 has_host_suffix(Host, Suffix) ->
     Pos = byte_size(Host) - byte_size(Suffix) - 1,
     binary:part(Host, Pos, byte_size(Suffix) + 1) =:= <<".", Suffix/binary>>.
-
-valid_host_entry(<<".", Host/binary>>) -> valid_dns_host(Host);
-valid_host_entry(Host) ->
-    case inet:parse_strict_address(hb_util:list(Host)) of
-        {ok, _} -> true;
-        _ -> valid_dns_host(Host)
-    end.
-
-valid_dns_host(Host) when byte_size(Host) > 0, byte_size(Host) =< 253 ->
-    Labels = binary:split(Host, <<".">>, [global]),
-    length(Labels) > 1 andalso lists:all(fun valid_dns_label/1, Labels);
-valid_dns_host(_) -> false.
-
-valid_dns_label(Label) when byte_size(Label) > 0, byte_size(Label) =< 63 ->
-    not is_hyphen(binary:first(Label)) andalso
-        not is_hyphen(binary:last(Label)) andalso
-        lists:all(fun valid_dns_char/1, binary:bin_to_list(Label));
-valid_dns_label(_) -> false.
-
-is_hyphen($-) -> true;
-is_hyphen(_) -> false.
-
-valid_dns_char(C) when C >= $a, C =< $z -> true;
-valid_dns_char(C) when C >= $0, C =< $9 -> true;
-valid_dns_char($-) -> true;
-valid_dns_char(_) -> false.
-
-hostname_opts(Opts) ->
-    Base = #{
-        <<"dns-timeout">> => hb_opts:get(relay_dns_timeout, 1000, Opts),
-        <<"dns-retries">> => hb_opts:get(relay_dns_retry, 1, Opts)
-    },
-    case hb_opts:get(relay_dns_resolvers, not_found, Opts) of
-        not_found -> Base;
-        Resolvers -> Base#{ <<"dns-servers">> => Resolvers }
-    end.
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
@@ -376,7 +335,7 @@ relay_host_allowlist_test() ->
         )
     ),
     ?assertThrow(
-        relay_invalid_allowed_host,
+        relay_host_not_allowed,
         block_internal_host(
             <<"https://example.com/">>,
             #{ <<"relay-allowed-hosts">> => [<<"https://example.com">>] }
