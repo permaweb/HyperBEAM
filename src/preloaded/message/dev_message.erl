@@ -707,18 +707,15 @@ vary(Base, Req, Opts) ->
     maybe
         {ok, Key} ?= hb_maps:find(<<"vary">>, Req, Opts),
         {ok, VaryReq} ?= hb_maps:find(<<"...">>, Req, Opts),
-        Ctx0 = #{ <<"base">> => Base, <<"key">> => Key, <<"req">> => VaryReq },
-        case hb_device:add_resolver(Ctx0, Opts) of
-            {ok, Ctx1 = #{ <<"result">> := _ }} ->
-                % Finding the resolver led us to first find the complete
-                % solution. We return the context as-is.
-                {ok, Ctx1};
-            {ok, Ctx1} ->
-                % The resolver has been found. We must vary the `Base` and
-                % `Req` using its schema, then return the updated context.
-                hb_types:vary(Ctx1, Opts);
-            Err -> Err
-        end
+        Ctx1 = #{ <<"base">> => Base, <<"key">> => Key, <<"req">> => VaryReq },
+        {ok, Ctx2} ?=
+            case hb_private:get(<<"function">>, Req, not_found, Opts) of
+                not_found ->
+                    hb_device:add_resolver(Ctx1, Opts);
+                Fun ->
+                    {ok, Ctx1#{ <<"priv">> => #{ <<"function">> => Fun } }}
+            end,
+        hb_types:vary(Ctx2, Opts)
     else
         error ->
             ?prim_dbg({vary_error, {base, Base}, {req, Req}}),
