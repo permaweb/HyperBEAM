@@ -12,8 +12,8 @@ is_public(Host, Opts) ->
 %% @doc Return the normalized host from a URI, or `not_found' if absent.
 uri_host(URI) ->
     case uri_string:parse(URI) of
-        #{host := Host} -> normalize(Host);
-        _ -> not_found
+        #{host := Host} -> {ok, normalize(Host)};
+        _ -> {error, invalid_uri}
     end.
 
 normalize(Host) ->
@@ -204,5 +204,5 @@ public_ips_literal_test() ->
     ?assertEqual([], public_ips(<<"127.0.0.1">>, #{})).
 
 uri_host_test() ->
-    ?assertEqual(<<"example.com">>, uri_host(<<"https://Example.COM./x">>)),
-    ?assertEqual(not_found, uri_host(<<"/x">>)).
+    ?assertEqual({ok, <<"example.com">>}, uri_host(<<"https://Example.COM./x">>)),
+    ?assertEqual({error, invalid_uri}, uri_host(<<"/x">>)).

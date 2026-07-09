@@ -457,6 +457,7 @@ blacklist_from_external_http_test() ->
         #{
             <<"store">> => RootStore,
             <<"priv-wallet">> => ar_wallet:new(),
+            <<"relay-block-internal">> => false,
             <<"blacklist-providers">> =>
                 [<<
                     "/~relay@1.0/call?relay-method=GET&relay-path=",
