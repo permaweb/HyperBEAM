@@ -176,10 +176,11 @@ status(_Base, Req, Opts) ->
 					Pid when is_pid(Pid) -> erlang:is_process_alive(Pid);
 					undefined -> false
 				end,
-			{ok, #{<<"status">> => 200, <<"body">> => #{
+			{ok, #{
+				<<"status">> => 200,
 				<<"task_id">> => TaskID,
 				<<"active">> => Active
-			}}}
+			}}
 	end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
@@ -319,17 +320,15 @@ status_every_test() ->
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
 	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
 	StatusPath = <<"/~cron@1.0/status?task=", CronTaskID/binary>>,
-	{ok, #{<<"body">> := ActiveStatus}} = hb_http:get(Node, StatusPath, #{}),
 	?assertMatch(
-		#{<<"task_id">> := CronTaskID, <<"active">> := true},
-		ActiveStatus
+		{ok, #{<<"task_id">> := CronTaskID, <<"active">> := true}},
+		hb_http:get(Node, StatusPath, #{})
 	),
 	EveryStopPath = <<"/~cron@1.0/stop?task=", CronTaskID/binary>>,
 	{ok, _EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
-	{ok, #{<<"body">> := InactiveStatus}} = hb_http:get(Node, StatusPath, #{}),
 	?assertMatch(
-		#{<<"task_id">> := CronTaskID, <<"active">> := false},
-		InactiveStatus
+		{ok, #{<<"task_id">> := CronTaskID, <<"active">> := false}},
+		hb_http:get(Node, StatusPath, #{})
 	).
 
 
