@@ -411,9 +411,15 @@ maybe_sign(Res, NodeMsg) ->
     ?event({maybe_sign, Res}),
     case hb_opts:get(force_signed, false, NodeMsg) of
         true ->
-            case hb_message:signers(Res, NodeMsg) of
-                [] -> hb_message:commit(Res, NodeMsg);
-                _ -> Res
+            Unsigned = hb_message:uncommitted(Res, NodeMsg),
+            case hb_private:get(<<"hashpath">>, Unsigned, not_found, NodeMsg) of
+                not_found -> Unsigned;
+                Hashpath ->
+                    hb_message:commit(
+                        Unsigned#{ <<"hashpath">> => Hashpath },
+                        NodeMsg,
+                        #{ <<"committed">> => [<<"hashpath">>] }
+                    )
             end;
         false -> Res
     end.
@@ -762,6 +768,38 @@ modify_request_test() ->
         }),
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
+
+%% @doc Test that forced response signing commits only the public hashpath.
+maybe_sign_hashpath_only_test() ->
+    OldWallet = ar_wallet:new(),
+    NewWallet = ar_wallet:new(),
+    Hashpath = hb_path:hashpath(<<"test-hashpath">>, #{}),
+    Opts = #{ <<"force-signed">> => true, <<"priv-wallet">> => NewWallet },
+    OldSigner = hb_util:human_id(ar_wallet:to_address(OldWallet)),
+    NewSigner = hb_util:human_id(ar_wallet:to_address(NewWallet)),
+    AlreadySigned =
+        hb_message:commit(
+            #{
+                <<"body">> => <<"test">>,
+                <<"priv">> => #{ <<"hashpath">> => Hashpath }
+            },
+            Opts#{ <<"priv-wallet">> => OldWallet }
+        ),
+    ?assertEqual([OldSigner], hb_message:signers(AlreadySigned, Opts)),
+    Signed =
+        maybe_sign(AlreadySigned, Opts),
+    ?assertEqual(Hashpath, maps:get(<<"hashpath">>, Signed)),
+    ?assertEqual([<<"hashpath">>], hb_message:committed(Signed, all, Opts)),
+    ?assertEqual([NewSigner], hb_message:signers(Signed, Opts)),
+    ?assert(hb_message:verify(Signed, all, Opts)).
+
+%% @doc Test that forced response signing strips signatures without a hashpath.
+maybe_sign_without_hashpath_test() ->
+    Res = #{ <<"body">> => <<"test">> },
+    Opts = #{ <<"force-signed">> => true, <<"priv-wallet">> => ar_wallet:new() },
+    Signed = hb_message:commit(Res, Opts),
+    ?assertNotEqual([], hb_message:signers(Signed, Opts)),
+    ?assertEqual(Res, maybe_sign(Signed, Opts)).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->

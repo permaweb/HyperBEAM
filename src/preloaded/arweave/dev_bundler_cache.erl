@@ -390,20 +390,31 @@ bundler_optimistic_cache_test() ->
     % Every item at every nesting level must be independently readable
     % via a bare GET /ID — the real user-facing access pattern.
     AllItems = [
-        {l2bundle, L2BundleID},
-        {l3item,   L3ItemID},
-        {l3bundle, L3BundleID},
-        {l4item1,  L4Item1ID},
-        {l4item2,  L4Item2ID}
+        {l2bundle, L2BundleID, bundle},
+        {l3item,   L3ItemID,   {data, <<"l3item">>}},
+        {l3bundle, L3BundleID, bundle},
+        {l4item1,  L4Item1ID,  {data, <<"l4item1">>}},
+        {l4item2,  L4Item2ID,  {data, <<"l4item2">>}}
     ],
     lists:foreach(
-        fun({Label, ExpectedID}) ->
+        fun({Label, ExpectedID, Expected}) ->
             {ok, Msg} = hb_http:get(
                 Node, #{ <<"path">> => <<"/", ExpectedID/binary>> }, #{}),
             ?event(debug_test, {item_result,
                 {label, Label}, {expected_id, ExpectedID}, {msg, Msg}}),
             ?assert(hb_message:verify(Msg)),
-            ?assertEqual(ExpectedID, hb_message:id(Msg, signed))
+            case Expected of
+                bundle ->
+                    ?assertEqual([], hb_message:signers(Msg, #{}));
+                {data, ExpectedData} ->
+                    TX = hb_message:convert(
+                        Msg,
+                        <<"ans104@1.0">>,
+                        <<"structured@1.0">>,
+                        #{}
+                    ),
+                    ?assertEqual(ExpectedData, TX#tx.data)
+            end
         end,
         AllItems
     ),

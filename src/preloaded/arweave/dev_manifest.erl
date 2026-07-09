@@ -354,26 +354,28 @@ manifest_inner_redirect_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+    assert_hashpath_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
             Opts
-        )
+        ),
+        <<"<title>Portal</title>">>,
+        Opts
     ).
 
 %% @doc Accessing `/TXID/assets/ArticleBlock-Dtwjc54T.js` should return valid message.
 access_key_path_in_manifest_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"oLnQY-EgiYRg9XyO7yZ_mC0Ehy7TFR3UiDhFvxcohC4">> := _ }}},
+    assert_hashpath_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
             Opts
-        )
+        ),
+        <<"const __vite__mapDeps">>,
+        Opts
     ).
 
 %% This works with `not_found.js` but doesn't follow the logic if under a 
@@ -381,11 +383,36 @@ access_key_path_in_manifest_test_parallel() ->
 manifest_should_fallback_on_not_found_path_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
-    ?assertMatch(
-        {ok, #{<<"commitments">> := #{<<"Tqh6oIS2CLUaDY11YUENlvvHmDim1q16pMyXAeSKsFM">> := _ }}},
+    assert_hashpath_response(
         hb_http:get(
             Node,
             #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
             Opts
-        )
+        ),
+        <<"<title>Portal</title>">>,
+        Opts
     ).
+
+assert_hashpath_response(HTTPRes, BodySnippet, Opts) ->
+    Res = assert_hashpath_response(HTTPRes, Opts),
+    Body = response_data(Res, Opts),
+    ?assert(is_binary(Body)),
+    ?assertNotEqual(nomatch, binary:match(Body, BodySnippet)),
+    Res.
+
+response_data(Res, Opts) ->
+    case hb_ao:get(<<"body">>, Res, not_found, Opts) of
+        Body when is_binary(Body) -> Body;
+        _ -> hb_ao:get(<<"data">>, Res, not_found, Opts)
+    end.
+
+assert_hashpath_response({ok, Res = #{ <<"status">> := 200 }}, Opts) ->
+    case hb_message:committed(Res, all, Opts) of
+        [<<"hashpath">>] ->
+            ?assert(hb_message:verify(Res, all, Opts));
+        [] ->
+            ?assertEqual([], hb_message:signers(Res, Opts));
+        Other ->
+            ?assertEqual([<<"hashpath">>], Other)
+    end,
+    Res.

@@ -653,7 +653,8 @@ relay_schedule_ans104_test() ->
                     }
                 },
                 <<"store">> => [hb_test_utils:test_store()],
-                <<"priv-wallet">> => SchedulerWallet
+                <<"priv-wallet">> => SchedulerWallet,
+                <<"force-signed">> => false
             }
         ),
     ?event(debug_test, {scheduler, Scheduler}),
@@ -683,20 +684,14 @@ relay_schedule_ans104_test() ->
     ?event({scheduler_location, SchedulerLocation}),
     LocationOpts = #{ <<"store">> => [ComputeStore] },
     {ok, LocationPath} = hb_cache:write(SchedulerLocation, LocationOpts),
-    lists:foreach(
-        fun(Signer) ->
-            ok = hb_store:link(
-                [ComputeStore],
-                #{
-                    hb_path:to_binary([
-                        <<"~location@1.0">>,
-                        hb_util:human_id(Signer)
-                    ]) => LocationPath
-                },
-                LocationOpts
-            )
-        end,
-        hb_message:signers(SchedulerLocation, LocationOpts)
+    SchedulerAddr = hb_util:human_id(ar_wallet:to_address(SchedulerWallet)),
+    ok = hb_store:link(
+        [ComputeStore],
+        #{
+            hb_path:to_binary([<<"~location@1.0">>, SchedulerAddr]) =>
+                LocationPath
+        },
+        LocationOpts
     ),
     % Create the relaying server.
     Relay =

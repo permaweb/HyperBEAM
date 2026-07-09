@@ -66,8 +66,7 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
         ),
     case HTTPRes of
         {ok, Res} ->
-            % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
+            Msg = without_transport_commitment(Res, Opts),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
             maybe_cache(Opts, Msg, [Key]),
             {ok, Msg};
@@ -78,6 +77,19 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
 read_request(_, _) -> {error, not_found}.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
+
+without_transport_commitment(Res, Opts) when is_map(Res) ->
+    case hb_message:committed(Res, all, Opts) of
+        [<<"hashpath">>] ->
+            maps:without(
+                [<<"hashpath">>],
+                hb_message:uncommitted(Res, Opts)
+            );
+        _ ->
+            Res
+    end;
+without_transport_commitment(Res, _Opts) ->
+    Res.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -158,7 +170,12 @@ write(Opts = #{ <<"node">> := Node }, Req, _NodeOpts) when is_map(Req) ->
         fun(Destination, Value, ok) ->
             case remote_write_value(Opts, Value) of
                 {ok, SourcePath} ->
-                    remote_link(Opts, hb_path:to_binary(SourcePath), hb_path:to_binary(Destination));
+                    SourceBin = hb_path:to_binary(SourcePath),
+                    DestinationBin = hb_path:to_binary(Destination),
+                    case SourceBin of
+                        DestinationBin -> ok;
+                        _ -> remote_link(Opts, SourceBin, DestinationBin)
+                    end;
                 {error, _} = Error ->
                     Error
             end;

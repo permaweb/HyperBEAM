@@ -609,7 +609,7 @@ set_default_opts(Opts) ->
         <<"store">> => Store,
         <<"priv-wallet">> => Wallet,
         <<"address">> => hb_util:human_id(ar_wallet:to_address(Wallet)),
-        <<"force-signed">> => true
+        <<"force-signed">> => hb_opts:get(force_signed, true, TempOpts)
     }.
 
 %% @doc Test that we can start the server, send a message, and get a response.
