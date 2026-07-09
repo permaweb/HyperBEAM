@@ -891,11 +891,10 @@ request(Method, Path, Extra, LogExtra, Opts) ->
 %% ascending by HTTP status code. Returns the first (best) response tuple.
 best_response(Path, {error, {no_viable_responses, Responses}}) ->
     best_response(Path, Responses);
+best_response(<<"/height">>, Responses) when is_list(Responses) ->
+    current_height_best_response(Responses);
 best_response(<<"/block/current">>, Responses) when is_list(Responses) ->
-    case current_height_responses(Responses) of
-        [] -> best_response(Responses);
-        Heights -> current_height_best_response(Heights)
-    end;
+    current_height_best_response(Responses);
 best_response(_Path, Response) ->
     best_response(Response).
 
@@ -921,37 +920,47 @@ response_status(Response) when is_map(Response) ->
 response_status(_Response) ->
     999.
 
-current_height_responses(Responses) ->
-    lists:filtermap(
+%% @doc Parse responses that contains block height to return the one with the
+%% highest value. This helps when one node lags behind.
+current_height_best_response(Responses) ->
+    FilteredResponsesHeight = lists:filtermap(
         fun
             ({ok, #{ <<"body">> := Body }} = Response) ->
                 try hb_json:decode(Body) of
                     #{ <<"height">> := Height } ->
                         {true, {hb_util:int(Height), Response}};
+                    Height when is_integer(Height) ->
+                        {true, {Height, Response}};
                     _ ->
                         false
                 catch _:_ ->
-                    false
+                    case hb_util:safe_int(Body) of
+                        {ok, Height} -> {true, {Height, Response}};
+                        {error, invalid} -> false
+                    end
                 end;
             (_) ->
                 false
         end,
         Responses
-    ).
-
-current_height_best_response([{Height, Response} | Rest]) ->
-    {_, BestResponse} =
-        lists:foldl(
-            fun({NextHeight, NextResponse}, {BestHeight, Best}) ->
-                case NextHeight > BestHeight of
-                    true -> {NextHeight, NextResponse};
-                    false -> {BestHeight, Best}
-                end
-            end,
-            {Height, Response},
-            Rest
-        ),
-    BestResponse.
+    ),
+    case FilteredResponsesHeight of
+        [] ->
+            {error, no_viable_responses};
+        [{Height, Response} | Rest] ->
+            {_, BestResponse} =
+                lists:foldl(
+                    fun({NextHeight, NextResponse}, {BestHeight, Best}) ->
+                        case NextHeight > BestHeight of
+                            true -> {NextHeight, NextResponse};
+                            false -> {BestHeight, Best}
+                        end
+                    end,
+                    {Height, Response},
+                    Rest
+                ),
+            BestResponse
+    end.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
@@ -1249,6 +1258,16 @@ best_response_handles_failed_connect_entries_test_parallel() ->
     ?assertEqual(
         {ok, #{ <<"status">> => 200, <<"body">> => <<"OK-2">> }},
         best_response(Responses)
+    ).
+
+best_response_height_integer_body_test_parallel() ->
+    Responses = [
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"5">> }},
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"8">> }}
+    ],
+    ?assertEqual(
+        {ok, #{ <<"status">> => 200, <<"body">> => <<"8">> }},
+        best_response(<<"/height">>, Responses)
     ).
 
 best_response_non_map_error_round_trips_test_parallel() ->
