@@ -21,16 +21,6 @@
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--define(RELAY_DROP_KEYS, [
-    <<"authorization">>, <<"proxy-authorization">>,
-    <<"connection">>, <<"content-length">>, <<"cookie">>, <<"forwarded">>,
-    <<"host">>, <<"http-client">>, <<"keep-alive">>, <<"relay-body">>,
-    <<"relay-commit-request">>, <<"relay-device">>, <<"relay-method">>,
-    <<"relay-path">>, <<"set-cookie">>, <<"te">>, <<"trailer">>,
-    <<"transfer-encoding">>, <<"upgrade">>, <<"x-forwarded-for">>,
-    <<"x-forwarded-host">>, <<"x-forwarded-proto">>, <<"x-real-ip">>
-]).
-
 %% @doc Execute a `call' request using a node's routes.
 %% 
 %% Supports the following options:
@@ -166,7 +156,7 @@ call(M1, RawM2, Opts) ->
 
 sanitize_request(Msg, Opts) ->
     hb_private:set(
-        hb_maps:without([<<"commitments">> | ?RELAY_DROP_KEYS], Msg, Opts),
+        hb_maps:without([<<"commitments">>, <<"cookie">>, <<"set-cookie">>], Msg, Opts),
         <<"cookie">>,
         unset,
         Opts
@@ -240,13 +230,8 @@ has_host_suffix(Host, Suffix) ->
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
 cast(M1, M2, Opts) ->
-    case hb_opts:get(relay_allow_cast, false, Opts) of
-        true ->
-            spawn(fun() -> call(M1, M2, Opts) end),
-            {ok, <<"OK">>};
-        false ->
-            throw(relay_cast_not_allowed)
-    end.
+    spawn(fun() -> call(M1, M2, Opts) end),
+    {ok, <<"OK">>}.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 request(_Base, Req, Opts) ->
