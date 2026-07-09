@@ -41,8 +41,16 @@ call(M1, RawM2, Opts) ->
                 {RawM2, <<"relay-path">>},
                 {M1, <<"relay-path">>}
             ],
+            undefined,
             Opts
         ),
+    case is_blocked_host(RelayPath, Opts) of
+        true -> {error, blocked_host};
+        _ -> do_call(RelayPath, BaseTarget, M1, RawM2, Opts)
+    end.
+
+%% @doc The target is valid, so we perform the full relay call.
+do_call(RelayPath, BaseTarget, M1, RawM2, Opts) ->
     RelayDevice =
         hb_ao:get_first(
             [
@@ -97,12 +105,7 @@ call(M1, RawM2, Opts) ->
             not_found -> hb_maps:without([<<"device">>], TargetMod2);
             _ -> TargetMod2#{<<"device">> => RelayDevice}
         end,
-    TargetMod4 = 
-        hb_maps:without(
-            [<<"commitments">>],
-            TargetMod3,
-            Opts
-        ),
+    TargetMod4 = strip_cookies(TargetMod3, Opts),
     Commit =
         hb_ao:get_first(
             [
@@ -120,9 +123,8 @@ call(M1, RawM2, Opts) ->
             true ->
                 case hb_opts:get(relay_allow_commit_request, false, Opts) of
                     true ->
-                        ?event(debug_relay, {recommitting, TargetMod4}, Opts),
                         Committed = hb_message:commit(TargetMod4, Opts),
-                        ?event(debug_relay, {relay_call, {committed, Committed}}, Opts),
+                        ?event(debug_relay, {relay_recommitted, Committed}, Opts),
                         true = hb_message:verify(Committed, all),
                         Committed;
                     false ->
@@ -134,11 +136,7 @@ call(M1, RawM2, Opts) ->
     ?event(debug_relay, {relay_call, {with_http_params, TargetMod5}}),
     true = hb_message:verify(TargetMod5),
     ?event(debug_relay, {relay_call, {verified, true}}),
-    Client =
-        case hb_maps:get(<<"http-client">>, BaseTarget, not_found, Opts) of
-            not_found -> hb_opts:get(relay_http_client, Opts);
-            RequestedClient -> RequestedClient
-        end,
+    Client = hb_opts:get(relay_http_client, Opts),
     % Let `hb_http:request/2' handle finding the peer and dispatching the
     % request, unless the peer is explicitly given.
     HTTPOpts = Opts#{ <<"http-client">> => Client, <<"http-only-result">> => false },
@@ -156,11 +154,61 @@ call(M1, RawM2, Opts) ->
             )
     end,
     case Res of
-        {ok, R} ->
-            {ok, hb_maps:without([<<"set-cookie">>], R)};
+        {ok, R} -> {ok, strip_cookies(R, Opts)};
         Err -> Err
     end.
 
+%% @doc Ensure that cookies are not forwarded either to or from the relayed
+%% node.
+strip_cookies(Msg, Opts) ->
+    hb_private:set(
+        hb_maps:without([<<"cookie">>, <<"set-cookie">>], Msg, Opts),
+        <<"cookie">>,
+        unset,
+        Opts
+    ).
+
+%% @doc Returns `true` if the given host is blocked by the relay's allowed
+%% hosts configuration.
+%% 
+%% The configuration supports:
+%% 1. Blocking internal hosts (e.g. `localhost`, `127.0.0.1`, etc.) if the
+%%    `relay-block-internal` option is set to `true` (default: `true`).
+%% 2. Allowing access to a list of specific hosts by hostname or IP address,
+%%    provided by the `relay-allowed-hosts` option.
+is_blocked_host(URI, Opts) ->
+    maybe
+        true ?= (URI =/= undefined) orelse skip,
+        {ok, Host} ?= hb_hostname:uri_host(URI),
+        AllowedHosts = hb_opts:get(relay_allowed_hosts, any, Opts),
+        true ?=
+            (AllowedHosts =:= any) orelse
+                lists:any(
+                    fun(Entry) -> host_matches(Host, Entry) end,
+                    AllowedHosts
+                ),
+        true ?= hb_opts:get(relay_block_internal, true, Opts) orelse skip,
+        try not hb_hostname:is_public(Host, Opts)
+        catch _:_ -> true
+        end
+    else
+        skip -> false;
+        {error, invalid_uri} -> false;
+        _ -> true
+    end.
+
+%% @doc Ensure that a given hostname either fully matches, or matches a
+%% namespace-delimited suffix.
+host_matches(_Host, Entry) when not is_binary(Entry) ->
+    throw(relay_invalid_allowed_host);
+host_matches(Host, Entry) ->
+    case hb_hostname:normalize(Entry) of
+        SuffixSeg = <<".", _/binary>> ->
+            binary:longest_common_suffix([Host, SuffixSeg])
+                =:= byte_size(SuffixSeg);
+        NormalEntry ->
+            Host =:= NormalEntry
+    end.
 
 %% @doc Execute a request in the same way as `call/3', but asynchronously. Always
 %% returns `<<"OK">>'.
@@ -178,8 +226,7 @@ request(_Base, Req, Opts) ->
                     #{
                         <<"path">> => <<"call">>,
                         <<"target">> => <<"body">>,
-                        <<"body">> =>
-                            hb_ao:get(<<"request">>, Req, Opts#{ <<"hashpath">> => ignore })
+                        <<"body">> => hb_maps:get(<<"request">>, Req, Opts)
                     }
                 ]
         }
@@ -187,6 +234,74 @@ request(_Base, Req, Opts) ->
 
 
 %%% Tests
+
+internal_host_block_test() ->
+    lists:foreach(
+        fun(URL) -> ?assert(is_blocked_host(URL, #{})) end,
+        [
+            <<"http://localhost/">>,
+            <<"http://localhost./">>,
+            <<"http://127.0.0.1/">>,
+            <<"http://127.1/">>,
+            <<"http://2130706433/">>,
+            <<"http://0x7f000001/">>,
+            <<"http://0177.0.0.1/">>,
+            <<"http://0/">>,
+            <<"http://0.0.0.0/">>,
+            <<"http://10.0.0.1/">>,
+            <<"http://172.16.0.1/">>,
+            <<"http://192.168.0.1/">>,
+            <<"http://169.254.169.254/">>,
+            <<"http://[::]/">>,
+            <<"http://[::1]/">>,
+            <<"http://[::ffff:127.0.0.1]/">>,
+            <<"http://[fd00:ec2::254]/">>,
+            <<"http://[fd20:ce::254]/">>,
+            <<"http://[fe80::1]/">>
+        ]
+    ),
+    ?assertEqual(false, is_blocked_host(<<"https://1.1.1.1/">>, #{})),
+    ?assertEqual(false, is_blocked_host(<<"https://[2606:4700:4700::1111]/">>, #{})),
+    ?assertEqual(false, is_blocked_host(<<"/arweave/info">>, #{})),
+    ?assertEqual(
+        false,
+        is_blocked_host(
+            <<"http://localhost/">>,
+            #{ <<"relay-block-internal">> => false }
+        )
+    ).
+
+relay_host_allowlist_test() ->
+    ?assertNot(
+        is_blocked_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"example.com">>] }
+        )
+    ),
+    ?assertNot(
+        is_blocked_host(
+            <<"https://www.example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<".example.com">>] }
+        )
+    ),
+    ?assert(
+        is_blocked_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"arweave.net">>] }
+        )
+    ),
+    ?assert(
+        is_blocked_host(
+            <<"https://example.com/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"https://example.com">>] }
+        )
+    ),
+    ?assert(
+        is_blocked_host(
+            <<"http://127.0.0.1/">>,
+            #{ <<"relay-allowed-hosts">> => [<<"127.0.0.1">>] }
+        )
+    ).
 
 call_get_test() ->
     application:ensure_all_started([hb]),
@@ -200,7 +315,7 @@ call_get_test() ->
             <<"call">>,
             #{ <<"protocol">> => http2 }
         ),
-    ?assertEqual(true, byte_size(Body) > 10_000).
+    ?assert(byte_size(Body) > 10_000).
 
 relay_nearest_test() ->
     Peer1 = hb_http_server:start_node(#{ <<"priv-wallet">> => W1 = ar_wallet:new() }),
