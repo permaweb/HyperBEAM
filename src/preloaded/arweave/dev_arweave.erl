@@ -885,10 +885,20 @@ request(Method, Path, Extra, LogExtra, Opts) ->
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         ),
-    to_message(Path, Method, best_response(Res), LogExtra, Opts).
+    to_message(Path, Method, best_response(Path, Res), LogExtra, Opts).
 
 %% @doc Select the best response from a list of responses by sorting them
 %% ascending by HTTP status code. Returns the first (best) response tuple.
+best_response(Path, {error, {no_viable_responses, Responses}}) ->
+    best_response(Path, Responses);
+best_response(<<"/block/current">>, Responses) when is_list(Responses) ->
+    case current_height_responses(Responses) of
+        [] -> best_response(Responses);
+        Heights -> current_height_best_response(Heights)
+    end;
+best_response(_Path, Response) ->
+    best_response(Response).
+
 best_response({error, {no_viable_responses, Responses}}) ->
     best_response(Responses);
 best_response([]) ->
@@ -910,6 +920,38 @@ response_status(Response) when is_map(Response) ->
     maps:get(<<"status">>, Response, 999);
 response_status(_Response) ->
     999.
+
+current_height_responses(Responses) ->
+    lists:filtermap(
+        fun
+            ({ok, #{ <<"body">> := Body }} = Response) ->
+                try hb_json:decode(Body) of
+                    #{ <<"height">> := Height } ->
+                        {true, {hb_util:int(Height), Response}};
+                    _ ->
+                        false
+                catch _:_ ->
+                    false
+                end;
+            (_) ->
+                false
+        end,
+        Responses
+    ).
+
+current_height_best_response([{Height, Response} | Rest]) ->
+    {_, BestResponse} =
+        lists:foldl(
+            fun({NextHeight, NextResponse}, {BestHeight, Best}) ->
+                case NextHeight > BestHeight of
+                    true -> {NextHeight, NextResponse};
+                    false -> {BestHeight, Best}
+                end
+            end,
+            {Height, Response},
+            Rest
+        ),
+    BestResponse.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
