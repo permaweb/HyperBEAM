@@ -302,30 +302,8 @@ do(Ctx0) ->
 stage_1(Ctx = #{<<"device">> := _, <<"path">> := _ }) -> {ok, Ctx};
 stage_1(Ctx = #{ <<"base">> := Base, <<"path">> := Path, <<"opts">> := Opts }) ->
     case hb_device:message_device_id(Base, Path, Opts) of
-        {hit, Res} ->
-            {hit,
-                Ctx#{
-                    <<"result">> => Res,
-                    <<"cache-hit">> => false
-                }
-            };
-        {ok, Device} ->
-    end.
-
-%% @doc Normalize the context of an execution request. Ensures that a device and
-%% path are available for execution.
-stage_1(Ctx = #{<<"device">> := _, <<"path">> := _ }) -> {ok, Ctx};
-stage_1(Ctx = #{ <<"base">> := Base, <<"path">> := Path, <<"opts">> := Opts }) ->
-    case hb_device:message_device_id(Base, Path, Opts) of
-        {hit, Res} ->
-            {hit,
-                Ctx#{
-                    <<"result">> => Res,
-                    <<"store-hit">> => false
-                }
-            };
-        {ok, Device} ->
-            stage_1(Ctx#{ <<"device">> => Device })
+        {hit, Res} -> {hit, Ctx#{ <<"result">> => Res }};
+        {ok, Device} -> stage_1(Ctx#{ <<"device">> => Device })
     end;
 stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) ->
     stage_1(Ctx#{ <<"path">> => hb_path:hd(Req, Opts) }).
@@ -363,10 +341,200 @@ stage_3(
                 <<"opts">> := Opts
             }
 ) ->
-    case raw(undefined, <<"vary">>, Base, Req, Opts) of
-        {ok, VariedCtx} -> {ok, maps:merge(Ctx, VariedCtx)};
-        {error, Reason} -> {error, Reason}
+    maybe
+        % Raw call `vary` to find the varied base/req, passing the `priv/function`
+        % such that varying does not require us to repeat the associated work.
+        {ok, VariedCtx} ?=
+            raw(
+                undefined,
+                <<"vary">>,
+                Base,
+                hb_private:set(Req, <<"function">>, Function, Opts),
+                Opts
+            ),
+        {ok, maps:merge(Ctx, VariedCtx)}
     end.
+
+%% @doc Determine if the request is already being resolved right now. If so,
+%% await the result rather than resolving again. If not, register as the
+%% resolver for the request in question and proceed. If we are executing with
+%% `no-cache`, skip the lookup and proceed with the current context.
+stage_4(
+        Ctx = #{
+            <<"varied-base">> := Base,
+            <<"varied-req">> := Req,
+            <<"opts">> := Opts
+        }) ->
+    ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
+    % Persistent-resolver lookup: Search for local (or Distributed
+    % Erlang cluster) processes that are already performing the execution.
+    % Before we search for a live executor, we check if the device specifies 
+    % a function that tailors the 'group' name of the execution. For example, 
+    % the `~process@1.0' device 'groups' all calls to the same process onto
+    % calls to a single executor. By default, `{Base, Req}' is used as the
+    % group name.
+    case hb_persistent:find_or_register(Base, Req, Opts) of
+        {leader, ExecName} ->
+            % We are the leader for this resolution. Continue while noting
+            % this in our context.
+            {ok, Ctx#{ <<"leader">> => ExecName }};
+        {wait, Leader} ->
+            % There is another executor of this resolution in-flight.
+            % register to receive the response, then
+            % wait.
+            case hb_persistent:await(Leader, Base, Req, Opts) of
+                {error, leader_died} ->
+                    ?event(
+                        ao_core,
+                        {leader_died_during_wait,
+                            {leader, Leader},
+                            {base, Base},
+                            {req, Req},
+                            {opts, Opts}
+                        },
+                        Opts
+                    ),
+                    % Re-try again if the group leader has died.
+                    stage_4(Ctx);
+                {ok, Result} ->
+                    % We received a successful result from another worker. They
+                    % will store the result if appropriate, so we skip the store
+                    % write.
+                    {hit, Ctx#{ <<"result">> := Result }}
+            end;
+        {infinite_recursion, GroupName} ->
+            % We are the leader for this resolution, but we executing the 
+            % computation again. This may plausibly be OK in _some_ cases,
+            % but in general it is the sign of a bug.
+            ?event(
+                ao_core,
+                {infinite_recursion,
+                    {exec_group, GroupName},
+                    {base, Base},
+                    {req, Req},
+                    {opts, Opts}
+                },
+                Opts
+            ),
+            case hb_opts:get(<<"allow-infinite">>, false, Opts) of
+                true ->
+                    % We are OK with infinite loops, so we just continue.
+                    % No need to register, as we are the leader.
+                    {ok, Ctx};
+                false ->
+                    % We are not OK with infinite loops, so we raise an error.
+                    {
+                        error,
+                        #{
+                            <<"status">> => 508,
+                            <<"body">> => <<"Request creates infinite recursion.">>
+                        }
+                    }.
+            end
+    end.
+
+%% @doc Look up whether the varied base and request pair already has a known
+%% result in the cache. If so, we skip the resolution step and proceed using
+%% the cached result. We signal that further execution is not needed by
+%% returning the context
+stage_5(Ctx = #{
+    <<"varied-base">> := Base,
+    <<"varied-req">> := Req,
+    <<"opts">> := Opts
+}) ->
+    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {ok, Result} ->
+            % The result was found, so we return a `hit`, but we also unregister
+            % and notify if 
+            case maps:get(<<"leader">>, Ctx, false) of
+                false -> skip;
+                ExecName ->
+                    hb_persistent:unregister_notify(ExecName, Req, Result, Opts)
+            end,
+            {hit, Ctx#{ <<"result">> := Result }};
+        _ -> {ok, Ctx}
+    end.
+
+%% @doc Perform the actual resolution of an AO-Core request.
+stage_6(Ctx = #{
+    <<"varied-base">> := Base,
+    <<"varied-req">> := Req,
+    <<"opts">> := Opts,
+    <<"priv">> := #{ <<"function">> := Func }
+}) ->
+    ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
+    ExecOpts = execution_opts(Opts),
+    ExecName = maps:get(<<"leader">>, Ctx, unnamed),
+    Args =
+        case maps:get(<<"add-key">>, Ctx, false) of
+            false -> [Base, Req, ExecOpts];
+            Key -> [Key, Base, Req, ExecOpts]
+        end,
+    % Try to execute the function.
+    Res = 
+        try
+            TruncatedArgs = hb_device:truncate_args(Func, Args),
+            MsgRes = maybe_profiled_apply(Func, TruncatedArgs, Base, Req, Opts),
+            ?event(
+                debug_ao_result,
+                {
+                    ao_result,
+                    {exec_name, ExecName},
+                    {base, Base},
+                    {req, Req},
+                    {res, MsgRes}
+                },
+                Opts
+            ),
+            MsgRes
+        catch
+            ExecClass:ExecException:ExecStacktrace ->
+                ?event(
+                    ao_core,
+                    {device_call_failed, ExecName, {func, Func}},
+                    Opts
+                ),
+                ?event(
+                    ao_result,
+                    {
+                        exec_failed,
+                        {base, Base},
+                        {req, Req},
+                        {exec_name, ExecName},
+                        {func, Func},
+                        {exec_class, ExecClass},
+                        {exec_exception, ExecException},
+                        {exec_stacktrace,
+                            {trace, erlang:process_info(self(), backtrace)}
+                        },
+                        {opts, Opts}
+                    },
+    				Opts
+                ),
+                % If the function call fails, we raise an error in the manner
+                % indicated by caller's `#Opts'.
+                error_execution(
+                    ExecName,
+                    Req,
+                    device_call,
+                    {ExecClass, ExecException, ExecStacktrace},
+                    Opts
+                )
+        end,
+    hb_message:paranoid_verify(
+        post_resolve,
+        #{
+            <<"reason">> => <<"AO-Core Post-Execution Validation">>,
+            <<"base">> => Base,
+            <<"request">> => Req,
+            <<"result">> => Res
+        },
+        Opts
+    ),
+    case Result of
+     ->
+        Body.
+    
 
 resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
     % If the second message is a link, we should load the message and
@@ -832,13 +1000,6 @@ error_infinite(Base, Req, Opts) ->
         Opts
     ),
     ?trace(),
-    {
-        error,
-        #{
-            <<"status">> => 508,
-            <<"body">> => <<"Request creates infinite recursion.">>
-        }
-    }.
 
 %% @doc Handle an error in a device call.
 error_execution(ExecGroup, Req, Whence, {Class, Exception, Stacktrace}, Opts) ->
