@@ -87,6 +87,10 @@ request(Method, #{ <<"opts">> := ReqOpts, <<"uri">> := URI }, _Path, Message, Op
             MergedOpts
         ),
     request(NewMethod, Node, NewPath, NewMsg, NewOpts);
+request(Method, #{ <<"prefix">> := Prefix }, Path, RawMessage, Opts) ->
+    % A configured remote node carrying a `prefix' URL (its per-node `opts' are
+    % read elsewhere). Use the prefix as the peer, preserving the request path.
+    request(Method, Prefix, Path, RawMessage, Opts);
 request(Method, Peer, Path, RawMessage, Opts) ->
     ?event({request, {method, Method}, {peer, Peer}, {path, Path}, {priv_message, RawMessage}}),
     Req =
@@ -284,9 +288,10 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
         0 -> #{};
         _ -> #{ <<"body">> => Body }
     end,
-    ConvertFrom = 
+    NormalizedHeaders = lowercase_header_keys(HeaderMap),
+    ConvertFrom =
         hb_maps:merge(
-            HeaderMap#{ <<"status">> => BinStatus },
+            NormalizedHeaders#{ <<"status">> => BinStatus },
             BodyMap,
 			Opts
         ),
@@ -296,6 +301,18 @@ http_response_to_httpsig(Status, HeaderMap, Body, Opts) ->
         <<"httpsig@1.0">>,
         Opts
     ))#{ <<"status">> => hb_util:int(Status) }.
+
+%% @doc Lowercase binary header keys from peer responses before the httpsig
+%% codec runs, so committed component names (signed lowercase per RFC 9421)
+%% match regardless of the peer's HTTP/1.1 header casing. Values are untouched.
+lowercase_header_keys(Headers) when is_map(Headers) ->
+    maps:fold(
+        fun(K, V, Acc) when is_binary(K) -> Acc#{ string:lowercase(K) => V };
+           (K, V, Acc) -> Acc#{ K => V }
+        end,
+        #{},
+        Headers
+    ).
 
 %% @doc Given a message, return the information needed to make the request.
 message_to_request(M, Opts) ->
@@ -1118,7 +1135,8 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         Device -> WithPrivIP#{<<"device">> => Device}
     end,
     Host = cowboy_req:host(Req),
-    WithDevice#{<<"host">> => Host}.
+    Port = cowboy_req:port(Req),
+    WithDevice#{<<"host">> => Host, <<"port">> => Port}.
 
 
 %% @doc Determine the caller, honoring the `x-real-ip' header if present.

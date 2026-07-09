@@ -4,7 +4,7 @@
 %%% been written to the remote node. In that case, the node would probably want
 %%% to upload it to an Arweave bundler to ensure persistence, too.
 -module(hb_store_remote_node).
--export([scope/1, type/3, read/3, write/3, link/3, group/3, resolve/3]).
+-export([scope/1, type/3, read/3, write/3, link/3, group/3, resolve/3, start/1]).
 %%% Public utilities.
 -export([maybe_cache/2, maybe_cache/3, read_local_cache/3]).
 -include("include/hb.hrl").
@@ -18,6 +18,8 @@
 %% @returns remote.
 scope(_StoreOpts) ->
     remote.
+start(_StoreOpts) ->
+    ok.
 
 %% @doc Resolve a key path in the remote store.
 %%
@@ -26,6 +28,10 @@ scope(_StoreOpts) ->
 %% @param Data A map containing node configuration.
 %% @param Key The key to resolve.
 %% @returns The resolved key.
+resolve(#{ <<"nodes">> := Nodes }, #{ <<"resolve">> := Key }, _NodeOpts)
+        when is_list(Nodes) ->
+    ?event({remote_resolve, {nodes, length(Nodes)}, {key, Key}}),
+    {ok, Key};
 resolve(#{ <<"node">> := Node }, #{ <<"resolve">> := Key }, _NodeOpts) ->
     ?event({remote_resolve, {node, Node}, {key, Key}}),
     {ok, Key}.
@@ -38,6 +44,13 @@ resolve(#{ <<"node">> := Node }, #{ <<"resolve">> := Key }, _NodeOpts) ->
 %% @param Key The key whose value type is determined.
 %% @returns `{ok, simple}' or `{ok, composite}' if found, or
 %%          `{error, not_found}' otherwise.
+type(StoreOpts = #{ <<"nodes">> := Nodes }, #{ <<"type">> := Key }, NodeOpts)
+        when is_list(Nodes) ->
+    ?event({remote_type, {nodes, length(Nodes)}, {key, Key}}),
+    case multi_read(StoreOpts, Nodes, Key, NodeOpts) of
+        {ok, _} -> {ok, simple};
+        Other -> Other
+    end;
 type(Opts = #{ <<"node">> := Node }, #{ <<"type">> := Key }, _NodeOpts) ->
     ?event({remote_type, {node, Node}, {key, Key}}),
     case read_request(Opts, Key) of
@@ -76,8 +89,76 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
             {error, not_found}
     end;
 read_request(_, _) -> {error, not_found}.
+read(StoreOpts = #{ <<"nodes">> := Nodes }, #{ <<"read">> := Key }, NodeOpts)
+        when is_list(Nodes) ->
+    multi_read(StoreOpts, Nodes, Key, NodeOpts);
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
+
+%% @doc Fan out a read across every configured node in parallel, taking the
+%% first response that the `~cache@1.0/expected-response' admissibility check
+%% proves to be the requested, cryptographically-valid message. Uses `NodeOpts'
+%% (the runtime node options) so the admissibility resolution can dispatch the
+%% `cache@1.0' device; `StoreOpts' carries the store-level `nodes'/`local-store'.
+multi_read(#{ <<"only-ids">> := true }, _Nodes, Key, _NodeOpts) when not ?IS_ID(Key) ->
+    {error, not_found};
+multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
+    Config =
+        #{
+            <<"nodes">> => [ node_request(N) || N <- Nodes ],
+            <<"parallel">> => true,
+            <<"responses">> => 1,
+            <<"stop-after">> => true,
+            <<"admissible">> =>
+                #{
+                    <<"device">> => <<"cache@1.0">>,
+                    <<"path">> => <<"expected-response">>,
+                    <<"expected">> => Key,
+                    %% Hook config rides the admissibility spec (the `Base' that
+                    %% reaches `expected_response'), never `NodeOpts', no collision.
+                    <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, StoreOpts),
+                    <<"commit-hook-response">> =>
+                        hb_opts:get(commit_hook_response, false, StoreOpts)
+                }
+        },
+    ?event(store_remote_node,
+        {executing_multiread, {node_count, length(Nodes)}, {key, Key}}),
+    case
+        hb_http:request(
+            <<"GET">>,
+            Config,
+            <<"/~cache@1.0/read">>,
+            %% Send both `read' (edge convention) and `target' (legacy/branch
+            %% convention) so the fan-out works against a heterogeneous peer
+            %% pool running either HyperBEAM lineage.
+            #{ <<"read">> => Key, <<"target">> => Key },
+            NodeOpts
+        )
+    of
+        {ok, Res} ->
+            {ok, Msg} = hb_message:with_only_committed(Res, NodeOpts),
+            ?event(store_remote_node, {multiread_found, {key, Key}}),
+            maybe_cache(StoreOpts, Msg, [Key]),
+            {ok, Msg};
+        Other ->
+            ?event(store_remote_node,
+                {multiread_not_found, {key, Key}, {result, Other}}),
+            {error, not_found}
+    end.
+
+%% @doc Extract the base URL of a configured remote node. Accepts a bare URL
+%% binary, or a node map carrying a `prefix' or `uri' key.
+node_url(#{ <<"prefix">> := Prefix }) -> Prefix;
+node_url(#{ <<"uri">> := URI }) -> URI;
+node_url(URL) when is_binary(URL) -> URL.
+
+%% @doc Wrap each configured node so its URL and its per-node `opts' (e.g.
+%% `http-reference') both reach the fan-out, letting the admissibility check
+%% report which node served the content.
+node_request(N) when is_map(N) ->
+    #{ <<"prefix">> => node_url(N), <<"opts">> => hb_maps:get(<<"opts">>, N, #{}, #{}) };
+node_request(N) ->
+    #{ <<"prefix">> => node_url(N), <<"opts">> => #{} }.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional
@@ -304,3 +385,55 @@ read_only_ids_test() ->
            <<"only-ids">> => true }
 	],
     ?assertEqual({error, not_found}, hb_cache:read(ID, #{ <<"store">> => RemoteStore })).
+
+%% @doc Read a committed message back through a multi-node remote store and
+%% confirm the admissibility check passes and returns the verified message.
+multiread_admissible_test() ->
+    LocalStore =
+        #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
+    hb_store:reset(LocalStore),
+    SignOpts =
+        #{ <<"store">> => LocalStore, <<"priv-wallet">> => ar_wallet:new() },
+    Msg = hb_message:commit(#{ <<"test-key">> => <<"router-v1">> }, SignOpts),
+    SignedID = hb_message:id(Msg, signed, SignOpts),
+    {ok, _UnsignedID} = hb_cache:write(Msg, #{ <<"store">> => LocalStore }),
+    Node1 = hb_http_server:start_node(#{ <<"store">> => LocalStore }),
+    Node2 = hb_http_server:start_node(#{ <<"store">> => LocalStore }),
+    RemoteStore =
+        [ #{ <<"store-module">> => hb_store_remote_node,
+             <<"nodes">> => [Node1, Node2] } ],
+    {ok, Got} = hb_cache:read(SignedID, #{ <<"store">> => RemoteStore }),
+    ?assertMatch(
+        #{ <<"test-key">> := <<"router-v1">> },
+        hb_cache:ensure_all_loaded(Got)
+    ).
+
+%% @doc A node that serves a different (but validly-signed) message under the
+%% requested id must be rejected by the admissibility gate. We prove the gate is
+%% what does the rejecting: a single-node store (no gate) returns the wrong
+%% message, while the multi-node store (gate) returns not_found.
+multiread_rejects_wrong_content_test() ->
+    LocalStore =
+        #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-badnode">> },
+    hb_store:reset(LocalStore),
+    SignOpts =
+        #{ <<"store">> => LocalStore, <<"priv-wallet">> => ar_wallet:new() },
+    MsgA = hb_message:commit(#{ <<"k">> => <<"A">> }, SignOpts),
+    MsgB = hb_message:commit(#{ <<"k">> => <<"B">> }, SignOpts),
+    IDA = hb_message:id(MsgA, signed, SignOpts),
+    {ok, IDB} = hb_cache:write(MsgB, #{ <<"store">> => LocalStore }),
+    %% Poison the node so that a request for IDA resolves to MsgB.
+    ok = hb_store:link(LocalStore, #{ IDA => IDB }, #{}),
+    Node = hb_http_server:start_node(#{ <<"store">> => LocalStore }),
+    %% Without the gate (single node) the poisoned node serves the wrong message.
+    SingleStore =
+        [ #{ <<"store-module">> => hb_store_remote_node, <<"node">> => Node } ],
+    {ok, Wrong} = hb_cache:read(IDA, #{ <<"store">> => SingleStore }),
+    ?assertMatch(#{ <<"k">> := <<"B">> }, hb_cache:ensure_all_loaded(Wrong)),
+    %% With the gate (multi-node) the wrong message is rejected.
+    MultiStore =
+        [ #{ <<"store-module">> => hb_store_remote_node, <<"nodes">> => [Node] } ],
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:read(IDA, #{ <<"store">> => MultiStore })
+    ).
