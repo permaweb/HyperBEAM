@@ -842,13 +842,19 @@ basic_test() ->
 %% @doc Binary keys must be stored and read verbatim, even when they contain
 %% bytes that coincide with the path separator (e.g. raw Arweave IDs with
 %% leading, trailing, or consecutive `/' bytes).
-opaque_binary_key_roundtrip_test() ->
+opaque_binary_key_roundtrip_test_parallel() ->
     StoreOpts = hb_test_utils:test_store(?MODULE),
     test_reset(StoreOpts),
     Keys = [
         << $/, "leading-slash-key" >>,
         << "trailing-slash-key", $/ >>,
-        << "consecutive", $/, $/, "slash-key" >>
+        << "consecutive", $/, $/, "slash-key" >>,
+        %% Example of valid TX's
+        hb_util:decode(<<"Lwtls3qtfr338KDQjGNJr6mBZp7KCmEOV4cnSoCFd5k">>),
+        hb_util:decode(<<"L7vzb6bWI-QM2ZvwGYUoeEDGKHfZFqFg-Uaew7brkew">>),
+        hb_util:decode(<<"ucRYoq8jr3ZEnAFikIuUiBJnd9arnswI1uChhuYg-i8">>),
+        hb_util:decode(<<"KJkZZ9RclM8dilY5Md-onB3rU_75IH8goe2wk2M_gC8">>),
+        hb_util:decode(<<"rHAYunZfP1Dzg5bqPbv2xGdadHUIpLIks0tfYcCrQC8">>)
     ],
     lists:foreach(
         fun(Key) ->
