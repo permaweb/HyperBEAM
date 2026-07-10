@@ -136,7 +136,7 @@ find_key(Path, Base, Request, Opts) ->
                         {message, Request};
                     [<<"base">>, Key] ->
                         {resolve, [{BaseAs, normalize_path([Key|RestKeys])}]};
-                    [Req, Key] when Req == <<"request">> orelse Req == <<"req">> ->
+                    [Req, Key] when Req == <<"request">> orelse Req == <<"request">> ->
                         {resolve, [{RequestAs, normalize_path([Key|RestKeys])}]};
                     [_] ->
                         {resolve, [
