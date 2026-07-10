@@ -87,43 +87,33 @@ test_empty_path_manifest() ->
     %% Test to load manifest with only subdomain
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        ),
+    assert_manifest(
+        Node,
+        TestPath, 
+        Subdomain,
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
     ).
 
-%% @doc Loading assets from a manifest where only a 52 char subdomain is 
-%% provided should work. 
+%% @doc Loading assets from a manifest where only a 52 char subdomain is
+%% provided should work.
 test_resolve_52char_subdomain_asset_if_txid_not_present() ->
     TestPath = <<"/assets/ArticleBlock-Dtwjc54T.js">>,
     Opts = manifest_opts(),
     %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        ),
+    assert_manifest(
+        Node,
+        TestPath,
+        Subdomain,
         <<"application/javascript">>,
         <<"const __vite__mapDeps">>,
         Opts
     ).
 
-%% @doc Loading assets from a manifest where a 52 char subdomain and TX ID 
+%% @doc Loading assets from a manifest where a 52 char subdomain and TX ID
 %% is provided should work.
 test_subdomain_matches_path_id_and_loads_asset() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>,
@@ -131,15 +121,10 @@ test_subdomain_matches_path_id_and_loads_asset() ->
     %% Test to load asset with only subdomain (no TX ID present).
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        ),
+    assert_manifest(
+        Node,
+        TestPath,
+        Subdomain,
         <<"application/javascript">>,
         <<"const __vite__mapDeps">>,
         Opts
@@ -152,7 +137,7 @@ test_subdomain_matches_path_id() ->
     ?assertMatch(
         {ok, 1},
         hb_http:get(
-            hb_http_server:start_node(Opts), 
+            hb_http_server:start_node(Opts),
             #{
                 <<"path">> => <<ID1/binary, "/a">>,
                 <<"host">> => subdomain(ID1, Opts)
@@ -169,7 +154,7 @@ test_subdomain_does_not_match_path_id() ->
     ?assertMatch(
         {error, not_found},
         hb_http:get(
-            hb_http_server:start_node(Opts), 
+            hb_http_server:start_node(Opts),
             #{
                 <<"path">> => <<ID1/binary, "/a">>,
                 <<"host">> => subdomain(ID2, Opts)
@@ -178,22 +163,17 @@ test_subdomain_does_not_match_path_id() ->
         )
     ).
 
-%% @doc When both 52 char subdomain and TX ID are provided and equal, ignore 
-%% the TXID from the assets path. 
+%% @doc When both 52 char subdomain and TX ID are provided and equal, ignore
+%% the TXID from the assets path.
 test_manifest_subdomain_matches_path_id() ->
     TestPath = <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
-    hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        ),
+    assert_manifest(
+        Node,
+        TestPath,
+        Subdomain,
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
@@ -206,17 +186,15 @@ test_manifest_subdomain_does_not_match_path_id() ->
     Opts = manifest_opts(),
     Subdomain = <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya">>,
     Node = hb_http_server:start_node(Opts),
+    assert_manifest(Node, TestPath, Subdomain, <<"image/png">>, <<137, "PNG">>, Opts).
+
+%% @doc Assert a manifest response for a b32 subdomain request.
+assert_manifest(Node, Path, Subdomain, ContentType, BodyNeedle, Opts) ->
     hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node, 
-            #{
-                <<"path">> => TestPath,
-                <<"host">> => <<Subdomain/binary, ".localhost">>
-            },
-            Opts
-        ),
-        <<"image/png">>,
-        <<137, "PNG">>,
+        Node,
+        #{ <<"path">> => Path, <<"host">> => <<Subdomain/binary, ".localhost">> },
+        ContentType,
+        BodyNeedle,
         Opts
     ).
 

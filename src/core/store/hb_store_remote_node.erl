@@ -85,15 +85,13 @@ read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
 
 %% @doc Remove the transport commitments from the response.
 without_transport_commitment(Msg, Opts) when is_map(Msg) ->
-    hb_message:without_unless_signed(
-        [<<"hashpath">>],
+    WithoutCommitment =
         hb_message:without_commitments(
             #{ <<"committed">> => [<<"hashpath">>] },
             Msg,
             Opts
         ),
-        Opts
-    );
+    hb_message:without_unless_signed([<<"hashpath">>], WithoutCommitment, Opts);
 without_transport_commitment(Res, _Opts) ->
     Res.
 

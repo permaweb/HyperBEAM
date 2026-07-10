@@ -355,11 +355,8 @@ manifest_inner_redirect_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     %% Request manifest to node.
     hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node,
-            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
-            Opts
-        ),
+        Node,
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
@@ -370,11 +367,8 @@ access_key_path_in_manifest_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node,
-            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
-            Opts
-        ),
+        Node,
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
         <<"application/javascript">>,
         <<"const __vite__mapDeps">>,
         Opts
@@ -386,11 +380,8 @@ manifest_should_fallback_on_not_found_path_test_parallel() ->
     Opts = hb_name_test_utils:manifest_opts(),
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
-        hb_http:get(
-            Node,
-            #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
-            Opts
-        ),
+        Node,
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts

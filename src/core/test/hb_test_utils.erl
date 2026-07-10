@@ -3,8 +3,8 @@
 %%% differing options, as well as executing and reporting benchmarks.
 -module(hb_test_utils).
 -export([suite_with_opts/2, run/4, assert_throws/4]).
--export([assert_hashpath_reply/3, assert_hashpath_response/2]).
--export([assert_manifest_response/4, has_committed_keys/2]).
+-export([assert_hashpath_reply/3]).
+-export([assert_manifest_response/4, assert_manifest_response/5, has_committed_keys/2]).
 -export([test_store/0, test_store/1, test_store/2]).
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
@@ -225,26 +225,24 @@ assert_throws(Fun, Args, ExpectedException, Label) ->
 assert_hashpath_reply(SignedMessage, PreservedSigner, ExpectedBody) ->
     ?assertEqual(ExpectedBody, maps:get(<<"body">>, SignedMessage)),
     ?assert(lists:member(PreservedSigner, hb_message:signers(SignedMessage, #{}))),
-    ?assert(has_hashpath_commitment(SignedMessage)).
+    ?assert(has_committed_keys(SignedMessage, [<<"hashpath">>])).
 
 %% @doc Assert that a manifest-style HTTP response returned the expected item
 %% and, when present, only exposes hashpath transport commitments.
+assert_manifest_response(Node, Req, ExpectedContentType, BodyNeedle, Opts) ->
+    Res = hb_http:get(Node, Req, Opts),
+    assert_manifest_response(Res, ExpectedContentType, BodyNeedle, Opts).
 assert_manifest_response(
     {ok, Res = #{ <<"status">> := 200 }},
     ExpectedContentType,
     BodyNeedle,
     Opts
 ) ->
+    Payload = maps:get(<<"body">>, Res, maps:get(<<"data">>, Res, <<>>)),
     ?assertEqual(ExpectedContentType, maps:get(<<"content-type">>, Res)),
-    ?assertNotEqual(nomatch, binary:match(response_payload(Res), BodyNeedle)),
-    assert_hashpath_response(Res, Opts);
-assert_manifest_response(Other, _ExpectedContentType, _BodyNeedle, _Opts) ->
-    ?assertMatch({ok, #{ <<"status">> := 200 }}, Other).
-
-%% @doc Assert that hashpath-bearing responses have a hashpath-only commitment.
-assert_hashpath_response(Res, Opts) ->
+    ?assertNotEqual(nomatch, binary:match(Payload, BodyNeedle)),
     case maps:is_key(<<"hashpath">>, Res) of
-        true -> ?assert(has_hashpath_commitment(Res));
+        true -> ?assert(has_committed_keys(Res, [<<"hashpath">>]));
         false -> ok
     end,
     case maps:get(<<"commitments">>, Res, #{}) of
@@ -253,15 +251,9 @@ assert_hashpath_response(Res, Opts) ->
         _ ->
             ok
     end,
-    Res.
-
-response_payload(#{ <<"body">> := Body }) ->
-    Body;
-response_payload(#{ <<"data">> := Data }) ->
-    Data.
-
-has_hashpath_commitment(Msg) ->
-    has_committed_keys(Msg, [<<"hashpath">>]).
+    Res;
+assert_manifest_response(Other, _ExpectedContentType, _BodyNeedle, _Opts) ->
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Other).
 
 has_committed_keys(#{ <<"commitments">> := Commitments }, Keys) ->
     lists:any(

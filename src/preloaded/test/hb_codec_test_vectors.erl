@@ -1570,26 +1570,17 @@ bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) -
         },
     % Created signed and then unsigned commitments, 
     % for both bundle:true and bundle:false.
-    SignedNoBundle =
-        hb_message:commit(
+    Commit =
+        fun(Bundle) ->
+            Spec = Codec#{ <<"bundle">> => Bundle },
             hb_message:commit(
-                Msg,
+                hb_message:commit(Msg, Opts, Spec#{ <<"type">> => <<"signed">> }),
                 Opts,
-                Codec#{ <<"type">> => <<"signed">>, <<"bundle">> => false }
-            ),
-            Opts,
-            Codec#{ <<"type">> => <<"unsigned">>, <<"bundle">> => false }
-        ),
-    SignedBundled =
-        hb_message:commit(
-            hb_message:commit(
-                Msg,
-                Opts,
-                Codec#{ <<"type">> => <<"signed">>, <<"bundle">> => true }
-            ),
-            Opts,
-            Codec#{ <<"type">> => <<"unsigned">>, <<"bundle">> => true }
-        ),
+                Spec#{ <<"type">> => <<"unsigned">> }
+            )
+        end,
+    SignedNoBundle = Commit(false),
+    SignedBundled = Commit(true),
     ?event({signed_no_bundle, SignedNoBundle}),
     ?event({signed_bundled, SignedBundled}),
     {ok, UnbundledID, _} =

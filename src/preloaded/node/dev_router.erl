@@ -1335,14 +1335,7 @@ dynamic_router() ->
     % Ensure that computation is routed successfully to the exec node.
     {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
     ?assertEqual(1, hb_maps:get(<<"1">>, ResMsg, not_found, ExecOpts)),
-    ?assert(
-        lists:any(
-            fun(#{ <<"committed">> := [<<"hashpath">>] }) -> true;
-               (_) -> false
-            end,
-            maps:values(maps:get(<<"commitments">>, ResMsg, #{}))
-        )
-    ),
+    ?assert(hb_test_utils:has_committed_keys(ResMsg, [<<"hashpath">>])),
     ?assert(hb_message:verify(ResMsg, all, ExecOpts)).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
