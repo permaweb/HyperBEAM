@@ -816,9 +816,8 @@ maybe_sign_hashpath_only_test() ->
         lists:sort([OldSigner, NewSigner]),
         lists:sort(hb_message:signers(Signed, Opts))
     ),
-    ?assert(has_commitment_committing(Signed, [<<"body">>])),
-    ?assert(has_commitment_committing(Signed, [<<"hashpath">>])),
-    ?assert(has_unsigned_commitment(Signed, [<<"hashpath">>])),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"body">>])),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"hashpath">>])),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
 %% @doc Test that forced response signing leaves replies without hashpaths alone.
@@ -847,38 +846,8 @@ maybe_sign_unsigned_hashpath_test() ->
         ),
     ?assertEqual(Hashpath, maps:get(<<"hashpath">>, Signed)),
     ?assertEqual([Signer], hb_message:signers(Signed, Opts)),
-    ?assert(has_commitment_committing(Signed, [<<"hashpath">>])),
-    ?assert(has_unsigned_commitment(Signed, [<<"hashpath">>])),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"hashpath">>])),
     ?assert(hb_message:verify(Signed, all, Opts)).
-
-has_unsigned_commitment(#{ <<"commitments">> := Commitments }, Keys) ->
-    lists:any(
-        fun(Commitment) ->
-            not maps:is_key(<<"committer">>, Commitment)
-                andalso same_keys(commitment_keys(Commitment), Keys)
-        end,
-        maps:values(Commitments)
-    );
-has_unsigned_commitment(_Msg, _Keys) ->
-    false.
-
-has_commitment_committing(#{ <<"commitments">> := Commitments }, Keys) ->
-    lists:any(
-        fun(Commitment) -> same_keys(commitment_keys(Commitment), Keys) end,
-        maps:values(Commitments)
-    );
-has_commitment_committing(_Msg, _Keys) ->
-    false.
-
-commitment_keys(#{ <<"committed">> := Committed }) when is_map(Committed) ->
-    hb_util:message_to_ordered_list(Committed, #{});
-commitment_keys(#{ <<"committed">> := Committed }) ->
-    Committed;
-commitment_keys(_Commitment) ->
-    [].
-
-same_keys(Left, Right) ->
-    lists:sort(Left) == lists:sort(Right).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->

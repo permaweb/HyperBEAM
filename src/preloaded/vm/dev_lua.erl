@@ -530,16 +530,20 @@ post_invocation_message_validation_test() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
     Base =
         hb_message:commit(
-            #{
-                <<"device">> => <<"lua@5.3a">>,
-                <<"module">> => #{
-                    <<"content-type">> => <<"application/lua">>,
-                    <<"body">> => Script
+            hb_message:commit(
+                #{
+                    <<"device">> => <<"lua@5.3a">>,
+                    <<"module">> => #{
+                        <<"content-type">> => <<"application/lua">>,
+                        <<"body">> => Script
+                    },
+                    <<"test-key">> => <<"test-value-1">>
                 },
-                <<"test-key">> => <<"test-value-1">>
-            },
-            Opts
-        ),
+                Opts
+            ),
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+    ),
     {ok, UnsignedID} = hb_cache:write(Base, Opts),
     ?event({base, {msg, Base}, {unsigned_id, UnsignedID}}),
     {ok, Res} = hb_ao:resolve(Base, <<"mutate_test_key">>, Opts),

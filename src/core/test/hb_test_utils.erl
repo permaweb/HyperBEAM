@@ -4,7 +4,7 @@
 -module(hb_test_utils).
 -export([suite_with_opts/2, run/4, assert_throws/4]).
 -export([assert_hashpath_reply/3, assert_hashpath_response/2]).
--export([assert_manifest_response/4]).
+-export([assert_manifest_response/4, has_committed_keys/2]).
 -export([test_store/0, test_store/1, test_store/2]).
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
@@ -225,8 +225,7 @@ assert_throws(Fun, Args, ExpectedException, Label) ->
 assert_hashpath_reply(SignedMessage, PreservedSigner, ExpectedBody) ->
     ?assertEqual(ExpectedBody, maps:get(<<"body">>, SignedMessage)),
     ?assert(lists:member(PreservedSigner, hb_message:signers(SignedMessage, #{}))),
-    ?assert(has_hashpath_commitment(SignedMessage)),
-    ?assert(has_unsigned_hashpath_commitment(SignedMessage)).
+    ?assert(has_hashpath_commitment(SignedMessage)).
 
 %% @doc Assert that a manifest-style HTTP response returned the expected item
 %% and, when present, only exposes hashpath transport commitments.
@@ -262,25 +261,14 @@ response_payload(#{ <<"data">> := Data }) ->
     Data.
 
 has_hashpath_commitment(Msg) ->
-    has_commitment_committing(Msg, [<<"hashpath">>]).
+    has_committed_keys(Msg, [<<"hashpath">>]).
 
-has_unsigned_hashpath_commitment(#{ <<"commitments">> := Commitments }) ->
-    lists:any(
-        fun(Commitment) ->
-            not maps:is_key(<<"committer">>, Commitment)
-                andalso commitment_keys(Commitment) == [<<"hashpath">>]
-        end,
-        maps:values(Commitments)
-    );
-has_unsigned_hashpath_commitment(_Msg) ->
-    false.
-
-has_commitment_committing(#{ <<"commitments">> := Commitments }, Keys) ->
+has_committed_keys(#{ <<"commitments">> := Commitments }, Keys) ->
     lists:any(
         fun(Commitment) -> commitment_keys(Commitment) == Keys end,
         maps:values(Commitments)
     );
-has_commitment_committing(_Msg, _Keys) ->
+has_committed_keys(_Msg, _Keys) ->
     false.
 
 commitment_keys(#{ <<"committed">> := Committed }) when is_map(Committed) ->
