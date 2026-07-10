@@ -27,7 +27,7 @@ index(M1, M2, Opts) ->
 %% @doc Route a request to the associated data via its manifest.
 route(<<"index">>, M1, M2, Opts) ->
     ?event({manifest_index, M1, M2}),
-    case manifest(M1, M2, Opts) of
+    case manifest(M1, <<>>, Opts) of
         {ok, Manifest} ->
             % Get the path to the index page from the manifest. We make
             % sure to use `hb_maps:get/4' to ensure that we do not recurse
@@ -63,7 +63,7 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
-    {ok, Manifest} = manifest(M1, M2, Opts),
+    {ok, Manifest} = manifest(M1, Key, Opts),
     {ok, Res} = maps:find(<<"paths">>, Manifest),
     case maps:get(Key, Res, no_path_match) of
         no_path_match ->
@@ -164,7 +164,7 @@ maybe_cast_manifest(Msg, Opts) ->
 
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
-manifest(Base, _Req, Opts) ->
+manifest(Base, Path, Opts) ->
     JSON =
         hb_maps:get_first(
             [
@@ -174,17 +174,45 @@ manifest(Base, _Req, Opts) ->
             not_found,
             Opts
     ),
-    FlatManifest = #{ <<"paths">> := FlatPaths } = hb_json:decode(JSON),
-    DeepPaths =
-        hb_message:convert(
-            FlatPaths,
-            <<"structured@1.0">>,
-            <<"flat@1.0">>,
-            Opts
-        ),
-    LinkifiedPaths = linkify(DeepPaths, Opts),
-    Structured = FlatManifest#{ <<"paths">> => LinkifiedPaths },
+    StructuredManifest = #{ <<"paths">> := StructuredPaths } =
+        decode_manifest(JSON, Path, Opts),
+    LinkifiedPaths = linkify(StructuredPaths, Opts),
+    Structured = StructuredManifest#{ <<"paths">> => LinkifiedPaths },
     {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+
+%% @doc Decode a manifest while retaining only paths relevant to the current
+%% route component.
+decode_manifest(JSON, Path, Opts) ->
+    Prefix = <<Path/binary, "/">>,
+    PrefixSize = byte_size(Prefix),
+    {Manifest, _, <<>>} =
+        json:decode(
+            JSON,
+            {0, #{}},
+            #{
+                object_start =>
+                    fun({Depth, _}) -> {Depth + 1, #{}} end,
+                object_push =>
+                    fun
+                        (Key, Value, {2, Object}) ->
+                            {2,
+                                case Key of
+                                    K when K =:= <<"path">>; K =:= Path ->
+                                        hb_util:deep_set(Key, Value, Object, Opts);
+                                    <<Prefix:PrefixSize/binary, _/binary>> ->
+                                        hb_util:deep_set(Key, Value, Object, Opts);
+                                    _ ->
+                                        Object
+                                end
+                            };
+                        (Key, Value, {Depth, Object}) ->
+                            {Depth, Object#{ Key => Value }}
+                    end,
+                object_finish =>
+                    fun({_, Object}, Parent) -> {Object, Parent} end
+            }
+        ),
+    Manifest.
 
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
