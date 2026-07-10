@@ -205,7 +205,7 @@ import(Base, Request, Opts) ->
             {ok, Keys} when is_list(Keys) ->
                 [ wallet_from_key(Key) || Key <- Keys ];
             {ok, Key} ->
-                [ wallet_from_key(hb_escape:decode_quotes(Key)) ];
+                [ wallet_from_key(Key) ];
             error ->
                 request_to_wallets(Base, Request, Opts)
         end,
@@ -273,8 +273,13 @@ register_wallet(Wallet, Base, Request, Opts) ->
                     {defaulting_access_control, {base, Base}, {request, Request}}
                 ),
                 {ok, #{ <<"device">> => ?DEFAULT_AUTH_DEVICE }};
-            AuthPath when is_binary(AuthPath) ->
-                hb_ao:resolve(AuthPath, Opts);
+            AccessControlDevice when is_binary(AccessControlDevice) ->
+                case hb_ao:resolve(<<"~", AccessControlDevice/binary>>, Opts) of 
+                    {ok, {as, Device, _}} -> 
+                        {ok, #{ <<"device">> => Device }};
+                    AccessControlResolution ->
+                        AccessControlResolution
+                end;
             Msg ->
                 case hb_maps:is_key(<<"path">>, Msg, Opts) of
                     true -> hb_ao:resolve(Msg, Opts);
@@ -445,11 +450,12 @@ request_to_wallets(Base, Request, Opts) ->
                         wallets_from_cookie(Request, Opts);
                     _ -> secrets_to_keyids(Keys)
                 end;
-        KeyIDs -> lists:map(fun(KeyID) ->
+            KeyIDs ->
+                lists:map(fun(KeyID) ->
                     Wallet = find_wallet(KeyID, Opts),
                     {secret, KeyID, hb_maps:get(<<"wallet">>, Wallet, Opts) }
                 end, KeyIDs)
-    end,
+        end,
     ?event({attempting_to_load_wallets, {priv_keyids, WalletKeyIDs}, {priv_request, Request}}),
     lists:filtermap(
         fun(WalletKeyID) ->
@@ -519,7 +525,7 @@ verify_controllers(WalletDetails, Request, Opts) ->
             fun(Signer) ->
                 lists:member(Signer, Controllers)
             end,
-            hb_message:signers(Request, Opts)
+            hb_message:verified_committers(Request, Opts)
         ),
     length(PresentControllers) >= RequiredControllers.
 
@@ -835,7 +841,7 @@ import_wallet_with_key_test() ->
     % Create a test wallet key to import (in real scenario from user).
     TestWallet = ar_wallet:new(),
     % WalletAddress = hb_util:human_id(TestWallet),
-    WalletKey = hb_escape:encode_quotes(ar_wallet:to_json(TestWallet)),
+    WalletKey = ar_wallet:to_json(TestWallet),
     WalletAddress = hb_util:human_id(ar_wallet:to_address(TestWallet)),
     % Import the wallet with a specific name.
     ImportUrl =
@@ -901,6 +907,43 @@ commit_with_cookie_wallet_test() ->
     {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
     % Should return the signed message with signature attached.
     ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletName]).
+
+forged_controller_rejected_test_parallel() ->
+    Controller = ar_wallet:new(),
+    Attacker = ar_wallet:new(),
+    ControllerAddr = hb_util:human_id(ar_wallet:to_address(Controller)),
+    WalletDetails =
+        #{
+            <<"controllers">> => [ControllerAddr],
+            <<"required-controllers">> => 1
+        },
+    Signed =
+        hb_message:commit(
+            #{ <<"path">> => <<"/~secret@1.0/export">> },
+            #{ <<"priv-wallet">> => Attacker }
+        ),
+    Forged =
+        Signed#{
+            <<"commitments">> =>
+                hb_maps:map(
+                    fun(_ID, Commitment) ->
+                        Commitment#{ <<"committer">> => ControllerAddr }
+                    end,
+                    hb_maps:get(<<"commitments">>, Signed, #{}, #{})
+                )
+        },
+    ?assertEqual(false, verify_controllers(WalletDetails, Forged, #{})),
+    ?assertEqual(
+        true,
+        verify_controllers(
+            WalletDetails,
+            hb_message:commit(
+                #{ <<"path">> => <<"/~secret@1.0/export">> },
+                #{ <<"priv-wallet">> => Controller }
+            ),
+            #{}
+        )
+    ).
 
 export_wallet_test() ->
     Node = hb_http_server:start_node(#{}),
@@ -1060,14 +1103,14 @@ export_batch_all_wallets_test() ->
                 }
         ),
     % Generate multiple wallets and collect auth cookies.
-    {ok, #{ <<"wallet-address">> := WalletAddr1 }} =
+    {ok, #{ <<"body">> := WalletKeyID1, <<"wallet-address">> := WalletAddr1 }} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory&exportable=",
                 (hb_util:human_id(AdminWallet))/binary>>,
             #{}
         ),
-    {ok, #{ <<"wallet-address">> := WalletAddr2 }} =
+    {ok, #{ <<"body">> := WalletKeyID2, <<"wallet-address">> := WalletAddr2 }} =
         hb_http:get(
             Node,
             <<"/~secret@1.0/generate?persist=in-memory&exportable=",
@@ -1081,7 +1124,7 @@ export_batch_all_wallets_test() ->
             (hb_message:commit(
                 #{
                     <<"device">> => <<"secret@1.0">>,
-                    <<"keyids">> => <<"all">>
+                    <<"keyids">> => [WalletKeyID1, WalletKeyID2]
                 },
                 AdminOpts
             ))#{ <<"path">> => <<"/~secret@1.0/export">> },
@@ -1130,7 +1173,11 @@ sync_wallets_test() ->
     {ok, _} =
         hb_http:get(
             Node,
-            <<"/~secret@1.0/sync?node=", Node2/binary, "&wallets=all">>,
+            #{
+                <<"path">> => <<"/~secret@1.0/sync">>,
+                <<"node">> => Node2,
+                <<"keyids">> => [WalletKeyID]
+            },
             #{}
         ),
     % Get the wallet list from the first node.
@@ -1164,7 +1211,11 @@ sync_non_volatile_wallets_test() ->
     {ok, _} =
         hb_http:get(
             Node,
-            <<"/~secret@1.0/sync?node=", Node2/binary, "&wallets=all">>,
+            #{
+                <<"path">> => <<"/~secret@1.0/sync">>,
+                <<"node">> => Node2,
+                <<"keyids">> => [WalletName]
+            },
             #{}
         ),
     % Get the wallet list from the first node.

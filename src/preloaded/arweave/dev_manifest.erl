@@ -317,6 +317,7 @@ create_generic_manifest(Opts) ->
 manifest_download_via_raw_endpoint_test_ignore() ->
     Opts = #{
         <<"arweave-index-ids">> => true,
+        <<"priv-wallet">> => ar_wallet:new(),
         <<"store">> => [
         #{
             <<"store-module">> => hb_store_arweave,
@@ -329,11 +330,17 @@ manifest_download_via_raw_endpoint_test_ignore() ->
     %% Force index the block that includes the manifest transaction
     _ = hb_http:get(
             Node,
-            #{
-                <<"path">> =>
-                    <<"~copycat@1.0/arweave/?from+integer=1809222&to+integer=1809222">>
-            },
-            #{}
+            hb_message:commit(
+                #{
+                    <<"path">> => <<"/~copycat@1.0/arweave">>,
+                    <<"method">> => <<"GET">>,
+                    <<"from">> => <<"1809222">>,
+                    <<"to">> => <<"1809222">>,
+                    <<"mode">> => <<"deep">>
+                },
+                Opts
+            ),
+            Opts
         ),
     ?assertMatch(
         {ok,

@@ -1,7 +1,7 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, info/1, info/3, details/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -43,8 +43,9 @@ once(_Base, Req, Opts) ->
                     <<"cron-path">>,
                     maps:put(<<"path">>, CronPath, Req)
                 ),
+            FinalReq = maybe_sign_modified_request(Req, ModifiedReq, Opts),
 			Name = {<<"cron@1.0">>, ReqMsgID},
-			Pid = spawn(fun() -> once_worker(CronPath, ModifiedReq, Opts) end),
+			Pid = spawn(fun() -> once_worker(CronPath, FinalReq, ReqMsgID, Opts) end),
 			hb_name:register(Name, Pid),
 			{
                 ok,
@@ -57,11 +58,12 @@ once(_Base, Req, Opts) ->
 	end.
 
 %% @doc Internal function for scheduling a one-time message.
-once_worker(Path, Req, Opts) ->
+once_worker(Path, Req, ReqMsgID, Opts) ->
 	% Directly call the meta device on the newly constructed 'singleton', just
     % as hb_http_server does.
 	try
-		hb_ao:resolve(Req#{ <<"path">> => Path}, Opts)
+		Result = hb_ao:resolve(Req#{ <<"path">> => Path}, Opts),
+        hb_store:write(#{result_store_key(ReqMsgID) => Result}, Opts)
 	catch
 		Class:Reason:Stacktrace ->
 			?event(
@@ -74,6 +76,8 @@ once_worker(Path, Req, Opts) ->
 			throw({error, Class, Reason, Stacktrace})
 	end.
 
+result_store_key(TaskID) ->
+    <<"dev_cron/result/", TaskID/binary>>.
 
 %% @doc Exported function for scheduling a recurring message.
 every(_Base, Req, Opts) ->
@@ -104,12 +108,13 @@ every(_Base, Req, Opts) ->
                         Req,
                         Opts
                     ),
+                FinalReq = maybe_sign_modified_request(Req, ModifiedReq, Opts),
 				Pid =
                     spawn(
                         fun() ->
                             every_worker_loop(
                                 CronPath,
-                                ModifiedReq,
+                                FinalReq,
                                 Opts,
                                 IntervalMillis
                             )
@@ -135,6 +140,23 @@ every(_Base, Req, Opts) ->
 			end
 	end.
 
+maybe_sign_modified_request(OriginalReq, ModifiedReq, Opts) ->
+    case signed_by_priv_wallet(OriginalReq, Opts) of
+        true ->
+            hb_message:commit(hb_message:uncommitted(ModifiedReq, Opts), Opts);
+        false -> 
+            ModifiedReq
+    end.
+
+signed_by_priv_wallet(Req, Opts) ->
+    case hb_opts:get(priv_wallet, no_viable_wallet, Opts) of
+        no_viable_wallet ->
+            false;
+        Wallet ->
+            Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+            lists:member(Address, hb_message:verified_committers(Req, Opts))
+    end.
+
 %% @doc Exported function for stopping a scheduled task.
 stop(_Base, Req, Opts) ->
 	case hb_ao:get(<<"task">>, Req, Opts) of
@@ -153,6 +175,35 @@ stop(_Base, Req, Opts) ->
 					}}};
 				undefined ->
 					{error, <<"Task not found.">>};
+				Error ->
+					?event({cron_stop_lookup_error, {task_id, TaskID}, {error, Error}}),
+					{error, #{
+                        <<"error">> =>
+                            <<"Failed to lookup task or unexpected result">>,
+                            <<"details">> => Error
+                    }}
+			end
+	end.
+
+details(_Base, Req, Opts) ->
+	case hb_ao:get(<<"task">>, Req, Opts) of
+		not_found ->
+			{error, <<"No task ID found in message.">>};
+		TaskID ->
+			Name = {<<"cron@1.0">>, TaskID},
+			case hb_name:lookup(Name) of
+				Pid when is_pid(Pid) ->
+					{ok, #{<<"status">> => 200, <<"body">> => #{
+						<<"message">> => <<"Still running">>,
+						<<"task_id">> => TaskID
+					}}};
+				undefined ->
+                    case hb_store:read(result_store_key(TaskID), Opts) of 
+                        {error, not_found} ->
+					        {error, <<"Task not found.">>};
+                        {ok, Result} ->
+                            Result
+                    end;
 				Error ->
 					?event({cron_stop_lookup_error, {task_id, TaskID}, {error, Error}}),
 					{error, #{
@@ -209,6 +260,49 @@ extract_path(Key, Req, Opts) ->
     hb_ao:get_first([{Req, Key}, {Req, <<"cron-path">>}], Opts).
 
 %%% Tests
+
+signs_modified_request_from_priv_wallet_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{ <<"priv-wallet">> => Wallet },
+    OriginalReq =
+        hb_message:commit(
+            #{
+                <<"path">> => <<"once">>,
+                <<"cron-path">> => <<"/~test-device@1.0/update_state">>,
+                <<"test-id">> => <<"test">>
+            },
+            Opts
+        ),
+    ModifiedReq =
+        #{
+            <<"path">> => <<"/~test-device@1.0/update_state">>,
+            <<"test-id">> => <<"test">>
+        },
+    SignedReq = maybe_sign_modified_request(OriginalReq, ModifiedReq, Opts),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    ?assert(lists:member(Address, hb_message:verified_committers(SignedReq, Opts))).
+
+does_not_sign_unsigned_modified_request_test() ->
+    ModifiedReq = #{ <<"path">> => <<"/~test-device@1.0/update_state">> },
+    ?assertEqual(
+        ModifiedReq,
+        maybe_sign_modified_request(#{}, ModifiedReq, #{})
+    ).
+
+does_not_sign_request_from_other_wallet_test() ->
+    Wallet = ar_wallet:new(),
+    OtherWallet = ar_wallet:new(),
+    Opts = #{ <<"priv-wallet">> => Wallet },
+    OriginalReq =
+        hb_message:commit(
+            #{ <<"path">> => <<"once">> },
+            Opts#{ <<"priv-wallet">> => OtherWallet }
+        ),
+    ModifiedReq = #{ <<"path">> => <<"/~test-device@1.0/update_state">> },
+    ?assertEqual(
+        ModifiedReq,
+        maybe_sign_modified_request(OriginalReq, ModifiedReq, Opts)
+    ).
 
 stop_once_test() ->
 	% Start a new node
@@ -372,3 +466,93 @@ test_worker(State) ->
 			Pid ! {state, State},
 			test_worker(State)
 	end.
+
+resign_with_dev_secret_integration_test_parallel() ->
+    Owner = ar_wallet:new(),
+    NodeOpts =
+        #{
+            <<"priv-wallet">> => Owner,
+            <<"store">> => hb_test_utils:test_store(),
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{
+                                <<"device">> => <<"auth-hook@1.0">>,
+                                <<"path">> => <<"request">>,
+                                <<"when">> => #{
+                                    <<"keys">> => [<<"authorization">>, <<"!">>]
+                                },
+                                <<"secret-provider">> =>
+                                    #{
+                                        <<"device">> => <<"http-auth@1.0">>,
+                                        <<"access-control">> =>
+                                            #{ <<"device">> => <<"http-auth@1.0">> }
+                                    }
+                            }
+                        ]
+                }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    OwnerAddr = hb_util:human_id(ar_wallet:to_address(Owner)),
+    UserPassBase64 = b64veryfast:encode64_url(<<"user:pass">>),
+    HttpBasicAuth = <<"Basic ", UserPassBase64/binary>>,
+    % Req 1. Store secret
+    Req1 = 
+        #{
+            <<"path">> => <<"~secret@1.0/import">>,
+            <<"key">> => ar_wallet:to_json(Owner),
+            <<"access-control">> => <<"http-auth@1.0">>,
+            <<"authorization">> => HttpBasicAuth 
+        },
+    ?assertMatch({ok, #{ <<"body">> := OwnerAddr}}, hb_http:get(Node, Req1, #{})),
+    % Req 2. Sign request and request copycat
+    Req2 =
+        #{
+            <<"path">> => <<"~cron@1.0/once?cron-path=/~copycat@1.0/arweave&from=1035654&to=1035654&mode=invalid">>,
+            <<"authorization">> => HttpBasicAuth
+        },
+    {ok, #{<<"body">> := TaskID}} = hb_http:get(Node, Req2, #{}),
+    hb_util:until(
+        fun () -> 
+            {error, not_found} /= hb_store:read(result_store_key(TaskID), NodeOpts)
+        end, 
+        10),
+    ?assertMatch({ok, {error, <<"Unsupported mode", _/binary>>}}, hb_store:read(result_store_key(TaskID), NodeOpts)).
+
+resign_with_dev_secret_should_fail_without_request_being_signed_integration_test_parallel() ->
+    NodeOpts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{
+                                <<"device">> => <<"auth-hook@1.0">>,
+                                <<"path">> => <<"request">>,
+                                <<"when">> => #{
+                                    <<"keys">> => [<<"authorization">>, <<"!">>]
+                                },
+                                <<"secret-provider">> =>
+                                    #{
+                                        <<"device">> => <<"http-auth@1.0">>,
+                                        <<"access-control">> =>
+                                            #{ <<"device">> => <<"http-auth@1.0">> }
+                                    }
+                            }
+                        ]
+                }
+        },
+    Node = hb_http_server:start_node(NodeOpts),
+    Req =
+        #{
+            <<"path">> => <<"~cron@1.0/once?cron-path=/~copycat@1.0/arweave&from=1035654&to=1035654&mode=invalid">>
+        },
+    {ok, #{<<"body">> := TaskID}} = hb_http:get(Node, Req, #{}),
+    hb_util:until(
+        fun () -> 
+            {error, not_found} /= hb_store:read(result_store_key(TaskID), NodeOpts)
+        end),
+    ?assertMatch({ok, {error, #{<<"status">> := 403}}}, hb_store:read(result_store_key(TaskID), NodeOpts)).

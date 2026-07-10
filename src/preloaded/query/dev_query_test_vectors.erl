@@ -76,14 +76,18 @@ test_env_with_blocks(InitialHeight, FinalHeight) ->
             <<"query-arweave-remote-block-ranges">> => true
         },
     Node = hb_http_server:start_node(Opts),
-    hb_http:request(
-        <<"GET">>,
+    hb_http:get(
         Node,
-        <<
-            "/~copycat@1.0/arweave?from=",
-                (hb_util:bin(InitialHeight))/binary, "&to=",
-                (hb_util:bin(FinalHeight))/binary
-        >>,
+        hb_message:commit(
+            #{
+                <<"path">> => <<"/~copycat@1.0/arweave">>,
+                <<"method">> => <<"GET">>,
+                <<"from">> => hb_util:bin(InitialHeight),
+                <<"to">> => hb_util:bin(FinalHeight),
+                <<"mode">> => <<"deep">>
+            },
+            Opts
+        ),
         Opts
     ),
     {ok, Node, Opts}.
