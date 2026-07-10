@@ -2,7 +2,7 @@
 %%% Offers services for loading, verifying executability, and extracting Erlang
 %%% functions from a device.
 -module(hb_device).
--export([truncate_args/2, add_resolver/2, message_to_fun/3, module/2]).
+-export([truncate_args/2, add_resolver/2, message_to_fun/3, message_to_fun/4, module/2]).
 -export([message_device_id/3]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
@@ -39,7 +39,7 @@ truncate_args(Fun, Args) ->
 %%     priv/exec-device: The device from which the execution function originates.
 %%                       If the `forced-device` resolvers from another device,
 %%                       this key will differ from the `forced-device`.
-%%     priv/resolver:    The function to execute to resolve the `forced-device`.
+%%     priv/function:    The function to execute to resolve the `forced-device`.
 %%     priv/add-key:     Whether the execution function expects that we should
 %%                       add the `key` as an additional argument to the start of
 %%                       the argument list.
@@ -70,7 +70,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
                         OldPriv#{
                             <<"resolver-module">> => ExecMod,
                             <<"add-key">> => Type == add_key,
-                            <<"resolver">> => Fun
+                            <<"function">> => Fun
                         }
                 }
             }

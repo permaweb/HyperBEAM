@@ -691,13 +691,21 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% during the process of `vary`ing.
 -spec vary(
     #{ _ => _ },
-    #{ vary => binary(), '...' => #{ _ => _ }, _ => _ },
+    #{ vary => binary(), _ => _ },
     #{}) -> {ok, #{}}.
 vary(Base, Req, Opts) ->
     maybe
-        {ok, Key} ?= hb_maps:find(<<"vary">>, Req, Opts),
-        {ok, VaryReq} ?= hb_maps:find(<<"...">>, Req, Opts),
-        Ctx1 = #{ <<"base">> => Base, <<"key">> => Key, <<"req">> => VaryReq },
+        {ok, Key} ?=
+            case maps:find(<<"vary">>, Req) of
+                {ok, KeyToVaryOn} -> KeyToVaryOn;
+                error ->
+                    case maps:find(<<"path">>, Req) of
+                        {ok, <<"vary">>} ->
+                            {error, <<"Cannot vary the `vary` path.">>};
+                        Other -> Other
+                    end
+            end,
+        Ctx1 = #{ <<"base">> => Base, <<"key">> => Key, <<"request">> => Req },
         {ok, Ctx2} ?=
             case hb_private:get(<<"function">>, Req, not_found, Opts) of
                 not_found ->
@@ -707,9 +715,7 @@ vary(Base, Req, Opts) ->
             end,
         hb_types:vary(Ctx2, Opts)
     else
-        error ->
-            ?prim_dbg({vary_error, {base, Base}, {req, Req}}),
-            throw({invalid_vary_call, {base, Base}, {req, Req}})
+        error -> {error, <<"invalid-vary-request">>}
     end.
 
 %% @doc Returns the device schema for a `Base` message.
