@@ -426,9 +426,17 @@ raw_default_message() ->
                         <<"opts">> => ?DEFAULT_HTTP_OPTS
                     }
             },
-            % Wait for 2 node responses when fetching current block information
+            % Wait for 2 node responses when fetching current block or height information
             #{
                 <<"template">> => <<"^/arweave/block/current">>,
+                <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
+                <<"parallel">> => true,
+                <<"responses">> => 2,
+                <<"stop-after">> => true,
+                <<"admissible-status">> => 200
+            },
+            #{
+                <<"template">> => <<"^/arweave/height">>,
                 <<"nodes">> => add_opts(?ARWEAVE_BOOTSTRAP_CHAIN_NODES),
                 <<"parallel">> => true,
                 <<"responses">> => 2,

@@ -923,42 +923,39 @@ response_status(_Response) ->
 %% @doc Parse responses that contains block height to return the one with the
 %% highest value. This helps when one node lags behind.
 current_height_best_response(Responses) ->
-    FilteredResponsesHeight = lists:filtermap(
+    Best = lists:foldl(
         fun
-            ({ok, #{ <<"body">> := Body }} = Response) ->
-                try hb_json:decode(Body) of
-                    #{ <<"height">> := Height } ->
-                        {true, {hb_util:int(Height), Response}};
-                    Height when is_integer(Height) ->
-                        {true, {Height, Response}};
+            ({ok, #{ <<"body">> := Body }} = Response, CurrentBest) ->
+                Height = try hb_json:decode(Body) of
+                    #{ <<"height">> := DecodedHeight } ->
+                        hb_util:int(DecodedHeight);
+                    DecodedHeight when is_integer(DecodedHeight) ->
+                        DecodedHeight;
                     _ ->
-                        false
+                        undefined
                 catch _:_ ->
                     case hb_util:safe_int(Body) of
-                        {ok, Height} -> {true, {Height, Response}};
-                        {error, invalid} -> false
+                        {ok, ParsedHeight} -> ParsedHeight;
+                        {error, invalid} -> undefined
                     end
+                end,
+                case CurrentBest of
+                    undefined when is_integer(Height) -> {Height, Response};
+                    {BestHeight, _}
+                            when is_integer(Height), Height > BestHeight ->
+                        {Height, Response};
+                    _ -> CurrentBest
                 end;
-            (_) ->
-                false
+            (_, CurrentBest) ->
+                CurrentBest
         end,
+        undefined,
         Responses
     ),
-    case FilteredResponsesHeight of
-        [] ->
+    case Best of
+        undefined ->
             {error, no_viable_responses};
-        [{Height, Response} | Rest] ->
-            {_, BestResponse} =
-                lists:foldl(
-                    fun({NextHeight, NextResponse}, {BestHeight, Best}) ->
-                        case NextHeight > BestHeight of
-                            true -> {NextHeight, NextResponse};
-                            false -> {BestHeight, Best}
-                        end
-                    end,
-                    {Height, Response},
-                    Rest
-                ),
+        {_Height, BestResponse} ->
             BestResponse
     end.
 
