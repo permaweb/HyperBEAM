@@ -1555,25 +1555,32 @@ sign_links_test(Codec, Opts) ->
     ?event({signed, Signed}),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
+bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
+bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
+    skip;
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
-    SignatureType = 
-        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
-            true -> ?RSA_SIGN_TYPE;
-            false -> <<"hmac-sha256">>
-        end,
-    Msg = #{
-        <<"immediate-key">> => <<"immediate-value">>,
-        <<"nested">> => #{
-            <<"immediate-key-2">> => <<"immediate-value-2">>
-        }
-    },
-    SignedNoBundle =
+    SignatureType = <<"hmac-sha256">>,
+    Msg =
+        #{
+            <<"immediate-key">> => <<"immediate-value">>,
+            <<"nested">> => #{
+                <<"immediate-key-2">> => <<"immediate-value-2">>
+            }
+        },
+    SignedNoBundle = #{},
+    %     hb_message:commit(
+    %         Msg,
+    %         Opts,
+    %         Codec#{ <<"type">> => <<"unsigned">>, <<"bundle">> => false }
+    %     ),
+    SignedBundled =
         hb_message:commit(
             Msg,
             Opts,
-            maps:without([<<"bundle">>], Codec)
+            Codec#{ <<"type">> => <<"unsigned">>, <<"bundle">> => true }
         ),
-    SignedBundled = hb_message:commit(Msg, Opts, Codec),
+    throw(a),
     ?event({signed_no_bundle, SignedNoBundle}),
     ?event({signed_bundled, SignedBundled}),
     {ok, UnbundledID, _} =

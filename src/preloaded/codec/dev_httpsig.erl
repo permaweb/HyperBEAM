@@ -193,7 +193,8 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
     % Calculate the ID and place the signature into the `commitments' key of the
     % message. After, we call `commit' again to add the hmac to the new
     % message.
-    commit(
+    {
+        ok,
         MsgToSign#{
             <<"commitments">> =>
                 (maps:get(<<"commitments">>, MsgToSign, #{}))#{
@@ -203,10 +204,8 @@ commit(MsgToSign, Req = #{ <<"type">> := <<"rsa-pss-sha512">> }, RawOpts) ->
                             <<"committed">> => ModCommittedKeys
                         }
                 }
-        },
-        Req#{ <<"type">> => <<"hmac-sha256">> },
-        Opts
-    );
+        }
+    };
 commit(BaseMsg, Req = #{ <<"type">> := <<"hmac-sha256">> }, RawOpts) ->
     % Extract the key material from the request.
     Opts = opts(RawOpts),

@@ -85,39 +85,15 @@ read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
 
 %% @doc Remove the transport commitments from the response.
 without_transport_commitment(Msg, Opts) when is_map(Msg) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    % Get the keys of the commitments that are only on the hashpath.
-    TransportCommitments =
-        hb_maps:keys(
-            hb_maps:filter(
-                fun(_ID, Commitment) ->
-                    case maps:get(<<"committed">>, Commitment, not_found) of
-                        not_found -> false;
-                        [<<"hashpath">>] -> true;
-                        Map when is_map(Map) ->
-                            map_size(Map) == 1 andalso
-                            maps:is_key(<<"hashpath">>, Map);
-                        _ -> false
-                    end
-                end,
-                Commitments,
-                Opts
-            ),
+    hb_message:without_unless_signed(
+        [<<"hashpath">>],
+        hb_message:without_commitments(
+            #{ <<"committed">> => [<<"hashpath">>] },
+            Msg,
             Opts
         ),
-    % If necessary, remove the hashpath commitments from the response.
-    case TransportCommitments of
-        [] ->
-            Msg;
-        _ ->
-            maps:without(
-                [<<"hashpath">>],
-                case maps:without(TransportCommitments, Commitments) of
-                    #{} -> maps:without([<<"commitments">>], Msg);
-                    Rest -> Msg#{ <<"commitments">> => Rest }
-                end
-            )
-    end;
+        Opts
+    );
 without_transport_commitment(Res, _Opts) ->
     Res.
 

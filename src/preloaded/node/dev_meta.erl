@@ -149,7 +149,11 @@ info(_, Request, NodeMsg) ->
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
 filter_node_msg(Msg, NodeMsg) when is_map(Msg) ->
-    hb_maps:map(fun(_, Value) -> filter_node_msg(Value, NodeMsg) end, hb_private:reset(Msg), NodeMsg);
+    hb_maps:map(
+        fun(_, Value) -> filter_node_msg(Value, NodeMsg) end,
+        hb_private:reset(Msg),
+        NodeMsg
+    );
 filter_node_msg(Msg, NodeMsg) when is_list(Msg) ->
     lists:map(fun(Item) -> filter_node_msg(Item, NodeMsg) end, Msg);
 filter_node_msg(Tuple, _NodeMsg) when is_tuple(Tuple) ->
@@ -429,7 +433,6 @@ maybe_sign(Res, NodeMsg) ->
                         NodeMsg,
                         #{
                             <<"device">> => <<"httpsig@1.0">>,
-                            <<"keyid">> => <<"constant:http-reply">>,
                             <<"committed">> => [<<"hashpath">>]
                         }
                     )
