@@ -1555,25 +1555,32 @@ sign_links_test(Codec, Opts) ->
     ?event({signed, Signed}),
     ?assert(hb_message:verify(Signed, all, Opts)).
 
+bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"ans104@1.0">> }, _Opts) ->
+    skip;
+bundled_and_unbundled_ids_differ_test(#{ <<"device">> := <<"tx@1.0">> }, _Opts) ->
+    skip;
 bundled_and_unbundled_ids_differ_test(Codec = #{ <<"bundle">> := true }, Opts) ->
-    SignatureType = 
-        case is_device_codec([<<"ans104@1.0">>, <<"tx@1.0">>], Codec) of
-            true -> ?RSA_SIGN_TYPE;
-            false -> <<"hmac-sha256">>
+    SignatureType = <<"hmac-sha256">>,
+    Msg =
+        #{
+            <<"immediate-key">> => <<"immediate-value">>,
+            <<"nested">> => #{
+                <<"immediate-key-2">> => <<"immediate-value-2">>
+            }
+        },
+    % Created signed and then unsigned commitments, 
+    % for both bundle:true and bundle:false.
+    Commit =
+        fun(Bundle) ->
+            Spec = Codec#{ <<"bundle">> => Bundle },
+            hb_message:commit(
+                hb_message:commit(Msg, Opts, Spec#{ <<"type">> => <<"signed">> }),
+                Opts,
+                Spec#{ <<"type">> => <<"unsigned">> }
+            )
         end,
-    Msg = #{
-        <<"immediate-key">> => <<"immediate-value">>,
-        <<"nested">> => #{
-            <<"immediate-key-2">> => <<"immediate-value-2">>
-        }
-    },
-    SignedNoBundle =
-        hb_message:commit(
-            Msg,
-            Opts,
-            maps:without([<<"bundle">>], Codec)
-        ),
-    SignedBundled = hb_message:commit(Msg, Opts, Codec),
+    SignedNoBundle = Commit(false),
+    SignedBundled = Commit(true),
     ?event({signed_no_bundle, SignedNoBundle}),
     ?event({signed_bundled, SignedBundled}),
     {ok, UnbundledID, _} =

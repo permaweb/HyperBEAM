@@ -938,25 +938,6 @@ commitment(ID, #{ <<"commitments">> := Commitments }, Opts)
         not_found,
         Opts
     );
-commitment(#{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
-    Commitments = hb_maps:get(<<"commitments">>, Msg, #{}, Opts),
-    UnsignedCommitments =
-        hb_maps:filter(
-            fun(_, #{ <<"committer">> := _Committer }) -> false;
-                (_, _) -> true
-            end,
-            Commitments,
-            Opts
-        ),
-    if 
-        map_size(UnsignedCommitments) == 0 -> not_found;
-        map_size(UnsignedCommitments) == 1 ->
-            CommID = hd(maps:keys(UnsignedCommitments)),
-            {ok, CommID, hb_util:ok(hb_maps:find(CommID, UnsignedCommitments, Opts))};
-        true ->
-            ?event(commitment, {multiple_matches, {matches, UnsignedCommitments}}),
-            multiple_matches
-    end;
 commitment(Spec, Msg, Opts) ->
     Matches = commitments(Spec, Msg, Opts),
     ?event_debug(debug_commitment, {commitment, {spec, Spec}, {matches, Matches}}),
@@ -975,6 +956,19 @@ commitments(ID, Link, Opts) when ?IS_LINK(Link) ->
     commitments(ID, hb_cache:ensure_loaded(Link, Opts), Opts);
 commitments(CommitterID, Msg, Opts) when is_binary(CommitterID) ->
     commitments(#{ <<"committer">> => CommitterID }, Msg, Opts);
+commitments(Spec = #{ <<"type">> := <<"unsigned">> }, Msg, Opts) ->
+    % Unsigned is a special case: Match all of the commitments with a committer
+    % first, remove them, then call `commitments` again with the remainder of
+    % the spec.
+    commitments(
+        maps:without([<<"type">>], Spec),
+        without_commitments(
+            #{ <<"committer">> => '_' },
+            Msg,
+            Opts
+        ),
+        Opts
+    );
 commitments(Spec, #{ <<"commitments">> := Commitments }, Opts) ->
     hb_maps:filtermap(
         fun(_ID, CommMsg) ->

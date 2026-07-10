@@ -803,9 +803,13 @@ test_wallet_generate_and_verify(GeneratePath, ExpectedName, CommitParams) ->
         ),
     ?event({signing_with_cookie, {test_message, TestMessage}}),
     {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
-    % Should return signed message with correct signer
-    ?assertMatch(#{ <<"body">> := <<"Test message">> }, SignedMessage),
-    ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletAddr]).
+    % HTTP replies should preserve secret-wallet commitments and add hashpath-only
+    % transport commitments.
+    hb_test_utils:assert_hashpath_reply(
+        SignedMessage,
+        WalletAddr,
+        <<"Test message">>
+    ).
 
 client_persist_generate_and_verify_test() ->
     test_wallet_generate_and_verify(
@@ -899,8 +903,13 @@ commit_with_cookie_wallet_test() ->
         <<"priv">> => Priv
     },
     {ok, SignedMessage} = hb_http:post(Node, TestMessage, #{}),
-    % Should return the signed message with signature attached.
-    ?assert(hb_message:signers(SignedMessage, #{}) =:= [WalletName]).
+    % HTTP replies should preserve secret-wallet commitments and add hashpath-only
+    % transport commitments.
+    hb_test_utils:assert_hashpath_reply(
+        SignedMessage,
+        WalletName,
+        <<"Test data">>
+    ).
 
 export_wallet_test() ->
     Node = hb_http_server:start_node(#{}),

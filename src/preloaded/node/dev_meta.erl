@@ -149,7 +149,11 @@ info(_, Request, NodeMsg) ->
 %% @doc Remove items from the node message that are not encodable into a
 %% message.
 filter_node_msg(Msg, NodeMsg) when is_map(Msg) ->
-    hb_maps:map(fun(_, Value) -> filter_node_msg(Value, NodeMsg) end, hb_private:reset(Msg), NodeMsg);
+    hb_maps:map(
+        fun(_, Value) -> filter_node_msg(Value, NodeMsg) end,
+        hb_private:reset(Msg),
+        NodeMsg
+    );
 filter_node_msg(Msg, NodeMsg) when is_list(Msg) ->
     lists:map(fun(Item) -> filter_node_msg(Item, NodeMsg) end, Msg);
 filter_node_msg(Tuple, _NodeMsg) when is_tuple(Tuple) ->
@@ -411,9 +415,27 @@ maybe_sign(Res, NodeMsg) ->
     ?event({maybe_sign, Res}),
     case hb_opts:get(force_signed, false, NodeMsg) of
         true ->
-            case hb_message:signers(Res, NodeMsg) of
-                [] -> hb_message:commit(Res, NodeMsg);
-                _ -> Res
+            case hb_private:get(<<"hashpath">>, Res, not_found, NodeMsg) of
+                not_found ->
+                    Res;
+                Hashpath ->
+                    WithUnsigned =
+                        hb_message:commit(
+                            Res,
+                            NodeMsg,
+                            #{
+                                <<"device">> => <<"httpsig@1.0">>,
+                                <<"type">> => <<"unsigned">>
+                            }
+                        ),
+                    hb_message:commit(
+                        WithUnsigned#{ <<"hashpath">> => Hashpath },
+                        NodeMsg,
+                        #{
+                            <<"device">> => <<"httpsig@1.0">>,
+                            <<"committed">> => [<<"hashpath">>]
+                        }
+                    )
             end;
         false -> Res
     end.
@@ -762,6 +784,70 @@ modify_request_test() ->
         }),
     {ok, Res} = hb_http:get(Node, <<"/added">>, #{}),
     ?assertEqual(<<"value">>, Res).
+
+%% @doc Test that forced response signing preserves signers and commits hashpath.
+maybe_sign_hashpath_only_test() ->
+    OldWallet = ar_wallet:new(),
+    NewWallet = ar_wallet:new(),
+    Hashpath = hb_path:hashpath(<<"test-hashpath">>, #{}),
+    OldOpts =
+        #{
+            <<"commitment-device">> => <<"httpsig@1.0">>,
+            <<"priv-wallet">> => OldWallet
+        },
+    Opts =
+        #{
+            <<"force-signed">> => true,
+            <<"priv-wallet">> => NewWallet
+        },
+    OldSigner = hb_util:human_id(ar_wallet:to_address(OldWallet)),
+    NewSigner = hb_util:human_id(ar_wallet:to_address(NewWallet)),
+    AlreadySigned =
+        (hb_message:commit(
+            #{ <<"body">> => <<"test">> },
+            OldOpts,
+            #{ <<"committed">> => [<<"body">>] }
+        ))#{
+            <<"priv">> => #{ <<"hashpath">> => Hashpath }
+        },
+    Signed = maybe_sign(AlreadySigned, Opts),
+    ?assertEqual(Hashpath, maps:get(<<"hashpath">>, Signed)),
+    ?assertEqual(
+        lists:sort([OldSigner, NewSigner]),
+        lists:sort(hb_message:signers(Signed, Opts))
+    ),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"body">>])),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"hashpath">>])),
+    ?assert(hb_message:verify(Signed, all, Opts)).
+
+%% @doc Test that forced response signing leaves replies without hashpaths alone.
+maybe_sign_without_hashpath_test() ->
+    Res = #{ <<"body">> => <<"test">> },
+    Opts = #{ <<"force-signed">> => true, <<"priv-wallet">> => ar_wallet:new() },
+    ?assertEqual(Res, maybe_sign(Res, Opts)),
+    Signed = hb_message:commit(Res, Opts),
+    ?assertNotEqual([], hb_message:signers(Signed, Opts)),
+    ?assertEqual(Signed, maybe_sign(Signed, Opts)).
+
+%% @doc Test that unsigned responses get hashpath transport commitments.
+maybe_sign_unsigned_hashpath_test() ->
+    Wallet = ar_wallet:new(),
+    Hashpath = hb_path:hashpath(<<"test-hashpath">>, #{}),
+    Opts = #{ <<"force-signed">> => true, <<"priv-wallet">> => Wallet },
+    Signer = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Signed =
+        maybe_sign(
+            #{
+                <<"body">> => <<"test">>,
+                <<"status">> => 200,
+                <<"priv">> => #{ <<"hashpath">> => Hashpath }
+            },
+            Opts
+        ),
+    ?assertEqual(Hashpath, maps:get(<<"hashpath">>, Signed)),
+    ?assertEqual([Signer], hb_message:signers(Signed, Opts)),
+    ?assert(hb_test_utils:has_committed_keys(Signed, [<<"hashpath">>])),
+    ?assert(hb_message:verify(Signed, all, Opts)).
 
 %% @doc Test that version information is available and returned correctly.
 buildinfo_test() ->

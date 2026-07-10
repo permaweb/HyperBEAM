@@ -67,7 +67,11 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
-            {ok, Msg} = hb_message:with_only_committed(Res, Opts),
+            {ok, Msg} =
+                hb_message:with_only_committed(
+                    without_transport_commitment(Res, Opts),
+                    Opts
+                ),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
             maybe_cache(Opts, Msg, [Key]),
             {ok, Msg};
@@ -78,6 +82,18 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
 read_request(_, _) -> {error, not_found}.
 read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
     read_request(Opts, Key).
+
+%% @doc Remove the transport commitments from the response.
+without_transport_commitment(Msg, Opts) when is_map(Msg) ->
+    WithoutCommitment =
+        hb_message:without_commitments(
+            #{ <<"committed">> => [<<"hashpath">>] },
+            Msg,
+            Opts
+        ),
+    hb_message:without_unless_signed([<<"hashpath">>], WithoutCommitment, Opts);
+without_transport_commitment(Res, _Opts) ->
+    Res.
 
 %% @doc Cache the data if the cache is enabled. The `local-store' option may
 %% either be `false' or a store definition to use as the local cache. Additional

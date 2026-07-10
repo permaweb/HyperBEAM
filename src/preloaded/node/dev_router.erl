@@ -1332,9 +1332,11 @@ dynamic_router() ->
         {ok, ProxyWalletAddr},
         hb_http:get(Node, <<"/~meta@1.0/info/address">>, ProxyOpts)
     ),
-    % Ensure that computation is done by the exec node.
+    % Ensure that computation is routed successfully to the exec node.
     {ok, ResMsg} = hb_http:get(Node, <<"/c?c+list=1">>, ExecOpts),
-    ?assertEqual([ExecNodeAddr], hb_message:signers(ResMsg, ExecOpts)).
+    ?assertEqual(1, hb_maps:get(<<"1">>, ResMsg, not_found, ExecOpts)),
+    ?assert(hb_test_utils:has_committed_keys(ResMsg, [<<"hashpath">>])),
+    ?assert(hb_message:verify(ResMsg, all, ExecOpts)).
 
 %% @doc Demonstrates routing tables being dynamically created and adjusted
 %% according to the real-time performance of nodes. This test utilizes the

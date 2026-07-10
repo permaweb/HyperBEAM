@@ -3,6 +3,8 @@
 %%% differing options, as well as executing and reporting benchmarks.
 -module(hb_test_utils).
 -export([suite_with_opts/2, run/4, assert_throws/4]).
+-export([assert_hashpath_reply/3]).
+-export([assert_manifest_response/4, assert_manifest_response/5, has_committed_keys/2]).
 -export([test_store/0, test_store/1, test_store/2]).
 -export([benchmark/1, benchmark/2, benchmark/3, benchmark_iterations/2]).
 -export([benchmark_print/2, benchmark_print/3, benchmark_print/4]).
@@ -217,6 +219,56 @@ assert_throws(Fun, Args, ExpectedException, Label) ->
         Other -> {wrong_exception, Other}
     end,
     ?assertEqual(expected_exception, Error, Label).
+
+%% @doc Assert that an HTTP reply preserved its payload commitment signer and
+%% added hashpath-only transport commitments.
+assert_hashpath_reply(SignedMessage, PreservedSigner, ExpectedBody) ->
+    ?assertEqual(ExpectedBody, maps:get(<<"body">>, SignedMessage)),
+    ?assert(lists:member(PreservedSigner, hb_message:signers(SignedMessage, #{}))),
+    ?assert(has_committed_keys(SignedMessage, [<<"hashpath">>])).
+
+%% @doc Assert that a manifest-style HTTP response returned the expected item
+%% and, when present, only exposes hashpath transport commitments.
+assert_manifest_response(Node, Req, ExpectedContentType, BodyNeedle, Opts) ->
+    Res = hb_http:get(Node, Req, Opts),
+    assert_manifest_response(Res, ExpectedContentType, BodyNeedle, Opts).
+assert_manifest_response(
+    {ok, Res = #{ <<"status">> := 200 }},
+    ExpectedContentType,
+    BodyNeedle,
+    Opts
+) ->
+    Payload = maps:get(<<"body">>, Res, maps:get(<<"data">>, Res, <<>>)),
+    ?assertEqual(ExpectedContentType, maps:get(<<"content-type">>, Res)),
+    ?assertNotEqual(nomatch, binary:match(Payload, BodyNeedle)),
+    case maps:is_key(<<"hashpath">>, Res) of
+        true -> ?assert(has_committed_keys(Res, [<<"hashpath">>]));
+        false -> ok
+    end,
+    case maps:get(<<"commitments">>, Res, #{}) of
+        Commitments when map_size(Commitments) == 0 ->
+            ?assertEqual([], hb_message:signers(Res, Opts));
+        _ ->
+            ok
+    end,
+    Res;
+assert_manifest_response(Other, _ExpectedContentType, _BodyNeedle, _Opts) ->
+    ?assertMatch({ok, #{ <<"status">> := 200 }}, Other).
+
+has_committed_keys(#{ <<"commitments">> := Commitments }, Keys) ->
+    lists:any(
+        fun(Commitment) -> commitment_keys(Commitment) == Keys end,
+        maps:values(Commitments)
+    );
+has_committed_keys(_Msg, _Keys) ->
+    false.
+
+commitment_keys(#{ <<"committed">> := Committed }) when is_map(Committed) ->
+    hb_util:message_to_ordered_list(Committed, #{});
+commitment_keys(#{ <<"committed">> := Committed }) ->
+    Committed;
+commitment_keys(_Commitment) ->
+    [].
 
 %% @doc Run a function as many times as possible in a given amount of time.
 benchmark(Fun) ->

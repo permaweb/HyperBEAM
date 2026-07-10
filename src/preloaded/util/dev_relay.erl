@@ -357,14 +357,7 @@ relay_nearest_test() ->
             {peers, Peers}
         }
     ),
-    HasValidSigner =
-        lists:any(
-            fun(Peer) ->
-                lists:member(Peer, hb_message:signers(RelayRes, Opts))
-            end,
-            Peers
-        ),
-    ?assert(HasValidSigner).
+    ?assert(lists:member(hb_ao:get(<<"body">>, RelayRes, Opts), Peers)).
 
 %% @doc Test that a `relay@1.0/call' correctly commits requests as specified.
 %% We validate this by configuring two nodes: One that will execute a given
