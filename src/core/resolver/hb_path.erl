@@ -37,7 +37,7 @@
 -export([priv_remaining/2, priv_store_remaining/2, priv_store_remaining/3]).
 -export([verify_hashpath/2]).
 -export([term_to_path_parts/1, term_to_path_parts/2, from_message/3]).
--export([matches/2, to_binary/1, do_to_binary/1, regex_matches/2, normalize/1]).
+-export([matches/2, to_binary/1, concatenate_parts/1, regex_matches/2, normalize/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -265,12 +265,12 @@ term_to_path_parts({as, DevName, Msgs}, _Opts) ->
 %% is the `hb_util_string:normalize_path' NIF, which returns an already-clean
 %% path verbatim (the common case) instead of splitting and rejoining it.
 to_binary(Path) ->
-    hb_util_string:normalize_path(do_to_binary(Path)).
+    hb_util_string:normalize_path(concatenate_parts(Path)).
 
 %% @doc Convert a path of any form to a binary without the `/'-splitting
 %% normalization of `to_binary/1'. Binaries are returned verbatim, so opaque
 %% keys (e.g. raw Arweave IDs containing `/' bytes) survive intact.
-do_to_binary(Path) when is_list(Path) ->
+concatenate_parts(Path) when is_list(Path) ->
     case hb_util:is_string_list(Path) of
         false ->
             iolist_to_binary(
@@ -278,7 +278,7 @@ do_to_binary(Path) when is_list(Path) ->
                     "/",
                     lists:filtermap(
                         fun(Part) ->
-                            case do_to_binary(Part) of
+                            case concatenate_parts(Part) of
                                 <<>> -> false;
                                 BinPart -> {true, BinPart}
                             end
@@ -290,9 +290,9 @@ do_to_binary(Path) when is_list(Path) ->
         true ->
             to_binary(list_to_binary(Path))
     end;
-do_to_binary(Path) when is_binary(Path) ->
+concatenate_parts(Path) when is_binary(Path) ->
     Path;
-do_to_binary(Other) ->
+concatenate_parts(Other) ->
     hb_ao:normalize_key(Other).
 
 %% @doc Check if two keys match.
