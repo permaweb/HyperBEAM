@@ -892,9 +892,9 @@ request(Method, Path, Extra, LogExtra, Opts) ->
 best_response(Path, {error, {no_viable_responses, Responses}}) ->
     best_response(Path, Responses);
 best_response(<<"/height">>, Responses) when is_list(Responses) ->
-    current_height_best_response(Responses);
+    current_height_best_response(current_height_responses(Responses));
 best_response(<<"/block/current">>, Responses) when is_list(Responses) ->
-    current_height_best_response(Responses);
+    current_height_best_response(current_height_responses(Responses));
 best_response(_Path, Response) ->
     best_response(Response).
 
@@ -922,42 +922,44 @@ response_status(_Response) ->
 
 %% @doc Parse responses that contains block height to return the one with the
 %% highest value. This helps when one node lags behind.
-current_height_best_response(Responses) ->
-    Best = lists:foldl(
+current_height_responses(Responses) ->
+    lists:filtermap(
         fun
-            ({ok, #{ <<"body">> := Body }} = Response, CurrentBest) ->
-                Height = try hb_json:decode(Body) of
-                    #{ <<"height">> := DecodedHeight } ->
-                        hb_util:int(DecodedHeight);
-                    DecodedHeight when is_integer(DecodedHeight) ->
-                        DecodedHeight;
+            ({ok, #{ <<"body">> := Body }} = Response) ->
+                try hb_json:decode(Body) of
+                    #{ <<"height">> := Height } ->
+                        {true, {hb_util:int(Height), Response}};
+                    Height when is_integer(Height) ->
+                        {true, {Height, Response}};
                     _ ->
-                        undefined
+                        false
                 catch _:_ ->
                     case hb_util:safe_int(Body) of
-                        {ok, ParsedHeight} -> ParsedHeight;
-                        {error, invalid} -> undefined
+                        {ok, Height} -> {true, {Height, Response}};
+                        {error, invalid} -> false
                     end
-                end,
-                case CurrentBest of
-                    undefined when is_integer(Height) -> {Height, Response};
-                    {BestHeight, _}
-                            when is_integer(Height), Height > BestHeight ->
-                        {Height, Response};
-                    _ -> CurrentBest
                 end;
-            (_, CurrentBest) ->
-                CurrentBest
+            (_) ->
+                false
         end,
-        undefined,
         Responses
-    ),
-    case Best of
-        undefined ->
-            {error, no_viable_responses};
-        {_Height, BestResponse} ->
-            BestResponse
-    end.
+    ).
+
+current_height_best_response([]) ->
+    {error, no_viable_responses};
+current_height_best_response([{Height, Response} | Rest]) ->
+    {_, BestResponse} =
+        lists:foldl(
+            fun({NextHeight, NextResponse}, {BestHeight, Best}) ->
+                case NextHeight > BestHeight of
+                    true -> {NextHeight, NextResponse};
+                    false -> {BestHeight, Best}
+                end
+            end,
+            {Height, Response},
+            Rest
+        ),
+    BestResponse.
 
 %% @doc Transform a response from the Arweave node into an AO-Core message.
 to_message(Path, Method, {error, #{ <<"status">> := 404 }}, LogExtra, _Opts) ->
