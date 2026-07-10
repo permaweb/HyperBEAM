@@ -1,7 +1,7 @@
 %%% @doc A device that inserts new messages into the schedule to allow processes
 %%% to passively 'call' themselves without user interaction.
 -module(dev_cron).
--export([once/3, every/3, stop/3, info/1, info/3]).
+-export([once/3, every/3, stop/3, report/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -17,6 +17,7 @@ info(_Base, _Req, _Opts) ->
 			<<"info">> => <<"Get device info">>,
 			<<"once">> => <<"Schedule a one-time message">>,
 			<<"every">> => <<"Schedule a recurring message">>,
+			<<"report">> => <<"Get scheduled task status {task}">>,
 			<<"stop">> => <<"Stop a scheduled task {task}">>
 		}
 	},
@@ -137,7 +138,7 @@ every(_Base, Req, Opts) ->
 
 %% @doc Exported function for stopping a scheduled task.
 stop(_Base, Req, Opts) ->
-	case hb_ao:get(<<"task">>, Req, Opts) of
+	case hb_maps:get(<<"stop">>, Req, not_found, Opts) of
 		not_found ->
 			{error, <<"No task ID found in message.">>};
 		TaskID ->
@@ -161,6 +162,25 @@ stop(_Base, Req, Opts) ->
                             <<"details">> => Error
                     }}
 			end
+	end.
+
+%% @doc Exported function for getting a scheduled task status report.
+report(_Base, Req, Opts) ->
+	case hb_maps:get(<<"task">>, Req, not_found, Opts) of
+		not_found ->
+			{error, <<"No task ID found in message.">>};
+		TaskID ->
+			Name = {<<"cron@1.0">>, TaskID},
+			Active =
+				case hb_name:lookup(Name) of
+					Pid when is_pid(Pid) -> erlang:is_process_alive(Pid);
+					undefined -> false
+				end,
+			{ok, #{
+				<<"status">> => 200,
+				<<"task-id">> => TaskID,
+				<<"active">> => Active
+			}}
 	end.
 
 every_worker_loop(CronPath, Req, Opts, IntervalMillis) ->
@@ -230,7 +250,7 @@ stop_once_test() ->
 	?assert(is_pid(OncePid), "Lookup did not return a PID"),
 	?assert(erlang:is_process_alive(OncePid), "OnceWorker process died prematurely"),
 	% Call stop on the once task while it's sleeping
-	OnceStopPath = <<"/~cron@1.0/stop?task=", OnceTaskID/binary>>,
+	OnceStopPath = <<"/~cron@1.0/stop=", OnceTaskID/binary>>,
 	{ok, OnceStopResult} = hb_http:get(Node, OnceStopPath, #{}),
 	?event({cron_stop_once_test_stopped, OnceStopResult}),
 	% Verify success response from stop
@@ -267,7 +287,7 @@ stop_every_test() ->
 	% Wait a bit to ensure the cron worker has run a few times
 		timer:sleep(400),
 	% Call stop on the cron task using its ID
-	EveryStopPath = <<"/~cron@1.0/stop?task=", CronTaskID/binary>>,
+	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
 	{ok, EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
 	?event({cron_stop_every_test_stopped, EveryStopResult}),
 	% Verify success response
@@ -289,6 +309,27 @@ stop_every_test() ->
 	end,
 	% Call stop again using the same CronTaskID to verify the error
 	{error, <<"Task not found.">>} = hb_http:get(Node, EveryStopPath, #{}).
+
+report_every_test() ->
+	Node = hb_http_server:start_node(),
+	TestWorkerPid = spawn(fun test_worker/0),
+	TestWorkerNameId = hb_util:human_id(crypto:strong_rand_bytes(32)),
+	hb_name:register({<<"test">>, TestWorkerNameId}, TestWorkerPid),
+	EveryUrlPath = <<"/~cron@1.0/every?test-id=", TestWorkerNameId/binary, 
+					   "&interval=200-milliseconds",
+				   "&cron-path=/~test-device@1.0/increment_counter">>,
+	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
+	ReportPath = <<"/~cron@1.0/report?task=", CronTaskID/binary>>,
+	?assertMatch(
+		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := true}},
+		hb_http:get(Node, ReportPath, #{})
+	),
+	EveryStopPath = <<"/~cron@1.0/stop=", CronTaskID/binary>>,
+	{ok, _EveryStopResult} = hb_http:get(Node, EveryStopPath, #{}),
+	?assertMatch(
+		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := false}},
+		hb_http:get(Node, ReportPath, #{})
+	).
 
 
 %% @doc This test verifies that a one-time task can be scheduled and executed.
