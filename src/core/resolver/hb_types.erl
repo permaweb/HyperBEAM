@@ -14,7 +14,7 @@ add_schema(
             <<"resolver-device">> := Device,
             <<"priv">> :=
                 #{
-                    <<"resolver">> := Func,
+                    <<"function">> := Func,
                     <<"add-key">> := AddKey
                 }
         },
@@ -28,7 +28,7 @@ add_schema(
                     {key, Key}
                 }
             ),
-            {ok, Ctx#{ <<"schema">> => undefined } };
+            {ok, Ctx};
         Schema ->
             ?prim_dbg(
                 {schema_found,
@@ -42,25 +42,25 @@ add_schema(
     end.
 
 %% @doc Apply the resolved function's base/request schemas to one execution.
-vary(Ctx = #{ <<"base">> := Base, <<"req">> := Req }, _Opts)
+vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts)
         when not is_map_key(<<"schema">>, Ctx) ->
     {ok,
         Ctx#{
             <<"varied-base">> => Base,
-            <<"varied-req">> => Req,
-            <<"return-extends">> => none
+            <<"varied-request">> => Req,
+            <<"normalizer">> => none
         }
     };
 vary(Ctx = #{
     <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
     <<"base">> := Base,
-    <<"req">> := Req
+    <<"request">> := Req
 }, Opts) ->
     {ok,
         Ctx#{
             <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
-            <<"varied-req">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
-            <<"return-extends">> => overlay(ReturnSchema)
+            <<"varied-request">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
+            <<"normalizer">> => overlay(ReturnSchema)
         }
     }.
 
@@ -628,10 +628,10 @@ boolean_type() ->
 
 empty_projection_test() ->
     ?assertEqual(
-        #{ <<"device">> => <<"test@1.0">> },
+        #{ <<"device">> => <<"test-device@1.0">> },
         apply_schema(
             implicit_base(empty_type()),
-            #{ <<"device">> => <<"test@1.0">>, <<"extra">> => <<"drop">> },
+            #{ <<"device">> => <<"test-device@1.0">>, <<"extra">> => <<"drop">> },
             #{}
         )
     ).
@@ -682,8 +682,8 @@ default_handler_uses_resolved_function_schema_test() ->
             Func,
             <<"requested-key">>,
             #{
-                {<<"default-schema-fun">>, 4} => default_schema,
-                {<<"requested-key">>, 3} => requested_key_schema
+                <<"default-schema-fun">> => default_schema,
+                <<"requested-key">> => requested_key_schema
             }
         )
     ),
@@ -692,7 +692,7 @@ default_handler_uses_resolved_function_schema_test() ->
         select_schema(
             Func,
             <<"requested-key">>,
-            #{{<<"requested-key">>, 3} => requested_key_schema}
+            #{ <<"other-key">> => other_schema }
         )
     ).
 

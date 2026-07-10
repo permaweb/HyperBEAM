@@ -202,7 +202,7 @@ apply_bundle_hint(Msg, Req, Opts) ->
     case hb_maps:get(<<"hint-device">>, Req, undefined, Opts) of
         undefined -> Req;
         DeviceBin ->
-            case hb_ao:primitive(DeviceBin, <<"to-hint">>, Msg, Req, Opts) of
+            case hb_ao:raw(DeviceBin, <<"to-hint">>, Msg, Req, Opts) of
                 {ok, HintedReq} ->
                     % May add a `bundle` key to the request
                     HintedReq;

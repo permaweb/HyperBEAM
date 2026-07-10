@@ -1026,13 +1026,17 @@ structured_decode_types(Types, Opts) ->
 %% message and return it if it exists.
 %% 3. If the message has an explicit device, we attempt to read the hashpath to
 %% see if it has already been computed.
-read_resolved(BaseID, ReqID, Opts) ->
+read_resolved(BaseID, ReqID, Opts) when is_binary(BaseID), is_binary(ReqID) ->
     ExpectedPath = <<BaseID/binary, "/", ReqID/binary>>,
     ?prim_dbg({read_resolved, ExpectedPath}),
     case read(ExpectedPath, Opts) of
         {error, not_found} -> miss;
         Other -> {hit, Other}
-    end.
+    end;
+read_resolved(_Base, _Req, _Opts) ->
+    % The varied pair's IDs have not been generated, so there is no address to
+    % consult.
+    miss.
 
 %% @doc Return a key from an in-memory message, returning the same form as
 %% a store read (`{Status, Value}').

@@ -3,7 +3,7 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/6, maybe_lookup/3]).
+-export([maybe_store/4, maybe_lookup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
