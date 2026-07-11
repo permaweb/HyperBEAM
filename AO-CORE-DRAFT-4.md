@@ -1,4 +1,4 @@
-# AO-Core 1.0 Draft 3
+# AO-Core 1.0 Draft 4
 
 AO-Core is a protocol for attestable computation over protocol-addressed
 messages. It is not itself a virtual machine. It is a neutral meta-VM: a common
@@ -53,12 +53,12 @@ outermost layer inward.
 
 At each layer:
 
-1. Look locally for `device`.
-2. If `device = Dev` is found, execute `Dev` against the original outermost
+1. Look locally for `K`.
+2. If `K = Value` is found, return `Value`.
+3. If `K = unset` is found, return `not_found`.
+4. Otherwise, look locally for `device`.
+5. If `device = Dev` is found, execute `Dev` against the original outermost
    `Base` and the original `Request`.
-3. Otherwise, look locally for `K`.
-4. If `K = Value` is found, return `Value`.
-5. If `K = unset` is found, return `not_found`.
 6. Otherwise, look locally for `...`.
 7. If `... = Ancestor` is found, continue at `Ancestor`.
 8. Otherwise, return `not_found`.
@@ -69,14 +69,14 @@ Pseudocode:
 resolve(Outer, Layer, Request):
   K = key(Request)
 
-  case local(Layer, "device") of
-    Dev -> return execute(Dev, Outer, Request)
-    not_found -> continue
-  end
-
   case local(Layer, K) of
     Value -> return Value
     unset -> return not_found
+    not_found -> continue
+  end
+
+  case local(Layer, "device") of
+    Dev -> return execute(Dev, Outer, Request)
     not_found -> continue
   end
 
@@ -98,6 +98,10 @@ If a device is inherited from an ancestor, it executes over the outermost state:
 
 selects `dev1` from the ancestor, but `dev1` sees `x = 5`.
 
+Layer order determines which value answers a key; it does not restrict what a
+device sees. A local key answers before its layer's device, but a device that
+answers always executes over the complete outermost state.
+
 ## Devices
 
 A device defines how requests are computed for a state.
@@ -108,6 +112,19 @@ AO-Core does not privilege one compute model over another. It standardizes how
 their transitions are named, witnessed, attested, transported, and traced.
 
 If no device is found, the default device is `message@1.0`.
+
+A device is itself a value, and may be named by link. When the device value is
+a message, execution is itself resolution: the request is resolved against the
+device message extended over the outermost state:
+
+```text
+execute(Dev, Outer, Request) = resolve(set(Outer, Dev), Request)
+```
+
+The device message's own keys answer first, its own `device` computes the
+remainder, and the outermost state remains visible as ancestry. The recursion
+terminates at a device the host implements directly; which devices those are is
+an implementation fact.
 
 Device loading, Erlang modules, function pointers, local caches, and runtime
 workers are implementation facts. The protocol fact is the device value that
