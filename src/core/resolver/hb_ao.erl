@@ -293,7 +293,13 @@ do(Ctx0) ->
             % A stage may choose to return early. If it does, return it in
             % `ok`-form. We assume that the stage in question will have 
             % appropriately cleaned up.
-            {ok, Ctx}
+            {ok, Ctx};
+        {error, Ctx} ->
+            % The stage returned an error. Return to the caller early after
+            % unregistering as the active worker, if appropriate. We can call
+            % this twice, even if we erred after stage 8, as it is idempotent.
+            stage_8(Ctx),
+            {error, Ctx}
     end.
 
 %% @doc Normalize the context of an execution request. Ensures that a device and
@@ -301,9 +307,11 @@ do(Ctx0) ->
 %% request without one.
 stage_1(Ctx = #{ <<"device">> := _, <<"path">> := _ }) -> {ok, Ctx};
 stage_1(Ctx = #{ <<"base">> := Base, <<"path">> := Path, <<"opts">> := Opts }) ->
-    case hb_device:message_device_id(Base, Path, Opts) of
+    case hb_device:id_or_direct_key(Base, Path, Opts) of
         {hit, Res} -> {hit, Ctx#{ <<"status">> => ok, <<"result">> => Res }};
-        {ok, Device} -> stage_1(Ctx#{ <<"device">> => Device })
+        {ok, Device} -> stage_1(Ctx#{ <<"device">> => Device });
+        {error, Reason} ->
+            {error, Ctx#{ <<"status">> => error, <<"reason">> => Reason }}
     end;
 stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) ->
     stage_1(Ctx#{ <<"path">> => hb_path:hd(Req, Opts) }).
@@ -447,6 +455,13 @@ stage_5(Ctx = #{
     <<"opts">> := Opts
 }) ->
     case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {continue, NewBase, NewReq} ->
+            {ok,
+                #{
+                    <<"varied-base">> => NewBase,
+                    <<"varied-request">> => NewReq
+                }
+            };
         {error, not_found} -> {ok, Ctx};
         {Status, Result} ->
             {
@@ -555,7 +570,8 @@ stage_9(
                     Fun when is_function(Fun) -> Fun(Base, Result, Opts)
                 end
         }
-    }.
+    };
+stage_9(Ctx) -> {ok, Ctx}.
 
 %% @doc If a hook has been specified for the `step` action, we call it with our
 %% context including the result.
