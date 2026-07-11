@@ -697,7 +697,7 @@ vary(Base, Req, Opts) ->
     maybe
         {ok, Key} ?=
             case maps:find(<<"vary">>, Req) of
-                {ok, KeyToVaryOn} -> KeyToVaryOn;
+                {ok, KeyToVaryOn} -> {ok, KeyToVaryOn};
                 error ->
                     case maps:find(<<"path">>, Req) of
                         {ok, <<"vary">>} ->
