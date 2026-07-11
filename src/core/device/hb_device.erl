@@ -3,7 +3,7 @@
 %%% functions from a device.
 -module(hb_device).
 -export([truncate_args/2, add_resolver/2, message_to_fun/3, message_to_fun/4, module/2]).
--export([message_device_id/3]).
+-export([id_or_direct_key/3]).
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
@@ -49,7 +49,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
     DevRes =
         case maps:find(<<"forced-device">>, Context) of
             {ok, ForcedBaseDevice} -> {ok, ForcedBaseDevice};
-            error -> message_device_id(Base, Key, Opts)
+            error -> id_or_direct_key(Base, Key, Opts)
         end,
     OldPriv = maps:get(<<"priv">>, Context, #{}),
     case DevRes of
@@ -101,7 +101,7 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
 %% Returns {ok | add_key, Fun} where Fun is the function to call, and add_key
 %% indicates that the key should be added to the start of the call's arguments.
 message_to_fun(Msg, Key, Opts) ->
-    DeviceID = message_device_id(Msg, Key, Opts),
+    DeviceID = id_or_direct_key(Msg, Key, Opts),
     message_to_fun(DeviceID, Msg, Key, Opts).
 message_to_fun(DevID, Msg, Key, Opts) ->
     message_to_fun(DevID, module(DevID, Opts), Msg, Key, Opts).
@@ -193,18 +193,23 @@ module(DevID, Opts) ->
 
 %% @doc Return the device ID from a message, resolving through any ancestors
 %% as necessary.
-message_device_id(List, _, _) when is_list(List) ->
+id_or_direct_key(_, <<"priv", _/binary>>, _) ->
+    {error, <<"`priv*` keys not resolvable.">>};
+id_or_direct_key(Msg, Key, Opts) ->
+    do_id_or_direct_key(Msg, Key, Opts).
+do_id_or_direct_key(List, _, _) when is_list(List) ->
     {ok, <<"message@1.0">>};
-message_device_id(Msg, Key, Opts) ->
+do_id_or_direct_key(Msg, Key, Opts) ->
     ?event({finding_device_id, Msg}),
-    case hb_maps:find(<<"device">>, Msg, Opts) of
-        {ok, Device} -> {ok, Device};
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, <<"unset">>} -> {error, not_found};
+        {ok, Value} -> {hit, Value};
         error ->
-            case hb_maps:find(Key, Msg, Opts) of
-                {ok, Value} -> {hit, Value};
+            case hb_maps:find(<<"device">>, Msg, Opts) of
+                {ok, Device} -> {ok, Device};
                 error ->
                     case hb_maps:find(<<"...">>, Msg, Opts) of
-                        {ok, Ancestor} -> message_device_id(Ancestor, Key, Opts);
+                        {ok, Ancestor} -> do_id_or_direct_key(Ancestor, Key, Opts);
                         error -> {ok, ?DEFAULT_DEVICE}
                     end
             end
