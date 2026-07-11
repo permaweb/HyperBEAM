@@ -29,37 +29,9 @@
 -export([all_atoms/0, binary_is_atom/1]).
 -export([lower_case_keys/2]).
 -export([base58_encode/1, atom_to_dashed_binary/1]).
--export([
-    validate_address/2,
-    validate_address/3,
-    account_key/1
-]).
 -include("include/hb.hrl").
 
 -include_lib("eunit/include/eunit.hrl").
-
-%% @doc `validate_address/2` built-in reserved keys list
--define(AO_RESERVED_ADDRESS_KEYS,
-    [
-        <<"path">>,
-        <<"get">>,
-        <<"set">>,
-        <<"remove">>,
-        <<"verify">>,
-        <<"keys">>,
-        <<"id">>,
-        <<"commit">>,
-        <<"committed">>,
-        <<"committers">>,
-        <<"index">>,
-        <<"info">>,
-        <<"set_path">>,
-        <<"reserved_keys">>,
-        <<"is_reserved_key">>,
-        <<"dedup">>,
-        <<"dedup-subject">>
-    ]
-).
 
 %%% Simple type coercion functions, useful for quickly turning inputs from the
 %%% HTTP API into the correct types for the HyperBEAM runtime, if they are not
@@ -1003,57 +975,6 @@ base58_encode_int(N) ->
 %% @doc Convert an atom with underscope to dashed binary form.
 atom_to_dashed_binary(Key) when is_atom(Key) ->
     hb_util_string:dash_chars(atom_to_binary(Key)).
-
-%%% token helper functions.
-
-%% @doc Validate address format for security. the validation
-%% allows binary addresses up to 128 bytes and prevent invalid
-%% addresses such as trie reserved keys.
-validate_address(Address, CustomList) ->
-    validate_address(Address, CustomList, #{}).
-validate_address(Address, CustomList, Opts) when is_binary(Address), is_list(CustomList) ->
-    ReservedKeys = ?AO_RESERVED_ADDRESS_KEYS ++ CustomList,
-    AccountKey = account_key(Address),
-    CanonicalReservedKeys = [account_key(Key) || Key <- ReservedKeys, is_binary(Key)],
-    case byte_size(Address) of
-        0 -> {error, <<"Address cannot be empty.">>};
-        N when N > 128 -> {error, <<"Address is too long.">>};
-        _ ->
-            TrieReservedKeys = trie_reserved_keys(Opts),
-            maybe
-                true ?= (not is_reserved_trie_key(Address, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_trie_key(AccountKey, TrieReservedKeys))
-                    orelse {error, <<"Address uses a reserved trie internal key.">>},
-                true ?= (not is_reserved_custom_key(Address, ReservedKeys))
-                    orelse {error, <<"Address is a reserved ao/custom key">>},
-                true ?= (not is_reserved_custom_key(AccountKey, CanonicalReservedKeys))
-                    orelse {error, <<"Address is a reserved ao/custom key">>},
-                % Check for path separators (security: prevent path traversal) and whitespaces.
-                case binary:match(Address, [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]) of
-                    nomatch -> true;
-                    _ -> {error, <<"Address cannot contain path separators or whitespaces">>}
-                end
-            end
-    end;
-validate_address(_, _, _) ->
-    {error, <<"Address must be a binary.">>}.
-
-account_key(Address) when is_binary(Address) ->
-    to_lower(Address).
-
-trie_reserved_keys(Opts) ->
-    {ok, Trie} = hb_device_load:reference(<<"trie@1.0">>, Opts),
-    maps:get(reserved, Trie:info(), []).
-
-is_reserved_trie_key(Key, ReservedKeys) ->
-    lists:member(Key, ReservedKeys).
-
-%% @doc Check if the given Key exists in the passed List
-is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
-    lists:member(Key, List);
-is_reserved_custom_key(_, _) ->
-    false.
 
 %% Tests
 
