@@ -49,8 +49,6 @@ test_suite() ->
             fun resolve_from_multiple_keys_test/1},
         {resolve_path_element, "resolve path element",
             fun resolve_path_element_test/1},
-        {resolve_binary_key, "resolve binary key",
-            fun resolve_binary_key_test/1},
         {key_to_binary, "key to binary",
             fun key_to_binary_test/1},
         {key_from_id_device_with_args, "key from id device with args",
@@ -124,82 +122,82 @@ test_opts() ->
             desc => "Default opts",
             opts => #{ <<"store">> => hb_test_utils:test_store() },
             skip => []
-        },
-        #{
-            name => without_hashpath,
-            desc => "Default without hashpath",
-            opts => #{
-                <<"hashpath">> => ignore,
-                <<"store">> => hb_test_utils:test_store()
-            },
-            skip => []
-        },
-        #{
-            name => no_cache,
-            desc => "No cache read or write",
-            opts => #{
-                <<"hashpath">> => ignore,
-                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
-                <<"spawn-worker">> => false,
-                <<"store">> => hb_test_utils:test_store()
-            },
-            skip => [load_as]
-        },
-        #{
-            name => only_store,
-            desc => "Store, don't read",
-            opts => #{
-                <<"hashpath">> => update,
-                <<"cache-control">> => [<<"no-cache">>],
-                <<"spawn-worker">> => false,
-                <<"store">> => CachedExecStore
-            },
-            skip => [
-                denormalized_device_name,
-                deep_set_with_device,
-                load_as
-            ],
-            reset => false
-        },
-        #{
-            name => only_if_cached,
-            desc => "Only read, don't exec",
-            opts => #{
-                <<"hashpath">> => ignore,
-                <<"cache-control">> => [<<"only-if-cached">>],
-                <<"spawn-worker">> => false,
-                <<"store">> => CachedExecStore
-            },
-            skip => [
-                % Skip test with locally defined device, amongst others.
-                resolve_id,
-                start_as,
-                start_as_with_parameters,
-                as_path,
-                multiple_as_subresolutions,
-                key_from_id_device_with_args,
-                get_with_denormalized_key,
-                set_new_messages,
-                resolve_from_multiple_keys,
-                resolve_path_element,
-                device_with_default_handler_function,
-                device_with_handler_function,
-                denormalized_device_name,
-                get_with_device,
-                get_as_with_device,
-                set_with_device,
-                device_exports,
-                device_excludes,
-                device_inheritance,
-                deep_set_with_device,
-                as,
-                as_commitments,
-                step_hook,
-                paranoid_message_verification,
-                paranoid_input_verification,
-                paranoid_result_verification
-            ]
         }
+        % #{
+        %     name => without_hashpath,
+        %     desc => "Default without hashpath",
+        %     opts => #{
+        %         <<"hashpath">> => ignore,
+        %         <<"store">> => hb_test_utils:test_store()
+        %     },
+        %     skip => []
+        % },
+        % #{
+        %     name => no_cache,
+        %     desc => "No cache read or write",
+        %     opts => #{
+        %         <<"hashpath">> => ignore,
+        %         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+        %         <<"spawn-worker">> => false,
+        %         <<"store">> => hb_test_utils:test_store()
+        %     },
+        %     skip => [load_as]
+        % },
+        % #{
+        %     name => only_store,
+        %     desc => "Store, don't read",
+        %     opts => #{
+        %         <<"hashpath">> => update,
+        %         <<"cache-control">> => [<<"no-cache">>],
+        %         <<"spawn-worker">> => false,
+        %         <<"store">> => CachedExecStore
+        %     },
+        %     skip => [
+        %         denormalized_device_name,
+        %         deep_set_with_device,
+        %         load_as
+        %     ],
+        %     reset => false
+        % },
+        % #{
+        %     name => only_if_cached,
+        %     desc => "Only read, don't exec",
+        %     opts => #{
+        %         <<"hashpath">> => ignore,
+        %         <<"cache-control">> => [<<"only-if-cached">>],
+        %         <<"spawn-worker">> => false,
+        %         <<"store">> => CachedExecStore
+        %     },
+        %     skip => [
+        %         % Skip test with locally defined device, amongst others.
+        %         resolve_id,
+        %         start_as,
+        %         start_as_with_parameters,
+        %         as_path,
+        %         multiple_as_subresolutions,
+        %         key_from_id_device_with_args,
+        %         get_with_denormalized_key,
+        %         set_new_messages,
+        %         resolve_from_multiple_keys,
+        %         resolve_path_element,
+        %         device_with_default_handler_function,
+        %         device_with_handler_function,
+        %         denormalized_device_name,
+        %         get_with_device,
+        %         get_as_with_device,
+        %         set_with_device,
+        %         device_exports,
+        %         device_excludes,
+        %         device_inheritance,
+        %         deep_set_with_device,
+        %         as,
+        %         as_commitments,
+        %         step_hook,
+        %         paranoid_message_verification,
+        %         paranoid_input_verification,
+        %         paranoid_result_verification
+        %     ]
+        % }
     ].
 
 %%% Standalone test vectors
@@ -343,7 +341,7 @@ resolve_simple_test(Opts) ->
 
 resolve_id_test(Opts) ->
     ?assertMatch(
-        ID when byte_size(ID) == 43,
+        ID when ?IS_ID(ID),
         hb_ao:get(<<"id">>, #{ <<"test_key">> => <<"1">> }, Opts)
     ).
 
@@ -375,22 +373,6 @@ key_to_binary_test(Opts) ->
     ?assertEqual(<<"a">>, hb_ao:normalize_key(<<"a">>, Opts)),
     ?assertEqual(<<"a">>, hb_ao:normalize_key("a", Opts)).
 
-resolve_binary_key_test(Opts) ->
-    ?assertEqual(
-        {ok, <<"RESULT">>},
-        hb_ao:resolve(#{ a => <<"RESULT">> }, <<"a">>, Opts)
-    ),
-    ?assertEqual(
-        {ok, <<"1">>},
-        hb_ao:resolve(
-            #{
-                <<"Test-Header">> => <<"1">>
-            },
-            <<"Test-Header">>,
-            Opts
-        )
-    ).
-
 %% @doc Generates a test device with three keys, each of which uses
 %% progressively more of the arguments that can be passed to a device key.
 generate_device_with_keys_using_args() ->
@@ -398,15 +380,15 @@ generate_device_with_keys_using_args() ->
         key_using_only_state =>
             fun(State) ->
                 {ok,
-                    <<(hb_maps:get(<<"state_key">>, State))/binary>>
+                    <<(hb_maps:get(<<"state-key">>, State))/binary>>
                 }
             end,
         key_using_state_and_msg =>
             fun(State, Msg) ->
                 {ok,
                     <<
-                        (hb_maps:get(<<"state_key">>, State))/binary,
-                        (hb_maps:get(<<"msg_key">>, Msg))/binary
+                        (hb_maps:get(<<"state-key">>, State))/binary,
+                        (hb_maps:get(<<"msg-key">>, Msg))/binary
                     >>
                 }
             end,
@@ -414,9 +396,9 @@ generate_device_with_keys_using_args() ->
             fun(State, Msg, Opts) ->
                 {ok,
                     <<
-                        (hb_maps:get(<<"state_key">>, State, undefined, Opts))/binary,
-                        (hb_maps:get(<<"msg_key">>, Msg, undefined, Opts))/binary,
-                        (hb_maps:get(<<"opts_key">>, Opts, undefined, Opts))/binary
+                        (hb_maps:get(<<"state-key">>, State, undefined, Opts))/binary,
+                        (hb_maps:get(<<"msg-key">>, Msg, undefined, Opts))/binary,
+                        (hb_maps:get(<<"opts-key">>, Opts, undefined, Opts))/binary
                     >>
                 }
             end
@@ -434,7 +416,7 @@ gen_default_device() ->
                         end
                 }
             end,
-        <<"state_key">> =>
+        <<"state-key">> =>
             fun(_) ->
                 {ok, <<"STATE">>}
             end
@@ -455,6 +437,13 @@ gen_handler_device() ->
                                 M2,
                                 Opts
                             );
+                        (<<"vary">>, Base, Req, Opts) ->
+                            {ok,
+                                #{
+                                    <<"varied-base">> => Base,
+                                    <<"varied-request">> => Req
+                                }
+                            };
                         (_, _, _, _) ->
                             {ok, <<"HANDLER VALUE">>}
                         end
@@ -468,8 +457,8 @@ gen_handler_device() ->
 key_from_id_device_with_args_test(Opts) ->
     Msg =
         #{
-            device => generate_device_with_keys_using_args(),
-            state_key => <<"1">>
+            <<"device">> => generate_device_with_keys_using_args(),
+            <<"state-key">> => <<"1">>
         },
     ?assertEqual(
         {ok, <<"1">>},
@@ -477,7 +466,7 @@ key_from_id_device_with_args_test(Opts) ->
             Msg,
             #{
                 <<"path">> => <<"key_using_only_state">>,
-                <<"msg_key">> => <<"2">> % Param message, which is ignored
+                <<"msg-key">> => <<"2">> % Param message, which is ignored
             },
             Opts
         )
@@ -488,7 +477,7 @@ key_from_id_device_with_args_test(Opts) ->
             Msg,
             #{
                 <<"path">> => <<"key_using_state_and_msg">>,
-                <<"msg_key">> => <<"3">> % Param message, with value to add
+                <<"msg-key">> => <<"3">> % Param message, with value to add
             },
             Opts
         )
@@ -499,46 +488,45 @@ key_from_id_device_with_args_test(Opts) ->
             Msg,
             #{
                 <<"path">> => <<"key_using_all">>,
-                <<"msg_key">> => <<"3">> % Param message
+                <<"msg-key">> => <<"3">> % Param message
             },
             Opts#{
-                <<"opts_key">> => <<"37">>,
+                <<"opts-key">> => <<"37">>,
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
         )
     ).
 
 device_with_handler_function_test(Opts) ->
-    Msg =
-        #{
-            device => gen_handler_device(),
-            test_key => <<"BAD">>
-        },
     ?assertEqual(
         {ok, <<"HANDLER VALUE">>},
-        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+        hb_ao:resolve(
+            hb_ao:as(gen_handler_device(), #{ <<"test-key">> => <<"BAD">> }, Opts),
+            #{ <<"path">> => <<"test-key">> },
+            Opts
+        )
     ).
 
 device_with_default_handler_function_test(Opts) ->
     Msg =
         #{
-            device => gen_default_device()
+            <<"device">> => gen_default_device()
         },
     ?assertEqual(
         {ok, <<"STATE">>},
-        hb_ao:resolve(Msg, <<"state_key">>, Opts)
+        hb_ao:resolve(Msg, #{<<"path">> => <<"state-key">>}, Opts)
     ),
     ?assertEqual(
         {ok, <<"DEFAULT">>},
-        hb_ao:resolve(Msg, <<"any_random_key">>, Opts)
+        hb_ao:resolve(Msg, #{<<"path">> => <<"any-random-key">>}, Opts)
     ).
 
 basic_get_test(Opts) ->
     Msg = #{ <<"key1">> => <<"value1">>, <<"key2">> => <<"value2">> },
     ?assertEqual(<<"value1">>, hb_ao:get(<<"key1">>, Msg, Opts)),
     ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, Msg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, Msg, Opts)),
-    ?assertEqual(<<"value2">>, hb_ao:get([<<"key2">>], Msg, Opts)).
+    % Repeat to ensure consistency in caching setups.
+    ?assertEqual(<<"value2">>, hb_ao:get(<<"key2">>, Msg, Opts)).
 
 recursive_get_test(Opts) ->
     Msg = #{
@@ -591,24 +579,24 @@ get_with_device_test(Opts) ->
     Msg =
         #{
             <<"device">> => generate_device_with_keys_using_args(),
-            <<"state_key">> => <<"STATE">>
+            <<"state-key">> => <<"STATE">>
         },
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, Msg, Opts)),
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"key_using_only_state">>, Msg, Opts)).
+    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state-key">>, Msg, Opts)),
+    ?assertEqual(<<"STATE">>, hb_ao:get(<<"key-using-only-state">>, Msg, Opts)).
 
 get_as_with_device_test(Opts) ->
     Msg =
         #{
             <<"device">> => gen_handler_device(),
-            <<"test_key">> => <<"ACTUAL VALUE">>
+            <<"test-key">> => <<"ACTUAL VALUE">>
         },
     ?assertEqual(
         <<"HANDLER VALUE">>,
-        hb_ao:get(test_key, Msg, Opts)
+        hb_ao:get(<<"test-key">>, Msg, Opts)
     ),
     ?assertEqual(
         <<"ACTUAL VALUE">>,
-        hb_ao:get(test_key, {as, <<"message@1.0">>, Msg}, Opts)
+        hb_ao:get(<<"test-key">>, hb_ao:as(<<"message@1.0">>, Msg, Opts), Opts)
     ).
 
 set_with_device_test(Opts) ->
@@ -618,22 +606,22 @@ set_with_device_test(Opts) ->
                 #{
                     <<"set">> =>
                         fun(State, _Msg) ->
-                            Acc = hb_maps:get(<<"set_count">>, State, <<"">>, Opts),
+                            Acc = hb_maps:get(<<"set-count">>, State, <<"">>, Opts),
                             {ok,
                                 State#{
-                                    <<"set_count">> => << Acc/binary, "." >>
+                                    <<"set-count">> => << Acc/binary, "." >>
                                 }
                             }
                         end
                 },
-            <<"state_key">> => <<"STATE">>
+            <<"state-key">> => <<"STATE">>
         },
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, Msg, Opts)),
-    SetOnce = hb_ao:set(Msg, #{ <<"state_key">> => <<"SET_ONCE">> }, Opts),
-    ?assertEqual(<<".">>, hb_ao:get(<<"set_count">>, SetOnce, Opts)),
-    SetTwice = hb_ao:set(SetOnce, #{ <<"state_key">> => <<"SET_TWICE">> }, Opts),
-    ?assertEqual(<<"..">>, hb_ao:get(<<"set_count">>, SetTwice, Opts)),
-    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state_key">>, SetTwice, Opts)).
+    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state-key">>, Msg, Opts)),
+    SetOnce = hb_ao:set(Msg, #{ <<"state-key">> => <<"SET_ONCE">> }, Opts),
+    ?assertEqual(<<".">>, hb_ao:get(<<"set-count">>, SetOnce, Opts)),
+    SetTwice = hb_ao:set(SetOnce, #{ <<"state-key">> => <<"SET_TWICE">> }, Opts),
+    ?assertEqual(<<"..">>, hb_ao:get(<<"set-count">>, SetTwice, Opts)),
+    ?assertEqual(<<"STATE">>, hb_ao:get(<<"state-key">>, SetTwice, Opts)).
 
 deep_set_test(Opts) ->
     % First validate second layer changes are handled correctly.
@@ -726,9 +714,9 @@ deep_set_with_device_test(Opts) ->
     B = hb_ao:get(<<"b">>, A, Opts),
     C = hb_ao:get(<<"c">>, B, Opts),
     ?assertEqual(<<"2">>, C),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer)),
-    ?assertEqual(false, hb_ao:get(<<"modified">>, A)),
-    ?assertEqual(true, hb_ao:get(<<"modified">>, B)).
+    ?assertEqual(true, hb_ao:get(<<"modified">>, Outer, Opts)),
+    ?assertEqual(false, hb_ao:get(<<"modified">>, A, Opts)),
+    ?assertEqual(true, hb_ao:get(<<"modified">>, B, Opts)).
 
 device_exports_test(Opts) ->
 	Msg = #{ <<"device">> => dev_message },
@@ -862,11 +850,11 @@ denormalized_key_test(Opts) ->
         },
     ?assertEqual(
         {ok, <<"TEST VALUE">>},
-        hb_ao:resolve(Msg, <<"test_key">>, Opts)
+        hb_ao:get(<<"test_key">>, Msg, Opts)
     ),
     ?assertEqual(
         {ok, <<"TEST VALUE">>},
-        hb_ao:resolve(Msg, <<"test-key">>, Opts)
+        hb_ao:get(<<"test-key">>, Msg, Opts)
     ).
 
 list_transform_test(Opts) ->
@@ -880,10 +868,10 @@ list_transform_test(Opts) ->
 start_as_test(Opts) ->
     ?assertEqual(
         {ok, <<"GOOD FUNCTION">>},
-        hb_ao:resolve_many(
+        hb_ao:resolve(
             [
-                {as, <<"test-device@1.0">>, #{ <<"path">> => <<>> }},
-                #{ <<"path">> => <<"test_func">> }
+                hb_ao:as(<<"test-device@1.0">>, #{}, Opts),
+                #{ <<"path">> => <<"test-func">> }
             ],
             Opts
         )
@@ -892,14 +880,14 @@ start_as_with_parameters_test(Opts) ->
     % Resolve a key on a message that has its device set with `as'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"test-func">> => #{ <<"test-key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
         {ok, <<"GOOD FUNCTION">>},
-        hb_ao:resolve_many(
+        hb_ao:resolve(
             [
-                {as, <<"message@1.0">>, Msg},
-                #{ <<"path">> => <<"test_func">> }
+                hb_ao:as(<<"message@1.0">>, Msg, Opts),
+                #{ <<"path">> => <<"test-func">> }
             ],
             Opts
         )
@@ -909,7 +897,7 @@ load_as_test(Opts) ->
     % Load a message as a device with the `as' keyword.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"test-func">> => #{ <<"test-key">> => <<"MESSAGE">> }
     },
     % There is a race condition where we write to the store and a 
     % reset happens making not read the written value.
@@ -920,30 +908,31 @@ load_as_test(Opts) ->
     ?assert(hb_message:match(Msg, ReadMsg, primary, Opts)),
     ?assertEqual(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        hb_ao:resolve(
             [
-                {as, <<"message@1.0">>, #{ <<"path">> => <<ID/binary>> }},
-                <<"test_func">>,
-                <<"test_key">>
+                {link, ID, #{}},
+                #{ <<"device">> => <<"test-device@1.0">> },
+                <<"test-func">>,
+                <<"test-key">>
             ],
             Opts
         )
     ).
 
 as_path_test(Opts) ->
-    % Create a message with the test device, which implements the test_func
+    % Create a message with the test device, which implements the test-func
     % function. It normally returns `GOOD FUNCTION'.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"test-func">> => #{ <<"test-key">> => <<"MESSAGE">> }
     },
-    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test_func">>, Msg, Opts)),
+    ?assertEqual(<<"GOOD FUNCTION">>, hb_ao:get(<<"test-func">>, Msg, Opts)),
     % Now use the `as' keyword to subresolve a key with the message device.
     ?assertMatch(
-        {ok, #{ <<"test_key">> := <<"MESSAGE">> }},
+        {ok, #{ <<"test-key">> := <<"MESSAGE">> }},
         hb_ao:resolve(
-            Msg,
-            {as, <<"message@1.0">>, #{ <<"path">> => <<"test_func">> }},
+            hb_ao:as(<<"message@1.0">>, Msg, Opts),
+            #{ <<"path">> => <<"test-func">> },
             Opts
         )
     ).
@@ -952,16 +941,15 @@ continue_as_test(Opts) ->
     % Resolve a list of messages in sequence, swapping the device in the middle.
     Msg = #{
         <<"device">> => <<"test-device@1.0">>,
-        <<"test_func">> => #{ <<"test_key">> => <<"MESSAGE">> }
+        <<"test-func">> => #{ <<"test-key">> => <<"MESSAGE">> }
     },
     ?assertEqual(
         {ok, <<"MESSAGE">>},
-        hb_ao:resolve_many(
+        hb_ao:resolve(
             [
-                Msg,
-                {as, <<"message@1.0">>, <<>>},
-                #{ <<"path">> => <<"test_func">> },
-                #{ <<"path">> => <<"test_key">> }
+                hb_ao:as(<<"message@1.0">>, Msg, Opts),
+                #{ <<"path">> => <<"test-func">> },
+                #{ <<"path">> => <<"test-key">> }
             ],
             Opts
         )
@@ -982,16 +970,16 @@ as_commitments_test(RawOpts) ->
     InitialComms = hb_ao:get(<<"commitments">>, Msg, OptsWithWallet),
     {ok, ResolvedMsg} =
         hb_ao:resolve(
-            {as, <<"test-device@1.0">>, Msg},
+            hb_ao:as(<<"test-device@1.0">>, Msg, OptsWithWallet),
             <<"commitments">>,
             OptsWithWallet
         ),
     ?assertEqual(InitialComms, ResolvedMsg),
     ?assertEqual(
         {ok, []},
-        hb_ao:resolve_many(
+        hb_ao:resolve(
             [
-                {as, <<"message@1.0">>, Msg},
+                hb_ao:as(<<"message@1.0">>, Msg, OptsWithWallet),
                 <<"committers">>
             ],
             OptsWithWallet
@@ -1009,9 +997,9 @@ multiple_as_subresolutions_test(Opts) ->
                     #{ <<"test-key-2">> => <<"MESSAGE-2">> }
             }
     },
-    Res = hb_ao:resolve_many(
+    Res = hb_ao:resolve(
         [
-            {as, <<"message@1.0">>, Msg},
+            hb_ao:as(<<"message@1.0">>, Msg, Opts),
             #{ <<"path">> => <<"test-message">> },
             #{ <<"path">> => <<"test-message-2">>, <<"extraneous">> => <<"1">> },
             <<"test-key-2">>

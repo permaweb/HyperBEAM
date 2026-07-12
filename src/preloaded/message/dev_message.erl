@@ -221,7 +221,6 @@ id_device(_, _) ->
     {ok, ?DEFAULT_ID_DEVICE}.
 
 %% @doc Return the committers of a message that are present in the given request.
--spec committers(#{ commitments => _ }, _, _) -> {ok, [binary()]}.
 committers(#{ <<"commitments">> := Commitments }, _, NodeOpts) ->
     {ok,
         hb_maps:values(
@@ -611,16 +610,16 @@ set(Base, Req = #{ <<"set">> := <<"deep">> }, Opts) ->
         maps:map(
             fun(Key, Nested) when is_map(Nested) or ?IS_LINK(Nested) ->
                 case hb_maps:find(Key, Base, Opts) of
-                    {ok, NestedBase} ->
+                    {ok, NestedBase} when is_map(NestedBase) or ?IS_LINK(NestedBase) ->
                         % We use `hb_ao:deep_set` rather than just recursing
                         % such that the correct device is used for the downstream
                         % set operation.
-                        hb_util:ok(hb_ao:deep_set(NestedBase, Nested, Opts));
+                        hb_ao:deep_set(NestedBase, Nested, Opts);
                     error -> Nested
                 end;
                (_Key, NewValue) -> NewValue
                 end,
-                hb_message:uncommitted(Req, Opts)
+                maps:without([<<"set">>], hb_message:uncommitted(Req, Opts))
             ),
     set(Base, NewValues, Opts);
 set(Base, NewValues, _Opts) ->
@@ -701,31 +700,46 @@ default_accessor(Key, Msg, Req, Opts) ->
 %% during the process of `vary`ing.
 -spec vary(
     #{ _ => _ },
-    #{ vary => binary(), _ => _ },
-    #{}) -> {ok, #{}}.
+    #{ _ => _ },
+    #{}) -> {ok, #{}} | {error, binary()}.
 vary(Base, Req, Opts) ->
     maybe
-        {ok, Key} ?=
-            case maps:find(<<"vary">>, Req) of
-                {ok, KeyToVaryOn} -> {ok, KeyToVaryOn};
-                error ->
-                    case maps:find(<<"path">>, Req) of
-                        {ok, <<"vary">>} ->
-                            {error, <<"Cannot vary the `vary` path.">>};
-                        Other -> Other
-                    end
-            end,
-        Ctx1 = #{ <<"base">> => Base, <<"key">> => Key, <<"request">> => Req },
-        {ok, Ctx2} ?=
+        {ok, Ctx} ?=
             case hb_private:get(<<"function">>, Req, not_found, Opts) of
                 not_found ->
-                    hb_device:add_resolver(Ctx1, Opts);
+                    % No function given: derive the key to resolve one.
+                    maybe
+                        {ok, Key} ?=
+                            case Req of
+                                #{ <<"vary">> := KeyToVaryOn } ->
+                                    {ok, KeyToVaryOn};
+                                #{ <<"path">> := <<"vary">> } ->
+                                    {error, <<"Cannot vary the `vary` path.">>};
+                                #{ <<"path">> := PathKey } ->
+                                    {ok, PathKey};
+                                _ ->
+                                    {error, <<"invalid-vary-request">>}
+                            end,
+                        hb_device:add_resolver(
+                            #{
+                                <<"base">> => Base,
+                                <<"key">> => Key,
+                                <<"request">> => Req
+                            },
+                            Opts
+                        )
+                    end;
                 Fun ->
-                    {ok, Ctx1#{ <<"priv">> => #{ <<"function">> => Fun } }}
+                    % The executor is already known: no key is required.
+                    {ok,
+                        #{
+                            <<"base">> => Base,
+                            <<"request">> => Req,
+                            <<"priv">> => #{ <<"function">> => Fun }
+                        }
+                    }
             end,
-        hb_types:vary(Ctx2, Opts)
-    else
-        error -> {error, <<"invalid-vary-request">>}
+        hb_types:vary(Ctx, Opts)
     end.
 
 %% @doc Returns the device schema for a `Base` message.
