@@ -105,6 +105,20 @@ message_to_fun(Msg, Key, Opts) ->
     message_to_fun(DeviceID, Msg, Key, Opts).
 message_to_fun(DevID, Msg, Key, Opts) ->
     message_to_fun(DevID, module(DevID, Opts), Msg, Key, Opts).
+message_to_fun(DevID, DevMsg = #{ <<"device">> := _ }, _Msg, Key, _Opts) ->
+    % A message-valued device: execution is itself resolution. The request is
+    % resolved against the device message extended over the outermost state:
+    % `execute(Dev, Outer, Request) = resolve(set(Outer, Dev), Request)'.
+    % The key is forced upon the inner resolution: for forced-key executions
+    % (`vary', `set', ...) the request's own path differs from the key that
+    % this function was extracted to compute.
+    {ok,
+        DevID,
+        DevMsg,
+        fun(Base, Req, ExecOpts) ->
+            hb_ao:raw(undefined, Key, DevMsg#{ <<"...">> => Base }, Req, ExecOpts)
+        end
+    };
 message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
     Info = info(DevMod, Msg, Opts),
     % Is the key exported by the device?
@@ -149,7 +163,7 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 							?event_debug({found_default_device, {mod, DefaultDevice}}),
                             message_to_fun(
                                 DefaultDevice,
-                                with_device(Msg, DefaultDevice),
+                                hb_ao:as(DefaultDevice, Msg, Opts),
                                 Key,
                                 Opts
                             );
@@ -165,10 +179,9 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 											{key, Key}
 										});
 								_ ->
-								    WithDev = with_device(Msg, ?DEFAULT_DEVICE),
 									message_to_fun(
                                         ?DEFAULT_DEVICE,
-										WithDev,
+                                        hb_ao:as(?DEFAULT_DEVICE, Msg, Opts),
 										Key,
 										Opts
 									)
@@ -181,10 +194,8 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 %% message has no `<<"device">>' key, we resolve the default
 %% (`message@1.0') just like any other device: There is no privileged
 %% internal module-loading path.
-module(DevMod, _Opts) when is_atom(DevMod) ->
-    DevMod;
-module(Dev, _Opts) when is_map(Dev) ->
-    Dev;
+module(DevMod, _Opts) when is_atom(DevMod) -> DevMod;
+module(Dev, _Opts) when is_map(Dev) -> Dev;
 module(DevID, Opts) ->
     case hb_device_load:reference(DevID, Opts) of
         {error, Reason} -> throw({error, {device_not_loadable, DevID, Reason}});
@@ -215,18 +226,6 @@ do_id_or_direct_key(Msg, Key, Opts) ->
             end
     end.
 
-%% @doc Small helper to extend a message with a device.
-with_device(Msg, Device) when is_map(Msg) ->
-    hb_private:set_priv(
-        #{
-            <<"device">> => Device,
-            <<"...">> => Msg
-        },
-        hb_private:from_message(Msg)
-    );
-with_device(_Msg, Device) ->
-    #{ <<"device">> => Device }.
-
 %% @doc Parse a handler key given by a device's `info'.
 info_handler_to_fun(Handler, DevID, DevMod, _Msg, _Key, _Opts)
         when is_function(Handler) ->
@@ -240,7 +239,7 @@ info_handler_to_fun(HandlerMap, DevID, DevMod, Msg, Key, Opts) ->
 							hb_maps:without([<<"device">>], Msg, Opts),
 					message_to_fun(
                         ?DEFAULT_DEVICE,
-						with_device(MsgWithoutDevice, ?DEFAULT_DEVICE),
+						hb_ao:as(?DEFAULT_DEVICE, MsgWithoutDevice, Opts),
 						Key,
 						Opts
 					);
@@ -334,7 +333,14 @@ maybe_normalize_device_key(Key, Mode) ->
 
 %% @doc Get the info map for a device, optionally giving it a message if the
 %% device's info function is parameterized by one.
-info(Msg, Opts) -> info(module(Msg, Opts), Msg, Opts).
+info(Msg, Opts) ->
+    Device =
+        case id_or_direct_key(Msg, <<"device">>, Opts) of
+            {hit, Dev} -> Dev;
+            {ok, Dev} -> Dev;
+            {error, _} -> ?DEFAULT_DEVICE   % `device => unset' masks: default.
+        end,
+    info(module(Device, Opts), Msg, Opts).
 info(DevMod, Msg, Opts) ->
     case find_exported_function(Msg, DevMod, info, 2, Opts) of
 		{ok, Fun} -> apply(Fun, truncate_args(Fun, [Msg, Opts]));
