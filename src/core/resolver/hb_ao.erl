@@ -514,7 +514,7 @@ stage_6(Ctx = #{
             <<"reason">> => <<"AO-Core Post-Execution Validation">>,
             <<"base">> => Base,
             <<"request">> => Req,
-            <<"result">> => Res
+            <<"varied-result">> => Res
         },
         Opts
     ),
@@ -522,7 +522,7 @@ stage_6(Ctx = #{
         ok,
         Ctx#{
             <<"status">> => Status,
-            <<"result">> => Res,
+            <<"varied-result">> => Res,
             <<"fresh">> => true
         }
     }.
@@ -536,11 +536,11 @@ stage_7(
         <<"fresh">> := true,
         <<"varied-base">> := VariedBase,
         <<"varied-request">> := VariedReq,
-        <<"result">> := Res,
+        <<"varied-result">> := Res,
         <<"opts">> := Opts
     }
 ) ->
-    hb_cache_control:maybe_store(VariedBase, VariedReq, Res, Opts),
+    hb_cache_control:maybe_store(VariedBase, VariedReq, VariedRes, Opts),
     {ok, Ctx};
 stage_7(Ctx) -> {ok, Ctx}.
 
@@ -549,7 +549,7 @@ stage_8(
     Ctx = #{
         <<"leader">> := ExecName,
         <<"varied-request">> := Req,
-        <<"result">> := Res,
+        <<"varied-result">> := Res,
         <<"status">> := Status,
         <<"opts">> := Opts
     }
@@ -573,7 +573,7 @@ stage_9(
         <<"normalizer">> := Normalizer,
         <<"base">> := Base,
         <<"request">> := Req,
-        <<"result">> := Result,
+        <<"varied-result">> := Result,
         <<"opts">> := Opts
     }
 ) when Normalizer =/= none ->
@@ -588,7 +588,8 @@ stage_9(
                 end
         }
     };
-stage_9(Ctx) -> {ok, Ctx}.
+stage_9(Ctx#{ <<"varied-result">> := Result}) ->
+    {ok, Ctx#{ <<"result">> := Result }}.
 
 %% @doc If a hook has been specified for the `step` action, we call it with our
 %% context including the result.
