@@ -27,7 +27,7 @@
 %%% Create and parse hashpaths.
 -export([format/1, parse/1, context/1]).
 %%% Verify hashpath claims.
--export([verify/2]).
+-export([verify_all/2, verify_part/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -189,9 +189,9 @@ parse_dependencies(Delim, Part, Ctx0, _Opts) ->
 %% @doc Parse the equivalent relationship if stated in the hashpath.
 parse_equivalence(no_match, <<>>, Ctx, _Opts) -> {ok, Ctx};
 parse_equivalence($=, ResultID, Ctx0, _Opts) ->
-    {ok, #{ <<"normalizer">> => base, <<"result-id">> => ResultID }};
+    {ok, #{ <<"normalizer">> => base, <<"varied-result-id">> => ResultID }};
 parse_equivalence($., ResultID, Ctx0, _Opts) ->
-    {ok, #{ <<"result-id">> => ResultID }}.
+    {ok, #{ <<"varied-result-id">> => ResultID }}.
 
 %% @doc Utility to split at the next syntax delimiter (e.g. `=`, `.`, `>`, `@`).
 %% Returns the syntax element matched, and the rest of the string. Notably, this
@@ -201,30 +201,64 @@ next(S) -> next([$=, $., $>, $@], S).
 next(Symbols, S) -> hb_util:split_depth_string_aware_single(Symbols, S).
 
 %% @doc Challenge a complete hashpath, verifying each part's claims.
-verify(Bin, Opts) when is_binary(Bin) ->
-    case parse(Bin) of
-        [] ->
-            % We treat an empty hashpath as failing verification.
-            false;
-        [Init | Parts] ->
-            case verify(Init, Parts, Opts) of
-                {true, #{ <<"result">> := ComputedState }} ->
-                    verify(ComputedState, Parts, Opts);
-                false ->
-                    false
-            end;
-        _ ->
-            false
-    end.
-verify(_FinalBase, [], _Opts) ->
+verify_all(Bin, Opts) when is_binary(Bin) ->
+    verify_all(parse(Bin), Opts);
+verify_all([], _Opts) ->
+    % We treat an empty hashpath as failing verification.
+    false;
+verify_all([Init | Parts], Opts) ->
+    verify_all(Init, Parts, Opts).
+
+verify_all(_FinalBase, [], _Opts) ->
     % The full hashpath has resolved and we have no more parts to verify. Each
     % passed verification.
     true;
-verify(State, [Part | Rest], Opts) ->
+verify_all(State, [Part | Rest], Opts) ->
     % Add the currently computed state to the part's context and verify it.
     case verify(Part#{ <<"base">> => State }, Opts) of
-        {true, ComputedState} -> verify(ComputedState, Rest, Opts);
+        {true, ComputedState} -> verify_all(ComputedState, Rest, Opts);
         false -> false
+    end.
+
+%% @doc Verify a single hashpath execution contained inside a larger hashpath
+%% sequence.
+verify_part(Hashpath, PartNum, Opts) when is_binary(Hashpath) ->
+    verify_part(parse(Hashpath), PartNum, Opts);
+verify_part([InitialCtx|Rest], PartNum, Opts) ->
+    verify_part(InitialCtx, Rest, PartNum, Opts).
+
+verify_part(State, [], _PartNum, _Opts) ->
+    {error, <<"Part number not found.">>};
+verify_part(State, [Part | Rest], 0, Opts) ->
+    maybe 
+        {true, _} ?=
+            verify_context(
+                Part#{ <<"base">> => State, <<"opts">> => Opts}
+            ),
+        true
+    end;
+verify_part(State, [Next | Rest], PartNum, Opts) ->
+    % Extract the varied-result from the next context and apply it to the current
+    % state.
+    case maps:get(<<"normalizer">>, Next, replace) of
+        replace ->
+            % Replace the full accumulated state with the varied result and
+            % recurse to the next part.
+            verify_part(
+                maps:get(<<"varied-result">>, Next),
+                Rest,
+                PartNum - 1,
+                Opts
+            );
+        base ->
+            % The base normalizer means we should extend the result over the
+            % base state.
+            verify_part(
+                maps:get(<<"varied-result">>, Next)#{ <<"...">> => State },
+                Rest,
+                PartNum - 1,
+                Opts
+            );
     end.
 
 %% @doc Verify a full single context, parsed from a binary hashpath. The context
