@@ -641,9 +641,15 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             end,
 			Opts
         ),
+    DefaultAcceptBundle =
+        case {Codec, hb_maps:get(<<"require-codec">>, TABMReq, not_found, Opts)} of
+            {<<"json@1.0">>, not_found} -> false;
+            {<<"json@1.0">>, _} -> true;
+            _ -> false
+        end,
     AcceptBundle =
         hb_util:atom(
-            hb_maps:get(<<"accept-bundle">>, TABMReq, false, Opts)
+            hb_maps:get(<<"accept-bundle">>, TABMReq, DefaultAcceptBundle, Opts)
         ),
     ?event(debug_http,
         {encoding_reply,
@@ -759,6 +765,7 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:filter(
                     fun(<<"body">>, _V) -> false;
                        (<<"data">>, _V) -> false;
+                       (<<"content-length">>, _V) -> false;
                        (_Key, V) ->
                             not ?IS_LINK(V)
                                 andalso not is_map(V)
@@ -1056,6 +1063,16 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
         ),
     FilterKeys = hb_opts:get(http_inbound_filter_keys, ?DEFAULT_FILTER_KEYS, Opts),
     FilteredMsg = hb_message:without_unless_signed(FilterKeys, Msg, Opts),
+    DefaultAcceptBundle =
+        case maps:get(
+            <<"require-codec">>,
+            Msg,
+            maps:get(<<"require-codec">>, PrimMsg, not_found)
+        ) of
+            <<"application/json">> -> true;
+            <<"json@1.0">> -> true;
+            _ -> maps:get(<<"accept-bundle">>, RawHeaders, false)
+        end,
     BaseMsg =
         FilteredMsg#{
             <<"method">> => Method,
@@ -1067,7 +1084,7 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                     maps:get(
                         <<"accept-bundle">>,
                         PrimMsg,
-                        maps:get(<<"accept-bundle">>, RawHeaders, false)
+                        DefaultAcceptBundle
                     )
                 ),
             <<"accept">> =>
@@ -1301,6 +1318,21 @@ cors_get_test() ->
         <<"*">>,
         hb_ao:get(<<"access-control-allow-origin">>, Res, LocalOpts)
     ).
+
+content_length_not_forwarded_for_encoded_reply_test() ->
+    {200, Headers, EncodedBody} =
+        encode_reply(
+            200,
+            #{ <<"require-codec">> => <<"application/json">> },
+            #{
+                <<"content-length">> => <<"999">>,
+                <<"status">> => 200,
+                <<"body">> => <<"ok">>
+            },
+            #{}
+        ),
+    ?assertNot(maps:is_key(<<"content-length">>, Headers)),
+    ?assert(byte_size(EncodedBody) > 0).
 
 ans104_wasm_test() ->
     ServerStore = [hb_test_utils:test_store()],

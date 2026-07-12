@@ -75,13 +75,47 @@ eval(Base, Request, Opts) ->
                             >>
                         };
                     {ok, ApplyPath} ->
-                        ApplyMsg = ApplyBase#{ <<"path">> => ApplyPath },
+                        ApplyMsg = apply_msg(ApplyBase, ApplyPath, Opts),
                         ?event({executing, ApplyMsg}),
-                        hb_ao:resolve(ApplyMsg, Opts)
+                        execute_apply(ApplyMsg, ApplyPath, Opts)
                 end
         end
     else
         Error -> error_to_message(Error)
+    end.
+
+execute_apply(ApplyMsg, ApplyPath, Opts) ->
+    case hb_path:term_to_path_parts(ApplyPath) of
+        [ID | _] when ?IS_ID(ID) ->
+            Meta = hb_device:message_to_device(
+                #{ <<"device">> => <<"meta@1.0">> },
+                Opts
+            ),
+            unwrap_ao_result(Meta:handle(Opts, ApplyMsg), Opts);
+        _ ->
+            hb_ao:resolve(ApplyMsg, Opts)
+    end.
+
+unwrap_ao_result({ok, Res}, Opts) when is_map(Res) ->
+    case hb_maps:get(<<"ao-result">>, Res, not_found, Opts) of
+        Key when is_binary(Key) ->
+            case hb_maps:find(Key, Res, Opts) of
+                {ok, Value} -> {ok, Value};
+                error -> {error, not_found}
+            end;
+        _ ->
+            {ok, Res}
+    end;
+unwrap_ao_result(Res, _Opts) ->
+    Res.
+
+apply_msg(ApplyBase, ApplyPath, Opts) ->
+    Msg = ApplyBase#{ <<"path">> => ApplyPath },
+    case hb_path:term_to_path_parts(ApplyPath) of
+        [ID | _] when ?IS_ID(ID) ->
+            hb_maps:without([<<"device">>], Msg, Opts);
+        _ ->
+            Msg
     end.
 
 %% @doc Apply the message found at `request' to the message found at `base'.
@@ -283,5 +317,32 @@ apply_over_http_test() ->
             <<"/user-path">>,
             Signed,
             #{ <<"priv-wallet">> => hb:wallet() }
+        )
+    ).
+
+apply_id_path_as_singleton_test() ->
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Node = hb_http_server:start_node(Opts),
+    Signed =
+        hb_message:commit(
+            #{ <<"body">> => <<"DATA">> },
+            Opts#{ <<"priv-wallet">> => hb:wallet() }
+        ),
+    {ok, ID} = hb_cache:write(Signed, Opts),
+    Path = <<"/", ID/binary, "/body">>,
+    ?assertEqual({ok, <<"DATA">>}, hb_http:get(Node, Path, Opts)),
+    ?assertEqual(
+        {ok, <<"DATA">>},
+        hb_http:request(
+            <<"POST">>,
+            Node,
+            <<"/user-path">>,
+            #{
+                <<"device">> => <<"apply@1.0">>,
+                <<"source">> => <<"user-message">>,
+                <<"user-path">> => Path,
+                <<"user-message">> => #{ <<"method">> => <<"GET">> }
+            },
+            Opts
         )
     ).

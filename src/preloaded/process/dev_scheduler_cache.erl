@@ -96,7 +96,7 @@ read(ProcID, Slot, RawOpts) ->
                     case hb_ao:get(<<"variant">>, Assignment, Opts) of
                         <<"ao.TN.1">> ->
                             Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
-                            Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
+                            Norm = lib_scheduler_formats:aos2_to_assignment(Loaded, Opts),
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->

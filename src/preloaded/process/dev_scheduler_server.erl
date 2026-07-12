@@ -263,17 +263,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             ),
             ?event(writes_complete),
-            ?event(uploading_message),
-            hb_client_remote:upload(Message, Opts),
-            hb_client_remote:upload(Assignment, Opts),
-            ?event(uploads_complete),
-            maybe_inform_recipient(
-                remote_confirmation,
-                ReplyPID,
-                Message,
-                Assignment,
-                State
-            )
+            dispatch_uploads(Message, Assignment, ReplyPID, State)
         end,
     case hb_opts:get(scheduling_mode, sync, Opts) of
         aggressive ->
@@ -293,17 +283,28 @@ commit_assignment(BaseAssignment, State) ->
     Wallets = maps:get(wallets, State),
     Opts = maps:get(opts, State),
     CommittmentSpec = maps:get(committment_spec, State),
-    lists:foldr(
-        fun(Wallet, Assignment) ->
-            hb_message:commit(
-                Assignment,
-                Opts#{ <<"priv-wallet">> => Wallet },
-                CommittmentSpec
-            )
+    lists:foldl(
+        fun(Wallet, Acc) ->
+            Signed =
+                hb_message:commit(
+                    BaseAssignment,
+                    Opts#{ <<"priv-wallet">> => Wallet },
+                    CommittmentSpec
+                ),
+            merge_commitments(Acc, Signed)
         end,
         BaseAssignment,
         Wallets
     ).
+
+merge_commitments(Base, Signed) ->
+    Signed#{
+        <<"commitments">> =>
+            maps:merge(
+                maps:get(<<"commitments">>, Base, #{}),
+                maps:get(<<"commitments">>, Signed, #{})
+            )
+    }.
 
 %% @doc Potentially inform the caller that the assignment has been scheduled.
 %% The main assignment loop calls this function repeatedly at different stages
@@ -313,6 +314,42 @@ maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
     case maps:get(mode, State) of
         Mode -> ReplyPID ! {scheduled, Message, Assignment};
         _ -> ok
+    end.
+
+dispatch_uploads(Message, Assignment, ReplyPID, State) ->
+    Opts = maps:get(opts, State),
+    UploadOpts = Opts#{ <<"http-monitor">> => not_found },
+    UploadFun =
+        fun() ->
+            ?event(uploading_message),
+            hb_client_remote:upload(Message, UploadOpts),
+            hb_client_remote:upload(Assignment, UploadOpts),
+            ?event(uploads_complete),
+            maybe_inform_recipient(
+                remote_confirmation,
+                ReplyPID,
+                Message,
+                Assignment,
+                State
+            )
+        end,
+    case maps:get(mode, State) of
+        remote_confirmation -> UploadFun();
+        _ ->
+            spawn(
+                fun() ->
+                    try UploadFun()
+                    catch Class:Reason:Stack ->
+                        ?event(warning,
+                            {scheduler_upload_failed,
+                                {class, Class},
+                                {reason, Reason},
+                                {trace, Stack}
+                            }
+                        )
+                    end
+                end
+            )
     end.
 
 %% @doc Find the hashpath of the base state upon which a new assignment should

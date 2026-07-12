@@ -217,7 +217,7 @@ compute(Base, Req, Opts) ->
                             {result, Result}
                         }
                     ),
-                    {ok, without_snapshot(Result, Opts)};
+                    {ok, compute_response(Result, Req, Opts)};
                 {error, not_found} ->
                     {ok, Loaded} = ensure_loaded(ProcBase, Req, Opts),
                     ?event(compute,
@@ -259,7 +259,7 @@ compute_to_slot(ProcID, Base, Req, TargetSlot, Opts) ->
                 Opts
             ),
             store_result(true, ProcID, TargetSlot, Base, Req, Opts),
-            {ok, without_snapshot(lib_process:as_process(Base, Opts), Opts)};
+            {ok, compute_response(lib_process:as_process(Base, Opts), Req, Opts)};
         CurrentSlot when CurrentSlot < TargetSlot ->
             % Compute the next state transition.
             NextSlot = CurrentSlot + 1,
@@ -646,7 +646,7 @@ now(RawBase, Req, Opts) ->
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
-                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
+                    LatestMsg = compute_response(RawLatestMsg, Req, Opts),
                     ?event(compute_cache,
                         {serving_latest_cached_state,
                             {proc_id, ProcessID},
@@ -791,3 +791,17 @@ ensure_loaded(Base, Req, Opts) ->
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
     hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
+
+%% @doc Format a compute response for the caller with its result payload inline.
+compute_response(Msg, _Req, Opts) ->
+    with_loaded_results(without_snapshot(Msg, Opts), Opts).
+
+with_loaded_results(Msg, Opts) ->
+    Decoded = hb_link:decode_all_links(Msg),
+    case hb_maps:get(<<"results">>, Decoded, not_found, Opts) of
+        not_found -> Msg;
+        Results ->
+            (maps:remove(<<"results+link">>, Msg))#{
+                <<"results">> => hb_cache:ensure_all_loaded(Results, Opts)
+            }
+    end.

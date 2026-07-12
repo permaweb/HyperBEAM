@@ -208,13 +208,24 @@ prepare_tags(Msg, Opts) ->
                 {ok, OriginalTags} ->
                     Res = hb_util:message_to_ordered_list(OriginalTags),
                     ?event({using_original_tags, Res}),
-                    Res;
+                    case complete_tags(Res) of
+                        true -> Res;
+                        false -> prepare_header_case_tags(Msg, Opts)
+                    end;
                 error -> 
                     prepare_header_case_tags(Msg, Opts)
             end;
         _ ->
             prepare_header_case_tags(Msg, Opts)
     end.
+
+complete_tags(Tags) ->
+    lists:all(
+        fun(#{ <<"name">> := _, <<"value">> := _ }) -> true;
+           (_) -> false
+        end,
+        Tags
+    ).
 
 %% @doc Convert a message without an `original-tags' field into a list of
 %% key-value pairs, with the keys in HTTP header-case.

@@ -27,9 +27,10 @@ to(Msg, Req, Opts) ->
             tabm,
             ConvOpts
         ),
+    Bundle = hb_maps:get(<<"bundle">>, Req, false, Opts),
     Loaded =
-        case hb_maps:get(<<"bundle">>, Req, false, Opts) of
-            true -> hb_cache:ensure_all_loaded(Restructured, Opts);
+        case Bundle of
+            true -> load_available_links(hb_link:decode_all_links(Restructured), Opts);
             false -> Restructured
         end,
     JSONStructured =
@@ -38,11 +39,36 @@ to(Msg, Req, Opts) ->
             tabm,
             #{
                 <<"device">> => <<"structured@1.0">>,
+                <<"bundle">> => Bundle,
                 <<"encode-types">> => [<<"atom">>]
             },
             ConvOpts
         ),
     {ok, hb_json:encode(JSONStructured)}.
+
+%% @doc Eager-load resolvable links for bundled JSON responses, while leaving
+%% missing lazy links in place so optional response fields do not fail encoding.
+load_available_links(Msg, Opts) ->
+    load_available_links([], Msg, Opts).
+
+load_available_links(_Ref, Link, Opts) when ?IS_LINK(Link) ->
+    try hb_cache:ensure_loaded(Link, Opts) of
+        Loaded -> load_available_links([], Loaded, Opts)
+    catch
+        throw:{necessary_message_not_found, _, _} -> Link
+    end;
+load_available_links(Ref, Msg, Opts) when is_map(Msg) ->
+    maps:map(
+        fun(K, V) -> load_available_links([K|Ref], V, Opts) end,
+        Msg
+    );
+load_available_links(Ref, Msg, Opts) when is_list(Msg) ->
+    lists:map(
+        fun({N, V}) -> load_available_links([N|Ref], V, Opts) end,
+        hb_util:number(Msg)
+    );
+load_available_links(_Ref, Msg, _Opts) ->
+    Msg.
 
 %% @doc Decode a JSON string to a message.
 from(Map, _Req, _Opts) when is_map(Map) -> {ok, Map};

@@ -285,12 +285,19 @@ route(_, Msg, Opts) ->
                                             ),
                                             Nodes
                                         ),
-                                    Chosen = choose(ChooseN, Strategy, Msg, Nodes, Opts),
+                                    RouteMsg =
+                                        route_selection_message(
+                                            Msg,
+                                            RouteWithAppliedNodes,
+                                            Opts
+                                        ),
+                                    Chosen =
+                                        choose(ChooseN, Strategy, RouteMsg, Nodes, Opts),
                                     ?event({choose,
                                         {strategy, Strategy},
                                         {choose_n, ChooseN},
                                         {nodes, Nodes},
-                                        {msg, Msg},
+                                        {msg, RouteMsg},
                                         {chosen, Chosen}
                                     }),
                                     case Chosen of
@@ -353,6 +360,61 @@ apply_routes(Msg, R, Opts) ->
         ),
     ?event({nodes_after_apply, NodesWithRouteApplied}),
     R#{ <<"nodes">> => NodesWithRouteApplied }.
+
+%% @doc Apply a matched route's configured routing key to a request message.
+route_selection_message(Msg, Route, Opts) ->
+    case hb_maps:get(<<"route-by">>, Route, not_found, Opts) of
+        not_found ->
+            Msg;
+        Spec ->
+            case route_by(Spec, Msg, Opts) of
+                not_found -> Msg;
+                RouteBy -> Msg#{ <<"route-by">> => RouteBy }
+            end
+    end.
+
+route_by(Spec, Msg, Opts) when is_integer(Spec) ->
+    route_by_prefix(Spec, Msg, Opts);
+route_by(Spec, Msg, Opts) when is_binary(Spec) ->
+    case safe_to_integer(Spec) of
+        {ok, Int} -> route_by_prefix(Int, Msg, Opts);
+        error -> route_by_regex(Spec, Msg, Opts)
+    end;
+route_by(_, _, _) ->
+    not_found.
+
+route_by_prefix(N, Msg, Opts) when N > 0 ->
+    case route_path(Msg, Opts) of
+        not_found -> not_found;
+        Path ->
+            PathWithoutSlash = strip_leading_slash(Path),
+            case byte_size(PathWithoutSlash) >= N of
+                true -> binary:part(PathWithoutSlash, 0, N);
+                false -> not_found
+            end
+    end;
+route_by_prefix(_, _, _) ->
+    not_found.
+
+route_by_regex(Regex, Msg, Opts) ->
+    case route_path(Msg, Opts) of
+        not_found ->
+            not_found;
+        Path ->
+            case re:run(Path, Regex, [{capture, [1], binary}]) of
+                {match, [RouteBy]} -> RouteBy;
+                _ -> not_found
+            end
+    end.
+
+route_path(Msg, Opts) ->
+    case hb_util:find_target_path(Msg, Opts) of
+        no_path -> not_found;
+        {_TargetKey, Path} -> hb_path:normalize(hb_path:to_binary(Path))
+    end.
+
+strip_leading_slash(<<"/", Rest/binary>>) -> Rest;
+strip_leading_slash(Path) -> Path.
 
 %% @doc Apply a node map's rules for transforming the path of the message.
 %% Supports the following keys:
@@ -569,6 +631,9 @@ choose(N, <<"Range">>, #{ <<"route-by">> := RouteBy }, Nodes, Opts) ->
             Nodes
         ),
     lists:sublist(FilteredNodes, min(length(FilteredNodes), N));
+choose(N, <<"Nearest">>, #{ <<"route-by">> := HashPath }, Nodes, Opts)
+        when is_binary(HashPath) ->
+    choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
 choose(N, <<"Nearest">>, #{ <<"path">> := HashPath }, Nodes, Opts)
         when is_binary(HashPath) ->
     choose(N, <<"Nearest">>, normalize_hashpath(HashPath), Nodes, Opts);
@@ -726,11 +791,11 @@ binary_to_bignum(Bin) when ?IS_ID(Bin) ->
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Base, RawReq, Opts) ->
     Req = hb_ao:get(<<"request">>, RawReq, Opts#{ <<"hashpath">> => ignore }),
-    ?event(debug_preprocess, {called_preprocess,Req}),
+    ?event(debug_preprocess1, {called_preprocess,Req}),
     TemplateRoutes = load_routes(Opts),
-    ?event(debug_preprocess, {template_routes, TemplateRoutes}),
-    Res = hb_http:message_to_request(Req, Opts),
-    ?event(debug_preprocess, {match, Res}),
+    ?event(debug_preprocess1, {template_routes, TemplateRoutes}),
+    Res = route_request(Req, RawReq, Opts),
+    ?event(debug_preprocess1, {match, Res}),
     case Res of
         {error, _} -> 
             ?event(debug_preprocess, preprocessor_did_not_match),
@@ -782,11 +847,12 @@ preprocess(Base, RawReq, Opts) ->
             % We additionally ensure that the request itself has a commitment,
             % such that headers added by the relaying node are not added to the
             % user's request.
+            LoadedReq = hb_cache:ensure_all_loaded(Req, Opts),
             UserReqWithCommit =
-                case hb_message:signers(Req, Opts) of
+                case hb_message:signers(LoadedReq, Opts) of
                     [] ->
                         hb_message:commit(
-                            Req,
+                            LoadedReq,
                             Opts,
                             #{
                                 <<"commitment-device">> => <<"httpsig@1.0">>,
@@ -794,7 +860,7 @@ preprocess(Base, RawReq, Opts) ->
                             }
                         );
                     _ ->
-                        Req
+                        LoadedReq
                 end,
             UserPath =
                 case hb_maps:get(<<"path">>, Req, not_found, Opts) of
@@ -835,7 +901,169 @@ preprocess(Base, RawReq, Opts) ->
             }
     end.
 
+%% @doc Find the HTTP route for a request, using a process ID hint for an
+%% initial `/push' if the literal path does not match any route.
+route_request(Req, RawReq, Opts) ->
+    case hb_http:message_to_request(Req, Opts) of
+        Error = {error, {no_viable_route, _, _}} ->
+            case initial_push_route_request(Req, RawReq, Opts) of
+                not_found ->
+                    Error;
+                RouteReq ->
+                    ?event(debug_preprocess, {initial_push_route_req, RouteReq}),
+                    hb_http:message_to_request(RouteReq, Opts)
+            end;
+        Res ->
+            Res
+    end.
+
+%% @doc Add a route-only process path for initial pushes with a process body.
+initial_push_route_request(Req, RawReq, Opts) ->
+    case initial_push_route_path(Req, RawReq, Opts) of
+        not_found -> not_found;
+        RoutePath -> Req#{ <<"route-path">> => RoutePath }
+    end.
+
+initial_push_route_path(Req, RawReq, Opts) ->
+    Path = hb_ao:get(<<"path">>, Req, <<>>, Opts#{ <<"hashpath">> => ignore }),
+    case {is_push_path(Path), initial_push_process_id(Req, RawReq, Opts)} of
+        {true, ProcID} when ?IS_ID(ProcID) ->
+            <<"/", ProcID/binary, "/push">>;
+        _ ->
+            not_found
+    end.
+
+%% @doc Determine if a path is an initial process push.
+is_push_path(Path) ->
+    case hb_path:normalize(hb_path:to_binary(Path)) of
+        <<"/push">> -> true;
+        <<"/push?", _/binary>> -> true;
+        _ -> false
+    end.
+
+%% @doc Find the pushed process ID from the raw or parsed hook request.
+initial_push_process_id(Req, RawReq, Opts) ->
+    HookBody = hb_ao:get(
+        <<"body">>,
+        RawReq,
+        [],
+        Opts#{ <<"hashpath">> => ignore }
+    ),
+    ReqBody = hb_ao:get(
+        <<"body">>,
+        Req,
+        not_found,
+        Opts#{ <<"hashpath">> => ignore }
+    ),
+    initial_push_process_id(
+        [Req, ReqBody | route_body_candidates(HookBody, Opts)],
+        Opts
+    ).
+initial_push_process_id([], _Opts) ->
+    not_found;
+initial_push_process_id([Candidate | Rest], Opts) ->
+    case process_id_from_candidate(Candidate, Opts) of
+        not_found -> initial_push_process_id(Rest, Opts);
+        ProcID -> ProcID
+    end.
+
+%% @doc Normalize a hook body into route hint candidates.
+route_body_candidates(Body, _Opts) when is_list(Body) -> Body;
+route_body_candidates(Body, Opts) when is_map(Body) ->
+    case hb_util:is_ordered_list(Body, Opts) of
+        true -> hb_util:message_to_ordered_list(Body, Opts);
+        false -> [Body]
+    end;
+route_body_candidates(_, _Opts) -> [].
+
+%% @doc Return a signed process ID from a candidate message, if present.
+process_id_from_candidate(Candidate, Opts) when is_map(Candidate) ->
+    Process =
+        case hb_ao:get(<<"body/type">>, Candidate, not_found, Opts) of
+            <<"Process">> ->
+                hb_ao:get(
+                    <<"body">>,
+                    Candidate,
+                    not_found,
+                    Opts#{ <<"hashpath">> => ignore }
+                );
+            _ ->
+                case hb_ao:get(<<"type">>, Candidate, not_found, Opts) of
+                    <<"Process">> -> Candidate;
+                    _ -> not_found
+                end
+        end,
+    case Process of
+        Msg when is_map(Msg) ->
+            try
+                {ok, Committed} = hb_message:with_only_committed(Msg, Opts),
+                hb_message:id(Committed, signed, Opts)
+            catch
+                _:_ -> not_found
+            end;
+        _ ->
+            not_found
+    end;
+process_id_from_candidate(_, _Opts) ->
+    not_found.
+
 %%% Tests
+
+initial_push_route_request_test() ->
+    Peer = <<"http://localhost:8735">>,
+    ClientOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Process =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"execution-device">> => <<"test-device@1.0">>,
+                <<"push-device">> => <<"push@1.0">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"type">> => <<"Process">>,
+                <<"module">> => <<"test-module">>
+            },
+            ClientOpts
+        ),
+    ProcID = hb_message:id(Process, signed, ClientOpts),
+    Req = Process#{ <<"path">> => <<"/push">>, <<"method">> => <<"POST">> },
+    RawReq = #{ <<"request">> => Req, <<"body">> => [Process, Req] },
+    NumberedRawReq =
+        #{
+            <<"request">> => Req#{ <<"body">> => not_found },
+            <<"body">> => hb_util:list_to_numbered_message([Process, Req])
+        },
+    RoutePath = <<"/", ProcID/binary, "/push">>,
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => hb_test_utils:test_store(),
+            <<"routes">> =>
+                [
+                    #{
+                        <<"template">> => <<"^/.{43}(~.*|/).*">>,
+                        <<"node">> => #{ <<"prefix">> => Peer }
+                    }
+                ]
+        },
+    ?assertMatch({error, _}, hb_http:message_to_request(Req, Opts)),
+    ?assertMatch(
+        {ok, <<"POST">>, Peer, RoutePath, _, _},
+        route_request(Req, RawReq, Opts)
+    ),
+    ?assertMatch(
+        {ok, <<"POST">>, Peer, RoutePath, _, _},
+        route_request(maps:remove(<<"body">>, Req), NumberedRawReq, Opts)
+    ),
+    {ok, #{ <<"body">> := [RelayBase, RelayCall] }} =
+        preprocess(#{}, RawReq, Opts),
+    ?assertEqual(Peer, hb_maps:get(<<"peer">>, RelayBase, not_found, Opts)),
+    ProxyMsg = hb_maps:get(<<"proxy-message">>, RelayCall, #{}, Opts),
+    UserMsg = hb_maps:get(<<"user-message">>, ProxyMsg, #{}, Opts),
+    ?assertEqual(not_found, hb_maps:get(<<"route-path">>, UserMsg, not_found, Opts)),
+    ?assertEqual(
+        <<"/push">>,
+        hb_maps:get(<<"user-path">>, ProxyMsg, not_found, Opts)
+    ).
 
 test_provider_test_parallel_() ->
     {timeout, 30, fun test_provider/0}.
@@ -1973,6 +2201,101 @@ route_nearest_integer_preserves_opts_test_parallel() ->
     ?assertEqual(
         [<<"http://node-100/chunk">>, <<"http://node-200/chunk">>],
         SelectedURIs
+    ).
+
+route_nearest_route_by_process_test() ->
+    ProcID = hb_util:encode(crypto:strong_rand_bytes(32)),
+    PushPath = <<"/", ProcID/binary, "~process@1.0/push">>,
+    ComputePath = <<"/", ProcID/binary, "~process@1.0/compute=3">>,
+    BaseRoute =
+        #{
+            <<"template">> => <<"^/.{43}(~.*|/).*">>,
+            <<"strategy">> => <<"Nearest">>,
+            <<"nodes">> =>
+                [
+                    #{
+                        <<"prefix">> => <<"http://localhost:8001">>,
+                        <<"salt">> => <<"local1">>,
+                        <<"wallet">> => hb_util:human_id(ar_wallet:to_address(ar_wallet:new()))
+                    },
+                    #{
+                        <<"prefix">> => <<"http://localhost:8002">>,
+                        <<"salt">> => <<"local2">>,
+                        <<"wallet">> => hb_util:human_id(ar_wallet:to_address(ar_wallet:new()))
+                    },
+                    #{
+                        <<"prefix">> => <<"http://localhost:8003">>,
+                        <<"salt">> => <<"local3">>,
+                        <<"wallet">> => hb_util:human_id(ar_wallet:to_address(ar_wallet:new()))
+                    }
+                ]
+        },
+    lists:foreach(
+        fun(RouteBy) ->
+            Routes = [BaseRoute#{ <<"route-by">> => RouteBy }],
+            {ok, PushRoute} = route(#{ <<"path">> => PushPath }, #{ <<"routes">> => Routes }),
+            {ok, ComputeRoute} =
+                route(#{ <<"path">> => ComputePath }, #{ <<"routes">> => Routes }),
+            ?assertEqual(
+                hb_maps:get(<<"prefix">>, PushRoute, #{}),
+                hb_maps:get(<<"prefix">>, ComputeRoute, #{})
+            ),
+            ?assertEqual(
+                <<(hb_maps:get(<<"prefix">>, PushRoute, #{}))/binary, PushPath/binary>>,
+                hb_maps:get(<<"uri">>, PushRoute, #{})
+            ),
+            ?assertEqual(
+                <<(hb_maps:get(<<"prefix">>, ComputeRoute, #{}))/binary, ComputePath/binary>>,
+                hb_maps:get(<<"uri">>, ComputeRoute, #{})
+            )
+        end,
+        [43, <<"^/([^/~]{43})">>]
+    ).
+
+route_nearest_route_by_process_same_wallet_test() ->
+    Wallet = <<"bFUk2NRWuoHgxL4tzJQM5gw09snq66uM_fiPJPyQKP0">>,
+    BaseRoute =
+        #{
+            <<"template">> => <<"^/.{43}(~.*|/).*">>,
+            <<"strategy">> => <<"Nearest">>,
+            <<"nodes">> =>
+                [
+                    #{
+                        <<"prefix">> => <<"http://localhost:8001">>,
+                        <<"salt">> => <<"local1">>,
+                        <<"wallet">> => Wallet
+                    },
+                    #{
+                        <<"prefix">> => <<"http://localhost:8002">>,
+                        <<"salt">> => <<"local2">>,
+                        <<"wallet">> => Wallet
+                    },
+                    #{
+                        <<"prefix">> => <<"http://localhost:8003">>,
+                        <<"salt">> => <<"local3">>,
+                        <<"wallet">> => Wallet
+                    }
+                ]
+        },
+    lists:foreach(
+        fun(RouteBy) ->
+            Routes = [BaseRoute#{ <<"route-by">> => RouteBy }],
+            Prefixes =
+                lists:usort(
+                    [
+                        begin
+                            ProcID = hb_util:encode(crypto:hash(sha256, <<N:256>>)),
+                            Path = <<"/", ProcID/binary, "~process@1.0/push">>,
+                            {ok, Route} = route(#{ <<"path">> => Path }, #{ <<"routes">> => Routes }),
+                            hb_maps:get(<<"prefix">>, Route, #{})
+                        end
+                    ||
+                        N <- lists:seq(1, 30)
+                    ]
+                ),
+            ?assert(length(Prefixes) > 1)
+        end,
+        [43, <<"^/([^/~]{43})">>]
     ).
 
 route_multirequest_parallel_limit_test_parallel_() ->
