@@ -90,7 +90,7 @@
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 %%% Shortcuts and tools:
 -export([keys/2]).
--export([get/3, get/4, get_first/2, get_first/3]).
+-export([as/3, get/3, get/4, get_first/2, get_first/3]).
 -export([set/3, set/4, deep_set/3, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
 -include("include/hb.hrl").
@@ -105,6 +105,18 @@
     ]
 ).
 
+%% @doc Small helper to extend a message with a device.
+as(Device, Link, Opts) when ?IS_LINK(Link) ->
+    as(Device, hb_cache:ensure_loaded(Link, Opts), Opts);
+as(Device, Msg, _Opts) when is_map(Msg) ->
+    hb_private:set_priv(
+        #{
+            <<"device">> => Device,
+            <<"...">> => Msg
+        },
+        hb_private:from_message(Msg)
+    ).
+
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
 %% This function comes in `/3`-`/5` variants, allowing the caller to optionally
@@ -118,12 +130,12 @@ raw(Base, Req, Opts) ->
 raw(Device, Base, Req, Opts) ->
     raw(Device, undefined, Base, Req, Opts).
 raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
-    ?prim_dbg(
-        {executing,
-            {forced_device, ForcedDevice},
-            {forced_key, ForcedKey}
-        }
-    ),
+    % ?prim_dbg(
+    %     {executing,
+    %         {forced_device, ForcedDevice},
+    %         {forced_key, ForcedKey}
+    %     }
+    % ),
     from_context(
         do(
             to_context(
@@ -313,8 +325,12 @@ stage_1(Ctx = #{ <<"base">> := Base, <<"path">> := Path, <<"opts">> := Opts }) -
         {error, Reason} ->
             {error, Ctx#{ <<"status">> => error, <<"reason">> => Reason }}
     end;
-stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) ->
-    stage_1(Ctx#{ <<"path">> => hb_path:hd(Req, Opts) }).
+stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) when is_map(Req) ->
+    stage_1(Ctx#{ <<"path">> => hb_path:hd(Req, Opts) });
+stage_1(Ctx = #{ <<"request">> := Key }) ->
+    % If the request is for a direct key we normalize it to a message with 
+    % only a path of that key.
+    stage_1(Ctx#{ <<"request">> => #{ <<"path">> => normalize_key(Key) } }).
 
 %% @doc Lookup the device and function to use during an execution.
 stage_2(
@@ -456,8 +472,9 @@ stage_5(Ctx = #{
 }) ->
     case hb_cache_control:maybe_lookup(Base, Req, Opts) of
         {continue, NewBase, NewReq} ->
-            {ok,
-                #{
+            {
+                ok,
+                Ctx#{
                     <<"varied-base">> => NewBase,
                     <<"varied-request">> => NewReq
                 }
@@ -559,7 +576,7 @@ stage_9(
         <<"result">> := Result,
         <<"opts">> := Opts
     }
-) ->
+) when Normalizer =/= none ->
     {
         ok,
         Ctx#{
