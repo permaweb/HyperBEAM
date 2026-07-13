@@ -25,7 +25,7 @@
 %%% literal key when it is self-describing (e.g. `*').
 -module(hb_hashpath).
 %%% Create and parse hashpaths.
--export([format/1, parse/1, context/1]).
+-export([format/2, parse/2, context/2]).
 %%% Verify hashpath claims.
 -export([verify_all/2, verify_part/3]).
 -include("include/hb.hrl").
@@ -61,10 +61,15 @@ format_base(Ctx, Opts) ->
 
 %% @doc General utility for extracting the ID of a message by its name from a
 %% context if it is already known, recomputing only if necessary.
-find_id(Name, #{ << Name/binary, "-id">> := ID }, _Opts) ->
-    {ok, ID};
-find_id(Name, #{ Name := Msg }, Opts) ->
-    {ok, hb_message:id(Msg, signers, Opts)};
+find_id(Name, Ctx, _Opts) when is_map_key(<<Name/binary, "-id">>, Ctx) ->
+    {ok, maps:get(Name, Ctx)};
+find_id(Name, Ctx, Opts) when is_map_key(Name, Ctx) ->
+    case hb_opts:get(<<"hashpath">>, enabled, Opts) of
+        enabled ->
+            {ok, hb_message:id(maps:get(Name, Ctx), signers, Opts)};
+        _ ->
+            {not_found, Name}
+    end;
 find_id(Name, _Ctx, _Opts) ->
     {not_found, Name}.
 
@@ -93,9 +98,9 @@ format_dependencies(Ctx, Opts) ->
 
 %% @doc If the result of the execution has already been calculated, format it
 %% into the hashpath equivalence component. If not, return an empty string.
-format_equivalence(Ctx = #{ <<"result">> := Result }, Opts) ->
+format_equivalence(Ctx = #{ <<"varied-result">> := Result }, Opts) ->
     <<(format_normalizer(Ctx, Opts)), Result/binary>>;
-format_equivalence(_) -> <<>>.
+format_equivalence(_, _) -> <<>>.
 
 %% @doc Format the normalizer component of the hashpath.
 format_normalizer(#{ <<"normalizer">> := base }, _Opts) -> <<"=">>;
@@ -133,7 +138,7 @@ context(Hashpath, Opts) ->
 parse_part(undefined, ReqPart, Opts) ->
     parse_request(ReqPart, Opts);
 parse_part(Base, ReqPart, Opts) ->
-    (parse_request(ReqPart, Opts, Base)#{ <<"base-id">> => Base }).
+    (parse_request(ReqPart, Opts, Base))#{ <<"base-id">> => Base }.
 
 %% @doc Parse a single segment of the hashpath into a context segment.
 parse_request(Part, Opts) ->
@@ -161,7 +166,7 @@ parse_request_id(Part, Opts) ->
 %% @doc If the delimiter that starts our segment is `>` we handle the inner
 %% segment as a `VariedBase` and `VariedRequest` pair and get the next delimited
 %% component. If the delimiter is not `>`, we pass the segment forward as-is.
-parse_varied($>, Part2, Ctx0, Opts) ->
+parse_varied($>, Part, Ctx0, _Opts) ->
     {NextDelim, Next, After} = next([$@, $., $=], Part),
     case binary:split(Next, <<"+">>) of
         [VBase, VReq] ->
@@ -174,8 +179,8 @@ parse_varied($>, Part2, Ctx0, Opts) ->
         Malformed ->
             {error, {invalid_variance_parts, Malformed}}
     end;
-parse_varied(NextDelim, Part2, Ctx0, _Opts) ->
-    {next, NextDelim, Part2, Ctx0}.
+parse_varied(NextDelim, Part, Ctx0, _Opts) ->
+    {next, NextDelim, Part, Ctx0}.
 
 %% @doc Parse the dependencies if present. We short-curcuit the parser and 
 %% return the context early if we have already hit the end of the string.
@@ -188,10 +193,10 @@ parse_dependencies(Delim, Part, Ctx0, _Opts) ->
 
 %% @doc Parse the equivalent relationship if stated in the hashpath.
 parse_equivalence(no_match, <<>>, Ctx, _Opts) -> {ok, Ctx};
-parse_equivalence($=, ResultID, Ctx0, _Opts) ->
-    {ok, #{ <<"normalizer">> => base, <<"varied-result-id">> => ResultID }};
-parse_equivalence($., ResultID, Ctx0, _Opts) ->
-    {ok, #{ <<"varied-result-id">> => ResultID }}.
+parse_equivalence($=, ResultID, Ctx, _Opts) ->
+    {ok, Ctx#{ <<"normalizer">> => base, <<"varied-result-id">> => ResultID }};
+parse_equivalence($., ResultID, Ctx, _Opts) ->
+    {ok, Ctx#{ <<"varied-result-id">> => ResultID }}.
 
 %% @doc Utility to split at the next syntax delimiter (e.g. `=`, `.`, `>`, `@`).
 %% Returns the syntax element matched, and the rest of the string. Notably, this
@@ -202,7 +207,7 @@ next(Symbols, S) -> hb_util:split_depth_string_aware_single(Symbols, S).
 
 %% @doc Challenge a complete hashpath, verifying each part's claims.
 verify_all(Bin, Opts) when is_binary(Bin) ->
-    verify_all(parse(Bin), Opts);
+    verify_all(parse(Bin, Opts), Opts);
 verify_all([], _Opts) ->
     % We treat an empty hashpath as failing verification.
     false;
@@ -215,7 +220,7 @@ verify_all(_FinalBase, [], _Opts) ->
     true;
 verify_all(State, [Part | Rest], Opts) ->
     % Add the currently computed state to the part's context and verify it.
-    case verify(Part#{ <<"base">> => State }, Opts) of
+    case verify_context(Part#{ <<"base">> => State }, Opts) of
         {true, ComputedState} -> verify_all(ComputedState, Rest, Opts);
         false -> false
     end.
@@ -223,42 +228,11 @@ verify_all(State, [Part | Rest], Opts) ->
 %% @doc Verify a single hashpath execution contained inside a larger hashpath
 %% sequence.
 verify_part(Hashpath, PartNum, Opts) when is_binary(Hashpath) ->
-    verify_part(parse(Hashpath), PartNum, Opts);
-verify_part([InitialCtx|Rest], PartNum, Opts) ->
-    verify_part(InitialCtx, Rest, PartNum, Opts).
-
-verify_part(State, [], _PartNum, _Opts) ->
-    {error, <<"Part number not found.">>};
-verify_part(State, [Part | Rest], 0, Opts) ->
-    maybe 
-        {true, _} ?=
-            verify_context(
-                Part#{ <<"base">> => State, <<"opts">> => Opts}
-            ),
-        true
-    end;
-verify_part(State, [Next | Rest], PartNum, Opts) ->
-    % Extract the varied-result from the next context and apply it to the current
-    % state.
-    case maps:get(<<"normalizer">>, Next, replace) of
-        replace ->
-            % Replace the full accumulated state with the varied result and
-            % recurse to the next part.
-            verify_part(
-                maps:get(<<"varied-result">>, Next),
-                Rest,
-                PartNum - 1,
-                Opts
-            );
-        base ->
-            % The base normalizer means we should extend the result over the
-            % base state.
-            verify_part(
-                maps:get(<<"varied-result">>, Next)#{ <<"...">> => State },
-                Rest,
-                PartNum - 1,
-                Opts
-            );
+    verify_part(parse(Hashpath, Opts), PartNum, Opts);
+verify_part(Hashpath, PartNum, Opts) ->
+    maybe
+        {ok, Base} ?= load(Hashpath, PartNum, Opts),
+        verify_context(Part#{ <<"base">> => State }, Opts)
     end.
 
 %% @doc Verify a full single context, parsed from a binary hashpath. The context
@@ -276,9 +250,9 @@ verify_context(Ctx, Opts) ->
         ),
     maybe
         {ok, ExecutedCtx} = hb_ao:do(StrippedCtx),
-        true ?= verify_varied(Ctx, ExecutedCtx),
-        true ?= verify_dependencies(Ctx, ExecutedCtx),
-        true ?= verify_equivalence(Ctx, ExecutedCtx),
+        true ?= verify_varied(Ctx, ExecutedCtx, Opts),
+        true ?= verify_dependencies(Ctx, ExecutedCtx, Opts),
+        true ?= verify_equivalence(Ctx, ExecutedCtx, Opts),
         {true, ExecutedCtx}
     else
         {error, Type} ->
@@ -292,7 +266,7 @@ verify_context(Ctx, Opts) ->
 
 %% @doc If varied `Req` and `Base` statements were present in the hashpath,
 %% we verify that they match the executed context.
-verify_varied(HPCtx, ExecutedCtx) ->
+verify_varied(HPCtx, ExecutedCtx, Opts) ->
     maybe
         {ok, HPVBase} ?= find_id(<<"varied-base">>, HPCtx, Opts),
         {ok, ExecVBase} ?= find_id(<<"varied-base">>, ExecutedCtx, Opts),
@@ -301,35 +275,141 @@ verify_varied(HPCtx, ExecutedCtx) ->
         {ok, HPVReq} ?= find_id(<<"varied-request">>, HPCtx, Opts),
         {ok, ExecVReq} ?= find_id(<<"varied-request">>, ExecutedCtx, Opts),
         true ?= HPVReq =:= ExecVReq
-            orelse {error, <<"Varied `Request`s do not match">>},
+            orelse {error, <<"Varied `Request`s do not match">>}
+    else
+        {not_found, _} ->
+            % Skip validation if one or more required components are not 
+            % provided.
+            true
     end.
 
 %% @doc Verify that the dependencies in the hashpath claim match those in the
 %% executed context, if both are present.
-verify_dependencies(HPCtx, ExecutedCtx) ->
+verify_dependencies(HPCtx, ExecutedCtx, Opts) ->
     maybe
         {ok, HPDeps} ?= find_id(<<"dependencies">>, HPCtx, Opts),
         {ok, ExecDeps} ?= find_id(<<"dependencies">>, ExecutedCtx, Opts),
         true ?= HPDeps =:= ExecDeps
             orelse {error, <<"Dependencies do not match">>}
+    else
+        {not_found, <<"dependencies">>} ->
+            % Skip verification if dependencies not provided
+            true
     end.
 
 %% @doc Verify that the results of the execution match those in the claim.
-verify_equivalence(HPCtx, ExecutedCtx) ->
+verify_equivalence(HPCtx, ExecutedCtx, Opts) ->
     maybe
         HPNormalizer = maps:get(<<"normalizer">>, HPCtx, replace),
         ExecNormalizer = maps:get(<<"normalizer">>, ExecutedCtx, replace),
         true ?= HPNormalizer =:= ExecNormalizer
             orelse {error, <<"Normalizers do not match">>},
-        {ok, HPResult} ?= find_id(<<"result">>, HPCtx, Opts),
-        {ok, ExecResult} ?= find_id(<<"result">>, ExecutedCtx, Opts),
+        {ok, HPResult} ?= find_id(<<"varied-result">>, HPCtx, Opts),
+        {ok, ExecResult} ?= find_id(<<"varied-result">>, ExecutedCtx, Opts),
         true ?= HPResult =:= ExecResult
             orelse {error, <<"Results do not match">>}
     end.
 
+%% @doc Load the minimal executable base for a hashpath or a given part number
+%% within it.
+load(Hashpath, Opts) when is_binary(Hashpath) ->
+    load(parse(Hashpath, Opts), Opts);
+load(Parts, Opts) ->
+    load(Parts, length(Parts), Opts).
+load(Hashpath, PartNum, Opts) when is_binary(Hashpath) ->
+    load(parse(Hashpath, Opts), PartNum, Opts);
+load(Parts, PartNum, Opts) ->
+    maybe
+        [Init|Rest] ?= load_sequence(Parts, PartNum, Opts),
+        {ok, InitState} ?= result_from_context(Init, Opts),
+        lists:foldl(
+            fun(Ctx, {error, X}) -> {error, X};
+               (Ctx, {ok, State}) -> result_from_context(State, Ctx, Opts)
+            end,
+            {ok, InitState}
+        )
+    else
+        [] ->
+            {error, <<"Cannot load empty hashpath.">>};
+        {error, X} ->
+            {error, <<"Initial state not loadable: ", (hb_util:bin(X))/binary>>}
+    end.
+
+%% @doc Find the minimal sequence of hashpath contexts to load/apply such that
+%% a valid base can be constructed at position `PartNum`.
+load_sequence(Parts, OutOfBounds, Opts) when length(Parts) > OutOfBounds ->
+    {
+        error,
+        <<
+            "Hashpath part number `",
+            (hb_util:bin(OutOfBounds))/binary,
+            "` not found. Hashpath length: ",
+            (hb_util:bin(length(Parts))),
+            "."
+        >>
+    };
+load_sequence(Parts, PartNum, Opts) ->
+    {
+        ok, 
+        lists:reverse(
+            lists:takewhile(
+                fun(Ctx) ->
+                    case result_from_context(Ctx, Opts) of
+                        {error, _} -> true;
+                        _ -> false
+                    end,
+                lists:reverse(lists:sublist(Parts, PartNum))
+            )
+        )
+    }.
+
+%% @doc Extract, if we can, a workable post-exec `message` from a context either
+%% via the fully qualified result if possible or layering of the `varied-result`
+%% atop the `base` if provided explicitly.
+result_from_context(Ctx, Opts) -> result_from_context(undefined, Ctx, Opts).
+result_from_context(
+    undefined,
+    #{ <<"normalizer">> => replace, <<"varied-result">> => VRes },
+    _Opts
+) ->
+    {ok, VRes};
+result_from_context(
+    S,
+    #{ <<"normalizer">> => replace, <<"varied-result">> => VRes },
+    _Opts
+) ->
+    {ok, Vres};
+result_from_context(
+    undefined,
+    Ctx = #{ <<"normalizer">> => base, <<"varied-result">> => VRes },
+    _Opts
+) ->
+    case find_id(<<"base">>, Ctx, Opts) of
+        {ok, Base} -> {ok, VRes#{ <<"...">> => S }};
+        {not_found, _} ->
+            {
+                error,
+                <<
+                    "Context with `base` extension normalizer",
+                    " without accessible `base`."
+                >>
+            }
+    end;
+result_from_context(
+    S,
+    #{ <<"normalizer">> => base, <<"varied-result">> => VRes },
+    _Opts
+) ->
+    {ok, VRes#{ <<"...">> => S }};
+result_from_context(S, #{ <<"normalizer">> => X }, _Opts) ->
+    {error, <<"Unsupported normalizer `", (hb_util:bin(X))/binary, "`.">>};
+result_from_context(S, Ctx, Opts) ->
+    result_from_context(S, Ctx#{ <<"normalizer">> => replace }, Opts).
+
 %%% Tests
 
 full_form_round_trip_test() ->
+    Opts = #{},
     HP =
         <<
             "BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4"
@@ -339,11 +419,12 @@ full_form_round_trip_test() ->
             "@ZGVwZW5kcy1tZXNzYWdlLWlkLTAwMDAwMDAwMDAwMDAw"
             "=cGF0Y2gtaWQtMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw"
         >>,
-    ?assertEqual(HP, format(parse(HP))).
+    ?assertEqual(HP, format(parse(HP, Opts), Opts)).
 
 compact_form_round_trip_test() ->
+    Opts = #{},
     lists:foreach(
-        fun(HP) -> ?assertEqual(HP, format(parse(HP))) end,
+        fun(HP) -> ?assertEqual(HP, format(parse(HP, Opts), Opts)) end,
         [
             <<"BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4">>,
             <<"BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/balance">>,

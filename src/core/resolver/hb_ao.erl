@@ -290,11 +290,11 @@ do(Ctx0) ->
         {ok, Ctx5} ?= stage_5(Ctx4),
         % Stage 6: Execution.
         {ok, Ctx6} ?= stage_6(Ctx5),
-        % Stage 7: Result caching.
+        % Stage 7: `Normalizer` application and hashpath generation
         {ok, Ctx7} ?= stage_7(Ctx6),
-        % Stage 8: Notify waiters.
+        % Stage 8: Result caching.
         {ok, Ctx8} ?= stage_8(Ctx7),
-        % Stage 9: Extension of result upon original base.
+        % Stage 9: Notify waiters.
         {ok, Ctx9} ?= stage_9(Ctx8),
         % Stage 10: Execution of the `step' hook.
         {ok, Ctx10} ?= stage_10(Ctx9),
@@ -527,10 +527,20 @@ stage_6(Ctx = #{
         }
     }.
 
+%% @doc When specified in the schema for the device call, normalize the
+%% execution's result on top of the `Base` or `Req` message. In cases where
+%% hashpath calculation is disabled (`hashpath => ignore` in the node message,
+%% etc.), we 
+stage_7(Ctx = #{ <<"base">> => Base, <<"opts">> := Opts }) ->
+    maybe
+        {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        {ok, Ctx#{ <<"result">> => Result }}
+    end.
+
 %% @doc Cache the result of an execution if appropriate for the context.
 %% Results that were not freshly and successfully executed (cache hits, direct
 %% key hits, awaited results, non-`ok` statuses) are not stored.
-stage_7(
+stage_8(
     Ctx = #{
         <<"status">> := ok,
         <<"fresh">> := true,
@@ -542,10 +552,10 @@ stage_7(
 ) ->
     hb_cache_control:maybe_store(VariedBase, VariedReq, VariedRes, Opts),
     {ok, Ctx};
-stage_7(Ctx) -> {ok, Ctx}.
+stage_8(Ctx) -> {ok, Ctx}.
 
 %% @doc Return the resolved response to any waiting callers.
-stage_8(
+stage_9(
     Ctx = #{
         <<"leader">> := ExecName,
         <<"varied-request">> := Req,
@@ -561,35 +571,9 @@ stage_8(
         Opts
     ),
     {ok, Ctx};
-stage_8(Ctx) ->
+stage_9(Ctx) ->
     % If we are not the leader, we can ignore the unregister step.
     {ok, Ctx}.
-
-%% @doc When specified in the schema for the device call, normalize the
-%% execution's result on top of the `Base` or `Req` message.
-stage_9(
-    Ctx = #{
-        <<"status">> := ok,
-        <<"normalizer">> := Normalizer,
-        <<"base">> := Base,
-        <<"request">> := Req,
-        <<"varied-result">> := Result,
-        <<"opts">> := Opts
-    }
-) when Normalizer =/= none ->
-    {
-        ok,
-        Ctx#{
-            <<"result">> :=
-                case Normalizer of
-                    base -> Result#{ <<"...">> => Base };
-                    request -> Result#{ <<"...">> => Req };
-                    Fun when is_function(Fun) -> Fun(Base, Result, Opts)
-                end
-        }
-    };
-stage_9(Ctx#{ <<"varied-result">> := Result}) ->
-    {ok, Ctx#{ <<"result">> := Result }}.
 
 %% @doc If a hook has been specified for the `step` action, we call it with our
 %% context including the result.
