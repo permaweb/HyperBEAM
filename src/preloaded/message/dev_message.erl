@@ -1005,6 +1005,48 @@ test_verify(KeyType) ->
         )
     ).
 
+verified_committers_supports_httpsig_and_ed25519_test() ->
+    Msg = #{ <<"a">> => <<"b">> },
+    RequiredKeys = [<<"a">>],
+    HTTPSigWallet = ar_wallet:new(?RSA_KEY_TYPE),
+    HTTPSigSigned =
+        hb_message:commit(
+            Msg,
+            #{ <<"priv-wallet">> => HTTPSigWallet },
+            #{ <<"commitment-device">> => <<"httpsig@1.0">> }
+        ),
+    HTTPSigCommitters =
+        hb_message:verified_committers(HTTPSigSigned, RequiredKeys, #{}),
+    ?assert(
+        lists:member(
+            hb_util:human_id(ar_wallet:to_address(HTTPSigWallet)),
+            HTTPSigCommitters
+        )
+    ),
+    Ed25519Wallet = ar_wallet:new(?EDDSA_KEY_TYPE),
+    Ed25519Signed =
+        hb_message:commit(
+            Msg,
+            #{ <<"priv-wallet">> => Ed25519Wallet },
+            #{
+                <<"commitment-device">> => <<"ans104@1.0">>,
+                <<"type">> => ?EDDSA_SIGN_TYPE
+            }
+        ),
+    Ed25519Committers =
+        hb_message:verified_committers(Ed25519Signed, RequiredKeys, #{}),
+    ?assert(
+        lists:member(
+            hb_util:human_id(
+                ar_wallet:to_address(
+                    ar_wallet:to_pubkey(Ed25519Wallet),
+                    ?EDDSA_KEY_TYPE
+                )
+            ),
+            Ed25519Committers
+        )
+    ).
+
 set_nested_link_test() ->
     Opts = #{ <<"store">> => [hb_test_utils:test_store(hb_store_lmdb)] },
 
