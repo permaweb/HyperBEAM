@@ -77,6 +77,8 @@
         <<"preloaded-store">> =>
             {"HB_PRELOADED_STORE", fun preloaded_store_from_env/1},
         <<"port">> => {"HB_PORT", fun erlang:list_to_integer/1, "8734"},
+        <<"metrics-port">> =>
+            {"HB_METRICS_PORT", fun erlang:list_to_integer/1},
         <<"mode">> => {"HB_MODE", fun list_to_existing_atom/1},
         <<"paranoid-verify">> =>
             {"HB_PARANOID", fun topic_list_to_atoms/1, "false"},

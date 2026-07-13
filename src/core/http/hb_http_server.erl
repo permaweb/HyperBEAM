@@ -239,7 +239,7 @@ new_server(RawNodeMsg) ->
         max_connections => infinity,
         idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg)
     },
-    PrometheusOpts =
+    {PrometheusOpts, MetricsPort} =
         case hb_opts:get(prometheus, not hb_features:test(), NodeMsg) of
             true ->
                 ?event(prometheus,
@@ -249,10 +249,15 @@ new_server(RawNodeMsg) ->
                 try
                     application:ensure_all_started([prometheus, prometheus_cowboy, prometheus_ranch]),
                     prometheus_registry:register_collectors([hb_metrics_collector]),
-                    ProtoOpts#{
-                        metrics_callback =>
-                            fun prometheus_cowboy2_instrumenter:observe/1,
-                        stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
+                    {ok, MetricsPortActual} =
+                        maybe_start_metrics_server(ServerID, NodeMsg),
+                    {
+                        ProtoOpts#{
+                            metrics_callback =>
+                                fun prometheus_cowboy2_instrumenter:observe/1,
+                            stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
+                        },
+                        MetricsPortActual
                     }
                 catch
                     Type:Reason ->
@@ -262,13 +267,13 @@ new_server(RawNodeMsg) ->
                         ?event(prometheus,
                             {prometheus_not_started, {type, Type}, {reason, Reason}}
                         ),
-                        ProtoOpts
+                        {ProtoOpts, undefined}
                 end;
             false ->
                 ?event(prometheus,
                     {prometheus_not_started, {test_mode, hb_features:test()}}
                 ),
-                ProtoOpts
+                {ProtoOpts, undefined}
         end,
     DefaultProto =
         case hb_features:http3() of
@@ -287,7 +292,15 @@ new_server(RawNodeMsg) ->
     % Update the node message with the actual port that was used, in the event
     % that the OS assigned a different port. This happens, for example, when we
     % use port 0.
-    set_opts(NodeMsg#{ <<"port">> => Port }),
+    NodeMsgWithPorts =
+        case MetricsPort of
+            undefined -> NodeMsgWithID#{ <<"port">> => Port };
+            _ -> NodeMsgWithID#{
+                <<"port">> => Port,
+                <<"metrics-port">> => MetricsPort
+            }
+        end,
+    set_opts(NodeMsgWithPorts),
     ?event(http,
         {http_server_started,
             {listener, Listener},
@@ -298,6 +311,46 @@ new_server(RawNodeMsg) ->
         }
     ),
     {ok, Listener, Port}.
+
+%% @doc Start a dedicated Prometheus listener when a metrics port is configured.
+maybe_start_metrics_server(
+        ServerID,
+        #{ <<"metrics-port">> := Port } = NodeMsg
+    ) when is_integer(Port) ->
+    start_metrics_server(ServerID, NodeMsg);
+maybe_start_metrics_server(_ServerID, _NodeMsg) ->
+    {ok, undefined}.
+
+%% @doc Start a dedicated listener for Prometheus scrapes. Its connections are
+%% independent from the AO-Core HTTP listener, keeping metrics available when
+%% the latter reaches its connection limit.
+start_metrics_server(ServerID, NodeMsg) ->
+    ListenerID = <<ServerID/binary, "-metrics">>,
+    Dispatcher =
+        cowboy_router:compile(
+            [{'_', [
+                {
+                    "/~hyperbuddy@1.0/metrics",
+                    prometheus_cowboy2_handler,
+                    []
+                }
+            ]}]
+        ),
+    TransportOpts = #{
+        socket_opts => [{port, maps:get(<<"metrics-port">>, NodeMsg)}],
+        max_connections => hb_opts:get(metrics_max_connections, 10000, NodeMsg),
+        num_acceptors => hb_opts:get(
+            metrics_num_acceptors,
+            erlang:system_info(schedulers) * 4,
+            NodeMsg
+        )
+    },
+    {ok, _} = cowboy:start_clear(
+        ListenerID,
+        TransportOpts,
+        #{env => #{dispatch => Dispatcher}, stream_handlers => [cowboy_stream_h]}
+    ),
+    {ok, ranch:get_port(ListenerID)}.
 
 start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http3, ServerID}),
@@ -663,6 +716,34 @@ set_node_opts_test() ->
         }),
     {ok, LiveOpts} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     ?assert(hb_ao:get(<<"test-success">>, LiveOpts, false, #{})).
+
+%% @doc Prometheus metrics are served by a listener independent of the node.
+metrics_listener_test() ->
+    Wallet = ar_wallet:new(),
+    start_node(
+        #{
+            <<"priv-wallet">> => Wallet,
+            <<"prometheus">> => true,
+            <<"metrics-port">> => 0
+        }
+    ),
+    ServerID = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    Opts = get_opts(#{ <<"http-server">> => ServerID }),
+    MetricsPort = maps:get(<<"metrics-port">>, Opts),
+    ?assert(is_integer(MetricsPort)),
+    {ok, {{_, 200, _}, _, _}} =
+        httpc:request(
+            get,
+            {
+                lists:flatten(io_lib:format(
+                    "http://localhost:~p/~~hyperbuddy@1.0/metrics",
+                    [MetricsPort]
+                )),
+                []
+            },
+            [],
+            []
+        ).
 
 %% @doc Test the set_opts/2 function that merges request with options,
 %% manages node history, and updates server state.
