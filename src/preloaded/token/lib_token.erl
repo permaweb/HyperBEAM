@@ -54,13 +54,8 @@ validate_address(Address, CustomList, Opts) when is_binary(Address), is_list(Cus
                     orelse {error, <<"Address is a reserved ao/custom key">>},
                 true ?= (not is_reserved_custom_key(AccountKey, CanonicalReservedKeys))
                     orelse {error, <<"Address is a reserved ao/custom key">>},
-                case binary:match(
-                    Address,
-                    [<<"/">>, <<"\\">>, <<" ">>, <<"\n">>, <<"\r">>, <<"\t">>]
-                ) of
-                    nomatch -> true;
-                    _ -> {error, <<"Address cannot contain path separators or whitespaces">>}
-                end
+                true ?= valid_address_chars(Address)
+                    orelse {error, <<"Address contains unsupported characters.">>}
             end
     end;
 validate_address(_, _, _) ->
@@ -80,4 +75,17 @@ is_reserved_trie_key(Key, ReservedKeys) ->
 is_reserved_custom_key(Key, List) when is_binary(Key), is_list(List) ->
     lists:member(Key, List);
 is_reserved_custom_key(_, _) ->
+    false.
+
+%% @doc Return true when every byte is in the supported account alphabet.
+valid_address_chars(<<>>) ->
+    true;
+valid_address_chars(<<Char, Rest/binary>>) when
+        Char >= $A, Char =< $Z;
+        Char >= $a, Char =< $z;
+        Char >= $0, Char =< $9;
+        Char =:= $_;
+        Char =:= $- ->
+    valid_address_chars(Rest);
+valid_address_chars(_) ->
     false.
