@@ -799,3 +799,148 @@ relay_schedule_ans104_test() ->
         ),
     ?event(debug_test, {post_result, PushRes}),
     ?assertMatch({ok, #{ <<"status">> := 200, <<"slot">> := 1 }}, PushRes).
+
+dai_oracle_reconciliation_test_() ->
+    {timeout, 1800, fun dai_oracle_reconciliation/0}.
+
+dai_oracle_reconciliation() ->
+    Opts = #{
+        <<"process-cache-frequency">> => 1,
+        <<"trusted-devices">> =>
+            #{ <<"eth-client@1.0">> =>
+                <<"cGDM0T6dpC5Adm-ahe9JIG7IUlq5C-6FCFRlkzXxC7A">> },
+        <<"load-remote-devices">> => true
+    },
+    Bridge = <<"0x6A1B588B0684dACE1f53C5820111F400B3dbfeBf">>,
+    Head = dai_head_block(Opts),
+    Baseline = Head - 30000,
+    Seed = dai_eth_call(Opts, Bridge, <<"totalDepositedInPublicPools()">>, dai_hex(Baseline)),
+    Process = dai_oracle_process(Opts, Baseline, Seed),
+    {ok, _} = hb_cache:write(Process, Opts),
+    SafeBlock = dai_sync(Process, Opts),
+
+    {ok, OracleTotal} = hb_ao:resolve(Process, <<"now/total_staked">>, Opts),
+    {ok, OracleBps} = hb_ao:resolve(Process, <<"now/yield/bps">>, Opts),
+
+    BlockHex = dai_hex(SafeBlock),
+    ChainTotal =
+        dai_eth_call(Opts, Bridge, <<"totalDepositedInPublicPools()">>, BlockHex),
+    ChainDsr =
+        dai_eth_call(
+            Opts,
+            <<"0x197E90f9FAD81970bA7976f33CbD77088E5D7cf7">>,
+            <<"dsr()">>,
+            BlockHex
+        ),
+    ExpectedBps = dai_dsr_to_bps(ChainDsr),
+    ?event(debug_test,
+        {dai_reconcile,
+            {baseline, Baseline}, {seed, Seed},
+            {oracle_total, OracleTotal}, {chain_total, ChainTotal},
+            {oracle_bps, OracleBps}, {expected_bps, ExpectedBps},
+            {block, SafeBlock}}),
+    ?assertEqual(hb_util:bin(ChainTotal), hb_util:bin(OracleTotal)),
+    ?assertEqual(ExpectedBps, hb_util:bin(OracleBps)).
+
+%% Read the current head block number through eth-client.
+dai_head_block(Opts) ->
+    Req = #{
+        <<"device">> => <<"eth-client@1.0">>,
+        <<"rpc-url">> =>
+            <<"https://rpc.ankr.com/eth/74d2b128de93394f12cc690d47fd64995b86447646f83b6e5711fa10217eab9d">>,
+        <<"rpc-method">> => <<"eth_blockNumber">>,
+        <<"rpc-params">> => <<"[]">>
+    },
+    {ok, Res} = hb_ao:resolve(Req, <<"rpc">>, Opts),
+    Body = hb_ao:get(<<"body">>, Res, Opts),
+    binary_to_integer(binary:part(Body, 2, byte_size(Body) - 2), 16).
+
+dai_oracle_process(Opts, DeployBlock, Seed) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    {ok, DaiSrc} = file:read_file("test/dai-oracle.lua"),
+    {ok, JsonSrc} = file:read_file("test/json.lua"),
+    Module =
+        <<
+            "package.preload[\"json\"] = function()\n",
+            JsonSrc/binary,
+            "\nend\n",
+            DaiSrc/binary
+        >>,
+    hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"type">> => <<"Process">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"execution-device">> => <<"lua@5.3a">>,
+            <<"module">> => #{
+                <<"content-type">> => <<"application/lua">>,
+                <<"body">> => Module
+            },
+            <<"authority">> => [ Address ],
+            <<"scheduler-location">> => Address,
+            <<"deploy-block">> => DeployBlock,
+            <<"seed-total-staked">> => Seed,
+            <<"test-random-seed">> => rand:uniform(1337)
+        },
+        Opts#{ <<"priv-wallet">> => Wallet }
+    ).
+
+dai_sync(Process, Opts) ->
+    Before = dai_last_block(Process, Opts),
+    Msg = dai_schedule(Process, Opts, #{ <<"action">> => <<"sync">> }),
+    {ok, _} = hb_ao:resolve(Process, Msg, Opts#{ <<"hashpath">> => ignore }),
+    After = dai_last_block(Process, Opts),
+    case After > Before of
+        true -> dai_sync(Process, Opts);
+        false -> After
+    end.
+
+dai_last_block(Process, Opts) ->
+    case hb_ao:resolve(Process, <<"now/last_block">>, Opts) of
+        {ok, V} when is_float(V) -> trunc(V);
+        {ok, V} when is_integer(V) -> V;
+        {ok, V} -> hb_util:int(V);
+        _ -> 0
+    end.
+
+dai_schedule(Process, Opts, MsgBase) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    hb_message:commit(
+        #{
+            <<"path">> => <<"schedule">>,
+            <<"method">> => <<"POST">>,
+            <<"body">> =>
+                hb_message:commit(
+                    MsgBase#{
+                        <<"target">> => hb_message:id(Process, all),
+                        <<"type">> => <<"Message">>,
+                        <<"random-seed">> => rand:uniform(1337)
+                    },
+                    Opts#{ <<"priv-wallet">> => Wallet }
+                )
+        },
+        Opts#{ <<"priv-wallet">> => Wallet }
+    ).
+
+dai_eth_call(Opts, To, Fn, BlockHex) ->
+    Req = #{
+        <<"device">> => <<"eth-client@1.0">>,
+        <<"rpc-url">> =>
+            <<"https://rpc.ankr.com/eth/74d2b128de93394f12cc690d47fd64995b86447646f83b6e5711fa10217eab9d">>,
+        <<"to">> => To,
+        <<"function">> => Fn,
+        <<"returns">> => <<"uint256">>,
+        <<"block">> => BlockHex
+    },
+    {ok, Res} = hb_ao:resolve(Req, <<"call">>, Opts),
+    hb_ao:get(<<"body/data">>, Res, Opts).
+
+dai_dsr_to_bps(RayBin) ->
+    Ray = binary_to_integer(hb_util:bin(RayBin)),
+    PerSecond = Ray / 1.0e27,
+    Apy = math:pow(PerSecond, 31536000) - 1,
+    integer_to_binary(round(Apy * 10000)).
+
+dai_hex(N) ->
+    iolist_to_binary(io_lib:format("0x~.16b", [hb_util:int(N)])).
