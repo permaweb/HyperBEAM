@@ -688,16 +688,9 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                 maps:get(<<"body">>, ErrMsg, <<>>)
             };
         {_, <<"httpsig@1.0">>, _} ->
-            TABM =
-                hb_message:convert(
-                    Message,
-                    tabm,
-                    <<"structured@1.0">>,
-                    Opts#{ <<"topic">> => ao_internal }
-                ),
             EncMessage =
                 hb_message:convert(
-                    TABM,
+                    Message,
                     case AcceptBundle of
                         true ->
                             #{
@@ -713,8 +706,8 @@ encode_reply(Status, TABMReq, Message, Opts) ->
                                     hb_opts:get(generate_index, true, Opts)
                             }
                     end,
-                    tabm,
-                    Opts
+                    <<"structured@1.0">>,
+                    Opts#{ <<"topic">> => ao_internal }
                 ),
             {
                 Status,
@@ -1188,6 +1181,12 @@ record_request_metric(TotalDuration, ReplyDuration, StatusCode) ->
 test_opts() ->
     #{ <<"store">> => hb_test_utils:test_store(), <<"priv-wallet">> => hb:wallet() }.
 
+isolated_test_opts() ->
+    #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new()
+    }.
+
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
     TestMsg = #{ <<"path">> => <<"/key1">>, <<"key1">> => <<"Value1">> },
@@ -1336,6 +1335,103 @@ ans104_wasm_test() ->
             Msg#{ <<"path">> => <<"/init/compute/results">> },
             ClientOpts
         )
+    ).
+
+nested_signed_bundle_over_http_test() ->
+    Parent = self(),
+    ServerOpts =
+        (isolated_test_opts())#{
+            <<"port">> => 0,
+            <<"on">> => #{
+                <<"request">> => #{
+                    <<"device">> => #{
+                        <<"request">> =>
+                            fun(_, HookReq, HookOpts) ->
+                                Parent ! {nested_httpsig_request, HookReq},
+                                {error, #{
+                                    <<"status">> => 200,
+                                    <<"response">> =>
+                                        nested_signed_response(HookOpts)
+                                }}
+                            end
+                    }
+                }
+            }
+        },
+    ClientOpts =
+        (isolated_test_opts())#{ <<"http-only-result">> => false },
+    Inner = nested_signed_response(ClientOpts),
+    Request =
+        hb_message:commit(
+            #{
+                <<"accept-bundle">> => true,
+                <<"codec-device">> => <<"httpsig@1.0">>,
+                <<"require-codec">> => <<"httpsig@1.0">>,
+                <<"response">> => Inner
+            },
+            ClientOpts,
+            #{
+                <<"commitment-device">> => <<"httpsig@1.0">>,
+                <<"bundle">> => true
+            }
+        ),
+    {ok, Reply} =
+        post(
+            hb_http_server:start_node(ServerOpts),
+            <<"/~meta@1.0/info">>,
+            Request,
+            ClientOpts
+        ),
+    Received =
+        receive
+            {nested_httpsig_request, #{ <<"request">> := Req }} -> Req
+        after 5_000 ->
+            error(nested_httpsig_request_timeout)
+        end,
+    ?assert(hb_message:verify(Received, all, ServerOpts)),
+    ReceivedInner = maps:get(<<"response">>, Received),
+    ?assertEqual(Inner, ReceivedInner),
+    ?assert(hb_message:verify(ReceivedInner, all, ServerOpts)),
+    ?assertEqual(
+        ReceivedInner,
+        maps:get(
+            <<"response">>,
+            hb_cache:ensure_all_loaded(Received, ServerOpts)
+        )
+    ),
+    ReplyInner = maps:get(<<"response">>, Reply),
+    ?assert(hb_message:verify(Reply, all, ClientOpts)),
+    ?assert(hb_message:verify(ReplyInner, all, ClientOpts)),
+    ?assertEqual(
+        ReplyInner,
+        hb_cache:ensure_all_loaded(ReplyInner, ClientOpts)
+    ).
+
+nested_signed_response(Opts) ->
+    Response = #{
+        <<"body">> => #{ <<"nested">> => #{ <<"value">> => <<"x">> } },
+        <<"status">> => 200
+    },
+    {ok, _} = hb_cache:write(Response, Opts),
+    Unsigned =
+        hb_cache:ensure_all_loaded(
+            hb_message:commit(
+                Response,
+                Opts,
+                #{
+                    <<"commitment-device">> => <<"httpsig@1.0">>,
+                    <<"type">> => <<"unsigned">>
+                }
+            ),
+            Opts
+        ),
+    hb_message:commit(
+        Unsigned,
+        Opts,
+        #{
+            <<"commitment-device">> => <<"httpsig@1.0">>,
+            <<"bundle">> => true
+        }
     ).
 
 send_large_signed_request_test() ->
