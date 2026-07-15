@@ -436,6 +436,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
         ok ->
             case is_bundle_tx(TX, Opts) of
                 false ->
+                    % A plain (non-bundle) L1 transaction: cache its header so
+                    % its fields are locally matchable. Bundle transactions are
+                    % handled below -- caching their data-free header here would
+                    % shadow the full bundle written by the bundle indexer.
+                    ok = cache_tx_header(TX, Opts),
                     counters(0, 0, 0);
                 true when IndexMode =/= shallow ->
                     try
@@ -842,6 +847,34 @@ resolve_tx_header(TXID, Opts) ->
                 }
             ),
             error
+    end.
+
+%% @doc Cache a transaction's header -- already resolved during the block scan
+%% -- as a structured message in the local store, so that its fields (notably
+%% `target') are matchable via `hb_cache:match'/`~query@1.0' without a further
+%% gateway fetch. The header carries no data (it is resolved with
+%% `exclude-data'), so storing it is cheap and is done in every index mode. A
+%% header that fails to convert or write is logged and skipped rather than
+%% failing the whole block.
+cache_tx_header(TX, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    try
+        Msg =
+            hb_message:convert(
+                TX, <<"structured@1.0">>, <<"tx@1.0">>, LocalOpts),
+        {ok, _} = hb_cache:write(Msg, LocalOpts),
+        ok
+    catch
+        Class:Reason ->
+            ?event(
+                copycat_short,
+                {tx_header_cache_skipped,
+                    {tx_id, {explicit, hb_util:encode(TX#tx.id)}},
+                    {class, Class},
+                    {reason, Reason}
+                }
+            ),
+            ok
     end.
 
 %% @doc Record event metrics (count and duration) using hb_event:record.
@@ -1657,3 +1690,36 @@ small_block_full_mode_test() ->
     ?assert(hb_message:verify(L3Header, all, Opts), {verify_failed, L3ID}),
     ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
     ok.
+
+%% @doc Every index mode caches L1 transaction headers in the local store, so a
+%% transaction's committed fields -- here its `target' -- are matchable from the
+%% node's own cache after a `shallow' index, with no further gateway round-trip.
+%% Uses a permanent mainnet transaction (`TXID' at block `Block', targeting
+%% `Target').
+cached_tx_header_matchable_by_target_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1958993,
+    TXID = <<"Y8GnKytC57VUk7W7FlGnD1oH4OAwFHyP-pJPGCJBa3Y">>,
+    Target = <<"q3SycbYpO1lz-S6V2kd7FG3DIZ3AU0NrKKxWw4C3yos">>,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(Block))/binary, "&"
+                "to=", (hb_util:bin(Block))/binary, "&"
+                "mode=shallow"
+            >>,
+            Opts
+        ),
+    LocalOpts = hb_store:scope(Opts, local),
+    % The header is cached from the block scan and reads back from the local
+    % store as the canonical signed transaction.
+    {ok, Header} = hb_cache:read(TXID, LocalOpts),
+    ?assert(hb_message:verify(Header, all, Opts), {verify_failed, TXID}),
+    ?assertEqual(TXID, hb_message:id(Header, signed, Opts)),
+    % Its `target' is indexed locally, so a recipient match finds it with no
+    % gateway query.
+    ?assertMatch(
+        {ok, [_ | _]},
+        hb_cache:match(#{ <<"field-target">> => Target }, LocalOpts)
+    ).
