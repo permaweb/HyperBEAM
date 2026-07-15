@@ -716,12 +716,9 @@ request_response_hooks_test() ->
                                     end
                             }
                         }
-                },
-            <<"http-extra-opts">> => #{
-                <<"cache-control">> => [<<"no-store">>, <<"no-cache">>]
-            }
+                }
         }),
-    hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
+    {ok, _} = hb_http:get(Node, <<"/~meta@1.0/info">>, #{}),
     % Receive both of the responses from the hooks, if possible.
     Res =
         receive
