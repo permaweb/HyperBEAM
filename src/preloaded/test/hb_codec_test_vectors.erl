@@ -603,6 +603,12 @@ verify_nested_complex_signed_test(Codec, Opts) ->
         #{ <<"device">> := <<"tx@1.0">> } -> Codec#{ <<"device">> => <<"ans104@1.0">> };
         _ -> Codec
     end,
+    ConversionCodec =
+        case Codec of
+            #{ <<"device">> := Device, <<"bundle">> := true } -> Device;
+            _ ->
+                Codec
+        end,
     Msg =
         hb_message:commit(#{
             <<"path">> => <<"schedule">>,
@@ -639,9 +645,15 @@ verify_nested_complex_signed_test(Codec, Opts) ->
     ?assert(hb_message:verify(Inner, all, Opts)),
     ?assert(hb_message:verify(LoadedInitialInner, all, Opts)),
     % % Test encoding and decoding.
-    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    Encoded = hb_message:convert(Msg, ConversionCodec, <<"structured@1.0">>, Opts),
     ?event({encoded, Encoded}),
-    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    Decoded =
+        hb_message:convert(
+            Encoded,
+            <<"structured@1.0">>,
+            ConversionCodec,
+            Opts
+        ),
     ?event({decoded, Decoded}),
     LoadedMsg = hb_cache:ensure_all_loaded(Decoded, Opts),
     ?event({loaded, LoadedMsg}),
@@ -998,14 +1010,21 @@ deep_multisignature_test() ->
         hb_message:commit(
             Msg,
             Opts#{ <<"priv-wallet">> => Wallet1 },
-            Codec
+            #{
+                <<"commitment-device">> => Codec,
+                <<"bundle">> => true,
+                <<"committed">> => [<<"body">>]
+            }
         ),
     ?event({signed_msg, SignedMsg}),
     MsgSignedTwice =
         hb_message:commit(
             SignedMsg,
             Opts#{ <<"priv-wallet">> => Wallet2 },
-            Codec
+            #{
+                <<"commitment-device">> => Codec,
+                <<"committed">> => [<<"data">>, <<"test-key">>]
+            }
         ),
     ?event({signed_msg_twice, MsgSignedTwice}),
     ?assert(hb_message:verify(MsgSignedTwice, all, Opts)),

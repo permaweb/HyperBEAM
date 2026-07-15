@@ -2,7 +2,8 @@
 %%% message as TABM and returns an encoded JSON string representation.
 %%% This codec utilizes the httpsig@1.0 codec for signing and verifying.
 -module(dev_json).
--export([to/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
+-device_libraries([lib_arweave_common]).
+-export([to/3, to_hint/3, from/3, commit/3, verify/3, committed/3, content_type/1]).
 -export([deserialize/3, serialize/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
@@ -10,11 +11,20 @@
 %% @doc Return the content type for the codec.
 content_type(_) -> {ok, <<"application/json">>}.
 
+%% @doc Apply the bundle state of the delegated HTTPSig commitment.
+to_hint(Msg, Req, Opts) ->
+    case lib_arweave_common:bundle_hint(<<"httpsig@1.0">>, Msg, Req, Opts) of
+        not_found -> {ok, Req};
+        Hint -> Hint
+    end.
+
 %% @doc Encode a message to a JSON string, using JSON-native typing.
 to(Msg, _Req, _Opts) when is_binary(Msg) ->
     {ok, hb_util:bin(json:encode(Msg))};
 to(Msg, Req, Opts) ->
     ConvOpts = Opts#{ <<"hashpath">> => ignore },
+    HintedReq = hb_util:ok(to_hint(Msg, Req, Opts)),
+    Bundle = hb_maps:get(<<"bundle">>, HintedReq, false, Opts),
     % The input to this function will be a TABM message, so we:
     % 1. Convert it to a structured message.
     % 2. Load any linked items if we are in `bundle' mode.
@@ -28,7 +38,7 @@ to(Msg, Req, Opts) ->
             ConvOpts
         ),
     Loaded =
-        case hb_maps:get(<<"bundle">>, Req, false, Opts) of
+        case Bundle of
             true -> hb_cache:ensure_all_loaded(Restructured, Opts);
             false -> Restructured
         end,
@@ -38,7 +48,8 @@ to(Msg, Req, Opts) ->
             tabm,
             #{
                 <<"device">> => <<"structured@1.0">>,
-                <<"encode-types">> => [<<"atom">>]
+                <<"encode-types">> => [<<"atom">>],
+                <<"bundle">> => Bundle
             },
             ConvOpts
         ),
@@ -60,8 +71,9 @@ from(JSON, Req, Opts) ->
             tabm,
             ConvOpts
         ),
+    HintedReq = hb_util:ok(to_hint(Structured, Req, Opts)),
     ?event(debug_json, {structured, Structured}, Opts),
-    case hb_maps:get(<<"accept-codec">>, Req, undefined, Opts) of
+    case hb_maps:get(<<"accept-codec">>, HintedReq, undefined, Opts) of
         <<"structured@1.0">> -> {ok, Structured};
         _ ->
             % Re-encode the structured message back to TABM for the caller.
@@ -69,7 +81,7 @@ from(JSON, Req, Opts) ->
                 hb_message:convert(
                     Structured,
                     tabm,
-                    Req#{ <<"device">> => <<"structured@1.0">> },
+                    HintedReq#{ <<"device">> => <<"structured@1.0">> },
                     ConvOpts
                 ),
             ?event(debug_json, {tabm, TABM}, Opts),

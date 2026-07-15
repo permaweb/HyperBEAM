@@ -5,8 +5,9 @@
 %%% are found in this module, while the codec functions are relayed to the 
 %%% `dev_httpsig_conv' module.
 -module(dev_httpsig).
+-device_libraries([lib_arweave_common]).
 %%% Codec API functions
--export([to/3, from/3]).
+-export([to/3, to_hint/3, from/3]).
 %%% Uni-directional codec support (_to_ binary/header+body components), but not 
 %%% back.
 -export([serialize/2, serialize/3]).
@@ -285,6 +286,13 @@ maybe_bundle_tag_commitment(Commitment, Req, _Opts) ->
     case hb_util:atom(maps:get(<<"bundle">>, Req, false)) of
         true -> Commitment#{ <<"bundle">> => <<"true">> };
         false -> Commitment
+    end.
+
+%% @doc Apply the bundle state of an HTTPSig commitment to a conversion.
+to_hint(Msg, Req, Opts) ->
+    case lib_arweave_common:bundle_hint(<<"httpsig@1.0">>, Msg, Req, Opts) of
+        not_found -> {ok, Req};
+        Hint -> Hint
     end.
 
 %% @doc Derive the set of keys to commit to from a `commit` request and a 

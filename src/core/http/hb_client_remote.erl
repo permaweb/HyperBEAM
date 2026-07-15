@@ -37,7 +37,7 @@ prefix_keys(Prefix, Message, Opts) ->
             hb_maps:put(<<Prefix/binary, Key/binary>>, Val, Acc, Opts)
         end,
         #{},
-        hb_message:convert(Message, tabm, Opts),
+		hb_ao:normalize_keys(Message, Opts),
 		Opts
     ).
 
