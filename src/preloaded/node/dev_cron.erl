@@ -166,7 +166,7 @@ stop(_Base, Req, Opts) ->
 
 %% @doc Exported function for getting a scheduled task status report.
 report(_Base, Req, Opts) ->
-	case hb_maps:get(<<"task">>, Req, not_found, Opts) of
+	case hb_maps:get(<<"report">>, Req, not_found, Opts) of
 		not_found ->
 			{error, <<"No task ID found in message.">>};
 		TaskID ->
@@ -319,7 +319,7 @@ report_every_test() ->
 					   "&interval=200-milliseconds",
 				   "&cron-path=/~test-device@1.0/increment_counter">>,
 	{ok, #{ <<"body">> := CronTaskID }} = hb_http:get(Node, EveryUrlPath, #{}),
-	ReportPath = <<"/~cron@1.0/report?task=", CronTaskID/binary>>,
+	ReportPath = <<"/~cron@1.0/report=", CronTaskID/binary>>,
 	?assertMatch(
 		{ok, #{<<"task-id">> := CronTaskID, <<"active">> := true}},
 		hb_http:get(Node, ReportPath, #{})
