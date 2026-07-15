@@ -525,7 +525,14 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             true -> fin;
             false -> nofin
         end,
-    cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq),
+    % Stream the body back to the caller if there is content. If we already
+    % signal a non-content reply, skip.
+    case Status of
+        NonContentStatus
+            when (NonContentStatus == 204)
+            orelse (NonContentStatus == 304) -> skip;
+        _ -> cowboy_req:stream_body(EncodedBody, Fin, PostStreamReq)
+    end,
     EndTime = os:system_time(millisecond),
     ReqDuration = EndTime - hb_maps:get(start_time, Req, undefined, Opts),
     ReplyDuration = EndTime - ReplyStartTime,
