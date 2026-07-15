@@ -90,7 +90,13 @@ id(Base, _, NodeOpts) when is_binary(Base) ->
     {ok, hb_util:human_id(hb_path:hashpath(Base, NodeOpts))};
 id(List, Req, NodeOpts) when is_list(List) ->
     % Return the list of IDs for a list of messages.
-    id(hb_message:convert(List, tabm, NodeOpts), Req, NodeOpts);
+    SourceSpec =
+        hb_message:add_bundle_hint(
+            #{ <<"device">> => <<"structured@1.0">> },
+            Req#{ <<"device">> => ?DEFAULT_ID_DEVICE },
+            NodeOpts
+        ),
+    id(hb_message:convert(List, tabm, SourceSpec, NodeOpts), Req, NodeOpts);
 id(RawBase, Req, NodeOpts) ->
     % Ensure that the base message is normalized before proceeding.
     IDOpts = NodeOpts#{ <<"linkify-mode">> => discard },
@@ -334,6 +340,10 @@ verify(Self, Req, Opts) ->
                                     <<"commitment-device">>,
                                     Commitment,
                                     undefined
+                                ),
+                            <<"bundle">> =>
+                                hb_util:atom(
+                                    maps:get(<<"bundle">>, Commitment, false)
                                 )
                         },
                         Opts
@@ -872,6 +882,29 @@ case_insensitive_get(Key, Msg, Opts) ->
 %%% Internal module functionality tests:
 get_keys_mod_test() ->
     ?assertEqual([a], hb_maps:keys(#{a => 1}, #{})).
+
+list_id_preserves_bundle_hint_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => hb:wallet()
+    },
+    List = [
+        hb_message:commit(
+            #{ <<"payload">> => #{ <<"deep">> => <<"value">> } },
+            Opts,
+            #{ <<"commitment-device">> => <<"httpsig@1.0">>, <<"bundle">> => true }
+        )
+    ],
+    Source = #{
+        <<"device">> => <<"structured@1.0">>,
+        <<"hint-device">> => ?DEFAULT_ID_DEVICE
+    },
+    Expected = hb_message:id(
+        hb_message:convert(List, tabm, Source, Opts),
+        none,
+        Opts
+    ),
+    ?assertEqual(Expected, hb_message:id(List, none, Opts)).
 
 is_private_mod_test() ->
     ?assertEqual(true, hb_private:is_private(<<"private">>)),
