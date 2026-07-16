@@ -112,8 +112,11 @@ upload(Msg, Opts, _CommitmentDevice) ->
     hb_ao:raw(
         <<"arweave@2.9">>,
         <<"tx">>,
-        #{},
-        Msg#{ <<"method">> => <<"POST">> },
+        Msg,
+        #{
+            <<"method">> => <<"POST">>,
+            <<"target">> => <<"base">>
+        },
         Opts
     ).
 
@@ -144,6 +147,25 @@ upload_single_layer_message_test() ->
         <<"data">> => <<"TEST">>,
         <<"basic">> => <<"value">>,
         <<"integer">> => 1
+    },
+    Committed =
+        hb_message:commit(
+            Msg,
+            Opts,
+            <<"ans104@1.0">>
+        ),
+    Result = upload(Committed, Opts, <<"ans104@1.0">>),
+    ?event({upload_result, Result}),
+    ?assertMatch({ok, _}, Result).
+
+%% @doc A message's AO target is transaction data, not the arweave device's
+%% request/base selector. Upload it as the base so a process ID target is not
+%% misinterpreted as a selector path.
+upload_targeted_message_test() ->
+    Opts = upload_test_opts(),
+    Msg = #{
+        <<"target">> => hb_util:human_id(<<0:256>>),
+        <<"data">> => <<"TEST">>
     },
     Committed =
         hb_message:commit(
