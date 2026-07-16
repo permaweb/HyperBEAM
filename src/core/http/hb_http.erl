@@ -549,6 +549,7 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
+            {host, get_host(TABMReq, Opts)},
             {path,
                 {string,
                     uri_string:percent_decode(
@@ -1135,6 +1136,18 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
         IP -> IP
     end.
 
+%% @doc Find the hostname from either the inbound TABM request form,
+%% or set explicitly in the node message.
+get_host(TABMReq, Opts) ->
+    ReqHost = maps:get(<<"host">>, TABMReq, <<"no_host">>),
+    case hb_opts:get(node_host, no_host, Opts) of
+        no_host ->
+            ReqHost;
+        NodeHost ->
+            % Replace suffix part
+            filename:rootname(ReqHost, <<".", NodeHost/binary>>)
+    end.
+
 %%% Metrics
 
 init_prometheus() ->
@@ -1193,6 +1206,18 @@ isolated_test_opts() ->
         <<"store">> => hb_test_utils:test_store(),
         <<"priv-wallet">> => ar_wallet:new()
     }.
+
+%% @doc Verify that request hosts are formatted appropriately for logging.
+get_host_test_parallel() ->
+    Opts = #{ <<"node-host">> => <<"example.com">> },
+    ?assertEqual(
+        <<"abc">>,
+        get_host(#{ <<"host">> => <<"abc.example.com">> }, Opts)
+    ),
+    ?assertEqual(
+        <<"example.com">>,
+        get_host(#{ <<"host">> => <<"example.com">> }, Opts)
+    ).
 
 simple_ao_resolve_unsigned_test() ->
     URL = hb_http_server:start_node(),
