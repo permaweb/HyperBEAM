@@ -546,10 +546,10 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
         {sent,
             {status, Status},
             {ip, {string, real_ip(Req, Opts)}},
-            {host, get_host(TABMReq, Opts)},
             {duration, EndTime - hb_maps:get(start_time, Req, undefined, Opts)},
             {body_size, byte_size(EncodedBody)},
             {method, cowboy_req:method(Req)},
+            {host, get_host(TABMReq, Opts)},
             {path,
                 {string,
                     uri_string:percent_decode(
