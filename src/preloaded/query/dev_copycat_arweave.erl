@@ -736,10 +736,7 @@ index_full_bundle_items(
             ok =
                 case {IndexMode, ParseResult} of
                     {full, {ok, _, Parsed}} ->
-                        LocalOpts = hb_store:scope(Opts, local),
-                        Msg = hb_message:convert(
-                            Parsed, <<"structured@1.0">>, <<"ans104@1.0">>, LocalOpts),
-                        {ok, _Path} = hb_cache:write(Msg, LocalOpts),
+                        {ok, _Path} = cache_item(Parsed, <<"ans104@1.0">>, Opts),
                         ok;
                     _ -> ok
                 end,
@@ -876,12 +873,8 @@ cache_tx_header(TX, Opts) ->
     end.
 
 write_tx_header(TX, Opts) ->
-    LocalOpts = hb_store:scope(Opts, local),
     try
-        Msg =
-            hb_message:convert(
-                TX, <<"structured@1.0">>, <<"tx@1.0">>, LocalOpts),
-        {ok, _} = hb_cache:write(Msg, LocalOpts),
+        {ok, _} = cache_item(TX, <<"tx@1.0">>, Opts),
         ok
     catch
         Class:Reason ->
@@ -895,6 +888,14 @@ write_tx_header(TX, Opts) ->
             ),
             ok
     end.
+
+%% @doc Cache an item decoded during the block scan in the local store as a
+%% structured message, keyed by the codec it is committed with. Its fields
+%% (notably `target') then become locally matchable.
+cache_item(Item, Codec, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    Msg = hb_message:convert(Item, <<"structured@1.0">>, Codec, LocalOpts),
+    hb_cache:write(Msg, LocalOpts).
 
 %% @doc Record event metrics (count and duration) using hb_event:record.
 record_event_metrics(MetricName, Count, Duration) ->
