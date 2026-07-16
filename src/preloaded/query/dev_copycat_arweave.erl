@@ -226,8 +226,9 @@ classify_txs(TXIDs, Opts) ->
     ).
 
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
-%% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
-%% is omitted, stop at the first block indexed to the target mode.
+%% If `To' is provided, every block in [`To', `Current'] is processed (unless
+%% `reindex' is disabled, in which case already-indexed blocks are skipped). If
+%% `To' is omitted, stop at the first block indexed to the target mode.
 fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
@@ -255,10 +256,18 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
             end
     end;
 fetch_blocks(Req, Current, To, IndexMode, Opts) ->
-    observe_event(<<"block_indexed">>, fun() ->
-        process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
-    end),
+    % Unless `reindex' is set (the default), skip blocks already indexed at
+    % this mode, so overlapping ranges from different callers are not re-fetched.
+    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Opts))
+        andalso observe_event(<<"block_indexed">>, fun() ->
+            process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
+        end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
+
+%% @doc Whether a bounded index run should reprocess blocks that are already
+%% indexed. Defaults to `true' (`~copycat@1.0/arweave&reindex=false' opts out).
+reindex(Req, Opts) ->
+    hb_util:atom(hb_maps:get(<<"reindex">>, Req, true, Opts)).
 
 stop_at_indexed_block(Req, Current) ->
     ?event(copycat_short,
