@@ -1137,26 +1137,13 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
     end.
 
 get_host(TABMReq, Opts) ->
-    Host = hb_maps:get(<<"host">>, TABMReq, <<"no_host">>, Opts),
-    MsgNode = hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts),
-    case hb_device_load:reference(<<"name@1.0">>, Opts) of
-        {ok, NameMod} ->
-            case NameMod:name_from_host(Host, MsgNode) of
-                {ok, Name} -> decode_host(Name, Opts);
-                {skip, _} -> no_host
-            end;
-        {error, _} -> no_host
-    end.
-
-%% @doc Decode a base32 host name if its device is available.
-decode_host(Name, Opts) ->
-    case hb_device_load:reference(<<"b32-name@1.0">>, Opts) of
-        {ok, B32NameMod} ->
-            case B32NameMod:decode(Name) of
-                error -> Name;
-                TXID -> {decoded, {explicit, TXID}}
-            end;
-        {error, _} -> Name
+    ReqHost = maps:get(<<"host">>, TABMReq, <<"no_host">>),
+    case hb_opts:get(node_host, no_host, Opts) of
+        no_host ->
+            ReqHost;
+        NodeHost ->
+            %% Replace sufix part
+            filename:rootname(ReqHost, <<".", NodeHost/binary>>)
     end.
 
 %%% Metrics
@@ -1226,18 +1213,7 @@ get_host_test_parallel() ->
         get_host(#{ <<"host">> => <<"abc.example.com">> }, Opts)
     ),
     ?assertEqual(
-        {decoded,
-            {explicit, <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>}},
-        get_host(
-            #{
-                <<"host">> =>
-                    <<"4nuojs5tw6xtfjbq47dqk6ak7n6tqyr3uxgemkq5z5vmunhxphya.example.com">>
-            },
-            Opts
-        )
-    ),
-    ?assertEqual(
-        no_host,
+        <<"example.com">>,
         get_host(#{ <<"host">> => <<"example.com">> }, Opts)
     ).
 
