@@ -10,52 +10,11 @@
 
 %% @doc Merge the scheduler store with the main store. Used before writing
 %% to the cache.
-opts(Opts) ->
-    Opts#{
-        <<"store">> =>
-            hb_opts:get(
-                scheduler_store,
-                hb_opts:get(store, no_viable_store, Opts),
-                Opts
-            )
-    }.
+opts(Opts) -> lib_scheduler:cache_opts(Opts).
 
 %% @doc Write an assignment message into the cache.
-write(RawAssignment, RawOpts) ->
-    Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
-    Opts = opts(RawOpts),
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    % Write the message into the main cache
-    ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
-    Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
-    ?event(
-        {writing_assignment,
-            {proc_id, ProcID},
-            {slot, Slot},
-            {assignment, Assignment}
-        }
-    ),
-    case hb_cache:write(Assignment, Opts) of
-        {ok, _UnsignedID} ->
-            % Create symlinks from the message on the process and the 
-            % slot on the process to the underlying data.
-            ok = hb_store:link(
-                Store,
-                #{
-                    hb_path:to_binary([
-                        ?SCHEDULER_CACHE_PREFIX,
-                        <<"assignments">>,
-                        hb_util:human_id(ProcID),
-                        hb_ao:normalize_key(Slot)
-                    ]) => hb_message:id(Assignment, signed, Opts)
-                },
-                Opts
-            ),
-            ok;
-        {error, Reason} ->
-            ?event(error, {failed_to_write_assignment, {reason, Reason}}),
-            {error, Reason}
-    end.
+write(Assignment, Opts) ->
+    lib_scheduler:write_assignment(?SCHEDULER_CACHE_PREFIX, Assignment, Opts).
 
 %% @doc Write the initial assignment message to the cache.
 write_spawn(RawInitMessage, Opts) ->
@@ -63,53 +22,8 @@ write_spawn(RawInitMessage, Opts) ->
     hb_cache:write(InitMessage, opts(Opts)).
 
 %% @doc Get an assignment message from the cache.
-read(ProcID, Slot, Opts) when is_integer(Slot) ->
-    read(ProcID, hb_util:bin(Slot), Opts);
-read(ProcID, Slot, RawOpts) ->
-    Opts = opts(RawOpts),
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    P1 = hb_path:to_binary([
-        ?SCHEDULER_CACHE_PREFIX,
-        <<"assignments">>,
-        hb_util:human_id(ProcID),
-        Slot
-    ]),
-    ?event(
-        {read_assignment,
-            {proc_id, ProcID},
-            {slot, Slot},
-            {store, Store}
-        }
-    ),
-    case hb_store:resolve(Store, P1, Opts) of
-        {ok, ResolvedPath} ->
-            ?event({resolved_path, {p1, P1}, {p2, ResolvedPath}, {resolved, ResolvedPath}}),
-            case hb_cache:read(ResolvedPath, Opts) of
-                {ok, RawAssignment} ->
-                    % `hb_cache:read' no longer normalizes commitments; the
-                    % scheduler relies on each assignment carrying its unsigned
-                    % commitment ID, so we restore it here.
-                    Assignment =
-                        hb_message:normalize_commitments(RawAssignment, Opts),
-                    % If the slot key is not present, the format of the assignment is
-                    % AOS2, so we need to convert it to the canonical format.
-                    case hb_ao:get(<<"variant">>, Assignment, Opts) of
-                        <<"ao.TN.1">> ->
-                            Loaded = hb_cache:ensure_all_loaded(Assignment, Opts),
-                            Norm = dev_scheduler_formats:aos2_to_assignment(Loaded, Opts),
-                            ?event({normalized_aos2_assignment, Norm}),
-                            {ok, Norm};
-                        <<"ao.N.1">> ->
-                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
-                    end;
-                {error, not_found} ->
-                    ?event(debug_sched, {read_assignment, {res, not_found}}),
-                    not_found
-            end;
-        {error, not_found} ->
-            ?event(debug_sched, {read_assignment, {res, not_found}}),
-            not_found
-    end.
+read(ProcID, Slot, Opts) ->
+    lib_scheduler:read_assignment(?SCHEDULER_CACHE_PREFIX, ProcID, Slot, Opts).
 
 %% @doc Get the assignments for a process.
 list(ProcID, RawOpts) ->
