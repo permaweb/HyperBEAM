@@ -226,8 +226,9 @@ classify_txs(TXIDs, Opts) ->
     ).
 
 %% @doc Fetch blocks from an Arweave node while moving downward from `Current'.
-%% If `To' is provided, every block in [`To', `Current'] is processed. If `To'
-%% is omitted, stop at the first block indexed to the target mode.
+%% If `To' is provided, every block in [`To', `Current'] is processed (unless
+%% `reindex' is disabled, in which case already-indexed blocks are skipped). If
+%% `To' is omitted, stop at the first block indexed to the target mode.
 fetch_blocks(Req, Current, To, _IndexMode, _Opts) when is_integer(To), Current < To ->
     ?event(copycat_short,
         {arweave_block_indexing_completed,
@@ -255,10 +256,18 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
             end
     end;
 fetch_blocks(Req, Current, To, IndexMode, Opts) ->
-    observe_event(<<"block_indexed">>, fun() ->
-        process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
-    end),
+    % Unless `reindex' is set (the default), skip blocks already indexed at
+    % this mode, so overlapping ranges from different callers are not re-fetched.
+    (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Opts))
+        andalso observe_event(<<"block_indexed">>, fun() ->
+            process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
+        end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
+
+%% @doc Whether a bounded index run should reprocess blocks that are already
+%% indexed. Defaults to `true' (`~copycat@1.0/arweave&reindex=false' opts out).
+reindex(Req, Opts) ->
+    hb_util:atom(hb_maps:get(<<"reindex">>, Req, true, Opts)).
 
 stop_at_indexed_block(Req, Current) ->
     ?event(copycat_short,
@@ -436,6 +445,11 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
         ok ->
             case is_bundle_tx(TX, Opts) of
                 false ->
+                    % A plain (non-bundle) L1 transaction: cache its header so
+                    % its fields are locally matchable. Bundle transactions are
+                    % handled below -- caching their data-free header here would
+                    % shadow the full bundle written by the bundle indexer.
+                    ok = cache_tx_header(TX, Opts),
                     counters(0, 0, 0);
                 true when IndexMode =/= shallow ->
                     try
@@ -842,6 +856,34 @@ resolve_tx_header(TXID, Opts) ->
                 }
             ),
             error
+    end.
+
+%% @doc Cache a transaction's header -- already resolved during the block scan
+%% -- as a structured message in the local store, so that its fields (notably
+%% `target') are matchable via `hb_cache:match'/`~query@1.0' without a further
+%% gateway fetch. The header carries no data (it is resolved with
+%% `exclude-data'), so storing it is cheap and is done in every index mode. A
+%% header that fails to convert or write is logged and skipped rather than
+%% failing the whole block.
+cache_tx_header(TX, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    try
+        Msg =
+            hb_message:convert(
+                TX, <<"structured@1.0">>, <<"tx@1.0">>, LocalOpts),
+        {ok, _} = hb_cache:write(Msg, LocalOpts),
+        ok
+    catch
+        Class:Reason ->
+            ?event(
+                copycat_short,
+                {tx_header_cache_skipped,
+                    {tx_id, {explicit, hb_util:encode(TX#tx.id)}},
+                    {class, Class},
+                    {reason, Reason}
+                }
+            ),
+            ok
     end.
 
 %% @doc Record event metrics (count and duration) using hb_event:record.
@@ -1657,3 +1699,36 @@ small_block_full_mode_test() ->
     ?assert(hb_message:verify(L3Header, all, Opts), {verify_failed, L3ID}),
     ?assertEqual(L3ID, hb_message:id(L3Header, signed, Opts)),
     ok.
+
+%% @doc Every index mode caches L1 transaction headers in the local store, so a
+%% transaction's committed fields -- here its `target' -- are matchable from the
+%% node's own cache after a `shallow' index, with no further gateway round-trip.
+%% Uses a permanent mainnet transaction (`TXID' at block `Block', targeting
+%% `Target').
+cached_tx_header_matchable_by_target_test() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    Block = 1958993,
+    TXID = <<"Y8GnKytC57VUk7W7FlGnD1oH4OAwFHyP-pJPGCJBa3Y">>,
+    Target = <<"q3SycbYpO1lz-S6V2kd7FG3DIZ3AU0NrKKxWw4C3yos">>,
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", (hb_util:bin(Block))/binary, "&"
+                "to=", (hb_util:bin(Block))/binary, "&"
+                "mode=shallow"
+            >>,
+            Opts
+        ),
+    LocalOpts = hb_store:scope(Opts, local),
+    % The header is cached from the block scan and reads back from the local
+    % store as the canonical signed transaction.
+    {ok, Header} = hb_cache:read(TXID, LocalOpts),
+    ?assert(hb_message:verify(Header, all, Opts), {verify_failed, TXID}),
+    ?assertEqual(TXID, hb_message:id(Header, signed, Opts)),
+    % Its `target' is indexed locally, so a recipient match finds it with no
+    % gateway query.
+    ?assertMatch(
+        {ok, [_ | _]},
+        hb_cache:match(#{ <<"field-target">> => Target }, LocalOpts)
+    ).
