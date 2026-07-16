@@ -1136,13 +1136,15 @@ real_ip(Req = #{ headers := RawHeaders }, Opts) ->
         IP -> IP
     end.
 
+%% @doc Find the hostname from either the inbound TABM request form,
+%% or set explicitly in the node message.
 get_host(TABMReq, Opts) ->
     ReqHost = maps:get(<<"host">>, TABMReq, <<"no_host">>),
     case hb_opts:get(node_host, no_host, Opts) of
         no_host ->
             ReqHost;
         NodeHost ->
-            %% Replace sufix part
+            % Replace suffix part
             filename:rootname(ReqHost, <<".", NodeHost/binary>>)
     end.
 
