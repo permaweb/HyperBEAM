@@ -233,9 +233,13 @@ new_server(RawNodeMsg) ->
     % params.
     NodeMsgWithID = hb_maps:put(<<"http-server">>, ServerID, NodeMsg),
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
+    MetricsCallback = fun(Metrics) ->
+        log_terminated_request(Metrics, NodeMsgWithID)
+    end,
     ProtoOpts = #{
         env => #{ dispatch => Dispatcher, node_msg => NodeMsgWithID },
-        stream_handlers => [cowboy_stream_h],
+        metrics_callback => MetricsCallback,
+        stream_handlers => [cowboy_metrics_h, cowboy_stream_h],
         max_connections => infinity,
         idle_timeout => hb_opts:get(idle_timeout, 300000, NodeMsg)
     },
@@ -251,8 +255,10 @@ new_server(RawNodeMsg) ->
                     prometheus_registry:register_collectors([hb_metrics_collector]),
                     ProtoOpts#{
                         metrics_callback =>
-                            fun prometheus_cowboy2_instrumenter:observe/1,
-                        stream_handlers => [cowboy_metrics_h, cowboy_stream_h]
+                            fun(Metrics) ->
+                                MetricsCallback(Metrics),
+                                prometheus_cowboy2_instrumenter:observe(Metrics)
+                            end
                     }
                 catch
                     Type:Reason ->
@@ -298,6 +304,51 @@ new_server(RawNodeMsg) ->
         }
     ),
     {ok, Listener, Port}.
+
+%% @doc Log requests terminated by a closed connection before a reply is sent.
+log_terminated_request(#{ reason := Reason } = Metrics, Opts) ->
+    case connection_terminated(Reason) of
+        true ->
+            Req = maps:get(req, Metrics, maps:get(partial_req, Metrics, #{})),
+            ?event(http_server_short,
+                {sent,
+                    {status, 499},
+                    {ip, {string, request_ip(Req)}},
+                    {duration, request_duration(Metrics)},
+                    {body_size, maps:get(resp_body_length, Metrics, 0)},
+                    {method, maps:get(method, Req, <<"[NO METHOD]">>)},
+                    {host, maps:get(host, Req, <<"[NO HOST]">>)},
+                    {path, {string, maps:get(path, Req, <<"[NO PATH]">>)}},
+                    {reason, Reason}
+                },
+                Opts
+            );
+        false ->
+            ok
+    end.
+
+%% @doc Return true when Cowboy terminated a client connection or stream.
+connection_terminated({socket_error, _, _}) -> true;
+connection_terminated({stream_error, _, _}) -> true;
+connection_terminated({connection_error, _, _}) -> true;
+connection_terminated(cancel) -> true;
+connection_terminated(_) -> false.
+
+%% @doc Return the elapsed request time recorded by Cowboy's metrics handler.
+request_duration(#{ req_start := Start, req_end := End }) ->
+    erlang:convert_time_unit(End - Start, native, millisecond);
+request_duration(_) ->
+    0.
+
+%% @doc Return the request IP, honoring the reverse-proxy header when present.
+request_ip(#{ headers := Headers, peer := {PeerIP, _} }) ->
+    maps:get(
+        <<"x-real-ip">>,
+        Headers,
+        hb_util:bin(inet:ntoa(PeerIP))
+    );
+request_ip(_) ->
+    <<"[NO IP]">>.
 
 start_http3(ServerID, ProtoOpts, NodeMsg) ->
     ?event(http, {start_http3, ServerID}),
@@ -637,6 +688,16 @@ start_node(Opts) ->
 %%% Tests
 %%% The following only covering the HTTP server initialization process. For tests
 %%% of HTTP server requests/responses, see `hb_http.erl'.
+
+connection_terminated_test() ->
+    ?assert(connection_terminated(
+        {socket_error, closed, 'The socket has been closed.'}
+    )),
+    ?assert(connection_terminated(
+        {stream_error, cancel, 'The stream was reset by the client.'}
+    )),
+    ?assert(connection_terminated(cancel)),
+    ?assertNot(connection_terminated(normal)).
 
 %% @doc Ensure that the `start' hook can be used to modify the node options. We
 %% do this by creating a message with a device that has a `start' key. This 
