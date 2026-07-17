@@ -465,9 +465,11 @@ get_chunk_range_fixed_size(Offset, EndOffset, Opts) ->
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
         []),
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
+    maybe
+        {ok, Offsets} ?= generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE, Opts),
+        {ok, ChunkInfos} = fetch_and_collect(Offsets, Opts),
+        fill_gaps(ChunkInfos, Offset, EndOffset, Opts)
+    else
         Error -> Error
     end.
 
@@ -479,9 +481,11 @@ get_chunk_range_variable_size(Offset, EndOffset, Opts) ->
         EndOffset - Offset,
         arweave_chunk_load_requested_bytes,
         []),
-    Offsets = generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE),
-    case fetch_and_collect(Offsets, Opts) of
-        {ok, ChunkInfos} -> fill_gaps(ChunkInfos, Offset, EndOffset, Opts);
+    maybe
+        {ok, Offsets} ?= generate_offsets(Offset, EndOffset, ?DATA_CHUNK_SIZE, Opts),
+        {ok, ChunkInfos} ?= fetch_and_collect(Offsets, Opts),
+        fill_gaps(ChunkInfos, Offset, EndOffset, Opts)
+    else
         Error -> Error
     end.
 
@@ -575,14 +579,22 @@ fetch_and_collect(Offsets, GETFun, Opts) ->
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
-generate_offsets(Start, End, Step) ->
-    generate_offsets(Start, End, Step, []).
-generate_offsets(Current, End, _Step, Acc) when Current > End ->
+generate_offsets(Start, End, Step, Opts) ->
+    NumberOfChunks = End - Start / ?DATA_CHUNK_SIZE,
+    Limit = hb_opts:get(max_offset_chunks, 100_000, Opts),
+    case NumberOfChunks > Limit of
+        true ->
+            ?event(warning, {generate_offsets, {limit, Limit}, {requested, NumberOfChunks}}),
+            {error, too_large_number_of_chunks};
+        false ->
+            generate_offsets(Start, End, Step, Opts, [])
+    end.
+generate_offsets(Current, End, _Step, _Opts, Acc) when Current > End ->
     Offsets = lists:reverse(Acc),
     ?event(debug_arweave, {fetch_chunk_offsets, {offsets, Offsets}}),
-    Offsets;
-generate_offsets(Current, End, Step, Acc) ->
-    generate_offsets(Current + Step, End, Step, [Current | Acc]).
+    {ok, Offsets};
+generate_offsets(Current, End, Step, Opts, Acc) ->
+    generate_offsets(Current + Step, End, Step, Opts, [Current | Acc]).
 
 pending_relative_chunk_offsets(Offset, Length, DataSize) ->
     RangeStart = max(1, Offset + 1),
@@ -1812,6 +1824,17 @@ pending_relative_chunk_helpers_test_parallel() ->
     ?assertEqual([?DATA_CHUNK_SIZE], pending_relative_chunk_offsets(0, 1, DataSize)),
     ?assertEqual([DataSize], pending_relative_chunk_offsets(?DATA_CHUNK_SIZE, 1, DataSize)),
     ?assertEqual([?DATA_CHUNK_SIZE, DataSize], pending_relative_chunk_offsets(0, DataSize, DataSize)).
+
+generate_offsets_max_offset_chunks_test() ->
+    ?assertEqual(
+        {error, too_large_number_of_chunks},
+        generate_offsets(
+            0,
+            3 * ?DATA_CHUNK_SIZE,
+            ?DATA_CHUNK_SIZE,
+            #{ <<"max-offset-chunks">> => 3 }
+        )
+    ).
 
 get_partial_chunk_post_split_test_parallel() ->
     %% https://arweave.net/tx/QL7_EnmrFtx-0wVgPr2IwaGWQT8vmPcF3R20CKMO3D4/offset

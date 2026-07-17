@@ -315,6 +315,7 @@ raw_default_message() ->
         <<"debug-resolve-links">> => false,
         <<"debug-print-fail-mode">> => long,
 		<<"trusted">> => #{},
+        <<"max-offset-chunks">> => 100_000, % 32GiB in 256KiB chunks
         <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
         <<"routes">> => [
             % Local CU routes.
