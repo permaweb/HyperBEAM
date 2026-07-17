@@ -377,17 +377,23 @@ init_prometheus() ->
 %%% Tests
 
 slash_offset_key_read_test_parallel() ->
-    Store = [hb_test_utils:test_store(hb_store_lmdb)],
-    Opts = #{ <<"index-store">> => Store },
+    IndexStore = [hb_test_utils:test_store(hb_store_lmdb)],
+    Opts = #{
+        <<"store">> => [#{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => IndexStore
+        }]
+    },
+    Store = store_from_opts(Opts),
     ID = <<"L2FiY2RlZmdoaWprbG0vL29wcXJzdHV2d3h5ejAxMi8">>,
     ?assertEqual(
         <<"/abcdefghijklm//opqrstuvwxyz012/">>,
         hb_store_arweave_offset:path(ID)
     ),
-    ok = write_offset(Opts, ID, <<"tx@1.0">>, 123, 456),
+    ok = write_offset(Store, ID, <<"tx@1.0">>, 123, 456),
     ?assertMatch(
         {ok, #{ <<"start-offset">> := 123, <<"length">> := 456 }},
-        read_offset(Opts, ID, Opts)
+        read_offset(Store, ID, Opts)
     ).
 
 write_read_tx_test() ->
