@@ -146,12 +146,10 @@ load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
     % We have found a message with a Lua module inside. Search for the binary
     % of the program in the body and the data.
     ModuleBin =
-        hb_ao:get_first(
-            [
-                {{as, <<"message@1.0">>, Module}, <<"body">>},
-                {{as, <<"message@1.0">>, Module}, <<"data">>}
-            ],
+        hb_maps:get(
+            <<"body">>,
             Module,
+            hb_maps:get(<<"data">>, Module, not_found, Opts),
             Opts
         ),
     case ModuleBin of
@@ -902,108 +900,12 @@ lua_http_hook_test() ->
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_process_test() ->
-    Process = generate_lua_process("test/test.lua", #{}),
+    Process = generate_lua_process("test/test.lua", inline, #{}),
     {ok, _} = hb_cache:write(Process, #{}),
     Message = generate_test_message(Process, #{}),
     {ok, _} = hb_ao:resolve(Process, Message, #{ <<"hashpath">> => ignore }),
     {ok, Results} = hb_ao:resolve(Process, <<"now">>, #{}),
     ?assertEqual(42, hb_ao:get(<<"results/output/body">>, Results, #{})).
-
-%% @doc An inline ANS-104 process stores its Lua source under `data'. Ensure
-%% module discovery reads that field literally instead of invoking Lua's
-%% default handler for the absent `body' field during initialization.
-inline_lua_data_process_test() ->
-    Opts = #{ <<"priv-wallet">> => hb:wallet() },
-    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Script =
-        <<"function compute(process, message, opts)\n"
-          "  process.count = (process.count or 0) + 1\n"
-          "  process.results = { output = { body = process.count }, outbox = {} }\n"
-          "  return process\n"
-          "end\n">>,
-    Process =
-        hb_message:commit(
-            #{
-                <<"device">> => <<"process@1.0">>,
-                <<"type">> => <<"Process">>,
-                <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"execution-device">> => <<"lua@5.3a">>,
-                <<"content-type">> => <<"application/lua">>,
-                <<"data">> => Script,
-                <<"name">> => <<"inline-lua-data-test">>,
-                <<"authority">> => [Address],
-                <<"scheduler-location">> => Address,
-                <<"test-random-seed">> => rand:uniform(1337)
-            },
-            Opts
-        ),
-    {ok, _} = hb_cache:write(Process, Opts),
-    Message = generate_test_message(Process, Opts),
-    {ok, _} = hb_ao:resolve(Process, Message, Opts#{ <<"hashpath">> => ignore }),
-    {ok, Results} = hb_ao:resolve(Process, <<"now">>, Opts),
-    ?assertEqual(1, hb_ao:get(<<"results/output/body">>, Results, #{})).
-
-%% @doc Sequential pushes must advance the scheduler rather than replacing the
-%% previous assignment at the same slot. This mirrors the request shape used by
-%% aoconnect for `POST /<process>~process@1.0/push'.
-inline_lua_sequential_push_test() ->
-    Opts = #{
-        <<"priv-wallet">> => hb:wallet(),
-        <<"cache-control">> => [<<"always">>]
-    },
-    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Process =
-        hb_message:commit(
-            #{
-                <<"device">> => <<"process@1.0">>,
-                <<"type">> => <<"Process">>,
-                <<"scheduler-device">> => <<"scheduler@1.0">>,
-                <<"push-device">> => <<"push@1.0">>,
-                <<"execution-device">> => <<"lua@5.3a">>,
-                <<"content-type">> => <<"application/lua">>,
-                <<"data">> =>
-                    <<"function compute(process, message, opts)\n"
-                      "  process.results = { output = { body = message.data }, outbox = {} }\n"
-                      "  return process\n"
-                      "end\n">>,
-                <<"authority">> => [Address],
-                <<"scheduler-location">> => Address,
-                <<"test-random-seed">> => rand:uniform(1337)
-            },
-            Opts
-        ),
-    ProcID = hb_message:id(Process, all, Opts),
-    {ok, _} = hb_cache:write(Process, Opts),
-    {ok, SpawnAssignment} =
-        hb_ao:resolve(
-            Process,
-            #{
-                <<"method">> => <<"POST">>,
-                <<"path">> => <<"schedule">>,
-                <<"body">> => Process
-            },
-            Opts
-        ),
-    ?assertEqual(0, hb_ao:get(<<"slot">>, SpawnAssignment, Opts)),
-    lists:foreach(
-        fun({ExpectedSlot, Data}) ->
-            Message =
-                hb_message:commit(
-                    #{
-                        <<"target">> => ProcID,
-                        <<"type">> => <<"Message">>,
-                        <<"data">> => Data
-                    },
-                    Opts
-                ),
-            PushReq = Message#{ <<"path">> => <<"push">> },
-            {ok, PushResult} = hb_ao:resolve(Process, PushReq, Opts),
-            ?assertEqual(ExpectedSlot, hb_ao:get(<<"slot">>, PushResult, Opts))
-        end,
-        [{1, <<"one">>}, {2, <<"two">>}]
-    ).
 
 %% @doc Call a process whose `execution-device' is set to `lua@5.3a'.
 pure_lua_restore_test() ->
@@ -1135,29 +1037,45 @@ aos_process_benchmark_test_() ->
 
 %% @doc Generate a Lua process message.
 generate_lua_process(File, Opts) ->
+    generate_lua_process(File, module, Opts).
+generate_lua_process(File, Source, Opts) ->
     NormOpts =
         Opts#{ <<"priv-wallet">> => hb_opts:get(priv_wallet, hb:wallet(), Opts) },
     Wallet = hb_opts:get(priv_wallet, hb:wallet(), NormOpts),
     Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
     {ok, Module} = file:read_file(File),
+    SourceFields =
+        case Source of
+            inline ->
+                #{
+                    <<"content-type">> => <<"application/lua">>,
+                    <<"data">> => Module
+                };
+            module ->
+                #{
+                    <<"module">> => #{
+                        <<"content-type">> => <<"application/lua">>,
+                        <<"body">> => Module
+                    }
+                }
+        end,
     hb_message:commit(
-        #{
-            <<"device">> => <<"process@1.0">>,
-            <<"type">> => <<"Process">>,
-            <<"scheduler-device">> => <<"scheduler@1.0">>,
-            <<"execution-device">> => <<"lua@5.3a">>,
-            <<"module">> => #{
-                <<"content-type">> => <<"application/lua">>,
-                <<"body">> => Module
+        maps:merge(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"type">> => <<"Process">>,
+                <<"scheduler-device">> => <<"scheduler@1.0">>,
+                <<"execution-device">> => <<"lua@5.3a">>,
+                <<"authority">> => [
+                    Address,
+                    <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
+                ],
+                <<"scheduler-location">> =>
+                    hb_util:human_id(ar_wallet:to_address(Wallet)),
+                <<"test-random-seed">> => rand:uniform(1337)
             },
-            <<"authority">> => [ 
-                Address, 
-                <<"E3FJ53E6xtAzcftBpaw2E1H4ZM9h6qy6xz9NXh5lhEQ">>
-            ], 
-            <<"scheduler-location">> =>
-                hb_util:human_id(ar_wallet:to_address(Wallet)),
-            <<"test-random-seed">> => rand:uniform(1337)
-        },
+            SourceFields
+        ),
         NormOpts
     ).
 

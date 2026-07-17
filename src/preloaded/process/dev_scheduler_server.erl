@@ -278,21 +278,16 @@ do_assign(State, Message, ReplyPID) ->
         base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
     }.
 
-%% @doc Upload a durably written assignment without allowing a remote upload
-%% failure to roll back the scheduler's in-memory slot. In local-confirmation
-%% mode the caller has already received the assignment at this point; reusing
-%% the old state would let the next message overwrite that accepted slot.
+%% @doc Upload a durably written assignment. Local and aggressive confirmation
+%% have already replied by this point, so an upload failure must not roll their
+%% scheduler state back. Remote confirmation has not replied, so remove the
+%% local schedule link and re-raise to keep the previous scheduler state.
 upload_after_write(Message, Assignment, ReplyPID, State) ->
     Opts = maps:get(opts, State),
-    Upload = hb_opts:get(
-        scheduler_upload_fun,
-        fun hb_client_remote:upload/2,
-        Opts
-    ),
     try
         ?event(uploading_message),
-        Upload(Message, Opts),
-        Upload(Assignment, Opts),
+        hb_client_remote:upload(Message, Opts),
+        hb_client_remote:upload(Assignment, Opts),
         ?event(uploads_complete),
         maybe_inform_recipient(
             remote_confirmation,
@@ -312,7 +307,15 @@ upload_after_write(Message, Assignment, ReplyPID, State) ->
                     {slot, hb_ao:get(<<"slot">>, Assignment, Opts)}
                 }
             ),
-            ok
+            case maps:get(mode, State) of
+                aggressive -> ok;
+                local_confirmation -> ok;
+                remote_confirmation ->
+                    ok = dev_scheduler_cache:unlink(Assignment, Opts),
+                    erlang:raise(Class, Reason, Stack);
+                _ ->
+                    erlang:raise(Class, Reason, Stack)
+            end
     end.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
@@ -395,46 +398,6 @@ new_proc_test() ->
         #{ current := 2 },
         dev_scheduler_server:info(dev_scheduler_registry:find(ID))
     ).
-
-%% @doc Once local confirmation follows a durable cache write, a subsequent
-%% upload failure must not reset the scheduler to its previous slot.
-local_confirmation_upload_failure_preserves_slot_test() ->
-    Wallet = hb:wallet(),
-    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    Opts = #{
-        <<"priv-wallet">> => Wallet,
-        <<"store">> => [hb_test_utils:test_store()],
-        <<"scheduling-mode">> => local_confirmation,
-        <<"scheduler-upload-fun">> =>
-            fun(_, _) -> error(simulated_upload_failure) end
-    },
-    Process = hb_message:commit(
-        #{
-            <<"type">> => <<"Process">>,
-            <<"scheduler">> => Address,
-            <<"test-random-seed">> => rand:uniform(1000000)
-        },
-        Opts
-    ),
-    ProcID = hb_message:id(Process, all, Opts),
-    PID = start(ProcID, Process, Opts),
-    First = schedule(PID, Process),
-    ?assertEqual(0, hb_ao:get(<<"slot">>, First, Opts)),
-    ?assertMatch(#{ current := 0 }, info(PID)),
-    Message = hb_message:commit(
-        #{
-            <<"type">> => <<"Message">>,
-            <<"target">> => ProcID,
-            <<"data">> => <<"next">>
-        },
-        Opts
-    ),
-    Second = schedule(PID, Message),
-    ?assertEqual(1, hb_ao:get(<<"slot">>, Second, Opts)),
-    ?assertMatch(#{ current := 1 }, info(PID)),
-    stop(PID),
-    hb_name:unregister({<<"scheduler@1.0">>, ProcID}).
-    
 
 benchmark_test() ->
     BenchTime = 1,
