@@ -87,6 +87,7 @@
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3]).
 -export([raw/3, raw/4, raw/5]).
+-export([with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 %%% Shortcuts and tools:
 -export([keys/2]).
@@ -273,6 +274,43 @@ from_context({ok, Ctx = #{ <<"result">> := Res }}) ->
 from_context(Other) ->
     throw({unexpected_context_after_exec, Other}).
 
+%% @doc Ensure that each of the given fields is present in an execution
+%% context, deriving those that are absent from the components already known.
+%% Derived fields are added to the context, such that repeated demands do not
+%% repeat work. A field that is neither present nor derivable yields
+%% `{not_found, Field}`.
+with([], Ctx, _Opts) -> {ok, Ctx};
+with([Field | Fields], Ctx, Opts) when is_map_key(Field, Ctx) ->
+    with(Fields, Ctx, Opts);
+with([Field | Fields], Ctx, Opts) ->
+    case derive(Field, Ctx, Opts) of
+        {ok, Value} -> with(Fields, Ctx#{ Field => Value }, Opts);
+        _ -> {not_found, Field}
+    end.
+
+%% @doc Derive a single context field from its complementary components:
+%% messages are read from the store by their IDs, while IDs are calculated
+%% from their messages. A request may also be derived from a literal path
+%% (e.g. `*`), which names itself. Messages read from the store are lazily
+%% loaded: their keys are only read when they are themselves demanded.
+derive(<<"base">>, #{ <<"base-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(<<"request">>, #{ <<"request-id">> := ID }, Opts) when ?IS_ID(ID) ->
+    hb_cache:read(ID, Opts);
+derive(<<"request">>, #{ <<"request-id">> := Path }, _Opts) ->
+    {ok, #{ <<"path">> => Path }};
+derive(<<"varied-base">>, #{ <<"varied-base-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(<<"varied-request">>, #{ <<"varied-request-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(Field, Ctx, Opts) ->
+    % Every `x-id` field is derivable from its `x` message, if present.
+    case binary:split(Field, <<"-id">>) of
+        [Name, <<>>] when is_map_key(Name, Ctx) ->
+            {ok, hb_message:id(maps:get(Name, Ctx), all, Opts)};
+        _ -> {not_found, Field}
+    end.
+
 %% @doc Resolves a fully normalized execution context. Stages that find the
 %% result early set it in the context; later stages skip themselves when they
 %% see it. Any non-`{ok, Ctx}` return propagates as the result.
@@ -330,7 +368,16 @@ stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) when is_map(Req) ->
 stage_1(Ctx = #{ <<"request">> := Key }) ->
     % If the request is for a direct key we normalize it to a message with 
     % only a path of that key.
-    stage_1(Ctx#{ <<"request">> => #{ <<"path">> => normalize_key(Key) } }).
+    stage_1(Ctx#{ <<"request">> => #{ <<"path">> => normalize_key(Key) } });
+stage_1(Ctx = #{ <<"opts">> := Opts }) ->
+    % The context does not carry its messages directly. Derive the `base` and
+    % `request` from the components that are given (e.g. their IDs), then
+    % normalize as usual.
+    case with([<<"base">>, <<"request">>], Ctx, Opts) of
+        {ok, Loaded} -> stage_1(Loaded);
+        {not_found, Field} ->
+            {error, Ctx#{ <<"status">> => error, <<"reason">> => {not_found, Field} }}
+    end.
 
 %% @doc Lookup the device and function to use during an execution.
 stage_2(
@@ -531,7 +578,7 @@ stage_6(Ctx = #{
 %% execution's result on top of the `Base` or `Req` message. In cases where
 %% hashpath calculation is disabled (`hashpath => ignore` in the node message,
 %% etc.), we 
-stage_7(Ctx = #{ <<"base">> => Base, <<"opts">> := Opts }) ->
+stage_7(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
     maybe
         {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
         {ok, Ctx#{ <<"result">> => Result }}
@@ -546,7 +593,7 @@ stage_8(
         <<"fresh">> := true,
         <<"varied-base">> := VariedBase,
         <<"varied-request">> := VariedReq,
-        <<"varied-result">> := Res,
+        <<"varied-result">> := VariedRes,
         <<"opts">> := Opts
     }
 ) ->
