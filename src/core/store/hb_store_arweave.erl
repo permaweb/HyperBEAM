@@ -61,7 +61,11 @@ group(_, _, _) -> {error, not_found}.
 %% multiple times.
 type(#{ <<"index-store">> := IndexStore }, #{ <<"type">> := ID }, NodeOpts)
         when ?IS_ID(ID) ->
-    case hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), NodeOpts) of
+    case hb_store:read(
+        IndexStore,
+        #{ <<"read">> => hb_store_arweave_offset:path(ID) },
+        NodeOpts
+    ) of
         {ok, _Offset} ->
             {ok, simple};
         _ ->
@@ -75,7 +79,11 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(IndexStore, hb_store_arweave_offset:path(ID), StoreOpts)
+                hb_store:read(
+                    IndexStore,
+                    #{ <<"read">> => hb_store_arweave_offset:path(ID) },
+                    StoreOpts
+                )
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
@@ -367,6 +375,26 @@ init_prometheus() ->
     hb_http_client:init_prometheus().
 
 %%% Tests
+
+slash_offset_key_read_test_parallel() ->
+    IndexStore = [hb_test_utils:test_store(hb_store_lmdb)],
+    Opts = #{
+        <<"store">> => [#{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => IndexStore
+        }]
+    },
+    Store = store_from_opts(Opts),
+    ID = <<"L2FiY2RlZmdoaWprbG0vL29wcXJzdHV2d3h5ejAxMi8">>,
+    ?assertEqual(
+        <<"/abcdefghijklm//opqrstuvwxyz012/">>,
+        hb_store_arweave_offset:path(ID)
+    ),
+    ok = write_offset(Store, ID, <<"tx@1.0">>, 123, 456),
+    ?assertMatch(
+        {ok, #{ <<"start-offset">> := 123, <<"length">> := 456 }},
+        read_offset(Store, ID, Opts)
+    ).
 
 write_read_tx_test() ->
     Store = [hb_test_utils:test_store()],
