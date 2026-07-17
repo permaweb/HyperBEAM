@@ -870,6 +870,12 @@ resolve_tx_header(TXID, Opts) ->
 %% header that fails to convert or write is logged and skipped rather than
 %% failing the whole block.
 cache_tx_header(TX, Opts) ->
+    case hb_opts:get(arweave_index_txs, true, Opts) of
+        true -> write_tx_header(TX, Opts);
+        false -> ok
+    end.
+
+write_tx_header(TX, Opts) ->
     LocalOpts = hb_store:scope(Opts, local),
     try
         Msg =
@@ -1736,3 +1742,13 @@ cached_tx_header_matchable_by_target_test() ->
         {ok, [_ | _]},
         hb_cache:match(#{ <<"field-target">> => Target }, LocalOpts)
     ).
+
+tx_header_cache_respects_index_txs_test() ->
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()] },
+    TX = ar_tx:sign(#tx{ format = 2 }, hb:wallet()),
+    TXID = hb_util:encode(TX#tx.id),
+    LocalOpts = hb_store:scope(Opts, local),
+    ok = cache_tx_header(TX, Opts#{ <<"arweave-index-txs">> => false }),
+    ?assertEqual({error, not_found}, hb_cache:read(TXID, LocalOpts)),
+    ok = cache_tx_header(TX, Opts),
+    ?assertMatch({ok, _}, hb_cache:read(TXID, LocalOpts)).
