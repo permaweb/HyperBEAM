@@ -140,6 +140,15 @@ request(Base, HookReq, Opts) ->
                 NewOpts
             ),
         ?event(auth_hook_processed_messages),
+        % Persist the messages committed here: `store-all-signed' only
+        % covers messages that arrive signed on the wire (it runs before
+        % the request hooks). Writes only the messages that now have commitments.
+        _ = hb_opts:get(store_all_signed, false, NewOpts) andalso
+            [
+                {ok, _} = hb_cache:write(Msg, NewOpts)
+            ||
+                Msg = #{ <<"commitments">> := _ } <- MessageSequence
+            ],
         % Call the key provider to finalize the response
         {ok, FinalSequence} ?=
             finalize(
@@ -688,6 +697,27 @@ when_test() ->
             ServerWallet
         )
     ).
+
+%% @doc Ensure that signed requests are stored and recallable if
+%% `store-all-signed' is enabled.
+store_hook_signed_test() ->
+    Node =
+        hb_http_server:start_node(
+            #{ <<"port">> => 0, <<"store-all-signed">> => true }
+        ),
+    AuthStr = <<"Basic ", (base64:encode(<<"user:pass">>))/binary>>,
+    {ok, ID} =
+        hb_http:post(
+            Node,
+            #{
+                <<"path">> => <<"/id?committers=all&!">>,
+                <<"authorization">> => AuthStr,
+                <<"stored-key">> => <<"stored-value">>
+            },
+            #{}
+        ),
+    {ok, Read} = hb_http:get(Node, <<"/", ID/binary>>, #{}),
+    ?assertEqual(<<"stored-value">>, hb_ao:get(<<"stored-key">>, Read, #{})).
 
 %% @doc The cookie hook test(s) call `GET /commitments', which returns the 
 %% commitments found on the client request during execution on the server.
