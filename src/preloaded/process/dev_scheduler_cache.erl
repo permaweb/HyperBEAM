@@ -1,6 +1,6 @@
 %%% @doc A module that provides a cache for scheduler assignments and locations.
 -module(dev_scheduler_cache).
--export([write/2, write_spawn/2, read/3]).
+-export([write/2, unlink/2, write_spawn/2, read/3]).
 -export([list/2, latest/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -41,14 +41,8 @@ write(RawAssignment, RawOpts) ->
             % slot on the process to the underlying data.
             ok = hb_store:link(
                 Store,
-                #{
-                    hb_path:to_binary([
-                        ?SCHEDULER_CACHE_PREFIX,
-                        <<"assignments">>,
-                        hb_util:human_id(ProcID),
-                        hb_ao:normalize_key(Slot)
-                    ]) => hb_message:id(Assignment, signed, Opts)
-                },
+                #{ assignment_path(ProcID, Slot) =>
+                    hb_message:id(Assignment, signed, Opts) },
                 Opts
             ),
             ok;
@@ -56,6 +50,34 @@ write(RawAssignment, RawOpts) ->
             ?event(error, {failed_to_write_assignment, {reason, Reason}}),
             {error, Reason}
     end.
+
+%% @doc Remove a failed assignment from the usable schedule while retaining
+%% its content-addressed data. Stores do not expose a destructive unlink API,
+%% so replace the slot link with a deliberately dangling rollback link.
+unlink(RawAssignment, RawOpts) ->
+    Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
+    Opts = opts(RawOpts),
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
+    Slot = hb_ao:get(<<"slot">>, Assignment, Opts),
+    AssignmentID = hb_message:id(Assignment, signed, Opts),
+    ?event(
+        {unlinking_assignment,
+            {proc_id, ProcID},
+            {slot, Slot},
+            {assignment, AssignmentID}
+        }
+    ),
+    hb_store:link(
+        Store,
+        #{ assignment_path(ProcID, Slot) =>
+            hb_path:to_binary([
+                ?SCHEDULER_CACHE_PREFIX,
+                <<"rolled-back">>,
+                AssignmentID
+            ]) },
+        Opts
+    ).
 
 %% @doc Write the initial assignment message to the cache.
 write_spawn(RawInitMessage, Opts) ->
@@ -68,12 +90,7 @@ read(ProcID, Slot, Opts) when is_integer(Slot) ->
 read(ProcID, Slot, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    P1 = hb_path:to_binary([
-        ?SCHEDULER_CACHE_PREFIX,
-        <<"assignments">>,
-        hb_util:human_id(ProcID),
-        Slot
-    ]),
+    P1 = assignment_path(ProcID, Slot),
     ?event(
         {read_assignment,
             {proc_id, ProcID},
@@ -114,14 +131,36 @@ read(ProcID, Slot, RawOpts) ->
 %% @doc Get the assignments for a process.
 list(ProcID, RawOpts) ->
     Opts = opts(RawOpts),
-    hb_cache:list_numbered(
-        hb_path:to_binary([
-            ?SCHEDULER_CACHE_PREFIX,
-            <<"assignments">>,
-            hb_util:human_id(ProcID)
-        ]),
-        Opts
-    ).
+    Slots =
+        hb_cache:list_numbered(
+            hb_path:to_binary([
+                ?SCHEDULER_CACHE_PREFIX,
+                <<"assignments">>,
+                hb_util:human_id(ProcID)
+            ]),
+            Opts
+        ),
+    trim_unavailable_tail(ProcID, Slots, Opts).
+
+%% Rolled-back assignments can only occur at the unconfirmed tail because the
+%% scheduler does not advance its state in remote-confirmation mode. Usually
+%% this checks one slot; recursion also tolerates multiple interrupted retries.
+trim_unavailable_tail(_ProcID, [], _Opts) -> [];
+trim_unavailable_tail(ProcID, Slots, Opts) ->
+    Latest = lists:max(Slots),
+    case read(ProcID, Latest, Opts) of
+        {ok, _} -> Slots;
+        not_found ->
+            trim_unavailable_tail(ProcID, lists:delete(Latest, Slots), Opts)
+    end.
+
+assignment_path(ProcID, Slot) ->
+    hb_path:to_binary([
+        ?SCHEDULER_CACHE_PREFIX,
+        <<"assignments">>,
+        hb_util:human_id(ProcID),
+        hb_ao:normalize_key(Slot)
+    ]).
 
 %% @doc Get the latest assignment from the cache.
 latest(ProcID, RawOpts) ->
@@ -178,6 +217,20 @@ volatile_schedule_test() ->
     ?assertMatch({1, _}, latest(ProcID, Opts)),
     {ok, ReadAssignment} = read(ProcID, 1, Opts),
     ?assertEqual(ReadAssignment, hb_message:normalize_commitments(Assignment, Opts)),
+    ?assertEqual(ok, unlink(Assignment, Opts)),
+    ?assertEqual([], list(ProcID, Opts)),
+    ?assertEqual(not_found, read(ProcID, 1, Opts)),
+    ?assertEqual(ok, write(Assignment, Opts)),
+    ?assertMatch({ok, _}, read(ProcID, 1, Opts)),
+    LMDBStore = hb_test_utils:test_store(hb_store_lmdb, <<"scheduler-unlink">>),
+    LMDBOpts = #{ <<"store">> => [LMDBStore] },
+    hb_store:start(LMDBStore),
+    ?assertEqual(ok, write(Assignment, LMDBOpts)),
+    ?assertEqual(ok, unlink(Assignment, LMDBOpts)),
+    ?assertEqual([], list(ProcID, LMDBOpts)),
+    ?assertEqual(ok, write(Assignment, LMDBOpts)),
+    ?assertMatch({ok, _}, read(ProcID, 1, LMDBOpts)),
+    hb_store:reset(LMDBStore),
     hb_store:stop(VolStore),
     hb_store:reset(VolStore),
     hb_store:start(VolStore),

@@ -263,17 +263,7 @@ do_assign(State, Message, ReplyPID) ->
                 State
             ),
             ?event(writes_complete),
-            ?event(uploading_message),
-            hb_client_remote:upload(Message, Opts),
-            hb_client_remote:upload(Assignment, Opts),
-            ?event(uploads_complete),
-            maybe_inform_recipient(
-                remote_confirmation,
-                ReplyPID,
-                Message,
-                Assignment,
-                State
-            )
+            upload_after_write(Message, Assignment, ReplyPID, State)
         end,
     case hb_opts:get(scheduling_mode, sync, Opts) of
         aggressive ->
@@ -287,6 +277,46 @@ do_assign(State, Message, ReplyPID) ->
         current := NextSlot,
         base_state_hashpath := next_hashpath(BaseStateHashpath, Assignment, State)
     }.
+
+%% @doc Upload a durably written assignment. Local and aggressive confirmation
+%% have already replied by this point, so an upload failure must not roll their
+%% scheduler state back. Remote confirmation has not replied, so remove the
+%% local schedule link and re-raise to keep the previous scheduler state.
+upload_after_write(Message, Assignment, ReplyPID, State) ->
+    Opts = maps:get(opts, State),
+    try
+        ?event(uploading_message),
+        hb_client_remote:upload(Message, Opts),
+        hb_client_remote:upload(Assignment, Opts),
+        ?event(uploads_complete),
+        maybe_inform_recipient(
+            remote_confirmation,
+            ReplyPID,
+            Message,
+            Assignment,
+            State
+        )
+    catch
+        Class:Reason:Stack ->
+            ?event(error,
+                {assignment_upload_failed_after_write,
+                    {class, Class},
+                    {reason, Reason},
+                    {trace, Stack},
+                    {process, maps:get(id, State)},
+                    {slot, hb_ao:get(<<"slot">>, Assignment, Opts)}
+                }
+            ),
+            case maps:get(mode, State) of
+                aggressive -> ok;
+                local_confirmation -> ok;
+                remote_confirmation ->
+                    ok = dev_scheduler_cache:unlink(Assignment, Opts),
+                    erlang:raise(Class, Reason, Stack);
+                _ ->
+                    erlang:raise(Class, Reason, Stack)
+            end
+    end.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
@@ -368,7 +398,6 @@ new_proc_test() ->
         #{ current := 2 },
         dev_scheduler_server:info(dev_scheduler_registry:find(ID))
     ).
-    
 
 benchmark_test() ->
     BenchTime = 1,

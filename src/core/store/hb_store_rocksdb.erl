@@ -224,14 +224,9 @@ link_path(_, Key1, Key1) ->
 link_path(Opts, Existing, New) ->
     ExistingBin = convert_if_list(Existing),
     NewBin = convert_if_list(New),
-
-    % Create: NewValue -> ExistingBin
-    case do_read(Opts, NewBin) of
-        not_found ->
-            do_write(Opts, NewBin, encode_value(link, ExistingBin));
-        _ ->
-            ok
-    end.
+    % Create or replace: NewValue -> ExistingBin. Replacement matches the
+    % semantics of the FS, LMDB, and volatile stores.
+    do_write(Opts, NewBin, encode_value(link, ExistingBin)).
 
 %% @doc List all items registered in rocksdb store. Should be used only
 %% for testing/debugging, as the underlying operation is doing full traversal
@@ -457,8 +452,13 @@ write_read_test_() ->
                 ),
                 ok = link(#{}, #{ <<"test_key">> => <<"test_key2">> }, #{}),
                 {ok, Value} = read(#{}, #{ <<"read">> => <<"test_key">> }, #{}),
-
-                ?assertEqual(<<"value_under_linked_key">>, Value)
+                ?assertEqual(<<"value_under_linked_key">>, Value),
+                ok = write(#{}, #{ <<"test_key3">> => <<"replacement">> }, #{}),
+                ok = link(#{}, #{ <<"test_key">> => <<"test_key3">> }, #{}),
+                ?assertEqual(
+                    {ok, <<"replacement">>},
+                    read(#{}, #{ <<"read">> => <<"test_key">> }, #{})
+                )
             end}
         ]}.
 
