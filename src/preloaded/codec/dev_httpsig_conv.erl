@@ -608,10 +608,10 @@ group_maps(Map, Parent, Top, Opts) when is_map(Map) ->
                     end;
                 _ ->
                     ?event_debug({group_maps, {norm_key, NormKey}, {value, Value}}),
-                    case byte_size(Value) > ?MAX_HEADER_LENGTH of
-                        % the value is too large to be encoded as a header
-                        % within a part, so instead lift it to be a top level
-                        % part
+                    case NormKey =:= <<"content-disposition">>
+                            orelse byte_size(Value) > ?MAX_HEADER_LENGTH of
+                        % Content-Disposition frames multipart parts, while
+                        % large values cannot be headers. Lift either one.
                         true ->
                             NewTop = hb_maps:put(FlatK, Value, CurTop, Opts),
                             {CurMap, NewTop};
@@ -904,3 +904,15 @@ encode_message_with_links_test() ->
     % Ensure that the result is the same as the original message
     ?event({decoded, Dec}),
     ?assert(hb_message:match(Msg, Dec, strict, #{})).
+
+nested_content_disposition_roundtrip_test() ->
+    Msg = #{
+        <<"child">> => #{
+            <<"content-disposition">> => <<"attachment">>,
+            <<"value">> => <<"x">>
+        }
+    },
+    Codec = #{ <<"device">> => <<"httpsig@1.0">>, <<"bundle">> => true },
+    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, #{}),
+    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, #{}),
+    ?assertEqual(Msg, Decoded).
