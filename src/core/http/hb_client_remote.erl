@@ -112,8 +112,8 @@ upload(Msg, Opts, _CommitmentDevice) ->
     hb_ao:raw(
         <<"arweave@2.9">>,
         <<"tx">>,
-        #{},
-        Msg#{ <<"method">> => <<"POST">> },
+        Msg,
+        #{ <<"method">> => <<"POST">>, <<"target">> => <<"base">> },
         Opts
     ).
 
@@ -143,7 +143,8 @@ upload_single_layer_message_test() ->
     Msg = #{
         <<"data">> => <<"TEST">>,
         <<"basic">> => <<"value">>,
-        <<"integer">> => 1
+        <<"integer">> => 1,
+        <<"target">> => hb_util:human_id(<<0:256>>)
     },
     Committed =
         hb_message:commit(
