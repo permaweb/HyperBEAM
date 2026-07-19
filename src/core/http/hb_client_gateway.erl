@@ -78,12 +78,12 @@ read(ID, Opts) ->
             end
     end.
 
-%% @doc Gives the fields of a transaction that are needed to construct an
-%% ANS-104 message.
+%% @doc Gives the fields needed to construct an Arweave message.
 item_spec() ->
     <<"""
         node {
             id
+            bundledIn { id }
             anchor
             signature
             recipient
@@ -355,6 +355,13 @@ result_to_message(Item, Opts) ->
         _ ->
             result_to_message(undefined, Item, Opts)
     end.
+%% @doc Load an L1 transaction in its native form.
+result_to_message(ExpectedID, #{ <<"bundledIn">> := null }, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave@2.9">> },
+        #{ <<"path">> => <<"tx">>, <<"tx">> => ExpectedID },
+        Opts
+    );
 result_to_message(ExpectedID, Item, Opts) ->
     GQLOpts =
         Opts#{
@@ -561,9 +568,17 @@ scheduler_location_test() ->
 
 %% @doc Test l1 message from graphql
 l1_transaction_test() ->
-    _Node = hb_http_server:start_node(#{}),
-    {ok, Res} = read(<<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>, #{}),
+    ID = <<"uJBApOt4ma3pTfY6Z4xmknz5vAasup4KcGX7FJ0Of8w">>,
+    Node = hb_http_server:start_node(
+        #{ <<"store">> => [#{ <<"store-module">> => hb_store_gateway }] }
+    ),
+    ClientOpts = #{ <<"store">> => [hb_test_utils:test_store(hb_store_volatile)] },
+    {ok, Res} = hb_http:get(Node, ID, ClientOpts),
     ?event(gateway, {l1_transaction, Res}),
+    Devices = hb_message:commitment_devices(Res, ClientOpts),
+    ?assert(lists:member(<<"tx@1.0">>, Devices)),
+    ?assertNot(lists:member(<<"ans104@1.0">>, Devices)),
+    ?assert(hb_message:verify(Res, all, ClientOpts)),
     Data = maps:get(<<"data">>, Res),
     ?assertEqual(<<"Hello World">>, Data).
 
