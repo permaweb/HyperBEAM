@@ -117,6 +117,8 @@ read(ProcID, Slot, RawOpts) ->
                             ?event({normalized_aos2_assignment, Norm}),
                             {ok, Norm};
                         <<"ao.N.1">> ->
+                            {ok, hb_cache:ensure_all_loaded(Assignment, Opts)};
+                        not_found ->
                             {ok, hb_cache:ensure_all_loaded(Assignment, Opts)}
                     end;
                 {error, not_found} ->

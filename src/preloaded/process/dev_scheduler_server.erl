@@ -286,8 +286,8 @@ upload_after_write(Message, Assignment, ReplyPID, State) ->
     Opts = maps:get(opts, State),
     try
         ?event(uploading_message),
-        hb_client_remote:upload(Message, Opts),
-        hb_client_remote:upload(Assignment, Opts),
+        ok = ensure_upload_succeeded(hb_client_remote:upload(Message, Opts)),
+        ok = ensure_upload_succeeded(hb_client_remote:upload(Assignment, Opts)),
         ?event(uploads_complete),
         maybe_inform_recipient(
             remote_confirmation,
@@ -317,6 +317,24 @@ upload_after_write(Message, Assignment, ReplyPID, State) ->
                     erlang:raise(Class, Reason, Stack)
             end
     end.
+
+%% @doc Turn failed upload return values into exceptions so the confirmation-
+%% mode-specific recovery in `upload_after_write/4' is always applied.
+ensure_upload_succeeded({ok, Results}) when is_list(Results) ->
+    case [Result || Result <- Results, not upload_result_succeeded(Result)] of
+        [] -> ok;
+        Failed -> erlang:error({upload_failed, Failed})
+    end;
+ensure_upload_succeeded({error, Reason}) ->
+    erlang:error({upload_failed, Reason});
+ensure_upload_succeeded({failure, Reason}) ->
+    erlang:error({upload_failed, Reason});
+ensure_upload_succeeded(Result) ->
+    erlang:error({upload_failed, Result}).
+
+upload_result_succeeded(ok) -> true;
+upload_result_succeeded({ok, _}) -> true;
+upload_result_succeeded(_) -> false.
 
 %% @doc Commit to the assignment using all of our appropriate wallets.
 commit_assignment(BaseAssignment, State) ->
@@ -398,6 +416,43 @@ new_proc_test() ->
         #{ current := 2 },
         dev_scheduler_server:info(dev_scheduler_registry:find(ID))
     ).
+
+%% @doc A returned upload error must invalidate an assignment that has not yet
+%% received remote confirmation.
+remote_confirmation_upload_failure_unlinks_test() ->
+    Wallet = hb:wallet(),
+    Store = hb_test_utils:test_store(hb_store_fs, <<"remote-upload-failure">>),
+    Opts = #{
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => [Store]
+    },
+    hb_store:start(Store),
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Message = hb_message:commit(
+        #{ <<"target">> => ProcID, <<"data">> => <<"test">> },
+        Opts,
+        <<"httpsig@1.0">>
+    ),
+    Assignment = hb_message:commit(
+        #{
+            <<"variant">> => <<"ao.N.1">>,
+            <<"process">> => ProcID,
+            <<"slot">> => 0,
+            <<"hash-chain">> => <<"test-hash-chain">>
+        },
+        Opts,
+        <<"httpsig@1.0">>
+    ),
+    ok = dev_scheduler_cache:write(Assignment, Opts),
+    ?assertEqual([0], dev_scheduler_cache:list(ProcID, Opts)),
+    State = #{ id => ProcID, mode => remote_confirmation, opts => Opts },
+    ?assertError(
+        {upload_failed, [{error, no_httpsig_bundler}]},
+        upload_after_write(Message, Assignment, self(), State)
+    ),
+    ?assertEqual([], dev_scheduler_cache:list(ProcID, Opts)),
+    ?assertEqual(not_found, dev_scheduler_cache:read(ProcID, 0, Opts)),
+    hb_store:reset(Store).
 
 benchmark_test() ->
     BenchTime = 1,
