@@ -1,68 +1,71 @@
 %%% @doc Extract device specs and vary AO-Core execution inputs.
 -module(hb_types).
--export([extract/2, vary/2, add_schema/2, beam_to_schema/2]).
+-export([extract/2, vary/2, beam_to_schema/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Add the schema for a resolution to an execution context, given a
-%% resolved key, function, and execution module (e.g, from
-%% `hb_device:add_resolver`).
-add_schema(
+%% @doc Derive the resolved function's schema and use it to vary one execution.
+%% Projection and dependency collection are one operation: every selected fact
+%% is returned together with the hashpath of the membership that supplied it.
+vary(
     Ctx =
         #{
-            <<"key">> := Key,
-            <<"resolver-device">> := Device,
-            <<"priv">> :=
-                #{
-                    <<"function">> := Func,
-                    <<"add-key">> := AddKey
-                }
+            <<"base">> := Base,
+            <<"request">> := Req,
+            <<"priv">> := #{ <<"function">> := Func }
         },
-    Opts) ->
-    case schema_from_device(Device, Func, Key, Opts) of
+    Opts
+) ->
+    case schema_from_function(Func, Opts) of
         undefined ->
-            ?prim_dbg(
-                {schema_not_found,
-                    {device, Device},
-                    {func, Func},
-                    {key, Key}
-                }
-            ),
-            {ok, Ctx};
+            identity_vary(Ctx, Base, Req);
         Schema ->
-            ?prim_dbg(
-                {schema_found,
-                    {device, Device},
-                    {func, Func},
-                    {key, Key},
-                    {schema, Schema}
-                }
-            ),
-            {ok, Ctx#{ <<"schema">> => execution_schema(Schema, AddKey) } }
-    end.
+            [BaseSchema, ReqSchema, ReturnSchema] =
+                execution_schema(
+                    Schema,
+                    maps:get(<<"add-key">>, Ctx, false)
+                ),
+            {VariedBase, BaseDependencies} =
+                project_schema(
+                    implicit_base(BaseSchema),
+                    Base,
+                    undefined,
+                    <<"base">>,
+                    Opts
+                ),
+            {VariedReq, ReqDependencies} =
+                project_schema(
+                    implicit_request(ReqSchema),
+                    Req,
+                    undefined,
+                    <<"request">>,
+                    Opts
+                ),
+            varied_context(
+                Ctx,
+                VariedBase,
+                VariedReq,
+                merge_dependencies(BaseDependencies, ReqDependencies),
+                overlay(ReturnSchema)
+            )
+    end;
+vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts) ->
+    identity_vary(Ctx, Base, Req).
 
-%% @doc Apply the resolved function's base/request schemas to one execution.
-vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts)
-        when not is_map_key(<<"schema">>, Ctx) ->
-    {ok,
+identity_vary(Ctx, Base, Req) ->
+    varied_context(Ctx, Base, Req, #{}, none).
+
+varied_context(Ctx, Base, Req, Dependencies, Normalizer) ->
+    Varied =
         Ctx#{
             <<"varied-base">> => Base,
             <<"varied-request">> => Req,
-            <<"normalizer">> => none
-        }
-    };
-vary(Ctx = #{
-    <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
-    <<"base">> := Base,
-    <<"request">> := Req
-}, Opts) ->
-    {ok,
-        Ctx#{
-            <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
-            <<"varied-request">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
-            <<"normalizer">> => overlay(ReturnSchema)
-        }
-    }.
+            <<"normalizer">> => Normalizer
+        },
+    case map_size(Dependencies) of
+        0 -> {ok, maps:remove(<<"dependencies">>, Varied)};
+        _ -> {ok, Varied#{ <<"dependencies">> => Dependencies }}
+    end.
 
 %% @doc Extract a device module's function schemas. We first check the
 %% `loaded-device-store` cache, then fall back to loading the module manually
@@ -93,15 +96,16 @@ extract(Device, Opts) when is_binary(Device) ->
 extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
-schema_from_device(Device, Func, Key, Opts) ->
-    case extract(Device, Opts) of
+schema_from_function(Func, Opts) ->
+    {module, Module} = erlang:fun_info(Func, module),
+    case extract(Module, Opts) of
         {ok, #{ <<"keys">> := Schemas }} ->
-            select_schema(Func, Key, Schemas);
+            select_schema(Func, Schemas);
         {error, _Reason} ->
             undefined
     end.
 
-select_schema(Func, _Key, Schemas) ->
+select_schema(Func, Schemas) ->
     case erlang:fun_info(Func, name) of
         {name, Name} ->
             maps:get(normalize_name(Name), Schemas, undefined);
@@ -351,21 +355,47 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
             hb_util:bin(io_lib:format("~tp", [Other]))
     end.
 
-apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
-    Value;
-apply_schema(#{ <<"kind">> := <<"empty">> }, Value, _Opts) ->
-    Value;
-apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
+%% @doc Apply a schema while collecting the source membership of every value
+%% selected from a message. `Origin' is the hashpath of the containing value;
+%% it is only present while recursively projecting an already-selected field.
+project_schema(#{ <<"kind">> := <<"any">> }, Value, Origin, Location, _Opts) ->
+    {Value, dependency(Origin, Location)};
+project_schema(#{ <<"kind">> := <<"empty">> }, Value, Origin, Location, _Opts) ->
+    {Value, dependency(Origin, Location)};
+project_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Origin, Location, Opts)
         when not is_map(Value) ->
-    apply_schema(Schema, hb_cache:ensure_loaded(Value, Opts), Opts);
-apply_schema(
+    project_schema(
+        Schema,
+        hb_cache:ensure_loaded(Value, Opts),
+        Origin,
+        Location,
+        Opts
+    );
+project_schema(
     #{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"wildcard">> := Wildcard },
     Message,
+    Origin,
+    Location,
     Opts
 ) when is_map(Message) ->
-    Explicit = explicit_keys(Keys, Message, Opts),
-    maps:merge(wildcard_keys(Wildcard, Keys, Message, Opts), Explicit);
-apply_schema(Type, Value, Opts) ->
+    {Explicit, ExplicitDependencies} =
+        project_explicit(Keys, Message, Origin, Location, Opts),
+    {WildcardValues, WildcardDependencies} =
+        project_wildcard(Wildcard, Keys, Message, Origin, Location, Opts),
+    Dependencies =
+        merge_dependencies(ExplicitDependencies, WildcardDependencies),
+    {
+        maps:merge(WildcardValues, Explicit),
+        case {map_size(Dependencies), Origin} of
+            {0, undefined} -> #{};
+            {0, _} -> dependency(Origin, Location);
+            _ -> Dependencies
+        end
+    };
+project_schema(Type, Value, Origin, Location, Opts) ->
+    {apply_type(Type, Value, Opts), dependency(Origin, Location)}.
+
+apply_type(Type, Value, Opts) ->
     case check_type(Type, Value) of
         true ->
             Value;
@@ -380,32 +410,150 @@ apply_schema(Type, Value, Opts) ->
             end
     end.
 
-explicit_keys(Keys, Message, Opts) ->
+project_explicit(Keys, Message, ParentOrigin, ParentLocation, Opts) ->
     maps:fold(
-        fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
-            case hb_ao:raw(Message, #{ <<"path">> => Key }, Opts) of
-                {ok, Value} ->
-                    Acc#{ Key => apply_schema(Type, Value, Opts) };
+        fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type },
+                {Values, Dependencies}) ->
+            case read_schema_fact(Message, Key, Presence, ParentOrigin, Opts) of
+                {ok, Value, Origin} ->
+                    Location = dependency_location(ParentLocation, Key),
+                    {Projected, FieldDependencies} =
+                        project_schema(Type, Value, Origin, Location, Opts),
+                    {
+                        Values#{ Key => Projected },
+                        merge_dependencies(Dependencies, FieldDependencies)
+                    };
                 {error, not_found} when Presence =:= required ->
                     throw({required_key_missing, Key});
                 {error, not_found} ->
-                    Acc
+                    {Values, Dependencies};
+                {error, Reason} ->
+                    throw({dependency_resolution_failed, Key, Reason})
             end
         end,
-        #{},
+        {#{}, #{}},
         Keys
     ).
 
-wildcard_keys(none, _Keys, _Message, _Opts) ->
-    #{};
-wildcard_keys(#{ <<"presence">> := optional }, Keys, Message, _Opts) ->
-    maps:without(maps:keys(Keys), Message);
-wildcard_keys(#{ <<"presence">> := required, <<"type">> := Type }, Keys, Message, Opts) ->
-    maps:map(
-        fun(_Key, Value) ->
-            apply_schema(Type, hb_cache:ensure_all_loaded(Value, Opts), Opts)
+project_wildcard(none, _Keys, _Message, _Origin, _Location, _Opts) ->
+    {#{}, #{}};
+project_wildcard(
+    #{ <<"presence">> := Presence, <<"type">> := Type },
+    Keys,
+    Message,
+    ParentOrigin,
+    ParentLocation,
+    Opts
+) ->
+    % Enumerate the value already being projected. Calling its `keys'
+    % operation here would itself require varying and recursively re-enter this
+    % walker.
+    AvailableKeys =
+        maps:keys(
+            hb_private:reset(hb_message:uncommitted(Message, Opts))
+        ),
+    project_wildcard_keys(
+        Type,
+        Presence,
+        hb_util:list_without(maps:keys(Keys), AvailableKeys),
+        Message,
+        ParentOrigin,
+        ParentLocation,
+        Opts
+    ).
+
+project_wildcard_keys(
+    Type,
+    Presence,
+    Keys,
+    Message,
+    ParentOrigin,
+    ParentLocation,
+    Opts
+) ->
+    lists:foldl(
+        fun(Key, {Values, Dependencies}) ->
+            case read_schema_fact(Message, Key, Presence, ParentOrigin, Opts) of
+                {ok, Value, Origin} ->
+                    Location = dependency_location(ParentLocation, Key),
+                    {Projected, FieldDependencies} =
+                        project_schema(Type, Value, Origin, Location, Opts),
+                    {
+                        Values#{ Key => Projected },
+                        merge_dependencies(Dependencies, FieldDependencies)
+                    };
+                {error, not_found} when Presence =:= optional ->
+                    {Values, Dependencies};
+                {error, Reason} ->
+                    throw({dependency_resolution_failed, Key, Reason})
+            end
         end,
-        hb_util:list_without(maps:keys(Keys), hb_ao:keys(Message, Opts))
+        {#{}, #{}},
+        Keys
+    ).
+
+%% Optional schema fields describe values that may already be present; they do
+%% not authorize execution of a same-named device operation. Required fields do
+%% authorize normal AO-Core resolution and record the resulting claim.
+read_schema_fact(Message, Key, optional, ParentOrigin, Opts) ->
+    case hb_device:id_or_direct_key(Message, Key, Opts) of
+        {hit, _} -> read_fact(Message, Key, ParentOrigin, Opts);
+        {ok, _Device} -> {error, not_found};
+        {error, Reason} -> {error, Reason}
+    end;
+read_schema_fact(Message, Key, _Presence, ParentOrigin, Opts) ->
+    read_fact(Message, Key, ParentOrigin, Opts).
+
+%% Resolve one fact without discarding the execution context: the result and
+%% the hashpath formatted from that same context must remain inseparable.
+read_fact(Message, Key, ParentOrigin, Opts) ->
+    InitialCtx =
+        #{
+            <<"base">> => Message,
+            <<"request">> => #{ <<"path">> => Key },
+            <<"opts">> => Opts
+        },
+    Ctx =
+        case ParentOrigin of
+            undefined -> InitialCtx;
+            _ -> InitialCtx#{ <<"base-id">> => ParentOrigin }
+        end,
+    case hb_ao:do(Ctx) of
+        {ok, ResolvedCtx = #{ <<"result">> := Value }} ->
+            case maps:get(<<"status">>, ResolvedCtx, ok) of
+                ok ->
+                    {
+                        ok,
+                        Value,
+                        fact_origin(ResolvedCtx, Opts)
+                    };
+                Status ->
+                    {error, {Status, Value}}
+            end;
+        {error, #{ <<"reason">> := Reason }} ->
+            {error, Reason};
+        Other ->
+            {error, {unexpected_fact_resolution, Other}}
+    end.
+
+fact_origin(Ctx, Opts) ->
+    case hb_opts:get(<<"hashpath">>, enabled, Opts) of
+        enabled -> hb_hashpath:format(Ctx, Opts);
+        _ -> undefined
+    end.
+
+dependency(undefined, _Location) -> #{};
+dependency(Origin, Location) ->
+    #{ Origin => #{ Location => true } }.
+
+dependency_location(Parent, Key) ->
+    <<Parent/binary, "/", (hb_ao:normalize_key(Key))/binary>>.
+
+merge_dependencies(Left, Right) ->
+    maps:merge_with(
+        fun(_Hashpath, LeftUses, RightUses) -> maps:merge(LeftUses, RightUses) end,
+        Left,
+        Right
     ).
 
 overlay(ReturnSchema) ->
@@ -629,7 +777,7 @@ boolean_type() ->
 empty_projection_test() ->
     ?assertEqual(
         #{ <<"device">> => <<"test-device@1.0">> },
-        apply_schema(
+        projected(
             implicit_base(empty_type()),
             #{ <<"device">> => <<"test-device@1.0">>, <<"extra">> => <<"drop">> },
             #{}
@@ -680,7 +828,6 @@ default_handler_uses_resolved_function_schema_test() ->
         default_schema,
         select_schema(
             Func,
-            <<"requested-key">>,
             #{
                 <<"default-schema-fun">> => default_schema,
                 <<"requested-key">> => requested_key_schema
@@ -691,7 +838,6 @@ default_handler_uses_resolved_function_schema_test() ->
         undefined,
         select_schema(
             Func,
-            <<"requested-key">>,
             #{ <<"other-key">> => other_schema }
         )
     ).
@@ -719,7 +865,7 @@ extension_projection_test() ->
                     <<"b">> => 1
                 }
         },
-    ?assertEqual(#{ <<"a">> => 1 }, apply_schema(Schema, Msg, #{})).
+    ?assertEqual(#{ <<"a">> => 1 }, projected(Schema, Msg, #{})).
 
 extension_wildcard_carry_test() ->
     Schema =
@@ -735,5 +881,10 @@ extension_wildcard_carry_test() ->
     Msg = #{ <<"b">> => 2, <<"...">> => Parent },
     ?assertEqual(
         #{ <<"a">> => 1, <<"b">> => 2, <<"...">> => Parent },
-        apply_schema(Schema, Msg, #{})
+        projected(Schema, Msg, #{})
     ).
+
+projected(Schema, Value, Opts) ->
+    {Projected, _Dependencies} =
+        project_schema(Schema, Value, undefined, <<"value">>, Opts),
+    Projected.

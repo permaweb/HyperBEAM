@@ -36,13 +36,11 @@ truncate_args(Fun, Args) ->
 %%     base:             The base message, unvaried.
 %%     key:              The key to be resolved in the execution.
 %%     forced-device:    The device derived from the message itself.
-%%     priv/exec-device: The device from which the execution function originates.
-%%                       If the `forced-device` resolvers from another device,
+%%     resolver-device:  The device from which the execution function originates.
+%%                       If the `forced-device` resolves from another device,
 %%                       this key will differ from the `forced-device`.
-%%     priv/function:    The function to execute to resolve the `forced-device`.
-%%     priv/add-key:     Whether the execution function expects that we should
-%%                       add the `key` as an additional argument to the start of
-%%                       the argument list.
+%%     add-key:          The key to prepend to the execution arguments, or false.
+%%     priv/function:    The local function that executes the resolution.
 %% }
 add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
     % TODO: What if we force a device _and_ have a direct key hit?
@@ -60,18 +58,15 @@ add_resolver(Context = #{ <<"base">> := Base, <<"key">> := Key }, Opts) ->
                 }
             };
         {ok, DeviceID} ->
-            {Type, ExecDev, ExecMod, Fun} =
+            {Type, ExecDev, _ExecMod, Fun} =
                 message_to_fun(DeviceID, Base, Key, Opts),
             {ok,
                 Context#{
                     <<"forced-device">> => DeviceID,
                     <<"resolver-device">> => ExecDev,
-                    <<"priv">> =>
-                        OldPriv#{
-                            <<"resolver-module">> => ExecMod,
-                            <<"add-key">> => Type == add_key,
-                            <<"function">> => Fun
-                        }
+                    <<"add-key">> =>
+                        case Type of add_key -> Key; _ -> false end,
+                    <<"priv">> => OldPriv#{ <<"function">> => Fun }
                 }
             }
     end.
@@ -123,6 +118,9 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
     Info = info(DevMod, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
+    % Blanket handlers apply to content keys. A device owns `vary' only by
+    % explicitly exporting it.
+    Blanket = Exported andalso Key =/= <<"vary">>,
 	?event(
         ao_devices,
         {message_to_fun,
@@ -135,7 +133,7 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 		Opts
     ),
     % Does the device have an explicit handler function?
-    case {hb_maps:find(handler, Info, Opts), Exported} of
+    case {hb_maps:find(handler, Info, Opts), Blanket} of
         {{ok, Handler}, true} ->
 			% Case 2: The device has an explicit handler function.
 			?event(
@@ -150,7 +148,7 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 					% Case 3: The device has a function of the name `Key'.
 					{ok, DevID, DevMod, Func};
 				_ ->
-					case {hb_maps:find(default, Info, Opts), Exported} of
+					case {hb_maps:find(default, Info, Opts), Blanket} of
 						{{ok, DefaultFunc}, true} when is_function(DefaultFunc) ->
 							% Case 4: The device has a default handler.
                             ?event_debug({found_default_handler, {func, DefaultFunc}}),

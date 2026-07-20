@@ -694,43 +694,58 @@ default_accessor(Key, Msg, Req, Opts) ->
     #{}) -> {ok, #{}} | {error, binary()}.
 vary(Base, Req, Opts) ->
     maybe
-        {ok, Ctx} ?=
-            case hb_private:get(<<"function">>, Req, not_found, Opts) of
-                not_found ->
-                    % No function given: derive the key to resolve one.
-                    maybe
-                        {ok, Key} ?=
-                            case Req of
-                                #{ <<"vary">> := KeyToVaryOn } ->
-                                    {ok, KeyToVaryOn};
-                                #{ <<"path">> := <<"vary">> } ->
-                                    {error, <<"Cannot vary the `vary` path.">>};
-                                #{ <<"path">> := PathKey } ->
-                                    {ok, PathKey};
-                                _ ->
-                                    {error, <<"invalid-vary-request">>}
-                            end,
-                        hb_device:add_resolver(
-                            #{
-                                <<"base">> => Base,
-                                <<"key">> => Key,
-                                <<"request">> => Req
-                            },
-                            Opts
-                        )
-                    end;
-                Fun ->
-                    % The executor is already known: no key is required.
-                    {ok,
-                        #{
-                            <<"base">> => Base,
-                            <<"request">> => Req,
-                            <<"priv">> => #{ <<"function">> => Fun }
-                        }
-                    }
+        {ok, Key, TargetReq} ?= vary_target(Req, Opts),
+        ForcedDevice =
+            hb_private:get(<<"forced-device">>, Req, undefined, Opts),
+        ResolverCtx0 =
+            #{
+                <<"base">> => Base,
+                <<"key">> => Key,
+                <<"request">> => TargetReq
+            },
+        ResolverCtx =
+            case ForcedDevice of
+                undefined -> ResolverCtx0;
+                _ -> ResolverCtx0#{ <<"forced-device">> => ForcedDevice }
             end,
+        {ok, Ctx} ?=
+            hb_device:add_resolver(ResolverCtx, Opts),
         hb_types:vary(Ctx, Opts)
     end.
+
+%% @doc Recover the target request from either an ordinary `vary' membership
+%% or a direct device call. The `vary' selector is preparation syntax, not an
+%% input to the target function.
+vary_target(Req, Opts) ->
+    case hb_path:hd(Req, Opts) of
+        <<"vary">> ->
+            case hb_device:id_or_direct_key(Req, <<"request">>, Opts) of
+                {hit, TargetReq} when is_map(TargetReq) ->
+                    case hb_path:hd(TargetReq, Opts) of
+                        undefined -> {error, <<"invalid-vary-request">>};
+                        Key -> {ok, Key, TargetReq}
+                    end;
+                _ ->
+                    legacy_vary_target(Req, Opts)
+            end;
+        undefined ->
+            {error, <<"invalid-vary-request">>};
+        Key ->
+            {ok, Key, clean_vary_request(Req)}
+    end.
+
+legacy_vary_target(Req, Opts) ->
+    case hb_device:id_or_direct_key(Req, <<"vary">>, Opts) of
+        {hit, Key} ->
+            CleanReq = clean_vary_request(maps:remove(<<"vary">>, Req)),
+            {ok, Key, CleanReq#{ <<"path">> => Key }};
+        _ ->
+            {error, <<"Cannot vary the `vary` path.">>}
+    end.
+
+clean_vary_request(Req) ->
+    Priv = maps:remove(<<"forced-device">>, hb_private:from_message(Req)),
+    hb_private:set_priv(maps:without([<<"priv">>, priv], Req), Priv).
 
 %% @doc Returns the device schema for a `Base` message.
 -spec schema(_, _, _) -> {ok, undefined | #{}}.

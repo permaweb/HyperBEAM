@@ -87,7 +87,7 @@
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3]).
 -export([raw/3, raw/4, raw/5]).
--export([with/3]).
+-export([do/1, with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 %%% Shortcuts and tools:
 -export([keys/2]).
@@ -233,7 +233,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             ?event_debug(debug_ao_core,
                 {
                     stage,
-                    13,
+                    11,
                     resolved_step,
                     {res, Res},
                     {opts, Opts}
@@ -243,7 +243,7 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
             do_resolve_many([Res | MsgList], Opts);
         Res ->
             % The result is not a continuable message. Return it.
-            ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating, Res}),
+            ?event_debug(debug_ao_core, {stage, 11, resolve_many_terminating, Res}),
             Res
     end.
 
@@ -260,6 +260,7 @@ to_context(FDevice, FKey, Base, Req, Opts) ->
         fun(_K, V) -> V =/= undefined end,
         #{
             <<"device">> => FDevice,
+            <<"forced-device">> => FDevice,
             <<"path">> => FKey,
             <<"base">> => Base,
             <<"request">> => Req,
@@ -318,26 +319,24 @@ do(Ctx0) ->
     maybe
         % Stage 1: Normalization; device or direct key lookup.
         {ok, Ctx1} ?= stage_1(Ctx0),
-        % Stage 2: Function lookup.
+        % Stage 2: Derive the executable context through `vary'.
         {ok, Ctx2} ?= stage_2(Ctx1),
-        % Stage 3: Vary `Base` and `Req`.
+        % Stage 3: Persistent resolver lookup.
         {ok, Ctx3} ?= stage_3(Ctx2),
-        % Stage 4: Persistent resolver lookup.
+        % Stage 4: Cache lookup.
         {ok, Ctx4} ?= stage_4(Ctx3),
-        % Stage 5: Cache lookup.
+        % Stage 5: Execution.
         {ok, Ctx5} ?= stage_5(Ctx4),
-        % Stage 6: Execution.
+        % Stage 6: Result normalization and materialization.
         {ok, Ctx6} ?= stage_6(Ctx5),
-        % Stage 7: `Normalizer` application and hashpath generation
+        % Stage 7: Result caching.
         {ok, Ctx7} ?= stage_7(Ctx6),
-        % Stage 8: Result caching.
+        % Stage 8: Notify waiters.
         {ok, Ctx8} ?= stage_8(Ctx7),
-        % Stage 9: Notify waiters.
+        % Stage 9: Execution of the `step' hook.
         {ok, Ctx9} ?= stage_9(Ctx8),
-        % Stage 10: Execution of the `step' hook.
-        {ok, Ctx10} ?= stage_10(Ctx9),
-        % Stage 11: Fork worker.
-        stage_11(Ctx10)
+        % Stage 10: Spawn a persistent worker, if requested.
+        stage_10(Ctx9)
     else
         {hit, Ctx} ->
             % A stage may choose to return early. If it does, return it in
@@ -379,81 +378,90 @@ stage_1(Ctx = #{ <<"opts">> := Opts }) ->
             {error, Ctx#{ <<"status">> => error, <<"reason">> => {not_found, Field} }}
     end.
 
-%% @doc Lookup the device and function to use during an execution.
+%% @doc Derive the complete executable context by resolving the selected
+%% device's `vary' function as an ordinary AO-Core membership. For an ordinary
+%% request, execute `Base / { path: vary, request: Req }' and merge the returned
+%% function, varied inputs, dependencies, and normalizer into the outer context.
+%% An explicit `vary' request is the recursion base case: resolve its function
+%% locally and pass its inputs through unchanged. The internal execution bypasses
+%% the result cache because its function is runtime-private, but retains hashpath
+%% generation for dependency origins.
 stage_2(
         Ctx = #{
             <<"device">> := Device,
+            <<"path">> := <<"vary">>,
             <<"base">> := Base,
-            <<"path">> := Path,
+            <<"request">> := Req,
             <<"opts">> := Opts
         }
 ) ->
-    {Status, _ExecDev, _ExecMod, Function} =
-        hb_device:message_to_fun(Device, Base, Path, Opts),
-    {ok,
+    % We are already varying. Resolve `vary' locally and do not recurse.
+    hb_device:add_resolver(
         Ctx#{
-            <<"add-key">> => case Status of add_key -> Path; _ -> false end,
-            <<"priv">> => #{ <<"function">> => Function }
-        }
-    }.
-
-%% @doc Vary the `Base` and `Req` of the resolution. To do so, assuming that
-%% the request is not itself a `vary` call, we recursively resolve the
-%% computation as a sub-request. This allows the device to offer its own `vary`
-%% logic, based upon the device's own understanding of the request.
-stage_3(Ctx = #{ <<"path">> := <<"vary">>, <<"base">> := Base, <<"request">> := Req }) ->
-    % We are already varying. Do not recurse.
-    {ok, Ctx#{ <<"varied-base">> => Base, <<"varied-request">> => Req }};
-stage_3(
+            <<"key">> => <<"vary">>,
+            <<"forced-device">> => Device,
+            <<"varied-base">> => Base,
+            <<"varied-request">> => Req
+        },
+        Opts
+    );
+stage_2(
         Ctx =
             #{
+                <<"device">> := Device,
                 <<"base">> := Base,
                 <<"request">> := Req,
-                <<"priv">> := #{ <<"function">> := Function },
                 <<"opts">> := Opts
             }
 ) ->
     maybe
-        % Raw call `vary` to find the varied base/req, passing the
-        % `priv/function` such that varying does not require us to repeat the
-        % associated work. The returned context fragment (varied messages,
-        % result normalization) is merged into our own.
-        {ok, VariedCtx} ?=
-            raw(
-                undefined,
-                <<"vary">>,
-                Base,
-                hb_private:set(Req, <<"function">>, Function, Opts),
-                Opts
-            ),
+        VaryReq0 = #{ <<"path">> => <<"vary">>, <<"request">> => Req },
+        VaryReq =
+            case maps:find(<<"forced-device">>, Ctx) of
+                {ok, ForcedDevice} ->
+                    hb_private:set(
+                        VaryReq0,
+                        <<"forced-device">>,
+                        ForcedDevice,
+                        Opts
+                    );
+                error ->
+                    VaryReq0
+            end,
+        VaryOpts =
+            (execution_opts(Opts))#{
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                <<"await-inprogress">> => false,
+                <<"spawn-worker">> => false
+            },
+        {ok, VaryCtx = #{ <<"result">> := VariedCtx }} ?=
+            do(to_context(Device, undefined, Base, VaryReq, VaryOpts)),
+        ok ?= maps:get(<<"status">>, VaryCtx, ok),
         {ok, maps:merge(Ctx, VariedCtx)}
     end.
 
-%% @doc Determine if the request is already being resolved right now. If so,
-%% await the result rather than resolving again. If not, register as the
-%% resolver for the request in question and proceed. If we are executing with
-%% `no-cache`, skip the lookup and proceed with the current context.
-stage_4(
+%% @doc Determine whether the varied request is already being resolved. If so,
+%% await its result; otherwise register this execution as its resolver. With
+%% `no-cache', skip registration and continue directly.
+stage_3(
         Ctx = #{
             <<"varied-base">> := Base,
             <<"varied-request">> := Req,
             <<"opts">> := Opts
         }) ->
-    ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
-    % Persistent-resolver lookup: Search for local (or Distributed
-    % Erlang cluster) processes that are already performing the execution.
+    ?event_debug(debug_ao_core, {stage, 3, persistent_resolver_lookup}, Opts),
+    % Search for local or distributed Erlang processes already performing the
+    % execution.
     % Before we search for a live executor, we check if the device specifies
     % a function that tailors the 'group' name of the execution. For example,
-    % the `~process@1.0' device 'groups' all calls to the same process onto
-    % calls to a single executor. By default, `{Base, Req}' is used as the
-    % group name.
+    % the `~process@1.0' device groups all calls to one process under a single
+    % executor. By default, `{Base, Req}' is used as the group name.
     case hb_persistent:find_or_register(Base, Req, Opts) of
         {skip, ungrouped_exec} -> {ok, Ctx};
         {leader, ExecName} -> {ok, Ctx#{ <<"leader">> => ExecName }};
         {wait, Leader} ->
-            % There is another executor of this resolution in-flight.
-            % register to receive the response, then
-            % wait.
+            % Register to receive the response from the in-flight executor,
+            % then wait.
             case hb_persistent:await(Leader, Base, Req, Opts) of
                 {error, leader_died} ->
                     ?event(
@@ -467,11 +475,10 @@ stage_4(
                         Opts
                     ),
                     % Re-try again if the group leader has died.
-                    stage_4(Ctx);
+                    stage_3(Ctx);
                 {Status, Result} ->
-                    % We received a successful result from another worker. They
-                    % will store the result if appropriate, so we skip the store
-                    % write.
+                    % The active worker stores the result if appropriate, so
+                    % this execution skips the store write.
                     {ok, Ctx#{ <<"status">> => Status, <<"result">> => Result }};
                 Other ->
                     % The leader resolved to a non-`ok` result. Propagate it.
@@ -479,7 +486,7 @@ stage_4(
                     Other
             end;
         {infinite_recursion, GroupName} ->
-            % We are the leader for this resolution, but we executing the
+            % We are the leader for this resolution, but are executing the
             % computation again. This may plausibly be OK in _some_ cases,
             % but in general it is the sign of a bug.
             ?event(
@@ -512,7 +519,7 @@ stage_4(
 %% @doc Look up whether the varied base and request pair already has a known
 %% result in the cache. If so, set it in the context: subsequent stages skip
 %% execution, and stage 8 notifies any waiting callers.
-stage_5(Ctx = #{
+stage_4(Ctx = #{
     <<"varied-base">> := Base,
     <<"varied-request">> := Req,
     <<"opts">> := Opts
@@ -538,14 +545,14 @@ stage_5(Ctx = #{
     end.
 
 %% @doc Perform the actual resolution of an AO-Core request.
-stage_6(Ctx = #{ <<"result">> := _ }) -> {ok, Ctx};
-stage_6(Ctx = #{
+stage_5(Ctx = #{ <<"result">> := _ }) -> {ok, Ctx};
+stage_5(Ctx = #{
     <<"varied-base">> := Base,
     <<"varied-request">> := Req,
     <<"opts">> := Opts,
     <<"priv">> := #{ <<"function">> := Func }
 }) ->
-    ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
+    ?event_debug(debug_ao_core, {stage, 5, ExecName, execution}, Opts),
     ExecOpts = execution_opts(Opts),
     ExecName = maps:get(<<"leader">>, Ctx, unnamed),
     Args =
@@ -574,11 +581,10 @@ stage_6(Ctx = #{
         }
     }.
 
-%% @doc When specified in the schema for the device call, normalize the
-%% execution's result on top of the `Base` or `Req` message. In cases where
-%% hashpath calculation is disabled (`hashpath => ignore` in the node message,
-%% etc.), we 
-stage_7(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
+%% @doc Materialize the caller-facing result according to the normalizer. The
+%% `base' normalizer links the varied result to the prior base; `replace' returns
+%% the varied result directly.
+stage_6(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
     maybe
         {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
         {ok, Ctx#{ <<"result">> => Result }}
@@ -587,7 +593,7 @@ stage_7(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
 %% @doc Cache the result of an execution if appropriate for the context.
 %% Results that were not freshly and successfully executed (cache hits, direct
 %% key hits, awaited results, non-`ok` statuses) are not stored.
-stage_8(
+stage_7(
     Ctx = #{
         <<"status">> := ok,
         <<"fresh">> := true,
@@ -599,10 +605,10 @@ stage_8(
 ) ->
     hb_cache_control:maybe_store(VariedBase, VariedReq, VariedRes, Opts),
     {ok, Ctx};
-stage_8(Ctx) -> {ok, Ctx}.
+stage_7(Ctx) -> {ok, Ctx}.
 
-%% @doc Return the resolved response to any waiting callers.
-stage_9(
+%% @doc Unregister the active resolver and return its response to waiters.
+stage_8(
     Ctx = #{
         <<"leader">> := ExecName,
         <<"varied-request">> := Req,
@@ -618,30 +624,30 @@ stage_9(
         Opts
     ),
     {ok, Ctx};
-stage_9(Ctx) ->
+stage_8(Ctx) ->
     % If we are not the leader, we can ignore the unregister step.
     {ok, Ctx}.
 
 %% @doc If a hook has been specified for the `step` action, we call it with our
 %% context including the result.
-stage_10(Ctx = #{ <<"opts">> := Opts = #{ <<"on">> := #{ <<"step">> := _ }}}) ->
-    ?event_debug(debug_ao_core, {stage, 7, executing_step_hook}, Opts),
+stage_9(Ctx = #{ <<"opts">> := Opts = #{ <<"on">> := #{ <<"step">> := _ }}}) ->
+    ?event_debug(debug_ao_core, {stage, 9, executing_step_hook}, Opts),
     % If the `step' hook is defined, we execute it. Note: This function clause
     % matches directly on the `on' key of the `Opts' map. This is in order to
     % remove the expensive lookup check that would otherwise be performed on every
     % execution.
     hb_hook:on(<<"step">>, Ctx, Opts);
-stage_10(Ctx) -> {ok, Ctx}.
+stage_9(Ctx) -> {ok, Ctx}.
 
 %% @doc If we have been requested to spawn a worker process to remain active
 %% at this stage, with this context in memory, we do so.
-stage_11(
+stage_10(
     Ctx = #{
         <<"leader">> := ExecName,
         <<"result">> := Res,
         <<"opts">> := Opts
     }) ->
-    ?event_debug(debug_ao_core, {stage, 11, maybe_spawn_worker}, Opts),
+    ?event_debug(debug_ao_core, {stage, 10, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
     case
         {is_map(Res), hb_opts:get(<<"spawn-worker">>, false, Opts#{ <<"prefer">> => local })}
@@ -654,7 +660,7 @@ stage_11(
             hb_persistent:forward_work(WorkerPID, Opts),
             {ok, Ctx}
     end;
-stage_11(Ctx) -> {ok, Ctx}.
+stage_10(Ctx) -> {ok, Ctx}.
 
 %% @doc If the `AO_PROFILING' macro is defined (set by building/launching with
 %% `rebar3 as ao_profiling') we record statistics about the execution of the
