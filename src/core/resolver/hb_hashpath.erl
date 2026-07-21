@@ -557,31 +557,49 @@ dev_math_chain_depends_are_in_hashpath_test() ->
     Req1ID = hb_message:id(Req1, all, Opts),
     Req2ID = hb_message:id(Req2, all, Opts),
     Req3ID = hb_message:id(Req3, all, Opts),
-    assert_depends(
+    assert_dependencies(
         maps:get(<<"dependencies">>, Ctx1),
         #{
-            [<<"base">>, <<"x">>] => origin(Base0ID, <<"x">>),
-            [<<"request">>, <<"add">>] => origin(Req1ID, <<"add">>),
-            [<<"request">>, <<"path">>] => origin(Req1ID, <<"path">>)
-        },
-        Opts
+            <<"base">> =>
+                #{
+                    <<"device">> => origin(Base0ID, <<"device">>),
+                    <<"x">> => origin(Base0ID, <<"x">>)
+                },
+            <<"request">> =>
+                #{
+                    <<"add">> => origin(Req1ID, <<"add">>),
+                    <<"path">> => origin(Req1ID, <<"path">>)
+                }
+        }
     ),
-    assert_depends(
+    assert_dependencies(
         maps:get(<<"dependencies">>, Ctx2),
         #{
-            [<<"base">>, <<"x">>] => origin(HP1, <<"x">>),
-            [<<"request">>, <<"path">>] => origin(Req2ID, <<"path">>)
-        },
-        Opts
+            <<"base">> =>
+                #{
+                    <<"device">> => origin(HP1, <<"device">>),
+                    <<"x">> => origin(HP1, <<"x">>)
+                },
+            <<"request">> =>
+                #{
+                    <<"path">> => origin(Req2ID, <<"path">>)
+                }
+        }
     ),
-    assert_depends(
+    assert_dependencies(
         maps:get(<<"dependencies">>, Ctx3),
         #{
-            [<<"base">>, <<"x">>] => origin(HP12, <<"x">>),
-            [<<"base">>, <<"y">>] => origin(HP12, <<"y">>),
-            [<<"request">>, <<"path">>] => origin(Req3ID, <<"path">>)
-        },
-        Opts
+            <<"base">> =>
+                #{
+                    <<"device">> => origin(HP12, <<"device">>),
+                    <<"x">> => origin(HP12, <<"x">>),
+                    <<"y">> => origin(HP12, <<"y">>)
+                },
+            <<"request">> =>
+                #{
+                    <<"path">> => origin(Req3ID, <<"path">>)
+                }
+        }
     ),
     ?assertEqual(9, maps:get(<<"sum">>, maps:get(<<"varied-result">>, Ctx3))).
 
@@ -609,13 +627,8 @@ assert_dependencies_id(Ctx, ParsedPart, Opts) ->
         maps:get(<<"dependencies-id">>, ParsedPart)
     ).
 
-assert_depends(Dependencies, Expected, Opts) ->
-    maps:foreach(
-        fun(Path, Origin) ->
-            ?assertEqual(Origin, hb_util:deep_get(Path, Dependencies, Opts))
-        end,
-        Expected
-    ).
+assert_dependencies(Dependencies, Expected) ->
+    ?assertEqual(Expected, Dependencies).
 
 origin(Hashpath, Key) ->
     <<Hashpath/binary, "/", Key/binary>>.
