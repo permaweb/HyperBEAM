@@ -717,13 +717,18 @@ vary(Base, Req, Opts) ->
 %% or a direct device call. The `vary' selector is preparation syntax, not an
 %% input to the target function.
 vary_target(Req, Opts) ->
+    ForcedKey = hb_private:get(<<"forced-key">>, Req, undefined, Opts),
     case hb_path:hd(Req, Opts) of
         <<"vary">> ->
             case hb_device:id_or_direct_key(Req, <<"request">>, Opts) of
                 {hit, TargetReq} when is_map(TargetReq) ->
-                    case hb_path:hd(TargetReq, Opts) of
-                        undefined -> {error, <<"invalid-vary-request">>};
-                        Key -> {ok, Key, TargetReq}
+                    case {ForcedKey, hb_path:hd(TargetReq, Opts)} of
+                        {undefined, undefined} ->
+                            {error, <<"invalid-vary-request">>};
+                        {undefined, Key} ->
+                            {ok, Key, TargetReq};
+                        {Key, _} ->
+                            {ok, Key, TargetReq}
                     end;
                 _ ->
                     legacy_vary_target(Req, Opts)
@@ -744,7 +749,11 @@ legacy_vary_target(Req, Opts) ->
     end.
 
 clean_vary_request(Req) ->
-    Priv = maps:remove(<<"forced-device">>, hb_private:from_message(Req)),
+    Priv =
+        maps:without(
+            [<<"forced-device">>, <<"forced-key">>],
+            hb_private:from_message(Req)
+        ),
     hb_private:set_priv(maps:without([<<"priv">>, priv], Req), Priv).
 
 %% @doc Returns the device schema for a `Base` message.

@@ -261,6 +261,7 @@ to_context(FDevice, FKey, Base, Req, Opts) ->
         #{
             <<"device">> => FDevice,
             <<"forced-device">> => FDevice,
+            <<"forced-key">> => FKey,
             <<"path">> => FKey,
             <<"base">> => Base,
             <<"request">> => Req,
@@ -416,7 +417,7 @@ stage_2(
 ) ->
     maybe
         VaryReq0 = #{ <<"path">> => <<"vary">>, <<"request">> => Req },
-        VaryReq =
+        VaryReq1 =
             case maps:find(<<"forced-device">>, Ctx) of
                 {ok, ForcedDevice} ->
                     hb_private:set(
@@ -427,6 +428,18 @@ stage_2(
                     );
                 error ->
                     VaryReq0
+            end,
+        VaryReq =
+            case maps:find(<<"forced-key">>, Ctx) of
+                {ok, ForcedKey} ->
+                    hb_private:set(
+                        VaryReq1,
+                        <<"forced-key">>,
+                        ForcedKey,
+                        Opts
+                    );
+                error ->
+                    VaryReq1
             end,
         VaryOpts =
             (execution_opts(Opts))#{

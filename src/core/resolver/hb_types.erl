@@ -67,9 +67,8 @@ varied_context(Ctx, Base, Req, Dependencies, Normalizer) ->
         _ -> {ok, Varied#{ <<"dependencies">> => Dependencies }}
     end.
 
-%% @doc Extract a device module's function schemas. We first check the
-%% `loaded-device-store` cache, then fall back to loading the module manually
-%% if it isn't already available.
+%% @doc Extract a device module's function schemas. Prefer already-loaded BEAM
+%% abstract code, falling back to packaged device schema lookup when needed.
 extract(Device, _Opts) when is_map(Device) ->
     {error, {unsupported_device_type, Device}};
 extract(Module, Opts) when is_atom(Module) ->
@@ -79,12 +78,16 @@ extract(Module, Opts) when is_atom(Module) ->
         true ->
             {error, caching_schema};
         false ->
-            case hb_device_load:schema(Module, Opts) of
-                {ok, Schema} -> {ok, Schema};
-                _ ->
-                    case code:ensure_loaded(Module) of
-                        {module, Module} -> beam_to_schema(Module);
-                        {error, Reason} -> {error, {module_not_loaded, Module, Reason}}
+            case code:ensure_loaded(Module) of
+                {module, Module} ->
+                    case beam_to_schema(Module) of
+                        {ok, Schema} -> {ok, Schema};
+                        _ -> hb_device_load:schema(Module, Opts)
+                    end;
+                {error, Reason} ->
+                    case hb_device_load:schema(Module, Opts) of
+                        {ok, Schema} -> {ok, Schema};
+                        _ -> {error, {module_not_loaded, Module, Reason}}
                     end
             end
     end;
@@ -97,11 +100,33 @@ extract(Device, _Opts) ->
     {error, {unsupported_device_type, Device}}.
 
 schema_from_function(Func, Opts) ->
-    {module, Module} = erlang:fun_info(Func, module),
-    case extract(Module, Opts) of
-        {ok, #{ <<"keys">> := Schemas }} ->
-            select_schema(Func, Schemas);
-        {error, _Reason} ->
+    Key = {?MODULE, schema_from_function},
+    case erlang:get(Key) of
+        true ->
+            undefined;
+        _ ->
+            erlang:put(Key, true),
+            try do_schema_from_function(Func, Opts)
+            after erlang:erase(Key)
+            end
+    end.
+
+do_schema_from_function(Func, Opts) ->
+    case erlang:fun_info(Func, name) of
+        {name, Name} ->
+            case atom_to_binary(Name) of
+                <<"-", _/binary>> ->
+                    undefined;
+                _ ->
+                    {module, Module} = erlang:fun_info(Func, module),
+                    case extract(Module, Opts) of
+                        {ok, #{ <<"keys">> := Schemas }} ->
+                            maps:get(normalize_name(Name), Schemas, undefined);
+                        {error, _Reason} ->
+                            undefined
+                    end
+            end;
+        _ ->
             undefined
     end.
 
@@ -544,17 +569,19 @@ fact_origin(Ctx, Opts) ->
 
 dependency(undefined, _Location) -> #{};
 dependency(Origin, Location) ->
-    #{ Origin => #{ Location => true } }.
+    case dependency_path(Location) of
+        undefined -> #{};
+        Path -> hb_util:deep_set(Path, Origin, #{}, #{})
+    end.
 
 dependency_location(Parent, Key) ->
-    <<Parent/binary, "/", (hb_ao:normalize_key(Key))/binary>>.
+    dependency_path(Parent) ++ [hb_ao:normalize_key(Key)].
+
+dependency_path(Location) ->
+    hb_path:term_to_path_parts(Location, #{}).
 
 merge_dependencies(Left, Right) ->
-    maps:merge_with(
-        fun(_Hashpath, LeftUses, RightUses) -> maps:merge(LeftUses, RightUses) end,
-        Left,
-        Right
-    ).
+    hb_util:deep_merge(Left, Right, #{}).
 
 overlay(ReturnSchema) ->
     case overlay_type(ReturnSchema) of
@@ -884,7 +911,82 @@ extension_wildcard_carry_test() ->
         projected(Schema, Msg, #{})
     ).
 
+depends_mirrors_varied_shape_test() ->
+    Schema =
+        message_type(
+            {
+                #{
+                    <<"balance">> =>
+                        #{
+                            <<"presence">> => required,
+                            <<"type">> =>
+                                message_type(
+                                    {
+                                        #{
+                                            <<"alice">> =>
+                                                #{
+                                                    <<"presence">> => required,
+                                                    <<"type">> => scalar_type(<<"integer">>)
+                                                }
+                                        },
+                                        #{
+                                            <<"presence">> => optional,
+                                            <<"type">> => scalar_type(<<"integer">>)
+                                        }
+                                    }
+                                )
+                        }
+                },
+                none
+            }
+        ),
+    Message = #{ <<"balance">> => #{ <<"alice">> => 7, <<"bob">> => 9 } },
+    {ProjectedBase, BaseDependencies} =
+        project_schema(
+            Schema,
+            Message,
+            <<"base">>,
+            <<"base">>,
+            #{}
+        ),
+    {ProjectedRequest, RequestDependencies} =
+        project_schema(
+            Schema,
+            Message,
+            <<"request">>,
+            <<"request">>,
+            #{}
+        ),
+    Dependencies = merge_dependencies(BaseDependencies, RequestDependencies),
+    ?assertEqual(
+        #{ <<"balance">> => #{ <<"alice">> => 7, <<"bob">> => 9 } },
+        ProjectedBase
+    ),
+    ?assertEqual(ProjectedBase, ProjectedRequest),
+    ?assertEqual(
+        #{
+            <<"base">> =>
+                #{
+                    <<"balance">> =>
+                        #{
+                            <<"alice">> => <<"base/balance/alice">>,
+                            <<"bob">> => <<"base/balance/bob">>
+                        }
+                },
+            <<"request">> =>
+                #{
+                    <<"balance">> =>
+                        #{
+                            <<"alice">> => <<"request/balance/alice">>,
+                            <<"bob">> => <<"request/balance/bob">>
+                        }
+                }
+        },
+        Dependencies
+    ).
+
 projected(Schema, Value, Opts) ->
+    ProjectionOpts = maps:merge(#{ <<"hashpath">> => disabled }, Opts),
     {Projected, _Dependencies} =
-        project_schema(Schema, Value, undefined, <<"value">>, Opts),
+        project_schema(Schema, Value, undefined, <<"value">>, ProjectionOpts),
     Projected.
