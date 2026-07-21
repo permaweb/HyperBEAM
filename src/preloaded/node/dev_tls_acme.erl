@@ -350,31 +350,44 @@ validate_token(_) -> throw({acme, 'invalid-acme-token'}).
 %% @doc Create a SAN PKCS#10 request using the node wallet's exact key.
 csr(Wallet, Domains) ->
     Names = [binary_to_list(Domain) || Domain <- Domains],
+    Extensions = [{asn1_OPENTYPE, public_key:der_encode(
+        'Extensions', [#'Extension'{
+            extnID = ?'id-ce-subjectAltName',
+            critical = false,
+            extnValue = public_key:der_encode('GeneralNames',
+                [{dNSName, Name} || Name <- Names])
+        }]
+    )}],
+    {Info, EncodedInfo} = csr_info(Wallet, Names, Extensions,
+        'CertificationRequestInfo_attributes_SETOF'),
+    {ok, Encoded} = 'PKCS-10':encode(
+        'CertificationRequest',
+        #'CertificationRequest'{
+            certificationRequestInfo = Info,
+            signatureAlgorithm = #'CertificationRequest_signatureAlgorithm'{
+                algorithm = ?'sha256WithRSAEncryption',
+                parameters = {asn1_OPENTYPE, <<5, 0>>}
+            },
+            signature = rsa_sign(Wallet, EncodedInfo)
+        }
+    ),
+    Encoded.
+
+csr_info(Wallet, Names, Extensions, AttributeRecord) ->
     Info = #'CertificationRequestInfo'{
         version = 0,
         subject = distinguished_name(hd(Names)),
         subjectPKInfo = csr_public_key_info(Wallet),
-        attributes = [#'CertificationRequestInfo_attributes_SETOF'{
-            type = ?'pkcs-9-at-extensionRequest',
-            values = [{asn1_OPENTYPE, public_key:der_encode(
-                'Extensions', [#'Extension'{
-                    extnID = ?'id-ce-subjectAltName',
-                    critical = false,
-                    extnValue = public_key:der_encode('SubjectAltName',
-                        [{dNSName, Name} || Name <- Names])
-                }]
-            )}]
-        }]
+        attributes = [{AttributeRecord,
+            {1, 2, 840, 113549, 1, 9, 14}, Extensions}]
     },
-    EncodedInfo = public_key:der_encode('CertificationRequestInfo', Info),
-    public_key:der_encode('CertificationRequest', #'CertificationRequest'{
-        certificationRequestInfo = Info,
-        signatureAlgorithm = #'CertificationRequest_signatureAlgorithm'{
-            algorithm = ?'sha256WithRSAEncryption',
-            parameters = {asn1_OPENTYPE, <<5, 0>>}
-        },
-        signature = rsa_sign(Wallet, EncodedInfo)
-    }).
+    try
+        {ok, Encoded} = 'PKCS-10':encode('CertificationRequestInfo', Info),
+        {Info, Encoded}
+    catch error:_ when AttributeRecord =/=
+            'AttributePKCS-10' ->
+        csr_info(Wallet, Names, Extensions, 'AttributePKCS-10')
+    end.
 
 csr_public_key_info(Wallet) ->
     #'CertificationRequestInfo_subjectPKInfo'{
@@ -406,8 +419,9 @@ csr_key_test() ->
     Encoded = csr(Wallet, [<<"localhost">>, <<"node.example">>]),
     CSR = public_key:der_decode('CertificationRequest', Encoded),
     Info = CSR#'CertificationRequest'.certificationRequestInfo,
+    {ok, EncodedInfo} = 'PKCS-10':encode('CertificationRequestInfo', Info),
     ?assert(public_key:verify(
-        public_key:der_encode('CertificationRequestInfo', Info),
+        EncodedInfo,
         sha256,
         CSR#'CertificationRequest'.signature,
         wallet_public_key(Wallet)
