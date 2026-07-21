@@ -56,8 +56,8 @@ values (`BaseURI/RequestBinary`).
 
 If the request is instead of a composite form, we attempt to resolve `/path`
 element upon the second ('request') URI for the  computation, and search the
-primary ('base') with its value. In the event that the resource is resolved, its
-value is returned. If the direct URI cannot be resolved, we attempt to resolve
+primary ('base') with its value. In the event that the resource is found, its
+value is returned. If the direct URI is not found, we look for a directly asserted
 `BaseURI/device`, yielding a specification -- or a binary, whose value can be
 resolved to a specification -- of a `device` (a virtual machine) to utilize for
 the computation. If a device is not found in the `BaseURI` we recurse backwards
@@ -89,17 +89,17 @@ number of elements:
 4. `Varied-Base` and `Varied-Request` emelements, each containing URIs for
    collections of _only_ the necessary components that were utilized in the 
    state transition.
-5. `Dependencies`, an optional collection hosting the hashpaths of each utilized
-   state component from the `[Varied-][Base|Request]` elements.
-5. An `Attestation`, cryptographically linking an identity with each of the 
-   constituent claims made in the hashpath context.
+5. `Dependencies`, a collection hosting the origin hashpath of each utilized
+   component from the `[Varied-][Base|Request]` elements. It may be omitted only
+   when empty or fully derivable.
 
-A hashpath may convey any number of connected frames of execution attested by a
-single commitment. Hashpath may be extended by Merklizing the ordered list of
-contexts, such that only a single root is provided as the `Base` to the final
-frame. Alternatively, any number of `Base`/`Request` pairs may be provided,
-with the `Base` of each frame being the ancestry (ordered prior results) of the
-`Request` at that layer.
+Claims are signatures over one or more complete hashpath assertions rather than
+fields within their frames. A hashpath may convey any number of connected frames
+of execution covered by a single claim. Hashpath may be extended by Merklizing
+the ordered list of contexts, such that only a single root is provided as the
+`Base` to the final frame. Alternatively, any number of `Base`/`Request` pairs may
+be provided, with the `Base` of each frame being the ancestry (ordered prior
+results) of the `Request` at that layer.
 
 ## Resolution Semantics
 
@@ -115,14 +115,16 @@ non-extending hashpath context is found.
 
 At each layer:
 
-1. Resolve `BaseURI/path`. Return if found.
-2. Resolve `BaseURI/device`.
-3. If `Device` is found, lookup runtime-compliant implementation and execute 
+1. Look for `BaseURI/P` among the resources asserted directly at this layer.
+   Return if found.
+2. Look directly for `BaseURI/device` at this layer.
+3. If `Device` is found, look up a runtime-compliant implementation and execute
    against the original outermost `Base` and the original `Request`.
 4. Else, if a prior extending element of the hashpath context is found, recursively
    resolve at that element.
 
-Pseudocode:
+In the pseudocode below, `lookup` inspects direct assertions in the loaded layer.
+It does not recursively perform AO execution.
 
 ```text
 resolve(Outer, BaseURI, Request):
@@ -179,7 +181,10 @@ precedence over the base resource.
 
 ## Vary
 
-Before execution, the selected device varies the transition:
+Device application has two phases. First, the selected device prepares an
+executable context containing the local function to invoke, the minimized
+`Varied-Base` and `Varied-Request`, their `Dependencies`, and whether the result
+extends or replaces the `Base`. The protocol-visible portion of preparation is:
 
 ```text
 Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
@@ -302,8 +307,10 @@ Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
 VariedBase / VariedRequest -> Patch
 ```
 
-Extension is just `set`. There is no special update operation beyond
-constructing an extension whose ancestry is the original base.
+The device's preparation selects extension or replacement as the result mode.
+AO-Core applies that mode: extension constructs a new layer whose ancestry is
+the original `Base`, while replacement terminates active inheritance. Devices do
+not implement ancestry traversal themselves.
 
 ## Hashpath Assertions And Claims
 
@@ -409,7 +416,8 @@ of the same process.
 To challenge a transition assertion:
 
 1. Verify that `BaseID` and `ReqID` identify the asserted values.
-2. Verify the vary assertion:
+2. Repeat the selected device's preparation phase and verify its asserted
+   `VariedBase`, `VariedRequest`, `Dependencies`, and result mode:
 
    ```text
    Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
@@ -417,7 +425,9 @@ To challenge a transition assertion:
 
 3. For every leaf in `VariedBase` and `VariedRequest`, follow the matching leaf
    in `Dependencies` and verify that it yields that value.
-4. Verify execution:
+4. Invoke the prepared function and verify its result. An existing result may
+   substitute for execution only if it was previously verified under the
+   verifier's trust policy:
 
    ```text
    VariedBase / VariedRequest -> Patch
