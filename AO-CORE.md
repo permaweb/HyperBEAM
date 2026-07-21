@@ -179,13 +179,13 @@ precedence over the base resource.
 
 ## Vary
 
-Before execution, a transition is varied:
+Before execution, the selected device varies the transition:
 
 ```text
-Base / Request / vary -> VariedBase + VariedRequest @ Depends
+Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
 ```
 
-`VariedBase` and `VariedRequest` are ordinary messages containing exactly the
+`VariedBase` and `VariedRequest` are resource collections containing exactly the
 values required by the execution. They use canonical nested structure, not path
 strings:
 
@@ -206,12 +206,12 @@ VariedRequest = {
 }
 ```
 
-`Depends` records where each varied value originated. It has the same shape as
-the varied messages, rooted under `base` and `request`. Each leaf is a hashpath
-whose terminal value is the corresponding varied value:
+`Dependencies` records where each varied value originated. It has the same shape
+as the varied collections, rooted under `base` and `request`. Each leaf is a
+hashpath whose terminal value is the corresponding varied value:
 
 ```text
-Depends = {
+Dependencies = {
   base: {
     device: HP_for_process_device,
     balance: {
@@ -229,7 +229,7 @@ Depends = {
 ```
 
 The dependency leaf is a single value: the origin hashpath. The value itself
-does not need to be duplicated inside `Depends`, because the hashpath binds the
+does not need to be duplicated inside `Dependencies`, because the hashpath binds the
 origin to the value it yields.
 
 If no exact vary specification is available, the conservative valid vary is
@@ -240,6 +240,8 @@ VariedBase = Base
 VariedRequest = Request
 ```
 
+Identity variation does not waive dependency recording.
+
 The core rule is:
 
 ```text
@@ -247,17 +249,17 @@ No hidden inputs.
 ```
 
 Everything observed by execution must be present in `VariedBase` or
-`VariedRequest`, and every varied value must have an origin in `Depends`.
+`VariedRequest`, and every varied value must have an origin in `Dependencies`.
 
 ## Shared Computation
 
 Varying creates a reusable computation point.
 
-Many concrete states may vary to the same pair:
+Many concrete bases may vary to the same pair:
 
 ```text
-BaseA / Request -> VariedBase + VariedRequest
-BaseB / Request -> VariedBase + VariedRequest
+BaseA / Request / vary -> VariedBase + VariedRequest @ DependenciesA
+BaseB / Request / vary -> VariedBase + VariedRequest @ DependenciesB
 ```
 
 The execution:
@@ -266,8 +268,8 @@ The execution:
 VariedBase / VariedRequest -> Patch
 ```
 
-is shared by all sufficiently alike concrete states for that request. The final
-states may still differ because the patch is equivalent to applying the original
+is shared by all sufficiently alike concrete bases for that request. The final
+results may still differ because the patch is equivalent to applying the original
 transition to each original base:
 
 ```text
@@ -276,14 +278,12 @@ BaseB / Request == set(BaseB, Patch)
 ```
 
 This is the default mode of AO-Core computation: do a computation once for the
-material inputs that matter, then reuse it across every state/request pair that
+material inputs that matter, then reuse it across every base/request pair that
 varies to those inputs.
 
-All AO-Core states and transition results are cacheable by address. Prior
-computations from many different execution traces can therefore be reused
-seamlessly. Because AO-Core is expressed naturally through HTTP semantics, the
-same `Vary`-style caching and routing ideas that already power web
-infrastructure can be applied to decentralized computation.
+Both the varied computation and complete transition results are cacheable by
+address, allowing prior computations from different execution traces to be
+reused.
 
 ## Transition Equivalence
 
@@ -298,31 +298,32 @@ Base / Request
 where:
 
 ```text
-Base / Request / vary -> VariedBase + VariedRequest @ Depends
+Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
 VariedBase / VariedRequest -> Patch
 ```
 
-Extension is just `set`. There is no special state update operation beyond
-constructing a new message with ancestry.
+Extension is just `set`. There is no special update operation beyond
+constructing an extension whose ancestry is the original base.
 
-## Hashpath Attestations
+## Hashpath Assertions And Claims
 
-A hashpath is a succinct executable claim and an addressable protocol value.
-Like any other value, it may be encountered as a link and resolved through
-AO-Core, or encountered as serialized content and decoded into its in-memory
-form.
+A hashpath without a terminal result is an address naming a computation. A
+hashpath containing its result is an assertion. A signature over one or more
+hashpaths is a claim. Like any other value, a hashpath may be encountered as a
+link and resolved through AO-Core, or encountered as serialized content and
+decoded into its in-memory form.
 
 The full transition forms are:
 
 ```text
-BaseID/ReqID>VariedBaseID+VariedReqID@DependsID=PatchID
-BaseID/ReqID>VariedBaseID+VariedReqID@DependsID.ResultID
+BaseID/ReqID>VariedBaseID+VariedReqID@DependenciesID=PatchID
+BaseID/ReqID>VariedBaseID+VariedReqID@DependenciesID.ResultID
 ```
 
-`=` means the execution produced a patch that extends the prior state:
+`=` means the execution produced a patch that extends the prior result:
 
 ```text
-BaseID/ReqID>VariedBaseID+VariedReqID@DependsID=PatchID
+BaseID/ReqID>VariedBaseID+VariedReqID@DependenciesID=PatchID
 ```
 
 is equivalent to:
@@ -334,94 +335,88 @@ set(Base, Patch)
 `.` means the execution produced a replacement value:
 
 ```text
-BaseID/ReqID>VariedBaseID+VariedReqID@DependsID.ResultID
+BaseID/ReqID>VariedBaseID+VariedReqID@DependenciesID.ResultID
 ```
 
-The accumulated state becomes `ResultID`, dropping the prior state's keys rather
-than extending them.
+The accumulated result becomes `ResultID`, dropping the prior result's resources
+rather than extending them.
 
 A compact form may omit fields when they are derivable or supplied elsewhere,
-but the full receipt must be recoverable for challenge and trace.
+but the full assertion must be recoverable for challenge and trace.
 
-A hashpath is a sequence of transition claims. Later segments operate on the
+A hashpath is a sequence of transition assertions. Later segments operate on the
 result established by earlier segments.
 
 Segments without explicit vary syntax are not special. They are compact
-transition claims. For example:
+transition assertions. For example:
 
 ```text
 HP/*=FinalResultID
 ```
 
-is simply a claim that resolving `*` at `HP` yields `FinalResultID`. HTTP
+is simply an assertion that resolving `*` at `HP` yields `FinalResultID`. HTTP
 gateways commonly append such a segment so the response body is tied to the
 specific keys and values returned to the client.
 
 ## Hashpath Loading And Portability
 
 Hashpaths are not a storage system outside AO-Core. They are addressable values
-whose loaded form reconstructs ordinary message semantics.
+whose loaded form reconstructs resource-prefix and extension semantics.
 
 Reusable patches can be stored by their generic IDs, without caller-specific
 ancestry. The hashpath records how that generic value is reached from a prior
-state. For an extension segment:
+result. For an extension segment:
 
 ```text
-PriorHP/Req>VariedBase+VariedReq@Depends=Patch
+PriorHP/Req>VariedBase+VariedReq@Dependencies=Patch
 ```
 
-the cacheable value may be the hashpath link itself:
+Stores may cache the asserted result at that hashpath. Loading the segment loads
+`Patch` and presents it as an extension whose `...` is the previous accumulated
+result:
 
 ```text
-link:PriorHP/Req>VariedBase+VariedReq@Depends=Patch
+load(PriorHP/Req>VB+VR@Dependencies=Patch)
+  -> { PatchKeys..., ...: PriorHP }
 ```
 
-loading the segment loads `Patch` and presents it as an extension whose `...`
-is the transition context before the patch result:
-
-```text
-load(PriorHP/Req>VB+VR@Deps=Patch)
-  -> { PatchKeys..., ...: PriorHP/Req>VB+VR@Deps }
-```
-
-The `...` value is itself a hashpath value. Loading it reconstructs the prior
-state for inherited-key resolution and retains the request, varied witnesses,
-and dependency message needed to challenge the transition. Implementations may
-cache this decoded context in runtime metadata, but the protocol-visible
-ancestry remains the hashpath value.
+The `...` value is itself a hashpath. Loading it reconstructs the prior result
+for inherited-key resolution. The complete result remains addressed by the full
+hashpath, which retains the request, varied witnesses, and dependencies needed
+to challenge the transition.
 
 For replacement segments:
 
 ```text
-PriorHP/Req>VB+VR@Deps.Result
+PriorHP/Req>VB+VR@Dependencies.Result
 ```
 
-loading the segment yields `Result`. The prior state is not inherited as active
-message keys, but the hashpath still carries the transition context needed for
+loading the segment yields `Result`. The prior result is not inherited as active
+keys, but the hashpath still carries the transition context needed for
 challenge and trace.
 
 This gives portability as a single addressable value: posting a hashpath plus
 the values needed to resolve the IDs it names gives another node enough data to
-reconstruct the live state, challenge any segment, and continue computation.
+reconstruct the result collection, challenge any segment, and continue computation.
 
 ## Challenge And Audit
 
 A transition can be challenged locally, without verifying its entire dependency
-tree. The usual practical operation is to pick one claim and verify only the
-facts needed for that claim. A full provenance audit is the recursive version of
-the same process.
+tree. The usual practical operation is to pick one assertion and verify only the
+values needed to reproduce it. A full provenance audit is the recursive version
+of the same process.
 
-To challenge a transition claim:
+To challenge a transition assertion:
 
-1. Verify that `BaseID` and `ReqID` identify the claimed values.
-2. Verify the vary claim:
+1. Verify that `BaseID` and `ReqID` identify the asserted values.
+2. Verify the vary assertion:
 
    ```text
-   Base / Request / vary -> VariedBase + VariedRequest @ Depends
+   Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
    ```
 
 3. For every leaf in `VariedBase` and `VariedRequest`, follow the matching leaf
-   in `Depends` and verify that it yields that value.
+   in `Dependencies` and verify that it yields that value.
 4. Verify execution:
 
    ```text
@@ -431,28 +426,29 @@ To challenge a transition claim:
 5. Verify transition equivalence:
 
    ```text
-   "=" means the accumulated state is set(Base, Patch)
-   "." means the accumulated state is Result
+   "=" means the accumulated result is set(Base, Patch)
+   "." means the accumulated result is Result
    ```
 
 Any one of these checks can be challenged independently. To audit the full
 provenance tree, recursively challenge the dependency hashpaths named in
-`Depends`.
+`Dependencies`.
 
 ## Traceability
 
 To trace a value in a result:
 
-1. Locate the transition that produced the state containing the value.
+1. Locate the transition that produced the result collection containing the
+   value.
 2. If the value was introduced by the patch, trace it to that transition's
    varied witness.
-3. Follow every corresponding leaf in `Depends`.
+3. Follow every corresponding leaf in `Dependencies`.
 4. If the value was inherited through `...`, continue tracing in the ancestor
-   state.
+   result.
 5. Repeat recursively until reaching literals, signed inputs, codec inputs, or
-   externally attested transition claims.
+   externally supplied claims.
 
-For example, a process state may claim:
+For example, a process result may assert:
 
 ```text
 ProcessStateN.balance.OUR_ADDRESS = 10
@@ -462,7 +458,7 @@ The trace may show that this came from:
 
 ```text
 ProcessStateN-1 / TransferRequest
-  > VariedBase + VariedRequest @ Depends
+  > VariedBase + VariedRequest @ Dependencies
   = ProcessStateN
 ```
 
@@ -474,38 +470,40 @@ VariedBase.balance.SENDER = 93
 VariedRequest.quantity = 3
 ```
 
-`Depends` then points to the hashpaths that produced `7`, `93`, and `3`. The
+`Dependencies` then points to the hashpaths that produced `7`, `93`, and `3`. The
 quantity may trace to an inbound message from a swap process, whose sale-price
 transition may itself be attested by another node.
 
-The trace is not a narrative. It is a recursive chain of AO-Core claims.
+The trace is not a narrative. It is a recursive chain of AO-Core assertions.
+Any signed assertion in the chain is a claim.
 
 ## HTTP Expression
 
 HTTP is an expression of AO-Core, not the foundation of AO-Core.
 
-An HTTP request is decoded into an AO-Core request message. URL path segments,
-query parameters, method, headers, and body are message members. Content
-negotiation selects codecs for values and messages. The server resolves:
+An HTTP request is decoded into an AO-Core request resource. URL path segments,
+query parameters, method, headers, and body are associated resources. Content
+negotiation selects codecs for values and resource collections. The server
+resolves:
 
 ```text
 Base / Request -> Result
 ```
 
-and returns an HTTP response containing the encoded result plus enough hashpath
-and commitment information for the receiver to verify, port, and continue the
-computation.
+and returns an HTTP response containing the encoded result, its result assertion,
+supporting values, and any signed claims needed for the receiver to verify, port,
+and continue the computation.
 
 Thus HTTP gives AO-Core a universal transport and user-facing syntax while the
 protocol remains independent of HTTP itself.
 
-HTTP computations should append a terminal materialization claim by default:
+HTTP computations should append a terminal materialization assertion by default:
 
 ```text
 HP/*=MaterializedID
 ```
 
-This claim is not special in the hashpath calculus. It is the ordinary
+This assertion is not special in the hashpath calculus. It is the ordinary
 materialization request for `*`, included so that the transport response is tied
 to the concrete enumerated keys and values returned to the client.
 
