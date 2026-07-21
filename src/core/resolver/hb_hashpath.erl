@@ -188,10 +188,12 @@ parse(Hashpath, Opts) when is_binary(Hashpath) ->
 context(Hashpath, Opts) ->
     case lists:reverse(binary:split(Hashpath, <<"/">>, [global])) of
         [ LoneBase ] -> #{ <<"base-id">> => LoneBase };
-        [ LastReq, Rest ] ->
-            ReconstitutedBase = binary:join(lists:reverse(Rest), <<"/">>),
+        [ LastReq | Rest ] ->
+            ReconstitutedBase =
+                iolist_to_binary(lists:join(<<"/">>, lists:reverse(Rest))),
             parse_part(ReconstitutedBase, LastReq, Opts);
-        _ -> #{ <<"base-id">> => Hashpath }
+        _ ->
+            #{ <<"base-id">> => Hashpath }
     end.
 
 %% @doc Calculate the context for a hashpath segment. If the base is known
@@ -284,16 +286,24 @@ verify_all([], _Opts) ->
     % We treat an empty hashpath as failing verification.
     false;
 verify_all([Init | Parts], Opts) ->
-    verify_all(Init, Parts, Opts).
+    case verify_context(Init, Opts) of
+        {true, ComputedCtx} -> verify_all_from_context(ComputedCtx, Parts, Opts);
+        false -> false
+    end.
 
-verify_all(_FinalBase, [], _Opts) ->
+verify_all_from_context(#{ <<"result">> := State }, Parts, Opts) ->
+    verify_all_with_state(State, Parts, Opts);
+verify_all_from_context(_ComputedCtx, _Parts, _Opts) ->
+    false.
+
+verify_all_with_state(_State, [], _Opts) ->
     % The full hashpath has resolved and we have no more parts to verify. Each
     % passed verification.
     true;
-verify_all(State, [Part | Rest], Opts) ->
+verify_all_with_state(State, [Part | Rest], Opts) ->
     % Add the currently computed state to the part's context and verify it.
     case verify_context(Part#{ <<"base">> => State }, Opts) of
-        {true, ComputedState} -> verify_all(ComputedState, Rest, Opts);
+        {true, ComputedCtx} -> verify_all_from_context(ComputedCtx, Rest, Opts);
         false -> false
     end.
 
@@ -371,11 +381,99 @@ verify_dependencies(HPCtx, ExecutedCtx, Opts) ->
         {ok, HPDeps} ?= find_id(<<"dependencies">>, HPCtx, Opts),
         {ok, ExecDeps} ?= find_id(<<"dependencies">>, ExecutedCtx, Opts),
         true ?= HPDeps =:= ExecDeps
-            orelse {error, <<"Dependencies do not match">>}
+            orelse {error, <<"Dependencies do not match">>},
+        true ?= verify_dependency_values(ExecutedCtx, Opts)
+            orelse {error, <<"Dependency values do not match">>}
     else
         {not_found, <<"dependencies">>} ->
             % Skip verification if dependencies not provided
             true
+    end.
+
+verify_dependency_values(#{ <<"dependencies">> := Deps } = Ctx, Opts) ->
+    verify_dependency_root(
+        <<"base">>,
+        maps:get(<<"varied-base">>, Ctx, #{}),
+        Deps,
+        Opts
+    )
+    andalso
+    verify_dependency_root(
+        <<"request">>,
+        maps:get(<<"varied-request">>, Ctx, #{}),
+        Deps,
+        Opts
+    );
+verify_dependency_values(_Ctx, _Opts) ->
+    true.
+
+verify_dependency_root(Root, Value, Dependencies, Opts) ->
+    case maps:find(Root, Dependencies) of
+        {ok, RootDependencies} ->
+            verify_dependency_tree(Value, RootDependencies, Opts);
+        error ->
+            empty_dependency_value(Value, Opts)
+    end.
+
+empty_dependency_value(Value, Opts) when is_map(Value) ->
+    map_size(hb_private:reset(hb_message:uncommitted(Value, Opts))) =:= 0;
+empty_dependency_value(_Value, _Opts) ->
+    false.
+
+verify_dependency_tree(Value, Hashpath, Opts) when is_binary(Hashpath) ->
+    case dependency_value(Hashpath, Opts) of
+        {ok, Value} -> true;
+        _ -> false
+    end;
+verify_dependency_tree(Value, Dependencies, Opts)
+        when is_map(Value), is_map(Dependencies) ->
+    PublicValue = hb_private:reset(hb_message:uncommitted(Value, Opts)),
+    lists:sort(maps:keys(PublicValue)) =:= lists:sort(maps:keys(Dependencies))
+        andalso
+        lists:all(
+            fun(Key) ->
+                verify_dependency_tree(
+                    maps:get(Key, PublicValue),
+                    maps:get(Key, Dependencies),
+                    Opts
+                )
+            end,
+            maps:keys(PublicValue)
+        );
+verify_dependency_tree(_Value, _Dependencies, _Opts) ->
+    false.
+
+dependency_value(Hashpath, Opts) ->
+    case parse(Hashpath, Opts) of
+        [] ->
+            {error, <<"Cannot resolve empty dependency hashpath.">>};
+        [Part] ->
+            execute_hashpath_part(Part, Opts);
+        Parts ->
+            PrefixLen = length(Parts) - 1,
+            {Prefix, [Part]} = lists:split(PrefixLen, Parts),
+            maybe
+                {ok, Base} ?= load_from_sequence(Prefix, Opts),
+                execute_hashpath_part(Part#{ <<"base">> => Base }, Opts)
+            end
+    end.
+
+execute_hashpath_part(Ctx, Opts) ->
+    ExecCtx =
+        maps:with(
+            [
+                <<"base">>,
+                <<"request">>,
+                <<"base-id">>,
+                <<"request-id">>,
+                <<"opts">>
+            ],
+            Ctx#{ <<"opts">> => Opts }
+        ),
+    case hb_ao:do(ExecCtx) of
+        {ok, #{ <<"result">> := Result }} -> {ok, Result};
+        {error, Reason} -> {error, Reason};
+        Other -> {error, {unexpected_dependency_result, Other}}
     end.
 
 %% @doc Verify that the results of the execution match those in the claim.
@@ -529,6 +627,17 @@ full_form_round_trip_test() ->
 
 compact_form_round_trip_test() ->
     Opts = #{},
+    ?assertEqual(
+        #{
+            <<"base-id">> =>
+                <<"BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/transfer">>,
+            <<"request-id">> => <<"balance">>
+        },
+        context(
+            <<"BQQF7TjcHTPT57eIcABDeIbfHkkOTDPKAQ9tJqScTV4/transfer/balance">>,
+            Opts
+        )
+    ),
     lists:foreach(
         fun(HP) -> ?assertEqual(HP, format(parse(HP, Opts), Opts)) end,
         [
@@ -586,6 +695,20 @@ dev_math_chain_depends_are_in_hashpath_test() ->
     HP1 = format([Frame1], Opts),
     HP12 = format([Frame1, Frame2], Opts),
     ?assertEqual(HP123, format(Parsed, Opts)),
+    ?assertEqual(true, verify_all([Frame1], Opts)),
+    ?assertEqual(
+        false,
+        verify_all(
+            [
+                Frame1#{
+                    <<"varied-result-id">> =>
+                        <<"tampered-result-id">>
+                }
+            ],
+            Opts
+        )
+    ),
+    ?assertEqual(true, verify_all(Parsed, Opts)),
     {true, Ctx1} = verify_part(Parsed, 1, Opts),
     {true, Ctx2} = verify_part(Parsed, 2, Opts),
     {true, Ctx3} = verify_part(Parsed, 3, Opts),

@@ -18,7 +18,7 @@ vary(
 ) ->
     case schema_from_function(Func, Opts) of
         undefined ->
-            identity_vary(Ctx, Base, Req);
+            identity_vary(Ctx, Base, Req, Opts);
         Schema ->
             [BaseSchema, ReqSchema, ReturnSchema] =
                 execution_schema(
@@ -49,11 +49,68 @@ vary(
                 overlay(ReturnSchema)
             )
     end;
-vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts) ->
-    identity_vary(Ctx, Base, Req).
+vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, Opts) ->
+    identity_vary(Ctx, Base, Req, Opts).
 
-identity_vary(Ctx, Base, Req) ->
-    varied_context(Ctx, Base, Req, #{}, none).
+identity_vary(Ctx, Base, Req, Opts) ->
+    case identity_dependencies_enabled(Opts) of
+        true -> identity_vary_with_dependencies(Ctx, Base, Req, Opts);
+        false -> varied_context(Ctx, Base, Req, #{}, none)
+    end.
+
+identity_dependencies_enabled(Opts) ->
+    hb_opts:get(<<"hashpath">>, enabled, Opts) =:= enabled
+        andalso not forge_bootstrap_enabled(Opts).
+
+forge_bootstrap_enabled(Opts) ->
+    case hb_opts:get(forge_bootstrap, #{}, Opts) of
+        M when is_map(M) -> map_size(M) =/= 0;
+        _ -> false
+    end.
+
+identity_vary_with_dependencies(Ctx, Base, Req, Opts) ->
+    {VariedBase, BaseDependencies} =
+        project_schema(
+            identity_schema(Base, Opts),
+            Base,
+            undefined,
+            <<"base">>,
+            Opts
+        ),
+    {VariedReq, ReqDependencies} =
+        project_schema(
+            identity_schema(Req, Opts),
+            Req,
+            undefined,
+            <<"request">>,
+            Opts
+        ),
+    varied_context(
+        Ctx,
+        VariedBase,
+        VariedReq,
+        merge_dependencies(BaseDependencies, ReqDependencies),
+        none
+    ).
+
+identity_schema(Value, Opts) when is_map(Value) ->
+    Public = hb_private:reset(hb_message:uncommitted(Value, Opts)),
+    message_type(
+        {
+            maps:map(
+                fun(_Key, Child) ->
+                    #{
+                        <<"presence">> => optional,
+                        <<"type">> => identity_schema(Child, Opts)
+                    }
+                end,
+                Public
+            ),
+            none
+        }
+    );
+identity_schema(_Value, _Opts) ->
+    any_type().
 
 varied_context(Ctx, Base, Req, Dependencies, Normalizer) ->
     Varied =
@@ -978,8 +1035,83 @@ depends_mirrors_varied_shape_test() ->
         Dependencies
     ).
 
+identity_vary_records_dependencies_test() ->
+    Opts = #{},
+    Base =
+        #{
+            <<"device">> => <<"message@1.0">>,
+            <<"balance">> => #{ <<"alice">> => 7 }
+        },
+    Req = #{ <<"path">> => <<"transfer">>, <<"quantity">> => 3 },
+    {ok, Varied} =
+        vary(
+            #{
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            Opts
+        ),
+    BaseID = hb_message:id(Base, all, Opts),
+    ReqID = hb_message:id(Req, all, Opts),
+    ?assertEqual(Base, maps:get(<<"varied-base">>, Varied)),
+    ?assertEqual(Req, maps:get(<<"varied-request">>, Varied)),
+    ?assertEqual(
+        #{
+            <<"base">> =>
+                #{
+                    <<"device">> => origin(BaseID, <<"device">>),
+                    <<"balance">> =>
+                        #{
+                            <<"alice">> =>
+                                origin(
+                                    origin(BaseID, <<"balance">>),
+                                    <<"alice">>
+                                )
+                        }
+                },
+            <<"request">> =>
+                #{
+                    <<"path">> => origin(ReqID, <<"path">>),
+                    <<"quantity">> => origin(ReqID, <<"quantity">>)
+                }
+        },
+        maps:get(<<"dependencies">>, Varied)
+    ).
+
+identity_vary_skips_dependencies_when_hashpath_ignored_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => 1 },
+    Req = #{ <<"path">> => <<"value">> },
+    {ok, Varied} =
+        vary(
+            #{
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{ <<"hashpath">> => ignore }
+        ),
+    ?assertNot(maps:is_key(<<"dependencies">>, Varied)).
+
+identity_vary_skips_dependencies_for_forge_bootstrap_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"value">> => 1 },
+    Req = #{ <<"path">> => <<"value">> },
+    {ok, Varied} =
+        vary(
+            #{
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{
+                <<"forge-bootstrap">> =>
+                    #{ <<"message@1.0">> => dev_message }
+            }
+        ),
+    ?assertNot(maps:is_key(<<"dependencies">>, Varied)).
+
 projected(Schema, Value, Opts) ->
     ProjectionOpts = maps:merge(#{ <<"hashpath">> => disabled }, Opts),
     {Projected, _Dependencies} =
         project_schema(Schema, Value, undefined, <<"value">>, ProjectionOpts),
     Projected.
+
+origin(Hashpath, Key) ->
+    <<Hashpath/binary, "/", Key/binary>>.
