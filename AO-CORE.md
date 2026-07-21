@@ -1,7 +1,7 @@
 # AO 1.0: A universal protocol for computation over URIs.
 
 AO is a language for describing a method of combining -- computing over -- URI-named
-resourced, yielding further URI-addressable values. AO forms a computing environment,
+resources, yielding further URI-addressable values. AO forms a computing environment,
 but it is not itself a virtual machine. It is a neutral meta-VM: a common
 language for describing, transporting, attesting, challenging, and tracing the
 computations performed by many VMs, called devices.
@@ -30,10 +30,10 @@ forms. Their values are produced by resolvers that yield a representation of the
 bytes that the named resource refers to. Resources may identify other values by
 protocol address; creating a graph of connected computed elements.
 
-AO runtime implementations use a system of caches that associated resources with
+AO runtime implementations use a system of caches that associate resources with
 their associated values, then make these available for computations to access.
 When a URI is not known in a node's existing stores, it may be requested for
-resolution using the host environments native mechanisms, or through custom
+resolution using the host environment's native mechanisms, or through custom
 providers built-in to the runtime.
 
 Resources may share a common prefix, resembling a directory or other composite
@@ -54,8 +54,8 @@ The simplest form of a hashpath is resolving a `data:` `request` value against
 a resource collection, which yields the standard resolution of the concatenated
 values (`BaseURI/RequestBinary`).
 
-If the request is instead of a composite form, we attempt to resolve `/path`
-element upon the second ('request') URI for the  computation, and search the
+If the request is a composite resource, we attempt to resolve the `/path`
+element upon the second ('request') URI for the computation, and search the
 primary ('base') with its value. In the event that the resource is found, its
 value is returned. If the direct URI is not found, we look for a directly asserted
 `BaseURI/device`, yielding a specification -- or a binary, whose value can be
@@ -79,14 +79,14 @@ provenance.
 Hashpaths represent a sequence of execution frames, each of which may contain a
 number of elements:
 1. A `Base` URI upon which the request is being made. Must always be present on
-   the first context of the hashpath, but may be ommitted for the second
+   the first context of the hashpath, but may be omitted for the second
    and further elements, instead having their `Base` inferred from the rolling
    context of the hashpath itself.
 2. A raw binary or `Request` URI, holding the metadata of the request upon the
    `Base`.
 3. A `Result`, optionally, if computed, the result of the computation as a
    further URI.
-4. `Varied-Base` and `Varied-Request` emelements, each containing URIs for
+4. `Varied-Base` and `Varied-Request` elements, each containing URIs for
    collections of _only_ the necessary components that were utilized in the 
    state transition.
 5. `Dependencies`, a collection hosting the origin hashpath of each utilized
@@ -118,7 +118,7 @@ At each layer:
 1. Look for `BaseURI/P` among the resources asserted directly at this layer.
    Return if found.
 2. Look directly for `BaseURI/device` at this layer.
-3. If `Device` is found, look up a runtime-compliant implementation and execute
+3. If `Device` is found, look up a runtime-compliant implementation and apply it
    against the original outermost `Base` and the original `Request`.
 4. Else, if a prior extending element of the hashpath context is found, recursively
    resolve at that element.
@@ -160,7 +160,7 @@ selects `dev1` from the ancestor, but `dev1` sees `x = 5`.
 A device defines how requests are computed for a state.
 
 Examples of devices include message interpreters, process VMs, WASM VMs,
-Lua VMs, codecs, stores, payment devices, and application-specific evaluators.
+Lua VMs, codecs, payment devices, and application-specific evaluators.
 AO-Core does not privilege one compute model over another. It standardizes how
 their transitions are named, witnessed, attested, transported, and traced.
 
@@ -170,7 +170,7 @@ their transitions are named, witnessed, attested, transported, and traced.
    full specification when resolved.
 2. **Binaries, resolved as Permaweb Names**: Binary literals that imply a 
    request to resolve the name against `ao://~name@1.0/[Name]` in the resolver.
-3. **`ao://` Resource Prefixes**: Recursively resolved devices whos functionality
+3. **`ao://` Resource Prefixes**: Recursively resolved devices whose functionality
    is defined by extending the `Base` resource with its values and calling the
    resolution upon its new form.
 
@@ -258,7 +258,8 @@ Everything observed by execution must be present in `VariedBase` or
 
 ## Shared Computation
 
-Varying creates a reusable computation point.
+The second phase of device application begins at the reusable computation point
+created by varying.
 
 Many concrete bases may vary to the same pair:
 
@@ -270,17 +271,23 @@ BaseB / Request / vary -> VariedBase + VariedRequest @ DependenciesB
 The execution:
 
 ```text
-VariedBase / VariedRequest -> Patch
+VariedBase / VariedRequest -> VariedResult
 ```
 
-is shared by all sufficiently alike concrete bases for that request. The final
-results may still differ because the patch is equivalent to applying the original
-transition to each original base:
+is shared by all sufficiently alike concrete bases for that request. AO-Core
+first looks for a result at this address. On a miss, the kernel invokes the
+prepared function and caches its result; on a hit, it reuses the result without
+invoking the function.
+
+For extension, `VariedResult` is a patch. Final results may still differ because
+the patch is applied to each original base:
 
 ```text
 BaseA / Request == set(BaseA, Patch)
 BaseB / Request == set(BaseB, Patch)
 ```
+
+For replacement, `VariedResult` is the final result and is shared directly.
 
 This is the default mode of AO-Core computation: do a computation once for the
 material inputs that matter, then reuse it across every base/request pair that
@@ -292,25 +299,27 @@ reused.
 
 ## Transition Equivalence
 
-A transition asserts an equivalence between resolving a request and extending
-the base with the patch produced by varied execution:
+A transition asserts an equivalence between resolving a request and applying the
+selected result mode to the varied result:
 
 ```text
-Base / Request
-  == set(Base, Patch)
+Base / Request ==
+  extension:   set(Base, VariedResult)
+  replacement: VariedResult
 ```
 
 where:
 
 ```text
 Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
-VariedBase / VariedRequest -> Patch
+VariedBase / VariedRequest -> VariedResult
 ```
 
-The device's preparation selects extension or replacement as the result mode.
-AO-Core applies that mode: extension constructs a new layer whose ancestry is
-the original `Base`, while replacement terminates active inheritance. Devices do
-not implement ancestry traversal themselves.
+The device's preparation selects extension or replacement as `ResultMode`.
+Extension applies `set(Base, VariedResult)`, constructing a new layer whose
+ancestry is the original `Base`. Replacement returns `VariedResult` and terminates
+active inheritance. AO-Core applies the mode; devices do not implement ancestry
+traversal themselves.
 
 ## Hashpath Assertions And Claims
 
