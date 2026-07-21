@@ -112,28 +112,21 @@ schema_from_function(Func, Opts) ->
     end.
 
 do_schema_from_function(Func, Opts) ->
-    case erlang:fun_info(Func, name) of
-        {name, Name} ->
-            case atom_to_binary(Name) of
-                <<"-", _/binary>> ->
-                    undefined;
-                _ ->
-                    {module, Module} = erlang:fun_info(Func, module),
-                    case extract(Module, Opts) of
-                        {ok, #{ <<"keys">> := Schemas }} ->
-                            maps:get(normalize_name(Name), Schemas, undefined);
-                        {error, _Reason} ->
-                            undefined
-                    end
-            end;
-        _ ->
+    {module, Module} = erlang:fun_info(Func, module),
+    case extract(Module, Opts) of
+        {ok, #{ <<"keys">> := Schemas }} ->
+            select_schema(Func, Schemas);
+        {error, _Reason} ->
             undefined
     end.
 
 select_schema(Func, Schemas) ->
     case erlang:fun_info(Func, name) of
         {name, Name} ->
-            maps:get(normalize_name(Name), Schemas, undefined);
+            case atom_to_binary(Name) of
+                <<"-", _/binary>> -> undefined;
+                _ -> maps:get(normalize_name(Name), Schemas, undefined)
+            end;
         _ ->
             undefined
     end.

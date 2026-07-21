@@ -85,7 +85,7 @@
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3]).
+-export([resolve/2, resolve/3, resolve_many/2]).
 -export([raw/3, raw/4, raw/5]).
 -export([do/1, with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
@@ -596,10 +596,12 @@ stage_5(Ctx = #{
 
 %% @doc Materialize the caller-facing result according to the normalizer. The
 %% `base' normalizer links the varied result to the prior base; `replace' returns
-%% the varied result directly.
+%% the varied result directly. Map results retain their hashpath identity in
+%% private metadata so later transitions can format the result as their base.
 stage_6(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
     maybe
-        {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        {ok, Result0} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        Result = hb_hashpath:with_result_hashpath(Result0, Ctx, Opts),
         {ok, Ctx#{ <<"result">> => Result }}
     end.
 
