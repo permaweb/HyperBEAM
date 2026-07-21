@@ -710,9 +710,10 @@ read_all_commitments(Msg, Opts) ->
                                     true,
                                     {
                                         CommitmentID,
-                                        ensure_all_loaded(
+                                        load_commitment(
                                             Commitment,
-                                            Opts#{ <<"commitment">> => true }
+                                            UncommittedID,
+                                            Opts
                                         )
                                     }
                                 };
@@ -866,9 +867,10 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                     case do_read_commitment(CommPath, Opts) of
                         {ok, Commitment} ->
                             LoadedCommitment =
-                                ensure_all_loaded(
+                                load_commitment(
                                     Commitment,
-                                    Opts#{ <<"commitment">> => true }
+                                    RootPath,
+                                    Opts
                                 ),
                             ?event(read_commitment,
                                 {found_target_commitment,
@@ -960,6 +962,34 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                 true -> Merged;
                 false -> ensure_all_loaded(Merged, Opts)
             end
+    end.
+
+%% @doc Fully load a commitment while recovering the legacy representation of
+%% an empty `committed' key list. Lua historically decoded that empty list as
+%% `#{}`. Its cache ID is also the uncommitted ID of an empty message, so loading
+%% the link from a commitment stored at that same root recursively re-entered
+%% the root forever. A first-hop link back to the commitment's base therefore
+%% represents the empty committed-key list.
+load_commitment(Commitment, BasePath, Opts) ->
+    CommitmentOpts = Opts#{ <<"commitment">> => true },
+    case maps:get(<<"committed">>, Commitment, not_found) of
+        {link, LinkID, LinkOpts = #{
+            <<"type">> := <<"link">>,
+            <<"lazy">> := true
+        }} ->
+            LinkReadOpts =
+                hb_util:deep_merge(CommitmentOpts, LinkOpts, CommitmentOpts),
+            case do_read_commitment(LinkID, LinkReadOpts) of
+                {ok, BasePath} ->
+                    ensure_all_loaded(
+                        Commitment#{ <<"committed">> => [] },
+                        CommitmentOpts
+                    );
+                _ ->
+                    ensure_all_loaded(Commitment, CommitmentOpts)
+            end;
+        _ ->
+            ensure_all_loaded(Commitment, CommitmentOpts)
     end.
 
 apply_type_to_immediate(Value, #{ <<"type">> := Type }) ->
@@ -1155,6 +1185,33 @@ test_store_unsigned_empty_message(Store) ->
     MatchRes = hb_message:match(Item, RetrievedItem, strict, Opts),
     ?event_debug({match_result, MatchRes}),
     ?assert(MatchRes).
+
+test_store_lua_decoded_empty_commitment(Store) ->
+    ?event_debug(debug_store_test, {store, Store}),
+    hb_store:reset(Store),
+    Opts = #{ <<"store">> => Store },
+    SignedEmpty =
+        hb_message:commit(
+            #{},
+            Opts,
+            #{ <<"type">> => <<"unsigned">> }
+        ),
+    % Lua historically decoded the empty committed-key list as an empty map.
+    % Recreate that persisted representation to ensure it remains readable.
+    LuaDecoded =
+        SignedEmpty#{
+            <<"commitments">> =>
+                maps:map(
+                    fun(_ID, Commitment) ->
+                        Commitment#{ <<"committed">> => #{} }
+                    end,
+                    maps:get(<<"commitments">>, SignedEmpty)
+                )
+        },
+    {ok, Path} = write(LuaDecoded, Opts),
+    {ok, Retrieved} = read(Path, Opts),
+    [Commitment] = maps:values(maps:get(<<"commitments">>, Retrieved)),
+    ?assertEqual([], maps:get(<<"committed">>, Commitment)).
 
 test_store_unsigned_nested_empty_message(Store) ->
     ?event_debug(debug_store_test, {store, Store}),
@@ -1444,6 +1501,8 @@ cache_suite_test_() ->
     hb_store:generate_test_suite([
         {"store unsigned empty message",
             fun test_store_unsigned_empty_message/1},
+        {"store Lua-decoded empty commitment",
+            fun test_store_lua_decoded_empty_commitment/1},
         {"store binary", fun test_store_binary/1},
         {"store unsigned nested empty message",
             fun test_store_unsigned_nested_empty_message/1},

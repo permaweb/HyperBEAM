@@ -244,6 +244,13 @@ do_push(PrimaryProcess, Assignment, Opts) ->
                     ),
                     Opts
                 ),
+            % The HTTP response signer represents each downstream result as a
+            % link. These entries are produced by `push@1.0' rather than the
+            % execution device, so they are not covered by the compute result's
+            % existing commitment and would otherwise be omitted from the
+            % normal result cache write. Store the downstream tree explicitly
+            % before it can be linkified.
+            {ok, _} = hb_cache:write(Downstream, Opts),
             {ok, maps:merge(Downstream, AdditionalRes#{
                 <<"slot">> => Slot,
                 <<"process">> => ID
@@ -1434,7 +1441,23 @@ test_max_depth_one_walks_one_hop() ->
                 #{ <<"resulted-in">> := <<"skipped">> },
                 Next
             )
-    end.
+    end,
+    %% HTTP response signing uses an unsigned commitment, which linkifies the
+    %% downstream entries without writing them. Verify the push device already
+    %% persisted those entries so the signed response remains resolvable.
+    SignedPushResult =
+        hb_message:commit(
+            PushResult,
+            Opts,
+            #{
+                <<"device">> => <<"httpsig@1.0">>,
+                <<"type">> => <<"unsigned">>
+            }
+        ),
+    ?assertMatch(
+        #{ <<"1">> := #{ <<"resulted-in">> := _ } },
+        hb_cache:ensure_all_loaded(SignedPushResult, Opts)
+    ).
 
 %% @doc `~process@1.0/compute' called with `push = true' fires an async
 %% `~push@1.0/push' for the freshly-computed slot. Calling
