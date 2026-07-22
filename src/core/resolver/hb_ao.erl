@@ -85,7 +85,7 @@
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2]).
+-export([resolve/2, resolve/3]).
 -export([raw/3, raw/4, raw/5]).
 -export([do/1, with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).

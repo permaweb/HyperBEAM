@@ -685,7 +685,7 @@ dev_math_chain_depends_are_in_hashpath_test() ->
     {ok, _} = hb_cache:write(Req1, Opts),
     {ok, _} = hb_cache:write(Req2, Opts),
     {ok, _} = hb_cache:write(Req3, Opts),
-    {ok, FinalResult} = hb_ao:resolve_many([Base0, Req1, Req2, Req3], Opts),
+    {ok, FinalResult} = hb_ao:resolve([Base0, Req1, Req2, Req3], Opts),
     ?assertMatch(#{ <<"sum">> := 9 }, FinalResult),
     HP123 = hb_private:get(<<"hashpath">>, FinalResult, not_found, Opts),
     ?assert(is_binary(HP123)),
