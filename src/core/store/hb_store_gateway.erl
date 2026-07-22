@@ -61,8 +61,13 @@ extract_path_value(Message, Rest, StoreOpts) ->
 %% to read the data if the key is an ID.
 read(BaseStoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
     StoreOpts = opts(BaseStoreOpts),
-    GatewayReadOpts = maps:remove(<<"local-store">>, StoreOpts),
-    case hb_path:term_to_path_parts(Key, StoreOpts) of
+    ReadOpts = hb_util:deep_merge(NodeOpts, StoreOpts, NodeOpts),
+    GatewayReadOpts =
+        maps:without(
+            [<<"local-store">>, <<"force-message">>],
+            ReadOpts
+        ),
+    case hb_path:term_to_path_parts(Key, ReadOpts) of
         [ID|Rest] when ?IS_ID(ID) ->
             case hb_store_remote_node:read_local_cache(StoreOpts, ID, NodeOpts) of
                 {error, not_found} ->
@@ -74,7 +79,7 @@ read(BaseStoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
                         {ok, Message} ->
                             ?event({read_found, {key, ID}}),
                             hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
-                            extract_path_value(Message, Rest, StoreOpts)
+                            extract_path_value(Message, Rest, ReadOpts)
                     catch Class:Reason:Stacktrace ->
                         ?event(
                             gateway,
@@ -87,7 +92,7 @@ read(BaseStoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
                         {failure, failure}
                     end;
                 {ok, CachedMessage} ->
-                    extract_path_value(CachedMessage, Rest, StoreOpts);
+                    extract_path_value(CachedMessage, Rest, ReadOpts);
                 {failure, _} = Failure ->
                     Failure;
                 {error, _} = Error ->
@@ -160,7 +165,7 @@ graphql_as_store_test_() ->
 			hb_store:read(
 				[#{ <<"store-module">> => hb_store_gateway }],
 				<<"BOogk_XAI3bvNWnxNxwxmvOfglZt17o4MOVAdPNZ_ew">>,
-                #{}
+				#{ <<"force-message">> => true }
 			)
 		)
 	end}.
