@@ -124,26 +124,26 @@ At each layer:
    resolve at that element.
 
 In the pseudocode below, `lookup` inspects direct assertions in the loaded layer.
-It does not recursively perform AO execution.
+It does not recursively perform AO execution. A `not_found` error is scoped to
+the resource searched.
 
 ```text
 resolve(Outer, BaseURI, Request):
   P = path(Request)
 
   case lookup(BaseURI/P) of
-    Value -> return Value
-    unset -> return not_found
-    not_found -> continue
+    {ok, Response} -> return {ok, Response}
+    {error, not_found} -> continue
   end
 
   case lookup(BaseURI/device) of
-    Dev -> return execute(Dev, Outer, Request)
-    not_found -> continue
+    {ok, Dev} -> return execute(Dev, Outer, Request)
+    {error, not_found} -> continue
   end
 
   case local(BaseURI/...) of
-    Ancestor -> return resolve(Outer, Ancestor, Request)
-    not_found -> return not_found
+    {ok, Ancestor} -> return resolve(Outer, Ancestor, Request)
+    {error, not_found} -> return {error, not_found}
   end
 ```
 
