@@ -247,7 +247,10 @@ add_remote_link_store({link, ID, LinkOpts}, Peer, Opts) ->
             {link, ID, LinkOpts};
         false ->
             LocalStores =
-                hb_store:scope(hb_opts:get(store, [], Opts), local),
+                hb_store:filter(
+                    hb_opts:get(store, [], Opts),
+                    fun(Scope, _) -> Scope == local end
+                ),
             RemoteStore = #{
                 <<"store-module">> => hb_store_remote_node,
                 <<"node">> => Peer,
@@ -1525,7 +1528,7 @@ remote_response_links_retain_peer_test() ->
     ServerStore = [hb_test_utils:test_store(hb_store_volatile, <<"http-link-server">>)],
     ClientStore = [hb_test_utils:test_store(hb_store_volatile, <<"http-link-client">>)],
     FastClientStore =
-        [hb_test_utils:test_store(hb_store_volatile, <<"http-link-fast-client">>)],
+        hb_test_utils:test_store(hb_store_volatile, <<"http-link-fast-client">>),
     ServerOpts = #{ <<"store">> => ServerStore, <<"port">> => 0 },
     ClientOpts = #{ <<"store">> => ClientStore, <<"http-only-result">> => false },
     FastClientOpts = #{ <<"store">> => FastClientStore },
