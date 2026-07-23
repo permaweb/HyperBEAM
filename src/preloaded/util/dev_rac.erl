@@ -53,8 +53,10 @@
 %%% `send' sets `rac-slot' to `rac-outbound/<recipient>/<channel> + 1' (a
 %%% missing counter is `-1', so the first slot is `0'), stamps the outbound
 %%% message with `rac-slot' and `target = recipient' (plus `rac-channel' /
-%%% `rac-ratchet' when non-default), appends it to `results/outbox', and
-%%% advances the outbound counter. Delivery, provenance (`from-process'), and
+%%% `rac-ratchet' when non-default), replacing existing top-level RAC, target,
+%%% or `from-*' control fields in the body. It appends the message to
+%%% `results/outbox' after the highest numeric key and advances the outbound
+%%% counter. Delivery, provenance (`from-process'), and
 %%% re-signing to the recipient's policy are performed by `~push@1.0';
 %%% `~rac@1.0' only stamps and enqueues.
 %%%
@@ -64,9 +66,10 @@
 %%% mirroring `~dedup@1.0': it acts only on the first pass and returns the base
 %%% unchanged on later passes. The inbound message is the request's `body', from
 %%% which `compute' reads `rac-slot', `rac-channel' (default `default'),
-%%% `rac-ratchet' (default `false'), and the sender (`from-process', or the
-%%% message's first committer if absent). Untagged traffic (no `rac-slot')
-%%% passes through unmodified. With `Ratchet = rac-inbound/<sender>/<channel>'
+%%% `rac-ratchet' (default `false'), and the sender (`from-process'). Tagged
+%%% RAC messages without process provenance are rejected. Untagged traffic (no
+%%% `rac-slot') passes through unmodified. With `Ratchet =
+%%% rac-inbound/<sender>/<channel>'
 %%% (absent => -1) and `Slot = rac-slot', the message is admitted iff:
 %%%
 %%% ```
@@ -93,11 +96,6 @@
 -export([info/1, send/3, compute/3]).
 -include("include/hb.hrl").
 
-%% Keys that are structural rather than outbox entries, excluded when
-%% numbering a new outbox slot.
--define(NON_ENTRY_KEYS,
-    [<<"device">>, <<"priv">>, <<"commitments">>, <<"hashpath">>]).
-
 %% @doc Expose the two channel verbs; every other key (including the
 %% message-manipulation and stack-lifecycle keys) falls through to
 %% `message@1.0'.
@@ -109,9 +107,12 @@ info(_Opts) ->
 send(Base, Req, Opts) ->
     maybe
         {ok, Recipient} ?= required(<<"recipient">>, Req, Opts),
-        {ok, Body} ?= required(<<"body">>, Req, Opts),
-        Channel = hb_ao:get(<<"channel">>, Req, <<"default">>, Opts),
+        ok ?= valid_key(<<"recipient">>, Recipient),
+        {ok, RawBody} ?= required(<<"body">>, Req, Opts),
+        {ok, Body} ?= scrub_body(RawBody, Opts),
+        {ok, Channel} ?= send_channel(Req, Opts),
         Ratchet = hb_ao:get(<<"ratchet">>, Req, false, Opts),
+        ok ?= valid_ratchet(Ratchet),
         Slot =
             last_slot(<<"rac-outbound">>, Base, Recipient, Channel, Opts) + 1,
         Outbound = stamp(Body, Slot, Recipient, Channel, Ratchet),
@@ -140,43 +141,56 @@ compute(Base, Req, Opts) ->
 
 %% @doc Admit or reject one inbound message. Untagged traffic (no `rac-slot')
 %% passes through unchanged.
-ingest(Base, In, Opts) ->
+ingest(Base, In, Opts) when is_map(In) ->
     case hb_maps:get(<<"rac-slot">>, In, not_found, Opts) of
         not_found -> {ok, Base};
-        RawSlot -> admit(Base, In, hb_util:int(RawSlot), Opts)
-    end.
+        RawSlot ->
+            case parse_slot(RawSlot) of
+                {ok, Slot} -> admit(Base, In, Slot, Opts);
+                error -> reject(Base, invalid_slot)
+            end
+    end;
+ingest(Base, _In, _Opts) ->
+    {ok, Base}.
 
 %% @doc Read the channel's sender, rule, and ratchet, then admit or reject the
 %% slot, advancing `rac-inbound' on admission.
 admit(Base, In, Slot, Opts) ->
-    Sender = sender(In, Opts),
-    Channel = hb_maps:get(<<"rac-channel">>, In, <<"default">>, Opts),
-    Rule = ratchet_rule(hb_maps:get(<<"rac-ratchet">>, In, false, Opts)),
-    Ratchet = last_slot(<<"rac-inbound">>, Base, Sender, Channel, Opts),
-    case admits(Rule, Slot, Ratchet) of
-        true ->
-            ?event(rac, {admit, {sender, Sender}, {slot, Slot}}),
-            {ok,
-                set_slot(<<"rac-inbound">>, Base, Sender, Channel, Slot, Opts)};
-        false ->
-            ?event(rac, {reject, {sender, Sender}, {slot, Slot}}),
-            {skip, Base}
+    maybe
+        {ok, Sender} ?= sender(In, Opts),
+        {ok, Channel} ?= inbound_channel(In, Opts),
+        {ok, Rule} ?=
+            parse_ratchet(hb_maps:get(<<"rac-ratchet">>, In, false, Opts)),
+        Ratchet = last_slot(<<"rac-inbound">>, Base, Sender, Channel, Opts),
+        case admits(Rule, Slot, Ratchet) of
+            true ->
+                ?event(rac, {admit, {sender, Sender}, {slot, Slot}}),
+                {ok,
+                    set_slot(<<"rac-inbound">>, Base, Sender, Channel, Slot, Opts)};
+            false ->
+                ?event(rac, {reject, {sender, Sender}, {slot, Slot}}),
+                {skip, Base}
+        end
+    else
+        {error, Reason} -> reject(Base, Reason)
     end.
+
+reject(Base, Reason) ->
+    ?event(rac, {reject, Reason}),
+    {skip, Base}.
 
 %%% Ingest rules.
 
 %% @doc Normalize the on-message `rac-ratchet' value to an internal rule.
-ratchet_rule(N) when is_integer(N) -> {at, N};
-ratchet_rule(true) -> ratchet;
-ratchet_rule(false) -> strict;
-ratchet_rule(<<"true">>) -> ratchet;
-ratchet_rule(<<"false">>) -> strict;
-ratchet_rule(V) when is_binary(V) ->
-    case is_integer_binary(V) of
-        true -> {at, hb_util:int(V)};
-        false -> strict
-    end;
-ratchet_rule(_) -> strict.
+parse_ratchet(false) -> {ok, strict};
+parse_ratchet(<<"false">>) -> {ok, strict};
+parse_ratchet(true) -> {ok, ratchet};
+parse_ratchet(<<"true">>) -> {ok, ratchet};
+parse_ratchet(Value) ->
+    case parse_nonneg_int(Value) of
+        {ok, N} -> {ok, {at, N}};
+        error -> {error, <<"rac-invalid-ratchet">>}
+    end.
 
 %% @doc Does `Slot' satisfy the channel's ingest rule against the ratchet?
 admits(strict, Slot, Ratchet) -> Slot == Ratchet + 1;
@@ -200,18 +214,20 @@ stamp(Body, Slot, Recipient, Channel, Ratchet) ->
         _ -> WithChannel#{ <<"rac-ratchet">> => Ratchet }
     end.
 
+control_key(<<"rac-slot">>) -> true;
+control_key(<<"rac-channel">>) -> true;
+control_key(<<"rac-ratchet">>) -> true;
+control_key(<<"target">>) -> true;
+control_key(<<"from-", _/binary>>) -> true;
+control_key(_) -> false.
+
 %%% State access.
 
 %% @doc Read a channel counter, defaulting to `-1' when absent.
 last_slot(Dir, Base, Address, Channel, Opts) ->
-    hb_util:int(
-        hb_ao:get(
-            [Dir, Address, Channel],
-            {as, <<"message@1.0">>, Base},
-            -1,
-            Opts
-        )
-    ).
+    DirMap = hb_ao:get(Dir, {as, <<"message@1.0">>, Base}, #{}, Opts),
+    AddrMap = hb_maps:get(Address, DirMap, #{}, Opts),
+    hb_util:int(hb_maps:get(Channel, AddrMap, -1, Opts)).
 
 %% @doc Write a channel counter, replacing the `Dir' sub-map wholesale so the
 %% nested update is not deep-merged with the prior value.
@@ -225,12 +241,12 @@ set_slot(Dir, Base, Address, Channel, Slot, Opts) ->
         Opts
     ).
 
-%% @doc Append an entry to `results/outbox' at the next free numeric index,
+%% @doc Append an entry to `results/outbox' after existing numeric indexes,
 %% replacing `results' wholesale to avoid deep-merging the outbox map.
 append_outbox(Base, Entry, Opts) ->
     Results = hb_ao:get(<<"results">>, {as, <<"message@1.0">>, Base}, #{}, Opts),
     Outbox = hb_maps:get(<<"outbox">>, Results, #{}, Opts),
-    Key = hb_util:bin(entry_count(Outbox, Opts) + 1),
+    Key = next_entry_key(Outbox, Opts),
     NewResults = Results#{ <<"outbox">> => Outbox#{ Key => Entry } },
     hb_ao:set(
         Base,
@@ -238,41 +254,111 @@ append_outbox(Base, Entry, Opts) ->
         Opts
     ).
 
-%% @doc Count outbox entries, ignoring structural keys.
-entry_count(Map, Opts) when is_map(Map) ->
-    Keys = hb_maps:keys(Map, Opts),
-    length([ K || K <- Keys, not lists:member(K, ?NON_ENTRY_KEYS) ]);
-entry_count(_, _) -> 0.
+%% @doc Find the next append position after existing numeric outbox keys.
+next_entry_key(Map, Opts) when is_map(Map) ->
+    Used = [
+        N
+    ||  K <- hb_maps:keys(Map, Opts),
+        {ok, N} <- [entry_number(K)]
+    ],
+    hb_util:bin(max_entry(Used) + 1);
+next_entry_key(_, _) ->
+    <<"1">>.
 
-%% @doc The sender of an inbound message: its `from-process' provenance, or its
-%% first committer when no provenance is present.
+entry_number(K) when is_integer(K), K >= 1 ->
+    {ok, K};
+entry_number(K) when is_binary(K) ->
+    case hb_util:safe_int(K) of
+        {ok, N} when N >= 1 ->
+            case hb_util:bin(N) of
+                K -> {ok, N};
+                _ -> error
+            end;
+        _ -> error
+    end;
+entry_number(_) ->
+    error.
+
+max_entry([]) -> 0;
+max_entry(Used) -> lists:max(Used).
+
+%% @doc The sender of an inbound message: its `from-process' provenance.
 sender(In, Opts) ->
     case hb_maps:get(<<"from-process">>, In, not_found, Opts) of
-        not_found -> first_committer(In, Opts);
-        Process -> Process
-    end.
-
-%% @doc The address of the first committer of a message, or `anonymous' when it
-%% carries no commitments.
-first_committer(In, Opts) ->
-    case hb_message:signers(In, Opts) of
-        [Address | _] -> Address;
-        _ -> <<"anonymous">>
+        not_found ->
+            {error, missing_from_process};
+        Process ->
+            case valid_key(<<"from-process">>, Process) of
+                ok -> {ok, Process};
+                Error -> Error
+            end
     end.
 
 %% @doc Is this the first fold pass? Later passes (driven by `~multipass@1.0')
 %% must not re-apply the ratchet.
 is_first_pass(Base, Opts) ->
     Pass = hb_ao:get(<<"pass">>, {as, <<"message@1.0">>, Base}, 1, Opts),
-    hb_util:int(Pass) == 1.
+    case hb_util:safe_int(Pass) of
+        {ok, N} when N > 1 -> false;
+        _ -> true
+    end.
 
-%% @doc Is a binary a base-10 integer literal (optionally negative)?
-is_integer_binary(<<"-", Rest/binary>>) when Rest =/= <<>> ->
-    is_integer_binary(Rest);
-is_integer_binary(Bin) when is_binary(Bin), Bin =/= <<>> ->
-    lists:all(fun(C) -> C >= $0 andalso C =< $9 end, binary_to_list(Bin));
-is_integer_binary(_) ->
-    false.
+send_channel(Req, Opts) ->
+    Channel = hb_ao:get(<<"channel">>, Req, <<"default">>, Opts),
+    case valid_key(<<"channel">>, Channel) of
+        ok -> {ok, Channel};
+        Error -> Error
+    end.
+
+inbound_channel(In, Opts) ->
+    Channel = hb_maps:get(<<"rac-channel">>, In, <<"default">>, Opts),
+    case valid_key(<<"channel">>, Channel) of
+        ok -> {ok, Channel};
+        Error -> Error
+    end.
+
+valid_key(_Name, Key) when is_binary(Key), Key =/= <<>> -> ok;
+valid_key(Name, _) -> {error, <<"rac-invalid-", Name/binary>>}.
+
+scrub_body(Body, Opts) when is_map(Body) ->
+    try
+        {ok,
+            hb_maps:fold(
+                fun(Key, Value, Acc) ->
+                    NormKey = hb_util:to_lower(hb_ao:normalize_key(Key)),
+                    case control_key(NormKey) of
+                        true -> Acc;
+                        false -> maps:put(Key, Value, Acc)
+                    end
+                end,
+                #{},
+                Body,
+                Opts
+            )}
+    catch
+        _:_ -> {error, <<"rac-invalid-body">>}
+    end;
+scrub_body(_, _) ->
+    {error, <<"rac-invalid-body">>}.
+
+valid_ratchet(Ratchet) ->
+    case parse_ratchet(Ratchet) of
+        {ok, _} -> ok;
+        {error, Reason} -> {error, Reason}
+    end.
+
+parse_slot(Value) ->
+    parse_nonneg_int(Value).
+
+parse_nonneg_int(N) when is_integer(N), N >= 0 ->
+    {ok, N};
+parse_nonneg_int(Bin) when is_binary(Bin), Bin =/= <<>> ->
+    case hb_util:safe_int(Bin) of
+        {ok, N} when N >= 0 -> {ok, N};
+        _ -> error
+    end;
+parse_nonneg_int(_) ->
+    error.
 
 %%%---------------------------------------------------------------------------
 %%% Tests
@@ -401,7 +487,10 @@ compute_first_pass_only_test() ->
     O = opts(),
     S = <<"sender-addr">>,
     Base2 = (base())#{ <<"pass">> => 2 },
-    ?assertEqual({ok, Base2}, compute(Base2, in(S, 0), O)).
+    ?assertEqual({ok, Base2}, compute(Base2, in(S, 0), O)),
+    BaseBad = (base())#{ <<"pass">> => <<"bad">> },
+    {ok, B1} = compute(BaseBad, in(S, 0), O),
+    ?assertEqual(0, last_slot(<<"rac-inbound">>, B1, S, <<"default">>, O)).
 
 %% Item 10: untagged traffic passes through unmodified.
 compute_untagged_passthrough_test() ->
@@ -417,6 +506,115 @@ send_requires_fields_test() ->
         send(base(), #{ <<"body">> => #{} }, O)),
     ?assertEqual({error, <<"rac-missing-body">>},
         send(base(), #{ <<"recipient">> => <<"r">> }, O)).
+
+compute_rejects_malformed_slot_test() ->
+    O = opts(),
+    B0 = base(),
+    S = <<"sender-addr">>,
+    BadSlots = [<<"abc">>, <<>>, -1, <<"-1">>, #{}],
+    lists:foreach(
+        fun(Slot) ->
+            ?assertEqual({skip, B0}, compute(B0, in(S, Slot), O))
+        end,
+        BadSlots
+    ).
+
+compute_requires_from_process_test() ->
+    O = opts(),
+    B0 = base(),
+    ?assertEqual({skip, B0},
+        compute(B0, inbound(#{ <<"rac-slot">> => 0 }), O)).
+
+compute_rejects_invalid_ratchet_test() ->
+    O = opts(),
+    B0 = base(),
+    S = <<"sender-addr">>,
+    BadRatchets = [<<"bad">>, <<"-1">>, -1, #{}],
+    lists:foreach(
+        fun(Ratchet) ->
+            ?assertEqual({skip, B0}, compute(B0, in(S, 0, Ratchet), O))
+        end,
+        BadRatchets
+    ).
+
+send_validates_shape_test() ->
+    O = opts(),
+    ?assertEqual({error, <<"rac-invalid-recipient">>},
+        send(base(), #{ <<"recipient">> => <<>>, <<"body">> => #{} }, O)),
+    ?assertEqual({error, <<"rac-invalid-body">>},
+        send(base(), #{ <<"recipient">> => <<"r">>, <<"body">> => <<"bad">> }, O)),
+    ?assertEqual({error, <<"rac-invalid-channel">>},
+        send(base(),
+            #{ <<"recipient">> => <<"r">>,
+               <<"channel">> => <<>>,
+               <<"body">> => #{} },
+            O)),
+    ?assertEqual({error, <<"rac-invalid-ratchet">>},
+        send(base(),
+            #{ <<"recipient">> => <<"r">>,
+               <<"ratchet">> => <<"-1">>,
+               <<"body">> => #{} },
+            O)).
+
+send_scrubs_control_fields_test() ->
+    O = opts(),
+    R = <<"recipient-addr">>,
+    Body =
+        #{
+            <<"rac-channel">> => <<"stale">>,
+            <<"rac-ratchet">> => true,
+            <<"Rac-Slot">> => 99,
+            <<"Target">> => <<"stale-target">>,
+            <<"from-process">> => <<"forged">>,
+            <<"keep">> => <<"ok">>
+        },
+    {ok, B1} = send(base(), #{ <<"recipient">> => R, <<"body">> => Body }, O),
+    ?assertEqual(0, hb_ao:get(<<"results/outbox/1/rac-slot">>, B1, O)),
+    ?assertEqual(R, hb_ao:get(<<"results/outbox/1/target">>, B1, O)),
+    ?assertEqual(<<"ok">>, hb_ao:get(<<"results/outbox/1/keep">>, B1, O)),
+    ?assertEqual(not_found,
+        hb_ao:get(<<"results/outbox/1/rac-channel">>, B1, not_found, O)),
+    ?assertEqual(not_found,
+        hb_ao:get(<<"results/outbox/1/rac-ratchet">>, B1, not_found, O)),
+    ?assertEqual(not_found,
+        hb_ao:get(<<"results/outbox/1/from-process">>, B1, not_found, O)).
+
+state_keys_are_literal_test() ->
+    O = opts(),
+    S = <<"sender-addr">>,
+    C = <<"keys">>,
+    {ok, B1} =
+        compute(base(),
+            inbound(#{
+                <<"from-process">> => S,
+                <<"rac-channel">> => C,
+                <<"rac-slot">> => 0
+            }),
+            O),
+    ?assertEqual(0, last_slot(<<"rac-inbound">>, B1, S, C, O)).
+
+send_sparse_outbox_does_not_overwrite_test() ->
+    O = opts(),
+    R = <<"recipient-addr">>,
+    Existing = #{ <<"keep">> => true },
+    B0 =
+        (base())#{
+            <<"results">> => #{
+                <<"outbox">> => #{
+                    <<"2">> => Existing,
+                    <<"01">> => #{},
+                    <<"0">> => #{},
+                    <<"-1">> => #{},
+                    <<"extra">> => #{}
+                }
+            }
+        },
+    {ok, B1} =
+        send(B0, #{ <<"recipient">> => R, <<"body">> => #{ <<"n">> => 1 } }, O),
+    ?assertEqual(0, hb_ao:get(<<"results/outbox/3/rac-slot">>, B1, O)),
+    ?assertEqual(true, hb_ao:get(<<"results/outbox/2/keep">>, B1, O)),
+    ?assertEqual(not_found,
+        hb_ao:get(<<"results/outbox/2/rac-slot">>, B1, not_found, O)).
 
 %%% Integration tests.
 
