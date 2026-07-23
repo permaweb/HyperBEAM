@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>AO 1.0</title>
+    <script
+      src="https://www.w3.org/Tools/respec/respec-w3c"
+      class="remove"
+      async
+    ></script>
+    <script class="remove">
+      function prepareAoCoreMarkdown(_utils, content) {
+        return content
+          .replace(/^# AO 1\.0: A universal protocol for computation over URIs\.\s*/u, "## Introduction\n\n")
+          .replace("([RFC 3986])", "([[RFC3986]])");
+      }
+
+      var respecConfig = {
+        specStatus: "unofficial",
+        shortName: "ao-core",
+        subtitle: "A universal protocol for computation over URIs",
+        editors: [
+          {
+            name: "AO-Core contributors",
+            company: "Forward Research"
+          }
+        ],
+        github: {
+          branch: "neo/edge-1.0",
+          repoURL: "permaweb/HyperBEAM"
+        },
+        maxTocLevel: 3,
+        lint: {
+          "local-refs-exist": true,
+          "no-headingless-sections": true,
+          "no-http-props": true
+        }
+      };
+    </script>
+  </head>
+  <body>
+    <section id="abstract">
+      <p>
+        AO-Core defines a URI-addressed protocol for describing, transporting,
+        attesting, challenging, and tracing computations performed by many
+        virtual machines, called devices.
+      </p>
+    </section>
+
+    <section id="sotd">
+      <p>
+        This is an unofficial working draft of AO-Core 1.0. The Markdown source
+        for the main body of this document is <code>AO-CORE-SPEC.md</code>; this file
+        supplies the ReSpec wrapper, metadata, generated table of contents,
+        references, and conformance boilerplate.
+      </p>
+    </section>
+
+    <section
+      data-include="AO-CORE-SPEC.md"
+      data-include-format="markdown"
+      data-include-replace="true"
+      data-oninclude="prepareAoCoreMarkdown"
+    ></section>
+
+    <section id="conformance"></section>
+  </body>
+</html>

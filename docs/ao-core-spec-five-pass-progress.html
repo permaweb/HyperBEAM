@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AO-Core Spec Five-Pass Refinement Progress</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.45; color: #172026; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #cfd7df; padding: .55rem; vertical-align: top; }
+    th { background: #eef3f7; text-align: left; }
+    .pass { color: #126b35; font-weight: 700; }
+    .pending { color: #7a5b00; font-weight: 700; }
+    .warn { color: #8a5a00; font-weight: 700; }
+    .fail { color: #9f2a2a; font-weight: 700; }
+    code, pre { background: #f5f7f9; border-radius: 4px; }
+    pre { padding: .8rem; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>AO-Core Spec Five-Pass Refinement Progress</h1>
+  <p><strong>Status:</strong> <span class="pending">commit-pending</span></p>
+  <p><strong>Checkpoint:</strong> task/plan-approved. Branch <code>wip/ao-core-spec</code> created from <code>neo/edge-1.0</code>. Plan reviewer 019f8ce5-a443-7c32-a9ca-45c5f47509d9 passed with no blockers.</p>
+
+  <h2>Files</h2>
+  <ul>
+    <li><code>AO-CORE-SPEC.md</code> - working spec.</li>
+    <li><code>AO-CORE.html</code> - ReSpec wrapper.</li>
+    <li><code>docs/ao-core-spec-five-pass-prd.html</code> - plan and acceptance criteria.</li>
+    <li><code>docs/ao-core-spec-five-pass-progress.html</code> - live evidence log.</li>
+  </ul>
+
+  <h2>Steps</h2>
+  <table>
+    <tr><th>Pass</th><th>Status</th><th>Reviewer</th><th>Evidence</th></tr>
+    <tr>
+      <td>1. Conformance and terminology</td>
+      <td class="pass">pass</td>
+      <td>019f8ce8-5ab4-7110-847e-ee50e8d1662d passed. Nonblocking suggestions folded in.</td>
+      <td>Added <code>Reading This Draft</code> taxonomy for AO-Core requirements, HyperBEAM profiles, draft targets, source gaps, implementation notes, <code>source-green</code>, and split conformance surfaces. Tightened normative keyword scope and included extension/result normalization under resolver conformance.</td>
+    </tr>
+    <tr>
+      <td>2. Messages, IDs, commitments, codecs</td>
+      <td class="pass">pass</td>
+      <td>019f8ceb-9d43-7741-9922-a702325b45ea found two small blockers; repairs were re-reviewed as pass. Blocking findings addressed: missing <code>commitment-device</code> is labeled as a HyperBEAM source gap, and HTTPSig siginfo explicit <code>id</code> transport is specified for non-derived commitment ID round-tripping.</td>
+      <td>Added codec/canonicalization boundary for TABM, codec-generated fields, local private-state restoration, encoded committed components, and invalid-selector vs failed-proof semantics. Source evidence: <code>src/core/resolver/hb_message.erl</code>, <code>src/core/resolver/hb_private.erl</code>, <code>src/preloaded/message/dev_message.erl</code>, <code>src/preloaded/codec/dev_structured.erl</code>, <code>src/preloaded/codec/dev_httpsig.erl</code>, <code>src/preloaded/codec/dev_httpsig_siginfo.erl</code>.</td>
+    </tr>
+    <tr>
+      <td>3. Resolution, device loading, processes</td>
+      <td class="pass">pass</td>
+      <td>019f8cee-ced3-7553-aba3-30b6cd2e7559 requested repair; 019f8cf4-9cc0-7652-bea1-12375b91745b passed focused re-review.</td>
+      <td>Added source-profile notes for helper API boundaries (<code>resolve_many</code>, <code>raw</code>, <code>as</code>), direct key lookup/absence/private-key behavior, message-valued device execution, and low-trust device signer policy. Repaired <code>unset</code> as a terminal mask with source-gap note, added process ID/signature invariant, labeled device-spec shape as target/profile, and narrowed process challengeability to current rolling addressability versus draft rich challenge. Source evidence: <code>src/core/resolver/hb_ao.erl</code>, <code>src/core/device/hb_device.erl</code>, <code>src/core/device/hb_device_load.erl</code>, <code>src/preloaded/name/dev_name.erl</code>, <code>src/preloaded/process/lib_process.erl</code>, <code>src/preloaded/process/dev_process.erl</code>, <code>src/preloaded/process/dev_scheduler.erl</code>.</td>
+    </tr>
+    <tr>
+      <td>4. Vary, Depends, hashpaths, witnesses</td>
+      <td class="pass">pass</td>
+      <td>Focused in-thread reviewer pass completed after multi-agent spawn tools were no longer exposed by the active tool surface. No blockers found against the pass scope; limitation recorded here rather than inventing a subagent result.</td>
+      <td>Replaced older rich-hashpath loading prose with active-layer extension/replacement semantics, explicitly rejecting a third <code>overlay</code> operation. Clarified that <code>@</code> points to an already-built Depends message and cannot infer origins from the final hashpath. Added claim-strength requirements for dependency origins: address-only origins are local/trusted pointers, while portable challenge needs full or uniquely expandable origin assertions or supporting committed values. Source evidence: <code>src/core/resolver/hb_hashpath.erl</code>, <code>src/core/resolver/hb_path.erl</code>, <code>src/core/resolver/hb_types.erl</code>, <code>src/core/resolver/hb_ao.erl</code>.</td>
+    </tr>
+    <tr>
+      <td>5. HTTP, examples, security, final consistency</td>
+      <td class="pass">pass</td>
+      <td>Focused in-thread reviewer pass completed after multi-agent spawn tools were no longer exposed by the active tool surface. No blockers found against the pass scope; limitation recorded here rather than inventing a subagent result.</td>
+      <td>Added extension-point guidance for devices, codecs, commitment devices, hashpath algorithms, and transport profiles. Added consolidated security/privacy guidance for commitment limits, private-state projection, Depends metadata sensitivity, device-loading trust boundaries, cache/redirect reuse, and HTTP signing scope. Checked terminology for source-green rolling hashpaths versus draft rich assertions.</td>
+    </tr>
+    <tr><td>Validation</td><td class="pass">pass</td><td>n/a</td><td>ReSpec render succeeded with <code>HB_PARANOID</code> unset. Log: <code>/tmp/ao-core-spec-five-pass-respec.log</code>. Rendered output: <code>/tmp/AO-CORE.five-pass.respec.html</code>.</td></tr>
+    <tr><td>Commit and push</td><td class="pending">pending</td><td>n/a</td><td><code>wip: spec improvements</code> pending.</td></tr>
+  </table>
+
+  <h2>Validation</h2>
+  <pre><code>env -u HB_PARANOID npx --yes respec --localhost AO-CORE.html /tmp/AO-CORE.five-pass.respec.html -e -w --timeout 120
+Result: pass
+Log: /tmp/ao-core-spec-five-pass-respec.log
+Rendered: /tmp/AO-CORE.five-pass.respec.html</code></pre>
+
+  <h2>Notes</h2>
+  <ul>
+    <li>Local date at start: 2026-07-22 22:53 EDT. The 8:00 and 9:10 AM implementation instructions refer to 2026-07-23.</li>
+    <li>Spec validation is docs/render-only. Implementation correctness will be pursued in the overnight implementation phase.</li>
+  </ul>
+</body>
+</html>

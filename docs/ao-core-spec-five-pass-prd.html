@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AO-Core Spec Five-Pass Refinement PRD</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; line-height: 1.45; color: #172026; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+    th, td { border: 1px solid #cfd7df; padding: .55rem; vertical-align: top; }
+    th { background: #eef3f7; text-align: left; }
+    code, pre { background: #f5f7f9; border-radius: 4px; }
+    pre { padding: .8rem; overflow: auto; }
+  </style>
+</head>
+<body>
+  <h1>AO-Core Spec Five-Pass Refinement</h1>
+  <p><strong>Definition:</strong> Improve <code>AO-CORE-SPEC.md</code> through five source-backed LFG passes that answer open questions, reduce ambiguity, and make the spec more implementable without pretending current HyperBEAM source already implements draft target behavior.</p>
+  <p><strong>Non-goals:</strong> Do not implement Erlang behavior during this phase. Do not treat stale <code>/docs</code> content as authority unless confirmed by source. Do not touch unrelated untracked files such as <code>otp/</code>. Do not use <code>HB_PARANOID</code>.</p>
+
+  <h2>Constraints</h2>
+  <ul>
+    <li>Work on branch <code>wip/ao-core-spec</code>.</li>
+    <li>Use current source and source tests as authority for HyperBEAM behavior.</li>
+    <li>Use subagents to review each pass before advancing.</li>
+    <li>Validation for this phase is docs/render-oriented plus source-backed review; HyperBEAM implementation tests belong to the overnight implementation phase.</li>
+    <li>Commit and push intended spec artifacts as <code>wip: spec improvements</code>.</li>
+  </ul>
+
+  <h2>Plan</h2>
+  <table>
+    <tr><th>Step</th><th>Acceptance criteria</th><th>Evidence</th></tr>
+    <tr>
+      <td>1. Conformance and terminology</td>
+      <td>Spec defines conformance classes, normative/status labels, terminology boundaries, and source/draft/profile distinctions consistently.</td>
+      <td>Diff plus reviewer pass.</td>
+    </tr>
+    <tr>
+      <td>2. Messages, IDs, commitments, codecs</td>
+      <td>Message/key, ID, commitment, private state, codec/canonicalization, and failure-mode questions are answered or explicitly labeled as source gaps.</td>
+      <td>Diff plus reviewer pass.</td>
+    </tr>
+    <tr>
+      <td>3. Resolution, device loading, processes</td>
+      <td>Base/request, resolver, device lookup/loading/trust, process/scheduler, and message extension semantics are more complete and source-backed.</td>
+      <td>Diff plus reviewer pass.</td>
+    </tr>
+    <tr>
+      <td>4. Vary, Depends, hashpaths, witnesses</td>
+      <td>Vary/Depends, result modes, hashpath profile strength, loading, witnesses, challenge, and traceability are internally consistent and implementable.</td>
+      <td>Diff plus reviewer pass.</td>
+    </tr>
+    <tr>
+      <td>5. HTTP, examples, security, final consistency</td>
+      <td>HTTP/singleton expression, examples, security/privacy considerations, registries/extension points, and final cross-references are coherent.</td>
+      <td>Diff, ReSpec validation, and reviewer pass.</td>
+    </tr>
+  </table>
+
+  <h2>Validation</h2>
+  <pre><code>env -u HB_PARANOID npx --yes respec --localhost AO-CORE.html /tmp/AO-CORE.five-pass.respec.html -e -w --timeout 30</code></pre>
+
+  <h2>Judge Rubric</h2>
+  <p>Correctness, source traceability, unanswered-question coverage, security/privacy clarity, implementation usefulness, simplicity, taste, originality, maintainability, and validation honesty.</p>
+
+  <h2>Definition Of Done</h2>
+  <ul>
+    <li>Five spec passes are complete and reviewed by subagents.</li>
+    <li>All known unanswered questions are answered, narrowed, or explicitly labeled as source/spec gaps.</li>
+    <li>ReSpec render validation passes with <code>HB_PARANOID</code> unset.</li>
+    <li>The spec improvement commit is created as <code>wip: spec improvements</code> and pushed on <code>wip/ao-core-spec</code>.</li>
+  </ul>
+</body>
+</html>
