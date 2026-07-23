@@ -36,6 +36,20 @@ This should run all of the tests in every HyperBEAM module. If you would like to
 run only tests from a specific set of modules, just add `--module=list,of,mods`.
 To run only a specific test use `--test=your_module:your_test`.
 
+Preloaded device modules under `src/preloaded` are packaged and renamed before
+execution, so run their tests through the device test harness instead of plain
+`eunit --module`. For example:
+
+```
+	rebar3 device test --devices dev_manifest --module dev_manifest
+```
+
+To run specific device tests, pass the source module and test function:
+
+```
+	rebar3 device test --devices dev_manifest --module dev_manifest --test manifest_should_fallback_on_not_found_path_test_parallel
+```
+
 Do not send a PR in which the tests do not pass.
 
 ## Event logging and debugging
