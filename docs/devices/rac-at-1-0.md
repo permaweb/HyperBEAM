@@ -65,7 +65,11 @@ channel's next slot and appending it to the process outbox for delivery.
    `-1`, so the first slot is `0`).
 2. Stamp the outbound message with `rac-slot = Slot` and `target = recipient`,
    plus `rac-channel`/`rac-ratchet` when they differ from their defaults.
-3. Append the stamped message to the outbox (`results/outbox`).
+   Existing top-level RAC control keys, `target`, and `from-*` provenance keys
+   in `body` are replaced or removed before stamping.
+3. Append the stamped message to the outbox (`results/outbox`) at one past the
+   highest canonical positive numeric key; sparse gaps and noncanonical,
+   nonpositive, or non-numeric keys are not reused.
 4. Set `base/rac-outbound/<recipient>/<channel> = Slot`.
 
 **Response:** `{ok, <base>}` — the base with the outbox entry appended and the
@@ -86,8 +90,8 @@ first pass and returns the base unchanged on later passes.
 
 **Inputs:** the base is the process state; the inbound message is the request's
 `body`, from which `compute` reads `rac-slot`, `rac-channel` (default
-`default`), `rac-ratchet` (default `false`), and the sender (`from-process`, or
-the message's first committer if absent).
+`default`), `rac-ratchet` (default `false`), and the sender (`from-process`).
+Tagged RAC messages without process provenance are rejected.
 
 **Behaviour:**
 
