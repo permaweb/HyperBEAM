@@ -527,13 +527,14 @@ active device. These helpers are useful implementation surfaces, but portable
 claims are still judged as one or more ordinary `Base / Request` transitions.
 
 For a request whose `path` is `P`, resolution walks the ancestry of `Base` from
-the outermost layer inward until either a direct result, a `device`, or a
-non-extending hashpath context is found.
+the outermost layer inward until either a direct-accessible result, a `device`,
+or a non-extending hashpath context is found.
 
 At each layer:
 
 1. Look for `BaseURI/P` among the resources asserted directly at this layer.
-   Return if found.
+   Return if found and direct access is permitted for `P` under the active
+   device profile.
 2. Look directly for `BaseURI/device` at this layer.
 3. If `Device` is found, look up a runtime-compliant implementation and apply it
    against the original outermost `Base` and the original `Request`.
@@ -542,19 +543,25 @@ At each layer:
 
 In the pseudocode below, `lookup` inspects direct assertions in the loaded layer.
 It does not recursively perform AO execution. A `not_found` error is scoped to
-the resource searched. Direct public key hits return before device execution;
-`unset` is a terminal mask at the active layer rather than a signal to inherit
-the ancestor's value. Private keys must not be returned by this direct lookup.
-Current HyperBEAM source recognizes the binary sentinel `<<"unset">>` in the
-stage-1 direct lookup path, while some helper paths still construct atom
-`unset`; that mismatch is a source gap against a single portable sentinel.
+the resource searched. Direct public key hits return before device execution
+only when the active device profile classifies the key as direct-accessible. For
+`message@1.0`, this means non-reserved public keys; reserved keys such as `set`,
+`keys`, `id`, and `verify` dispatch through the message device even if a literal
+field of the same name exists. `unset` is a terminal mask at the active layer
+rather than a signal to inherit the ancestor's value. Private keys must not be
+returned by this direct lookup. Current HyperBEAM source recognizes the binary
+sentinel `<<"unset">>` in the stage-1 direct lookup path, while some helper paths
+still construct atom `unset`; that mismatch is a source gap against a single
+portable sentinel.
 
 ```text
 resolve(Outer, BaseURI, Request):
   P = path(Request)
 
   case lookup(BaseURI/P) of
-    {ok, Response} -> return {ok, Response}
+    {ok, Response} when direct_accessible(BaseURI, P) ->
+      return {ok, Response}
+    {ok, _ReservedOrDeviceHandledValue} -> continue
     {error, not_found} -> continue
   end
 
@@ -855,9 +862,10 @@ Base / Request / vary -> VariedBase + VariedRequest @ Dependencies
 Implementation status: current HyperBEAM `vary` is schema-declared preparation.
 If no schema is available, `hb_types:vary/2` returns the original `Base` and
 `Request` and records `normalizer: none`. If a schema is available, it projects
-`Base` and `Request` through `apply_schema/3` and records the selected
-normalizer. It does not currently produce the exact `Dependencies` tree
-described below.
+`Base` and `Request` through `apply_schema/3`, records the selected normalizer,
+and, when rich hashpaths are enabled, produces schema-declared dependency
+observations. It does not currently produce an observed-exact `Dependencies`
+tree.
 
 Depends is not an independent post-hoc overlay. It is the origin-observation
 side of Vary: for every public value, absence, mask, default, or lookup failure
@@ -929,6 +937,7 @@ A dependency leaf is an AO message describing one observation:
 
 ```text
 { status: found,     origin: Hashpath }
+{ status: found,     origin: Hashpath, observed: ObservedValue, value: VariedValue }
 { status: not_found, origin: Hashpath, path: Path }
 { status: unset,     origin: Hashpath, path: Path }
 { status: defaulted, origin: Hashpath, path: Path, default: DefaultID }
@@ -938,7 +947,12 @@ A dependency leaf is an AO message describing one observation:
 A bare hashpath may be used only as shorthand for
 `{ status: found, origin: Hashpath }`. For `found`, the origin hashpath's
 terminal value is the varied value, so the value does not need to be duplicated
-inside `Dependencies`. Negative leaves do not correspond to a varied value; they
+inside `Dependencies`. If preparation projects or coerces an observed value into
+a different varied value, the `found` leaf MUST use the explicit
+`observed`/`value` form: `observed` is the value resolved at `origin`, and
+`value` is the value included in `VariedBase` or `VariedRequest`. A verifier
+checks both that `origin` resolves to `observed` and that the varied witness
+contains `value`. Negative leaves do not correspond to a varied value; they
 record observations that affected preparation or execution, including absence,
 masking by `unset`, default selection, or failure to find a direct key or device.
 
