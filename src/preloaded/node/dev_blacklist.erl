@@ -404,6 +404,99 @@ basic_test() ->
     ),
     ok.
 
+%% @doc A blacklisted ID must be blocked identically regardless of the route
+%% form used to request it. Here we verify that `/raw/ID' is blocked by the
+%% same mechanism that blocks `/ID', since the ID appears as a later path
+%% segment rather than the base message.
+raw_route_blocked_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    Opts1 = Opts0#{ <<"blacklist-providers">> => [BlacklistID]},
+    Node = hb_http_server:start_node(Opts1),
+    % Sanity: the bare `/ID' form is blocked.
+    ?assertMatch(
+        {error, #{ <<"status">> := 451, <<"reason">> := <<"content-policy">> }},
+        hb_http:get(Node, SignedID1, Opts1)
+    ),
+    % The `/raw/ID' form must be blocked by the same mechanism.
+    ?assertMatch(
+        {error, #{ <<"status">> := 451, <<"reason">> := <<"content-policy">> }},
+        hb_http:get(Node, <<"/raw/", SignedID1/binary>>, Opts1)
+    ),
+    ok.
+
+%% @doc A blacklisted ID must also be blocked when requested via its base32
+%% subdomain (`BASE32.localhost'). The subdomain is decoded to the real ID by
+%% the `name@1.0' hook, which must run *before* `blacklist@1.0' so that the
+%% resolved ID is present in the request when the blacklist check runs. A
+%% non-blacklisted ID's subdomain must not be blocked.
+subdomain_route_blocked_test() ->
+    {ok, #{
+        opts := Opts0,
+        signed1 := SignedID1,
+        unsigned3 := UnsignedID3,
+        blacklist := BlacklistID
+    }} = setup_test_env(),
+    % Wire `name@1.0' (resolving base32 subdomains via `b32-name@1.0') ahead of
+    % `blacklist@1.0' in the request hook chain.
+    Opts1 = Opts0#{
+        <<"blacklist-providers">> => [BlacklistID],
+        <<"name-resolvers">> => [#{ <<"device">> => <<"b32-name@1.0">> }],
+        <<"on">> => #{
+            <<"request">> => [
+                #{ <<"device">> => <<"name@1.0">> },
+                #{ <<"device">> => <<"blacklist@1.0">> }
+            ]
+        }
+    },
+    Node = hb_http_server:start_node(Opts1),
+    % The blacklisted ID, requested via its base32 subdomain, is blocked.
+    ?assertMatch(
+        {error, #{ <<"status">> := 451, <<"reason">> := <<"content-policy">> }},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => b32_subdomain(SignedID1)
+            },
+            Opts1
+        )
+    ),
+    % A non-blacklisted ID's subdomain is not blocked by the content policy
+    % (it resolves normally rather than returning 451).
+    ?assertNotMatch(
+        {error, #{ <<"status">> := 451 }},
+        hb_http:get(
+            Node,
+            #{
+                <<"path">> => <<"/">>,
+                <<"host">> => b32_subdomain(UnsignedID3)
+            },
+            Opts1
+        )
+    ),
+    ok.
+
+%% @doc Encode an ID as its base32 `<id>.localhost' subdomain, mirroring
+%% `dev_b32_name:encode/1'. Inlined here because packaged device modules are
+%% renamed, so the `dev_b32_name' atom is not callable from this test.
+b32_subdomain(ID) ->
+    Encoded =
+        hb_util:bin(
+            string:replace(
+                string:to_lower(
+                    hb_util:list(base32:encode(hb_util:native_id(ID)))
+                ),
+                "=",
+                "",
+                all
+            )
+        ),
+    <<Encoded/binary, ".localhost">>.
+
 %% @doc Ensure that the default provider does not block any requests.
 first_request_always_return_503_test() ->
     {ok, #{
