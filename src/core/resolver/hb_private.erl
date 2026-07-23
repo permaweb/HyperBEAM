@@ -89,6 +89,8 @@ is_private(ListKey) when is_list(ListKey) ->
     % Strings should always be lists, but in case for some reason the caller
     % ignores that...
     try is_private(hb_util:bin(ListKey)) catch _ -> false end;
+is_private(AtomKey) when is_atom(AtomKey) ->
+    is_private(atom_to_binary(AtomKey));
 is_private(<<"priv", _/binary>>) -> true;
 is_private(_) -> false.
 

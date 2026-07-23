@@ -2,8 +2,8 @@
 %%% from the message as it is found in the message's underlying Erlang map. 
 %%% Private keys (`priv[.*]') are not included.
 %%% Reserved keys are: `id', `commitments', `committers', `keys', `path', 
-%%% `set', `remove', `get', and `verify'. Their function comments describe the 
-%%% behaviour of the device when these keys are set.
+%%% `set', `remove', `get', and `verify'. Exported handlers or helper APIs
+%%% describe the behaviour of these keys when they are set.
 -module(dev_message).
 %%% Base AO-Core state manipulation functions.
 -export([info/0, keys/3, set/3, id/3, vary/3, schema/3]).
@@ -606,33 +606,131 @@ commitment_ids_from_committers(CommitterAddrs, Commitments, Opts) ->
 %% @doc Deep merge keys in a message. Takes a map of key-value pairs and sets
 %% them in the message, overwriting any existing values.
 set(Base, Req = #{ <<"set">> := <<"deep">> }, Opts) ->
-    NewValues =
-        maps:map(
-            fun(Key, Nested) when is_map(Nested) or ?IS_LINK(Nested) ->
-                case hb_maps:find(Key, Base, Opts) of
-                    {ok, NestedBase} when is_map(NestedBase) or ?IS_LINK(NestedBase) ->
-                        % We use `hb_ao:deep_set` rather than just recursing
-                        % such that the correct device is used for the downstream
-                        % set operation.
-                        hb_ao:deep_set(NestedBase, Nested, Opts);
-                    error -> Nested
-                end;
-               (_Key, NewValue) -> NewValue
-                end,
-                maps:without([<<"set">>], hb_message:uncommitted(Req, Opts))
-            ),
-    set(Base, NewValues, Opts);
-set(Base, NewValues, _Opts) ->
+    set_layer(Base, nested_set_values(Base, set_values(Req, Opts), Opts), Opts);
+set(Base, NewValues, Opts) ->
+    Patch = nested_set_values(Base, set_values(NewValues, Opts), Opts),
+    set_layer(Base, Patch, Opts).
+
+set_layer(Base, Patch, Opts) ->
     case lists:partition(fun hb_private:is_private/1, maps:keys(Base)) of
-        {[], _} -> {ok, NewValues#{ <<"...">> => Base }};
+        {[], _} ->
+            {ok, Patch#{ <<"...">> => Base }};
         {PrivKeys, _} ->
             {
                 ok,
-                (maps:merge(NewValues, maps:with(PrivKeys, Base)))#{
+                (maps:merge(Patch, carried_private_keys(Base, PrivKeys)))#{
                     <<"...">> => maps:without(PrivKeys, Base)
                 }
             }
     end.
+
+nested_set_values(Base, Patch, Opts) ->
+    maps:map(
+        fun(Key, Nested) when is_map(Nested) or ?IS_LINK(Nested) ->
+            case hb_maps:find(Key, Base, Opts) of
+                {ok, NestedBase} when is_map(NestedBase) or ?IS_LINK(NestedBase) ->
+                    % Use the child value's device so deep extension works for
+                    % message maps, tries, and other nested AO values.
+                    hb_ao:deep_set(NestedBase, Nested, Opts);
+                _ -> Nested
+            end;
+            (_Key, NewValue) -> NewValue
+        end,
+        Patch
+    ).
+
+set_values(Req, Opts) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            case set_value_at(Key, Req, Opts) of
+                {ok, undefined} -> Acc;
+                {ok, Value} -> patch_set(Key, Value, Acc, Opts);
+                error -> Acc
+            end
+        end,
+        #{},
+        set_candidate_keys(Req, Opts)
+    ).
+
+set_candidate_keys(Req, Opts) when is_map(Req) ->
+    Direct =
+        [
+            Key
+        ||
+            {Key, _Value} <- hb_maps:to_list(hb_message:uncommitted(Req, Opts), Opts),
+            set_value_key(Key)
+        ],
+    Inherited =
+        case hb_maps:find(<<"...">>, Req, Opts) of
+            {ok, Ancestor} ->
+                case ancestor_message(Ancestor, Opts) of
+                    {ok, AncestorMsg} -> set_candidate_keys(AncestorMsg, Opts);
+                    error -> []
+                end;
+            error -> []
+        end,
+    lists:usort(Direct ++ Inherited);
+set_candidate_keys(_Req, _Opts) ->
+    [].
+
+set_value_at(Key, Msg, Opts) when is_map(Msg) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            case hb_maps:find(<<"...">>, Msg, Opts) of
+                {ok, Ancestor} ->
+                    case ancestor_message(Ancestor, Opts) of
+                        {ok, AncestorMsg} -> set_value_at(Key, AncestorMsg, Opts);
+                        error -> error
+                    end;
+                error -> error
+            end
+    end;
+set_value_at(_Key, _Msg, _Opts) ->
+    error.
+
+set_value_key(<<"set">>) -> false;
+set_value_key(<<"path">>) -> false;
+set_value_key(<<"...">>) -> false;
+set_value_key(Key) -> not hb_private:is_private(Key).
+
+patch_set(Key, Value, Acc, Opts) ->
+    case hb_path:term_to_path_parts(Key, Opts) of
+        undefined -> Acc;
+        Parts -> do_patch_set(Parts, Value, Acc)
+    end.
+
+do_patch_set([Key], Value, Acc) ->
+    Acc#{ Key => Value };
+do_patch_set([Key | Rest], Value, Acc) ->
+    Child =
+        case maps:get(Key, Acc, #{}) of
+            Msg when is_map(Msg) -> Msg;
+            _ -> #{}
+        end,
+    Acc#{ Key => do_patch_set(Rest, Value, Child) }.
+
+carried_private_keys(Base, PrivKeys) ->
+    lists:foldl(
+        fun(Key, Acc) ->
+            case carried_private_value(Key, maps:get(Key, Base)) of
+                {keep, Value} -> Acc#{ Key => Value };
+                drop -> Acc
+            end
+        end,
+        #{},
+        PrivKeys
+    ).
+
+carried_private_value(<<"priv">>, Priv) when is_map(Priv) ->
+    Clean = maps:without([<<"hashpath">>, hashpath], Priv),
+    case map_size(Clean) of
+        0 -> drop;
+        _ -> {keep, Clean}
+    end;
+carried_private_value(_Key, Value) ->
+    {keep, Value}.
 
 %% @doc Get the public keys of a message.
 -spec keys(#{ _ => _ }, #{ keys => _, _ => _ }, _) -> {ok, [binary()]}.
@@ -643,56 +741,163 @@ keys(Msg, Req, Opts) when is_list(Msg) ->
     end;
 keys(Msg, #{ <<"keys">> := <<"deep">> }, Opts) when is_map(Msg) ->
     Inherited =
-        case maps:find(<<"...">>, Msg) of
-            {ok, Extension} -> hb_ao:keys(Extension, Opts);
+        case hb_maps:find(<<"...">>, Msg, Opts) of
+            {ok, Extension} ->
+                case ancestor_message(Extension, Opts) of
+                    {ok, Ancestor} -> deep_keys(Ancestor, Opts);
+                    error -> []
+                end;
             error -> []
         end,
-    InheritedPublic = Inherited -- [<<"commitments">>],
+    MaskedKeys =
+        [
+            Key
+        ||
+            {Key, Value} <- hb_maps:to_list(Msg, Opts),
+            unset_value(Value, Opts)
+        ],
+    Hidden = [<<"commitments">> | MaskedKeys],
+    InheritedPublic = [Key || Key <- Inherited, not lists:member(Key, Hidden)],
     DirectKeys =
-        maps:fold(
-            fun
-                (_Key, unset, Acc) -> Acc;
-                (<<"...">>, _Value, Acc) -> Acc;
-                (Key, _Value, Acc) -> [Key | Acc]
-            end,
-            [],
-            Msg
-        ),
-    {ok, DirectKeys ++ InheritedPublic};
+        [
+            Key
+        ||
+            {Key, Value} <- hb_maps:to_list(Msg, Opts),
+            Key =/= <<"...">>,
+            visible_key(Key, Value, Opts)
+        ],
+    {ok, lists:usort(DirectKeys ++ InheritedPublic)};
 keys(Msg, _Req, Opts) ->
     {
         ok,
-        lists:filter(
-            fun(Key) -> not hb_private:is_private(Key) end,
-            hb_maps:keys(hb_message:uncommitted(Msg, Opts), Opts)
-        )
+        [
+            Key
+        ||
+            {Key, Value} <-
+                hb_maps:to_list(hb_message:uncommitted(Msg, Opts), Opts),
+            visible_key(Key, Value, Opts)
+        ]
     }.
+
+deep_keys(Msg, Opts) ->
+    case keys(Msg, #{ <<"keys">> => <<"deep">> }, Opts) of
+        {ok, Keys} -> Keys;
+        _ -> []
+    end.
+
+visible_key(Key, Value, Opts) ->
+    Key =/= <<"...">>
+        andalso not hb_private:is_private(Key)
+        andalso not unset_value(Value, Opts).
+
+unset_value(unset) -> true;
+unset_value(<<"unset">>) -> true;
+unset_value(_) -> false.
+
+unset_value(Value, _Opts) when Value =:= unset; Value =:= <<"unset">> ->
+    true;
+unset_value(Value, Opts) when ?IS_LINK(Value) ->
+    try unset_value(hb_cache:ensure_loaded(Value, Opts)) of
+        IsUnset -> IsUnset
+    catch
+        _:_ -> false
+    end;
+unset_value(_Value, _Opts) ->
+    false.
+
+ancestor_message(Ancestor, _Opts) when is_map(Ancestor) ->
+    {ok, Ancestor};
+ancestor_message(Ancestor, Opts) when ?IS_LINK(Ancestor) ->
+    case hb_cache:ensure_loaded(Ancestor, Opts) of
+        Msg when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end;
+ancestor_message(Ancestor, Opts) when is_binary(Ancestor) ->
+    case binary:match(Ancestor, <<"/">>) of
+        {_, _} -> hashpath_ancestor(Ancestor, Opts);
+        nomatch -> cached_ancestor(Ancestor, Opts)
+    end;
+ancestor_message(_Ancestor, _Opts) ->
+    error.
+
+cached_ancestor(Ancestor, Opts) ->
+    case hb_cache:read(Ancestor, Opts) of
+        {ok, Msg} when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end.
+
+hashpath_ancestor(Ancestor, Opts) ->
+    case hb_hashpath:load(Ancestor, Opts) of
+        {ok, Msg} when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end.
 
 %% @doc Return the value associated with the key as it exists in the message's
 %% underlying Erlang map. First check the public keys, then check case-
 %% insensitively if the key is a binary.
+default_accessor(<<"*">>, Msg, _Req, Opts) ->
+    MaterializeOpts =
+        Opts#{
+            <<"hashpath">> => ignore,
+            <<"spawn-worker">> => false,
+            <<"caching-schema">> => true
+        },
+    materialized_message(Msg, MaterializeOpts);
+default_accessor(Key, Msg, Req, Opts) when is_list(Msg) ->
+    case hb_ao:normalize_keys(Msg, Opts) of
+        NormMsg when is_map(NormMsg) -> default_accessor(Key, NormMsg, Req, Opts);
+        _ -> {error, not_found}
+    end;
 default_accessor(Key, Msg, Req, Opts) ->
     case hb_private:is_private(Key) of
         true -> {error, not_found};
-        false ->
-            case hb_maps:find(Key, Msg, Opts) of
-                {ok, Value} -> {ok, Value};
-                error ->
-                    case hb_maps:find(<<"...">>, Msg, Opts) of
-                        {ok, AncestorMsg} when is_map(AncestorMsg) ->
-                            hb_ao:raw(AncestorMsg, Req, Opts);
-                        {ok, Ancestor}
-                                when is_binary(Ancestor)
-                                orelse ?IS_LINK(Ancestor) ->
-                            case hb_cache:read(Ancestor, Opts) of
-                                {ok, AncestorMsg} ->
-                                    hb_ao:raw(AncestorMsg, Req, Opts);
-                                OtherStatus -> OtherStatus
-                            end;
+        false -> message_lookup(Key, Msg, Opts)
+    end.
+
+message_lookup(Key, Msg, Opts) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Value} when Value =:= unset; Value =:= <<"unset">> ->
+            {error, not_found};
+        {ok, Value} ->
+            {ok, Value};
+        error ->
+            case hb_maps:find(<<"...">>, Msg, Opts) of
+                {ok, Ancestor} ->
+                    case ancestor_message(Ancestor, Opts) of
+                        {ok, AncestorMsg} -> message_lookup(Key, AncestorMsg, Opts);
                         error -> {error, not_found}
-                    end
+                    end;
+                error -> {error, not_found}
             end
     end.
+
+materialized_message(Msg, Opts) ->
+    case keys(Msg, #{ <<"keys">> => <<"deep">> }, Opts) of
+        {ok, Keys} ->
+            {ok,
+                maps:from_list(
+                    lists:filtermap(
+                        fun(Key) ->
+                            case hb_ao:resolve(Msg, Key, Opts) of
+                                {ok, Value} -> {true, {Key, materialized_value(Value, Opts)}};
+                                _ -> false
+                            end
+                        end,
+                        Keys
+                    )
+                )
+            };
+        Error ->
+            Error
+    end.
+
+materialized_value(Value, Opts) when is_map(Value) ->
+    case materialized_message(Value, Opts) of
+        {ok, Surface} -> Surface;
+        _ -> hb_private:reset(Value)
+    end;
+materialized_value(Value, _Opts) ->
+    hb_private:reset(Value).
 
 %% @doc Determines the schema for the resolution of a `Base/Request` pair and
 %% applies it to the inputs. Returns `base` and `request` submessages, as well
@@ -809,23 +1014,68 @@ cannot_get_private_keys_test() ->
         )
     ).
 
+star_materialization_strips_nested_private_state_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Msg = #{
+        <<"plain">> => <<"yes">>,
+        <<"visible">> =>
+            hb_private:set_priv(
+                #{ <<"public">> => <<"ok">> },
+                #{ <<"secret">> => <<"nope">> }
+            )
+    },
+    ?assertEqual(
+        {ok, #{
+            <<"plain">> => <<"yes">>,
+            <<"visible">> => #{ <<"public">> => <<"ok">> }
+        }},
+        default_accessor(<<"*">>, Msg, #{}, Opts)
+    ).
+
+star_materialization_projects_nested_extensions_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Parent = #{ <<"a">> => 1, <<"b">> => 1 },
+    Msg = #{ <<"nested">> => #{ <<"b">> => 2, <<"...">> => Parent } },
+    ?assertEqual(
+        {ok, #{ <<"nested">> => #{ <<"a">> => 1, <<"b">> => 2 } }},
+        default_accessor(<<"*">>, Msg, #{}, Opts)
+    ).
+
 key_from_device_test() ->
     ?assertEqual({ok, 1}, hb_ao:resolve(#{ <<"a">> => 1 }, <<"a">>, #{})).
 
+list_key_access_normalizes_to_indexed_message_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Msg = [<<"A">>, <<"B">>, <<"C">>],
+    ?assertEqual(<<"A">>, hb_ao:get(1, Msg, Opts)),
+    ?assertEqual(<<"B">>, hb_ao:get(2, Msg, Opts)),
+    ?assertEqual(<<"C">>, hb_ao:get(3, Msg, Opts)).
+
+keys_do_not_materialize_lazy_values_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Msg = #{ <<"lazy">> => {link, <<"missing-id">>, #{}}},
+    ?assertEqual({ok, [<<"lazy">>]}, hb_ao:resolve(Msg, keys, Opts)).
+
 remove_test() ->
 	Msg = #{ <<"key1">> => <<"Value1">>, <<"key2">> => <<"Value2">> },
-	?assertMatch({ok, #{ <<"key2">> := <<"Value2">> }},
-		hb_ao:resolve(
+    Opts = #{ <<"hashpath">> => ignore },
+    RemoveOne = hb_ao:remove(Msg, <<"key1">>, Opts),
+	?assertEqual({error, not_found}, hb_ao:resolve(RemoveOne, <<"key1">>, Opts)),
+	?assertEqual({ok, <<"Value2">>}, hb_ao:resolve(RemoveOne, <<"key2">>, Opts)),
+    RemoveBoth = hb_ao:remove(RemoveOne, <<"key2">>, Opts),
+	?assertEqual({ok, []}, hb_ao:resolve(RemoveBoth, keys, Opts)),
+	?assertEqual({error, not_found}, hb_ao:resolve(RemoveBoth, <<"key1">>, Opts)),
+	?assertEqual({error, not_found}, hb_ao:resolve(RemoveBoth, <<"key2">>, Opts)).
+
+remove_is_not_device_handler_test() ->
+    Msg = #{ <<"key1">> => <<"Value1">> },
+    Opts = #{ <<"hashpath">> => ignore },
+    ?assertEqual(
+        {error, not_found},
+        hb_ao:resolve(
             Msg,
             #{ <<"path">> => <<"remove">>, <<"item">> => <<"key1">> },
-            #{ <<"hashpath">> => ignore }
-        )
-    ),
-	?assertMatch({ok, #{}},
-		hb_ao:resolve(
-            Msg,
-            #{ <<"path">> => <<"remove">>, <<"items">> => [<<"key1">>, <<"key2">>] },
-            #{ <<"hashpath">> => ignore }
+            Opts
         )
     ).
 
@@ -835,11 +1085,46 @@ set_conflicting_keys_test() ->
 	?assertMatch({ok, #{ <<"dangerous">> := <<"Value2">> }},
 		hb_ao:resolve(Base, Req, #{})).
 
+reserved_set_key_dispatches_operation_test() ->
+    Base = #{ <<"set">> => <<"literal">>, <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"set">>, <<"x">> => 2 },
+    Opts = #{ <<"hashpath">> => ignore },
+    {ok, Res} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(2, maps:get(<<"x">>, Res)),
+    ?assertEqual(Base, maps:get(<<"...">>, Res)).
+
 unset_with_set_test() ->
 	Base = #{ <<"dangerous">> => <<"Value1">> },
 	Req = #{ <<"path">> => <<"set">>, <<"dangerous">> => unset },
-	?assertMatch({ok, Res} when ?IS_EMPTY_MESSAGE(Res),
-		hb_ao:resolve(Base, Req, #{ <<"hashpath">> => ignore })).
+    Opts = #{ <<"hashpath">> => ignore },
+    {ok, Res} = hb_ao:resolve(Base, Req, Opts),
+	?assertEqual({error, not_found}, hb_ao:resolve(Res, <<"dangerous">>, Opts)),
+	?assertEqual({ok, []}, hb_ao:resolve(Res, keys, Opts)).
+
+binary_unset_masks_active_key_test() ->
+    Msg = #{ <<"visible">> => <<"ok">>, <<"masked">> => <<"unset">> },
+    Opts = #{ <<"hashpath">> => ignore },
+    ?assertEqual({error, not_found}, hb_ao:resolve(Msg, <<"masked">>, Opts)),
+    ?assertEqual({ok, [<<"visible">>]}, hb_ao:resolve(Msg, keys, Opts)).
+
+set_step_request_uses_inherited_payload_test() ->
+    Base = #{ <<"dangerous">> => <<"Value1">> },
+    Req = #{
+        <<"path">> => <<"set">>,
+        <<"...">> => #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> }
+    },
+    ?assertEqual(
+        [<<"dangerous">>, <<"path">>],
+        lists:sort(hb_util:ok(keys(Req, #{ <<"keys">> => <<"deep">> }, #{ <<"hashpath">> => ignore })))
+    ),
+    ?assertEqual(
+        {ok, <<"Value2">>},
+        hb_ao:raw(Req, #{ <<"path">> => <<"dangerous">> }, #{ <<"hashpath">> => ignore })
+    ),
+    ?assertMatch(
+        {ok, #{ <<"dangerous">> := <<"Value2">> }},
+        set(Base, Req, #{ <<"hashpath">> => ignore })
+    ).
 
 deep_unset_test() ->
     Opts = #{ <<"hashpath">> => ignore },
@@ -851,27 +1136,33 @@ deep_unset_test() ->
         }
     },
     Req = hb_ao:set(Base, #{ <<"deep/test-key2">> => unset }, Opts),
-    ?assertEqual(#{
-            <<"test-key1">> => <<"Value1">>,
-            <<"deep">> => #{ <<"test-key3">> => <<"Value3">> }
-        },
-        Req
-    ),
+    ?assertEqual({ok, <<"Value1">>}, hb_ao:resolve(Req, <<"test-key1">>, Opts)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(Req, <<"deep/test-key2">>, Opts)),
+    ?assertEqual({ok, <<"Value3">>}, hb_ao:resolve(Req, <<"deep/test-key3">>, Opts)),
     Res = hb_ao:set(Req, <<"deep/test-key3">>, unset, Opts),
-    ?assertEqual(#{
-            <<"test-key1">> => <<"Value1">>,
-            <<"deep">> => #{}
-        },
-        Res
-    ),
+    ?assertEqual({ok, <<"Value1">>}, hb_ao:resolve(Res, <<"test-key1">>, Opts)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(Res, <<"deep/test-key2">>, Opts)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(Res, <<"deep/test-key3">>, Opts)),
     Msg4 = hb_ao:set(Res, #{ <<"deep">> => unset }, Opts),
-    ?assertEqual(#{ <<"test-key1">> => <<"Value1">> }, Msg4).
+    ?assertEqual({ok, <<"Value1">>}, hb_ao:resolve(Msg4, <<"test-key1">>, Opts)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(Msg4, <<"deep">>, Opts)).
 
 set_ignore_undefined_test() ->
 	Base = #{ <<"test-key">> => <<"Value1">> },
 	Req = #{ <<"path">> => <<"set">>, <<"test-key">> => undefined },
-	?assertEqual(#{ <<"test-key">> => <<"Value1">> },
-		hb_private:reset(hb_util:ok(set(Base, Req, #{ <<"hashpath">> => ignore })))).
+    Opts = #{ <<"hashpath">> => ignore },
+    Res = hb_util:ok(set(Base, Req, Opts)),
+	?assertEqual(Base, maps:get(<<"...">>, hb_private:reset(Res))),
+	?assertEqual({ok, <<"Value1">>}, hb_ao:resolve(Res, <<"test-key">>, Opts)).
+
+atom_priv_is_private_when_setting_test() ->
+    Base = #{ priv => #{ <<"secret">> => true }, <<"x">> => 1 },
+    Opts = #{ <<"hashpath">> => ignore },
+    Res = hb_util:ok(set(Base, #{ <<"y">> => 2 }, Opts)),
+    Public = hb_private:reset(Res),
+    ?assertEqual(false, maps:is_key(priv, Public)),
+    ?assertEqual(false, maps:is_key(priv, maps:get(<<"...">>, Public))),
+    ?assertEqual(#{ <<"secret">> => true }, hb_private:from_message(Res)).
 
 verify_test_() ->
 	{foreach, fun () -> ok end, fun (_) -> ok end, [
@@ -939,5 +1230,4 @@ set_nested_link_test() ->
             <<"cc">> => <<"300">>
         }
     },
-    Matches = hb_message:match(Expected, Result, strict, Opts),
-    ?assert(Matches).
+    ?assertEqual(true, hb_message:match(Expected, Result, only_present, Opts)).

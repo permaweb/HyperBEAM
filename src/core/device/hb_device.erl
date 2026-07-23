@@ -7,6 +7,7 @@
 -export([is_direct_key_access/3, is_direct_key_access/4]).
 -export([find_exported_function/5, is_exported/4, info/2, info/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DEVICE, <<"message@1.0">>).
 
@@ -105,7 +106,15 @@ message_to_fun(Msg, Key, Opts) ->
     message_to_fun(DeviceID, Msg, Key, Opts).
 message_to_fun(DevID, Msg, Key, Opts) ->
     message_to_fun(DevID, module(DevID, Opts), Msg, Key, Opts).
-message_to_fun(DevID, DevMsg = #{ <<"device">> := _ }, _Msg, Key, _Opts) ->
+message_to_fun(DevID, DevMsg, Msg, Key, Opts) when is_map(DevMsg) ->
+    case executable_device_map(DevMsg) of
+        true -> module_to_fun(DevID, DevMsg, Msg, Key, Opts);
+        false -> message_to_fun_with_message_device(DevID, DevMsg, Key)
+    end;
+message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
+    module_to_fun(DevID, DevMod, Msg, Key, Opts).
+
+message_to_fun_with_message_device(DevID, DevMsg, Key) ->
     % A message-valued device: execution is itself resolution. The request is
     % resolved against the device message extended over the outermost state:
     % `execute(Dev, Outer, Request) = resolve(set(Outer, Dev), Request)'.
@@ -116,10 +125,11 @@ message_to_fun(DevID, DevMsg = #{ <<"device">> := _ }, _Msg, Key, _Opts) ->
         DevID,
         DevMsg,
         fun(Base, Req, ExecOpts) ->
-            hb_ao:raw(undefined, Key, DevMsg#{ <<"...">> => Base }, Req, ExecOpts)
+            hb_ao:raw(undefined, Key, message_device_base(DevMsg, Base, ExecOpts), Req, ExecOpts)
         end
-    };
-message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
+    }.
+
+module_to_fun(DevID, DevMod, Msg, Key, Opts) ->
     Info = info(DevMod, Msg, Opts),
     % Is the key exported by the device?
     Exported = is_exported(Info, Key, Opts),
@@ -190,6 +200,16 @@ message_to_fun(DevID, DevMod, Msg, Key, Opts) ->
 			end
 	end.
 
+executable_device_map(DevMsg) ->
+    lists:any(fun executable_device_value/1, maps:values(DevMsg)).
+
+executable_device_value(Value) when is_function(Value) ->
+    true;
+executable_device_value(Value) when is_map(Value) ->
+    executable_device_map(Value);
+executable_device_value(_Value) ->
+    false.
+
 %% @doc Extract the runtime device module from a message. When the
 %% message has no `<<"device">>' key, we resolve the default
 %% (`message@1.0') just like any other device: There is no privileged
@@ -204,26 +224,109 @@ module(DevID, Opts) ->
 
 %% @doc Return the device ID from a message, resolving through any ancestors
 %% as necessary.
-id_or_direct_key(_, <<"priv", _/binary>>, _) ->
-    {error, <<"`priv*` keys not resolvable.">>};
+id_or_direct_key(Msg, Key, Opts) when is_binary(Key) ->
+    case hb_private:is_private(Key) of
+        true -> {error, not_found};
+        false -> do_id_or_direct_key(Msg, Key, Opts)
+    end;
 id_or_direct_key(Msg, Key, Opts) ->
     do_id_or_direct_key(Msg, Key, Opts).
 do_id_or_direct_key(List, _, _) when is_list(List) ->
     {ok, <<"message@1.0">>};
+do_id_or_direct_key(Msg, _Key, _Opts)
+        when not is_map(Msg) andalso not is_binary(Msg) andalso not ?IS_LINK(Msg) ->
+    {error, not_found};
 do_id_or_direct_key(Msg, Key, Opts) ->
+    case hb_ao:normalize_key(Key) of
+        <<"device">> -> direct_device_or_ancestor(Msg, Key, Opts);
+        _ -> do_id_or_direct_key_non_device(Msg, Key, Opts)
+    end.
+
+do_id_or_direct_key_non_device(Msg, Key, Opts) ->
     ?event({finding_device_id, Msg}),
     case hb_maps:find(Key, Msg, Opts) of
-        {ok, <<"unset">>} -> {error, not_found};
-        {ok, Value} -> {hit, Value};
+        {ok, Unset} when Unset =:= unset; Unset =:= <<"unset">> ->
+            {error, not_found};
+        {ok, Value} ->
+            case direct_key_accessible(Msg, Key, Opts) of
+                true -> {hit, Value};
+                false -> device_or_ancestor(Msg, Key, Opts)
+            end;
         error ->
-            case hb_maps:find(<<"device">>, Msg, Opts) of
-                {ok, Device} -> {ok, Device};
-                error ->
-                    case hb_maps:find(<<"...">>, Msg, Opts) of
-                        {ok, Ancestor} -> do_id_or_direct_key(Ancestor, Key, Opts);
-                        error -> {ok, ?DEFAULT_DEVICE}
-                    end
+            device_or_ancestor(Msg, Key, Opts)
+    end.
+
+direct_device_or_ancestor(Msg, Key, Opts) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Unset} when Unset =:= unset; Unset =:= <<"unset">> ->
+            {error, not_found};
+        {ok, Device} ->
+            {hit, Device};
+        error ->
+            device_or_ancestor(Msg, Key, Opts)
+    end.
+
+direct_key_accessible(Msg, Key, Opts) ->
+    DevRes = hb_maps:find(<<"device">>, Msg, Opts),
+    do_is_direct_key_access(DevRes, hb_ao:normalize_key(Key), Opts).
+
+device_or_ancestor(Msg, Key, Opts) ->
+    case hb_maps:find(<<"device">>, Msg, Opts) of
+        {ok, Unset} when Unset =:= unset; Unset =:= <<"unset">> ->
+            {ok, ?DEFAULT_DEVICE};
+        {ok, Device} ->
+            {ok, Device};
+        error ->
+            case hb_maps:find(<<"...">>, Msg, Opts) of
+                {ok, Ancestor} ->
+                    case ancestor_message(Ancestor, Opts) of
+                        {ok, AncestorMsg} ->
+                            do_id_or_direct_key(AncestorMsg, Key, Opts);
+                        error ->
+                            {ok, ?DEFAULT_DEVICE}
+                    end;
+                error -> {ok, ?DEFAULT_DEVICE}
             end
+    end.
+
+ancestor_message(Ancestor, _Opts) when is_map(Ancestor) ->
+    {ok, Ancestor};
+ancestor_message(Ancestor, Opts) when ?IS_LINK(Ancestor) ->
+    case hb_cache:ensure_loaded(Ancestor, Opts) of
+        Msg when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end;
+ancestor_message(Ancestor, Opts) when is_binary(Ancestor) ->
+    case binary:match(Ancestor, <<"/">>) of
+        {_, _} -> hashpath_ancestor(Ancestor, Opts);
+        nomatch -> cached_ancestor(Ancestor, Opts)
+    end;
+ancestor_message(_Ancestor, _Opts) ->
+    error.
+
+cached_ancestor(Ancestor, Opts) ->
+    case hb_cache:read(Ancestor, Opts) of
+        {ok, Msg} when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end.
+
+hashpath_ancestor(Ancestor, Opts) ->
+    case hb_hashpath:load(Ancestor, Opts) of
+        {ok, Msg} when is_map(Msg) -> {ok, Msg};
+        _ -> error
+    end.
+
+message_device_base(DevMsg, Base, Opts) ->
+    case hb_maps:find(<<"...">>, DevMsg, Opts) of
+        {ok, Parent} ->
+            case ancestor_message(Parent, Opts) of
+                {ok, ParentMsg} ->
+                    DevMsg#{ <<"...">> => message_device_base(ParentMsg, Base, Opts) };
+                error ->
+                    DevMsg#{ <<"...">> => Base }
+            end;
+        error ->
+            DevMsg#{ <<"...">> => Base }
     end.
 
 %% @doc Parse a handler key given by a device's `info'.
@@ -401,3 +504,24 @@ do_is_direct_key_access(Dev, NormKey, Opts) ->
             not lists:member(NormKey, Exports ++ ?MESSAGE_KEYS);
         _ -> false
     end.
+
+message_valued_device_preserves_own_ancestry_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    DeviceMsg = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"...">> => #{ <<"foo">> => <<"from-device-parent">> }
+    },
+    Base = #{ <<"device">> => DeviceMsg },
+    ?assertEqual(
+        {ok, <<"from-device-parent">>},
+        hb_ao:resolve(Base, #{ <<"path">> => <<"foo">> }, Opts)
+    ).
+
+plain_message_valued_device_uses_message_semantics_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    DeviceMsg = #{ <<"foo">> => <<"from-device">> },
+    Base = #{ <<"device">> => DeviceMsg },
+    ?assertEqual(
+        {ok, <<"from-device">>},
+        hb_ao:resolve(Base, #{ <<"path">> => <<"foo">> }, Opts)
+    ).

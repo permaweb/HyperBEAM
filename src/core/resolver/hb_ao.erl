@@ -87,6 +87,8 @@
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3]).
 -export([raw/3, raw/4, raw/5]).
+%% Execution-context API used by hashpath verification.
+-export([do/1]).
 -export([with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 %%% Shortcuts and tools:
@@ -95,6 +97,7 @@
 -export([set/3, set/4, deep_set/3, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(
     TEMP_OPTS,
@@ -271,6 +274,10 @@ to_context(FDevice, FKey, Base, Req, Opts) ->
 %% `{ExecStatus, Result}` form from its stage-bound `context`. 
 from_context({ok, Ctx = #{ <<"result">> := Res }}) ->
     {maps:get(<<"status">>, Ctx, ok), Res};
+from_context({error, #{ <<"reason">> := Reason }}) ->
+    {error, Reason};
+from_context({error, Reason}) ->
+    {error, Reason};
 from_context(Other) ->
     throw({unexpected_context_after_exec, Other}).
 
@@ -388,46 +395,50 @@ stage_2(
             <<"opts">> := Opts
         }
 ) ->
-    {Status, _ExecDev, _ExecMod, Function} =
+    {Status, ExecDev, ExecMod, Function} =
         hb_device:message_to_fun(Device, Base, Path, Opts),
-    {ok,
+    AddKey =
+        case Status of
+            add_key -> Path;
+            _ -> false
+        end,
+    hb_types:add_schema(
         Ctx#{
-            <<"add-key">> => case Status of add_key -> Path; _ -> false end,
-            <<"priv">> => #{ <<"function">> => Function }
-        }
-    }.
+            <<"key">> => Path,
+            <<"resolver-device">> => ExecDev,
+            <<"add-key">> => AddKey,
+            <<"priv">> =>
+                #{
+                    <<"resolver-module">> => ExecMod,
+                    <<"add-key">> => AddKey =/= false,
+                    <<"function">> => Function
+                }
+        },
+        Opts
+    ).
 
-%% @doc Vary the `Base` and `Req` of the resolution. To do so, assuming that
-%% the request is not itself a `vary` call, we recursively resolve the
-%% computation as a sub-request. This allows the device to offer its own `vary`
-%% logic, based upon the device's own understanding of the request.
+%% @doc Vary the `Base` and `Req` of the resolution. Stage 2 has already
+%% resolved the executor and attached its schema when available, so normal
+%% execution varies directly through the schema projector.
 stage_3(Ctx = #{ <<"path">> := <<"vary">>, <<"base">> := Base, <<"request">> := Req }) ->
     % We are already varying. Do not recurse.
-    {ok, Ctx#{ <<"varied-base">> => Base, <<"varied-request">> => Req }};
+    hb_types:vary(
+        maps:remove(<<"schema">>, Ctx#{
+            <<"base">> => Base,
+            <<"request">> => Req
+        }),
+        maps:get(<<"opts">>, Ctx, #{})
+    );
 stage_3(
         Ctx =
             #{
-                <<"base">> := Base,
-                <<"request">> := Req,
-                <<"priv">> := #{ <<"function">> := Function },
+                <<"base">> := _Base,
+                <<"request">> := _Req,
+                <<"priv">> := #{ <<"function">> := _Function },
                 <<"opts">> := Opts
             }
 ) ->
-    maybe
-        % Raw call `vary` to find the varied base/req, passing the
-        % `priv/function` such that varying does not require us to repeat the
-        % associated work. The returned context fragment (varied messages,
-        % result normalization) is merged into our own.
-        {ok, VariedCtx} ?=
-            raw(
-                undefined,
-                <<"vary">>,
-                Base,
-                hb_private:set(Req, <<"function">>, Function, Opts),
-                Opts
-            ),
-        {ok, maps:merge(Ctx, VariedCtx)}
-    end.
+    hb_types:vary(Ctx, Opts).
 
 %% @doc Determine if the request is already being resolved right now. If so,
 %% await the result rather than resolving again. If not, register as the
@@ -468,10 +479,18 @@ stage_4(
                     ),
                     % Re-try again if the group leader has died.
                     stage_4(Ctx);
-                {Status, Result} ->
+                {ok, Result} ->
                     % We received a successful result from another worker. They
                     % will store the result if appropriate, so we skip the store
                     % write.
+                    {
+                        ok,
+                        Ctx#{
+                            <<"status">> => ok,
+                            <<"varied-result">> => Result
+                        }
+                    };
+                {Status, Result} ->
                     {ok, Ctx#{ <<"status">> => Status, <<"result">> => Result }};
                 Other ->
                     % The leader resolved to a non-`ok` result. Propagate it.
@@ -527,27 +546,30 @@ stage_5(Ctx = #{
                 }
             };
         {error, not_found} -> {ok, Ctx};
-        {Status, Result} ->
+        {ok, Result} ->
             {
                 ok,
                 Ctx#{
-                    <<"result">> => Result,
-                    <<"status">> => Status
+                    <<"varied-result">> => Result,
+                    <<"status">> => ok
                 }
-            }
+            };
+        {Status, Result} ->
+            {ok, Ctx#{ <<"result">> => Result, <<"status">> => Status }}
     end.
 
 %% @doc Perform the actual resolution of an AO-Core request.
 stage_6(Ctx = #{ <<"result">> := _ }) -> {ok, Ctx};
+stage_6(Ctx = #{ <<"varied-result">> := _ }) -> {ok, Ctx};
 stage_6(Ctx = #{
     <<"varied-base">> := Base,
     <<"varied-request">> := Req,
     <<"opts">> := Opts,
     <<"priv">> := #{ <<"function">> := Func }
 }) ->
-    ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
     ExecOpts = execution_opts(Opts),
     ExecName = maps:get(<<"leader">>, Ctx, unnamed),
+    ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
     Args =
         case maps:get(<<"add-key">>, Ctx, false) of
             false -> [Base, Req, ExecOpts];
@@ -577,10 +599,15 @@ stage_6(Ctx = #{
 %% @doc When specified in the schema for the device call, normalize the
 %% execution's result on top of the `Base` or `Req` message. In cases where
 %% hashpath calculation is disabled (`hashpath => ignore` in the node message,
-%% etc.), we 
+%% etc.), the result is left without a generated private hashpath.
+stage_7(Ctx = #{ <<"result">> := _, <<"status">> := Status }) when Status =/= ok ->
+    {ok, Ctx};
+stage_7(Ctx = #{ <<"varied-result">> := Result, <<"status">> := Status }) when Status =/= ok ->
+    {ok, Ctx#{ <<"result">> => Result }};
 stage_7(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
     maybe
-        {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        {ok, Result0} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        Result = hb_hashpath:with_context_hashpath(Result0, Ctx, Opts),
         {ok, Ctx#{ <<"result">> => Result }}
     end.
 
@@ -964,3 +991,277 @@ execution_opts(Opts) ->
         recursive -> Opts1#{ <<"spawn-worker">> => recursive };
         _ -> Opts1
     end.
+
+stage_7_sets_result_hashpath_test() ->
+    Opts = #{},
+    Base = #{ <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"inc-x">> },
+    Patch = #{ <<"x">> => 2 },
+    Deps = #{ <<"base">> => #{}, <<"request">> => #{} },
+    Ctx0 = #{
+        <<"base">> => Base,
+        <<"request">> => Req,
+        <<"varied-base">> => Base,
+        <<"varied-request">> => Req,
+        <<"dependencies">> => Deps,
+        <<"normalizer">> => base,
+        <<"varied-result">> => Patch,
+        <<"opts">> => Opts
+    },
+    {ok, Ctx1} = stage_7(Ctx0),
+    Result = maps:get(<<"result">>, Ctx1),
+    ?assertEqual(
+        hb_hashpath:format(Ctx0, Opts),
+        maps:get(<<"hashpath">>, hb_private:from_message(Result))
+    ),
+    ?assertEqual(Patch#{ <<"...">> => Base }, hb_private:reset(Result)).
+
+stage_7_skips_hashpath_without_dependencies_test() ->
+    Opts = #{},
+    Base = #{ <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"inc-x">> },
+    Patch = #{ <<"x">> => 2 },
+    Ctx0 = #{
+        <<"base">> => Base,
+        <<"request">> => Req,
+        <<"varied-base">> => Base,
+        <<"varied-request">> => Req,
+        <<"normalizer">> => base,
+        <<"varied-result">> => Patch,
+        <<"opts">> => Opts
+    },
+    {ok, Ctx1} = stage_7(Ctx0),
+    Result = maps:get(<<"result">>, Ctx1),
+    ?assertEqual(
+        undefined,
+        maps:get(<<"hashpath">>, hb_private:from_message(Result), undefined)
+    ).
+
+stage_3_live_schema_generates_dependencies_test() ->
+    Opts = #{},
+    Base = #{ <<"a">> => 1 },
+    Req = #{ <<"path">> => <<"keys">>, <<"keys">> => <<"deep">> },
+    {ok, Ctx1} = stage_1(to_context(undefined, undefined, Base, Req, Opts)),
+    {ok, Ctx2} = stage_2(Ctx1),
+    ?assert(maps:is_key(<<"schema">>, Ctx2)),
+    {ok, Ctx3} = stage_3(Ctx2),
+    ?assert(maps:is_key(<<"dependencies">>, Ctx3)),
+    ?assertMatch(
+        #{ <<"base">> := _, <<"request">> := _ },
+        maps:get(<<"dependencies">>, Ctx3)
+    ).
+
+stage_3_live_schema_records_coerced_dependency_test() ->
+    Opts = #{},
+    Base = #{ <<"device">> => <<"math@1.0">>, <<"x">> => <<"1">> },
+    Req = #{ <<"path">> => <<"add-x">>, <<"add">> => <<"2">> },
+    {ok, Ctx1} = stage_1(to_context(undefined, undefined, Base, Req, Opts)),
+    {ok, Ctx2} = stage_2(Ctx1),
+    {ok, Ctx3} = stage_3(Ctx2),
+    BaseID = hb_message:id(Base, all, Opts),
+    ReqID = hb_message:id(Req, all, Opts),
+    ?assertEqual(
+        #{ <<"device">> => <<"math@1.0">>, <<"x">> => 1 },
+        maps:get(<<"varied-base">>, Ctx3)
+    ),
+    ?assertEqual(
+        #{ <<"path">> => <<"add-x">>, <<"add">> => 2 },
+        maps:get(<<"varied-request">>, Ctx3)
+    ),
+    ?assertEqual(
+        #{
+            <<"status">> => found,
+            <<"origin">> => <<BaseID/binary, "/x">>,
+            <<"observed">> => <<"1">>,
+            <<"value">> => 1
+        },
+        maps:get(<<"x">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx3)))
+    ),
+    ?assertEqual(
+        #{
+            <<"status">> => found,
+            <<"origin">> => <<ReqID/binary, "/add">>,
+            <<"observed">> => <<"2">>,
+            <<"value">> => 2
+        },
+        maps:get(<<"add">>, maps:get(<<"request">>, maps:get(<<"dependencies">>, Ctx3)))
+    ).
+
+stage_3_vary_bypass_generates_dependencies_test() ->
+    Opts = #{},
+    Base = #{ <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"vary">> },
+    {ok, Ctx} = stage_3(#{ <<"path">> => <<"vary">>, <<"base">> => Base, <<"request">> => Req, <<"opts">> => Opts }),
+    ?assertEqual(Base, maps:get(<<"varied-base">>, Ctx)),
+    ?assertEqual(Req, maps:get(<<"varied-request">>, Ctx)),
+    ?assertMatch(#{ <<"base">> := _, <<"request">> := _ }, maps:get(<<"dependencies">>, Ctx)).
+
+stage_7_respects_hashpath_ignore_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Base = #{ <<"x">> => 1 },
+    Patch = #{ <<"x">> => 2 },
+    Ctx0 = #{
+        <<"base">> => Base,
+        <<"normalizer">> => base,
+        <<"varied-result">> => Patch,
+        <<"opts">> => Opts
+    },
+    {ok, Ctx1} = stage_7(Ctx0),
+    Result = maps:get(<<"result">>, Ctx1),
+    ?assertEqual(undefined, maps:get(<<"hashpath">>, hb_private:from_message(Result), undefined)),
+    ?assertEqual(Patch#{ <<"...">> => Base }, Result).
+
+message_set_drops_parent_hashpath_when_hashpath_ignored_test() ->
+    Opts = #{ <<"hashpath">> => ignore },
+    Base =
+        hb_private:set_priv(
+            #{ <<"x">> => 1 },
+            #{ <<"hashpath">> => <<"ParentHP">>, <<"token">> => <<"keep">> }
+        ),
+    Req = #{ <<"path">> => <<"set">>, <<"y">> => 2 },
+    {ok, Result} = resolve(Base, Req, Opts),
+    Priv = hb_private:from_message(Result),
+    ?assertEqual(undefined, maps:get(<<"hashpath">>, Priv, undefined)),
+    ?assertEqual(<<"keep">>, maps:get(<<"token">>, Priv)),
+    ?assertEqual(#{ <<"x">> => 1 }, maps:get(<<"...">>, hb_private:reset(Result))).
+
+stage_7_preserves_non_ok_materialized_result_test() ->
+    Ctx = #{
+        <<"base">> => #{ <<"x">> => 1 },
+        <<"normalizer">> => base,
+        <<"result">> => #{ <<"error">> => true },
+        <<"status">> => error,
+        <<"opts">> => #{}
+    },
+    ?assertEqual({ok, Ctx}, stage_7(Ctx)).
+
+stage_7_preserves_non_ok_varied_result_test() ->
+    ErrorResult = #{ <<"error">> => true },
+    Ctx = #{
+        <<"base">> => #{ <<"x">> => 1 },
+        <<"normalizer">> => base,
+        <<"varied-result">> => ErrorResult,
+        <<"status">> => error,
+        <<"opts">> => #{}
+    },
+    ?assertEqual({ok, Ctx#{ <<"result">> => ErrorResult }}, stage_7(Ctx)).
+
+binary_unset_masks_direct_key_test() ->
+    Msg = #{ <<"visible">> => <<"ok">>, <<"masked">> => <<"unset">> },
+    Opts = #{ <<"hashpath">> => ignore },
+    ?assertEqual({error, not_found}, resolve(Msg, <<"masked">>, Opts)),
+    ?assertEqual({ok, [<<"visible">>]}, resolve(Msg, keys, Opts)).
+
+unset_masks_inherited_keys_test() ->
+    Msg = #{
+        <<"visible">> => <<"ok">>,
+        <<"masked">> => <<"unset">>,
+        <<"...">> => #{ <<"masked">> => <<"ancestor">>, <<"inherited">> => <<"yes">> }
+    },
+    Opts = #{ <<"hashpath">> => ignore },
+    ?assertEqual({error, not_found}, resolve(Msg, <<"masked">>, Opts)),
+    ?assertEqual({ok, <<"yes">>}, resolve(Msg, <<"inherited">>, Opts)),
+    {ok, Keys} = raw(<<"message@1.0">>, <<"keys">>, Msg, #{ <<"keys">> => <<"deep">> }, Opts),
+    ?assertEqual(lists:sort([<<"visible">>, <<"inherited">>]), lists:sort(Keys)).
+
+lazy_unset_masks_inherited_keys_test() ->
+    hb:init(),
+    Opts = #{ <<"hashpath">> => ignore, <<"store">> => hb_test_utils:test_store() },
+    Msg = #{
+        <<"visible">> => <<"ok">>,
+        <<"masked">> => <<"unset">>,
+        <<"...">> => #{
+            <<"masked">> => <<"ancestor">>,
+            <<"parent">> => <<"yes">>,
+            <<"...">> => #{ <<"grandparent">> => <<"yes">> }
+        }
+    },
+    {ok, ID} = hb_cache:write(Msg, Opts),
+    {ok, Loaded} = hb_cache:read(ID, Opts),
+    {ok, Keys} =
+        raw(
+            <<"message@1.0">>,
+            <<"keys">>,
+            Loaded,
+            #{ <<"keys">> => <<"deep">> },
+            Opts
+        ),
+    ?assertEqual(
+        lists:sort([<<"visible">>, <<"parent">>, <<"grandparent">>]),
+        lists:sort(Keys)
+    ).
+
+scalar_base_key_resolution_returns_not_found_test() ->
+    ?assertEqual({error, not_found}, resolve(1, <<"x">>, #{})).
+
+unset_device_masks_inherited_device_test() ->
+    Msg = #{
+        <<"device">> => <<"unset">>,
+        <<"local">> => <<"value">>,
+        <<"...">> => #{ <<"device">> => <<"bad-device@1.0">> }
+    },
+    ?assertEqual({ok, [<<"local">>]}, resolve(Msg, keys, #{ <<"hashpath">> => ignore })).
+
+cache_hit_applies_normalizer_test() ->
+    hb:init(),
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"x">> => 1, <<"keep">> => true },
+    Req = #{ <<"path">> => <<"inc-x">> },
+    Patch = #{ <<"x">> => 2 },
+    hb_cache_control:maybe_store(Base, Req, Patch, Opts),
+    {ok, BaseID} = hb_cache:write(Base, Opts),
+    {ok, ReqID} = hb_cache:write(Req, Opts),
+    Ctx0 = #{
+        <<"base">> => Base,
+        <<"request">> => Req,
+        <<"varied-base">> => BaseID,
+        <<"varied-request">> => ReqID,
+        <<"normalizer">> => base,
+        <<"opts">> => Opts
+    },
+    {ok, Ctx1} = stage_5(Ctx0),
+    ?assert(maps:is_key(<<"varied-result">>, Ctx1)),
+    ?assertEqual(false, maps:is_key(<<"result">>, Ctx1)),
+    {ok, Ctx2} = stage_6(Ctx1),
+    {ok, Ctx3} = stage_7(Ctx2),
+    Result = hb_cache:ensure_all_loaded(maps:get(<<"result">>, Ctx3), Opts),
+    ?assertEqual(2, maps:get(<<"x">>, Result)),
+    ?assertEqual(true, maps:get(<<"keep">>, maps:get(<<"...">>, Result))).
+
+persistent_wait_applies_normalizer_test() ->
+    hb:init(),
+    Opts = #{ <<"await-inprogress">> => true },
+    Base = #{ <<"x">> => 1, <<"keep">> => true },
+    Req = #{ <<"path">> => <<"inc-x">> },
+    Patch = #{ <<"x">> => 2 },
+    GroupName = hb_persistent:group(Base, Req, Opts),
+    Leader =
+        spawn(
+            fun() ->
+                receive
+                    {resolve, Waiter, GroupName, Req, _WaitOpts} ->
+                        Waiter ! {resolved, self(), GroupName, Req, {ok, Patch}}
+                end
+            end
+        ),
+    ok = hb_name:register(GroupName, Leader),
+    Ctx0 = #{
+        <<"base">> => Base,
+        <<"request">> => Req,
+        <<"varied-base">> => Base,
+        <<"varied-request">> => Req,
+        <<"normalizer">> => base,
+        <<"opts">> => Opts
+    },
+    {ok, Ctx1} = stage_4(Ctx0),
+    hb_name:unregister(GroupName),
+    ?assertMatch(#{ <<"varied-result">> := Patch }, Ctx1),
+    ?assertEqual(false, maps:is_key(<<"result">>, Ctx1)),
+    {ok, Ctx2} = stage_6(Ctx1),
+    {ok, Ctx3} = stage_7(Ctx2),
+    Result = maps:get(<<"result">>, Ctx3),
+    ?assertEqual(2, maps:get(<<"x">>, Result)),
+    ?assertEqual(true, maps:get(<<"keep">>, maps:get(<<"...">>, Result))).

@@ -7,7 +7,13 @@
 %% @doc Add the schema for a resolution to an execution context, given a
 %% resolved key, function, and execution module (e.g, from
 %% `hb_device:add_resolver`).
-add_schema(
+add_schema(Ctx, Opts) ->
+    case hb_opts:get(<<"caching-schema">>, false, Opts) of
+        true -> {ok, Ctx};
+        false -> do_add_schema(Ctx, Opts)
+    end.
+
+do_add_schema(
     Ctx =
         #{
             <<"key">> := Key,
@@ -21,7 +27,7 @@ add_schema(
     Opts) ->
     case schema_from_device(Device, Func, Key, Opts) of
         undefined ->
-            ?prim_dbg(
+            ?event_debug(
                 {schema_not_found,
                     {device, Device},
                     {func, Func},
@@ -30,7 +36,7 @@ add_schema(
             ),
             {ok, Ctx};
         Schema ->
-            ?prim_dbg(
+            ?event_debug(
                 {schema_found,
                     {device, Device},
                     {func, Func},
@@ -39,30 +45,268 @@ add_schema(
                 }
             ),
             {ok, Ctx#{ <<"schema">> => execution_schema(Schema, AddKey) } }
-    end.
+    end;
+
+do_add_schema(Ctx, _Opts) ->
+    {ok, Ctx}.
 
 %% @doc Apply the resolved function's base/request schemas to one execution.
 vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts)
         when not is_map_key(<<"schema">>, Ctx) ->
-    {ok,
-        Ctx#{
-            <<"varied-base">> => Base,
-            <<"varied-request">> => Req,
-            <<"normalizer">> => none
-        }
-    };
+    case {hb_opts:get(<<"caching-schema">>, false, _Opts), hashpath_ignored(_Opts)} of
+        {true, _} ->
+            {ok,
+                schema_declared_context(Ctx#{
+                    <<"varied-base">> => Base,
+                    <<"varied-request">> => Req,
+                    <<"normalizer">> => none
+                })
+            };
+        {_, true} ->
+            {ok,
+                schema_declared_context(Ctx#{
+                    <<"varied-base">> => Base,
+                    <<"varied-request">> => Req,
+                    <<"normalizer">> => identity_normalizer(Req)
+                })
+            };
+        {false, false} ->
+            ProjectionOpts = schema_projection_opts(_Opts),
+            WitnessBase = identity_witness(Base, ProjectionOpts),
+            WitnessReq = identity_witness(Req, ProjectionOpts),
+            {ok,
+                maybe_add_dependencies(
+                    schema_declared_context(Ctx#{
+                        <<"varied-base">> => WitnessBase,
+                        <<"varied-request">> => WitnessReq,
+                        <<"normalizer">> => identity_normalizer(Req)
+                    }),
+                    fun() ->
+                        #{
+                            <<"base">> =>
+                                identity_dependencies(Base, WitnessBase, ProjectionOpts),
+                            <<"request">> =>
+                                identity_dependencies(Req, WitnessReq, ProjectionOpts)
+                        }
+                    end,
+                    _Opts
+                )
+            }
+    end;
 vary(Ctx = #{
     <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
     <<"base">> := Base,
     <<"request">> := Req
 }, Opts) ->
-    {ok,
-        Ctx#{
-            <<"varied-base">> => apply_schema(implicit_base(BaseSchema), Base, Opts),
-            <<"varied-request">> => apply_schema(implicit_request(ReqSchema), Req, Opts),
-            <<"normalizer">> => overlay(ReturnSchema)
+    ProjectionOpts = schema_projection_opts(Opts),
+    BaseProjection = implicit_base(BaseSchema),
+    ReqProjection = implicit_request(ReqSchema),
+    case hashpath_ignored(Opts) of
+        true ->
+            {ok,
+                schema_declared_context(Ctx#{
+                    <<"varied-base">> => apply_schema(BaseProjection, Base, ProjectionOpts),
+                    <<"varied-request">> => apply_schema(ReqProjection, Req, ProjectionOpts),
+                    <<"normalizer">> => overlay(ReturnSchema)
+                })
+            };
+        false ->
+            {VariedBase, BaseDeps} =
+                apply_schema_with_dependencies(BaseProjection, Base, ProjectionOpts),
+            {VariedReq, ReqDeps} =
+                apply_schema_with_dependencies(ReqProjection, Req, ProjectionOpts),
+            {ok,
+                schema_declared_context(Ctx#{
+                    <<"varied-base">> => VariedBase,
+                    <<"varied-request">> => VariedReq,
+                    <<"dependencies">> =>
+                        #{
+                            <<"base">> => BaseDeps,
+                            <<"request">> => ReqDeps
+                        },
+                    <<"normalizer">> => overlay(ReturnSchema)
+                })
+            }
+    end.
+
+schema_declared_context(Ctx) ->
+    Ctx#{ <<"claim-level">> => <<"schema-declared">> }.
+
+hashpath_ignored(Opts) ->
+    hashpath_mode(Opts) =:= ignore.
+
+hashpath_mode(Opts) when is_map(Opts) ->
+    case maps:get(<<"hashpath">>, Opts, maps:get(hashpath, Opts, undefined)) of
+        undefined -> hb_opts:get(<<"hashpath">>, enabled, Opts);
+        Mode -> Mode
+    end;
+hashpath_mode(Opts) ->
+    hb_opts:get(<<"hashpath">>, enabled, Opts).
+
+maybe_add_dependencies(Ctx, DepsFun, Opts) ->
+    case hashpath_ignored(Opts) of
+        true -> Ctx;
+        false -> Ctx#{ <<"dependencies">> => DepsFun() }
+    end.
+
+schema_projection_opts(Opts) ->
+    Opts#{ <<"caching-schema">> => true }.
+
+active_surface_opts(Opts) ->
+    schema_projection_opts(
+        Opts#{
+            <<"hashpath">> => ignore,
+            <<"spawn-worker">> => false
         }
-    }.
+    ).
+
+identity_witness(Value, Opts) when is_map(Value) ->
+    active_message_surface(Value, Opts);
+identity_witness(Value, _Opts) ->
+    Value.
+
+identity_dependencies(Source, Witness, Opts) ->
+    add_identity_unset_dependencies(
+        Source,
+        Source,
+        [],
+        dependency_tree(Source, [], Witness, Opts),
+        Opts
+    ).
+
+add_identity_unset_dependencies(RootSource, Source, Path, Deps, Opts) when is_map(Source) ->
+    lists:foldl(
+        fun({Key, Value}, Acc) ->
+            case hb_private:is_private(Key) of
+                true ->
+                    Acc;
+                false ->
+                    FullPath = Path ++ [Key],
+                    case Key of
+                        <<"...">> ->
+                            add_inherited_identity_unset_dependencies(
+                                RootSource,
+                                raw_unset_source(Value, Opts),
+                                Path,
+                                Acc,
+                                direct_shadow_keys(Source, Opts),
+                                Opts
+                            );
+                        _ ->
+                            case unset_surface_value(Value, Opts) of
+                                true ->
+                                    add_identity_unset_dependency(Key, RootSource, FullPath, Acc, Opts);
+                                false when is_map(Value) ->
+                                    case maps:get(Key, Acc, undefined) of
+                                        undefined ->
+                                            Acc;
+                                        ChildDeps ->
+                                            Acc#{
+                                                Key =>
+                                                    add_identity_unset_dependencies(
+                                                        RootSource,
+                                                        Value,
+                                                        FullPath,
+                                                        ChildDeps,
+                                                        Opts
+                                                    )
+                                            }
+                                    end;
+                                false ->
+                                    Acc
+                            end
+                    end
+            end
+        end,
+        Deps,
+        hb_maps:to_list(hb_private:reset(Source), Opts)
+    );
+add_identity_unset_dependencies(_RootSource, _Source, _Path, Deps, _Opts) ->
+    Deps.
+
+add_inherited_identity_unset_dependencies(RootSource, Source, Path, Deps, Shadowed, Opts)
+        when is_map(Source) ->
+    lists:foldl(
+        fun({Key, Value}, Acc) ->
+            case hb_private:is_private(Key) orelse lists:member(Key, Shadowed) of
+                true ->
+                    Acc;
+                false ->
+                    FullPath = Path ++ [Key],
+                    case Key of
+                        <<"...">> ->
+                            add_inherited_identity_unset_dependencies(
+                                RootSource,
+                                raw_unset_source(Value, Opts),
+                                Path,
+                                Acc,
+                                lists:usort(Shadowed ++ direct_shadow_keys(Source, Opts)),
+                                Opts
+                            );
+                        _ ->
+                            case unset_surface_value(Value, Opts) of
+                                true ->
+                                    add_identity_unset_dependency(Key, RootSource, FullPath, Acc, Opts);
+                                false when is_map(Value) ->
+                                    case maps:get(Key, Acc, undefined) of
+                                        undefined ->
+                                            Acc;
+                                        ChildDeps ->
+                                            Acc#{
+                                                Key =>
+                                                    add_identity_unset_dependencies(
+                                                        RootSource,
+                                                        Value,
+                                                        FullPath,
+                                                        ChildDeps,
+                                                        Opts
+                                                    )
+                                            }
+                                    end;
+                                false ->
+                                    Acc
+                            end
+                    end
+            end
+        end,
+        Deps,
+        hb_maps:to_list(hb_private:reset(Source), Opts)
+    );
+add_inherited_identity_unset_dependencies(_RootSource, _Source, _Path, Deps, _Shadowed, _Opts) ->
+    Deps.
+
+direct_shadow_keys(Source, Opts) when is_map(Source) ->
+    [
+        Key
+    ||
+        {Key, _Value} <- hb_maps:to_list(hb_private:reset(Source), Opts),
+        Key =/= <<"...">>,
+        not hb_private:is_private(Key)
+    ];
+direct_shadow_keys(_Source, _Opts) ->
+    [].
+
+add_identity_unset_dependency(Key, RootSource, FullPath, Deps, Opts) ->
+    case maps:is_key(Key, Deps) of
+        true ->
+            Deps;
+        false ->
+            Deps#{
+                Key =>
+                    #{
+                        <<"status">> => unset,
+                        <<"origin">> => origin_hashpath(RootSource, FullPath, Opts),
+                        <<"path">> => hb_path:to_binary(FullPath)
+                    }
+            }
+    end.
+
+identity_normalizer(#{ <<"path">> := <<"*">> }) ->
+    base;
+identity_normalizer(<<"*">>) ->
+    base;
+identity_normalizer(_Req) ->
+    none.
 
 %% @doc Extract a device module's function schemas. We first check the
 %% `loaded-device-store` cache, then fall back to loading the module manually
@@ -380,6 +624,377 @@ apply_schema(Type, Value, Opts) ->
             end
     end.
 
+apply_schema_with_dependencies(Schema, Value, Opts) ->
+    Projected = apply_schema(Schema, Value, Opts),
+    {
+        Projected,
+        add_dependency_observations(
+            Schema,
+            Value,
+            Value,
+            [],
+            Projected,
+            dependency_tree(Value, [], Projected, Opts),
+            Opts
+        )
+    }.
+
+add_dependency_observations(
+    #{ <<"kind">> := <<"message">>, <<"keys">> := Keys },
+    RootSource,
+    Source,
+    Path,
+    Projected,
+    Deps,
+    Opts
+) when is_map(Projected) ->
+    maps:fold(
+        fun(Key, Field, Acc) ->
+            add_key_dependency_observation(Key, Field, RootSource, Source, Path, Projected, Acc, Opts)
+        end,
+        Deps,
+        Keys
+    );
+add_dependency_observations(_Schema, _RootSource, _Source, _Path, _Projected, Deps, _Opts) ->
+    Deps.
+
+add_key_dependency_observation(
+    Key,
+    #{ <<"presence">> := optional },
+    RootSource,
+    Source,
+    Path,
+    Projected,
+    Deps,
+    Opts
+) when not is_map_key(Key, Projected) ->
+    FullPath = Path ++ [Key],
+    case raw_unset_at_path(Source, [Key], Opts) of
+        true ->
+            Deps#{
+                Key =>
+                    #{
+                        <<"status">> => unset,
+                        <<"origin">> => origin_hashpath(RootSource, FullPath, Opts),
+                        <<"path">> => hb_path:to_binary(FullPath)
+                    }
+            };
+        false ->
+            Deps#{
+                Key =>
+                    #{
+                        <<"status">> => not_found,
+                        <<"origin">> => origin_hashpath(RootSource, FullPath, Opts),
+                        <<"path">> => hb_path:to_binary(FullPath)
+                    }
+            }
+    end;
+add_key_dependency_observation(
+    Key,
+    #{ <<"type">> := Type },
+    RootSource,
+    Source,
+    Path,
+    Projected,
+    Deps,
+    Opts
+) ->
+    case maps:find(Key, Projected) of
+        {ok, ProjectedValue} ->
+            case source_child(Source, Key, Opts) of
+                {ok, ChildSource} ->
+                    Deps#{
+                        Key =>
+                            add_dependency_observations(
+                                Type,
+                                RootSource,
+                                ChildSource,
+                                Path ++ [Key],
+                                ProjectedValue,
+                                maps:get(Key, Deps, #{}),
+                                Opts
+                            )
+                    };
+                error ->
+                    Deps
+            end;
+        error ->
+            Deps
+    end.
+
+source_child(Source, Key, Opts) ->
+    case hb_ao:raw(Source, #{ <<"path">> => Key }, Opts) of
+        {ok, Value} -> {ok, Value};
+        _ -> error
+    end.
+
+dependency_tree(Source, Path, Value, Opts) when is_map(Value) ->
+    maps:from_list(
+        [
+            {Key, dependency_tree(Source, Path ++ [Key], Child, Opts)}
+        ||
+            {Key, Child} <- hb_maps:to_list(hb_private:reset(Value), Opts),
+            Key =/= <<"...">>,
+            not hb_private:is_private(Key)
+        ]
+    );
+dependency_tree(Source, Path, Value, Opts)
+        when Value =:= unset; Value =:= <<"unset">> ->
+    #{
+        <<"status">> => unset,
+        <<"origin">> => origin_hashpath(Source, Path, Opts),
+        <<"path">> => hb_path:to_binary(Path)
+    };
+dependency_tree(Source, Path, Value, Opts) ->
+    positive_dependency_leaf(Source, Path, Value, Opts).
+
+positive_dependency_leaf(Source, Path, Value, Opts) ->
+    Origin = origin_hashpath(Source, Path, Opts),
+    case observed_value_at_path(Source, Path, Opts) of
+        {ok, Observed} ->
+            case same_dependency_value(Value, Observed, Opts) of
+                true ->
+                    Origin;
+                false ->
+                    #{
+                        <<"status">> => found,
+                        <<"origin">> => Origin,
+                        <<"observed">> => Observed,
+                        <<"value">> => Value
+                    }
+            end;
+        _ ->
+            Origin
+    end.
+
+observed_value_at_path(Source, [], _Opts) ->
+    {ok, Source};
+observed_value_at_path(Source, [Key | Rest], Opts) ->
+    case source_child(Source, Key, Opts) of
+        {ok, Child} -> observed_value_at_path(Child, Rest, Opts);
+        error -> {error, not_found}
+    end.
+
+same_dependency_value(Left, Right, Opts) ->
+    hb_private:reset(hb_cache:ensure_all_loaded(Left, Opts))
+        =:= hb_private:reset(hb_cache:ensure_all_loaded(Right, Opts)).
+
+raw_unset_at_path(_Source, [], _Opts) ->
+    false;
+raw_unset_at_path(Source, [Key | Rest], Opts) ->
+    case raw_unset_source(Source, Opts) of
+        Message when is_map(Message) ->
+            case maps:find(Key, Message) of
+                {ok, Value0} ->
+                    Value = hb_cache:ensure_loaded(Value0, Opts),
+                    case {unset_literal(Value), Rest} of
+                        {true, _} -> true;
+                        {false, [_ | _]} -> raw_unset_at_path(Value, Rest, Opts);
+                        {false, []} -> false
+                    end;
+                error ->
+                    case maps:find(<<"...">>, Message) of
+                        {ok, Ancestor} -> raw_unset_at_path(Ancestor, [Key | Rest], Opts);
+                        error -> false
+                    end
+            end;
+        _ ->
+            false
+    end.
+
+raw_unset_source(Source, _Opts) when is_map(Source) ->
+    Source;
+raw_unset_source(Source, Opts) when ?IS_LINK(Source) ->
+    hb_cache:ensure_loaded(Source, Opts);
+raw_unset_source(Source, Opts) when is_binary(Source) ->
+    case is_hashpath_reference(Source) of
+        true ->
+            case hb_hashpath:load(Source, Opts) of
+                {ok, Loaded} -> Loaded;
+                _ -> Source
+            end;
+        false ->
+            case hb_cache:read(Source, Opts) of
+                {ok, Loaded} -> Loaded;
+                _ -> Source
+            end
+    end;
+raw_unset_source(Source, _Opts) ->
+    Source.
+
+is_hashpath_reference(Value) when is_binary(Value) ->
+    binary:match(Value, <<"/">>) =/= nomatch;
+is_hashpath_reference(_Value) ->
+    false.
+
+unset_literal(unset) -> true;
+unset_literal(<<"unset">>) -> true;
+unset_literal(_) -> false.
+
+origin_hashpath(Source, [], Opts) ->
+    origin_ref(Source, Opts);
+origin_hashpath(Source, Path, Opts) ->
+    {Ref, OriginPath} = origin_location(Source, Path, Opts),
+    origin_ref_path(Ref, OriginPath, Opts).
+
+origin_location(Source, [], Opts) ->
+    {origin_ref(Source, Opts), []};
+origin_location(Source, Path = [Key | _], Opts) ->
+    case origin_message(Source, Opts) of
+        {ok, Message, Ref} ->
+            case hb_maps:find(Key, Message, Opts) of
+                {ok, Value} ->
+                    origin_location_at(Value, tl(Path), Ref, [Key], Opts);
+                error ->
+                    case hb_maps:find(<<"...">>, Message, Opts) of
+                        {ok, Ancestor} -> origin_location(Ancestor, Path, Opts);
+                        error -> {Ref, Path}
+                    end
+            end;
+        error ->
+            {origin_ref(Source, Opts), Path}
+    end.
+
+origin_location_at(_Value, [], Ref, Prefix, _Opts) ->
+    {Ref, Prefix};
+origin_location_at(Value, Path = [Key | Rest], Ref, Prefix, Opts) ->
+    case origin_message(Value, Opts) of
+        {ok, Message, _ValueRef} ->
+            case hb_maps:find(Key, Message, Opts) of
+                {ok, Child} ->
+                    origin_location_at(Child, Rest, Ref, Prefix ++ [Key], Opts);
+                error ->
+                    case hb_maps:find(<<"...">>, Message, Opts) of
+                        {ok, Ancestor} -> origin_location(Ancestor, Path, Opts);
+                        error -> {Ref, Prefix ++ Path}
+                    end
+            end;
+        error ->
+            {Ref, Prefix ++ Path}
+    end.
+
+origin_message(Source, _Opts) when is_map(Source) ->
+    {ok, Source, origin_ref(Source, _Opts)};
+origin_message(Source, Opts) when ?IS_LINK(Source) ->
+    case hb_cache:ensure_loaded(Source, Opts) of
+        Msg when is_map(Msg) -> {ok, Msg, origin_ref(Source, Opts)};
+        _ -> error
+    end;
+origin_message(Source, Opts) when is_binary(Source) ->
+    case is_hashpath_reference(Source) of
+        true ->
+            case hb_hashpath:load(Source, Opts) of
+                {ok, Msg} when is_map(Msg) -> {ok, Msg, Source};
+                _ -> error
+            end;
+        false ->
+            case hb_cache:read(Source, Opts) of
+                {ok, Msg} when is_map(Msg) -> {ok, Msg, Source};
+                _ -> error
+            end
+    end;
+origin_message(_Source, _Opts) ->
+    error.
+
+origin_ref(Source, _Opts) when is_map(Source) ->
+    case hb_private:from_message(Source) of
+        #{ <<"hashpath">> := HP } ->
+            case origin_hashpath_matches_source(HP, Source, _Opts) of
+                true -> HP;
+                false -> hb_message:id(Source, all, schema_projection_opts(_Opts))
+            end;
+        _ -> hb_message:id(Source, all, schema_projection_opts(_Opts))
+    end;
+origin_ref(Source, _Opts) when is_binary(Source) ->
+    Source;
+origin_ref(Source, Opts) ->
+    hb_message:id(Source, all, schema_projection_opts(Opts)).
+
+origin_ref_path(Ref, [], _Opts) ->
+    Ref;
+origin_ref_path(Ref, Path, _Opts) ->
+    PathBin = hb_path:to_binary(Path),
+    <<Ref/binary, "/", PathBin/binary>>.
+
+origin_hashpath_matches_source(Hashpath, Source, Opts) ->
+    case hb_hashpath:load(Hashpath, Opts) of
+        {ok, Loaded} -> same_active_message(Source, Loaded, Opts);
+        _ -> false
+    end.
+
+same_active_message(Left, Right, Opts) when is_map(Left), is_map(Right) ->
+    CompareOpts =
+        schema_projection_opts(
+            Opts#{
+                <<"hashpath">> => ignore,
+                <<"spawn-worker">> => false
+            }
+        ),
+    case {deep_public_keys(Left, CompareOpts), deep_public_keys(Right, CompareOpts)} of
+        {{ok, Keys}, {ok, Keys}} ->
+            lists:all(
+                fun(Key) -> same_resolved_key(Key, Left, Right, CompareOpts) end,
+                Keys
+            );
+        _ ->
+            hb_private:reset(hb_cache:ensure_all_loaded(Left, Opts))
+                =:= hb_private:reset(hb_cache:ensure_all_loaded(Right, Opts))
+    end;
+same_active_message(Left, Right, Opts) ->
+    hb_private:reset(hb_cache:ensure_all_loaded(Left, Opts))
+        =:= hb_private:reset(hb_cache:ensure_all_loaded(Right, Opts)).
+
+deep_public_keys(Msg, Opts) when is_list(Msg) ->
+    case hb_ao:normalize_keys(Msg, Opts) of
+        NormMsg when is_map(NormMsg) -> deep_public_keys(NormMsg, Opts);
+        _ -> {error, badarg}
+    end;
+deep_public_keys(Msg, Opts) when is_map(Msg) ->
+    {ok, lists:sort(active_public_keys(Msg, Opts))};
+deep_public_keys(_Msg, _Opts) ->
+    {error, not_found}.
+
+active_public_keys(Msg, Opts) ->
+    Pairs = hb_maps:to_list(Msg, Opts),
+    MaskedKeys =
+        [
+            Key
+        ||
+            {Key, Value} <- Pairs,
+            unset_surface_value(Value, Opts)
+        ],
+    Inherited =
+        case hb_maps:find(<<"...">>, Msg, Opts) of
+            {ok, Extension} ->
+                case raw_unset_source(Extension, Opts) of
+                    Ancestor when is_map(Ancestor) -> active_public_keys(Ancestor, Opts);
+                    _ -> []
+                end;
+            error ->
+                []
+        end,
+    Hidden = [<<"commitments">> | MaskedKeys],
+    DirectKeys =
+        [
+            Key
+        ||
+            {Key, Value} <- Pairs,
+            Key =/= <<"...">>,
+            not hb_private:is_private(Key),
+            not unset_surface_value(Value, Opts)
+        ],
+    InheritedPublic = [Key || Key <- Inherited, not lists:member(Key, Hidden)],
+    lists:usort(DirectKeys ++ InheritedPublic).
+
+same_resolved_key(Key, Left, Right, Opts) ->
+    case {hb_ao:resolve(Left, Key, Opts), hb_ao:resolve(Right, Key, Opts)} of
+        {{ok, LeftValue}, {ok, RightValue}} ->
+            hb_private:reset(hb_cache:ensure_all_loaded(LeftValue, Opts))
+                =:= hb_private:reset(hb_cache:ensure_all_loaded(RightValue, Opts));
+        _ ->
+            false
+    end.
+
 explicit_keys(Keys, Message, Opts) ->
     maps:fold(
         fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
@@ -398,20 +1013,74 @@ explicit_keys(Keys, Message, Opts) ->
 
 wildcard_keys(none, _Keys, _Message, _Opts) ->
     #{};
-wildcard_keys(#{ <<"presence">> := optional }, Keys, Message, _Opts) ->
-    maps:without(maps:keys(Keys), Message);
+wildcard_keys(#{ <<"presence">> := optional }, Keys, Message, Opts) ->
+    maps:without(maps:keys(Keys), public_message_surface(Message, Opts));
 wildcard_keys(#{ <<"presence">> := required, <<"type">> := Type }, Keys, Message, Opts) ->
     maps:map(
         fun(_Key, Value) ->
             apply_schema(Type, hb_cache:ensure_all_loaded(Value, Opts), Opts)
         end,
-        hb_util:list_without(maps:keys(Keys), hb_ao:keys(Message, Opts))
+        maps:without(maps:keys(Keys), public_message_surface(Message, Opts))
     ).
+
+public_message_surface(Message, Opts) ->
+    active_message_surface(Message, Opts).
+
+active_message_surface(Message, Opts) ->
+    SurfaceOpts = active_surface_opts(Opts),
+    case deep_public_keys(Message, SurfaceOpts) of
+        {ok, Keys} ->
+            maps:from_list(
+                lists:filtermap(
+                    fun(Key) ->
+                        surface_key(Message, Key, SurfaceOpts)
+                    end,
+                    Keys
+                )
+            );
+        _ ->
+            direct_public_surface(Message, SurfaceOpts)
+    end.
+
+surface_key(Message, Key, Opts) ->
+    try hb_ao:resolve(Message, Key, Opts) of
+        {ok, Value} -> {true, {Key, surface_value(Value, Opts)}};
+        _ -> false
+    catch
+        _:_ -> false
+    end.
+
+surface_value(Value, Opts) when is_map(Value) ->
+    active_message_surface(Value, Opts);
+surface_value(Value, _Opts) ->
+    hb_private:reset(Value).
+
+direct_public_surface(Message, Opts) ->
+    maps:from_list(
+        [
+            {Key, surface_value(Value, Opts)}
+        ||
+            {Key, Value} <- hb_maps:to_list(hb_message:uncommitted(Message, Opts), Opts),
+            Key =/= <<"...">>,
+            not hb_private:is_private(Key),
+            not unset_surface_value(Value, Opts)
+        ]
+    ).
+
+unset_surface_value(Value, _Opts) when Value =:= unset; Value =:= <<"unset">> ->
+    true;
+unset_surface_value(Value, Opts) when ?IS_LINK(Value) ->
+    try unset_literal(hb_cache:ensure_loaded(Value, Opts)) of
+        IsUnset -> IsUnset
+    catch
+        _:_ -> false
+    end;
+unset_surface_value(_Value, _Opts) ->
+    false.
 
 overlay(ReturnSchema) ->
     case overlay_type(ReturnSchema) of
         base -> base;
-        request -> request;
         _ -> none
     end.
 
@@ -439,9 +1108,7 @@ first_overlay([Schema | Rest]) ->
     end.
 
 overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"base">> }) -> base;
-overlay_marker(#{ <<"kind">> := <<"literal">>, <<"value">> := <<"request">> }) -> request;
 overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"base">> }) -> base;
-overlay_marker(#{ <<"kind">> := <<"alias">>, <<"name">> := <<"request">> }) -> request;
 overlay_marker(_) -> none.
 
 coerce_type(_, undefined, _Opts) -> error;
@@ -674,6 +1341,48 @@ map_wildcards_test() ->
         Force
     ).
 
+required_wildcard_uses_public_surface_test() ->
+    Schema =
+        message_type(
+            {
+                #{
+                    <<"a">> => #{ <<"presence">> => optional, <<"type">> => empty_type() }
+                },
+                #{ <<"presence">> => required, <<"type">> => empty_type() }
+            }
+        ),
+    ?assertEqual(
+        #{
+            <<"a">> => 1,
+            <<"b">> => 2,
+            <<"c">> => #{ <<"visible">> => true }
+        },
+        apply_schema(
+            Schema,
+            #{
+                <<"a">> => 1,
+                <<"b">> => 2,
+                <<"c">> => #{
+                    <<"visible">> => true,
+                    <<"priv">> => #{ <<"secret">> => true }
+                },
+                <<"priv">> => #{ <<"secret">> => true }
+            },
+            #{}
+        )
+    ).
+
+wildcard_projection_omits_unset_masks_test() ->
+    Schema =
+        message_type(
+            {
+                #{},
+                #{ <<"presence">> => optional, <<"type">> => empty_type() }
+            }
+        ),
+    Msg = #{ <<"visible">> => <<"ok">>, <<"masked">> => <<"unset">> },
+    ?assertEqual(#{ <<"visible">> => <<"ok">> }, apply_schema(Schema, Msg, #{})).
+
 default_handler_uses_resolved_function_schema_test() ->
     Func = fun default_schema_fun/4,
     ?assertEqual(
@@ -721,6 +1430,479 @@ extension_projection_test() ->
         },
     ?assertEqual(#{ <<"a">> => 1 }, apply_schema(Schema, Msg, #{})).
 
+request_overlay_marker_is_replacement_test() ->
+    ReturnSchema =
+        message_type(
+            {
+                #{
+                    <<"...">> =>
+                        #{
+                            <<"presence">> => optional,
+                            <<"type">> => literal_type(<<"request">>)
+                        }
+                },
+                none
+            }
+        ),
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [empty_type(), empty_type(), ReturnSchema],
+                <<"base">> => #{},
+                <<"request">> => #{ <<"path">> => <<"x">> }
+            },
+            #{}
+        ),
+    ?assertEqual(none, maps:get(<<"normalizer">>, Ctx)).
+
+vary_generates_schema_dependency_tree_test() ->
+    BaseSchema =
+        message_type(
+            {
+                #{
+                    <<"x">> => #{ <<"presence">> => required, <<"type">> => empty_type() },
+                    <<"y">> => #{ <<"presence">> => required, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    ReqSchema =
+        message_type(
+            {
+                #{
+                    <<"add">> => #{ <<"presence">> => required, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"x">> => 1, <<"y">> => 2 },
+    Req = #{ <<"path">> => <<"add-x">>, <<"add">> => 3 },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{}
+        ),
+    BaseID = hb_message:id(Base, all, #{}),
+    ReqID = hb_message:id(Req, all, #{}),
+    ?assertEqual(
+        #{ <<"device">> => <<"message@1.0">>, <<"x">> => 1, <<"y">> => 2 },
+        maps:get(<<"varied-base">>, Ctx)
+    ),
+	    ?assertEqual(#{ <<"path">> => <<"add-x">>, <<"add">> => 3 }, maps:get(<<"varied-request">>, Ctx)),
+	    ?assertEqual(<<"schema-declared">>, maps:get(<<"claim-level">>, Ctx)),
+	    ?assertEqual(
+	        #{
+	            <<"base">> => #{
+                <<"device">> => <<BaseID/binary, "/device">>,
+                <<"x">> => <<BaseID/binary, "/x">>,
+                <<"y">> => <<BaseID/binary, "/y">>
+            },
+            <<"request">> => #{
+                <<"path">> => <<ReqID/binary, "/path">>,
+                <<"add">> => <<ReqID/binary, "/add">>
+            }
+        },
+        maps:get(<<"dependencies">>, Ctx)
+    ).
+
+identity_vary_generates_dependency_tree_test() ->
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"x">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    BaseID = hb_message:id(Base, all, #{}),
+    ReqID = hb_message:id(Req, all, #{}),
+	    ?assertEqual(Base, maps:get(<<"varied-base">>, Ctx)),
+	    ?assertEqual(Req, maps:get(<<"varied-request">>, Ctx)),
+	    ?assertEqual(<<"schema-declared">>, maps:get(<<"claim-level">>, Ctx)),
+	    ?assertEqual(
+	        #{
+	            <<"base">> => #{
+                <<"device">> => <<BaseID/binary, "/device">>,
+                <<"x">> => <<BaseID/binary, "/x">>
+            },
+            <<"request">> => #{ <<"path">> => <<ReqID/binary, "/path">> }
+        },
+        maps:get(<<"dependencies">>, Ctx)
+    ).
+
+identity_vary_records_unset_as_dependency_not_witness_test() ->
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"visible">> => <<"ok">>,
+        <<"masked">> => <<"unset">>
+    },
+    Req = #{ <<"path">> => <<"keys">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    BaseID = hb_message:id(Base, all, #{}),
+    VariedBase = maps:get(<<"varied-base">>, Ctx),
+    ?assertEqual(false, maps:is_key(<<"masked">>, VariedBase)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(VariedBase, <<"masked">>, #{ <<"hashpath">> => ignore })),
+    ?assertEqual(
+        #{
+            <<"status">> => unset,
+            <<"origin">> => <<BaseID/binary, "/masked">>,
+            <<"path">> => <<"masked">>
+        },
+        maps:get(<<"masked">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx)))
+    ).
+
+identity_vary_records_nested_unset_as_dependency_not_witness_test() ->
+    Parent = #{ <<"kept">> => <<"yes">>, <<"masked">> => <<"unset">> },
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"...">> => Parent
+    },
+    Req = #{ <<"path">> => <<"keys">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    VariedBase = maps:get(<<"varied-base">>, Ctx),
+    ?assertEqual(false, maps:is_key(<<"masked">>, VariedBase)),
+    ?assertEqual({error, not_found}, hb_ao:resolve(VariedBase, <<"masked">>, #{ <<"hashpath">> => ignore })),
+    ?assertEqual({ok, <<"yes">>}, hb_ao:resolve(VariedBase, <<"kept">>, #{ <<"hashpath">> => ignore })),
+    ?assertMatch(
+        #{ <<"status">> := unset },
+        maps:get(
+            <<"masked">>,
+            maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))
+        )
+    ).
+
+identity_vary_direct_value_shadows_inherited_unset_dependency_test() ->
+    Parent = #{ <<"k">> => <<"unset">> },
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"k">> => 1,
+        <<"...">> => Parent
+    },
+    Req = #{ <<"path">> => <<"k">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    BaseID = hb_message:id(Base, all, #{}),
+    ?assertEqual(1, maps:get(<<"k">>, maps:get(<<"varied-base">>, Ctx))),
+    ?assertEqual(
+        <<BaseID/binary, "/k">>,
+        maps:get(<<"k">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx)))
+    ).
+
+identity_vary_recursively_projects_nested_active_surfaces_test() ->
+    Parent = #{ <<"a">> => 1, <<"b">> => 1 },
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"nested">> => #{ <<"b">> => 2, <<"...">> => Parent }
+    },
+    Req = #{ <<"path">> => <<"nested">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    BaseID = hb_message:id(Base, all, #{}),
+    ParentID = hb_message:id(Parent, all, #{}),
+    VariedNested = maps:get(<<"nested">>, maps:get(<<"varied-base">>, Ctx)),
+    NestedDeps = maps:get(<<"nested">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))),
+    ?assertEqual(#{ <<"a">> => 1, <<"b">> => 2 }, VariedNested),
+    ?assertEqual(false, maps:is_key(<<"...">>, VariedNested)),
+    ?assertEqual(<<ParentID/binary, "/a">>, maps:get(<<"a">>, NestedDeps)),
+    ?assertEqual(<<BaseID/binary, "/nested/b">>, maps:get(<<"b">>, NestedDeps)).
+
+identity_vary_direct_nested_value_shadows_inherited_nested_unset_test() ->
+    Parent = #{ <<"nested">> => #{ <<"masked">> => <<"unset">> } },
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"nested">> => #{ <<"kept">> => <<"yes">> },
+        <<"...">> => Parent
+    },
+    Req = #{ <<"path">> => <<"nested">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{}),
+    NestedDeps = maps:get(<<"nested">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))),
+    ?assertEqual(
+        #{ <<"kept">> => <<"yes">> },
+        maps:get(<<"nested">>, maps:get(<<"varied-base">>, Ctx))
+    ),
+    ?assertEqual(false, maps:is_key(<<"masked">>, NestedDeps)).
+
+hashpath_ignore_skips_identity_dependencies_test() ->
+    Base = #{ <<"lazy">> => {link, <<"missing-id">>, #{}} },
+    Req = #{ <<"path">> => <<"keys">> },
+    {ok, Ctx} =
+        vary(
+            #{ <<"base">> => Base, <<"request">> => Req },
+            #{ <<"hashpath">> => ignore }
+        ),
+    ?assertEqual(Base, maps:get(<<"varied-base">>, Ctx)),
+    ?assertEqual(Req, maps:get(<<"varied-request">>, Ctx)),
+    ?assertEqual(false, maps:is_key(<<"dependencies">>, Ctx)).
+
+atom_hashpath_ignore_skips_identity_dependencies_test() ->
+    Base = #{ <<"lazy">> => {link, <<"missing-id">>, #{}} },
+    Req = #{ <<"path">> => <<"keys">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, #{ hashpath => ignore }),
+    ?assertEqual(false, maps:is_key(<<"dependencies">>, Ctx)).
+
+	vary_generates_optional_missing_dependency_test() ->
+	    BaseSchema =
+	        message_type(
+	            {
+                #{
+                    <<"x">> => #{ <<"presence">> => required, <<"type">> => empty_type() },
+                    <<"missing">> => #{ <<"presence">> => optional, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    ReqSchema = message_type({#{}, none}),
+    Base = #{ <<"device">> => <<"message@1.0">>, <<"x">> => 1 },
+    Req = #{ <<"path">> => <<"set">> },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+	            },
+	            #{}
+	        ),
+	    BaseID = hb_message:id(Base, all, #{}),
+	    ?assertEqual(
+	        #{
+	            <<"status">> => not_found,
+	            <<"origin">> => <<BaseID/binary, "/missing">>,
+	            <<"path">> => <<"missing">>
+	        },
+	        maps:get(
+	            <<"missing">>,
+	            maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))
+	        )
+	    ).
+
+	vary_records_coerced_positive_dependency_leaf_test() ->
+	    BaseSchema = message_type({#{}, none}),
+	    ReqSchema =
+	        message_type(
+	            {
+	                #{
+	                    <<"quantity">> =>
+	                        #{
+	                            <<"presence">> => required,
+	                            <<"type">> => scalar_type(<<"integer">>)
+	                        }
+	                },
+	                none
+	            }
+	        ),
+	    Req = #{ <<"path">> => <<"transfer">>, <<"quantity">> => <<"3">> },
+	    {ok, Ctx} =
+	        vary(
+	            #{
+	                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+	                <<"base">> => #{},
+	                <<"request">> => Req
+	            },
+	            #{}
+	        ),
+	    ReqID = hb_message:id(Req, all, #{}),
+	    ?assertEqual(3, maps:get(<<"quantity">>, maps:get(<<"varied-request">>, Ctx))),
+	    ?assertEqual(
+	        #{
+	            <<"status">> => found,
+	            <<"origin">> => <<ReqID/binary, "/quantity">>,
+	            <<"observed">> => <<"3">>,
+	            <<"value">> => 3
+	        },
+	        maps:get(<<"quantity">>, maps:get(<<"request">>, maps:get(<<"dependencies">>, Ctx)))
+	    ).
+
+	vary_generates_optional_unset_dependency_test() ->
+    BaseSchema =
+        message_type(
+            {
+                #{
+                    <<"x">> => #{ <<"presence">> => required, <<"type">> => empty_type() },
+                    <<"masked">> => #{ <<"presence">> => optional, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    ReqSchema = message_type({#{}, none}),
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"x">> => 1,
+        <<"masked">> => <<"unset">>,
+        <<"...">> => #{ <<"masked">> => <<"ancestor">> }
+    },
+    Req = #{ <<"path">> => <<"set">> },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{}
+        ),
+    BaseID = hb_message:id(Base, all, #{}),
+    ?assertEqual(false, maps:is_key(<<"masked">>, maps:get(<<"varied-base">>, Ctx))),
+    ?assertEqual(
+        #{
+            <<"status">> => unset,
+            <<"origin">> => <<BaseID/binary, "/masked">>,
+            <<"path">> => <<"masked">>
+        },
+        maps:get(
+            <<"masked">>,
+            maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))
+        )
+    ).
+
+vary_generates_inherited_optional_unset_dependency_test() ->
+    BaseSchema =
+        message_type(
+            {
+                #{
+                    <<"x">> => #{ <<"presence">> => required, <<"type">> => empty_type() },
+                    <<"masked">> => #{ <<"presence">> => optional, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    ReqSchema = message_type({#{}, none}),
+    Parent = #{ <<"masked">> => <<"unset">> },
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"x">> => 1,
+        <<"...">> => Parent
+    },
+    Req = #{ <<"path">> => <<"set">> },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{}
+        ),
+    ParentID = hb_message:id(Parent, all, #{}),
+    ?assertEqual(false, maps:is_key(<<"masked">>, maps:get(<<"varied-base">>, Ctx))),
+    ?assertEqual(
+        #{
+            <<"status">> => unset,
+            <<"origin">> => <<ParentID/binary, "/masked">>,
+            <<"path">> => <<"masked">>
+        },
+        maps:get(
+            <<"masked">>,
+            maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))
+        )
+    ).
+
+vary_generates_hashpath_inherited_optional_unset_dependency_test() ->
+    hb:init(),
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    BaseSchema =
+        message_type(
+            {
+                #{
+                    <<"x">> => #{ <<"presence">> => required, <<"type">> => empty_type() },
+                    <<"masked">> => #{ <<"presence">> => optional, <<"type">> => empty_type() }
+                },
+                none
+            }
+        ),
+    ReqSchema = message_type({#{}, none}),
+    Parent = #{ <<"masked">> => <<"unset">> },
+    {ok, ParentID} = hb_cache:write(Parent, Opts),
+    HashpathAncestor = <<"AncestorBase/AncestorReq.", ParentID/binary>>,
+    Base = #{
+        <<"device">> => <<"message@1.0">>,
+        <<"x">> => 1,
+        <<"...">> => HashpathAncestor
+    },
+    Req = #{ <<"path">> => <<"set">> },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            Opts
+        ),
+    ?assertEqual(false, maps:is_key(<<"masked">>, maps:get(<<"varied-base">>, Ctx))),
+    ?assertEqual(
+        #{
+            <<"status">> => unset,
+            <<"origin">> => <<HashpathAncestor/binary, "/masked">>,
+            <<"path">> => <<"masked">>
+        },
+        maps:get(
+            <<"masked">>,
+            maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx))
+        )
+    ).
+
+vary_generates_nested_inherited_origin_test() ->
+    BaseSchema =
+        message_type(
+            {
+                #{
+                    <<"balance">> =>
+                        #{
+                            <<"presence">> => required,
+                            <<"type">> =>
+                                message_type(
+                                    {
+                                        #{
+                                            <<"x">> =>
+                                                #{
+                                                    <<"presence">> => required,
+                                                    <<"type">> => empty_type()
+                                                }
+                                        },
+                                        none
+                                    }
+                                )
+                        }
+                },
+                none
+            }
+        ),
+    ReqSchema = message_type({#{}, none}),
+    BalanceParent = #{ <<"x">> => 1 },
+    BalanceParentID = hb_message:id(BalanceParent, all, #{}),
+    Base = #{ <<"balance">> => #{ <<"...">> => BalanceParent } },
+    Req = #{ <<"path">> => <<"balance">> },
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, any_type()],
+                <<"base">> => Base,
+                <<"request">> => Req
+            },
+            #{}
+        ),
+    ?assertEqual(#{ <<"balance">> => #{ <<"x">> => 1 } }, maps:get(<<"varied-base">>, Ctx)),
+    ?assertEqual(
+        <<BalanceParentID/binary, "/x">>,
+        maps:get(
+            <<"x">>,
+            maps:get(<<"balance">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx)))
+        )
+    ).
+
+vary_rejects_stale_private_hashpath_origin_test() ->
+    hb:init(),
+    Opts = #{ <<"store">> => hb_test_utils:test_store() },
+    Base0 = #{ <<"x">> => 1 },
+    OtherBase = #{ <<"x">> => 2 },
+    BaseID = hb_message:id(Base0, all, Opts),
+    {ok, OtherBaseID} = hb_cache:write(OtherBase, Opts),
+    Base = hb_private:set_priv(Base0, #{ <<"hashpath">> => OtherBaseID }),
+    Req = #{ <<"path">> => <<"x">> },
+    {ok, Ctx} = vary(#{ <<"base">> => Base, <<"request">> => Req }, Opts),
+    ?assertEqual(
+        <<BaseID/binary, "/x">>,
+        maps:get(<<"x">>, maps:get(<<"base">>, maps:get(<<"dependencies">>, Ctx)))
+    ).
+
 extension_wildcard_carry_test() ->
     Schema =
         message_type(
@@ -734,6 +1916,21 @@ extension_wildcard_carry_test() ->
     Parent = #{ <<"a">> => 1, <<"b">> => 1, <<"c">> => 1 },
     Msg = #{ <<"b">> => 2, <<"...">> => Parent },
     ?assertEqual(
-        #{ <<"a">> => 1, <<"b">> => 2, <<"...">> => Parent },
+        #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 1 },
         apply_schema(Schema, Msg, #{})
+    ),
+    ?assertEqual(
+        #{ <<"a">> => 1, <<"b">> => 2, <<"c">> => 1 },
+        apply_schema(Schema, Msg#{ <<"priv">> => #{ <<"secret">> => true } }, #{})
+    ),
+    ?assertEqual(
+        #{ <<"a">> => 1, <<"b">> => #{ <<"visible">> => true }, <<"c">> => 1 },
+        apply_schema(
+            Schema,
+            Msg#{
+                <<"b">> => #{ <<"visible">> => true, <<"priv">> => #{ <<"secret">> => true } },
+                <<"priv">> => #{ <<"secret">> => true }
+            },
+            #{}
+        )
     ).
