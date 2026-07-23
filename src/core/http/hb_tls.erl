@@ -66,10 +66,9 @@ bootstrap(Table, Domains) ->
         Domains
     ).
 
-%% @doc Live-install a renewed certificate for a single host: rebuilds that
-%% host's entry in the in-memory table so the next TLS handshake serves the new
-%% cert, with no restart and no disk write. In-flight connections are
-%% unaffected. This is the seam an ACME renewal calls after fetching a cert.
+%% @doc Live-install a renewed certificate for a host: the next TLS handshake
+%% serves the new cert, with no restart, no disk write, and in-flight
+%% connections unaffected. The seam an ACME renewal calls.
 install(Domain, CertPem, KeyPem) ->
     NewOpts = entry_opts(#{ <<"cert">> => CertPem, <<"key">> => KeyPem }),
     Table = persistent_term:get(?CERTS, #{}),
@@ -91,11 +90,8 @@ sni_lookup(ServerName) ->
     Table = persistent_term:get(?CERTS, #{}),
     maps:get(list_to_binary(ServerName), Table, maps:get(default, Table, [])).
 
-%% @doc Days until the certificate currently installed for `Domain' expires, or
-%% `undefined' when no certificate is found. Reads the leaf cert from the
-%% per-host table (inline DER or `certfile'), decodes its notAfter validity and
-%% returns `(NotAfter - now) div 86400'. This is the seam an ACME renewal scans
-%% to decide whether a domain is due.
+%% @doc Days until the certificate installed for `Domain' expires, or
+%% `undefined' when none is found. The seam an ACME renewal scans for due-ness.
 expiry(Domain) ->
     Table = persistent_term:get(?CERTS, #{}),
     Opts = maps:get(Domain, Table, maps:get(default, Table, undefined)),
@@ -108,13 +104,10 @@ expiry(Domain) ->
             (asn1_time_to_unix(NotAfter) - os:system_time(second)) div 86400
     end.
 
-%% @doc The SPKI (public-key) fingerprint of each serving cert, keyed by host:
-%% `base64(sha256(SubjectPublicKeyInfo))'. Computed LIVE from the current cert
-%% table, so it reflects the self-signed bootstrap and any ACME-renewed cert.
-%% This matches what a client computes with
-%% `openssl x509 -pubkey | openssl pkey -pubin -outform der | dgst -sha256',
-%% so a client can pin the served cert against the node's signed info. The
-%% private key is never exposed.
+%% @doc The SPKI fingerprint of each serving cert, keyed by host:
+%% `base64(sha256(SubjectPublicKeyInfo))', computed live from the cert table.
+%% Matches what a client computes from the served cert with openssl, so the
+%% node's signed info can pin the cert. The private key is never exposed.
 fingerprints() ->
     Table = persistent_term:get(?CERTS, #{}),
     maps:fold(
@@ -209,12 +202,10 @@ entry_opts(#{ <<"cert">> := CertPem, <<"key">> := KeyPem }) ->
 entry_opts(#{ <<"certfile">> := CertFile, <<"keyfile">> := KeyFile }) ->
     [{certfile, binary_to_list(CertFile)}, {keyfile, binary_to_list(KeyFile)}].
 
-%% @doc Generate a short-lived self-signed certificate for `Domain', returning
-%% {CertPem, KeyPem}. The RSA key is generated in memory and never written to
-%% disk. Used as a bootstrap so a node with an `acme' block but no configured
-%% cert can bring up its TLS listener; the ACME cron then replaces it live.
-%% OTP 28 ASN.1 is picky: the algorithm parameters must be an explicit ASN.1
-%% NULL as {asn1_OPENTYPE, <<5,0>>}, and the SAN extnValue must be the decoded
+%% @doc A short-lived in-memory self-signed {CertPem, KeyPem} for `Domain':
+%% the bootstrap that lets an acme-only node bring up :443 with no cert on
+%% disk. OTP 28 ASN.1 quirks: algorithm parameters must be an explicit NULL
+%% ({asn1_OPENTYPE, <<5,0>>}) and the SAN extnValue must be the decoded
 %% [{dNSName, _}] list (pkix_sign re-encodes it), not pre-encoded DER.
 self_signed(Domain) ->
     Key = public_key:generate_key({rsa, 2048, 65537}),
@@ -384,8 +375,7 @@ live_rotation_test() ->
         }),
     Port = url_port(URL),
     Served1 = served_cert(Port),
-    {ok, Cert2} = file:read_file("test/test-tls-alt.pem"),
-    {ok, Key2} = file:read_file("test/test-tls-alt.key"),
+    {Cert2, Key2} = self_signed(<<"localhost">>),
     ok = hb_tls:install(<<"localhost">>, Cert2, Key2),
     Served2 = served_cert(Port),
     ?debugFmt(
@@ -403,22 +393,8 @@ served_cert(Port) ->
     ssl:close(S),
     Der.
 
-%% @doc expiry/1 reads the installed leaf cert's notAfter and returns the days
-%% remaining. The alt test cert is valid years out, so a positive integer; an
-%% unknown domain with no default returns undefined.
-expiry_test() ->
-    {ok, CertPem} = file:read_file("test/test-tls-alt.pem"),
-    {ok, KeyPem} = file:read_file("test/test-tls-alt.key"),
-    persistent_term:put(?CERTS, #{}),
-    ok = install(<<"expiry-test.localhost">>, CertPem, KeyPem),
-    Days = expiry(<<"expiry-test.localhost">>),
-    ?debugFmt("installed cert expires in ~p days", [Days]),
-    ?assert(is_integer(Days)),
-    ?assert(Days > 0),
-    ?assertEqual(undefined, expiry(<<"no-such-domain.localhost">>)).
-
-%% @doc self_signed/1 yields a decodable cert + key PEM pair, and once installed
-%% expiry/1 reports the ~7-day validity of the bootstrap cert.
+%% @doc self_signed/1 yields a decodable cert + key PEM pair; once installed,
+%% expiry/1 reports the ~7-day bootstrap validity, and undefined for unknowns.
 self_signed_test() ->
     {CertPem, KeyPem} = self_signed(<<"boot.example">>),
     ?assertMatch([{'Certificate', _, _} | _], public_key:pem_decode(CertPem)),
@@ -427,9 +403,8 @@ self_signed_test() ->
     ok = install(<<"boot.example">>, CertPem, KeyPem),
     Days = expiry(<<"boot.example">>),
     ?debugFmt("self-signed bootstrap cert expires in ~p days", [Days]),
-    ?assert(is_integer(Days)),
-    ?assert(Days > 0),
-    ?assert(Days =< 7).
+    ?assert(is_integer(Days) andalso Days > 0 andalso Days =< 7),
+    ?assertEqual(undefined, expiry(<<"no-such-domain.localhost">>)).
 
 %% @doc fingerprints/0 reads the live cert table and yields, for each host, the
 %% base64 SPKI pin. It must equal the pin a real client computes with the

@@ -430,28 +430,30 @@ start_https(ServerID, ProtoOpts, NodeMsg, SslOpts) ->
             start_https(ServerID, ProtoOpts, NodeMsg, SslOpts)
     end.
 
-%% @doc When the `tls' block configures `acme', start in-node certificate
-%% renewal: store the ACME config (read by the ~cert@1.0 device), start the
-%% HTTP-01 challenge listener, and arm a daily renewal cron. Renewal then runs
-%% live via hb_tls:install/3 with no restart.
+%% @doc When the `tls' block configures `acme', start the HTTP-01 challenge
+%% listener and arm the renewal cron (`/~cert@1.0/renew', which reads the
+%% `tls.acme' opts and installs live via hb_tls:install/3, no restart).
 maybe_start_acme(NodeMsg) ->
-    Tls = maps:get(<<"tls">>, NodeMsg, #{}),
-    case maps:get(<<"acme">>, Tls, undefined) of
+    case maps:get(<<"acme">>, maps:get(<<"tls">>, NodeMsg, #{}), undefined) of
         undefined ->
             ok;
         Acme ->
-            hb_acme:configure(Acme),
-            catch hb_acme_http:start(maps:get(<<"challenge-port">>, Acme, 80), #{}),
+            ChallengePort = maps:get(<<"challenge-port">>, Acme, 80),
+            case catch hb_acme_http:start(ChallengePort, #{}) of
+                {ok, _} -> ok;
+                {error, {already_started, _}} -> ok;
+                Error ->
+                    ?event(http, {acme_challenge_listener_failed, ChallengePort, Error})
+            end,
             Interval = maps:get(<<"check-interval">>, Acme, <<"1-days">>),
-            spawn(fun() -> arm_renewal_cron(NodeMsg, Interval, 12) end),
+            spawn(fun() -> arm_renewal_cron(NodeMsg, Interval) end),
             ok
     end.
 
-%% Arm the daily renewal cron off the boot path, retrying until the resolver and
-%% preloaded devices are ready. Each tick resolves `/~cert@1.0/renew'.
-arm_renewal_cron(_NodeMsg, _Interval, 0) ->
-    ?event(http, acme_renewal_cron_arm_failed);
-arm_renewal_cron(NodeMsg, Interval, N) ->
+%% Arm the renewal cron off the boot path, retrying until the resolver and
+%% preloaded devices are ready. Never gives up: an unarmed cron means certs
+%% silently stop renewing.
+arm_renewal_cron(NodeMsg, Interval) ->
     Req = #{
         <<"path">> => <<"/~cron@1.0/every">>,
         <<"interval">> => Interval,
@@ -459,7 +461,7 @@ arm_renewal_cron(NodeMsg, Interval, N) ->
     },
     case catch hb_ao:resolve(Req, NodeMsg) of
         {ok, _} -> ?event(http, {acme_renewal_cron_armed, Interval});
-        _ -> timer:sleep(5000), arm_renewal_cron(NodeMsg, Interval, N - 1)
+        _ -> timer:sleep(5000), arm_renewal_cron(NodeMsg, Interval)
     end.
 
 %% @doc Entrypoint for all HTTP requests. Receives the Cowboy request option and

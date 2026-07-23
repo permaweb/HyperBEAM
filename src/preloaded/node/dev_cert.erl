@@ -1,14 +1,12 @@
-%%% @doc A device that renews the node's TLS certificates in-node via ACME.
-%%% Reads the stored ACME config (hb_acme:config/0), and for each domain whose
-%%% installed certificate is within `renew-before-days' of expiry (or missing),
-%%% obtains a fresh certificate over HTTP-01 and installs it live with
-%%% hb_tls:install/3. Intended to be driven on a schedule (e.g. by ~cron@1.0).
+%%% @doc In-node ACME certificate renewal (`~cert@1.0'), driven on a schedule
+%%% by ~cron@1.0. For each domain in `tls.acme' whose installed certificate is
+%%% within `renew-before-days' of expiry (or missing), obtains a fresh
+%%% certificate over HTTP-01 and installs it live with hb_tls:install/3.
 -module(dev_cert).
 -export([renew/3, info/1, info/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc Exported function for getting device info.
 info(_) ->
     #{ exports => [<<"info">>, <<"renew">>] }.
 
@@ -21,28 +19,25 @@ info(_Base, _Req, _Opts) ->
         }
     }}.
 
-%% @doc Renew every configured domain that is due. Each domain is wrapped so one
-%% failure does not abort the rest; the result body maps domain => outcome.
+%% @doc Renew every configured domain that is due. Each domain is wrapped so
+%% one failure does not abort the rest; the body maps domain => outcome.
 renew(_Base, _Req, Opts) ->
-    case hb_acme:config() of
+    Tls = hb_maps:get(<<"tls">>, Opts, #{}, Opts),
+    case hb_maps:get(<<"acme">>, Tls, undefined, Opts) of
         undefined ->
             {ok, #{<<"status">> => 200, <<"body">> => <<"no acme configured">>}};
         AcmeCfg ->
             Domains = maps:get(<<"domains">>, AcmeCfg, []),
             RenewBeforeDays = maps:get(<<"renew-before-days">>, AcmeCfg, 30),
             Results =
-                lists:foldl(
-                    fun(Domain, Acc) ->
-                        Acc#{ Domain => renew_domain(Domain, RenewBeforeDays, AcmeCfg, Opts) }
-                    end,
-                    #{},
-                    Domains
-                ),
+                maps:from_list([
+                    {Domain, renew_domain(Domain, RenewBeforeDays, AcmeCfg, Opts)}
+                 || Domain <- Domains
+                ]),
             {ok, #{<<"status">> => 200, <<"body">> => #{<<"results">> => Results}}}
     end.
 
-%% Renew a single domain when its cert is missing or within RenewBeforeDays of
-%% expiry, otherwise skip it. Any crash is caught and reported as an error.
+%% Renew when the cert is missing or within RenewBeforeDays of expiry.
 renew_domain(Domain, RenewBeforeDays, AcmeCfg, Opts) ->
     try
         case hb_tls:expiry(Domain) of
@@ -56,13 +51,10 @@ renew_domain(Domain, RenewBeforeDays, AcmeCfg, Opts) ->
     end.
 
 obtain_and_install(Domain, AcmeCfg, Opts) ->
-    ObtainCfg = #{
+    ObtainCfg = AcmeCfg#{
         <<"domains">> => [Domain],
-        <<"email">> => maps:get(<<"email">>, AcmeCfg, <<>>),
-        <<"directory_url">> => maps:get(<<"directory_url">>, AcmeCfg, <<>>),
         <<"publish">> => fun hb_acme_http:publish/2,
-        <<"unpublish">> => fun hb_acme_http:unpublish/1,
-        <<"http_opts">> => maps:get(<<"http_opts">>, AcmeCfg, [])
+        <<"unpublish">> => fun hb_acme_http:unpublish/1
     },
     case hb_acme:obtain(ObtainCfg, Opts) of
         {ok, #{<<"cert">> := C, <<"key">> := K}} ->
