@@ -160,9 +160,11 @@ write(Opts, Path, Value) ->
     case elmdb:put(DBInstance, Path, Value) of
         ok -> ok;
         {error, Type, Description} ->
+            Name = maps:get(<<"name">>, Opts, not_set),
             ?event(
                 error,
                 {lmdb_error,
+                    {name, Name},
                     {type, Type},
                     {description, Description}
                 }
