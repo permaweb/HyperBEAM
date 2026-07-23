@@ -408,7 +408,7 @@ basic_test() ->
 %% form used to request it. Here we verify that `/raw/ID' is blocked by the
 %% same mechanism that blocks `/ID', since the ID appears as a later path
 %% segment rather than the base message.
-raw_route_blocked_test() ->
+raw_route_blocked_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
@@ -433,7 +433,7 @@ raw_route_blocked_test() ->
 %% the `name@1.0' hook, which must run *before* `blacklist@1.0' so that the
 %% resolved ID is present in the request when the blacklist check runs. A
 %% non-blacklisted ID's subdomain must not be blocked.
-subdomain_route_blocked_test() ->
+subdomain_route_blocked_test_parallel() ->
     {ok, #{
         opts := Opts0,
         signed1 := SignedID1,
