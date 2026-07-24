@@ -702,20 +702,55 @@ valid_commitment(
         CommitmentID,
         Commitment =
             #{
-                <<"commitment-device">> := <<"httpsig@1.0">>,
-                <<"type">> := <<"rsa-pss-sha512">>,
-                <<"keyid">> := KeyID
+                <<"commitment-device">> := _CommitmentDevice
             },
         RequiredKeys,
         Opts) ->
     Committed = commitment_keys(Commitment, Opts),
     Present = committed_keys_present(Committed, RequiredKeys),
     case Present andalso verify_commitment(Request, CommitmentID, Opts) of
-        true -> {true, lib_httpsig_keyid:keyid_to_committer(KeyID)};
-        false -> false
+        true ->
+            case verified_committer(Commitment, Opts) of
+                undefined -> false;
+                Committer -> {true, Committer}
+            end;
+        false ->
+            false
     end;
 valid_commitment(_Request, _CommitmentID, _Commitment, _RequiredKeys, _Opts) ->
     false.
+
+%% @doc Return the verified committer identity implied by a commitment.
+verified_committer(Commitment, Opts) ->
+    case hb_maps:get(<<"keyid">>, Commitment, undefined, Opts) of
+        undefined ->
+            hb_maps:get(<<"committer">>, Commitment, undefined, Opts);
+        KeyID ->
+            case {
+                hb_maps:get(<<"commitment-device">>, Commitment, undefined, Opts),
+                hb_maps:get(<<"type">>, Commitment, undefined, Opts)
+            } of
+                {<<"ans104@1.0">>, Type} when Type =/= undefined ->
+                    ans104_keyid_to_committer(KeyID, Type);
+                _ ->
+                    lib_httpsig_keyid:keyid_to_committer(KeyID)
+            end
+    end.
+
+%% @doc Return the committer implied by an ANS-104 keyid and signature type.
+ans104_keyid_to_committer(<<"publickey:", _/binary>> = KeyID, Type) ->
+    try
+        hb_util:human_id(
+            ar_wallet:to_address(
+                hb_util:decode(hb_util:remove_scheme_prefix(KeyID)),
+                ar_tx:deserialize_sig_type(Type)
+            )
+        )
+    catch _:_ ->
+        undefined
+    end;
+ans104_keyid_to_committer(KeyID, _Type) ->
+    lib_httpsig_keyid:keyid_to_committer(KeyID).
 
 committed_keys_present(Committed, RequiredKeys) ->
     lists:all(
