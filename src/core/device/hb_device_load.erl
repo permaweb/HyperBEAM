@@ -31,6 +31,8 @@
 %% then memoised in the process cache unless it is a forge seed.
 reference(Loaded, _Opts) when is_map(Loaded) ->
     {ok, Loaded};
+reference(<<>>, _Opts) ->
+    {error, not_found};
 reference(Ref, Opts) when is_binary(Ref) ->
     NormRef = hb_ao:normalize_key(Ref),
     case from_forge_bootstrap(NormRef, Opts) of
@@ -38,6 +40,9 @@ reference(Ref, Opts) when is_binary(Ref) ->
         {error, not_found} -> resolve_cached(NormRef, Opts);
         {error, Err} -> {error, Err}
     end.
+
+do_not_try_to_load_empty_device_test() ->
+    ?assertEqual({error, not_found}, reference(<<>>, #{})).
 
 resolve_cached(Ref, Opts) ->
     case resolve(Ref, Opts) of
