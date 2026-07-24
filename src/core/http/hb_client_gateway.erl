@@ -130,12 +130,30 @@ data(ID, Opts) ->
     end.
 
 %% @doc Find the location of the scheduler based on its ID, through GraphQL.
+%% Current AO location records use lowercase tags. Nodes may disable the
+%% fallback to legacy capitalized tags with `scheduler-legacy-locations'.
 location(Address, Opts) ->
+    maybe
+        % Fallback to legacy capitalized tags if a lower-case result is not
+        % available and `scheduler-legacy-locations' is enabled.
+        Error = {error, _} ?=
+            do_location(Address, <<"type">>, <<"[\"location\"]">>, Opts),
+        true ?= hb_opts:get(scheduler_legacy_locations, true, Opts)
+            orelse Error,
+        do_location(
+            Address,
+            <<"Type">>,
+            <<"[\"Location\", \"Scheduler-Location\"]">>,
+            Opts
+        )
+    end.
+do_location(Address, TagName, TagValues, Opts) ->
     Query =
         <<"query($Addresses: [String!]!) { ",
                 "transactions(",
                 "owners: $Addresses, ",
-                "tags: { name: \"Type\" values: [\"Location\", \"Scheduler-Location\"] }, ",
+                "tags: { name: \"", TagName/binary, "\" values: ",
+                    TagValues/binary, " }, ",
                 "first: 1",
             "){ ",
                 "edges { ",
@@ -487,11 +505,6 @@ result_to_message(ExpectedID, Item, Opts) ->
 normalize_null(null) -> <<>>;
 normalize_null(not_found) -> <<>>;
 normalize_null(Bin) when is_binary(Bin) -> Bin.
-
-decode_id_or_null(Bin) when byte_size(Bin) > 0 ->
-    hb_util:human_id(Bin);
-decode_id_or_null(_) ->
-    <<>>.
 
 decode_or_null(Bin) when is_binary(Bin) ->
     hb_util:decode(Bin);
