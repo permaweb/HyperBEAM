@@ -556,7 +556,8 @@ reply(InitReq, TABMReq, RawStatus, RawMessage, Opts) ->
                         hb_maps:get(<<"path">>, TABMReq, <<"[NO PATH]">>, Opts)
                     )
                 }
-            }
+            },
+            {read, {string, hb_maps:get(<<"read">>, TABMReq, <<>>, Opts)}}
         }
     ),
     {ok, PostStreamReq, no_state}.
