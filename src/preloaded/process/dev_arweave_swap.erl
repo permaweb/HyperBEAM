@@ -31,11 +31,20 @@
 %%%       of AR sent to the process -- an address with no key, which would
 %%%       destroy it.</li>
 %%%   <li>`register-interest' (to the process, from a buyer), naming an
-%%%       `order-id'. It moves no value. It buys exclusivity: for
-%%%       `swap-reservation-blocks' the order is that buyer's alone and the
-%%%       seller cannot cancel it. That window is what makes paying safe --
-%%%       without it a buyer races the seller's cancellation, having already
-%%%       sent AR that nobody can claw back.</li>
+%%%       `order-id'. It buys exclusivity: for `swap-reservation-blocks' the
+%%%       order is that buyer's alone and the seller cannot cancel it. That
+%%%       window is what makes paying safe -- without it a buyer races the
+%%%       seller's cancellation, having already sent AR that nobody can claw
+%%%       back. An order may charge a `minimum-fee' in winston to register,
+%%%       which the registration pays as its own transaction `reward':
+%%%       reserving an order costs the seller their bond and their right to
+%%%       cancel, so making it free makes it worth abusing. Paying it as the
+%%%       reward sends it where Arweave sends rewards -- to miners and the
+%%%       endowment -- rather than stranding it at the process's address, which
+%%%       is a transaction id with no key behind it. The fee is the protection
+%%%       an order can offer when it has no bond to post -- a name, whose whole
+%%%       supply is the single unit being sold -- and being denominated in AR it
+%%%       asks nothing of a buyer who holds none of the token.</li>
 %%%   <li>`cancel-order' (to the process, from the seller), naming an
 %%%       `order-id'. Returns the goods, but not the deposit (see below).</li>
 %%%   <li>The payment itself: an ordinary transfer whose `target' is the
@@ -171,12 +180,18 @@ make_offer(Base, Body, Height, Opts) ->
         {ok, Quantity} ?= amount(<<"offer-quantity">>, Body, Opts),
         {ok, Asking} ?= amount(<<"asking">>, Body, Opts),
         {ok, Deposit} ?= amount(<<"deposit">>, Body, Opts),
+        {ok, Fee} ?= amount(<<"minimum-fee">>, Body, Opts),
         {ok, Deadline} ?= amount(<<"deadline">>, Body, Opts),
         Recipient = hb_ao:get(<<"recipient">>, Body, Seller, Opts),
         true ?= Quantity >= 1,
         true ?= Asking >= 1,
         true ?= Deposit >= 0,
+        true ?= Fee >= 0,
         true ?= Deadline > Height,
+        % An order with no bond asks only that the seller hold what they are
+        % offering. A seller whose whole holding is the thing being sold -- the
+        % single unit of a name -- has nothing left to bond with, and requiring
+        % otherwise would put a name beyond sale.
         true ?= balance(Base, Seller, Opts) >= Quantity + Deposit,
         OrderID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
         not_found ?= hb_maps:get(OrderID, order_book(Base, Opts), not_found, Opts),
@@ -188,6 +203,7 @@ make_offer(Base, Body, Height, Opts) ->
                 <<"quantity">> => Quantity,
                 <<"asking">> => Asking,
                 <<"deposit">> => Deposit,
+                <<"minimum-fee">> => Fee,
                 <<"deadline">> => Deadline,
                 <<"created-at">> => Height,
                 <<"status">> => <<"open">>
@@ -251,6 +267,17 @@ register_interest(Base, Body, Height, Opts) ->
         #{ <<"status">> := Status, <<"deadline">> := Deadline } = Order,
         true ?= Status =:= <<"open">>,
         true ?= Height < Deadline,
+        % Reserving an order costs the seller: it freezes their bond and their
+        % right to cancel behind somebody who may never pay. An order may
+        % therefore demand a fee to register, and the registration pays it as
+        % its own transaction `reward' -- the fee the network is already
+        % charging to accept it. Overpaying that goes where Arweave sends
+        % rewards, which is to miners and the endowment; sending it to the
+        % process instead would strand it at an address with no key behind it.
+        % Being denominated in AR, it asks nothing of a buyer who holds none of
+        % the token they are trying to buy.
+        {ok, Paid} ?= amount(<<"reward">>, Body, Opts),
+        true ?= Paid >= minimum_fee(Order),
         Until = min(Deadline, Height + reservation_blocks(Base, Opts)),
         ?event(
             {swap_interest_registered,
@@ -558,6 +585,7 @@ order(Held) ->
         [
             <<"quantity">>,
             <<"deposit">>,
+            <<"minimum-fee">>,
             <<"asking">>,
             <<"deadline">>,
             <<"created-at">>,
@@ -609,6 +637,8 @@ order_id(Order) -> maps:get(<<"order-id">>, Order).
 quantity(Order) -> hb_util:int(maps:get(<<"quantity">>, Order, 0)).
 
 deposit(Order) -> hb_util:int(maps:get(<<"deposit">>, Order, 0)).
+
+minimum_fee(Order) -> hb_util:int(maps:get(<<"minimum-fee">>, Order, 0)).
 
 %% @doc Read an address's token balance from the ledger this process shares.
 %% Only the one entry is read: the ledger may be large, and the rest of it is
@@ -1304,6 +1334,113 @@ reserved_paths_are_applied_test() ->
             )
         end,
         [<<"set">>, <<"keys">>, <<"info">>]
+    ).
+
+%% @doc An offer that charges to register turns away a registration that does
+%% not pay the fee, and lets one that does through. The fee is the
+%% registration's own reward, so it is paid to the network rather than to an
+%% address nobody holds.
+minimum_fee_gates_registration_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, _} = party(),
+    Charged =
+        tx(
+            Seller,
+            #{
+                <<"target">> => ?PROCESS,
+                <<"action">> => <<"make-offer">>,
+                <<"offer-quantity">> => <<"10">>,
+                <<"asking">> => <<"500">>,
+                <<"deposit">> => <<"0">>,
+                <<"minimum-fee">> => <<"1000">>,
+                <<"deadline">> => <<"200">>
+            }
+        ),
+    Opened = apply_tx(base(#{ SellerAddr => 100 }), Charged, 100, Opts),
+    OrderID = order_id(only_order(Opened, Opts)),
+    Free =
+        apply_tx(
+            Opened,
+            order_action(Buyer, <<"register-interest">>, OrderID),
+            110,
+            Opts
+        ),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Free, Opts))),
+    % Value sent to the process is not the fee: it would be stranded there, and
+    % it is the reward that the order asks for.
+    Stranded =
+        apply_tx(
+            Opened,
+            tx(
+                Buyer,
+                #{
+                    <<"target">> => ?PROCESS,
+                    <<"action">> => <<"register-interest">>,
+                    <<"order-id">> => OrderID,
+                    <<"quantity">> => <<"100000">>
+                }
+            ),
+            110,
+            Opts
+        ),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Stranded, Opts))),
+    Underpaid =
+        apply_tx(
+            Opened,
+            registration(Buyer, OrderID, 999),
+            110,
+            Opts
+        ),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Underpaid, Opts))),
+    Reserved = apply_tx(Opened, registration(Buyer, OrderID, 1000), 110, Opts),
+    ?assertEqual(
+        <<"reserved">>,
+        maps:get(<<"status">>, only_order(Reserved, Opts))
+    ).
+
+%% @doc An order that charges nothing is still free to register on.
+no_minimum_fee_registers_free_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, _} = party(),
+    Opened =
+        apply_tx(base(#{ SellerAddr => 100 }), offer(Seller, 10, 500, 5, 200), 100, Opts),
+    OrderID = order_id(only_order(Opened, Opts)),
+    Reserved =
+        apply_tx(
+            Opened,
+            order_action(Buyer, <<"register-interest">>, OrderID),
+            110,
+            Opts
+        ),
+    ?assertEqual(
+        <<"reserved">>,
+        maps:get(<<"status">>, only_order(Reserved, Opts))
+    ).
+
+%% @doc A seller whose whole holding is the single unit they are selling can
+%% still offer it, because an order with no bond asks only for the goods.
+single_unit_offer_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    Opened =
+        apply_tx(base(#{ SellerAddr => 1 }), offer(Seller, 1, 500, 0, 200), 100, Opts),
+    Order = only_order(Opened, Opts),
+    ?assertEqual(1, quantity(Order)),
+    ?assertEqual(0, deposit(Order)),
+    ?assertEqual(0, balance_of(Opened, SellerAddr, Opts)).
+
+%% @doc A registration paying a fee, as the reward on its own transaction.
+registration(Wallet, OrderID, Winston) ->
+    tx(
+        Wallet,
+        #{
+            <<"target">> => ?PROCESS,
+            <<"action">> => <<"register-interest">>,
+            <<"order-id">> => OrderID,
+            <<"reward">> => hb_util:bin(Winston)
+        }
     ).
 
 %% @doc The next height at which anything happens is recorded, so that the
