@@ -143,7 +143,7 @@ compute(Base, Assignment, Opts) ->
     ProcID = hb_ao:get(<<"process">>, Assignment, <<>>, Opts),
     Body = hb_ao:get(<<"body">>, Assignment, #{}, Opts),
     Advanced = advance(Base, Height, Opts),
-    case hb_ao:get(<<"target">>, Body, <<>>, Opts) of
+    case tx_field_target(Body, Opts) of
         ProcID -> {ok, control(Advanced, Body, Height, Opts)};
         Target -> {ok, payment(Advanced, Body, Target, Height, Opts)}
     end.
@@ -308,7 +308,7 @@ payment(Base, Body, Target, Height, Opts) ->
         % against an order that is already spent.
         false ?= Buyer =:= Creator,
         false ?= Buyer =:= Recipient,
-        {ok, Paid} ?= amount(<<"quantity">>, Body, Opts),
+        {ok, Paid} ?= tx_field_quantity(Body, Opts),
         true ?= Paid >= Asking,
         true ?= Height =< Deadline + cancel_grace(Base, Opts),
         settle(Base, Order, Buyer, Height, Body, Opts)
@@ -648,6 +648,23 @@ note(Base, Event, OrderID, _Opts) ->
 amount(Key, Body, Opts) ->
     hb_util:safe_int(hb_ao:get(Key, Body, 0, Opts)).
 
+%% @doc Read a value from the real L1 transaction fields recorded in the
+%% `tx@1.0' commitment. Top-level keys may come from tags with the same names, so
+%% payment routing and amount checks must not use them.
+tx_field(Body, Field, Default, Opts) ->
+    case hb_message:commitment(#{ <<"commitment-device">> => <<"tx@1.0">> }, Body, Opts) of
+        {ok, _ID, Commitment} ->
+            hb_maps:get(<<"field-", Field/binary>>, Commitment, Default, Opts);
+        _ ->
+            Default
+    end.
+
+tx_field_target(Body, Opts) ->
+    tx_field(Body, <<"target">>, <<>>, Opts).
+
+tx_field_quantity(Body, Opts) ->
+    hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)).
+
 %% @doc The single signer of a message. A message with any other number of
 %% signers is not attributable to one party, so it cannot open, cancel, reserve
 %% or pay for anything.
@@ -698,6 +715,11 @@ tx(Wallet, Fields) ->
         #{ <<"priv-wallet">> => Wallet },
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
+
+%% @doc A transaction that carries trade keys as tags only.
+tag_only_tx(Wallet, Tags) ->
+    Signed = ar_tx:sign(#tx{ format = 2, reward = 1, tags = Tags }, Wallet),
+    hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}).
 
 %% @doc Sequence a transaction into the process at a block height, as
 %% `~arweave-scheduler@1.0' in `all' mode does.
@@ -755,6 +777,16 @@ pay(Wallet, To, Winston, OrderID) ->
         }
     ).
 
+tag_only_transfer(Wallet, To, Winston, OrderID) ->
+    tag_only_tx(
+        Wallet,
+        [
+            {<<"target">>, To},
+            {<<"quantity">>, hb_util:bin(Winston)},
+            {<<"order-id">>, OrderID}
+        ]
+    ).
+
 only_order(Base, Opts) ->
     [Order] = orders(Base, Opts),
     Order.
@@ -791,6 +823,28 @@ make_offer_stale_deadline_test() ->
     Base = base(#{ SellerAddr => 100 }),
     Result = apply_tx(Base, offer(Seller, 10, 500, 5, 100), 100, Opts),
     ?assertEqual([], orders(Result, Opts)).
+
+%% @doc Tag-only trade keys are metadata and do not route control slots.
+tag_only_target_is_metadata_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    Tagged =
+        tag_only_tx(
+            Seller,
+            [
+                {<<"target">>, ?PROCESS},
+                {<<"action">>, <<"make-offer">>},
+                {<<"offer-quantity">>, <<"10">>},
+                {<<"asking">>, <<"500">>},
+                {<<"deposit">>, <<"5">>},
+                {<<"deadline">>, <<"200">>}
+            ]
+        ),
+    ?assertEqual(?PROCESS, hb_ao:get(<<"target">>, Tagged, not_found, Opts)),
+    ?assertEqual(<<>>, tx_field_target(Tagged, Opts)),
+    Result = apply_tx(base(#{ SellerAddr => 100 }), Tagged, 100, Opts),
+    ?assertEqual([], orders(Result, Opts)),
+    ?assertEqual(100, balance_of(Result, SellerAddr, Opts)).
 
 %% @doc The whole trade: the buyer pays the seller directly on layer one, and
 %% the process -- which is not a party to that payment -- settles it.
@@ -841,6 +895,24 @@ payment_to_wrong_address_test() ->
     Result = apply_tx(Opened, pay(Buyer, Stranger, 500, OrderID), 120, Opts),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Result, Opts))),
     ?assertEqual(0, balance_of(Result, BuyerAddr, Opts)).
+
+%% @doc Tag-only trade keys are metadata and do not count as the payment leg.
+tag_only_transfer_is_metadata_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Opened =
+        apply_tx(base(#{ SellerAddr => 100 }), offer(Seller, 10, 500, 5, 200), 100, Opts),
+    OrderID = order_id(only_order(Opened, Opts)),
+    Tagged = tag_only_transfer(Buyer, SellerAddr, 500, OrderID),
+    ?assertEqual(SellerAddr, hb_ao:get(<<"target">>, Tagged, not_found, Opts)),
+    ?assertEqual(<<"500">>, hb_ao:get(<<"quantity">>, Tagged, not_found, Opts)),
+    ?assertEqual(<<>>, tx_field_target(Tagged, Opts)),
+    ?assertEqual({ok, 0}, tx_field_quantity(Tagged, Opts)),
+    Result = apply_tx(Opened, Tagged, 120, Opts),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Result, Opts))),
+    ?assertEqual(0, balance_of(Result, BuyerAddr, Opts)),
+    ?assertEqual(85, balance_of(Result, SellerAddr, Opts)).
 
 %% @doc Cancelling returns the goods at once, but holds the bond for as long as
 %% a payment could still be in flight.
@@ -1147,17 +1219,16 @@ non_numeric_tag_is_ignored_test() ->
     ?assertEqual([], orders(Result, Opts)),
     ?assertEqual(100, balance_of(Result, SellerAddr, Opts)).
 
-%% @doc An `order-id' is a stranger's text. Naming a path into the order book,
-%% or one of a message's own reserved keys, must not reach anything that is then
-%% read as an order.
-hostile_order_id_test() ->
+%% @doc An `order-id' is caller-supplied text. Path-like values and reserved
+%% keys must not reach anything that is then read as an order.
+reserved_order_id_names_test() ->
     Opts = test_opts(),
     {Seller, SellerAddr} = party(),
     {Buyer, _} = party(),
     Opened =
         apply_tx(base(#{ SellerAddr => 100 }), offer(Seller, 10, 500, 5, 200), 100, Opts),
     OrderID = order_id(only_order(Opened, Opts)),
-    Hostile =
+    Names =
         [
             <<OrderID/binary, "/creator">>,
             <<"keys">>,
@@ -1172,7 +1243,7 @@ hostile_order_id_test() ->
                 maps:get(<<"status">>, only_order(Result, Opts))
             )
         end,
-        Hostile
+        Names
     ).
 
 %% @doc A seller cannot buy their own order. Paying oneself costs only a network
