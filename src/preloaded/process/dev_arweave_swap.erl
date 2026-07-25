@@ -179,6 +179,7 @@ make_offer(Base, Body, Height, Opts) ->
         true ?= Deadline > Height,
         true ?= balance(Base, Seller, Opts) >= Quantity + Deposit,
         OrderID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
+        not_found ?= hb_maps:get(OrderID, order_book(Base, Opts), not_found, Opts),
         Order =
             #{
                 <<"order-id">> => OrderID,
