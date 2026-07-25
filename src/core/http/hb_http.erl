@@ -207,7 +207,11 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                         >>
                     };
                 {_, Value} ->
-                    {hb_http_client:response_status_to_atom(Status), Value}
+                    add_remote_link_store_to_result(
+                        {hb_http_client:response_status_to_atom(Status), Value},
+                        Peer,
+                        Opts
+                    )
             end;
         false ->
             % Find the codec device from the headers, if set.
@@ -218,14 +222,53 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                     <<"httpsig@1.0">>,
                     Opts
                 ),
-            outbound_result_to_message(
-                CodecDev,
-                Status,
-                NormHeaderMap,
-                Body,
+            add_remote_link_store_to_result(
+                outbound_result_to_message(
+                    CodecDev,
+                    Status,
+                    NormHeaderMap,
+                    Body,
+                    Opts
+                ),
+                Peer,
                 Opts
             )
     end.
+
+%% @doc Attach response-peer provenance to decoded response links.
+add_remote_link_store_to_result({Status, Result}, Peer, Opts) ->
+    {Status, add_remote_link_store(Result, Peer, Opts)};
+add_remote_link_store_to_result(Result, _Peer, _Opts) ->
+    Result.
+
+%% @doc Preserve the peer needed to load links in a decoded HTTP response.
+add_remote_link_store({link, ID, LinkOpts}, Peer, Opts) ->
+    case maps:is_key(<<"store">>, LinkOpts) of
+        true ->
+            {link, ID, LinkOpts};
+        false ->
+            LocalStores =
+                hb_opts:get(store, [], hb_store:scope(Opts, local)),
+            RemoteStore = #{
+                <<"store-module">> => hb_store_remote_node,
+                <<"node">> => Peer,
+                <<"access">> => [<<"read">>],
+                <<"local-store">> => LocalStores
+            },
+            {link, ID, LinkOpts#{
+                <<"store">> => LocalStores ++ [RemoteStore],
+                <<"scope">> => [local, remote]
+            }}
+    end;
+add_remote_link_store(Map, Peer, Opts) when is_map(Map) ->
+    maps:map(
+        fun(_Key, Value) -> add_remote_link_store(Value, Peer, Opts) end,
+        Map
+    );
+add_remote_link_store(List, Peer, Opts) when is_list(List) ->
+    lists:map(fun(Value) -> add_remote_link_store(Value, Peer, Opts) end, List);
+add_remote_link_store(Value, _Peer, _Opts) ->
+    Value.
 
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
@@ -1464,6 +1507,54 @@ nested_signed_response(Opts) ->
             <<"commitment-device">> => <<"httpsig@1.0">>,
             <<"bundle">> => true
         }
+    ).
+
+remote_response_links_retain_peer_test() ->
+    ServerStore = [
+        hb_test_utils:test_store(hb_store_volatile, <<"http-link-server">>)
+    ],
+    ClientStore = [
+        hb_test_utils:test_store(hb_store_volatile, <<"http-link-client">>)
+    ],
+    FastClientStore =
+        hb_test_utils:test_store(hb_store_volatile, <<"http-link-fast-client">>),
+    ServerOpts = #{ <<"store">> => ServerStore, <<"port">> => 0 },
+    ClientOpts = #{ <<"store">> => ClientStore, <<"http-only-result">> => false },
+    FastClientOpts = #{ <<"store">> => FastClientStore },
+    URL = hb_http_server:start_node(ServerOpts),
+    Parent = #{ <<"child">> => #{ <<"value">> => <<"from-peer">> } },
+    {ok, ParentID} = hb_cache:write(Parent, ServerOpts),
+    {ok, Reply} =
+        get(
+            URL,
+            #{
+                <<"path">> => <<"/~cache@1.0/read">>,
+                <<"read">> => ParentID,
+                <<"accept-bundle">> => false
+            },
+            ClientOpts
+        ),
+    {link, ChildID, LinkOpts} = maps:get(<<"child">>, Reply),
+    ?assertEqual([local, remote], maps:get(<<"scope">>, LinkOpts)),
+    StorelessLink =
+        {link,
+            ChildID,
+            maps:without([<<"store">>, <<"scope">>], LinkOpts)},
+    {ok, FastPathLink} =
+        add_remote_link_store_to_result(
+            {ok, StorelessLink},
+            URL,
+            FastClientOpts
+        ),
+    FastPathChild = hb_cache:ensure_all_loaded(FastPathLink, FastClientOpts),
+    ?assertEqual(
+        <<"from-peer">>,
+        hb_ao:get(<<"value">>, FastPathChild, FastClientOpts)
+    ),
+    LoadedReply = hb_cache:ensure_all_loaded(Reply, ClientOpts),
+    ?assertEqual(
+        <<"from-peer">>,
+        hb_ao:get(<<"child/value">>, LoadedReply, ClientOpts)
     ).
 
 send_large_signed_request_test() ->
