@@ -37,9 +37,11 @@ list_processes(RawOpts) ->
 
 %% @doc Read the persisted synchronization state for a process. Returns
 %% `{ok, State}' with the `next-slot' to be assigned, the process's
-%% `spawn-height', and `synced-to' (the highest block whose messages have been
-%% contiguously indexed and materialized), or propagates the store's
-%% `not_found'.
+%% `spawn-height', `synced-to' (the highest block whose messages have been
+%% contiguously indexed and materialized), and the `mode' the process is
+%% sequenced in, or propagates the store's `not_found'. The mode is pinned here
+%% at first contact: it is read from the process message, which cannot change,
+%% and a schedule half-derived in each mode would be undetectable.
 read_state(ProcID, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
@@ -50,11 +52,14 @@ read_state(ProcID, RawOpts) ->
             hb_store:read(Store, state_path(ProcID, <<"spawn-height">>), Opts),
         {ok, SyncedTo} ?=
             hb_store:read(Store, state_path(ProcID, <<"synced-to">>), Opts),
+        {ok, Mode} ?=
+            hb_store:read(Store, state_path(ProcID, <<"mode">>), Opts),
         {ok,
             #{
                 <<"next-slot">> => hb_util:int(NextSlot),
                 <<"spawn-height">> => hb_util:int(SpawnHeight),
-                <<"synced-to">> => hb_util:int(SyncedTo)
+                <<"synced-to">> => hb_util:int(SyncedTo),
+                <<"mode">> => Mode
             }
         }
     end.
@@ -66,14 +71,16 @@ write_state(ProcID, State, RawOpts) ->
     #{
         <<"next-slot">> := NextSlot,
         <<"spawn-height">> := SpawnHeight,
-        <<"synced-to">> := SyncedTo
+        <<"synced-to">> := SyncedTo,
+        <<"mode">> := Mode
     } = State,
     hb_store:write(
         Store,
         #{
             state_path(ProcID, <<"next-slot">>) => hb_util:bin(NextSlot),
             state_path(ProcID, <<"spawn-height">>) => hb_util:bin(SpawnHeight),
-            state_path(ProcID, <<"synced-to">>) => hb_util:bin(SyncedTo)
+            state_path(ProcID, <<"synced-to">>) => hb_util:bin(SyncedTo),
+            state_path(ProcID, <<"mode">>) => Mode
         },
         Opts
     ).
