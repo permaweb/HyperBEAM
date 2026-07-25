@@ -832,9 +832,22 @@ slot_zero(_Mode, Offset, _SpawnHeight) ->
 %% tx@1.0 signature -- so its committed ID is the transaction ID and it verifies
 %% -- and no data is attached at this layer, so the schedule never depends on
 %% the availability of any transaction's data.
+%% The header is taken as it is read, links and all. Forcing it to load in full
+%% would demand a transaction's data -- the very thing this schedule promises
+%% never to depend on -- and any transaction on the network can be a message
+%% here, so most of them carry some. Loading only what happens to be available
+%% locally would be worse than either: two nodes would mint different
+%% assignments for the same transaction.
+%% Only the node's own stores are consulted, because only they are known to
+%% hold what this schedule wants: the indexing pass caches a data-free header
+%% for every plain transaction it walks. Letting the read fall through to a
+%% gateway would answer with the whole transaction instead -- data, or a bundle
+%% decoded into items whose contents are not on this node -- and the schedule
+%% would then depend on the availability of data it promises never to touch.
+%% Anything not cached locally is fetched as a header in its own right.
 read_tx_header(TXID, Opts) ->
-    case hb_cache:read(TXID, Opts) of
-        {ok, Msg} -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)};
+    case hb_cache:read(TXID, hb_store:scope(Opts, local)) of
+        {ok, Msg} -> {ok, Msg};
         _ -> fetch_tx_header(TXID, Opts)
     end.
 
@@ -855,7 +868,7 @@ fetch_tx_header(TXID, Opts) ->
             no_result_cache(Opts)
         ),
     case Res of
-        {ok, Msg} -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)};
+        {ok, Msg} -> {ok, Msg};
         _ ->
             {error,
                 #{
