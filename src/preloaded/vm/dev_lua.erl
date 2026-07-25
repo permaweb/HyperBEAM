@@ -145,13 +145,14 @@ load_modules([ModuleID | Rest], Opts, Acc) when ?IS_ID(ModuleID) ->
 load_modules([Module|Rest], Opts, Acc) when is_map(Module) ->
     % We have found a message with a Lua module inside. Search for the binary
     % of the program in the body and the data.
+    PlainModule = {as, <<"message@1.0">>, Module},
     ModuleBin =
         hb_ao:get_first(
             [
-                {Module, <<"body">>},
-                {Module, <<"data">>}
+                {PlainModule, <<"body">>},
+                {PlainModule, <<"data">>}
             ],
-            Module,
+            not_found,
             Opts
         ),
     case ModuleBin of
@@ -523,7 +524,14 @@ simple_invocation_test() ->
         },
         <<"parameters">> => []
     },
-    ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})).
+    ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, Base, #{})),
+    InlineBase = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"content-type">> => <<"application/lua">>,
+        <<"data">> => Script,
+        <<"parameters">> => []
+    },
+    ?assertEqual(2, hb_ao:get(<<"assoctable/b">>, InlineBase, #{})).
 
 post_invocation_message_validation_test() ->
     {ok, Script} = file:read_file("test/test.lua"),
