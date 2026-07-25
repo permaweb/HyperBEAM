@@ -27,6 +27,26 @@
 %%%       the device's own schedule cache.</li>
 %%% </ul>
 %%%
+%%% A process message may widen what it is sequenced by, with a
+%%% `scheduler-mode' key:
+%%% <ul>
+%%%   <li>`target' (the default): the process's messages are the transactions
+%%%       addressed to it, as above.</li>
+%%%   <li>`all': <em>every</em> base-layer transaction is a message in the
+%%%       process's schedule, whoever it is addressed to. This is what lets a
+%%%       process observe value moving between two other addresses -- a
+%%%       payment it is owed but is not a party to -- at the cost of a slot
+%%%       for every transaction on the network. Its schedule is enumerated
+%%%       from the block headers rather than by query, in canonical chain
+%%%       order (blocks ascending, then each block's own transaction order),
+%%%       and each assignment records the `block-height' that sequenced it, so
+%%%       a process in this mode has a clock. The process's own transaction is
+%%%       not re-assigned: it remains slot 0 alone.</li>
+%%% </ul>
+%%% The mode is read from the process message itself -- an L1 transaction --
+%%% so it is chain data like the rest of the schedule, and is fixed for the
+%%% life of the process.
+%%%
 %%% Assignment <em>bodies are transaction headers only</em>: each is the
 %%% data-free header that `~copycat@1.0/arweave' cached while indexing the
 %%% range (read from the node's stores), so the schedule never carries (nor
@@ -93,6 +113,9 @@
 -define(QUERY_PAGE_SIZE, 100).
 %%% The Arweave device that we resolve chain data through.
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
+%%% The sequencing mode of a process whose message does not name one: only the
+%%% transactions addressed to it are its messages.
+-define(DEFAULT_MODE, <<"target">>).
 
 %% @doc This device uses a default handler to route requests to the correct
 %% function.
@@ -364,19 +387,21 @@ sync(ProcID, Opts) ->
 do_sync(_ProcID, State = #{ <<"synced-to">> := SyncedTo }, Upper, _Opts)
         when SyncedTo >= Upper ->
     {ok, State};
-do_sync(ProcID, State = #{ <<"synced-to">> := SyncedTo }, Upper, Opts) ->
+do_sync(ProcID, State = #{ <<"synced-to">> := SyncedTo, <<"mode">> := Mode },
+        Upper, Opts) ->
     From = SyncedTo + 1,
     To = min(SyncedTo + sync_chunk_blocks(Opts), Upper),
     ?event(
         {arweave_scheduler_sync,
             {proc_id, ProcID},
+            {mode, Mode},
             {from, From},
             {to, To},
             {target, Upper}
         }
     ),
     maybe
-        {ok, Ordered} ?= discover(ProcID, From, To, Opts),
+        {ok, Ordered} ?= discover(ProcID, Mode, From, To, Opts),
         {ok, NewState} ?= materialize(ProcID, State, Ordered, To, Opts),
         do_sync(ProcID, NewState, Upper, Opts)
     end.
@@ -397,21 +422,68 @@ no_result_cache(Opts) ->
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     }.
 
-%% @doc Discover the base-layer transactions addressed to a process within a
-%% block range, in ascending weave order, entirely from the node's own index.
-%% Indexing the range with `~copycat@1.0/arweave' both records each
+%% @doc Discover the base-layer transactions that a process is sequenced by
+%% within a block range, in canonical weave order, entirely from the node's own
+%% index. Indexing the range with `~copycat@1.0/arweave' both records each
 %% transaction's weave offset and caches its header (so its `target' is locally
-%% matchable); the recipient match is then served from the node's own
+%% matchable), whichever mode the process is in.
+%%
+%% In `target' mode the recipient match is served from the node's own
 %% `~query@1.0' GraphQL endpoint, and each match is annotated with its offset --
 %% the sort key and the `offset' recorded on the assignment. No gateway is
-%% queried by default. Returns `{Offset, TXID}' pairs in ascending offset order;
-%% bundled data items are excluded, as this scheduler sequences the base layer
-%% only.
-discover(ProcID, From, To, Opts) ->
+%% queried by default. In `all' mode there is nothing to match, so no query is
+%% run: the range's block headers are walked directly (see
+%% `enumerate_blocks/4').
+%%
+%% Returns `{Extra, TXID}' pairs in the order they are to be assigned, where
+%% `Extra' is the sequencing detail recorded on each assignment. Bundled data
+%% items are excluded, as this scheduler sequences the base layer only.
+discover(ProcID, <<"all">>, From, To, Opts) ->
+    maybe
+        ok ?= ensure_offsets(From, To, Opts),
+        {ok, Located} ?= enumerate_blocks(ProcID, From, To, Opts),
+        base_layer_blocks(Located, Opts)
+    end;
+discover(ProcID, _Mode, From, To, Opts) ->
     maybe
         ok ?= ensure_offsets(From, To, Opts),
         {ok, IDs} ?= query_recipients(ProcID, From, To, Opts),
-        {ok, base_layer_offsets(IDs, Opts)}
+        {ok,
+            [
+                {#{ <<"offset">> => Offset }, TXID}
+            ||
+                {Offset, TXID} <- base_layer_offsets(IDs, Opts)
+            ]
+        }
+    end.
+
+%% @doc Enumerate every transaction in a block range from the block headers
+%% themselves, in canonical chain order: blocks ascending by height, then each
+%% block's transactions in the order that block lists them. This is the same
+%% source `~copycat@1.0/arweave' walks while indexing, and `ensure_offsets' has
+%% already cached the blocks locally, so the enumeration is normally a local
+%% read. The process's own transaction is skipped: it is already slot 0.
+%%
+%% Returns `{Height, TXID}' pairs. Unlike a query result these are ordered by
+%% construction, and that order is total -- weave offset is not, because every
+%% transaction that carries no data shares the offset of the one before it.
+enumerate_blocks(_ProcID, From, To, _Opts) when From > To -> {ok, []};
+enumerate_blocks(ProcID, From, To, Opts) ->
+    maybe
+        {ok, Block} ?=
+            hb_ao:resolve(
+                <<?ARWEAVE_DEVICE/binary, "/block=", (hb_util:bin(From))/binary>>,
+                no_result_cache(Opts)
+            ),
+        {ok, Rest} ?= enumerate_blocks(ProcID, From + 1, To, Opts),
+        {ok,
+            [
+                {From, TXID}
+            ||
+                TXID <- hb_maps:get(<<"txs">>, Block, [], Opts),
+                TXID =/= hb_util:human_id(ProcID)
+            ] ++ Rest
+        }
     end.
 
 %% @doc Ensure the node's local Arweave index covers the block range, so that
@@ -570,6 +642,60 @@ base_layer_offset(Store, ID, Opts) ->
         _ -> false
     end.
 
+%% @doc Annotate each block-enumerated transaction with its weave offset,
+%% keeping only the base-layer ones. The enumeration is already in canonical
+%% order, so -- unlike `base_layer_offsets/2' -- it is not re-sorted. Each
+%% assignment records the height of the block that sequenced it as well as its
+%% offset: in this mode the schedule follows the chain rather than the process,
+%% so the block height is the only clock a process has.
+%%
+%% A transaction the block lists but the local index does not hold is a failure
+%% to index, not an absence -- `~copycat@1.0/arweave' skips a whole block if any
+%% one of its transaction headers could not be fetched, while still reporting
+%% success. Dropping those would silently shorten the schedule and, because
+%% slots are positional, shift every later slot on this node alone. So the range
+%% fails here instead, leaving `synced-to' where it was for the next pass to
+%% retry.
+base_layer_blocks(Located, Opts) ->
+    Store = hb_store_arweave:store_from_opts(Opts),
+    lists:foldr(
+        fun(_, {error, Err}) -> {error, Err};
+           ({Height, ID}, {ok, Acc}) ->
+            case offset_entry(Store, ID, Opts) of
+                {ok, <<"tx@1.0">>, Offset} ->
+                    {ok,
+                        [
+                            {
+                                #{
+                                    <<"offset">> => Offset,
+                                    <<"block-height">> => Height
+                                },
+                                ID
+                            }
+                        |
+                            Acc
+                        ]
+                    };
+                {ok, _Codec, _Offset} ->
+                    % A bundled data item: this scheduler sequences the base
+                    % layer only.
+                    {ok, Acc};
+                not_found ->
+                    {error,
+                        #{
+                            <<"status">> => 503,
+                            <<"reason">> =>
+                                <<"Block range is not fully indexed locally.">>,
+                            <<"tx">> => ID,
+                            <<"block-height">> => Height
+                        }
+                    }
+            end
+        end,
+        {ok, []},
+        Located
+    ).
+
 %% @doc Read a transaction's local index entry, returning its codec device and
 %% weave offset.
 offset_entry(Store, ID, Opts) ->
@@ -595,10 +721,10 @@ assign(ProcID, State, Slot, [], To, Opts) ->
     NewState = State#{ <<"next-slot">> => Slot, <<"synced-to">> => To },
     ok = dev_arweave_scheduler_cache:write_state(ProcID, NewState, Opts),
     {ok, NewState};
-assign(ProcID, State, Slot, [{Offset, TXID} | Rest], To, Opts) ->
+assign(ProcID, State, Slot, [{Extra, TXID} | Rest], To, Opts) ->
     case read_tx_header(TXID, Opts) of
         {ok, Msg} ->
-            ok = write_assignment(ProcID, Slot, Offset, Msg, Opts),
+            ok = write_assignment(ProcID, Slot, Extra, Msg, Opts),
             assign(ProcID, State, Slot + 1, Rest, To, Opts);
         {error, Err} ->
             ?event(
@@ -613,10 +739,11 @@ assign(ProcID, State, Slot, [{Offset, TXID} | Rest], To, Opts) ->
 
 %% @doc Generate and store the synthetic assignment for a message. Mirrors the
 %% assignments minted by `~scheduler@1.0', but the on-chain position is the
-%% transaction's weave `offset' rather than a scheduler-assigned nonce. Every
-%% field derives from chain data, so the assignment is deterministic across
-%% nodes and is left uncommitted.
-write_assignment(ProcID, Slot, Offset, Msg, Opts) ->
+%% transaction's weave `offset' rather than a scheduler-assigned nonce (joined,
+%% in `all' mode, by the `block-height' that sequenced it). Every field derives
+%% from chain data, so the assignment is deterministic across nodes and is left
+%% uncommitted.
+write_assignment(ProcID, Slot, Extra, Msg, Opts) ->
     BaseAssignment =
         lib_scheduler:base_assignment(
             hb_util:human_id(ProcID),
@@ -624,12 +751,12 @@ write_assignment(ProcID, Slot, Offset, Msg, Opts) ->
             Msg,
             Opts
         ),
-    Assignment = BaseAssignment#{ <<"offset">> => Offset },
+    Assignment = hb_maps:merge(BaseAssignment, Extra, Opts),
     ?event(
         {minting_assignment,
             {proc_id, ProcID},
             {slot, Slot},
-            {offset, Offset}
+            {extra, Extra}
         }
     ),
     dev_arweave_scheduler_cache:write(Assignment, Opts).
@@ -655,7 +782,15 @@ initialize(ProcID, Opts) ->
         {ok, Offset} ?= tx_offset(ProcID, Opts),
         {ok, Process} ?= read_tx_header(ProcID, Opts),
         {ok, _} = hb_cache:write(Process, Opts),
-        ok = write_assignment(ProcID, 0, Offset, Process, Opts),
+        Mode = mode(Process, Opts),
+        ok =
+            write_assignment(
+                ProcID,
+                0,
+                slot_zero(Mode, Offset, SpawnHeight),
+                Process,
+                Opts
+            ),
         % `synced-to' starts one below the spawn block: slot 0 is the process
         % itself, and no message-bearing block has been indexed yet. The first
         % sync begins its range at the spawn block, catching any messages mined
@@ -664,11 +799,30 @@ initialize(ProcID, Opts) ->
             #{
                 <<"next-slot">> => 1,
                 <<"spawn-height">> => SpawnHeight,
-                <<"synced-to">> => SpawnHeight - 1
+                <<"synced-to">> => SpawnHeight - 1,
+                <<"mode">> => Mode
             },
         ok = dev_arweave_scheduler_cache:write_state(ProcID, State, Opts),
         {ok, State}
     end.
+
+%% @doc The sequencing mode a process message asks for. A mode the device does
+%% not implement falls back to `target' rather than erroring: the process
+%% message is immutable, so a typo in a spawn tag would otherwise wedge the
+%% process permanently.
+mode(Process, Opts) ->
+    case hb_ao:get(<<"scheduler-mode">>, Process, ?DEFAULT_MODE, Opts) of
+        <<"all">> -> <<"all">>;
+        _ -> ?DEFAULT_MODE
+    end.
+
+%% @doc The sequencing detail recorded on slot 0. The process message is its
+%% own first message, so in `all' mode it carries the height of its spawn block
+%% -- the process's clock starts at the block it was created in.
+slot_zero(<<"all">>, Offset, SpawnHeight) ->
+    #{ <<"offset">> => Offset, <<"block-height">> => SpawnHeight };
+slot_zero(_Mode, Offset, _SpawnHeight) ->
+    #{ <<"offset">> => Offset }.
 
 %% @doc Read an L1 transaction as a header-only message from the node's stores.
 %% `~copycat@1.0/arweave' caches the (data-free) header locally while indexing,
@@ -680,6 +834,27 @@ initialize(ProcID, Opts) ->
 %% the availability of any transaction's data.
 read_tx_header(TXID, Opts) ->
     case hb_cache:read(TXID, Opts) of
+        {ok, Msg} -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)};
+        _ -> fetch_tx_header(TXID, Opts)
+    end.
+
+%% @doc Fetch a transaction's data-free header from Arweave. The indexing pass
+%% caches the headers of plain L1 transactions as it goes, but deliberately not
+%% those of bundles -- and an `all'-mode schedule sequences every transaction in
+%% a block, bundles included. Their headers are fetched on demand rather than
+%% failing the whole range; `exclude-data' keeps the schedule header-only, so it
+%% still never depends on the availability of a transaction's data.
+fetch_tx_header(TXID, Opts) ->
+    Res =
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary, "/tx",
+                "&tx=", TXID/binary,
+                "&exclude-data=true"
+            >>,
+            no_result_cache(Opts)
+        ),
+    case Res of
         {ok, Msg} -> {ok, hb_cache:ensure_all_loaded(Msg, Opts)};
         _ ->
             {error,
@@ -880,6 +1055,149 @@ base_layer_offsets_test() ->
         base_layer_offsets([Late, Bundled, Early, Unindexed], Opts)
     ).
 
+%% @doc The sequencing mode is read from the process message, and anything the
+%% device does not implement leaves the process sequenced as normal rather than
+%% wedging it: the process message cannot be corrected once it is on-chain.
+mode_test() ->
+    ?assertEqual(<<"all">>, mode(#{ <<"scheduler-mode">> => <<"all">> }, #{})),
+    ?assertEqual(?DEFAULT_MODE, mode(#{}, #{})),
+    ?assertEqual(
+        ?DEFAULT_MODE,
+        mode(#{ <<"scheduler-mode">> => <<"sideways">> }, #{})
+    ).
+
+%% @doc A process sequenced by the whole chain has a clock from slot 0; one
+%% sequenced by its own messages keeps the assignment shape it always had.
+slot_zero_test() ->
+    ?assertEqual(
+        #{ <<"offset">> => 7, <<"block-height">> => 3 },
+        slot_zero(<<"all">>, 7, 3)
+    ),
+    ?assertEqual(#{ <<"offset">> => 7 }, slot_zero(?DEFAULT_MODE, 7, 3)).
+
+%% @doc Write a block into the node's block cache at the height pseudo-path
+%% `~copycat@1.0/arweave' caches it under, so the enumerator reads it locally
+%% rather than from the network.
+write_test_block(Height, TXs, Opts) ->
+    {ok, MsgID} =
+        hb_cache:write(#{ <<"height">> => Height, <<"txs">> => TXs }, Opts),
+    hb_cache:link(
+        MsgID,
+        hb_path:to_binary(
+            [?ARWEAVE_DEVICE, <<"block">>, <<"height">>, hb_util:bin(Height)]
+        ),
+        Opts
+    ),
+    ok.
+
+%% @doc In `all' mode the schedule is enumerated from the block headers, in
+%% chain order, and the process's own transaction is not re-assigned: it is
+%% already slot 0.
+enumerate_blocks_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    First = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Second = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Third = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ok = write_test_block(10, [First, ProcID], Opts),
+    ok = write_test_block(11, [Second, Third], Opts),
+    ?assertEqual(
+        {ok, [{10, First}, {11, Second}, {11, Third}]},
+        enumerate_blocks(ProcID, 10, 11, Opts)
+    ).
+
+%% @doc Block-enumerated transactions keep chain order rather than being sorted
+%% by offset -- offsets tie for every transaction that carries no data, which
+%% is what an AO message is -- and each records the height that sequenced it.
+%% Bundled data items are still dropped.
+base_layer_blocks_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    ArwStore = #{ <<"index-store">> => [Store] },
+    Opts = #{ <<"arweave-index-store">> => ArwStore },
+    Early = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Late = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Bundled = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ok = hb_store_arweave:write_offset(ArwStore, Late, <<"tx@1.0">>, 100, 0),
+    ok = hb_store_arweave:write_offset(ArwStore, Bundled, <<"ans104@1.0">>, 150, 0),
+    ok = hb_store_arweave:write_offset(ArwStore, Early, <<"tx@1.0">>, 200, 0),
+    ?assertEqual(
+        {ok,
+            [
+                {#{ <<"offset">> => 100, <<"block-height">> => 10 }, Late},
+                {#{ <<"offset">> => 200, <<"block-height">> => 11 }, Early}
+            ]
+        },
+        base_layer_blocks([{10, Late}, {11, Bundled}, {11, Early}], Opts)
+    ).
+
+%% @doc A transaction the block lists but the index does not hold means the
+%% range was not fully indexed. Dropping it would shorten the schedule and, as
+%% slots are positional, shift every later slot on this node alone -- so the
+%% range fails and `synced-to' stays where it was.
+base_layer_blocks_unindexed_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    ArwStore = #{ <<"index-store">> => [Store] },
+    Opts = #{ <<"arweave-index-store">> => ArwStore },
+    Indexed = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Missing = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ok = hb_store_arweave:write_offset(ArwStore, Indexed, <<"tx@1.0">>, 100, 0),
+    ?assertMatch(
+        {error, #{ <<"status">> := 503 }},
+        base_layer_blocks([{10, Indexed}, {10, Missing}], Opts)
+    ).
+
+%% @doc An `all'-mode assignment records the height that sequenced it as well
+%% as its weave offset, and both survive the cache round trip that a process
+%% reads its schedule back through. This is the contract
+%% `~arweave-swap@1.0' reads its clock from.
+all_mode_assignment_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store], <<"priv-wallet">> => ar_wallet:new() },
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Msg =
+        hb_message:commit(
+            #{ <<"target">> => ProcID },
+            Opts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    ok =
+        write_assignment(
+            ProcID,
+            1,
+            #{ <<"offset">> => 42, <<"block-height">> => 1958986 },
+            Msg,
+            Opts
+        ),
+    {ok, Assignment} = dev_arweave_scheduler_cache:read(ProcID, 1, Opts),
+    ?assertEqual(1, hb_util:int(hb_ao:get(<<"slot">>, Assignment, Opts))),
+    ?assertEqual(42, hb_util:int(hb_ao:get(<<"offset">>, Assignment, Opts))),
+    ?assertEqual(
+        1958986,
+        hb_util:int(hb_ao:get(<<"block-height">>, Assignment, Opts))
+    ).
+
+%% @doc The mode is pinned in the persisted state, so a schedule can never be
+%% half-derived in each mode.
+state_mode_round_trip_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    State =
+        #{
+            <<"next-slot">> => 1,
+            <<"spawn-height">> => 10,
+            <<"synced-to">> => 9,
+            <<"mode">> => <<"all">>
+        },
+    ok = dev_arweave_scheduler_cache:write_state(ProcID, State, Opts),
+    ?assertEqual({ok, State}, dev_arweave_scheduler_cache:read_state(ProcID, Opts)).
+
 %% @doc `/status' reports each tracked process's contiguously-indexed block
 %% range straight from the cache, without triggering a synchronization.
 status_attestable_range_test() ->
@@ -893,7 +1211,8 @@ status_attestable_range_test() ->
             #{
                 <<"next-slot">> => 4,
                 <<"spawn-height">> => 100,
-                <<"synced-to">> => 150
+                <<"synced-to">> => 150,
+                <<"mode">> => ?DEFAULT_MODE
             },
             Opts
         ),
