@@ -695,7 +695,7 @@ cancel_grace(Base, Opts) ->
 %%% `~process@1.0' would: the device reads chain data but performs no I/O, so a
 %%% whole trade can be played out without a weave.
 
--define(PROCESS, <<"pRoCeSs00000000000000000000000000000000000">>).
+-define(PROCESS, <<"pRoCeSs000000000000000000000000000000000000">>).
 
 test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 
