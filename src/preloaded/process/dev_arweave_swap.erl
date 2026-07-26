@@ -182,7 +182,7 @@ make_offer(Base, Body, Height, Opts) ->
         {ok, Deposit} ?= amount(<<"deposit">>, Body, Opts),
         {ok, Fee} ?= amount(<<"minimum-fee">>, Body, Opts),
         {ok, Deadline} ?= amount(<<"deadline">>, Body, Opts),
-        Recipient = field(<<"recipient">>, Body, Seller, Opts),
+        {ok, Recipient} ?= recipient(Body, Seller, Opts),
         true ?= Quantity >= 1,
         true ?= Asking >= 1,
         true ?= Deposit >= 0,
@@ -699,6 +699,13 @@ note(Base, Event, OrderID, _Opts) ->
 amount(Key, Body, Opts) ->
     hb_util:safe_int(field(Key, Body, 0, Opts)).
 
+recipient(Body, Default, Opts) ->
+    Recipient = field(<<"recipient">>, Body, Default, Opts),
+    case hb_util:safe_decode(Recipient) of
+        {ok, Decoded} when ?IS_ID(Decoded) -> {ok, Recipient};
+        _ -> not_found
+    end.
+
 %% @doc Read a value from the real L1 transaction fields recorded in the
 %% `tx@1.0' commitment. Top-level keys may come from tags with the same names, so
 %% payment routing and amount checks must not use them.
@@ -726,19 +733,25 @@ signer(Body, Opts) ->
     end.
 
 reservation_blocks(Base, Opts) ->
-    hb_util:int(
+    case hb_util:safe_int(
         state(
             <<"swap-reservation-blocks">>,
             Base,
             ?DEFAULT_RESERVATION_BLOCKS,
             Opts
         )
-    ).
+    ) of
+        {ok, Blocks} when Blocks >= 1 -> Blocks;
+        _ -> ?DEFAULT_RESERVATION_BLOCKS
+    end.
 
 cancel_grace(Base, Opts) ->
-    hb_util:int(
+    case hb_util:safe_int(
         state(<<"swap-cancel-grace">>, Base, ?DEFAULT_CANCEL_GRACE, Opts)
-    ).
+    ) of
+        {ok, Grace} when Grace >= 0 -> Grace;
+        _ -> ?DEFAULT_CANCEL_GRACE
+    end.
 
 %%% Tests
 
@@ -907,6 +920,27 @@ make_offer_insufficient_balance_test() ->
     Result = apply_tx(Base, offer(Seller, 10, 500, 5, 200), 100, Opts),
     ?assertEqual([], orders(Result, Opts)),
     ?assertEqual(4, balance_of(Result, SellerAddr, Opts)).
+
+%% @doc A recipient supplied by the seller must be a real address.
+make_offer_bad_recipient_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    Bad =
+        tx(
+            Seller,
+            #{
+                <<"target">> => ?PROCESS,
+                <<"action">> => <<"make-offer">>,
+                <<"offer-quantity">> => <<"1">>,
+                <<"asking">> => <<"500">>,
+                <<"deposit">> => <<"0">>,
+                <<"deadline">> => <<"200">>,
+                <<"recipient">> => <<"path">>
+            }
+        ),
+    Result = apply_tx(base(#{ SellerAddr => 1 }), Bad, 100, Opts),
+    ?assertEqual([], orders(Result, Opts)),
+    ?assertEqual(1, balance_of(Result, SellerAddr, Opts)).
 
 %% @doc A deadline that has already passed is not an offer.
 make_offer_stale_deadline_test() ->
@@ -1101,6 +1135,23 @@ reservation_lapses_test() ->
     Lapsed = tick(Reserved, 110 + ?DEFAULT_RESERVATION_BLOCKS + 1, Opts),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Lapsed, Opts))).
 
+%% @doc A malformed reservation window falls back to the default.
+negative_reservation_blocks_uses_default_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, _} = party(),
+    Base =
+        (base(#{ SellerAddr => 100 }))#{
+            <<"swap-reservation-blocks">> => <<"-1">>
+        },
+    Opened = apply_tx(Base, offer(Seller, 10, 500, 5, 200), 100, Opts),
+    OrderID = order_id(only_order(Opened, Opts)),
+    Reserved = apply_tx(Opened, order_action(Buyer, <<"register-interest">>, OrderID), 110, Opts),
+    ?assertEqual(
+        110 + ?DEFAULT_RESERVATION_BLOCKS,
+        maps:get(<<"reserved-until">>, only_order(Reserved, Opts))
+    ).
+
 %% @doc An unsold order returns its goods when its deadline passes.
 expiry_returns_goods_test() ->
     Opts = test_opts(),
@@ -1128,6 +1179,22 @@ late_payment_takes_the_bond_test() ->
     ?assertEqual(5, balance_of(Paid, BuyerAddr, Opts)),
     ?assertEqual(0, deposit(only_order(Paid, Opts))),
     ?assertEqual(95, balance_of(Paid, SellerAddr, Opts)).
+
+%% @doc A malformed cancel grace falls back to the default.
+negative_cancel_grace_uses_default_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Base =
+        (base(#{ SellerAddr => 100 }))#{
+            <<"swap-cancel-grace">> => <<"-100">>
+        },
+    Opened = apply_tx(Base, offer(Seller, 10, 500, 5, 200), 100, Opts),
+    OrderID = order_id(only_order(Opened, Opts)),
+    Expired = tick(Opened, 201, Opts),
+    Paid = apply_tx(Expired, pay(Buyer, SellerAddr, 500, OrderID), 202, Opts),
+    ?assertEqual(5, balance_of(Paid, BuyerAddr, Opts)),
+    ?assertEqual(0, deposit(only_order(Paid, Opts))).
 
 %% @doc The bond is paid out once. A second late payment gets nothing, because
 %% there is nothing left to compensate it with.
