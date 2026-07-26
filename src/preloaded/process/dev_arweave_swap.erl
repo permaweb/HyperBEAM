@@ -553,7 +553,7 @@ state(Key, Base, Default, Opts) ->
 
 %% @doc Read a field from an untrusted scheduled message as plain data.
 field(Key, Msg, Default, Opts) ->
-    hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
+    hb_maps:get(Key, Msg, Default, Opts).
 
 %% @doc Read the orders currently held, as plain maps. The state may have been
 %% written to the process cache and read back since it was last touched, so it
@@ -877,14 +877,14 @@ balance_of(Base, Address, Opts) -> balance(Base, Address, Opts).
 foreign_device_is_data_test() ->
     Opts = test_opts(),
     {Sender, SenderAddr} = party(),
+    {_, Recipient} = party(),
     Base = base(#{ SenderAddr => 1 }),
     Foreign =
         tx(
             Sender,
             #{
-                <<"target">> => ?PROCESS,
-                <<"device">> => <<"manifest@1.0">>,
-                <<"manifest">> => #{}
+                <<"target">> => Recipient,
+                <<"device">> => <<"reference@1.0">>
             }
         ),
     Untouched = apply_tx(Base, Foreign, 100, Opts),

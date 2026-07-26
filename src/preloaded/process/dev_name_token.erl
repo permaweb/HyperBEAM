@@ -295,7 +295,7 @@ state(Key, Base, Default, Opts) ->
 
 %% @doc Read a field from an untrusted scheduled message as plain data.
 field(Key, Msg, Default, Opts) ->
-    hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
+    hb_maps:get(Key, Msg, Default, Opts).
 
 balance(Base, Address, Opts) ->
     hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
@@ -472,8 +472,7 @@ foreign_device_is_data_test() ->
         tx(
             Owner,
             #{
-                <<"device">> => <<"manifest@1.0">>,
-                <<"manifest">> => #{}
+                <<"device">> => <<"reference@1.0">>
             }
         ),
     Untouched = apply_tx(name_held_by(OwnerAddr), Foreign, Opts),

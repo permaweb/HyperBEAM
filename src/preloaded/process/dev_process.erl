@@ -387,11 +387,11 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
                     {store_ms, StoreTimeMicroSecs div 1000},
                     {computed_slot_size, erlang:external_size(NewProcStateMsgWithSlot)},
                     {action,
-                        hb_ao:get(
-                            <<"body/action">>,
-                            Req,
+                        hb_maps:get(
+                            <<"action">>,
+                            hb_maps:get(<<"body">>, Req, #{}, Opts),
                             no_action_set,
-                            Opts#{ <<"hashpath">> => ignore }
+                            Opts
                         )
                     }
                 }
