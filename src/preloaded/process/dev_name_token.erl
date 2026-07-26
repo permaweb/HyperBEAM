@@ -107,13 +107,23 @@ swap(Base, Assignment, Opts) ->
             end
     end.
 
-%% @doc Give the name its single unit the first time it computes.
+%% @doc Give the name its single unit, and whatever it was minted pointing at,
+%% the first time it computes.
 %%
-%% The holding cannot be written into the spawn: `balances' is a submessage, and
-%% a submessage does not cross the chain. What does cross is the address itself,
-%% as the value of `initial-holder' -- values keep their case, where keys are
+%% Neither can be written into the spawn directly: `balances' and the linked
+%% message are submessages, and a submessage does not cross the chain. What does
+%% cross is a scalar -- `initial-holder', an address, and `initial-value', the id
+%% of whatever the name should resolve to. Values keep their case, where keys are
 %% lowercased and a lowercased address is a different address.
+%%
+%% Seeding a value at spawn is what makes a name cheap to mint. Without it, a
+%% freshly spawned name says nothing until somebody sends it a `set', and the
+%% first message addressed to a process pays Arweave's new-account fee -- so
+%% every name would cost that before it could resolve at all.
 seed(Base, Opts) ->
+    seed_value(seed_holding(Base, Opts), Opts).
+
+seed_holding(Base, Opts) ->
     case state(<<"initial-holder">>, Base, not_found, Opts) of
         not_found -> Base;
         Holder ->
@@ -122,6 +132,22 @@ seed(Base, Opts) ->
                     Supply = hb_util:int(state(<<"total-supply">>, Base, 1, Opts)),
                     ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
                     Base#{ ?BALANCES => #{ Holder => Supply } };
+                _ -> Base
+            end
+    end.
+
+%% @doc A name minted pointing somewhere resolves there from its first slot. The
+%% value is a message of its own -- `{ target: <id> }' -- so that a `set' can
+%% later replace it with anything at all without the shape changing underneath
+%% whatever is reading it.
+seed_value(Base, Opts) ->
+    case state(<<"initial-value">>, Base, not_found, Opts) of
+        not_found -> Base;
+        Target ->
+            case state(?VALUE, Base, not_found, Opts) of
+                not_found ->
+                    ?event({name_token_seeded_value, {target, Target}}),
+                    Base#{ ?VALUE => #{ <<"target">> => Target } };
                 _ -> Base
             end
     end.
@@ -610,6 +636,32 @@ seeded_from_initial_holder_test() ->
         <<"mine">>,
         hb_ao:get(<<"greeting">>, value(Set, Opts), not_found, Opts)
     ).
+
+%% @doc A name minted pointing somewhere resolves there immediately, without
+%% anybody having to send it a message -- which matters because the first message
+%% addressed to a process pays to create its account.
+seeded_value_test() ->
+    Opts = test_opts(),
+    {Owner, OwnerAddr} = party(),
+    Spawned =
+        #{
+            <<"name">> => <<"pn-test-1">>,
+            <<"total-supply">> => 1,
+            <<"initial-holder">> => OwnerAddr,
+            <<"initial-value">> => <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>
+        },
+    Alive = apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
+    ?assertEqual(
+        <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>,
+        hb_ao:get(<<"target">>, value(Alive, Opts), not_found, Opts)
+    ),
+    % And the holder can still point it somewhere else afterwards.
+    Reset = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"moved">> }), Opts),
+    ?assertEqual(
+        <<"moved">>,
+        hb_ao:get(<<"greeting">>, value(Reset, Opts), not_found, Opts)
+    ),
+    ?assertEqual(not_found, hb_ao:get(<<"target">>, value(Reset, Opts), not_found, Opts)).
 
 %% @doc Seeding happens once. A name whose unit has moved on is not handed a
 %% fresh one by the next message that arrives.
@@ -1285,6 +1337,104 @@ live_story(Name, Wanted, Fun) ->
             ?event(name_token_live, {story_skipped, {name, Name}}),
             skipped
     end.
+
+%% @doc Mint the five `pn-test-N' names the site's test namespace resolves
+%% through, and report what to put in the manifest.
+%%
+%% Each is spawned already holding its unit and already pointing somewhere, so
+%% none of them needs a message sent to it -- which is the whole point of
+%% `initial-value', since the first message addressed to a process pays Arweave's
+%% new-account fee. Targets alternate between a manifest and another reference,
+%% because a name that points at a reference is the shape a person actually wants:
+%% a reference can be updated with a bundled data item in seconds, where a name
+%% token needs consensus.
+%%
+%%     HB_LIVE_NAMES=1 HB_PRINT=name_token_live \\
+%%         rebar3 device test --devices dev_name_token \\
+%%             --test dev_name_token:live_names_test_
+live_names_test_() -> live_gated("HB_LIVE_NAMES", fun live_names/0, 7200).
+
+live_names() ->
+    Seller = live_wallet(),
+    SellerAddr = live_address(Seller),
+    Opts = live_opts(Seller),
+    Targets = live_name_targets(),
+    Minted =
+        lists:map(
+            fun({Index, Kind, Target}) ->
+                Name = <<"pn-test-", (hb_util:bin(Index))/binary>>,
+                ProcID =
+                    live_post(
+                        <<"mint:", Name/binary>>,
+                        #{
+                            <<"device">> => <<"process@1.0">>,
+                            <<"type">> => <<"Process">>,
+                            <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
+                            <<"scheduler-mode">> => <<"all">>,
+                            <<"execution-device">> => <<"name-token@1.0">>,
+                            <<"swap-device">> => <<"arweave-swap@1.0">>,
+                            <<"name">> => Name,
+                            <<"ticker">> => <<"NAME">>,
+                            <<"denomination">> => <<"0">>,
+                            <<"total-supply">> => <<"1">>,
+                            <<"initial-holder">> => SellerAddr,
+                            <<"initial-value">> => Target,
+                            <<"test-suite">> => <<"name-token">>
+                        },
+                        Seller,
+                        Opts
+                    ),
+                ?event(name_token_live,
+                    {minted,
+                        {name, {string, Name}},
+                        {process, {string, ProcID}},
+                        {points_at, {string, Target}},
+                        {kind, Kind}
+                    }
+                ),
+                {Name, ProcID, Kind, Target}
+            end,
+            Targets
+        ),
+    lists:foreach(fun({_, ProcID, _, _}) -> live_await(ProcID, Opts) end, Minted),
+    ?event(name_token_live,
+        {namespace_entries,
+            {holder, {string, SellerAddr}},
+            {entries,
+                {string,
+                    hb_util:bin(
+                        lists:flatten(
+                            [
+                                io_lib:format("~s=~s ", [Name, ProcID])
+                            ||
+                                {Name, ProcID, _, _} <- Minted
+                            ]
+                        )
+                    )
+                }
+            }
+        }
+    ),
+    {ok, Minted}.
+
+%% @doc What each test name points at. The manifest is the AO site's own, so a
+%% resolved name actually renders something; the references are real
+%% `~reference@1.0' inits, so the deeper chain is exercised rather than mocked.
+live_name_targets() ->
+    % A real Arweave path manifest that a gateway serves today, so a resolved
+    % name renders something rather than 404ing.
+    Manifest = <<"6oMvmlBUUltTDz_T9pZrEP2QkzpCBGk83Br8XXbqy20">>,
+    % Replaced with the test namespace's own reference once it is published; a
+    % name pointing at a reference is the shape an owner actually wants, because
+    % a reference can be repointed in seconds.
+    Reference = <<"6oMvmlBUUltTDz_T9pZrEP2QkzpCBGk83Br8XXbqy20">>,
+    [
+        {1, manifest, Manifest},
+        {2, reference, Reference},
+        {3, manifest, Manifest},
+        {4, reference, Reference},
+        {5, manifest, Manifest}
+    ].
 
 %% @doc Play all three stories out on mainnet.
 live_suite() ->
