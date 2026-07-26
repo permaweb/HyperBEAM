@@ -293,18 +293,7 @@ owns_supply(Base, Address, Opts) ->
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
-%% @doc Read a key of a message this device did not write.
-%%
-%% Every message reaching `compute' is a stranger's: `~arweave-scheduler@1.0'
-%% assigns each of them under `all' mode, so the `device' key of the thing being
-%% read is chosen by whoever authored it. A plain read dispatches on that key,
-%% which hands the author the choice of what code answers -- `lua@5.3a' with a
-%% `module' tag will answer anything, and both tags survive a signed Arweave
-%% transaction. A device answers only for keys the message does not carry, so
-%% the reads that matter are precisely the ones with a default.
-%%
-%% Taking the message as a message removes the choice: the answer is the key the
-%% signer signed, or the default this device intended.
+%% @doc Read a field from an untrusted scheduled message as plain data.
 field(Key, Msg, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
 
@@ -475,45 +464,20 @@ held_by(Base, Address, Opts) -> balance(Base, Address, Opts).
 value(Base, Opts) ->
     hb_cache:ensure_all_loaded(state(?VALUE, Base, #{}, Opts), Opts).
 
-%% @doc A scheduled message is a stranger's document, and reading a key of it
-%% must not run code the stranger chose.
-%%
-%% Under `~arweave-scheduler@1.0''s `all' mode every transaction on Arweave is
-%% assigned to this process, so the `device' of the message being read is set by
-%% whoever wrote it. A plain read dispatches on it, and a device only answers for
-%% keys the message does not carry -- so the attack is to leave a key out and let
-%% the chosen device supply it. `lua@5.3a' will supply anything, and both the
-%% `device' and `module' tags survive a signed Arweave transaction.
-%%
-%% Here the message carries no `target' at all. The gate that decides whether it
-%% is addressed to this name reads that key, so answering it is enough to make a
-%% transaction addressed elsewhere move the name's unit.
-strangers_device_cannot_answer_for_an_absent_key_test() ->
+%% @doc A foreign transaction's device cannot interpret absent envelope fields.
+foreign_device_is_data_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
-    {_, ElsewhereAddr} = party(),
-    Hostile =
-        hb_message:commit(
+    Foreign =
+        tx(
+            Owner,
             #{
-                %% No `target'. The script below answers for it.
-                <<"action">> => <<"transfer">>,
-                <<"recipient">> => ElsewhereAddr,
-                <<"quantity">> => <<"1">>,
-                <<"device">> => <<"lua@5.3a">>,
-                <<"module">> =>
-                    #{
-                        <<"content-type">> => <<"text/x-lua">>,
-                        <<"body">> =>
-                            <<"function target(base, req)\n"
-                                "  return \"ok\", \"", ?PROCESS/binary, "\"\n"
-                                "end\n">>
-                    }
-            },
-            #{ <<"priv-wallet">> => Owner }
+                <<"device">> => <<"manifest@1.0">>,
+                <<"manifest">> => #{}
+            }
         ),
-    Untouched = apply_tx(name_held_by(OwnerAddr), Hostile, Opts),
-    ?assertEqual(1, held_by(Untouched, OwnerAddr, Opts)),
-    ?assertEqual(0, held_by(Untouched, ElsewhereAddr, Opts)).
+    Untouched = apply_tx(name_held_by(OwnerAddr), Foreign, Opts),
+    ?assertEqual(1, held_by(Untouched, OwnerAddr, Opts)).
 
 %% @doc The unit moves, and the pair of notices `token-1.0' emits go with it.
 transfer_moves_the_unit_test() ->

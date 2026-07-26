@@ -551,19 +551,7 @@ release_goods(Base, Order, Creator, Status, Opts) ->
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
-%% @doc Read a key of a message this device did not write.
-%%
-%% This device sees every transaction on Arweave -- that is what `all' mode is
-%% for, and how a payment between two other addresses is observed at all. The
-%% `device' key of each of those is chosen by whoever authored it, and a plain
-%% read dispatches on it, so the author would choose what code answers. A device
-%% answers only for keys the message does not carry, which makes the reads with
-%% a default the ones worth attacking: leave the key out, and the answer is
-%% whatever the chosen device says. `lua@5.3a' says anything, and its `module'
-%% tag survives a signed Arweave transaction.
-%%
-%% Reading it as a message leaves the answer to the signer, or to the default
-%% this device intended.
+%% @doc Read a field from an untrusted scheduled message as plain data.
 field(Key, Msg, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
 
@@ -884,6 +872,24 @@ only_order(Base, Opts) ->
     Order.
 
 balance_of(Base, Address, Opts) -> balance(Base, Address, Opts).
+
+%% @doc A foreign transaction's device cannot interpret absent control fields.
+foreign_device_is_data_test() ->
+    Opts = test_opts(),
+    {Sender, SenderAddr} = party(),
+    Base = base(#{ SenderAddr => 1 }),
+    Foreign =
+        tx(
+            Sender,
+            #{
+                <<"target">> => ?PROCESS,
+                <<"device">> => <<"manifest@1.0">>,
+                <<"manifest">> => #{}
+            }
+        ),
+    Untouched = apply_tx(Base, Foreign, 100, Opts),
+    ?assertEqual(1, balance_of(Untouched, SenderAddr, Opts)),
+    ?assertEqual([], orders(Untouched, Opts)).
 
 %% @doc Opening an offer moves the goods and the bond into escrow, and leaves
 %% the order open.
