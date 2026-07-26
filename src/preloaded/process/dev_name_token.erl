@@ -152,14 +152,16 @@ seed_value(Base, Opts) ->
             end
     end.
 
-%% @doc Route a message addressed to the name by its `action'. Matching is
-%% case-insensitive, as `token-1.0' matches. An unknown action leaves the state
+%% @doc Route a message addressed to the name by its `action'. Matching is an
+%% exact whitelist of the token-style action names. An unknown action leaves the state
 %% untouched rather than failing the slot, which would stop the process on every
 %% node for good.
 action(Base, Body, Opts) ->
-    case hb_util:to_lower(field(<<"action">>, Body, <<>>, Opts)) of
+    case field(<<"action">>, Body, <<>>, Opts) of
         <<"transfer">> -> transfer(Base, Body, Opts);
+        <<"Transfer">> -> transfer(Base, Body, Opts);
         <<"set">> -> set_value(Base, Body, Opts);
+        <<"Set">> -> set_value(Base, Body, Opts);
         _ -> Base
     end.
 
@@ -681,8 +683,8 @@ supply_is_fixed_test() ->
     ?assertEqual(1, held_by(Result, OwnerAddr, Opts)),
     ?assertEqual(1, hb_util:int(state(<<"total-supply">>, Result, 0, Opts))).
 
-%% @doc Actions are matched however they are cased, as `token-1.0' matches.
-action_case_is_ignored_test() ->
+%% @doc Token-style action casing is accepted without lowercasing untrusted input (exact match).
+action_case_is_accepted_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
     {_, BuyerAddr} = party(),
