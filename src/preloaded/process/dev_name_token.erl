@@ -127,12 +127,13 @@ seed_holding(Base, Opts) ->
     case state(<<"initial-holder">>, Base, not_found, Opts) of
         not_found -> Base;
         Holder ->
-            case state(?BALANCES, Base, not_found, Opts) of
-                not_found ->
+            case {address(Holder), state(?BALANCES, Base, not_found, Opts)} of
+                {{ok, Address}, not_found} ->
                     Supply = hb_util:int(state(<<"total-supply">>, Base, 1, Opts)),
-                    ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
-                    Base#{ ?BALANCES => #{ Holder => Supply } };
-                _ -> Base
+                    ?event({name_token_seeded, {holder, Address}, {supply, Supply}}),
+                    Base#{ ?BALANCES => #{ Address => Supply } };
+                _ ->
+                    Base
             end
     end.
 
@@ -153,9 +154,9 @@ seed_value(Base, Opts) ->
     end.
 
 %% @doc Route a message addressed to the name by its `action'. Matching is an
-%% exact whitelist of the token-style action names. An unknown action leaves the state
-%% untouched rather than failing the slot, which would stop the process on every
-%% node for good.
+%% exact whitelist of the token-style action names. An unknown action leaves
+%% the state untouched rather than failing the slot, which would stop the
+%% process on every node for good.
 action(Base, Body, Opts) ->
     case field(<<"action">>, Body, <<>>, Opts) of
         <<"transfer">> -> transfer(Base, Body, Opts);
@@ -173,8 +174,7 @@ action(Base, Body, Opts) ->
 transfer(Base, Body, Opts) ->
     maybe
         {ok, Sender} ?= signer(Body, Opts),
-        Recipient = field(<<"recipient">>, Body, not_found, Opts),
-        true ?= is_binary(Recipient),
+        {ok, Recipient} ?= address(field(<<"recipient">>, Body, not_found, Opts)),
         {ok, Quantity} ?= hb_util:safe_int(field(<<"quantity">>, Body, 0, Opts)),
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
@@ -310,6 +310,28 @@ state(Key, Base, Default, Opts) ->
 field(Key, Msg, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
 
+address(Address) when is_binary(Address), byte_size(Address) =:= 32 ->
+    {ok, hb_util:human_id(Address)};
+address(Address) when ?IS_ID(Address); byte_size(Address) =:= 44 ->
+    case address_chars(Address) of
+        true -> {ok, Address};
+        false -> not_found
+    end;
+address(_) ->
+    not_found.
+
+address_chars(<<>>) ->
+    true;
+address_chars(<<Char, Rest/binary>>) when
+        Char >= $A, Char =< $Z;
+        Char >= $a, Char =< $z;
+        Char >= $0, Char =< $9;
+        Char =:= $_;
+        Char =:= $- ->
+    address_chars(Rest);
+address_chars(_) ->
+    false.
+
 balance(Base, Address, Opts) ->
     hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
 
@@ -368,7 +390,7 @@ signer(Body, Opts) ->
 %%% `~process@1.0' would. Below them is the live-network driver that seeded the
 %%% permanent fixture, and the fixture test that replays it.
 
--define(PROCESS, <<"nAmEtOkEn000000000000000000000000000000000">>).
+-define(PROCESS, <<"nAmEtOkEn0000000000000000000000000000000000">>).
 
 test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 
@@ -564,6 +586,20 @@ transfer_beyond_balance_test() ->
         )
     ).
 
+%% @doc A transfer recipient must be an address-shaped id, not an AO key.
+reserved_recipient_transfer_rejected_test() ->
+    Opts = test_opts(),
+    {Owner, OwnerAddr} = party(),
+    Result = apply_tx(name_held_by(OwnerAddr), transfer_tx(Owner, <<"path">>, 1), Opts),
+    Balances = state(?BALANCES, Result, #{}, Opts),
+    ?assertEqual(1, held_by(Result, OwnerAddr, Opts)),
+    ?assertEqual(0, hb_maps:get(<<"path">>, Balances, 0, Opts)).
+
+%% @doc Accepted address-shaped ids are preserved.
+address_shape_is_accepted_test() ->
+    Address = <<"11111111111111111111111111111111111111111111">>,
+    ?assertEqual({ok, Address}, address(Address)).
+
 %% @doc The holder says what the name resolves to, by handing over a message.
 set_writes_the_linked_message_test() ->
     Opts = test_opts(),
@@ -743,6 +779,32 @@ seeded_from_initial_holder_test() ->
         hb_ao:get(<<"greeting">>, value(Set, Opts), not_found, Opts)
     ).
 
+%% @doc Native 32-byte ids are stored as the human id that signers resolve to.
+native_initial_holder_is_canonicalized_test() ->
+    Opts = test_opts(),
+    {Owner, OwnerAddr} = party(),
+    Spawned =
+        #{
+            <<"name">> => <<"test-name">>,
+            <<"total-supply">> => 1,
+            <<"initial-holder">> => hb_util:native_id(OwnerAddr)
+        },
+    Alive = apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
+    ?assertEqual(1, held_by(Alive, OwnerAddr, Opts)).
+
+%% @doc Invalid initial holders do not receive the unit.
+invalid_initial_holder_is_not_seeded_test() ->
+    Opts = test_opts(),
+    {Owner, _} = party(),
+    Spawned =
+        #{
+            <<"name">> => <<"test-name">>,
+            <<"total-supply">> => 1,
+            <<"initial-holder">> => <<"path">>
+        },
+    Alive = apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
+    ?assertEqual(not_found, state(?BALANCES, Alive, not_found, Opts)).
+
 %% @doc A name minted pointing somewhere resolves there immediately, without
 %% anybody having to send it a message -- which matters because the first message
 %% addressed to a process pays to create its account.
@@ -865,7 +927,7 @@ live_gated(Variable, Fun, Timeout) ->
 
 %% @doc The wallet that pays for the live run.
 live_wallet() ->
-    ar_wallet:load_keyfile(<<"/Users/sam/Documents/hyperbeam-key.json">>).
+    hb:wallet().
 
 %% @doc A counterparty, kept beside the node's own key so that a rerun reuses
 %% it rather than paying to create another account.
