@@ -79,9 +79,9 @@ router(_Key, Base, Assignment, Opts) ->
 compute(Base, Assignment, Opts) ->
     Seeded = seed(Base, Opts),
     Sold = swap(Seeded, Assignment, Opts),
-    Body = hb_ao:get(<<"body">>, Assignment, #{}, Opts),
-    ProcID = hb_ao:get(<<"process">>, Assignment, <<>>, Opts),
-    case hb_ao:get(<<"target">>, Body, <<>>, Opts) of
+    Body = field(<<"body">>, Assignment, #{}, Opts),
+    ProcID = field(<<"process">>, Assignment, <<>>, Opts),
+    case field(<<"target">>, Body, <<>>, Opts) of
         ProcID -> {ok, action(Sold, Body, Opts)};
         _ ->
             % Not addressed to this name. Under `all' mode that is almost every
@@ -157,7 +157,7 @@ seed_value(Base, Opts) ->
 %% untouched rather than failing the slot, which would stop the process on every
 %% node for good.
 action(Base, Body, Opts) ->
-    case hb_util:to_lower(hb_ao:get(<<"action">>, Body, <<>>, Opts)) of
+    case hb_util:to_lower(field(<<"action">>, Body, <<>>, Opts)) of
         <<"transfer">> -> transfer(Base, Body, Opts);
         <<"set">> -> set_value(Base, Body, Opts);
         _ -> Base
@@ -171,9 +171,9 @@ action(Base, Body, Opts) ->
 transfer(Base, Body, Opts) ->
     maybe
         {ok, Sender} ?= signer(Body, Opts),
-        Recipient = hb_ao:get(<<"recipient">>, Body, not_found, Opts),
+        Recipient = field(<<"recipient">>, Body, not_found, Opts),
         true ?= is_binary(Recipient),
-        {ok, Quantity} ?= hb_util:safe_int(hb_ao:get(<<"quantity">>, Body, 0, Opts)),
+        {ok, Quantity} ?= hb_util:safe_int(field(<<"quantity">>, Body, 0, Opts)),
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
         ?event(
@@ -244,7 +244,7 @@ set_value(Base, Body, Opts) ->
 
 %% @doc The message a `set' is asking the name to resolve to.
 value_of(Body, Opts) ->
-    case hb_ao:get(<<"reference-value">>, Body, not_found, Opts) of
+    case field(<<"reference-value">>, Body, not_found, Opts) of
         not_found ->
             % The set message itself is the value. The keys that addressed it to
             % this name are not part of what the name says.
@@ -292,6 +292,21 @@ owns_supply(Base, Address, Opts) ->
 %% through `compute'. See `dev_arweave_swap:state/4'.
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
+
+%% @doc Read a key of a message this device did not write.
+%%
+%% Every message reaching `compute' is a stranger's: `~arweave-scheduler@1.0'
+%% assigns each of them under `all' mode, so the `device' key of the thing being
+%% read is chosen by whoever authored it. A plain read dispatches on that key,
+%% which hands the author the choice of what code answers -- `lua@5.3a' with a
+%% `module' tag will answer anything, and both tags survive a signed Arweave
+%% transaction. A device answers only for keys the message does not carry, so
+%% the reads that matter are precisely the ones with a default.
+%%
+%% Taking the message as a message removes the choice: the answer is the key the
+%% signer signed, or the default this device intended.
+field(Key, Msg, Default, Opts) ->
+    hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
 
 balance(Base, Address, Opts) ->
     hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
@@ -389,6 +404,55 @@ apply_tx(Base, Body, Opts) ->
         ),
     New.
 
+%% @doc A `target' tag is not an address. `~arweave-swap@1.0' states the rule
+%% this device shares -- "top-level keys may come from tags with the same
+%% names" -- and the addressed-to-me gate here reads that top-level key, so a
+%% transaction sent to nobody can reach the actions with a tag alone.
+%%
+%% It buys nothing, and this records why: every action is gated again on what
+%% the signer holds, so reaching `transfer' with an empty balance moves nothing
+%% and reaching `set' without the supply writes nothing. The gate decides who is
+%% being spoken to; the holdings decide who may speak.
+tag_only_target_reaches_the_actions_but_holds_nothing_test() ->
+    Opts = test_opts(),
+    {_, OwnerAddr} = party(),
+    {Stranger, StrangerAddr} = party(),
+    Held = name_held_by(OwnerAddr),
+    Steal =
+        tag_only_tx(
+            Stranger,
+            [
+                {<<"target">>, ?PROCESS},
+                {<<"action">>, <<"transfer">>},
+                {<<"recipient">>, StrangerAddr},
+                {<<"quantity">>, <<"1">>}
+            ]
+        ),
+    %% The tag does put the process's own id at the key the gate reads.
+    ?assertEqual(?PROCESS, hb_ao:get(<<"target">>, Steal, not_found, Opts)),
+    Tried = apply_tx(Held, Steal, Opts),
+    ?assertEqual(1, held_by(Tried, OwnerAddr, Opts)),
+    ?assertEqual(0, held_by(Tried, StrangerAddr, Opts)),
+    Speak =
+        tag_only_tx(
+            Stranger,
+            [
+                {<<"target">>, ?PROCESS},
+                {<<"action">>, <<"set">>},
+                {<<"reference-value">>, <<"a-value-the-name-never-agreed-to">>}
+            ]
+        ),
+    Said = apply_tx(Tried, Speak, Opts),
+    ?assertEqual(
+        hb_ao:get(?VALUE, {as, <<"message@1.0">>, Tried}, not_found, Opts),
+        hb_ao:get(?VALUE, {as, <<"message@1.0">>, Said}, not_found, Opts)
+    ).
+
+%% @doc A transaction that carries its keys as tags only, addressed to nobody.
+tag_only_tx(Wallet, Tags) ->
+    Signed = ar_tx:sign(#tx{ format = 2, reward = 1, tags = Tags }, Wallet),
+    hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}).
+
 transfer_tx(Wallet, Recipient, Quantity) ->
     tx(
         Wallet,
@@ -410,6 +474,46 @@ held_by(Base, Address, Opts) -> balance(Base, Address, Opts).
 
 value(Base, Opts) ->
     hb_cache:ensure_all_loaded(state(?VALUE, Base, #{}, Opts), Opts).
+
+%% @doc A scheduled message is a stranger's document, and reading a key of it
+%% must not run code the stranger chose.
+%%
+%% Under `~arweave-scheduler@1.0''s `all' mode every transaction on Arweave is
+%% assigned to this process, so the `device' of the message being read is set by
+%% whoever wrote it. A plain read dispatches on it, and a device only answers for
+%% keys the message does not carry -- so the attack is to leave a key out and let
+%% the chosen device supply it. `lua@5.3a' will supply anything, and both the
+%% `device' and `module' tags survive a signed Arweave transaction.
+%%
+%% Here the message carries no `target' at all. The gate that decides whether it
+%% is addressed to this name reads that key, so answering it is enough to make a
+%% transaction addressed elsewhere move the name's unit.
+strangers_device_cannot_answer_for_an_absent_key_test() ->
+    Opts = test_opts(),
+    {Owner, OwnerAddr} = party(),
+    {_, ElsewhereAddr} = party(),
+    Hostile =
+        hb_message:commit(
+            #{
+                %% No `target'. The script below answers for it.
+                <<"action">> => <<"transfer">>,
+                <<"recipient">> => ElsewhereAddr,
+                <<"quantity">> => <<"1">>,
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> =>
+                    #{
+                        <<"content-type">> => <<"text/x-lua">>,
+                        <<"body">> =>
+                            <<"function target(base, req)\n"
+                                "  return \"ok\", \"", ?PROCESS/binary, "\"\n"
+                                "end\n">>
+                    }
+            },
+            #{ <<"priv-wallet">> => Owner }
+        ),
+    Untouched = apply_tx(name_held_by(OwnerAddr), Hostile, Opts),
+    ?assertEqual(1, held_by(Untouched, OwnerAddr, Opts)),
+    ?assertEqual(0, held_by(Untouched, ElsewhereAddr, Opts)).
 
 %% @doc The unit moves, and the pair of notices `token-1.0' emits go with it.
 transfer_moves_the_unit_test() ->

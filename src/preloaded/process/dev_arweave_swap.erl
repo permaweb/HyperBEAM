@@ -148,9 +148,9 @@ keys(Base, Req, Opts) -> compute(Base, Req, Opts).
 %% message, which `lib_process:process_id/3' would re-verify the signature of on
 %% every one of the network's transactions.
 compute(Base, Assignment, Opts) ->
-    Height = hb_util:int(hb_ao:get(<<"block-height">>, Assignment, 0, Opts)),
-    ProcID = hb_ao:get(<<"process">>, Assignment, <<>>, Opts),
-    Body = hb_ao:get(<<"body">>, Assignment, #{}, Opts),
+    Height = hb_util:int(field(<<"block-height">>, Assignment, 0, Opts)),
+    ProcID = field(<<"process">>, Assignment, <<>>, Opts),
+    Body = field(<<"body">>, Assignment, #{}, Opts),
     Advanced = advance(Base, Height, Opts),
     case tx_field_target(Body, Opts) of
         ProcID -> {ok, control(Advanced, Body, Height, Opts)};
@@ -164,7 +164,7 @@ compute(Base, Assignment, Opts) ->
 %% anything, and a process that could be wedged by a stranger's transaction
 %% would not survive its own schedule.
 control(Base, Body, Height, Opts) ->
-    case hb_ao:get(<<"action">>, Body, <<>>, Opts) of
+    case field(<<"action">>, Body, <<>>, Opts) of
         <<"make-offer">> -> make_offer(Base, Body, Height, Opts);
         <<"cancel-order">> -> cancel_order(Base, Body, Opts);
         <<"register-interest">> -> register_interest(Base, Body, Height, Opts);
@@ -182,7 +182,7 @@ make_offer(Base, Body, Height, Opts) ->
         {ok, Deposit} ?= amount(<<"deposit">>, Body, Opts),
         {ok, Fee} ?= amount(<<"minimum-fee">>, Body, Opts),
         {ok, Deadline} ?= amount(<<"deadline">>, Body, Opts),
-        Recipient = hb_ao:get(<<"recipient">>, Body, Seller, Opts),
+        Recipient = field(<<"recipient">>, Body, Seller, Opts),
         true ?= Quantity >= 1,
         true ?= Asking >= 1,
         true ?= Deposit >= 0,
@@ -551,6 +551,22 @@ release_goods(Base, Order, Creator, Status, Opts) ->
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
+%% @doc Read a key of a message this device did not write.
+%%
+%% This device sees every transaction on Arweave -- that is what `all' mode is
+%% for, and how a payment between two other addresses is observed at all. The
+%% `device' key of each of those is chosen by whoever authored it, and a plain
+%% read dispatches on it, so the author would choose what code answers. A device
+%% answers only for keys the message does not carry, which makes the reads with
+%% a default the ones worth attacking: leave the key out, and the answer is
+%% whatever the chosen device says. `lua@5.3a' says anything, and its `module'
+%% tag survives a signed Arweave transaction.
+%%
+%% Reading it as a message leaves the answer to the signer, or to the default
+%% this device intended.
+field(Key, Msg, Default, Opts) ->
+    hb_ao:get(Key, {as, <<"message@1.0">>, Msg}, Default, Opts).
+
 %% @doc Read the orders currently held, as plain maps. The state may have been
 %% written to the process cache and read back since it was last touched, so it
 %% is loaded through the link layer, and anything that is not an order is
@@ -561,7 +577,11 @@ orders(Base, Opts) ->
         order(Held)
     ||
         Held <-
-            [ hb_maps:get(ID, Orders, #{}, Opts) || ID <- hb_ao:keys(Orders, Opts) ],
+            [
+                hb_maps:get(ID, Orders, #{}, Opts)
+            ||
+                ID <- hb_ao:keys({as, <<"message@1.0">>, Orders}, Opts)
+            ],
         is_map(Held),
         maps:is_key(<<"order-id">>, Held)
     ].
@@ -605,7 +625,7 @@ order(Held) ->
 find_order(Base, Body, Opts) ->
     Held =
         hb_maps:get(
-            hb_ao:get(<<"order-id">>, Body, <<>>, Opts),
+            field(<<"order-id">>, Body, <<>>, Opts),
             order_book(Base, Opts),
             not_found,
             Opts
@@ -677,7 +697,7 @@ note(Base, Event, OrderID, _Opts) ->
 %% that slot on every node, for good. A value that is not a number is simply not
 %% an admissible message.
 amount(Key, Body, Opts) ->
-    hb_util:safe_int(hb_ao:get(Key, Body, 0, Opts)).
+    hb_util:safe_int(field(Key, Body, 0, Opts)).
 
 %% @doc Read a value from the real L1 transaction fields recorded in the
 %% `tx@1.0' commitment. Top-level keys may come from tags with the same names, so
@@ -746,6 +766,47 @@ tx(Wallet, Fields) ->
         #{ <<"priv-wallet">> => Wallet },
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
+
+%% @doc A message this device reads is a stranger's, and a key it does not carry
+%% must be answered by this device's default, not by code the stranger picked.
+%%
+%% `all' mode hands every transaction on Arweave to this process, so the `device'
+%% key of each is the author's to choose. Reading plainly dispatches on it, and a
+%% device answers only for absent keys -- so the attack is to omit one. Here
+%% `recipient' is omitted: the seller of an order is meant to be paid by the
+%% default, and a chosen device answering that key would redirect the goods.
+strangers_device_cannot_answer_for_an_absent_key_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {_, ThiefAddr} = party(),
+    Hostile =
+        tx(
+            Seller,
+            #{
+                <<"target">> => ?PROCESS,
+                <<"action">> => <<"make-offer">>,
+                <<"offer-quantity">> => <<"1">>,
+                <<"asking">> => <<"10">>,
+                <<"deposit">> => <<"0">>,
+                <<"deadline">> => <<"100">>,
+                %% No `recipient'. The script answers for it.
+                <<"device">> => <<"lua@5.3a">>,
+                <<"module">> =>
+                    #{
+                        <<"content-type">> => <<"text/x-lua">>,
+                        <<"body">> =>
+                            <<"function recipient(base, req)\n"
+                                "  return \"ok\", \"", ThiefAddr/binary, "\"\n"
+                                "end\n">>
+                    }
+            }
+        ),
+    Opened = apply_tx(base(#{ SellerAddr => 1 }), Hostile, 10, Opts),
+    [Order] = orders(Opened, Opts),
+    %% The goods come back to the seller, because that is what this device
+    %% decided in the absence of an instruction.
+    ?assertEqual(SellerAddr, maps:get(<<"recipient">>, Order, undefined)),
+    ?assertNotEqual(ThiefAddr, maps:get(<<"recipient">>, Order, undefined)).
 
 %% @doc A transaction that carries trade keys as tags only.
 tag_only_tx(Wallet, Tags) ->
