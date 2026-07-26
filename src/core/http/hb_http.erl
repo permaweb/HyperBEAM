@@ -207,7 +207,11 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                         >>
                     };
                 {_, Value} ->
-                    {hb_http_client:response_status_to_atom(Status), Value}
+                    add_peer_stores(
+                        {hb_http_client:response_status_to_atom(Status), Value},
+                        Peer,
+                        Opts
+                    )
             end;
         false ->
             % Find the codec device from the headers, if set.
@@ -218,14 +222,55 @@ request_response(Method, Peer, Path, Response, Duration, Opts) ->
                     <<"httpsig@1.0">>,
                     Opts
                 ),
-            outbound_result_to_message(
-                CodecDev,
-                Status,
-                NormHeaderMap,
-                Body,
+            add_peer_stores(
+                outbound_result_to_message(
+                    CodecDev,
+                    Status,
+                    NormHeaderMap,
+                    Body,
+                    Opts
+                ),
+                Peer,
                 Opts
             )
     end.
+
+%% @doc Give every link in a response the stores needed to resolve it: the
+%% client's own local stores, followed by the peer that served the response.
+%% We additionally add the local stores as a cache that the read links should
+%% be replicated to on this node, if they are resolved.
+add_peer_stores({Status, Res}, Peer, Opts) ->
+    LocalStore = hb_opts:get(store, [], hb_store:scope(Opts, local)),
+    {
+        Status,
+        set_link_stores(
+            Res,
+            LocalStore ++ [
+                #{
+                    <<"store-module">> => hb_store_remote_node,
+                    <<"node">> => Peer,
+                    <<"access">> => [<<"read">>],
+                    <<"local-store">> => LocalStore
+                }
+            ]
+        )
+    }.
+
+%% @doc Add's the given `Stores` value to every link in a message, recursively.
+set_link_stores({link, ID, LinkOpts}, Stores) ->
+    {link,
+        ID,
+        LinkOpts#{
+            <<"store">> => Stores,
+            <<"scope">> => [local, remote]
+        }
+    };
+set_link_stores(Msg, Stores) when is_map(Msg) ->
+    maps:map(fun(_Key, Value) -> set_link_stores(Value, Stores) end, Msg);
+set_link_stores(Msg, Stores) when is_list(Msg) ->
+    lists:map(fun(Value) -> set_link_stores(Value, Stores) end, Msg);
+set_link_stores(Value, _Stores) ->
+    Value.
 
 %% @doc Convert an HTTP response to a message.
 outbound_result_to_message(<<"ans104@1.0">>, Status, Headers, Body, Opts) ->
@@ -1465,6 +1510,23 @@ nested_signed_response(Opts) ->
             <<"bundle">> => true
         }
     ).
+
+%% @doc Ensure that linked submessages in a response can be resolved by
+%% reading them back from the peer that served it.
+remote_response_links_test() ->
+    ServerOpts = #{ <<"store">> => hb_test_utils:test_store() },
+    ClientOpts = #{ <<"store">> => hb_test_utils:test_store() },
+    {ok, ID} = hb_cache:write(#{ <<"a">> => #{ <<"b">> => 123 } }, ServerOpts),
+    {ok, Res} =
+        get(
+            hb_http_server:start_node(ServerOpts),
+            #{
+                <<"path">> => ID,
+                <<"accept-bundle">> => false
+            },
+            ClientOpts
+        ),
+    ?assertEqual(123, hb_ao:get(<<"a/b">>, Res, ClientOpts)).
 
 send_large_signed_request_test() ->
     Opts = #{ <<"priv-wallet">> => hb:wallet() },
