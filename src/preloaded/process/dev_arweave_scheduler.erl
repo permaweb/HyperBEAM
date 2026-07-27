@@ -423,23 +423,12 @@ no_result_cache(Opts) ->
     }.
 
 %% @doc Discover the base-layer transactions that a process is sequenced by
-%% within a block range, in canonical weave order, entirely from the node's own
-%% index.
+%% within a block range, entirely from the node's own index, returning
+%% `{Extra, TXID}' pairs in the order they are to be assigned -- where `Extra'
+%% is the sequencing detail recorded on each assignment.
 %%
-%% In `target' mode the recipient match is served from the node's own
-%% `~query@1.0' GraphQL endpoint, and each match is annotated with its weave
-%% offset -- the sort key, and the `offset' recorded on the assignment. That
-%% needs `~copycat@1.0/arweave' to have indexed an offset for every transaction
-%% in the range. No gateway is queried by default.
-%%
-%% In `all' mode there is nothing to match and nothing to sort: every
-%% transaction is a slot, and the blocks themselves already give a total order.
-%% So the range is only indexed for its headers (see `ensure_headers/3'), which
-%% is one request per block rather than a walk of every transaction and bundle
-%% in it, and the assignments are built straight from the enumeration.
-%%
-%% Returns `{Extra, TXID}' pairs in the order they are to be assigned, where
-%% `Extra' is the sequencing detail recorded on each assignment.
+%% `target' mode orders by weave offset (`base_layer_offsets/2'); `all' mode
+%% takes the total order the blocks themselves give (`enumerate_blocks/4').
 discover(ProcID, <<"all">>, From, To, Opts) ->
     maybe
         ok ?= ensure_headers(From, To, Opts),
@@ -526,10 +515,8 @@ index_range(Mode, From, To, Opts) ->
 %% range, ordered by weave position, returning their IDs. By default the query
 %% is served by the node's own `~query@1.0' index (`local'), whose `field-target'
 %% matches are populated by `~copycat@1.0/arweave' as it indexes the range (see
-%% `ensure_offsets'); a node may instead be configured
-%% (`arweave_scheduler_query_source => remote') to query a remote gateway.
+%% `ensure_offsets').
 query_recipients(ProcID, From, To, Opts) ->
-    Source = hb_opts:get(arweave_scheduler_query_source, local, Opts),
     Query =
         <<
             "query($after: String) { transactions(",
@@ -541,16 +528,16 @@ query_recipients(ProcID, From, To, Opts) ->
                 ", after: $after",
             ") { pageInfo { hasNextPage } edges { cursor node { id } } } }"
         >>,
-    query_pages(Source, Query, undefined, [], Opts).
+    query_pages(Query, undefined, [], Opts).
 
-query_pages(Source, Query, After, Acc, Opts) ->
+query_pages(Query, After, Acc, Opts) ->
     Variables =
         case After of
             undefined -> #{};
             _ -> #{ <<"after">> => After }
         end,
     maybe
-        {ok, Transactions} ?= run_query(Source, Query, Variables, Opts),
+        {ok, Transactions} ?= run_query(Query, Variables, Opts),
         Edges = hb_maps:get(<<"edges">>, Transactions, [], Opts),
         IDs = Acc ++ [ edge_id(E, Opts) || E <- Edges ],
         HasNext =
@@ -566,7 +553,7 @@ query_pages(Source, Query, After, Acc, Opts) ->
             {true, [_ | _]} ->
                 Cursor =
                     hb_maps:get(<<"cursor">>, lists:last(Edges), undefined, Opts),
-                query_pages(Source, Query, Cursor, IDs, Opts);
+                query_pages(Query, Cursor, IDs, Opts);
             _ ->
                 {ok, [ ID || ID <- IDs, is_binary(ID) ]}
         end
@@ -582,7 +569,7 @@ edge_id(Edge, Opts) ->
 %% ranges, and the racing `/graphql' route lets AO-search gateways that do not
 %% index arbitrary L1 transactions win with empty-but-200 responses. Here an
 %% empty range is an authoritative answer.
-run_query(local, Query, Variables, Opts) ->
+run_query(Query, Variables, Opts) ->
     to_transactions(
         hb_ao:resolve(
             #{ <<"device">> => <<"query@1.0">> },
@@ -591,23 +578,6 @@ run_query(local, Query, Variables, Opts) ->
                 <<"method">> => <<"POST">>,
                 <<"query">> => Query,
                 <<"variables">> => Variables
-            },
-            no_result_cache(Opts)
-        ),
-        Opts
-    );
-run_query(remote, Query, Variables, Opts) ->
-    Gateway = hb_opts:get(gateway, <<"https://arweave.net">>, Opts),
-    to_transactions(
-        hb_http:post(
-            Gateway,
-            #{
-                <<"path">> => <<"/graphql">>,
-                <<"content-type">> => <<"application/json">>,
-                <<"body">> =>
-                    hb_json:encode(
-                        #{ <<"query">> => Query, <<"variables">> => Variables }
-                    )
             },
             no_result_cache(Opts)
         ),
@@ -933,7 +903,6 @@ confirmed_tip(Opts) ->
 %%% presence in the schedule proves foreign-message indexing. Arweave is
 %%% permanent, so these tests are repeatable against the live network.
 %%% Spawn block 1958986; messages at 1958993, 1958994 and 1958995.
--define(FIXTURE_MODULE, <<"_GeSyZbQkmqWk6YzL-tjIqJ-2hakIkg-9k127DpVfO8">>).
 -define(FIXTURE_PROCESS, <<"q3SycbYpO1lz-S6V2kd7FG3DIZ3AU0NrKKxWw4C3yos">>).
 -define(FIXTURE_MSG1, <<"Y8GnKytC57VUk7W7FlGnD1oH4OAwFHyP-pJPGCJBa3Y">>).
 -define(FIXTURE_MSG2, <<"luf1fFmhi0RMIZNnFmv1QgK2SJU5plAFQ3ZxndUsLpk">>).
@@ -1050,9 +1019,7 @@ mode_test() ->
     ).
 
 %% @doc A process sequenced by the whole chain has a clock from slot 0, and
-%% every one of its slots resolves `compute'. The mode that sorts by weave
-%% position keeps the assignment shape it always had; it is read end to end by
-%% `state_mode_round_trip_test'.
+%% every one of its slots resolves `compute'.
 all_mode_detail_test() ->
     ?assertEqual(
         #{ <<"block-height">> => 3, <<"path">> => <<"compute">> },
@@ -1098,10 +1065,6 @@ enumerate_blocks_test() ->
 %% process reads its schedule back through. `~arweave-swap@1.0' reads its clock
 %% from the height; the pinned `compute' is what keeps a passer-by's `path' tag
 %% from choosing which key of the execution device the slot lands on.
-%% @doc An `all'-mode assignment records the height that sequenced it as well
-%% as its weave offset, and both survive the cache round trip that a process
-%% reads its schedule back through. This is the contract
-%% `~arweave-swap@1.0' reads its clock from.
 all_mode_assignment_test() ->
     Store = hb_test_utils:test_store(),
     hb_store:start(Store),

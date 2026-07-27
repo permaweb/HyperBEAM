@@ -197,7 +197,12 @@ make_offer(Base, Body, Height, Opts) ->
                 <<"asking">> => Asking,
                 <<"minimum-fee">> => Fee,
                 <<"deposit">> => Deposit,
-                <<"deadline">> => Deadline
+                <<"deadline">> => Deadline,
+                % Named for readers of the book rather than for this device,
+                % which decides from `buyer' and `reserved-until' alone. A
+                % client sees `reserved' until the order is next touched; the
+                % height it must outlast is beside it.
+                <<"status">> => <<"open">>
             },
             Opts
         )
@@ -262,7 +267,11 @@ register_interest(Base, Body, Height, Opts) ->
         ),
         put_order(
             debit(Taken, Buyer, Deposit, Opts),
-            Order#{ <<"buyer">> => Buyer, <<"reserved-until">> => Until },
+            Order#{
+                <<"status">> => <<"reserved">>,
+                <<"buyer">> => Buyer,
+                <<"reserved-until">> => Until
+            },
             Opts
         )
     else
@@ -359,7 +368,11 @@ forfeit(Base, Order = #{ <<"buyer">> := _, <<"creator">> := Seller }, Height, Op
             ?event({swap_pledge_forfeited, {seller, Seller}, {deposit, Deposit}}),
             {
                 credit(Base, Seller, Deposit, Opts),
-                hb_maps:without([<<"buyer">>, <<"reserved-until">>], Order, Opts)
+                hb_maps:without(
+                    [<<"buyer">>, <<"reserved-until">>],
+                    Order#{ <<"status">> => <<"open">> },
+                    Opts
+                )
             }
     end;
 forfeit(Base, Order, _Height, _Opts) -> {Base, Order}.
@@ -1060,6 +1073,20 @@ supply_is_conserved_test() ->
     Settled = apply_tx(Reserved, pay(Buyer, SellerAddr, 500, OrderID), 115, Opts),
     ?assertEqual(105, Held(Settled)),
     ?assertEqual(105, Held(tick(Reserved, 300, Opts))).
+
+%% @doc An order says whether it is held, for the benefit of whoever reads the
+%% book. The device decides from `buyer' and `reserved-until'; `status' is what
+%% a client sees.
+status_is_published_test() ->
+    Opts = test_opts(),
+    {Seller, _, Buyer, _, Opened, OrderID} = collateralised(Opts),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Opened, Opts))),
+    Reserved = reserve(Opened, Buyer, OrderID, 110, Opts),
+    ?assertEqual(<<"reserved">>, maps:get(<<"status">>, only_order(Reserved, Opts))),
+    % A hold the height has outrun reads as open again the moment the order is
+    % touched -- here by the seller's own withdrawal being admissible.
+    Relet = reserve(credit(Reserved, <<"other">>, 5, Opts), Seller, OrderID, 131, Opts),
+    ?assertEqual(<<"reserved">>, maps:get(<<"status">>, only_order(Relet, Opts))).
 
 %% @doc Collateral is pledged out of the buyer's own balance to reserve an
 %% order, and comes back to them with the goods when they pay.
