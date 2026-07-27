@@ -1,5 +1,5 @@
-%%% @doc A name: a token with a single unit, whose holder decides what the
-%%% name resolves to.
+%%% @doc A name: a token with a single unit, whose holder decides what the name
+%%% resolves to.
 %%%
 %%% The device is `token-1.0''s shape carrying `~reference@1.0''s payload. From
 %%% the token it takes the state layout -- `name', `ticker', `denomination',
@@ -38,15 +38,15 @@
 %%%
 %%% Reads are paths into the state -- `/now/balances/<address>',
 %%% `/now/total-supply', `/now/value/<key>' -- and not device keys, which is how
-%%% `token-1.0' reads too. The device deliberately exports no key list: a name
-%%% is meant to be sold by `~arweave-swap@1.0', which requires its process to be
-%%% sequenced by every transaction on Arweave, so the key a slot resolves is
-%%% chosen by a stranger's `path' tag. An exported `balance' key would let a
-%%% passer-by's transaction hand back a balance as the new process state.
+%%% `token-1.0' reads too. The device deliberately declares no `exports' list: a
+%%% name is meant to be sold by `~arweave-swap@1.0', which requires its process to
+%%% be sequenced by every transaction on Arweave, so the key a slot resolves is
+%%% chosen by a stranger's `path' tag. A `balance' key answering for itself would
+%%% let a passer-by's transaction hand back a balance as the new process state.
 -module(dev_name_token).
 -implements(<<"name-token@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3, keys/3]).
+-export([info/0, compute/3, set/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -54,9 +54,6 @@
 -define(BALANCES, <<"balances">>).
 %%% The linked message whose keys the name resolves through to.
 -define(VALUE, <<"value">>).
-%%% The share of the supply a signer must hold to set the name, in basis
-%%% points. The whole supply, unless the token says otherwise.
--define(DEFAULT_THRESHOLD_BPS, 10000).
 
 %% @doc Every key routes to `compute': the schedule drives this device, and
 %% under `~arweave-scheduler@1.0''s `all' mode the key a slot resolves comes
@@ -69,6 +66,21 @@ info() ->
 router(_Key, Base, Assignment, Opts) ->
     compute(Base, Assignment, Opts).
 
+%% @doc Setting the device is honoured, and nothing else is: `lib_process' puts
+%% the process's own device back after every slot. Anything else is a scheduled
+%% message and is applied as one. See `dev_arweave_swap:set/3'.
+set(Base, Req, Opts) ->
+    case hb_maps:keys(Req, Opts) -- [<<"path">>, <<"set-mode">>] of
+        [<<"device">>] ->
+            {ok,
+                Base#{
+                    <<"device">> =>
+                        hb_maps:get(<<"device">>, Req, undefined, Opts)
+                }
+            };
+        _ -> compute(Base, Req, Opts)
+    end.
+
 %% @doc Apply one assignment to the name's state.
 %%
 %% A name that is for sale is settled in the same balances it keeps, so every
@@ -77,11 +89,13 @@ router(_Key, Base, Assignment, Opts) ->
 %% transfer between two other addresses. Which device that is, is a scalar key
 %% on the process; see `swap/3' for why it is not a `~stack@1.0'.
 compute(Base, Assignment, Opts) ->
-    Seeded = seed(Base, Opts),
-    Sold = swap(Seeded, Assignment, Opts),
-    Body = field(<<"body">>, Assignment, #{}, Opts),
-    ProcID = field(<<"process">>, Assignment, <<>>, Opts),
-    case field(<<"target">>, Body, <<>>, Opts) of
+    Sold = swap(seed(Base, Opts), Assignment, Opts),
+    Body = hb_maps:get(<<"body">>, Assignment, #{}, Opts),
+    ProcID = hb_maps:get(<<"process">>, Assignment, <<>>, Opts),
+    case tx_field(Body, <<"target">>, <<>>, Opts) of
+        % Sent to nobody, and so not to us: an absent `process' must not alias
+        % an absent `target' and address every such transaction to this name.
+        <<>> -> {ok, Sold};
         ProcID -> {ok, action(Sold, Body, Opts)};
         _ ->
             % Not addressed to this name. Under `all' mode that is almost every
@@ -93,17 +107,42 @@ compute(Base, Assignment, Opts) ->
 %% take back the state it produces.
 %%
 %% This is a `~stack@1.0' written out by hand, and deliberately so. A process
-%% spawned as an Arweave transaction can only carry flat, scalar tags: the
-%% codec turns a submessage or a list into a `+link' to content that is not on
-%% the weave, so nothing else can read it back. `device-stack' is a list, so a
-%% stack cannot survive the spawn -- but `swap-device' is one word.
+%% spawned as an Arweave transaction can only carry flat, scalar tags: the codec
+%% turns a submessage or a list into a `+link' to content that is not on the
+%% weave, so nothing else can read it back. `device-stack' is a list, so a stack
+%% cannot survive the spawn -- but `swap-device' is one word.
+%%
+%% A device that cannot answer leaves the name untouched, and that includes one
+%% that raises: `hb_device:message_to_device/2' throws for a name it cannot
+%% resolve, and it throws from outside `hb_ao''s own guard. The device is named
+%% by a scalar tag fixed at the spawn and changeable never, so a seller who
+%% mis-spells it would otherwise mint a name that fails its every slot, on every
+%% node, for good. Failing here instead fails the sale closed and leaves the
+%% name open: nothing can be offered, so nothing can be bought, and the name
+%% still works as a name.
 swap(Base, Assignment, Opts) ->
     case state(<<"swap-device">>, Base, not_found, Opts) of
         not_found -> Base;
         Device ->
-            case hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
+            try hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
                 {ok, Settled} -> Settled#{ <<"device">> => <<"name-token@1.0">> };
-                _ -> Base
+                Other ->
+                    ?event(
+                        {name_token_swap_declined,
+                            {device, Device},
+                            {res, Other}
+                        }
+                    ),
+                    Base
+            catch
+                Class:Reason ->
+                    ?event(
+                        {name_token_swap_failed,
+                            {device, Device},
+                            {error, {Class, Reason}}
+                        }
+                    ),
+                    Base
             end
     end.
 
@@ -112,28 +151,25 @@ swap(Base, Assignment, Opts) ->
 %%
 %% Neither can be written into the spawn directly: `balances' and the linked
 %% message are submessages, and a submessage does not cross the chain. What does
-%% cross is a scalar -- `initial-holder', an address, and `initial-value', the id
-%% of whatever the name should resolve to. Values keep their case, where keys are
-%% lowercased and a lowercased address is a different address.
+%% cross is a scalar -- `initial-holder', an address, and `initial-value', the
+%% id of whatever the name should resolve to. Values keep their case, where keys
+%% are lowercased and a lowercased address is a different address.
 %%
 %% Seeding a value at spawn is what makes a name cheap to mint. Without it, a
 %% freshly spawned name says nothing until somebody sends it a `set', and the
-%% first message addressed to a process pays Arweave's new-account fee -- so
-%% every name would cost that before it could resolve at all.
+%% first message addressed to a process pays Arweave's fee for creating that
+%% address -- so every name would cost that before it could resolve at all.
+%%
+%% Both are seeded together, in the one slot where the name has no balances yet,
+%% so a value the holder later replaces is never handed back to them.
 seed(Base, Opts) ->
-    seed_value(seed_holding(Base, Opts), Opts).
-
-seed_holding(Base, Opts) ->
-    case state(<<"initial-holder">>, Base, not_found, Opts) of
-        not_found -> Base;
-        Holder ->
-            case state(?BALANCES, Base, not_found, Opts) of
-                not_found ->
-                    Supply = hb_util:int(state(<<"total-supply">>, Base, 1, Opts)),
-                    ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
-                    Base#{ ?BALANCES => #{ Holder => Supply } };
-                _ -> Base
-            end
+    case {state(?BALANCES, Base, not_found, Opts),
+            state(<<"initial-holder">>, Base, not_found, Opts)} of
+        {not_found, Holder} when Holder =/= not_found ->
+            Supply = supply(Base, Opts),
+            ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
+            seed_value(Base#{ ?BALANCES => #{ Holder => Supply } }, Opts);
+        _ -> Base
     end.
 
 %% @doc A name minted pointing somewhere resolves there from its first slot. The
@@ -144,12 +180,8 @@ seed_value(Base, Opts) ->
     case state(<<"initial-value">>, Base, not_found, Opts) of
         not_found -> Base;
         Target ->
-            case state(?VALUE, Base, not_found, Opts) of
-                not_found ->
-                    ?event({name_token_seeded_value, {target, Target}}),
-                    Base#{ ?VALUE => #{ <<"target">> => Target } };
-                _ -> Base
-            end
+            ?event({name_token_seeded_value, {target, Target}}),
+            Base#{ ?VALUE => #{ <<"target">> => Target } }
     end.
 
 %% @doc Route a message addressed to the name by its `action'. Matching is
@@ -157,7 +189,7 @@ seed_value(Base, Opts) ->
 %% untouched rather than failing the slot, which would stop the process on every
 %% node for good.
 action(Base, Body, Opts) ->
-    case hb_util:to_lower(field(<<"action">>, Body, <<>>, Opts)) of
+    case hb_util:to_lower(hb_maps:get(<<"action">>, Body, <<>>, Opts)) of
         <<"transfer">> -> transfer(Base, Body, Opts);
         <<"set">> -> set_value(Base, Body, Opts);
         _ -> Base
@@ -166,14 +198,15 @@ action(Base, Body, Opts) ->
 %%% The token
 
 %% @doc Move units between balances. Nothing is written unless the whole
-%% transfer is admissible, so a rejected one is indistinguishable from a
-%% message that was never sent.
+%% transfer is admissible, so a rejected one is indistinguishable from a message
+%% that was never sent.
 transfer(Base, Body, Opts) ->
     maybe
         {ok, Sender} ?= signer(Body, Opts),
-        Recipient = field(<<"recipient">>, Body, not_found, Opts),
+        Recipient = hb_maps:get(<<"recipient">>, Body, not_found, Opts),
         true ?= is_binary(Recipient),
-        {ok, Quantity} ?= hb_util:safe_int(field(<<"quantity">>, Body, 0, Opts)),
+        {ok, Quantity} ?=
+            hb_util:safe_int(hb_maps:get(<<"quantity">>, Body, 0, Opts)),
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
         ?event(
@@ -184,25 +217,19 @@ transfer(Base, Body, Opts) ->
             }
         ),
         notices(
-            credit(
-                debit(Base, Sender, Quantity, Opts),
-                Recipient,
-                Quantity,
-                Opts
-            ),
+            credit(debit(Base, Sender, Quantity, Opts), Recipient, Quantity, Opts),
             Sender,
             Recipient,
-            Quantity,
-            Opts
+            Quantity
         )
     else
         _ -> Base
     end.
 
-%% @doc Emit the pair of notices that `token-1.0' emits for a transfer, with
-%% the same keys. They are the slot's results; whether anything delivers them
-%% is the process's business, not this device's.
-notices(Base, Sender, Recipient, Quantity, _Opts) ->
+%% @doc Emit the pair of notices that `token-1.0' emits for a transfer, with the
+%% same keys. They are the slot's results; whether anything delivers them is the
+%% process's business, not this device's.
+notices(Base, Sender, Recipient, Quantity) ->
     Base#{
         <<"results">> =>
             #{
@@ -235,19 +262,19 @@ set_value(Base, Body, Opts) ->
     maybe
         {ok, Signer} ?= signer(Body, Opts),
         true ?= owns_supply(Base, Signer, Opts),
-        Value = value_of(Body, Opts),
         ?event({name_token_set, {by, Signer}}),
-        Base#{ ?VALUE => Value }
+        Base#{ ?VALUE => value_of(Body, Opts) }
     else
         _ -> Base
     end.
 
-%% @doc The message a `set' is asking the name to resolve to.
+%% @doc The message a `set' is asking the name to resolve to. With no
+%% `reference-value' the `set' is its own value, less the transaction envelope
+%% the base layer wrapped it in and the `action' that addressed it here: what
+%% the name says is what the sender wrote, not how it reached us.
 value_of(Body, Opts) ->
-    case field(<<"reference-value">>, Body, not_found, Opts) of
+    case hb_maps:get(<<"reference-value">>, Body, not_found, Opts) of
         not_found ->
-            % The set message itself is the value. The keys that addressed it to
-            % this name are not part of what the name says.
             hb_maps:without(
                 [
                     <<"action">>,
@@ -255,11 +282,7 @@ value_of(Body, Opts) ->
                     <<"quantity">>,
                     <<"anchor">>,
                     <<"reward">>,
-                    <<"last_tx">>,
-                    <<"owner">>,
-                    <<"signature">>,
-                    <<"commitments">>,
-                    <<"priv">>
+                    <<"commitments">>
                 ],
                 hb_cache:ensure_all_loaded(Body, Opts),
                 Opts
@@ -267,23 +290,22 @@ value_of(Body, Opts) ->
         Value -> hb_cache:ensure_all_loaded(Value, Opts)
     end.
 
-%% @doc Whether an address may speak for the name: it must hold the share of the
-%% supply the token requires, which is all of it unless the token says
-%% otherwise. This is `token-1.0''s `supply-threshold-owner' rule, and it is
-%% evaluated against the balances as they stand -- so the authority moves with
-%% the unit, with no separate owner field to keep in step.
+%% @doc Whether an address may speak for the name: it must hold the whole
+%% supply. The rule is evaluated against the balances as they stand, so the
+%% authority moves with the unit, with no separate owner field to keep in step.
 owns_supply(Base, Address, Opts) ->
-    Supply = hb_util:int(state(<<"total-supply">>, Base, 1, Opts)),
-    Threshold =
-        hb_util:int(
-            state(
-                <<"set-authority-threshold-bps">>,
-                Base,
-                ?DEFAULT_THRESHOLD_BPS,
-                Opts
-            )
-        ),
-    balance(Base, Address, Opts) * 10000 >= Supply * Threshold.
+    balance(Base, Address, Opts) >= supply(Base, Opts).
+
+%% @doc How many units there are. The figure is a scalar tag on the spawn and
+%% `hb_util:int/1' raises on anything that is not a number, so a name minted
+%% with `total-supply: one' reads as the single unit a name is -- the same
+%% answer as a name that named no supply at all -- rather than as a process that
+%% raises on its every slot, for good, on every node.
+supply(Base, Opts) ->
+    hb_util:ok_or(
+        hb_util:safe_int(state(<<"total-supply">>, Base, 1, Opts)),
+        1
+    ).
 
 %%% State
 
@@ -293,52 +315,21 @@ owns_supply(Base, Address, Opts) ->
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
-%% @doc Read a field from an untrusted scheduled message as plain data.
-field(Key, Msg, Default, Opts) ->
-    hb_maps:get(Key, Msg, Default, Opts).
-
-balance(Base, Address, Opts) ->
-    hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
-
-credit(Base, Address, Amount, Opts) ->
-    write_balance(Base, Address, balance(Base, Address, Opts) + Amount, Opts).
-
-debit(Base, Address, Amount, Opts) ->
-    write_balance(Base, Address, balance(Base, Address, Opts) - Amount, Opts).
-
-%% @doc Write one balance back. Only whole top-level keys are written: setting a
-%% nested path would resolve the keys above it through this device on the way
-%% down.
-write_balance(Base, Address, Value, Opts) ->
-    Base#{
-        ?BALANCES =>
-            hb_maps:put(
-                Address,
-                Value,
-                state(?BALANCES, Base, #{}, Opts),
-                Opts
-            )
-    }.
-
-%% @doc Setting the device is honoured, and nothing else is: `lib_process' puts
-%% the process's own device back after every slot, and reading this state as a
-%% message is itself a device set. Anything else is a scheduled message and is
-%% applied as one. See `dev_arweave_swap:set/3'.
-set(Base, Req, Opts) ->
-    case hb_maps:keys(Req, Opts) -- [<<"path">>, <<"set-mode">>] of
-        [<<"device">>] ->
-            {ok,
-                Base#{
-                    <<"device">> =>
-                        hb_maps:get(<<"device">>, Req, undefined, Opts)
-                }
-            };
-        _ -> compute(Base, Req, Opts)
+%% @doc Read a value from the real layer-1 transaction fields. A `target' tag is
+%% not an address: only the field the base layer itself moved value to decides
+%% who a transaction was sent to. See `dev_arweave_swap:tx_field/4'.
+tx_field(Body, Field, Default, Opts) ->
+    case
+        hb_message:commitment(
+            #{ <<"commitment-device">> => <<"tx@1.0">> },
+            Body,
+            Opts
+        )
+    of
+        {ok, _ID, Commitment} ->
+            hb_maps:get(<<"field-", Field/binary>>, Commitment, Default, Opts);
+        _ -> Default
     end.
-
-%% @doc Listing the state's keys is not a state transition, so a scheduled
-%% message asking for it is applied as one.
-keys(Base, Req, Opts) -> compute(Base, Req, Opts).
 
 %% @doc The single signer of a message. A message with any other number of
 %% signers is not attributable to one party, so it can neither move the unit nor
@@ -349,13 +340,36 @@ signer(Body, Opts) ->
         _ -> not_found
     end.
 
+balance(Base, Address, Opts) ->
+    hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
+
+%% @doc Write one balance back. Only whole top-level keys are written: setting a
+%% nested path would resolve the keys above it through this device on the way
+%% down.
+credit(Base, _Address, 0, _Opts) -> Base;
+credit(Base, Address, Amount, Opts) ->
+    Base#{
+        ?BALANCES =>
+            hb_maps:put(
+                Address,
+                balance(Base, Address, Opts) + Amount,
+                state(?BALANCES, Base, #{}, Opts),
+                Opts
+            )
+    }.
+
+debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
+
 %%% Tests
 
 %%% The tests drive `compute/3' directly with synthetic assignments, exactly as
 %%% `~process@1.0' would. Below them is the live-network driver that seeded the
-%%% permanent fixture, and the fixture test that replays it.
+%%% permanent fixtures, and the fixture tests that replay them.
 
--define(PROCESS, <<"nAmEtOkEn000000000000000000000000000000000">>).
+%%% A process id, which must be a real 43-character address: the gate below
+%%% reads the transaction field the base layer moved value to, and anything else
+%%% is not an address the codec can carry there.
+-define(PROCESS, <<"nAmEtOkEn0000000000000000000000000000000000">>).
 
 test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 
@@ -380,11 +394,17 @@ tx(Wallet, Fields) ->
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
 
+%% @doc Sequence a transaction into the process, as `~arweave-scheduler@1.0' in
+%% `all' mode does. The `path' is part of an assignment -- see
+%% `lib_scheduler:base_assignment/4' -- and the swap device is handed the whole
+%% assignment, so an assignment without one is not one this device would ever
+%% see.
 apply_tx(Base, Body, Opts) ->
     {ok, New} =
         compute(
             Base,
             #{
+                <<"path">> => <<"compute">>,
                 <<"process">> => ?PROCESS,
                 <<"slot">> => 1,
                 <<"body">> => Body
@@ -392,55 +412,6 @@ apply_tx(Base, Body, Opts) ->
             Opts
         ),
     New.
-
-%% @doc A `target' tag is not an address. `~arweave-swap@1.0' states the rule
-%% this device shares -- "top-level keys may come from tags with the same
-%% names" -- and the addressed-to-me gate here reads that top-level key, so a
-%% transaction sent to nobody can reach the actions with a tag alone.
-%%
-%% It buys nothing, and this records why: every action is gated again on what
-%% the signer holds, so reaching `transfer' with an empty balance moves nothing
-%% and reaching `set' without the supply writes nothing. The gate decides who is
-%% being spoken to; the holdings decide who may speak.
-tag_only_target_reaches_the_actions_but_holds_nothing_test() ->
-    Opts = test_opts(),
-    {_, OwnerAddr} = party(),
-    {Stranger, StrangerAddr} = party(),
-    Held = name_held_by(OwnerAddr),
-    Steal =
-        tag_only_tx(
-            Stranger,
-            [
-                {<<"target">>, ?PROCESS},
-                {<<"action">>, <<"transfer">>},
-                {<<"recipient">>, StrangerAddr},
-                {<<"quantity">>, <<"1">>}
-            ]
-        ),
-    %% The tag does put the process's own id at the key the gate reads.
-    ?assertEqual(?PROCESS, hb_ao:get(<<"target">>, Steal, not_found, Opts)),
-    Tried = apply_tx(Held, Steal, Opts),
-    ?assertEqual(1, held_by(Tried, OwnerAddr, Opts)),
-    ?assertEqual(0, held_by(Tried, StrangerAddr, Opts)),
-    Speak =
-        tag_only_tx(
-            Stranger,
-            [
-                {<<"target">>, ?PROCESS},
-                {<<"action">>, <<"set">>},
-                {<<"reference-value">>, <<"a-value-the-name-never-agreed-to">>}
-            ]
-        ),
-    Said = apply_tx(Tried, Speak, Opts),
-    ?assertEqual(
-        hb_ao:get(?VALUE, {as, <<"message@1.0">>, Tried}, not_found, Opts),
-        hb_ao:get(?VALUE, {as, <<"message@1.0">>, Said}, not_found, Opts)
-    ).
-
-%% @doc A transaction that carries its keys as tags only, addressed to nobody.
-tag_only_tx(Wallet, Tags) ->
-    Signed = ar_tx:sign(#tx{ format = 2, reward = 1, tags = Tags }, Wallet),
-    hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}).
 
 transfer_tx(Wallet, Recipient, Quantity) ->
     tx(
@@ -454,27 +425,50 @@ transfer_tx(Wallet, Recipient, Quantity) ->
     ).
 
 set_tx(Wallet, Fields) ->
-    tx(
-        Wallet,
-        Fields#{ <<"target">> => ?PROCESS, <<"action">> => <<"set">> }
-    ).
+    tx(Wallet, Fields#{ <<"target">> => ?PROCESS, <<"action">> => <<"set">> }).
 
 held_by(Base, Address, Opts) -> balance(Base, Address, Opts).
 
 value(Base, Opts) ->
     hb_cache:ensure_all_loaded(state(?VALUE, Base, #{}, Opts), Opts).
 
+says(Base, Key, Opts) -> hb_ao:get(Key, value(Base, Opts), not_found, Opts).
+
+%% @doc A `target' tag is not an address. A transaction addressed to nobody
+%% carries the process's own id at the key a plain read would find, so the gate
+%% reads the field the base layer moved value to instead -- the same rule
+%% `~arweave-swap@1.0' settles payments by.
+tags_are_not_transaction_fields_test() ->
+    Opts = test_opts(),
+    {_, OwnerAddr} = party(),
+    {Stranger, StrangerAddr} = party(),
+    Signed =
+        ar_tx:sign(
+            #tx{
+                format = 2,
+                reward = 1,
+                tags =
+                    [
+                        {<<"target">>, ?PROCESS},
+                        {<<"action">>, <<"transfer">>},
+                        {<<"recipient">>, StrangerAddr},
+                        {<<"quantity">>, <<"1">>}
+                    ]
+            },
+            Stranger
+        ),
+    Steal = hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
+    ?assertEqual(?PROCESS, hb_ao:get(<<"target">>, Steal, not_found, Opts)),
+    ?assertEqual(<<>>, tx_field(Steal, <<"target">>, <<>>, Opts)),
+    Tried = apply_tx(name_held_by(OwnerAddr), Steal, Opts),
+    ?assertEqual(1, held_by(Tried, OwnerAddr, Opts)),
+    ?assertEqual(0, held_by(Tried, StrangerAddr, Opts)).
+
 %% @doc A foreign transaction's device cannot interpret absent envelope fields.
 foreign_device_is_data_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
-    Foreign =
-        tx(
-            Owner,
-            #{
-                <<"device">> => <<"reference@1.0">>
-            }
-        ),
+    Foreign = tx(Owner, #{ <<"device">> => <<"reference@1.0">> }),
     Untouched = apply_tx(name_held_by(OwnerAddr), Foreign, Opts),
     ?assertEqual(1, held_by(Untouched, OwnerAddr, Opts)).
 
@@ -487,23 +481,18 @@ transfer_moves_the_unit_test() ->
         apply_tx(name_held_by(OwnerAddr), transfer_tx(Owner, BuyerAddr, 1), Opts),
     ?assertEqual(0, held_by(Moved, OwnerAddr, Opts)),
     ?assertEqual(1, held_by(Moved, BuyerAddr, Opts)),
-    Outbox = hb_ao:get(<<"results/outbox">>, {as, <<"message@1.0">>, Moved}, #{}, Opts),
+    Outbox =
+        hb_ao:get(<<"results/outbox">>, {as, <<"message@1.0">>, Moved}, #{}, Opts),
     ?assertEqual(
         <<"Debit-Notice">>,
         hb_ao:get(<<"1/action">>, Outbox, not_found, Opts)
     ),
+    ?assertEqual(BuyerAddr, hb_ao:get(<<"1/recipient">>, Outbox, not_found, Opts)),
     ?assertEqual(
         <<"Credit-Notice">>,
         hb_ao:get(<<"2/action">>, Outbox, not_found, Opts)
     ),
-    ?assertEqual(
-        BuyerAddr,
-        hb_ao:get(<<"1/recipient">>, Outbox, not_found, Opts)
-    ),
-    ?assertEqual(
-        OwnerAddr,
-        hb_ao:get(<<"2/sender">>, Outbox, not_found, Opts)
-    ).
+    ?assertEqual(OwnerAddr, hb_ao:get(<<"2/sender">>, Outbox, not_found, Opts)).
 
 %% @doc Nobody can send what they do not hold.
 transfer_beyond_balance_test() ->
@@ -512,18 +501,10 @@ transfer_beyond_balance_test() ->
     {Stranger, _} = party(),
     {_, ElsewhereAddr} = party(),
     Base = name_held_by(OwnerAddr),
-    ?assertEqual(
-        1,
-        held_by(apply_tx(Base, transfer_tx(Owner, ElsewhereAddr, 2), Opts), OwnerAddr, Opts)
-    ),
-    ?assertEqual(
-        0,
-        held_by(
-            apply_tx(Base, transfer_tx(Stranger, ElsewhereAddr, 1), Opts),
-            ElsewhereAddr,
-            Opts
-        )
-    ).
+    TooMuch = apply_tx(Base, transfer_tx(Owner, ElsewhereAddr, 2), Opts),
+    ?assertEqual(1, held_by(TooMuch, OwnerAddr, Opts)),
+    NotTheirs = apply_tx(Base, transfer_tx(Stranger, ElsewhereAddr, 1), Opts),
+    ?assertEqual(0, held_by(NotTheirs, ElsewhereAddr, Opts)).
 
 %% @doc The holder says what the name resolves to, by handing over a message.
 set_writes_the_linked_message_test() ->
@@ -544,14 +525,8 @@ set_writes_the_linked_message_test() ->
             ),
             Opts
         ),
-    ?assertEqual(
-        <<"text/html">>,
-        hb_ao:get(<<"content-type">>, value(Set, Opts), not_found, Opts)
-    ),
-    ?assertEqual(
-        <<"<h1>hello</h1>">>,
-        hb_ao:get(<<"body">>, value(Set, Opts), not_found, Opts)
-    ).
+    ?assertEqual(<<"text/html">>, says(Set, <<"content-type">>, Opts)),
+    ?assertEqual(<<"<h1>hello</h1>">>, says(Set, <<"body">>, Opts)).
 
 %% @doc With no `reference-value', the name inherits the keys of the `set'
 %% itself -- less the keys that carried it here.
@@ -564,23 +539,9 @@ set_without_value_inherits_own_keys_test() ->
             set_tx(Owner, #{ <<"greeting">> => <<"ahoy">> }),
             Opts
         ),
-    Value = value(Set, Opts),
-    ?assertEqual(<<"ahoy">>, hb_ao:get(<<"greeting">>, Value, not_found, Opts)),
-    ?assertEqual(not_found, hb_ao:get(<<"action">>, Value, not_found, Opts)),
-    ?assertEqual(not_found, hb_ao:get(<<"target">>, Value, not_found, Opts)).
-
-%% @doc Anybody who does not hold the name cannot speak for it.
-set_by_stranger_test() ->
-    Opts = test_opts(),
-    {_, OwnerAddr} = party(),
-    {Stranger, _} = party(),
-    Result =
-        apply_tx(
-            name_held_by(OwnerAddr),
-            set_tx(Stranger, #{ <<"greeting">> => <<"mine now">> }),
-            Opts
-        ),
-    ?assertEqual(#{}, value(Result, Opts)).
+    ?assertEqual(<<"ahoy">>, says(Set, <<"greeting">>, Opts)),
+    ?assertEqual(not_found, says(Set, <<"action">>, Opts)),
+    ?assertEqual(not_found, says(Set, <<"target">>, Opts)).
 
 %% @doc The authority is the holding, not a recorded owner: it goes with the
 %% unit and needs nothing kept in step. This is what makes a name sellable.
@@ -588,29 +549,29 @@ authority_follows_the_unit_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
     {Buyer, BuyerAddr} = party(),
-    Base = name_held_by(OwnerAddr),
-    Before = apply_tx(Base, set_tx(Owner, #{ <<"points-at">> => <<"seller">> }), Opts),
-    ?assertEqual(
-        <<"seller">>,
-        hb_ao:get(<<"points-at">>, value(Before, Opts), not_found, Opts)
-    ),
+    Before =
+        apply_tx(
+            name_held_by(OwnerAddr),
+            set_tx(Owner, #{ <<"points-at">> => <<"seller">> }),
+            Opts
+        ),
+    ?assertEqual(<<"seller">>, says(Before, <<"points-at">>, Opts)),
     Sold = apply_tx(Before, transfer_tx(Owner, BuyerAddr, 1), Opts),
     % The seller has handed over the unit, and with it the right to speak.
-    Stale = apply_tx(Sold, set_tx(Owner, #{ <<"points-at">> => <<"seller again">> }), Opts),
-    ?assertEqual(
-        <<"seller">>,
-        hb_ao:get(<<"points-at">>, value(Stale, Opts), not_found, Opts)
-    ),
+    Stale =
+        apply_tx(
+            Sold,
+            set_tx(Owner, #{ <<"points-at">> => <<"seller again">> }),
+            Opts
+        ),
+    ?assertEqual(<<"seller">>, says(Stale, <<"points-at">>, Opts)),
     Fresh = apply_tx(Sold, set_tx(Buyer, #{ <<"points-at">> => <<"buyer">> }), Opts),
-    ?assertEqual(
-        <<"buyer">>,
-        hb_ao:get(<<"points-at">>, value(Fresh, Opts), not_found, Opts)
-    ),
+    ?assertEqual(<<"buyer">>, says(Fresh, <<"points-at">>, Opts)),
     ?assertEqual(1, held_by(Fresh, BuyerAddr, Opts)),
     ?assertEqual(0, held_by(Fresh, OwnerAddr, Opts)).
 
 %% @doc A partial holding is not the whole supply, so it does not carry the
-%% authority. (A name is indivisible, but the rule is the supply threshold.)
+%% authority. (A name is indivisible, but the rule is the whole supply.)
 partial_holding_cannot_set_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
@@ -620,15 +581,17 @@ partial_holding_cannot_set_test() ->
             <<"total-supply">> => 2,
             ?BALANCES => #{ OwnerAddr => 1, OtherAddr => 1 }
         },
-    Result = apply_tx(Split, set_tx(Owner, #{ <<"greeting">> => <<"half mine">> }), Opts),
+    Result =
+        apply_tx(Split, set_tx(Owner, #{ <<"greeting">> => <<"half mine">> }), Opts),
     ?assertEqual(#{}, value(Result, Opts)).
 
-%% @doc There is no mint path, so the supply cannot grow -- an unknown action
-%% is ignored rather than failing the slot.
-supply_is_fixed_test() ->
+%% @doc There is no mint path, so the supply cannot grow -- and an unknown
+%% action is ignored rather than failing the slot, whatever its casing.
+actions_are_matched_by_name_only_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
-    Result =
+    {_, BuyerAddr} = party(),
+    Minted =
         apply_tx(
             name_held_by(OwnerAddr),
             tx(
@@ -641,14 +604,9 @@ supply_is_fixed_test() ->
             ),
             Opts
         ),
-    ?assertEqual(1, held_by(Result, OwnerAddr, Opts)),
-    ?assertEqual(1, hb_util:int(state(<<"total-supply">>, Result, 0, Opts))).
-
-%% @doc Actions are matched however they are cased, as `token-1.0' matches.
-action_case_is_ignored_test() ->
-    Opts = test_opts(),
-    {Owner, OwnerAddr} = party(),
-    {_, BuyerAddr} = party(),
+    ?assertEqual(1, held_by(Minted, OwnerAddr, Opts)),
+    ?assertEqual(1, hb_util:int(state(<<"total-supply">>, Minted, 0, Opts))),
+    % A known action is matched however it is cased, as `token-1.0' matches.
     Moved =
         apply_tx(
             name_held_by(OwnerAddr),
@@ -675,39 +633,19 @@ unrelated_traffic_test() ->
     Result =
         apply_tx(
             Base,
-            tx(Stranger, #{ <<"target">> => <<"somebody-else">>, <<"quantity">> => <<"1">> }),
+            tx(
+                Stranger,
+                #{ <<"target">> => <<"somebody-else">>, <<"quantity">> => <<"1">> }
+            ),
             Opts
         ),
     ?assertEqual(1, held_by(Result, OwnerAddr, Opts)).
 
 %% @doc A name spawned as an Arweave transaction carries only scalars, so it
-%% names its first holder rather than holding a balances submessage. The unit
-%% appears the first time it computes.
-seeded_from_initial_holder_test() ->
-    Opts = test_opts(),
-    {Owner, OwnerAddr} = party(),
-    Spawned =
-        #{
-            <<"name">> => <<"test-name">>,
-            <<"total-supply">> => 1,
-            <<"initial-holder">> => OwnerAddr
-        },
-    % Any message at all brings the name to life, including one that is not
-    % addressed to it.
-    Alive =
-        apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
-    ?assertEqual(1, held_by(Alive, OwnerAddr, Opts)),
-    % And the holder can immediately speak for it.
-    Set = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"mine">> }), Opts),
-    ?assertEqual(
-        <<"mine">>,
-        hb_ao:get(<<"greeting">>, value(Set, Opts), not_found, Opts)
-    ).
-
-%% @doc A name minted pointing somewhere resolves there immediately, without
-%% anybody having to send it a message -- which matters because the first message
-%% addressed to a process pays to create its account.
-seeded_value_test() ->
+%% names its first holder and what it points at rather than holding a `balances'
+%% submessage and a linked message. Both appear the first time it computes, so a
+%% name resolves without anybody having to send it anything.
+spawn_seeds_the_holder_and_the_value_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
     Spawned =
@@ -717,21 +655,43 @@ seeded_value_test() ->
             <<"initial-holder">> => OwnerAddr,
             <<"initial-value">> => <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>
         },
-    Alive = apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
+    % Any message at all brings the name to life, including one that is not
+    % addressed to it.
+    Alive =
+        apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
+    ?assertEqual(1, held_by(Alive, OwnerAddr, Opts)),
     ?assertEqual(
         <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>,
-        hb_ao:get(<<"target">>, value(Alive, Opts), not_found, Opts)
+        says(Alive, <<"target">>, Opts)
     ),
-    % And the holder can still point it somewhere else afterwards.
+    % And the holder can immediately point it somewhere else.
     Reset = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"moved">> }), Opts),
-    ?assertEqual(
-        <<"moved">>,
-        hb_ao:get(<<"greeting">>, value(Reset, Opts), not_found, Opts)
-    ),
-    ?assertEqual(not_found, hb_ao:get(<<"target">>, value(Reset, Opts), not_found, Opts)).
+    ?assertEqual(<<"moved">>, says(Reset, <<"greeting">>, Opts)),
+    ?assertEqual(not_found, says(Reset, <<"target">>, Opts)).
+
+%% @doc A figure that is not a number is read as the single unit a name is.
+%% `total-supply' is a scalar tag on the spawn, and it is read outside any
+%% `maybe': a name that raised here would fail every slot it ever had.
+unreadable_supply_is_one_unit_test() ->
+    Opts = test_opts(),
+    {Owner, OwnerAddr} = party(),
+    Alive =
+        apply_tx(
+            #{
+                <<"name">> => <<"test-name">>,
+                <<"total-supply">> => <<"one">>,
+                <<"initial-holder">> => OwnerAddr
+            },
+            tx(Owner, #{ <<"target">> => <<"elsewhere">> }),
+            Opts
+        ),
+    ?assertEqual(1, held_by(Alive, OwnerAddr, Opts)),
+    % And the holder of that one unit speaks for the name.
+    Set = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"mine">> }), Opts),
+    ?assertEqual(<<"mine">>, says(Set, <<"greeting">>, Opts)).
 
 %% @doc Seeding happens once. A name whose unit has moved on is not handed a
-%% fresh one by the next message that arrives.
+%% fresh one -- nor its first value back -- by the next message that arrives.
 seeding_happens_once_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
@@ -740,33 +700,122 @@ seeding_happens_once_test() ->
         #{
             <<"name">> => <<"test-name">>,
             <<"total-supply">> => 1,
-            <<"initial-holder">> => OwnerAddr
+            <<"initial-holder">> => OwnerAddr,
+            <<"initial-value">> => <<"aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789_-aBcDe">>
         },
     Alive = apply_tx(Spawned, tx(Owner, #{ <<"target">> => <<"elsewhere">> }), Opts),
-    Moved = apply_tx(Alive, transfer_tx(Owner, StrangerAddr, 1), Opts),
+    Said = apply_tx(Alive, set_tx(Owner, #{ <<"greeting">> => <<"mine">> }), Opts),
+    Moved = apply_tx(Said, transfer_tx(Owner, StrangerAddr, 1), Opts),
     Later =
         apply_tx(Moved, tx(Stranger, #{ <<"target">> => <<"elsewhere">> }), Opts),
     ?assertEqual(0, held_by(Later, OwnerAddr, Opts)),
-    ?assertEqual(1, held_by(Later, StrangerAddr, Opts)).
+    ?assertEqual(1, held_by(Later, StrangerAddr, Opts)),
+    ?assertEqual(<<"mine">>, says(Later, <<"greeting">>, Opts)),
+    ?assertEqual(not_found, says(Later, <<"target">>, Opts)).
 
 %% @doc A name with no selling device is simply a name: messages the swap would
-%% have handled do nothing, and the name still works.
-without_swap_device_test() ->
+%% have handled do nothing, and the name still works. A name whose selling
+%% device cannot answer is the same name -- the sale fails closed, not the
+%% process.
+without_a_working_swap_device_test() ->
     Opts = test_opts(),
     {Owner, OwnerAddr} = party(),
-    Base = name_held_by(OwnerAddr),
-    Set = apply_tx(Base, set_tx(Owner, #{ <<"greeting">> => <<"no swap here">> }), Opts),
-    ?assertEqual(
-        <<"no swap here">>,
-        hb_ao:get(<<"greeting">>, value(Set, Opts), not_found, Opts)
-    ),
-    ?assertEqual(not_found, state(<<"orders">>, Set, not_found, Opts)).
+    lists:foreach(
+        fun(Base) ->
+            Set =
+                apply_tx(
+                    Base,
+                    set_tx(Owner, #{ <<"greeting">> => <<"no swap here">> }),
+                    Opts
+                ),
+            ?assertEqual(<<"no swap here">>, says(Set, <<"greeting">>, Opts)),
+            ?assertEqual(not_found, state(<<"orders">>, Set, not_found, Opts))
+        end,
+        [
+            name_held_by(OwnerAddr),
+            (name_held_by(OwnerAddr))#{ <<"swap-device">> => <<"nOt-A-dEvIcE@1.0">> }
+        ]
+    ).
+
+%% @doc A name is sold by the device it names, settling in the balances the name
+%% itself keeps -- and the authority goes with the unit, so the buyer speaks for
+%% the name and the seller no longer does.
+%%
+%% The payment is the point: an ordinary transfer between two addresses that the
+%% process is not a party to, seen only because every transaction on Arweave is
+%% a slot of it.
+sold_through_the_swap_device_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    ForSale =
+        (name_held_by(SellerAddr))#{ <<"swap-device">> => <<"arweave-swap@1.0">> },
+    Offered =
+        apply_tx(
+            ForSale,
+            tx(
+                Seller,
+                #{
+                    <<"target">> => ?PROCESS,
+                    <<"action">> => <<"make-offer">>,
+                    <<"offer-quantity">> => <<"1">>,
+                    <<"asking">> => <<"500">>,
+                    <<"deadline">> => <<"20">>
+                }
+            ),
+            Opts
+        ),
+    % The unit is in escrow, so nobody holds the name and nobody speaks for it.
+    ?assertEqual(0, held_by(Offered, SellerAddr, Opts)),
+    Mute =
+        apply_tx(
+            Offered,
+            set_tx(Seller, #{ <<"greeting">> => <<"still mine">> }),
+            Opts
+        ),
+    ?assertEqual(not_found, says(Mute, <<"greeting">>, Opts)),
+    Paid =
+        apply_tx(
+            Offered,
+            tx(
+                Buyer,
+                #{
+                    <<"target">> => SellerAddr,
+                    <<"quantity">> => <<"500">>,
+                    <<"order-id">> => order_of(Offered, Opts)
+                }
+            ),
+            Opts
+        ),
+    ?assertEqual(1, held_by(Paid, BuyerAddr, Opts)),
+    ?assertEqual(0, held_by(Paid, SellerAddr, Opts)),
+    % And the buyer now says what the name means.
+    Spoken =
+        apply_tx(Paid, set_tx(Buyer, #{ <<"greeting">> => <<"mine now">> }), Opts),
+    ?assertEqual(<<"mine now">>, says(Spoken, <<"greeting">>, Opts)).
+
+%% @doc The id of the one order the name's selling device is holding.
+order_of(Base, Opts) ->
+    [Order] =
+        [
+            Held
+        ||
+            Held = #{ <<"order-id">> := _ } <-
+                hb_maps:values(
+                    hb_cache:ensure_all_loaded(
+                        state(<<"orders">>, Base, #{}, Opts),
+                        Opts
+                    ),
+                    Opts
+                )
+        ],
+    hb_maps:get(<<"order-id">>, Order, not_found, Opts).
 
 %% @doc A stranger's transaction may ask to be routed anywhere, including to
 %% keys `~message@1.0' would otherwise answer. Each is applied like any other
 %% message rather than handing back the state, a list of key names, or an info
 %% map as the new state.
-reserved_paths_are_applied_test() ->
+stray_paths_are_applied_test() ->
     Opts = test_opts(),
     {_, OwnerAddr} = party(),
     {Stranger, _} = party(),
@@ -791,949 +840,25 @@ reserved_paths_are_applied_test() ->
         [<<"set">>, <<"keys">>, <<"info">>, <<"balances">>, <<"anything-else">>]
     ).
 
-%%% The live network suite
+%%% The permanent fixtures
 %%%
-%%% Three stories played out on mainnet, against the real weave, with every
-%%% path and refusal a name sale can take. It is deliberately NOT a `_test'
-%%% function: it posts real transactions and spends real AR. Invoke it by name:
+%%% Three stories, played out on mainnet against the real weave, and replayed
+%%% here from the blocks that hold them. Every read below is a deterministic
+%%% read of the weave capped at a pinned height, so each answer is immutable: no
+%%% block after the cap can reach the process.
 %%%
-%%%     HB_LIVE_SUITE=1 HB_PRINT=name_token_live \\
-%%%         rebar3 device test --devices dev_name_token \\
-%%%             --test dev_name_token:live_suite_test_
+%%% The stories pin transaction ids rather than slot numbers, because a slot
+%%% number is a fact about the weave -- every transaction on the network takes
+%%% one -- while the id is the message itself.
 %%%
-%%% It reports every transaction id and the slot it landed at, which is what
-%%% the pinned fixtures below are made of. Each message waits for the previous
-%%% one to be mined: the schedule is block order, and two messages in one block
-%%% would be ordered by the block's own transaction list rather than by intent.
-
-%% @doc Everything live is reachable only when asked for by name in the
-%% environment, so it contributes nothing to the battery.
-live_suite_test_() -> live_gated("HB_LIVE_SUITE", fun live_suite/0, 21600).
-
-live_gated(Variable, Fun, Timeout) ->
-    case os:getenv(Variable) of
-        false -> [];
-        _ -> {timeout, Timeout, Fun}
-    end.
-
-%%% What the network charges, and what the orders ask for. The fee an order
-%%% demands to register is set well above the price of an ordinary transaction,
-%%% so that clearing it means deliberately overpaying rather than paying what
-%%% the network was going to charge anyway.
--define(LIVE_MINIMUM_FEE, 100000000).
--define(LIVE_PAID_FEE, 150000000).
--define(LIVE_ASKING, 1000).
-
-%% @doc The wallet that pays for the live run.
-live_wallet() ->
-    ar_wallet:load_keyfile(<<"/Users/sam/Documents/hyperbeam-key.json">>).
-
-%% @doc A counterparty, kept beside the node's own key so that a rerun reuses
-%% it rather than paying to create another account.
-live_party(Path) ->
-    case file:read_file(Path) of
-        {ok, Json} -> ar_wallet:from_json(Json);
-        _ ->
-            Wallet = ar_wallet:new(),
-            ok = file:write_file(Path, hb_util:bin(ar_wallet:to_json(Wallet))),
-            Wallet
-    end.
-
-live_address(Wallet) -> hb_util:human_id(ar_wallet:to_address(Wallet)).
-
-%% @doc Node options for talking to the live network, mirroring the scheduler's
-%% own fixture options.
-live_opts(Wallet) ->
-    TestStore = hb_test_utils:test_store(),
-    IndexStore = hb_test_utils:test_store(),
-    (hb_opts:default_message())#{
-        <<"store">> => [
-            TestStore,
-            #{
-                <<"store-module">> => hb_store_arweave,
-                <<"name">> => <<"cache-arweave">>,
-                <<"index-store">> => [IndexStore]
-            },
-            #{
-                <<"store-module">> => hb_store_gateway,
-                <<"local-store">> => [TestStore]
-            }
-        ],
-        <<"arweave-index-store">> => #{ <<"index-store">> => [IndexStore] },
-        <<"arweave-index-workers">> => 8,
-        <<"arweave-scheduler-confirmation-depth">> => 1,
-        <<"priv-wallet">> => Wallet
-    }.
-
-%% @doc What the network will charge to send a transaction of no size to an
-%% address. An address that has never held AR costs thousands of times more to
-%% send to, because the transaction creates the account.
-live_price(Target, Opts) ->
-    Path =
-        case Target of
-            <<>> -> <<"/price/0">>;
-            _ -> <<"/price/0/", Target/binary>>
-        end,
-    {ok, Res} = hb_http:get(<<"https://arweave.net">>, Path, Opts),
-    hb_util:int(hb_ao:get(<<"body">>, Res, <<"0">>, Opts)).
-
-live_anchor(Opts) ->
-    {ok, Res} = hb_http:get(<<"https://arweave.net">>, <<"/tx_anchor">>, Opts),
-    hb_ao:get(<<"body">>, Res, <<>>, Opts).
-
-live_balance(Address, Opts) ->
-    {ok, Res} =
-        hb_http:get(
-            <<"https://arweave.net">>,
-            <<"/wallet/", Address/binary, "/balance">>,
-            Opts
-        ),
-    hb_util:int(hb_ao:get(<<"body">>, Res, <<"0">>, Opts)).
-
-%% @doc Sign a layer-1 transaction and hand it to the network, through the
-%% scheduler's own dispatch path, then wait for it to be mined.
-%%
-%% A `reward' given in the fields is a floor, not a replacement: the network's
-%% own price still has to be met. That is how a registration pays an order's
-%% `minimum-fee' -- by overpaying the reward, which goes to miners and the
-%% endowment rather than to an address with no key behind it.
-live_post(Label, Fields, Wallet, Opts) ->
-    Target = hb_maps:get(<<"target">>, Fields, <<>>, Opts),
-    Floor = hb_util:int(hb_maps:get(<<"reward">>, Fields, <<"0">>, Opts)),
-    Reward = max(live_price(Target, Opts), Floor),
-    Msg =
-        hb_message:commit(
-            Fields#{
-                <<"anchor">> => live_anchor(Opts),
-                <<"reward">> => hb_util:bin(Reward)
-            },
-            Opts#{ <<"priv-wallet">> => Wallet },
-            #{ <<"commitment-device">> => <<"tx@1.0">> }
-        ),
-    ID = hb_util:human_id(hb_message:id(Msg, signed, Opts)),
-    {ok, Res} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave-scheduler@1.0">> },
-            #{
-                <<"path">> => <<"schedule">>,
-                <<"method">> => <<"POST">>,
-                <<"body">> => Msg
-            },
-            Opts
-        ),
-    Height = live_await(ID, Opts),
-    ?event(name_token_live,
-        {posted,
-            {label, {string, Label}},
-            {tx, {string, ID}},
-            {signer, {string, live_address(Wallet)}},
-            {reward, Reward},
-            {status, hb_ao:get(<<"status">>, Res, none, Opts)},
-            {height, Height}
-        }
-    ),
-    ID.
-
-%% @doc Wait for a transaction to be mined, returning the height it landed at.
-%% While a transaction is pending the gateway answers in prose -- `Pending',
-%% `Accepted' -- and only once it is in a block does it answer with the JSON
-%% that carries the height.
-live_await(ID, Opts) -> live_await(ID, 240, Opts).
-live_await(ID, 0, _Opts) -> error({not_mined, ID});
-live_await(ID, Attempts, Opts) ->
-    case live_height(ID, Opts) of
-        not_found ->
-            timer:sleep(15000),
-            live_await(ID, Attempts - 1, Opts);
-        Height -> Height
-    end.
-
-live_height(ID, Opts) ->
-    case hb_http:get(<<"https://arweave.net">>, <<"/tx/", ID/binary, "/status">>, Opts) of
-        {ok, Status} ->
-            Body = hb_ao:get(<<"body">>, Status, <<"">>, Opts),
-            try hb_json:decode(Body) of
-                Decoded ->
-                    case hb_ao:get(<<"block_height">>, Decoded, not_found, Opts) of
-                        not_found -> not_found;
-                        Height -> hb_util:int(Height)
-                    end
-            catch
-                _:_ -> not_found
-            end;
-        _ -> not_found
-    end.
-
-%% @doc Top an account up only if it cannot pay its own way. Creating an
-%% account is by far the most expensive part of a run, so a funded counterparty
-%% is left alone and a rerun costs nothing here.
-live_fund(Address, Need, Seller, Opts) ->
-    case live_balance(Address, Opts) of
-        Balance when Balance >= Need ->
-            ?event(name_token_live,
-                {already_funded, {address, {string, Address}}, {balance, Balance}}
-            ),
-            Balance;
-        Balance ->
-            ?event(name_token_live,
-                {funding, {address, {string, Address}}, {balance, Balance}}
-            ),
-            live_post(
-                <<"fund">>,
-                #{
-                    <<"target">> => Address,
-                    <<"quantity">> => hb_util:bin(Need * 2)
-                },
-                Seller,
-                Opts
-            )
-    end.
-
-%% @doc Spawn a name on Arweave. Every key is a scalar: a submessage or a list
-%% would be written to the weave as a `+link' to content the weave does not
-%% hold, and no node could read the process back.
-live_spawn(Name, Holder, Wallet, Opts) ->
-    live_post(
-        <<"spawn:", Name/binary>>,
-        #{
-            <<"device">> => <<"process@1.0">>,
-            <<"type">> => <<"Process">>,
-            <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
-            <<"scheduler-mode">> => <<"all">>,
-            <<"execution-device">> => <<"name-token@1.0">>,
-            <<"swap-device">> => <<"arweave-swap@1.0">>,
-            <<"name">> => Name,
-            <<"ticker">> => <<"NAME">>,
-            <<"denomination">> => <<"0">>,
-            <<"total-supply">> => <<"1">>,
-            <<"initial-holder">> => Holder,
-            <<"test-suite">> => <<"name-token">>
-        },
-        Wallet,
-        Opts
-    ).
-
-%% @doc Address a message to a name. The first message to a process pays to
-%% create its account and must carry at least a winston to do so.
-live_send(Label, ProcID, Fields, Wallet, Opts) ->
-    live_post(
-        Label,
-        Fields#{ <<"target">> => ProcID, <<"quantity">> => <<"1">> },
-        Wallet,
-        Opts
-    ).
-
-%% @doc Report which slot each of a run's transactions landed at, by reading the
-%% schedule back and matching each assignment's body against the ids we sent.
-%% These are the numbers the fixture tests read state at.
-live_slots(ProcID, Named, Opts) ->
-    {ok, Schedule} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave-scheduler@1.0">> },
-            #{
-                <<"path">> => <<"schedule">>,
-                <<"method">> => <<"GET">>,
-                <<"target">> => ProcID
-            },
-            Opts
-        ),
-    Assignments =
-        hb_ao:normalize_keys(hb_ao:get(<<"assignments">>, Schedule, Opts), Opts),
-    % A schedule's assignments are keyed by slot, alongside the keys any
-    % committed message carries; only the numbered ones are slots.
-    BySlot =
-        [
-            {
-                Slot,
-                hb_util:human_id(
-                    hb_message:id(
-                        hb_ao:get(<<"body">>, Assignment, Opts),
-                        signed,
-                        Opts
-                    )
-                )
-            }
-        ||
-            {Key, Assignment} <- hb_maps:to_list(Assignments, Opts),
-            {ok, Slot} <- [hb_util:safe_int(Key)],
-            is_map(Assignment)
-        ],
-    lists:foreach(
-        fun({Label, ID}) ->
-            Slot =
-                case [S || {S, Body} <- BySlot, Body =:= ID] of
-                    [Found | _] -> Found;
-                    [] -> not_assigned
-                end,
-            ?event(name_token_live,
-                {slot,
-                    {process, {string, ProcID}},
-                    {label, {string, Label}},
-                    {tx, {string, ID}},
-                    {slot, Slot}
-                }
-            )
-        end,
-        Named
-    ),
-    ?event(name_token_live,
-        {schedule_length, {process, {string, ProcID}}, {slots, length(BySlot)}}
-    ),
-    ok.
-
-%%% Story one: a name that had to be paid for.
+%%% The driver that posted them is not kept here: it spends real AR, so it can
+%%% never run in the battery, and what it produced is already permanent. It is
+%%% in the history if a later protocol needs fresh fixtures minted:
 %%%
-%%% An offer that charges to register turns away a buyer who will not pay the
-%%% fee, and turns away a payment from somebody who never reserved it. The buyer
-%%% who does both gets the name -- and with it the right to say what it means,
-%%% which the seller loses in the same breath.
-live_story_sale(Seller, Poor, Rich, Opts) ->
-    SellerAddr = live_address(Seller),
-    ProcID = live_spawn(<<"paid-for">>, SellerAddr, Seller, Opts),
-    Offer =
-        live_send(
-            <<"make-offer">>,
-            ProcID,
-            #{
-                <<"action">> => <<"make-offer">>,
-                <<"offer-quantity">> => <<"1">>,
-                <<"asking">> => hb_util:bin(?LIVE_ASKING),
-                <<"deposit">> => <<"0">>,
-                <<"minimum-fee">> => hb_util:bin(?LIVE_MINIMUM_FEE),
-                <<"deadline">> => <<"99999999">>
-            },
-            Seller,
-            Opts
-        ),
-    % A registration that pays only what the network charges anyway does not
-    % clear a fee set above it.
-    Underpaid =
-        live_send(
-            <<"register:underpaid">>,
-            ProcID,
-            #{ <<"action">> => <<"register-interest">>, <<"order-id">> => Offer },
-            Poor,
-            Opts
-        ),
-    % Nor does value sent to the process, which would only be stranded there.
-    Stranded =
-        live_post(
-            <<"register:stranded">>,
-            #{
-                <<"target">> => ProcID,
-                <<"quantity">> => hb_util:bin(?LIVE_PAID_FEE),
-                <<"action">> => <<"register-interest">>,
-                <<"order-id">> => Offer
-            },
-            Poor,
-            Opts
-        ),
-    % Overpaying the reward does.
-    Registered =
-        live_post(
-            <<"register:paid">>,
-            #{
-                <<"target">> => ProcID,
-                <<"quantity">> => <<"1">>,
-                <<"reward">> => hb_util:bin(?LIVE_PAID_FEE),
-                <<"action">> => <<"register-interest">>,
-                <<"order-id">> => Offer
-            },
-            Rich,
-            Opts
-        ),
-    % The order is now the registrant's alone: somebody else's payment buys
-    % nothing, and with no bond posted there is nothing to compensate them with.
-    Interloper =
-        live_post(
-            <<"payment:interloper">>,
-            #{
-                <<"target">> => SellerAddr,
-                <<"quantity">> => hb_util:bin(?LIVE_ASKING),
-                <<"order-id">> => Offer
-            },
-            Poor,
-            Opts
-        ),
-    Payment =
-        live_post(
-            <<"payment:buyer">>,
-            #{
-                <<"target">> => SellerAddr,
-                <<"quantity">> => hb_util:bin(?LIVE_ASKING),
-                <<"order-id">> => Offer
-            },
-            Rich,
-            Opts
-        ),
-    % The seller no longer holds the name, so no longer speaks for it.
-    StaleSet =
-        live_send(
-            <<"set:former-owner">>,
-            ProcID,
-            #{ <<"action">> => <<"set">>, <<"greeting">> => <<"still mine">> },
-            Seller,
-            Opts
-        ),
-    OwnerSet =
-        live_send(
-            <<"set:owner">>,
-            ProcID,
-            #{
-                <<"action">> => <<"set">>,
-                <<"content-type">> => <<"text/plain">>,
-                <<"greeting">> => <<"hello from the new owner">>
-            },
-            Rich,
-            Opts
-        ),
-    % A stranger may ask a slot to resolve anything at all. It must be applied
-    % like any other message: a slot that failed could never be recomputed, and
-    % the process would stop on every node for good.
-    Stray =
-        live_post(
-            <<"stray:path-info">>,
-            #{
-                <<"target">> => ProcID,
-                <<"quantity">> => <<"1">>,
-                <<"path">> => <<"info">>
-            },
-            Poor,
-            Opts
-        ),
-    % And a figure that is not a number is an inadmissible message, not a
-    % failed slot.
-    Nonsense =
-        live_send(
-            <<"make-offer:nonsense">>,
-            ProcID,
-            #{
-                <<"action">> => <<"make-offer">>,
-                <<"offer-quantity">> => <<"1">>,
-                <<"asking">> => <<"1000">>,
-                <<"deposit">> => <<"0">>,
-                <<"deadline">> => <<"tomorrow">>
-            },
-            Seller,
-            Opts
-        ),
-    live_slots(
-        ProcID,
-        [
-            {<<"make-offer">>, Offer},
-            {<<"register:underpaid">>, Underpaid},
-            {<<"register:stranded">>, Stranded},
-            {<<"register:paid">>, Registered},
-            {<<"payment:interloper">>, Interloper},
-            {<<"payment:buyer">>, Payment},
-            {<<"set:former-owner">>, StaleSet},
-            {<<"set:owner">>, OwnerSet},
-            {<<"stray:path-info">>, Stray},
-            {<<"make-offer:nonsense">>, Nonsense}
-        ],
-        Opts
-    ),
-    ProcID.
+%%%     git show 824816e7c:src/preloaded/process/dev_name_token.erl
 
-%%% Story two: an offer withdrawn.
-%%%
-%%% A seller may take an unreserved order back, and once they have, nothing
-%%% more can be done with it: registering is refused and a payment against it
-%%% buys nothing. A stranger may not withdraw somebody else's order.
-live_story_withdrawn(Seller, Poor, Rich, Opts) ->
-    SellerAddr = live_address(Seller),
-    ProcID = live_spawn(<<"withdrawn">>, SellerAddr, Seller, Opts),
-    Offer =
-        live_send(
-            <<"make-offer">>,
-            ProcID,
-            #{
-                <<"action">> => <<"make-offer">>,
-                <<"offer-quantity">> => <<"1">>,
-                <<"asking">> => hb_util:bin(?LIVE_ASKING),
-                <<"deposit">> => <<"0">>,
-                <<"minimum-fee">> => hb_util:bin(?LIVE_MINIMUM_FEE),
-                <<"deadline">> => <<"99999999">>
-            },
-            Seller,
-            Opts
-        ),
-    Cancelled =
-        live_send(
-            <<"cancel">>,
-            ProcID,
-            #{ <<"action">> => <<"cancel-order">>, <<"order-id">> => Offer },
-            Seller,
-            Opts
-        ),
-    LateRegister =
-        live_post(
-            <<"register:after-cancel">>,
-            #{
-                <<"target">> => ProcID,
-                <<"quantity">> => <<"1">>,
-                <<"reward">> => hb_util:bin(?LIVE_PAID_FEE),
-                <<"action">> => <<"register-interest">>,
-                <<"order-id">> => Offer
-            },
-            Rich,
-            Opts
-        ),
-    LatePayment =
-        live_post(
-            <<"payment:after-cancel">>,
-            #{
-                <<"target">> => SellerAddr,
-                <<"quantity">> => hb_util:bin(?LIVE_ASKING),
-                <<"order-id">> => Offer
-            },
-            Rich,
-            Opts
-        ),
-    Second =
-        live_send(
-            <<"make-offer:second">>,
-            ProcID,
-            #{
-                <<"action">> => <<"make-offer">>,
-                <<"offer-quantity">> => <<"1">>,
-                <<"asking">> => hb_util:bin(?LIVE_ASKING),
-                <<"deposit">> => <<"0">>,
-                <<"minimum-fee">> => hb_util:bin(?LIVE_MINIMUM_FEE),
-                <<"deadline">> => <<"99999999">>
-            },
-            Seller,
-            Opts
-        ),
-    StrangerCancel =
-        live_send(
-            <<"cancel:stranger">>,
-            ProcID,
-            #{ <<"action">> => <<"cancel-order">>, <<"order-id">> => Second },
-            Poor,
-            Opts
-        ),
-    live_slots(
-        ProcID,
-        [
-            {<<"make-offer">>, Offer},
-            {<<"cancel">>, Cancelled},
-            {<<"register:after-cancel">>, LateRegister},
-            {<<"payment:after-cancel">>, LatePayment},
-            {<<"make-offer:second">>, Second},
-            {<<"cancel:stranger">>, StrangerCancel}
-        ],
-        Opts
-    ),
-    ProcID.
-
-%%% Story three: a name handed over directly.
-%%%
-%%% No sale at all -- just the token half. The unit moves, and the authority
-%%% moves with it: the former holder's word stops counting the moment it does.
-live_story_handover(Seller, Rich, Opts) ->
-    SellerAddr = live_address(Seller),
-    RichAddr = live_address(Rich),
-    ProcID = live_spawn(<<"handed-over">>, SellerAddr, Seller, Opts),
-    FirstSet =
-        live_send(
-            <<"set:before">>,
-            ProcID,
-            #{ <<"action">> => <<"set">>, <<"points-at">> => <<"seller">> },
-            Seller,
-            Opts
-        ),
-    Transfer =
-        live_send(
-            <<"transfer">>,
-            ProcID,
-            #{
-                <<"action">> => <<"transfer">>,
-                <<"recipient">> => RichAddr,
-                <<"quantity">> => <<"1">>
-            },
-            Seller,
-            Opts
-        ),
-    StaleSet =
-        live_send(
-            <<"set:former-owner">>,
-            ProcID,
-            #{ <<"action">> => <<"set">>, <<"points-at">> => <<"seller again">> },
-            Seller,
-            Opts
-        ),
-    NewSet =
-        live_send(
-            <<"set:new-owner">>,
-            ProcID,
-            #{ <<"action">> => <<"set">>, <<"points-at">> => <<"buyer">> },
-            Rich,
-            Opts
-        ),
-    live_slots(
-        ProcID,
-        [
-            {<<"set:before">>, FirstSet},
-            {<<"transfer">>, Transfer},
-            {<<"set:former-owner">>, StaleSet},
-            {<<"set:new-owner">>, NewSet}
-        ],
-        Opts
-    ),
-    ProcID.
-
-%% @doc The stories a run was asked for, named in the environment as
-%% `HB_LIVE_STORIES=sale,withdrawn' or left unset for all of them.
-live_stories() ->
-    case os:getenv("HB_LIVE_STORIES") of
-        false -> all;
-        Names ->
-            [
-                hb_util:atom(string:trim(Name))
-            ||
-                Name <- string:split(Names, ",", all)
-            ]
-    end.
-
-live_story(Name, all, Fun) -> live_story(Name, [Name], Fun);
-live_story(Name, Wanted, Fun) ->
-    case lists:member(Name, Wanted) of
-        true -> Fun();
-        false ->
-            ?event(name_token_live, {story_skipped, {name, Name}}),
-            skipped
-    end.
-
-%% @doc Mint the five `pn-test-N' names the site's test namespace resolves
-%% through, and report what to put in the manifest.
-%%
-%% Each is spawned already holding its unit and already pointing somewhere, so
-%% none of them needs a message sent to it -- which is the whole point of
-%% `initial-value', since the first message addressed to a process pays Arweave's
-%% new-account fee. Targets alternate between a manifest and another reference,
-%% because a name that points at a reference is the shape a person actually wants:
-%% a reference can be updated with a bundled data item in seconds, where a name
-%% token needs consensus.
-%%
-%%     HB_LIVE_NAMES=1 HB_PRINT=name_token_live \\
-%%         rebar3 device test --devices dev_name_token \\
-%%             --test dev_name_token:live_names_test_
-live_names_test_() -> live_gated("HB_LIVE_NAMES", fun live_names/0, 7200).
-
-live_names() ->
-    Seller = live_wallet(),
-    SellerAddr = live_address(Seller),
-    Opts = live_opts(Seller),
-    Targets = live_name_targets(),
-    Minted =
-        lists:map(
-            fun({Index, Kind, Target}) ->
-                Name = <<"pn-test-", (hb_util:bin(Index))/binary>>,
-                ProcID =
-                    live_post(
-                        <<"mint:", Name/binary>>,
-                        #{
-                            <<"device">> => <<"process@1.0">>,
-                            <<"type">> => <<"Process">>,
-                            <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
-                            <<"scheduler-mode">> => <<"all">>,
-                            <<"execution-device">> => <<"name-token@1.0">>,
-                            <<"swap-device">> => <<"arweave-swap@1.0">>,
-                            <<"name">> => Name,
-                            <<"ticker">> => <<"NAME">>,
-                            <<"denomination">> => <<"0">>,
-                            <<"total-supply">> => <<"1">>,
-                            <<"initial-holder">> => SellerAddr,
-                            <<"initial-value">> => Target,
-                            <<"test-suite">> => <<"name-token">>
-                        },
-                        Seller,
-                        Opts
-                    ),
-                ?event(name_token_live,
-                    {minted,
-                        {name, {string, Name}},
-                        {process, {string, ProcID}},
-                        {points_at, {string, Target}},
-                        {kind, Kind}
-                    }
-                ),
-                {Name, ProcID, Kind, Target}
-            end,
-            Targets
-        ),
-    lists:foreach(fun({_, ProcID, _, _}) -> live_await(ProcID, Opts) end, Minted),
-    ?event(name_token_live,
-        {namespace_entries,
-            {holder, {string, SellerAddr}},
-            {entries,
-                {string,
-                    hb_util:bin(
-                        lists:flatten(
-                            [
-                                io_lib:format("~s=~s ", [Name, ProcID])
-                            ||
-                                {Name, ProcID, _, _} <- Minted
-                            ]
-                        )
-                    )
-                }
-            }
-        }
-    ),
-    {ok, Minted}.
-
-%% @doc What each test name points at. The manifest is the AO site's own, so a
-%% resolved name actually renders something; the references are real
-%% `~reference@1.0' inits, so the deeper chain is exercised rather than mocked.
-live_name_targets() ->
-    % A real Arweave path manifest that a gateway serves today, so a resolved
-    % name renders something rather than 404ing.
-    Manifest = <<"6oMvmlBUUltTDz_T9pZrEP2QkzpCBGk83Br8XXbqy20">>,
-    % Replaced with the test namespace's own reference once it is published; a
-    % name pointing at a reference is the shape an owner actually wants, because
-    % a reference can be repointed in seconds.
-    Reference = <<"6oMvmlBUUltTDz_T9pZrEP2QkzpCBGk83Br8XXbqy20">>,
-    [
-        {1, manifest, Manifest},
-        {2, reference, Reference},
-        {3, manifest, Manifest},
-        {4, reference, Reference},
-        {5, manifest, Manifest}
-    ].
-
-%% @doc Play all three stories out on mainnet.
-live_suite() ->
-    Seller = live_wallet(),
-    SellerAddr = live_address(Seller),
-    Opts = live_opts(Seller),
-    Poor = live_party(<<"name-token-poor.json">>),
-    Rich = live_party(<<"name-token-buyer.json">>),
-    PoorAddr = live_address(Poor),
-    RichAddr = live_address(Rich),
-    ?event(name_token_live,
-        {parties,
-            {seller, {string, SellerAddr}},
-            {underpayer, {string, PoorAddr}},
-            {buyer, {string, RichAddr}},
-            {seller_balance, live_balance(SellerAddr, Opts)}
-        }
-    ),
-    live_fund(PoorAddr, 500000000, Seller, Opts),
-    live_fund(RichAddr, 500000000, Seller, Opts),
-    % Each story stands alone on its own process, so a rerun can name just the
-    % ones it needs rather than paying to create every account again.
-    Wanted = live_stories(),
-    Sale = live_story(sale, Wanted, fun() -> live_story_sale(Seller, Poor, Rich, Opts) end),
-    Withdrawn =
-        live_story(
-            withdrawn,
-            Wanted,
-            fun() -> live_story_withdrawn(Seller, Poor, Rich, Opts) end
-        ),
-    Handover =
-        live_story(handover, Wanted, fun() -> live_story_handover(Seller, Rich, Opts) end),
-    ?event(name_token_live,
-        {suite_complete,
-            {sale, {string, Sale}},
-            {withdrawn, {string, Withdrawn}},
-            {handover, {string, Handover}},
-            {buyer, {string, RichAddr}},
-            {underpayer, {string, PoorAddr}},
-            {seller, {string, SellerAddr}},
-            {seller_balance, live_balance(SellerAddr, Opts)}
-        }
-    ),
-    ok.
-
-%%% The permanent fixture
-%%%
-%%% A name that was really sold on Arweave, by the driver above. Everything
-%%% below is a deterministic read of blocks 1966039-1966044 of the weave, so it
-%%% is repeatable forever: the seller spawned `test-name' holding its single
-%%% unit, offered it for 1000 winston with no bond and a 1000 winston fee to
-%%% register, the buyer registered (paying that fee), paid, and then -- owning
-%%% the name -- pointed it at a message of their own.
-%%%
-%%% One transaction per block, so the schedule's order is unambiguous:
-%%%
-%%%     1966039  the name          yWRe7v4S...
-%%%     1966041  make-offer        3BApJHea...  (the order id)
-%%%     1966042  register-interest GGPH2lA8...
-%%%     1966043  payment           KROLsGpr...  (to the seller, not the process)
-%%%     1966044  set               QjmNGlIi...
-%%%
-%%% The payment is the point: it is an ordinary transfer between two addresses,
-%%% the process is not a party to it, and the process sees it only because
-%%% `~arweave-scheduler@1.0' is sequencing it by every transaction on the
-%%% network. Every transaction in that range is a slot of this
-%%% process, not just these five.
--define(FIXTURE_PROCESS, <<"yWRe7v4SZ4_NKV6LkYyNPrFdzEaGh0ckblu-CaGXqG4">>).
--define(FIXTURE_SELLER, <<"ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k">>).
--define(FIXTURE_BUYER, <<"LW0myHWuv7XcLec19OCDzFJW0P6jXPG_Ao49kfy9Slc">>).
--define(FIXTURE_ORDER, <<"3BApJHeatc9pVuLgjZ_P-HT5hZgRE1Q3I1bdTESgRDM">>).
--define(FIXTURE_MAX_HEIGHT, 1966044).
-
-%% @doc Read the fixture's state as of the pinned height. The height cap makes
-%% the answer immutable: no block after 1966044 can reach this process.
-fixture_opts() ->
-    TestStore = hb_test_utils:test_store(),
-    IndexStore = hb_test_utils:test_store(),
-    (hb_opts:default_message())#{
-        <<"store">> => [
-            TestStore,
-            #{
-                <<"store-module">> => hb_store_arweave,
-                <<"name">> => <<"cache-arweave">>,
-                <<"index-store">> => [IndexStore]
-            },
-            #{
-                <<"store-module">> => hb_store_gateway,
-                <<"local-store">> => [TestStore]
-            }
-        ],
-        <<"arweave-index-store">> => #{ <<"index-store">> => [IndexStore] },
-        <<"arweave-index-workers">> => 8,
-        <<"arweave-scheduler-confirmation-depth">> => 1,
-        <<"arweave-scheduler-max-height">> => ?FIXTURE_MAX_HEIGHT,
-        <<"name-resolvers">> => [#{ <<"test-name">> => ?FIXTURE_PROCESS }],
-        <<"node-host">> => <<"host">>,
-        <<"priv-wallet">> => ar_wallet:new()
-    }.
-
-%% @doc Synchronize the fixture's schedule from the network, retrying while the
-%% gateway rate-limits us -- the same allowance the scheduler's own fixture
-%% tests make.
-fixture_sync(_Opts, 0) -> {error, fixture_sync_failed};
-fixture_sync(Opts, Attempts) ->
-    case
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave-scheduler@1.0">> },
-            #{
-                <<"path">> => <<"schedule">>,
-                <<"method">> => <<"GET">>,
-                <<"target">> => ?FIXTURE_PROCESS
-            },
-            Opts
-        )
-    of
-        {ok, Schedule} -> {ok, Schedule};
-        _ ->
-            timer:sleep(5000),
-            fixture_sync(Opts, Attempts - 1)
-    end.
-
-%% @doc Compute the fixture to its latest slot. The schedule is primed first, so
-%% that the process message is read back as its canonical `tx@1.0' decoding
-%% rather than a gateway store's lossier one.
-fixture_state(Opts, Attempts) ->
-    {ok, _} = fixture_sync(Opts, Attempts),
-    {ok, Raw} = hb_cache:read(?FIXTURE_PROCESS, Opts),
-    Process = hb_cache:ensure_all_loaded(Raw, Opts),
-    hb_ao:resolve(Process, <<"now">>, Opts).
-
-%% @doc The whole story, read back off the weave: a name that changed hands for
-%% AR that never touched the process, and then said something new.
-fixture_sale_test_() ->
-    {timeout, 1800, fun fixture_sale/0}.
-fixture_sale() ->
-    Opts = fixture_opts(),
-    {ok, State} = fixture_state(Opts, 5),
-    Read = fun(Path) -> hb_ao:get(Path, {as, <<"message@1.0">>, State}, not_found, Opts) end,
-    % The name is the buyer's: the swap settled a payment it was not paid.
-    ?assertEqual(1, hb_util:int(Read([?BALANCES, ?FIXTURE_BUYER]))),
-    ?assertEqual(0, hb_util:int(Read([?BALANCES, ?FIXTURE_SELLER]))),
-    ?assertEqual(1, hb_util:int(Read(<<"total-supply">>))),
-    % The offer is complete, so the book no longer holds it.
-    ?assertEqual(
-        not_found,
-        Read([<<"orders">>, ?FIXTURE_ORDER, <<"status">>])
-    ),
-    % And the new owner has said what the name points at.
-    ?assertEqual(<<"hello from the new owner">>, Read([?VALUE, <<"greeting">>])),
-    ?assertEqual(<<"text/plain">>, Read([?VALUE, <<"content-type">>])).
-
-%% @doc The name resolves: `test-name' reaches this instance, both as a bare
-%% name and as the label of a host.
-fixture_name_resolution_test() ->
-    Opts = fixture_opts(),
-    % A node that serves a name holds it. Priming the schedule puts the process
-    % in the node's own cache, which is what the resolver then loads.
-    {ok, _} = fixture_sync(Opts, 5),
-    ?assertEqual(
-        {ok, ?FIXTURE_PROCESS},
-        hb_ao:resolve_many(
-            [
-                #{ <<"device">> => <<"name@1.0">> },
-                #{ <<"path">> => <<"test-name">>, <<"load">> => false }
-            ],
-            Opts
-        )
-    ),
-    % `test-name.host' is the same lookup: the node's own host is stripped from
-    % the request's host, leaving the label to resolve.
-    {ok, Resolved} =
-        hb_ao:resolve(
-            #{ <<"device">> => <<"name@1.0">> },
-            #{
-                <<"path">> => <<"request">>,
-                <<"request">> => #{ <<"host">> => <<"test-name.host">> },
-                <<"body">> => [#{ <<"path">> => <<"now">> }]
-            },
-            Opts
-        ),
-    [Named | _] = hb_ao:get(<<"body">>, Resolved, [], Opts),
-    Loaded = hb_cache:ensure_all_loaded(Named, Opts),
-    % The message the host resolved to is this name: it carries the name's own
-    % spawn keys, and nothing else on the weave does.
-    ?assertEqual(<<"test-name">>, hb_ao:get(<<"name">>, Loaded, not_found, Opts)),
-    ?assertEqual(
-        ?FIXTURE_SELLER,
-        hb_ao:get(<<"initial-holder">>, Loaded, not_found, Opts)
-    ),
-    ?assertEqual(
-        <<"name-token@1.0">>,
-        hb_ao:get(<<"execution-device">>, Loaded, not_found, Opts)
-    ).
-
-%%% Story one, replayed: a name that had to be paid for
-%%%
-%%% Every transaction below is on mainnet. The reads walk the process forward
-%%% one slot at a time, so what the schedule did to the state is visible in the
-%%% order it happened, rather than only at the end.
-%%%
-%%%   make-offer          the seller's unit goes into escrow, the order opens
-%%%   register:underpaid  a reward of 33,039,920 does not clear a 100,000,000
-%%%                       fee -- the order stays open
-%%%   register:stranded   150,000,000 sent *to the process* is not the fee
-%%%                       either: it would only be stranded there
-%%%   register:paid       a reward of 150,000,000 does clear it -- reserved
-%%%   payment:interloper  the underpayer pays anyway, but the order is not
-%%%                       theirs and there is no bond to compensate them with
-%%%   payment:buyer       the registrant pays -- settled, and the name moves
-%%%   set:former-owner    the seller no longer holds it, so is no longer heard
-%%%   set:owner           the buyer says what the name means
-%%%   stray:path-info     a stranger routes a slot at `info'; nothing breaks
-%%%   make-offer:nonsense a deadline of `tomorrow' opens no order
--define(SALE_PROCESS, <<"an95oAK9MlahZI_tKKeG4ykzNN01qfMi2WfJO58o_UU">>).
--define(SALE_SELLER, <<"ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k">>).
--define(SALE_UNDERPAYER, <<"2yvAwMDrF62hpH_kKTfguatzB9mKVzcM2edAn8KauTQ">>).
--define(SALE_BUYER, <<"LW0myHWuv7XcLec19OCDzFJW0P6jXPG_Ao49kfy9Slc">>).
--define(SALE_OFFER, <<"r6lleOybw5_Pz-3EDHjLwAYv8XNGTlLMjT_8pA9e6o0">>).
--define(SALE_UNDERPAID, <<"060IcKkUJ4ggdojenpcvSpTQjbuGDsoDz_jEhs-C4E8">>).
--define(SALE_STRANDED, <<"f31_VyEl5NumgmKUPeokDgPAxbOZj32bFBf3D5wwf_A">>).
--define(SALE_PAID, <<"RJXzg_GbIo7mUs3oNXfG4DI2-1EK7rWipN5YlvFxZFI">>).
--define(SALE_INTERLOPER, <<"L1mrhwV8JY0-n7B2XZu2R9Ox5MjCsdnsSohpNl_UHAg">>).
--define(SALE_PAYMENT, <<"B4F3TSTcLBuivjQ9Rzf-2IyY2svHUIMnfQjHGbegn6c">>).
--define(SALE_STALE_SET, <<"ndgQ_1zZCm3cMlmC42jhLFZHFwo60wVs5znQ14Mip4Q">>).
--define(SALE_OWNER_SET, <<"vc3eQypdoGc4--NMQkah5tYYnG62KkYtpme1JVTpeAU">>).
--define(SALE_STRAY, <<"bwEotEyzbH4AYP_-5WZCZB7TgTRI4bFjVdJl6fjmuhE">>).
--define(SALE_NONSENSE, <<"aYIqfkDstZTyewfRdqNcKHYdfCeC2jqyICD0juRCoC0">>).
--define(SALE_MAX_HEIGHT, 1966084).
-
-%% @doc Node options pinned to a story's last block, so its answer is
-%% immutable: no block after it can reach the process.
+%% @doc Node options pinned to a story's last block. `name-resolvers' is what
+%% lets `~name@1.0' find the process by its name.
 story_opts(MaxHeight, Process) ->
     TestStore = hb_test_utils:test_store(),
     IndexStore = hb_test_utils:test_store(),
@@ -1759,8 +884,11 @@ story_opts(MaxHeight, Process) ->
         <<"priv-wallet">> => ar_wallet:new()
     }.
 
-%% @doc Synchronize a story's schedule, retrying while the gateway rate-limits
-%% us -- the same allowance the scheduler's own fixture tests make.
+%% @doc Synchronize a story's schedule from the network, retrying while the
+%% gateway rate-limits us -- the same allowance the scheduler's own fixture
+%% tests make. Priming the schedule also puts the process message in the node's
+%% cache in its canonical `tx@1.0' decoding, rather than a gateway store's
+%% lossier one.
 story_sync(_Process, _Opts, 0) -> {error, sync_failed};
 story_sync(Process, Opts, Attempts) ->
     case
@@ -1780,13 +908,12 @@ story_sync(Process, Opts, Attempts) ->
             story_sync(Process, Opts, Attempts - 1)
     end.
 
-%% @doc The slot a transaction was given. The stories pin transaction ids
-%% rather than slot numbers, because a slot number is a fact about the weave --
-%% every transaction on the network takes one -- while the id is the message
-%% itself.
+%% @doc The slot a transaction was given.
 slot_of(Schedule, TXID, Opts) ->
     Assignments =
         hb_ao:normalize_keys(hb_ao:get(<<"assignments">>, Schedule, Opts), Opts),
+    % A schedule's assignments are keyed by slot, alongside the keys any
+    % committed message carries; only the numbered ones are slots.
     Found =
         [
             Slot
@@ -1817,99 +944,95 @@ at(Process, Slot, Path, Opts) ->
         Opts#{ <<"hashpath">> => ignore }
     ).
 
+%%% Story one: a name that had to be paid for.
+%%%
+%%% The seller spawned a name holding its single unit, offered it for 1000
+%%% winston with a 100,000,000 winston fee to register, and turned away everyone
+%%% who would not pay: a registration that paid only what the network charges
+%%% anyway, and one that sent value to the process instead. The buyer who
+%%% overpaid the reward reserved it, an interloper's payment bought nothing, and
+%%% the buyer's own payment settled it -- an ordinary transfer between two
+%%% addresses that the process was never a party to.
+%%%
+%%%   make-offer          the seller's unit goes into escrow, the order opens
+%%%   register:underpaid  a reward of 33,039,920 does not clear a 100,000,000
+%%%   fee register:stranded   150,000,000 sent *to the process* is not the fee
+%%%   either register:paid       a reward of 150,000,000 does clear it --
+%%%   reserved payment:interloper  the underpayer pays anyway, but the order is
+%%%   not theirs payment:buyer       the registrant pays -- settled, and the
+%%%   name moves set:former-owner    the seller no longer holds it, so is no
+%%%   longer heard set:owner           the buyer says what the name means
+%%%   stray:path-info     a stranger routes a slot at `info'; nothing breaks
+%%%   make-offer:nonsense a deadline of `tomorrow' opens no order
+-define(SALE_PROCESS, <<"an95oAK9MlahZI_tKKeG4ykzNN01qfMi2WfJO58o_UU">>).
+-define(SELLER, <<"ggltHF0Cnv9ylH3vM1p7amR2vXLMoPLQIUQmAEwLP-k">>).
+-define(UNDERPAYER, <<"2yvAwMDrF62hpH_kKTfguatzB9mKVzcM2edAn8KauTQ">>).
+-define(BUYER, <<"LW0myHWuv7XcLec19OCDzFJW0P6jXPG_Ao49kfy9Slc">>).
+-define(SALE_OFFER, <<"r6lleOybw5_Pz-3EDHjLwAYv8XNGTlLMjT_8pA9e6o0">>).
+-define(SALE_UNDERPAID, <<"060IcKkUJ4ggdojenpcvSpTQjbuGDsoDz_jEhs-C4E8">>).
+-define(SALE_STRANDED, <<"f31_VyEl5NumgmKUPeokDgPAxbOZj32bFBf3D5wwf_A">>).
+-define(SALE_PAID, <<"RJXzg_GbIo7mUs3oNXfG4DI2-1EK7rWipN5YlvFxZFI">>).
+-define(SALE_INTERLOPER, <<"L1mrhwV8JY0-n7B2XZu2R9Ox5MjCsdnsSohpNl_UHAg">>).
+-define(SALE_PAYMENT, <<"B4F3TSTcLBuivjQ9Rzf-2IyY2svHUIMnfQjHGbegn6c">>).
+-define(SALE_STALE_SET, <<"ndgQ_1zZCm3cMlmC42jhLFZHFwo60wVs5znQ14Mip4Q">>).
+-define(SALE_OWNER_SET, <<"vc3eQypdoGc4--NMQkah5tYYnG62KkYtpme1JVTpeAU">>).
+-define(SALE_STRAY, <<"bwEotEyzbH4AYP_-5WZCZB7TgTRI4bFjVdJl6fjmuhE">>).
+-define(SALE_NONSENSE, <<"aYIqfkDstZTyewfRdqNcKHYdfCeC2jqyICD0juRCoC0">>).
+-define(SALE_MAX_HEIGHT, 1966084).
+
 sale_story_test_() -> {timeout, 3600, fun sale_story/0}.
 sale_story() ->
-    Process = ?SALE_PROCESS,
-    Opts = story_opts(?SALE_MAX_HEIGHT, Process),
-    {ok, Schedule} = story_sync(Process, Opts, 5),
+    Opts = story_opts(?SALE_MAX_HEIGHT, ?SALE_PROCESS),
+    {ok, Schedule} = story_sync(?SALE_PROCESS, Opts, 5),
     Slot = fun(TXID) -> slot_of(Schedule, TXID, Opts) end,
-    Seller = ?SALE_SELLER,
-    Buyer = ?SALE_BUYER,
-    Poor = ?SALE_UNDERPAYER,
+    Read = fun(TXID, Path) -> at(?SALE_PROCESS, Slot(TXID), Path, Opts) end,
     Order = ?SALE_OFFER,
+    Held = <<"orders/", Order/binary, "/creator">>,
+    Reserver = <<"orders/", Order/binary, "/buyer">>,
     % The offer escrows the seller's only unit, and opens the order.
-    Offered = Slot(?SALE_OFFER),
-    ?assertEqual({ok, 0}, at(Process, Offered, <<"balances/", Seller/binary>>, Opts)),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Offered, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
+    ?assertEqual({ok, 0}, Read(?SALE_OFFER, <<"balances/", (?SELLER)/binary>>)),
+    ?assertEqual({ok, ?SELLER}, Read(?SALE_OFFER, Held)),
     ?assertEqual(
         {ok, 100000000},
-        at(Process, Offered, <<"orders/", Order/binary, "/minimum-fee">>, Opts)
+        Read(?SALE_OFFER, <<"orders/", Order/binary, "/minimum-fee">>)
     ),
     % A registration paying only what the network charges does not clear a fee
     % set above it, and neither does value sent to the process.
-    Underpaid = Slot(?SALE_UNDERPAID),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Underpaid, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
-    Stranded = Slot(?SALE_STRANDED),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Stranded, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
+    ?assertMatch({error, not_found}, Read(?SALE_UNDERPAID, Reserver)),
+    ?assertMatch({error, not_found}, Read(?SALE_STRANDED, Reserver)),
     % Overpaying the reward does.
-    Paid = Slot(?SALE_PAID),
-    ?assertEqual(
-        {ok, <<"reserved">>},
-        at(Process, Paid, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
-    ?assertEqual(
-        {ok, Buyer},
-        at(Process, Paid, <<"orders/", Order/binary, "/buyer">>, Opts)
-    ),
-    % Somebody else's payment buys nothing while it is reserved, and with no
-    % bond posted there is nothing to compensate them with either.
-    Interloped = Slot(?SALE_INTERLOPER),
-    ?assertEqual(
-        {ok, <<"reserved">>},
-        at(Process, Interloped, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
+    ?assertEqual({ok, ?BUYER}, Read(?SALE_PAID, Reserver)),
+    % Somebody else's payment buys nothing while the order is reserved.
+    ?assertEqual({ok, ?BUYER}, Read(?SALE_INTERLOPER, Reserver)),
     ?assertMatch(
         {error, not_found},
-        at(Process, Interloped, <<"balances/", Poor/binary>>, Opts)
+        Read(?SALE_INTERLOPER, <<"balances/", (?UNDERPAYER)/binary>>)
     ),
     % The registrant's payment settles it, and the name moves.
-    Settled = Slot(?SALE_PAYMENT),
-    ?assertMatch(
-        {error, _},
-        at(Process, Settled, <<"orders/", Order/binary, "/status">>, Opts)
-    ),
-    ?assertEqual({ok, 1}, at(Process, Settled, <<"balances/", Buyer/binary>>, Opts)),
-    ?assertEqual({ok, 0}, at(Process, Settled, <<"balances/", Seller/binary>>, Opts)),
-    % The seller no longer holds the name, so is no longer heard.
-    Stale = Slot(?SALE_STALE_SET),
-    ?assertMatch({error, not_found}, at(Process, Stale, <<"value/greeting">>, Opts)),
-    % The buyer is.
-    Spoken = Slot(?SALE_OWNER_SET),
+    ?assertMatch({error, _}, Read(?SALE_PAYMENT, Held)),
+    ?assertEqual({ok, 1}, Read(?SALE_PAYMENT, <<"balances/", (?BUYER)/binary>>)),
+    ?assertEqual({ok, 0}, Read(?SALE_PAYMENT, <<"balances/", (?SELLER)/binary>>)),
+    % The seller no longer holds the name, so is no longer heard. The buyer is.
+    ?assertMatch({error, not_found}, Read(?SALE_STALE_SET, <<"value/greeting">>)),
     ?assertEqual(
         {ok, <<"hello from the new owner">>},
-        at(Process, Spoken, <<"value/greeting">>, Opts)
+        Read(?SALE_OWNER_SET, <<"value/greeting">>)
     ),
-    % A stranger routing a slot at `info' changes nothing and breaks nothing:
-    % the process still computes, and still holds what it held.
-    Stray = Slot(?SALE_STRAY),
-    ?assertEqual({ok, 1}, at(Process, Stray, <<"balances/", Buyer/binary>>, Opts)),
-    ?assertEqual(
-        {ok, <<"hello from the new owner">>},
-        at(Process, Stray, <<"value/greeting">>, Opts)
-    ),
-    % And an offer whose deadline is `tomorrow' opens nothing.
-    Nonsense = Slot(?SALE_NONSENSE),
+    % A stranger routing a slot at `info' changes nothing and breaks nothing, and
+    % an offer whose deadline is `tomorrow' opens nothing.
+    ?assertEqual({ok, 1}, Read(?SALE_STRAY, <<"balances/", (?BUYER)/binary>>)),
     ?assertMatch(
         {error, not_found},
-        at(Process, Nonsense, <<"orders/", (?SALE_NONSENSE)/binary, "/status">>, Opts)
+        Read(?SALE_NONSENSE, <<"orders/", (?SALE_NONSENSE)/binary, "/creator">>)
     ),
-    ?assertEqual({ok, 1}, at(Process, Nonsense, <<"balances/", Buyer/binary>>, Opts)).
+    ?assertEqual({ok, 1}, Read(?SALE_NONSENSE, <<"balances/", (?BUYER)/binary>>)).
 
-%%% Story two, replayed: an offer withdrawn
+%%% Story two: an offer withdrawn.
 %%%
 %%% A seller may take back an order nobody has reserved. Once they have, the
 %%% order is spent: registering against it is refused however much is paid, and
-%%% a payment against it buys nothing and -- there being no bond -- compensates
-%%% nobody. A stranger may not withdraw somebody else's order.
+%%% a payment against it buys nothing and refunds nobody. A stranger may not
+%%% withdraw somebody else's order.
 -define(WITHDRAWN_PROCESS, <<"petNFJyilEh0YvFb39FqoL7CeBUvmnuQ73eHSlGLYxI">>).
 -define(WITHDRAWN_OFFER, <<"H1aRe1UoXqSW1IA1H4fZf8oUkHRFzgfzv2cw6hsRYGE">>).
 -define(WITHDRAWN_CANCEL, <<"zr8xLGjdXJWvWa3VYMjigEk4c47mteGRfUE0cZzX_hc">>).
@@ -1921,72 +1044,36 @@ sale_story() ->
 
 withdrawn_story_test_() -> {timeout, 3600, fun withdrawn_story/0}.
 withdrawn_story() ->
-    Process = ?WITHDRAWN_PROCESS,
-    Opts = story_opts(?WITHDRAWN_MAX_HEIGHT, Process),
-    {ok, Schedule} = story_sync(Process, Opts, 5),
+    Opts = story_opts(?WITHDRAWN_MAX_HEIGHT, ?WITHDRAWN_PROCESS),
+    {ok, Schedule} = story_sync(?WITHDRAWN_PROCESS, Opts, 5),
     Slot = fun(TXID) -> slot_of(Schedule, TXID, Opts) end,
-    Seller = ?SALE_SELLER,
-    Buyer = ?SALE_BUYER,
-    First = ?WITHDRAWN_OFFER,
-    Second = ?WITHDRAWN_SECOND,
-    % The offer escrows the unit.
-    Offered = Slot(?WITHDRAWN_OFFER),
-    ?assertEqual({ok, 0}, at(Process, Offered, <<"balances/", Seller/binary>>, Opts)),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Offered, <<"orders/", First/binary, "/status">>, Opts)
-    ),
-    % Withdrawing it gives the unit back.
-    Cancelled = Slot(?WITHDRAWN_CANCEL),
-    ?assertMatch(
-        {error, _},
-        at(Process, Cancelled, <<"orders/", First/binary, "/status">>, Opts)
-    ),
-    ?assertEqual({ok, 1}, at(Process, Cancelled, <<"balances/", Seller/binary>>, Opts)),
+    Read = fun(TXID, Path) -> at(?WITHDRAWN_PROCESS, Slot(TXID), Path, Opts) end,
+    First = <<"orders/", (?WITHDRAWN_OFFER)/binary, "/creator">>,
+    Second = <<"orders/", (?WITHDRAWN_SECOND)/binary, "/creator">>,
+    Balance = <<"balances/", (?SELLER)/binary>>,
+    % The offer escrows the unit; withdrawing it gives the unit back.
+    ?assertEqual({ok, 0}, Read(?WITHDRAWN_OFFER, Balance)),
+    ?assertEqual({ok, ?SELLER}, Read(?WITHDRAWN_OFFER, First)),
+    ?assertMatch({error, _}, Read(?WITHDRAWN_CANCEL, First)),
+    ?assertEqual({ok, 1}, Read(?WITHDRAWN_CANCEL, Balance)),
     % A registration that pays the fee in full is still refused: the order is
-    % no longer open.
-    LateRegister = Slot(?WITHDRAWN_LATE_REGISTER),
-    ?assertMatch(
-        {error, _},
-        at(Process, LateRegister, <<"orders/", First/binary, "/status">>, Opts)
-    ),
+    % gone. So is a payment against it, in either direction.
+    ?assertMatch({error, _}, Read(?WITHDRAWN_LATE_REGISTER, First)),
+    ?assertEqual({ok, 1}, Read(?WITHDRAWN_LATE_PAYMENT, Balance)),
     ?assertMatch(
         {error, not_found},
-        at(Process, LateRegister, <<"orders/", First/binary, "/buyer">>, Opts)
+        Read(?WITHDRAWN_LATE_PAYMENT, <<"balances/", (?BUYER)/binary>>)
     ),
-    % And a payment against it moves nothing, in either direction: the goods
-    % are back with the seller and there was no bond to compensate anyone from.
-    LatePayment = Slot(?WITHDRAWN_LATE_PAYMENT),
-    ?assertMatch(
-        {error, _},
-        at(Process, LatePayment, <<"orders/", First/binary, "/status">>, Opts)
-    ),
-    ?assertEqual(
-        {ok, 1},
-        at(Process, LatePayment, <<"balances/", Seller/binary>>, Opts)
-    ),
-    ?assertMatch(
-        {error, not_found},
-        at(Process, LatePayment, <<"balances/", Buyer/binary>>, Opts)
-    ),
-    % The seller offers it again, and a stranger tries to withdraw it.
-    Reoffered = Slot(?WITHDRAWN_SECOND),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Reoffered, <<"orders/", Second/binary, "/status">>, Opts)
-    ),
-    Meddled = Slot(?WITHDRAWN_STRANGER),
-    ?assertEqual(
-        {ok, <<"open">>},
-        at(Process, Meddled, <<"orders/", Second/binary, "/status">>, Opts)
-    ),
-    ?assertEqual({ok, 0}, at(Process, Meddled, <<"balances/", Seller/binary>>, Opts)).
+    % The seller offers it again, and a stranger cannot withdraw it.
+    ?assertEqual({ok, ?SELLER}, Read(?WITHDRAWN_SECOND, Second)),
+    ?assertEqual({ok, ?SELLER}, Read(?WITHDRAWN_STRANGER, Second)),
+    ?assertEqual({ok, 0}, Read(?WITHDRAWN_STRANGER, Balance)).
 
-%%% Story three, replayed: a name handed over
+%%% Story three: a name handed over.
 %%%
 %%% No sale at all -- the token half on its own. The unit moves by `transfer',
-%%% and the authority moves with it: the former holder's word stops counting
-%%% the moment it does, and the new holder's starts.
+%%% and the authority moves with it: the former holder's word stops counting the
+%%% moment it does, and the new holder's starts.
 -define(HANDOVER_PROCESS, <<"D4uhF_nO_vyPoIhPDZ0kFMyfOnk1ZCFJFkmnxVw7vSs">>).
 -define(HANDOVER_FIRST_SET, <<"dx_Dmvnp2FDZdb3wlDpfVvc4k3UCbQRWLXIEwwgGxIA">>).
 -define(HANDOVER_TRANSFER, <<"WgX3Ih8Ef7aDzQ_8Ziio_qYSA5z_-OUcCOVjmdC8WV0">>).
@@ -1996,33 +1083,101 @@ withdrawn_story() ->
 
 handover_story_test_() -> {timeout, 3600, fun handover_story/0}.
 handover_story() ->
-    Process = ?HANDOVER_PROCESS,
-    Opts = story_opts(?HANDOVER_MAX_HEIGHT, Process),
-    {ok, Schedule} = story_sync(Process, Opts, 5),
+    Opts = story_opts(?HANDOVER_MAX_HEIGHT, ?HANDOVER_PROCESS),
+    {ok, Schedule} = story_sync(?HANDOVER_PROCESS, Opts, 5),
     Slot = fun(TXID) -> slot_of(Schedule, TXID, Opts) end,
-    Seller = ?SALE_SELLER,
-    Buyer = ?SALE_BUYER,
+    Read = fun(TXID, Path) -> at(?HANDOVER_PROCESS, Slot(TXID), Path, Opts) end,
+    Seller = <<"balances/", (?SELLER)/binary>>,
+    Buyer = <<"balances/", (?BUYER)/binary>>,
     % While the seller holds it, the seller speaks for it.
-    Spoke = Slot(?HANDOVER_FIRST_SET),
-    ?assertEqual({ok, 1}, at(Process, Spoke, <<"balances/", Seller/binary>>, Opts)),
-    ?assertEqual({ok, <<"seller">>}, at(Process, Spoke, <<"value/points-at">>, Opts)),
-    % The unit moves.
-    Moved = Slot(?HANDOVER_TRANSFER),
-    ?assertEqual({ok, 0}, at(Process, Moved, <<"balances/", Seller/binary>>, Opts)),
-    ?assertEqual({ok, 1}, at(Process, Moved, <<"balances/", Buyer/binary>>, Opts)),
-    % The notices `token-1.0' emits for a transfer are the slot's results.
+    ?assertEqual({ok, 1}, Read(?HANDOVER_FIRST_SET, Seller)),
+    ?assertEqual(
+        {ok, <<"seller">>},
+        Read(?HANDOVER_FIRST_SET, <<"value/points-at">>)
+    ),
+    % The unit moves, and the notices `token-1.0' emits go with it.
+    ?assertEqual({ok, 0}, Read(?HANDOVER_TRANSFER, Seller)),
+    ?assertEqual({ok, 1}, Read(?HANDOVER_TRANSFER, Buyer)),
     ?assertEqual(
         {ok, <<"Debit-Notice">>},
-        at(Process, Moved, <<"results/outbox/1/action">>, Opts)
+        Read(?HANDOVER_TRANSFER, <<"results/outbox/1/action">>)
     ),
     ?assertEqual(
         {ok, <<"Credit-Notice">>},
-        at(Process, Moved, <<"results/outbox/2/action">>, Opts)
+        Read(?HANDOVER_TRANSFER, <<"results/outbox/2/action">>)
     ),
-    % The former holder is no longer heard: the name still says what it said.
-    Stale = Slot(?HANDOVER_STALE_SET),
-    ?assertEqual({ok, <<"seller">>}, at(Process, Stale, <<"value/points-at">>, Opts)),
-    % The new holder is.
-    Spoken = Slot(?HANDOVER_NEW_SET),
-    ?assertEqual({ok, <<"buyer">>}, at(Process, Spoken, <<"value/points-at">>, Opts)),
-    ?assertEqual({ok, 1}, at(Process, Spoken, <<"balances/", Buyer/binary>>, Opts)).
+    % The former holder is no longer heard; the new holder is.
+    ?assertEqual(
+        {ok, <<"seller">>},
+        Read(?HANDOVER_STALE_SET, <<"value/points-at">>)
+    ),
+    ?assertEqual({ok, <<"buyer">>}, Read(?HANDOVER_NEW_SET, <<"value/points-at">>)).
+
+%%% Story four: a name, read as a name.
+%%%
+%%% The three stories above are read slot by slot, through
+%%% `~process@1.0/compute&slot='. This one is read the way a person reads a
+%%% name: `~name@1.0' resolves the label to the process, and `/now' computes the
+%%% whole schedule at once rather than one slot at a time. The name really was
+%%% sold -- the buyer holds the unit and has said what it means -- and the
+%%% payment that did it was an ordinary transfer between two addresses that the
+%%% process was never a party to.
+-define(NAMED_PROCESS, <<"yWRe7v4SZ4_NKV6LkYyNPrFdzEaGh0ckblu-CaGXqG4">>).
+-define(NAMED_ORDER, <<"3BApJHeatc9pVuLgjZ_P-HT5hZgRE1Q3I1bdTESgRDM">>).
+-define(NAMED_MAX_HEIGHT, 1966044).
+
+name_resolution_test_() -> {timeout, 1800, fun name_resolution/0}.
+name_resolution() ->
+    Opts = story_opts(?NAMED_MAX_HEIGHT, ?NAMED_PROCESS),
+    % A node that serves a name holds it: priming the schedule puts the process
+    % in the node's own cache, which is what the resolver then loads.
+    {ok, _} = story_sync(?NAMED_PROCESS, Opts, 5),
+    ?assertEqual(
+        {ok, ?NAMED_PROCESS},
+        hb_ao:resolve_many(
+            [
+                #{ <<"device">> => <<"name@1.0">> },
+                #{ <<"path">> => <<"test-name">>, <<"load">> => false }
+            ],
+            Opts
+        )
+    ),
+    % `test-name.host' is the same lookup: the node's own host is stripped from
+    % the request's host, leaving the label to resolve.
+    {ok, Resolved} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"name@1.0">> },
+            #{
+                <<"path">> => <<"request">>,
+                <<"request">> => #{ <<"host">> => <<"test-name.host">> },
+                <<"body">> => [#{ <<"path">> => <<"now">> }]
+            },
+            Opts
+        ),
+    [Named | _] = hb_ao:get(<<"body">>, Resolved, [], Opts),
+    Loaded = hb_cache:ensure_all_loaded(Named, Opts),
+    % The message the host resolved to is this name: it carries the name's own
+    % spawn keys, and nothing else on the weave does.
+    ?assertEqual(<<"test-name">>, hb_ao:get(<<"name">>, Loaded, not_found, Opts)),
+    ?assertEqual(?SELLER, hb_ao:get(<<"initial-holder">>, Loaded, not_found, Opts)),
+    ?assertEqual(
+        <<"name-token@1.0">>,
+        hb_ao:get(<<"execution-device">>, Loaded, not_found, Opts)
+    ),
+    % And the whole schedule, computed at once: the name is the buyer's, the
+    % order it was sold by has left the book, and the new owner has spoken. The
+    % process is read from the node's cache, so that it is its canonical `tx@1.0'
+    % decoding rather than a gateway store's lossier one.
+    {ok, Raw} = hb_cache:read(?NAMED_PROCESS, Opts),
+    {ok, State} =
+        hb_ao:resolve(hb_cache:ensure_all_loaded(Raw, Opts), <<"now">>, Opts),
+    Read =
+        fun(Path) ->
+            hb_ao:get(Path, {as, <<"message@1.0">>, State}, not_found, Opts)
+        end,
+    ?assertEqual(1, hb_util:int(Read([?BALANCES, ?BUYER]))),
+    ?assertEqual(0, hb_util:int(Read([?BALANCES, ?SELLER]))),
+    ?assertEqual(1, hb_util:int(Read(<<"total-supply">>))),
+    ?assertEqual(not_found, Read([<<"orders">>, ?NAMED_ORDER, <<"creator">>])),
+    ?assertEqual(<<"hello from the new owner">>, Read([?VALUE, <<"greeting">>])),
+    ?assertEqual(<<"text/plain">>, Read([?VALUE, <<"content-type">>])).
