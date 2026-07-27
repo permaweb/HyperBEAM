@@ -6,6 +6,7 @@
     as_process/2,
     run_as/4,
     process_id/3,
+    cache_opts/1,
     set_results/3,
     ensure_process_key/2,
     default_device/3
@@ -33,6 +34,18 @@ process_id(Base, Req, Opts) ->
                     )
             end
     end.
+
+%% @doc Merge the process store with the main store. Used before reading
+%% from or writing to a process cache.
+cache_opts(Opts) ->
+    Opts#{
+        <<"store">> =>
+            hb_opts:get(
+                process_store,
+                hb_opts:get(store, no_viable_store, Opts),
+                Opts
+            )
+    }.
 
 %% @doc Run a message against Base, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back
