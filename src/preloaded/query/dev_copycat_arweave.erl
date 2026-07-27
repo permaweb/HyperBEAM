@@ -339,25 +339,30 @@ process_block(BlockRes, Current, To, IndexMode, Opts) ->
 block_indexed_path(Height) ->
     <<"block/", (hb_util:bin(Height))/binary, "/mode">>.
 
+block_indexed_path(Height, headers) ->
+    <<"block/", (hb_util:bin(Height))/binary, "/headers">>;
+block_indexed_path(Height, _IndexMode) ->
+    block_indexed_path(Height).
+
 write_block_index(Height, IndexMode, Opts) ->
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
-    Path = block_indexed_path(Height),
-    Mode =
-        case hb_store:read(Store, Path, Opts) of
-            {ok, Existing} ->
-                case mode_rank(Existing) >= mode_rank(IndexMode) of
-                    true -> Existing;
-                    false -> mode_name(IndexMode)
-                end;
-            _ ->
-                mode_name(IndexMode)
-        end,
     hb_store:write(
         Store,
-        #{ Path => Mode },
+        #{ block_indexed_path(Height, IndexMode) => mode_name(IndexMode) },
         Opts
     ).
 
+is_block_indexed(Height, headers, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store ->
+            false;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(
+                Store, block_indexed_path(Height, headers), Opts) of
+                {ok, <<"headers">>} -> true;
+                _ -> false
+            end
+    end;
 is_block_indexed(Height, IndexMode, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store ->
@@ -376,11 +381,9 @@ mode_name(shallow) -> <<"shallow">>;
 mode_name(deep) -> <<"deep">>;
 mode_name(full) -> <<"full">>.
 
-mode_rank(headers) -> 0;
 mode_rank(shallow) -> 1;
 mode_rank(deep) -> 2;
 mode_rank(full) -> 3;
-mode_rank(<<"headers">>) -> mode_rank(headers);
 mode_rank(<<"shallow">>) -> mode_rank(shallow);
 mode_rank(<<"deep">>) -> mode_rank(deep);
 mode_rank(<<"full">>) -> mode_rank(full);

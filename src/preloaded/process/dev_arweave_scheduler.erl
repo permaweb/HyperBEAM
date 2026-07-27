@@ -492,14 +492,11 @@ headers_indexed(From, To, Opts) ->
             fun(Height) ->
                 case hb_store:read(
                     Store,
-                    <<"block/", (hb_util:bin(Height))/binary, "/mode">>,
+                    <<"block/", (hb_util:bin(Height))/binary, "/headers">>,
                     Opts
                 ) of
-                    {ok, Mode} ->
-                        lists:member(
-                            Mode,
-                            [<<"headers">>, <<"shallow">>, <<"deep">>, <<"full">>]
-                        );
+                    {ok, <<"headers">>} ->
+                        true;
                     _ ->
                         false
                 end
