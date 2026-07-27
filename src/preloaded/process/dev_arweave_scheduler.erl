@@ -21,10 +21,8 @@
 %%%       `~query@1.0' GraphQL endpoint (`transactions(recipients:
 %%%       [ProcessID], sort: HEIGHT_ASC)') for the base-layer transactions
 %%%       addressed to the process, ordered by the local weave-offset index.
-%%%       A node may instead be configured to query a remote gateway
-%%%       (`arweave_scheduler_query_source => remote'). There is no bespoke
-%%%       store index -- discovery uses the node's existing Arweave index and
-%%%       the device's own schedule cache.</li>
+%%%       There is no bespoke store index -- discovery uses the node's existing
+%%%       Arweave index and the device's own schedule cache.</li>
 %%% </ul>
 %%%
 %%% A process message may widen what it is sequenced by, with a
@@ -208,13 +206,8 @@ get_schedule(Base, Req, Opts) ->
 post_schedule(Base, Req, Opts) ->
     maybe
         {ok, ToSched} ?= lib_scheduler:load_message_to_schedule(Base, Req, Opts),
-        do_post_schedule(Base, Req, ToSched, Opts)
-    end.
-
-do_post_schedule(Base, Req, ToSched, Opts) ->
-    ProcID = lib_scheduler:find_target_id(Base, Req, ToSched, Opts),
-    ?event({arweave_post_schedule, {proc_id, ProcID}}),
-    maybe
+        ProcID = lib_scheduler:find_target_id(Base, Req, ToSched, Opts),
+        ?event({arweave_post_schedule, {proc_id, ProcID}}),
         {ok, OnlyCommitted} ?= lib_scheduler:only_committed(ToSched, Opts),
         ok ?= ensure_tx_committed(OnlyCommitted, Opts),
         dispatch(ProcID, OnlyCommitted, Opts)
@@ -488,15 +481,7 @@ enumerate_blocks(ProcID, From, To, Opts) ->
 ensure_headers(From, To, _Opts) when From > To -> ok;
 ensure_headers(From, To, Opts) ->
     maybe
-        {ok, _} ?=
-            hb_ao:resolve(
-                <<
-                    "~copycat@1.0/arweave&mode=headers&reindex=false",
-                    "&from=", (hb_util:bin(To))/binary,
-                    "&to=", (hb_util:bin(From))/binary
-                >>,
-                no_result_cache(Opts)
-            ),
+        ok ?= index_range(<<"headers">>, From, To, Opts),
         ok ?= headers_indexed(From, To, Opts)
     end.
 
@@ -542,13 +527,15 @@ headers_indexed(From, To, Opts) ->
 %% node has already indexed (for any process), so the run is idempotent,
 %% incremental, and shared: overlapping ranges across processes are not
 %% re-fetched.
-ensure_offsets(From, To, _Opts) when From > To -> ok;
-ensure_offsets(From, To, Opts) ->
+ensure_offsets(From, To, Opts) -> index_range(<<"shallow">>, From, To, Opts).
+
+index_range(_Mode, From, To, _Opts) when From > To -> ok;
+index_range(Mode, From, To, Opts) ->
     maybe
         {ok, _} ?=
             hb_ao:resolve(
                 <<
-                    "~copycat@1.0/arweave&mode=shallow&reindex=false",
+                    "~copycat@1.0/arweave&mode=", Mode/binary, "&reindex=false",
                     "&from=", (hb_util:bin(To))/binary,
                     "&to=", (hb_util:bin(From))/binary
                 >>,
@@ -558,13 +545,11 @@ ensure_offsets(From, To, Opts) ->
     end.
 
 %% @doc Query for the transactions addressed to a process within a block
-%% range, ordered by weave position, returning their IDs. By default the query
-%% is served by the node's own `~query@1.0' index (`local'), whose `field-target'
+%% range, ordered by weave position, returning their IDs. The query is served
+%% by the node's own `~query@1.0' index, whose `field-target'
 %% matches are populated by `~copycat@1.0/arweave' as it indexes the range (see
-%% `ensure_offsets'); a node may instead be configured
-%% (`arweave_scheduler_query_source => remote') to query a remote gateway.
+%% `ensure_offsets').
 query_recipients(ProcID, From, To, Opts) ->
-    Source = hb_opts:get(arweave_scheduler_query_source, local, Opts),
     Query =
         <<
             "query($after: String) { transactions(",
@@ -576,16 +561,16 @@ query_recipients(ProcID, From, To, Opts) ->
                 ", after: $after",
             ") { pageInfo { hasNextPage } edges { cursor node { id } } } }"
         >>,
-    query_pages(Source, Query, undefined, [], Opts).
+    query_pages(Query, undefined, [], Opts).
 
-query_pages(Source, Query, After, Acc, Opts) ->
+query_pages(Query, After, Acc, Opts) ->
     Variables =
         case After of
             undefined -> #{};
             _ -> #{ <<"after">> => After }
         end,
     maybe
-        {ok, Transactions} ?= run_query(Source, Query, Variables, Opts),
+        {ok, Transactions} ?= run_query(Query, Variables, Opts),
         Edges = hb_maps:get(<<"edges">>, Transactions, [], Opts),
         IDs = Acc ++ [ edge_id(E, Opts) || E <- Edges ],
         HasNext =
@@ -601,7 +586,7 @@ query_pages(Source, Query, After, Acc, Opts) ->
             {true, [_ | _]} ->
                 Cursor =
                     hb_maps:get(<<"cursor">>, lists:last(Edges), undefined, Opts),
-                query_pages(Source, Query, Cursor, IDs, Opts);
+                query_pages(Query, Cursor, IDs, Opts);
             _ ->
                 {ok, [ ID || ID <- IDs, is_binary(ID) ]}
         end
@@ -610,14 +595,8 @@ query_pages(Source, Query, After, Acc, Opts) ->
 edge_id(Edge, Opts) ->
     hb_maps:get(<<"id">>, hb_maps:get(<<"node">>, Edge, #{}, Opts), undefined, Opts).
 
-%% @doc Run a GraphQL `transactions' query, returning its connection. `local'
-%% resolves the node's own `~query@1.0/graphql' endpoint; `remote' posts to
-%% the configured `gateway' directly. The remote path deliberately does not use
-%% `hb_client_gateway:query': its admissibility gate rejects legitimately-empty
-%% ranges, and the racing `/graphql' route lets AO-search gateways that do not
-%% index arbitrary L1 transactions win with empty-but-200 responses. Here an
-%% empty range is an authoritative answer.
-run_query(local, Query, Variables, Opts) ->
+%% @doc Run a GraphQL `transactions' query against the node's local index.
+run_query(Query, Variables, Opts) ->
     to_transactions(
         hb_ao:resolve(
             #{ <<"device">> => <<"query@1.0">> },
@@ -626,23 +605,6 @@ run_query(local, Query, Variables, Opts) ->
                 <<"method">> => <<"POST">>,
                 <<"query">> => Query,
                 <<"variables">> => Variables
-            },
-            no_result_cache(Opts)
-        ),
-        Opts
-    );
-run_query(remote, Query, Variables, Opts) ->
-    Gateway = hb_opts:get(gateway, <<"https://arweave.net">>, Opts),
-    to_transactions(
-        hb_http:post(
-            Gateway,
-            #{
-                <<"path">> => <<"/graphql">>,
-                <<"content-type">> => <<"application/json">>,
-                <<"body">> =>
-                    hb_json:encode(
-                        #{ <<"query">> => Query, <<"variables">> => Variables }
-                    )
             },
             no_result_cache(Opts)
         ),
@@ -757,11 +719,10 @@ assign(ProcID, State, Slot, [{Extra, TXID} | Rest], To, Opts) ->
     end.
 
 %% @doc Generate and store the synthetic assignment for a message. Mirrors the
-%% assignments minted by `~scheduler@1.0', but the on-chain position is the
-%% transaction's weave `offset' rather than a scheduler-assigned nonce (joined,
-%% in `all' mode, by the `block-height' that sequenced it). Every field derives
-%% from chain data, so the assignment is deterministic across nodes and is left
-%% uncommitted.
+%% assignments minted by `~scheduler@1.0', but records the chain position that
+%% sequences its mode: weave `offset' for `target', `block-height' for `all'.
+%% Every field derives from chain data, so the assignment is deterministic
+%% across nodes and is left uncommitted.
 write_assignment(ProcID, Slot, Extra, Msg, Opts) ->
     BaseAssignment =
         lib_scheduler:base_assignment(
@@ -787,29 +748,21 @@ ensure_initialized(ProcID, Opts) ->
         _ -> initialize(ProcID, Opts)
     end.
 
-%% @doc First contact with a process: locate its spawn block, index it, read
-%% the process header, and mint the slot 0 assignment from the process
-%% message itself. The canonical process header is also written to the cache
-%% so that `<ProcessID>~process@1.0' resolves to the verifying tx@1.0 form
-%% ahead of any lossier gateway-derived copy. If the spawn is not yet
-%% confirmed, initialization fails and is retried on the next synchronization.
+%% @doc First contact with a process: locate its spawn block, read the process
+%% header, and mint the slot 0 assignment from the process message itself. The
+%% canonical process header is also written to the cache so that
+%% `<ProcessID>~process@1.0' resolves to the verifying tx@1.0 form ahead of any
+%% lossier gateway-derived copy. If the spawn is not yet confirmed,
+%% initialization fails and is retried on the next synchronization.
 initialize(ProcID, Opts) ->
     ?event({initializing_arweave_schedule, {proc_id, ProcID}}),
     maybe
         {ok, SpawnHeight} ?= spawn_height(ProcID, Opts),
-        ok ?= ensure_offsets(SpawnHeight, SpawnHeight, Opts),
-        {ok, Offset} ?= tx_offset(ProcID, Opts),
         {ok, Process} ?= read_tx_header(ProcID, Opts),
         {ok, _} = hb_cache:write(Process, Opts),
         Mode = mode(Process, Opts),
-        ok =
-            write_assignment(
-                ProcID,
-                0,
-                slot_zero(Mode, Offset, SpawnHeight),
-                Process,
-                Opts
-            ),
+        {ok, Zero} ?= slot_zero(Mode, ProcID, SpawnHeight, Opts),
+        ok = write_assignment(ProcID, 0, Zero, Process, Opts),
         % `synced-to' starts one below the spawn block: slot 0 is the process
         % itself, and no message-bearing block has been indexed yet. The first
         % sync begins its range at the spawn block, catching any messages mined
@@ -837,11 +790,17 @@ mode(Process, Opts) ->
 
 %% @doc The sequencing detail recorded on slot 0. The process message is its
 %% own first message, so in `all' mode it carries the height of its spawn block
-%% -- the process's clock starts at the block it was created in.
-slot_zero(<<"all">>, Offset, SpawnHeight) ->
-    #{ <<"offset">> => Offset, <<"block-height">> => SpawnHeight };
-slot_zero(_Mode, Offset, _SpawnHeight) ->
-    #{ <<"offset">> => Offset }.
+%% -- the process's clock starts at the block it was created in -- and in the
+%% modes that sort by weave position, its offset. Only those modes index the
+%% spawn block to read that offset.
+slot_zero(<<"all">>, _ProcID, SpawnHeight, _Opts) ->
+    {ok, #{ <<"block-height">> => SpawnHeight }};
+slot_zero(_Mode, ProcID, SpawnHeight, Opts) ->
+    maybe
+        ok ?= ensure_offsets(SpawnHeight, SpawnHeight, Opts),
+        {ok, Offset} ?= tx_offset(ProcID, Opts),
+        {ok, #{ <<"offset">> => Offset }}
+    end.
 
 %% @doc Read an L1 transaction as a header-only message from the node's stores.
 %% `~copycat@1.0/arweave' caches the (data-free) header locally while indexing,
@@ -982,7 +941,6 @@ confirmed_tip(Opts) ->
 %%% presence in the schedule proves foreign-message indexing. Arweave is
 %%% permanent, so these tests are repeatable against the live network.
 %%% Spawn block 1958986; messages at 1958993, 1958994 and 1958995.
--define(FIXTURE_MODULE, <<"_GeSyZbQkmqWk6YzL-tjIqJ-2hakIkg-9k127DpVfO8">>).
 -define(FIXTURE_PROCESS, <<"q3SycbYpO1lz-S6V2kd7FG3DIZ3AU0NrKKxWw4C3yos">>).
 -define(FIXTURE_MSG1, <<"Y8GnKytC57VUk7W7FlGnD1oH4OAwFHyP-pJPGCJBa3Y">>).
 -define(FIXTURE_MSG2, <<"luf1fFmhi0RMIZNnFmv1QgK2SJU5plAFQ3ZxndUsLpk">>).
@@ -1098,14 +1056,12 @@ mode_test() ->
         mode(#{ <<"scheduler-mode">> => <<"sideways">> }, #{})
     ).
 
-%% @doc A process sequenced by the whole chain has a clock from slot 0; one
-%% sequenced by its own messages keeps the assignment shape it always had.
+%% @doc A process sequenced by the whole chain has a clock from slot 0.
 slot_zero_test() ->
     ?assertEqual(
-        #{ <<"offset">> => 7, <<"block-height">> => 3 },
-        slot_zero(<<"all">>, 7, 3)
-    ),
-    ?assertEqual(#{ <<"offset">> => 7 }, slot_zero(?DEFAULT_MODE, 7, 3)).
+        {ok, #{ <<"block-height">> => 3 }},
+        slot_zero(<<"all">>, ignored, 3, #{})
+    ).
 
 %% @doc Write a block into the node's block cache at the height pseudo-path
 %% `~copycat@1.0/arweave' caches it under, so the enumerator reads it locally
@@ -1170,10 +1126,9 @@ base_layer_blocks_test() ->
         )
     ).
 
-%% @doc An `all'-mode assignment records the height that sequenced it as well
-%% as its weave offset, and both survive the cache round trip that a process
-%% reads its schedule back through. This is the contract
-%% `~arweave-swap@1.0' reads its clock from.
+%% @doc An `all'-mode assignment records the height that sequenced it, and it
+%% survives the cache round trip that a process reads its schedule back through.
+%% This is the contract `~arweave-swap@1.0' reads its clock from.
 all_mode_assignment_test() ->
     Store = hb_test_utils:test_store(),
     hb_store:start(Store),
@@ -1189,13 +1144,12 @@ all_mode_assignment_test() ->
         write_assignment(
             ProcID,
             1,
-            #{ <<"offset">> => 42, <<"block-height">> => 1958986 },
+            #{ <<"block-height">> => 1958986 },
             Msg,
             Opts
         ),
     {ok, Assignment} = dev_arweave_scheduler_cache:read(ProcID, 1, Opts),
     ?assertEqual(1, hb_util:int(hb_ao:get(<<"slot">>, Assignment, Opts))),
-    ?assertEqual(42, hb_util:int(hb_ao:get(<<"offset">>, Assignment, Opts))),
     ?assertEqual(
         1958986,
         hb_util:int(hb_ao:get(<<"block-height">>, Assignment, Opts))
