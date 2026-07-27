@@ -1645,15 +1645,10 @@ fixture_sale() ->
     ?assertEqual(1, hb_util:int(Read([?BALANCES, ?FIXTURE_BUYER]))),
     ?assertEqual(0, hb_util:int(Read([?BALANCES, ?FIXTURE_SELLER]))),
     ?assertEqual(1, hb_util:int(Read(<<"total-supply">>))),
-    % The order it went through is settled, and the buyer is recorded as the
-    % one who paid.
+    % The offer is complete, so the book no longer holds it.
     ?assertEqual(
-        <<"settled">>,
+        not_found,
         Read([<<"orders">>, ?FIXTURE_ORDER, <<"status">>])
-    ),
-    ?assertEqual(
-        ?FIXTURE_BUYER,
-        Read([<<"orders">>, ?FIXTURE_ORDER, <<"buyer">>])
     ),
     % And the new owner has said what the name points at.
     ?assertEqual(<<"hello from the new owner">>, Read([?VALUE, <<"greeting">>])),
@@ -1878,8 +1873,8 @@ sale_story() ->
     ),
     % The registrant's payment settles it, and the name moves.
     Settled = Slot(?SALE_PAYMENT),
-    ?assertEqual(
-        {ok, <<"settled">>},
+    ?assertMatch(
+        {error, _},
         at(Process, Settled, <<"orders/", Order/binary, "/status">>, Opts)
     ),
     ?assertEqual({ok, 1}, at(Process, Settled, <<"balances/", Buyer/binary>>, Opts)),
@@ -1943,16 +1938,16 @@ withdrawn_story() ->
     ),
     % Withdrawing it gives the unit back.
     Cancelled = Slot(?WITHDRAWN_CANCEL),
-    ?assertEqual(
-        {ok, <<"cancelled">>},
+    ?assertMatch(
+        {error, _},
         at(Process, Cancelled, <<"orders/", First/binary, "/status">>, Opts)
     ),
     ?assertEqual({ok, 1}, at(Process, Cancelled, <<"balances/", Seller/binary>>, Opts)),
     % A registration that pays the fee in full is still refused: the order is
     % no longer open.
     LateRegister = Slot(?WITHDRAWN_LATE_REGISTER),
-    ?assertEqual(
-        {ok, <<"cancelled">>},
+    ?assertMatch(
+        {error, _},
         at(Process, LateRegister, <<"orders/", First/binary, "/status">>, Opts)
     ),
     ?assertMatch(
@@ -1962,8 +1957,8 @@ withdrawn_story() ->
     % And a payment against it moves nothing, in either direction: the goods
     % are back with the seller and there was no bond to compensate anyone from.
     LatePayment = Slot(?WITHDRAWN_LATE_PAYMENT),
-    ?assertEqual(
-        {ok, <<"cancelled">>},
+    ?assertMatch(
+        {error, _},
         at(Process, LatePayment, <<"orders/", First/binary, "/status">>, Opts)
     ),
     ?assertEqual(
