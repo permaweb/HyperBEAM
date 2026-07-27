@@ -187,3 +187,34 @@ cost, or ~218 MB over this backfill. Switching the block cache in
 `~copycat@1.0' to `/block2' would take that for every mode and every consumer,
 not just this one. It wants its own PR: it changes how blocks are fetched
 everywhere, and it needs the `/block2' block decoder that this branch deleted.
+
+## The property that actually matters: sync once, serve many
+
+A node pays the backfill once, not once per process. Three `all`-mode processes
+spawned in the same block, synced one after another on one node, 300-block
+range, cold cache:
+
+| process              | wall clock |
+|----------------------|------------|
+| first (cold)         | 266s       |
+| second (warm index)  | **3s**     |
+| third (warm index)   | **3s**     |
+
+The block cache and the copycat index are shared across processes, so every
+process after the first is ~90x cheaper. A pre-synced node serves any number of
+Arweave-scheduled processes over that range for the price of one backfill.
+
+## And on rate limits: `/block2` does not help the backfill
+
+One request per block instead of one per transaction is the right instinct, and
+it is why the mode was written -- but it only holds where the peer still has
+the block. Counted on the real path: at the tip `/block2` returned
+`inlined: 122, bare: 0`; historically, `inlined: 0, bare: 110`. A bare id is
+just an id, so a historical block costs one `/block2` *and* one fetch per
+transaction. Request counts over the 45-block fixture sync were 15 + 206 = 221
+with `/block2` against 183 without it. It adds requests to a backfill and
+removes them near the tip.
+
+So if tip-following ever runs into rate limits, `/block2` is the answer and
+should come back for that range specifically. It is not the answer for the
+cold backfill, which is what a fresh node spends its time on.
