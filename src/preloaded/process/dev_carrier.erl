@@ -44,8 +44,8 @@
 %%% resolves is chosen by a stranger's `path' tag. An exported `balance' key
 %%% would let a passer-by's transaction hand back a balance as the new process
 %%% state.
--module(dev_name_token).
--implements(<<"name-token@1.0">>).
+-module(dev_carrier).
+-implements(<<"carrier@1.0">>).
 %%% AO-Core API functions:
 -export([info/0, compute/3, set/3]).
 -include("include/hb.hrl").
@@ -103,7 +103,7 @@ swap(Base, Assignment, Opts) ->
         not_found -> Base;
         Device ->
             try hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
-                {ok, Settled} -> Settled#{ <<"device">> => <<"name-token@1.0">> };
+                {ok, Settled} -> Settled#{ <<"device">> => <<"carrier@1.0">> };
                 _ -> Base
             catch
                 _:_ -> Base
@@ -133,7 +133,7 @@ seed_holding(Base, Opts) ->
             case state(?BALANCES, Base, not_found, Opts) of
                 not_found ->
                     Supply = supply(Base, Opts),
-                    ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
+                    ?event({carrier_seeded, {holder, Holder}, {supply, Supply}}),
                     Base#{ ?BALANCES => #{ Holder => Supply } };
                 _ -> Base
             end
@@ -149,7 +149,7 @@ seed_value(Base, Opts) ->
         Target ->
             case state(?VALUE, Base, not_found, Opts) of
                 not_found ->
-                    ?event({name_token_seeded_value, {target, Target}}),
+                    ?event({carrier_seeded_value, {target, Target}}),
                     Base#{ ?VALUE => #{ <<"target">> => Target } };
                 _ -> Base
             end
@@ -180,7 +180,7 @@ transfer(Base, Body, Opts) ->
         true ?= Quantity >= 1,
         true ?= balance(Base, Sender, Opts) >= Quantity,
         ?event(
-            {name_token_transfer,
+            {carrier_transfer,
                 {from, Sender},
                 {to, Recipient},
                 {quantity, Quantity}
@@ -238,7 +238,7 @@ set_value(Base, Body, Opts) ->
         {ok, Signer} ?= signer(Body, Opts),
         true ?= owns_supply(Base, Signer, Opts),
         Value = value_of(Body, Opts),
-        ?event({name_token_set, {by, Signer}}),
+        ?event({carrier_set, {by, Signer}}),
         Base#{ ?VALUE => Value }
     else
         _ -> Base
@@ -367,7 +367,7 @@ signer(Body, Opts) ->
 %%% The tests drive `compute/3' directly with synthetic assignments, exactly as
 %%% `~process@1.0' would. The process id must be a real 43-character address so
 %%% the transaction codec can carry it as the layer-1 target.
--define(PROCESS, <<"nAmEtOkEn0000000000000000000000000000000000">>).
+-define(PROCESS, <<"cArRiEr000000000000000000000000000000000000">>).
 
 test_opts() -> #{ <<"priv-wallet">> => ar_wallet:new() }.
 
@@ -799,7 +799,7 @@ reserved_paths_are_applied_test() ->
         fun(Path) ->
             {ok, State} =
                 hb_ao:resolve(
-                    Base#{ <<"device">> => <<"name-token@1.0">> },
+                    Base#{ <<"device">> => <<"carrier@1.0">> },
                     #{
                         <<"path">> => Path,
                         <<"process">> => ?PROCESS,
@@ -818,9 +818,7 @@ reserved_paths_are_applied_test() ->
 %%% The permanent fixtures
 %%%
 %%% The driver that posted these stories spends real AR and does not belong in
-%%% the test battery. It remains recoverable from the commit that created them:
-%%%
-%%%     git show 824816e7c:src/preloaded/process/dev_name_token.erl
+%%% the test battery. It remains recoverable from commit `824816e7c'.
 %%%
 %%% Story one, replayed: a name that had to be paid for
 %%%
@@ -1203,7 +1201,7 @@ name_resolution() ->
         hb_ao:get(<<"initial-holder">>, Loaded, not_found, Opts)
     ),
     ?assertEqual(
-        <<"name-token@1.0">>,
+        <<"carrier@1.0">>,
         hb_ao:get(<<"execution-device">>, Loaded, not_found, Opts)
     ),
     % And the whole schedule, computed at once: the name is the buyer's, the
