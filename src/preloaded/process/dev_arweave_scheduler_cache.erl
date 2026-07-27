@@ -101,7 +101,7 @@ state_path(ProcID, Key) ->
 %% `block-height' and `block-hash'. Those describe the current weave tip
 %% rather than the blocks that sequenced these assignments, so they would be
 %% misleading on a schedule that is a deterministic read of historical chain
-%% data. The on-chain position of each message is its assignment's `offset'.
+%% data. Each assignment carries the position that sequences its mode.
 assignments_to_bundle(ProcID, Assignments, More, RawOpts) ->
     Opts = lib_scheduler:format_opts(RawOpts),
     {ok, #{

@@ -9,10 +9,10 @@
 %%% process can hold, redirect or refund.
 %%%
 %%% A process using this device is therefore sequenced by
-%%% `~arweave-scheduler@1.0' in its `all' mode: every base-layer transaction
-%%% becomes a slot, so a payment between two addresses that the process is not
-%%% a party to is nonetheless something the process sees, and can settle
-%%% against. Its process message reads:
+%%% `~arweave-scheduler@1.0' in its `all' mode: every data-free base-layer
+%%% transaction becomes a slot, so a payment between two addresses that the
+%%% process is not a party to is nonetheless something the process sees, and
+%%% can settle against. Its process message reads:
 %%% <pre>
 %%%     scheduler-device: arweave-scheduler@1.0
 %%%     scheduler-mode:   all
@@ -78,7 +78,7 @@
 -module(dev_arweave_swap).
 -implements(<<"arweave-swap@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3, keys/3]).
+-export([info/0, compute/3, set/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -93,14 +93,14 @@
 %% by a direct request, so every key routes to `compute'.
 %%
 %% The key a slot resolves is chosen by the scheduled transaction's own `path'
-%% tag, and this process is sequenced by every transaction on Arweave: whatever
-%% a stranger writes there must be applied like any other message. So there is
-%% no `exports' list -- a key outside it would fall through to `~message@1.0',
+%% tag, and this process is sequenced by every data-free transaction on Arweave:
+%% whatever a stranger writes there must be applied like any other message. So
+%% there is no `exports' list -- a key outside it would fall through to `~message@1.0',
 %% answer `not_found', fail its slot and wedge the process permanently -- and no
 %% `excludes' list either, since an excluded key is handed to `~message@1.0'
 %% instead, whose `set' would let a passer-by write the process's own balances
-%% and whose `keys' would replace the state with a list of key names. `set' and
-%% `keys' are therefore implemented here.
+%% and whose `keys' would replace the state with a list of key names. `set' is
+%% therefore implemented here.
 %%
 %% `info' is deliberately arity 0. A device's `info' is always exported, and had
 %% it taken the base as an argument it would also answer the `info' key, so a
@@ -135,10 +135,6 @@ set(Base, Req, Opts) ->
         _ -> compute(Base, Req, Opts)
     end.
 
-%% @doc Listing the state's keys is not a state transition, so a scheduled
-%% message asking for it is applied as one.
-keys(Base, Req, Opts) -> compute(Base, Req, Opts).
-
 %% @doc Apply one assignment to the swap's state.
 %%
 %% In `all' mode the overwhelming majority of slots are unrelated Arweave
@@ -149,7 +145,7 @@ keys(Base, Req, Opts) -> compute(Base, Req, Opts).
 %% it was.
 %% The process is identified from the assignment rather than from the process
 %% message, which `lib_process:process_id/3' would re-verify the signature of on
-%% every one of the network's transactions.
+%% every data-free transaction.
 compute(Base, Assignment, Opts) ->
     Height = hb_util:int(field(<<"block-height">>, Assignment, 0, Opts)),
     ProcID = field(<<"process">>, Assignment, <<>>, Opts),
@@ -219,11 +215,7 @@ make_offer(Base, Body, Height, Opts) ->
                 {asking, Asking}
             }
         ),
-        note(
-            put_order(debit(Base, Seller, Quantity, Opts), Order, Opts),
-            <<"order-opened">>,
-            OrderID
-        )
+        put_order(debit(Base, Seller, Quantity, Opts), Order, Opts)
     else
         _ -> Base
     end.
@@ -242,11 +234,7 @@ cancel_order(Base, Body, Opts) ->
             <<"quantity">> := Quantity
         } ?= Order,
         ?event({swap_order_cancelled, {order, OrderID}}),
-        note(
-            drop_order(credit(Base, Signer, Quantity, Opts), Order, Opts),
-            <<"order-cancelled">>,
-            OrderID
-        )
+        drop_order(credit(Base, Signer, Quantity, Opts), Order, Opts)
     else
         _ -> Base
     end.
@@ -288,21 +276,17 @@ register_interest(Base, Body, Height, Opts) ->
                 {until, Until}
             }
         ),
-        note(
-            deadlines(
-                put_order(
-                    debit(Base, Buyer, Deposit, Opts),
-                    Order#{
-                        <<"status">> => <<"reserved">>,
-                        <<"buyer">> => Buyer,
-                        <<"reserved-until">> => Until
-                    },
-                    Opts
-                ),
+        deadlines(
+            put_order(
+                debit(Base, Buyer, Deposit, Opts),
+                Order#{
+                    <<"status">> => <<"reserved">>,
+                    <<"buyer">> => Buyer,
+                    <<"reserved-until">> => Until
+                },
                 Opts
             ),
-            <<"interest-registered">>,
-            OrderID
+            Opts
         )
     else
         _ -> Base
@@ -311,8 +295,8 @@ register_interest(Base, Body, Height, Opts) ->
 %% @doc Settle against a layer-1 payment. The transaction is not addressed to
 %% the process at all: it is a transfer between two user addresses that names an
 %% `order-id', and the process sees it only because it is sequenced by every
-%% transaction on the network. It counts as payment for an order when it is
-%% addressed to that order's `recipient' and carries at least the asking
+%% data-free transaction on the network. It counts as payment for an order when
+%% it is addressed to that order's `recipient' and carries at least the asking
 %% winston.
 %%
 %% Underpayment is ignored rather than partially filled -- the value never
@@ -371,17 +355,13 @@ settle(Base, Order, Buyer, Opts) ->
             {quantity, Quantity}
         }
     ),
-    note(
-        deadlines(
-            drop_order(
-                credit(credit(Base, Buyer, Quantity, Opts), Buyer, Pledged, Opts),
-                Order,
-                Opts
-            ),
+    deadlines(
+        drop_order(
+            credit(credit(Base, Buyer, Quantity, Opts), Buyer, Pledged, Opts),
+            Order,
             Opts
         ),
-        <<"order-settled">>,
-        OrderID
+        Opts
     ).
 
 %% @doc Whether an order's goods are the payer's to take: an order nobody has
@@ -569,12 +549,6 @@ credit(Base, Address, Amount, Opts) ->
 
 debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 
-%% @doc Report what the slot did, in the results of the slot itself.
-note(Base, Event, OrderID) ->
-    Base#{
-        <<"results">> => #{ <<"event">> => Event, <<"order-id">> => OrderID }
-    }.
-
 %% @doc Read a number a stranger wrote. Every figure in the protocol arrives as
 %% a tag on somebody else's transaction, and this process is sequenced by all of
 %% them: coercing `deadline: tomorrow' with `hb_util:int/1' would raise out of
@@ -657,9 +631,10 @@ order_numbers_survive_the_cache_test() ->
 %% @doc A message this device reads is a stranger's, and a key it does not carry
 %% must be answered by this device's default, not by code the stranger picked.
 %%
-%% `all' mode hands every transaction on Arweave to this process, so the `device'
-%% key of each is the author's to choose. Reading plainly dispatches on it, and a
-%% device answers only for absent keys -- so the attack is to omit one. Here
+%% `all' mode hands every data-free transaction on Arweave to this process, so
+%% the `device' key of each is the author's to choose. Reading plainly
+%% dispatches on it, and a device answers only for absent keys -- so the attack
+%% is to omit one. Here
 %% `recipient' is omitted: the seller of an order is meant to be paid by the
 %% default, and a chosen device answering that key would redirect the goods.
 strangers_device_cannot_answer_for_an_absent_key_test() ->
@@ -1044,8 +1019,8 @@ unrelated_traffic_test() ->
 
 %% @doc A stranger's transaction may ask to be routed anywhere -- the key a slot
 %% resolves comes from the sender's own `path' tag, and this process is
-%% sequenced by every transaction on Arweave. It must be applied like any other,
-%% not fail its slot.
+%% sequenced by every data-free transaction on Arweave. It must be applied like
+%% any other, not fail its slot.
 stray_path_is_applied_test() ->
     Opts = test_opts(),
     {Seller, SellerAddr} = party(),
