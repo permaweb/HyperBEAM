@@ -129,43 +129,54 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
     end.
 
 %% @doc Find the latest assignment with the requested path suffix.
-first_with_path(ProcID, RequiredPath, Slots, Opts) ->
-    first_with_path(
-        ProcID,
-        RequiredPath,
-        Slots,
-        Opts,
-        hb_opts:get(store, no_viable_store, Opts)
-    ).
-first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
+first_with_path(_ProcID, _Required, [], _Opts) ->
     not_found;
-first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
-    RawPath = path(ProcID, Slot, RequiredPath, Opts),
+first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts) ->
+    RawPath = path(ProcID, Slot, Opts),
     ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
-    case hb_store:read(Store, RawPath, Opts) of
+    case hb_cache:read(RawPath, Opts) of
         {error, not_found} ->
-            first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
+            first_with_path(ProcID, RequiredPath, Rest, Opts);
         {failure, _} = Failure ->
             Failure;
         {error, _} = Error ->
             Error;
-        _ ->
-            Slot
+        {ok, Msg} ->
+            case path_exists(RequiredPath, hb_cache:ensure_all_loaded(Msg, Opts)) of
+                true -> Slot;
+                false -> first_with_path(ProcID, RequiredPath, Rest, Opts)
+            end
     end.
+
+path_exists([], _Msg) ->
+    true;
+path_exists([Key | Rest], Msg) when is_map(Msg) ->
+    case maps:find(Key, Msg) of
+        {ok, Next} -> path_exists(Rest, Next);
+        error -> false
+    end;
+path_exists(_Path, _Msg) ->
+    false.
 
 %%% Tests
 
 process_cache_suite_test_() ->
     hb_store:generate_test_suite(
         [
-            {"write and read process outputs", fun test_write_and_read_output/1},
-            {"find latest output (with path)", fun find_latest_outputs/1}
+            {
+                "write and read process outputs",
+                fun(Store) ->
+                    test_write_and_read_output(#{ <<"store">> => [Store] })
+                end
+            },
+            {
+                "find latest output (with path)",
+                fun(Store) ->
+                    find_latest_outputs(#{ <<"store">> => [Store] })
+                end
+            }
         ],
-        [
-            {Name, Opts}
-        ||
-            {Name, Opts} <- hb_store:test_stores()
-        ]
+        hb_store:test_stores()
     ).
 
 %% @doc Test for writing multiple computed outputs, then getting them by
@@ -199,20 +210,20 @@ find_latest_outputs(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ResetRes = hb_store:reset(Store),
     ?event({reset_store, {result, ResetRes}, {store, Store}}),
-    Proc1 = hb_process_test_vectors:aos_process(),
-    ProcID = hb_util:human_id(hb_ao:get(id, Proc1, Opts)),
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ProcessRef = <<"test-process-ref">>,
     % Create messages for the slots, with only the middle slot having a
     % `/Process' field, while the top slot has a `/Deep/Process' field.
     Msg0 = #{ <<"Results">> => #{ <<"Result-Number">> => 0 } },
     Base =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 1 }, 
-            <<"Process">> => Proc1 
+            <<"Process">> => ProcessRef
         },
     Req =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 2 }, 
-            <<"Deep">> => #{ <<"Process">> => Proc1 } 
+            <<"Deep">> => #{ <<"Process">> => ProcessRef }
         },
     % Write the messages to the cache.
     {ok, _} = write(ProcID, 0, Msg0, Opts),
@@ -220,19 +231,33 @@ find_latest_outputs(Opts) ->
     {ok, _} = write(ProcID, 2, Req, Opts),
     ?event(wrote_items),
     % Read the messages with various qualifiers.
-    {ok, 2, ReadReq} = latest(ProcID, Opts),
+    {ok, 2, RawReadReq} = latest(ProcID, Opts),
+    ReadReq = hb_cache:ensure_all_loaded(RawReadReq, Opts),
     ?event({read_latest, ReadReq}),
-    ?assert(hb_message:match(Req, ReadReq)),
+    ?assertEqual(2, maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadReq))),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, maps:get(<<"Deep">>, ReadReq))),
     ?event(read_latest_slot_without_qualifiers),
-    {ok, 1, ReadBaseRequired} = latest(ProcID, <<"Process">>, Opts),
+    {ok, 1, RawReadBaseRequired} = latest(ProcID, <<"Process">>, Opts),
+    ReadBaseRequired = hb_cache:ensure_all_loaded(RawReadBaseRequired, Opts),
     ?event({read_latest_with_process, ReadBaseRequired}),
-    ?assert(hb_message:match(Base, ReadBaseRequired)),
+    ?assertEqual(
+        1,
+        maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadBaseRequired))
+    ),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, ReadBaseRequired)),
     ?event(read_latest_slot_with_shallow_key),
-    {ok, 2, ReadReqRequired} = latest(ProcID, <<"Deep/Process">>, Opts),
-    ?assert(hb_message:match(Req, ReadReqRequired)),
+    {ok, 2, RawReadReqRequired} = latest(ProcID, <<"Deep/Process">>, Opts),
+    ReadReqRequired = hb_cache:ensure_all_loaded(RawReadReqRequired, Opts),
+    ?assertEqual(
+        2,
+        maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadReqRequired))
+    ),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, maps:get(<<"Deep">>, ReadReqRequired))),
     ?event(read_latest_slot_with_deep_key),
-    {ok, 1, ReadBase} = latest(ProcID, [], 1, Opts),
-    ?assert(hb_message:match(Base, ReadBase)).
+    {ok, 1, RawReadBase} = latest(ProcID, [], 1, Opts),
+    ReadBase = hb_cache:ensure_all_loaded(RawReadBase, Opts),
+    ?assertEqual(1, maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadBase))),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, ReadBase)).
 
 %% @doc Process cache writes go only to `process-store' when configured.
 isolated_process_store_test() ->
