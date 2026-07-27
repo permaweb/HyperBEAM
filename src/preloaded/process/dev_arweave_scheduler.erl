@@ -32,11 +32,10 @@
 %%% <ul>
 %%%   <li>`target' (the default): the process's messages are the transactions
 %%%       addressed to it, as above.</li>
-%%%   <li>`all': <em>every</em> base-layer transaction is a message in the
+%%%   <li>`all': every data-free base-layer transaction is a message in the
 %%%       process's schedule, whoever it is addressed to. This is what lets a
 %%%       process observe value moving between two other addresses -- a
-%%%       payment it is owed but is not a party to -- at the cost of a slot
-%%%       for every transaction on the network. Its schedule is enumerated
+%%%       payment it is owed but is not a party to. Its schedule is enumerated
 %%%       from the block headers rather than by query, in canonical chain
 %%%       order (blocks ascending, then each block's own transaction order),
 %%%       and each assignment records the `block-height' that sequenced it, so
@@ -424,9 +423,8 @@ no_result_cache(Opts) ->
 
 %% @doc Discover the base-layer transactions that a process is sequenced by
 %% within a block range, in canonical weave order, entirely from the node's own
-%% index. Indexing the range with `~copycat@1.0/arweave' both records each
-%% transaction's weave offset and caches its header (so its `target' is locally
-%% matchable), whichever mode the process is in.
+%% index. `target' mode records each transaction's weave offset and caches its
+%% header. `all' mode caches only data-free headers.
 %%
 %% In `target' mode the recipient match is served from the node's own
 %% `~query@1.0' GraphQL endpoint, and each match is annotated with its offset --
@@ -440,7 +438,7 @@ no_result_cache(Opts) ->
 %% items are excluded, as this scheduler sequences the base layer only.
 discover(ProcID, <<"all">>, From, To, Opts) ->
     maybe
-        ok ?= ensure_offsets(From, To, Opts),
+        ok ?= ensure_headers(From, To, Opts),
         {ok, Located} ?= enumerate_blocks(ProcID, From, To, Opts),
         base_layer_blocks(Located, Opts)
     end;
@@ -484,6 +482,56 @@ enumerate_blocks(ProcID, From, To, Opts) ->
                 TXID =/= hb_util:human_id(ProcID)
             ] ++ Rest
         }
+    end.
+
+%% @doc Ensure every data-free transaction header in a block range is cached.
+ensure_headers(From, To, _Opts) when From > To -> ok;
+ensure_headers(From, To, Opts) ->
+    maybe
+        {ok, _} ?=
+            hb_ao:resolve(
+                <<
+                    "~copycat@1.0/arweave&mode=headers&reindex=false",
+                    "&from=", (hb_util:bin(To))/binary,
+                    "&to=", (hb_util:bin(From))/binary
+                >>,
+                no_result_cache(Opts)
+            ),
+        ok ?= headers_indexed(From, To, Opts)
+    end.
+
+headers_indexed(From, To, Opts) ->
+    #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
+    Missing =
+        lists:dropwhile(
+            fun(Height) ->
+                case hb_store:read(
+                    Store,
+                    <<"block/", (hb_util:bin(Height))/binary, "/mode">>,
+                    Opts
+                ) of
+                    {ok, Mode} ->
+                        lists:member(
+                            Mode,
+                            [<<"headers">>, <<"shallow">>, <<"deep">>, <<"full">>]
+                        );
+                    _ ->
+                        false
+                end
+            end,
+            lists:seq(From, To)
+        ),
+    case Missing of
+        [] -> ok;
+        [Height | _] ->
+            {error,
+                #{
+                    <<"status">> => 503,
+                    <<"reason">> =>
+                        <<"Block range is not fully indexed locally.">>,
+                    <<"block-height">> => Height
+                }
+            }
     end.
 
 %% @doc Ensure the node's local Arweave index covers the block range, so that
@@ -642,59 +690,30 @@ base_layer_offset(Store, ID, Opts) ->
         _ -> false
     end.
 
-%% @doc Annotate each block-enumerated transaction with its weave offset,
-%% keeping only the base-layer ones. The enumeration is already in canonical
-%% order, so -- unlike `base_layer_offsets/2' -- it is not re-sorted. Each
-%% assignment records the height of the block that sequenced it as well as its
-%% offset: in this mode the schedule follows the chain rather than the process,
-%% so the block height is the only clock a process has.
-%%
-%% A transaction the block lists but the local index does not hold is a failure
-%% to index, not an absence -- `~copycat@1.0/arweave' skips a whole block if any
-%% one of its transaction headers could not be fetched, while still reporting
-%% success. Dropping those would silently shorten the schedule and, because
-%% slots are positional, shift every later slot on this node alone. So the range
-%% fails here instead, leaving `synced-to' where it was for the next pass to
-%% retry.
+%% @doc Keep the data-free headers cached by the headers-mode pass.
 base_layer_blocks(Located, Opts) ->
-    Store = hb_store_arweave:store_from_opts(Opts),
-    lists:foldr(
-        fun(_, {error, Err}) -> {error, Err};
-           ({Height, ID}, {ok, Acc}) ->
-            case offset_entry(Store, ID, Opts) of
-                {ok, <<"tx@1.0">>, Offset} ->
-                    {ok,
-                        [
-                            {
-                                #{
-                                    <<"offset">> => Offset,
-                                    <<"block-height">> => Height
-                                },
-                                ID
-                            }
-                        |
-                            Acc
-                        ]
-                    };
-                {ok, _Codec, _Offset} ->
-                    % A bundled data item: this scheduler sequences the base
-                    % layer only.
-                    {ok, Acc};
-                not_found ->
-                    {error,
-                        #{
-                            <<"status">> => 503,
-                            <<"reason">> =>
-                                <<"Block range is not fully indexed locally.">>,
-                            <<"tx">> => ID,
-                            <<"block-height">> => Height
-                        }
-                    }
-            end
-        end,
-        {ok, []},
-        Located
-    ).
+    {ok,
+        [
+            {#{ <<"block-height">> => Height }, ID}
+        ||
+            {Height, ID} <- Located,
+            data_free(ID, Opts)
+        ]
+    }.
+
+data_free(ID, Opts) ->
+    LocalOpts = hb_store:scope(Opts, local),
+    try
+        case hb_cache:read(ID, LocalOpts) of
+            {ok, Header} ->
+                (hb_message:convert(
+                    Header, <<"tx@1.0">>, LocalOpts))#tx.data_size =:= 0;
+            _ ->
+                false
+        end
+    catch
+        _:_ -> false
+    end.
 
 %% @doc Read a transaction's local index entry, returning its codec device and
 %% weave offset.
@@ -1121,46 +1140,34 @@ enumerate_blocks_test() ->
         enumerate_blocks(ProcID, 10, 11, Opts)
     ).
 
-%% @doc Block-enumerated transactions keep chain order rather than being sorted
-%% by offset -- offsets tie for every transaction that carries no data, which
-%% is what an AO message is -- and each records the height that sequenced it.
-%% Bundled data items are still dropped.
+%% @doc Block-enumerated transactions keep chain order and only locally cached,
+%% data-free transaction headers.
 base_layer_blocks_test() ->
     Store = hb_test_utils:test_store(),
     hb_store:start(Store),
-    ArwStore = #{ <<"index-store">> => [Store] },
-    Opts = #{ <<"arweave-index-store">> => ArwStore },
-    Early = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    Late = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    Bundled = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    ok = hb_store_arweave:write_offset(ArwStore, Late, <<"tx@1.0">>, 100, 0),
-    ok = hb_store_arweave:write_offset(ArwStore, Bundled, <<"ans104@1.0">>, 150, 0),
-    ok = hb_store_arweave:write_offset(ArwStore, Early, <<"tx@1.0">>, 200, 0),
+    Opts = #{ <<"store">> => [Store], <<"priv-wallet">> => ar_wallet:new() },
+    DataFree =
+        hb_message:commit(
+            #{ <<"target">> => hb_util:human_id(crypto:strong_rand_bytes(32)) },
+            Opts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    DataBearing =
+        hb_message:commit(
+            #{ <<"data">> => <<"not-a-message">> },
+            Opts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    DataFreeID = hb_message:id(DataFree, signed, Opts),
+    DataBearingID = hb_message:id(DataBearing, signed, Opts),
+    {ok, _} = hb_cache:write(DataFree, Opts),
+    {ok, _} = hb_cache:write(DataBearing, Opts),
     ?assertEqual(
-        {ok,
-            [
-                {#{ <<"offset">> => 100, <<"block-height">> => 10 }, Late},
-                {#{ <<"offset">> => 200, <<"block-height">> => 11 }, Early}
-            ]
-        },
-        base_layer_blocks([{10, Late}, {11, Bundled}, {11, Early}], Opts)
-    ).
-
-%% @doc A transaction the block lists but the index does not hold means the
-%% range was not fully indexed. Dropping it would shorten the schedule and, as
-%% slots are positional, shift every later slot on this node alone -- so the
-%% range fails and `synced-to' stays where it was.
-base_layer_blocks_unindexed_test() ->
-    Store = hb_test_utils:test_store(),
-    hb_store:start(Store),
-    ArwStore = #{ <<"index-store">> => [Store] },
-    Opts = #{ <<"arweave-index-store">> => ArwStore },
-    Indexed = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    Missing = hb_util:human_id(crypto:strong_rand_bytes(32)),
-    ok = hb_store_arweave:write_offset(ArwStore, Indexed, <<"tx@1.0">>, 100, 0),
-    ?assertMatch(
-        {error, #{ <<"status">> := 503 }},
-        base_layer_blocks([{10, Indexed}, {10, Missing}], Opts)
+        {ok, [{#{ <<"block-height">> => 10 }, DataFreeID}]},
+        base_layer_blocks(
+            [{10, DataFreeID}, {10, DataBearingID}, {10, <<"missing">>}],
+            Opts
+        )
     ).
 
 %% @doc An `all'-mode assignment records the height that sequenced it as well
