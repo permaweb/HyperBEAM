@@ -145,3 +145,45 @@ Two leads, both left alone deliberately:
   backfill and make the headers free where they are available. That is a change
   to how `~copycat@1.0` fetches blocks for every mode, not just this one, so it
   wants its own PR and its own evidence rather than being smuggled in here.
+
+## Correction: the 29% figure does not hold at range
+
+The 29% was measured on the four pinned mainnet replays, whose ranges are 45-60
+blocks. Asked whether it survives a long backfill, it does not. Measured on a
+cold cache, syncing the process that holds `pn-test-1`
+(`HcCk6wcTTPPmU68KyCt3pjvYZw8-1kF__7GVpCgVEr0`, spawned at 1966376) forward:
+
+| range       | `mode=headers` | `mode=shallow` | delta |
+|-------------|----------------|----------------|-------|
+| 45 blocks   | 11.9s          | 16.7s          | -29%  |
+| 300 blocks  | 253s           | 272s           | -7%   |
+| 1224 blocks | 1174s          | 1306s          | -10%  |
+
+The 1224-block row is the whole backfill from `pn-test-1`'s spawn to the tip,
+on a cold cache, run twice over the identical range: **19.6 minutes against
+20.8**. Do not read a slot count off these runs -- the schedule response is
+paginated at `?MAX_ASSIGNMENT_QUERY_LEN' (1000), so every run reports ~1001
+whatever it synced. The timings are the whole sync; the counts are a page.
+
+The reason is arithmetic, and it says the optimisation was aimed at the wrong
+thing. Over the 1224 blocks from `pn-test-1`'s spawn to the tip:
+
+- block headers, one `/block/height/<h>` per block at ~740 KB: **~864 MB**
+- transaction headers, ~4,100 of them at ~1.8 KB: **~7 MB**
+
+Both modes pay the 864 MB identically -- `enumerate_blocks/4` needs every
+block's `txs` list, and that is the only way to get it from the peers we reach.
+`mode=headers` makes the 7 MB concurrent. A hundred-and-twenty-to-one ratio
+puts a ceiling on what it can ever be worth, and 7% is where it lands.
+
+Keeping it is still right: it is about ten lines, it costs nothing, and the
+short incremental syncs a running node actually performs are where the 29%
+lives. But it is not what makes a cold long-range backfill fast, and this
+document should not have implied it was.
+
+**The lever that would.** `/block2/height/<h>` returns the same block in 553 KB
+against `/block`'s 740 KB, measured at height 1966044 -- 25% off the dominant
+cost, or ~218 MB over this backfill. Switching the block cache in
+`~copycat@1.0' to `/block2' would take that for every mode and every consumer,
+not just this one. It wants its own PR: it changes how blocks are fetched
+everywhere, and it needs the `/block2' block decoder that this branch deleted.
