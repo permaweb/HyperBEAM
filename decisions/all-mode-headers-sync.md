@@ -79,3 +79,69 @@ precisely, and only, what `mode=headers` provides.
   it leaves a stranger able to choose which key a slot resolves, and costs
   ~90 lines of boilerplate across two modules to half-defend against it.
 - Teaching copycat anything about schedulers.
+
+## Addendum: what `mode=headers` is actually good for (measured)
+
+The cherry-picked mode, used unconditionally, was a **pessimisation**. Measured
+on a fresh node syncing a real `all`-mode process (45 blocks, 110 slots),
+best of three:
+
+| pre-index      | time  | /block2 | /tx | downloaded |
+|----------------|-------|---------|-----|------------|
+| `mode=headers` | 5.13s | 15      | 206 | 19.5 MB    |
+| `mode=shallow` | 3.98s | 0       | 183 | 17.2 MB    |
+| none           | 2.74s | 0       | 111 | 11.4 MB    |
+
+Two independent causes, both found by instrumenting the real path:
+
+1. **`/block2` inlines nothing outside a peer's block cache.** Counted directly:
+   historical blocks returned `inlined: 0, bare: 110`; blocks at the tip
+   returned `inlined: 122, bare: 0`. A bare id is just the id, so every header
+   still had to be fetched one by one -- after paying for the `/block2`
+   response, which is ~550 KB whatever it contains, because it ships the
+   block's PoA chunk.
+2. **The port cached only `data_size = 0` headers.** In `all` mode every
+   transaction is a slot, data-bearing ones included, so each of those was
+   fetched by the index pass, discarded, and fetched again by
+   `read_tx_header/2` -- which is why `/tx` was 206 for 110 slots.
+
+## What we do instead
+
+- **Copycat**: delete `cache_data_free_header/2` and call the module's existing
+  `cache_tx_header/2`, which every other mode already uses and which caches any
+  header, data-bearing or not. That is one fetch per transaction instead of
+  two, and it is less code, not more.
+- **Scheduler**: `mode=headers` earns its request only where a peer still holds
+  the block, so the scheduler asks for it only within a horizon of the chain
+  tip and leaves older blocks to be fetched on demand -- exactly once each, by
+  the `read_tx_header/2` call that mints the assignment. The policy is the
+  caller's; copycat stays a generic indexer that knows nothing about
+  schedulers.
+
+This is the split the brief asked for, and it makes both cases fast: backfill
+pays nothing it does not use, and a node following the tip replaces N per-
+transaction fetches per block with one request.
+
+## What is left on the table (measured, not fixed here)
+
+With the above in place, a fresh sync of the 45-block fixture range is 2.35s
+(from 3.98s), and `/tx` fetches fall from 206 to 112 -- exactly one per slot.
+
+A fresh sync of a *large* backfill is still bounded by something else entirely.
+Syncing ~1300 blocks of history downloaded **971 MB in 10 minutes**, of which
+the transaction headers are a small fraction: `enumerate_blocks/4` needs each
+block's `txs` list, and the only way to get it from the peers we reach is to
+download the whole block -- ~740 KB, nearly all of it the proof-of-access
+chunk. 1443 block fetches, 15k transaction headers.
+
+Two leads, both left alone deliberately:
+
+- `/block/height/<h>/txs` would be a few hundred bytes instead of 740 KB, but
+  every peer tried answers `421 Subfield block querying is disabled on this
+  node.`
+- `/block2/height/<h>` is 553 KB against `/block`'s 740 KB for the same block,
+  *and* carries the transaction headers inline near the tip. Switching the
+  block cache itself to `/block2` would cut a quarter of the bytes off every
+  backfill and make the headers free where they are available. That is a change
+  to how `~copycat@1.0` fetches blocks for every mode, not just this one, so it
+  wants its own PR and its own evidence rather than being smuggled in here.

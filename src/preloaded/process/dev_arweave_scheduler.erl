@@ -498,13 +498,13 @@ enumerate_blocks(ProcID, From, To, Opts) ->
 %% re-fetched.
 ensure_offsets(From, To, Opts) -> index_range(<<"shallow">>, From, To, Opts).
 
-%% @doc Cache every transaction header in a block range, and nothing else.
+%% @doc Cache the header of every transaction in a block range.
 %%
 %% `all' mode needs each header locally so that `read_tx_header/2' can serve it,
 %% and needs nothing else: it does not sort by weave offset and it never reads a
-%% body. `mode=headers' is one `/block2' request per block, where `mode=shallow'
-%% is a walk of every transaction and every bundle in the range -- which is the
-%% difference between a fresh node syncing in minutes and in hours.
+%% body. `mode=headers' fetches a whole range's headers together, across the
+%% node's index workers, where minting the assignments walks them one slot at a
+%% time -- so the pass is not saving requests, it is making them concurrent.
 ensure_headers(From, To, Opts) -> index_range(<<"headers">>, From, To, Opts).
 
 index_range(_Mode, From, To, _Opts) when From > To -> ok;
