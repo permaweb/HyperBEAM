@@ -35,11 +35,12 @@ arweave(_Base, Request, Opts) ->
             end;
         {error, Mode} ->
             {error, <<"Unsupported mode `", (hb_util:bin(Mode))/binary,
-                "`. Supported modes are: shallow, deep, full, list">>}
+                "`. Supported modes are: headers, shallow, deep, full, list">>}
     end.
 
 request_mode(Request, Opts) ->
     case hb_maps:get(<<"mode">>, Request, <<"shallow">>, Opts) of
+        <<"headers">> -> {ok, headers};
         <<"shallow">> -> {ok, shallow};
         <<"deep">> -> {ok, deep};
         <<"full">> -> {ok, full};
@@ -338,14 +339,30 @@ process_block(BlockRes, Current, To, IndexMode, Opts) ->
 block_indexed_path(Height) ->
     <<"block/", (hb_util:bin(Height))/binary, "/mode">>.
 
+block_indexed_path(Height, headers) ->
+    <<"block/", (hb_util:bin(Height))/binary, "/headers">>;
+block_indexed_path(Height, _IndexMode) ->
+    block_indexed_path(Height).
+
 write_block_index(Height, IndexMode, Opts) ->
     #{ <<"index-store">> := Store } = hb_store_arweave:store_from_opts(Opts),
     hb_store:write(
         Store,
-        #{ block_indexed_path(Height) => mode_name(IndexMode) },
+        #{ block_indexed_path(Height, IndexMode) => mode_name(IndexMode) },
         Opts
     ).
 
+is_block_indexed(Height, headers, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store ->
+            false;
+        #{ <<"index-store">> := Store } ->
+            case hb_store:read(
+                Store, block_indexed_path(Height, headers), Opts) of
+                {ok, <<"headers">>} -> true;
+                _ -> false
+            end
+    end;
 is_block_indexed(Height, IndexMode, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store ->
@@ -359,6 +376,7 @@ is_block_indexed(Height, IndexMode, Opts) ->
             end
     end.
 
+mode_name(headers) -> <<"headers">>;
 mode_name(shallow) -> <<"shallow">>;
 mode_name(deep) -> <<"deep">>;
 mode_name(full) -> <<"full">>.
@@ -371,6 +389,24 @@ mode_rank(<<"deep">>) -> mode_rank(deep);
 mode_rank(<<"full">>) -> mode_rank(full);
 mode_rank(_Other) -> 0.
 
+%% @doc Cache only the data-free L1 transaction headers from the block.
+maybe_index_ids(Block, headers, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    case resolve_block_tx_headers(Block, Opts) of
+        error ->
+            {block_skipped, #{
+                skipped_count => length(TXIDs),
+                total_txs => length(TXIDs)
+            }};
+        {ok, TXs} ->
+            Results = parallel_map(
+                TXs,
+                fun(TX) -> cache_data_free_header(TX, Opts) end,
+                Opts
+            ),
+            {block_cached,
+                (sum_counters(Results))#{ total_txs => length(TXIDs) }}
+    end;
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_ids(Block, IndexMode, Opts) ->
     TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
@@ -590,6 +626,31 @@ skip_bundle(EncodedTXID, Reason) ->
     ),
     counters(0, 1, 1).
 
+cache_data_free_header(#tx{ data_size = 0 } = TX, Opts) ->
+    case hb_opts:get(arweave_index_txs, true, Opts) of
+        false ->
+            counters(0, 0, 0);
+        true ->
+            try
+                true = ar_tx:verify_tx_id(TX#tx.id, TX),
+                {ok, _} = cache_item(TX#tx{ data = <<>> }, <<"tx@1.0">>, Opts),
+                counters(1, 0, 0)
+            catch
+                Class:Reason ->
+                    ?event(
+                        copycat_short,
+                        {tx_header_cache_skipped,
+                            {tx_id, {explicit, hb_util:encode(TX#tx.id)}},
+                            {class, Class},
+                            {reason, Reason}
+                        }
+                    ),
+                    counters(0, 0, 1)
+            end
+    end;
+cache_data_free_header(_TX, _Opts) ->
+    counters(0, 0, 0).
+
 index_full_bundle_bytes(BundleData, BundleStartOffset, IndexMode, Store, Opts) ->
     case ar_bundles:decode_bundle_header(BundleData) of
         invalid_bundle_header ->
@@ -623,6 +684,8 @@ index_pending(IndexMode, Opts) ->
 
 process_pending_tx(TXID, IndexMode, Opts) ->
     case resolve_pending_tx_header(TXID, Opts) of
+        {ok, TX} when IndexMode =:= headers ->
+            cache_data_free_header(TX, Opts);
         {ok, TX} ->
             Store = hb_store_arweave:store_from_opts(Opts),
             case hb_store_arweave:write_offset(
@@ -797,12 +860,280 @@ download_bundle_header(EndOffset, Size, Opts) ->
         lib_arweave_common:bundle_header(EndOffset - Size, Size, Opts)
     end).
 
+%% @doc Resolve every transaction header in a block, preferring the Arweave
+%% node's single-request `/block2' path and falling back for uncached headers.
+resolve_block_tx_headers(Block, Opts) ->
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    case fetch_block_tx_headers(Block, Opts) of
+        error ->
+            error;
+        {ok, Entries} ->
+            Results = parallel_map(
+                lists:zip(TXIDs, Entries),
+                fun({TXID, Entry}) ->
+                    resolve_block_tx_header(TXID, Entry, Opts)
+                end,
+                Opts
+            ),
+            collect_tx_headers(Results)
+    end.
+
+resolve_block_tx_header(TXID, #tx{} = TX, Opts) ->
+    case validate_tx_header(TXID, TX) of
+        {ok, _} = Valid -> Valid;
+        error -> resolve_block_tx_header(TXID, hb_util:decode(TXID), Opts)
+    end;
+resolve_block_tx_header(TXID, RawTXID, Opts) when is_binary(RawTXID) ->
+    case hb_util:decode(TXID) of
+        RawTXID ->
+            case resolve_tx_header(TXID, Opts) of
+                {ok, TX} -> validate_tx_header(TXID, TX);
+                error -> error
+            end;
+        _ ->
+            error
+    end.
+
+validate_tx_header(TXID, TX) ->
+    try
+        RawTXID = hb_util:decode(TXID),
+        case TX#tx.id =:= RawTXID
+                andalso ar_tx:generate_id(TX, signed) =:= RawTXID of
+            true -> {ok, TX#tx{ data = <<>> }};
+            false -> error
+        end
+    catch
+        _:_ -> error
+    end.
+
+%% @doc Ask an Arweave node to inline every transaction it still has in its
+%% block cache. Bare IDs in the response are resolved individually above.
+fetch_block_tx_headers(Block, Opts) ->
+    Height = hb_maps:get(<<"height">>, Block, 0, Opts),
+    BlockID = hb_maps:get(<<"indep_hash">>, Block, <<>>, Opts),
+    Res = observe_event(<<"block_headers">>, fun() ->
+        hb_http:request(
+            #{
+                <<"path">> =>
+                    <<"/arweave/block2/hash/", BlockID/binary>>,
+                <<"method">> => <<"GET">>,
+                % `/block2' accepts one selection bit for each possible TX.
+                <<"body">> => binary:copy(<<255>>, 125),
+                <<"route-by">> => Height
+            },
+            Opts#{
+                <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                <<"http-client">> => hackney
+            }
+        )
+    end),
+    case lib_arweave_common:best_response(Res) of
+        {ok, #{ <<"body">> := Body }} ->
+            decode_block_tx_headers(Body, Block, Opts);
+        _ ->
+            error
+    end.
+
+decode_block_tx_headers(Body, Block, Opts) ->
+    try parse_block2_transactions(Body) of
+        {ok, BlockID, TXs} ->
+            ExpectedBlockID = hb_util:decode(
+                hb_maps:get(<<"indep_hash">>, Block, <<>>, Opts)),
+            ExpectedTXIDs = [
+                hb_util:decode(TXID)
+            ||
+                TXID <- hb_maps:get(<<"txs">>, Block, [], Opts)
+            ],
+            case BlockID =:= ExpectedBlockID
+                    andalso [block2_tx_id(TX) || TX <- TXs] =:= ExpectedTXIDs of
+                true -> {ok, TXs};
+                false -> error
+            end;
+        error ->
+            error
+    catch
+        _:_ -> error
+    end.
+
+block2_tx_id(#tx{ id = TXID }) -> TXID;
+block2_tx_id(TXID) when is_binary(TXID) -> TXID.
+
+%% @doc Decode the transaction section of an Arweave `/block2' response.
+parse_block2_transactions(
+    <<
+        BlockID:48/binary,
+        PrevHashSize:8, _:PrevHashSize/binary,
+        TimestampSize:8, _:(TimestampSize * 8),
+        NonceSize:16, _:NonceSize/binary,
+        HeightSize:8, _:(HeightSize * 8),
+        DiffSize:16, _:(DiffSize * 8),
+        CumulativeDiffSize:16, _:(CumulativeDiffSize * 8),
+        LastRetargetSize:8, _:(LastRetargetSize * 8),
+        HashSize:8, _:HashSize/binary,
+        BlockSizeSize:16, _:(BlockSizeSize * 8),
+        WeaveSizeSize:16, _:(WeaveSizeSize * 8),
+        RewardAddrSize:8, _:RewardAddrSize/binary,
+        TXRootSize:8, _:TXRootSize/binary,
+        WalletListSize:8, _:WalletListSize/binary,
+        HashListMerkleSize:8, _:HashListMerkleSize/binary,
+        RewardPoolSize:8, _:(RewardPoolSize * 8),
+        PackingThresholdSize:8, _:(PackingThresholdSize * 8),
+        StrictChunkThresholdSize:8, _:(StrictChunkThresholdSize * 8),
+        RateDividendSize:8, _:(RateDividendSize * 8),
+        RateDivisorSize:8, _:(RateDivisorSize * 8),
+        ScheduledRateDividendSize:8, _:(ScheduledRateDividendSize * 8),
+        ScheduledRateDivisorSize:8, _:(ScheduledRateDivisorSize * 8),
+        PoAOptionSize:8, _:(PoAOptionSize * 8),
+        ChunkSize:24, _:ChunkSize/binary,
+        TXPathSize:24, _:TXPathSize/binary,
+        DataPathSize:24, _:DataPathSize/binary,
+        Rest/binary
+    >>
+) when NonceSize =< 512 ->
+    parse_block2_tags(Rest, BlockID);
+parse_block2_transactions(_Bin) ->
+    error.
+
+parse_block2_tags(<< Count:16, Rest/binary >>, BlockID)
+        when Count =< 2048 ->
+    parse_block2_tags(Count, Rest, BlockID, 0);
+parse_block2_tags(_Bin, _BlockID) ->
+    error.
+
+parse_block2_tags(0, Rest, BlockID, _Size) ->
+    parse_block2_txs(Rest, BlockID);
+parse_block2_tags(
+        Count, << Size:16, _:Size/binary, Rest/binary >>,
+        BlockID, TotalSize) when TotalSize + Size =< 2048 ->
+    parse_block2_tags(Count - 1, Rest, BlockID, TotalSize + Size);
+parse_block2_tags(_Count, _Bin, _BlockID, _Size) ->
+    error.
+
+parse_block2_txs(<< Count:16, Rest/binary >>, BlockID) when Count =< 1000 ->
+    parse_block2_txs(Count, Rest, BlockID, []);
+parse_block2_txs(_Bin, _BlockID) ->
+    error.
+
+parse_block2_txs(0, _Rest, BlockID, TXs) ->
+    {ok, BlockID, TXs};
+parse_block2_txs(
+        Count, << Size:24, TXBin:Size/binary, Rest/binary >>,
+        BlockID, TXs) when Count > 0 ->
+    case parse_block2_tx(TXBin) of
+        {ok, TX} ->
+            parse_block2_txs(Count - 1, Rest, BlockID, [TX | TXs]);
+        error ->
+            error
+    end;
+parse_block2_txs(_Count, _Bin, _BlockID, _TXs) ->
+    error.
+
+parse_block2_tx(<< TXID:32/binary >>) ->
+    {ok, TXID};
+parse_block2_tx(
+    <<
+        Format:8, TXID:32/binary,
+        AnchorSize:8, Anchor:AnchorSize/binary,
+        OwnerSize:16, Owner:OwnerSize/binary,
+        TargetSize:8, Target:TargetSize/binary,
+        QuantitySize:8, Quantity:(QuantitySize * 8),
+        DataSizeSize:16, DataSize:(DataSizeSize * 8),
+        DataRootSize:8, DataRoot:DataRootSize/binary,
+        SignatureSize:16, Signature:SignatureSize/binary,
+        RewardSize:8, Reward:(RewardSize * 8),
+        DataEncodingSize:24, Data:DataEncodingSize/binary,
+        Rest/binary
+    >>
+) when Format =:= 1; Format =:= 2 ->
+    case parse_block2_tx_tags(Rest) of
+        {ok, Tags, DenominationBin} ->
+            case parse_block2_tx_denomination(DenominationBin) of
+                {ok, Denomination} ->
+                    TX = #tx{
+                        format = Format,
+                        id = TXID,
+                        anchor = Anchor,
+                        owner = Owner,
+                        tags = Tags,
+                        target = Target,
+                        quantity = Quantity,
+                        data = Data,
+                        data_size =
+                            case Format of
+                                1 -> byte_size(Data);
+                                2 -> DataSize
+                            end,
+                        data_root = DataRoot,
+                        signature = Signature,
+                        reward = Reward,
+                        denomination = Denomination,
+                        signature_type =
+                            case Owner of
+                                <<>> -> ?ECDSA_KEY_TYPE;
+                                _ -> ?RSA_KEY_TYPE
+                            end
+                    },
+                    {ok, block2_tx_owner(TX)};
+                error ->
+                    error
+            end;
+        error ->
+            error
+    end;
+parse_block2_tx(_Bin) ->
+    error.
+
+parse_block2_tx_tags(<< Count:16, Rest/binary >>) when Count =< 2048 ->
+    parse_block2_tx_tags(Count, Rest, []);
+parse_block2_tx_tags(_Bin) ->
+    error.
+
+parse_block2_tx_tags(0, Rest, Tags) ->
+    {ok, Tags, Rest};
+parse_block2_tx_tags(
+        Count,
+        <<
+            NameSize:16, ValueSize:16,
+            Name:NameSize/binary, Value:ValueSize/binary,
+            Rest/binary
+        >>,
+        Tags
+) when Count > 0 ->
+    parse_block2_tx_tags(Count - 1, Rest, [{Name, Value} | Tags]);
+parse_block2_tx_tags(_Count, _Bin, _Tags) ->
+    error.
+
+parse_block2_tx_denomination(<<>>) -> {ok, 0};
+parse_block2_tx_denomination(<< Denomination:24 >>)
+        when Denomination > 0 ->
+    {ok, Denomination};
+parse_block2_tx_denomination(_Bin) ->
+    error.
+
+block2_tx_owner(TX = #tx{
+        data_size = 0, signature_type = ?ECDSA_KEY_TYPE }) ->
+    Owner = ar_wallet:recover_key(
+        ar_tx:generate_signature_data_segment(TX),
+        TX#tx.signature,
+        TX#tx.signature_type
+    ),
+    TX#tx{
+        owner = Owner,
+        owner_address = ar_wallet:to_address(Owner, TX#tx.signature_type)
+    };
+block2_tx_owner(TX = #tx{ data_size = 0 }) ->
+    TX#tx{ owner_address = ar_tx:get_owner_address(TX) };
+block2_tx_owner(TX) -> TX.
+
 resolve_tx_headers(TXIDs, Opts) ->
     Results = parallel_map(
         TXIDs,
         fun(TXID) -> resolve_tx_header(TXID, Opts) end,
         Opts
     ),
+    collect_tx_headers(Results).
+
+collect_tx_headers(Results) ->
     case lists:any(fun(Res) -> Res =:= error end, Results) of
         true -> error;
         false ->
@@ -910,6 +1241,53 @@ observe_event(MetricName, Fun) ->
     Result.
 
 %%% Tests
+
+headers_mode_test() ->
+    Block = 1967269,
+    BlockBin = hb_util:bin(Block),
+    ZeroTXID = <<"enIzMI_6vVcY80ZqfiCdWq56chbft3HSZnXMj7X7BdE">>,
+    DataTXID = <<"NEsEjfjjawZ_fqMEnIS9aURTIvgrZ5TqFwC9hcsE2nM">>,
+    TestStore = hb_test_utils:test_store(),
+    StoreOpts = #{ <<"index-store">> => [TestStore] },
+    Opts = #{
+        <<"store">> => [TestStore],
+        <<"arweave-index-store">> => StoreOpts,
+        <<"arweave-index-workers">> => 2
+    },
+    LocalOpts = hb_store:scope(Opts, local),
+    ?assertEqual({error, not_found}, hb_cache:read(ZeroTXID, LocalOpts)),
+    {ok, Block} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave&"
+                "from=", BlockBin/binary, "&"
+                "to=", BlockBin/binary, "&"
+                "mode=headers"
+            >>,
+            Opts
+        ),
+    ?assertMatch(
+        {ok, _},
+        hb_cache:read(
+            <<"~arweave@2.9/block/height/", BlockBin/binary>>,
+            LocalOpts
+        )
+    ),
+    {ok, CachedTX} = hb_cache:read(ZeroTXID, LocalOpts),
+    ?assert(hb_message:verify(CachedTX, all, Opts)),
+    ?assertEqual(ZeroTXID, hb_message:id(CachedTX, signed, Opts)),
+    ?assertEqual({error, not_found}, hb_cache:read(DataTXID, LocalOpts)),
+    lists:foreach(
+        fun(TXID) ->
+            ?assertEqual(
+                not_found,
+                hb_store_arweave:read_offset(StoreOpts, TXID, Opts)
+            )
+        end,
+        [ZeroTXID, DataTXID]
+    ),
+    ?assert(is_block_indexed(Block, headers, Opts)),
+    ?assertNot(is_block_indexed(Block, shallow, Opts)).
 
 index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
