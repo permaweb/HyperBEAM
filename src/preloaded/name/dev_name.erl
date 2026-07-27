@@ -83,21 +83,24 @@ request(HookMsg, HookReq, Opts) ->
     maybe
         {ok, Req} ?= hb_maps:find(<<"request">>, HookReq, Opts),
         {ok, Host} ?= hb_maps:find(<<"host">>, Req, Opts),
-        {ok, Name} ?=
+        {ok, RawName} ?=
             name_from_host(
                 Host,
                 hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts)
             ),
+        {Name, NamePath} = name_path(RawName),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
-            maybe_append_named_message(
+            append_name_path(
                 ResolvedMsg,
+                NamePath,
                 hb_util:ok(hb_maps:find(<<"body">>, HookReq, Opts)),
                 Opts
             ),
         ?event(
             {request_with_prepended_path,
                 {name, Name},
+                {name_path, NamePath},
                 {full_host, Host},
                 {resolved_msg, ResolvedMsg},
                 {to_execute, ModReq}
@@ -120,6 +123,19 @@ request(HookMsg, HookReq, Opts) ->
                     {ok, HookReq}
             end
     end.
+
+%% @doc Split an underscore-encoded subdomain into root name and path parts.
+%% `x_y_z' resolves `z', then `y', then `x'.
+name_path(Name) ->
+    case lists:reverse(binary:split(Name, <<"_">>, [global, trim_all])) of
+        [Root | Path] -> {Root, Path};
+        [] -> {Name, []}
+    end.
+
+%% @doc Append the resolved name as the base, then any path encoded in the host.
+append_name_path(ResolvedMsg, NamePath, OldReq, Opts) ->
+    [Base | Rest] = maybe_append_named_message(ResolvedMsg, OldReq, Opts),
+    [Base | ([#{ <<"path">> => Part } || Part <- NamePath] ++ Rest)].
 
 %% @doc After finding a hit for a named message, we should ensure that it is the
 %% base message for the evaluation. If it is already present in the request,
@@ -207,6 +223,19 @@ device_resolver(Msg) ->
                     }
                 end
         }
+    }.
+
+host_test_opts() ->
+    #{
+        <<"port">> => 0,
+        <<"name-resolvers">> =>
+            [
+                device_resolver(
+                    #{ <<"permabytes">> => #{ <<"content-type">> => <<"text/html">> } }
+                )
+            ],
+        <<"on">> =>
+            #{ <<"request">> => #{ <<"device">> => <<"name@1.0">> } }
     }.
 
 single_resolver_test_parallel() ->
@@ -303,8 +332,8 @@ arns_json_snapshot_test_parallel() ->
         )
     ).
 
-arns_host_resolution_test_parallel() ->
-    Opts = hb_name_test_utils:arns_opts(),
+host_resolution_test_parallel() ->
+    Opts = host_test_opts(),
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -312,17 +341,14 @@ arns_host_resolution_test_parallel() ->
             Node,
             #{
                 <<"path">> => <<"content-type">>,
-                <<"host">> => <<"001_permabytes.localhost">>
+                <<"host">> => <<"permabytes.localhost">>
             },
             Opts
         )
     ).
 
-arns_host_resolution_with_node_host_test_parallel() ->
-    Opts = (hb_name_test_utils:arns_opts())#{
-        <<"node-host">> => <<"http://localhost">>,
-        <<"port">> => 0
-    },
+host_resolution_with_node_host_test_parallel() ->
+    Opts = (host_test_opts())#{ <<"node-host">> => <<"http://localhost">> },
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, <<"text/html">>},
@@ -330,10 +356,43 @@ arns_host_resolution_with_node_host_test_parallel() ->
             Node,
             #{
                 <<"path">> => <<"content-type">>,
-                <<"host">> => <<"001_permabytes.localhost">>
+                <<"host">> => <<"permabytes.localhost">>
             },
             Opts
         )
+    ).
+
+underscore_host_parts_resolve_manifest_test_parallel() ->
+    ManifestID = <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
+    Opts =
+        (hb_name_test_utils:manifest_opts())#{
+            <<"port">> => 0,
+            <<"http-client-hackney-recv-timeout">> => 30_000,
+            <<"name-resolvers">> =>
+                [
+                    device_resolver(
+                        #{
+                            <<"sub2_sub1">> => <<"not-the-manifest">>,
+                            <<"sub1">> => #{ <<"sub2">> => ManifestID }
+                        }
+                    )
+                ],
+            <<"on">> =>
+                #{
+                    <<"request">> =>
+                        [
+                            #{<<"device">> => <<"name@1.0">>},
+                            #{<<"device">> => <<"manifest@1.0">>}
+                        ]
+                }
+        },
+    Node = hb_http_server:start_node(Opts),
+    hb_test_utils:assert_manifest_response(
+        Node,
+        #{ <<"path">> => <<"/">>, <<"host">> => <<"sub2_sub1.localhost">> },
+        <<"text/html">>,
+        <<"<title>Portal</title>">>,
+        Opts
     ).
 
 root_request_skips_name_resolution_test_parallel() ->
@@ -371,4 +430,9 @@ name_from_host_test_parallel() ->
     ?assertEqual(
         {ok, <<"sub3.sub2">>},
         name_from_host(<<"sub3.sub2.sub1.abc.xyz">>, <<"sub1.abc.xyz">>)
+    ),
+    ?assertEqual({<<"sub1">>, [<<"sub2">>]}, name_path(<<"sub2_sub1">>)),
+    ?assertEqual(
+        {<<"sub1">>, [<<"sub2">>, <<"sub3">>]},
+        name_path(<<"sub3_sub2_sub1">>)
     ).

@@ -102,10 +102,7 @@ request(Base, Req, Opts) ->
         %    message replaced with the casted manifest.
         case {Rest, maybe_cast_manifest(Loaded, Opts)} of
             {_, ignored} ->
-                ?event(
-                    debug_manifest,
-                    {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}),
-                {ok, Req#{ <<"body">> => [Loaded|Rest] }};
+                maybe_cast_resolved_path(Loaded, Rest, Req, Opts);
             {[], {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
                 {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
@@ -128,6 +125,36 @@ request(Base, Req, Opts) ->
             % On other errors, we return the original request.
             {ok, Req}
     end.
+
+maybe_cast_resolved_path(Loaded, [Next | Rest], Req, Opts) ->
+    case catch hb_ao:resolve(Loaded, Next, Opts) of
+        {ok, Resolved} ->
+            case catch load(Resolved, Opts) of
+                {ok, NextLoaded} ->
+                    case maybe_cast_manifest(NextLoaded, Opts) of
+                        {ok, Casted} -> manifest_path(Casted, Rest, Req);
+                        ignored -> non_manifest_path(Loaded, [Next | Rest], Req)
+                    end;
+                _ -> non_manifest_path(Loaded, [Next | Rest], Req)
+            end;
+        _ -> non_manifest_path(Loaded, [Next | Rest], Req)
+    end;
+maybe_cast_resolved_path(Loaded, [], Req, _Opts) ->
+    non_manifest_path(Loaded, [], Req).
+
+manifest_path(Casted, [], Req) ->
+    ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
+    {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
+manifest_path(Casted, Rest, Req) ->
+    ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
+    {ok, Req#{ <<"body">> => [Casted | Rest] }}.
+
+non_manifest_path(Loaded, Rest, Req) ->
+    ?event(
+        debug_manifest,
+        {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}
+    ),
+    {ok, Req#{ <<"body">> => [Loaded | Rest] }}.
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
