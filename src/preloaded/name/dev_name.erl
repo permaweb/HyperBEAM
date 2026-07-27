@@ -363,7 +363,20 @@ host_resolution_with_node_host_test_parallel() ->
     ).
 
 underscore_host_parts_resolve_manifest_test_parallel() ->
+    Opts = hb_name_test_utils:manifest_opts(),
     ManifestID = <<"42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>,
+    {ok, IndexPageID} =
+        hb_cache:write(
+            #{
+                <<"content-type">> => <<"text/html">>,
+                <<"body">> => <<"Index page.">>
+            }
+        ),
+    Subrealm =
+        #{
+            <<"sub2">> => ManifestID
+            <<"index">> => IndexPageID
+        }
     Opts =
         (hb_name_test_utils:manifest_opts())#{
             <<"port">> => 0,
@@ -373,7 +386,7 @@ underscore_host_parts_resolve_manifest_test_parallel() ->
                     device_resolver(
                         #{
                             <<"sub2_sub1">> => <<"not-the-manifest">>,
-                            <<"sub1">> => #{ <<"sub2">> => ManifestID }
+                            <<"sub1">> => IndexPageID
                         }
                     )
                 ],
