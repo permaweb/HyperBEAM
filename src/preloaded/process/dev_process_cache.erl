@@ -3,7 +3,7 @@
 %%% convenient interface for reading the result of a process at a given slot or
 %%% message ID.
 -module(dev_process_cache).
--export([latest/2, latest/3, latest/4, read/2, read/3, write/4]).
+-export([fresh/3, latest/2, latest/3, latest/4, read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -40,8 +40,76 @@ write(ProcID, Slot, Msg, RawOpts) ->
         }
     ),
     hb_cache:link(Root, MsgIDPath, Opts),
+    write_refreshed_at(ProcID, Opts),
     % Return the slot number path.
     {ok, SlotNumPath}.
+
+%% @doc Mark the process as refreshed at the current clock time.
+write_refreshed_at(ProcID, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    ok = hb_store:write(
+        Store,
+        #{ refreshed_path(ProcID) => hb_util:bin(clock(Opts)) },
+        Opts
+    ).
+
+refreshed_path(ProcID) ->
+    path(ProcID, <<"refreshed-at">>, #{}).
+
+%% @doc Return whether the latest cached process output is fresh enough for
+%% `/now' to serve from cache under the effective `max-age'.
+fresh(ProcID, Req, RawOpts) ->
+    Opts = lib_process:scoped_opts(RawOpts),
+    case effective_max_age(Req, Opts) of
+        infinity ->
+            true;
+        MaxAge ->
+            case read_refreshed_at(ProcID, Opts) of
+                undefined -> false;
+                RefreshedAt -> clock(Opts) =< RefreshedAt + MaxAge
+            end
+    end.
+
+%% @doc Read the timestamp of the last refresh of a process.
+read_refreshed_at(ProcID, Opts) ->
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    case hb_store:read(Store, refreshed_path(ProcID), Opts) of
+        {ok, Timestamp} -> hb_util:int(Timestamp);
+        _ -> undefined
+    end.
+
+%% @doc Calculate the effective maximum age of a process cache entry.
+effective_max_age(Req, Opts) ->
+    case lib_process:only_if_cached(Req, Opts) of
+        true ->
+            infinity;
+        false ->
+            case max_age_from_request(Req, Opts) of
+                {ok, MaxAge} ->
+                    normalize_max_age(MaxAge);
+                error ->
+                    normalize_max_age(
+                        hb_opts:get(process_now_max_age, infinity, Opts)
+                    )
+            end
+    end.
+
+max_age_from_request(Req, Opts) when is_map(Req) ->
+    hb_maps:find(<<"max-age">>, Req, Opts);
+max_age_from_request(_Req, _Opts) ->
+    error.
+
+normalize_max_age(infinity) -> infinity;
+normalize_max_age(<<"infinity">>) -> infinity;
+normalize_max_age(RawMaxAge) -> hb_util:int(RawMaxAge).
+
+%% @doc Return the current clock time. Allows the option to override the clock
+%% time with a custom value for test use.
+clock(Opts) ->
+    case hb_opts:get(process_clock, undefined, Opts) of
+        undefined -> erlang:system_time(second);
+        Time -> hb_util:int(Time)
+    end.
 
 %% @doc Calculate the path of a result, given a process ID and a slot.
 path(ProcID, Ref, Opts) ->
@@ -67,17 +135,7 @@ latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
 latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
-    CacheOpts = lib_process:cache_opts(RawOpts),
-    Scope = hb_opts:get(process_cache_scope, local, CacheOpts),
-    % Normalize the selected store descriptor to a list of stores.
-    UnscopedStore =
-        case hb_opts:get(store, no_viable_store, CacheOpts) of
-            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
-            Other -> Other
-        end,
-    % Apply the scope to the process store and update the options message.
-    ScopedStore = hb_store:scope(UnscopedStore, Scope),
-    Opts = CacheOpts#{ <<"store">> => ScopedStore },
+    Opts = lib_process:scoped_opts(RawOpts),
     % Convert the required path to a list of _binary_ keys.
     RequiredPath =
         case RawRequiredPath of
@@ -129,43 +187,60 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
     end.
 
 %% @doc Find the latest assignment with the requested path suffix.
-first_with_path(ProcID, RequiredPath, Slots, Opts) ->
-    first_with_path(
-        ProcID,
-        RequiredPath,
-        Slots,
-        Opts,
-        hb_opts:get(store, no_viable_store, Opts)
-    ).
-first_with_path(_ProcID, _Required, [], _Opts, _Store) ->
+first_with_path(_ProcID, _Required, [], _Opts) ->
     not_found;
-first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts, Store) ->
-    RawPath = path(ProcID, Slot, RequiredPath, Opts),
+first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts) ->
+    RawPath = path(ProcID, Slot, Opts),
     ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
-    case hb_store:read(Store, RawPath, Opts) of
+    case hb_cache:read(RawPath, Opts) of
         {error, not_found} ->
-            first_with_path(ProcID, RequiredPath, Rest, Opts, Store);
+            first_with_path(ProcID, RequiredPath, Rest, Opts);
         {failure, _} = Failure ->
             Failure;
         {error, _} = Error ->
             Error;
-        _ ->
-            Slot
+        {ok, Msg} ->
+            case path_exists(RequiredPath, hb_cache:ensure_all_loaded(Msg, Opts)) of
+                true -> Slot;
+                false -> first_with_path(ProcID, RequiredPath, Rest, Opts)
+            end
     end.
+
+path_exists([], _Msg) ->
+    true;
+path_exists([Key | Rest], Msg) when is_map(Msg) ->
+    case maps:find(Key, Msg) of
+        {ok, Next} -> path_exists(Rest, Next);
+        error -> false
+    end;
+path_exists(_Path, _Msg) ->
+    false.
 
 %%% Tests
 
 process_cache_suite_test_() ->
     hb_store:generate_test_suite(
         [
-            {"write and read process outputs", fun test_write_and_read_output/1},
-            {"find latest output (with path)", fun find_latest_outputs/1}
+            {
+                "write and read process outputs",
+                fun(Store) ->
+                    test_write_and_read_output(#{ <<"store">> => [Store] })
+                end
+            },
+            {
+                "find latest output (with path)",
+                fun(Store) ->
+                    find_latest_outputs(#{ <<"store">> => [Store] })
+                end
+            },
+            {
+                "honor max-age when checking process cache freshness",
+                fun(Store) ->
+                    freshness_max_age(#{ <<"store">> => [Store] })
+                end
+            }
         ],
-        [
-            {Name, Opts}
-        ||
-            {Name, Opts} <- hb_store:test_stores()
-        ]
+        hb_store:test_stores()
     ).
 
 %% @doc Test for writing multiple computed outputs, then getting them by
@@ -199,20 +274,20 @@ find_latest_outputs(Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     ResetRes = hb_store:reset(Store),
     ?event({reset_store, {result, ResetRes}, {store, Store}}),
-    Proc1 = hb_process_test_vectors:aos_process(),
-    ProcID = hb_util:human_id(hb_ao:get(id, Proc1, Opts)),
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ProcessRef = <<"test-process-ref">>,
     % Create messages for the slots, with only the middle slot having a
     % `/Process' field, while the top slot has a `/Deep/Process' field.
     Msg0 = #{ <<"Results">> => #{ <<"Result-Number">> => 0 } },
     Base =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 1 }, 
-            <<"Process">> => Proc1 
+            <<"Process">> => ProcessRef
         },
     Req =
         #{ 
             <<"Results">> => #{ <<"Result-Number">> => 2 }, 
-            <<"Deep">> => #{ <<"Process">> => Proc1 } 
+            <<"Deep">> => #{ <<"Process">> => ProcessRef }
         },
     % Write the messages to the cache.
     {ok, _} = write(ProcID, 0, Msg0, Opts),
@@ -220,19 +295,120 @@ find_latest_outputs(Opts) ->
     {ok, _} = write(ProcID, 2, Req, Opts),
     ?event(wrote_items),
     % Read the messages with various qualifiers.
-    {ok, 2, ReadReq} = latest(ProcID, Opts),
+    {ok, 2, RawReadReq} = latest(ProcID, Opts),
+    ReadReq = hb_cache:ensure_all_loaded(RawReadReq, Opts),
     ?event({read_latest, ReadReq}),
-    ?assert(hb_message:match(Req, ReadReq)),
+    ?assertEqual(2, maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadReq))),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, maps:get(<<"Deep">>, ReadReq))),
     ?event(read_latest_slot_without_qualifiers),
-    {ok, 1, ReadBaseRequired} = latest(ProcID, <<"Process">>, Opts),
+    {ok, 1, RawReadBaseRequired} = latest(ProcID, <<"Process">>, Opts),
+    ReadBaseRequired = hb_cache:ensure_all_loaded(RawReadBaseRequired, Opts),
     ?event({read_latest_with_process, ReadBaseRequired}),
-    ?assert(hb_message:match(Base, ReadBaseRequired)),
+    ?assertEqual(
+        1,
+        maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadBaseRequired))
+    ),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, ReadBaseRequired)),
     ?event(read_latest_slot_with_shallow_key),
-    {ok, 2, ReadReqRequired} = latest(ProcID, <<"Deep/Process">>, Opts),
-    ?assert(hb_message:match(Req, ReadReqRequired)),
+    {ok, 2, RawReadReqRequired} = latest(ProcID, <<"Deep/Process">>, Opts),
+    ReadReqRequired = hb_cache:ensure_all_loaded(RawReadReqRequired, Opts),
+    ?assertEqual(
+        2,
+        maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadReqRequired))
+    ),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, maps:get(<<"Deep">>, ReadReqRequired))),
     ?event(read_latest_slot_with_deep_key),
-    {ok, 1, ReadBase} = latest(ProcID, [], 1, Opts),
-    ?assert(hb_message:match(Base, ReadBase)).
+    {ok, 1, RawReadBase} = latest(ProcID, [], 1, Opts),
+    ReadBase = hb_cache:ensure_all_loaded(RawReadBase, Opts),
+    ?assertEqual(1, maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadBase))),
+    ?assertEqual(ProcessRef, maps:get(<<"Process">>, ReadBase)).
+
+%% @doc Test for serving `/now' from cache only while the cache is fresh enough.
+freshness_max_age(Opts) ->
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Slot = 1,
+    SlotResult = #{
+        <<"device">> => <<"process@1.0">>,
+        <<"at-slot">> => Slot,
+        <<"results">> => #{ <<"number">> => 1 }
+    },
+    % Assert that the process is not fresh by default.
+    ?assertEqual(
+        false,
+        fresh(
+            ProcID,
+            #{ <<"max-age">> => 60 },
+            Opts#{ <<"process-clock">> => 100 }
+        )
+    ),
+    % Write the slot result to the cache at clock time 100.
+    {ok, _} = write(ProcID, Slot, SlotResult, Opts#{ <<"process-clock">> => 100 }),
+    {ok, 1, RawReadSlotResult} = latest(ProcID, Opts),
+    ReadSlotResult = hb_cache:ensure_all_loaded(RawReadSlotResult, Opts),
+    ?assertEqual(<<"process@1.0">>, maps:get(<<"device">>, ReadSlotResult)),
+    ?assertEqual(1, maps:get(<<"number">>, maps:get(<<"results">>, ReadSlotResult))),
+    % Assert that the process is fresh exactly at the max-age.
+    ?assertEqual(
+        true,
+        fresh(
+            ProcID,
+            #{ <<"max-age">> => 60 },
+            Opts#{ <<"process-clock">> => 160 }
+        )
+    ),
+    % Assert that the process is not fresh after the max-age.
+    ?assertEqual(
+        false,
+        fresh(
+            ProcID,
+            #{ <<"max-age">> => 60 },
+            Opts#{ <<"process-clock">> => 161 }
+        )
+    ),
+    % Assert that the process is fresh if the max-age is infinity.
+    ?assertEqual(
+        true,
+        fresh(
+            ProcID,
+            #{ <<"max-age">> => <<"infinity">> },
+            Opts#{ <<"process-clock">> => 1000 }
+        )
+    ),
+    % Assert that the process is fresh if the only-if-cached flag is set.
+    ?assertEqual(
+        true,
+        fresh(
+            ProcID,
+            #{
+                <<"cache-control">> => [<<"only-if-cached">>],
+                <<"max-age">> => 0
+            },
+            Opts#{ <<"process-clock">> => 1000 }
+        )
+    ),
+    % Assert that the max age is read as a fallback from the node opts
+    ?assertEqual(
+        true,
+        fresh(
+            ProcID,
+            #{},
+            Opts#{
+                <<"process-clock">> => 160,
+                <<"process-now-max-age">> => 60
+            }
+        )
+    ),
+    ?assertEqual(
+        false,
+        fresh(
+            ProcID,
+            #{},
+            Opts#{
+                <<"process-clock">> => 161,
+                <<"process-now-max-age">> => 60
+            }
+        )
+    ).
 
 %% @doc Process cache writes go only to `process-store' when configured.
 isolated_process_store_test() ->
