@@ -38,15 +38,12 @@
 %%%
 %%% Reads are paths into the state -- `/now/balances/<address>',
 %%% `/now/total-supply', `/now/value/<key>' -- and not device keys, which is how
-%%% `token-1.0' reads too. The device deliberately declares no `exports' list: a
-%%% name is meant to be sold by `~arweave-swap@1.0', which requires its process to
-%%% be sequenced by every transaction on Arweave, so the key a slot resolves is
-%%% chosen by a stranger's `path' tag. A `balance' key answering for itself would
-%%% let a passer-by's transaction hand back a balance as the new process state.
+%%% `token-1.0' reads too. `compute' is the only key this device answers; every
+%%% other one is `~message@1.0''s.
 -module(dev_name_token).
 -implements(<<"name-token@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3]).
+-export([compute/3, init/3, snapshot/3, normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -55,33 +52,18 @@
 %%% The linked message whose keys the name resolves through to.
 -define(VALUE, <<"value">>).
 
-%% @doc Every key routes to `compute': the schedule drives this device, and
-%% under `~arweave-scheduler@1.0''s `all' mode the key a slot resolves comes
-%% from a stranger's `path' tag. See `dev_arweave_swap:info/0', which carries
-%% the same reasoning at length.
-info() ->
-    #{ default => fun router/4 }.
+%% @doc The process lifecycle keys `~process@1.0' calls on an execution device.
+%% This device's state is a plain message and its whole contents, so there is
+%% nothing to boot, nothing to serialize that is not already here, and nothing
+%% to restore. Declaring them is what keeps `~message@1.0' -- which owns every
+%% other key of this state -- from answering `not_found' and failing the slot.
+init(Base, _Req, _Opts) -> {ok, Base}.
+snapshot(Base, _Req, _Opts) -> {ok, Base}.
+normalize(Base, _Req, _Opts) -> {ok, Base}.
 
-%% @doc Apply any scheduled message, whatever it asked to be routed to.
-router(_Key, Base, Assignment, Opts) ->
-    compute(Base, Assignment, Opts).
-
-%% @doc Setting the device is honoured, and nothing else is: `lib_process' puts
-%% the process's own device back after every slot. Anything else is a scheduled
-%% message and is applied as one. See `dev_arweave_swap:set/3'.
-set(Base, Req, Opts) ->
-    case hb_maps:keys(Req, Opts) -- [<<"path">>, <<"set-mode">>] of
-        [<<"device">>] ->
-            {ok,
-                Base#{
-                    <<"device">> =>
-                        hb_maps:get(<<"device">>, Req, undefined, Opts)
-                }
-            };
-        _ -> compute(Base, Req, Opts)
-    end.
-
-%% @doc Apply one assignment to the name's state.
+%% @doc Apply one assignment to the name's state. This is the device's only
+%% key: `~arweave-scheduler@1.0' pins `path: compute' on every `all'-mode
+%% assignment, so no stranger's tag can choose another.
 %%
 %% A name that is for sale is settled in the same balances it keeps, so every
 %% message is offered to the selling device first -- including the ones this
@@ -121,7 +103,7 @@ compute(Base, Assignment, Opts) ->
 %% name open: nothing can be offered, so nothing can be bought, and the name
 %% still works as a name.
 swap(Base, Assignment, Opts) ->
-    case state(<<"swap-device">>, Base, not_found, Opts) of
+    case hb_ao:get(<<"swap-device">>, Base, not_found, Opts) of
         not_found -> Base;
         Device ->
             try hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
@@ -163,8 +145,8 @@ swap(Base, Assignment, Opts) ->
 %% Both are seeded together, in the one slot where the name has no balances yet,
 %% so a value the holder later replaces is never handed back to them.
 seed(Base, Opts) ->
-    case {state(?BALANCES, Base, not_found, Opts),
-            state(<<"initial-holder">>, Base, not_found, Opts)} of
+    case {hb_ao:get(?BALANCES, Base, not_found, Opts),
+            hb_ao:get(<<"initial-holder">>, Base, not_found, Opts)} of
         {not_found, Holder} when Holder =/= not_found ->
             Supply = supply(Base, Opts),
             ?event({name_token_seeded, {holder, Holder}, {supply, Supply}}),
@@ -177,7 +159,7 @@ seed(Base, Opts) ->
 %% later replace it with anything at all without the shape changing underneath
 %% whatever is reading it.
 seed_value(Base, Opts) ->
-    case state(<<"initial-value">>, Base, not_found, Opts) of
+    case hb_ao:get(<<"initial-value">>, Base, not_found, Opts) of
         not_found -> Base;
         Target ->
             ?event({name_token_seeded_value, {target, Target}}),
@@ -303,17 +285,11 @@ owns_supply(Base, Address, Opts) ->
 %% raises on its every slot, for good, on every node.
 supply(Base, Opts) ->
     hb_util:ok_or(
-        hb_util:safe_int(state(<<"total-supply">>, Base, 1, Opts)),
+        hb_util:safe_int(hb_ao:get(<<"total-supply">>, Base, 1, Opts)),
         1
     ).
 
 %%% State
-
-%% @doc Read a key of the process's own state. While a slot is being computed
-%% the state carries this device, so a plain read would resolve the key back
-%% through `compute'. See `dev_arweave_swap:state/4'.
-state(Key, Base, Default, Opts) ->
-    hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
 %% @doc Read a value from the real layer-1 transaction fields. A `target' tag is
 %% not an address: only the field the base layer itself moved value to decides
@@ -341,7 +317,7 @@ signer(Body, Opts) ->
     end.
 
 balance(Base, Address, Opts) ->
-    hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
+    hb_util:int(hb_ao:get([?BALANCES, Address], Base, 0, Opts)).
 
 %% @doc Write one balance back. Only whole top-level keys are written: setting a
 %% nested path would resolve the keys above it through this device on the way
@@ -353,7 +329,7 @@ credit(Base, Address, Amount, Opts) ->
             hb_maps:put(
                 Address,
                 balance(Base, Address, Opts) + Amount,
-                state(?BALANCES, Base, #{}, Opts),
+                hb_ao:get(?BALANCES, Base, #{}, Opts),
                 Opts
             )
     }.
@@ -430,7 +406,7 @@ set_tx(Wallet, Fields) ->
 held_by(Base, Address, Opts) -> balance(Base, Address, Opts).
 
 value(Base, Opts) ->
-    hb_cache:ensure_all_loaded(state(?VALUE, Base, #{}, Opts), Opts).
+    hb_cache:ensure_all_loaded(hb_ao:get(?VALUE, Base, #{}, Opts), Opts).
 
 says(Base, Key, Opts) -> hb_ao:get(Key, value(Base, Opts), not_found, Opts).
 
@@ -605,7 +581,7 @@ actions_are_matched_by_name_only_test() ->
             Opts
         ),
     ?assertEqual(1, held_by(Minted, OwnerAddr, Opts)),
-    ?assertEqual(1, hb_util:int(state(<<"total-supply">>, Minted, 0, Opts))),
+    ?assertEqual(1, hb_util:int(hb_ao:get(<<"total-supply">>, Minted, 0, Opts))),
     % A known action is matched however it is cased, as `token-1.0' matches.
     Moved =
         apply_tx(
@@ -729,7 +705,7 @@ without_a_working_swap_device_test() ->
                     Opts
                 ),
             ?assertEqual(<<"no swap here">>, says(Set, <<"greeting">>, Opts)),
-            ?assertEqual(not_found, state(<<"orders">>, Set, not_found, Opts))
+            ?assertEqual(not_found, hb_ao:get(<<"orders">>, Set, not_found, Opts))
         end,
         [
             name_held_by(OwnerAddr),
@@ -803,42 +779,13 @@ order_of(Base, Opts) ->
             Held = #{ <<"order-id">> := _ } <-
                 hb_maps:values(
                     hb_cache:ensure_all_loaded(
-                        state(<<"orders">>, Base, #{}, Opts),
+                        hb_ao:get(<<"orders">>, Base, #{}, Opts),
                         Opts
                     ),
                     Opts
                 )
         ],
     hb_maps:get(<<"order-id">>, Order, not_found, Opts).
-
-%% @doc A stranger's transaction may ask to be routed anywhere, including to
-%% keys `~message@1.0' would otherwise answer. Each is applied like any other
-%% message rather than handing back the state, a list of key names, or an info
-%% map as the new state.
-stray_paths_are_applied_test() ->
-    Opts = test_opts(),
-    {_, OwnerAddr} = party(),
-    {Stranger, _} = party(),
-    Base = name_held_by(OwnerAddr),
-    lists:foreach(
-        fun(Path) ->
-            {ok, State} =
-                hb_ao:resolve(
-                    Base#{ <<"device">> => <<"name-token@1.0">> },
-                    #{
-                        <<"path">> => Path,
-                        <<"process">> => ?PROCESS,
-                        <<"slot">> => 2,
-                        ?BALANCES => #{ OwnerAddr => 1000000 },
-                        <<"body">> =>
-                            tx(Stranger, #{ <<"target">> => <<"somebody-else">> })
-                    },
-                    Opts
-                ),
-            ?assertEqual(1, held_by(State, OwnerAddr, Opts))
-        end,
-        [<<"set">>, <<"keys">>, <<"info">>, <<"balances">>, <<"anything-else">>]
-    ).
 
 %%% The permanent fixtures
 %%%

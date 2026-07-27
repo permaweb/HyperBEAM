@@ -23,18 +23,20 @@
 %%% <ul>
 %%%   <li>`make-offer' (to the process, from the seller), carrying
 %%%       `offer-quantity' in token units, `asking' in winston, a `deadline'
-%%%       in blocks and a `minimum-fee' in winston. The `offer-quantity' moves
+%%%       in blocks, and what a buyer must put up to reserve it: a
+%%%       `minimum-fee' in winston and a `deposit' in token units, either of
+%%%       which may be zero. The `offer-quantity' moves
 %%%       into escrow at once, so delivery is never in doubt: the goods are held
 %%%       before any buyer commits anything. The offered amount cannot be called
 %%%       `quantity': that is a transaction's own value field, so the codec would
 %%%       carry it as winston of AR sent to the process -- an address with no key
 %%%       behind it, which would destroy it.</li>
 %%%   <li>`register-interest' (to the process, from a buyer), naming an
-%%%       `order-id'. It buys the exclusive right to complete the sale: for
-%%%       `deadline' blocks the order is that buyer's alone and the seller
-%%%       cannot withdraw it. That window is what makes paying safe -- without
-%%%       it a buyer races the seller's withdrawal, having already sent AR that
-%%%       nobody can claw back.</li>
+%%%       `order-id' and pledging the order's `deposit'. It buys the exclusive
+%%%       right to complete the sale: for `deadline' blocks the order is that
+%%%       buyer's alone and the seller cannot withdraw it. That window is what
+%%%       makes paying safe -- without it a buyer races the seller's withdrawal,
+%%%       having already sent AR that nobody can claw back.</li>
 %%%   <li>`cancel-order' (to the process, from the seller), naming an
 %%%       `order-id'. Returns the escrowed goods and removes the offer. It is
 %%%       refused while a reservation stands.</li>
@@ -44,35 +46,52 @@
 %%%       deliver.</li>
 %%% </ul>
 %%%
-%%% Exclusivity is the only thing a buyer is sold before they pay, so the
-%%% `minimum-fee' is the only thing that can be asked for it: taking a
-%%% reservation costs the seller their right to withdraw, and a free option is
-%%% worth abusing. The fee is paid as the registration's own transaction
-%%% `reward', which sends it where Arweave sends rewards -- to miners and the
-%%% endowment -- rather than stranding it at the process's address. Being
-%%% denominated in AR it asks nothing of a buyer who holds none of the token,
-%%% which is the whole population of buyers when the thing being sold is a name
-%%% whose entire supply is the single unit on offer.
+%%% Exclusivity is all a buyer is sold before they pay, and taking it costs the
+%%% seller their right to withdraw, so a free option would be worth abusing.
+%%% Two things can be asked for it, and they are asked in different currencies
+%%% for different reasons:
+%%% <ul>
+%%%   <li>The `minimum-fee' is paid as the registration's own transaction
+%%%       `reward' -- spent to miners and the endowment rather than collected,
+%%%       so it costs a buyer only what they were spending anyway, and lands
+%%%       nowhere rather than at the process's address, which is a transaction
+%%%       id with no key behind it. Being denominated in AR it asks nothing of a
+%%%       buyer who holds none of the token, which is every buyer when what is
+%%%       being sold is a name whose entire supply is the single unit on
+%%%       offer.</li>
+%%%   <li>The `deposit' is collateral against taking exclusivity and abandoning
+%%%       it: pledged out of the buyer's own balance when they register,
+%%%       returned when they pay, and forfeit to the seller -- who was held all
+%%%       that time -- when the window passes unpaid. It is denominated in the
+%%%       token because a pledge is only worth taking if this device can decline
+%%%       to honour it, and the token is the only thing it can decline; AR
+%%%       settles on the weave whatever any process decides. A buyer must
+%%%       therefore already hold some of what they are buying, which is true of
+%%%       a fungible supply and never of a name.</li>
+%%% </ul>
 %%%
 %%% An offer does not expire; only a reservation does. Paying an unreserved
 %%% offer is permitted and unwise: the seller may withdraw, or another buyer
 %%% complete it, while the payment is in flight.
 %%%
 %%% The book holds live offers only, so opening an offer and withdrawing it
-%%% leaves the process exactly as it was, and escrowed goods plus balances
-%%% always sum to the supply.
+%%% leaves the process exactly as it was. Escrowed goods, pledged collateral and
+%%% balances always sum to the supply.
 %%%
 %%% Reservations are measured in Arweave block heights, read from the
 %%% `block-height' that `all'-mode assignments carry. That is the only clock the
 %%% device has, and deliberately so: reading the chain tip during a compute
 %%% would be non-deterministic, and `~process@1.0' caches every slot result
-%%% forever. A lapsed reservation is not retired by the clock but simply ignored
-%%% once the height has passed it, so the network's traffic costs this process
-%%% nothing.
+%%% forever. Nothing sweeps for lapsed reservations: an order the height has
+%%% outrun simply reads as unheld, and its forfeit is taken the next time the
+%%% order is touched. A pledge nobody comes back for stays escrowed against the
+%%% order, where it is still the seller's for the asking -- they need only
+%%% withdraw the offer to take it. So the network's traffic, which is every
+%%% transaction on Arweave, costs this process nothing at all.
 -module(dev_arweave_swap).
 -implements(<<"arweave-swap@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3]).
+-export([compute/3, init/3, snapshot/3, normalize/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -80,53 +99,22 @@
 %%% implementation; the swap only moves value inside it.
 -define(BALANCES, <<"balances">>).
 
-%% @doc Every state transition in this device is driven by the schedule, never
-%% by a direct request, so every key routes to `compute'.
-%%
-%% The key a slot resolves is chosen by the scheduled transaction's own `path'
-%% tag (see `lib_scheduler:base_assignment/4'), and this process is sequenced by
-%% every transaction on Arweave: whatever a stranger writes there must be
-%% applied like any other message. So there is no `exports' list -- a key
-%% outside it would fall through to `~message@1.0', answer `not_found', fail its
-%% slot and wedge the process permanently -- and no `excludes' list either,
-%% since an excluded key is handed to `~message@1.0' instead, whose `keys' would
-%% replace the state with a list of key names. A module function of a key's name
-%% takes precedence over this handler, so the device exports only `set', which
-%% it must.
-%%
-%% `info' is deliberately arity 0. A device's `info' is always exported, and had
-%% it taken the base as an argument it would also answer the `info' key, so a
-%% transaction tagged `path: info' would replace the process state with this
-%% map.
-info() ->
-    #{ default => fun router/4 }.
-
-%% @doc Apply any scheduled message, whatever it asked to be routed to.
-router(_Key, Base, Assignment, Opts) ->
-    compute(Base, Assignment, Opts).
-
-%% @doc Setting the device is honoured, and nothing else is.
-%% `lib_process:run_as' puts the process's own device back with a `set' after
-%% every slot, so refusing it would leave the process wearing this device. A
-%% scheduled message that asks to be routed to `set' is applied like any other
-%% message instead of being allowed to write the state directly.
-%%
-%% The device is written here rather than delegated to `~message@1.0', because
-%% delegating means viewing this state as a message, which is another device
-%% set: it would arrive back here forever.
-set(Base, Req, Opts) ->
-    case hb_maps:keys(Req, Opts) -- [<<"path">>, <<"set-mode">>] of
-        [<<"device">>] ->
-            {ok,
-                Base#{
-                    <<"device">> =>
-                        hb_maps:get(<<"device">>, Req, undefined, Opts)
-                }
-            };
-        _ -> compute(Base, Req, Opts)
-    end.
+%% @doc The process lifecycle keys `~process@1.0' calls on an execution device.
+%% This device's state is a plain message and its whole contents, so there is
+%% nothing to boot, nothing to serialize that is not already here, and nothing
+%% to restore. Declaring them is what keeps `~message@1.0' -- which owns every
+%% other key of this state -- from answering `not_found' and failing the slot.
+init(Base, _Req, _Opts) -> {ok, Base}.
+snapshot(Base, _Req, _Opts) -> {ok, Base}.
+normalize(Base, _Req, _Opts) -> {ok, Base}.
 
 %% @doc Apply one assignment to the swap's state.
+%%
+%% This is the device's only key. Every slot arrives here, because
+%% `~arweave-scheduler@1.0' pins `path: compute' on every `all'-mode assignment
+%% -- the scheduled transaction is a stranger's and never addressed this
+%% process, so its tags are data and never routing. Everything else about this
+%% state is `~message@1.0''s to answer.
 %%
 %% In `all' mode the overwhelming majority of slots are unrelated Arweave
 %% traffic, so the classification below is ordered by cost: compare a single
@@ -178,15 +166,17 @@ make_offer(Base, Body, Height, Opts) ->
         {ok, Quantity} ?= amount(<<"offer-quantity">>, Body, Opts),
         {ok, Asking} ?= amount(<<"asking">>, Body, Opts),
         {ok, Fee} ?= amount(<<"minimum-fee">>, Body, Opts),
+        {ok, Deposit} ?= amount(<<"deposit">>, Body, Opts),
         {ok, Deadline} ?= amount(<<"deadline">>, Body, Opts),
         true ?= Quantity >= 1,
         true ?= Asking >= 1,
         true ?= Fee >= 0,
+        true ?= Deposit >= 0,
         true ?= Deadline >= 1,
-        % An offer asks only that the seller hold what they are offering. A
-        % seller whose whole holding is the thing being sold -- the single unit
-        % of a name -- has nothing left to stake, and asking for more would put
-        % a name beyond sale.
+        % An offer asks only that the seller hold what they are offering: the
+        % collateral is the buyer's to put up, not the seller's. A seller whose
+        % whole holding is the thing being sold -- the single unit of a name --
+        % can therefore still make one.
         true ?= balance(Base, Seller, Opts) >= Quantity,
         OrderID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
         not_found ?= hb_maps:get(OrderID, order_book(Base, Opts), not_found, Opts),
@@ -206,6 +196,7 @@ make_offer(Base, Body, Height, Opts) ->
                 <<"quantity">> => Quantity,
                 <<"asking">> => Asking,
                 <<"minimum-fee">> => Fee,
+                <<"deposit">> => Deposit,
                 <<"deadline">> => Deadline
             },
             Opts
@@ -220,15 +211,16 @@ make_offer(Base, Body, Height, Opts) ->
 cancel_order(Base, Body, Height, Opts) ->
     maybe
         {ok, Signer} ?= signer(Body, Opts),
-        {ok, Order} ?= find_order(Base, Body, Opts),
+        {ok, Found} ?= find_order(Base, Body, Opts),
+        false ?= reserved(Found, Height),
+        {Taken, Order} = forfeit(Base, Found, Height, Opts),
         #{
             <<"order-id">> := OrderID,
             <<"creator">> := Signer,
             <<"quantity">> := Quantity
         } ?= Order,
-        false ?= reserved(Order, Height),
         ?event({swap_order_cancelled, {order, OrderID}}),
-        drop_order(credit(Base, Signer, Quantity, Opts), Order, Opts)
+        drop_order(credit(Taken, Signer, Quantity, Opts), Order, Opts)
     else
         Refused -> refused(Base, <<"cancel-order">>, Refused)
     end.
@@ -247,25 +239,29 @@ cancel_order(Base, Body, Height, Opts) ->
 register_interest(Base, Body, Height, Opts) ->
     maybe
         {ok, Buyer} ?= signer(Body, Opts),
-        {ok, Order} ?= find_order(Base, Body, Opts),
-        false ?= reserved(Order, Height),
+        {ok, Found} ?= find_order(Base, Body, Opts),
+        false ?= reserved(Found, Height),
+        {Taken, Order} = forfeit(Base, Found, Height, Opts),
         #{
             <<"order-id">> := OrderID,
             <<"minimum-fee">> := Fee,
+            <<"deposit">> := Deposit,
             <<"deadline">> := Deadline
         } ?= Order,
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"reward">>, 0, Opts)),
         true ?= Paid >= Fee,
+        true ?= balance(Taken, Buyer, Opts) >= Deposit,
         Until = Height + Deadline,
         ?event(
             {swap_interest_registered,
                 {order, OrderID},
                 {buyer, Buyer},
+                {deposit, Deposit},
                 {until, Until}
             }
         ),
         put_order(
-            Base,
+            debit(Taken, Buyer, Deposit, Opts),
             Order#{ <<"buyer">> => Buyer, <<"reserved-until">> => Until },
             Opts
         )
@@ -288,13 +284,13 @@ register_interest(Base, Body, Height, Opts) ->
 %% longer there to give, and the AR is not there to refund.
 payment(Base, Body, Target, Height, Opts) ->
     maybe
-        {ok, Order} ?= find_order(Base, Body, Opts),
+        {ok, Found} ?= find_order(Base, Body, Opts),
         #{
             <<"order-id">> := OrderID,
             <<"creator">> := Creator,
             <<"quantity">> := Quantity,
             <<"asking">> := Asking
-        } ?= Order,
+        } ?= Found,
         true ?= Target =:= Creator,
         {ok, Buyer} ?= signer(Body, Opts),
         % A seller completing their own order would take the goods straight back
@@ -303,15 +299,29 @@ payment(Base, Body, Target, Height, Opts) ->
         false ?= Buyer =:= Creator,
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)),
         true ?= Paid >= Asking,
-        true ?= claimable(Order, Buyer, Height),
+        true ?= claimable(Found, Buyer, Height),
+        % A payer who reserved the order gets their pledge back with the goods;
+        % a stale pledge on an order they are taking from under went to the
+        % seller on the way past, so there is nothing of theirs to return.
+        {Taken, Order} = forfeit(Base, Found, Height, Opts),
+        Pledged =
+            case Order of
+                #{ <<"buyer">> := Buyer } -> hb_maps:get(<<"deposit">>, Order, 0, Opts);
+                _ -> 0
+            end,
         ?event(
             {swap_order_settled,
                 {order, OrderID},
                 {buyer, Buyer},
-                {quantity, Quantity}
+                {quantity, Quantity},
+                {returned, Pledged}
             }
         ),
-        drop_order(credit(Base, Buyer, Quantity, Opts), Order, Opts)
+        drop_order(
+            credit(credit(Taken, Buyer, Quantity, Opts), Buyer, Pledged, Opts),
+            Order,
+            Opts
+        )
     else
         Refused -> refused(Base, <<"payment">>, Refused)
     end.
@@ -332,6 +342,28 @@ refused(Base, Action, Reason) ->
 reserved(#{ <<"reserved-until">> := Until }, Height) -> Height =< Until;
 reserved(_Order, _Height) -> false.
 
+%% @doc Take the pledge on a reservation the height has outrun. It is the
+%% seller's: they were held all that time, and the buyer who held them did not
+%% pay. A hold that still stands is left alone, so a buyer settling their own
+%% reservation keeps their pledge and gets it back with the goods.
+%%
+%% Nothing sweeps for these. A pledge is taken the next time its order is
+%% touched, and one nobody comes back for stays escrowed against the order --
+%% still the seller's for the asking, since withdrawing the offer takes it.
+forfeit(Base, Order = #{ <<"buyer">> := _, <<"creator">> := Seller }, Height, Opts) ->
+    case reserved(Order, Height) of
+        % The hold still stands, so the pledge is still the buyer's.
+        true -> {Base, Order};
+        false ->
+            Deposit = hb_maps:get(<<"deposit">>, Order, 0, Opts),
+            ?event({swap_pledge_forfeited, {seller, Seller}, {deposit, Deposit}}),
+            {
+                credit(Base, Seller, Deposit, Opts),
+                hb_maps:without([<<"buyer">>, <<"reserved-until">>], Order, Opts)
+            }
+    end;
+forfeit(Base, Order, _Height, _Opts) -> {Base, Order}.
+
 %% @doc Whether an order's goods are a payer's to take: an order nobody holds is
 %% first-come, and a held one is its buyer's until the hold lapses.
 claimable(Order = #{ <<"buyer">> := Buyer }, Payer, Height) ->
@@ -339,17 +371,6 @@ claimable(Order = #{ <<"buyer">> := Buyer }, Payer, Height) ->
 claimable(_Order, _Payer, _Height) -> true.
 
 %%% State helpers
-
-%% @doc Read a key of the process's own state.
-%%
-%% While a slot is being computed the state carries this device, so a plain read
-%% of one of its keys would resolve that key *through this device* and land back
-%% in `compute'. Every read of the state is therefore taken as a message. Writes
-%% have the same hazard one level down -- setting a nested path resolves the
-%% keys above it on the way -- so the device only ever writes whole top-level
-%% keys.
-state(Key, Base, Default, Opts) ->
-    hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
 %% @doc Read a value from the real layer-1 transaction fields recorded in the
 %% `tx@1.0' commitment. Top-level keys may come from tags of the same name
@@ -388,7 +409,7 @@ amount(Key, Body, Opts) ->
 
 %%% The order book
 
-order_book(Base, Opts) -> state(<<"orders">>, Base, #{}, Opts).
+order_book(Base, Opts) -> hb_ao:get(<<"orders">>, Base, #{}, Opts).
 
 %% @doc Read the order a message names, if the process holds it.
 %%
@@ -436,7 +457,7 @@ drop_order(Base, #{ <<"order-id">> := OrderID }, Opts) ->
 %% Only the one entry is read: the ledger may be large, and the rest of it is
 %% none of this device's business.
 balance(Base, Address, Opts) ->
-    hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
+    hb_util:int(hb_ao:get([?BALANCES, Address], Base, 0, Opts)).
 
 credit(Base, _Address, 0, _Opts) -> Base;
 credit(Base, Address, Amount, Opts) ->
@@ -445,7 +466,7 @@ credit(Base, Address, Amount, Opts) ->
             hb_maps:put(
                 Address,
                 balance(Base, Address, Opts) + Amount,
-                state(?BALANCES, Base, #{}, Opts),
+                hb_ao:get(?BALANCES, Base, #{}, Opts),
                 Opts
             )
     }.
@@ -502,6 +523,9 @@ apply_tx(Base, Body, Height, Opts) ->
     New.
 
 offer(Wallet, Quantity, Asking, Deadline) ->
+    offer(Wallet, Quantity, Asking, Deadline, 0).
+
+offer(Wallet, Quantity, Asking, Deadline, Deposit) ->
     tx(
         Wallet,
         #{
@@ -509,9 +533,25 @@ offer(Wallet, Quantity, Asking, Deadline) ->
             <<"action">> => <<"make-offer">>,
             <<"offer-quantity">> => hb_util:bin(Quantity),
             <<"asking">> => hb_util:bin(Asking),
-            <<"deadline">> => hb_util:bin(Deadline)
+            <<"deadline">> => hb_util:bin(Deadline),
+            <<"deposit">> => hb_util:bin(Deposit)
         }
     ).
+
+%% @doc An offer asking five units of collateral, against a buyer who holds
+%% enough to pledge it. Only a fungible supply can put one up -- a name's whole
+%% supply is the single unit on offer.
+collateralised(Opts) ->
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Opened =
+        apply_tx(
+            base(#{ SellerAddr => 100, BuyerAddr => 5 }),
+            offer(Seller, 10, 500, 20, 5),
+            100,
+            Opts
+        ),
+    {Seller, SellerAddr, Buyer, BuyerAddr, Opened, order_id(Opened, Opts)}.
 
 order_action(Wallet, Action, OrderID) ->
     tx(
@@ -667,37 +707,6 @@ tags_are_not_transaction_fields_test() ->
     Result = apply_tx(Opened, TaggedPay, 120, Opts),
     ?assertEqual([OrderID], [order_id(Result, Opts)]),
     ?assertEqual(0, balance(Result, BuyerAddr, Opts)).
-
-%% @doc A stranger's transaction may ask to be routed anywhere, including to
-%% keys `~message@1.0' would otherwise answer. Each is applied like any other
-%% message rather than handing back the state, a list of key names, or an info
-%% map as the new state.
-stray_paths_are_applied_test() ->
-    Opts = test_opts(),
-    {Seller, SellerAddr} = party(),
-    {Stranger, _} = party(),
-    Opened = opened(Seller, SellerAddr, Opts),
-    lists:foreach(
-        fun(Path) ->
-            {ok, State} =
-                hb_ao:resolve(
-                    Opened#{ <<"device">> => <<"arweave-swap@1.0">> },
-                    #{
-                        <<"path">> => Path,
-                        <<"process">> => ?PROCESS,
-                        <<"slot">> => 2,
-                        <<"block-height">> => 150,
-                        ?BALANCES => #{ SellerAddr => 10000000 },
-                        <<"body">> =>
-                            tx(Stranger, #{ <<"target">> => <<"somebody-else">> })
-                    },
-                    Opts
-                ),
-            ?assertEqual(90, balance(State, SellerAddr, Opts)),
-            ?assertEqual(1, length(book(State, Opts)))
-        end,
-        [<<"set">>, <<"keys">>, <<"info">>, <<"withdraw-everything">>]
-    ).
 
 %% @doc Opening an offer moves the goods into escrow.
 make_offer_escrows_test() ->
@@ -1027,7 +1036,14 @@ supply_is_conserved_test() ->
             balance(State, SellerAddr, Opts) + balance(State, BuyerAddr, Opts)
                 + lists:sum(
                     [
+                        % Goods are escrowed by every offer; collateral only by
+                        % one somebody has pledged against.
                         maps:get(<<"quantity">>, Order)
+                            + case Order of
+                                #{ <<"buyer">> := _ } ->
+                                    maps:get(<<"deposit">>, Order);
+                                _ -> 0
+                            end
                     ||
                         Order <- book(State, Opts)
                     ]
@@ -1035,7 +1051,7 @@ supply_is_conserved_test() ->
         end,
     Before = base(#{ SellerAddr => 100, BuyerAddr => 5 }),
     ?assertEqual(105, Held(Before)),
-    Opened = apply_tx(Before, offer(Seller, 10, 500, 20), 100, Opts),
+    Opened = apply_tx(Before, offer(Seller, 10, 500, 20, 5), 100, Opts),
     ?assertEqual(105, Held(Opened)),
     OrderID = order_id(Opened, Opts),
     Reserved =
@@ -1044,6 +1060,66 @@ supply_is_conserved_test() ->
     Settled = apply_tx(Reserved, pay(Buyer, SellerAddr, 500, OrderID), 115, Opts),
     ?assertEqual(105, Held(Settled)),
     ?assertEqual(105, Held(tick(Reserved, 300, Opts))).
+
+%% @doc Collateral is pledged out of the buyer's own balance to reserve an
+%% order, and comes back to them with the goods when they pay.
+collateral_is_pledged_and_returned_test() ->
+    Opts = test_opts(),
+    {_, SellerAddr, Buyer, BuyerAddr, Opened, OrderID} = collateralised(Opts),
+    Reserved = reserve(Opened, Buyer, OrderID, 110, Opts),
+    ?assertEqual(0, balance(Reserved, BuyerAddr, Opts)),
+    Settled = apply_tx(Reserved, pay(Buyer, SellerAddr, 500, OrderID), 115, Opts),
+    ?assertEqual([], book(Settled, Opts)),
+    % The goods, and the collateral back.
+    ?assertEqual(15, balance(Settled, BuyerAddr, Opts)),
+    ?assertEqual(90, balance(Settled, SellerAddr, Opts)).
+
+%% @doc A buyer who cannot cover the collateral cannot reserve. This is why the
+%% pledge is denominated in the token: it is the only thing this device can
+%% decline to honour, where AR settles on the weave whatever it decides.
+collateral_must_be_held_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Opened =
+        apply_tx(
+            base(#{ SellerAddr => 100, BuyerAddr => 4 }),
+            offer(Seller, 10, 500, 20, 5),
+            100,
+            Opts
+        ),
+    Tried = reserve(Opened, Buyer, order_id(Opened, Opts), 110, Opts),
+    ?assertEqual(false, maps:is_key(<<"buyer">>, only_order(Tried, Opts))),
+    ?assertEqual(4, balance(Tried, BuyerAddr, Opts)).
+
+%% @doc A reservation that lapses unpaid forfeits its collateral to the seller,
+%% who was held all that time. Nothing sweeps for it: the forfeit is taken the
+%% next time the order is touched -- the seller withdrawing it, another buyer
+%% reserving it, or a payment taking it from under.
+lapsed_collateral_is_forfeit_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr, Buyer, BuyerAddr, Opened, OrderID} = collateralised(Opts),
+    Reserved = reserve(Opened, Buyer, OrderID, 110, Opts),
+    ?assertEqual(0, balance(Reserved, BuyerAddr, Opts)),
+    % Withdrawn after the window: the seller takes back the goods and the pledge.
+    Cancelled = cancel(Reserved, Seller, OrderID, 131, Opts),
+    ?assertEqual([], book(Cancelled, Opts)),
+    ?assertEqual(105, balance(Cancelled, SellerAddr, Opts)),
+    ?assertEqual(0, balance(Cancelled, BuyerAddr, Opts)),
+    % Or reserved by somebody else, who pledges their own.
+    {Other, OtherAddr} = party(),
+    Relet =
+        reserve(credit(Reserved, OtherAddr, 5, Opts), Other, OrderID, 131, Opts),
+    ?assertEqual(95, balance(Relet, SellerAddr, Opts)),
+    ?assertEqual(0, balance(Relet, OtherAddr, Opts)),
+    ?assertEqual(OtherAddr, maps:get(<<"buyer">>, only_order(Relet, Opts))),
+    % Or taken from under by a payment, which returns nothing to the buyer who
+    % walked away.
+    Taken = apply_tx(Reserved, pay(Other, SellerAddr, 500, OrderID), 131, Opts),
+    ?assertEqual([], book(Taken, Opts)),
+    ?assertEqual(95, balance(Taken, SellerAddr, Opts)),
+    ?assertEqual(10, balance(Taken, OtherAddr, Opts)),
+    ?assertEqual(0, balance(Taken, BuyerAddr, Opts)).
 
 %% @doc An order's figures are compared with the height of a later slot, and the
 %% state between two slots is written to the process cache and read back. A
