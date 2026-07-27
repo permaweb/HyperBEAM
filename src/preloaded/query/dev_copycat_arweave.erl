@@ -387,7 +387,7 @@ mode_rank(full) -> 3;
 mode_rank(<<"shallow">>) -> mode_rank(shallow);
 mode_rank(<<"deep">>) -> mode_rank(deep);
 mode_rank(<<"full">>) -> mode_rank(full);
-mode_rank(_Other) -> -1.
+mode_rank(_Other) -> 0.
 
 %% @doc Cache only the data-free L1 transaction headers from the block.
 maybe_index_ids(Block, headers, Opts) ->
@@ -1116,6 +1116,12 @@ headers_mode_test() ->
         <<"arweave-index-workers">> => 2
     },
     LocalOpts = hb_store:scope(Opts, local),
+    ok = hb_store:write(
+        TestStore,
+        #{ <<"block/", BlockBin/binary, "/mode">> => <<"shallow">> },
+        Opts
+    ),
+    ?assertNot(is_block_indexed(Block, headers, Opts)),
     ?assertEqual({error, not_found}, hb_cache:read(ZeroTXID, LocalOpts)),
     {ok, Block} =
         hb_ao:resolve(
@@ -1146,7 +1152,7 @@ headers_mode_test() ->
         [ZeroTXID, DataTXID]
     ),
     ?assert(is_block_indexed(Block, headers, Opts)),
-    ?assertNot(is_block_indexed(Block, shallow, Opts)).
+    ?assert(is_block_indexed(Block, shallow, Opts)).
 
 index_ids_test_parallel() ->
     %% Test block: https://viewblock.io/arweave/block/1827942
