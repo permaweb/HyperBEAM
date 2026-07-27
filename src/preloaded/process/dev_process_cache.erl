@@ -10,13 +10,15 @@
 %% @doc Read the result of a process at a given slot.
 read(ProcID, Opts) ->
     hb_util:ok(latest(ProcID, Opts)).
-read(ProcID, SlotRef, Opts) ->
+read(ProcID, SlotRef, RawOpts) ->
+    Opts = lib_process:cache_opts(RawOpts),
     ?event({reading_computed_result, ProcID, SlotRef}),
     Path = path(ProcID, SlotRef, Opts),
     hb_cache:read(Path, Opts).
 
 %% @doc Write a process computation result to the cache.
-write(ProcID, Slot, Msg, Opts) ->
+write(ProcID, Slot, Msg, RawOpts) ->
+    Opts = lib_process:cache_opts(RawOpts),
     % Write the item to the cache in the root of the store.
     {ok, Root} = hb_cache:write(hb_private:reset(Msg), Opts),
     % Link the item to the path in the store by slot number.
@@ -65,16 +67,7 @@ latest(ProcID, Opts) -> latest(ProcID, [], Opts).
 latest(ProcID, RequiredPath, Opts) ->
     latest(ProcID, RequiredPath, undefined, Opts).
 latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
-    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
-    % Normalize the store descriptor to a list of stores.
-    UnscopedStore =
-        case hb_opts:get(store, no_viable_store, RawOpts) of
-            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
-            Other -> Other
-        end,
-    % Apply the scope to the store and update the options message.
-    ScopedStore = hb_store:scope(UnscopedStore, Scope),
-    Opts = RawOpts#{ <<"store">> => ScopedStore },
+    Opts = lib_process:cache_opts(RawOpts),
     % Convert the required path to a list of _binary_ keys.
     RequiredPath =
         case RawRequiredPath of
@@ -230,3 +223,27 @@ find_latest_outputs(Opts) ->
     ?event(read_latest_slot_with_deep_key),
     {ok, 1, ReadBase} = latest(ProcID, [], 1, Opts),
     ?assert(hb_message:match(Base, ReadBase)).
+
+%% @doc Process cache writes go only to `process-store' when configured.
+isolated_process_store_test() ->
+    MainStore = hb_test_utils:test_store(hb_store_fs, <<"process-main">>),
+    ProcessStore = hb_test_utils:test_store(hb_store_fs, <<"process-isolated">>),
+    Opts = #{
+        <<"store">> => [MainStore],
+        <<"process-store">> => [ProcessStore]
+    },
+    hb_store:start(MainStore),
+    hb_store:start(ProcessStore),
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Msg = #{ <<"results">> => #{ <<"ok">> => <<"stored">> } },
+    {ok, Path} = write(ProcID, 1, Msg, Opts),
+    MainOpts = #{ <<"store">> => [MainStore] },
+    ?assertMatch({error, not_found}, hb_cache:read(Path, MainOpts)),
+    ?assertMatch({ok, _}, read(ProcID, 1, Opts)),
+    ?assertMatch({ok, 1, _}, latest(ProcID, Opts)),
+    hb_store:reset(MainStore),
+    ?assertMatch({ok, _}, read(ProcID, 1, Opts)),
+    ?assertMatch({ok, 1, _}, latest(ProcID, Opts)),
+    hb_store:reset(ProcessStore),
+    ?assertMatch({error, not_found}, read(ProcID, 1, Opts)),
+    ?assertMatch({error, not_found}, latest(ProcID, Opts)).
