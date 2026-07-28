@@ -916,9 +916,9 @@ to_message(Path = <<"/unconfirmed_tx/", ID/binary>>, <<"GET">>, Result, LogExtra
     to_tx_message(pending, ID, Path, Result, LogExtra, Opts);
 to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
     to_tx_message(tx, TXID, Path, Result, LogExtra, Opts);
-to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
-    {ok, Body};
+    {ok, maps:get(<<"body">>, Response, <<>>)};
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     Block =

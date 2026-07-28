@@ -653,7 +653,7 @@ base_layer_offset(Store, ID, Opts) ->
 base_layer_blocks(Located, Opts) ->
     {ok,
         [
-            {#{ <<"block-height">> => Height }, ID}
+            {all_mode_detail(Height), ID}
         ||
             {Height, ID} <- Located,
             data_free(ID, Opts)
@@ -791,13 +791,18 @@ mode(Process, Opts) ->
 %% modes that sort by weave position, its offset. Only those modes index the
 %% spawn block to read that offset.
 slot_zero(<<"all">>, _ProcID, SpawnHeight, _Opts) ->
-    {ok, #{ <<"block-height">> => SpawnHeight }};
+    {ok, all_mode_detail(SpawnHeight)};
 slot_zero(_Mode, ProcID, SpawnHeight, Opts) ->
     maybe
         ok ?= ensure_offsets(SpawnHeight, SpawnHeight, Opts),
         {ok, Offset} ?= tx_offset(ProcID, Opts),
         {ok, #{ <<"offset">> => Offset }}
     end.
+
+%% @doc Every message in an `all'-mode schedule is process input, not a request
+%% whose `path' may select an execution-device key.
+all_mode_detail(Height) ->
+    #{ <<"block-height">> => Height, <<"path">> => <<"compute">> }.
 
 %% @doc Read an L1 transaction as a header-only message from the node's stores.
 %% `~copycat@1.0/arweave' caches the (data-free) header locally while indexing,
@@ -1053,10 +1058,11 @@ mode_test() ->
         mode(#{ <<"scheduler-mode">> => <<"sideways">> }, #{})
     ).
 
-%% @doc A process sequenced by the whole chain has a clock from slot 0.
+%% @doc A process sequenced by the whole chain has a clock from slot 0, and
+%% every slot resolves `compute'.
 slot_zero_test() ->
     ?assertEqual(
-        {ok, #{ <<"block-height">> => 3 }},
+        {ok, all_mode_detail(3)},
         slot_zero(<<"all">>, ignored, 3, #{})
     ).
 
@@ -1116,7 +1122,7 @@ base_layer_blocks_test() ->
     {ok, _} = hb_cache:write(DataFree, Opts),
     {ok, _} = hb_cache:write(DataBearing, Opts),
     ?assertEqual(
-        {ok, [{#{ <<"block-height">> => 10 }, DataFreeID}]},
+        {ok, [{all_mode_detail(10), DataFreeID}]},
         base_layer_blocks(
             [{10, DataFreeID}, {10, DataBearingID}, {10, <<"missing">>}],
             Opts
@@ -1133,7 +1139,7 @@ all_mode_assignment_test() ->
     ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Msg =
         hb_message:commit(
-            #{ <<"target">> => ProcID },
+            #{ <<"path">> => <<"keys">>, <<"target">> => ProcID },
             Opts,
             #{ <<"commitment-device">> => <<"tx@1.0">> }
         ),
@@ -1141,7 +1147,7 @@ all_mode_assignment_test() ->
         write_assignment(
             ProcID,
             1,
-            #{ <<"block-height">> => 1958986 },
+            all_mode_detail(1958986),
             Msg,
             Opts
         ),
@@ -1150,7 +1156,8 @@ all_mode_assignment_test() ->
     ?assertEqual(
         1958986,
         hb_util:int(hb_ao:get(<<"block-height">>, Assignment, Opts))
-    ).
+    ),
+    ?assertEqual(<<"compute">>, hb_ao:get(<<"path">>, Assignment, Opts)).
 
 %% @doc The mode is pinned in the persisted state, so a schedule can never be
 %% half-derived in each mode.

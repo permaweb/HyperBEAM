@@ -36,18 +36,14 @@
 %%% process is handed that order already: the latest `set' in slot order wins,
 %%% and there is nothing to declare and nothing to tie-break.
 %%%
-%%% Reads are paths into the state -- `/now/balances/<address>',
-%%% `/now/total-supply', `/now/value/<key>' -- and not device keys, which is how
-%%% `token-1.0' reads too. The device deliberately exports no key list: a name
-%%% is meant to be sold by `~arweave-swap@1.0', which requires its process to be
-%%% sequenced by every data-free transaction on Arweave, so the key a slot
-%%% resolves is chosen by a stranger's `path' tag. An exported `balance' key
-%%% would let a passer-by's transaction hand back a balance as the new process
-%%% state.
+%%% Reads fall through to the linked value, as they do in `~reference@1.0'.
+%%% Every `all'-mode assignment is explicitly routed to `compute' by
+%%% `~arweave-scheduler@1.0', so a base-layer transaction's `path' is data and
+%%% cannot select a device key.
 -module(dev_carrier).
 -implements(<<"carrier@1.0">>).
 %%% AO-Core API functions:
--export([info/0, compute/3, set/3]).
+-export([info/0, compute/3, init/3, snapshot/3, normalize/3, request/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -59,16 +55,41 @@
 %%% points. The whole supply, unless the token says otherwise.
 -define(DEFAULT_THRESHOLD_BPS, 10000).
 
-%% @doc Every key routes to `compute': the schedule drives this device, and
-%% under `~arweave-scheduler@1.0''s `all' mode the key a slot resolves comes
-%% from a stranger's `path' tag. See `dev_arweave_swap:info/0', which carries
-%% the same reasoning at length.
+%% @doc Resolve unimplemented keys through the value carried by the name.
 info() ->
-    #{ default => fun router/4 }.
+    #{
+        default => fun get/4,
+        excludes => [<<"keys">>, <<"set">>, <<"set-path">>, <<"remove">>]
+    }.
 
-%% @doc Apply any scheduled message, whatever it asked to be routed to.
-router(_Key, Base, Assignment, Opts) ->
-    compute(Base, Assignment, Opts).
+%% @doc The carrier state is already a plain message.
+init(Base, _Req, _Opts) -> {ok, Base}.
+snapshot(Base, _Req, _Opts) -> {ok, Base}.
+normalize(Base, _Req, _Opts) -> {ok, Base}.
+
+%% @doc Resolve a key through the message the name currently carries.
+get(Key, Base, Req, Opts) ->
+    hb_ao:resolve(value_base(value(Base, Opts), Opts), Req#{ <<"path">> => Key }, Opts).
+
+%% @doc Dereference a carrier process selected by an earlier request hook.
+request(_Base, Req, Opts) ->
+    maybe
+        {ok, [Process | Rest]} ?= hb_maps:find(<<"body">>, Req, Opts),
+        true ?= is_map(Process),
+        <<"carrier@1.0">> ?=
+            hb_maps:get(<<"execution-device">>, Process, undefined, Opts),
+        {ok, State} ?=
+            hb_ao:resolve(
+                Process,
+                (hb_maps:get(<<"request">>, Req, #{}, Opts))#{
+                    <<"path">> => <<"now">>
+                },
+                Opts
+            ),
+        {ok, Req#{ <<"body">> => [value_base(value(State, Opts), Opts) | Rest] }}
+    else
+        _ -> {ok, Req}
+    end.
 
 %% @doc Apply one assignment to the name's state.
 %%
@@ -337,22 +358,6 @@ credit(Base, Address, Amount, Opts) ->
 
 debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 
-%% @doc Setting the device is honoured, and nothing else is: `lib_process' puts
-%% the process's own device back after every slot, and reading this state as a
-%% message is itself a device set. Anything else is a scheduled message and is
-%% applied as one. See `dev_arweave_swap:set/3'.
-set(Base, Req, Opts) ->
-    case hb_maps:keys(Req, Opts) -- [<<"path">>, <<"set-mode">>] of
-        [<<"device">>] ->
-            {ok,
-                Base#{
-                    <<"device">> =>
-                        hb_maps:get(<<"device">>, Req, undefined, Opts)
-                }
-            };
-        _ -> compute(Base, Req, Opts)
-    end.
-
 %% @doc The single signer of a message. A message with any other number of
 %% signers is not attributable to one party, so it can neither move the unit nor
 %% speak for the name.
@@ -455,6 +460,22 @@ held_by(Base, Address, Opts) -> balance(Base, Address, Opts).
 
 value(Base, Opts) ->
     hb_cache:ensure_all_loaded(state(?VALUE, Base, #{}, Opts), Opts).
+
+%% @doc Follow the pointer used by an `initial-value', or a directly linked
+%% value supplied by a later `set'.
+value_base(ID, Opts) when ?IS_ID(ID) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} -> Msg;
+        _ -> ID
+    end;
+value_base(Link, Opts) when ?IS_LINK(Link) ->
+    hb_cache:ensure_loaded(Link, Opts);
+value_base(Value, Opts) ->
+    case hb_maps:get(<<"target">>, Value, not_found, Opts) of
+        Target when ?IS_ID(Target); ?IS_LINK(Target) ->
+            value_base(Target, Opts);
+        _ -> Value
+    end.
 
 %% @doc A foreign transaction's device cannot interpret absent envelope fields.
 foreign_device_is_data_test() ->
@@ -786,34 +807,72 @@ without_a_working_swap_device_test() ->
         ]
     ).
 
-%% @doc A stranger's transaction may ask to be routed anywhere, including to
-%% keys `~message@1.0' would otherwise answer. Each is applied like any other
-%% message rather than handing back the state, a list of key names, or an info
-%% map as the new state.
-reserved_paths_are_applied_test() ->
+%% @doc Unknown keys resolve through the name's current value.
+default_reads_value_test() ->
     Opts = test_opts(),
-    {_, OwnerAddr} = party(),
-    {Stranger, _} = party(),
-    Base = name_held_by(OwnerAddr),
-    lists:foreach(
-        fun(Path) ->
-            {ok, State} =
-                hb_ao:resolve(
-                    Base#{ <<"device">> => <<"carrier@1.0">> },
-                    #{
-                        <<"path">> => Path,
-                        <<"process">> => ?PROCESS,
-                        <<"slot">> => 2,
-                        ?BALANCES => #{ OwnerAddr => 1000000 },
-                        <<"body">> =>
-                            tx(Stranger, #{ <<"target">> => <<"somebody-else">> })
-                    },
-                    Opts
-                ),
-            ?assertEqual(1, held_by(State, OwnerAddr, Opts))
-        end,
-        [<<"set">>, <<"keys">>, <<"info">>, <<"balances">>, <<"anything-else">>]
+    ?assertEqual(
+        {ok, <<"hello">>},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"carrier@1.0">>,
+                ?VALUE => #{ <<"greeting">> => <<"hello">> }
+            },
+            <<"greeting">>,
+            Opts
+        )
     ).
+
+%% @doc Initial values are pointers to messages, not the pointer wrapper.
+initial_value_resolves_target_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    Target = #{ <<"greeting">> => <<"hello">> },
+    {ok, TargetID} = hb_cache:write(Target, Opts),
+    ?assertEqual(
+        {ok, <<"hello">>},
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"carrier@1.0">>,
+                ?VALUE => #{ <<"target">> => TargetID }
+            },
+            <<"greeting">>,
+            Opts
+        )
+    ).
+
+%% @doc The request hook unwraps carrier processes and ignores other bases.
+request_dereferences_process_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    Target = #{ <<"greeting">> => <<"hello">> },
+    {ok, TargetID} = hb_cache:write(Target, Opts),
+    State = #{ ?VALUE => #{ <<"target">> => TargetID } },
+    Process =
+        #{
+            <<"device">> =>
+                #{
+                    now =>
+                        fun(_Base, _Req, _CallOpts) ->
+                            {ok, State}
+                        end
+                },
+            <<"execution-device">> => <<"carrier@1.0">>
+        },
+    Req = #{ <<"request">> => #{}, <<"body">> => [Process] },
+    {ok, Res} = request(#{}, Req, Opts),
+    ?assertEqual(
+        <<"hello">>,
+        hb_ao:get(
+            [<<"body">>, 1, <<"greeting">>],
+            Res,
+            not_found,
+            Opts
+        )
+    ),
+    IDReq = Req#{ <<"body">> => [TargetID] },
+    ?assertEqual({ok, IDReq}, request(#{}, IDReq, Opts)).
 
 %%% The permanent fixtures
 %%%
