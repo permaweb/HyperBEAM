@@ -82,7 +82,7 @@ request(_Base, Req, Opts) ->
             hb_ao:resolve(
                 Process,
                 (hb_maps:get(<<"request">>, Req, #{}, Opts))#{
-                    <<"path">> => <<"now">>
+                    <<"path">> => <<"compute">>
                 },
                 Opts
             ),
@@ -853,7 +853,7 @@ request_dereferences_process_test() ->
         #{
             <<"device">> =>
                 #{
-                    now =>
+                    compute =>
                         fun(_Base, _Req, _CallOpts) ->
                             {ok, State}
                         end
