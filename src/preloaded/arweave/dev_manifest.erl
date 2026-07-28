@@ -63,24 +63,28 @@ route(ID, _, _, Opts) when ?IS_ID(ID) ->
     hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
-    {ok, Manifest} = manifest(M1, Key, Opts),
-    {ok, Res} = maps:find(<<"paths">>, Manifest),
-    case maps:get(Key, Res, no_path_match) of
-        no_path_match ->
-            % Support materialized view in some JavaScript frameworks.
-            case hb_opts:get(manifest_404, fallback, Opts) of
-                error ->
-                    ?event({manifest_404_error, {key, Key}}),
-                    {error, not_found};
-                fallback ->
-                    ?event({manifest_fallback, {key, Key}}),
-                    route(<<"index">>, M1, M2, Opts)
+    case manifest(M1, Key, Opts) of
+        {ok, Manifest} ->
+            {ok, Res} = maps:find(<<"paths">>, Manifest),
+            case maps:get(Key, Res, no_path_match) of
+                no_path_match ->
+                    % Support materialized view in some JavaScript frameworks.
+                    case hb_opts:get(manifest_404, fallback, Opts) of
+                        error ->
+                            ?event({manifest_404_error, {key, Key}}),
+                            {error, not_found};
+                        fallback ->
+                            ?event({manifest_fallback, {key, Key}}),
+                            route(<<"index">>, M1, M2, Opts)
+                    end;
+                Result ->
+                    ?event(debug_manifest, {manifest_lookup_success, {key, Key}, {result, Result}}),
+                    try {ok, hb_cache:ensure_loaded(Result, Opts)}
+                    catch _:_:_ -> {error, not_found}
+                    end
             end;
-        Result ->
-            ?event({manifest_lookup_success, {key, Key}, {result, Result}}),
-            try {ok, hb_cache:ensure_loaded(Result, Opts)}
-            catch _:_:_ -> {error, not_found}
-            end
+        Error ->
+            Error
     end.
 
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
@@ -165,20 +169,24 @@ maybe_cast_manifest(Msg, Opts) ->
 %% @doc Find and deserialize a manifest from the given base, returning a 
 %% message with the `~manifest@1.0' device.
 manifest(Base, Path, Opts) ->
-    JSON =
-        hb_maps:get_first(
+    case hb_maps:get_first(
             [
                 {Base, <<"data">>},
                 {Base, <<"body">>}
             ],
             not_found,
             Opts
-    ),
-    StructuredManifest = #{ <<"paths">> := StructuredPaths } =
-        decode_manifest(JSON, Path, Opts),
-    LinkifiedPaths = linkify(StructuredPaths, Opts),
-    Structured = StructuredManifest#{ <<"paths">> => LinkifiedPaths },
-    {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}.
+    ) of
+        not_found ->
+            {error, not_found};
+        JSON ->
+            ?event(error, {manifest, JSON}),
+            StructuredManifest = #{ <<"paths">> := StructuredPaths } =
+                decode_manifest(JSON, Path, Opts),
+            LinkifiedPaths = linkify(StructuredPaths, Opts),
+            Structured = StructuredManifest#{ <<"paths">> => LinkifiedPaths },
+            {ok, Structured#{ <<"device">> => <<"manifest@1.0">> }}
+    end.
 
 %% @doc Decode a manifest while retaining only paths relevant to the current
 %% route component.
