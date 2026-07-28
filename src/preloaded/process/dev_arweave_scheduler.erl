@@ -528,6 +528,11 @@ ensure_offsets(From, To, Opts) -> index_range(<<"shallow">>, From, To, Opts).
 
 index_range(_Mode, From, To, _Opts) when From > To -> ok;
 index_range(Mode, From, To, Opts) ->
+    CopycatOpts =
+        (lib_scheduler:cache_opts(Opts))#{
+            <<"arweave-index-store">> =>
+                hb_store_arweave:store_from_opts(Opts)
+        },
     maybe
         {ok, _} ?=
             hb_ao:resolve(
@@ -536,7 +541,7 @@ index_range(Mode, From, To, Opts) ->
                     "&from=", (hb_util:bin(To))/binary,
                     "&to=", (hb_util:bin(From))/binary
                 >>,
-                no_result_cache(Opts)
+                no_result_cache(CopycatOpts)
             ),
         ok
     end.
@@ -1028,6 +1033,27 @@ reject_data_message_test() ->
             Opts
         )
     ).
+
+%% @doc Copycat writes schedule headers through the scheduler store, while the
+%% same store may be exposed read-only in the node's general store chain.
+scheduler_copycat_store_test() ->
+    Block = 1967269,
+    DataFree = <<"enIzMI_6vVcY80ZqfiCdWq56chbft3HSZnXMj7X7BdE">>,
+    SchedulerStore = hb_test_utils:test_store(),
+    IndexStore = hb_test_utils:test_store(),
+    Opts =
+        (hb_opts:default_message())#{
+            <<"store">> =>
+                [SchedulerStore#{ <<"access">> => [<<"read">>] }],
+            <<"scheduler-store">> => [SchedulerStore],
+            <<"arweave-index-store">> =>
+                #{ <<"index-store">> => [IndexStore] },
+            <<"arweave-index-workers">> => 2
+        },
+    ok = hb_store:start(SchedulerStore),
+    ok = hb_store:start(IndexStore),
+    ?assertEqual(ok, ensure_headers(Block, Block, Opts)),
+    ?assertMatch({ok, _}, hb_cache:read(DataFree, Opts)).
 
 %% @doc Base-layer annotation keeps only tx@1.0 offsets and sorts by offset.
 base_layer_offsets_test() ->
