@@ -530,6 +530,7 @@ index_range(_Mode, From, To, _Opts) when From > To -> ok;
 index_range(Mode, From, To, Opts) ->
     CopycatOpts =
         (lib_scheduler:cache_opts(Opts))#{
+            <<"arweave-index-blocks">> => true,
             <<"arweave-index-store">> =>
                 hb_store_arweave:store_from_opts(Opts)
         },
@@ -1048,11 +1049,22 @@ scheduler_copycat_store_test() ->
             <<"scheduler-store">> => [SchedulerStore],
             <<"arweave-index-store">> =>
                 #{ <<"index-store">> => [IndexStore] },
+            <<"arweave-index-blocks">> => false,
             <<"arweave-index-workers">> => 2
         },
     ok = hb_store:start(SchedulerStore),
     ok = hb_store:start(IndexStore),
     ?assertEqual(ok, ensure_headers(Block, Block, Opts)),
+    ?assertMatch(
+        {ok, _},
+        hb_ao:resolve(
+            <<
+                ?ARWEAVE_DEVICE/binary, "/block=", (hb_util:bin(Block))/binary,
+                "&only-if-cached=true"
+            >>,
+            lib_scheduler:cache_opts(Opts)
+        )
+    ),
     ?assertMatch({ok, _}, hb_cache:read(DataFree, Opts)).
 
 %% @doc Base-layer annotation keeps only tx@1.0 offsets and sorts by offset.
