@@ -646,7 +646,7 @@ now(RawBase, Req, Opts) ->
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
-                    case dev_process_cache:fresh(ProcessID, Req, Opts) of
+                    case dev_process_cache:fresh(ProcessID, LatestSlot, Req, Opts) of
                         true ->
                             LatestMsg = without_snapshot(RawLatestMsg, Opts),
                             ?event(compute_cache,

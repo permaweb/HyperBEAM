@@ -3,7 +3,9 @@
 %%% convenient interface for reading the result of a process at a given slot or
 %%% message ID.
 -module(dev_process_cache).
--export([fresh/3, latest/2, latest/3, latest/4, read/2, read/3, write/4]).
+-export([fresh/3, fresh/4]).
+-export([latest/2, latest/3, latest/4]).
+-export([read/2, read/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -40,18 +42,31 @@ write(ProcID, Slot, Msg, RawOpts) ->
         }
     ),
     hb_cache:link(Root, MsgIDPath, Opts),
-    write_refreshed_at(ProcID, Opts),
+    write_refreshed_at(ProcID, Slot, Opts),
     % Return the slot number path.
     {ok, SlotNumPath}.
 
 %% @doc Mark the process as refreshed at the current clock time.
-write_refreshed_at(ProcID, Opts) ->
-    Store = hb_opts:get(store, no_viable_store, Opts),
-    ok = hb_store:write(
-        Store,
-        #{ refreshed_path(ProcID) => hb_util:bin(clock(Opts)) },
-        Opts
-    ).
+write_refreshed_at(ProcID, Slot, Opts) ->
+    CachedSlot = latest_slot(ProcID, lib_process:scoped_opts(Opts)),
+    case CachedSlot of
+        {ok, LatestSlot} when Slot < LatestSlot ->
+            ok;
+        _ ->
+            Store = hb_opts:get(store, no_viable_store, Opts),
+            ok = hb_store:write(
+                Store,
+                #{ refreshed_path(ProcID) => refreshed_at(Slot, clock(Opts)) },
+                Opts
+            )
+    end.
+
+refreshed_at(Slot, Timestamp) ->
+    iolist_to_binary([
+        integer_to_binary(Slot),
+        <<":">>,
+        integer_to_binary(Timestamp)
+    ]).
 
 refreshed_path(ProcID) ->
     path(ProcID, <<"refreshed-at">>, #{}).
@@ -63,10 +78,21 @@ fresh(ProcID, Req, RawOpts) ->
     case effective_max_age(Req, Opts) of
         infinity ->
             true;
+        _MaxAge ->
+            case latest_slot(ProcID, Opts) of
+                {ok, Slot} -> fresh(ProcID, Slot, Req, Opts);
+                {error, not_found} -> false
+            end
+    end.
+fresh(ProcID, Slot, Req, RawOpts) ->
+    Opts = lib_process:scoped_opts(RawOpts),
+    case effective_max_age(Req, Opts) of
+        infinity ->
+            true;
         MaxAge ->
             case read_refreshed_at(ProcID, Opts) of
-                undefined -> false;
-                RefreshedAt -> clock(Opts) =< RefreshedAt + MaxAge
+                {ok, Slot, RefreshedAt} -> clock(Opts) =< RefreshedAt + MaxAge;
+                _ -> false
             end
     end.
 
@@ -74,8 +100,16 @@ fresh(ProcID, Req, RawOpts) ->
 read_refreshed_at(ProcID, Opts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     case hb_store:read(Store, refreshed_path(ProcID), Opts) of
-        {ok, Timestamp} -> hb_util:int(Timestamp);
+        {ok, RefreshedAt} -> parse_refreshed_at(RefreshedAt);
         _ -> undefined
+    end.
+
+parse_refreshed_at(RefreshedAt) ->
+    case binary:split(RefreshedAt, <<":">>) of
+        [Slot, Timestamp] ->
+            {ok, hb_util:int(Slot), hb_util:int(Timestamp)};
+        _ ->
+            undefined
     end.
 
 %% @doc Calculate the effective maximum age of a process cache entry.
@@ -149,7 +183,7 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
         end,
     ?event({required_path_converted, {proc_id, ProcID}, {required_path, RequiredPath}}),
     Path = path(ProcID, slot_root, Opts),
-    AllSlots = hb_cache:list_numbered(Path, Opts),
+    AllSlots = slots(ProcID, Opts),
     ?event({all_slots, {proc_id, ProcID}, {slots, AllSlots}}),
     CappedSlots =
         case Limit of
@@ -180,16 +214,19 @@ latest(ProcID, RawRequiredPath, Limit, RawOpts) ->
         not_found ->
             % No slot found with the necessary path was found.
             {error, not_found};
-        SlotNum ->
-            % Found. Return the slot number and the message at that slot.
-            {ok, Msg} = hb_cache:read(path(ProcID, SlotNum, Opts), Opts),
+        {ok, SlotNum, Msg} ->
             {ok, SlotNum, Msg}
     end.
 
 %% @doc Find the latest assignment with the requested path suffix.
 first_with_path(_ProcID, _Required, [], _Opts) ->
     not_found;
+first_with_path(ProcID, [], [Slot | Rest], Opts) ->
+    read_candidate(ProcID, [], Slot, Rest, Opts);
 first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts) ->
+    read_candidate(ProcID, RequiredPath, Slot, Rest, Opts).
+
+read_candidate(ProcID, RequiredPath, Slot, Rest, Opts) ->
     RawPath = path(ProcID, Slot, Opts),
     ?event({trying_slot, {slot, Slot}, {path, RawPath}}),
     case hb_cache:read(RawPath, Opts) of
@@ -200,21 +237,28 @@ first_with_path(ProcID, RequiredPath, [Slot | Rest], Opts) ->
         {error, _} = Error ->
             Error;
         {ok, Msg} ->
-            case path_exists(RequiredPath, hb_cache:ensure_all_loaded(Msg, Opts)) of
-                true -> Slot;
+            case path_exists(RequiredPath, Msg, Opts) of
+                true -> {ok, Slot, Msg};
                 false -> first_with_path(ProcID, RequiredPath, Rest, Opts)
             end
     end.
 
-path_exists([], _Msg) ->
+latest_slot(ProcID, Opts) ->
+    case lists:sort(slots(ProcID, Opts)) of
+        [] -> {error, not_found};
+        Slots -> {ok, lists:last(Slots)}
+    end.
+
+slots(ProcID, Opts) ->
+    hb_cache:list_numbered(path(ProcID, slot_root, Opts), Opts).
+
+path_exists([], _Msg, _Opts) ->
     true;
-path_exists([Key | Rest], Msg) when is_map(Msg) ->
-    case maps:find(Key, Msg) of
-        {ok, Next} -> path_exists(Rest, Next);
+path_exists([Key | Rest], Msg, Opts) ->
+    case hb_maps:find(Key, Msg, Opts) of
+        {ok, Next} -> path_exists(Rest, Next, Opts);
         error -> false
-    end;
-path_exists(_Path, _Msg) ->
-    false.
+    end.
 
 %%% Tests
 
@@ -347,6 +391,29 @@ freshness_max_age(Opts) ->
     ReadSlotResult = hb_cache:ensure_all_loaded(RawReadSlotResult, Opts),
     ?assertEqual(<<"process@1.0">>, maps:get(<<"device">>, ReadSlotResult)),
     ?assertEqual(1, maps:get(<<"number">>, maps:get(<<"results">>, ReadSlotResult))),
+    ?assertEqual({ok, Slot, 100}, read_refreshed_at(ProcID, Opts)),
+    % Assert that writing an older slot does not refresh the latest cached slot.
+    OlderSlot = 0,
+    OlderSlotResult = SlotResult#{
+        <<"at-slot">> => OlderSlot,
+        <<"results">> => #{ <<"number">> => 0 }
+    },
+    {ok, _} =
+        write(
+            ProcID,
+            OlderSlot,
+            OlderSlotResult,
+            Opts#{ <<"process-clock">> => 200 }
+        ),
+    ?assertEqual({ok, Slot, 100}, read_refreshed_at(ProcID, Opts)),
+    ?assertEqual(
+        false,
+        fresh(
+            ProcID,
+            #{ <<"max-age">> => 60 },
+            Opts#{ <<"process-clock">> => 250 }
+        )
+    ),
     % Assert that the process is fresh exactly at the max-age.
     ?assertEqual(
         true,
