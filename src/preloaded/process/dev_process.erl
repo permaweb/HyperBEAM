@@ -635,6 +635,11 @@ now(RawBase, Req, Opts) ->
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
+            dev_process_cache:refresh(
+                ProcessID,
+                hb_util:int(CurrentSlot),
+                Opts
+            ),
             hb_ao:resolve(
                 Base,
                 #{ <<"path">> => <<"compute">>, <<"slot">> => CurrentSlot },

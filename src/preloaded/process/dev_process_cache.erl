@@ -5,7 +5,7 @@
 -module(dev_process_cache).
 -export([fresh/3, fresh/4]).
 -export([latest/2, latest/3, latest/4]).
--export([read/2, read/3, write/4]).
+-export([read/2, read/3, refresh/3, write/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -42,19 +42,20 @@ write(ProcID, Slot, Msg, RawOpts) ->
         }
     ),
     hb_cache:link(Root, MsgIDPath, Opts),
-    write_refreshed_at(ProcID, Slot, Opts),
+    ok = refresh(ProcID, Slot, Opts),
     % Return the slot number path.
     {ok, SlotNumPath}.
 
 %% @doc Mark the process as refreshed at the current clock time.
-write_refreshed_at(ProcID, Slot, Opts) ->
+refresh(ProcID, Slot, RawOpts) ->
+    Opts = lib_process:cache_opts(RawOpts),
     CachedSlot = latest_slot(ProcID, lib_process:scoped_opts(Opts)),
     case CachedSlot of
         {ok, LatestSlot} when Slot < LatestSlot ->
             ok;
         _ ->
             Store = hb_opts:get(store, no_viable_store, Opts),
-            ok = hb_store:write(
+            hb_store:write(
                 Store,
                 #{ refreshed_path(ProcID) => refreshed_at(Slot, clock(Opts)) },
                 Opts
@@ -475,7 +476,10 @@ freshness_max_age(Opts) ->
                 <<"process-now-max-age">> => 60
             }
         )
-    ).
+    ),
+    % A scheduler check of an unchanged slot refreshes its cache age.
+    ok = refresh(ProcID, Slot, Opts#{ <<"process-clock">> => 250 }),
+    ?assertEqual({ok, Slot, 250}, read_refreshed_at(ProcID, Opts)).
 
 %% @doc Process cache writes go only to `process-store' when configured.
 isolated_process_store_test() ->
