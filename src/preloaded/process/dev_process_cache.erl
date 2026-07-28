@@ -256,7 +256,17 @@ slots(ProcID, Opts) ->
 path_exists([], _Msg, _Opts) ->
     true;
 path_exists([Key | Rest], Msg, Opts) ->
-    case hb_maps:find(Key, Msg, Opts) of
+    Found =
+        case hb_link:is_link_key(Key) andalso is_map(Msg) of
+            true ->
+                case maps:find(hb_link:remove_link_specifier(Key), Msg) of
+                    {ok, Link} when ?IS_LINK(Link) -> {ok, Link};
+                    _ -> error
+                end;
+            false ->
+                hb_maps:find(Key, Msg, Opts)
+        end,
+    case Found of
         {ok, Next} -> path_exists(Rest, Next, Opts);
         error -> false
     end.
@@ -363,6 +373,8 @@ find_latest_outputs(Opts) ->
     ),
     ?assertEqual(ProcessRef, maps:get(<<"Process">>, maps:get(<<"Deep">>, ReadReqRequired))),
     ?event(read_latest_slot_with_deep_key),
+    {ok, 2, _} = latest(ProcID, <<"Deep+link">>, Opts),
+    ?event(read_latest_slot_with_link_key),
     {ok, 1, RawReadBase} = latest(ProcID, [], 1, Opts),
     ReadBase = hb_cache:ensure_all_loaded(RawReadBase, Opts),
     ?assertEqual(1, maps:get(<<"Result-Number">>, maps:get(<<"Results">>, ReadBase))),
