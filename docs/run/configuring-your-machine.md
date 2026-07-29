@@ -106,6 +106,12 @@ The certificate leaf contains the exact `priv-wallet` public key. Certificate
 viewers expose a fingerprint of that TLS key; the node address instead hashes
 the wallet's raw RSA modulus.
 
+If the ACME directory is unreachable at boot (CA outage, rate limits), the
+node still starts: it serves a short-lived self-signed certificate carrying
+the same wallet key and retries issuance hourly, installing the CA
+certificate live once issuance succeeds. Browsers warn during that window,
+but the wallet binding above still holds.
+
 The `tls` node-message field cannot be changed while the listener is running;
 restart the node to adopt a different TLS policy.
 
