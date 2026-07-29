@@ -329,7 +329,7 @@ prepare_tls(TLS, Wallet, ServerID, NodeMsg) ->
             #{ <<"path">> => <<"obtain">> }, Private, NodeMsg
         ),
         ResolveOpts = hb_private:set(NodeMsg, Private, NodeMsg),
-        {ok, BootstrapResult} = hb_ao:resolve(
+        Chain = case hb_ao:resolve(
             #{ <<"device">> => <<"tls@1.0">> },
             Request,
             ResolveOpts#{
@@ -337,10 +337,20 @@ prepare_tls(TLS, Wallet, ServerID, NodeMsg) ->
                 <<"hashpath">> => ignore,
                 <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
             }
-        ),
-        Chain = hb_maps:get(
-            <<"certificate-chain">>, BootstrapResult, not_found, NodeMsg
-        ),
+        ) of
+            {ok, BootstrapResult} ->
+                hb_maps:get(
+                    <<"certificate-chain">>, BootstrapResult, not_found, NodeMsg
+                );
+            BootstrapError ->
+                %% Boot on a wallet-key self-signed fallback rather than not
+                %% at all; the runtime loop retries issuance hourly and
+                %% installs the real certificate live once the CA cooperates.
+                ?event(tls, {acme_bootstrap_failed, {error, BootstrapError}}),
+                hb_tls:self_signed_chain(
+                    Wallet, hb_maps:get(<<"domains">>, TLS, [], NodeMsg)
+                )
+        end,
         {ok, TLSOpts} = hb_tls:socket_options(Wallet, Chain),
         TLSOpts
     catch
@@ -377,7 +387,7 @@ stop_tls(ServerID) ->
     case hb_name:lookup({<<"tls@1.0">>, ServerID}) of
         PID when is_pid(PID) ->
             PID ! {stop, self()},
-            receive {stopped, PID} -> ok end;
+            receive {stopped, PID} -> ok after 5000 -> ok end;
         undefined -> ok
     end,
     cowboy:stop_listener({tls_http_01, ServerID}),
