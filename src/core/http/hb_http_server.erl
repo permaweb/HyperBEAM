@@ -36,7 +36,7 @@ start() ->
                 ?event(boot, {failed_to_load_config, Loc, Reason}),
                 #{}
         end,
-    MergedConfig = hb_maps:merge(EnvConfig, Loaded),
+    MergedConfig = hb_opts:merge_config(EnvConfig, Loaded),
     hb_http_client:setup_conn(MergedConfig),
     %% Apply store defaults before starting store
     StoreOpts = hb_opts:get(store, no_store, MergedConfig),
@@ -57,9 +57,9 @@ start() ->
                 Loaded
             )
         ),
-    maybe_greeter(Loaded, PrivWallet),
+    maybe_greeter(MergedConfig, PrivWallet),
     start(
-        Loaded#{
+        MergedConfig#{
             <<"priv-wallet">> => PrivWallet,
             <<"store">> => UpdatedStoreOpts,
             <<"port">> => hb_opts:get(port, 8734, Loaded),
