@@ -75,7 +75,8 @@ obtain(_Base, Request, Opts) ->
             andalso RequestCapability =:= OptsCapability of
         false -> not_found();
         true ->
-            case call(ensure_started(Opts), obtain, infinity) of
+            %% Bounded above the ACME client's own 180s issuance deadline.
+            case call(ensure_started(Opts), obtain, 200000) of
                 {ok, Chain} -> {ok, #{
                     <<"status">> => 200,
                     <<"certificate-chain">> => Chain
@@ -91,14 +92,17 @@ ensure_started(Opts) ->
     TLS = hb_tls:config(Opts),
     true = is_map(TLS),
     ServerID = server_id(Opts),
-    hb_name:singleton(runtime_name(ServerID), fun() -> loop(#{
-        server_id => ServerID,
-        tls => TLS,
-        wallet => hb_opts:get(priv_wallet, no_viable_wallet, Opts),
-        account_wallet => ar_wallet:new(),
-        challenges => #{},
-        operation => idle
-    }) end).
+    hb_name:singleton(runtime_name(ServerID), fun() ->
+        process_flag(trap_exit, true),
+        loop(#{
+            server_id => ServerID,
+            tls => TLS,
+            wallet => hb_opts:get(priv_wallet, no_viable_wallet, Opts),
+            account_wallet => ar_wallet:new(),
+            challenges => #{},
+            operation => idle
+        })
+    end).
 
 loop(State) ->
     receive
@@ -122,14 +126,31 @@ loop(State) ->
         {acme_result, Result} when map_get(operation, State) =/= idle ->
             loop(complete(Result, State));
         renew when map_get(operation, State) =:= idle ->
-            loop(issue(renew, State));
+            loop(renew(State));
         renew -> loop(State);
         {renew_after, Delay} -> loop(schedule(Delay, State));
+        {'EXIT', _, normal} -> loop(State);
+        {'EXIT', _, Reason} when map_get(operation, State) =/= idle ->
+            loop(complete({error, {'tls-worker-died', Reason}}, State));
         {stop, From} ->
             hb_name:unregister(runtime_name(maps:get(server_id, State))),
             From ! {stopped, self()},
             exit(shutdown);
         _ -> loop(State)
+    end.
+
+%% @doc A pending chain means the last install failed after a successful
+%% issuance: retry the install without spending another issuance against the
+%% CA's rate limits. Re-issue only if there is no pending chain, or it will
+%% not outlive the next retry cycle.
+renew(State) ->
+    Chain = maps:get(pending_chain, State, undefined),
+    Usable = Chain =/= undefined andalso
+        hb_tls:certificate_expiry(Chain)
+            - erlang:system_time(millisecond) > ?RENEW_RETRY_MS,
+    case Usable of
+        true -> complete({ok, Chain}, State#{operation => renew});
+        false -> issue(renew, State)
     end.
 
 issue(Operation, State) ->
@@ -150,15 +171,15 @@ complete(Result, State = #{operation := {obtain, From, Ref}}) ->
     From ! {Ref, Result},
     case Result of
         {ok, Chain} -> schedule_certificate(Chain, State#{operation => idle});
-        {error, _} -> State#{operation => idle}
+        {error, Reason} -> retry(Reason, State#{operation => idle})
     end;
 complete({ok, Chain}, State = #{operation := renew}) ->
     Idle = State#{operation => idle},
     case hb_tls:install(
         maps:get(server_id, State), maps:get(wallet, State), Chain
     ) of
-        ok -> schedule_certificate(Chain, Idle);
-        {error, Reason} -> retry(Reason, Idle)
+        ok -> schedule_certificate(Chain, maps:remove(pending_chain, Idle));
+        {error, Reason} -> retry(Reason, Idle#{pending_chain => Chain})
     end;
 complete({error, Reason}, State = #{operation := renew}) ->
     retry(Reason, State#{operation => idle}).
