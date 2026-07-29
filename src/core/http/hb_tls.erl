@@ -1,6 +1,7 @@
 %%% @doc TLS policy and node-wallet key adapter.
 -module(hb_tls).
 -export([config/1, certificate_expiry/1, install/3, socket_options/2]).
+-export([self_signed_chain/2]).
 -include_lib("public_key/include/public_key.hrl").
 
 -define(UNIX_EPOCH, 62167219200).
@@ -92,3 +93,53 @@ rsa_public_key(E, N) ->
         publicExponent = E,
         modulus = binary:decode_unsigned(N)
     }.
+
+%% @doc A short-lived in-memory self-signed chain carrying the wallet key, so
+%% a node can serve TLS before (or without) a CA-issued certificate. The SPKI
+%% is the wallet key, so socket_options/2 and the address binding both hold.
+%% OTP 28 ASN.1: algorithm parameters must be an explicit NULL open type, and
+%% the SAN extnValue must be the decoded list (pkix_sign re-encodes it).
+self_signed_chain({{{rsa, E}, D, N}, {{rsa, E}, N}}, [Domain | _] = Domains) ->
+    Key = #'RSAPrivateKey'{
+        modulus = binary:decode_unsigned(N),
+        publicExponent = E,
+        privateExponent = binary:decode_unsigned(D)
+    },
+    Now = os:system_time(second),
+    Subject = {rdnSequence, [[#'AttributeTypeAndValue'{
+        type = ?'id-at-commonName',
+        value = {utf8String, Domain}
+    }]]},
+    [public_key:pkix_sign(#'OTPTBSCertificate'{
+        version = v3,
+        serialNumber = erlang:unique_integer([positive]),
+        signature = #'SignatureAlgorithm'{
+            algorithm = ?'sha256WithRSAEncryption',
+            parameters = {asn1_OPENTYPE, <<5, 0>>}
+        },
+        issuer = Subject,
+        validity = #'Validity'{
+            notBefore = utc_time(Now - 300),
+            notAfter = utc_time(Now + 7 * 24 * 60 * 60)
+        },
+        subject = Subject,
+        subjectPublicKeyInfo = #'OTPSubjectPublicKeyInfo'{
+            algorithm = #'PublicKeyAlgorithm'{
+                algorithm = ?'rsaEncryption',
+                parameters = {asn1_OPENTYPE, <<5, 0>>}
+            },
+            subjectPublicKey = rsa_public_key(E, N)
+        },
+        extensions = [#'Extension'{
+            extnID = ?'id-ce-subjectAltName',
+            critical = false,
+            extnValue = [{dNSName, binary_to_list(Name)} || Name <- Domains]
+        }]
+    }, Key)].
+
+utc_time(Unix) ->
+    {{Y, Mo, Day}, {H, Mi, S}} =
+        calendar:gregorian_seconds_to_datetime(Unix + ?UNIX_EPOCH),
+    {utcTime, lists:flatten(io_lib:format(
+        "~2..0w~2..0w~2..0w~2..0w~2..0w~2..0wZ",
+        [Y rem 100, Mo, Day, H, Mi, S]))}.
