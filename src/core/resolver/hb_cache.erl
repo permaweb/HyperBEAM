@@ -270,7 +270,7 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
     {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
     TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
-    try
+    {ok, Path} = try
         do_write_message(
             TABM,
             hb_opts:get(store, no_viable_store, Opts),
@@ -287,11 +287,15 @@ write(RawMsg, Opts) when is_map(RawMsg) ->
                 Opts
             ),
             erlang:raise(Type, Reason, Stacktrace)
-    end;
+    end,
+    hb_hook:on(<<"cache-write">>, #{ <<"body">> => Msg }, Opts),
+    {ok, Path};
 write(List, Opts) when is_list(List) ->
     write(hb_message:convert(List, tabm, <<"structured@1.0">>, Opts), Opts);
 write(Bin, Opts) when is_binary(Bin) ->
-    do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts).
+    {ok, Path} = do_write_message(Bin, hb_opts:get(store, no_viable_store, Opts), Opts),
+    hb_hook:on(<<"cache-write">>, #{ <<"body">> => Bin }, Opts),
+    {ok, Path}.
 
 do_write_message(Bin, Store, Opts) when is_binary(Bin) ->
     % Write the binary in the store at its calculated content-hash.
@@ -664,6 +668,7 @@ write_binary(Hashpath, Bin, Store, Opts) ->
     ?event_debug({writing_binary, {hashpath, Hashpath}, {bin, Bin}, {store, Store}}),
     {ok, Path} = do_write_message(Bin, Store, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
+    hb_hook:on(<<"cache-write">>, #{ <<"body">> => Bin }, Opts),
     {ok, Path}.
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
@@ -1487,6 +1492,75 @@ write_with_only_read_only_store_test() ->
     Opts = #{ <<"store">> => [ReadOnlyStore] },
     ?assertMatch({ok, _}, write(<<"some-binary-payload">>, Opts)),
     ?assertMatch({ok, _}, write(#{ <<"hello">> => <<"world">> }, Opts)).
+
+%% @doc Cache writes trigger the `cache-write' hook after the value is stored.
+cache_write_hook_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"cache-write-hook">>),
+    hb_store:reset(Store),
+    Parent = self(),
+    Ref = make_ref(),
+    Handler = #{
+        <<"device">> => #{
+            cache_write =>
+                fun(_, Req, _Opts) ->
+                    NewReq = Req#{ <<"handler_executed">> => true },
+                    Parent ! {Ref, NewReq},
+                    {ok, NewReq}
+                end
+        }
+    },
+    Msg = #{ <<"hello">> => <<"world">> },
+    Opts = #{
+        <<"store">> => Store,
+        <<"on">> => #{ <<"cache-write">> => Handler }
+    },
+    {ok, _Path} = write(Msg, Opts),
+    receive
+        {Ref, HookReq} ->
+            ?assertEqual(true, maps:get(<<"handler_executed">>, HookReq)),
+            ?assertEqual(Msg, maps:get(<<"body">>, HookReq))
+    after 1000 ->
+        ?assert(false)
+    end.
+
+%% @doc Raw binary writes trigger the `cache-write' hook.
+cache_write_binary_hook_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"cache-write-binary-hook">>),
+    hb_store:reset(Store),
+    Parent = self(),
+    Ref = make_ref(),
+    Handler = #{
+        <<"device">> => #{
+            cache_write =>
+                fun(_, Req, _) ->
+                    NewReq = Req#{ <<"handler_executed">> => true },
+                    Parent ! {Ref, NewReq},
+                    {ok, NewReq}
+                end
+        }
+    },
+    DirectBin = <<"direct-payload">>,
+    AliasedBin = <<"aliased-payload">>,
+    Opts = #{
+        <<"store">> => Store,
+        <<"on">> => #{ <<"cache-write">> => Handler }
+    },
+    {ok, _DirectPath} = write(DirectBin, Opts),
+    {ok, _AliasedPath} = write_binary(<<"explicit/hashpath">>, AliasedBin, Opts),
+    receive
+        {Ref, HookReq1} ->
+            ?assertEqual(true, maps:get(<<"handler_executed">>, HookReq1)),
+            ?assertEqual(DirectBin, maps:get(<<"body">>, HookReq1))
+    after 1000 ->
+        ?assert(false)
+    end,
+    receive
+        {Ref, HookReq2} ->
+            ?assertEqual(true, maps:get(<<"handler_executed">>, HookReq2)),
+            ?assertEqual(AliasedBin, maps:get(<<"body">>, HookReq2))
+    after 1000 ->
+        ?assert(false)
+    end.
 
 %% @doc Run a specific test with a given store module.
 run_test() ->
