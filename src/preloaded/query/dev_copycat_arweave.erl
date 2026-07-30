@@ -250,7 +250,7 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
         false ->
             BlockRes = fetch_block_header(Current, Opts),
             case IndexMode =:= shallow andalso
-                    is_already_indexed(BlockRes, Req, Opts) of
+                    is_already_indexed(BlockRes, Opts) of
                 true ->
                     stop_at_indexed_block(Req, Current);
                 false ->
@@ -284,13 +284,13 @@ stop_at_indexed_block(Req, Current) ->
     ),
     {ok, Current}.
 
-is_already_indexed({ok, Block}, Request, Opts) ->
+is_already_indexed({ok, Block}, Opts) ->
     TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
     lists:any(
         fun(TXID) -> is_tx_indexed(TXID, Opts) end,
-        filter_txids(TXIDs, Request, Opts)
+        TXIDs
     );
-is_already_indexed({error, _}, _Request, _Opts) ->
+is_already_indexed({error, _}, _Opts) ->
     false.
 
 process_block(BlockRes, Current, To, IndexMode, Request, Opts) ->
@@ -376,21 +376,16 @@ mode_rank(<<"deep">>) -> mode_rank(deep);
 mode_rank(<<"full">>) -> mode_rank(full);
 mode_rank(_Other) -> 0.
 
-%% @doc Restrict L1 transaction IDs to the request's optional `txid'.
-filter_txids(TXIDs, Request, Opts) ->
-    case requested_txid(Request, Opts) of
-        undefined -> TXIDs;
-        TXID -> lists:filter(fun(ID) -> ID =:= TXID end, TXIDs)
-    end.
-
 %% @doc Return the request's optional L1 transaction ID filter.
 requested_txid(Request, Opts) ->
-    hb_maps:get(<<"txid">>, Request, undefined, Opts).
+    case hb_maps:get(<<"txid">>, Request, undefined, Opts) of
+        TXID when ?IS_ID(TXID) -> TXID;
+        _ -> undefined
+    end.
 
 %% @doc Index the IDs of all transactions in the block if configured to do so.
 maybe_index_ids(Block, IndexMode, Request, Opts) ->
-    TXIDs = filter_txids(
-        hb_maps:get(<<"txs">>, Block, [], Opts), Request, Opts),
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
     TotalTXs = length(TXIDs),
     case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
@@ -416,9 +411,16 @@ maybe_index_ids(Block, IndexMode, Request, Opts) ->
                 {ok, TXs} ->
                     Height = hb_maps:get(<<"height">>, Block, 0, Opts),
                     TXsWithData = ar_block:generate_size_tagged_list_from_txs(TXs, Height),
-                    % Filter out padding entries before processing
+                    % Filter out padding entries before processing.
+                    % If a TXID is provided, filter by that.
+                    RequestedTXID = requested_txid(Request, Opts),
                     ValidTXs = lists:filter(
-                        fun({{padding, _}, _}) -> false; (_) -> true end,
+                        fun
+                            ({{padding, _}, _}) -> false;
+                            ({{_TX, _}, _}) when RequestedTXID == undefined -> true;
+                            ({{TX, _}, _}) -> hb_util:encode(TX#tx.id) == RequestedTXID;
+                            (_) -> true
+                        end,
                         TXsWithData
                     ),
                     TXResults = process_txs(
@@ -628,7 +630,11 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, IndexMode, Store, Opts) -
 index_pending(Request, IndexMode, Opts) ->
     case hb_ao:resolve(<<?ARWEAVE_DEVICE/binary, "/pending">>, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
-            FilteredTXIDs = filter_txids(TXIDs, Request, Opts),
+            FilteredTXIDs =
+                case requested_txid(Request, Opts) of
+                    undefined -> TXIDs;
+                    TXID -> lists:filter(fun(ID) -> ID =:= TXID end, TXIDs)
+                end,
             Results = parallel_map(
                 FilteredTXIDs,
                 fun(TXID) -> process_pending_tx(TXID, IndexMode, Opts) end,
