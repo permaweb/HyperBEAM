@@ -93,28 +93,39 @@ vary(Ctx = #{ <<"base">> := Base, <<"request">> := Req }, _Opts)
                 )
             }
     end;
-vary(Ctx = #{
-    <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema],
-    <<"base">> := Base,
-    <<"request">> := Req
-}, Opts) ->
+vary(Ctx = #{ <<"schema">> := [BaseSchema, ReqSchema, ReturnSchema] }, Opts) ->
+    vary_with_schema(Ctx, BaseSchema, ReqSchema, any_type(), ReturnSchema, Opts);
+vary(Ctx = #{ <<"schema">> := [BaseSchema, ReqSchema, OptsSchema, ReturnSchema] }, Opts) ->
+    vary_with_schema(Ctx, BaseSchema, ReqSchema, OptsSchema, ReturnSchema, Opts).
+
+vary_with_schema(
+    Ctx = #{ <<"base">> := Base, <<"request">> := Req },
+    BaseSchema,
+    ReqSchema,
+    OptsSchema,
+    ReturnSchema,
+    Opts
+) ->
     ProjectionOpts = schema_projection_opts(Opts),
     BaseProjection = implicit_base(BaseSchema),
     ReqProjection = implicit_request(ReqSchema),
+    {_, Env0} = apply_schema_env(OptsSchema, Opts, ProjectionOpts, #{}),
     case hashpath_ignored(Opts) of
         true ->
+            {VariedBase, Env1} = apply_schema_env(BaseProjection, Base, ProjectionOpts, Env0),
+            {VariedReq, _Env2} = apply_schema_env(ReqProjection, Req, ProjectionOpts, Env1),
             {ok,
                 schema_declared_context(Ctx#{
-                    <<"varied-base">> => apply_schema(BaseProjection, Base, ProjectionOpts),
-                    <<"varied-request">> => apply_schema(ReqProjection, Req, ProjectionOpts),
+                    <<"varied-base">> => VariedBase,
+                    <<"varied-request">> => VariedReq,
                     <<"normalizer">> => overlay(ReturnSchema)
                 })
             };
         false ->
-            {VariedBase, BaseDeps} =
-                apply_schema_with_dependencies(BaseProjection, Base, ProjectionOpts),
-            {VariedReq, ReqDeps} =
-                apply_schema_with_dependencies(ReqProjection, Req, ProjectionOpts),
+            {VariedBase, BaseDeps, Env1} =
+                apply_schema_with_dependencies(BaseProjection, Base, ProjectionOpts, Env0),
+            {VariedReq, ReqDeps, _Env2} =
+                apply_schema_with_dependencies(ReqProjection, Req, ProjectionOpts, Env1),
             {ok,
                 schema_declared_context(Ctx#{
                     <<"varied-base">> => VariedBase,
@@ -363,6 +374,7 @@ execution_schema(Schema, AddKey) ->
     [
         nth_or(1 + Offset, Args, any_type()),
         nth_or(2 + Offset, Args, any_type()),
+        nth_or(3 + Offset, Args, any_type()),
         maps:get(<<"return">>, Schema, any_type())
     ].
 
@@ -506,6 +518,28 @@ parse_type({user_type, _, Name, Args}, TypeEnv, VarEnv, Seen) ->
                     )
             end
     end;
+parse_type({remote_type, _, [{atom, _, hb_schema}, {atom, _, bind}, [Arg]]},
+        TypeEnv,
+        VarEnv,
+        Seen) ->
+    #{ <<"kind">> => <<"bind">>, <<"var">> => schema_arg_var(Arg, TypeEnv, VarEnv, Seen) };
+parse_type({remote_type, _, [{atom, _, hb_schema}, {atom, _, int}, [Arg]]},
+        TypeEnv,
+        VarEnv,
+        Seen) ->
+    (scalar_type(<<"integer">>))#{
+        <<"bind">> => schema_arg_var(Arg, TypeEnv, VarEnv, Seen)
+    };
+parse_type({remote_type, _, [{atom, _, hb_schema}, {atom, _, date}, [Unit, Bucket, Format]]},
+        TypeEnv,
+        VarEnv,
+        Seen) ->
+    #{
+        <<"kind">> => <<"synthetic-date">>,
+        <<"unit">> => schema_arg(Unit, TypeEnv, VarEnv, Seen),
+        <<"bucket">> => schema_arg(Bucket, TypeEnv, VarEnv, Seen),
+        <<"format">> => schema_arg(Format, TypeEnv, VarEnv, Seen)
+    };
 parse_type({remote_type, _, [{atom, _, Mod}, {atom, _, Name}, Args]},
         TypeEnv,
         VarEnv,
@@ -558,6 +592,29 @@ parse_type({nil, _}, _TypeEnv, _VarEnv, _Seen) -> literal_type([]);
 parse_type(Other, _TypeEnv, _VarEnv, _Seen) ->
     unknown_type(Other).
 
+schema_arg_var(Arg, TypeEnv, VarEnv, Seen) ->
+    case schema_arg(Arg, TypeEnv, VarEnv, Seen) of
+        #{ <<"kind">> := <<"var-ref">>, <<"name">> := Name } -> Name;
+        #{ <<"kind">> := <<"literal">>, <<"value">> := Value } -> hb_util:bin(Value);
+        Other -> hb_util:bin(io_lib:format("~tp", [Other]))
+    end.
+
+schema_arg({var, _, Name}, TypeEnv, VarEnv, Seen) ->
+    case maps:get(Name, VarEnv, undefined) of
+        undefined -> var_ref_type(Name);
+        Bound -> schema_arg(Bound, TypeEnv, VarEnv, Seen)
+    end;
+schema_arg({atom, _, Atom}, _TypeEnv, _VarEnv, _Seen) ->
+    literal_type(hb_util:bin(Atom));
+schema_arg({integer, _, Int}, _TypeEnv, _VarEnv, _Seen) ->
+    literal_type(Int);
+schema_arg({char, _, Char}, _TypeEnv, _VarEnv, _Seen) ->
+    literal_type(<<Char/utf8>>);
+schema_arg({string, _, String}, _TypeEnv, _VarEnv, _Seen) ->
+    literal_type(hb_util:bin(String));
+schema_arg(Other, TypeEnv, VarEnv, Seen) ->
+    parse_type(Other, TypeEnv, VarEnv, Seen).
+
 parse_fields(Fields, TypeEnv, VarEnv, Seen) ->
     lists:foldl(
         fun({type, _, Assoc, [KeyAst, ValueAst]}, {Keys, Wildcard}) ->
@@ -595,37 +652,49 @@ key_name(Other, TypeEnv, VarEnv, Seen) ->
             hb_util:bin(io_lib:format("~tp", [Other]))
     end.
 
-apply_schema(#{ <<"kind">> := <<"any">> }, Value, _Opts) ->
-    Value;
-apply_schema(#{ <<"kind">> := <<"empty">> }, Value, _Opts) ->
-    Value;
-apply_schema(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts)
+apply_schema(Schema, Value, Opts) ->
+    {Projected, _Env} = apply_schema_env(Schema, Value, Opts, #{}),
+    Projected.
+
+apply_schema_env(#{ <<"kind">> := <<"any">> }, Value, _Opts, Env) ->
+    {Value, Env};
+apply_schema_env(#{ <<"kind">> := <<"empty">> }, Value, _Opts, Env) ->
+    {Value, Env};
+apply_schema_env(#{ <<"bind">> := Var } = Type, Value, Opts, Env) ->
+    {Projected, Env1} = apply_schema_env(maps:remove(<<"bind">>, Type), Value, Opts, Env),
+    {Projected, bind_schema_var(Var, Projected, Env1)};
+apply_schema_env(#{ <<"kind">> := <<"bind">>, <<"var">> := Var }, Value, _Opts, Env) ->
+    {Value, bind_schema_var(Var, Value, Env)};
+apply_schema_env(Schema = #{ <<"kind">> := <<"synthetic-date">> }, Value, Opts, Env) ->
+    {synthetic_date(Schema, Value, Opts, Env), Env};
+apply_schema_env(Schema = #{ <<"kind">> := <<"message">> }, Value, Opts, Env)
         when not is_map(Value) ->
-    apply_schema(Schema, hb_cache:ensure_loaded(Value, Opts), Opts);
-apply_schema(
+    apply_schema_env(Schema, hb_cache:ensure_loaded(Value, Opts), Opts, Env);
+apply_schema_env(
     #{ <<"kind">> := <<"message">>, <<"keys">> := Keys, <<"wildcard">> := Wildcard },
     Message,
-    Opts
+    Opts,
+    Env0
 ) when is_map(Message) ->
-    Explicit = explicit_keys(Keys, Message, Opts),
-    maps:merge(wildcard_keys(Wildcard, Keys, Message, Opts), Explicit);
-apply_schema(Type, Value, Opts) ->
+    {Explicit, Env} = explicit_keys(Keys, Message, Opts, Env0),
+    {maps:merge(wildcard_keys(Wildcard, Keys, Message, Opts), Explicit), Env};
+apply_schema_env(Type, Value, Opts, Env) ->
     case check_type(Type, Value) of
         true ->
-            Value;
+            {Value, Env};
         false ->
             case coerce_type(Type, Value, Opts) of
                 error -> throw({invalid_type, Type, Value});
                 Coerced ->
                     case check_type(Type, Coerced) of
-                        true -> Coerced;
+                        true -> {Coerced, Env};
                         false -> throw({invalid_type, Type, Value})
                     end
             end
     end.
 
-apply_schema_with_dependencies(Schema, Value, Opts) ->
-    Projected = apply_schema(Schema, Value, Opts),
+apply_schema_with_dependencies(Schema, Value, Opts, Env0) ->
+    {Projected, Env} = apply_schema_env(Schema, Value, Opts, Env0),
     {
         Projected,
         add_dependency_observations(
@@ -636,7 +705,8 @@ apply_schema_with_dependencies(Schema, Value, Opts) ->
             Projected,
             dependency_tree(Value, [], Projected, Opts),
             Opts
-        )
+        ),
+        Env
     }.
 
 add_dependency_observations(
@@ -995,21 +1065,143 @@ same_resolved_key(Key, Left, Right, Opts) ->
             false
     end.
 
-explicit_keys(Keys, Message, Opts) ->
+explicit_keys(Keys, Message, Opts, Env0) ->
     maps:fold(
-        fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, Acc) ->
+        fun(Key, #{ <<"presence">> := Presence, <<"type">> := Type }, {Acc, Env}) ->
             case hb_ao:raw(Message, #{ <<"path">> => Key }, Opts) of
                 {ok, Value} ->
-                    Acc#{ Key => apply_schema(Type, Value, Opts) };
-                {error, not_found} when Presence =:= required ->
-                    throw({required_key_missing, Key});
+                    {Projected, Env1} = apply_schema_env(Type, Value, Opts, Env),
+                    {Acc#{ Key => Projected }, Env1};
                 {error, not_found} ->
-                    Acc
+                    case {is_synthetic(Type), Presence} of
+                        {true, _} ->
+                            {Projected, Env1} = apply_schema_env(Type, undefined, Opts, Env),
+                            {Acc#{ Key => Projected }, Env1};
+                        {false, required} ->
+                            throw({required_key_missing, Key});
+                        {false, _} ->
+                            {Acc, Env}
+                    end
             end
         end,
-        #{},
+        {#{}, Env0},
         Keys
     ).
+
+is_synthetic(#{ <<"kind">> := <<"synthetic-date">> }) ->
+    true;
+is_synthetic(_Type) ->
+    false.
+
+bind_schema_var(<<"_">>, _Value, Env) ->
+    Env;
+bind_schema_var(Var, Value, Env) ->
+    case maps:find(Var, Env) of
+        {ok, Value} -> Env;
+        {ok, Other} -> throw({schema_variable_mismatch, Var, Other, Value});
+        error -> Env#{ Var => Value }
+    end.
+
+synthetic_date(Schema, Value, Opts, Env) ->
+    Unit = normalize_date_unit(resolve_schema_arg(maps:get(<<"unit">>, Schema), Env)),
+    Bucket = positive_date_bucket(resolve_schema_arg(maps:get(<<"bucket">>, Schema), Env)),
+    Format = normalize_date_format(resolve_schema_arg(maps:get(<<"format">>, Schema), Env)),
+    Seconds = date_source_seconds(Value, Opts),
+    BucketSeconds = Bucket * date_unit_seconds(Unit),
+    BucketedSeconds = (Seconds div BucketSeconds) * BucketSeconds,
+    format_synthetic_date(Format, BucketedSeconds).
+
+resolve_schema_arg(#{ <<"kind">> := <<"var-ref">>, <<"name">> := Name }, Env) ->
+    case maps:find(Name, Env) of
+        {ok, Value} -> Value;
+        error -> throw({unbound_schema_variable, Name})
+    end;
+resolve_schema_arg(#{ <<"kind">> := <<"literal">>, <<"value">> := Value }, _Env) ->
+    Value;
+resolve_schema_arg(Value, _Env) ->
+    Value.
+
+date_source_seconds(undefined, Opts) ->
+    case maps:get(<<"date-now">>, Opts, undefined) of
+        undefined -> erlang:system_time(second);
+        Now -> hb_util:int(Now)
+    end;
+date_source_seconds(Value, _Opts) when is_integer(Value) ->
+    Value;
+date_source_seconds(Value, _Opts) when is_binary(Value) ->
+    hb_util:int(Value).
+
+normalize_date_unit(Unit) when is_atom(Unit) ->
+    normalize_date_unit(hb_util:bin(Unit));
+normalize_date_unit(<<"second">>) -> second;
+normalize_date_unit(<<"seconds">>) -> second;
+normalize_date_unit(<<"minute">>) -> minute;
+normalize_date_unit(<<"minutes">>) -> minute;
+normalize_date_unit(<<"hour">>) -> hour;
+normalize_date_unit(<<"hours">>) -> hour;
+normalize_date_unit(<<"day">>) -> day;
+normalize_date_unit(<<"days">>) -> day;
+normalize_date_unit(Unit) ->
+    throw({unsupported_date_unit, Unit}).
+
+date_unit_seconds(second) -> 1;
+date_unit_seconds(minute) -> 60;
+date_unit_seconds(hour) -> 60 * 60;
+date_unit_seconds(day) -> 24 * 60 * 60.
+
+positive_date_bucket(Bucket0) ->
+    case hb_util:int(Bucket0) of
+        Bucket when Bucket > 0 -> Bucket;
+        Bucket -> throw({invalid_date_bucket, Bucket})
+    end.
+
+normalize_date_format(Format) when is_atom(Format) ->
+    normalize_date_format(hb_util:bin(Format));
+normalize_date_format(<<"http">>) -> http;
+normalize_date_format(<<"unix">>) -> unix;
+normalize_date_format(Format) ->
+    throw({unsupported_date_format, Format}).
+
+format_synthetic_date(unix, Seconds) ->
+    integer_to_binary(Seconds);
+format_synthetic_date(http, Seconds) ->
+    {{Year, Month, Day}, {Hour, Minute, Second}} =
+        calendar:system_time_to_universal_time(Seconds, second),
+    iolist_to_binary(
+        io_lib:format(
+            "~s, ~2..0B ~s ~4..0B ~2..0B:~2..0B:~2..0B GMT",
+            [
+                http_weekday(calendar:day_of_the_week(Year, Month, Day)),
+                Day,
+                http_month(Month),
+                Year,
+                Hour,
+                Minute,
+                Second
+            ]
+        )
+    ).
+
+http_weekday(1) -> "Mon";
+http_weekday(2) -> "Tue";
+http_weekday(3) -> "Wed";
+http_weekday(4) -> "Thu";
+http_weekday(5) -> "Fri";
+http_weekday(6) -> "Sat";
+http_weekday(7) -> "Sun".
+
+http_month(1) -> "Jan";
+http_month(2) -> "Feb";
+http_month(3) -> "Mar";
+http_month(4) -> "Apr";
+http_month(5) -> "May";
+http_month(6) -> "Jun";
+http_month(7) -> "Jul";
+http_month(8) -> "Aug";
+http_month(9) -> "Sep";
+http_month(10) -> "Oct";
+http_month(11) -> "Nov";
+http_month(12) -> "Dec".
 
 wildcard_keys(none, _Keys, _Message, _Opts) ->
     #{};
@@ -1283,6 +1475,7 @@ scalar_type(Name) -> #{ <<"kind">> => Name }.
 literal_type(Value) -> #{ <<"kind">> => <<"literal">>, <<"value">> => Value }.
 alias_type(Name) -> #{ <<"kind">> => <<"alias">>, <<"name">> => normalize_name(Name) }.
 variable_type(Name) -> #{ <<"kind">> => <<"variable">>, <<"name">> => normalize_name(Name) }.
+var_ref_type(Name) -> #{ <<"kind">> => <<"var-ref">>, <<"name">> => normalize_name(Name) }.
 unknown_type(Other) ->
     #{ <<"kind">> => <<"unknown">>, <<"ast">> => hb_util:bin(io_lib:format("~tp", [Other])) }.
 boolean_type() ->
@@ -1292,6 +1485,41 @@ boolean_type() ->
     }.
 
 %%% Tests
+
+-spec date_poc_schema_fun(
+    map(),
+    #{ date => hb_schema:date(Unit, Bucket, http) },
+    #{
+        process_now_bucket_size => hb_schema:int(Bucket),
+        process_now_bucket_unit => hb_schema:bind(Unit)
+    }
+) -> map().
+date_poc_schema_fun(Base, Req, _Opts) ->
+    maps:merge(Base, Req).
+
+date_schema_forms_can_bind_opts_and_synthesize_request_date_test() ->
+    ?assertEqual(#{}, date_poc_schema_fun(#{}, #{}, #{})),
+    {ok, #{ <<"keys">> := Schemas }} = beam_to_schema(?MODULE),
+    Schema = maps:get(<<"date-poc-schema-fun">>, Schemas),
+    [BaseSchema, ReqSchema, OptsSchema, ReturnSchema] = execution_schema(Schema, false),
+    {ok, Ctx} =
+        vary(
+            #{
+                <<"schema">> => [BaseSchema, ReqSchema, OptsSchema, ReturnSchema],
+                <<"base">> => #{ <<"device">> => <<"message@1.0">> },
+                <<"request">> => #{ <<"path">> => <<"current">> }
+            },
+            #{
+                <<"hashpath">> => ignore,
+                <<"date-now">> => 641,
+                <<"process-now-bucket-size">> => 10,
+                <<"process-now-bucket-unit">> => <<"minutes">>
+            }
+        ),
+    ?assertEqual(
+        <<"Thu, 01 Jan 1970 00:10:00 GMT">>,
+        maps:get(<<"date">>, maps:get(<<"varied-request">>, Ctx))
+    ).
 
 empty_projection_test() ->
     ?assertEqual(
