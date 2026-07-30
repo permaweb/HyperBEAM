@@ -88,6 +88,7 @@ request(HookMsg, HookReq, Opts) ->
                 Host,
                 hb_opts:get(node_host, hb_opts:get(host, no_host, Opts), Opts)
             ),
+        ok ?= reject_reserved_host_label(Name, Opts),
         {ok, ResolvedMsg} ?= resolve(Name, HookMsg, HookReq, Opts),
         ModReq =
             maybe_append_named_message(
@@ -105,6 +106,9 @@ request(HookMsg, HookReq, Opts) ->
         ),
         {ok, #{ <<"body">> => ModReq }}
     else
+        {reserved_host_label, ReservedName} ->
+            ?event({reserved_host_label_rejected, {name, ReservedName}}),
+            {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
         {skip, Reason} ->
             ?event({name_resolution_skipped, {reason, Reason}}),
             {ok, HookReq};
@@ -182,6 +186,21 @@ name_from_host(ReqHost, RawNodeHost) ->
             {skip, <<"No subdomain found in `Host: ", ReqHost/binary, "`.">>};
         _ -> name_from_host(ReqHost, no_host)
     end.
+
+%% @doc Reject host-derived names that the node has reserved for gateway
+%% routing. Direct protocol lookups through `~name@1.0/<name>' are intentionally
+%% left to `resolve/4'.
+reject_reserved_host_label(Name, Opts) ->
+    case reserved_host_label(Name, Opts) of
+        false -> ok;
+        true -> {reserved_host_label, Name}
+    end.
+
+reserved_host_label(Name, Opts) ->
+    lists:member(
+        hb_util:to_lower(Name),
+        hb_opts:get(name_reserved_host_labels, [], Opts)
+    ).
 
 %%% Tests.
 
@@ -364,6 +383,40 @@ root_request_skips_name_resolution_test_parallel() ->
     Check(<<"localhost">>, #{}),
     Check(<<"127.0.0.1:8734">>, #{}),
     Check(<<"ourweave.net:8734">>, #{ <<"node-host">> => <<"ourweave.net">> }).
+
+reserved_host_label_blocks_host_resolution_test_parallel() ->
+    ?assertEqual(
+        {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}},
+        request(
+            #{},
+            #{
+                <<"request">> => #{<<"host">> => <<"WWW.localhost">>},
+                <<"body">> => [#{<<"path">> => <<"status">>}]
+            },
+            #{
+                <<"name-reserved-host-labels">> => [<<"www">>, <<"admin">>],
+                <<"name-resolvers">> => [
+                    device_resolver(#{<<"WWW">> => <<"should-not-resolve">>})
+                ]
+            }
+        )
+    ).
+
+reserved_host_labels_do_not_block_direct_resolution_test_parallel() ->
+    ?assertEqual(
+        {ok, <<"allowed">>},
+        resolve(
+            <<"www">>,
+            #{},
+            #{<<"load">> => false},
+            #{
+                <<"name-reserved-host-labels">> => [<<"www">>],
+                <<"name-resolvers">> => [
+                    device_resolver(#{<<"www">> => <<"allowed">>})
+                ]
+            }
+        )
+    ).
 
 name_from_host_test_parallel() ->
     ?assertMatch({skip, _}, name_from_host(<<"127.0.0.1">>, no_host)),
