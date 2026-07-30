@@ -485,6 +485,17 @@ defined by the selected device. The `path` key is request metadata: it chooses
 what to resolve, but it is not itself the target base key unless the selected
 device explicitly resolves `path`.
 
+Device preparation may also use declared preparation parameters: public values
+that influence Vary but are not themselves ordinary request arguments to the
+device function. Preparation parameters exist so that a device specification can
+name bounded environmental or configuration inputs, such as a date-bucket size,
+without making them hidden local state. A preparation parameter is portable only
+when it is literal in the selected device specification, derived from public
+`Base` or `Request` fields, or projected into a public parameter collection that
+is witnessed in `Dependencies`. Runtime-local options that are not projected
+this way are local policy inputs; they can guide schema-declared or trusted
+execution, but they cannot support a portable observed-exact claim.
+
 The canonical one-step request form is:
 
 ```text
@@ -601,8 +612,8 @@ resolution, identity, and hashpath effects.
 | --- | --- | --- |
 | 1 | Normalize context; perform device or direct key lookup. | Keys, path, request form, and selected device are put into AO form, or a direct key hit returns early. |
 | 2 | Look up the device function. | The selected key handler is fixed for the varied/executed transition. |
-| 3 | Vary `Base` and `Request`. | Current HyperBEAM prepares schema-declared `VariedBase`, `VariedRequest`, and result normalization. Exact AO-Core `Dependencies` are target protocol state and are not produced by this current stage. |
-| 4 | Persistent resolver lookup. | An in-flight equivalent execution may be joined instead of recomputed. |
+| 3 | Vary `Base` and `Request`. | Current HyperBEAM prepares schema-declared `VariedBase`, `VariedRequest`, and result normalization. Draft target Vary may also bind declared preparation parameters and synthesize public request fields, such as a bucketed `date`, before reuse lookup. Exact AO-Core `Dependencies` are target protocol state and are not produced by this current stage. |
+| 4 | Persistent resolver lookup. | An in-flight equivalent execution may be joined instead of recomputed, using the already-varied pair. |
 | 5 | Cache lookup. | A known result for the varied pair may be reused by address. |
 | 6 | Execute the handler. | `VariedBase / VariedRequest -> RawResult` is computed when no reusable result exists. |
 | 7 | Apply the selected normalizer and construct the hashpath result. | Extension/replacement semantics are applied. Draft rich hashpath result construction is an integration point, but rich cryptographic linkage is target semantics until the hashpath implementation is source-green. |
@@ -880,6 +891,73 @@ Depends tree and supporting witness values are available.
 the public base and request surface that the prepared function is executed
 against. A Vary claim has a claim level.
 
+### Schema-Bound Parameters And Synthetic Dates
+
+Draft target: a device schema may declare schema-bound parameters that are bound
+during Vary and reused by other schema forms. This is a constrained parameter
+mechanism, not a general dependent type language. A schema-bound variable may be
+bound from a literal schema value, a public `Base` field, a public `Request`
+field, or a declared public preparation parameter. Reusing the same variable
+requires the same value. Schema forms must not perform arbitrary computation,
+lookup by dynamically constructed key, I/O, or expression evaluation.
+
+For example, a device may declare that request `date` is a synthetic HTTP date
+bucketed by public preparation parameters:
+
+```text
+RequestSchema = {
+  date: {
+    type: date(Unit, Bucket, http),
+    when-absent: synthesize
+  }
+}
+
+PreparationParameters = {
+  process-now-bucket-size: int(Bucket),
+  process-now-bucket-unit: bind(Unit)
+}
+```
+
+Here `int(Bucket)` validates and canonicalizes a positive integer, then binds
+`Bucket` to that value. `bind(Unit)` binds `Unit` to the exact public value of
+`process-now-bucket-unit`. `date(Unit, Bucket, http)` consumes those bindings and
+produces a canonical `date` field in `VariedRequest`. The `when-absent:
+synthesize` marker is illustrative schema notation for the separate choice to
+create `date` when the original request omitted it; without such a declaration,
+`date(...)` canonicalizes an existing request date but does not by itself make
+wall-clock time an input.
+
+`date(Unit, Bucket, Format)` has fixed semantics:
+
+1. Resolve `Unit`, `Bucket`, and `Format` from literals or previously bound
+   schema variables.
+2. Require `Bucket` to be a positive integer and `Unit` to name a supported
+   duration unit such as `seconds`, `minutes`, `hours`, or `days`.
+3. Choose the source instant. If `Request.date` exists, parse it according to
+   `Format` or the selected date profile. If `Request.date` is absent, a runtime
+   may synthesize the source instant from a declared time source only when the
+   selected schema declares that synthesis.
+4. Convert the source instant to UTC seconds, floor it to the nearest bucket
+   boundary, and encode the bucket boundary in `Format`.
+5. Put the encoded bucket boundary in `VariedRequest.date`.
+
+The bucket operation is floor-to-boundary, not the modulo remainder. For a
+10-minute bucket, instants from `00:10:00` through `00:19:59` UTC vary to the
+same canonical date, while `00:20:00` varies to a different date. Local timezone,
+locale, leap-second display choices, and host formatting preferences must not
+change the canonical value or its ID.
+
+Synthetic request fields are public Vary outputs. They are not hidden inputs and
+they are not cache metadata. If a runtime synthesizes `Request.date` during Vary,
+the device executes against `VariedRequest.date`, the `VariedRequestID` includes
+that value, and every downstream reuse, hashpath, witness, and challenge uses the
+bucketed value rather than an invisible wall-clock read.
+
+Source gap: current HyperBEAM POC code can parse marker forms and synthesize a
+bucketed request date during schema-declared Vary, but the `parameters` Depends
+root, `derived` dependency leaves, portable time-source witnessing, and rich
+hashpath challenge checks for this feature are draft target semantics.
+
 Schema-declared variation means the witness is produced by applying the selected
 device's declared schema to `Base` and `Request`. It is exact only with respect
 to that declaration; it may include values not read by a particular execution,
@@ -913,7 +991,10 @@ VariedRequest = {
 `Dependencies` records where each varied value or relevant negative observation
 originated. It has the same shape as the positive varied collections, rooted
 under `base` and `request`, with optional additional leaves for negative
-observations that affected preparation or execution:
+observations that affected preparation or execution. When Vary consumes declared
+public preparation parameters that are not already represented as `base` or
+`request` observations, `Dependencies` may also include a `parameters` root for
+those values:
 
 ```text
 Dependencies = {
@@ -929,6 +1010,10 @@ Dependencies = {
     from: HP_for_request_from,
     to: HP_for_request_to,
     quantity: HP_for_quantity
+  },
+  parameters: {
+    process-now-bucket-size: HP_for_bucket_size,
+    process-now-bucket-unit: HP_for_bucket_unit
   }
 }
 ```
@@ -941,6 +1026,7 @@ A dependency leaf is an AO message describing one observation:
 { status: not_found, origin: Hashpath, path: Path }
 { status: unset,     origin: Hashpath, path: Path }
 { status: defaulted, origin: Hashpath, path: Path, default: DefaultID }
+{ status: derived,   origin: Hashpath, observed: ObservedValue, value: VariedValue, transform: Transform }
 { status: error,     origin: Hashpath, path: Path, error: ErrorValue }
 ```
 
@@ -952,9 +1038,41 @@ a different varied value, the `found` leaf MUST use the explicit
 `observed`/`value` form: `observed` is the value resolved at `origin`, and
 `value` is the value included in `VariedBase` or `VariedRequest`. A verifier
 checks both that `origin` resolves to `observed` and that the varied witness
-contains `value`. Negative leaves do not correspond to a varied value; they
-record observations that affected preparation or execution, including absence,
-masking by `unset`, default selection, or failure to find a direct key or device.
+contains `value`.
+
+A `derived` leaf records a public value produced by a declared Vary transform.
+For date bucketing, `observed` is the source instant, `value` is the canonical
+bucket boundary inserted into `VariedRequest.date`, and `transform` names the
+date-bucket form and its public parameters, for example:
+
+```text
+{
+  status: derived,
+  origin: HP_for_request_date_or_time_source,
+  observed: "Thu, 01 Jan 1970 00:10:41 GMT",
+  value: "Thu, 01 Jan 1970 00:10:00 GMT",
+  transform: {
+    type: date,
+    unit: minutes,
+    bucket: 10,
+    format: http
+  }
+}
+```
+
+If the original request carried `date`, the origin is the request date's
+hashpath, and the derived leaf proves the canonicalization from request value to
+varied value. If the request omitted `date`, the origin names the declared time
+source observed by the runtime. Such an origin is portable proof only when the
+time source itself is committed, signed, or otherwise trusted under the
+receiver's policy. Otherwise it is a local/trusted observation. Parameters used
+by the transform, such as `unit` and `bucket`, must be literals in the selected
+schema or must have their own public dependency leaves under `base`, `request`,
+or `parameters`.
+
+Negative leaves do not correspond to a varied value; they record observations
+that affected preparation or execution, including absence, masking by `unset`,
+default selection, or failure to find a direct key or device.
 
 Dependency origins inherit the hashpath claim-strength model. An address-only
 origin can name where a local or trusted runtime observed a value, but it is not
@@ -967,12 +1085,16 @@ Portable Depends uses the same nested message shape as the witness, not a flat
 list of paths. The bare hashpath leaves in the `Dependencies` example above are
 the shorthand form. If a lookup observes absence or masking, the corresponding
 leaf must be the explicit observation message rather than a bare hashpath.
+`parameters` is not a third AO-Core operand alongside `Base` and `Request`; it is
+a witness root for declared Vary preparation inputs. Adding it does not change
+the primitive relation, which remains `Base / Request -> Result`.
 
 For an observed-exact Vary claim, every positive leaf in `VariedBase` and
-`VariedRequest` must have a corresponding `found` dependency leaf. Additional
-dependency leaves are valid only when they record observations that affected
-preparation or execution. Negative leaves do not assert a value; they assert that
-repeating the same lookup observes the same absence, mask, default, or failure.
+`VariedRequest` must have a corresponding `found` or `derived` dependency leaf.
+Additional dependency leaves are valid only when they record observations that
+affected preparation or execution. Negative leaves do not assert a value; they
+assert that repeating the same lookup observes the same absence, mask, default,
+or failure.
 
 If no observed-exact vary specification is available, the conservative valid
 schema-declared vary is identity:
@@ -1021,6 +1143,28 @@ A runtime may satisfy that computation by joining an equivalent in-flight
 execution, loading a previously verified result, executing the prepared function,
 or using another local strategy.
 
+Reusable computation identity is formed after Vary. For a given claim level, two
+requests may share execution only when the selected device, result mode,
+`VariedBase`, and `VariedRequest` are equivalent under their IDs and verification
+policy. The original `ReqID` is not sufficient, because Vary may project,
+canonicalize, or synthesize public request fields before execution.
+
+Date-bucketed requests illustrate the rule:
+
+```text
+RequestA = { path: current }
+RequestB = { path: current }
+
+Base / RequestA / vary -> VariedBase + { path: current, date: "Thu, 01 Jan 1970 00:10:00 GMT" } @ DepsA
+Base / RequestB / vary -> VariedBase + { path: current, date: "Thu, 01 Jan 1970 00:10:00 GMT" } @ DepsB
+```
+
+Both requests may join the same in-flight execution or reuse the same verified
+result because their varied request IDs match. A request that varies to
+`00:20:00 GMT` names a different varied computation and must not join or load a
+result for the `00:10:00 GMT` bucket merely because the original request shape
+was the same.
+
 Reuse is valid only when the candidate `VariedResult` is verified, or trusted
 under the verifier's policy, as the result of the same varied computation and
 result mode. Cache lookup and cache storage are implementation policy; they are
@@ -1041,9 +1185,11 @@ a reusable computation, and runtimes may reuse verified or trusted results for
 base/request pairs that vary to those inputs and satisfy the same claim level.
 
 Both the varied computation and complete transition results may be addressed and
-stored by hashpath or ID. A cache is one way to make such results available, but
-the protocol requirement is that reused results remain challengeable as the same
-transition.
+stored by hashpath or ID. A cache or single-flight table is one way to make such
+results available, but the protocol requirement is that reused results remain
+challengeable as the same varied transition. Implementations that key reuse only
+by the original request, or by a pre-Vary clock/cache hint, are not equivalent to
+the date-bucketed AO-Core computation.
 
 ## Transition Equivalence
 
@@ -1131,6 +1277,15 @@ The `>` component names `VariedBaseID + VariedReqID`. The `@` component names
 `DependenciesID`. `=` and `.` are not arbitrary punctuation: they select the
 protocol result mode, with `=` for extension/patch application and `.` for
 replacement/materialized result.
+
+Synthetic Vary fields do not add hashpath separators or components. They affect
+the full rich assertion through the values already present in the grammar:
+`ReqID` names the original request, `VariedReqID` names the request after Vary,
+and `DependenciesID` names the observations and transforms that justify the
+difference. A request that omitted `date` may therefore have a `ReqID` with no
+date field while the same assertion has a `VariedReqID` whose value includes the
+bucketed `date`. Challenge reconstructs that difference by repeating Vary and
+checking the `derived` dependency leaf.
 
 `=` means the execution produced a patch that extends the prior result:
 
@@ -1245,6 +1400,13 @@ through resolvable links:
 7. Any commitment records needed to verify those IDs under the receiver's trust
    policy.
 
+If Vary synthesized or canonicalized a request field, the package must include
+or make resolvable the varied request value and the dependency leaf proving that
+transform. For date bucketing, this includes the bucketed `VariedRequest.date`,
+the original request date or declared time-source observation when the receiver
+is expected to verify it, and any public preparation parameters that were not
+literals in the selected device schema.
+
 The package does not need to eagerly include the full transitive provenance tree
 for every dependency. Atomic challenge only needs the values for the challenged
 transition. A full audit recursively asks for the dependency hashpaths named in
@@ -1276,9 +1438,14 @@ To challenge a transition assertion:
    ```
 
 3. For every positive leaf in `VariedBase` and `VariedRequest`, follow the
-   matching `found` dependency leaf and verify that it yields that value. For
-   every negative dependency leaf, repeat the named observation and verify the
-   asserted `not_found`, `unset`, `defaulted`, or `error` status.
+   matching `found` or `derived` dependency leaf and verify that it yields or
+   derives that value. For every `derived` leaf, verify the declared transform
+   and its public parameters. For every negative dependency leaf, repeat the
+   named observation and verify the asserted `not_found`, `unset`, `defaulted`,
+   or `error` status.
+   For a synthesized date, repeat the transform using the source instant named
+   by the `derived` leaf or by a trusted time-source witness; a verifier must
+   not substitute its own current clock.
 4. Invoke the prepared function and verify its result. An existing result may
    substitute for execution only if it was previously verified under the
    verifier's trust policy:
@@ -1468,6 +1635,17 @@ final result: exact dependency trees may expose which balances, device lookups,
 absences, defaults, or failed paths influenced execution. Implementations should
 choose claim levels deliberately, avoid recording secret material as public
 dependencies, and treat negative observations as potentially sensitive metadata.
+
+Date bucketing is a computation-identity mechanism, not a freshness or
+authorization guarantee. A bucketed synthetic `date` can make `current`-style
+requests cacheable, joinable, and attestable for a coarse time window, but it
+does not prove that the runtime's clock was honest unless the time source is
+itself signed, committed, or trusted by policy. Coarser buckets improve reuse and
+reduce timing precision; finer buckets reduce reuse and may reveal more precise
+activity timing. Implementations must canonicalize dates in UTC with a positive
+bucket size, must not allow local timezone or locale formatting to affect IDs,
+and should treat user-supplied dates as ordinary public request values subject
+to the selected device's validation and replay policy.
 
 Device loading is a trust boundary. A node may execute local preloaded devices or
 operator-pinned implementations by policy, but portable low-trust implementation
