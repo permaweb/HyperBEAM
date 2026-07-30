@@ -113,7 +113,7 @@ latest_height(Opts) ->
     end.
 
 index_range(Request, true, From, To, IndexMode, Opts) ->
-    case index_pending(IndexMode, Opts) of
+    case index_pending(Request, IndexMode, Opts) of
         {ok, PendingRes} ->
             case block_range_empty(From, To) of
                 true ->
@@ -249,12 +249,14 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
             stop_at_indexed_block(Req, Current);
         false ->
             BlockRes = fetch_block_header(Current, Opts),
-            case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
+            case IndexMode =:= shallow andalso
+                    is_already_indexed(BlockRes, Req, Opts) of
                 true ->
                     stop_at_indexed_block(Req, Current);
                 false ->
                     observe_event(<<"block_indexed">>, fun() ->
-                        process_block(BlockRes, Current, undefined, IndexMode, Opts)
+                        process_block(
+                            BlockRes, Current, undefined, IndexMode, Req, Opts)
                     end),
                     fetch_blocks(Req, Current - 1, undefined, IndexMode, Opts)
             end
@@ -264,7 +266,7 @@ fetch_blocks(Req, Current, To, IndexMode, Opts) ->
     % this mode, so overlapping ranges from different callers are not re-fetched.
     (reindex(Req, Opts) orelse not is_block_indexed(Current, IndexMode, Opts))
         andalso observe_event(<<"block_indexed">>, fun() ->
-            process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Opts)
+            process_block(fetch_block_header(Current, Opts), Current, To, IndexMode, Req, Opts)
         end),
     fetch_blocks(Req, Current - 1, To, IndexMode, Opts).
 
@@ -282,18 +284,21 @@ stop_at_indexed_block(Req, Current) ->
     ),
     {ok, Current}.
 
-is_already_indexed({ok, Block}, Opts) ->
+is_already_indexed({ok, Block}, Request, Opts) ->
     TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
-is_already_indexed({error, _}, _Opts) ->
+    lists:any(
+        fun(TXID) -> is_tx_indexed(TXID, Opts) end,
+        filter_txids(TXIDs, Request, Opts)
+    );
+is_already_indexed({error, _}, _Request, _Opts) ->
     false.
 
-process_block(BlockRes, Current, To, IndexMode, Opts) ->
+process_block(BlockRes, Current, To, IndexMode, Request, Opts) ->
     case BlockRes of
         {ok, Block} ->
             ?event(debug_copycat, {{processing_block, Current},
                 {indep_hash, hb_maps:get(<<"indep_hash">>, Block, <<>>)}}),
-            case maybe_index_ids(Block, IndexMode, Opts) of
+            case maybe_index_ids(Block, IndexMode, Request, Opts) of
                 {block_skipped, Results} ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     ?event(
@@ -371,9 +376,21 @@ mode_rank(<<"deep">>) -> mode_rank(deep);
 mode_rank(<<"full">>) -> mode_rank(full);
 mode_rank(_Other) -> 0.
 
+%% @doc Restrict L1 transaction IDs to the request's optional `txid'.
+filter_txids(TXIDs, Request, Opts) ->
+    case requested_txid(Request, Opts) of
+        undefined -> TXIDs;
+        TXID -> lists:filter(fun(ID) -> ID =:= TXID end, TXIDs)
+    end.
+
+%% @doc Return the request's optional L1 transaction ID filter.
+requested_txid(Request, Opts) ->
+    hb_maps:get(<<"txid">>, Request, undefined, Opts).
+
 %% @doc Index the IDs of all transactions in the block if configured to do so.
-maybe_index_ids(Block, IndexMode, Opts) ->
-    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+maybe_index_ids(Block, IndexMode, Request, Opts) ->
+    TXIDs = filter_txids(
+        hb_maps:get(<<"txs">>, Block, [], Opts), Request, Opts),
     TotalTXs = length(TXIDs),
     case hb_opts:get(arweave_index_ids, true, Opts) of
         false -> 
@@ -608,15 +625,18 @@ index_full_bundle_bytes(BundleData, BundleStartOffset, IndexMode, Store, Opts) -
     end.
 
 %% @doc Index unconfirmed transactions from the Arweave mempool.
-index_pending(IndexMode, Opts) ->
+index_pending(Request, IndexMode, Opts) ->
     case hb_ao:resolve(<<?ARWEAVE_DEVICE/binary, "/pending">>, Opts) of
         {ok, TXIDs} when is_list(TXIDs) ->
+            FilteredTXIDs = filter_txids(TXIDs, Request, Opts),
             Results = parallel_map(
-                TXIDs,
+                FilteredTXIDs,
                 fun(TXID) -> process_pending_tx(TXID, IndexMode, Opts) end,
                 Opts
             ),
-            {ok, (sum_counters(Results))#{ total_txs => length(TXIDs) }};
+            {ok, (sum_counters(Results))#{
+                total_txs => length(FilteredTXIDs)
+            }};
         Error ->
             Error
     end.
@@ -917,11 +937,26 @@ index_ids_test_parallel() ->
     %% however we should still be able to index it (we just can't deserialize
     %% it).
     {_TestStore, StoreOpts, Opts} = setup_index_opts(),
+    FilteredTXID = <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
+    IgnoredTXID = <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>,
+    {ok, 1827942} =
+        hb_ao:resolve(
+            <<
+                "~copycat@1.0/arweave?mode=deep&from=1827942&to=1827942",
+                "&txid=", FilteredTXID/binary
+            >>,
+            Opts
+        ),
+    ?assert(is_tx_indexed(FilteredTXID, Opts)),
+    ?assertNot(is_tx_indexed(IgnoredTXID, Opts)),
+    ?assertNot(is_block_indexed(1827942, deep, Opts)),
     {ok, 1827942} =
         hb_ao:resolve(
             <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
             Opts
         ),
+    ?assert(is_tx_indexed(IgnoredTXID, Opts)),
+    ?assert(is_block_indexed(1827942, shallow, Opts)),
     ?assertMatch(
         {ok, _},
         hb_store_arweave:read(
