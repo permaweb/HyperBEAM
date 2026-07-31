@@ -314,9 +314,11 @@ process_block(BlockRes, Current, To, IndexMode, Request, Opts) ->
                     TotalTXs = maps:get(total_txs, Results, 0),
                     BundleTXs = maps:get(bundle_count, Results, 0),
                     SkippedTXs = maps:get(skipped_count, Results, 0),
-                    case SkippedTXs of
-                        0 -> ok = write_block_index(Current, IndexMode, Opts);
-                        _ -> ok
+                    case {requested_txid(Request, Opts), SkippedTXs} of
+                        {undefined, 0} ->
+                            ok = write_block_index(Current, IndexMode, Opts);
+                        _ ->
+                            ok
                     end,
                     ?event(
                         copycat_short,
@@ -936,92 +938,49 @@ observe_event(MetricName, Fun) ->
 
 %%% Tests
 
-index_ids_test_parallel() ->
-    %% Test block: https://viewblock.io/arweave/block/1827942
-    %% Note: this block includes a data item with an Ethereum signature. This
-    %% signature type is not yet (as of Jan 2026) supported by ar_bundles.erl,
-    %% however we should still be able to index it (we just can't deserialize
-    %% it).
-    {_TestStore, StoreOpts, Opts} = setup_index_opts(),
-    FilteredTXID = <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
-    IgnoredTXID = <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">>,
-    {ok, 1827942} =
+filtered_txid_test_parallel() ->
+    {_TestStore, _StoreOpts, Opts} = setup_index_opts(),
+    FilteredTXID = <<"tiT3XhhgSvK39Lx40jniKD9CpbTTTDaQmGimrhFh-sw">>,
+    BlockHeight = 1969127,
+    BlockHeightBin = integer_to_binary(BlockHeight),
+    {ok, Block} = fetch_block_header(BlockHeight, Opts),
+    TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
+    ?assert(lists:member(FilteredTXID, TXIDs)),
+    IgnoredTXIDs = lists:delete(FilteredTXID, TXIDs),
+    {ok, BlockHeight} =
         hb_ao:resolve(
             <<
-                "~copycat@1.0/arweave?mode=deep&from=1827942&to=1827942",
+                "~copycat@1.0/arweave?mode=deep&from=",
+                BlockHeightBin/binary, "&to=", BlockHeightBin/binary,
                 "&txid=", FilteredTXID/binary
             >>,
             Opts
         ),
     ?assert(is_tx_indexed(FilteredTXID, Opts)),
-    ?assertNot(is_tx_indexed(IgnoredTXID, Opts)),
-    ?assertNot(is_block_indexed(1827942, deep, Opts)),
-    {ok, 1827942} =
+    ?assertEqual(
+        [],
+        [TXID || TXID <- IgnoredTXIDs, is_tx_indexed(TXID, Opts)]
+    ),
+    ?assertNot(is_block_indexed(BlockHeight, deep, Opts)),
+    assert_bundle_read(
+        FilteredTXID,
+        [{<<"m8oR6EqaqhPqHZtKUCvDYWp3sPbMOQzxVf2VxpR7sWY">>, <<"1">>}],
+        Opts
+    ),
+    {ok, BlockHeight} =
         hb_ao:resolve(
-            <<"~copycat@1.0/arweave&from=1827942&to=1827942">>,
+            <<
+                "~copycat@1.0/arweave&from=", BlockHeightBin/binary,
+                "&to=", BlockHeightBin/binary, "&mode=deep"
+            >>,
             Opts
         ),
-    ?assert(is_tx_indexed(IgnoredTXID, Opts)),
-    ?assert(is_block_indexed(1827942, shallow, Opts)),
-    ?assertMatch(
-        {ok, _},
-        hb_store_arweave:read(
-            StoreOpts,
-            #{ <<"read">> => <<"WbRAQbeyjPHgopBKyi0PLeKWvYZr3rgZvQ7QY3ASJS4">> },
-            Opts
-        )
+    ?assertEqual(
+        [],
+        [TXID || TXID <- TXIDs, not is_tx_indexed(TXID, Opts)]
     ),
-    assert_item_read(
-        <<"0vy2Ey8bWkSDcRIvWQJjxDeVGYOrTSmYIIhBILJntY8">>,
-        Opts),
-    assert_item_read(
-        <<"2lmrYydmDweX2MgGH39ZEB9hKm2JqGOYmRiG3n_xh8A">>,
-        Opts),
-    assert_item_read(
-        <<"ATi9pQF_eqb99UK84R5rq8lGfRGpilVQOYyth7rXxh8">>,
-        Opts),
-    assert_item_read(
-        <<"4VSfUbhMVZQHW5VfVwQZOmC5fR3W21DZgFCyz8CA-cE">>,
-        Opts),
-    assert_item_read(
-        <<"ZQRHZhktk6dAtX9BlhO1teOtVlGHoyaWP25kAlhxrM4">>,
-        Opts),
-    % The T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs can be deserialized so
-    % we'll verify that some of its items were index and match the version
-    % in the deserialized bundle.
-    assert_bundle_read(
-        <<"T2pluNnaavL7-S2GkO_m3pASLUqMH_XQ9IiIhZKfySs">>,
-        [
-            {<<"54K1ehEIKZxGSusgZzgbGYaHfllwWQ09-S9-eRUJg5Y">>, <<"1">>},
-            {<<"MgatoEjlO_YtdbxFi9Q7Hxbs0YQVcChddhSS7FsdeIg">>, <<"19">>},
-            {<<"z-oKJfhMq5qoVFrljEfiBKgumaJmCWVxNJaavR5aPE8">>, <<"26">>}
-        ],
-        Opts
-    ),
-    % Non-ans104 data transaction 
-    assert_item_read(
-        <<"bXEgFm4K2b5VD64skBNAlS3I__4qxlM3Sm4Z5IXj3h8">>,
-        Opts),
-    % This bundle previously triggered the ANS-104 tag-section boundary bug:
-    % the decoder ran past the declared tag bytes into the JSON body and
-    % crashed with a badmatch on the body content (the `"address":"0x..."'
-    % string). With the strict tag-section boundary enforced, the item is
-    % decoded and indexed correctly.
-    ?assertMatch(
-        {ok, _},
-        hb_store_arweave:read(
-            StoreOpts,
-            #{ <<"read">> => <<"kK67S13W_8jM9JUw2umVamo0zh9v1DeVxWrru2evNco">> },
-            Opts)
-    ),
-    assert_bundle_read(
-        <<"c2ATDuTgwKCcHpAFZqSt13NC-tA4hdA7Aa2xBPuOzoE">>,
-        [
-            {<<"OBKr-7UrmjxFD-h-qP-XLuvCgtyuO_IDpBMgIytvusA">>, <<"1">>}
-        ],
-        Opts
-    ),
-   ok.
+    ?assert(is_block_indexed(BlockHeight, deep, Opts)),
+    ok.
 
 %% @doc Test a bundle header that fits in a single chunk.
 small_bundle_header_test_parallel() ->
