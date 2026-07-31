@@ -142,7 +142,35 @@ topic_list_to_atoms("1") -> true;
 topic_list_to_atoms("true") -> true;
 topic_list_to_atoms("all") -> true;
 topic_list_to_atoms(Str) ->
-    lists:map(fun(Topic) -> list_to_atom(Topic) end, string:tokens(Str, ",")).
+    lists:map(fun topic_to_atom/1, string:tokens(Str, ",")).
+
+%% @doc Resolve one device print selector, preserving ordinary event topics.
+topic_to_atom(Topic) ->
+    case string:find(Topic, "@") of
+        nomatch -> list_to_atom(Topic);
+        _ ->
+            Default = default_message(),
+            Preloaded =
+                case os:getenv("HB_PRELOADED_STORE") of
+                    false -> maps:get(<<"preloaded-store">>, Default);
+                    Path -> preloaded_store_from_env(Path)
+                end,
+            Opts = Default#{
+                %% Prevent read/write from default store
+                <<"loaded-device-store">> => [],
+                <<"preloaded-store">> => Preloaded
+            },
+            %% Make default_message_with_env available to avoid a loop.
+            persistent_term:put(default_message_with_env, Default),
+            Result =
+                try hb_device_load:reference(hb_util:bin(Topic), Opts)
+                after persistent_term:erase(default_message_with_env)
+                end,
+            case Result of
+                {ok, Mod} -> Mod;
+                {error, _} -> list_to_atom(Topic)
+            end
+    end.
 
 preloaded_store_from_env(Path) ->
     #{
@@ -177,7 +205,7 @@ canonical_key(Key) -> Key.
 %% single static fallback map behind `get/3', so there is no per-key environment
 %% dispatch on the hot path — the env values live in the map.
 default_message_with_env() ->
-    case erlang:get(default_message_with_env) of
+    case persistent_term:get(default_message_with_env, undefined) of
         undefined ->
             Resolved =
                 maps:fold(
@@ -190,7 +218,7 @@ default_message_with_env() ->
                     default_message(),
                     ?ENV_KEYS
                 ),
-            erlang:put(default_message_with_env, Resolved),
+            persistent_term:put(default_message_with_env, Resolved),
             Resolved;
         Resolved -> Resolved
     end.
@@ -202,10 +230,10 @@ default_message_with_env() ->
 %% lifetime of a process, so this is safe; `default_message_with_env/0' applies
 %% the same memoisation to the env-resolved configuration above.
 default_message() ->
-    case erlang:get(default_message) of
+    case persistent_term:get(default_message, undefined) of
         undefined ->
             Cached = raw_default_message(),
-            erlang:put(default_message, Cached),
+            persistent_term:put(default_message, Cached),
             Cached;
         Cached -> Cached
     end.
@@ -1056,7 +1084,7 @@ load_multi_mixed_extensions_test() ->
 preloaded_env_override_test() ->
     StorePath = "/tmp/hb-preloaded-env-test",
     os:putenv("HB_PRELOADED_STORE", StorePath),
-    erase(default_message_with_env),
+    persistent_term:erase(default_message_with_env),
     try
             ?assertEqual(
                 #{
@@ -1067,8 +1095,15 @@ preloaded_env_override_test() ->
         )
     after
         os:unsetenv("HB_PRELOADED_STORE"),
-        erase(default_message_with_env)
+        persistent_term:erase(default_message_with_env)
     end.
+
+print_device_name_resolves_generated_module_test() ->
+    [Mod] = topic_list_to_atoms("cron@1.0"),
+    ?assert(hb_device_name:is_generated(Mod)),
+    ?assertMatch({<<"cron_1_0">>, _}, hb_device_name:parts(Mod)),
+    ?assertEqual([ao_result], topic_list_to_atoms("ao_result")),
+    ?assertEqual(true, topic_list_to_atoms("all")).
 
 as_identity_test() ->
     DefaultWallet = ar_wallet:new(),

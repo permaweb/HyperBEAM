@@ -268,7 +268,7 @@ restore_env(Name, Value) ->
 
 %% @doc Clear hb_opts' cached view of preloaded-store environment variables.
 erase_preloaded_env_cache() ->
-    erase(default_message_with_env).
+    persistent_term:erase(default_message_with_env).
 
 %% @doc Read an OS environment variable using HB binary naming internally.
 getenv(Name) ->
