@@ -11,7 +11,8 @@
 -export([find_message_to_schedule/3, load_message_to_schedule/3]).
 -export([only_committed/2, base_assignment/4, slot_unavailable/0]).
 -export([parse_slot_range/2, read_assignment_range/5, read_local_assignments/5]).
--export([cache_opts/1, write_assignment/3, read_assignment/4, format_opts/1]).
+-export([cache_opts/1, write_assignment/3, write_linked_assignment/3]).
+-export([read_assignment/4, format_opts/1]).
 -export([max_assignment_query_len/0]).
 
 %%% The maximum number of assignments that a schedule request returns at a
@@ -243,6 +244,10 @@ cache_opts(Opts) ->
 %% scheduler devices that share this helper.
 write_assignment(Prefix, RawAssignment, RawOpts) ->
     Assignment = hb_cache:ensure_all_loaded(RawAssignment, RawOpts),
+    write_linked_assignment(Prefix, Assignment, RawOpts).
+
+%% @doc Write an assignment whose content links are already in the cache.
+write_linked_assignment(Prefix, Assignment, RawOpts) ->
     Opts = cache_opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
     ProcID = hb_ao:get(<<"process">>, Assignment, Opts),
