@@ -57,12 +57,12 @@ parse(Key) ->
 %% @doc Parses and applies a unit modifier to a base value, supporting both
 %% the `kb` and `kib` unit formats.
 unit(Binary) ->
-    Unit =
+    UnitWithoutOptionalB =
         case Binary of
             <<Prefix:(byte_size(Binary) - 1)/binary, "b">> -> Prefix;
             _ -> Binary
         end,
-    unit(0, Unit).
+    unit(0, UnitWithoutOptionalB).
 unit(Complete, <<>>) -> Complete;
 unit(Base, <<Int:8/integer, Rest/binary>>) when Int >= $0 andalso Int =< $9 ->
     unit(Base * 10 + (Int - $0), Rest);
@@ -358,6 +358,40 @@ parse_offset_test() ->
         parse(<<"1337tib">>)
     ),
     ok.
+
+all_unit_forms_test() ->
+    ?assertEqual({ok, 1, undefined}, parse(<<"1">>)),
+    ?assertEqual({ok, 1, undefined}, parse(<<"1b">>)),
+    assert_unit_forms(
+        [
+            <<"k">>, <<"m">>, <<"g">>, <<"t">>,
+            <<"p">>, <<"e">>, <<"z">>, <<"y">>
+        ],
+        1000
+    ),
+    assert_unit_forms(
+        [
+            <<"ki">>, <<"mi">>, <<"gi">>, <<"ti">>,
+            <<"pi">>, <<"ei">>, <<"zi">>, <<"yi">>
+        ],
+        1024
+    ),
+    ok.
+
+assert_unit_forms(Units, Multiple) ->
+    lists:foldl(
+        fun(Unit, Value) ->
+            Expected = Value * Multiple,
+            ?assertEqual({ok, Expected, undefined}, parse(<<"1", Unit/binary>>)),
+            ?assertEqual(
+                {ok, Expected, undefined},
+                parse(<<"1", Unit/binary, "b">>)
+            ),
+            Expected
+        end,
+        1,
+        Units
+    ).
 
 partial_match_should_fail_test_parallel() ->
     InvalidReference = <<"42tf43cjcfkwqydcjdk7ty2wbonkabw5acywyzk6shbd7x272zxq">>,
