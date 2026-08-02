@@ -16,6 +16,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BALANCES, <<"balances">>).
+-define(SEEN_LOANS, <<"seen-loans">>).
 -define(DEFAULT_COLLATERAL_QUANTITY, 1).
 
 %% @doc Every scheduled slot routes to `compute'. Do not exclude `set' or
@@ -81,6 +82,7 @@ make_loan(Base, Body, Height, Opts) ->
         BorrowerSet = hb_util:bool(field(<<"borrower-set">>, Body, true, Opts)),
         true ?= Principal >= 1,
         true ?= Repayment >= 1,
+        true ?= Repayment >= Principal,
         true ?= FundingWindow >= 1,
         true ?= MaturityWindow >= 1,
         true ?= Quantity >= 1,
@@ -89,7 +91,7 @@ make_loan(Base, Body, Height, Opts) ->
         [] ?= live_loans(Base, Opts),
         true ?= balance(Base, Borrower, Opts) >= Quantity,
         LoanID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
-        not_found ?= hb_maps:get(LoanID, loan_book(Base, Opts), not_found, Opts),
+        false ?= loan_seen(Base, LoanID, Opts),
         Loan =
             #{
                 <<"loan-id">> => LoanID,
@@ -166,6 +168,7 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
     maybe
         {ok, Lender} ?= signer(Body, Opts),
         #{
+            <<"borrower">> := Borrower,
             <<"principal">> := Principal,
             <<"recipient">> := Recipient,
             <<"funding-deadline">> := Deadline,
@@ -177,6 +180,8 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
         true ?= Height =< Deadline,
         RepaymentRecipient = field(<<"repayment-recipient">>, Body, Lender, Opts),
         true ?= is_address(RepaymentRecipient),
+        false ?= Lender =:= Borrower,
+        false ?= Lender =:= Recipient,
         FundingTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
         Active =
             Loan#{
@@ -305,21 +310,48 @@ find_loan(Base, Body, Opts) ->
         _ -> not_found
     end.
 
-put_loan(Base, Loan = #{ <<"loan-id">> := LoanID }, Opts) ->
+seen_loans(Base, Opts) -> state(?SEEN_LOANS, Base, #{}, Opts).
+
+loan_seen(Base, LoanID, Opts) ->
+    hb_maps:get(LoanID, seen_loans(Base, Opts), false, Opts) =:= true
+        orelse
+            hb_maps:get(LoanID, loan_book(Base, Opts), not_found, Opts)
+                =/= not_found.
+
+remember_loan(Base, LoanID, Opts) ->
     Base#{
-        <<"loans">> =>
+        ?SEEN_LOANS =>
             hb_maps:put(
                 LoanID,
-                Loan,
-                loan_book(Base, Opts),
+                true,
+                seen_loans(Base, Opts),
                 Opts
             )
     }.
 
+put_loan(Base, Loan = #{ <<"loan-id">> := LoanID }, Opts) ->
+    remember_loan(
+        Base#{
+            <<"loans">> =>
+                hb_maps:put(
+                    LoanID,
+                    Loan,
+                    loan_book(Base, Opts),
+                    Opts
+                )
+        },
+        LoanID,
+        Opts
+    ).
+
 drop_loan(Base, #{ <<"loan-id">> := LoanID }, Opts) ->
-    Base#{
-        <<"loans">> => hb_maps:without([LoanID], loan_book(Base, Opts), Opts)
-    }.
+    remember_loan(
+        Base#{
+            <<"loans">> => hb_maps:without([LoanID], loan_book(Base, Opts), Opts)
+        },
+        LoanID,
+        Opts
+    ).
 
 has_live_sale(Base, Opts) ->
     lists:any(
