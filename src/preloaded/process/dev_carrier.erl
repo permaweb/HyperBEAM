@@ -51,6 +51,8 @@
 -define(BALANCES, <<"balances">>).
 %%% The linked message whose keys the name resolves through to.
 -define(VALUE, <<"value">>).
+%%% Existing carriers inherit this settlement device unless they override it.
+-define(DEFAULT_LOAN_DEVICE, <<"arweave-loan@1.0">>).
 %%% The share of the supply a signer must hold to set the name, in basis
 %%% points. The whole supply, unless the token says otherwise.
 -define(DEFAULT_THRESHOLD_BPS, 10000).
@@ -121,7 +123,7 @@ compute(Base, Assignment, Opts) ->
 %% the weave, so nothing else can read it back. `device-stack' is a list, so a
 %% stack cannot survive the spawn -- but `loan-device' is one word.
 loan(Base, Assignment, Opts) ->
-    case state(<<"loan-device">>, Base, not_found, Opts) of
+    case state(<<"loan-device">>, Base, ?DEFAULT_LOAN_DEVICE, Opts) of
         not_found -> Base;
         Device ->
             try hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
