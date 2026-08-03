@@ -421,10 +421,11 @@ no_result_cache(Opts) ->
 %%
 %% In `target' mode the recipient match is served from the node's own
 %% `~query@1.0' GraphQL endpoint, and each match is annotated with its offset --
-%% the sort key and the `offset' recorded on the assignment. No gateway is
-%% queried by default. In `all' mode there is nothing to match, so no query is
-%% run: the range's block headers are walked directly (see
-%% `enumerate_blocks/4').
+%% the sort key and the `offset' recorded on the assignment. If multiple
+%% matches share an offset, the range's block headers are walked to put only
+%% that ambiguous set back into block order. In `all' mode there is nothing to
+%% match, so no query is run: the range's block headers are walked directly
+%% (see `enumerate_blocks/4').
 %%
 %% Returns `{Extra, TXID}' pairs in the order they are to be assigned, where
 %% `Extra' is the sequencing detail recorded on each assignment. Bundled data
@@ -439,14 +440,56 @@ discover(ProcID, _Mode, From, To, Opts) ->
     maybe
         ok ?= ensure_offsets(From, To, Opts),
         {ok, IDs} ?= query_recipients(ProcID, From, To, Opts),
-        {ok,
-            [
-                {#{ <<"offset">> => Offset }, TXID}
-            ||
-                {Offset, TXID} <- base_layer_offsets(IDs, Opts)
-            ]
-        }
+        target_offsets(ProcID, From, To, base_layer_offsets(IDs, Opts), Opts)
     end.
+
+%% @doc Return target-mode matches in offset order unless an equal-offset group
+%% needs block order to break the tie.
+target_offsets(_ProcID, _From, _To, [], _Opts) -> {ok, []};
+target_offsets(ProcID, From, To, OffsetPairs, Opts) ->
+    case has_offset_ties(OffsetPairs) of
+        false ->
+            {ok, offset_assignments(OffsetPairs)};
+        true ->
+            maybe
+                {ok, Located} ?= enumerate_blocks(ProcID, From, To, Opts),
+                target_blocks(OffsetPairs, Located)
+            end
+    end.
+
+has_offset_ties(OffsetPairs) ->
+    Offsets = [Offset || {Offset, _TXID} <- OffsetPairs],
+    length(Offsets) =/= length(lists:usort(Offsets)).
+
+offset_assignments(OffsetPairs) ->
+    [
+        {#{ <<"offset">> => Offset }, TXID}
+    ||
+        {Offset, TXID} <- OffsetPairs
+    ].
+
+%% @doc Keep equal-offset target-mode matches in canonical block order, while
+%% preserving each transaction's weave offset as assignment metadata.
+target_blocks(OffsetPairs, Located) ->
+    Offsets =
+        maps:from_list(
+            [
+                {TXID, Offset}
+            ||
+                {Offset, TXID} <- OffsetPairs
+            ]
+        ),
+    {ok,
+        lists:filtermap(
+            fun({_Height, TXID}) ->
+                case maps:find(TXID, Offsets) of
+                    {ok, Offset} -> {true, {#{ <<"offset">> => Offset }, TXID}};
+                    error -> false
+                end
+            end,
+            Located
+        )
+    }.
 
 %% @doc Enumerate every transaction in a block range from the block headers
 %% themselves, in canonical chain order: blocks ascending by height, then each
@@ -634,11 +677,10 @@ to_transactions({error, Reason}, _Opts) ->
         }
     }.
 
-%% @doc Annotate each matched transaction with its weave offset from the
-%% local index, keeping only the base-layer (`tx@1.0') transactions and
-%% dropping bundled data items (indexed under the `ans104@1.0' codec) and any
-%% that are not yet locally indexed. The result is sorted by offset, which is
-%% the canonical weave order.
+%% @doc Annotate each matched transaction with its weave offset from the local
+%% index, keeping only the base-layer (`tx@1.0') transactions and dropping
+%% bundled data items (indexed under the `ans104@1.0' codec) and any that are
+%% not yet locally indexed.
 base_layer_offsets(IDs, Opts) ->
     Store = hb_store_arweave:store_from_opts(Opts),
     lists:keysort(
@@ -1083,6 +1125,35 @@ base_layer_offsets_test() ->
     ?assertEqual(
         [{100, Early}, {200, Late}],
         base_layer_offsets([Late, Bundled, Early, Unindexed], Opts)
+    ).
+
+%% @doc Target mode uses the query result as a candidate set, but block order
+%% as the sequencing order. Equal offsets are not enough to order data-free
+%% transactions.
+target_blocks_equal_offset_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    First = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Second = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    ?assertEqual(
+        {ok,
+            [
+                {#{ <<"offset">> => 99 }, First},
+                {#{ <<"offset">> => 100 }, Second}
+            ]},
+        target_offsets(ProcID, 10, 10, [{99, First}, {100, Second}], #{})
+    ),
+    ok = write_test_block(10, [Second, Other, First], Opts),
+    ?assertEqual(
+        {ok,
+            [
+                {#{ <<"offset">> => 100 }, Second},
+                {#{ <<"offset">> => 100 }, First}
+            ]},
+        target_offsets(ProcID, 10, 10, [{100, First}, {100, Second}], Opts)
     ).
 
 %% @doc The sequencing mode is read from the process message, and anything the
