@@ -264,7 +264,7 @@ register_interest(Base, Body, Height, Opts) ->
             <<"deposit">> := Deposit,
             <<"deadline">> := Deadline
         } ?= Order,
-        {ok, Paid} ?= amount(<<"reward">>, Body, Opts),
+        {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"reward">>, 0, Opts)),
         true ?= Paid >= Fee,
         true ?= balance(Base, Buyer, Opts) >= Deposit,
         Until = Height + Deadline,
