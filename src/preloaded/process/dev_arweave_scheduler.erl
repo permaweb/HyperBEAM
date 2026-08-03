@@ -453,7 +453,7 @@ target_offsets(ProcID, From, To, OffsetPairs, Opts) ->
         true ->
             maybe
                 {ok, Located} ?= enumerate_blocks(ProcID, From, To, Opts),
-                target_blocks(OffsetPairs, Located)
+                {ok, target_groups(OffsetPairs, Located)}
             end
     end.
 
@@ -468,6 +468,15 @@ offset_assignments(OffsetPairs) ->
         {Offset, TXID} <- OffsetPairs
     ].
 
+target_groups([], _Located) -> [];
+target_groups([{Offset, _TXID} = Pair | Rest], Located) ->
+    {Same, Next} = lists:splitwith(fun({NextOffset, _}) -> NextOffset =:= Offset end, Rest),
+    Group = [Pair | Same],
+    case Same of
+        [] -> offset_assignments(Group);
+        _ -> target_blocks(Group, Located)
+    end ++ target_groups(Next, Located).
+
 %% @doc Keep equal-offset target-mode matches in canonical block order, while
 %% preserving each transaction's weave offset as assignment metadata.
 target_blocks(OffsetPairs, Located) ->
@@ -479,17 +488,15 @@ target_blocks(OffsetPairs, Located) ->
                 {Offset, TXID} <- OffsetPairs
             ]
         ),
-    {ok,
-        lists:filtermap(
-            fun({_Height, TXID}) ->
-                case maps:find(TXID, Offsets) of
-                    {ok, Offset} -> {true, {#{ <<"offset">> => Offset }, TXID}};
-                    error -> false
-                end
-            end,
-            Located
-        )
-    }.
+    lists:filtermap(
+        fun({_Height, TXID}) ->
+            case maps:find(TXID, Offsets) of
+                {ok, Offset} -> {true, {#{ <<"offset">> => Offset }, TXID}};
+                error -> false
+            end
+        end,
+        Located
+    ).
 
 %% @doc Enumerate every transaction in a block range from the block headers
 %% themselves, in canonical chain order: blocks ascending by height, then each
@@ -1138,6 +1145,7 @@ target_blocks_equal_offset_test() ->
     First = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Second = hb_util:human_id(crypto:strong_rand_bytes(32)),
     Other = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Later = hb_util:human_id(crypto:strong_rand_bytes(32)),
     ?assertEqual(
         {ok,
             [
@@ -1146,14 +1154,22 @@ target_blocks_equal_offset_test() ->
             ]},
         target_offsets(ProcID, 10, 10, [{99, First}, {100, Second}], #{})
     ),
-    ok = write_test_block(10, [Second, Other, First], Opts),
+    ok = write_test_block(10, [Other, First, Second, Later], Opts),
     ?assertEqual(
         {ok,
             [
+                {#{ <<"offset">> => 99 }, First},
+                {#{ <<"offset">> => 100 }, Other},
                 {#{ <<"offset">> => 100 }, Second},
-                {#{ <<"offset">> => 100 }, First}
+                {#{ <<"offset">> => 101 }, Later}
             ]},
-        target_offsets(ProcID, 10, 10, [{100, First}, {100, Second}], Opts)
+        target_offsets(
+            ProcID,
+            10,
+            10,
+            [{99, First}, {100, Second}, {100, Other}, {101, Later}],
+            Opts
+        )
     ).
 
 %% @doc The sequencing mode is read from the process message, and anything the
