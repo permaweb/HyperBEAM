@@ -436,7 +436,7 @@ process_tx({{TX, _TXDataRoot}, EndOffset}, BlockStartOffset, IndexMode, Opts) ->
         {indexed_tx,
             {type, tx},
             {pending, false},
-            {txid, {explicit, TXID}}
+            {txid, {string, TXID}}
         }),
     ?event(debug_copycat, {writing_index,
         {id, {explicit, TXID}},
@@ -638,7 +638,7 @@ process_pending_tx(TXID, IndexMode, Opts) ->
                         {indexed_tx,
                             {type, tx},
                             {pending, true},
-                            {txid, {explicit, TXID}}
+                            {txid, {string, TXID}}
                         }),
                     index_pending_children(TXID, TX, IndexMode, Store, Opts);
                 WriteError ->
@@ -741,7 +741,7 @@ index_full_bundle_items(
         {indexed_tx,
             {type, ans104},
             {pending, not is_integer(ItemStartOffset)},
-            {txid, {explicit, EncodedItemID}}
+            {txid, {string, EncodedItemID}}
         }),
     case hb_store_arweave:write_offset(
         Store,
