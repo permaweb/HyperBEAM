@@ -149,19 +149,9 @@ topic_to_atom(Topic) ->
     case string:find(Topic, "@") of
         nomatch -> list_to_atom(Topic);
         _ ->
-            Default = default_message(),
-            Preloaded =
-                case os:getenv("HB_PRELOADED_STORE") of
-                    false -> maps:get(<<"preloaded-store">>, Default);
-                    Path -> preloaded_store_from_env(Path)
-                end,
-            Opts = Default#{
-                %% Prevent read/write from default store
-                <<"loaded-device-store">> => [],
-                <<"preloaded-store">> => Preloaded
-            },
             %% Make default_message_with_env available to avoid a loop.
-            persistent_term:put(default_message_with_env, Default),
+            Opts = default_message(),
+            persistent_term:put(default_message_with_env, Opts),
             Result =
                 try hb_device_load:reference(hb_util:bin(Topic), Opts)
                 after persistent_term:erase(default_message_with_env)
