@@ -12,10 +12,10 @@
 %%%       process ID, and the process message occupies slot 0 of its own
 %%%       schedule.</li>
 %%%   <li>Every L1 transaction whose `target' field is the process ID is a
-%%%       message in the process's schedule. Slots follow the canonical weave
-%%%       order (ascending weave offset, which is ascending block order). The
-%%%       transaction's weave `offset' -- not a scheduler-assigned nonce -- is
-%%%       its on-chain position, and it is recorded on the assignment.</li>
+%%%       message in the process's schedule. Slots follow the transaction's
+%%%       weave `offset' as their primary on-chain position, and equal offsets
+%%%       are ordered by the block's transaction list. The offset -- not a
+%%%       scheduler-assigned nonce -- is recorded on the assignment.</li>
 %%%   <li>Discovery is <em>local-first</em>: the node indexes the relevant
 %%%       blocks itself with `~copycat@1.0' and then queries its own
 %%%       `~query@1.0' GraphQL endpoint (`transactions(recipients:
