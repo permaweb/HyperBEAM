@@ -17,6 +17,7 @@
 
 -define(BALANCES, <<"balances">>).
 -define(SEEN_LOANS, <<"seen-loans">>).
+-define(SEEN_PAYMENTS, <<"seen-loan-payments">>).
 -define(DEFAULT_COLLATERAL_QUANTITY, 1).
 
 %% @doc Every scheduled slot routes to `compute'. Do not exclude `set' or
@@ -183,6 +184,7 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
         false ?= Lender =:= Borrower,
         false ?= Lender =:= Recipient,
         FundingTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
+        false ?= payment_seen(Base, FundingTX, Opts),
         Active =
             Loan#{
                 <<"status">> => <<"active">>,
@@ -192,7 +194,7 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
                 <<"funding-tx">> => FundingTX
             },
         ?event({loan_funded, {loan, maps:get(<<"loan-id">>, Loan)}, {lender, Lender}}),
-        deadlines(put_loan(Base, Active, Opts), Opts)
+        deadlines(remember_payment(put_loan(Base, Active, Opts), FundingTX, Opts), Opts)
     else
         _ -> Base
     end.
@@ -211,8 +213,17 @@ repay(Base, Body, Target, Height, Loan, Opts) ->
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)),
         true ?= Paid >= Repayment,
         true ?= Height =< Maturity,
+        RepaymentTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
+        false ?= payment_seen(Base, RepaymentTX, Opts),
         ?event({loan_repaid, {loan, maps:get(<<"loan-id">>, Loan)}}),
-        deadlines(drop_loan(credit(Base, Borrower, Quantity, Opts), Loan, Opts), Opts)
+        deadlines(
+            remember_payment(
+                drop_loan(credit(Base, Borrower, Quantity, Opts), Loan, Opts),
+                RepaymentTX,
+                Opts
+            ),
+            Opts
+        )
     else
         _ -> Base
     end.
@@ -325,6 +336,22 @@ remember_loan(Base, LoanID, Opts) ->
                 LoanID,
                 true,
                 seen_loans(Base, Opts),
+                Opts
+            )
+    }.
+
+seen_payments(Base, Opts) -> state(?SEEN_PAYMENTS, Base, #{}, Opts).
+
+payment_seen(Base, TXID, Opts) ->
+    hb_maps:get(TXID, seen_payments(Base, Opts), false, Opts) =:= true.
+
+remember_payment(Base, TXID, Opts) ->
+    Base#{
+        ?SEEN_PAYMENTS =>
+            hb_maps:put(
+                TXID,
+                true,
+                seen_payments(Base, Opts),
                 Opts
             )
     }.
