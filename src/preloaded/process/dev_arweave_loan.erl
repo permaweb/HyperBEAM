@@ -179,8 +179,7 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)),
         true ?= Paid >= Principal,
         true ?= Height =< Deadline,
-        RepaymentRecipient = field(<<"repayment-recipient">>, Body, Lender, Opts),
-        true ?= is_address(RepaymentRecipient),
+        true ?= is_address(Lender),
         false ?= Lender =:= Borrower,
         false ?= Lender =:= Recipient,
         FundingTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
@@ -189,7 +188,7 @@ fund(Base, Body, Target, Height, Loan, Opts) ->
             Loan#{
                 <<"status">> => <<"active">>,
                 <<"lender">> => Lender,
-                <<"repayment-recipient">> => RepaymentRecipient,
+                <<"repayment-recipient">> => Lender,
                 <<"maturity">> => Height + MaturityDuration,
                 <<"funding-tx">> => FundingTX
             },
