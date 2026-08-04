@@ -455,7 +455,7 @@ discover(ProcID, _Mode, From, To, Opts) ->
 %% already cached the blocks locally, so the enumeration is normally a local
 %% read. The process's own transaction is skipped: it is already slot 0.
 %%
-%% Returns `{Height, TXID}' pairs. Unlike a query result these are ordered by
+%% Returns `{Block, TXID}' pairs. Unlike a query result these are ordered by
 %% construction, and that order is total -- weave offset is not, because every
 %% transaction that carries no data shares the offset of the one before it.
 enumerate_blocks(_ProcID, From, To, _Opts) when From > To -> {ok, []};
@@ -469,7 +469,7 @@ enumerate_blocks(ProcID, From, To, Opts) ->
         {ok, Rest} ?= enumerate_blocks(ProcID, From + 1, To, Opts),
         {ok,
             [
-                {From, TXID}
+                {Block, TXID}
             ||
                 TXID <- hb_maps:get(<<"txs">>, Block, [], Opts),
                 TXID =/= hb_util:human_id(ProcID)
@@ -659,9 +659,9 @@ base_layer_offset(Store, ID, Opts) ->
 base_layer_blocks(Located, Opts) ->
     {ok,
         [
-            {all_mode_detail(Height), ID}
+            {all_mode_detail(Block, Opts), ID}
         ||
-            {Height, ID} <- Located,
+            {Block, ID} <- Located,
             data_free(ID, Opts)
         ]
     }.
@@ -801,8 +801,15 @@ mode(Process, Opts) ->
 %% -- the process's clock starts at the block it was created in -- and in the
 %% modes that sort by weave position, its offset. Only those modes index the
 %% spawn block to read that offset.
-slot_zero(<<"all">>, _ProcID, SpawnHeight, _Opts) ->
-    {ok, all_mode_detail(SpawnHeight)};
+slot_zero(<<"all">>, _ProcID, SpawnHeight, Opts) ->
+    maybe
+        {ok, Block} ?=
+            hb_ao:resolve(
+                <<?ARWEAVE_DEVICE/binary, "/block=", (hb_util:bin(SpawnHeight))/binary>>,
+                no_result_cache(Opts)
+            ),
+        {ok, all_mode_detail(Block, Opts)}
+    end;
 slot_zero(_Mode, ProcID, SpawnHeight, Opts) ->
     maybe
         ok ?= ensure_offsets(SpawnHeight, SpawnHeight, Opts),
@@ -812,8 +819,20 @@ slot_zero(_Mode, ProcID, SpawnHeight, Opts) ->
 
 %% @doc Every message in an `all'-mode schedule is process input, not a request
 %% whose `path' may select an execution-device key.
-all_mode_detail(Height) ->
-    #{ <<"block-height">> => Height, <<"path">> => <<"compute">> }.
+all_mode_detail(Block, Opts) ->
+    Height = hb_util:int(block_field(<<"height">>, Block, Opts)),
+    Timestamp = hb_util:int(block_field(<<"timestamp">>, Block, Opts)),
+    #{
+        <<"block-height">> => Height,
+        <<"block-timestamp">> => Timestamp,
+        % Field-name alias for `block-timestamp`, preserving compatibility with
+        % consumers that read scheduler@1.0's `timestamp` field.
+        <<"timestamp">> => Timestamp,
+        <<"path">> => <<"compute">>
+    }.
+
+block_field(Key, Block, Opts) ->
+    hb_maps:get(Key, Block, not_found, Opts).
 
 %% @doc Read an L1 transaction as a header-only message from the node's stores.
 %% `~copycat@1.0/arweave' caches the (data-free) header locally while indexing,
@@ -1104,17 +1123,28 @@ mode_test() ->
 %% @doc A process sequenced by the whole chain has a clock from slot 0, and
 %% every slot resolves `compute'.
 slot_zero_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    ok = write_test_block(3, [], Opts),
     ?assertEqual(
-        {ok, all_mode_detail(3)},
-        slot_zero(<<"all">>, ignored, 3, #{})
+        {ok, all_mode_detail(test_block(3, []), Opts)},
+        slot_zero(<<"all">>, ignored, 3, Opts)
     ).
+
+test_block(Height, TXs) ->
+    #{
+        <<"height">> => Height,
+        <<"timestamp">> => Height * 1000,
+        <<"txs">> => TXs
+    }.
 
 %% @doc Write a block into the node's block cache at the height pseudo-path
 %% `~copycat@1.0/arweave' caches it under, so the enumerator reads it locally
 %% rather than from the network.
 write_test_block(Height, TXs, Opts) ->
     {ok, MsgID} =
-        hb_cache:write(#{ <<"height">> => Height, <<"txs">> => TXs }, Opts),
+        hb_cache:write(test_block(Height, TXs), Opts),
     hb_cache:link(
         MsgID,
         hb_path:to_binary(
@@ -1137,9 +1167,20 @@ enumerate_blocks_test() ->
     Third = hb_util:human_id(crypto:strong_rand_bytes(32)),
     ok = write_test_block(10, [First, ProcID], Opts),
     ok = write_test_block(11, [Second, Third], Opts),
+    {ok, Enumerated} = enumerate_blocks(ProcID, 10, 11, Opts),
     ?assertEqual(
-        {ok, [{10, First}, {11, Second}, {11, Third}]},
-        enumerate_blocks(ProcID, 10, 11, Opts)
+        [First, Second, Third],
+        [TXID || {_Block, TXID} <- Enumerated]
+    ),
+    ?assertEqual(
+        [10, 11, 11],
+        [hb_util:int(block_field(<<"height">>, Block, Opts)) ||
+            {Block, _TXID} <- Enumerated]
+    ),
+    ?assertEqual(
+        [10000, 11000, 11000],
+        [hb_util:int(block_field(<<"timestamp">>, Block, Opts)) ||
+            {Block, _TXID} <- Enumerated]
     ).
 
 %% @doc Block-enumerated transactions keep chain order and only locally cached,
@@ -1164,10 +1205,15 @@ base_layer_blocks_test() ->
     DataBearingID = hb_message:id(DataBearing, signed, Opts),
     {ok, _} = hb_cache:write(DataFree, Opts),
     {ok, _} = hb_cache:write(DataBearing, Opts),
+    Block10 = test_block(10, [DataFreeID, DataBearingID, <<"missing">>]),
     ?assertEqual(
-        {ok, [{all_mode_detail(10), DataFreeID}]},
+        {ok, [{all_mode_detail(Block10, Opts), DataFreeID}]},
         base_layer_blocks(
-            [{10, DataFreeID}, {10, DataBearingID}, {10, <<"missing">>}],
+            [
+                {Block10, DataFreeID},
+                {Block10, DataBearingID},
+                {Block10, <<"missing">>}
+            ],
             Opts
         )
     ).
@@ -1188,15 +1234,18 @@ all_mode_assignment_test() ->
         ),
     MsgID = hb_util:human_id(hb_message:id(Msg, signed, Opts)),
     {ok, _} = hb_cache:write(Msg, Opts),
-    Extra = all_mode_detail(1958986),
+    Block = test_block(1958986, [hb_message:id(Msg, signed, Opts)]),
+    Extra = all_mode_detail(Block, Opts),
+    BodyLink = {link, MsgID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
     Expected =
         hb_maps:merge(
-            lib_scheduler:base_assignment(ProcID, 1, Msg, Opts),
+            (lib_scheduler:base_assignment(ProcID, 1, Extra, Opts))#{
+                <<"body">> => BodyLink
+            },
             Extra,
             Opts
         ),
     ExpectedID = hb_message:id(Expected, signed, Opts),
-    BodyLink = {link, MsgID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
     ok = write_assignment(ProcID, 1, Extra, Extra, BodyLink, Opts),
     {ok, Stored} = hb_cache:read(ExpectedID, Opts),
     ?assertMatch({link, _, _}, maps:get(<<"body">>, Stored)),
@@ -1212,6 +1261,14 @@ all_mode_assignment_test() ->
     ?assertEqual(
         1958986,
         hb_util:int(hb_ao:get(<<"block-height">>, Assignment, Opts))
+    ),
+    ?assertEqual(
+        1958986000,
+        hb_util:int(hb_ao:get(<<"timestamp">>, Assignment, Opts))
+    ),
+    ?assertEqual(
+        1958986000,
+        hb_util:int(hb_ao:get(<<"block-timestamp">>, Assignment, Opts))
     ),
     ?assertEqual(<<"compute">>, hb_ao:get(<<"path">>, Assignment, Opts)).
 
