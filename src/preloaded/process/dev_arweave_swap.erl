@@ -32,8 +32,10 @@
 %%%       field, so the codec would carry it as winston of AR sent to the
 %%%       process -- an address with no key, which would destroy it.</li>
 %%%   <li>`register-interest' (to the process, from a buyer), naming an
-%%%       `order-id'. It buys the exclusive right to complete the sale: for
-%%%       `deadline' blocks the order is that buyer's alone and the seller
+%%%       `order-id' and optionally a `fill-quantity' (the whole offer by
+%%%       default). A partial registration reserves that slice while its
+%%%       remainder stays open under the registration's id. For `deadline' blocks
+%%%       the slice is that buyer's alone and the seller
 %%%       cannot withdraw it. That window is what makes paying safe -- without
 %%%       it a buyer races the seller's withdrawal, having already sent AR that
 %%%       nobody can claw back. Registering pays the order's `minimum-fee' as
@@ -260,26 +262,60 @@ register_interest(Base, Body, Height, Opts) ->
         #{
             <<"order-id">> := OrderID,
             <<"status">> := <<"open">>,
+            <<"quantity">> := Quantity,
+            <<"asking">> := Asking,
             <<"minimum-fee">> := Fee,
             <<"deposit">> := Deposit,
             <<"deadline">> := Deadline
         } ?= Order,
+        {ok, Fill} ?= amount(<<"fill-quantity">>, Body, Quantity, Opts),
+        true ?= Fill >= 1 andalso Fill =< Quantity,
+        FillAsking = share(Asking, Fill, Quantity),
+        FillFee = share(Fee, Fill, Quantity),
+        FillDeposit = share(Deposit, Fill, Quantity),
+        RemainderID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
+        not_found ?=
+            case Fill of
+                Quantity -> not_found;
+                _ -> hb_maps:get(RemainderID, order_book(Base, Opts), not_found, Opts)
+            end,
         {ok, Paid} ?= amount(<<"reward">>, Body, Opts),
-        true ?= Paid >= Fee,
-        true ?= balance(Base, Buyer, Opts) >= Deposit,
+        true ?= Paid >= FillFee,
+        true ?= balance(Base, Buyer, Opts) >= FillDeposit,
         Until = Height + Deadline,
         ?event(
             {swap_interest_registered,
                 {order, OrderID},
                 {buyer, Buyer},
-                {deposit, Deposit},
+                {quantity, Fill},
+                {deposit, FillDeposit},
                 {until, Until}
             }
         ),
+        Split =
+            case Fill of
+                Quantity -> Base;
+                _ ->
+                    put_order(
+                        Base,
+                        Order#{
+                            <<"order-id">> => RemainderID,
+                            <<"quantity">> => Quantity - Fill,
+                            <<"asking">> => Asking - FillAsking,
+                            <<"minimum-fee">> => Fee - FillFee,
+                            <<"deposit">> => Deposit - FillDeposit
+                        },
+                        Opts
+                    )
+            end,
         deadlines(
             put_order(
-                debit(Base, Buyer, Deposit, Opts),
+                debit(Split, Buyer, FillDeposit, Opts),
                 Order#{
+                    <<"quantity">> => Fill,
+                    <<"asking">> => FillAsking,
+                    <<"minimum-fee">> => FillFee,
+                    <<"deposit">> => FillDeposit,
                     <<"status">> => <<"reserved">>,
                     <<"buyer">> => Buyer,
                     <<"reserved-until">> => Until
@@ -560,6 +596,9 @@ amount(Key, Body, Opts) -> amount(Key, Body, 0, Opts).
 amount(Key, Body, Default, Opts) ->
     hb_util:safe_int(field(Key, Body, Default, Opts)).
 
+%% @doc A proportional integer share, rounded up in the seller's favour.
+share(Value, Part, Whole) -> (Value * Part + Whole - 1) div Whole.
+
 %% @doc Read a value from the real L1 transaction fields recorded in the
 %% `tx@1.0' commitment. Top-level keys may come from tags with the same names, so
 %% payment routing and amount checks must not use them.
@@ -697,6 +736,9 @@ tick(Base, Height, Opts) ->
     apply_tx(Base, #{ <<"target">> => <<"someone-else">> }, Height, Opts).
 
 offer(Wallet, Quantity, Asking, Deposit, Deadline) ->
+    offer(Wallet, Quantity, Asking, Deposit, 0, Deadline).
+
+offer(Wallet, Quantity, Asking, Deposit, Fee, Deadline) ->
     tx(
         Wallet,
         #{
@@ -705,6 +747,7 @@ offer(Wallet, Quantity, Asking, Deposit, Deadline) ->
             <<"offer-quantity">> => hb_util:bin(Quantity),
             <<"asking">> => hb_util:bin(Asking),
             <<"deposit">> => hb_util:bin(Deposit),
+            <<"minimum-fee">> => hb_util:bin(Fee),
             <<"deadline">> => hb_util:bin(Deadline)
         }
     ).
@@ -828,6 +871,41 @@ settlement_test() ->
     ?assertEqual([], orders(Settled, Opts)),
     ?assertEqual(10, balance(Settled, BuyerAddr, Opts)),
     ?assertEqual(90, balance(Settled, SellerAddr, Opts)).
+
+%% @doc A buyer may reserve and settle a whole-unit slice while the remainder
+%% stays open, with every economic term split exactly despite integer rounding.
+partial_settlement_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Opened = apply_tx(
+        base(#{ SellerAddr => 5, BuyerAddr => 7 }),
+        offer(Seller, 5, 503, 7, 7, 20), 100, Opts),
+    OrderID = maps:get(<<"order-id">>, only_order(Opened, Opts)),
+    lists:foreach(
+        fun(Fill) ->
+            Invalid = apply_tx(Opened, registration(Buyer, OrderID, 7, Fill), 110, Opts),
+            ?assertEqual(5, maps:get(<<"quantity">>, only_order(Invalid, Opts)))
+        end,
+        [0, 6]
+    ),
+    Unpaid = apply_tx(Opened, registration(Buyer, OrderID, 4, 3), 110, Opts),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Unpaid, Opts))),
+    Reserved = apply_tx(Opened, registration(Buyer, OrderID, 5, 3), 110, Opts),
+    [Held] = [O || O = #{ <<"status">> := <<"reserved">> } <- orders(Reserved, Opts)],
+    [Open] = [O || O = #{ <<"status">> := <<"open">> } <- orders(Reserved, Opts)],
+    ?assertMatch(#{ <<"quantity">> := 3, <<"asking">> := 302,
+        <<"minimum-fee">> := 5, <<"deposit">> := 5 }, Held),
+    ?assertMatch(#{ <<"quantity">> := 2, <<"asking">> := 201,
+        <<"minimum-fee">> := 2, <<"deposit">> := 2 }, Open),
+    ?assertEqual(2, balance(Reserved, BuyerAddr, Opts)),
+    Underpaid = apply_tx(Reserved, pay(Buyer, SellerAddr, 301, OrderID), 111, Opts),
+    ?assertEqual(2, length(orders(Underpaid, Opts))),
+    Settled = apply_tx(Reserved, pay(Buyer, SellerAddr, 302, OrderID), 111, Opts),
+    ?assertMatch(#{ <<"quantity">> := 2, <<"status">> := <<"open">> },
+        only_order(Settled, Opts)),
+    ?assertEqual(10, balance(Settled, BuyerAddr, Opts)),
+    ?assertEqual(0, balance(Settled, SellerAddr, Opts)).
 
 %% @doc Paying less than the asking price settles nothing: the process never
 %% held the value, so it cannot refund a partial fill.
@@ -1413,14 +1491,18 @@ single_unit_offer_test() ->
 
 %% @doc A registration paying a fee, as the reward on its own transaction.
 registration(Wallet, OrderID, Winston) ->
+    registration(Wallet, OrderID, Winston, undefined).
+
+registration(Wallet, OrderID, Winston, Fill) ->
     tx(
         Wallet,
-        #{
+        hb_maps:without(case Fill of undefined -> [<<"fill-quantity">>]; _ -> [] end, #{
             <<"target">> => ?PROCESS,
             <<"action">> => <<"register-interest">>,
             <<"order-id">> => OrderID,
-            <<"reward">> => hb_util:bin(Winston)
-        }
+            <<"reward">> => hb_util:bin(Winston),
+            <<"fill-quantity">> => hb_util:bin(Fill)
+        }, #{})
     ).
 
 %% @doc The next height at which anything happens is recorded, so that the
