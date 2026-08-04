@@ -270,6 +270,7 @@ register_interest(Base, Body, Height, Opts) ->
         } ?= Order,
         {ok, Fill} ?= amount(<<"fill-quantity">>, Body, Quantity, Opts),
         true ?= Fill >= 1 andalso Fill =< Quantity,
+        Rest = Quantity - Fill,
         FillAsking = share(Asking, Fill, Quantity),
         FillFee = share(Fee, Fill, Quantity),
         FillDeposit = share(Deposit, Fill, Quantity),
@@ -300,10 +301,10 @@ register_interest(Base, Body, Height, Opts) ->
                         Base,
                         Order#{
                             <<"order-id">> => RemainderID,
-                            <<"quantity">> => Quantity - Fill,
-                            <<"asking">> => Asking - FillAsking,
-                            <<"minimum-fee">> => Fee - FillFee,
-                            <<"deposit">> => Deposit - FillDeposit
+                            <<"quantity">> => Rest,
+                            <<"asking">> => share(Asking, Rest, Quantity),
+                            <<"minimum-fee">> => share(Fee, Rest, Quantity),
+                            <<"deposit">> => share(Deposit, Rest, Quantity)
                         },
                         Opts
                     )
@@ -596,7 +597,12 @@ amount(Key, Body, Opts) -> amount(Key, Body, 0, Opts).
 amount(Key, Body, Default, Opts) ->
     hb_util:safe_int(field(Key, Body, Default, Opts)).
 
-%% @doc A proportional integer share, rounded up in the seller's favour.
+%% @doc A proportional integer share, rounded up. A slice and the remainder it
+%% leaves behind are each taken this way rather than one being the subtraction
+%% of the other, so no term a seller set can be rounded away by splitting: a
+%% one-unit fill of a large order would otherwise take a whole unit of the
+%% deposit and the fee from the remainder, and enough of them would leave it
+%% asking nothing and demanding no collateral.
 share(Value, Part, Whole) -> (Value * Part + Whole - 1) div Whole.
 
 %% @doc Read a value from the real L1 transaction fields recorded in the
@@ -873,7 +879,8 @@ settlement_test() ->
     ?assertEqual(90, balance(Settled, SellerAddr, Opts)).
 
 %% @doc A buyer may reserve and settle a whole-unit slice while the remainder
-%% stays open, with every economic term split exactly despite integer rounding.
+%% stays open, with neither half of the split taking less than its share of the
+%% terms the seller set.
 partial_settlement_test() ->
     Opts = test_opts(),
     {Seller, SellerAddr} = party(),
@@ -896,8 +903,8 @@ partial_settlement_test() ->
     [Open] = [O || O = #{ <<"status">> := <<"open">> } <- orders(Reserved, Opts)],
     ?assertMatch(#{ <<"quantity">> := 3, <<"asking">> := 302,
         <<"minimum-fee">> := 5, <<"deposit">> := 5 }, Held),
-    ?assertMatch(#{ <<"quantity">> := 2, <<"asking">> := 201,
-        <<"minimum-fee">> := 2, <<"deposit">> := 2 }, Open),
+    ?assertMatch(#{ <<"quantity">> := 2, <<"asking">> := 202,
+        <<"minimum-fee">> := 3, <<"deposit">> := 3 }, Open),
     ?assertEqual(2, balance(Reserved, BuyerAddr, Opts)),
     Underpaid = apply_tx(Reserved, pay(Buyer, SellerAddr, 301, OrderID), 111, Opts),
     ?assertEqual(2, length(orders(Underpaid, Opts))),
@@ -906,6 +913,45 @@ partial_settlement_test() ->
         only_order(Settled, Opts)),
     ?assertEqual(10, balance(Settled, BuyerAddr, Opts)),
     ?assertEqual(0, balance(Settled, SellerAddr, Opts)).
+
+%% @doc Splitting an order cannot round its terms away. Whittling an offer down
+%% one unit at a time is the cheapest way to ask that question: each fill takes
+%% a whole unit of a term that is worth a tenth of one, and a remainder that
+%% paid for them out of its own terms would end up asking no price and
+%% demanding no collateral -- free goods, and a free reservation with which to
+%% freeze what is left.
+splitting_preserves_the_terms_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Buyer, BuyerAddr} = party(),
+    Opened =
+        apply_tx(
+            base(#{ SellerAddr => 10, BuyerAddr => 5 }),
+            offer(Seller, 10, 5, 5, 5, 20),
+            100,
+            Opts
+        ),
+    OrderID = maps:get(<<"order-id">>, only_order(Opened, Opts)),
+    % Each fill leaves its remainder under the registration's own id, which is
+    % what the next one names.
+    {Whittled, _} =
+        lists:foldl(
+            fun(Height, {State, OpenID}) ->
+                Fill = registration(Buyer, OpenID, 5, 1),
+                {
+                    apply_tx(State, Fill, Height, Opts),
+                    hb_util:human_id(hb_message:id(Fill, signed, Opts))
+                }
+            end,
+            {Opened, OrderID},
+            lists:seq(101, 105)
+        ),
+    [Rest] =
+        [O || O = #{ <<"status">> := <<"open">> } <- orders(Whittled, Opts)],
+    ?assertMatch(#{ <<"quantity">> := 5, <<"asking">> := 5,
+        <<"minimum-fee">> := 5, <<"deposit">> := 5 }, Rest),
+    % Every fill pledged its own collateral, so the gate was live throughout.
+    ?assertEqual(0, balance(Whittled, BuyerAddr, Opts)).
 
 %% @doc Paying less than the asking price settles nothing: the process never
 %% held the value, so it cannot refund a partial fill.
