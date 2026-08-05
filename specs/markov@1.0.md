@@ -15,8 +15,8 @@
 }
 ```
 
-`order` is the number of preceding symbols conditioning the next symbol;
-`order=2` models `P(C | AB)`. The default is `2`.
+`order` is the maximum number of preceding symbols conditioning the next
+symbol; `order=2` models `P(C | AB)`. The default is `2`.
 
 Symbols are one-byte ASCII binaries. `|start|` and `|end|` are reserved boundary
 symbols and never appear in generated output. They are their own IDs; an ASCII
@@ -34,7 +34,7 @@ The effective `order` is the first present value from `Request/order`,
 `Base/order`, `Base/model/order`, then `2`. It MUST be a non-negative integer.
 An existing model with another order returns `order-mismatch`.
 
-Each sample is interpreted as:
+Each training sample, and each scored sample by default, is interpreted as:
 
 ```text
 [|start| x order] ++ symbols ++ [|end|]
@@ -42,22 +42,37 @@ Each sample is interpreted as:
 
 ## `/train`
 
-Increment every observed `context -> next-symbol` count and increment `samples`
-once per sample. Create `model` when absent. Return `{ok, Base'}` with only
-`model` replaced.
+Increment every observed `context -> next-symbol` count for the full context
+and each of its suffixes down to the empty context. Increment `samples` once per
+sample. Create `model` when absent. Return `{ok, Base'}` with only `model`
+replaced.
 
 ## `/likelihood`
 
-For each transition:
+The empty context is the empirical symbol distribution:
 
 ```text
-P(next | context) = count(context, next) / sum(count(context, _))
+P(next | []) = count([], next) / sum(count([], _))
 ```
 
-The sequence likelihood is the product of all transitions, including `end`.
-An unseen transition has likelihood zero. For a list, sample likelihoods are
-multiplied and event counts summed; a list containing no samples has likelihood
-one.
+Each longer context is interpolated recursively with its immediate suffix:
+
+```text
+P(next | context) =
+    (count(context, next) + 129 * P(next | suffix(context))) /
+    (sum(count(context, _)) + 129)
+```
+
+The fixed backoff weight `129` is the number of possible outputs: 128 ASCII
+symbols and `|end|`. `order` remains the model's only parameter.
+
+An absent context therefore uses its suffix distribution exactly. A symbol
+absent from the empty-context distribution has likelihood zero. The sequence
+likelihood is the product of all transitions. `include-end` is a boolean read
+from the request, then the base; it defaults to `true`. When false, omit the
+`end` transition, yielding the probability of the supplied prefix. For a list,
+sample likelihoods are multiplied and event counts summed; a list containing no
+samples has likelihood one.
 
 `result-mode=float` (default) returns the likelihood as a float.
 `result-mode=integer` returns its exact reduced representation:
@@ -85,7 +100,18 @@ empty input is `0.0`; its perplexity is `1.0`.
 ## `/generate`
 
 Begin with `order` `|start|` symbols, or reconstruct the context from the
-request `body`. Sample by transition count until `|end|`.
+request `body`. Sample from the same recursively interpolated distribution used
+by `/likelihood` until `|end|`.
+
+For deterministic integer sampling, let the empty context's stored counts be
+`W0` with total `T0`. For each successively longer context `n`:
+
+```text
+Wn(symbol) = count(n, symbol) * T(n-1) + 129 * W(n-1)(symbol)
+Tn         = (sum(count(n, _)) + 129) * T(n-1)
+```
+
+Use `Worder` and `Torder` as the draw weights and total below.
 
 `limit=false` (default) imposes no length limit. An integer `limit` is the total
 desired output length, including an existing `body`; it is not an additional
@@ -101,7 +127,7 @@ R(i) = unsigned(SHA-256(seed || uint64be(i)))
 
 Reject `R(i) >= floor(2^256 / T) * T`; otherwise select cumulative outcome
 `R(i) mod T`, ordering symbol IDs bytewise. Increment `i` after every hash.
-An outgoing count total greater than `2^256` is an invalid model.
+A backed-off draw total greater than `2^256` is an invalid model.
 
 Return:
 

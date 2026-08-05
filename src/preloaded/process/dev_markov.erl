@@ -14,6 +14,7 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_ORDER, 2).
+-define(BACKOFF_WEIGHT, 129).
 -define(START, <<"|start|">>).
 -define(END, <<"|end|">>).
 -define(RNG_RANGE, (1 bsl 256)).
@@ -129,34 +130,84 @@ requested_order(Base, Req, Default, Opts) ->
 %% @doc Add every independent sample to `Model'.
 train_samples(Samples, Model, Order, Opts) ->
     Transitions = hb_maps:get(<<"transitions">>, Model, #{}, Opts),
-    NewTransitions = lists:foldl(
-        fun(Sample, Acc) -> train_sample(Sample, Order, Acc, Opts) end,
-        Transitions,
+    Additions = lists:foldl(
+        fun(Sample, Acc) -> train_sample(Sample, Order, Acc) end,
+        #{},
         Samples
     ),
     Model#{
         <<"samples">> => hb_maps:get(<<"samples">>, Model, 0, Opts) + length(Samples),
-        <<"transitions">> => NewTransitions
+        <<"transitions">> => merge_transitions(Transitions, Additions, Opts)
     }.
 
 %% @doc Add one bounded sample to the transition table.
-train_sample(Sample, Order, Transitions, Opts) ->
-    train_symbols(symbols(Sample) ++ [?END], lists:duplicate(Order, ?START),
-        Order, Transitions, Opts).
+train_sample(Sample, Order, Transitions) ->
+    train_symbols(
+        symbols(Sample) ++ [?END],
+        lists:duplicate(Order, ?START),
+        Order,
+        Transitions
+    ).
 
 %% @doc Increment each transition in a tokenized sample.
-train_symbols([], _Context, _Order, Transitions, _Opts) -> Transitions;
-train_symbols([Symbol | Rest], Context, Order, Transitions, Opts) ->
-    ContextID = context_id(Context),
-    SymbolID = symbol_id(Symbol),
-    Outcomes = hb_maps:get(ContextID, Transitions, #{}, Opts),
-    Count = hb_maps:get(SymbolID, Outcomes, 0, Opts),
+train_symbols([], _Context, _Order, Transitions) -> Transitions;
+train_symbols([Symbol | Rest], Context, Order, Transitions) ->
     train_symbols(
         Rest,
         next_context(Context, Symbol, Order),
         Order,
-        Transitions#{ ContextID => Outcomes#{ SymbolID => Count + 1 } },
-        Opts
+        train_contexts(Context, Symbol, Transitions)
+    ).
+
+%% @doc Increment a transition for a context and every suffix context.
+train_contexts([], Symbol, Transitions) ->
+    increment_transition([], Symbol, Transitions);
+train_contexts([_ | Suffix] = Context, Symbol, Transitions) ->
+    train_contexts(
+        Suffix,
+        Symbol,
+        increment_transition(Context, Symbol, Transitions)
+    ).
+
+%% @doc Increment one transition count.
+increment_transition(Context, Symbol, Transitions) ->
+    ContextID = context_id(Context),
+    SymbolID = symbol_id(Symbol),
+    maps:update_with(
+        ContextID,
+        fun(Outcomes) ->
+            maps:update_with(
+                SymbolID,
+                fun(N) -> N + 1 end,
+                1,
+                Outcomes
+            )
+        end,
+        #{ SymbolID => 1 },
+        Transitions
+    ).
+
+%% @doc Merge newly counted transitions into a possibly linkified model.
+merge_transitions(Transitions, Additions, Opts) ->
+    maps:fold(
+        fun(Context, Counts, Acc) ->
+            Existing = hb_maps:get(Context, Acc, #{}, Opts),
+            Acc#{
+                Context =>
+                    maps:fold(
+                        fun(Symbol, Count, Outcomes) ->
+                            Outcomes#{
+                                Symbol =>
+                                    hb_maps:get(Symbol, Outcomes, 0, Opts) + Count
+                            }
+                        end,
+                        Existing,
+                        Counts
+                    )
+            }
+        end,
+        Transitions,
+        Additions
     ).
 
 %%% Scoring
@@ -166,15 +217,22 @@ exact_likelihood(Base, Req, Opts) ->
     maybe
         {ok, Model, Order} ?= model(Base, Opts),
         {ok, Samples} ?= input(Req, false, Opts),
+        IncludeEnd = include_end(Base, Req, Opts),
         Transitions = hb_maps:get(<<"transitions">>, Model, #{}, Opts),
-        score_samples(Samples, Order, Transitions, Opts)
+        score_samples(Samples, Order, Transitions, IncludeEnd, Opts)
     end.
 
 %% @doc Multiply the likelihoods of independent samples.
-score_samples(Samples, Order, Transitions, Opts) ->
+score_samples(Samples, Order, Transitions, IncludeEnd, Opts) ->
     lists:foldl(
         fun(Sample, {ok, Acc}) ->
-            score_symbols(symbols(Sample) ++ [?END],
+            End =
+                case IncludeEnd of
+                    true -> [?END];
+                    false -> []
+                end,
+            Symbols = symbols(Sample) ++ End,
+            score_symbols(Symbols,
                 lists:duplicate(Order, ?START), Order, Transitions, Acc, Opts);
            (_Sample, Error) -> Error
         end,
@@ -192,15 +250,52 @@ score_symbols([Symbol | Rest], Context, Order, Transitions, Exact, Opts) ->
         Error -> Error
     end.
 
-%% @doc Return the observed count and total for one transition.
-ratio(Context, Symbol, Transitions, Opts) ->
-    case hb_maps:get(context_id(Context), Transitions, not_found, Opts) of
+%% @doc Return a recursively backed-off transition probability.
+ratio([], Symbol, Transitions, Opts) ->
+    case hb_maps:get(context_id([]), Transitions, not_found, Opts) of
         not_found -> {ok, 0, 1};
         Outcomes when is_map(Outcomes) ->
             case counts(Outcomes, Opts) of
                 {ok, Total} ->
                     {ok, hb_maps:get(symbol_id(Symbol), Outcomes, 0, Opts), Total};
                 Error -> Error
+            end;
+        _ -> {error, 'invalid-model'}
+    end;
+ratio([_ | Suffix] = Context, Symbol, Transitions, Opts) ->
+    maybe
+        {ok, Numerator, Denominator} ?=
+            ratio(Suffix, Symbol, Transitions, Opts),
+        interpolate_ratio(
+            Context,
+            Symbol,
+            Numerator,
+            Denominator,
+            Transitions,
+            Opts
+        )
+    end.
+
+%% @doc Blend one context's counts with its suffix probability.
+interpolate_ratio(
+    Context,
+    Symbol,
+    Numerator,
+    Denominator,
+    Transitions,
+    Opts
+) ->
+    case hb_maps:get(context_id(Context), Transitions, not_found, Opts) of
+        not_found -> {ok, Numerator, Denominator};
+        Outcomes when is_map(Outcomes) ->
+            maybe
+                {ok, Total} ?= counts(Outcomes, Opts),
+                Count = hb_maps:get(symbol_id(Symbol), Outcomes, 0, Opts),
+                {ReducedNumerator, ReducedDenominator} = reduce(
+                    Count * Denominator + ?BACKOFF_WEIGHT * Numerator,
+                    (Total + ?BACKOFF_WEIGHT) * Denominator
+                ),
+                {ok, ReducedNumerator, ReducedDenominator}
             end;
         _ -> {error, 'invalid-model'}
     end.
@@ -240,6 +335,11 @@ multiply({Numerator, Denominator, Events}, FactorNumerator, FactorDenominator) -
 gcd(A, 0) -> A;
 gcd(A, B) -> gcd(B, A rem B).
 
+%% @doc Reduce a non-negative fraction.
+reduce(Numerator, Denominator) ->
+    Divisor = gcd(Numerator, Denominator),
+    {Numerator div Divisor, Denominator div Divisor}.
+
 %% @doc Render an exact likelihood in the selected result mode.
 result(_Exact, {error, _} = Error) -> Error;
 result({Numerator, Denominator, Events}, integer) ->
@@ -257,6 +357,10 @@ result_mode(Base, Req, Opts) ->
         <<"integer">> -> integer;
         _ -> {error, 'invalid-result-mode'}
     end.
+
+%% @doc Read whether scoring includes the terminating transition.
+include_end(Base, Req, Opts) ->
+    hb_util:bool(request_or_state(<<"include-end">>, Base, Req, true, Opts)).
 
 %% @doc Convert an exact likelihood to a float without first coercing its
 %% potentially large integers.
@@ -343,18 +447,70 @@ generated(Body, Seed, _Counter, false) ->
 
 %% @doc Draw the next symbol from a context's outcome counts.
 draw(Context, Seed, Counter, Transitions, Opts) ->
-    case hb_maps:get(context_id(Context), Transitions, not_found, Opts) of
+    maybe
+        {ok, Outcomes, Total} ?= distribution(Context, Transitions, Opts),
+        case Total =< ?RNG_RANGE of
+            true -> draw_outcome(Seed, Counter, Outcomes, Total, Opts);
+            false -> {error, 'invalid-model'}
+        end
+    end.
+
+%% @doc Build exact integer weights for a backed-off context distribution.
+distribution([], Transitions, Opts) ->
+    case hb_maps:get(context_id([]), Transitions, not_found, Opts) of
         not_found -> {error, 'context-not-found'};
         Outcomes when is_map(Outcomes) ->
             maybe
                 {ok, Total} ?= counts(Outcomes, Opts),
-                case Total =< ?RNG_RANGE of
-                    true -> draw_outcome(Seed, Counter, Outcomes, Total, Opts);
-                    false -> {error, 'invalid-model'}
-                end
+                {ok, Outcomes, Total}
+            end;
+        _ -> {error, 'invalid-model'}
+    end;
+distribution([_ | Suffix] = Context, Transitions, Opts) ->
+    maybe
+        {ok, Outcomes, Total} ?= distribution(Suffix, Transitions, Opts),
+        interpolate_distribution(Context, Outcomes, Total, Transitions, Opts)
+    end.
+
+%% @doc Blend one context's counts into lower-order integer weights.
+interpolate_distribution(Context, Outcomes, Total, Transitions, Opts) ->
+    case hb_maps:get(context_id(Context), Transitions, not_found, Opts) of
+        not_found -> {ok, Outcomes, Total};
+        Counts when is_map(Counts) ->
+            maybe
+                {ok, CountTotal} ?= counts(Counts, Opts),
+                {ok,
+                    merge_weights(Outcomes, Counts, Total, Opts),
+                    (CountTotal + ?BACKOFF_WEIGHT) * Total}
             end;
         _ -> {error, 'invalid-model'}
     end.
+
+%% @doc Add scaled context counts to lower-order weights.
+merge_weights(Outcomes, Counts, Scale, Opts) ->
+    Lower = maps:from_list(
+        [
+            {
+                Symbol,
+                ?BACKOFF_WEIGHT * hb_maps:get(Symbol, Outcomes, 0, Opts)
+            }
+        ||
+            Symbol <- hb_maps:keys(Outcomes, Opts)
+        ]
+    ),
+    lists:foldl(
+        fun(Symbol, Acc) ->
+            Count = hb_maps:get(Symbol, Counts, 0, Opts),
+            maps:update_with(
+                Symbol,
+                fun(Weight) -> Weight + Count * Scale end,
+                Count * Scale,
+                Acc
+            )
+        end,
+        Lower,
+        hb_maps:keys(Counts, Opts)
+    ).
 
 %% @doc Draw an unbiased position from an outcome-count total.
 draw_outcome(Seed, Counter, Outcomes, Total, Opts) when Counter < (1 bsl 64) ->
@@ -526,28 +682,74 @@ training_and_scores_test() ->
     {ok, State} = train(#{}, #{ <<"body">> => [<<"aba">>, <<"abb">>] }, #{}),
     Request = #{ <<"body">> => <<"aba">>, <<"result-mode">> => <<"integer">> },
     ?assertEqual(
-        {ok, #{ <<"numerator">> => 1, <<"denominator">> => 2, <<"events">> => 4 }},
+        {ok, #{
+            <<"numerator">> => 152175667482387,
+            <<"denominator">> => 10197065681600512,
+            <<"events">> => 4
+        }},
         likelihood(State, Request, #{})
     ),
-    ?assertEqual(
-        {ok, 0.5},
-        likelihood(State, #{ <<"body">> => <<"aba">> }, #{})
-    ),
-    ?assertEqual(
-        {ok, 1.0},
-        surprisal(State, Request, #{})
-    ),
-    ?assertEqual(
-        {ok, 0.25},
-        mean_surprisal(State, Request, #{})
-    ),
+    Expected = 152175667482387 / 10197065681600512,
+    {ok, Probability} = likelihood(State, #{ <<"body">> => <<"aba">> }, #{}),
+    ?assert(abs(Probability - Expected) < 1.0e-12),
+    {ok, Surprise} = surprisal(State, Request, #{}),
+    ?assert(abs(Surprise + math:log2(Expected)) < 1.0e-12),
+    {ok, MeanSurprise} = mean_surprisal(State, Request, #{}),
+    ?assert(abs(MeanSurprise - Surprise / 4) < 1.0e-12),
     {ok, Perplexity} = perplexity(State, Request, #{}),
-    ?assert(abs(Perplexity - math:pow(2.0, 0.25)) < 1.0e-12),
+    ?assert(abs(Perplexity - math:pow(2.0, MeanSurprise)) < 1.0e-12),
+    PrefixRequest = Request#{ <<"include-end">> => false },
+    {ok, Prefix = #{
+        <<"numerator">> := PrefixNumerator,
+        <<"denominator">> := PrefixDenominator,
+        <<"events">> := 3
+    }} = likelihood(State, PrefixRequest, #{}),
+    ?assert(PrefixNumerator / PrefixDenominator > Expected),
+    ?assertEqual(
+        {ok, #{
+            <<"numerator">> => 1,
+            <<"denominator">> => 1,
+            <<"events">> => 0
+        }},
+        likelihood(
+            State,
+            #{
+                <<"body">> => <<>>,
+                <<"include-end">> => false,
+                <<"result-mode">> => <<"integer">>
+            },
+            #{}
+        )
+    ),
     {ok, Updated} = train(State, #{ <<"body">> => <<"aba">> }, #{}),
     ?assertEqual(
         3,
         hb_ao:get(<<"model/samples">>, Updated, #{})
     ).
+
+%% @doc Use suffix distributions when a full context has no observations.
+hierarchical_backoff_test() ->
+    {ok, State} = train(
+        #{},
+        #{ <<"body">> => [<<"ab">>, <<"ac">>], <<"order">> => 2 },
+        #{}
+    ),
+    Transitions = hb_ao:get(<<"model/transitions">>, State, #{}),
+    ?assertEqual(
+        {ok, 45, 262},
+        ratio([<<"x">>, <<"a">>], <<"b">>, Transitions, #{})
+    ),
+    ?assertEqual(
+        {ok, 6067, 34322},
+        ratio([?START, <<"a">>], <<"b">>, Transitions, #{})
+    ),
+    {ok, Weights, Total} = distribution(
+        [?START, <<"a">>],
+        Transitions,
+        #{}
+    ),
+    ?assertEqual(102966, Total),
+    ?assertEqual(18201, hb_maps:get(symbol_id(<<"b">>), Weights, 0, #{})).
 
 %% @doc Ensure separate training samples do not create cross-sample edges.
 samples_are_independent_test() ->
@@ -557,7 +759,15 @@ samples_are_independent_test() ->
         #{}
     ),
     ?assertEqual(
-        {ok, #{ <<"numerator">> => 0, <<"denominator">> => 1, <<"events">> => 3 }},
+        not_found,
+        hb_ao:get(<<"model/transitions/c-t097/t098">>, State, not_found, #{})
+    ),
+    ?assertEqual(
+        {ok, #{
+            <<"numerator">> => 17157,
+            <<"denominator">> => 540800,
+            <<"events">> => 3
+        }},
         likelihood(
             State,
             #{ <<"body">> => <<"ab">>, <<"result-mode">> => <<"integer">> },
@@ -607,7 +817,7 @@ generation_continuation_test() ->
     ),
     {ok, Complete} = generate(State, Resumed#{ <<"limit">> => false }, #{}),
     ?assertEqual(
-        Text,
+        <<"sgzbctkkozraslktttczcsfqhgmh">>,
         hb_maps:get(<<"body">>, Complete, #{}, #{})
     ),
     ?assertEqual(
@@ -635,26 +845,43 @@ resolution_and_http_test() ->
         #{ <<"path">> => <<"train">>, <<"body">> => [<<"aba">>, <<"abb">>] },
         #{}
     ),
-    ?assertEqual(
-        {ok, 0.5},
-        hb_ao:resolve(
-            RoutedState,
-            #{ <<"path">> => <<"likelihood">>, <<"body">> => <<"aba">> },
-            #{}
-        )
+    Expected = 152175667482387 / 10197065681600512,
+    {ok, Resolved} = hb_ao:resolve(
+        RoutedState,
+        #{ <<"path">> => <<"likelihood">>, <<"body">> => <<"aba">> },
+        #{}
     ),
+    ?assert(abs(Resolved - Expected) < 1.0e-12),
     State = hb_maps:remove(<<"device">>, RoutedState, #{}),
     Opts = #{ <<"store">> => hb_test_utils:test_store() },
     {ok, ID} = hb_cache:write(State, Opts),
-    Node = hb_http_server:start_node(Opts#{ <<"port">> => 0 }),
+    {ok, Cached} = hb_cache:read(ID, Opts),
+    {ok, Updated} = train(Cached, #{ <<"body">> => <<"aba">> }, Opts),
     ?assertEqual(
-        {ok, 0.5},
-        hb_http:get(
-            Node,
-            <<"/", ID/binary, "~markov@1.0/likelihood&body=aba">>,
-            Opts
-        )
-    ).
+        3,
+        hb_ao:get(<<"model/samples">>, Updated, Opts)
+    ),
+    Node = hb_http_server:start_node(Opts#{ <<"port">> => 0 }),
+    {ok, HTTP} = hb_http:get(
+        Node,
+        <<"/", ID/binary, "~markov@1.0/likelihood&body=aba">>,
+        Opts
+    ),
+    ?assert(abs(HTTP - Expected) < 1.0e-12),
+    {ok, ExpectedPrefix} = likelihood(
+        State,
+        #{ <<"body">> => <<"aba">>, <<"include-end">> => false },
+        Opts
+    ),
+    {ok, HTTPPrefix} = hb_http:get(
+        Node,
+        <<
+            "/", ID/binary,
+            "~markov@1.0/likelihood&body=aba&include-end=false"
+        >>,
+        Opts
+    ),
+    ?assert(abs(HTTPPrefix - ExpectedPrefix) < 1.0e-12).
 
 %% @doc Reject malformed requests at each public boundary.
 validation_test() ->
