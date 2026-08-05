@@ -705,10 +705,15 @@ assign(ProcID, State, Slot, [], To, Opts) ->
     NewState = State#{ <<"next-slot">> => Slot, <<"synced-to">> => To },
     ok = dev_arweave_scheduler_cache:write_state(ProcID, NewState, Opts),
     {ok, NewState};
+assign(ProcID, State, Slot,
+        [{Extra = #{ <<"block-height">> := _ }, TXID} | Rest], To, Opts) ->
+    Body = {link, TXID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
+    ok = write_assignment(ProcID, Slot, Extra, Extra, Body, Opts),
+    assign(ProcID, State, Slot + 1, Rest, To, Opts);
 assign(ProcID, State, Slot, [{Extra, TXID} | Rest], To, Opts) ->
     case read_tx_header(TXID, Opts) of
         {ok, Msg} ->
-            ok = write_assignment(ProcID, Slot, Extra, Msg, Opts),
+            ok = write_assignment(ProcID, Slot, Extra, Msg, Msg, Opts),
             assign(ProcID, State, Slot + 1, Rest, To, Opts);
         {error, Err} ->
             ?event(
@@ -721,19 +726,19 @@ assign(ProcID, State, Slot, [{Extra, TXID} | Rest], To, Opts) ->
             {error, Err}
     end.
 
-%% @doc Generate and store the synthetic assignment for a message. Mirrors the
-%% assignments minted by `~scheduler@1.0', but records the chain position that
-%% sequences its mode: weave `offset' for `target', `block-height' for `all'.
+%% @doc Generate and store the synthetic assignment for a message. `all' mode
+%% uses the already-cached transaction ID as its body link; its path is always
+%% `compute', so the header does not need to be loaded to build the assignment.
+%% Mirrors the assignments minted by `~scheduler@1.0', but records the chain
+%% position that sequences its mode: weave `offset' for `target',
+%% `block-height' for `all'.
 %% Every field derives from chain data, so the assignment is deterministic
 %% across nodes and is left uncommitted.
-write_assignment(ProcID, Slot, Extra, Msg, Opts) ->
+write_assignment(ProcID, Slot, Extra, PathMsg, Body, Opts) ->
     BaseAssignment =
-        lib_scheduler:base_assignment(
-            hb_util:human_id(ProcID),
-            Slot,
-            Msg,
-            Opts
-        ),
+        (lib_scheduler:base_assignment(
+            hb_util:human_id(ProcID), Slot, PathMsg, Opts
+        ))#{ <<"body">> => Body },
     Assignment = hb_maps:merge(BaseAssignment, Extra, Opts),
     ?event(
         {minting_assignment,
@@ -765,7 +770,7 @@ initialize(ProcID, Opts) ->
         {ok, _} = hb_cache:write(Process, Opts),
         Mode = mode(Process, Opts),
         {ok, Zero} ?= slot_zero(Mode, ProcID, SpawnHeight, Opts),
-        ok = write_assignment(ProcID, 0, Zero, Process, Opts),
+        ok = write_assignment(ProcID, 0, Zero, Process, Process, Opts),
         % `synced-to' starts one below the spawn block: slot 0 is the process
         % itself, and no message-bearing block has been indexed yet. The first
         % sync begins its range at the spawn block, catching any messages mined
@@ -1181,15 +1186,28 @@ all_mode_assignment_test() ->
             Opts,
             #{ <<"commitment-device">> => <<"tx@1.0">> }
         ),
-    ok =
-        write_assignment(
-            ProcID,
-            1,
-            all_mode_detail(1958986),
-            Msg,
+    MsgID = hb_util:human_id(hb_message:id(Msg, signed, Opts)),
+    {ok, _} = hb_cache:write(Msg, Opts),
+    Extra = all_mode_detail(1958986),
+    Expected =
+        hb_maps:merge(
+            lib_scheduler:base_assignment(ProcID, 1, Msg, Opts),
+            Extra,
             Opts
         ),
+    ExpectedID = hb_message:id(Expected, signed, Opts),
+    BodyLink = {link, MsgID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
+    ok = write_assignment(ProcID, 1, Extra, Extra, BodyLink, Opts),
+    {ok, Stored} = hb_cache:read(ExpectedID, Opts),
+    ?assertMatch({link, _, _}, maps:get(<<"body">>, Stored)),
     {ok, Assignment} = dev_arweave_scheduler_cache:read(ProcID, 1, Opts),
+    ?assertEqual(
+        ExpectedID,
+        hb_message:id(Assignment, signed, Opts)
+    ),
+    Body = hb_ao:get(<<"body">>, Assignment, Opts),
+    ?assertEqual(MsgID, hb_util:human_id(hb_message:id(Body, signed, Opts))),
+    ?assert(hb_message:verify(Body, all, Opts)),
     ?assertEqual(1, hb_util:int(hb_ao:get(<<"slot">>, Assignment, Opts))),
     ?assertEqual(
         1958986,

@@ -15,12 +15,11 @@
 %% to the cache.
 opts(Opts) -> lib_scheduler:cache_opts(Opts).
 
-%% @doc Write an assignment message into the cache. Assignments are
-%% deterministic derivations of chain data, so writes are idempotent:
-%% concurrent synchronizations of the same process converge on identical
-%% messages at identical paths.
+%% @doc Write an assignment message into the cache. Its transaction body was
+%% cached before assignment, so preserve its content link. Assignments are
+%% deterministic derivations of chain data, making writes idempotent.
 write(Assignment, Opts) ->
-    lib_scheduler:write_assignment(?CACHE_PREFIX, Assignment, Opts).
+    lib_scheduler:write_linked_assignment(?CACHE_PREFIX, Assignment, Opts).
 
 %% @doc Get an assignment message from the cache.
 read(ProcID, Slot, Opts) ->
