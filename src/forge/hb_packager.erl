@@ -31,6 +31,7 @@
 -export([scan/2, scan/1]).
 -export([package/2, package_all/2, group_device_name/1]).
 -export([spec_message/2, impl_message/3]).
+-export([require_spec_bodies/1]).
 -export([format_error/1]).
 
 -include("include/hb.hrl").
@@ -333,6 +334,17 @@ package(#{ root := Root, root_file := RootFile, helpers := Helpers,
             Pkg
     end.
 
+%% @doc Require packaged devices to have a non-empty specification body before
+%% publishing through paths that upload the spec as signed item data.
+require_spec_bodies(Pkgs) ->
+    lists:foreach(fun require_spec_body/1, Pkgs),
+    Pkgs.
+
+require_spec_body(#{ device_name := Name, spec_body := <<>> }) ->
+    erlang:error({empty_device_specification, Name});
+require_spec_body(_Pkg) ->
+    ok.
+
 %% @doc The device name (`name@version') a scanned group implements,
 %% without packaging it. Build tooling uses this to correlate a source
 %% group with its package.
@@ -618,6 +630,11 @@ format_error({device_compile_failed, Device, Path, Errors, Warnings}) ->
         compile_messages("", Errors),
         compile_messages("Warning: ", Warnings)
     ];
+format_error({empty_device_specification, Name}) ->
+    io_lib:format(
+        "Device specification body is empty for ~ts. Add a leading %%% @doc block or -specification(\"path\") before publishing.",
+        [hb_util:list(Name)]
+    );
 format_error(Reason) ->
     io_lib:format("~p", [Reason]).
 
