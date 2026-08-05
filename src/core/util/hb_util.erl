@@ -4,7 +4,7 @@
 -export([safe_int/1]).
 -export([ceil_int/2, floor_int/2]).
 -export([id/1, id/2, native_id/1, human_id/1, human_int/1, to_hex/1]).
--export([secret_key_to_committer/1, remove_scheme_prefix/1]).
+-export([secret_key_to_committer/1, remove_scheme_prefix/1, extract_ao_id/1]).
 -export([key_to_atom/1, key_to_atom/2, binary_to_strings/1]).
 -export([encode/1, decode/1, decode/2, safe_encode/1, safe_decode/1]).
 -export([is_printable_string/1]).
@@ -220,6 +220,10 @@ remove_scheme_prefix(KeyID) ->
         [_Scheme, Key] -> Key;
         [Key] -> Key
     end.
+
+%% @doc Extract an ID from its `ao-id:' representation.
+extract_ao_id(<<"ao-id:", ID/binary>>) -> ID;
+extract_ao_id(ID) -> ID.
 
 %% @doc Is the given term a string list?
 is_string_list(MaybeString) ->
@@ -977,6 +981,21 @@ atom_to_dashed_binary(Key) when is_atom(Key) ->
     hb_util_string:dash_chars(atom_to_binary(Key)).
 
 %% Tests
+
+is_id_test_parallel() ->
+    ?assert(is_id_guard(<<0:256>>)),
+    ?assert(is_id_guard(<<"ao-id:test">>)),
+    ?assert(is_id_guard(<<"ao-id:">>)),
+    ?assertNot(is_id_guard(<<"ao-id">>)),
+    ?assertNot(is_id_guard(<<"xa-id:test">>)),
+    ?assertNot(is_id_guard(not_binary)).
+
+is_id_guard(ID) when ?IS_ID(ID) -> true;
+is_id_guard(_) -> false.
+
+extract_ao_id_test_parallel() ->
+    ?assertEqual(<<"test">>, extract_ao_id(<<"ao-id:test">>)),
+    ?assertEqual(<<"test">>, extract_ao_id(<<"test">>)).
 
 atom_to_dashed_binary_test_parallel() ->
     ?assertEqual(atom_to_dashed_binary(atom_1), <<"atom-1">>).

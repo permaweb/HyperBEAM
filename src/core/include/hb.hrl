@@ -5,9 +5,14 @@
 
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.
 -define(IS_EMPTY_MESSAGE(Msg), (map_size(Msg) == 0) orelse (map_size(Msg) == 1 andalso (is_map_key(priv, Msg) orelse is_map_key(<<"priv">>, Msg)))).
-%% @doc Macro usable in guards that validates whether a term is a
-%% human-readable ID encoding.
--define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% @doc Macro usable in guards that validates whether a term is an ID.
+-define(IS_ID(X),
+    (is_binary(X) andalso
+        (byte_size(X) == 42 orelse
+            byte_size(X) == 43 orelse
+            byte_size(X) == 32 orelse
+            (byte_size(X) >= 6 andalso
+                binary_part(X, 0, 6) =:= <<"ao-id:">>)))).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.
