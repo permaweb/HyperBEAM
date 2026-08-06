@@ -67,6 +67,8 @@
 %%% is handed the name and the lease's remaining duration as well as the
 %%% payment, so that a rate varying with either replaces it without touching a
 %%% caller. A process may instead name a `pricing-device', asked in its place.
+%%% It may return a scalar quote, or a quote carrying opaque `pricing'
+%%% metadata that this device retains on the lease.
 %%%
 %%% == Running one ==
 %%%
@@ -300,7 +302,9 @@ calendar_seconds(_Date) -> {error, invalid}.
 blocks(Base, Req, Opts) ->
     maybe
         {ok, Payment} ?= amount(<<"blocks">>, Req, Opts),
-        quote(Base, <<"blocks">>, Payment, priced(Base, Req, Opts), Opts)
+        {ok, Bought, _Pricing} ?=
+            quote(Base, <<"blocks">>, Payment, priced(Base, Req, Opts), Opts),
+        {ok, Bought}
     end.
 
 %% @doc What a number of blocks of registration costs.
@@ -308,7 +312,9 @@ blocks(Base, Req, Opts) ->
 price(Base, Req, Opts) ->
     maybe
         {ok, Blocks} ?= amount(<<"price">>, Req, Opts),
-        quote(Base, <<"price">>, Blocks, priced(Base, Req, Opts), Opts)
+        {ok, Cost, _Pricing} ?=
+            quote(Base, <<"price">>, Blocks, priced(Base, Req, Opts), Opts),
+        {ok, Cost}
     end.
 
 %% @doc Tell the curve how long the name it is being asked about still has to
@@ -324,12 +330,18 @@ priced(Base, Req, Opts) ->
 %% through it, exactly as `dev_carrier' asks its `swap-device' -- and for the
 %% same reason it is one scalar key rather than a `~stack@1.0': a process
 %% spawned as an Arweave transaction can carry only flat tags.
+%% A structured answer may carry opaque metadata to retain on the lease.
 quote(Base, Key, Given, Req, Opts) ->
     case state(<<"pricing-device">>, Base, not_found, Opts) of
-        not_found -> flat(Base, Key, Given, Req, Opts);
+        not_found -> quoted(flat(Base, Key, Given, Req, Opts));
         Device -> delegated(Base, Device, Key, Given, Req, Opts)
     end.
 
+%% @doc Normalize a scalar quote to the internal response form.
+quoted({ok, Answer}) -> {ok, Answer, #{}};
+quoted(Error) -> Error.
+
+%% @doc Ask a configured pricing device for a scalar or structured quote.
 delegated(Base, Device, Key, Given, Req, Opts) ->
     case
         hb_ao:resolve(
@@ -338,7 +350,20 @@ delegated(Base, Device, Key, Given, Req, Opts) ->
             Opts
         )
     of
-        {ok, Answer} -> hb_util:safe_int(Answer);
+        {ok, Answer} when is_map(Answer) -> structured_quote(Key, Answer, Opts);
+        {ok, Answer} -> quoted(hb_util:safe_int(Answer));
+        _ -> {error, invalid}
+    end.
+
+%% @doc Read a quote and opaque lease metadata from a pricing response.
+structured_quote(Key, Answer, Opts) ->
+    maybe
+        {ok, Quoted} ?=
+            hb_util:safe_int(hb_maps:get(Key, Answer, not_found, Opts)),
+        Pricing = hb_maps:get(<<"pricing">>, Answer, #{}, Opts),
+        true ?= is_map(Pricing),
+        {ok, Quoted, Pricing}
+    else
         _ -> {error, invalid}
     end.
 
@@ -395,7 +420,7 @@ purchase(Base, Body, Height, Opts) ->
         true ?= is_binary(Name),
         {ok, Paid} ?= amount_field(<<"reward">>, Body, Opts),
         Held = held(Name, Base, Height, Opts),
-        {ok, Bought} ?=
+        {ok, Bought, Pricing} ?=
             quote(
                 Base,
                 <<"blocks">>,
@@ -423,16 +448,23 @@ purchase(Base, Body, Height, Opts) ->
         put_name(
             Base,
             Name,
-            #{
-                <<"deadline">> => Deadline,
-                <<"grace">> => Grace,
-                <<"value">> => value(Held, Body, Opts)
-            },
+            priced_lease(
+                #{
+                    <<"deadline">> => Deadline,
+                    <<"grace">> => Grace,
+                    <<"value">> => value(Held, Body, Opts)
+                },
+                Pricing
+            ),
             Opts
         )
     else
         _ -> Base
     end.
+
+%% @doc Retain opaque metadata supplied by the configured pricing device.
+priced_lease(Record, Pricing) when map_size(Pricing) =:= 0 -> Record;
+priced_lease(Record, Pricing) -> Record#{ <<"pricing">> => Pricing }.
 
 %% @doc The height a purchase's grace extends from, as `extends/3' is the
 %% height its deadline extends from. A lease that still stands carries its
@@ -983,6 +1015,50 @@ pricing_device_replaces_the_curve_test() ->
     Bought = apply_tx(Base, buy(Buyer, <<"abcd">>, 100), 10, Opts),
     ?assertEqual(35, lease(Bought, <<"abcd">>, <<"deadline">>, Opts)).
 
+%% @doc A structured quote retains opaque pricing metadata on the lease.
+probability_time_pricing_device_test() ->
+    Opts = test_opts(),
+    {ok, Trained} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"markov@1.0">> },
+            #{
+                <<"path">> => <<"train">>,
+                <<"body">> => [<<"a">>, <<"ab">>, <<"b">>],
+                <<"order">> => 1
+            },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    Base =
+        Trained#{
+            <<"pricing-device">> => <<"probability-time@1.0">>,
+            <<"target-occupancy">> => 0.5,
+            <<"price-at-target">> => 1000000000000
+        },
+    {ok, Cost} =
+        price(
+            Base,
+            #{ <<"price">> => 100, <<"name">> => <<"a">> },
+            Opts
+        ),
+    {Buyer, _} = party(),
+    Bought = apply_tx(Base, buy(Buyer, <<"a">>, Cost), 10, Opts),
+    ?assertEqual(110, lease(Bought, <<"a">>, <<"deadline">>, Opts)),
+    Pricing = lease(Bought, <<"a">>, <<"pricing">>, Opts),
+    ?assert(is_float(hb_maps:get(<<"weight">>, Pricing, Opts))),
+    {ok, EmptyPrice} =
+        price(
+            Base,
+            #{ <<"price">> => 10, <<"name">> => <<"b">> },
+            Opts
+        ),
+    {ok, OccupiedPrice} =
+        price(
+            Bought,
+            #{ <<"price">> => 10, <<"name">> => <<"b">> },
+            Opts
+        ),
+    ?assert(OccupiedPrice > EmptyPrice).
+
 %% @doc A lease's numbers come back from the process cache as numbers, or are
 %% coerced back into them. `number/4' re-coerces on every read on that stated
 %% ground; if it is not so, the coercion is doing nothing at all.
@@ -1346,4 +1422,3 @@ story() ->
             Opts
         )
     ).
-
