@@ -15,7 +15,8 @@
 %%%       message in the process's schedule. Slots follow the canonical weave
 %%%       order (ascending weave offset, which is ascending block order). The
 %%%       transaction's weave `offset' -- not a scheduler-assigned nonce -- is
-%%%       its on-chain position, and it is recorded on the assignment.</li>
+%%%       its on-chain position, and it is recorded on the assignment alongside
+%%%       the block clock.</li>
 %%%   <li>Discovery is <em>local-first</em>: the node indexes the relevant
 %%%       blocks itself with `~copycat@1.0' and then queries its own
 %%%       `~query@1.0' GraphQL endpoint (`transactions(recipients:
@@ -439,11 +440,12 @@ discover(ProcID, _Mode, From, To, Opts) ->
     maybe
         ok ?= ensure_offsets(From, To, Opts),
         {ok, IDs} ?= query_recipients(ProcID, From, To, Opts),
+        {ok, Blocks} ?= target_blocks(ProcID, From, To, IDs, Opts),
         {ok,
             [
-                {#{ <<"offset">> => Offset }, TXID}
+                {target_mode_detail(Block, Offset, Opts), TXID}
             ||
-                {Offset, TXID} <- base_layer_offsets(IDs, Opts)
+                {Offset, Block, TXID} <- base_layer_offsets(IDs, Blocks, Opts)
             ]
         }
     end.
@@ -455,7 +457,7 @@ discover(ProcID, _Mode, From, To, Opts) ->
 %% already cached the blocks locally, so the enumeration is normally a local
 %% read. The process's own transaction is skipped: it is already slot 0.
 %%
-%% Returns `{Height, TXID}' pairs. Unlike a query result these are ordered by
+%% Returns `{Block, TXID}' pairs. Unlike a query result these are ordered by
 %% construction, and that order is total -- weave offset is not, because every
 %% transaction that carries no data shares the offset of the one before it.
 enumerate_blocks(_ProcID, From, To, _Opts) when From > To -> {ok, []};
@@ -469,7 +471,7 @@ enumerate_blocks(ProcID, From, To, Opts) ->
         {ok, Rest} ?= enumerate_blocks(ProcID, From + 1, To, Opts),
         {ok,
             [
-                {From, TXID}
+                {Block, TXID}
             ||
                 TXID <- hb_maps:get(<<"txs">>, Block, [], Opts),
                 TXID =/= hb_util:human_id(ProcID)
@@ -598,6 +600,24 @@ query_pages(Query, After, Acc, Opts) ->
 edge_id(Edge, Opts) ->
     hb_maps:get(<<"id">>, hb_maps:get(<<"node">>, Edge, #{}, Opts), undefined, Opts).
 
+target_blocks(_ProcID, _From, _To, [], _Opts) ->
+    {ok, #{}};
+target_blocks(ProcID, From, To, IDs, Opts) ->
+    IDSet = maps:from_list([{ID, true} || ID <- IDs]),
+    maybe
+        {ok, Located} ?= enumerate_blocks(ProcID, From, To, Opts),
+        {ok,
+            maps:from_list(
+                [
+                    {ID, Block}
+                ||
+                    {Block, ID} <- Located,
+                    maps:is_key(ID, IDSet)
+                ]
+            )
+        }
+    end.
+
 %% @doc Run a GraphQL `transactions' query against the node's local index.
 run_query(Query, Variables, Opts) ->
     to_transactions(
@@ -655,13 +675,33 @@ base_layer_offset(Store, ID, Opts) ->
         _ -> false
     end.
 
+base_layer_offsets(IDs, Blocks, Opts) ->
+    Store = hb_store_arweave:store_from_opts(Opts),
+    lists:keysort(
+        1,
+        lists:filtermap(
+            fun(ID) ->
+                base_layer_offset(Store, ID, maps:get(ID, Blocks, undefined), Opts)
+            end,
+            IDs
+        )
+    ).
+
+base_layer_offset(Store, ID, Block, Opts) when is_map(Block) ->
+    case offset_entry(Store, ID, Opts) of
+        {ok, <<"tx@1.0">>, Offset} -> {true, {Offset, Block, ID}};
+        _ -> false
+    end;
+base_layer_offset(_Store, _ID, _Block, _Opts) ->
+    false.
+
 %% @doc Keep the data-free headers cached by the headers-mode pass.
 base_layer_blocks(Located, Opts) ->
     {ok,
         [
-            {all_mode_detail(Height), ID}
+            {all_mode_detail(Block, Opts), ID}
         ||
-            {Height, ID} <- Located,
+            {Block, ID} <- Located,
             data_free(ID, Opts)
         ]
     }.
@@ -706,7 +746,11 @@ assign(ProcID, State, Slot, [], To, Opts) ->
     ok = dev_arweave_scheduler_cache:write_state(ProcID, NewState, Opts),
     {ok, NewState};
 assign(ProcID, State, Slot,
-        [{Extra = #{ <<"block-height">> := _ }, TXID} | Rest], To, Opts) ->
+        [
+            {Extra = #{ <<"block-height">> := _, <<"path">> := <<"compute">> },
+                TXID}
+            | Rest
+        ], To, Opts) ->
     Body = {link, TXID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
     ok = write_assignment(ProcID, Slot, Extra, Extra, Body, Opts),
     assign(ProcID, State, Slot + 1, Rest, To, Opts);
@@ -731,7 +775,7 @@ assign(ProcID, State, Slot, [{Extra, TXID} | Rest], To, Opts) ->
 %% `compute', so the header does not need to be loaded to build the assignment.
 %% Mirrors the assignments minted by `~scheduler@1.0', but records the chain
 %% position that sequences its mode: weave `offset' for `target',
-%% `block-height' for `all'.
+%% `block-height' and `timestamp' for both modes.
 %% Every field derives from chain data, so the assignment is deterministic
 %% across nodes and is left uncommitted.
 write_assignment(ProcID, Slot, Extra, PathMsg, Body, Opts) ->
@@ -801,19 +845,46 @@ mode(Process, Opts) ->
 %% -- the process's clock starts at the block it was created in -- and in the
 %% modes that sort by weave position, its offset. Only those modes index the
 %% spawn block to read that offset.
-slot_zero(<<"all">>, _ProcID, SpawnHeight, _Opts) ->
-    {ok, all_mode_detail(SpawnHeight)};
+slot_zero(<<"all">>, _ProcID, SpawnHeight, Opts) ->
+    maybe
+        {ok, Block} ?= read_block(SpawnHeight, Opts),
+        {ok, all_mode_detail(Block, Opts)}
+    end;
 slot_zero(_Mode, ProcID, SpawnHeight, Opts) ->
     maybe
         ok ?= ensure_offsets(SpawnHeight, SpawnHeight, Opts),
         {ok, Offset} ?= tx_offset(ProcID, Opts),
-        {ok, #{ <<"offset">> => Offset }}
+        {ok, Block} ?= read_block(SpawnHeight, Opts),
+        {ok, target_mode_detail(Block, Offset, Opts)}
     end.
 
 %% @doc Every message in an `all'-mode schedule is process input, not a request
 %% whose `path' may select an execution-device key.
-all_mode_detail(Height) ->
-    #{ <<"block-height">> => Height, <<"path">> => <<"compute">> }.
+all_mode_detail(Block, Opts) ->
+    maps:merge(block_detail(Block, Opts), #{ <<"path">> => <<"compute">> }).
+
+target_mode_detail(Block, Offset, Opts) ->
+    maps:merge(block_detail(Block, Opts), #{ <<"offset">> => Offset }).
+
+block_detail(Block, Opts) ->
+    Height = hb_util:int(block_field(<<"height">>, Block, Opts)),
+    Timestamp = hb_util:int(block_field(<<"timestamp">>, Block, Opts)),
+    #{
+        <<"block-height">> => Height,
+        <<"block-timestamp">> => Timestamp,
+        % Field-name alias for `block-timestamp`, preserving compatibility with
+        % consumers that read scheduler@1.0's `timestamp` field.
+        <<"timestamp">> => Timestamp
+    }.
+
+read_block(Height, Opts) ->
+    hb_ao:resolve(
+        <<?ARWEAVE_DEVICE/binary, "/block=", (hb_util:bin(Height))/binary>>,
+        no_result_cache(Opts)
+    ).
+
+block_field(Key, Block, Opts) ->
+    hb_maps:get(Key, Block, not_found, Opts).
 
 %% @doc Read an L1 transaction as a header-only message from the node's stores.
 %% `~copycat@1.0/arweave' caches the (data-free) header locally while indexing,
@@ -1088,6 +1159,16 @@ base_layer_offsets_test() ->
     ?assertEqual(
         [{100, Early}, {200, Late}],
         base_layer_offsets([Late, Bundled, Early, Unindexed], Opts)
+    ),
+    EarlyBlock = test_block(10, [Early]),
+    LateBlock = test_block(11, [Late]),
+    ?assertEqual(
+        [{100, EarlyBlock, Early}, {200, LateBlock, Late}],
+        base_layer_offsets(
+            [Late, Bundled, Early, Unindexed],
+            #{ Early => EarlyBlock, Late => LateBlock },
+            Opts
+        )
     ).
 
 %% @doc The sequencing mode is read from the process message, and anything the
@@ -1104,17 +1185,39 @@ mode_test() ->
 %% @doc A process sequenced by the whole chain has a clock from slot 0, and
 %% every slot resolves `compute'.
 slot_zero_test() ->
+    Store = hb_test_utils:test_store(),
+    hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store] },
+    ok = write_test_block(3, [], Opts),
     ?assertEqual(
-        {ok, all_mode_detail(3)},
-        slot_zero(<<"all">>, ignored, 3, #{})
+        {ok, all_mode_detail(test_block(3, []), Opts)},
+        slot_zero(<<"all">>, ignored, 3, Opts)
     ).
+
+target_mode_detail_test() ->
+    ?assertEqual(
+        #{
+            <<"block-height">> => 3,
+            <<"block-timestamp">> => 3000,
+            <<"timestamp">> => 3000,
+            <<"offset">> => 123
+        },
+        target_mode_detail(test_block(3, []), 123, #{})
+    ).
+
+test_block(Height, TXs) ->
+    #{
+        <<"height">> => Height,
+        <<"timestamp">> => Height * 1000,
+        <<"txs">> => TXs
+    }.
 
 %% @doc Write a block into the node's block cache at the height pseudo-path
 %% `~copycat@1.0/arweave' caches it under, so the enumerator reads it locally
 %% rather than from the network.
 write_test_block(Height, TXs, Opts) ->
     {ok, MsgID} =
-        hb_cache:write(#{ <<"height">> => Height, <<"txs">> => TXs }, Opts),
+        hb_cache:write(test_block(Height, TXs), Opts),
     hb_cache:link(
         MsgID,
         hb_path:to_binary(
@@ -1137,9 +1240,20 @@ enumerate_blocks_test() ->
     Third = hb_util:human_id(crypto:strong_rand_bytes(32)),
     ok = write_test_block(10, [First, ProcID], Opts),
     ok = write_test_block(11, [Second, Third], Opts),
+    {ok, Enumerated} = enumerate_blocks(ProcID, 10, 11, Opts),
     ?assertEqual(
-        {ok, [{10, First}, {11, Second}, {11, Third}]},
-        enumerate_blocks(ProcID, 10, 11, Opts)
+        [First, Second, Third],
+        [TXID || {_Block, TXID} <- Enumerated]
+    ),
+    ?assertEqual(
+        [10, 11, 11],
+        [hb_util:int(block_field(<<"height">>, Block, Opts)) ||
+            {Block, _TXID} <- Enumerated]
+    ),
+    ?assertEqual(
+        [10000, 11000, 11000],
+        [hb_util:int(block_field(<<"timestamp">>, Block, Opts)) ||
+            {Block, _TXID} <- Enumerated]
     ).
 
 %% @doc Block-enumerated transactions keep chain order and only locally cached,
@@ -1164,10 +1278,15 @@ base_layer_blocks_test() ->
     DataBearingID = hb_message:id(DataBearing, signed, Opts),
     {ok, _} = hb_cache:write(DataFree, Opts),
     {ok, _} = hb_cache:write(DataBearing, Opts),
+    Block10 = test_block(10, [DataFreeID, DataBearingID, <<"missing">>]),
     ?assertEqual(
-        {ok, [{all_mode_detail(10), DataFreeID}]},
+        {ok, [{all_mode_detail(Block10, Opts), DataFreeID}]},
         base_layer_blocks(
-            [{10, DataFreeID}, {10, DataBearingID}, {10, <<"missing">>}],
+            [
+                {Block10, DataFreeID},
+                {Block10, DataBearingID},
+                {Block10, <<"missing">>}
+            ],
             Opts
         )
     ).
@@ -1186,9 +1305,10 @@ all_mode_assignment_test() ->
             Opts,
             #{ <<"commitment-device">> => <<"tx@1.0">> }
         ),
+    Block = test_block(1958986, [hb_message:id(Msg, signed, Opts)]),
     MsgID = hb_util:human_id(hb_message:id(Msg, signed, Opts)),
     {ok, _} = hb_cache:write(Msg, Opts),
-    Extra = all_mode_detail(1958986),
+    Extra = all_mode_detail(Block, Opts),
     Expected =
         hb_maps:merge(
             lib_scheduler:base_assignment(ProcID, 1, Msg, Opts),
@@ -1212,6 +1332,14 @@ all_mode_assignment_test() ->
     ?assertEqual(
         1958986,
         hb_util:int(hb_ao:get(<<"block-height">>, Assignment, Opts))
+    ),
+    ?assertEqual(
+        1958986000,
+        hb_util:int(hb_ao:get(<<"timestamp">>, Assignment, Opts))
+    ),
+    ?assertEqual(
+        1958986000,
+        hb_util:int(hb_ao:get(<<"block-timestamp">>, Assignment, Opts))
     ),
     ?assertEqual(<<"compute">>, hb_ao:get(<<"path">>, Assignment, Opts)).
 
