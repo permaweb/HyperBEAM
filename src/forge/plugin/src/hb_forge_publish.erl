@@ -78,9 +78,11 @@ publish(State) ->
                 [Action, maps:get(device_name, Pkg), SpecID, ImplID, Signer]
             )
         end,
-        hb_packager:package_all(
-            hb_forge_args:scan_devices(Args),
-            NodeOpts
+        hb_packager:require_spec_bodies(
+            hb_packager:package_all(
+                hb_forge_args:scan_devices(Args),
+                NodeOpts
+            )
         )
     ),
     {ok, State}.

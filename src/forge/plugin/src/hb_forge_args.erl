@@ -142,6 +142,8 @@ run_provider(State, Module, Fun) when is_function(Fun, 1) ->
             try Fun(State)
             catch
                 error:{device_compile_failed, _, _, _, _} = Reason ->
+                    {error, hb_packager:format_error(Reason)};
+                error:{empty_device_specification, _} = Reason ->
                     {error, hb_packager:format_error(Reason)}
             end
     end.
