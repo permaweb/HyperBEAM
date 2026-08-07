@@ -63,10 +63,10 @@ request(State, Raw, NodeMsg) ->
     case {IsChargable, (PricingDevice =/= false) and (LedgerDevice =/= false)} of
         {false, _} ->
             ?event(payment, non_chargable_route),
-            {ok, #{ <<"body">> => Messages }};
+            {ok, Raw#{ <<"body">> => Messages }};
         {true, false} ->
             ?event(payment, {p4_pre_pricing_response, {error, <<"infinity">>}}),
-            {ok, #{ <<"body">> => Messages }};
+            {ok, Raw#{ <<"body">> => Messages }};
         {true, true} ->
             PricingMsg = State#{ <<"device">> => PricingDevice },
             LedgerMsg = State#{ <<"device">> => LedgerDevice },
@@ -87,7 +87,7 @@ request(State, Raw, NodeMsg) ->
                 {ok, 0} ->
                     % The device has estimated the cost of the request to be
                     % zero, so we proceed.
-                    {ok, #{ <<"body">> => Messages }};
+                    {ok, Raw#{ <<"body">> => Messages }};
                 {ok, Price} ->
                     % The device has estimated the cost of the request. We check
                     % the user's balance to see if they have enough funds to
@@ -114,7 +114,7 @@ request(State, Raw, NodeMsg) ->
                                     {balance_check, guaranteed}
                                 }
                             ),
-                            {ok, #{ <<"body">> => Messages }};
+                            {ok, Raw#{ <<"body">> => Messages }};
                         {ok, Balance} when Balance >= Price ->
                             % The user has enough funds to service the request,
                             % so we proceed.
@@ -123,7 +123,7 @@ request(State, Raw, NodeMsg) ->
                                     {balance_check, sufficient}
                                 }
                             ),
-                            {ok, #{ <<"body">> => Messages }};
+                            {ok, Raw#{ <<"body">> => Messages }};
                         {ok, Balance} ->
                             % The user does not have enough funds to service
                             % the request, so we don't proceed.
@@ -265,11 +265,15 @@ response(State, RawResponse, NodeMsg) ->
     end.
 
 %% @doc Get the balance of a user in the ledger.
+%%
+%% A node may run several request hooks, so the P4 handler has to be selected
+%% rather than assumed to be the only entry. P4 handlers carry a
+%% `ledger-device'.
 balance(_, Req, NodeMsg) ->
-    case hb_hook:find(<<"request">>, NodeMsg) of
-        [] ->
+    case p4_handler(hb_hook:find(<<"request">>, NodeMsg), NodeMsg) of
+        not_found ->
             {error, <<"No request hook found.">>};
-        [Handler] ->
+        Handler ->
             LedgerDevice =
                 hb_ao:get(<<"ledger-device">>, Handler, false, NodeMsg),
             LedgerMsg = Handler#{ <<"device">> => LedgerDevice },
@@ -286,7 +290,21 @@ balance(_, Req, NodeMsg) ->
             end
     end.
 
-%% @doc The node operator may elect to make certain routes non-chargable, using 
+%% @doc Pick the P4 handler out of the request hook list.
+p4_handler([], _NodeMsg) ->
+    not_found;
+p4_handler(Handlers, NodeMsg) ->
+    case lists:search(
+        fun(Handler) ->
+            hb_ao:get(<<"ledger-device">>, Handler, false, NodeMsg) =/= false
+        end,
+        Handlers
+    ) of
+        {value, Handler} -> Handler;
+        false -> not_found
+    end.
+
+%% @doc The node operator may elect to make certain routes non-chargable, using
 %% the `routes' syntax also used to declare routes in `router@1.0'.
 is_chargable_req(Req, NodeMsg) ->
     NonChargableRoutes =
@@ -364,6 +382,54 @@ faff_test() ->
     ?event(payment, {res, Res}),
     ?assertEqual(<<"Hello, world!">>, Res),
     ?assertMatch({error, _}, hb_http:get(Node, BadSignedReq, #{})).
+
+%% @doc Test P4 in the middle of a request hook pipeline.
+multi_request_hook_test() ->
+    Parent = self(),
+    Wallet = ar_wallet:new(),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    PassThrough = #{
+        <<"device">> => #{
+            <<"request">> => fun(_, HookReq, _) -> {ok, HookReq} end
+        }
+    },
+    Processor = #{
+        <<"device">> => <<"p4@1.0">>,
+        <<"ledger-device">> => <<"simple-pay@1.0">>,
+        <<"pricing-device">> => <<"simple-pay@1.0">>
+    },
+    Observer = #{
+        <<"device">> => #{
+            <<"request">> =>
+                fun(_, HookReq, _) ->
+                    Parent ! {p4_hook_request, HookReq},
+                    {ok, HookReq}
+                end
+        }
+    },
+    Node = hb_http_server:start_node(
+        #{
+            <<"simple-pay-ledger">> => #{ Address => 7 },
+            <<"on">> => #{
+                <<"request">> => [PassThrough, Processor, Observer]
+            }
+        }
+    ),
+    SignedReq = hb_message:commit(
+        #{ <<"path">> => <<"/~p4@1.0/balance">> },
+        #{ <<"priv-wallet">> => Wallet }
+    ),
+    ?assertEqual({ok, 7}, hb_http:get(Node, SignedReq, #{})),
+    receive
+        {p4_hook_request, HookReq} ->
+            Request = hb_ao:get(<<"request">>, HookReq, #{}),
+            ?assertEqual(
+                <<"/~p4@1.0/balance">>,
+                hb_ao:get(<<"path">>, Request, #{})
+            )
+    after 1000 ->
+        ?assert(false)
+    end.
 
 %% @doc Test that a non-chargable route is not charged for.
 non_chargable_route_test() ->
