@@ -23,13 +23,15 @@
 %%%       signature.</li>
 %%% </ol>
 -module(hb_device_load).
--export([reference/2]).
+-export([reference/2, schema/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-%% @doc A message is already a device. A binary reference is resolved,
-%% then memoised in the process cache unless it is a forge seed.
+%% @doc Resolve a device referece to an executable device representation 
+%% (either a module atom or a binary reference).
 reference(Loaded, _Opts) when is_map(Loaded) ->
+    % A message is already a viable device. A binary reference is resolved,
+    % then memoised in the process cache unless it is a forge seed.
     {ok, Loaded};
 reference(<<>>, _Opts) ->
     {error, not_found};
@@ -75,7 +77,7 @@ get_resolved_device(Ref, Opts) ->
                 {ok, Bin} ?=
                     hb_store:read(
                         loaded_device_store(Opts),
-                        store_key(Ref),
+                        module_cache_key(Ref),
                         Opts
                     ),
                 Mod = hb_util:atom(Bin),
@@ -92,13 +94,15 @@ put_resolved_device(Ref, Mod, Opts) ->
     erlang:put({?MODULE, Ref}, Mod),
     hb_store:write(
         loaded_device_store(Opts),
-        #{ store_key(Ref) => hb_util:bin(Mod) },
+        #{ module_cache_key(Ref) => hb_util:bin(Mod) },
         Opts
     ).
 
 loaded_device_store(Opts) -> hb_opts:get(loaded_device_store, [], Opts).
 
-store_key(Ref) -> <<"~meta@1.0/devices/", Ref/binary>>.
+loaded_device_opts(Opts) -> Opts#{ <<"store">> => loaded_device_store(Opts) }.
+
+module_cache_key(Ref) -> <<"~meta@1.0/devices/modules/", Ref/binary>>.
 
 %%% --------------------------------------------------------------------
 %%% High trust
@@ -138,7 +142,10 @@ from_preloaded(Ref, Opts) ->
             {error, not_found};
         Store ->
             PreOpts =
-                Opts#{ <<"store">> => [Store], <<"cache-read-mode">> => raw },
+                Opts#{
+                    <<"store">> => [Store],
+                    <<"cache-read-mode">> => raw
+                },
             maybe
                 {ok, SpecID} ?= preloaded_spec(Ref, Store, PreOpts),
                 lazy_first(
@@ -161,7 +168,7 @@ preloaded_spec(Ref, Store, Opts) ->
     hb_store:read(Store, <<?PRELOADED_INDEX_KEY/binary, "/", Ref/binary>>, Opts).
 
 %% @doc The preloaded store, with request-local cache keys stripped so it is
-%% visible inside a request-scoped resolution.
+%% active inside a request-scoped resolution.
 preloaded(Opts) ->
     Node = maps:without([<<"cache-control">>, <<"only">>, <<"prefer">>], Opts),
     hb_opts:get(preloaded_store, undefined, Node).
@@ -277,13 +284,73 @@ load_archive(ID, Opts) ->
         load_archive_message(Msg, Opts)
     end.
 
+%% @doc Load an archive and cache the schema of its device.
 load_archive_message(Msg, Opts) ->
-    hb_device_archive:load(
-        hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
-        hb_maps:get(<<"body">>, Msg, undefined, Opts),
-        Msg,
-        Opts
-    ).
+    Archive = hb_maps:get(<<"body">>, Msg, undefined, Opts),
+    maybe
+        {ok, Module} ?=
+            hb_device_archive:load(
+                hb_maps:get(<<"module-name">>, Msg, undefined, Opts),
+                Archive,
+                Msg,
+                Opts
+            ),
+        maybe_cache_schema(Module, Archive, Opts),
+        {ok, Module}
+    end.
+
+%% @doc Extract and cache a packaged device schema when available.
+maybe_cache_schema(Module, Archive, Opts) ->
+    case archive_to_schema(Module, Archive, Opts) of
+        {ok, Schema} ->
+            cache_schema(Module, Schema, Opts),
+            ok;
+        _ -> ok
+    end.
+
+%% @doc Extract the schema for a loaded device module from a packaged archive.
+archive_to_schema(Module, Archive, _Opts) ->
+    case hb_device_archive:contents(Archive) of
+        {ok, Modules, _Resources} ->
+            case lists:keyfind(Module, 1, Modules) of
+                {Module, _Path, Beam} -> hb_types:beam_to_schema(Module, Beam);
+                false -> {error, schema_not_found}
+            end;
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Read the cached schema for a device module if known.
+schema(Module, Opts) ->
+    SchemaOpts = loaded_device_opts(Opts),
+    case hb_cache:read(schema_key(Module), SchemaOpts) of
+        {ok, Schema} -> {ok, hb_cache:ensure_all_loaded(Schema, SchemaOpts)};
+        Other -> Other
+    end.
+
+%% @doc Write the schema for a device to the cache, under its reference.
+cache_schema(Module, Schema, Opts) ->
+    case hb_opts:get(<<"caching-schema">>, false, Opts) of
+        true -> skipping_recursive_cache;
+        false ->
+            SchemaOpts =
+                (loaded_device_opts(Opts))#{
+                    <<"caching-schema">> => true
+                },
+            case hb_cache:write(Schema, SchemaOpts) of
+                {ok, SchemaID} ->
+                    hb_store:link(
+                        loaded_device_store(Opts),
+                        #{ schema_key(Module) => SchemaID },
+                        SchemaOpts
+                    );
+                _ ->
+                    ok
+            end
+    end.
+
+schema_key(Module) ->
+    <<"~meta@1.0/devices/schemas/", (atom_to_binary(Module, utf8))/binary>>.
 
 implementation_query(SpecID) ->
     #{

@@ -104,13 +104,13 @@ do_monitor(Group, Last, Opts) ->
 %% skip the grouper dispatch entirely: the leader short-circuit below would
 %% discard the computed group name anyway.
 find_or_register(_Base, _Req, #{ <<"await-inprogress">> := false }) ->
-    {leader, ungrouped_exec};
+    {skip, ungrouped_exec};
 find_or_register(Base, Req, Opts) ->
     find_or_register(group(Base, Req, Opts), Base, Req, Opts).
 find_or_register(ungrouped_exec, _Base, _Req, _Opts) ->
-    {leader, ungrouped_exec};
+    {skip, ungrouped_exec};
 find_or_register(GroupName, _Base, _Req, Opts) ->
-    case hb_opts:get(await_inprogress, false, Opts) of
+    case hb_opts:get(<<"await-inprogress">>, false, Opts) of
         false -> {leader, GroupName};
         _ ->
             Self = self(),

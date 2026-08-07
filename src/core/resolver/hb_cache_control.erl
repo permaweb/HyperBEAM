@@ -24,8 +24,8 @@
 maybe_store(Base, Req, Res, Opts) ->
     case derive_cache_settings([Res, Req], Opts) of
         #{ <<"store">> := true } ->
-            ?event(caching, {caching_result, {base, Base}, {req, Req}, {res, Res}}),
-            dispatch_cache_write(Base, Req, Res, Opts);
+            dispatch_cache_write(Base, Req, Res, Opts),
+            ok;
         _ -> 
             not_caching
     end.
@@ -74,27 +74,8 @@ lookup(Base, Req, Opts) ->
                         #{ <<"only-if-cached">> := true } ->
                             only_if_cached_not_found_error(Base, Req, Opts);
                         _ ->
-                            case ?IS_ID(Base) of
-                                    false -> {continue, Base, Req};
-                                    true ->
-                                        case hb_cache:read(Base, Opts) of
-                                            {ok, FullBase} ->
-                                                ?event(load_message,
-                                                    {cache_hit_base_message_load,
-                                                        {base_id, Base},
-                                                        {base_loaded, FullBase}
-                                                    }
-                                                ),
-                                                {continue, FullBase, Req};
-                                            not_found ->
-                                                necessary_messages_not_found_error(
-                                                    Base,
-                                                    Req,
-                                                    Opts
-                                                )
-                                        end
-                                end
-                        end
+                            {error, not_found}
+                    end
             end
     end.
 
@@ -132,8 +113,8 @@ async_writer() ->
 
 %% @doc Internal function to write a compute result to the cache.
 perform_cache_write(Base, Req, Res, Opts) ->
-    hb_cache:write(Base, Opts),
-    hb_cache:write(Req, Opts),
+    {ok, BaseID} = hb_cache:write(Base, Opts),
+    {ok, ReqID} = hb_cache:write(Req, Opts),
     case Res of
         <<_/binary>> ->
             hb_cache:write_binary(
@@ -141,8 +122,15 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Res,
                 Opts
             );
-        Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+        Msg when is_map(Msg) ->
+            {ok, ResID} = hb_cache:write(Res, Opts),
+            LinkPath = <<BaseID/binary, "/", ReqID/binary>>,
+            hb_cache:link(
+                ResID,
+                LinkPath,
+                Opts
+            ),
+            ok;
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching

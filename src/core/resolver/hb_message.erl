@@ -207,13 +207,7 @@ conversion_spec_to_req(Spec, Opts) ->
         {
             case Device of
                 tabm -> tabm;
-                _ ->
-                    hb_device:message_to_device(
-                        #{
-                            <<"device">> => Device
-                        },
-                        Opts
-                    )
+                _ -> hb_device:module(Device, Opts)
             end,
             hb_maps:without([<<"device">>], Spec, Opts)
         }
@@ -575,7 +569,7 @@ paranoid_verify(Topic, Msg, Opts) ->
     % without emitting an event or walking a topic list. This path fires
     % twice per `hb_ao:resolve/3', so the event/`lists:member' overhead is
     % noticeable on the hot path.
-    case hb_opts:get(paranoid_verify, false, Opts) of
+    case hb_opts:get(<<"paranoid-verify">>, false, Opts) of
         false -> true;
         [] -> true;
         true ->
@@ -592,7 +586,10 @@ paranoid_verify(Topic, Msg, Opts) ->
 
 do_paranoid_verify(Topic, Msg, Opts) ->
     try
-        do_paranoid_verify(Topic, [], Msg, Opts),
+        % We disable paranoid verification on _downstream_ (only!) execution
+        % here to avoid infinite recursion. We must avoid disabling it anywhere
+        % else.
+        do_paranoid_verify(Topic, [], Msg, Opts#{ <<"paranoid-verify">> => false }),
         ?event_debug(debug_paranoia, {paranoid_verify_complete, ok}, Opts),
         true
     catch

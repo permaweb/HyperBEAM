@@ -82,34 +82,23 @@
 %%% 
 %%%     info/worker : A function that should be run as the 'server' loop of
 %%%                   the executor for interactions using the device.
-%%% 
-%%% The HyperBEAM resolver also takes a number of runtime options that change
-%%% the way that the environment operates:
-%%% 
-%%% `update_hashpath':  Whether to add the `Req' to `HashPath' for the `Res'.
-%%% 					Default: true.
-%%% `add_key':          Whether to add the key to the start of the arguments.
-%%% 					Default: `<not set>'.
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
--export([resolve/2, resolve/3, resolve_many/2]).
+-export([resolve/2, resolve/3]).
 -export([raw/3, raw/4, raw/5]).
+-export([with/3]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
--export([force_message/2]).
 %%% Shortcuts and tools:
--export([keys/1, keys/2, keys/3]).
--export([get/2, get/3, get/4, get_first/2, get_first/3]).
--export([set/3, set/4, remove/2, remove/3]).
+-export([keys/2]).
+-export([as/3, get/3, get/4, get_first/2, get_first/3]).
+-export([set/3, set/4, deep_set/3, remove/3]).
 %%% Exports for tests in hb_ao_test_vectors.erl:
--export([deep_set/4]).
 -include("include/hb.hrl").
 
 -define(
     TEMP_OPTS,
     [
-        <<"add-key">>,
-        <<"force-message">>,
         <<"cache-control">>,
         <<"spawn-worker">>,
         <<"only">>,
@@ -117,49 +106,17 @@
     ]
 ).
 
-%% @doc Get the value of a message's key by running its associated device
-%% function. Optionally, takes options that control the runtime environment. 
-%% This function returns the raw result of the device function call:
-%% `{ok | error, NewMessage}.'
-%% The resolver is composed of a series of discrete phases:
-%%      1: Normalization.
-%%      2: Cache lookup.
-%%      3: Validation check.
-%%      4: Persistent-resolver lookup.
-%%      5: Device lookup.
-%%      6: Execution.
-%%      7: Execution of the `step' hook.
-%%      8: Subresolution.
-%%      9: Cryptographic linking.
-%%     10: Result caching.
-%%     11: Notify waiters.
-%%     12: Fork worker.
-%%     13: Recurse or terminate.
-resolve(Path, Opts) when is_binary(Path) ->
-    resolve(#{ <<"path">> => Path }, Opts);
-resolve(SingletonMsg, _Opts)
-        when is_map(SingletonMsg), not is_map_key(<<"path">>, SingletonMsg) ->
-    {error, <<"Attempted to resolve a message without a path.">>};
-resolve(SingletonMsg, Opts) ->
-    resolve_many(hb_singleton:from(SingletonMsg, Opts), Opts).
-
-resolve(Base, Path, Opts) when not is_map(Path) ->
-    resolve(Base, #{ <<"path">> => Path }, Opts);
-resolve(Base, Req, Opts) ->
-    PathParts = hb_path:from_message(request, Req, Opts),
-    ?event(
-        ao_core,
-        {stage, 1, prepare_multimessage_resolution, {path_parts, PathParts}}
-    ),
-    MessagesToExec = [ Req#{ <<"path">> => Path } || Path <- PathParts ],
-    ?event_debug(debug_ao_core,
-        {stage,
-            1,
-            prepare_multimessage_resolution,
-            {messages_to_exec, MessagesToExec}
-        }
-    ),
-    resolve_many([Base | MessagesToExec], Opts).
+%% @doc Small helper to extend a message with a device.
+as(Device, Link, Opts) when ?IS_LINK(Link) ->
+    as(Device, hb_cache:ensure_loaded(Link, Opts), Opts);
+as(Device, Msg, _Opts) when is_map(Msg) ->
+    hb_private:set_priv(
+        #{
+            <<"device">> => Device,
+            <<"...">> => Msg
+        },
+        hb_private:from_message(Msg)
+    ).
 
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
@@ -174,34 +131,58 @@ raw(Base, Req, Opts) ->
 raw(Device, Base, Req, Opts) ->
     raw(Device, undefined, Base, Req, Opts).
 raw(ForcedDevice, ForcedKey, Base, Req, Opts) ->
-    ExecOpts = execution_opts(Opts),
-    % If a forced key is provided, use it; otherwise, extract from the request.
-    Key =
-        if ForcedKey =/= undefined -> ForcedKey;
-        true -> hb_path:hd(Req, ExecOpts)
-        end,
-    % If an explicit device is provided we use it _only on the lookup_ -- not
-    % during execution.
-    BaseWithDevice =
-        case ForcedDevice of
-            undefined -> Base;
-            _ when is_map(Base) -> Base#{ <<"device">> => ForcedDevice };
-            _ -> #{ <<"device">> => ForcedDevice }
-        end,
-    {ExecFun, PrefixArgs} =
-        case hb_device:message_to_fun(BaseWithDevice, Key, ExecOpts) of
-            {add_key, _DevMod, Fun} -> {Fun, [Key]};
-            {_Status, _DevMod, Fun} -> {Fun, []}
-        end,
-    % Apply the function and return the result directly, without any further
-    % processing. We add the `PrefixArgs` to the list of arguments to be passed
-    % to the function to accomodate default handlers, which take the key that
-    % was invoked on the device as the first argument (ahead of `Base`, `Req`,
-    % and `ExecOpts`).
-    apply(
-        ExecFun,
-        hb_device:truncate_args(ExecFun, PrefixArgs ++ [Base, Req, ExecOpts])
+    % ?prim_dbg(
+    %     {executing,
+    %         {forced_device, ForcedDevice},
+    %         {forced_key, ForcedKey}
+    %     }
+    % ),
+    from_context(
+        do(
+            to_context(
+                ForcedDevice,
+                ForcedKey,
+                Base,
+                Req,
+                Opts#{
+                    <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                    <<"await-inprogress">> => false,
+                    <<"hashpath">> => ignore
+                }
+            )
+        )
     ).
+
+%% @doc Resolve a single AO-Core base and request pair or singleton message.
+%% If the `path` in the request has multiple parts, each is executed in sequence,
+%% over the original base message.
+resolve(MsgSeq, Opts) when is_list(MsgSeq) ->
+    resolve_many(MsgSeq, Opts);
+resolve(Path, Opts) when is_binary(Path) ->
+    resolve(#{ <<"path">> => Path }, Opts);
+resolve(SingleResult, _Opts)
+        when is_map(SingleResult), not is_map_key(<<"path">>, SingleResult) ->
+    % Nothing to resolve; return as-is.
+    {ok, SingleResult};
+resolve(SingletonMsg, Opts) ->
+    resolve_many(hb_singleton:from(SingletonMsg, Opts), Opts).
+resolve(Base, Path, Opts) when is_binary(Path) ->
+    resolve(Base, #{ <<"path">> => Path }, Opts);
+resolve(Base, Req, Opts) ->
+    MessagesToExec =
+        case hb_path:from_message(request, Req, Opts) of
+            undefined -> [Req];
+            PathParts ->
+                [ #{ <<"path">> => Path, <<"...">> => Req } || Path <- PathParts ]
+        end,
+    ?event_debug(debug_ao_core,
+        {stage,
+            1,
+            prepare_multimessage_resolution,
+            {messages_to_exec, MessagesToExec}
+        }
+    ),
+    resolve_many([Base | MessagesToExec], Opts).
 
 %% @doc Resolve a list of messages in sequence. Take the output of the first
 %% message as the input for the next message. Once the last message is resolved,
@@ -216,17 +197,15 @@ resolve_many([ID], Opts) when ?IS_ID(ID) ->
     % 2. The main AO-Core logic looks for linkages between message input
     %    pairs and outputs. With only a single ID, there is not a valid pairing
     %    to use in looking up a cached result.
-    ?event_debug(debug_ao_core, {stage, na, resolve_directly_to_id, ID, {opts, Opts}}, Opts),
-    try {ok, ensure_message_loaded(ID, Opts)}
-    catch _:_:_ -> {error, not_found}
-    end;
+    ?event_debug(debug_ao_core, {stage, na, resolve_directly_to_id, ID}, Opts),
+    hb_cache:read(ID, Opts);
 resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
     % We have been given a message rather than a list of messages, so we should
     % convert it to a list, assuming that the message is monotonically numbered.
     ListOfMessages =
         try hb_util:message_to_ordered_list(ListMsg, internal_opts(Opts))
         catch
-          Type:Exception:Stacktrace ->
+            Type:Exception:Stacktrace ->
             throw(
                 {resolve_many_error,
                     {given_message_not_ordered_list, ListMsg},
@@ -237,10 +216,6 @@ resolve_many(ListMsg, Opts) when is_map(ListMsg) ->
             )
         end,
     resolve_many(ListOfMessages, Opts);
-resolve_many({as, DevID, Msg}, Opts) ->
-    subresolve(#{}, DevID, Msg, Opts);
-resolve_many([{resolve, Subres}], Opts) ->
-    resolve_many(Subres, Opts);
 resolve_many(MsgList, Opts) ->
     ?event_debug(debug_ao_core, {resolve_many, MsgList}, Opts),
     Res = do_resolve_many(MsgList, Opts),
@@ -248,12 +223,12 @@ resolve_many(MsgList, Opts) ->
     Res.
 do_resolve_many([], _Opts) ->
     {failure, <<"Attempted to resolve an empty message sequence.">>};
-do_resolve_many([Res], Opts) ->
-    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}),
-    hb_cache:ensure_loaded(maybe_force_message(Res, Opts), Opts);
+do_resolve_many([Res], _Opts) ->
+    ?event_debug(debug_ao_core, {stage, 11, resolve_complete, Res}, _Opts),
+    {ok, Res};
 do_resolve_many([Base, Req | MsgList], Opts) ->
     ?event_debug(debug_ao_core, {stage, 0, resolve_many, {base, Base}, {req, Req}}),
-    case resolve_stage(1, Base, Req, Opts) of
+    case resolve_single(Base, Req, Opts) of
         {ok, Res} ->
             ?event_debug(debug_ao_core,
                 {
@@ -263,212 +238,221 @@ do_resolve_many([Base, Req | MsgList], Opts) ->
                     {res, Res},
                     {opts, Opts}
                 },
-				Opts
+			Opts
             ),
             do_resolve_many([Res | MsgList], Opts);
         Res ->
-            % The result is not a resolvable message. Return it.
-            ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating_early, Res}),
-            maybe_force_message(Res, Opts)
+            % The result is not a continuable message. Return it.
+            ?event_debug(debug_ao_core, {stage, 13, resolve_many_terminating, Res}),
+            Res
     end.
 
-resolve_stage(1, Link, Req, Opts) when ?IS_LINK(Link) ->
-    % If the first message is a link, we should load the message and
-    % continue with the resolution.
-    ?event_debug(debug_ao_core, {stage, 1, resolve_base_link, {link, Link}}, Opts),
-    resolve_stage(1, hb_cache:ensure_loaded(Link, Opts), Req, Opts);
-resolve_stage(1, Base, Link, Opts) when ?IS_LINK(Link) ->
-    % If the second message is a link, we should load the message and
-    % continue with the resolution.
-    ?event_debug(debug_ao_core, {stage, 1, resolve_req_link, {link, Link}}, Opts),
-    resolve_stage(1, Base, hb_cache:ensure_loaded(Link, Opts), Opts);
-resolve_stage(1, {as, DevID, Ref}, Req, Opts) when ?IS_ID(Ref) orelse ?IS_LINK(Ref) ->
-    % Normalize `as' requests with a raw ID or link as the path. Links will be
-    % loaded in following stages.
-    resolve_stage(1, {as, DevID, #{ <<"path">> => Ref }}, Req, Opts);
-resolve_stage(1, {as, DevID, Link}, Req, Opts) when ?IS_LINK(Link) ->
-    % If the first message is an `as' with a link, we should load the message and
-    % continue with the resolution.
-    ?event_debug(debug_ao_core, {stage, 1, resolve_base_as_link, {link, Link}}, Opts),
-    resolve_stage(1, {as, DevID, hb_cache:ensure_loaded(Link, Opts)}, Req, Opts);
-resolve_stage(1, {as, DevID, Raw = #{ <<"path">> := ID }}, Req, Opts) when ?IS_ID(ID) ->
-    % If the first message is an `as' with an ID, we should load the message and
-    % apply the non-path elements of the sub-request to it.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_with_load, {dev, DevID}, {id, ID}}, Opts),
-    RemBase = hb_maps:without([<<"path">>], Raw, Opts),
-    ?event_debug(debug_subresolution, {loading_message, {id, ID}, {params, RemBase}}, Opts),
-    Baseb = ensure_message_loaded(ID, Opts),
-    ?event_debug(debug_subresolution, {loaded_message, {msg, Baseb}}, Opts),
-    Basec = hb_maps:merge(Baseb, RemBase, Opts),
-    ?event_debug(debug_subresolution, {merged_message, {msg, Basec}}, Opts),
-    Based = set(Basec, <<"device">>, DevID, Opts),
-    ?event_debug(debug_subresolution, {loaded_parameterized_message, {msg, Based}}, Opts),
-    resolve_stage(1, Based, Req, Opts);
-resolve_stage(1, Raw = {as, DevID, SubReq}, Req, Opts) ->
-    % Set the device of the message to the specified one and resolve the sub-path.
-    % As this is the first message, we will then continue to execute the request
-    % on the result.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_base, {dev, DevID}, {subreq, SubReq}}, Opts),
-    ?event_debug(debug_subresolution, {as, {dev, DevID}, {subreq, SubReq}, {req, Req}}),
-    case subresolve(SubReq, DevID, SubReq, Opts) of
-        {ok, SubRes} ->
-            % The subresolution has returned a new message. Continue with it.
-            ?event(subresolution,
-                {continuing_with_subresolved_message, {base, SubRes}}
-            ),
-            resolve_stage(1, SubRes, Req, Opts);
-        OtherRes ->
-            % The subresolution has returned an error. Return it.
-            ?event(subresolution,
-                {subresolution_error, {base, Raw}, {res, OtherRes}}
-            ),
-            OtherRes
-    end;
-resolve_stage(1, RawBase, ReqOuter = #{ <<"path">> := {as, DevID, ReqInner} }, Opts) ->
-    % Set the device to the specified `DevID' and resolve the message. Merging
-    % the `ReqInner' into the `ReqOuter' message first. We return the result
-    % of the sub-resolution directly.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_from_request, {dev, DevID}}, Opts),
-    LoadedInner = ensure_message_loaded(ReqInner, Opts),
-    Req =
-        hb_maps:merge(
-            set(ReqOuter, <<"path">>, unset, Opts),
-            if is_binary(LoadedInner) -> #{ <<"path">> => LoadedInner };
-            true -> LoadedInner
-            end,
-			Opts
-        ),
-    ?event(subresolution,
-        {subresolving_request_before_execution,
-            {dev, DevID},
-            {req, Req}
-        }
-    ),
-    subresolve(RawBase, DevID, Req, Opts);
-resolve_stage(1, {resolve, Subres}, Req, Opts) ->
-    % If the first message is a `{resolve, Subres}' tuple, we should execute it
-    % directly, then apply the request to the result.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_base_message, {subres, Subres}}, Opts),
-    % Unlike the `request' case for pre-subresolutions, we do not need to unset
-    % the `force-message' option, because the result should be a message, anyway.
-    % If it is not, it is more helpful to have the message placed into the `body'
-    % of a result, which can then be executed upon.
-    case resolve_many(Subres, Opts) of
-        {ok, Base} ->
-            ?event_debug(debug_ao_core, {stage, 1, subresolve_success, {new_base, Base}}, Opts),
-            resolve_stage(1, Base, Req, Opts);
-        OtherRes ->
-            ?event_debug(debug_ao_core,
-                {stage,
-                    1,
-                    subresolve_failed,
-                    {subres, Subres},
-                    {res, OtherRes}},
-                Opts
-            ),
-            OtherRes
-    end;
-resolve_stage(1, Base, {resolve, Subres}, Opts) ->
-    % If the second message is a `{resolve, Subresolution}' tuple, we should
-    % execute the subresolution directly to gain the underlying `Req' for 
-    % our execution. We assume that the subresolution is already in a normalized,
-    % executable form, so we pass it to `resolve_many' for execution.
-    ?event_debug(debug_ao_core, {stage, 1, subresolving_request_message, {subres, Subres}}, Opts),
-    % We make sure to unset the `force-message' option so that if the subresolution
-    % returns a literal, the rest of `resolve' will normalize it to a path.
-    case resolve_many(Subres, maps:without([<<"force-message">>], Opts)) of
-        {ok, Req} ->
-            ?event(
-                ao_core,
-                {stage, 1, request_subresolve_success, {req, Req}},
-                Opts
-            ),
-            resolve_stage(1, Base, Req, Opts);
-        OtherRes ->
-            ?event(
-                ao_core,
-                {
-                    stage,
-                    1,
-                    request_subresolve_failed,
-                    {subres, Subres},
-                    {res, OtherRes}
-                },
-                Opts
-            ),
-            OtherRes
-    end;
-resolve_stage(1, Base, Req, Opts) when is_list(Base) ->
-    % Normalize lists to numbered maps (base=1) if necessary.
-    ?event_debug(debug_ao_core, {stage, 1, list_normalize}, Opts),
-    resolve_stage(1,
-        normalize_keys(Base, Opts),
-        Req,
-        Opts
-    );
-resolve_stage(1, Base, NonMapReq, Opts) when not is_map(NonMapReq) ->
-    ?event_debug(debug_ao_core, {stage, 1, path_normalize}),
-    resolve_stage(1, Base, #{ <<"path">> => NonMapReq }, Opts);
-resolve_stage(1, RawBase, RawReq, Opts) ->
-    % Normalize the path to a private key containing the list of remaining
-    % keys to resolve.
-    ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
-    Base = normalize_keys(RawBase, Opts),
-    Req = normalize_keys(RawReq, Opts),
-    resolve_stage(2, Base, Req, Opts);
-resolve_stage(2, Base, Req, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
-    % Lookup request in the cache. If we find a result, return it.
-    % If we do not find a result, we continue to the next stage,
-    % unless the cache lookup returns `halt' (the user has requested that we 
-    % only return a result if it is already in the cache).
-    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
-        {ok, Res} ->
-            ?event_debug(debug_ao_core, {stage, 2, cache_hit, {res, Res}, {opts, Opts}}, Opts),
-            {ok, Res};
-        {continue, NewBase, NewReq} ->
-            resolve_stage(3, NewBase, NewReq, Opts);
-        {error, CacheResp} -> {error, CacheResp}
-    end;
-resolve_stage(3, Base, Req, _Opts) when not is_map(Base) or not is_map(Req) ->
-    % Validation check: If the messages are not maps, we cannot find a key
-    % in them, so return not_found.
-    ?event_debug(debug_ao_core, {stage, 3, validation_check_type_error}, _Opts),
-    {error, not_found};
-resolve_stage(3, Base, Req, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 3, validation_check}, Opts),
-    % Validation checks: If `paranoid_message_verification' is enabled, we should
-    % verify the base and request messages prior to execution.
-    hb_message:paranoid_verify(
-        pre_resolve,
+%% @doc Resolve only a single, explicit, computation step over a path-normalized
+%% (single part) `Base` and `Req` pair.
+resolve_single(Base, Req, Opts) ->
+    from_context(do(to_context(undefined, undefined, Base, Req, Opts))).
+
+%% @doc Create an execution context from a set of core parameters:
+%% `ForcedDevice` (if relevant), `ForcedKey` (if relevant), `Base`, `Req`,
+%% and `Opts`.
+to_context(FDevice, FKey, Base, Req, Opts) ->
+    maps:filter(
+        fun(_K, V) -> V =/= undefined end,
         #{
-            <<"reason">> => <<"AO-Core Pre-Execution Validation">>,
+            <<"device">> => FDevice,
+            <<"path">> => FKey,
             <<"base">> => Base,
-            <<"request">> => Req
-        },
-        Opts
-    ),
-    resolve_stage(4, Base, Req, Opts);
-resolve_stage(4, Base, Req, Opts) ->
+            <<"request">> => Req,
+            <<"opts">> => Opts
+        }
+    ).
+    
+%% @doc Convert a completed execution context into the caller-facing
+%% `{ExecStatus, Result}` form from its stage-bound `context`. 
+from_context({ok, Ctx = #{ <<"result">> := Res }}) ->
+    {maps:get(<<"status">>, Ctx, ok), Res};
+from_context(Other) ->
+    throw({unexpected_context_after_exec, Other}).
+
+%% @doc Ensure that each of the given fields is present in an execution
+%% context, deriving those that are absent from the components already known.
+%% Derived fields are added to the context, such that repeated demands do not
+%% repeat work. A field that is neither present nor derivable yields
+%% `{not_found, Field}`.
+with([], Ctx, _Opts) -> {ok, Ctx};
+with([Field | Fields], Ctx, Opts) when is_map_key(Field, Ctx) ->
+    with(Fields, Ctx, Opts);
+with([Field | Fields], Ctx, Opts) ->
+    case derive(Field, Ctx, Opts) of
+        {ok, Value} -> with(Fields, Ctx#{ Field => Value }, Opts);
+        _ -> {not_found, Field}
+    end.
+
+%% @doc Derive a single context field from its complementary components:
+%% messages are read from the store by their IDs, while IDs are calculated
+%% from their messages. A request may also be derived from a literal path
+%% (e.g. `*`), which names itself. Messages read from the store are lazily
+%% loaded: their keys are only read when they are themselves demanded.
+derive(<<"base">>, #{ <<"base-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(<<"request">>, #{ <<"request-id">> := ID }, Opts) when ?IS_ID(ID) ->
+    hb_cache:read(ID, Opts);
+derive(<<"request">>, #{ <<"request-id">> := Path }, _Opts) ->
+    {ok, #{ <<"path">> => Path }};
+derive(<<"varied-base">>, #{ <<"varied-base-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(<<"varied-request">>, #{ <<"varied-request-id">> := ID }, Opts) ->
+    hb_cache:read(ID, Opts);
+derive(Field, Ctx, Opts) ->
+    % Every `x-id` field is derivable from its `x` message, if present.
+    case binary:split(Field, <<"-id">>) of
+        [Name, <<>>] when is_map_key(Name, Ctx) ->
+            {ok, hb_message:id(maps:get(Name, Ctx), all, Opts)};
+        _ -> {not_found, Field}
+    end.
+
+%% @doc Resolves a fully normalized execution context. Stages that find the
+%% result early set it in the context; later stages skip themselves when they
+%% see it. Any non-`{ok, Ctx}` return propagates as the result.
+do(Ctx0) ->
+    maybe
+        % Stage 1: Normalization; device or direct key lookup.
+        {ok, Ctx1} ?= stage_1(Ctx0),
+        % Stage 2: Function lookup.
+        {ok, Ctx2} ?= stage_2(Ctx1),
+        % Stage 3: Vary `Base` and `Req`.
+        {ok, Ctx3} ?= stage_3(Ctx2),
+        % Stage 4: Persistent resolver lookup.
+        {ok, Ctx4} ?= stage_4(Ctx3),
+        % Stage 5: Cache lookup.
+        {ok, Ctx5} ?= stage_5(Ctx4),
+        % Stage 6: Execution.
+        {ok, Ctx6} ?= stage_6(Ctx5),
+        % Stage 7: `Normalizer` application and hashpath generation
+        {ok, Ctx7} ?= stage_7(Ctx6),
+        % Stage 8: Result caching.
+        {ok, Ctx8} ?= stage_8(Ctx7),
+        % Stage 9: Notify waiters.
+        {ok, Ctx9} ?= stage_9(Ctx8),
+        % Stage 10: Execution of the `step' hook.
+        {ok, Ctx10} ?= stage_10(Ctx9),
+        % Stage 11: Fork worker.
+        stage_11(Ctx10)
+    else
+        {hit, Ctx} ->
+            % A stage may choose to return early. If it does, return it in
+            % `ok`-form. We assume that the stage in question will have 
+            % appropriately cleaned up.
+            {ok, Ctx};
+        {error, Ctx} ->
+            % The stage returned an error. Return to the caller early after
+            % unregistering as the active worker, if appropriate. We can call
+            % this twice, even if we erred after stage 8, as it is idempotent.
+            stage_8(Ctx),
+            {error, Ctx}
+    end.
+
+%% @doc Normalize the context of an execution request. Ensures that a device and
+%% path are available for execution, or that a direct key hit resolves the
+%% request without one.
+stage_1(Ctx = #{ <<"device">> := _, <<"path">> := _ }) -> {ok, Ctx};
+stage_1(Ctx = #{ <<"base">> := Base, <<"path">> := Path, <<"opts">> := Opts }) ->
+    case hb_device:id_or_direct_key(Base, Path, Opts) of
+        {hit, Res} -> {hit, Ctx#{ <<"status">> => ok, <<"result">> => Res }};
+        {ok, Device} -> stage_1(Ctx#{ <<"device">> => Device });
+        {error, Reason} ->
+            {error, Ctx#{ <<"status">> => error, <<"reason">> => Reason }}
+    end;
+stage_1(Ctx = #{ <<"request">> := Req, <<"opts">> := Opts }) when is_map(Req) ->
+    stage_1(Ctx#{ <<"path">> => hb_path:hd(Req, Opts) });
+stage_1(Ctx = #{ <<"request">> := Key }) ->
+    % If the request is for a direct key we normalize it to a message with 
+    % only a path of that key.
+    stage_1(Ctx#{ <<"request">> => #{ <<"path">> => normalize_key(Key) } });
+stage_1(Ctx = #{ <<"opts">> := Opts }) ->
+    % The context does not carry its messages directly. Derive the `base` and
+    % `request` from the components that are given (e.g. their IDs), then
+    % normalize as usual.
+    case with([<<"base">>, <<"request">>], Ctx, Opts) of
+        {ok, Loaded} -> stage_1(Loaded);
+        {not_found, Field} ->
+            {error, Ctx#{ <<"status">> => error, <<"reason">> => {not_found, Field} }}
+    end.
+
+%% @doc Lookup the device and function to use during an execution.
+stage_2(
+        Ctx = #{
+            <<"device">> := Device,
+            <<"base">> := Base,
+            <<"path">> := Path,
+            <<"opts">> := Opts
+        }
+) ->
+    {Status, _ExecDev, _ExecMod, Function} =
+        hb_device:message_to_fun(Device, Base, Path, Opts),
+    {ok,
+        Ctx#{
+            <<"add-key">> => case Status of add_key -> Path; _ -> false end,
+            <<"priv">> => #{ <<"function">> => Function }
+        }
+    }.
+
+%% @doc Vary the `Base` and `Req` of the resolution. To do so, assuming that
+%% the request is not itself a `vary` call, we recursively resolve the
+%% computation as a sub-request. This allows the device to offer its own `vary`
+%% logic, based upon the device's own understanding of the request.
+stage_3(Ctx = #{ <<"path">> := <<"vary">>, <<"base">> := Base, <<"request">> := Req }) ->
+    % We are already varying. Do not recurse.
+    {ok, Ctx#{ <<"varied-base">> => Base, <<"varied-request">> => Req }};
+stage_3(
+        Ctx =
+            #{
+                <<"base">> := Base,
+                <<"request">> := Req,
+                <<"priv">> := #{ <<"function">> := Function },
+                <<"opts">> := Opts
+            }
+) ->
+    maybe
+        % Raw call `vary` to find the varied base/req, passing the
+        % `priv/function` such that varying does not require us to repeat the
+        % associated work. The returned context fragment (varied messages,
+        % result normalization) is merged into our own.
+        {ok, VariedCtx} ?=
+            raw(
+                undefined,
+                <<"vary">>,
+                Base,
+                hb_private:set(Req, <<"function">>, Function, Opts),
+                Opts
+            ),
+        {ok, maps:merge(Ctx, VariedCtx)}
+    end.
+
+%% @doc Determine if the request is already being resolved right now. If so,
+%% await the result rather than resolving again. If not, register as the
+%% resolver for the request in question and proceed. If we are executing with
+%% `no-cache`, skip the lookup and proceed with the current context.
+stage_4(
+        Ctx = #{
+            <<"varied-base">> := Base,
+            <<"varied-request">> := Req,
+            <<"opts">> := Opts
+        }) ->
     ?event_debug(debug_ao_core, {stage, 4, persistent_resolver_lookup}, Opts),
     % Persistent-resolver lookup: Search for local (or Distributed
     % Erlang cluster) processes that are already performing the execution.
-    % Before we search for a live executor, we check if the device specifies 
-    % a function that tailors the 'group' name of the execution. For example, 
-    % the `dev_process' device 'groups' all calls to the same process onto
+    % Before we search for a live executor, we check if the device specifies
+    % a function that tailors the 'group' name of the execution. For example,
+    % the `~process@1.0' device 'groups' all calls to the same process onto
     % calls to a single executor. By default, `{Base, Req}' is used as the
     % group name.
-    case hb_persistent:find_or_register(Base, Req, hb_maps:without(?TEMP_OPTS, Opts, Opts)) of
-        {leader, ExecName} ->
-            % We are the leader for this resolution. Continue to the next stage.
-            case hb_opts:get(spawn_worker, false, Opts) of
-                true -> ?event(worker_spawns, {will_become, ExecName});
-                _ -> ok
-            end,
-            resolve_stage(5, Base, Req, ExecName, Opts);
+    case hb_persistent:find_or_register(Base, Req, Opts) of
+        {skip, ungrouped_exec} -> {ok, Ctx};
+        {leader, ExecName} -> {ok, Ctx#{ <<"leader">> => ExecName }};
         {wait, Leader} ->
             % There is another executor of this resolution in-flight.
-            % Bail execution, register to receive the response, then
+            % register to receive the response, then
             % wait.
             case hb_persistent:await(Leader, Base, Req, Opts) of
                 {error, leader_died} ->
@@ -483,14 +467,19 @@ resolve_stage(4, Base, Req, Opts) ->
                         Opts
                     ),
                     % Re-try again if the group leader has died.
-                    resolve_stage(4, Base, Req, Opts);
-                Res ->
-                    % Now that we have the result, we can skip right to potential
-                    % recursion (step 11) in the outer-wrapper.
-                    Res
+                    stage_4(Ctx);
+                {Status, Result} ->
+                    % We received a successful result from another worker. They
+                    % will store the result if appropriate, so we skip the store
+                    % write.
+                    {ok, Ctx#{ <<"status">> => Status, <<"result">> => Result }};
+                Other ->
+                    % The leader resolved to a non-`ok` result. Propagate it.
+                    ?event_debug(debug_ao_core, {unexpected_worker_result, Other}),
+                    Other
             end;
         {infinite_recursion, GroupName} ->
-            % We are the leader for this resolution, but we executing the 
+            % We are the leader for this resolution, but we executing the
             % computation again. This may plausibly be OK in _some_ cases,
             % but in general it is the sign of a bug.
             ?event(
@@ -503,335 +492,179 @@ resolve_stage(4, Base, Req, Opts) ->
                 },
                 Opts
             ),
-            case hb_opts:get(allow_infinite, false, Opts) of
+            case hb_opts:get(<<"allow-infinite">>, false, Opts) of
                 true ->
                     % We are OK with infinite loops, so we just continue.
-                    resolve_stage(5, Base, Req, GroupName, Opts);
+                    % No need to register, as we are the leader.
+                    {ok, Ctx};
                 false ->
                     % We are not OK with infinite loops, so we raise an error.
-                    error_infinite(Base, Req, Opts)
+                    {
+                        error,
+                        #{
+                            <<"status">> => 508,
+                            <<"body">> => <<"Request creates infinite recursion.">>
+                        }
+                    }
             end
     end.
-resolve_stage(5, Base, Req, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 5, device_lookup}, Opts),
-    % Device lookup: Find the Erlang function that should be utilized to 
-    % execute Req on Base.
-	{ResolvedFunc, NewOpts} =
-		try
-            UserOpts = hb_maps:without(?TEMP_OPTS, Opts, Opts),
-			Key = hb_path:hd(Req, UserOpts),
-			% Try to load the device and get the function to call.
-            ?event(
-                {
-                    resolving_key,
-                    {key, Key},
-                    {base, Base},
-                    {req, Req},
-                    {opts, Opts}
+
+%% @doc Look up whether the varied base and request pair already has a known
+%% result in the cache. If so, set it in the context: subsequent stages skip
+%% execution, and stage 8 notifies any waiting callers.
+stage_5(Ctx = #{
+    <<"varied-base">> := Base,
+    <<"varied-request">> := Req,
+    <<"opts">> := Opts
+}) ->
+    case hb_cache_control:maybe_lookup(Base, Req, Opts) of
+        {continue, NewBase, NewReq} ->
+            {
+                ok,
+                Ctx#{
+                    <<"varied-base">> => NewBase,
+                    <<"varied-request">> => NewReq
                 }
-            ),
-			{Status, Device, Func} = hb_device:message_to_fun(Base, Key, UserOpts),
-			?event(
-				{found_func_for_exec,
-                    {key, Key},
-                    {device, Device},
-					{func, Func},
-					{base, Base},
-					{req, Req},
-					{opts, Opts}
-				}
-			),
-			% Next, add an option to the Opts map to indicate if we should
-			% add the key to the start of the arguments.
-			{
-				Func,
-				Opts#{
-					<<"add-key">> =>
-						case Status of
-							add_key -> Key;
-							_ -> false
-						end
-				}
-			}
-		catch
-			Class:Exception:Stacktrace ->
-                ?event(
-                    ao_result,
-                    {
-                        load_device_failed,
-                        {base, Base},
-                        {req, Req},
-                        {exec_name, ExecName},
-                        {exec_class, Class},
-                        {exec_exception, Exception},
-                        {exec_stacktrace, Stacktrace},
-                        {opts, Opts}
-                    },
-					Opts
-                ),
-                % If the device cannot be loaded, we alert the caller.
-				error_execution(
-                    ExecName,
-                    Req,
-					loading_device,
-					{Class, Exception, Stacktrace},
-					Opts
-				)
-		end,
-	resolve_stage(6, ResolvedFunc, Base, Req, ExecName, NewOpts).
-resolve_stage(6, Func, Base, Req, ExecName, Opts) ->
+            };
+        {error, not_found} -> {ok, Ctx};
+        {Status, Result} ->
+            {
+                ok,
+                Ctx#{
+                    <<"result">> => Result,
+                    <<"status">> => Status
+                }
+            }
+    end.
+
+%% @doc Perform the actual resolution of an AO-Core request.
+stage_6(Ctx = #{ <<"result">> := _ }) -> {ok, Ctx};
+stage_6(Ctx = #{
+    <<"varied-base">> := Base,
+    <<"varied-request">> := Req,
+    <<"opts">> := Opts,
+    <<"priv">> := #{ <<"function">> := Func }
+}) ->
     ?event_debug(debug_ao_core, {stage, 6, ExecName, execution}, Opts),
-	% Execution.
     ExecOpts = execution_opts(Opts),
-	Args =
-		case hb_opts:get(add_key, false, Opts) of
-			false -> [Base, Req, ExecOpts];
-			Key -> [Key, Base, Req, ExecOpts]
-		end,
-    % Try to execute the function.
-    Res = 
-        try
-            TruncatedArgs = hb_device:truncate_args(Func, Args),
-            MsgRes = maybe_profiled_apply(Func, TruncatedArgs, Base, Req, Opts),
-            ?event(
-                debug_ao_result,
-                {
-                    ao_result,
-                    {exec_name, ExecName},
-                    {base, Base},
-                    {req, Req},
-                    {res, MsgRes}
-                },
-                Opts
-            ),
-            MsgRes
-        catch
-            ExecClass:ExecException:ExecStacktrace ->
-                ?event(
-                    ao_core,
-                    {device_call_failed, ExecName, {func, Func}},
-                    Opts
-                ),
-                ?event(
-                    ao_result,
-                    {
-                        exec_failed,
-                        {base, Base},
-                        {req, Req},
-                        {exec_name, ExecName},
-                        {func, Func},
-                        {exec_class, ExecClass},
-                        {exec_exception, ExecException},
-                        {exec_stacktrace, erlang:process_info(self(), backtrace)},
-                        {opts, Opts}
-                    },
-					Opts
-                ),
-                % If the function call fails, we raise an error in the manner
-                % indicated by caller's `#Opts'.
-                error_execution(
-                    ExecName,
-                    Req,
-                    device_call,
-                    {ExecClass, ExecException, ExecStacktrace},
-                    Opts
-                )
+    ExecName = maps:get(<<"leader">>, Ctx, unnamed),
+    Args =
+        case maps:get(<<"add-key">>, Ctx, false) of
+            false -> [Base, Req, ExecOpts];
+            Key -> [Key, Base, Req, ExecOpts]
         end,
+    % Try to execute the function.
+    {Status, Res} = maybe_profiled_apply(ExecName, Func, Args, Base, Req, Opts),
     hb_message:paranoid_verify(
         post_resolve,
         #{
             <<"reason">> => <<"AO-Core Post-Execution Validation">>,
             <<"base">> => Base,
             <<"request">> => Req,
-            <<"result">> => Res
+            <<"varied-result">> => Res
         },
         Opts
     ),
-    resolve_stage(7, Base, Req, Res, ExecName, Opts);
-resolve_stage(
-    7,
-    Base,
-    Req,
-    {St, Res},
-    ExecName,
-    Opts = #{ <<"on">> := _On = #{ <<"step">> := _ }}
+    {
+        ok,
+        Ctx#{
+            <<"status">> => Status,
+            <<"varied-result">> => Res,
+            <<"fresh">> => true
+        }
+    }.
+
+%% @doc When specified in the schema for the device call, normalize the
+%% execution's result on top of the `Base` or `Req` message. In cases where
+%% hashpath calculation is disabled (`hashpath => ignore` in the node message,
+%% etc.), we 
+stage_7(Ctx = #{ <<"base">> := Base, <<"opts">> := Opts }) ->
+    maybe
+        {ok, Result} ?= hb_hashpath:result_from_context(Base, Ctx, Opts),
+        {ok, Ctx#{ <<"result">> => Result }}
+    end.
+
+%% @doc Cache the result of an execution if appropriate for the context.
+%% Results that were not freshly and successfully executed (cache hits, direct
+%% key hits, awaited results, non-`ok` statuses) are not stored.
+stage_8(
+    Ctx = #{
+        <<"status">> := ok,
+        <<"fresh">> := true,
+        <<"varied-base">> := VariedBase,
+        <<"varied-request">> := VariedReq,
+        <<"varied-result">> := VariedRes,
+        <<"opts">> := Opts
+    }
 ) ->
-    ?event_debug(debug_ao_core, {stage, 7, ExecName, executing_step_hook, {on, _On}}, Opts),
+    hb_cache_control:maybe_store(VariedBase, VariedReq, VariedRes, Opts),
+    {ok, Ctx};
+stage_8(Ctx) -> {ok, Ctx}.
+
+%% @doc Return the resolved response to any waiting callers.
+stage_9(
+    Ctx = #{
+        <<"leader">> := ExecName,
+        <<"varied-request">> := Req,
+        <<"varied-result">> := Res,
+        <<"status">> := Status,
+        <<"opts">> := Opts
+    }
+) ->
+    hb_persistent:unregister_notify(
+        ExecName,
+        Req,
+        {Status, Res},
+        Opts
+    ),
+    {ok, Ctx};
+stage_9(Ctx) ->
+    % If we are not the leader, we can ignore the unregister step.
+    {ok, Ctx}.
+
+%% @doc If a hook has been specified for the `step` action, we call it with our
+%% context including the result.
+stage_10(Ctx = #{ <<"opts">> := Opts = #{ <<"on">> := #{ <<"step">> := _ }}}) ->
+    ?event_debug(debug_ao_core, {stage, 7, executing_step_hook}, Opts),
     % If the `step' hook is defined, we execute it. Note: This function clause
     % matches directly on the `on' key of the `Opts' map. This is in order to
     % remove the expensive lookup check that would otherwise be performed on every
     % execution.
-    HookReq = #{
-        <<"base">> => Base,
-        <<"request">> => Req,
-        <<"status">> => St,
-        <<"body">> => Res
-    },
-    case hb_hook:on(<<"step">>, HookReq, Opts) of
-        {ok, #{ <<"status">> := NewStatus, <<"body">> := NewRes }} ->
-            resolve_stage(8, Base, Req, {NewStatus, NewRes}, ExecName, Opts);
-        Error ->
-            ?event(
-                ao_core,
-                {step_hook_error,
-                    {error, Error},
-                    {hook_req, HookReq}
-                },
-                Opts
-            ),
-            Error
-    end;
-resolve_stage(7, Base, Req, Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 7, ExecName, no_step_hook}, Opts),
-    resolve_stage(8, Base, Req, Res, ExecName, Opts);
-resolve_stage(8, Base, Req, {ok, {resolve, Sublist}}, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 8, ExecName, subresolve_result}, Opts),
-    % If the result is a `{resolve, Sublist}' tuple, we need to execute it
-    % as a sub-resolution.
-    resolve_stage(9, Base, Req, resolve_many(Sublist, Opts), ExecName, Opts);
-resolve_stage(8, Base, Req, Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 8, ExecName, no_subresolution_necessary}, Opts),
-    resolve_stage(9, Base, Req, Res, ExecName, Opts);
-resolve_stage(9, Base, Req, {ok, Res}, ExecName, Opts) when is_map(Res) ->
-    ?event_debug(debug_ao_core, {stage, 9, ExecName, generate_hashpath}, Opts),
-    % Cryptographic linking. Now that we have generated the result, we
-    % need to cryptographically link the output to its input via a hashpath.
-    resolve_stage(10, Base, Req,
-        case hb_opts:get(hashpath, update, Opts#{ <<"only">> => local }) of
-            update ->
-                NormRes = Res,
-                Priv = hb_private:from_message(NormRes),
-                HP = hb_path:hashpath(Base, Req, Opts),
-                if not is_binary(HP) or not is_map(Priv) ->
-                    throw({invalid_hashpath, {hp, HP}, {res, NormRes}});
-                true ->
-                    {ok, NormRes#{ <<"priv">> => Priv#{ <<"hashpath">> => HP } }}
-                end;
-            reset ->
-                Priv = hb_private:from_message(Res),
-                {ok, Res#{ <<"priv">> => hb_maps:without([<<"hashpath">>], Priv, Opts) }};
-            ignore ->
-                Priv = hb_private:from_message(Res),
-                if not is_map(Priv) ->
-                    throw({invalid_private_message, {res, Res}});
-                true ->
-                    {ok, Res}
-                end
-        end,
-        ExecName,
-        Opts
-    );
-resolve_stage(9, Base, Req, {Status, Res}, ExecName, Opts) when is_map(Res) ->
-    ?event_debug(debug_ao_core, {stage, 9, ExecName, abnormal_status_reset_hashpath}, Opts),
-    ?event(hashpath, {resetting_hashpath_res, {base, Base}, {req, Req}, {opts, Opts}}),
-    % Skip cryptographic linking and reset the hashpath if the result is abnormal.
-    Priv = hb_private:from_message(Res),
-    resolve_stage(
-        10, Base, Req,
-        {Status, Res#{ <<"priv">> => maps:without([<<"hashpath">>], Priv) }},
-        ExecName, Opts);
-resolve_stage(9, Base, Req, Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 9, ExecName, non_map_result_skipping_hash_path}, Opts),
-    % Skip cryptographic linking and continue if we don't have a map that can have
-    % a hashpath at all.
-    resolve_stage(10, Base, Req, Res, ExecName, Opts);
-resolve_stage(10, Base, Req, {ok, Res}, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 10, ExecName, result_caching}, Opts),
-    % Result caching: Optionally, cache the result of the computation locally.
-    hb_cache_control:maybe_store(Base, Req, Res, Opts),
-    resolve_stage(11, Base, Req, {ok, Res}, ExecName, Opts);
-resolve_stage(10, Base, Req, Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 10, ExecName, abnormal_status_skip_caching}, Opts),
-    % Skip result caching if the result is abnormal.
-    resolve_stage(11, Base, Req, Res, ExecName, Opts);
-resolve_stage(11, Base, Req, Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 11, ExecName}, Opts),
-    % Notify processes that requested the resolution while we were executing and
-    % unregister ourselves from the group.
-    hb_persistent:unregister_notify(ExecName, Req, Res, Opts),
-    resolve_stage(12, Base, Req, Res, ExecName, Opts);
-resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
-    ?event_debug(debug_ao_core, {stage, 12, ExecName, maybe_spawn_worker}, Opts),
+    hb_hook:on(<<"step">>, Ctx, Opts);
+stage_10(Ctx) -> {ok, Ctx}.
+
+%% @doc If we have been requested to spawn a worker process to remain active
+%% at this stage, with this context in memory, we do so.
+stage_11(
+    Ctx = #{
+        <<"leader">> := ExecName,
+        <<"result">> := Res,
+        <<"opts">> := Opts
+    }) ->
+    ?event_debug(debug_ao_core, {stage, 11, maybe_spawn_worker}, Opts),
     % Check if we should fork out a new worker process for the current execution
     case
-        {is_map(Res), hb_opts:get(spawn_worker, false, Opts#{ <<"prefer">> => local })}
+        {is_map(Res), hb_opts:get(<<"spawn-worker">>, false, Opts#{ <<"prefer">> => local })}
     of
         {A, B} when (A == false) or (B == false) ->
-            Res;
+            {ok, Ctx};
         {_, _} ->
             % Spawn a worker for the current execution
             WorkerPID = hb_persistent:start_worker(ExecName, Res, Opts),
             hb_persistent:forward_work(WorkerPID, Opts),
-            Res
+            {ok, Ctx}
     end;
-resolve_stage(12, _Base, _Req, OtherRes, _ExecName, _Opts) ->
-    ?event_debug(debug_ao_core, {stage, 12, _ExecName, abnormal_status_skip_spawning}, _Opts),
-    OtherRes.
-
-%% @doc Execute a sub-resolution.
-subresolve(RawBase, DevID, ReqPath, Opts) when is_binary(ReqPath) ->
-    % If the request is a binary, we assume that it is a path.
-    subresolve(RawBase, DevID, #{ <<"path">> => ReqPath }, Opts);
-subresolve(RawBase, DevID, Req, Opts) ->
-    % First, ensure that the message is loaded from the cache.
-    Base = ensure_message_loaded(RawBase, Opts),
-    ?event(subresolution,
-        {subresolving, {base, Base}, {dev, DevID}, {req, Req}}
-    ),
-    % Next, set the device ID if it is given.
-    Base2 =
-        case DevID of
-            undefined -> Base;
-            _ ->
-                set(
-                    Base,
-                    <<"device">>,
-                    DevID,
-                    hb_maps:without(?TEMP_OPTS, Opts, Opts)
-                )
-        end,
-    % If there is no path but there are elements to the request, we set these on
-    % the base message. If there is a path, we do not modify the base message 
-    % and instead apply the request message directly.
-    case hb_path:from_message(request, Req, Opts) of
-        undefined ->
-            Base3 =
-                case map_size(hb_maps:without([<<"path">>], Req, Opts)) of
-                    0 -> Base2;
-                    _ ->
-                        set(
-							Base2,
-							set(Req, <<"path">>, unset, Opts),
-							Opts#{ <<"force-message">> => false }
-						)
-                end,
-            ?event(subresolution,
-                {subresolve_modified_base, Base3},
-                Opts
-            ),
-            {ok, Base3};
-        Path ->
-            ?event(subresolution,
-                {exec_subrequest_on_base,
-                    {mod_base, Base2},
-                    {req, Path},
-                    {req, Req}
-                }
-            ),
-            Res = resolve(Base2, Req, Opts),
-            ?event(subresolution, {subresolved_with_new_device, {res, Res}}),
-            Res
-    end.
+stage_11(Ctx) -> {ok, Ctx}.
 
 %% @doc If the `AO_PROFILING' macro is defined (set by building/launching with
 %% `rebar3 as ao_profiling') we record statistics about the execution of the
 %% function. This is a costly operation, so if it is not defined, we simply
 %% apply the function and return the result.
 -ifndef(AO_PROFILING).
-maybe_profiled_apply(Func, Args, _Base, _Req, _Opts) ->
-    apply(Func, Args).
+maybe_profiled_apply(ExecName, Func, Args, Base, Req, Opts) ->
+    do_apply(ExecName, Func, Args, Base, Req, Opts).
 -else.
-maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
+maybe_profiled_apply(ExecName, Func, Args, Base, Req, Opts) ->
     CallStack = erlang:get(ao_stack),
     ?event(ao_trace,
         {profiling_apply,
@@ -870,7 +703,12 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
             Stack -> [Key | Stack]
         end
     ),
-    {ExecMicroSecs, Res} = timer:tc(fun() -> apply(Func, Args) end),
+    {ExecMicroSecs, Res} =
+        timer:tc(
+            fun() ->
+                do_apply(ExecName, Func, Args, Base, Req, Opts)
+            end
+        ),
     put(ao_stack, CallStack),
     hb_event:record(<<"ao-call-counts">>, Key, Opts),
     hb_event:record(<<"ao-total-durations">>, Key, Opts, ExecMicroSecs),
@@ -901,86 +739,62 @@ maybe_profiled_apply(Func, Args, Base, Req, Opts) ->
     Res.
 -endif.
 
-%% @doc Ensure that a message is loaded from the cache if it is an ID, or 
-%% a link, such that it is ready for execution.
-ensure_message_loaded(MsgID, Opts) when ?IS_ID(MsgID) ->
-    case hb_cache:read(MsgID, Opts) of
-        {ok, LoadedMsg} ->
-            LoadedMsg;
-        failure ->
-            failure;
-        not_found ->
-            throw({necessary_message_not_found, <<"/">>, MsgID})
-    end;
-ensure_message_loaded(MsgLink, Opts) when ?IS_LINK(MsgLink) ->
-    hb_cache:ensure_loaded(MsgLink, Opts);
-ensure_message_loaded(Msg, _Opts) ->
-    Msg.
-
-%% @doc Catch all return if we are in an infinite loop.
-error_infinite(Base, Req, Opts) ->
-    ?event(
-        ao_core,
-        {error, {type, infinite_recursion},
-            {base, Base},
-            {req, Req},
-            {opts, Opts}
-        },
-        Opts
-    ),
-    ?trace(),
-    {
-        error,
-        #{
-            <<"status">> => 508,
-            <<"body">> => <<"Request creates infinite recursion.">>
-        }
-    }.
-
-%% @doc Handle an error in a device call.
-error_execution(ExecGroup, Req, Whence, {Class, Exception, Stacktrace}, Opts) ->
-    Error = {error, Whence, {Class, Exception, Stacktrace}},
-    hb_persistent:unregister_notify(ExecGroup, Req, Error, Opts),
-    ?event_debug(debug_ao_core, {handle_error, Error, {opts, Opts}}, Opts),
-    case hb_opts:get(error_strategy, throw, Opts) of
-        throw -> erlang:raise(Class, Exception, Stacktrace);
-        _ -> Error
+%% @doc Execute a device call, wrapped with failure handling.
+do_apply(ExecName, Func, Args, Base, Req, Opts) ->
+    try
+        case apply(Func, Truncated = hb_device:truncate_args(Func, Args)) of
+            {Status, Res} -> {Status, Res};
+            Other ->
+                throw(
+                    {unexpected_device_call_response,
+                        #{
+                            <<"exec-name">> => ExecName,
+                            <<"args">> => Truncated,
+                            <<"result">> => Other,
+                            <<"func">> => Func
+                        }
+                    }
+                )
+        end
+    catch
+        Class:Exception:Stacktrace ->
+            ?event(
+                ao_core,
+                {device_call_failed, ExecName, {func, Func}},
+                Opts
+            ),
+            ?event(
+                ao_result,
+                {
+                    exec_failed,
+                    {base, Base},
+                    {req, Req},
+                    {exec_name, ExecName},
+                    {func, Func},
+                    {exec_class, Class},
+                    {exec_exception, Exception},
+                    {exec_stacktrace, erlang:process_info(self(), backtrace)},
+                    {opts, Opts}
+                },
+					Opts
+            ),
+            % If the function call fails, we raise an error in the manner
+            % indicated by caller's `#Opts', as well as returning the error to
+            % any registered listeners.
+            Error =
+                {failure,
+                    #{
+                        <<"class">> => Class,
+                        <<"exception">> => Exception,
+                        <<"stacktrace">> => Stacktrace
+                    }
+                },
+            hb_persistent:unregister_notify(ExecName, Req, Error, Opts),
+            case hb_opts:get(error_strategy, throw, Opts) of
+                throw -> erlang:raise(Class, Exception, Stacktrace);
+                _ -> Error
+            end
     end.
-
-%% @doc Force the result of a device call into a message if the result is not
-%% requested by the `Opts'. If the result is a literal, we wrap it in a message
-%% and signal the location of the result inside. We also similarly handle ao-result
-%% when the result is a single value and an explicit status code.
-maybe_force_message({Status, Res}, Opts) ->
-    case hb_opts:get(force_message, false, Opts) of
-        true -> force_message({Status, Res}, Opts);
-        false -> {Status, Res}
-    end;
-maybe_force_message(Res, Opts) ->
-    maybe_force_message({ok, Res}, Opts).
-
-%% @doc Force a resolution result into a message, suitable for transmission
-%% via HTTP.
-force_message({Status, ResLink}, Opts) when ?IS_LINK(ResLink) ->
-    force_message({Status, hb_cache:ensure_loaded(ResLink, Opts)}, Opts);
-force_message({Status, Res}, Opts) when is_list(Res) ->
-    force_message({Status, normalize_keys(Res, Opts)}, Opts);
-force_message({Status, Subres = {resolve, _}}, _Opts) ->
-    {Status, Subres};
-force_message({Status, Literal}, _Opts) when not is_map(Literal) ->
-    ?event(encode_result, {force_message_from_literal, Literal}),
-    {Status, #{ <<"ao-result">> => <<"body">>, <<"body">> => Literal }};
-force_message({Status, M = #{ <<"status">> := Status, <<"body">> := Body }}, _Opts)
-        when map_size(M) == 2 ->
-    ?event(encode_result, {force_message_from_literal_with_status, M}),
-    {Status, #{
-        <<"status">> => Status,
-        <<"ao-result">> => <<"body">>,
-        <<"body">> => Body
-    }};
-force_message({Status, Map}, _Opts) ->
-    ?event(encode_result, {force_message_from_map, Map}),
-    {Status, Map}.
 
 %% @doc Shortcut for resolving a key in a message without its status if it is
 %% `ok'. This makes it easier to write complex logic on top of messages while
@@ -992,8 +806,6 @@ force_message({Status, Map}, _Opts) ->
 %% 
 %% Returns the value of the key if it is found, otherwise returns the default
 %% provided by the user, or `not_found' if no default is provided.
-get(Path, Msg) ->
-    get(Path, Msg, #{}).
 get(Path, Msg, Opts) ->
     get(Path, Msg, not_found, Opts).
 get(Path, {as, Device, Msg}, Default, Opts) ->
@@ -1024,194 +836,40 @@ get_first([{Base, Path}|Msgs], Default, Opts) ->
     end.
 
 %% @doc Shortcut to get the list of keys from a message.
-keys(Msg) -> keys(Msg, #{}).
-keys(Msg, Opts) -> keys(Msg, Opts, keep).
-keys(Msg, Opts, keep) ->
-    % There is quite a lot of AO-Core-specific machinery here. We:
-    % 1. `get' the keys from the message, via AO-Core in order to trigger the
-    %    `keys' function on its device.
-    % 2. Ensure that the result is normalized to a message (not just a list)
-    %    with `normalize_keys'.
-    % 3. Now we have a map of the original keys, so we can use `hb_maps:values' to
-    %    get a list of them.
-    % 4. Normalize each of those keys in turn.
-    try
-        lists:map(
-            fun normalize_key/1,
-            hb_maps:values(
-                normalize_keys(
-                    hb_private:reset(get(<<"keys">>, Msg, Opts))
-                ),
-                Opts
-            )
-        )
-    catch
-        A:B:St ->
-            throw(
-                {cannot_get_keys,
-                    {msg, Msg},
-                    {opts, Opts},
-                    {error, {A, B}},
-                    {stacktrace, St}
-                }
-            )
-    end;
-keys(Msg, Opts, remove) ->
-    lists:filter(
-        fun(Key) -> not lists:member(Key, ?AO_CORE_KEYS) end,
-        keys(Msg, Opts, keep)
+keys(Msg, Opts) -> get(<<"keys">>, Msg, Opts).
+
+%% @doc Extend a message using its underlying device's `set' key.
+set(Base, Req, Opts) ->
+    ?event_debug(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
+    hb_util:ok(
+        raw(undefined, <<"set">>, Base, Req, internal_opts(Opts)),
+        Opts
     ).
 
-%% @doc Shortcut for setting a key in the message using its underlying device.
-%% Like the `get/3' function, this function honors the `error_strategy' option.
-%% `set' works with maps and recursive paths while maintaining the appropriate
-%% `HashPath' for each step.
-set(RawBase, RawReq, Opts) when is_map(RawReq) ->
-    Base = normalize_keys(RawBase, Opts),
-    Req =
-        hb_maps:without(
-            [<<"hashpath">>, <<"priv">>],
-            normalize_keys(RawReq, Opts),
-            Opts
-        ),
-    ?event_debug(ao_internal, {set_called, {base, Base}, {req, Req}}, Opts),
-    % Get the next key to set. 
-    case keys(Req, internal_opts(Opts)) of
-        [] -> Base;
-        [Key|_] ->
-            % Get the value to set. Use AO-Core by default, but fall back to
-            % getting via `maps' if it is not found.
-            Val =
-                case get(Key, Req, internal_opts(Opts)) of
-                    not_found -> hb_maps:get(Key, Req, undefined, Opts);
-                    Body -> Body
-                end,
-            ?event_debug({got_val_to_set, {key, Key}, {val, Val}, {req, Req}}),
-            % Next, set the key and recurse, removing the key from the Req.
-            set(
-                set(Base, Key, Val, internal_opts(Opts)),
-                remove(Req, Key, internal_opts(Opts)),
-                Opts
-            )
-    end.
+%% @doc Set an individual (potentially deep) key in a message to a new using
+%% the message's set device.
 set(Base, Key, Value, Opts) ->
-    % For an individual key, we run deep_set with the key as the path.
-    % This handles both the case that the key is a path as well as the case
-    % that it is a single key.
-    Path = hb_path:term_to_path_parts(Key, Opts),
-    % ?event(
-    %     {setting_individual_key,
-    %         {base, Base},
-    %         {key, Key},
-    %         {path, Path},
-    %         {value, Value}
-    %     }
-    % ),
-    deep_set(Base, Path, Value, Opts).
-
-%% @doc Recursively search a map, resolving keys, and set the value of the key
-%% at the given path. This function has special cases for handling `set' calls
-%% where the path is an empty list (`/'). In this case, if the value is an 
-%% immediate, non-complex term, we can set it directly. Otherwise, we use the
-%% device's `set' function to set the value.
-deep_set(Msg, [], Value, Opts) when is_map(Msg) or is_list(Msg) ->
-    device_set(Msg, <<"/">>, Value, Opts);
-deep_set(_Msg, [], Value, _Opts) ->
-    Value;
-deep_set(Msg, [Key], Value, Opts) ->
-    device_set(Msg, Key, Value, Opts);
-deep_set(Msg, [Key|Rest], Value, Opts) ->
-    case resolve(Msg, Key, Opts) of 
-        {ok, SubMsg} ->
-            ?event_debug(debug_set,
-                {traversing_deeper_to_set,
-                    {current_key, Key},
-                    {current_value, SubMsg},
-                    {rest, Rest}
-                },
-                Opts
-            ),
-            Res =
-                device_set(
-                    Msg,
-                    Key,
-                    deep_set(SubMsg, Rest, Value, Opts),
-                    <<"explicit">>,
-                    Opts
-                ),
-            ?event_debug(debug_set, {deep_set, {msg, Msg}, {key, Key}, {res, Res}}, Opts),
-            Res;
-        _ ->
-            ?event_debug(debug_set,
-                {creating_new_map,
-                    {current_key, Key},
-                    {rest, Rest}
-                },
-                Opts
-            ),
-            Msg#{ Key => deep_set(#{}, Rest, Value, Opts) }
-    end.
-
-%% @doc Call the device's `set' function.
-device_set(Msg, Key, Value, Opts) ->
-    device_set(Msg, Key, Value, <<"deep">>, Opts).
-device_set(Msg, Key, Value, Mode, Opts) ->
-    ReqWithoutMode =
-        case Key of
-            <<"path">> ->
-                #{ <<"path">> => <<"set_path">>, <<"value">> => Value };
-            <<"/">> when is_map(Value) ->
-                % The value is a map and it is to be `set' at the root of the
-                % message. Subsequently, we call the device's `set' function
-                % with all of the keys found in the message, leading it to be
-                % merged into the message.
-                Value#{ <<"path">> => <<"set">> };
-            _ ->
-                #{ <<"path">> => <<"set">>, Key => Value }
+    DeepBase =
+        fun Deep([LeafKey]) -> #{ LeafKey => Value };
+            Deep([NextKey|Rest]) -> #{ NextKey => Deep(Rest) }
         end,
-    Req =
-        case Mode of
-            <<"deep">> -> ReqWithoutMode;
-            <<"explicit">> -> ReqWithoutMode#{ <<"set-mode">> => Mode }
-        end,
-    ?event(
-        debug_set,
-        {
-            calling_device_set,
-            {base, Msg},
-            {key, Key},
-            {value, Value},
-            {full_req, Req}
-        },
-        Opts
-    ),
-    Res =
-        hb_util:ok(
-            resolve(
-                Msg,
-                Req,
-                internal_opts(Opts)
-            ),
+    deep_set(Base, DeepBase(hb_path:term_to_path_parts(Key, Opts)), Opts).
+
+%% @doc Recursively extend nested message values.
+deep_set(Base, Req, Opts) when is_map(Req) ->
+    hb_util:ok(
+        raw(
+            undefined,
+            <<"set">>,
+            Base,
+            Req#{ <<"set">> => <<"deep">> },
             internal_opts(Opts)
         ),
-    ?event(
-        debug_set,
-        {device_set_result, Res},
         Opts
-    ),
-    Res.
+    ).
 
 %% @doc Remove a key from a message, using its underlying device.
-remove(Msg, Key) -> remove(Msg, Key, #{}).
-remove(Msg, Key, Opts) ->
-	hb_util:ok(
-        resolve(
-            Msg,
-            #{ <<"path">> => <<"remove">>, <<"item">> => Key },
-            internal_opts(Opts)
-        ),
-        Opts
-    ).
+remove(Msg, Key, Opts) -> set(Msg, Key, unset, Opts).
 
 %% @doc Convert a key to a binary in normalized form.
 normalize_key(Key) -> normalize_key(Key, #{}).
@@ -1233,10 +891,8 @@ normalize_key(Key, _Opts) when is_list(Key) ->
 %% @doc Ensure that a message is processable by the AO-Core resolver: No lists.
 %% Fast path: when every key is already a binary, `normalize_key/2' would
 %% pass them through unchanged (values are never recursed here), so return
-%% the map as-is. This is the overwhelming majority case on the resolve hot
-%% path -- `resolve_stage(1, ...)' normalises both `Base' and `Req' on every
-%% resolution -- and skips the `hb_maps:to_list'/`from_list' round-trip and
-%% per-key dispatch.
+%% the map as-is. This is the overwhelming majority case, and skips the
+%% `hb_maps:to_list'/`from_list' round-trip and per-key dispatch.
 normalize_keys(Msg) -> normalize_keys(Msg, #{}).
 normalize_keys(Base, Opts) when is_list(Base) ->
     normalize_keys(
@@ -1304,7 +960,7 @@ execution_opts(Opts) ->
     % Unless the user has explicitly requested recursive spawning, we
     % unset the spawn-worker option so that we do not spawn a new worker
     % for every resulting execution.
-    case hb_opts:get(spawn_worker, false, Opts) of
+    case hb_opts:get(<<"spawn-worker">>, false, Opts) of
         recursive -> Opts1#{ <<"spawn-worker">> => recursive };
         _ -> Opts1
     end.

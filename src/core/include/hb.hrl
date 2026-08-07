@@ -51,13 +51,17 @@
 -define(debug_print(X), hb_event:debug_print(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 -define(no_prod(X), hb:no_prod(X, ?MODULE, ?LINE)).
 
+-ifdef(HB_PRIMITIVE_DEBUG).
+%% @doc Primitive debugging macro for low-level printing when testing AO-Core
+%% changes.
+-define(prim_dbg(X), io:format(standard_error, "PRIM ~s: ~p~n", [?trace_short(), X])).
+-else.
+-define(prim_dbg(X), io:format(standard_error, "PRIM ~s: ~p~n", [?trace_short(), X])).
+-endif.
+
 %%% Macro shortcuts for debugging.
 %% @doc A macro for marking that you got 'here'.
 -define(h(), hb_event:log("[Debug point reached.]", ?MODULE, ?FUNCTION_NAME, ?LINE)).
-%% @doc Quickly print a value in the logs. Currently uses the event
-%% function, but should be moved to a debug-specific function once we
-%% build out better logging infrastructure.
--define(p(X), hb_event:log(X, ?MODULE, ?FUNCTION_NAME, ?LINE)).
 %% @doc Print the trace of the current stack, up to the first non-hyperbeam
 %% module.
 -define(trace(), hb_format:trace_macro_helper(fun hb_format:print_trace/4, catch error(test), ?MODULE, ?FUNCTION_NAME, ?LINE)).
