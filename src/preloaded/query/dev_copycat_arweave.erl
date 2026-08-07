@@ -886,10 +886,21 @@ fetch_block_tx_layout(Block, Opts) ->
     end),
     case lib_arweave_common:best_response(Res) of
         {ok, #{ <<"body">> := Body }} ->
-            parse_block2_transactions(Body);
+            case parse_block2_transactions(Body) of
+                {ok, Layout} ->
+                    case block_tx_layout_matches(Block, Layout, Opts) of
+                        true -> {ok, Layout};
+                        false -> error
+                    end;
+                error -> error
+            end;
         _ ->
             error
     end.
+
+block_tx_layout_matches(Block, Layout, Opts) ->
+    [hb_util:encode(ID) || {ID, _} <- Layout] =:=
+        hb_maps:get(<<"txs">>, Block, [], Opts).
 
 %% @doc Decode the transaction section of an Arweave `/block2' response.
 parse_block2_transactions(
@@ -1102,6 +1113,17 @@ observe_event(MetricName, Fun) ->
     Result.
 
 %%% Tests
+
+block_tx_layout_validation_test() ->
+    First = crypto:strong_rand_bytes(32),
+    Second = crypto:strong_rand_bytes(32),
+    Block = #{ <<"txs">> => [hb_util:encode(First), hb_util:encode(Second)] },
+    Layout = [{First, 0}, {Second, 1}],
+    ?assert(block_tx_layout_matches(Block, Layout, #{})),
+    ?assertNot(block_tx_layout_matches(Block, lists:reverse(Layout), #{})),
+    ?assertNot(block_tx_layout_matches(
+        Block, [{First, 0}, {crypto:strong_rand_bytes(32), 1}], #{}
+    )).
 
 headers_mode_test() ->
     Block = 1967269,
