@@ -1,0 +1,30 @@
+[
+  {
+    "name": "research",
+    "description": "Fetch 2-4 authoritative sources via relay, extract facts",
+    "requires_tools": ["fetch"],
+    "instructions": "Use fetch (relay@1.0) to retrieve:\n- Microsoft Project Natick (water)\n- Nautilus / offshore floating datacenters\n- Kepler / Starcloud / space datacenter concepts\nExtract: power, cooling, latency, failure mode, cost. Keep quotes + URLs. Do not invent.",
+    "steps": ["fetch https://natick.research.microsoft.com", "fetch https://kepler.space", "fetch https://arxiv.org/abs/space-datacenter"]
+  },
+  {
+    "name": "summarize",
+    "description": "Take documents, extract key points, produce tight brief",
+    "requires_tools": ["fetch"],
+    "instructions": "Given research docs, produce 10 bullets: 5 water, 5 space. Each bullet: claim + source URL.",
+    "steps": []
+  },
+  {
+    "name": "write_essay",
+    "description": "Write 800w essay: water vs space datacenters",
+    "requires_tools": ["fetch"],
+    "instructions": "Write essay using identity.md/user.md/soul.md + memory:\nH1: Datacenters in Water and Space\nH2: Water (Natick) — cooling, deployment, biofouling\nH2: Space (solar, radiation, launch $)\nTable: Power | Cooling | Latency | Repair | Cost\nConclusion: boring tradeoffs, not hype. Cite sources footnotes.",
+    "steps": []
+  },
+  {
+    "name": "research-write",
+    "description": "Composed: research + summarize + write_essay",
+    "requires_tools": ["fetch"],
+    "instructions": "Compose research then summarize then write_essay. First fetch sources, then bullet brief, then 800w essay.",
+    "steps": []
+  }
+]

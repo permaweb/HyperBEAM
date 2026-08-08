@@ -17,6 +17,9 @@ Below is a list of documented built-in devices. Each page details the device's p
 *   **[`~relay@1.0`](./relay-at-1-0.md):** Relaying messages to other nodes or HTTP endpoints.
 *   **[`~json@1.0`](./json-at-1-0.md):** Provides access to JSON data structures using HyperPATHs.
 *   **[`~recorder@1.0`](./recorder-at-1-0.md):** Process-local flight recorder for AO-Core event telemetry.
+*   **[`~llm@1.0`](./llm-at-1-0.md):** OpenAI-compatible LLM proxy (Ollama/vLLM/llama.cpp) with streaming SSE.
+*   **[`~harness@1.0`](./harness-at-1-0.md):** Generic agent harness — `LLM + Tools + memory` loop (`system + identity/soul/user + history↑limit + current` → rebuild until no `tool_calls`).
+*   **[`~skills@1.0`](./skills-at-1-0.md):** Composable skills (1..N tools) with `requires_tools` permission matrix and `harness@1.0` delegation.
 
 *(More devices will be documented here as specifications are finalized and reviewed.)*
 
