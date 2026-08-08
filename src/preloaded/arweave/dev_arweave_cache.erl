@@ -11,7 +11,6 @@
 -export([latest/1, heights/1, read/2, write/2]).
 -export([path/2]).
 -include("include/hb.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %% @doc The pseudo-path prefix which the Arweave block cache should use.
 -define(ARWEAVE_BLOCK_CACHE_PREFIX, <<"~arweave@2.9">>).

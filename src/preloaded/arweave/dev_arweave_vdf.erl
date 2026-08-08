@@ -37,10 +37,12 @@
 -device_libraries([lib_arweave_vdf]).
 -export([info/1, verify_chain/3, verify_step/3, seed_data/3]).
 -export([reset_point/3, next_difficulty/3]).
+-ifdef(TEST).
+-export([check_step_range/3, check_chain/4, threads/3]).
+-endif.
 -include("include/hb.hrl").
 -include("include/ar_vdf.hrl").
 -include("include/ar_consensus.hrl").
--include_lib("eunit/include/eunit.hrl").
 
 %% @doc Export only the nonce limiter operations, leaving message manipulation
 %% to `message@1.0'.
@@ -159,11 +161,10 @@ next_difficulty(Base, Req, Opts) ->
 
 %%% Internal functions.
 
-%% @doc Check that the block advanced the timeline, that it did so by a gap we
-%% can verify from block data alone, and that it carries exactly one step
-%% output per step in the range. An empty or short list fails here: a step list
-%% the chain verification never runs over would let the block through having
-%% proven nothing.
+%% @doc Check that the block advanced the timeline and carries the consensus
+%% suffix of its step range. Arweave caps the header at 10,800 outputs even
+%% when the distance from the parent is larger; `check_chain/4' computes the
+%% missing prefix before it verifies that suffix.
 %%
 %% The three failures name themselves apart. A step number that does not
 %% advance and a step list that does not cover the range are different faults
@@ -176,12 +177,9 @@ check_step_range(Info, PrevInfo, Opts) ->
         Delta when Delta =< 0 ->
             {error, error_message(<<"stale-step-number">>,
                 <<"The step number is not ahead of the parent's.">>)};
-        Delta when Delta > ?NONCE_LIMITER_MAX_CHECKPOINTS_COUNT ->
-            {error, error_message(<<"step-gap-too-large">>,
-                <<"The step gap cannot be verified from block data alone.">>)};
-        Delta when Count =/= Delta ->
+        Delta when Count =/= min(?NONCE_LIMITER_MAX_CHECKPOINTS_COUNT, Delta) ->
             {error, error_message(<<"invalid-step-count">>,
-                <<"The step list does not cover the step range.">>)};
+                <<"The step list is not the consensus suffix of the range.">>)};
         _ ->
             ok
     end.
@@ -251,22 +249,47 @@ check_last_step(Info, PrevInfo, Threads, Opts) ->
                 <<"The final step's checkpoints do not recompute.">>)}
     end.
 
-%% @doc Recompute the whole step chain from the parent's output. When the range
-%% crosses a reset line the steps below it are verified at the parent's
-%% difficulty and those above it at the block's, with the entropy mixed between
-%% the two calls -- the NIF is never asked to do the mixing.
+%% @doc Recompute the whole step chain from the parent's output. A standard
+%% block carries at most 10,800 outputs. For a wider gap, first compute the
+%% omitted prefix sequentially, then verify the signed suffix in parallel.
+%% This is deliberately uncapped: the operator chose validation over a fast
+%% refusal, and the VDF itself determines how long recovery takes.
+%%
+%% When the range crosses a reset line the steps below it use the parent's
+%% difficulty and those from the line onwards use the block's. Entropy is mixed
+%% exactly once, whether that line falls in the computed prefix or the supplied
+%% suffix.
 check_chain(Info, PrevInfo, Threads, Opts) ->
     StepNumber = step_number(Info, Opts),
     PrevStepNumber = step_number(PrevInfo, Opts),
     PrevOutput = decode(<<"output">>, PrevInfo, Opts),
     Ascending =
         lists:reverse([ decode(Step) || Step <- steps(Info, Opts) ]),
+    SuppliedStart = StepNumber - length(Ascending),
+    {SuppliedStart, SuppliedPrevOutput} =
+        compute_prefix(
+            PrevStepNumber,
+            SuppliedStart,
+            PrevOutput,
+            Info,
+            PrevInfo,
+            Opts
+        ),
     Result =
         case entropy_reset_point(PrevStepNumber, StepNumber) of
             none ->
                 ar_nonce_limiter:verify_no_reset(
-                    PrevStepNumber,
-                    PrevOutput,
+                    SuppliedStart,
+                    SuppliedPrevOutput,
+                    ?VDF_CHECKPOINT_COUNT_IN_STEP,
+                    Ascending,
+                    Threads,
+                    difficulty(Info, Opts)
+                );
+            ResetPoint when ResetPoint =< SuppliedStart ->
+                ar_nonce_limiter:verify_no_reset(
+                    SuppliedStart,
+                    SuppliedPrevOutput,
                     ?VDF_CHECKPOINT_COUNT_IN_STEP,
                     Ascending,
                     Threads,
@@ -274,8 +297,8 @@ check_chain(Info, PrevInfo, Threads, Opts) ->
                 );
             ResetPoint ->
                 ar_nonce_limiter:verify(
-                    PrevStepNumber,
-                    PrevOutput,
+                    SuppliedStart,
+                    SuppliedPrevOutput,
                     ?VDF_CHECKPOINT_COUNT_IN_STEP,
                     Ascending,
                     ResetPoint,
@@ -292,6 +315,38 @@ check_chain(Info, PrevInfo, Threads, Opts) ->
             {error, error_message(<<"invalid-vdf-chain">>,
                 <<"The steps do not recompute from the parent's output.">>)}
     end.
+
+%% @doc Compute the prefix omitted by the header's bounded step list.
+compute_prefix(StepNumber, StepNumber, Output, _Info, _PrevInfo, _Opts) ->
+    {StepNumber, Output};
+compute_prefix(StepNumber, EndStepNumber, Output, Info, PrevInfo, Opts) ->
+    NextStepNumber = StepNumber + 1,
+    ResetPoint = entropy_reset_point(step_number(PrevInfo, Opts), EndStepNumber),
+    SeededOutput =
+        case NextStepNumber of
+            ResetPoint ->
+                ar_nonce_limiter:mix_seed(
+                    Output,
+                    decode(<<"seed">>, Info, Opts)
+                );
+            _ ->
+                Output
+        end,
+    Difficulty =
+        case ResetPoint =/= none andalso NextStepNumber >= ResetPoint of
+            true -> difficulty(Info, Opts);
+            false -> difficulty(PrevInfo, Opts)
+        end,
+    {ok, NextOutput, _Checkpoints} =
+        ar_vdf:compute(NextStepNumber, SeededOutput, Difficulty),
+    compute_prefix(
+        NextStepNumber,
+        EndStepNumber,
+        NextOutput,
+        Info,
+        PrevInfo,
+        Opts
+    ).
 
 %% @doc The five seed fields as the block declares them, shaped to compare
 %% against `lib_arweave_vdf:seed_data/5'.
@@ -347,16 +402,23 @@ decode(Bin) ->
 %% @doc The number of OS threads the NIF may verify with. There is no
 %% parallelism inside a checkpoint -- that is the delay function's whole point
 %% -- so the threads are spread across the steps of a chain, or across the 25
-%% checkpoints of a single step.
+%% checkpoints of a single step. The request may choose fewer workers but can
+%% never exceed the node operator's `arweave-max-vdf-workers' setting.
 threads(Base, Req, Opts) ->
-    Default =
-        hb_opts:get(
-            arweave_vdf_threads,
-            max(1, erlang:system_info(schedulers) div 2),
-            Opts
+    Max =
+        max(
+            1,
+            hb_util:int(
+                hb_opts:get(
+                    arweave_max_vdf_workers,
+                    max(1, erlang:system_info(schedulers) div 2),
+                    Opts
+                )
+            )
         ),
+    Default = hb_opts:get(arweave_vdf_threads, Max, Opts),
     Threads = get_first(<<"arweave-vdf-threads">>, Base, Req, Default, Opts),
-    max(1, hb_util:int(Threads)).
+    min(Max, max(1, hb_util:int(Threads))).
 
 %% @doc Read a field from the request, falling back to the base message.
 %%
@@ -397,485 +459,3 @@ error_message(Message, Detail) ->
         <<"message">> => Message,
         <<"detail">> => Detail
     }.
-
-%%% Tests.
-%%%
-%%% Every vector here is a real mainnet post-2.9 block, and every mutant is one
-%%% field of one of them. The chain tests are slow by construction -- verifying
-%%% a step is a second of a reference CPU's work, and the point of the exercise
-%%% is that no shortcut exists -- so they carry explicit timeouts.
-
-%% @doc The options the tests resolve under.
-test_opts() ->
-    #{ <<"store">> => [hb_test_utils:test_store()] }.
-
-%% @doc `verify-chain' accepts a real block pair. Block 1,974,876 advanced the
-%% timeline by two steps, the shortest real chain in the fixtures.
-verify_chain_test_() ->
-    {timeout, 600, fun() ->
-        ?assertEqual(
-            true,
-            resolve_field(chain_base(1974876), <<"verify-chain">>, <<"valid">>)
-        )
-    end}.
-
-%% @doc `verify-chain' accepts a real block pair whose step range crosses an
-%% entropy reset line. Block 1,974,850 crosses line 111,555,600 in the course
-%% of its 270 steps: those below the line are verified at its parent's
-%% difficulty and those above it at its own, with the mixed entropy carried
-%% between the two calls in Erlang. The NIF's own reset branch stays dead.
-verify_chain_across_reset_test_() ->
-    {timeout, 3600, fun() ->
-        ?assertEqual(
-            true,
-            resolve_field(
-                with_all_threads(chain_base(1974850)),
-                <<"verify-chain">>,
-                <<"valid">>
-            )
-        )
-    end}.
-
-%% @doc `verify-step' recomputes a real block's final step, and reports it
-%% without claiming validity: there is no `valid' key to branch on.
-verify_step_test_() ->
-    {timeout, 600, fun() ->
-        {ok, Result} =
-            hb_ao:resolve(chain_base(1974876), <<"verify-step">>, test_opts()),
-        ?assertEqual(<<"passed">>, field(<<"pre-filter">>, Result)),
-        ?assertEqual(false, field(<<"sufficient">>, Result)),
-        ?assertEqual(not_found, field(<<"valid">>, Result))
-    end}.
-
-%% @doc The pre-filter does reject: a corrupted intra-step checkpoint fails it
-%% just as it fails `verify-chain'. What the pre-filter cannot do is accept.
-verify_step_rejects_test_() ->
-    {timeout, 600, fun() ->
-        Base = chain_base(1974876),
-        [Newest, _Second | Rest] = checkpoints_of(Base),
-        Corrupted =
-            mutate(
-                Base,
-                <<"last-step-checkpoints">>,
-                [Newest, random_hash() | Rest]
-            ),
-        {error, Error} =
-            hb_ao:resolve(Corrupted, <<"verify-step">>, test_opts()),
-        ?assertEqual(
-            <<"invalid-last-step-checkpoints">>,
-            field(<<"message">>, Error)
-        )
-    end}.
-
-%% @doc The pre-filter is not a substitute for the chain, and here is the
-%% block that proves it. Rewriting the parent's output -- and the block's claim
-%% about it, so the two still agree -- leaves every check that reads only the
-%% block itself satisfied, so `verify-step' passes. The chain is anchored on
-%% the parent's output, so `verify-chain' rejects it.
-verify_step_is_not_sufficient_test_() ->
-    {timeout, 600, fun() ->
-        Base = chain_base(1974876),
-        Forged = hb_util:encode(crypto:strong_rand_bytes(32)),
-        PrevInfo = maps:get(<<"prev-nonce-limiter-info">>, Base),
-        Tampered =
-            mutate(
-                Base#{
-                    <<"prev-nonce-limiter-info">> =>
-                        PrevInfo#{ <<"output">> => Forged }
-                },
-                <<"prev-output">>,
-                Forged
-            ),
-        ?assertEqual(
-            <<"passed">>,
-            resolve_field(Tampered, <<"verify-step">>, <<"pre-filter">>)
-        ),
-        assert_rejected(Tampered, <<"invalid-vdf-chain">>)
-    end}.
-
-%% @doc A step list that does not cover the whole range. Verifying the steps a
-%% block does carry proves nothing about the ones it does not, so a short list
-%% is an error rather than a smaller job.
-reject_truncated_steps_test() ->
-    Base = chain_base(1974876),
-    [_Newest | Rest] = steps_of(Base),
-    assert_rejected(mutate(Base, <<"steps">>, Rest), <<"invalid-step-count">>).
-
-%% @doc An empty step list. The verification would have nothing to run over,
-%% and a validator that let that through would accept every block.
-reject_empty_steps_test() ->
-    assert_rejected(
-        mutate(chain_base(1974876), <<"steps">>, []),
-        <<"invalid-step-count">>
-    ).
-
-%% @doc An ascending step list. The protocol's lists are newest-first; a
-%% validator that took either order would verify some chains backwards.
-reject_ascending_steps_test() ->
-    Base = chain_base(1974876),
-    assert_rejected(
-        mutate(Base, <<"steps">>, lists:reverse(steps_of(Base))),
-        <<"invalid-output">>
-    ).
-
-%% @doc A block that does not advance the timeline.
-reject_stale_step_number_test() ->
-    Base = chain_base(1974876),
-    assert_rejected(
-        mutate(Base, <<"global-step-number">>, prev_step_number(Base)),
-        <<"stale-step-number">>
-    ).
-
-%% @doc A gap wider than the 10,800 steps a block may carry. It cannot be
-%% verified from block data alone, whatever the block claims about it.
-reject_wide_step_gap_test() ->
-    Base = chain_base(1974876),
-    assert_rejected(
-        mutate(Base, <<"global-step-number">>, prev_step_number(Base) + 10801),
-        <<"step-gap-too-large">>
-    ).
-
-%% @doc A block that does not continue from its parent's output.
-reject_foreign_prev_output_test() ->
-    Base = chain_base(1974876),
-    assert_rejected(
-        mutate(Base, <<"prev-output">>, random_hash()),
-        <<"invalid-prev-output">>
-    ).
-
-%% @doc A block whose mined output is not the newest step it carries.
-reject_foreign_output_test() ->
-    Base = chain_base(1974876),
-    assert_rejected(
-        mutate(Base, <<"output">>, random_hash()),
-        <<"invalid-output">>
-    ).
-
-%% @doc Each of the five seed fields is checked against what the parent
-%% implies. The last mutant is `?VDF_DIFFICULTY' itself: mainnet left that
-%% constant behind at its first retarget, so a device that reached for it
-%% would verify every block against a difficulty no block declares.
-reject_wrong_seed_data_test() ->
-    Base = chain_base(1974876),
-    lists:foreach(
-        fun({Key, Value}) ->
-            assert_rejected(
-                mutate(Base, Key, Value),
-                <<"invalid-vdf-seed-data">>
-            )
-        end,
-        [
-            {<<"seed">>, hb_util:encode(crypto:strong_rand_bytes(48))},
-            {<<"next-seed">>, hb_util:encode(crypto:strong_rand_bytes(48))},
-            {<<"partition-upper-bound">>, 1},
-            {<<"next-partition-upper-bound">>, 1},
-            {<<"vdf-difficulty">>, ?VDF_DIFFICULTY}
-        ]
-    ).
-
-%% @doc A corrupted intra-step checkpoint. The 25 are one hash apart on the
-%% chain, so a single wrong entry breaks the recomputation of two of them.
-reject_corrupt_last_step_checkpoint_test_() ->
-    {timeout, 600, fun() ->
-        Base = chain_base(1974876),
-        [Newest, _Second | Rest] = checkpoints_of(Base),
-        assert_rejected(
-            mutate(
-                Base,
-                <<"last-step-checkpoints">>,
-                [Newest, random_hash() | Rest]
-            ),
-            <<"invalid-last-step-checkpoints">>
-        )
-    end}.
-
-%% @doc A single corrupted step in the middle of the chain. Block 1,974,879
-%% carries eighteen, so the mutation touches neither the newest step -- which
-%% `output' pins -- nor the second, which the final step's checkpoints are
-%% anchored on. Only the chain catches it.
-reject_corrupt_step_test_() ->
-    {timeout, 900, fun() ->
-        Base = with_all_threads(chain_base(1974879)),
-        {Newer, [_Corrupted | Older]} = lists:split(9, steps_of(Base)),
-        assert_rejected(
-            mutate(Base, <<"steps">>, Newer ++ [random_hash() | Older]),
-            <<"invalid-vdf-chain">>
-        )
-    end}.
-
-%% @doc Off a reset line the seed data is carried through from the parent
-%% unchanged, and a real block declares exactly that.
-seed_data_test() ->
-    Base = chain_base(1974876),
-    Info = maps:get(<<"nonce-limiter-info">>, Base),
-    ?assertEqual(seed_data_of(Info), resolve_seed_data(Base, Info)).
-
-%% @doc Across a reset line all five fields rotate together, and two of them
-%% are drawn from the parent's header rather than its nonce limiter info:
-%% `next-seed' becomes the parent's independent hash and
-%% `next-partition-upper-bound' its weave size. Block 1,974,850 crosses line
-%% 111,555,600 and declares exactly that.
-seed_data_across_reset_test() ->
-    Base = chain_base(1974850),
-    Info = maps:get(<<"nonce-limiter-info">>, Base),
-    Expected = seed_data_of(Info),
-    ?assertEqual(
-        maps:get(<<"prev-indep-hash">>, Base),
-        maps:get(<<"next-seed">>, Expected)
-    ),
-    ?assertEqual(
-        maps:get(<<"prev-weave-size">>, Base),
-        maps:get(<<"next-partition-upper-bound">>, Expected)
-    ),
-    ?assertEqual(Expected, resolve_seed_data(Base, Info)).
-
-%% @doc A step number behind its parent's has no seed data.
-reject_stale_seed_data_step_number_test() ->
-    Base = chain_base(1974876),
-    {error, Error} =
-        hb_ao:resolve(
-            Base#{ <<"step-number">> => prev_step_number(Base) },
-            <<"seed-data">>,
-            test_opts()
-        ),
-    ?assertEqual(<<"stale-step-number">>, field(<<"message">>, Error)).
-
-%% @doc The reset line a real step range crosses, and the absence of one.
-%% Blocks 1,974,849 and 1,974,850 straddle line 111,555,600; 1,974,875 and
-%% 1,974,876 sit between two lines.
-reset_point_test() ->
-    ?assertEqual(
-        111555600,
-        resolve_field(
-            #{
-                <<"device">> => <<"arweave-vdf@2.9">>,
-                <<"prev-step-number">> => 111555523,
-                <<"step-number">> => 111555793
-            },
-            <<"reset-point">>,
-            <<"reset-point">>
-        )
-    ),
-    ?assertEqual(
-        <<"none">>,
-        resolve_field(
-            #{
-                <<"device">> => <<"arweave-vdf@2.9">>,
-                <<"prev-step-number">> => 111559070,
-                <<"step-number">> => 111559072
-            },
-            <<"reset-point">>,
-            <<"reset-point">>
-        )
-    ).
-
-%% @doc Off a retarget height the scheduled difficulty is carried through.
-%% Block 1,974,871 scheduled 1,111,546 and 1,974,872 is not a retarget, so
-%% that is what 1,974,872 declares -- and does.
-next_difficulty_test() ->
-    ?assertEqual(
-        1111546,
-        resolve_field(
-            #{
-                <<"device">> => <<"arweave-vdf@2.9">>,
-                <<"height">> => 1974871,
-                <<"vdf-difficulty">> => 1111546,
-                <<"next-vdf-difficulty">> => 1111546
-            },
-            <<"next-difficulty">>,
-            <<"next-vdf-difficulty">>
-        )
-    ).
-
-%% @doc At a retarget height the difficulty is recomputed from the parent's
-%% block time history: the ratio of VDF time to block time over the 720
-%% entries after the first 50, smoothed nine parts old to one part new.
-%% Height 1,974,240 is a retarget and the network moved from 1,111,578 to
-%% 1,111,546 there. The fixtures carry block headers, not histories, so the
-%% history is synthesised to the ratio mainnet's implies; what is asserted is
-%% that the arithmetic lands on the value the network chose. The entries
-%% before and after the window are wildly off-ratio, so a device that failed
-%% to cut them would miss by orders of magnitude.
-next_difficulty_retarget_test() ->
-    Window = [ history_element(100000, 99972) || _ <- lists:seq(1, 720) ],
-    Excluded = [ history_element(100000, 1) || _ <- lists:seq(1, 50) ],
-    ?assertEqual(
-        1111546,
-        resolve_field(
-            #{
-                <<"device">> => <<"arweave-vdf@2.9">>,
-                <<"height">> => 1974239,
-                <<"vdf-difficulty">> => 1111578,
-                <<"next-vdf-difficulty">> => 1111578,
-                <<"block-time-history">> => Excluded ++ Window ++ Excluded
-            },
-            <<"next-difficulty">>,
-            <<"next-vdf-difficulty">>
-        )
-    ).
-
-%% @doc A retarget height whose parent already scheduled a different
-%% difficulty is not a retarget: the schedule is carried through untouched,
-%% and the history is never read.
-next_difficulty_scheduled_test() ->
-    ?assertEqual(
-        1111546,
-        resolve_field(
-            #{
-                <<"device">> => <<"arweave-vdf@2.9">>,
-                <<"height">> => 1974239,
-                <<"vdf-difficulty">> => 1111578,
-                <<"next-vdf-difficulty">> => 1111546
-            },
-            <<"next-difficulty">>,
-            <<"next-vdf-difficulty">>
-        )
-    ).
-
-%% @doc A nonce limiter info survives the round trip to a record and back,
-%% including the order of both of its lists.
-info_round_trip_test() ->
-    Info = maps:get(<<"nonce-limiter-info">>, chain_base(1974871)),
-    ?assertEqual(
-        Info,
-        lib_arweave_vdf:info_to_message(
-            lib_arweave_vdf:message_to_info(Info, test_opts())
-        )
-    ).
-
-%%% Test helpers.
-
-%% @doc A `verify-chain' base for a fixture block and its parent.
-chain_base(Height) ->
-    Block = fixture(Height),
-    PrevBlock = fixture(Height - 1),
-    #{
-        <<"device">> => <<"arweave-vdf@2.9">>,
-        <<"nonce-limiter-info">> => fixture_info(Block),
-        <<"prev-nonce-limiter-info">> => fixture_info(PrevBlock),
-        <<"prev-indep-hash">> => maps:get(<<"indep_hash">>, PrevBlock),
-        <<"prev-weave-size">> =>
-            hb_util:int(maps:get(<<"weave_size">>, PrevBlock))
-    }.
-
-%% @doc Read a fixture block: real mainnet post-2.9 JSON, as the network's own
-%% encoder emits it.
-fixture(Height) ->
-    {ok, Body} =
-        file:read_file(
-            <<"test/fixtures/arweave/block-",
-                (integer_to_binary(Height))/binary, ".json">>
-        ),
-    hb_json:decode(Body).
-
-%% @doc Project a fixture block's nonce limiter info into its message form.
-%%
-%% `~arweave-block@2.9' owns the block codec; until it lands this is the only
-%% place the JSON spellings appear. Three of them are renames the JSON encoder
-%% applies and the binary encoder does not, and the third is the trap: the
-%% JSON `checkpoints' key holds the `steps' list, and there is no JSON `steps'
-%% key at all. A codec that looked for one would hand `verify-chain' an empty
-%% list.
-fixture_info(Block) ->
-    Info = maps:get(<<"nonce_limiter_info">>, Block),
-    #{
-        <<"output">> => maps:get(<<"output">>, Info),
-        <<"prev-output">> => maps:get(<<"prev_output">>, Info),
-        <<"seed">> => maps:get(<<"seed">>, Info),
-        <<"next-seed">> => maps:get(<<"next_seed">>, Info),
-        <<"partition-upper-bound">> =>
-            hb_util:int(maps:get(<<"zone_upper_bound">>, Info)),
-        <<"next-partition-upper-bound">> =>
-            hb_util:int(maps:get(<<"next_zone_upper_bound">>, Info)),
-        <<"global-step-number">> =>
-            hb_util:int(maps:get(<<"global_step_number">>, Info)),
-        <<"last-step-checkpoints">> =>
-            maps:get(<<"last_step_checkpoints">>, Info),
-        <<"steps">> => maps:get(<<"checkpoints">>, Info),
-        <<"vdf-difficulty">> =>
-            hb_util:int(maps:get(<<"vdf_difficulty">>, Info)),
-        <<"next-vdf-difficulty">> =>
-            hb_util:int(maps:get(<<"next_vdf_difficulty">>, Info))
-    }.
-
-%% @doc Replace one field of the block's nonce limiter info.
-mutate(Base, Key, Value) ->
-    Info = maps:get(<<"nonce-limiter-info">>, Base),
-    Base#{ <<"nonce-limiter-info">> => Info#{ Key => Value } }.
-
-%% @doc Resolve `verify-chain' and assert the error it rejects with. A mutant
-%% that produced any other error, or none, would mean the check under test is
-%% not the one doing the work.
-assert_rejected(Base, Message) ->
-    {error, Error} = hb_ao:resolve(Base, <<"verify-chain">>, test_opts()),
-    ?assertEqual(Message, field(<<"message">>, Error)).
-
-%% @doc Resolve a key and read one field of the result. The resolver attaches
-%% its own `priv'/hashpath bookkeeping to every result, so assertions are made
-%% per field rather than on the whole message.
-resolve_field(Base, Key, Field) ->
-    {ok, Result} = hb_ao:resolve(Base, Key, test_opts()),
-    field(Field, Result).
-
-%% @doc Read one field of a resolved result.
-field(Key, Result) ->
-    hb_maps:get(Key, Result, not_found, test_opts()).
-
-%% @doc Resolve `seed-data' for a block's own step number, returning the five
-%% fields it answers with.
-resolve_seed_data(Base, Info) ->
-    {ok, Result} =
-        hb_ao:resolve(
-            Base#{
-                <<"step-number">> => maps:get(<<"global-step-number">>, Info)
-            },
-            <<"seed-data">>,
-            test_opts()
-        ),
-    seed_data_of(Result).
-
-%% @doc The block's step list, newest-first.
-steps_of(Base) ->
-    maps:get(<<"steps">>, maps:get(<<"nonce-limiter-info">>, Base)).
-
-%% @doc The block's final-step checkpoints, newest-first.
-checkpoints_of(Base) ->
-    Info = maps:get(<<"nonce-limiter-info">>, Base),
-    maps:get(<<"last-step-checkpoints">>, Info).
-
-%% @doc The parent's global step number.
-prev_step_number(Base) ->
-    maps:get(
-        <<"global-step-number">>,
-        maps:get(<<"prev-nonce-limiter-info">>, Base)
-    ).
-
-%% @doc The five seed fields an info declares.
-seed_data_of(Info) ->
-    maps:with(
-        [
-            <<"seed">>,
-            <<"next-seed">>,
-            <<"partition-upper-bound">>,
-            <<"next-partition-upper-bound">>,
-            <<"vdf-difficulty">>
-        ],
-        Info
-    ).
-
-%% @doc Let the long chains use the whole machine, so the tests that must run
-%% hundreds of steps are bounded by the hardware rather than by the default.
-with_all_threads(Base) ->
-    Base#{ <<"arweave-vdf-threads">> => erlang:system_info(schedulers) }.
-
-%% @doc One block time history entry, in message form.
-history_element(BlockInterval, VDFInterval) ->
-    #{
-        <<"block-interval">> => BlockInterval,
-        <<"vdf-interval">> => VDFInterval,
-        <<"chunk-count">> => 1
-    }.
-
-%% @doc An encoded hash belonging to nothing.
-random_hash() ->
-    hb_util:encode(crypto:strong_rand_bytes(32)).

@@ -1,240 +1,131 @@
 # `~arweave@2.9`
 
-`~arweave@2.9` gives a HyperBEAM node access to the Arweave network. Beyond
-relaying queries to a peer, it can **validate Arweave blocks itself** and keep a
-verified chain in the node's own stores, reachable through `hb_cache`.
+`~arweave@2.9` adds pull-based, post-2.9 Arweave validation to a HyperBEAM
+node. It bootstraps from a trusted state checkpoint, fetches new blocks from
+peers, validates them locally, and stores the resulting chain states in
+`hb_cache`.
 
-This page covers the validation subsystem. The relay keys (`tx`, `chunk`,
-`raw`, `price`, `block`, `current`) are unchanged and are configured by the
-`/arweave` route in the node message.
+The existing gateway keys (`tx`, `chunk`, `raw`, `price`, `block`, `current`)
+remain peer-backed. Use `validated` when the answer must have been checked by
+this node.
 
-## What "validated" means here
+## Validation boundary
 
-A block is accepted only after the node has checked it itself. Nothing is taken
-on a peer's word except at bootstrap, and even there only a single block hash is
-trusted — everything else fetched is checked against it.
+Bootstrap is a trusted-state join, not historical replay. The checkpoint
+commits to the block index and account root, but HyperBEAM does not replay the
+transitions that produced the checkpoint state. An explicit checkpoint hash
+therefore trusts the complete state carried at that point. This is the same
+fundamental join boundary used by an Arweave node loading state from trusted
+peers. HyperBEAM binds the newest reward-history element to the checkpoint and
+its parent; the standard Arweave join checks a 50-element recent window. Both
+trust the older history tail supplied at join.
 
-Each block is validated against its parent across **31 sequential checks** plus
-the account transition, which asserts four further quantities of its own. Between
-them they can reject a block in **44 distinct ways** — countable as the distinct
-`invalid-*` messages `dev_arweave_block.erl` can emit:
+After bootstrap, every accepted block is checked against the locally stored
+parent. The pipeline covers:
 
-```bash
-awk '/^%%% Tests\./{exit} 1' src/preloaded/arweave/dev_arweave_block.erl \
-  | grep -oE '<<"invalid-[a-z0-9-]+">>' | sort -u | wc -l
-```
+- block identity, signature, timestamp, difficulty, and cumulative work;
+- proof of work and both proof-of-access paths;
+- the complete VDF interval and seed/difficulty transitions, computing any
+  prefix omitted by the header's bounded step list;
+- transaction identities, signatures, anchors, fees, balances, and Merkle root;
+- block-index continuity and root; and
+- the account transition and exact signed `wallet-list` root.
 
-(The `awk` stops at the test section; counting the whole file also counts the
-messages the mutation tests name in their assertions.)
-
-The checks cover the block
-signature and independent hash, the proof of access (SPoRA) including chunk
-unpacking, the full VDF chain, difficulty and retargeting, the transaction set
-and its Merkle root, the block-index root, and the account-state transition
-including the `wallet_list` root.
-
-The last of those is worth calling out. `wallet_list` is a Merkle-Patricia root
-over every Arweave account *after* the block is applied. Reproducing it means
-reproducing the entire economic transition — every transfer, fee, and mining
-reward — to the winston. If the node's arithmetic is wrong anywhere, the root
-does not match and the block is rejected. Mainnet is the oracle.
+Account validation is required by default. A bootstrap fails if peers cannot
+serve the selected checkpoint's own wallet tree; it does not substitute a tree
+from another height.
 
 ## Devices
 
-The subsystem is deliberately split, so each piece is usable on its own.
-
 | Device | Responsibility |
 |---|---|
-| `~arweave@2.9` | Peer I/O, `bootstrap`, `sync`, `tip`, `validated` |
-| `~arweave-block@2.9` | Block codec, hashing, and `apply` — the state transition |
-| `~arweave-spora@2.9` | Storage proofs: recall ranges, packing and unpacking, `H0`/`H1`/`H2` |
-| `~arweave-vdf@2.9` | Nonce limiter: VDF chain verification, seeds, difficulty |
-| `~arweave-merkle@2.9` | Generic offset-indexed Merkle path validation |
-| `~arweave-block-index@2.9` | The `{indep-hash, weave-size, tx-root}` index over the weave |
-| `~arweave-wallets@2.9` | The account tree |
-| `~arweave-tx@2.9` | Transaction validation |
+| `~arweave@2.9` | Peer I/O, bootstrap, sync, fork choice, local lookups |
+| `~arweave-block@2.9` | Block codec and complete state transition |
+| `~arweave-block-index@2.9` | Weave index construction and proofs |
+| `~arweave-merkle@2.9` | Offset-indexed Merkle path validation |
+| `~arweave-spora@2.9` | Recall ranges, RandomX packing, and proof of access |
+| `~arweave-tx@2.9` | Transaction codec and admission rules |
+| `~arweave-vdf@2.9` | Nonce-limiter chain, seeds, and difficulty |
+| `~arweave-wallets@2.9` | Patricia account tree, sparse updates, rollback |
 
-`~arweave-merkle@2.9` carries no Arweave-specific knowledge at all — it
-validates a path against a root at an offset under a named ruleset, and is
-reusable for any offset-indexed tree.
+## Bootstrap and sync
 
-## Keeping a node in sync
+Configure a persistent store, block sources in `arweave-untrusted-peers`, and
+one bootstrap trust root:
 
-Validation is pull-only. The node never gossips; it asks peers for blocks and
-checks them. In production, point `~cron@1.0` at it:
+- `arweave-checkpoint-block`: an explicit block hash; or
+- `arweave-trusted-peers`: peers that must agree on a shared ancestor near the
+  tip.
 
-```
-POST /~cron@1.0/every
-  cron-path: /~arweave@2.9/sync
-  interval:  30-seconds
-```
+Then call `GET /~arweave@2.9/bootstrap` once. Bootstrap verifies the selected
+block's identity, reconstructs and verifies its block index, fetches the
+checkpoint histories and transaction-anchor window, and verifies the
+checkpoint's account tree against its signed root.
 
-`sync` is idempotent and resumable by construction: a block whose chain state is
-already stored is neither fetched nor applied, so an interrupted pass leaves a
-consistent tree and the next pass continues where it stopped.
+Schedule `GET /~arweave@2.9/sync` with `~cron@1.0` after bootstrap. A typical
+interval is 30 seconds. Sync is idempotent: each validated state is indexed by
+block hash, and the tip moves only after that state has been written.
 
-`GET /~arweave@2.9/validated&block=<indep-hash>` returns the chain state this
-node produced for a block, or `not-validated` if it has not verified it. It
-never falls back to a peer.
+`GET /~arweave@2.9/tip` returns the selected local tip. Fork choice follows
+Arweave's cumulative-difficulty and checkpoint-depth rules.
 
-Note the contrast with `GET /~arweave@2.9/block&block=<id>`, which is a gateway
-key: on a cache miss it fetches from a peer and returns the answer **unverified**.
-Both live on a device that validates blocks, so which one you ask decides
-whether the answer means anything. Use `validated` when you need a block this
-node checked.
+`GET /~arweave@2.9/validated&block=<indep-hash>` returns a state produced by
+this node, or `not-validated`. It never contacts a peer. In contrast,
+`GET /~arweave@2.9/block&block=<indep-hash>` is a gateway read and may return an
+unvalidated peer response.
 
-`GET /~arweave@2.9/tip` returns the chain state at the tip of the heaviest
-eligible branch, chosen with Arweave's own fork-choice rule — strictly greater
-`cumulative-diff` wins, an equal one keeps the incumbent, and a branch is
-eligible only if it forks no deeper than 18 blocks below the tip.
+Bootstrap is refused after a chain has been established. An operator can set
+`arweave-force-bootstrap` in the node message to re-anchor deliberately; the
+request itself cannot enable this option.
 
-## Bootstrapping
-
-`GET /~arweave@2.9/bootstrap` establishes the initial chain state. This is the
-only moment the node trusts anything.
-
-Two modes:
-
-- **Checkpoint** — set `arweave-checkpoint-block` in the node message to a block
-  hash. This is the `bitcoind` model, and the trustless configuration.
-- **Shared ancestor** — with `arweave-trusted-peers` set, the node takes the
-  block those peers agree on at `arweave-checkpoint-depth` below the tip.
-
-Only `arweave-trusted-peers` may decide where a shared-ancestor bootstrap
-anchors; a node that sets neither that nor `arweave-checkpoint-block` is told
-so rather than quietly asking whichever peers a previous bootstrap happened to
-find. A node given a checkpoint block needs no trusted peers at all.
-
-In both cases everything else is verified against that block: the block index
-against its `hash-list-merkle`, the account tree against its `wallet-list`, the
-transaction anchor window against the identifiers in that index, and the reward
-and block-time histories against their respective hashes. So the trusted input
-is one hash, and roughly 176 MB of index plus 300,000-odd accounts are checked
-against it.
-
-Bootstrap then populates `arweave-untrusted-peers`, which is where blocks come
-from afterwards — every one of them validated.
-
-### Bootstrapping twice
-
-`bootstrap` is refused once the node has a validated chain of its own, with
-`already-bootstrapped`, before any peer is contacted. Without that guard it is a
-repeatable trust reset: every call re-asks the peers where the chain starts and
-moves the tip onto their answer, discarding a chain the node had checked for
-itself. The rule is having a chain at all, not having a longer one — a
-checkpoint a few blocks ahead is still blocks taken on a peer's word that the
-node could have validated, and that is the case that actually occurred in
-testing. `sync` is what extends a chain; `bootstrap` is what starts one. Pass
-Set `arweave-force-bootstrap` in the **node message** to re-anchor anyway — a
-node stranded too far behind to close the gap needs a way out.
-
-It is deliberately not accepted from the request. `bootstrap` is reachable by
-anyone the node answers, and forcing it discards a chain the node validated for
-itself and re-anchors on whatever the peer set says. Honouring `force` from the
-request would leave the subsystem's one guarded trust boundary open to any
-caller who could reach the port — refusing the operator's accidental second
-bootstrap while waving through a stranger's deliberate one.
-
-### The transaction anchor window
-
-A transaction anchors on a block within 50 of the one carrying it, and may not
-repeat a transaction already inside that window. Both rules read the chain
-state's `recent-blocks`, so bootstrap seeds it with the checkpoint and the 49
-blocks below it — about 28 MB of headers, fetched in parallel and each
-re-identified by recomputing its `indep-hash`. Without it every block-anchored
-transaction on the network is refused, which is to say every real block.
-
-### Cost
-
-Validating the VDF chain is deliberately expensive; that is what a verifiable
-delay function is for. On current mainnet a block costs roughly **130
-CPU-seconds** of VDF verification against a ~122-second block interval, so
-*keeping up* costs about **1.1 cores** while *catching up* is linear in blocks.
-Measured end to end with 14 threads, a mainnet block lands in 17–43 seconds.
-
-That figure depends on the verification path reaching the crypto-extension
-kernel. The node runs a known-answer test at load and logs which kernel it
-installed:
-
-```
-VDF verify kernel fused ARM
-VDF verify kernel OpenSSL
-```
-
-The second line means the self-test failed or the hardware lacks the
-extensions, and verification runs ~6.4× slower — about 7 cores to keep up.
-Raise `arweave-vdf-threads` accordingly.
-
-This is why the checkpoint defaults to a recent height rather than the 2.9 fork:
-validating the ~373,000 blocks since the fork would take on the order of 13,500
-CPU-hours.
-
-There is also a hard limit, independent of cost. Bootstrap needs the reward and
-block-time histories, and peers serve those only for the last 50 blocks
-(measured: HTTP 200 at depth 50, 404 at depth 60). **A checkpoint deeper than
-that fails bootstrap with `history-unavailable`**, so the checkpoint mode cannot
-currently reach further back than the shared-ancestor mode. `bootstrap` logs an
-estimate of what a chosen checkpoint will cost before spending any of it.
-
-## Node message options
+## Node options
 
 | Key | Default | Meaning |
-|---|---|---|
-| `arweave-checkpoint-block` | `[]` | Bootstrap checkpoint block hash |
-| `arweave-checkpoint-depth` | `30` | Default checkpoint, in blocks below the tip |
-| `arweave-trusted-peers` | `[]` | The only peers that may establish a checkpoint |
-| `arweave-force-bootstrap` | `false` | Re-anchor over an already-validated chain. Node message only — never read from the request |
-| `arweave-untrusted-peers` | `[]` | Block and transaction sources; populated by `bootstrap` |
-| `arweave-sync-batch` | `50` | Maximum blocks advanced per `sync` pass |
-| `arweave-randomx-mode` | `light` | `light` or `fast` |
-| `arweave-vdf-threads` | `schedulers div 2` | VDF verification parallelism |
-| `arweave-require-accounts` | `true` | Refuse to advance the chain without an account tree |
+|---|---:|---|
+| `arweave-checkpoint-block` | unset | Explicit trusted checkpoint hash |
+| `arweave-checkpoint-depth` | `30` | Shared-ancestor distance below peer tip |
+| `arweave-trusted-peers` | `[]` | Sources allowed to establish the checkpoint |
+| `arweave-untrusted-peers` | `[]` | Sources for blocks and transactions after bootstrap |
+| `arweave-force-bootstrap` | `false` | Permit an operator-initiated re-anchor |
+| `arweave-sync-batch` | `50` | Maximum blocks applied by one sync call |
+| `arweave-peer-workers` | `8` | Concurrent peer fetch workers |
+| `arweave-peer-timeout` | `60000` | Peer response timeout in milliseconds |
+| `arweave-peer-connect-timeout` | `10000` | Peer connect timeout in milliseconds |
+| `arweave-randomx-mode` | `light` | RandomX `light` or `fast` mode |
+| `arweave-max-vdf-workers` | `max(1, schedulers div 2)` | Node-wide native VDF worker ceiling |
+| `arweave-vdf-threads` | worker ceiling | Requested VDF workers; clamped to the ceiling |
+| `arweave-require-accounts` | `true` | Refuse states without a verified account tree |
 
-`arweave-require-accounts` is the difference between validating a block and
-validating a *chain*. `~arweave-block@2.9/validate` answers for a single
-transition and names the mode it ran in, so a caller inspecting one block can
-act on the answer either way. `apply` returns the state the next block is
-checked against, and by then the distinction is gone — so at the default it
-refuses outright, with `accounts-not-checked`, rather than carrying a weaker
-state forward.
+The worker ceiling is a node option. Caller-supplied messages may select fewer
+workers but cannot create more native threads than the operator permits.
 
-Setting it `false` gives consensus-only validation: proof of access, proof of
-work, VDF, difficulty and the block's own commitments are all still checked, but
-nothing about who may spend what. That is the mode the staged trust model needs
-for pre-2.9 work types, which arrive with no account tree to spend from. It is
-not a performance setting, and a node syncing mainnet should not use it.
+## Tests
 
-`light` RandomX uses roughly 518 MiB and costs about 0.24 s per entropy
-generation — two per block, so under half a percent of one core. `fast` is
-~8× quicker per operation but needs ~6.6 GiB of datasets and tens of seconds to
-initialise, which validation does not need.
+Deterministic device suites use generated block-index, Merkle, account,
+transaction, SPoRA, and VDF boundary vectors and require no checked-in mainnet
+fixtures.
 
-## Two validation modes, and how to tell them apart
+Public peers prune historical wallet lists, so the full real-state integration
+test hydrates a recent checkpoint into `_build/arweave-test-vectors`, finds a
+transaction-bearing child, applies it, and asserts that the resulting account
+root equals the child's signed `wallet-list`:
 
-Account and transaction validation need the account tree. Bootstrap adopts it at
-the deepest block a peer still serves it for — peers prune the wallet list at
-roughly 100 blocks — and verifies its root against that block's signed
-`wallet-list` before adopting it.
+```shell
+rebar3 device test --devices dev_arweave \
+  --test all:live_account_transition --timeout 1800
+```
 
-If no peer serves a usable tree, the node still validates every block at the
-consensus level (signature, `indep-hash`, proof of access, the VDF chain,
-difficulty and every field check) but **cannot** check the account state
-transition, the `wallet-list` root, or per-transaction signatures, balances,
-anchors and fees.
-
-That is a materially weaker mode, so it is recorded rather than silent: the
-chain state carries a marker for which mode produced it, and `sync` emits it per
-block. **Check it.** A node quietly running in the reduced mode looks identical
-from the outside to one doing full validation.
+The same store is reusable for subsequent live sync checks.
 
 ## Scope
 
-Supported: post-2.9 blocks, which is everything from height 1,602,350 onward.
+Supported blocks start at the Arweave 2.9 fork. The subsystem does not mine,
+gossip, retain the weave, implement pre-2.9 proof formats, or replay from
+genesis. It also has no persistent VDF server. Validation recomputes each
+child's VDF interval; when a long block gap exceeds the header's 10,800-step
+suffix, the omitted prefix is computed sequentially before that suffix is
+verified.
 
-Not implemented: pre-2.9 proof formats, mining, chunk storage beyond the chunks
-carried in proofs, a persistent VDF server, and validation back to genesis. A
-checkpoint below the 2.9 fork is refused rather than silently accepted, because
-the node cannot check those proofs.
-
-Transaction replay checks (`tx_already_in_weave`, mempool checks) are out of
-scope, as they require a mempool the node does not keep.
+Native builds currently target macOS arm64 and Linux x86-64. The RandomX light
+mode is intended for validators; fast mode has a substantially larger memory
+footprint.

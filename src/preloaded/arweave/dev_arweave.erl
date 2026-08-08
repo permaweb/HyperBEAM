@@ -31,8 +31,8 @@ info() ->
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
 
-%% @doc Establish the node's initial chain state, trusting a single block hash
-%% and checking everything else against it. See `dev_arweave_sync'.
+%% @doc Establish the node's initial chain state from an operator-selected
+%% trusted checkpoint. See `dev_arweave_sync'.
 %%
 %% Refused once the node has validated a chain at or beyond the checkpoint it
 %% would anchor on: this key is reachable by anyone the node answers, and
@@ -2313,30 +2313,3 @@ get_post_split_mid_chunk_large_module_test_parallel() ->
         #{}
     ),
     ?assertEqual(ExpectedLength, byte_size(Data)).
-
-%% @doc `block' refuses the shapes `validated' refuses.
-%%
-%% `?IS_BLOCK_ID' is a length test, and 64 characters of `..' and `/' are 64
-%% bytes. On the length test alone such a value reaches `hb_cache:read/2' as a
-%% store key and an `hb_store_fs' node walks out of its own root, so the two
-%% keys share one definition of what a block hash is.
-block_refuses_a_traversal_test() ->
-    % 64 bytes, so the length gate admits it; no character is in the base64URL
-    % alphabet, so the shared definition does not.
-    Traversal = << (binary:copy(<<"../">>, 21))/binary, "x" >>,
-    ?assertEqual(64, byte_size(Traversal)),
-    % The length gate on its own admits it.
-    ?assert(?IS_BLOCK_ID(Traversal)),
-    % The device does not.
-    ?assertMatch(
-        {error, #{ <<"message">> := <<"invalid-block">> }},
-        block({id, Traversal}, #{}, #{})
-    ),
-    % A well-formed hash is not refused: it gets as far as the cache, and
-    % answers `not_found' rather than being rejected on shape.
-    Wellformed = binary:copy(<<"a">>, 64),
-    ?assertNotMatch(
-        {error, #{ <<"message">> := <<"invalid-block">> }},
-        block({id, Wellformed}, #{ <<"cache-control">> => [<<"only-if-cached">>] },
-            #{ <<"store">> => [hb_test_utils:test_store()] })
-    ).
