@@ -637,7 +637,10 @@ now(RawBase, Req, Opts) ->
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
             hb_ao:resolve(
                 Base,
-                #{ <<"path">> => <<"compute">>, <<"slot">> => CurrentSlot },
+                (hb_maps:with([<<"push">>], Req, Opts))#{
+                    <<"path">> => <<"compute">>,
+                    <<"slot">> => CurrentSlot
+                },
                 Opts
             );
         CacheParam ->

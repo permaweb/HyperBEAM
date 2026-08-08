@@ -663,7 +663,7 @@ relay_schedule_ans104_test() ->
                 <<"priv-wallet">> => ComputeWallet,
                 <<"store">> =>
                     [
-                        ComputeStore = hb_test_utils:test_store(),
+                        hb_test_utils:test_store(),
                         #{
                             <<"store-module">> => hb_store_remote_node,
                             <<"name">> => <<"cache-TEST/remote-node">>,
@@ -672,32 +672,24 @@ relay_schedule_ans104_test() ->
                     ]
             }
         ),
-    % Get the scheduler location of the scheduling node and write it to the
-    % compute node's store.
-    {ok, SchedulerLocation} =
-        hb_http:get(
-            Scheduler,
-            <<"/~location@1.0/node">>,
+    % Register the scheduler's signed location record on the compute node.
+    SchedulerLocation =
+        hb_message:commit(
+            #{
+                <<"type">> => <<"location">>,
+                <<"url">> => Scheduler,
+                <<"nonce">> => erlang:system_time(millisecond) + 1,
+                <<"time-to-live">> => 60 * 60 * 1000
+            },
+            #{ <<"priv-wallet">> => SchedulerWallet }
+        ),
+    {ok, _} =
+        hb_http:post(
+            Compute,
+            <<"/~location@1.0/known">>,
+            SchedulerLocation,
             #{}
         ),
-    ?event({scheduler_location, SchedulerLocation}),
-    LocationOpts = #{ <<"store">> => [ComputeStore] },
-    {ok, LocationPath} = hb_cache:write(SchedulerLocation, LocationOpts),
-    lists:foreach(
-        fun(Signer) ->
-            ok = hb_store:link(
-                [ComputeStore],
-                #{
-                    hb_path:to_binary([
-                        <<"~location@1.0">>,
-                        hb_util:human_id(Signer)
-                    ]) => LocationPath
-                },
-                LocationOpts
-            )
-        end,
-        hb_message:signers(SchedulerLocation, LocationOpts)
-    ),
     % Create the relaying server.
     Relay =
         hb_http_server:start_node(#{

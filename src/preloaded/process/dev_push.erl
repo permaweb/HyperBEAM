@@ -874,6 +874,9 @@ max_depth_test_cases() ->
         fun test_parse_max_depth/0
     ].
 
+cron_depth_zero_push_test_() ->
+    {timeout, 120, fun test_cron_depth_zero_push/0}.
+
 test_paranoid_push_result() ->
     % The `push_result' topic verifies the result before it is signed for
     % POSTing (at the `apply_security' entry): corrupting a committed
@@ -1330,6 +1333,174 @@ test_remote_routed_push() ->
     ?assertMatch(
         {ok, Slot} when Slot > 0,
         hb_ao:resolve(LoadedProc2, <<"now/at-slot">>, N2Opts)
+    ).
+
+%% @doc Play the same game one hop per node-local cron tick with `push = 0'.
+test_cron_depth_zero_push() ->
+    hb_process_test_vectors:init(),
+    SharedStore = hb_test_utils:test_store(hb_store_fs),
+    SharedOpts = #{ <<"store">> => [SharedStore] },
+    ReadOnlyShared = SharedStore#{ <<"access">> => [<<"read">>] },
+    Wallet1 = ar_wallet:new(),
+    Wallet2 = ar_wallet:new(),
+    Address1 = hb_util:human_id(Wallet1),
+    Address2 = hb_util:human_id(Wallet2),
+    UserWallet = ar_wallet:new(),
+    Opts = #{
+        <<"priv-wallet">> => UserWallet,
+        <<"store">> =>
+            [hb_test_utils:test_store(hb_store_lmdb), ReadOnlyShared]
+    },
+    Proc1 =
+        hb_process_test_vectors:aos_process(
+            SharedOpts#{
+                <<"priv-wallet">> => UserWallet,
+                <<"scheduler">> => Address1
+            }
+        ),
+    Proc2 =
+        hb_process_test_vectors:aos_process(
+            SharedOpts#{
+                <<"priv-wallet">> => UserWallet,
+                <<"scheduler">> => Address2
+            }
+        ),
+    {ok, _} = hb_cache:write(Proc1, SharedOpts),
+    {ok, _} = hb_cache:write(Proc2, SharedOpts),
+    Proc1ID = hb_message:id(Proc1, all, SharedOpts),
+    Proc2ID = hb_message:id(Proc2, all, SharedOpts),
+    Store1 = [hb_test_utils:test_store(hb_store_lmdb), ReadOnlyShared],
+    Store2 = [hb_test_utils:test_store(hb_store_lmdb), ReadOnlyShared],
+    Node1 = hb_http_server:start_node(#{
+        <<"priv-wallet">> => Wallet1,
+        <<"store">> => Store1
+    }),
+    Node2 = hb_http_server:start_node(#{
+        <<"priv-wallet">> => Wallet2,
+        <<"store">> => Store2
+    }),
+    share_location_record(Wallet1, Node1, Node2),
+    share_location_record(Wallet2, Node2, Node1),
+    {ok, _} = hb_http:post(Node1, <<"/schedule">>, Proc1, Opts),
+    {ok, _} = hb_http:post(Node2, <<"/schedule">>, Proc2, Opts),
+    Trust = <<
+        "ao.authorities = { \"", Address1/binary, "\",\"", Address2/binary,
+        "\" }; ao.addAssignable('all', function (msg) return true end); ",
+        "ao.isAssignable = function(m) return true end"
+    >>,
+    {ok, _} =
+        hb_http:post(
+            Node1,
+            <<Proc1ID/binary, "/schedule">>,
+            eval_message(Proc1ID, Trust, Opts),
+            Opts
+        ),
+    {ok, _} =
+        hb_http:post(
+            Node2,
+            <<Proc2ID/binary, "/schedule">>,
+            eval_message(
+                Proc2ID,
+                <<Trust/binary, "\n", (reply_script())/binary>>,
+                Opts
+            ),
+            Opts
+        ),
+    {ok, _} =
+        hb_http:post(
+            Node1,
+            <<Proc1ID/binary, "/schedule">>,
+            eval_message(
+                Proc1ID,
+                <<"Send({ Target = \"", Proc2ID/binary, "\", Action = \"Ping\" })">>,
+                Opts
+            ),
+            Opts
+        ),
+    Cron1 = start_now_push_cron(Node1, Proc1ID),
+    Cron2 = start_now_push_cron(Node2, Proc2ID),
+    GameSettled =
+        wait_until(
+            fun() -> remote_slot_current(Node1, Proc1ID) >= 3 end,
+            60000
+        ),
+    {ok, _} = hb_http:get(Node1, <<"/~cron@1.0/stop=", Cron1/binary>>, #{}),
+    {ok, _} = hb_http:get(Node2, <<"/~cron@1.0/stop=", Cron2/binary>>, #{}),
+    ?assert(GameSettled),
+    ?assertEqual(2, remote_slot_current(Node2, Proc2ID)),
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:read(
+            <<"computed/", Proc2ID/binary, "/slot/2">>,
+            #{ <<"store">> => Store1 }
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:read(
+            <<"computed/", Proc1ID/binary, "/slot/3">>,
+            #{ <<"store">> => Store2 }
+        )
+    ),
+    ?assertEqual(
+        {ok, <<"Replying to...\n", Proc1ID/binary, "\nDone.">>},
+        hb_http:get(
+            Node2,
+            <<Proc2ID/binary, "/compute&slot=2/results/data">>,
+            #{}
+        )
+    ).
+
+%% @doc Post an operator-signed location record to the target node.
+share_location_record(Wallet, NodeURL, Target) ->
+    Record =
+        hb_message:commit(
+            #{
+                <<"type">> => <<"location">>,
+                <<"url">> => NodeURL,
+                <<"nonce">> => 1,
+                <<"time-to-live">> => 60 * 60 * 1000
+            },
+            #{ <<"priv-wallet">> => Wallet }
+        ),
+    {ok, _} =
+        hb_http:post(
+            Target,
+            <<"/~location@1.0/known">>,
+            Record,
+            #{}
+        ).
+
+%% @doc Read the current slot of a process from a node over HTTP.
+remote_slot_current(Node, ProcID) ->
+    {ok, Slot} = hb_http:get(Node, <<ProcID/binary, "/slot/current">>, #{}),
+    hb_util:int(Slot).
+
+%% @doc Establish a cron on the given node that drives `/<proc>/now' with
+%% `push = 0' on every tick, returning the cron task ID.
+start_now_push_cron(Node, ProcID) ->
+    {ok, #{ <<"body">> := TaskID }} =
+        hb_http:get(
+            Node,
+            <<
+                "/~cron@1.0/every?interval=250-milliseconds",
+                "&cron-path=/", ProcID/binary, "/now",
+                "&push=0"
+            >>,
+            #{}
+        ),
+    TaskID.
+
+%% @doc Commit an `Eval' message from the caller to the given process.
+eval_message(ProcID, Code, Opts) ->
+    hb_message:commit(
+        #{
+            <<"type">> => <<"Message">>,
+            <<"action">> => <<"Eval">>,
+            <<"target">> => ProcID,
+            <<"data">> => Code
+        },
+        Opts
     ).
 
 test_oracle_push() ->
