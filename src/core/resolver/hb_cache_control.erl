@@ -49,7 +49,7 @@ lookup(Base, Req, Opts) ->
     case derive_cache_settings([Base, Req], Opts) of
         #{ <<"lookup">> := false } ->
             ?event({skip_cache_check, lookup_disabled}),
-            {continue, Base, Req};
+            maybe_load_base(Base, Req, Opts);
         Settings = #{ <<"lookup">> := true } ->
             OutputScopedOpts =
                 hb_store:scope(
@@ -74,31 +74,29 @@ lookup(Base, Req, Opts) ->
                         #{ <<"only-if-cached">> := true } ->
                             only_if_cached_not_found_error(Base, Req, Opts);
                         _ ->
-                            case ?IS_ID(Base) of
-                                    false -> {continue, Base, Req};
-                                    true ->
-                                        case hb_cache:read(Base, Opts) of
-                                            {ok, FullBase} ->
-                                                ?event(load_message,
-                                                    {cache_hit_base_message_load,
-                                                        {base_id, Base},
-                                                        {base_loaded, FullBase}
-                                                    }
-                                                ),
-                                                {continue, FullBase, Req};
-                                            not_found ->
-                                                necessary_messages_not_found_error(
-                                                    Base,
-                                                    Req,
-                                                    Opts
-                                                )
-                                        end
-                                end
+                            maybe_load_base(Base, Req, Opts)
                         end
             end
     end.
 
 %%% Internal functions
+
+%% @doc Load an ID base required to execute the request.
+maybe_load_base(Base, Req, _Opts) when not ?IS_ID(Base) ->
+    {continue, Base, Req};
+maybe_load_base(Base, Req, Opts) ->
+    case hb_cache:read(Base, Opts) of
+        {ok, FullBase} ->
+            ?event(load_message,
+                {cache_hit_base_message_load,
+                    {base_id, Base},
+                    {base_loaded, FullBase}
+                }
+            ),
+            {continue, FullBase, Req};
+        {error, not_found} ->
+            necessary_messages_not_found_error(Base, Req, Opts)
+    end.
 
 %% @doc Dispatch the cache write to a worker process if requested.
 %% Invoke the appropriate cache write function based on the type of the message.
