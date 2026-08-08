@@ -19,5 +19,10 @@ hash_list([Head | List], Acc) ->
     NewAcc = hash_bin(HashPair),
     hash_list(List, NewAcc).
 
+%% VENDOR: `?DEEP_HASH_ALG' upstream, inlined here as its definition
+%% (`ar.hrl:59', `sha384') so this module needs no include. The algorithm
+%% is part of every Arweave signature preimage -- changing it would change
+%% every transaction and block id, so it is inlined rather than
+%% parameterised.
 hash_bin(Bin) when is_binary(Bin) ->
     crypto:hash(sha384, Bin).
