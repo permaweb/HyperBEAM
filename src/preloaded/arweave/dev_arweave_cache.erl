@@ -1,6 +1,13 @@
-%%% @doc A module that performs caching operations for the Arweave device, 
+%%% @doc A module that performs caching operations for the Arweave device,
 %%% focused on ensuring that block metadata is queriable via pseudo-paths.
--module(dev_arweave_block_cache).
+%%%
+%%% Named `dev_arweave_cache' rather than `dev_arweave_block_cache' because
+%%% the Forge packager assigns a helper to its LONGEST matching `dev_*'
+%%% prefix. Once `dev_arweave_block' exists as a device root, a module called
+%%% `dev_arweave_block_cache' would be packaged under *that* device instead of
+%%% `~arweave@2.9', and `dev_arweave''s calls to it would fail with `undef':
+%%% the name they refer to would live in another device's package.
+-module(dev_arweave_cache).
 -export([latest/1, heights/1, read/2, write/2]).
 -export([path/2]).
 -include("include/hb.hrl").

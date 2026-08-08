@@ -48,3 +48,14 @@ mkdocs-site-id.txt
 mkdocs-site-manifest.csv
 
 !test/config.json
+# Run output from `scripts/arweave-live-sync.sh'. Acceptance logs are large
+# and are not evidence anyone can re-derive from the tree, so they are kept out
+# of it; score a run where it was produced.
+evidence/
+
+# The Arweave block fixtures are frozen mainnet data that cannot be refetched --
+# peers prune the reward and block-time histories about fifty blocks behind the
+# tip. `*.json' and `*.bin' above match every one of them, so they survive only
+# by already being in the index; a `git add .' in a fresh clone would drop them
+# and the suite would go red with `git status' saying clean. It has happened.
+!test/fixtures/**
