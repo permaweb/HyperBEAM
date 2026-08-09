@@ -239,8 +239,9 @@ being bounced:
       layer separately. Letting the appropriate parts of the system handle
       normalization allows your devices to be agnostic and to inherit support for
       _all_ of the different codec devices that the node supports without any
-      additional effort. Devices are protocols are data transformation. Messages
-      let you operate on the widest possible array of inputs.
+      additional effort. Devices are protocols for data transformation.
+      Operating on generic AO-Core messages for your inputs and outputs allows
+      your protocol to be applied to data regardless of its encoding specifics.
 - **Do not:** Use 'mock' HTTP servers in tests where you can use another HyperBEAM
   `hb_http_server:` instance on a different port. The codebase is full of examples
   of `EUnit` tests that follow the pattern of spawning micro 'networks' of nodes
