@@ -300,6 +300,10 @@ do_bootstrap(Req, Opts) ->
         ok ?= above_fork(Height),
         ok = report_cost(Height, TipHeight, Opts),
         {ok, Rewards, Times} ?= histories(Peers, Block, Hash, Opts),
+        {ok, RewardHistory} ?=
+            stored_history(<<"reward-history">>, Rewards, Height, Opts),
+        {ok, TimeHistory} ?=
+            stored_history(<<"block-time-history">>, Times, Height, Opts),
         ok ?= account_anchor(Peers, Block, Opts),
         {ok, Index} ?= block_index(Peers, Block, Height, Opts),
         {ok, Recent} ?= anchor_window(Peers, Index, Block, Height, Opts),
@@ -317,8 +321,8 @@ do_bootstrap(Req, Opts) ->
                         <<"block-index">> => Index,
                         <<"accounts">> => [],
                         <<"recent-blocks">> => Recent,
-                        <<"reward-history">> => #{ <<"body">> => Rewards },
-                        <<"block-time-history">> => #{ <<"body">> => Times }
+                        <<"reward-history">> => RewardHistory,
+                        <<"block-time-history">> => TimeHistory
                     },
                     Hash,
                     Opts
@@ -758,9 +762,9 @@ workers(Opts) ->
 %% Neither can be reconstructed from block headers -- `next-vdf-difficulty' is
 %% computed from the block-time history, and the history is carried state that
 %% is never gossiped -- so they are fetched once here and maintained forward
-%% from then on. They are stored as the exact bytes the peer served: that
-%% encoding is the network's own and it round-trips, so inventing a second one
-%% would only add a way for the two to disagree.
+%% from then on. What is checked here is the bytes the peer served; turning
+%% them into the persistent form a chain state carries belongs to
+%% `~arweave-history@2.9', which parses them with the same vendored decoder.
 %%
 %% The parent is identified rather than merely fetched: its
 %% `reward-history-hash' is one of the two values the reward history is checked
@@ -780,6 +784,22 @@ histories(Peers, Block, Hash, Opts) ->
         ok ?= verify_times(Times, Block, Opts),
         {ok, Rewards, Times}
     end.
+
+%% @doc Turn a verified history into the persistent list a chain state carries.
+%%
+%% The height goes with the bytes because it is what bounds the history's
+%% length, and the checkpoint's height is the one the state that holds it will
+%% be extended from.
+stored_history(Kind, Body, Height, Opts) ->
+    hb_ao:resolve(
+        #{
+            <<"device">> => <<"arweave-history@2.9">>,
+            <<"kind">> => Kind,
+            <<"height">> => Height
+        },
+        #{ <<"path">> => <<"from-binary">>, <<"body">> => Body },
+        Opts
+    ).
 
 %% @doc Fetch one carried history, distinguishing "the peers cannot answer this"
 %% from "the peers no longer hold it". They serve a history only while its block

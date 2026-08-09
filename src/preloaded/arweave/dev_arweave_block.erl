@@ -36,6 +36,7 @@
 -device_libraries([
     lib_arweave_block,
     lib_arweave_state,
+    lib_arweave_history,
     lib_arweave_tx,
     lib_arweave_accounts
 ]).
@@ -46,7 +47,9 @@
 -ifdef(TEST).
 -export([
     holds/3,
-    check_step_number/2
+    check_step_number/2,
+    check_reward_history_hash/2,
+    check_block_time_history_hash/2
 ]).
 -endif.
 -include("include/hb.hrl").
@@ -1263,12 +1266,11 @@ transition(State, Prev, Next, NextMsg, Accounts, Opts) ->
                     <<"accounts">> => Accounts,
                     <<"accounts-checked">> => accounts_checked(Accounts),
                     <<"reward-history">> =>
-                        lib_arweave_state:reward_history_message(
-                            ar_rewards:add_element(
-                                Next, Prev#block.reward_history)),
+                        lib_arweave_state:next_reward_history(
+                            State, Next, Opts),
                     <<"block-time-history">> =>
-                        lib_arweave_state:block_time_history_message(
-                            ar_block_time_history:update_history(Next, Prev)),
+                        lib_arweave_state:next_block_time_history(
+                            State, Next, Prev, Opts),
                     <<"recent-blocks">> =>
                         lib_arweave_state:next_recent_blocks(
                             State, NextMsg, Opts)
