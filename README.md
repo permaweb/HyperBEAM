@@ -182,6 +182,34 @@ described by traditional `combinator` systems.
 If a `message` does not explicitly specify a `device`, its implied `device` is a
  `message@1.0`, which simply returns the binary or `message` at a given named function.
 
+## Agents — `Agent = LLM + Harness + Tools + Instructions`
+
+HyperBEAM now ships a **generic agent stack** per [What is an Agent?](https://chat.hyper.io/share/wE41XruWrXFj37EdGfFxn3sdXy0Wib9e) and [Agent Flow](https://chat.hyper.io/share/_4kT2xkDzGpPncXP5k6wx8zB5m4LKlnT):
+
+```
+Agent = LLM (engine) + Harness (loop+memory) + Tools (hands) + Instructions (identity)
+```
+
+* **LLM** — `~llm@1.0` OpenAI proxy (Ollama/vLLM, `spark-1b7b.local:8888`, streaming SSE) — reasoning only.
+* **Harness** — `~harness@1.0` generic runtime: builds `system(identity.md+soul.md+user.md) + tools.json + history↑limit + current` window, loops `LLM → tool_calls → relay@1.0 → rebuild` until done, persists `history` to `hb_store` (`<collection>-harness-history`, default limit 20). One harness, many agents.
+* **Tools** — atomic `relay@1.0` calls (or MCP): `get_gmail_messages`, `fetch`. If in `tools.json`, agent can use it.
+* **Instructions** — `agents/<id>/{identity.md,user.md,soul.md,tools.json}` + durable `memory/*.md` (RAM vs files). Skills decouple know-how: `skills@1.0` stores `summarize` etc. `requires_tools` and composes (`research+publish`).
+
+Quick start — datacenter essay agent (research water+space):
+
+```bash
+rebar3 compile && rebar3 device preload
+# register composable skills
+curl -X POST http://localhost:8734/~skills@1.0/register -d @examples/datacenter-essay/skills.json
+# run as researcher (harness builds system+history+tools+current)
+curl -X POST http://localhost:8734/~skills@1.0/run -d '{"skill":"research-write","agent_tools":["fetch"],"message":"Research Natick + Kepler, write 800w essay","collection":"agent-researcher"}'
+# or via aOS
+aos researcher < src/preloaded/agent/agent.lua
+Send({Target=researcher, Action="RunSkill", Agent="researcher", Skill="research-write", Prompt="water vs space"})
+```
+
+See `src/preloaded/agent/{dev_harness.erl,dev_skills.erl,agent.lua,harness.lua}`, `agents/tom/`, and `examples/datacenter-essay/` (`README.md` + `essay.out.md`).
+
 ## Devices
 
 HyperBeam supports a number of different devices, each of which enable different
@@ -210,6 +238,14 @@ used to execute `devices` written in languages such as Rust, C, and C++.
 - `~json-iface@1.0`: The `~json-iface@1.0` device offers a translation layer between
 the JSON-encoded message format used by AOS 2.0 and prior versions, to HyperBEAM's
 native HTTP message format.
+
+- `~llm@1.0`: OpenAI-compatible proxy for Ollama/vLLM/llama.cpp (`POST /v1/chat/completions`, streaming SSE, local `localhost` allowed). See `docs/devices/llm-at-1-0.md`.
+
+- `~harness@1.0`: Generic agent harness (`dev_harness.erl`) — `handle/run/chat` rebuilds `system + tools + history↑20 + current`, loops `tool_calls` via `relay@1.0` until output, persists to `hb_store`. See `docs/devices/harness-at-1-0.md` and `src/preloaded/agent/agent.lua` (`RunSkill`/`AgentPrompt`).
+
+- `~skills@1.0`: Composable skills registry (`dev_skills.erl`) — `register/get/list/check/run/compose`, enforces `requires_tools ⊆ tools.json` matrix, delegates to harness. See `docs/devices/skills-at-1-0.md`.
+
+- `agent` process example: `src/preloaded/agent/agent.lua` + `agents/tom/{identity.md,user.md,soul.md,tools.json,memory/*.md}` + `examples/datacenter-essay/` (research water+space datacenters, `skills.json` + `essay.out.md`).
 
 - `~compute-lite@1.0`: The `~compute-lite@1.0` device is a lightweight device wrapping
 a local WASM executor, used for executing legacynet AO processes inside HyperBEAM.
