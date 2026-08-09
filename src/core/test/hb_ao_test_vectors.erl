@@ -341,6 +341,22 @@ resolve_simple_test(Opts) ->
     Res = hb_ao:resolve(#{ <<"a">> => <<"RESULT">> }, <<"a">>, Opts),
     ?assertEqual({ok, <<"RESULT">>}, Res).
 
+singleton_id_base_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+    },
+    {ok, ID} = hb_cache:write(#{ <<"a">> => <<"1">> }, Opts),
+    ?assertEqual(
+        {ok, [<<"a">>]},
+        hb_ao:resolve(<<"/", ID/binary, "/keys">>, Opts)
+    ),
+    MissingID = hb_util:human_id(<<0:256>>),
+    ?assertMatch(
+        {error, #{ <<"status">> := 404 }},
+        hb_ao:resolve(<<"/", MissingID/binary, "/keys">>, Opts)
+    ).
+
 resolve_id_test(Opts) ->
     ?assertMatch(
         ID when byte_size(ID) == 43,
