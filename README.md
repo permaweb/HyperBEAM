@@ -33,7 +33,7 @@ HyperBEAM is developed as an open source implementation of the AO-Core protocol
 by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
 
 **NOTE:** To get started building devices that run on HyperBEAM, or contributing
-to its kernel, it is **highly** advisable to read the [CONTRIBUTING](./CONTRIBUTING.md)
+to its core, it is **highly** advisable to read the [CONTRIBUTING](./CONTRIBUTING.md)
 and [hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md) guides before
 you get started. They will save you much more time than a typical contributing
 guide will. HyperBEAM is written in Erlang, but it implements AO-Core semantics.
