@@ -177,3 +177,92 @@ following:
     indent matching flow our code takes means that you can at least line up the
     returned details with the expression that caused it visually, but it is still
     far worse than the `maybe ... end` approach.
+
+## Anti-patterns
+  
+Some of most important patterns in the way HyperBEAM is maintained are in what
+you _don't see_. The complete set of rules for how _not_ to program is inherently
+not computable, but here are a few common patterns that we see leading to PRs
+being bounced:
+
+- **Do not:** Create 'out-of-band' `ets`, `persistent_term` or process dictionary
+  caches without extreme thought and care. In ~99% of cases, this is not what you
+  actually want to do.
+    - Why: AO-Core itself is a cached computation model. What you are trying to
+      achieve is almost certainly better written as a use of the existing cache/
+      store schemes.
+- **Do not:** Use logging frameworks (`logger` or `io:format`) raw outside of the
+  `?event` system.
+    - Why: Using `event`s instead means that you inherit the `hb_format:` pretty-
+      printer improves print safety dramatically, as well as making the results
+      much more readable to others. Failure to do so risks printing private keys
+      to logs, etc. Additionally, the `event` system is designed such that your
+      debugging/informational signals can be easily and systematically accessed
+      inside the AO-Core compute model as well as visible in prometheus/Grafana
+      integrations.
+- **Do not:** Use `dev_` direct device calls to exported functions in tests.
+    - Why: HyperBEAM implements AO-Core semantics. It is a runtime environment
+      for an execution mechanism which is _not_ just invoking Erlang module
+      functions. Tests that do not invoke the device properly through `hb_ao:`
+      calls will miss the intricacies and nuances of the execution environment
+      and return positive results for objectively broken code.
+- **Do not:** duplicate case clauses to fudge uncertain input types. We see this
+  particularly between `atom` and `binary` values in substandard PRs.
+- **Do not:** Introduce scripts in other languages as 'tests', 'smoke[s]', or
+  'acceptance gates'. In virtually every case none of these will be considered 
+  for merging.
+    - Why: Every developer and agent has a preference for their favorite language,
+      runtime, etc. They may even have good arguments. The burden to install each,
+      however, lands on the other engineers and contributors over time -- not the
+      originator. As a consequence, we keep things simple in virtually every case:
+      `EUnit` tests are the default and expectation, written directly in Erlang.
+      We expect to find them at the bottom of modules, or in separate `_test_vectors`
+      `.erl` files if they are significant in size/quantity.
+- **Do not:** Carelessly use or refer to `messages` as if they are normal Erlang `maps`.
+  Erlang has transparent compound data types, so their internals are visible by
+  all clients and they are not necessarily labelled to aid pattern matching, etc.
+  In HyperBEAM's case, our core data structure is `messages` but their primary
+  representation is often in the form of `map`s.
+    - Why: Failure to comprehend the difference will lead to severe and hard-to-debug
+      issues when the `map` you assumed you would receive is in-fact a
+      `{link, ..., ...}`, or a `map` containing such values. This can happen at
+      any moment, in any environment, because _the runtime decides when to load data_.
+      Additionally, carelessness around `message` and `map` differences can lead
+      to direct overwrites of `message` keys, dangerously rendering their attached
+      commitments invalid. Use `hb_message:uncommitted` to remove old commitments
+      that may be invalidated by the values being added to the message. `hb_ao:set`
+      may also provide the desired message functionality, depending upon the 
+      intended overwrite mechanics.
+- **Do not:** Embed message/transport encoding specifics inside devices.
+    - Why: HyperBEAM devices operate upon AO-Core data. The HTTP layer -- wrapping
+      the core `hb_ao` resolution paths handles the serialization/deserialization
+      layer separately. Letting the appropriate parts of the system handle
+      normalization allows your devices to be agnostic and to inherit support for
+      _all_ of the different codec devices that the node supports without any
+      additional effort. Devices are protocols are data transformation. Messages
+      let you operate on the widest possible array of inputs.
+- **Do not:** Use 'mock' HTTP servers in tests where you can use another HyperBEAM
+  `hb_http_server:` instance on a different port. The codebase is full of examples
+  of `EUnit` tests that follow the pattern of spawning micro 'networks' of nodes
+  and using them to demonstrate behavior. We even prefer hitting _real-world_
+  service endpoints as part of our `EUnit` tests in almost every case above creating
+  mock versions of services. The only current exceptions to this in the codebase
+  are where utilizing the real service would be prohibitively slow for the tests
+  (multiple minutes) or would require real-world payments to be made.
+    - Why: Using mocks lowers the utility of a test dramatically. A mock is 
+      generally quite unlikely to actually match the remote service's behavior.
+      A critical code quality issue with agents at time of writing is that they
+      produce abundant tests that _look_ like they are working, but do not actually
+      map to any real-world behaviors. These are categorically worse than simply not
+      having tests, because they create the perception of safety and trustworthiness
+      without substance. Even worse, to determine that the test is vacuous a
+      reader must parse it. In its extreme this is a DoS vector against progress.
+
+Much more important than these particular patterns, however: If you are findings
+that your code is frequently breaching these basic rules, you are likely not
+building carefully enough to contribute to this repository.
+
+_Code itself_ is almost free now. The bar is not _'it works'_. The bar is 'this
+is a robust substrate that others will be able to understand, depend upon for
+production deployments guarding many billions of USD-worth of value, and improve
+in the future'. If you would like your PRs to land, build with this mentality.
