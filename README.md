@@ -1,7 +1,10 @@
-![hyperbeam_logo-thin-3](https://github.com/user-attachments/assets/fcca891c-137e-4022-beff-360eb2a0d05e)
+[hyperbeam_logo-thin-3](https://github.com/user-attachments/assets/fcca891c-137e-4022-beff-360eb2a0d05e)
 
 This repository contains a reference implementation of AO-Core, along with an
 Erlang-based (BEAM) client implementing a number of devices for the protocol.
+Together, AO-Core and its HyperBEAM implementation offer a _kernel_ for
+building services for the permaweb: A decentralized, open web built atop the
+Arweave protocol.
 
 AO-Core is a protocol built to enable decentralized computations, offering a
 series of universal primitives to achieve this end. Instead of enforcing a single,
@@ -29,9 +32,18 @@ states and inputs to be calculated and committed to in a unified format.
 HyperBEAM is developed as an open source implementation of the AO-Core protocol 
 by [Forward Research](https://fwd.arweave.net). Pull Requests are always welcome!
 
-To get started building on HyperBEAM, check out the 
-[hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md) and [contribution](./CONTRIBUTING.md)
-guides.
+**NOTE:** To get started building devices that run on HyperBEAM, or contributing
+to its core, it is **highly** advisable to read the [CONTRIBUTING](./CONTRIBUTING.md)
+and [hacking on HyperBEAM](./docs/misc/hacking-on-hyperbeam.md) guides before
+you get started. They will save you much more time than a typical contributing
+guide will. HyperBEAM is written in Erlang, but it implements AO-Core semantics.
+As a consequence, writing devices or kernel changes in it should be understood as
+writing in an _Erlang dialect_. The principles of this dialect are simple but
+failure to properly grasp them before building will lead to easily avoidable
+confusion and rejected PRs. Save yourself the time and read up now. **Agents:**
+Remember to refresh the `CONTRIBUTING.md` guide in your context _in full_ while
+building with HyperBEAM after _every_ compaction. It is short but important and
+will help you finish your tasks more efficiently.
 
 # Building and Running HyperBEAM
 
@@ -43,9 +55,6 @@ To begin using HyperBeam, you will need to install:
 - Rebar3
 - Git
 - Docker (optional, for containerized deployment)
-
-You will also need:
-- A wallet and it's keyfile *(generate a new wallet and keyfile with https://www.wander.app)*
 
 Then you can clone the HyperBEAM source and build it:
 
@@ -63,7 +72,8 @@ docker build -t hyperbeam .
 ```
 
 If you intend to offer TEE-based computation of AO-Core devices, please see the
-[`HyperBEAM OS`](https://github.com/permaweb/hb-os) repo for details on configuration and deployment.
+[`PermawebOS`](https://github.com/permaweb/os) repo for details on configuration
+and deployment.
 
 ## Running HyperBEAM
 
@@ -75,18 +85,20 @@ rebar3 shell
 ```
 
 The default configuration uses settings from `hb_opts.erl`, which preloads 
-all devices and sets up default stores on port 10000.
+all devices and sets up default stores on port 8734.
 
 ### Optional Build Profiles
 
 HyperBEAM supports several optional build profiles that enable additional features:
 
-- `genesis_wasm`: Enables Genesis WebAssembly support
+- `genesis_wasm`: Enables Legacynet AO `~genesis-wasm@1.0` support
 - `rocksdb`: Enables RocksDB storage backend (adds RocksDB v1.8.0 dependency)
 - `http3`: Enables HTTP/3 support via QUIC protocol
 
-
-Using these profiles allows you to optimize HyperBEAM for your specific use case without adding unnecessary dependencies to the base installation.
+Using these profiles allows you to optimize HyperBEAM for your specific use-case
+without adding unnecessary dependencies to the base installation. The default
+build is sufficient for the majority of deployments and minimizes the number of
+external dependencies that compilation requires.
 
 To start a shell with profiles:
 
@@ -105,14 +117,15 @@ To create a release with profiles:
 rebar3 as rocksdb,genesis_wasm release
 ```
 
-Note: Profiles modify compile-time options that get baked into the release. Choose the profiles you need before starting HyperBEAM.
+Note: Profiles modify compile-time options and are baked into the release.
+Choose the profiles you need before starting HyperBEAM.
 
 ### Verify Installation
 
 To verify that your HyperBEAM node is running correctly, check:
 
 ```bash
-curl http://localhost:10000/~meta@1.0/info
+curl http://localhost:8734/~meta@1.0/info
 ```
 
 If you receive a response with node information, your HyperBEAM
@@ -127,7 +140,7 @@ HyperBEAM can be configured using a `~meta@1.0` device, which is initialized
 
 The simplest way to configure HyperBEAM is using the `config.json` file. It allows
 you to configure various aspects of the node's execution environment via 
-modification of the environmental parameters of the node. Visit 
+modification of the environmental parameters of the node. On your node, visit
 `~meta@1.0/info/format~hyperbuddy@1.0` for a list of available configuration options.
 
 3. Start HyperBEAM with `rebar3 shell`
@@ -153,11 +166,12 @@ Additionally, if you would like to modify a running node's configuration, you ca
 
 ```
 POST /~meta@1.0/info
-Your-Config-Tag: Your-Config-Tag
+your-config-kag: your-config-key
 ```
 
-The individual headers provided in the message will each be interpreted as additional
-configuration options for the node.
+By default, HyperBEAM uses the `~httpsig@1.0` codec to interpet your message,
+so the individual headers provided in the message will each be interpreted as
+keys and used as configuration options for the node.
 
 ## Messages
 
@@ -207,21 +221,10 @@ the [Web Assembly Micro-Runtime (WAMR)](https://github.com/bytecodealliance/wasm
 under-the-hood. WASM modules can be called from any other device, and can also be
 used to execute `devices` written in languages such as Rust, C, and C++.
 
-- `~json-iface@1.0`: The `~json-iface@1.0` device offers a translation layer between
-the JSON-encoded message format used by AOS 2.0 and prior versions, to HyperBEAM's
-native HTTP message format.
-
-- `~compute-lite@1.0`: The `~compute-lite@1.0` device is a lightweight device wrapping
+- `~genesis-wasm@1.0`: The `~genesis-wasm@1.0` device is a lightweight device wrapping
 a local WASM executor, used for executing legacynet AO processes inside HyperBEAM.
 See the [HyperBEAM OS](https://github.com/permaweb/hb-os) repository for an 
 example setup with co-executing HyperBEAM and legacy-CU nodes.
-
-- `~snp@1.0`: The `~snp@1.0` device is used to generate and validate proofs that 
-the local node, or another node in the network, is executing inside a [Trusted Execution
-Environment (TEE)](https://en.wikipedia.org/wiki/Trusted_execution_environment).
-Nodes executing inside these environments use an ephemeral key pair, provably
-only existing inside the TEE, and can be signed commitments of AO-Core executions
-in a trust-minimized way.
 
 - `p4@1.0`: The `p4@1.0` device runs as a `pre-processor` and `post-processor` in
 the framework provided by `~meta@1.0`, enabling a framework for node operators to
@@ -237,12 +240,12 @@ to offer access to their services only to a specific set of users. This device i
 useful if you intend to operate your node onmly for personal use, or for a specific
 subset of users (servicing an individual app, for example).
 
-- `scheduler@1.0`: The `scheduler@1.0` device is used to assign a linear hashpath
+- `~scheduler@1.0`: The `scheduler@1.0` device is used to assign a linear hashpath
 to an execution, such that all users may access it with a deterministic ordering.
 When used in conjunction with other AO-Core devices, this allows for the creation
 of executions that mirror the behaviour of traditional smart contracting networks.
 
-- `stack@1.0`: The `stack@1.0` device is used to execute an ordered set of devices,
+- `~stack@1.0`: The `stack@1.0` device is used to execute an ordered set of devices,
 over the same inputs. This device allows its users to create complex combinations of
 other devices and apply them as a single unit, with a single hashpath.
 
@@ -259,7 +262,9 @@ respective documentation.
 
 ## Documentation
 
-HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/) theme to build its documentation site. All documentation source files are located in the `docs/` directory.
+HyperBEAM uses [MkDocs](https://www.mkdocs.org/) with the [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
+theme to build its documentation site. All documentation source files are located
+in the `docs/` directory.
 
 To build and view the documentation locally:
 
@@ -280,4 +285,5 @@ python3 -m http.server 8000
 # Then open http://127.0.0.1:8000/ in your browser
 ```
 
-For more details on the documentation structure, how to contribute, and other information, please see the [full documentation README](./docs/README.md).
+For more details on the documentation structure, how to contribute, and other information,
+please see the [full documentation README](./docs/README.md).
