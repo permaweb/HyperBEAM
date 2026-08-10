@@ -217,19 +217,13 @@ validated_hash(Req, Opts) ->
 
 %% @doc Accept only something that is actually a block identifier.
 %%
-%% The value becomes a store path, and `hb_path:to_binary/1' does not collapse
-%% `..': `hb_store_fs' walks the components and hands the traversal to the OS.
-%% So a request naming `../../../hyperbeam-key.json' read the operator's signing
-%% key straight off disk, unauthenticated, from a key whose whole purpose is to
-%% answer strangers. Requiring the value to decode as base64url to 48 bytes
-%% leaves nothing for a path to be built out of.
+%% The value is caller-supplied and becomes a store path, so it is checked
+%% before it names anything. Requiring it to be a 48-byte base64url hash leaves
+%% no separator for a path to be built out of.
 block_hash(Hash) when is_binary(Hash) ->
     % The alphabet check is the one that matters, and decoding does not
     % perform it: `hb_util:decode/1' is the *unchecked* decoder, so any 64
-    % characters yield 48 bytes -- including 64 characters of `..' and `/'.
-    % Checking only the decoded length let a traversal through to the
-    % chokepoint, where it surfaced as an uncaught throw rather than as this
-    % device's own `invalid-block'.
+    % characters yield 48 bytes. A length test alone is not a check.
     case is_base64url(Hash) andalso byte_size(Hash) == 64 of
         true ->
             {ok, Hash};

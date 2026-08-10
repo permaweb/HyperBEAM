@@ -11,14 +11,13 @@
 %% @doc A store key carrying `..' is refused before it reaches the cache.
 %%
 %% `run-index' and the `runs' map arrive on a caller-supplied base -- both this
-%% device's keys are reachable over HTTP in their own right -- and nothing
-%% between `hb_cache:read/2' and `hb_store_fs' collapses `..', so such a key
-%% reads a file outside the store. `/' is ordinary here: this device's own keys
-%% are path-namespaced.
+%% device's keys are reachable over HTTP in their own right -- so the base is
+%% checked before it names anything. `/' is ordinary here: this device's own
+%% keys are path-namespaced.
 store_key_cannot_escape_the_store_test() ->
     ?assertThrow(
         {unsafe_store_key, _},
-        dev_arweave_block_index:safe_key(<<"../../hyperbeam-key.json">>)
+        dev_arweave_block_index:safe_key(<<"../../secret">>)
     ),
     ?assertThrow({unsafe_store_key, _}, dev_arweave_block_index:safe_key(<<"runs/../../secret">>)),
     ?assertEqual(

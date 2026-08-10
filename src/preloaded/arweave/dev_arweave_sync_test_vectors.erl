@@ -821,11 +821,7 @@ bootstrap_refuses_on_an_established_chain_test() ->
 %% @doc A request cannot shape a store path.
 %%
 %% `validated' and `tip' both turn a caller-supplied value into a path under
-%% `~arweave@2.9/state/'. Nothing between here and the filesystem collapses
-%% `..' -- `hb_path:to_binary/1' leaves it alone and `hb_store_fs' walks the
-%% components -- so before this was guarded, `block=../../../hyperbeam-key.json'
-%% read the operator's signing key off disk, unauthenticated, from a device key
-%% whose whole purpose is to answer strangers.
+%% `~arweave@2.9/state/', so both check the value before it names anything.
 %%
 %% Asserted at both layers: the request boundary refuses the value, and
 %% `state_path/1' refuses to build a path out of one even if a future caller
@@ -833,14 +829,12 @@ bootstrap_refuses_on_an_established_chain_test() ->
 request_cannot_shape_a_store_path_test() ->
     Traversals =
         [
-            <<"../../../hyperbeam-key.json">>,
+            <<"../../../secret">>,
             % 64 characters, so it decodes to exactly 48 bytes and passes a
             % length check. `hb_util:decode/1' is the unchecked decoder and
-            % validates no alphabet, so only checking the decoded size let this
-            % through to the chokepoint, where it surfaced as an uncaught throw
-            % instead of this device's own `invalid-block'.
-            << "../../../hyperbeam-key.json",
-                (binary:copy(<<"A">>, 37))/binary >>,
+            % validates no alphabet, so a size test alone does not refuse it.
+            << "../../../secret",
+                (binary:copy(<<"A">>, 49))/binary >>,
             <<"..">>,
             <<"a/b">>,
             <<"/etc/passwd">>,
@@ -1041,8 +1035,8 @@ wallet_list_is_bounded_test() ->
 
 %% @doc `block_hash/1' is exported so that `dev_arweave' can refuse on `block'
 %% what this module refuses on `validated'. Both keys reach `hb_cache:read/2'
-%% with a caller-supplied string, and a length test alone lets a traversal
-%% through: 64 characters of `..' and `/' are 64 bytes.
+%% with a caller-supplied string, and a length test alone is not a check: 64
+%% characters outside the base64url alphabet are still 64 bytes.
 block_hash_is_the_shared_definition_test() ->
     ?assertMatch({ok, _}, dev_arweave_sync:block_hash(binary:copy(<<"a">>, 64))),
     ?assertMatch({error, _}, dev_arweave_sync:block_hash(binary:copy(<<"a">>, 63))),

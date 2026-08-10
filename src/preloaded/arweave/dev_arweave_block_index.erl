@@ -488,14 +488,12 @@ run_index(Base, Opts) ->
 %% @doc Refuse a store key that could be resolved as a path.
 %%
 %% These keys arrive on a caller-supplied base -- both this device's keys are
-%% reachable over HTTP in their own right -- and `hb_cache:read/2' passes them
-%% to `hb_store_fs', which walks the components and lets the OS resolve `..'.
-%% Nothing between here and the filesystem collapses it, so a key carrying `..'
-%% reads a file outside the store.
+%% reachable over HTTP in their own right -- and are passed to `hb_cache:read/2'
+%% as store keys, so they are checked before they name anything.
 %%
 %% `/' is deliberately allowed: this device's own store keys are path-namespaced
-%% (`~arweave-block-index@2.9/runs/<n>'), so a separator is ordinary here. `..'
-%% is what escapes, and a base64url cache id carries neither it nor a NUL.
+%% (`~arweave-block-index@2.9/runs/<n>'), so a separator is ordinary here. A
+%% base64url cache id carries neither `..' nor a NUL.
 safe_key(Key) when is_binary(Key) ->
     case binary:match(Key, [<<"..">>, <<0>>]) of
         nomatch -> Key;
