@@ -1,0 +1,689 @@
+\documentclass[10pt]{article}
+
+\usepackage[letterpaper,margin=0.78in,headheight=14pt]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,tabularx,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{hyperref}
+
+\definecolor{Spectrum}{HTML}{3B3F8C}
+\definecolor{Ink}{HTML}{171922}
+\definecolor{Quiet}{HTML}{626779}
+\definecolor{Rule}{HTML}{D9DCE8}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=Spectrum,
+  urlcolor=Spectrum,
+  pdftitle={Spectrum Beta 1: Probability-Weighted Nametime},
+  pdfauthor={HyperBEAM contributors}
+}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{5pt plus 1pt}
+\setlength{\emergencystretch}{2em}
+\widowpenalty=10000
+\clubpenalty=10000
+\displaywidowpenalty=10000
+\setlist{nosep,leftmargin=1.25em}
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}
+\titleformat{\section}{\Large\bfseries\color{Ink}}{\thesection}{0.65em}{}
+\titleformat{\subsection}{\large\bfseries\color{Ink}}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{Ink}}{\thesubsubsection}{0.55em}{}
+\titlespacing*{\section}{0pt}{18pt}{7pt}
+\titlespacing*{\subsection}{0pt}{12pt}{4pt}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{Quiet}Spectrum Beta 1}
+\fancyhead[R]{\small\color{Quiet}Protocol note}
+\fancyfoot[C]{\small\color{Quiet}\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{Rule}\leaders\hrule height \headrulewidth\hfill}}
+
+\newcommand{\device}[1]{\texttt{\textasciitilde#1}}
+\newcommand{\key}[1]{\texttt{#1}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ceil}[1]{\left\lceil #1\right\rceil}
+\newcommand{\floor}[1]{\left\lfloor #1\right\rfloor}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Prob}{\operatorname{Pr}}
+
+\begin{document}
+
+\begin{titlepage}
+  \vspace*{0.85in}
+  {\color{Spectrum}\rule{0.16in}{1.05in}}\hspace{0.22in}
+  \begin{minipage}[b]{0.78\textwidth}
+    {\fontsize{28}{32}\selectfont\bfseries\color{Ink}
+      Spectrum Beta 1\par}
+    \vspace{7pt}
+    {\fontsize{16}{20}\selectfont\color{Quiet}
+      Probability-Weighted Nametime\\for a Permaweb Namespace\par}
+  \end{minipage}
+
+  \vspace{0.7in}
+  {\large\bfseries Protocol note}\par
+  \vspace{4pt}
+  {\color{Quiet}Mathematics, mechanism design, and device architecture}\par
+
+  \vfill
+  \begin{minipage}{0.88\textwidth}
+  \color{Ink}
+  \textbf{Status.} This document specifies \device{spectrum@1.0-beta-1} and
+  its pricing composition. It separates normative behavior from calibration
+  choices. The beta is deterministic, AR-funded, lease-based, and uses exact
+  string probability as its default measure of namespace scarcity.
+  \end{minipage}
+
+  \vspace{0.55in}
+  {\small\color{Quiet}August 2026}
+\end{titlepage}
+
+\section*{Abstract}
+
+Spectrum is a single-market naming protocol. A registration transaction pays
+the Arweave network reward and receives the greatest whole number of lease
+blocks that payment can buy. The price is not selected by a length table or a
+separate auction. Instead, a fixed Markov model assigns every exact name a
+probability weight. Active leases consume the corresponding probability mass
+over time. A convex bonding curve prices the integral increase in occupied
+mass, and future lease expiries divide a quote into constant-occupancy time
+slabs. Common exact names therefore consume more of the shared resource per
+block; unusual exact names consume less. Expiry releases capacity without a
+maintenance transaction.
+
+The protocol is decomposed into three AO-Core devices.
+\device{markov@1.0} defines the statistical model.\par
+\device{probability-time@1.0} defines the pure pricing function.\par
+\device{spectrum@1.0} defines the scheduled registry and lease state machine.\par
+This note gives the complete mathematics, mechanism properties, message
+interfaces, state invariants, and deployment model for the beta.
+
+\section{Design objective}
+
+The allocated resource is \emph{exact-name probability mass over block time}.
+Let a fixed distribution assign probability $p(n)$ to exact name $n$. A lease
+for $n$ lasting $d$ blocks consumes $p(n)d$ probability-blocks. This makes
+scarcity continuous: every valid name uses the same market and differs only in
+its weight. There is no protocol branch between ``free'', fixed-price, and
+auctioned names.
+
+The beta has four design constraints:
+
+\begin{enumerate}
+  \item one deterministic price for every node evaluating the same schedule;
+  \item a fixed capacity measure that leases release automatically at expiry;
+  \item whole-block grants that never exceed what the payment affords; and
+  \item composable devices whose statistical model and pricing function can be
+        replaced without changing the registry state machine.
+\end{enumerate}
+
+The mechanism prices leases, not ownership in perpetuity. A purchase may fund
+an unregistered name or extend a held name. The process does not collect a
+separate protocol fee in beta: the authenticated Arweave transaction reward is
+the payment.
+
+\section{Notation and units}
+
+\begin{tabularx}{\textwidth}{@{}>{$}l<{$}X@{}}
+\toprule
+n & exact normalized name; a finite sequence of symbols \tabularnewline
+M & fixed Markov model and its versioned parameters \tabularnewline
+p_M(n) & model probability of generating exactly $n$, including termination \tabularnewline
+w(n) & retained lease weight; by default $p_M(n)$ \tabularnewline
+h & Arweave block height supplied by the process schedule \tabularnewline
+u(h) & active probability mass immediately at height $h$ \tabularnewline
+t & reference occupancy, with $0<t<1$ \tabularnewline
+k & marginal winston per probability-block at $u=t$ \tabularnewline
+g & grace ratio, represented in process state as integer basis points \tabularnewline
+d_i & duration in blocks of a constant-occupancy time slab \tabularnewline
+\bottomrule
+\end{tabularx}
+
+All payments and returned prices are integer winston. One AR is $10^{12}$
+winston. Time is integer Arweave block height. Float calculations are
+deterministic within the HyperBEAM execution environment; integer rounding at
+the protocol boundary is explicit.
+
+\section{Exact-name probability}
+
+\subsection{Tokenization and training}
+
+\device{markov@1.0} is a variable-backoff character Markov model. Its core
+vocabulary is the 128 ASCII single-byte symbols plus the terminal token
+\key{|end|}. The context is prefixed by $q$ copies of \key{|start|}, where
+$q\geq 0$ is the model order. Start and end are model tokens, not bytes emitted
+in the generated binary.
+
+Training one binary $x_1\ldots x_L$ appends the event sequence
+\[
+  x_1,\ldots,x_L,\mathtt{|end|}.
+\]
+For every event, the model increments its count after the full context of at
+most $q$ preceding tokens and after every suffix of that context down to the
+empty context. Repeated calls add counts to the existing model. Training is
+therefore associative over a fixed order and tokenizer: corpus partitioning
+does not change the final counts.
+
+The beta namespace corpus is normalized before training to lowercase ASCII
+\key{a-z}, \key{0-9}, and \key{-}. The selected model order is $q=4$. This
+normalization is a deployment policy; the Markov device itself accepts general
+ASCII binaries.
+
+\subsection{Hierarchical interpolation}
+
+Write $C(c,a)$ for the count of output token $a$ after context $c$, and
+$C(c)=\sum_a C(c,a)$. At the empty context, the distribution is empirical:
+\[
+  P(a\mid\epsilon)=\frac{C(\epsilon,a)}{C(\epsilon)}.
+\]
+For nonempty context $c$, let $s(c)$ remove its first token. The device uses
+fixed hierarchical interpolation
+\[
+  P(a\mid c)=
+  \frac{C(c,a)+\lambda P(a\mid s(c))}{C(c)+\lambda},
+  \qquad \lambda=129.
+\]
+The constant is the number of possible output tokens: 128 ASCII symbols and
+\key{|end|}. An unseen higher-order context therefore backs off exactly to its
+suffix distribution. A symbol absent from the entire training corpus retains
+zero probability; this is interpolation over observed support, not add-one
+smoothing.
+
+\subsection{Likelihood and information measures}
+
+For $n=x_1\ldots x_L$, let $c_i$ be the suffix of length at most $q$ preceding
+event $x_i$, including start tokens before the first byte. Let
+$x_{L+1}=\mathtt{|end|}$. The exact-name likelihood used for pricing is
+\[
+  p_M(n)=\prod_{i=1}^{L+1} P(x_i\mid c_i).
+\]
+Including end is essential: it scores not only the spelling but the choice to
+stop at that length. The device can omit the terminal factor for exploratory
+prefix scoring, but \device{probability-time@1.0} always requests
+\key{include-end=true}.
+
+The likelihood endpoint can return a float or the exact product as an integer
+pair $(N,D)$ before division. Derived endpoints are
+\begin{align*}
+  S(n) &= -\log_2 p_M(n) && \text{total surprisal in bits},\\
+  \bar S(n) &= \frac{S(n)}{E} && \text{mean surprisal per scored event},\\
+  \operatorname{PP}(n) &= 2^{\bar S(n)} && \text{perplexity},
+\end{align*}
+where $E=L+1$ when end is included. Pricing uses $p_M(n)$ directly, not its
+logarithm. Surprisal is the logarithmic effect size and is useful for analysis,
+but it does not preserve probability mass under summation.
+
+\subsection{The natural occurrence knee}
+
+If $N$ independent names are drawn from $M$, exact name $n$ appears at least
+once with probability
+\[
+  1-(1-p_M(n))^N.
+\]
+At $p_M(n)=1/N$, this tends to $1-e^{-1}\approx0.6321$. Thus $1/N$ is a
+descriptive occurrence knee: above it, exact names are likely to have appeared;
+below it, they are increasingly unlikely. It is not a curve parameter in
+Spectrum.
+
+The expected probability mass covered by $N$ draws is
+\[
+  \E[U_N]=\sum_n p_M(n)\left[1-(1-p_M(n))^N\right].
+\]
+This identity explains why a large count of registered strings need not imply
+occupancy near one. The total depends on which probability mass those strings
+cover, not on the count alone.
+
+\subsection{Deterministic generation}
+
+Generation samples the same interpolated distribution used by likelihood.
+For exact integer sampling, let the empty-context outcome weights be $W_0(a)$
+with total $T_0$. For each successively longer context $c_j$,
+\begin{align*}
+  W_j(a) &= C(c_j,a)T_{j-1}+129W_{j-1}(a),\\
+  T_j &= \left(C(c_j)+129\right)T_{j-1}.
+\end{align*}
+These integers represent the interpolated probabilities with a common
+denominator. Outcomes are ordered by their bytewise symbol IDs.
+
+Given binary seed $z$ and draw counter $i$, the normative pseudorandom integer
+is unsigned $\operatorname{SHA256}(z\mathbin\Vert\operatorname{uint64be}(i))$.
+Rejection sampling removes modulo bias before selecting an outcome by cumulative
+weight. Generation stops on \key{|end|}, or returns a seed and next counter when
+an optional output-length limit is reached. Passing that continuation with the
+generated body and a larger limit produces exactly the same output as one call
+with the larger limit. Consensus execution must supply a seed; seedless calls
+may use runtime entropy.
+
+\section{Probability-weighted occupancy}
+
+Each lease records a positive weight. The default is
+\[
+  w(n)=p_M(n).
+\]
+A process may configure a weighting device $W$ and instead retain
+$w(n)=W(p_M(n),n,M)$. The weighting seam is explicit so that a later protocol
+can change the economic measure without changing Markov semantics. Beta 1 uses
+the identity function.
+
+For lease $i$, let $d_i$ be its deadline and $w_i$ its retained weight. Active
+occupancy at block $h$ is
+\[
+  u(h)=\sum_{i:h<d_i}w_i.
+\]
+The grace window does not consume occupancy. A lease in grace retains its
+resolver right against takeover, but its priced nametime has ended.
+
+The weight is calculated when a free name is acquired and is retained for all
+extensions while that lease remains held. Model replacement or retraining
+therefore cannot rewrite an existing lease's resource obligation. A name
+reacquired after expiry receives a new weight from the model then in force.
+The invariant is
+\[
+  0\leq u(h)<1.
+\]
+
+\section{Bonding curve}
+
+\subsection{Marginal rate}
+
+Let $t\in(0,1)$ be the reference occupancy and $k>0$ the marginal price at
+that point. Define
+\[
+  A=k\frac{1-t}{t}
+  \qquad\text{and}\qquad
+  r(u)=A\frac{u}{1-u}.
+\]
+Then
+\[
+  r(0)=0,\qquad r(t)=k,\qquad
+  \lim_{u\to1^-}r(u)=\infty.
+\]
+The rate is increasing and convex:
+\[
+  r'(u)=\frac{A}{(1-u)^2}>0,
+  \qquad
+  r''(u)=\frac{2A}{(1-u)^3}>0.
+\]
+The asymptote is a capacity boundary, not a claim that observed namespaces
+normally approach total modeled mass.
+
+\subsection{Finite-name price per block}
+
+Adding a name of weight $w$ moves occupancy from $u$ to $u+w$. Its price for
+one block is the integral of the marginal curve:
+\begin{align*}
+  c(u,w)
+    &=\int_u^{u+w}r(x)\,dx\\
+    &=A\left[
+      \log\left(\frac{1-u}{1-u-w}\right)-w
+    \right],
+  \qquad u+w<1.
+\end{align*}
+This charges the name for every infinitesimal unit of mass it adds, including
+its own movement along the curve. Consequently, even at $u=0$, a finite
+positive $w$ has positive cost. For small $w$,
+\[
+  c(u,w)=A\left[
+    \frac{u}{1-u}w+
+    \frac{w^2}{2(1-u)^2}+O(w^3)
+  \right].
+\]
+The cost is increasing in both $u$ and $w$, convex in the added mass, and
+diverges as $u+w\to1^-$. A quote that would reach or cross one is invalid.
+
+For numerical stability, the implementation evaluates the logarithm directly
+except when $w/(1-u)<10^{-4}$. In that range it sums the stable tail of
+$-\log(1-x)$ after the linear term. This avoids cancellation between two
+nearly equal floats without changing the equation being implemented.
+
+\section{Pricing over nametime}
+
+\subsection{Expiry slabs}
+
+Suppose a quote begins at block $a$ and ends at $b$. Existing deadlines
+partition $[a,b)$ into slabs $j$, each with duration $d_j$ and constant
+occupancy $u_j$. The unrounded price is
+\[
+  C(n;a,b)=\sum_j d_j\,c(u_j,w(n)).
+\]
+Future expiries reduce later slab occupancy automatically. Spectrum therefore
+prices the actual occupancy path already committed in state; it does not use a
+lagging demand estimator or a separate time-varying auction clock.
+
+For a free name, $a$ is the current scheduled block height. For a held name,
+the requested extension begins at its current deadline. Equivalently, the
+pricing request supplies the lease's remaining live duration and starts at
+current height plus that duration. Grace time is excluded from both the start
+and the occupancy slabs.
+
+\subsection{Integer boundary}
+
+The price of $B$ blocks is
+\[
+  \operatorname{price}(B)=\ceil{C(B)}\quad\text{winston}.
+\]
+Given payment $P$, the grant is
+\[
+  \operatorname{blocks}(P)=
+  \max\{B\in\mathbb Z_{\geq0}:\ceil{C(B)}\leq P\}.
+\]
+The implementation first divides through the successive constant rates, then
+checks the normative rounded price and adjusts by whole blocks. Thus no float
+boundary can grant an unaffordable block, and no affordable whole block is
+withheld.
+
+\section{Mechanism behavior}
+
+\subsection{One market}
+
+Every accepted purchase invokes the same rule. A fixed Arweave reward buys
+more time for lower-weight names and less time for higher-weight names. If the
+minimum network reward buys a useful duration, no additional payment mechanism
+is needed; the same transaction both schedules the intent and supplies its
+price. There is no threshold at which the protocol switches to a distinct
+auction.
+
+The shared state variable is occupied probability mass, not registration
+count. A purchase raises occupancy only for its granted interval. Expiry lowers
+occupancy without an explicit release message. The curve prices concurrent
+scarcity, while the slab integral makes later time cheaper when already-known
+leases end.
+
+\subsection{Calibration}
+
+The parameters have separate meanings:
+\begin{itemize}
+  \item $t$ selects the occupancy at which the operator wants a directly
+        interpretable reference rate;
+  \item $k$ sets that marginal rate in winston per probability-block;
+  \item the corpus, normalization, order, and model fix relative name weights;
+  \item $g$ controls recovery time after paid nametime, not price or occupancy.
+\end{itemize}
+
+Changing $k$ scales every quote linearly. Changing $t$ changes the same global
+scale factor when $k$ is held fixed; the shape as a function of $u$ remains
+$u/(1-u)$. These are state parameters and can be finalized at deployment
+without changing device code.
+
+\subsection{Lease and grace}
+
+Let a purchase at height $h$ buy $B$ blocks. For a free name,
+\[
+  \text{deadline}=h+B,
+  \qquad
+  \text{grace}=h+(1+g)B.
+\]
+For a held name, the deadline extends from its prior deadline and grace extends
+from its prior grace:
+\[
+  d'=d+B,
+  \qquad
+  q'=q+(1+g)B.
+\]
+Carrying grace forward prevents a small extension from deleting recovery time
+already purchased. During $[d,q)$ the name resolves to the configured grace
+notice. At and after $q$ it is free for a new acquisition. An extension during
+grace buys forward from $d$, not from the wall-clock height; lapsed paid time is
+not silently restored.
+
+The initial beta issuance grants every imported lease the same term $T_0$ from
+height $h_0$:
+\[
+  d=h_0+T_0,
+  \qquad
+  q=d+gT_0.
+\]
+The deployment target of 200 nominal years uses $T_0=52{,}560{,}000$ blocks at
+262,800 blocks per nominal year.
+
+\subsection{Resolver right}
+
+A free-name purchase may supply the resolver value. Further payments while the
+lease is held extend it but cannot replace that value. Any party may fund an
+extension. Beta 1 therefore specifies a held resolver right, not an on-chain
+owner identity or transfer mechanism. Ownership and authenticated value updates
+are outside this mechanism version.
+
+\section{Device architecture}
+
+\subsection{Composition}
+
+The deployed AO process composes these devices:
+
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Device & Responsibility \\
+\midrule
+\device{arweave-scheduler@1.0} & Orders base-layer data-free Arweave
+transactions in \key{all} mode and attaches block height. \\
+\device{spectrum@1.0} & Advances the deterministic clock, validates purchase
+shape and authenticated payment, maintains leases, and resolves names. \\
+\device{probability-time@1.0} & Computes exact-name weight, occupancy slabs,
+bonding-curve price, and its whole-block inverse. \\
+\device{markov@1.0} & Stores the fixed statistical model and answers exact
+likelihood requests. \\
+\bottomrule
+\end{tabularx}
+
+The composition is message-based. Spectrum does not call Erlang implementation
+functions directly. It resolves a configured \key{pricing-device}; that device
+resolves the configured \key{probability-device}. Implementation names may be
+device IDs or trusted device names according to normal AO-Core loading rules.
+
+\subsection{Message interfaces}
+
+\device{markov@1.0} exposes these protocol keys:
+\begin{itemize}
+  \item \key{/train} reads one binary or a list of independent binaries from
+        request \key{target}, defaulting to \key{body}, and replaces only the
+        \key{model} state with updated counts;
+  \item \key{/likelihood} returns float probability by default or exact
+        \key{numerator}, \key{denominator}, and \key{events} in integer mode;
+  \item \key{/surprisal}, \key{/mean-surprisal}, and \key{/perplexity} derive
+        the information measures in Section~3.3 from exact likelihood; and
+  \item \key{/generate} returns \key{body}, \key{seed}, and either a resumable
+        \key{continues} state or false on terminal output.
+\end{itemize}
+The effective order is read from request, base, then existing model, defaulting
+to two. Training refuses an order mismatch. Other keys use
+\device{message@1.0}.
+
+\device{probability-time@1.0} is a pure quote surface. Request
+\key{/price=B} returns the ceil-rounded winston cost for $B$ blocks. Request
+\key{/blocks=P} returns the greatest affordable duration and the retained
+\key{pricing/weight}. Both require \key{name}; \key{token} defaults to AR; and
+\key{duration} locates the interval after already-paid time.
+
+\device{spectrum@1.0} exposes the same quote keys after supplying trusted
+remaining duration from registry state. Scheduled \key{/compute} applies an
+assignment. A name key resolves through the lease table, optionally loading its
+resolver value. Snapshot and normalize preserve the ordinary process state
+contract.
+
+\subsection{Process state}
+
+The pricing and registry parameters are read from process state:
+
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Key & Meaning \\
+\midrule
+\key{pricing-device} & Pricing implementation; beta uses
+\device{probability-time@1.0}. \\
+\key{probability-device} & Probability implementation; beta uses
+\device{markov@1.0}. \\
+\key{model} & Trained Markov counts and parameters. \\
+\key{target-occupancy} & $t$, strictly between zero and one. \\
+\key{price-at-target} & $k$, positive winston per probability-block. \\
+\key{weighting-device} & Optional replacement $W$; absent in beta. \\
+\key{spectrum-height} & Height of the last applied scheduled assignment. \\
+\key{grace-factor} & Nonnegative grace ratio in basis points. \\
+\key{grace-notice} & Resolver value returned during grace. \\
+\key{names} & Map from exact name to lease record. \\
+\bottomrule
+\end{tabularx}
+
+Each lease record has the form
+\[
+\{\key{value},\key{deadline},\key{grace},
+  \key{pricing}:\{\key{weight}\}\}.
+\]
+The pricing metadata is opaque to Spectrum except that the pricing device
+receives it back through base state. \device{probability-time@1.0} requires a
+positive retained weight.
+
+\subsection{Initialization}
+
+Before the process transaction is mined, deployment prepares two signed
+\device{ans104@1.0} messages: the trained \key{model} and the pre-issued
+\key{names} map. Each prepared record contains its resolver value, exact-name
+weight, deadline, and grace height. Total imported occupancy must remain below
+one.
+
+The base-layer process transaction remains data-free. It carries scalar
+configuration tags plus \key{model+link} and \key{names+link}, whose values are
+the signed message IDs. Decoding those tags yields native AO-Core links, so the
+devices read ordinary \key{model} and \key{names} state and resolve the large
+children lazily through the store. No \key{initial-namespace} wrapper or custom
+initialization callback is required. The model and namespace can be published
+as bundled data items without flattening their contents into size-limited
+Arweave tags.
+
+After the process is created, the \key{all}-mode scheduler admits only real
+base-layer data-free transactions to the purchase sequence.
+Section~\ref{sec:deployment} records the deployment boundary.
+
+\subsection{Scheduled execution}
+
+The process clock is the \key{block-height} on an assignment produced by
+\device{arweave-scheduler@1.0} in \key{all} mode. Spectrum never reads a live
+network tip during compute. Every scheduled data-free transaction advances
+\key{spectrum-height}; unrelated transactions otherwise take a constant path
+and do not scan or mutate the namespace.
+
+A purchase is selected by the scheduled transaction's \key{path=purchase} tag.
+The payment is not read from a same-named tag. Spectrum extracts
+\key{field-reward} from the transaction's verified \device{tx@1.0} commitment.
+The transaction target remains empty, so the reward is the ordinary Arweave
+network reward. A malformed, unauthenticated, unaffordable, or otherwise invalid
+purchase is ignored. It cannot fail a public \key{all}-mode process slot.
+
+On success, Spectrum asks \key{/blocks} with payment, name, and trusted
+remaining duration. A structured pricing response returns both the integer
+grant and \key{pricing/weight}. Spectrum updates the deadline and grace, retains
+the old value for a held lease, and stores the new pricing metadata atomically.
+
+\subsection{Reads}
+
+At height $h$, a name reads as follows:
+\[
+\begin{cases}
+\key{value}, & h<\key{deadline},\\
+\key{grace-notice}, & \key{deadline}\leq h<\key{grace},\\
+\key{not-found}, & h\geq\key{grace}.
+\end{cases}
+\]
+A request may ask to dereference the returned value. Historical reads may name
+a height or date. Date resolution bisects immutable Arweave block timestamps;
+an unavailable probe fails the requested historical read rather than silently
+substituting the process's current height.
+
+\subsection{Failure and determinism boundaries}
+
+The following checks are normative:
+\begin{itemize}
+  \item model probabilities, transformed weights, $t$, and $k$ are positive;
+  \item $t<1$, current occupancy $<1$, and quoted occupancy plus weight $<1$;
+  \item amounts, heights, and durations are nonnegative integers;
+  \item only AR is accepted in beta;
+  \item linked state must resolve to the expected message shape;
+  \item price rounds up; purchased duration is the greatest affordable whole
+        block; and
+  \item invalid public input is a no-op, not a divergent process error.
+\end{itemize}
+
+The fixed model, retained weights, schedule-derived height, deterministic float
+execution, and explicit integer boundary together make a quote reproducible
+from process state. Node-local cache layout and fetch timing do not enter the
+economic result.
+
+\section{Deployment boundary}\label{sec:deployment}
+
+The beta deployment has two phases.
+
+\begin{enumerate}
+  \item \textbf{State construction.} Normalize the root namespace, train the
+        order-4 model, calculate every \key{include-end=true} weight, and sign
+        separate bundled AO messages for the model and pre-issued records.
+        Create a data-free process transaction carrying their IDs as
+        \key{model+link} and \key{names+link}, with initial height, curve
+        parameters, and grace factor in scalar state tags.
+  \item \textbf{Live scheduling.} Start the registry under
+        \device{arweave-scheduler@1.0} \key{mode=all}. Thereafter, only
+        base-layer data-free Arweave transactions enter the schedule. Purchase
+        rewards are taken from their transaction commitments.
+\end{enumerate}
+
+The root source for the beta is the namespace approximating manifest\\
+\key{fQXYPE9MAcfI1wV2CwJ3sJIhgT9btBOlYFOKFDGhAs0}. The deployment artifact must
+record the exact source, normalization, model order, initial height, nametime,
+$t$, $k$, grace factor, device implementation IDs, and content IDs of all
+bundled state messages. These values define the reproducible genesis state.
+
+No beta parameter should be inferred from a node's wall clock, chain tip, or
+local environment. No namespace artifact should be flattened into transaction
+tags. Before publication, the complete composed process is evaluated through
+packaged AO-Core messages: initialization, pricing, acquisition, extension,
+grace, expiry, and resolution.
+
+\section{Scope and limitations}
+
+Beta 1 intentionally fixes several choices:
+
+\begin{itemize}
+  \item The statistical model captures string-form regularity, not trademark,
+        semantic, social, or application value.
+  \item The model is fixed for the life of a retained lease. A future model
+        policy must define version transitions explicitly.
+  \item The curve prices occupied probability mass. It does not estimate recent
+        demand, clear competing simultaneous bids, or pay proceeds to a seller.
+  \item The registry supplies lease and resolver semantics, not an ownership or
+        transfer protocol.
+  \item Occupancy quote construction currently walks lease state to collect
+        active weights and future deadlines. Scaling this read path is an
+        implementation concern that must preserve the same slab result.
+  \item The model's calibration depends on the declared initial corpus and
+        normalization. A biased corpus yields biased weights even when the
+        arithmetic is exact.
+\end{itemize}
+
+These are explicit protocol boundaries, not hidden secondary mechanisms. The
+device seams permit later replacement of the probability model or weight
+transform while keeping lease accounting and scheduled payment authentication
+separate.
+
+\section{Summary}
+
+Spectrum Beta 1 treats exact-name probability over time as the scarce resource.
+A fixed Markov model supplies normalized weights; active retained weights form
+occupancy; a convex integral curve prices the finite mass added by a lease; and
+expiry slabs price the actual future occupancy path. An authenticated Arweave
+reward maps to the greatest affordable whole-block duration. The result is one
+continuous mechanism for all names, with automatic capacity release and no
+separate auction path.
+
+The implementation mirrors that decomposition. Markov owns statistical
+meaning, probability-time owns pricing, Spectrum owns the scheduled registry,
+and the Arweave scheduler owns ordering and height. Their only shared contract
+is structured AO messages and explicit state. That separation is the central
+audit property of the beta.
+
+\end{document}

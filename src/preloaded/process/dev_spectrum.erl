@@ -1226,6 +1226,10 @@ beta_device_stack_test() ->
             hb_ao:get(Path, {as, <<"message@1.0">>, Message}, Opts)
         end,
     Samples = [<<"alpha">>, <<"beta">>, <<"gamma">>],
+    Height = 2000000,
+    Nametime = 200 * ?YEAR_BLOCKS,
+    Deadline = Height + Nametime,
+    Grace = Deadline + (Nametime div 20),
     {ok, Trained} =
         hb_ao:resolve(
             #{ <<"device">> => <<"markov@1.0">> },
@@ -1241,47 +1245,84 @@ beta_device_stack_test() ->
             [
                 {
                     Name,
-                    prepared_name(
+                    (prepared_name(
                         Name,
                         <<Name/binary, "-value">>,
                         Trained,
                         Opts
-                    )
+                    ))#{
+                        <<"deadline">> => Deadline,
+                        <<"grace">> => Grace
+                    }
                 }
             || Name <- Samples
             ]
         ),
-    InitialNamespace =
+    Model =
+        hb_ao:get(
+            <<"model">>,
+            {as, <<"message@1.0">>, Trained},
+            Opts
+        ),
+    SignedModel =
         hb_message:commit(
-            #{
-                <<"model">> =>
-                    hb_ao:get(
-                        <<"model">>,
-                        {as, <<"message@1.0">>, Trained},
-                        Opts
-                    ),
-                <<"names">> => Prepared
-            },
+            Model,
             Opts,
             #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
         ),
-    {ok, Namespace} = hb_cache:write(InitialNamespace, Opts),
-    Height = 2000000,
-    Nametime = 200 * ?YEAR_BLOCKS,
-    Base =
+    SignedNames =
+        hb_message:commit(
+            Prepared,
+            Opts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
+        ),
+    {ok, _} = hb_cache:write(SignedModel, Opts),
+    {ok, _} = hb_cache:write(SignedNames, Opts),
+    ModelID = hb_message:id(SignedModel, all, Opts),
+    NamesID = hb_message:id(SignedNames, all, Opts),
+    Process =
         #{
-            <<"device">> => <<"spectrum@1.0">>,
+            <<"device">> => <<"process@1.0">>,
             <<"execution-device">> => <<"spectrum@1.0">>,
             <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
             <<"scheduler-mode">> => <<"all">>,
             <<"pricing-device">> => <<"probability-time@1.0">>,
             <<"probability-device">> => <<"markov@1.0">>,
-            <<"initial-namespace">> => Namespace,
-            <<"initial-nametime">> => hb_util:bin(Nametime),
+            <<"model+link">> => ModelID,
+            <<"names+link">> => NamesID,
             <<"spectrum-height">> => hb_util:bin(Height),
             <<"grace-factor">> => <<"500">>,
             <<"target-occupancy">> => <<"0.65">>,
             <<"price-at-target">> => <<"1000000000000">>
+        },
+    SignedProcess =
+        hb_message:commit(
+            Process,
+            Opts,
+            #{ <<"device">> => <<"tx@1.0">>, <<"bundle">> => false }
+        ),
+    ProcessTX =
+        hb_message:convert(
+            SignedProcess,
+            <<"tx@1.0">>,
+            <<"structured@1.0">>,
+            Opts
+        ),
+    ?assertEqual(0, ProcessTX#tx.data_size),
+    ?assertEqual(<<>>, ProcessTX#tx.data),
+    DecodedProcess =
+        hb_message:convert(
+            ProcessTX,
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts
+        ),
+    ?assert(hb_message:verify(DecodedProcess, all, Opts)),
+    ?assert(?IS_LINK(maps:get(<<"model">>, DecodedProcess))),
+    ?assert(?IS_LINK(maps:get(<<"names">>, DecodedProcess))),
+    Base =
+        (hb_message:uncommitted(DecodedProcess, Opts))#{
+            <<"device">> => <<"spectrum@1.0">>
         },
     {ok, Initialized} =
         Resolve(
@@ -1293,11 +1334,11 @@ beta_device_stack_test() ->
         State(Initialized, <<"model/order">>)
     ),
     ?assertEqual(
-        Height + Nametime,
+        Deadline,
         State(Initialized, <<"names/alpha/deadline">>)
     ),
     ?assertEqual(
-        Height + Nametime + (Nametime div 20),
+        Grace,
         State(Initialized, <<"names/alpha/grace">>)
     ),
     ?assertEqual(

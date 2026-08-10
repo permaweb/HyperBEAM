@@ -11,7 +11,7 @@ process@1.0
   model:     markov@1.0
 ```
 
-The launch is immutable. Prepare and verify the namespace artifact before
+The launch is immutable. Prepare and verify the linked state items before
 signing the process transaction; a correction requires a replacement process
 and resolver update.
 
@@ -22,8 +22,8 @@ from process state.
 
 | Key | Beta value | Unit |
 | --- | --- | --- |
-| `initial-namespace` | prepared artifact ID | Arweave ID |
-| `initial-nametime` | `52560000` | blocks (200 × 262800) |
+| `model+link` | prepared Markov model item ID | Arweave ID |
+| `names+link` | prepared lease table item ID | Arweave ID |
 | `spectrum-height` | chain tip used when signing | block height |
 | `grace-factor` | governance choice | basis points of bought time |
 | `target-occupancy` | governance choice | probability mass, `0 < t < 1` |
@@ -79,23 +79,42 @@ observations; issue only the reviewed roots. For this snapshot, filtering that
 training corpus to `[a-z0-9-]+` leaves 16,614 samples and 14,639 distinct
 strings. Record both final counts.
 
-The prepared artifact is an AO structured message, not JSON:
+Prepare the two AO structured state items that `~spectrum@1.0` reads directly:
 
 ```text
-model: <trained markov@1.0 model>
-names:
+model item: <trained markov@1.0 model>
+
+names item:
   <name>:
     value: <existing resolver target>
+    deadline: <spectrum-height + 52560000>
+    grace: <deadline + floor(grace-factor × 52560000 / 10000)>
     pricing:
       weight: <likelihood(name, include-end=true)>
 ```
 
-Build it through the packaged devices. The following is the normative Erlang
+The items are not constrained by Arweave's tag-size limit because `bundle=true`
+places their nested messages in ANS-104 data. They remain subject to the
+selected bundler's data-size limits. The data-free process transaction then
+carries only the two 43-byte IDs as native `+link` tags. On decoding, AO-Core
+exposes those links as the process's ordinary `model` and `names` state; no
+initialization pointer or import step is required.
+
+The ANS-104 items are immutable state dependencies, not process inputs. They
+are read by content ID and never enter the schedule. After the process spawn,
+`~arweave-scheduler@1.0` continues to admit only data-free `tx@1.0` layer-1
+headers.
+
+Build them through the packaged devices. The following is the normative Erlang
 flow; `TrainingNames` is the filtered observation list, `Targets` is the
-reviewed root map, and `Opts` names the complete preloaded store:
+reviewed root map, `Height` is the recorded chain tip, `GraceFactor` is the
+final basis-point value, and `Opts` names the complete preloaded store:
 
 ```erlang
 Names = lists:sort(maps:keys(Targets)),
+Nametime = 200 * 262800,
+Deadline = Height + Nametime,
+Grace = Deadline + ((GraceFactor * Nametime) div 10000),
 {ok, Trained} = hb_ao:resolve(
     #{ <<"device">> => <<"markov@1.0">> },
     #{
@@ -125,6 +144,8 @@ Records = maps:from_list([
         true = Weight > 0.0,
         {Name, #{
             <<"value">> => maps:get(Name, Targets),
+            <<"deadline">> => Deadline,
+            <<"grace">> => Grace,
             <<"pricing">> => #{ <<"weight">> => Weight }
         }}
     end
@@ -135,41 +156,51 @@ Occupancy = lists:sum([
  || Record <- maps:values(Records)
 ]),
 true = Occupancy > 0.0 andalso Occupancy < 1.0,
-InitialNamespace = #{ <<"model">> => Model, <<"names">> => Records }.
+true = maps:size(Records) =:= maps:size(Targets).
 ```
 
-Write the unsigned artifact locally and read it back before publishing:
-
-```erlang
-{ok, LocalID} = hb_cache:write(InitialNamespace, Opts),
-{ok, ReadBack} = hb_cache:read(LocalID, Opts),
-Names = lists:sort(hb_maps:keys(
-    hb_maps:get(<<"names">>, ReadBack, #{}, Opts),
-    Opts
-)).
-```
-
-Then sign and upload it with the deployment wallet:
+Sign both items with `bundle=true`, write them locally, and read them back
+before publishing. Use the signed message IDs, not the return value of the
+cache write:
 
 ```erlang
 Wallet = ar_wallet:load_keyfile("/absolute/path/to/key.json"),
 UploadOpts = Opts#{ <<"priv-wallet">> => Wallet },
-Signed = hb_message:commit(
-    InitialNamespace,
-    UploadOpts,
-    #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
-),
-ArtifactID = hb_message:id(Signed, all, UploadOpts),
+Bundle = #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true },
+SignedModel = hb_message:commit(Model, UploadOpts, Bundle),
+SignedNames = hb_message:commit(Records, UploadOpts, Bundle),
+ModelID = hb_message:id(SignedModel, all, UploadOpts),
+NamesID = hb_message:id(SignedNames, all, UploadOpts),
+{ok, _} = hb_cache:write(SignedModel, UploadOpts),
+{ok, _} = hb_cache:write(SignedNames, UploadOpts),
+{ok, ModelReadBack} = hb_cache:read(ModelID, UploadOpts),
+{ok, NamesReadBack} = hb_cache:read(NamesID, UploadOpts),
+4 = hb_maps:get(<<"order">>, ModelReadBack, not_found, UploadOpts),
+Names = lists:sort(hb_maps:keys(
+    NamesReadBack,
+    UploadOpts
+)).
+```
+
+Upload both items through the configured bundler:
+
+```erlang
 {ok, _} = hb_client_remote:upload(
-    Signed,
+    SignedModel,
+    UploadOpts,
+    <<"ans104@1.0">>
+),
+{ok, _} = hb_client_remote:upload(
+    SignedNames,
     UploadOpts,
     <<"ans104@1.0">>
 ).
 ```
 
-Wait until a fresh node can read `ArtifactID` through its normal configured
-store. Verify the model order, name count, targets, positive weights, and the
-same `0 < Occupancy < 1` invariant from that read-back.
+Wait until a fresh node can read `ModelID` and `NamesID` through its normal
+configured store. Verify the model order, name count, targets, deadlines,
+grace, positive weights, and the same `0 < Occupancy < 1` invariant from those
+read-backs. This must work without priming that node's process cache.
 
 ## Publish and pin the devices
 
@@ -183,9 +214,9 @@ rebar3 device publish --dry-run \
   --key /absolute/path/to/key.json
 ```
 
-Record the specification IDs, implementation IDs, signer, source commit, and
-artifact ID. Remove `--dry-run` only for the release invocation. Beta nodes
-must either preload this exact source commit or pin the resulting
+Record the specification IDs, implementation IDs, signer, source commit,
+`ModelID`, and `NamesID`. Remove `--dry-run` only for the release invocation.
+Beta nodes must either preload this exact source commit or pin the resulting
 implementations under `trusted-devices`; do not rely on an unrecorded moving
 signer policy.
 
@@ -200,8 +231,8 @@ scheduler-device   = arweave-scheduler@1.0
 scheduler-mode     = all
 pricing-device     = probability-time@1.0
 probability-device = markov@1.0
-initial-namespace  = <ArtifactID>
-initial-nametime   = 52560000
+model+link         = <ModelID>
+names+link         = <NamesID>
 spectrum-height    = <recorded tip at signing>
 grace-factor       = <final value>
 target-occupancy   = <final value>
@@ -209,8 +240,16 @@ price-at-target    = <final value>
 ```
 
 Add `grace-notice=<ID>` if the beta UI should resolve names in grace to a
-specific notice. Keep transaction data empty: `all` mode currently schedules
-base-layer data-free transactions.
+specific notice. Commit the process with `tx@1.0`, `bundle=false`. Inspect that
+`data_size` is zero and that `model+link` and `names+link` are signed tags. The
+process itself is therefore header-complete, while the linked state is fetched
+by content ID. Every later scheduled input remains a real data-free base-layer
+Arweave transaction.
+
+Do not put the state bundle in the process transaction's data. In `all` mode,
+slot zero is reconstructed from the process header; omitting transaction data
+would then also omit the nested `model` and `names`. Explicit `+link` tags keep
+the process header sufficient without imposing tag-size limits on either item.
 
 Sign, inspect every tag and the zero data size, dispatch, and record the
 process ID and confirmation height. Do not switch any live resolver yet.
@@ -221,8 +260,8 @@ On a fresh beta node:
 
 1. Run Copycat in `headers` mode through the process spawn height.
 2. Resolve the process with `~arweave-scheduler@1.0` in `all` mode.
-3. Confirm its imported `model/order` is 4 and its name count matches the
-   reviewed artifact.
+3. Confirm its linked `model/order` is 4 and its name count matches the
+   reviewed table.
 4. For several roots, confirm `value`, `pricing/weight`, `deadline`, and
    `grace`. Every initial deadline must equal
    `spectrum-height + 52560000`; grace must use the recorded factor.
@@ -230,7 +269,7 @@ On a fresh beta node:
    minimum-value purchase on a disposable beta name and resolve the resulting
    lease.
 6. Restart the node from an empty process cache and repeat the state and quote
-   checks. The namespace artifact may be cached, but correctness must not
+   checks. The linked items may be cached, but correctness must not
    depend on the previous process state cache.
 7. Configure the resolver only after those checks:
 
