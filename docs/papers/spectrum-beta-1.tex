@@ -1,4 +1,4 @@
-\documentclass[10pt]{article}
+\documentclass[10pt,oneside]{report}
 
 \usepackage[letterpaper,margin=0.78in,headheight=14pt]{geometry}
 \usepackage[T1]{fontenc}
@@ -15,7 +15,6 @@
 \definecolor{Spectrum}{HTML}{3B3F8C}
 \definecolor{Ink}{HTML}{171922}
 \definecolor{Quiet}{HTML}{626779}
-\definecolor{Rule}{HTML}{D9DCE8}
 \hypersetup{
   colorlinks=true,
   linkcolor=Spectrum,
@@ -33,19 +32,24 @@
 \setlist{nosep,leftmargin=1.25em}
 \setcounter{secnumdepth}{3}
 \setcounter{tocdepth}{2}
+\titleclass{\chapter}{straight}
+\titleformat{\chapter}[hang]{\Huge\bfseries\color{Ink}}{\thechapter}{0.65em}{}
 \titleformat{\section}{\Large\bfseries\color{Ink}}{\thesection}{0.65em}{}
 \titleformat{\subsection}{\large\bfseries\color{Ink}}{\thesubsection}{0.6em}{}
 \titleformat{\subsubsection}{\normalsize\bfseries\color{Ink}}{\thesubsubsection}{0.55em}{}
+\titlespacing*{\chapter}{0pt}{-12pt}{12pt}
 \titlespacing*{\section}{0pt}{18pt}{7pt}
 \titlespacing*{\subsection}{0pt}{12pt}{4pt}
 
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[L]{\small\color{Quiet}Spectrum Beta 1}
-\fancyhead[R]{\small\color{Quiet}Protocol note}
 \fancyfoot[C]{\small\color{Quiet}\thepage}
-\renewcommand{\headrulewidth}{0.4pt}
-\renewcommand{\headrule}{\hbox to\headwidth{\color{Rule}\leaders\hrule height \headrulewidth\hfill}}
+\renewcommand{\headrulewidth}{0pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\small\color{Quiet}\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
 
 \newcommand{\device}[1]{\texttt{\textasciitilde#1}}
 \newcommand{\key}[1]{\texttt{#1}}
@@ -86,7 +90,7 @@
   {\small\color{Quiet}August 2026}
 \end{titlepage}
 
-\section*{Abstract}
+\chapter*{Abstract}
 
 Spectrum is a single-market naming protocol. A registration transaction pays
 the Arweave network reward and receives the greatest whole number of lease
@@ -105,6 +109,8 @@ The protocol is decomposed into three AO-Core devices.
 \device{spectrum@1.0} defines the scheduled registry and lease state machine.\par
 This note gives the complete mathematics, mechanism properties, message
 interfaces, state invariants, and deployment model for the beta.
+
+\chapter{Protocol overview}
 
 \section{Design objective}
 
@@ -152,6 +158,8 @@ winston. Time is integer Arweave block height. Float calculations are
 deterministic within the HyperBEAM execution environment; integer rounding at
 the protocol boundary is explicit.
 
+\chapter{Statistical model}
+
 \section{Exact-name probability}
 
 \subsection{Tokenization and training}
@@ -197,7 +205,7 @@ suffix distribution. A symbol absent from the entire training corpus retains
 zero probability; this is interpolation over observed support, not add-one
 smoothing.
 
-\subsection{Likelihood and information measures}
+\subsection{Likelihood and information measures}\label{sec:information}
 
 For $n=x_1\ldots x_L$, let $c_i$ be the suffix of length at most $q$ preceding
 event $x_i$, including start tokens before the first byte. Let
@@ -380,9 +388,9 @@ checks the normative rounded price and adjusts by whole blocks. Thus no float
 boundary can grant an unaffordable block, and no affordable whole block is
 withheld.
 
-\section{Mechanism behavior}
+\chapter{Mechanism design}
 
-\subsection{One market}
+\section{One market}
 
 Every accepted purchase invokes the same rule. A fixed Arweave reward buys
 more time for lower-weight names and less time for higher-weight names. If the
@@ -397,7 +405,7 @@ occupancy without an explicit release message. The curve prices concurrent
 scarcity, while the slab integral makes later time cheaper when already-known
 leases end.
 
-\subsection{Calibration}
+\section{Calibration}
 
 The parameters have separate meanings:
 \begin{itemize}
@@ -413,7 +421,7 @@ scale factor when $k$ is held fixed; the shape as a function of $u$ remains
 $u/(1-u)$. These are state parameters and can be finalized at deployment
 without changing device code.
 
-\subsection{Lease and grace}
+\section{Lease and grace}
 
 Let a purchase at height $h$ buy $B$ blocks. For a free name,
 \[
@@ -444,7 +452,7 @@ height $h_0$:
 The deployment target of 200 nominal years uses $T_0=52{,}560{,}000$ blocks at
 262,800 blocks per nominal year.
 
-\subsection{Resolver right}
+\section{Resolver right}
 
 A free-name purchase may supply the resolver value. Further payments while the
 lease is held extend it but cannot replace that value. Any party may fund an
@@ -452,9 +460,9 @@ extension. Beta 1 therefore specifies a held resolver right, not an on-chain
 owner identity or transfer mechanism. Ownership and authenticated value updates
 are outside this mechanism version.
 
-\section{Device architecture}
+\chapter{Device architecture}
 
-\subsection{Composition}
+\section{Composition}
 
 The deployed AO process composes these devices:
 
@@ -478,7 +486,7 @@ functions directly. It resolves a configured \key{pricing-device}; that device
 resolves the configured \key{probability-device}. Implementation names may be
 device IDs or trusted device names according to normal AO-Core loading rules.
 
-\subsection{Message interfaces}
+\section{Message interfaces}
 
 \device{markov@1.0} exposes these protocol keys:
 \begin{itemize}
@@ -488,7 +496,8 @@ device IDs or trusted device names according to normal AO-Core loading rules.
   \item \key{/likelihood} returns float probability by default or exact
         \key{numerator}, \key{denominator}, and \key{events} in integer mode;
   \item \key{/surprisal}, \key{/mean-surprisal}, and \key{/perplexity} derive
-        the information measures in Section~3.3 from exact likelihood; and
+        the information measures in Section~\ref{sec:information} from exact
+        likelihood; and
   \item \key{/generate} returns \key{body}, \key{seed}, and either a resumable
         \key{continues} state or false on terminal output.
 \end{itemize}
@@ -508,7 +517,7 @@ assignment. A name key resolves through the lease table, optionally loading its
 resolver value. Snapshot and normalize preserve the ordinary process state
 contract.
 
-\subsection{Process state}
+\section{Process state}
 
 The pricing and registry parameters are read from process state:
 
@@ -540,7 +549,7 @@ The pricing metadata is opaque to Spectrum except that the pricing device
 receives it back through base state. \device{probability-time@1.0} requires a
 positive retained weight.
 
-\subsection{Initialization}
+\section{Initialization}
 
 Before the process transaction is mined, deployment prepares two signed
 \device{ans104@1.0} messages: the trained \key{model} and the pre-issued
@@ -561,7 +570,7 @@ After the process is created, the \key{all}-mode scheduler admits only real
 base-layer data-free transactions to the purchase sequence.
 Section~\ref{sec:deployment} records the deployment boundary.
 
-\subsection{Scheduled execution}
+\section{Scheduled execution}
 
 The process clock is the \key{block-height} on an assignment produced by
 \device{arweave-scheduler@1.0} in \key{all} mode. Spectrum never reads a live
@@ -581,7 +590,7 @@ remaining duration. A structured pricing response returns both the integer
 grant and \key{pricing/weight}. Spectrum updates the deadline and grace, retains
 the old value for a held lease, and stores the new pricing metadata atomically.
 
-\subsection{Reads}
+\section{Reads}
 
 At height $h$, a name reads as follows:
 \[
@@ -596,7 +605,7 @@ a height or date. Date resolution bisects immutable Arweave block timestamps;
 an unavailable probe fails the requested historical read rather than silently
 substituting the process's current height.
 
-\subsection{Failure and determinism boundaries}
+\section{Failure and determinism boundaries}
 
 The following checks are normative:
 \begin{itemize}
@@ -615,7 +624,7 @@ execution, and explicit integer boundary together make a quote reproducible
 from process state. Node-local cache layout and fetch timing do not enter the
 economic result.
 
-\section{Deployment boundary}\label{sec:deployment}
+\chapter{Deployment and audit}\label{sec:deployment}
 
 The beta deployment has two phases.
 
