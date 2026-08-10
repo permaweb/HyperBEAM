@@ -1,62 +1,24 @@
 \documentclass[10pt,twocolumn]{article}
 
-\usepackage[
-  letterpaper,
-  top=0.66in,
-  bottom=0.63in,
-  left=0.66in,
-  right=0.66in,
-  columnsep=0.25in
-]{geometry}
 \usepackage[T1]{fontenc}
 \usepackage{lmodern}
 \usepackage{microtype}
 \usepackage{amsmath,amssymb,mathtools}
 \usepackage{booktabs,tabularx,array}
-\usepackage{enumitem}
-\usepackage{balance}
-\usepackage{xcolor}
-\usepackage{fancyhdr}
-\usepackage{titlesec}
 \usepackage{hyperref}
 
-\definecolor{Spectrum}{HTML}{3B3F8C}
-\definecolor{Ink}{HTML}{171922}
-\definecolor{Quiet}{HTML}{626779}
 \hypersetup{
-  colorlinks=true,
-  linkcolor=Spectrum,
-  urlcolor=Spectrum,
+  hidelinks,
   pdftitle={Spectrum Beta 1: Probability-Weighted Nametime},
   pdfauthor={HyperBEAM contributors}
 }
 
-\setlength{\parindent}{0pt}
-\setlength{\parskip}{3pt plus 1pt}
 \setlength{\emergencystretch}{2em}
-\raggedbottom
 \widowpenalty=10000
 \clubpenalty=10000
 \displaywidowpenalty=10000
-\setlist{nosep,leftmargin=1.25em}
 \setcounter{secnumdepth}{3}
 \setcounter{tocdepth}{2}
-\titleformat{\section}{\Large\bfseries\color{Ink}}{\thesection}{0.6em}{}
-\titleformat{\subsection}{\large\bfseries\color{Ink}}{\thesubsection}{0.55em}{}
-\titleformat{\subsubsection}{\normalsize\bfseries\color{Ink}}{\thesubsubsection}{0.5em}{}
-\titlespacing*{\section}{0pt}{11pt}{5pt}
-\titlespacing*{\subsection}{0pt}{8pt}{3pt}
-\titlespacing*{\subsubsection}{0pt}{6pt}{2pt}
-
-\pagestyle{fancy}
-\fancyhf{}
-\fancyfoot[C]{\small\color{Quiet}\thepage}
-\renewcommand{\headrulewidth}{0pt}
-\fancypagestyle{plain}{
-  \fancyhf{}
-  \fancyfoot[C]{\small\color{Quiet}\thepage}
-  \renewcommand{\headrulewidth}{0pt}
-}
 
 \newcommand{\device}[1]{\texttt{\textasciitilde#1}}
 \newcommand{\key}[1]{\texttt{#1}}
@@ -66,39 +28,28 @@
 \newcommand{\E}{\mathbb{E}}
 \newcommand{\Prob}{\operatorname{Pr}}
 
+\title{Spectrum Beta 1\\
+  \large Probability-Weighted Nametime for a Permaweb Namespace}
+\author{HyperBEAM contributors}
+\date{August 2026}
+
 \begin{document}
 
-\twocolumn[{
-  \begin{minipage}{\textwidth}
-    \noindent{\color{Spectrum}\rule{0.10in}{0.72in}}\hspace{0.16in}
-    \begin{minipage}[b]{0.84\textwidth}
-      {\fontsize{24}{28}\selectfont\bfseries\color{Ink}
-        Spectrum Beta 1\par}
-      \vspace{3pt}
-      {\fontsize{14}{17}\selectfont\color{Quiet}
-        Probability-Weighted Nametime for a Permaweb Namespace\par}
-      \vspace{5pt}
-      {\small\color{Quiet}Protocol note, August 2026}
-    \end{minipage}
+\maketitle
 
-    \vspace{0.18in}
-    \hrule
-    \vspace{0.10in}
-    \textbf{Abstract.}
-    Spectrum is a single-market naming protocol. A registration transaction
-    pays the Arweave network reward and receives the greatest whole number of
-    lease blocks that payment can buy. A fixed Markov model assigns every exact
-    name a probability weight; active leases consume that probability mass
-    over time. A convex bonding curve prices the integral increase in occupied
-    mass, and known expiries divide a quote into constant-occupancy time slabs.
-    \device{markov@1.0} defines the statistical model,
-    \device{probability-time@1.0} defines the pure pricing function, and
-    \device{spectrum@1.0} defines the scheduled registry and lease state
-    machine. This note specifies their mathematics, mechanism properties,
-    message interfaces, state invariants, and deployment model.
-    \vspace{0.16in}
-  \end{minipage}
-}]
+\begin{abstract}
+Spectrum is a single-market naming protocol. A registration transaction pays
+the Arweave network reward and receives the greatest whole number of lease
+blocks that payment can buy. A fixed Markov model assigns every exact name a
+probability weight; active leases consume that probability mass over time. A
+convex bonding curve prices the integral increase in occupied mass, and known
+expiries divide a quote into constant-occupancy time slabs.
+\device{markov@1.0} defines the statistical model,
+\device{probability-time@1.0} defines the pure pricing function, and
+\device{spectrum@1.0} defines the scheduled registry and lease state machine.
+This note specifies their mathematics, mechanism properties, message
+interfaces, state invariants, and deployment model.
+\end{abstract}
 
 \section{Protocol overview}
 
@@ -128,7 +79,7 @@ the payment.
 
 \subsection{Notation and units}
 
-\begin{tabularx}{\columnwidth}{@{}>{$}l<{$}X@{}}
+\noindent\begin{tabularx}{\columnwidth}{@{}>{$}l<{$}X@{}}
 \toprule
 n & exact normalized name; a finite sequence of symbols \tabularnewline
 M & fixed Markov model and its versioned parameters \tabularnewline
@@ -211,13 +162,15 @@ prefix scoring, but \device{probability-time@1.0} always requests
 The likelihood endpoint can return a float or the exact product as an integer
 pair $(N,D)$ before division. Derived endpoints are
 \begin{align*}
-  S(n) &= -\log_2 p_M(n) && \text{total surprisal in bits},\\
-  \bar S(n) &= \frac{S(n)}{E} && \text{mean surprisal per scored event},\\
-  \operatorname{PP}(n) &= 2^{\bar S(n)} && \text{perplexity},
+  S(n) &= -\log_2 p_M(n),\\
+  \bar S(n) &= \frac{S(n)}{E},\\
+  \operatorname{PP}(n) &= 2^{\bar S(n)},
 \end{align*}
-where $E=L+1$ when end is included. Pricing uses $p_M(n)$ directly, not its
-logarithm. Surprisal is the logarithmic effect size and is useful for analysis,
-but it does not preserve probability mass under summation.
+where $S$ is total surprisal in bits, $\bar S$ is mean surprisal per scored
+event, $\operatorname{PP}$ is perplexity, and $E=L+1$ when end is included.
+Pricing uses $p_M(n)$ directly, not its logarithm. Surprisal is the logarithmic
+effect size and is useful for analysis, but it does not preserve probability
+mass under summation.
 
 \subsubsection{The natural occurrence knee}
 
@@ -456,9 +409,10 @@ are outside this mechanism version.
 
 The deployed AO process composes these devices:
 
-\begingroup
-\scriptsize
-\begin{tabularx}{\columnwidth}{@{}p{0.49\columnwidth}X@{}}
+\begin{table*}[t]
+\centering
+\caption{Spectrum device composition.}
+\begin{tabularx}{\textwidth}{@{}p{0.30\textwidth}X@{}}
 \toprule
 Device & Responsibility \\
 \midrule
@@ -472,7 +426,7 @@ bonding-curve price, and its whole-block inverse. \\
 likelihood requests. \\
 \bottomrule
 \end{tabularx}
-\endgroup
+\end{table*}
 
 The composition is message-based. Spectrum does not call Erlang implementation
 functions directly. It resolves a configured \key{pricing-device}; that device
@@ -514,9 +468,10 @@ contract.
 
 The pricing and registry parameters are read from process state:
 
-\begingroup
-\scriptsize
-\begin{tabularx}{\columnwidth}{@{}p{0.48\columnwidth}X@{}}
+\begin{table*}[t]
+\centering
+\caption{Spectrum process state.}
+\begin{tabularx}{\textwidth}{@{}p{0.28\textwidth}X@{}}
 \toprule
 Key & Meaning \\
 \midrule
@@ -534,7 +489,7 @@ Key & Meaning \\
 \key{names} & Map from exact name to lease record. \\
 \bottomrule
 \end{tabularx}
-\endgroup
+\end{table*}
 
 Each lease record has the form
 \[
@@ -620,7 +575,6 @@ execution, and explicit integer boundary together make a quote reproducible
 from process state. Node-local cache layout and fetch timing do not enter the
 economic result.
 
-\balance
 \section{Deployment and audit}\label{sec:deployment}
 
 The beta deployment has two phases.
