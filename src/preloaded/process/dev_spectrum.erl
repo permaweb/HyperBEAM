@@ -103,6 +103,7 @@
 %%% </pre>
 -module(dev_spectrum).
 -implements(<<"spectrum@1.0">>).
+-device_libraries([lib_scheduler]).
 %%% AO-Core API functions:
 -export([info/0, compute/3, init/3, snapshot/3, normalize/3]).
 %%% Pricing functions:
@@ -112,6 +113,8 @@
 
 %%% The registry of leases, keyed by name.
 -define(NAMES, <<"names">>).
+%%% The arweave-scheduler cache namespace.
+-define(ARWEAVE_SCHEDULER_CACHE, <<"~arweave-scheduler@1.0">>).
 %%% The height of the last assignment applied. The only clock a compute has: a
 %%% slot that fetched the chain tip would fork the process, and one that
 %%% compared against it would decide differently on different nodes. A read may
@@ -167,7 +170,8 @@ normalize(Base, _Req, _Opts) -> {ok, Base}.
 get(Key, Base, Req, Opts) ->
     maybe
         {ok, Height} ?= at(Base, Req, Opts),
-        {ok, Record} ?= find_name(Key, Base, Opts),
+        {ok, ReadBase} ?= registry_at(Base, Req, Height, Opts),
+        {ok, Record} ?= find_name(Key, ReadBase, Opts),
         case standing(Record, Height, Opts) of
             live ->
                 maybe_load(
@@ -175,11 +179,12 @@ get(Key, Base, Req, Opts) ->
                     Req,
                     Opts
                 );
-            grace -> notice(Base, Req, Opts);
+            grace -> notice(ReadBase, Req, Opts);
             expired -> {error, not_found}
         end
     else
-        not_found -> {error, not_found}
+        not_found -> {error, not_found};
+        {error, not_found} -> {error, not_found}
     end.
 
 %% @doc Where a lease stands against a height: still running, in the window
@@ -228,6 +233,117 @@ at(Base, Req, Opts) ->
 
 dated(not_found, Base, Opts) -> {ok, height(Base, Opts)};
 dated(Date, _Base, Opts) -> found(height_at(Date, Opts)).
+
+%% @doc Read from process history when a placed height names chain state the
+%% process has already passed.
+registry_at(Base, Req, Height, Opts) ->
+    case historical_read(Req, Opts) andalso Height < height(Base, Opts) of
+        true ->
+            case process_message(Base, Opts) of
+                {ok, Process, ProcID} ->
+                    process_at_height(
+                        Process,
+                        ProcID,
+                        Base,
+                        Height,
+                        Opts
+                    );
+                not_process -> {ok, Base};
+                Error -> Error
+            end;
+        false -> {ok, Base}
+    end.
+
+%% @doc Return whether a request names an explicit historical moment.
+historical_read(Req, Opts) ->
+    field(<<"height">>, Req, not_found, Opts) =/= not_found orelse
+        field(<<"date">>, Req, not_found, Opts) =/= not_found.
+
+%% @doc Read the computed process state at the end of an Arweave block height.
+process_at_height(Process, ProcID, Base, Height, Opts) ->
+    maybe
+        {ok, CurrentSlot} ?= current_slot(Base, Opts),
+        {ok, Slot} ?= slot_at_height(ProcID, Height, CurrentSlot, Opts),
+        {ok, State} ?= hb_ao:resolve(
+            Process,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => Slot },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+        {ok, State}
+    else
+        _ -> not_found
+    end.
+
+%% @doc Read the process message that owns a computed registry state.
+process_message(Base, Opts) ->
+    case state(<<"process">>, Base, not_found, Opts) of
+        not_found -> not_process;
+        Process ->
+            try
+                Loaded = hb_cache:ensure_loaded(Process, Opts),
+                ID =
+                    hb_util:human_id(
+                        hb_message:id(Loaded, signed, Opts)
+                    ),
+                {ok, Loaded, ID}
+            catch _:_ -> not_found
+            end
+    end.
+
+%% @doc Read the slot a process-shaped registry state has reached.
+current_slot(Base, Opts) ->
+    case hb_util:safe_int(state(<<"at-slot">>, Base, not_found, Opts)) of
+        {ok, Slot} when Slot >= 0 -> {ok, Slot};
+        _ -> {error, not_found}
+    end.
+
+%% @doc Find the last cached scheduler slot whose block height is at most
+%% `Height'.
+slot_at_height(ProcID, Height, CurrentSlot, Opts) ->
+    case assignment_height(ProcID, 0, Opts) of
+        {ok, SpawnHeight} when Height < SpawnHeight -> {error, not_found};
+        {ok, _SpawnHeight} ->
+            find_slot_at_height(
+                ProcID,
+                Height,
+                1,
+                CurrentSlot,
+                0,
+                Opts
+            );
+        _ -> {error, not_found}
+    end.
+
+find_slot_at_height(_ProcID, _Height, Low, High, Best, _Opts) when Low > High ->
+    {ok, Best};
+find_slot_at_height(ProcID, Height, Low, High, Best, Opts) ->
+    Slot = (Low + High) div 2,
+    case assignment_height(ProcID, Slot, Opts) of
+        {ok, At} when At =< Height ->
+            find_slot_at_height(ProcID, Height, Slot + 1, High, Slot, Opts);
+        {ok, _At} ->
+            find_slot_at_height(ProcID, Height, Low, Slot - 1, Best, Opts);
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Read the Arweave block height that sequenced one scheduler slot.
+assignment_height(ProcID, Slot, Opts) ->
+    case lib_scheduler:read_assignment(
+        ?ARWEAVE_SCHEDULER_CACHE,
+        ProcID,
+        Slot,
+        Opts
+    ) of
+        {ok, Assignment} ->
+            case hb_util:safe_int(
+                field(<<"block-height">>, Assignment, not_found, Opts)
+            ) of
+                {ok, Height} -> {ok, Height};
+                _ -> {error, not_found}
+            end;
+        _ -> {error, not_found}
+    end.
 
 %% @doc A moment the device cannot place is not the moment it would have used
 %% had nobody named one. A reader who asks about a date is answered about that
@@ -828,6 +944,20 @@ read(Base, Name, Opts) -> get(Name, Base, #{}, Opts).
 read_at(Base, Name, Height, Opts) ->
     get(Name, Base, #{ <<"height">> => hb_util:bin(Height) }, Opts).
 
+%% @doc Cache an all-mode Arweave assignment at the block that sequenced it.
+write_historical_slot(ProcID, Slot, Height, Body, Opts) ->
+    Assignment =
+        (lib_scheduler:base_assignment(
+            ProcID,
+            Slot,
+            #{ <<"path">> => <<"compute">> },
+            Opts
+        ))#{
+            <<"block-height">> => Height,
+            <<"body">> => Body
+        },
+    lib_scheduler:write_assignment(?ARWEAVE_SCHEDULER_CACHE, Assignment, Opts).
+
 lease(Base, Name, Key, Opts) ->
     hb_maps:get(
         Key,
@@ -935,6 +1065,71 @@ expired_name_can_be_retaken_test() ->
     ?assertEqual(
         Gone + ?YEAR_BLOCKS,
         lease(Retaken, <<"hello">>, <<"deadline">>, Opts)
+    ).
+
+%% @doc A read at an old block uses the process state at that block, not a
+%% future lease record that happens to remain live at the old height.
+historical_reads_use_historical_state_test() ->
+    Opts = (test_opts())#{ <<"store">> => hb_test_utils:test_store() },
+    Process =
+        hb_message:commit(
+            #{
+                <<"device">> => <<"process@1.0">>,
+                <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
+                <<"scheduler-mode">> => <<"all">>,
+                <<"execution-device">> => <<"spectrum@1.0">>
+            },
+            Opts
+        ),
+    ProcID = hb_util:human_id(hb_message:id(Process, signed, Opts)),
+    {Holder, _} = party(),
+    {Next, _} = party(),
+    ok = write_historical_slot(ProcID, 0, 900, Process, Opts),
+    ok =
+        write_historical_slot(
+            ProcID,
+            1,
+            1000,
+            buy_with_value(Holder, <<"hello">>, ?YEAR_PRICE, <<"world">>),
+            Opts
+        ),
+    {ok, Held} =
+        hb_ao:resolve(
+            Process,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 1 },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    Gone = lease(Held, <<"hello">>, <<"grace">>, Opts) + 1,
+    ok =
+        write_historical_slot(
+            ProcID,
+            2,
+            Gone,
+            buy_with_value(Next, <<"hello">>, ?YEAR_PRICE, <<"newer">>),
+            Opts
+        ),
+    {ok, Retaken} =
+        hb_ao:resolve(
+            Process,
+            #{ <<"path">> => <<"compute">>, <<"slot">> => 2 },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    Registry = Retaken#{ <<"device">> => <<"spectrum@1.0">> },
+    ?assertEqual(
+        {error, not_found},
+        read_at(Registry, <<"hello">>, 899, Opts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        read_at(Registry, <<"hello">>, 999, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"world">>},
+        read_at(Registry, <<"hello">>, 1001, Opts)
+    ),
+    ?assertEqual(
+        {ok, <<"newer">>},
+        read_at(Registry, <<"hello">>, Gone, Opts)
     ).
 
 %% @doc Between deadline and grace a name resolves to the registry's notice,
