@@ -57,7 +57,15 @@ metrics(_, Req, Opts) ->
                     RawHeaderMap,
 					Opts
                 ),
-            {ok, Headers#{ <<"body">> => Body }};
+            % Prometheus names its exposition format in a `version' parameter.
+            % `0.0.4' is not a valid structured-field value, so the parameter is
+            % dropped and the bare media type served.
+            {ok,
+                Headers#{
+                    <<"content-type">> => <<"text/plain">>,
+                    <<"body">> => Body
+                }
+            };
         false ->
             {ok, #{ <<"body">> => <<"Prometheus metrics disabled.">> }}
     end.
