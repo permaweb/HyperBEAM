@@ -86,6 +86,21 @@
 %%% <pre>
 %%%     name-resolvers: [ "&lt;process&gt;~process@1.0/now/~spectrum@1.0" ]
 %%% </pre>
+%%%
+%%% == Initial namespace ==
+%%%
+%%% `initial-namespace' may name a cached message containing `model' and
+%%% `names'. Each name record must carry its `value' and retained `pricing'
+%%% metadata. At init, the records are issued for `initial-nametime' blocks
+%%% from `spectrum-height'; their grace uses the process's `grace-factor'.
+%%% <pre>
+%%%     model: &lt;markov model&gt;
+%%%     names:
+%%%       &lt;name&gt;:
+%%%         value: &lt;resolver target&gt;
+%%%         pricing:
+%%%           weight: &lt;positive exact-name probability&gt;
+%%% </pre>
 -module(dev_spectrum).
 -implements(<<"spectrum@1.0">>).
 %%% AO-Core API functions:
@@ -102,6 +117,10 @@
 %%% compared against it would decide differently on different nodes. A read may
 %%% name a height or a date of its own; see `at/3'.
 -define(HEIGHT, <<"spectrum-height">>).
+%%% A prepared namespace state to import when the process initializes.
+-define(INITIAL_NAMESPACE, <<"initial-namespace">>).
+%%% The number of blocks granted to every imported name.
+-define(INITIAL_NAMETIME, <<"initial-nametime">>).
 %%% Winston per name per year, when the process does not say. A tenth of an AR.
 -define(DEFAULT_PRICE_PER_YEAR, 100000000000).
 %%% Blocks per year, at Arweave's two-minute block target.
@@ -129,8 +148,8 @@ info() ->
         excludes => [<<"keys">>, <<"set">>]
     }.
 
-%% @doc The registry state is already a plain message.
-init(Base, _Req, _Opts) -> {ok, Base}.
+%% @doc Import a prepared namespace the first time the process initializes.
+init(Base, _Req, Opts) -> initial_namespace(Base, Opts).
 snapshot(Base, _Req, _Opts) -> {ok, Base}.
 normalize(Base, _Req, _Opts) -> {ok, Base}.
 
@@ -607,6 +626,117 @@ find_name(_Name, _Base, _Opts) -> not_found.
 put_name(Base, Name, Record, Opts) ->
     Base#{ ?NAMES => hb_maps:put(Name, Record, names(Base, Opts), Opts) }.
 
+%% @doc Load and issue the configured initial namespace once.
+initial_namespace(Base, Opts) ->
+    case {
+        state(?INITIAL_NAMESPACE, Base, not_found, Opts),
+        state(?NAMES, Base, not_found, Opts)
+    } of
+        {not_found, _} -> {ok, Base};
+        {_, Names} when Names =/= not_found -> {ok, Base};
+        {Source, not_found} -> seed_namespace(Base, Source, Opts)
+    end.
+
+%% @doc Import a prepared model and issue every prepared name from state.
+seed_namespace(Base, Source, Opts) ->
+    maybe
+        {ok, Initial} ?= load_initial_namespace(Source, Opts),
+        Model = hb_maps:get(<<"model">>, Initial, not_found, Opts),
+        true ?= Model =/= not_found,
+        RawNames = hb_maps:get(?NAMES, Initial, not_found, Opts),
+        Names = hb_cache:ensure_loaded(RawNames, Opts),
+        true ?= is_map(Names),
+        {ok, Height} ?= non_negative_state(?HEIGHT, Base, Opts),
+        {ok, Nametime} ?= positive_state(?INITIAL_NAMETIME, Base, Opts),
+        Factor = setting(
+            <<"grace-factor">>,
+            Base,
+            ?DEFAULT_GRACE_FACTOR,
+            Opts
+        ),
+        true ?= Factor >= 0,
+        {ok, Issued} ?= issue_names(Names, Height, Nametime, Factor, Opts),
+        {ok, Base#{ <<"model">> => Model, ?NAMES => Issued }}
+    else
+        _ -> {error, invalid}
+    end.
+
+%% @doc Load an initial namespace supplied as an ID, link, or message.
+load_initial_namespace(ID, Opts) when ?IS_ID(ID) -> hb_cache:read(ID, Opts);
+load_initial_namespace(Link, Opts) when ?IS_LINK(Link) ->
+    try {ok, hb_cache:ensure_loaded(Link, Opts)}
+    catch _:_ -> {error, invalid}
+    end;
+load_initial_namespace(Initial, _Opts) when is_map(Initial) -> {ok, Initial};
+load_initial_namespace(_Initial, _Opts) -> {error, invalid}.
+
+%% @doc Give every prepared name the process-configured initial term.
+issue_names(Names, Height, Nametime, Factor, Opts) ->
+    try
+        Deadline = Height + Nametime,
+        Grace = Deadline + ((Factor * Nametime) div ?GRACE_BASIS),
+        {Issued, Occupancy} =
+            hb_maps:fold(
+                fun(Name, RawRecord, {Acc, Total}) ->
+                    true = is_binary(Name),
+                    Record = hb_cache:ensure_loaded(RawRecord, Opts),
+                    true = is_map(Record),
+                    {ok, Weight} = pricing_weight(Record, Opts),
+                    {
+                        hb_maps:put(
+                            Name,
+                            Record#{
+                                <<"deadline">> => Deadline,
+                                <<"grace">> => Grace
+                            },
+                            Acc,
+                            Opts
+                        ),
+                        Total + Weight
+                    }
+                end,
+                {#{}, 0.0},
+                Names,
+                Opts
+            ),
+        true = Occupancy < 1.0,
+        {ok, Issued}
+    catch
+        _:_ -> {error, invalid}
+    end.
+
+%% @doc Read a prepared lease's positive retained weight.
+pricing_weight(Record, Opts) ->
+    Pricing = hb_maps:get(<<"pricing">>, Record, not_found, Opts),
+    case is_map(Pricing) of
+        false -> {error, invalid};
+        true ->
+            case hb_maps:get(<<"weight">>, Pricing, not_found, Opts) of
+                Weight when is_integer(Weight), Weight > 0 ->
+                    {ok, float(Weight)};
+                Weight when is_float(Weight) ->
+                    case Weight > 0.0 andalso Weight =:= Weight of
+                        true -> {ok, Weight};
+                        false -> {error, invalid}
+                    end;
+                _ -> {error, invalid}
+            end
+    end.
+
+%% @doc Read a required non-negative integer from process state.
+non_negative_state(Key, Base, Opts) ->
+    case hb_util:safe_int(state(Key, Base, not_found, Opts)) of
+        {ok, Value} when Value >= 0 -> {ok, Value};
+        _ -> {error, invalid}
+    end.
+
+%% @doc Read a required positive integer from process state.
+positive_state(Key, Base, Opts) ->
+    case non_negative_state(Key, Base, Opts) of
+        {ok, Value} when Value > 0 -> {ok, Value};
+        _ -> {error, invalid}
+    end.
+
 %%% Tests
 
 %%% The tests drive `compute/3' directly with synthetic assignments, exactly
@@ -1059,6 +1189,174 @@ probability_time_pricing_device_test() ->
         ),
     ?assert(OccupiedPrice > EmptyPrice).
 
+%% @doc Build one prepared initial-name record from the configured model.
+prepared_name(Name, Value, Model, Opts) ->
+    {ok, Weight} =
+        hb_ao:resolve(
+            Model,
+            #{
+                <<"path">> => <<"likelihood">>,
+                <<"body">> => Name,
+                <<"include-end">> => true,
+                <<"result-mode">> => <<"float">>
+            },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    #{
+        <<"value">> => Value,
+        <<"pricing">> => #{ <<"weight">> => Weight }
+    }.
+
+%% @doc Exercise the complete beta execution and pricing device composition.
+beta_device_stack_test() ->
+    Opts =
+        (test_opts())#{
+            <<"store">> => hb_test_utils:test_store()
+        },
+    Resolve =
+        fun(State, Req) ->
+            hb_ao:resolve(
+                State,
+                Req,
+                Opts#{ <<"hashpath">> => ignore }
+            )
+        end,
+    State =
+        fun(Message, Path) ->
+            hb_ao:get(Path, {as, <<"message@1.0">>, Message}, Opts)
+        end,
+    Samples = [<<"alpha">>, <<"beta">>, <<"gamma">>],
+    {ok, Trained} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"markov@1.0">> },
+            #{
+                <<"path">> => <<"train">>,
+                <<"body">> => Samples,
+                <<"order">> => 4
+            },
+            Opts#{ <<"hashpath">> => ignore }
+        ),
+    Prepared =
+        maps:from_list(
+            [
+                {
+                    Name,
+                    prepared_name(
+                        Name,
+                        <<Name/binary, "-value">>,
+                        Trained,
+                        Opts
+                    )
+                }
+            || Name <- Samples
+            ]
+        ),
+    InitialNamespace =
+        hb_message:commit(
+            #{
+                <<"model">> =>
+                    hb_ao:get(
+                        <<"model">>,
+                        {as, <<"message@1.0">>, Trained},
+                        Opts
+                    ),
+                <<"names">> => Prepared
+            },
+            Opts,
+            #{ <<"device">> => <<"ans104@1.0">>, <<"bundle">> => true }
+        ),
+    {ok, Namespace} = hb_cache:write(InitialNamespace, Opts),
+    Height = 2000000,
+    Nametime = 200 * ?YEAR_BLOCKS,
+    Base =
+        #{
+            <<"device">> => <<"spectrum@1.0">>,
+            <<"execution-device">> => <<"spectrum@1.0">>,
+            <<"scheduler-device">> => <<"arweave-scheduler@1.0">>,
+            <<"scheduler-mode">> => <<"all">>,
+            <<"pricing-device">> => <<"probability-time@1.0">>,
+            <<"probability-device">> => <<"markov@1.0">>,
+            <<"initial-namespace">> => Namespace,
+            <<"initial-nametime">> => hb_util:bin(Nametime),
+            <<"spectrum-height">> => hb_util:bin(Height),
+            <<"grace-factor">> => <<"500">>,
+            <<"target-occupancy">> => <<"0.65">>,
+            <<"price-at-target">> => <<"1000000000000">>
+        },
+    {ok, Initialized} =
+        Resolve(
+            Base,
+            #{ <<"path">> => <<"init">> }
+        ),
+    ?assertEqual(
+        4,
+        State(Initialized, <<"model/order">>)
+    ),
+    ?assertEqual(
+        Height + Nametime,
+        State(Initialized, <<"names/alpha/deadline">>)
+    ),
+    ?assertEqual(
+        Height + Nametime + (Nametime div 20),
+        State(Initialized, <<"names/alpha/grace">>)
+    ),
+    ?assertEqual(
+        {ok, <<"alpha-value">>},
+        Resolve(
+            Initialized,
+            #{ <<"path">> => <<"alpha">>, <<"load">> => false }
+        )
+    ),
+    Request = #{ <<"price">> => 100, <<"name">> => <<"alphabet">> },
+    {ok, Cost} = Resolve(Initialized, Request#{ <<"path">> => <<"price">> }),
+    {ok, Double} =
+        Resolve(
+            Initialized#{ <<"price-at-target">> => <<"2000000000000">> },
+            Request#{ <<"path">> => <<"price">> }
+        ),
+    ?assert(abs(Double - (2 * Cost)) =< 1),
+    {ok, LowerTarget} =
+        Resolve(
+            Initialized#{ <<"target-occupancy">> => <<"0.5">> },
+            Request#{ <<"path">> => <<"price">> }
+        ),
+    ?assert(LowerTarget > Cost),
+    {ok, BoughtBlocks} =
+        Resolve(
+            Initialized,
+            #{
+                <<"path">> => <<"blocks">>,
+                <<"blocks">> => Cost,
+                <<"name">> => <<"alphabet">>
+            }
+        ),
+    {Buyer, _} = party(),
+    {ok, Bought} =
+        Resolve(
+            Initialized,
+            #{
+                <<"path">> => <<"compute">>,
+                <<"block-height">> => Height + 1,
+                <<"body">> => buy(Buyer, <<"alphabet">>, Cost)
+            }
+        ),
+    ?assertEqual(
+        Height + 1 + BoughtBlocks,
+        State(Bought, <<"names/alphabet/deadline">>)
+    ),
+    ?assertEqual(
+        Height + 1 + ((10500 * BoughtBlocks) div ?GRACE_BASIS),
+        State(Bought, <<"names/alphabet/grace">>)
+    ),
+    ?assertMatch(
+        Pricing when is_map(Pricing),
+        State(Bought, <<"names/alphabet/pricing">>)
+    ),
+    ?assertEqual(
+        {ok, Bought},
+        Resolve(Bought, #{ <<"path">> => <<"init">> })
+    ).
+
 %% @doc A lease's numbers come back from the process cache as numbers, or are
 %% coerced back into them. `number/4' re-coerces on every read on that stated
 %% ground; if it is not so, the coercion is doing nothing at all.
@@ -1272,6 +1570,7 @@ story_opts() ->
     TestStore = hb_test_utils:test_store(),
     IndexStore = hb_test_utils:test_store(),
     (hb_opts:default_message())#{
+        <<"port">> => 0,
         <<"store">> => [
             TestStore,
             #{
