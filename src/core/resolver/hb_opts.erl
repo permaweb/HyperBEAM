@@ -316,6 +316,7 @@ raw_default_message() ->
         <<"debug-print-fail-mode">> => long,
 		<<"trusted">> => #{},
         <<"name-resolvers">> => ?DEFAULT_NAME_RESOLVERS,
+        <<"name-reserved-host-labels">> => [],
         <<"routes">> => [
             % Local CU routes.
             #{
