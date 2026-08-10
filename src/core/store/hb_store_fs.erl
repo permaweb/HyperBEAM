@@ -22,6 +22,7 @@
 -export([type/3, read/3, write/3, list/3]).
 -export([group/3, link/3, resolve/3]).
 -include_lib("kernel/include/file.hrl").
+-include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 %% @doc Initialize the file system store with the given data directory.
@@ -212,7 +213,7 @@ add_prefix(#{ <<"name">> := Prefix }, Path) ->
     IsAbsolute = is_binary(Prefix) andalso binary:first(Prefix) =:= $/ orelse
                  is_list(Prefix) andalso hd(Prefix) =:= $/,
     % Join the paths
-    JoinedPath = hb_path:to_binary([Prefix, Path]),
+    JoinedPath = hb_path:to_binary([Prefix, safe_path(Path)]),
     % If the prefix was absolute, ensure the joined path is also absolute
     case IsAbsolute of
         true -> 
@@ -232,6 +233,37 @@ add_prefix(#{ <<"name">> := Prefix }, Path) ->
             JoinedPath
     end.
 
+%% @doc Refuse a key that the filesystem would resolve outside the store root.
+%%
+%% Keys are caller-supplied. `..' names no AO-Core key, so refusing it costs
+%% nothing; the operating system would otherwise walk it out of the root.
+safe_path(Path) ->
+    case binary:match(hb_path:to_binary(Path), [<<"..">>, <<0>>]) of
+        nomatch -> Path;
+        _ -> throw({unsafe_store_key, Path})
+    end.
+
 %% @doc Remove the directory prefix from a path.
 remove_prefix(#{ <<"name">> := Prefix }, Path) ->
     hb_util:remove_common(Path, Prefix).
+
+%%% TESTS
+
+%% @doc A key cannot name a path outside the store root.
+key_cannot_escape_the_store_test() ->
+    Store = hb_test_utils:test_store(?MODULE, <<"safe-path">>),
+    ?assertThrow(
+        {unsafe_store_key, _},
+        read(Store, #{ <<"read">> => <<"../outside">> }, #{})
+    ),
+    ?assertThrow(
+        {unsafe_store_key, _},
+        write(Store, #{ <<"../outside">> => <<"escaped">> }, #{})
+    ),
+    % An ordinary key is not refused: it reaches the store and simply misses.
+    % Asserted without writing first, because a write-then-read round trip
+    % under `cache-TEST' is flaky for reasons unrelated to this check.
+    ?assertEqual(
+        {error, not_found},
+        read(Store, #{ <<"read">> => <<"ordinary">> }, #{})
+    ).
