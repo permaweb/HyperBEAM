@@ -1,5 +1,5 @@
 -module(dev_scheduler_registry).
--export([start/0, find/1, find/2, find/3, get_wallet/0, get_processes/0]).
+-export([start/0, find/1, find/2, find/3, name/2, get_wallet/0, get_processes/0]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -27,15 +27,20 @@ find(ProcID, ProcMsgOrFalse) ->
 %% @doc Same as `find/2' but with additional options passed when spawning a 
 %% new process (if needed)
 find(ProcID, ProcMsgOrFalse, Opts) ->
-    case hb_name:lookup({<<"scheduler@1.0">>, ProcID}) of
+    case hb_name:lookup(name(ProcID, Opts)) of
         undefined -> maybe_new_proc(ProcID, ProcMsgOrFalse, Opts);
         Pid -> Pid
     end.
 
+%% @doc Calculate the node-scoped registry name of a scheduling server.
+name(ProcID, Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    {<<"scheduler@1.0">>, hb_util:human_id(Wallet), ProcID}.
+
 %% @doc Return a list of all currently registered ProcID.
 get_processes() ->
     ?event({getting_processes, hb_name:all()}),
-    [ ProcID || {{<<"scheduler@1.0">>, ProcID}, _} <- hb_name:all() ].
+    [ ProcID || {{<<"scheduler@1.0">>, _Address, ProcID}, _} <- hb_name:all() ].
 
 maybe_new_proc(_ProcID, false, _Opts) -> not_found;
 maybe_new_proc(ProcID, ProcMsg, Opts) -> 
@@ -95,6 +100,16 @@ create_multiple_processes_test() ->
     ?assertNotEqual(Pid1, Pid2),
     ?assertEqual(Pid1, ?MODULE:find(ID1, Proc1)),
     ?assertEqual(Pid2, ?MODULE:find(ID2, Proc2)).
+
+identity_scoped_processes_test() ->
+    Opts1 = (test_opts())#{ <<"priv-wallet">> => ar_wallet:new() },
+    Opts2 = (test_opts())#{ <<"priv-wallet">> => ar_wallet:new() },
+    [Proc, _] = generate_test_procs(Opts1),
+    ID = hb_message:id(Proc, all, Opts1),
+    ?assertNotEqual(
+        ?MODULE:find(ID, Proc, Opts1),
+        ?MODULE:find(ID, Proc, Opts2)
+    ).
 
 get_all_processes_test() ->
     Opts = test_opts(),

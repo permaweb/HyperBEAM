@@ -25,7 +25,7 @@ start(ProcID, Proc, Opts) ->
     spawn(
         fun() ->
             % Before we start, register the scheduler name.
-            case hb_name:register({<<"scheduler@1.0">>, ProcID}) of
+            case hb_name:register(dev_scheduler_registry:name(ProcID, Opts)) of
                 ok -> ok;
                 error ->
                     % Another scheduler is already registered on the process
@@ -368,7 +368,7 @@ new_proc_test() ->
 
 benchmark_test() ->
     BenchTime = 1,
-    Wallet = ar_wallet:new(),
+    Wallet = hb:wallet(),
     Opts = #{ <<"priv-wallet">> => Wallet },
     SignedItem = hb_message:commit(
         #{ <<"data">> => <<"test">>, <<"random-key">> => rand:uniform(10000) },
