@@ -65,7 +65,7 @@ route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
     {ok, Manifest} = manifest(M1, Key, Opts),
     {ok, Res} = maps:find(<<"paths">>, Manifest),
-    case maps:get(Key, Res, no_path_match) of
+    case hb_util:deep_get(Key, Res, no_path_match, Opts) of
         no_path_match ->
             % Support materialized view in some JavaScript frameworks.
             case hb_opts:get(manifest_404, fallback, Opts) of
@@ -412,5 +412,18 @@ manifest_should_fallback_on_not_found_path_test_parallel() ->
         #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
+        Opts
+    ).
+
+%% @doc Manifest with index path as "folder/subfolder/subsubfolder" which points
+%% to an image.
+sub_folder_index_test_parallel() ->
+    Opts = hb_name_test_utils:manifest_opts(),
+    Node = hb_http_server:start_node(Opts),
+    hb_test_utils:assert_manifest_response(
+        Node,
+        #{<<"path">> => <<"/wAy8yNYUs_nNLi61XCgaPh0yLOrF_zYFdmiWwBS8gJ4">>},
+        <<"image/png">>,
+        <<137, 80, 78, 71, 13, 10, 26, 10>>,
         Opts
     ).
