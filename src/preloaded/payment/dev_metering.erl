@@ -100,8 +100,9 @@ consume(Resource, Amount, _Opts) ->
 %%
 %% `estimate' receives the inbound request and `price' the result, so a body
 %% measured here covers whatever the node carried, including payload a device
-%% relayed on another node's behalf. Links are forced first: an unloaded body
-%% measures in kilobytes regardless of what it refers to.
+%% relayed on another node's behalf. A `bundle: true' commitment includes linked
+%% content in the body, so those links are loaded before sizing. Otherwise links
+%% are sized as links.
 %%
 %% The size is of the ETF encoding, not the wire form. It is stable and
 %% monotone in payload size, but a payer cannot reproduce it from the bytes it
@@ -109,12 +110,21 @@ consume(Resource, Amount, _Opts) ->
 body_size(Req, Opts) when is_map(Req) ->
     case hb_maps:get(<<"body">>, Req, not_found, Opts) of
         not_found -> 0;
-        Body -> term_size(hb_cache:ensure_all_loaded(Body, Opts))
+        Body -> term_size(maybe_load_body(Body, Opts))
     end;
 body_size(_Req, _Opts) ->
     0.
 
-%% @doc Return the encoded size of a loaded body term.
+%% @doc Load linked content included by any bundle commitment.
+maybe_load_body(Body, Opts) ->
+    Commitments =
+        hb_message:commitments(#{ <<"bundle">> => <<"true">> }, Body, Opts),
+    case map_size(Commitments) of
+        0 -> Body;
+        _ -> hb_cache:ensure_all_loaded(Body, Opts)
+    end.
+
+%% @doc Return the encoded size of a body term.
 term_size(Bin) when is_binary(Bin) -> byte_size(Bin);
 term_size(Term) ->
     try erlang:external_size(Term)
@@ -339,6 +349,44 @@ response_bytes_scale_with_payload_test() ->
     Large = Price(1000000),
     % A flat charge means the body is not reaching the meter.
     ?assert(Large > Small * 100).
+
+%% @doc Linked bodies are loaded only when a commitment includes the bundle.
+linked_body_metering_respects_bundle_commitment_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"metering-rates">> => #{ ?RESPONSE_BYTES => 1 }
+    },
+    Metering = #{ <<"device">> => <<"metering@1.0">> },
+    Payload = binary:copy(<<"x">>, 1000000),
+    Price =
+        fun(Bundle) ->
+            Response =
+                hb_message:commit(
+                    #{ <<"body">> => #{ <<"payload">> => Payload } },
+                    Opts,
+                    #{
+                        <<"commitment-device">> => <<"httpsig@1.0">>,
+                        <<"bundle">> => Bundle
+                    }
+                ),
+            {ok, _} = hb_cache:write(Response, Opts),
+            {ok, LinkedResponse} =
+                hb_cache:read(hb_message:id(Response, all, Opts), Opts),
+            {ok, 0} =
+                hb_ao:resolve(Metering, #{ <<"path">> => <<"estimate">> }, Opts),
+            {ok, Result} =
+                hb_ao:resolve(
+                    Metering,
+                    #{ <<"path">> => <<"price">>, <<"body">> => LinkedResponse },
+                    Opts
+                ),
+            Result
+        end,
+    LinkedPrice = Price(false),
+    BundledPrice = Price(true),
+    ?assert(LinkedPrice < 10000),
+    ?assert(BundledPrice > LinkedPrice * 100).
 
 %% @doc Byte meters remain inert when the operator configures no rate.
 unpriced_resources_cost_nothing_test() ->
