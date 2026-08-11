@@ -284,16 +284,14 @@ materialize_against_index_test() ->
         lib_arweave_block:to_binary(Msg, Opts),
         lib_arweave_block:to_binary(Materialized, Opts)
     ),
-    % It names the block below it by that block's own hash, which is the name
-    % `previous' resolves and the name the block will be published under if it
-    % is ever materialised.
+    % It links the block below it by that block's own hash, which is the name
+    % that block will be published under if it is ever materialised.
     ?assertEqual(
-        hb_util:encode(Block#block.previous_block),
-        maps:get(<<"previous-block">>, Materialized)
-    ),
-    ?assertMatch(
-        {error, #{ <<"message">> := <<"no-previous-block">> }},
-        hb_ao:resolve(Materialized, <<"previous">>, Opts)
+        {link,
+            hb_util:encode(Block#block.previous_block),
+            #{ <<"type">> => <<"link">>, <<"lazy">> => false }
+        },
+        maps:get(<<"previous">>, Materialized)
     ),
     % Every transaction is placed, at the offset the transaction root was built
     % over, in the block's own order.
@@ -436,7 +434,7 @@ materialize_refuses_a_forged_transaction_test() ->
         <<"weave-size">> => 3_000_000, <<"tx-root">> => <<>> },
     % Keep the identifier, change the body. The transaction check recomputes
     % the identifier from a signature over the fields, so it does not agree.
-    Forged = TX#{ <<"quantity">> => 1 },
+    Forged = forged_field(TX, <<"field-quantity">>, <<"1">>),
     ?assertMatch(
         {error, #{ <<"message">> := <<"invalid-tx-signature">> }},
         materialize(
@@ -445,6 +443,37 @@ materialize_refuses_a_forged_transaction_test() ->
             Previous,
             <<"archive">>,
             [Forged | Rest],
+            Opts
+        )
+    ).
+
+%% @doc A transaction with no real owner is refused by the transaction check,
+%% and so never reaches the account lookup.
+%%
+%% An owner of 512 zero bytes is no RSA modulus, so the signature cannot
+%% verify. It matters where that is caught: `balances/5' encodes each sender's
+%% address to ask the account tree for it, and upstream answers `not_set' for
+%% this owner. The transaction check runs first and `checks/0' makes the
+%% account check depend on it, so the atom has nowhere to go.
+materialize_refuses_a_transaction_with_no_owner_test() ->
+    Opts = test_opts(),
+    {Block, Msg, [TX | Rest]} = test_block(1_500_005, 3_000_000, Opts),
+    Previous = #{ <<"indep-hash">> => hb_util:encode(Block#block.previous_block),
+        <<"weave-size">> => 3_000_000, <<"tx-root">> => <<>> },
+    Ownerless =
+        forged_field(
+            TX,
+            <<"keyid">>,
+            <<"publickey:", (hb_util:encode(?DEFAULT_OWNER))/binary>>
+        ),
+    ?assertMatch(
+        {error, #{ <<"message">> := <<"invalid-tx-signature">> }},
+        materialize(
+            Msg,
+            index_entry(Block),
+            Previous,
+            <<"archive">>,
+            [Ownerless | Rest],
             Opts
         )
     ).
@@ -668,6 +697,19 @@ test_block(Height, PrevWeaveSize, Opts) ->
         ),
         [ lib_arweave_tx:from_tx(TX, Opts) || TX <- TXs ]
     }.
+
+%% @doc Restate one of a transaction's fields, leaving the identifier the block
+%% names it by untouched.
+%%
+%% A `tx@1.0' message keeps its fields in the commitment, so that is where a
+%% forgery has to be made: a value written onto the message beside the
+%% commitment is not part of the transaction and does not reach the record. The
+%% commitment's key is the transaction identifier, so the forged body is still
+%% offered as the transaction the block declared -- which is what makes the
+%% signature the only thing left that can refuse it.
+forged_field(TX, Field, Value) ->
+    [{ID, Commitment}] = maps:to_list(maps:get(<<"commitments">>, TX)),
+    TX#{ <<"commitments">> => #{ ID => Commitment#{ Field => Value } } }.
 
 test_header(Height, PrevWeaveSize, TXs) ->
     Sized = ar_block:generate_size_tagged_list_from_txs(TXs, Height),

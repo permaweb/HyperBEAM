@@ -56,7 +56,7 @@
     lib_arweave_accounts
 ]).
 -compile({no_auto_import, [apply/3]}).
--export([info/1, apply/3, validate/3, materialize/3, previous/3]).
+-export([info/1, apply/3, validate/3, materialize/3]).
 -export([id/3, signed_hash/3, verify_signature/3]).
 -export([from_binary/3, to_binary/3, from_json/3, to_json/3]).
 -ifdef(TEST).
@@ -163,6 +163,7 @@ materialize(Base, Req, Opts) ->
             lib_arweave_state:next(NextMsg,
                 #{
                     <<"device">> => ?DEVICE,
+                    <<"previous">> => previous_link(Next),
                     <<"transactions">> =>
                         placements(
                             Ran,
@@ -176,37 +177,6 @@ materialize(Base, Req, Opts) ->
             )
         }
     end.
-
-%% @doc Return the block below this one.
-%%
-%% The chain is a linked list and this key is the link. What makes it one is the
-%% header's own `previous-block' hash, which the block producer signed, together
-%% with `~arweave@2.9' publishing every validated block under that name: so
-%% `tip/previous/previous' walks the chain through ordinary resolution.
-%%
-%% It is a key rather than a stored link because a stored link's target has to
-%% be a content identifier, and a block names its parent long before that
-%% parent's identifier exists -- a node filling in history downwards writes the
-%% child first. Resolving the name at read time is what spans that gap: the
-%% answer is the block when this node holds it, and `no-previous-block' when it
-%% does not, which is the truth in both cases.
-previous(Base, _Req, Opts) ->
-    previous(hb_maps:get(<<"previous-block">>, Base, not_found, Opts), Opts).
-
-previous(Hash, Opts) when is_binary(Hash) ->
-    case hb_cache:read(lib_arweave_paths:block(Hash), Opts) of
-        {ok, Block} -> {ok, Block};
-        _ -> no_previous_block()
-    end;
-previous(_NotAHash, _Opts) ->
-    no_previous_block().
-
-no_previous_block() ->
-    {error,
-        error_message(404, <<"no-previous-block">>,
-            <<"This node has not validated the block below this one. The chain "
-                "reaches back to the block it joined at, and no further until "
-                "`backfill' materialises more of it.">>)}.
 
 %% @doc Recompute a block's identifier from the block itself. The header's own
 %% `indep-hash' is not consulted, so the result may be compared against it.
@@ -1543,16 +1513,13 @@ balances(Accounts, Next, Prev, TXs, Opts) ->
             ]
             ++ [
                 % The record's own field, not `ar_tx:get_owner_address/1'.
-                % That function answers `not_set' for an owner of 512 zero
-                % bytes, which is a well-formed RSA owner rather than a
-                % sentinel, and a peer chooses this field: transaction bodies
-                % are fetched by id and their contents are not re-derived, so
-                % a peer answering first with a zero owner reaches here. The
-                % encoder would raise on the atom, and it would raise after the
-                % proof of work, proof of access and VDF chain had been
-                % computed. `lib_arweave_tx:to_tx/2' fills the field with
-                % `ar_wallet:to_address/2' unconditionally, which is upstream's
-                % value for every owner including this one.
+                % That function answers the atom `not_set' when the owner is
+                % 512 zero bytes -- no RSA modulus, and so a transaction whose
+                % signature cannot verify -- and the encoder would raise on it.
+                % No such transaction reaches here: the transaction check
+                % refuses it, it runs before this one, and `checks/0' names it
+                % as one this check reads from, so a set that asks for this
+                % without it is refused rather than run.
                 hb_util:encode(TX#tx.owner_address)
             ||
                 TX <- Next#block.txs
@@ -1688,6 +1655,10 @@ entry(Key, Req, Opts) ->
 %% They are required exactly when the transaction check runs. A caller asking
 %% only for the VDF chain has no use for them and should not have to download
 %% every transaction of the block to get an answer.
+%%
+%% A transaction is a `tx@1.0' message, so what it is matched against the
+%% header by is the identifier of its signature -- the identifier the codec
+%% derives from the bytes rather than one the body states about itself.
 transactions(NextMsg, Req, Selected, Opts) ->
     case wanted(<<"transactions">>, Selected) of
         false -> {ok, []};
@@ -1701,7 +1672,7 @@ transactions(NextMsg, Req, Opts) ->
     Supplied =
         hb_util:message_to_ordered_list(
             hb_maps:get(<<"transactions">>, Req, [], Opts), Opts),
-    case [ hb_maps:get(<<"id">>, TX, <<>>, Opts) || TX <- Supplied ] of
+    case [ hb_message:id(TX, signed, Opts) || TX <- Supplied ] of
         IDs ->
             {ok, Supplied};
         _ ->
@@ -1737,6 +1708,7 @@ transition(Block, Prev, Next, NextMsg, Accounts, Ran, Opts) ->
             lib_arweave_state:next(NextMsg,
                 #{
                     <<"device">> => ?DEVICE,
+                    <<"previous">> => previous_link(Next),
                     <<"transactions">> =>
                         placements(Ran, Next, Prev#block.weave_size),
                     <<"block-index">> => Index,
@@ -1752,6 +1724,19 @@ transition(Block, Prev, Next, NextMsg, Accounts, Ran, Opts) ->
             )
         }
     end.
+
+%% @doc Link the block below this one, by the Arweave block hash that names it.
+%%
+%% The target need not exist yet. A node materialising history downwards writes
+%% this link before the block it points at has been downloaded, and it becomes
+%% traversable when that block is published -- which is what makes
+%% `tip/previous/previous' a walk of the chain rather than a walk of whatever
+%% happened to be fetched first.
+previous_link(Next) ->
+    {link,
+        lib_arweave_paths:block(hb_util:encode(Next#block.previous_block)),
+        #{ <<"type">> => <<"link">>, <<"lazy">> => false }
+    }.
 
 %% @doc Derive the placements of the block's transactions, when the transaction
 %% check ran. Without it the record carries identifiers rather than bodies, and

@@ -33,20 +33,22 @@
 %%% A request may ask for fewer with `arweave-vdf-threads', never more.
 %%%
 %%% The explicit live integration vector hydrates a recent checkpoint into an
-%%% ignored `_build' store and validates a transaction-bearing mainnet block:
+%%% ignored `_build' store and validates a transaction-bearing mainnet block.
+%%% A cold bootstrap fetches a 155 MiB block index and the whole account tree,
+%%% which outlasts the default EUnit timeout on anything but an idle machine:
 %%%
 %%% <pre>
 %%% rebar3 device test --devices dev_arweave \
-%%%   --test all:live_account_transition
+%%%   --test all:live_account_transition --timeout 5400
 %%% </pre>
 %%%
 %%% == Store layout ==
 %%%
-%%% A validated block is filed at `~arweave@2.9/blocks/&lt;indep-hash&gt;', and
-%%% that is the whole of the index: the message holds the header, the components
-%%% the checks produced, and a link to the block below it, so the chain is a
-%%% linked list reachable as `tip/previous/previous'. `~arweave@2.9/tip' points
-%%% at the selected head, `~arweave@2.9/placements/&lt;txid&gt;' at the current
+%%% A validated block is filed under its own Arweave block hash, and that is the
+%%% whole of the index: the message holds the header, the components the checks
+%%% produced, and a link to the block below it, so the chain is a linked list
+%%% reachable as `tip/previous/previous'. `~arweave@2.9/tip' points at the
+%%% selected head, `~arweave@2.9/placements/&lt;txid&gt;' at the current
 %%% placement of a transaction, `~arweave@2.9/settled/&lt;indep-hash&gt;'
 %%% marks a block whose transactions have been announced, and
 %%% `~arweave@2.9/accounts-anchor' records the checkpoint account tree.
@@ -380,7 +382,8 @@ do_bootstrap(Req, Opts) ->
         {ok, ID} ?=
             publish(
                 with_anchor(
-                    checkpoint_block(Block, Index, RewardHistory, TimeHistory),
+                    checkpoint_block(
+                        Block, Index, RewardHistory, TimeHistory, Opts),
                     Hash,
                     Opts
                 ),
@@ -419,9 +422,10 @@ do_bootstrap(Req, Opts) ->
 %% `transactions' is empty because a join does not fetch the checkpoint's
 %% transactions: nothing checked them, so nothing was placed. The list says so
 %% the same way the checks do -- by what is missing from it.
-checkpoint_block(Block, Index, Rewards, Times) ->
+checkpoint_block(Block, Index, Rewards, Times, Opts) ->
     Block#{
         <<"device">> => ?BLOCK_DEVICE,
+        <<"previous">> => previous_link(Block, Opts),
         <<"transactions">> => [],
         <<"block-index">> => Index,
         <<"accounts">> => [],
@@ -437,6 +441,16 @@ checkpoint_block(Block, Index, Rewards, Times) ->
                         <<"block-time-history">>
                     ]
             }
+    }.
+
+%% @doc Link the block below one this device is storing, by the Arweave block
+%% hash that names it. The target need not be present; it becomes traversable
+%% if `backfill' materialises it.
+previous_link(Block, Opts) ->
+    {link,
+        lib_arweave_paths:block(
+            hb_maps:get(<<"previous-block">>, Block, <<>>, Opts)),
+        #{ <<"type">> => <<"link">>, <<"lazy">> => false }
     }.
 
 %% @doc Refuse a bootstrap on a node that already has a chain.
@@ -1268,19 +1282,19 @@ apply_block(Peers, Block, Hash, Opts) ->
                 block_key(hb_maps:get(<<"previous-block">>, Block, [], Opts)),
                 Opts
             ),
-        {ok, Fetched} ?= transactions(Peers, Block, Opts),
+        {ok, TXs} ?= transactions(Peers, Block, Opts),
         {ok, Next} ?=
             hb_ao:resolve(
                 Parent#{ <<"device">> => ?BLOCK_DEVICE },
                 #{
                     <<"path">> => <<"apply">>,
                     <<"next">> => Block,
-                    <<"transactions">> => checked_transactions(Fetched)
+                    <<"transactions">> => TXs
                 },
                 Opts
             ),
         Anchored = with_anchor(Next, Hash, Opts),
-        {ok, _} ?= publish(Anchored, Hash, stored_transactions(Fetched), Opts),
+        {ok, _} ?= publish(Anchored, Hash, TXs, Opts),
         ok ?= adopt(Hash, Opts),
         {ok, Anchored}
     end.
@@ -1386,14 +1400,11 @@ link_tip(Hash, Opts) ->
 %% the header. They are returned in the header's own order, because that is the
 %% order `tx-root' is built in and the device rejects any other.
 %%
-%% Each is fetched once and kept in two forms, because two things read it and
-%% they read different representations of the same transaction. The checks read
-%% `~arweave-tx@2.9''s form, which spells Arweave's wire names and carries the
-%% signature as a field. Publication writes HyperBEAM's own committed `tx@1.0'
-%% message, which is what the generic match index reads a committer and a target
-%% out of, and whose signed identifier is the Arweave transaction identifier --
-%% so writing it is also what makes a placement's link to a transaction
-%% resolvable.
+%% Each is fetched once and kept in one form: the committed `tx@1.0' message.
+%% That is the form the consensus checks convert to a record, and the form
+%% publication writes -- which is what puts a transaction in the generic match
+%% index, and what makes a placement's link to it resolve, because the
+%% commitment's identifier is the Arweave transaction identifier.
 transactions(Peers, Block, Opts) ->
     collect(
         hb_pmap:parallel_map(
@@ -1410,33 +1421,12 @@ transactions(Peers, Block, Opts) ->
 transaction(Peers, ID, Opts) ->
     maybe
         {ok, Body, _} ?= first_peer_with(Peers, <<"/tx/", ID/binary>>, Opts),
-        {ok, Checked} ?=
-            hb_ao:resolve(
-                #{ <<"device">> => <<"arweave-tx@2.9">>, <<"body">> => Body },
-                <<"from-json">>,
-                Opts
-            ),
-        {ok, {Checked, stored_transaction(Body, Opts)}}
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-tx@2.9">>, <<"body">> => Body },
+            <<"from-json">>,
+            Opts
+        )
     end.
-
-%% @doc The committed `tx@1.0' message a transaction is stored as. Built from
-%% the same bytes the checked form was, through the vendored JSON parser and the
-%% `tx@1.0' codec, so the two cannot describe different transactions.
-stored_transaction(Body, Opts) ->
-    hb_message:convert(
-        ar_tx:json_struct_to_tx(hb_json:decode(Body)),
-        <<"structured@1.0">>,
-        <<"tx@1.0">>,
-        Opts
-    ).
-
-%% @doc The form of each fetched transaction the block checks run over.
-checked_transactions(Fetched) ->
-    [ Checked || {Checked, _Stored} <- Fetched ].
-
-%% @doc The form of each fetched transaction publication writes.
-stored_transactions(Fetched) ->
-    [ Stored || {_Checked, Stored} <- Fetched ].
 
 %% @doc Reduce a list of per-item results to one result over the list. A single
 %% item that could not be fetched fails the whole, rather than being dropped
@@ -1793,7 +1783,7 @@ materialized(Peers, Expected, Previous, Profile, Opts) ->
     Hash = hb_maps:get(<<"indep-hash">>, Expected, <<>>, Opts),
     maybe
         {ok, Header} ?= peer_block(Peers, Hash, Opts),
-        {ok, Fetched} ?=
+        {ok, TXs} ?=
             materialized_transactions(Peers, Header, Profile, Opts),
         {ok, Block} ?=
             hb_ao:resolve(
@@ -1803,11 +1793,11 @@ materialized(Peers, Expected, Previous, Profile, Opts) ->
                     <<"profile">> => Profile,
                     <<"expected">> => Expected,
                     <<"previous-entry">> => Previous,
-                    <<"transactions">> => checked_transactions(Fetched)
+                    <<"transactions">> => TXs
                 },
                 Opts
             ),
-        {ok, Block, stored_transactions(Fetched)}
+        {ok, Block, TXs}
     end.
 
 %% @doc Fetch the transaction bodies a materialisation needs. A header-only

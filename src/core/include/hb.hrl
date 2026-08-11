@@ -6,8 +6,11 @@
 %% @doc Macro for checking if a message is empty, ignoring its hashpath.
 -define(IS_EMPTY_MESSAGE(Msg), (map_size(Msg) == 0) orelse (map_size(Msg) == 1 andalso (is_map_key(priv, Msg) orelse is_map_key(<<"priv">>, Msg)))).
 %% @doc Macro usable in guards that validates whether a term is a
-%% human-readable ID encoding.
--define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32))).
+%% human-readable ID encoding. 43 characters encode the 32 bytes an AO-Core
+%% message identifier and an Arweave transaction identifier share; 64 encode
+%% the 48 bytes of an Arweave block hash, which names a block in the cache the
+%% same way.
+-define(IS_ID(X), (is_binary(X) andalso (byte_size(X) == 42 orelse byte_size(X) == 43 orelse byte_size(X) == 32 orelse byte_size(X) == 64))).
 %% @doc Macro for checking a term is a link.
 -define(IS_LINK(X), (is_tuple(X) andalso element(1, X) == link)).
 %% @doc List of special keys that are used in the AO-Core protocol.

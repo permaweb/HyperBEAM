@@ -261,19 +261,24 @@ key_to_atom(Key, Mode) ->
     end.
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already
-%% a native binary ID, it is returned as is.
+%% a native binary ID, it is returned as is. The domain is `?IS_ID''s: the 43
+%% characters of a 32 byte message or transaction identifier, and the 64 of a
+%% 48 byte Arweave block hash.
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     decode(Bin);
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     Bin;
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
     Bin;
+native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 64 ->
+    decode(Bin);
 native_id(Wallet = {_Priv, _Pub}) ->
     native_id(ar_wallet:to_address(Wallet)).
 
 %% @doc Convert a native binary ID to a human readable ID. If the ID is already
 %% a human readable ID, it is returned as is. If it is an ethereum address, it
-%% is returned as is.
+%% is returned as is. The 48 bytes of an Arweave block hash encode to 64
+%% characters, which `?IS_ID' admits and this returns unchanged.
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
@@ -281,6 +286,10 @@ human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 42 ->
+    Bin;
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 48 ->
+    encode(Bin);
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 64 ->
     Bin;
 human_id(Wallet = {_Priv, _Pub}) ->
     human_id(ar_wallet:to_address(Wallet)).
@@ -1004,3 +1013,16 @@ to_lower_equivalence_test_parallel() ->
     [ ?assertEqual(Throws(fun() -> string:lowercase(I) end),
                    Throws(fun() -> to_lower(I) end)) || I <- Invalid ],
     [ ?assert(Throws(fun() -> to_lower(I) end)) || I <- Invalid ].
+
+%% `?IS_ID/1' admits the 64 characters an Arweave block hash encodes to, so
+%% both conversions have to be total over that: a guard that says a value is an
+%% identifier, paired with a converter that raises on it, is a crash waiting for
+%% the first block hash to reach it.
+block_hash_is_an_id_test_parallel() ->
+    Native = crypto:strong_rand_bytes(48),
+    Human = encode(Native),
+    ?assertEqual(64, byte_size(Human)),
+    ?assert(?IS_ID(Human)),
+    ?assertEqual(Native, native_id(Human)),
+    ?assertEqual(Human, human_id(Native)),
+    ?assertEqual(Human, human_id(Human)).

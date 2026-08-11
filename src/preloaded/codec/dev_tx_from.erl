@@ -15,6 +15,7 @@ fields(TX, Prefix, Opts) ->
             anchor_field(TX, Prefix, Opts),
             quantity_field(TX, Prefix, Opts),
             reward_field(TX, Prefix, Opts),
+            denomination_field(TX, Prefix, Opts),
             data_root_field(TX, Prefix, Opts),
             data_size_field(TX, Prefix, Opts)
         ]
@@ -56,6 +57,19 @@ reward_field(TX, Prefix, _Opts) ->
         ?DEFAULT_REWARD,
         Prefix,
         <<"reward">>,
+        fun integer_to_binary/1
+    ).
+
+%% @doc The denomination code the transaction states. Zero means "whatever the
+%% block says", and is the only value a transaction signed before redenomination
+%% support carries -- so it is the default, and an explicit code is a field that
+%% the signature preimage includes.
+denomination_field(TX, Prefix, _Opts) ->
+    encoded_field(
+        TX#tx.denomination,
+        ?DEFAULT_DENOMINATION,
+        Prefix,
+        <<"denomination">>,
         fun integer_to_binary/1
     ).
 

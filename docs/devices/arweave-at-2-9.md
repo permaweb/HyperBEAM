@@ -11,12 +11,13 @@ this node.
 
 ## The consensus cache
 
-A validated block is one message, filed at `~arweave@2.9/blocks/<indep-hash>`.
-It carries the block header exactly as the protocol defines it, and alongside it
+A validated block is one message, filed under its own Arweave block hash. It
+carries the block header exactly as the protocol defines it, and alongside it
 the state a header does not express, as AO-Core links:
 
 | Key | Meaning |
 |---|---|
+| `previous` | The block below this one, by its Arweave block hash |
 | `transactions` | One placement per transaction, in the block's order |
 | `block-index` | The block index as it stood after this block |
 | `accounts` | The account tree as it stood after this block |
@@ -24,21 +25,18 @@ the state a header does not express, as AO-Core links:
 | `block-time-history` | The newest entry of the block-time history |
 | `validation` | The checks that established this block |
 
-`~arweave@2.9/tip` points at the selected head, and `~arweave-block@2.9`
-answers `previous` by resolving the block published under the header's own
-`previous-block` hash -- so `tip/previous/previous` walks two blocks back
-through ordinary AO-Core resolution, and answers `no-previous-block` where the
-chain this node holds ends. There is no separate chain-state message and no
-duplicated window of recent blocks: the chain is the linked list, and the
-transaction-anchor rules read it by walking back from the block being extended.
+`~arweave@2.9/tip` points at the selected head, so `tip/previous/previous`
+resolves two blocks back through ordinary AO-Core traversal. There is no
+separate chain-state message and no duplicated window of recent blocks: the
+chain is the linked list, and the transaction-anchor rules read it by walking
+back from the block being extended.
 
-`previous` is a key rather than a stored link because a stored link's target
-has to be a content identifier, and a block names its parent before that parent
-has been downloaded -- `backfill` writes the child first. Resolving the name at
-read time is what spans the gap. The same holds for the account tree, which
-records `previous-root` and answers `previous` over it; the block index links
-its previous version by identifier, because that version exists before the one
-derived from it.
+`previous` names the block below by its hash rather than by a content
+identifier, so it can be written before that block has been downloaded --
+`backfill` materialises a parent after the child that names it. A walk past the
+oldest block a node holds therefore raises, as any unresolvable link does; the
+consensus rules that must not raise walk by `previous-block` hash and stop where
+the chain does.
 
 Every component reaches the version it was derived from, so an account tree or
 a block index can be walked backwards through its own history as well as through
@@ -54,17 +52,24 @@ interrupted anywhere before that leaves content-addressed messages nothing
 points at, which the next pass rewrites at the same identifiers.
 
 Blocks fetched from a gateway by `~arweave@2.9/block` are a different thing and
-live elsewhere: under the bare block hash, where the generic query device reads
-them. Nothing checks them, so they never occupy a name in the
-`~arweave@2.9/blocks/` namespace, which only validated blocks are published
-into. That separation is what `validated` rests on.
+live elsewhere, under `~arweave@2.9/block/hash/<hash>` and
+`~arweave@2.9/block/height/<n>`. Nothing checks them, so they never occupy the
+bare hash, which only validated blocks are published under. That separation is
+what `validated` rests on, and `~query@1.0` reads both: a block identifier it is
+given resolves to whichever of the two the node holds.
 
 ## Transactions and placements
 
-Publication writes each of a block's transactions as a committed `tx@1.0`
-message, so the generic query device finds it by owner, target or tag like any
-other message, and `hb_cache` links it under its Arweave transaction
-identifier.
+A layer-one transaction has one message form: the committed `tx@1.0` message.
+The consensus checks convert it to a `#tx{}` record, and publication writes it
+unchanged -- so the generic query device finds it by owner, target or tag like
+any other message, `hb_cache` links it under its Arweave transaction
+identifier, and what a check ran over is what a query returns.
+
+The commitment holds the owner, the signature, its type and the transaction
+identifier; the fields keep the codec's own spelling, `anchor` for Arweave's
+`last_tx` and `data_root`/`data_size` underscored; the tags are the message's
+keys, with their exact bytes and case preserved in the commitment.
 
 A **placement** records where a source transaction occurs in the chain: the
 block that included it, its position in that block, its data root and size, and
@@ -204,7 +209,7 @@ long range should size the store for it.
 | `~arweave-merkle@2.9` | Offset-indexed Merkle path validation |
 | `~arweave-spora@2.9` | Recall ranges, RandomX packing, and proof of access |
 | `~arweave-history@2.9` | The two carried histories, as persistent linked lists |
-| `~arweave-tx@2.9` | Transaction codec and admission rules |
+| `~arweave-tx@2.9` | Transaction admission rules and the peer JSON codec |
 | `~arweave-vdf@2.9` | Nonce-limiter chain, seeds, and difficulty |
 | `~arweave-wallets@2.9` | Patricia account tree, sparse updates, rollback |
 

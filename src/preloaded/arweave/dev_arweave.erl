@@ -797,8 +797,14 @@ block({height, Height}, Req, Opts) ->
     block_by_height(Height, Req, Opts).
 
 %% @doc Read a block named by its hash, falling back to a peer.
+%%
+%% The gateway cache is read, not the consensus cache. A block this node
+%% validated is a canonical `arweave-block@2.9' message and a gateway response
+%% is a `json@1.0' projection of one; they carry different keys, and one key
+%% must not answer with two shapes. `validated' is where the checked block
+%% lives.
 block_by_id(ID, Req, Opts) ->
-    case hb_cache:read(ID, Opts) of
+    case hb_cache:read(dev_arweave_cache:hash_path(ID), Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {id, {explicit, ID}}

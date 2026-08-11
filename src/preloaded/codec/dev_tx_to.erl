@@ -10,6 +10,7 @@ fields_to_tx(TX, Prefix, Map, Opts) ->
         anchor = anchor_field(Prefix, Map, Opts),
         quantity = quantity_field(Prefix, Map, Opts),
         reward = reward_field(Prefix, Map, Opts),
+        denomination = denomination_field(Prefix, Map, Opts),
         data_root = data_root_field(Prefix, Map, Opts),
         data_size = data_size_field(Prefix, Map, Opts)
     }.
@@ -28,6 +29,16 @@ quantity_field(Prefix, Map, Opts) ->
 
 reward_field(Prefix, Map, Opts) ->
     decoded_field(Prefix, <<"reward">>, Map, ?DEFAULT_REWARD, fun hb_util:safe_int/1, Opts).
+
+denomination_field(Prefix, Map, Opts) ->
+    decoded_field(
+        Prefix,
+        <<"denomination">>,
+        Map,
+        ?DEFAULT_DENOMINATION,
+        fun hb_util:safe_int/1,
+        Opts
+    ).
 
 data_root_field(Prefix, Map, Opts) ->
     case hb_maps:get(<<"data">>, Map, ?DEFAULT_DATA, Opts) of
@@ -61,8 +72,10 @@ data_size_field(Prefix, Map, Opts) ->
 
 excluded_tags(TX, TABM, Opts) ->
     lib_arweave_common:excluded_tags(TX, TABM, Opts) ++
+    exclude_format_tag(TX, TABM, Opts) ++
     exclude_quantity_tag(TX, TABM, Opts) ++
     exclude_reward_tag(TX, TABM, Opts) ++
+    exclude_denomination_tag(TX, TABM, Opts) ++
     exclude_data_root_tag(TX) ++
     exclude_data_size_tag(TX).
 
@@ -86,6 +99,14 @@ decode_id(Encoded) ->
         _ -> error
     end.
 
+exclude_format_tag(TX, TABM, Opts) ->
+    case {TX#tx.format, hb_maps:get(<<"format">>, TABM, undefined, Opts)} of
+        {2, _} -> [];
+        {FieldFormat, TagFormat} when FieldFormat =/= TagFormat ->
+            [<<"format">>];
+        _ -> []
+    end.
+
 exclude_quantity_tag(TX, TABM, Opts) ->
     case {TX#tx.quantity, hb_maps:get(<<"quantity">>, TABM, undefined, Opts)} of
         {?DEFAULT_QUANTITY, _} -> [];
@@ -99,6 +120,16 @@ exclude_reward_tag(TX, TABM, Opts) ->
         {?DEFAULT_REWARD, _} -> [];
         {FieldReward, TagReward} when FieldReward =/= TagReward ->
             [<<"reward">>];
+        _ -> []
+    end.
+
+exclude_denomination_tag(TX, TABM, Opts) ->
+    case {TX#tx.denomination,
+            hb_maps:get(<<"denomination">>, TABM, undefined, Opts)} of
+        {?DEFAULT_DENOMINATION, _} -> [];
+        {FieldDenomination, TagDenomination}
+                when FieldDenomination =/= TagDenomination ->
+            [<<"denomination">>];
         _ -> []
     end.
 

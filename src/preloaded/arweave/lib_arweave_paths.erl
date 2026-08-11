@@ -1,15 +1,15 @@
 %%% @doc The store layout of the Arweave consensus cache.
 %%%
-%%% Four durable names, all under this device's own path namespace. The
-%%% namespace is what makes them mean something: everything filed here was
-%%% written by `~arweave@2.9' after checking it, so `validated' can answer from
-%%% it and a walk of `previous' links stays inside the chain this node
-%%% validated. `~arweave@2.9/block/...' -- singular, and a different prefix --
-%%% is the gateway cache, which holds peer claims nothing has checked.
+%%% A validated block is named by its Arweave block hash, which is the identity
+%%% the protocol, the peers and every other block already know it by. Everything
+%%% else this device writes is named under its own path namespace: the selected
+%%% tip, the current placement of a transaction, the marker recording that a
+%%% block's transactions have been announced, and the account tree a bootstrap
+%%% fetched.
 %%%
 %%% They live in one module because two devices build them. A block's `previous'
 %%% link is written by `~arweave-block@2.9' and followed by `~arweave@2.9', so a
-%%% path spelled out in each would be a path that can drift, and drift here is a
+%%% name spelled out in each would be a name that can drift, and drift here is a
 %%% chain that cannot be walked.
 %%%
 %%% Every name is built from a value that arrived from a peer or a request, and
@@ -32,8 +32,13 @@ tip() ->
 %% @doc A validated block, by its Arweave block hash. Publication links this
 %% last, so a block that reads back here is one whose local indexes are
 %% complete.
+%%
+%% The bare hash, not a path under this device: it is what one block names the
+%% block below it by, and a link's target must be an identifier. 64 characters
+%% is an Arweave block hash and nothing else -- an AO-Core message identifier is
+%% 43 -- so the two cannot collide.
 block(Hash) ->
-    hb_path:to_binary([?PREFIX, <<"blocks">>, safe(Hash)]).
+    safe(Hash).
 
 %% @doc The current placement of a transaction, by its identifier. A
 %% reorganisation replaces this; it deletes nothing.

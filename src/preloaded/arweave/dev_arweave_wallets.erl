@@ -21,7 +21,8 @@
 %%%     <<"root">>          => B64URLRootHash,
 %%%     <<"size">>          => AccountCount,
 %%%     <<"chunks">>        => #{ <<"0">> => Link, ..., <<"255">> => Link },
-%%%     <<"previous-root">> => B64URLRootHash of the earlier state
+%%%     <<"previous-root">> => B64URLRootHash of the earlier state,
+%%%     <<"previous">>      => Link to that state
 %%% }
 %%% '''
 %%%
@@ -50,7 +51,6 @@
 -device_libraries([lib_arweave_accounts]).
 -compile({no_auto_import, [apply/3]}).
 -export([info/1, root/3, verify/3, get/3, apply/3, rollback/3, page/3]).
--export([previous/3]).
 -ifdef(TEST).
 -export([tree_path/1]).
 -endif.
@@ -119,15 +119,6 @@ apply(Base, Req, Opts) ->
 %% there to be read.
 rollback(Base, Req, Opts) ->
     unwind(Base, hb_util:int(get_first(<<"depth">>, Base, Req, 1, Opts)), Opts).
-
-%% @doc Return the account state this one was derived from.
-%%
-%% The relationship is `previous-root', the identity a block header and a peer
-%% both name an account tree by, and this key is the traversal over it. It is a
-%% key rather than a stored link because a stored link's target has to be a
-%% content identifier, where a root is the identity the protocol uses.
-previous(Base, _Req, Opts) ->
-    unwind(Base, 1, Opts).
 
 %% @doc Ingest one `GET /wallet_list/<root>[/<cursor>]' response body into the
 %% tree. Returns the accumulated state and the cursor to fetch next, or the
@@ -252,15 +243,26 @@ chunk_link(Accounts, Opts) ->
 %% @doc Record the state a new one is derived from, so that a reorg can walk
 %% back to it. An initial state has none, and so carries neither key.
 %%
-%% The root is the identity a block header and a peer both name an account tree
-%% by, and is what `rollback/3' and `previous/3' look the earlier state up
-%% under.
+%% Two forms of one edge, because two things read it. `previous-root' is the
+%% identity a block header and a peer both name an account tree by, and is what
+%% `rollback/3' looks the earlier state up under; `previous' is the AO-Core
+%% link, so a caller holding one state can traverse to the one before it without
+%% knowing this device's store layout. The link names the state by identifier
+%% rather than by root, because a state exists before the one derived from it
+%% and so always has one.
 previous_state(Base, Opts) ->
     case hb_maps:get(<<"root">>, Base, not_found, Opts) of
         not_found ->
             #{};
         Root ->
-            #{ <<"previous-root">> => Root }
+            #{
+                <<"previous-root">> => Root,
+                <<"previous">> =>
+                    {link,
+                        hb_message:id(Base, all, Opts),
+                        #{ <<"type">> => <<"link">>, <<"lazy">> => false }
+                    }
+            }
     end.
 
 %% @doc The store path a state is indexed under. The root is the identity both

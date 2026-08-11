@@ -2,6 +2,12 @@
 %%% is valid at a given height, the identifiers derived from it, and the codec
 %%% between its message form and the JSON Arweave serves.
 %%%
+%%% That message form is `tx@1.0', HyperBEAM's own committed transaction
+%%% message, and it is the only one -- so a transaction this device admits is
+%%% the same message the cache indexes and a query returns. `lib_arweave_tx'
+%%% is the boundary between it and the `#tx{}' record the vendored rules work
+%%% on.
+%%%
 %%% `verify/3' answers twelve independent questions -- format, denomination,
 %%% self-targeting, field sizes, target length, data size, data root,
 %%% signature, anchor, balance, fee and malleability -- and names the one that
@@ -156,7 +162,7 @@ id(Base, _Req, Opts) ->
     {ok, #{ <<"id">> => hb_util:encode(TX#tx.id) }}.
 
 %% @doc Compute the identifier of a data chunk: its SHA-256 hash. This is the
-%% leaf of the Merkle tree a transaction's `data-root' commits to.
+%% leaf of the Merkle tree a transaction's `data_root' commits to.
 chunk_id(Base, Req, Opts) ->
     {ok,
         #{
@@ -204,11 +210,12 @@ tx_root(Base, Req, Opts) ->
         }
     }.
 
-%% @doc Parse the JSON form Arweave serves at `/tx/<id>'.
+%% @doc Parse the JSON form Arweave serves at `/tx/<id>'. The vendored decoder
+%% is also what recovers an ECDSA transaction's public key from its signature.
 from_json(Base, Req, Opts) ->
     {ok,
         lib_arweave_tx:from_tx(
-            lib_arweave_tx:from_json_struct(
+            ar_tx:json_struct_to_tx(
                 hb_json:decode(required(<<"body">>, Base, Req, Opts))
             ),
             Opts
@@ -220,16 +227,22 @@ to_json(Base, _Req, Opts) ->
     {ok,
         #{
             <<"body">> =>
-                hb_json:encode(
-                    lib_arweave_tx:to_json_struct(
-                        lib_arweave_tx:to_tx(Base, Opts),
-                        Opts
-                    )
-                )
+                hb_json:encode(json_struct(lib_arweave_tx:to_tx(Base, Opts)))
         }
     }.
 
 %%% Internal functions.
+
+%% @doc Render a record as the JSON structure Arweave serves. An ECDSA
+%% transaction carries no public key on the wire -- the verifier recovers it --
+%% so the recovered key is dropped again here.
+%% VENDOR: `ar_tx:tx_to_json_struct/1' emits the recovered key, where upstream
+%% `ar_serialize:tx_to_json_struct/1' (src/ar_serialize.erl:1499) emits `<<>>'.
+%% Remove this clause once the vendored encoder matches upstream.
+json_struct(TX = #tx{ signature_type = ?ECDSA_KEY_TYPE }) ->
+    maps:put(<<"owner">>, <<>>, ar_tx:tx_to_json_struct(TX));
+json_struct(TX) ->
+    ar_tx:tx_to_json_struct(TX).
 
 %% @doc Run checks in order, returning the first failure by name. Each check
 %% is a thunk so that a cheap check that fails spares the expensive ones after

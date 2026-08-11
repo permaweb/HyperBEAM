@@ -88,8 +88,9 @@ apply_and_rollback_test() ->
         ),
     ?assertEqual(InitialRoot, resolved_root(Back, Opts)).
 
-%% @doc An account state records the version it was derived from, by the root a
-%% block header and a peer both name a tree by, and `previous' resolves it.
+%% @doc An account state records the version it was derived from twice: as the
+%% root a block header and a peer both name a tree by, and as an AO-Core link a
+%% caller can traverse without knowing this device's store layout.
 account_state_names_its_previous_version_test() ->
     Opts = opts(),
     State = ingest_pages([accounts()], Opts),
@@ -100,17 +101,24 @@ account_state_names_its_previous_version_test() ->
         InitialRoot,
         hb_maps:get(<<"previous-root">>, One, not_found, Opts)
     ),
-    {ok, Earlier} = hb_ao:resolve(One, <<"previous">>, Opts),
-    ?assertEqual(InitialRoot, resolved_root(Earlier, Opts)),
+    ?assertEqual(
+        InitialRoot,
+        hb_maps:get(
+            <<"root">>,
+            hb_maps:get(<<"previous">>, One, not_found, Opts),
+            not_found,
+            Opts
+        )
+    ),
     % The first state of a tree was derived from nothing, and says so by
     % carrying no root rather than an empty one.
     ?assertEqual(
         not_found,
         hb_maps:get(<<"previous-root">>, State, not_found, Opts)
     ),
-    ?assertMatch(
-        {error, #{ <<"message">> := <<"unknown-account-tree">> }},
-        hb_ao:resolve(State, <<"previous">>, Opts)
+    ?assertEqual(
+        not_found,
+        hb_maps:get(<<"previous">>, State, not_found, Opts)
     ).
 
 reject_malformed_page_test() ->

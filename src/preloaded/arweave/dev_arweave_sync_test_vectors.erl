@@ -39,7 +39,12 @@ test_state(Hash, Height, CDiff, Parent, Opts) ->
                 <<"indep-hash">> => test_hash(Hash),
                 <<"height">> => Height,
                 <<"cumulative-diff">> => CDiff,
-                <<"previous-block">> => Parent
+                <<"previous-block">> => Parent,
+                <<"previous">> =>
+                    {link,
+                        lib_arweave_paths:block(Parent),
+                        #{ <<"type">> => <<"link">>, <<"lazy">> => false }
+                    }
             },
             test_hash(Hash),
             [],
@@ -223,10 +228,12 @@ tip_links_the_chain_test() ->
         test_hash(<<"main-97">>),
         hb_maps:get(<<"indep-hash">>, Block, none, Opts)
     ),
-    % The walk runs out where the chain this node holds does, and says which
-    % rather than raising on a link to something that is not there.
-    ?assertMatch(
-        {error, #{ <<"message">> := <<"no-previous-block">> }},
+    % A walk past the oldest block this node holds reaches a link to a block
+    % that was never downloaded, and raises as any unresolvable link does. That
+    % is the point of naming the parent before it arrives: the link is written
+    % once and becomes traversable when `backfill' materialises what it names.
+    ?assertThrow(
+        {necessary_message_not_found, _, _},
         hb_ao:resolve(
             #{ <<"device">> => <<"arweave@2.9">> },
             << "tip", (binary:copy(<<"/previous">>, 100))/binary >>,
@@ -736,8 +743,11 @@ gateway_cache_does_not_claim_the_validated_name_test() ->
             },
             Opts
         ),
-    ?assertMatch({ok, #{ <<"height">> := _ }}, hb_cache:read(Hash, Opts)),
-    ?assertEqual({error, not_found}, hb_cache:read(lib_arweave_paths:block(Hash), Opts)),
+    ?assertMatch(
+        {ok, #{ <<"height">> := _ }},
+        hb_cache:read(dev_arweave_cache:hash_path(Hash), Opts)
+    ),
+    ?assertEqual({error, not_found}, hb_cache:read(Hash, Opts)),
     ?assertMatch(
         {error, #{ <<"message">> := <<"not-validated">> }},
         hb_ao:resolve(
@@ -748,8 +758,8 @@ gateway_cache_does_not_claim_the_validated_name_test() ->
     ),
     % A value that could be resolved as a path is refused rather than walked.
     ?assertThrow(
-        {unsafe_arweave_path, _},
-        dev_arweave_sync:block_key(<<"../../secret">>)
+        {unsafe_block_hash_path, _},
+        dev_arweave_cache:hash_path(<<"../../secret">>)
     ).
 
 %% @doc The eligibility rule itself, asserted on the arithmetic rather than
@@ -1619,8 +1629,7 @@ apply_transaction_block(Peers, State, Opts, Remaining) ->
     Height = dev_arweave_sync:int(<<"height">>, Block, Opts),
     {ok, NextHash} = dev_arweave_sync:height_hash(Peers, Height + 1, Opts),
     {ok, Next} = dev_arweave_sync:peer_block(Peers, NextHash, Opts),
-    {ok, Fetched} = dev_arweave_sync:transactions(Peers, Next, Opts),
-    TXs = [ Checked || {Checked, _Stored} <- Fetched ],
+    {ok, TXs} = dev_arweave_sync:transactions(Peers, Next, Opts),
     ?debugFmt(
         "applying ~p onto ~p, ~p transactions, accounts=~p",
         [
@@ -1799,10 +1808,7 @@ request_cannot_shape_a_store_path_test() ->
     Good = hb_util:encode(crypto:strong_rand_bytes(48)),
     ?assertEqual({ok, Good}, dev_arweave_sync:validated_hash(#{ <<"block">> => Good }, #{})),
     ?assertEqual({ok, [Good]}, dev_arweave_sync:candidate_hashes([Good])),
-    ?assertMatch(
-        <<"~arweave@2.9/blocks/", _/binary>>,
-        dev_arweave_sync:block_key(Good)
-    ).
+    ?assertEqual(Good, dev_arweave_sync:block_key(Good)).
 
 %% @doc `force' is honoured from the node message and ignored from the request.
 %%

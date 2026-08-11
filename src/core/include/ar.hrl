@@ -19,6 +19,7 @@
 -define(DEFAULT_DATA_SIZE, 0).
 -define(DEFAULT_QUANTITY, 0).
 -define(DEFAULT_REWARD, 0).
+-define(DEFAULT_DENOMINATION, 0).
 
 -define(MAX_TAG_COUNT, 128).
 -define(MAX_TAG_NAME_SIZE, 1024).
