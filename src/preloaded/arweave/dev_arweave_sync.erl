@@ -42,12 +42,23 @@
 %%%
 %%% == Store layout ==
 %%%
-%%% `~arweave@2.9/tip' points to the selected tip,
-%%% `~arweave@2.9/state/&lt;indep-hash&gt;' indexes each locally produced state,
-%%% and `~arweave@2.9/accounts-anchor' records the checkpoint account tree.
+%%% A validated block is filed at `~arweave@2.9/blocks/&lt;indep-hash&gt;', and
+%%% that is the whole of the index: the message holds the header, the components
+%%% the checks produced, and a link to the block below it, so the chain is a
+%%% linked list reachable as `tip/previous/previous'. `~arweave@2.9/tip' points
+%%% at the selected head, `~arweave@2.9/placements/&lt;txid&gt;' at the current
+%%% placement of a transaction, `~arweave@2.9/settled/&lt;indep-hash&gt;'
+%%% marks a block whose transactions have been announced, and
+%%% `~arweave@2.9/accounts-anchor' records the checkpoint account tree.
 %%% The store is the only durable state, so sync resumes after restart.
+%%%
+%%% A block's presence under its hash is the completion marker. Publication
+%%% writes transactions, placements, offsets and components first and links the
+%%% hash last, so a block that reads back is a block whose local indexes are
+%%% finished. Nothing else records progress, and a partial pass leaves nothing
+%%% to undo.
 -module(dev_arweave_sync).
--export([bootstrap/3, sync/3, tip/3, validated/3]).
+-export([bootstrap/3, sync/3, tip/3, validated/3, backfill/3, placement/3]).
 %%% Exported so that `dev_arweave' can refuse on `block' the shapes this module
 %%% refuses on `validated'. One definition, because two would drift.
 -export([block_hash/1]).
@@ -57,12 +68,14 @@
     adopt/2,
     above_fork/1,
     block_index/4,
+    block_key/1,
     branch_point/4,
     candidate_hashes/1,
     choose/3,
     cumulative_diff/2,
     decode_rewards/2,
     decode_times/2,
+    do_backfill/2,
     do_bootstrap/2,
     do_sync/2,
     eligible/2,
@@ -77,11 +90,12 @@
     parent/2,
     peer_block/3,
     peers/1,
+    publish/4,
     ranges/3,
-    record_state/3,
     rotate/2,
+    settle/2,
+    settled_path/1,
     shared_ancestor/3,
-    state_path/1,
     stored_height/1,
     transactions/3,
     trusted_peers/2,
@@ -117,17 +131,23 @@
 %% with enough room for the network tip to advance during bootstrap.
 -define(DEFAULT_CHECKPOINT_DEPTH, 30).
 -define(DEFAULT_SYNC_BATCH, 50).
+-define(DEFAULT_BACKFILL_BATCH, 50).
+-define(DEFAULT_SETTLE_BATCH, 50).
 -define(DEFAULT_PEER_WORKERS, 8).
 -define(DEFAULT_PEER_TIMEOUT, 60000).
 -define(DEFAULT_PEER_CONNECT_TIMEOUT, 10000).
 %% Approximate CPU-seconds used only for the pre-bootstrap cost estimate.
 -define(VDF_SECONDS_PER_BLOCK, 130).
 
-%%% Store paths. Every key this device writes is namespaced by its device path.
+%%% The device that owns the block rules, and the hook a settled transaction is
+%%% announced on.
 
--define(TIP_PATH, <<"~arweave@2.9/tip">>).
--define(STATE_PATH, <<"~arweave@2.9/state">>).
--define(ANCHOR_PATH, <<"~arweave@2.9/accounts-anchor">>).
+-define(BLOCK_DEVICE, <<"arweave-block@2.9">>).
+-define(SETTLED_HOOK, <<"arweave-settled-transaction">>).
+
+%%% Every durable name this device writes is built by `lib_arweave_paths', so
+%%% that the block device -- which writes a block's `previous' link -- and this
+%%% one, which follows it, cannot come to disagree about the store layout.
 
 %% @doc Establish the node's initial chain state.
 %%
@@ -156,7 +176,12 @@ bootstrap(_Base, Req, Opts) ->
 sync(_Base, Req, Opts) ->
     exclusive(sync, fun() -> do_sync(Req, Opts) end, Opts).
 
-%% @doc Return the chain state at the tip of the heaviest eligible branch.
+%% @doc Materialise blocks below the ones this node holds, checked against the
+%% block index its selected tip carries. See `do_backfill/2'.
+backfill(_Base, Req, Opts) ->
+    exclusive(backfill, fun() -> do_backfill(Req, Opts) end, Opts).
+
+%% @doc Return the block at the tip of the heaviest eligible branch.
 %%
 %% `candidates' is a list of branch-head block hashes to weigh against the
 %% stored tip; `sync' passes the heads it has just validated. It defaults to
@@ -174,18 +199,19 @@ tip(_Base, Req, Opts) ->
         % not_found}', a bare atom, which `dev_meta:embed_status/2' renders as
         % HTTP 400 with an underscored atom as the body. Every other error this
         % device returns is a `#{status, message, detail}' message.
-        read_state(Winner, <<"no-tip">>,
-            <<"The stored tip does not resolve to a chain state.">>, Opts)
+        read_block(Winner, <<"no-tip">>,
+            <<"The stored tip does not resolve to a block.">>, Opts)
     end.
 
-%% @doc Return the chain state this node validated for a block, named by
-%% `indep-hash', by height, or as `current'.
+%% @doc Return the block this node validated, named by `indep-hash', by height,
+%% or as `current'.
 %%
 %% This key never contacts a peer, and that is the whole of its purpose.
 %% `~arweave@2.9/block' answers from a gateway on a cache miss, so a block this
 %% node verified and a block it was simply handed arrive looking the same. A
-%% block that reaches a caller through this key was validated here, against its
-%% parent, by this node -- or it does not arrive at all.
+%% block that reaches a caller through this key was validated here, by this
+%% node, under the checks its `validation/checks' names -- or it does not
+%% arrive at all.
 %%
 %% The absence of a fallback is the feature. `not-validated' means "this node
 %% has not verified that block", which is a different and more useful answer
@@ -193,11 +219,55 @@ tip(_Base, Req, Opts) ->
 validated(_Base, Req, Opts) ->
     maybe
         {ok, Hash} ?= validated_hash(Req, Opts),
-        read_state(Hash, <<"not-validated">>,
+        read_block(Hash, <<"not-validated">>,
             <<"This node has not validated that block. Blocks are not fetched "
                 "from peers here: only blocks this node verified are served.">>,
             Opts)
     end.
+
+%% @doc Return the placement this node holds for a transaction: which block
+%% included it, where in that block, and where its bytes begin in the weave.
+%%
+%% A placement is what this node last saw; it is not a claim that the block
+%% carrying it is still selected. A caller that needs one checks the placement's
+%% `block' against the hash the tip's block index records at its `height'. This
+%% key deliberately does not perform that check on the caller's behalf: the
+%% answer depends on what the caller needs it for, and the data to make it is
+%% right here.
+placement(_Base, Req, Opts) ->
+    maybe
+        {ok, ID} ?= transaction_id(Req, Opts),
+        case hb_cache:read(lib_arweave_paths:placement(ID), Opts) of
+            {ok, Placement} ->
+                {ok, Placement};
+            _ ->
+                {error, error_message(404, <<"no-placement">>,
+                    <<"This node holds no placement for that transaction.">>)}
+        end
+    end.
+
+%% @doc Accept only something that is actually a transaction identifier, for
+%% the same reason `block_hash/1' exists: the value becomes a store path.
+transaction_id(Req, Opts) ->
+    case hb_maps:get(<<"tx">>, Req, not_found, Opts) of
+        ID when is_binary(ID), byte_size(ID) == 43 ->
+            case is_base64url(ID) of
+                true -> {ok, ID};
+                false -> invalid_transaction()
+            end;
+        _ ->
+            invalid_transaction()
+    end.
+
+%% @doc Refuse a value that is not a transaction identifier.
+invalid_transaction() ->
+    {error,
+        error_message(
+            400,
+            <<"invalid-transaction">>,
+            <<"`tx' must be a base64url transaction identifier of 32 bytes.">>
+        )
+    }.
 
 %% @doc Resolve the `block' request parameter to an `indep-hash'. `current' is
 %% the stored tip; anything else must be a block hash.
@@ -300,31 +370,25 @@ do_bootstrap(Req, Opts) ->
             stored_history(<<"block-time-history">>, Times, Height, Opts),
         ok ?= account_anchor(Peers, Block, Opts),
         {ok, Index} ?= block_index(Peers, Block, Height, Opts),
-        {ok, Recent} ?= anchor_window(Peers, Index, Block, Height, Opts),
-        % The checkpoint state goes through `with_anchor/3' like any other, and
+        ok ?= anchor_window(Peers, Index, Height, Opts),
+        % The checkpoint goes through `with_anchor/3' like any other block, and
         % for the same reason. The anchor probe starts at the checkpoint, so in
         % the default configuration the tree it finds belongs to this very
         % block -- and if it were only attached to blocks `sync' applies later,
         % it would never be attached at all, leaving the account checks
         % silently disabled on a node that had fetched and verified the tree.
         {ok, ID} ?=
-            record_state(
+            publish(
                 with_anchor(
-                    #{
-                        <<"block">> => Block,
-                        <<"block-index">> => Index,
-                        <<"accounts">> => [],
-                        <<"recent-blocks">> => Recent,
-                        <<"reward-history">> => RewardHistory,
-                        <<"block-time-history">> => TimeHistory
-                    },
+                    checkpoint_block(Block, Index, RewardHistory, TimeHistory),
                     Hash,
                     Opts
                 ),
                 Hash,
+                [],
                 Opts
             ),
-        hb_cache:link(state_path(Hash), ?TIP_PATH, Opts),
+        hb_cache:link(block_key(Hash), lib_arweave_paths:tip(), Opts),
         record_peers(
             hb_opts:get(arweave_untrusted_peers, [], Opts),
             Peers,
@@ -340,6 +404,40 @@ do_bootstrap(Req, Opts) ->
         ),
         hb_cache:read(ID, Opts)
     end.
+
+%% @doc The block message the checkpoint is stored as.
+%%
+%% The checks it names are the ones a trusted-state join establishes: the
+%% header's own identity, recomputed by `identified_block/3', and each carried
+%% component against the hash this very header commits to it under -- the block
+%% index against `hash-list-merkle', the two histories against their history
+%% hashes, and, once `with_anchor/3' has attached it, the account tree against
+%% `wallet-list'. What the list does not name is everything that needs a
+%% parent. That is the join's trust boundary, stated in the record rather than
+%% only in a comment.
+%%
+%% `transactions' is empty because a join does not fetch the checkpoint's
+%% transactions: nothing checked them, so nothing was placed. The list says so
+%% the same way the checks do -- by what is missing from it.
+checkpoint_block(Block, Index, Rewards, Times) ->
+    Block#{
+        <<"device">> => ?BLOCK_DEVICE,
+        <<"transactions">> => [],
+        <<"block-index">> => Index,
+        <<"accounts">> => [],
+        <<"reward-history">> => Rewards,
+        <<"block-time-history">> => Times,
+        <<"validation">> =>
+            #{
+                <<"checks">> =>
+                    [
+                        <<"identity">>,
+                        <<"block-index">>,
+                        <<"reward-history">>,
+                        <<"block-time-history">>
+                    ]
+            }
+    }.
 
 %% @doc Refuse a bootstrap on a node that already has a chain.
 %%
@@ -663,30 +761,42 @@ ingest_index([Error | _Pages], _Index, _Entries, _Opts) ->
 
 %%% The transaction anchor window.
 
-%% @doc Assemble the window of recent blocks the checkpoint's chain state
-%% carries: the checkpoint and the blocks below it, newest first, each reduced
-%% to its identifier and the identifiers of its transactions.
+%% @doc Materialise the blocks below the checkpoint that a transaction may
+%% anchor on, so that the chain extends far enough back for the anchor rules to
+%% read.
 %%
 %% A transaction anchors on a block within `get_max_tx_anchor_depth' of the one
 %% carrying it, and may not repeat a transaction already inside that window.
-%% Both rules read this list and nothing else, so a chain state that does not
-%% carry it rejects every block-anchored transaction on the network -- which is
-%% to say every real block, as soon as an account tree is present to check
-%% transactions against at all. Neither rule is derivable from the checkpoint
-%% header, and mainnet peers refuse the sub-field request that would return a
-%% block's transaction list on its own (HTTP 421,
-%% `Subfield block querying is disabled'), so the headers are fetched whole and
-%% reduced here.
+%% Both rules walk the chain back from the block being extended, so a node whose
+%% chain begins at its checkpoint rejects every block-anchored transaction on
+%% the network -- which is to say every real block, as soon as an account tree
+%% is present to check transactions against at all. The blocks below the
+%% checkpoint are therefore fetched and stored, as blocks, and the walk finds
+%% them like any other.
+%%
+%% They are stored as headers and say so: their identity is established, and
+%% nothing else about them is. Mainnet peers refuse the sub-field request that
+%% would return a block's transaction list on its own (HTTP 421,
+%% `Subfield block querying is disabled'), so a whole header is fetched either
+%% way, and storing the whole of it costs nothing over storing a summary of it.
+%%
+%% A block published as a header is part of the chain and cannot be extended
+%% from: it carries no account tree and neither history, so
+%% `~arweave-block@2.9/apply' onto one refuses the first component check. The
+%% checkpoint is the lowest block this node can build on, which is what its
+%% `validation/checks' says and what makes `sync' stop there: `walk_back/5'
+%% ends at the deepest *published* block on the branch it is closing, and on
+%% the selected chain that is the checkpoint.
 %%
 %% The identifiers come from the index this bootstrap has already proven
 %% against the checkpoint's `hash-list-merkle', and each header is checked
 %% against the identifier it was asked for, so the window admits no peer claim:
 %% a peer that drops a transaction from a block to let it be replayed changes
-%% that block's `indep-hash' and is caught by `identified_block/3'.
-anchor_window(Peers, Index, Block, Height, Opts) ->
+%% that block's `indep-hash' and is caught by the identity check.
+anchor_window(Peers, Index, Height, Opts) ->
     maybe
         {ok, Hashes} ?= window_hashes(Index, Height, Opts),
-        {ok, Recent} ?=
+        {ok, _Published} ?=
             collect(
                 hb_pmap:parallel_map(
                     Hashes,
@@ -695,15 +805,13 @@ anchor_window(Peers, Index, Block, Height, Opts) ->
                 ),
                 []
             ),
-        {ok, [ summarise_block(Block, Opts) | Recent ]}
+        ok
     end.
 
 %% @doc The identifiers of the blocks below the checkpoint that fall inside the
 %% anchor window, newest first. The window holds exactly the depth an anchor may
-%% reach back, counting the checkpoint itself, which `lib_arweave_state' then
-%% maintains at that length as each block is applied. The checkpoint's own entry
-%% is not among these: it is read from the header bootstrap already holds rather
-%% than fetched a second time.
+%% reach back, counting the checkpoint itself, which is stored separately as the
+%% block the chain is anchored on.
 window_hashes(Index, Height, Opts) ->
     collect(
         [
@@ -721,28 +829,32 @@ window_hashes(Index, Height, Opts) ->
 
 index_hash(Index, Height, Opts) ->
     maybe
-        {ok, Entry} ?=
-            hb_ao:resolve(
-                Index#{ <<"device">> => <<"arweave-block-index@2.9">> },
-                #{ <<"path">> => <<"at">>, <<"height">> => Height },
-                Opts
-            ),
+        {ok, Entry} ?= index_entry(Index, Height, Opts),
         {ok, hb_maps:get(<<"indep-hash">>, Entry, [], Opts)}
     end.
 
-%% @doc Fetch one block of the window and reduce it to what the two rules read.
+%% @doc The authenticated triplet the block index records at a height.
+index_entry(Index, Height, Opts) ->
+    hb_ao:resolve(
+        Index#{ <<"device">> => <<"arweave-block-index@2.9">> },
+        #{ <<"path">> => <<"at">>, <<"height">> => Height },
+        Opts
+    ).
+
+%% @doc Fetch one block of the window, check its identity against the hash the
+%% authenticated index records for it, and publish it as a header.
 anchor_entry(Peers, Hash, Opts) ->
     maybe
-        {ok, Block} ?= identified_block(Peers, Hash, Opts),
-        {ok, summarise_block(Block, Opts)}
+        {ok, Header, TXs} ?=
+            materialized(
+                Peers,
+                #{ <<"indep-hash">> => Hash },
+                #{},
+                <<"headers">>,
+                Opts
+            ),
+        publish(Header, Hash, TXs, Opts)
     end.
-
-%% @doc Reduce a header to what an anchor check reads from it.
-summarise_block(Block, Opts) ->
-    #{
-        <<"indep-hash">> => hb_maps:get(<<"indep-hash">>, Block, <<>>, Opts),
-        <<"txs">> => hb_maps:get(<<"txs">>, Block, [], Opts)
-    }.
 
 %% @doc How many peer requests this node may have in flight at once.
 workers(Opts) ->
@@ -895,7 +1007,7 @@ account_anchor(Peers, Block, Opts) ->
                 Opts
             ),
             {ok, ID} = hb_cache:write(Anchor, Opts),
-            hb_cache:link(ID, ?ANCHOR_PATH, Opts),
+            hb_cache:link(ID, lib_arweave_paths:accounts_anchor(), Opts),
             ok;
         _ ->
             {error, error_message(<<"no-account-anchor">>,
@@ -1005,9 +1117,11 @@ do_sync(_Req, Opts) ->
         {ok, Current} ?= incumbent(Opts),
         Winner = choose(Current, heads(Targets), Opts),
         ok ?= link_tip(Winner, Opts),
+        Settled = settle(Winner, Opts),
         ?event(arweave_sync_short,
             {synced,
                 {applied, Applied},
+                {settled, Settled},
                 {height, height(Winner, Opts)},
                 {indep_hash, {string, Winner}},
                 {peers, length(Peers)}
@@ -1017,6 +1131,7 @@ do_sync(_Req, Opts) ->
         {ok,
             #{
                 <<"applied">> => Applied,
+                <<"settled">> => Settled,
                 <<"indep-hash">> => Winner,
                 <<"height">> => height(Winner, Opts)
             }
@@ -1096,8 +1211,8 @@ catch_up(Peers, Peer, Hash, Steps, Opts) ->
         apply_blocks(Peers, Missing, 0, Opts)
     end.
 
-%% @doc Collect the blocks between a target and the deepest block this node
-%% already has a chain state for, ancestor-first.
+%% @doc Collect the blocks between a target and the deepest block this node has
+%% already published, ancestor-first.
 %%
 %% A walk that runs out of steps without reaching one is not a gap this node
 %% can close in this pass -- the peer is either further ahead than a batch or
@@ -1107,8 +1222,8 @@ walk_back(_Peer, _Hash, _Missing, 0, _Opts) ->
     {error, error_message(<<"no-known-ancestor">>,
         <<"The branch does not meet this node inside the window.">>)};
 walk_back(Peer, Hash, Missing, Steps, Opts) ->
-    case hb_cache:read(state_path(Hash), Opts) of
-        {ok, _State} ->
+    case hb_cache:read(block_key(Hash), Opts) of
+        {ok, _Block} ->
             {ok, Missing};
         _ ->
             maybe
@@ -1123,12 +1238,12 @@ walk_back(Peer, Hash, Missing, Steps, Opts) ->
             end
     end.
 
-%% @doc Apply each block onto the chain state its parent produced and record
-%% the result before moving on, so that an interrupted pass leaves every block
-%% it finished permanently done.
+%% @doc Apply each block onto the block its parent produced and publish the
+%% result before moving on, so that an interrupted pass leaves every block it
+%% finished permanently done.
 %%
 %% A block that fails ends the run over that target, and the count is not
-%% reported -- but the states written before it are kept, and the next pass
+%% reported -- but the blocks published before it are kept, and the next pass
 %% walks back only as far as the newest of them. Progress is retained even
 %% though it is not counted, so a peer serving one bad block costs the work of
 %% that block and nothing before it.
@@ -1150,22 +1265,22 @@ apply_block(Peers, Block, Hash, Opts) ->
     maybe
         {ok, Parent} ?=
             hb_cache:read(
-                state_path(hb_maps:get(<<"previous-block">>, Block, [], Opts)),
+                block_key(hb_maps:get(<<"previous-block">>, Block, [], Opts)),
                 Opts
             ),
-        {ok, TXs} ?= transactions(Peers, Block, Opts),
+        {ok, Fetched} ?= transactions(Peers, Block, Opts),
         {ok, Next} ?=
             hb_ao:resolve(
-                Parent#{ <<"device">> => <<"arweave-block@2.9">> },
+                Parent#{ <<"device">> => ?BLOCK_DEVICE },
                 #{
                     <<"path">> => <<"apply">>,
                     <<"next">> => Block,
-                    <<"transactions">> => TXs
+                    <<"transactions">> => checked_transactions(Fetched)
                 },
                 Opts
             ),
         Anchored = with_anchor(Next, Hash, Opts),
-        {ok, _} ?= record_state(Anchored, Hash, Opts),
+        {ok, _} ?= publish(Anchored, Hash, stored_transactions(Fetched), Opts),
         ok ?= adopt(Hash, Opts),
         {ok, Anchored}
     end.
@@ -1176,9 +1291,9 @@ apply_block(Peers, Block, Hash, Opts) ->
 %% a pass closing a thirty-block gap is otherwise several minutes of silence
 %% that an operator cannot distinguish from a stalled validator.
 %%
-%% The mode is part of the line rather than something to be inferred: a block
-%% validated without an account tree has passed a strictly weaker set of checks,
-%% and the node says so for every block rather than letting the weaker mode look
+%% The checks are part of the line rather than something to be inferred: a block
+%% validated without an account tree has passed a strictly weaker set, and the
+%% node says which for every block rather than letting the weaker mode look
 %% identical to the stronger one.
 report_applied(Block, Hash, Next, Started, Opts) ->
     ?event(arweave_sync_short,
@@ -1188,19 +1303,26 @@ report_applied(Block, Hash, Next, Started, Opts) ->
             {elapsed_ms, erlang:monotonic_time(millisecond) - Started},
             {txs, length(hb_util:message_to_ordered_list(
                 hb_maps:get(<<"txs">>, Block, [], Opts), Opts))},
-            {accounts_checked, accounts_checked(Next, Opts)}
+            {checks, checks(Next, Opts)}
         },
         Opts
     ).
 
-%% @doc Whether the block that produced a chain state was validated against an
-%% account tree. Read off the state as a field rather than through
-%% `lib_arweave_state', which belongs to `~arweave-block@2.9': a bridge module
-%% is packaged with the device that declares it, so calling one from here
-%% compiles cleanly and raises `undef' in the packaged runtime. A chain state is
-%% a message, and this layer reads it as one.
-accounts_checked(State, Opts) ->
-    hb_util:atom(hb_maps:get(<<"accounts-checked">>, State, false, Opts)).
+%% @doc The checks a block records having been validated by. Read off the block
+%% as a field rather than through `lib_arweave_state', which belongs to
+%% `~arweave-block@2.9': a bridge module is packaged with the device that
+%% declares it, so calling one from here compiles cleanly and raises `undef' in
+%% the packaged runtime. A block is a message, and this layer reads it as one.
+checks(Block, Opts) ->
+    hb_util:message_to_ordered_list(
+        hb_maps:get(
+            <<"checks">>,
+            hb_maps:get(<<"validation">>, Block, #{}, Opts),
+            [],
+            Opts
+        ),
+        Opts
+    ).
 
 %% @doc Report a block this node refused, with the reason it refused it.
 %%
@@ -1253,7 +1375,7 @@ adopt(Hash, Opts) ->
     end.
 
 link_tip(Hash, Opts) ->
-    hb_cache:link(state_path(Hash), ?TIP_PATH, Opts),
+    hb_cache:link(block_key(Hash), lib_arweave_paths:tip(), Opts),
     ok.
 
 %% @doc Fetch the transaction bodies a block's validation needs.
@@ -1263,6 +1385,15 @@ link_tip(Hash, Opts) ->
 %% data root and size, so `~arweave-block@2.9/apply' takes the bodies alongside
 %% the header. They are returned in the header's own order, because that is the
 %% order `tx-root' is built in and the device rejects any other.
+%%
+%% Each is fetched once and kept in two forms, because two things read it and
+%% they read different representations of the same transaction. The checks read
+%% `~arweave-tx@2.9''s form, which spells Arweave's wire names and carries the
+%% signature as a field. Publication writes HyperBEAM's own committed `tx@1.0'
+%% message, which is what the generic match index reads a committer and a target
+%% out of, and whose signed identifier is the Arweave transaction identifier --
+%% so writing it is also what makes a placement's link to a transaction
+%% resolvable.
 transactions(Peers, Block, Opts) ->
     collect(
         hb_pmap:parallel_map(
@@ -1279,12 +1410,33 @@ transactions(Peers, Block, Opts) ->
 transaction(Peers, ID, Opts) ->
     maybe
         {ok, Body, _} ?= first_peer_with(Peers, <<"/tx/", ID/binary>>, Opts),
-        hb_ao:resolve(
-            #{ <<"device">> => <<"arweave-tx@2.9">>, <<"body">> => Body },
-            <<"from-json">>,
-            Opts
-        )
+        {ok, Checked} ?=
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave-tx@2.9">>, <<"body">> => Body },
+                <<"from-json">>,
+                Opts
+            ),
+        {ok, {Checked, stored_transaction(Body, Opts)}}
     end.
+
+%% @doc The committed `tx@1.0' message a transaction is stored as. Built from
+%% the same bytes the checked form was, through the vendored JSON parser and the
+%% `tx@1.0' codec, so the two cannot describe different transactions.
+stored_transaction(Body, Opts) ->
+    hb_message:convert(
+        ar_tx:json_struct_to_tx(hb_json:decode(Body)),
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        Opts
+    ).
+
+%% @doc The form of each fetched transaction the block checks run over.
+checked_transactions(Fetched) ->
+    [ Checked || {Checked, _Stored} <- Fetched ].
+
+%% @doc The form of each fetched transaction publication writes.
+stored_transactions(Fetched) ->
+    [ Stored || {_Checked, Stored} <- Fetched ].
 
 %% @doc Reduce a list of per-item results to one result over the list. A single
 %% item that could not be fetched fails the whole, rather than being dropped
@@ -1298,33 +1450,372 @@ collect([{ok, Item} | Rest], Fetched) ->
 collect([Error | _Rest], _Fetched) ->
     Error.
 
-%% @doc Attach the bootstrapped account tree to the chain state of the very
-%% block it was fetched at, and only then. Below that block the tree's root is
-%% committed by a header this node has not validated, so it is not yet anything
-%% to trust; at that block the header has just been validated, and from there
-%% forward every account transition is checked in full.
+%% @doc Attach the bootstrapped account tree to the very block it was fetched
+%% at, and only then. Below that block the tree's root is committed by a header
+%% this node has not validated, so it is not yet anything to trust; at that
+%% block the header has just been validated, and from there forward every
+%% account transition is checked in full.
+%%
+%% Attaching the tree also adds `accounts' to the block's checks, because at
+%% that one block the tree was checked against the `wallet-list' the header
+%% commits to. Every block after it earns the same name by a stronger route:
+%% `~arweave-block@2.9/apply' replays the transition and produces the root.
+%%
 %% The anchor's fields are read with `hb_maps:get/4' rather than matched in the
 %% head: a value that came back from the cache may be a link, and a link never
 %% pattern-matches the binary it stands for. Matching here silently attached
 %% the tree to nothing.
-with_anchor(State, Hash, Opts) ->
-    case hb_cache:read(?ANCHOR_PATH, Opts) of
+with_anchor(Block, Hash, Opts) ->
+    case hb_cache:read(lib_arweave_paths:accounts_anchor(), Opts) of
         {ok, Anchor} ->
             attach(
                 hb_maps:get(<<"indep-hash">>, Anchor, [], Opts),
                 Hash,
                 Anchor,
-                State,
+                Block,
                 Opts
             );
         _ ->
-            State
+            Block
     end.
 
-attach(Hash, Hash, Anchor, State, Opts) ->
-    State#{ <<"accounts">> => hb_maps:get(<<"accounts">>, Anchor, [], Opts) };
-attach(_Anchored, _Hash, _Anchor, State, _Opts) ->
-    State.
+attach(Hash, Hash, Anchor, Block, Opts) ->
+    Block#{
+        <<"accounts">> => hb_maps:get(<<"accounts">>, Anchor, [], Opts),
+        <<"validation">> =>
+            #{
+                <<"checks">> =>
+                    hb_util:unique(checks(Block, Opts) ++ [<<"accounts">>])
+            }
+    };
+attach(_Anchored, _Hash, _Anchor, Block, _Opts) ->
+    Block.
+
+%%% Settled transactions.
+
+%% @doc Announce every transaction of every block that has passed beyond the
+%% depth a reorganisation may reach, oldest block first.
+%%
+%% Settlement is not part of consensus and deliberately runs after it. A block
+%% deeper than `?CHECKPOINT_DEPTH' below the tip can no longer be reorganised
+%% away, which is the only guarantee an archive consumer needs before it spends
+%% real work on a transaction -- unpacking a bundle, indexing its items,
+%% fetching its data. Operators attach that work as handlers of the
+%% `arweave-settled-transaction' hook, so nothing downstream of it is coupled to
+%% block validation.
+%%
+%% A block's marker is written only after all of its transactions have been
+%% announced, so the pair is idempotent per block hash and transaction: a pass
+%% that fails partway re-announces the block's transactions on the next pass,
+%% and a handler that cannot be idempotent about that is a handler that would
+%% also break on a restart.
+%%
+%% A failure stops the walk and is retried, and it never moves the consensus
+%% tip: settlement reads the chain, and nothing in it writes to the chain.
+settle(Tip, Opts) ->
+    announce_blocks(
+        unsettled(
+            descend(Tip, ?CHECKPOINT_DEPTH, Opts),
+            settle_batch(Opts),
+            [],
+            Opts
+        ),
+        0,
+        Opts
+    ).
+
+%% @doc Walk down from the newest settled block, collecting the blocks whose
+%% transactions have not been announced, oldest first.
+%%
+%% Two things end the walk, and both are ordinary. A block that has been
+%% announced ends it because everything below it has been too. A block this node
+%% does not hold ends it because there is nothing to announce: the chain reaches
+%% back to the block the node joined at, and the hash below that one is a name
+%% for something it has never seen.
+%%
+%% Each block is read once, here, and travels with its hash. Collecting hashes
+%% and reading them again to announce them would put the block below the oldest
+%% one this node holds into the list -- the walk cannot tell a chain's end from
+%% a block it has yet to fetch without reading it -- and announcing runs
+%% oldest-first, so that one unreadable entry would report the whole pass as
+%% failed and settle nothing.
+unsettled([], _Left, Blocks, _Opts) ->
+    Blocks;
+unsettled(_Hash, 0, Blocks, _Opts) ->
+    Blocks;
+unsettled(Hash, Left, Blocks, Opts) ->
+    case hb_cache:read(block_key(Hash), Opts) of
+        {ok, Block} -> unsettled(Hash, Block, Left, Blocks, Opts);
+        _ -> Blocks
+    end.
+
+unsettled(Hash, Block, Left, Blocks, Opts) ->
+    case hb_cache:read(settled_path(Hash), Opts) of
+        {ok, _Marker} ->
+            Blocks;
+        _ ->
+            unsettled(
+                hb_maps:get(<<"previous-block">>, Block, [], Opts),
+                Left - 1,
+                [{Hash, Block} | Blocks],
+                Opts
+            )
+    end.
+
+%% @doc Announce each block in turn, stopping at the first that fails. What it
+%% failed on is retried by the next pass, which walks down to it again.
+announce_blocks([], Settled, _Opts) ->
+    Settled;
+announce_blocks([{Hash, Block} | Blocks], Settled, Opts) ->
+    case announce(Hash, Block, Opts) of
+        ok ->
+            announce_blocks(Blocks, Settled + 1, Opts);
+        Error ->
+            ?event(warning,
+                {arweave_settle_failed,
+                    {indep_hash, {string, Hash}},
+                    {message, {string, reason(Error, Opts)}},
+                    {detail, {string, detail(Error, Opts)}}
+                },
+                Opts
+            ),
+            Settled
+    end.
+
+%% @doc Announce one block's transactions and mark the block as settled.
+announce(Hash, Block, Opts) ->
+    maybe
+        ok ?=
+            announce_transactions(
+                hb_util:message_to_ordered_list(
+                    hb_maps:get(<<"transactions">>, Block, [], Opts),
+                    Opts
+                ),
+                Opts
+            ),
+        hb_cache:link(block_key(Hash), settled_path(Hash), Opts),
+        ok
+    end.
+
+%% @doc Run the hook once per placement. The request is the placement itself,
+%% carrying the link to the transaction it places, so a handler has both the
+%% weave location and the message without another lookup.
+announce_transactions([], _Opts) ->
+    ok;
+announce_transactions([Placement | Placements], Opts) ->
+    maybe
+        {ok, _Result} ?=
+            hb_hook:on(
+                ?SETTLED_HOOK,
+                hb_cache:ensure_loaded(Placement, Opts),
+                Opts
+            ),
+        announce_transactions(Placements, Opts)
+    end.
+
+%% @doc The block that is `Depth' blocks below the one given, or `[]' when the
+%% chain does not reach that far back.
+descend(Hash, 0, _Opts) ->
+    Hash;
+descend([], _Depth, _Opts) ->
+    [];
+descend(Hash, Depth, Opts) ->
+    descend(parent(Hash, Opts), Depth - 1, Opts).
+
+%% @doc How many blocks one pass may settle. A node that has just closed a long
+%% gap has a run of blocks to announce, and the bound keeps that run from
+%% holding the runner for the whole of it.
+settle_batch(Opts) ->
+    max(0, hb_util:int(
+        hb_opts:get(arweave_settle_batch, ?DEFAULT_SETTLE_BATCH, Opts))).
+
+%% @doc The marker recording that a block's transactions have been announced.
+settled_path(Hash) ->
+    lib_arweave_paths:settled(Hash).
+
+%%% Historical materialisation.
+
+%% @doc Materialise blocks below the ones this node holds, checked against the
+%% block index its selected tip carries.
+%%
+%% The index is the authority. Its root was committed by a header this node
+%% validated, so the hash, weave size and transaction root it records at every
+%% height from genesis are as trustworthy as the tip itself -- and a serving
+%% peer therefore cannot substitute another block or another transaction set,
+%% however far below the join the request reaches.
+%%
+%% `from' is the highest height to materialise and is required. There is no
+%% frontier to resume from, by design: the block index says what every height
+%% should hold, a block already published is skipped, and a pass that stops
+%% early is repeated by re-issuing the same request. Recording how far the
+%% backfill had got would be a second kind of progress state beside the blocks
+%% themselves, and the brief has exactly one.
+do_backfill(Req, Opts) ->
+    maybe
+        {ok, Peers} ?= peers(Opts),
+        {ok, Tip} ?= incumbent(Opts),
+        {ok, TipBlock} ?=
+            read_block(Tip, <<"no-tip">>,
+                <<"The stored tip does not resolve to a block.">>, Opts),
+        {ok, Index} ?= backfill_index(TipBlock, Opts),
+        {ok, From} ?= backfill_from(Req, Opts),
+        Profile = hb_maps:get(<<"profile">>, Req, <<"archive">>, Opts),
+        Count = backfill_count(Req, From, Opts),
+        Started = erlang:monotonic_time(millisecond),
+        Materialized =
+            backfill(Peers, Index, From, Count, Profile, 0, Opts),
+        ?event(arweave_sync_short,
+            {backfilled,
+                {materialized, Materialized},
+                {from, From},
+                {to, From - Count + 1},
+                {profile, {string, Profile}},
+                {elapsed_ms, erlang:monotonic_time(millisecond) - Started}
+            },
+            Opts
+        ),
+        {ok,
+            #{
+                <<"materialized">> => Materialized,
+                <<"from">> => From,
+                <<"to">> => From - Count + 1,
+                <<"profile">> => Profile
+            }
+        }
+    end.
+
+%% @doc The block index the tip carries, which is what a materialisation is
+%% checked against. A node whose tip carries none cannot authenticate a
+%% historical header at all, and is told so rather than fetching one.
+backfill_index(TipBlock, Opts) ->
+    case hb_maps:get(<<"block-index">>, TipBlock, [], Opts) of
+        [] ->
+            {error, error_message(<<"no-block-index">>,
+                <<"The selected tip carries no block index, so a historical "
+                    "block cannot be checked against anything.">>)};
+        Index ->
+            {ok, Index}
+    end.
+
+%% @doc The highest height a backfill materialises, which the caller names.
+backfill_from(Req, Opts) ->
+    case hb_maps:get(<<"from">>, Req, not_found, Opts) of
+        not_found ->
+            {error,
+                error_message(400, <<"missing-from">>,
+                    <<"`from' must name the highest height to materialise.">>)};
+        From ->
+            {ok, max(0, hb_util:int(From))}
+    end.
+
+%% @doc How many blocks one call may materialise: what the request asked for,
+%% never more than the node permits, and never below genesis.
+backfill_count(Req, From, Opts) ->
+    Ceiling =
+        max(
+            1,
+            hb_util:int(
+                hb_opts:get(
+                    arweave_backfill_batch,
+                    ?DEFAULT_BACKFILL_BATCH,
+                    Opts
+                )
+            )
+        ),
+    Asked =
+        max(1, hb_util:int(hb_maps:get(<<"count">>, Req, Ceiling, Opts))),
+    min(From + 1, min(Ceiling, Asked)).
+
+%% @doc Materialise each height in turn, downwards. A height whose expected
+%% block is already published costs a cache read and nothing else, which is what
+%% makes re-issuing the same request the way to resume.
+backfill(_Peers, _Index, _Height, 0, _Profile, Done, _Opts) ->
+    Done;
+backfill(_Peers, _Index, Height, _Left, _Profile, Done, _Opts)
+        when Height < 0 ->
+    Done;
+backfill(Peers, Index, Height, Left, Profile, Done, Opts) ->
+    case materialize_at(Peers, Index, Height, Profile, Opts) of
+        {ok, present} ->
+            backfill(Peers, Index, Height - 1, Left - 1, Profile, Done, Opts);
+        {ok, published} ->
+            backfill(
+                Peers, Index, Height - 1, Left - 1, Profile, Done + 1, Opts);
+        Error ->
+            ?event(warning,
+                {arweave_backfill_stopped,
+                    {height, Height},
+                    {message, {string, reason(Error, Opts)}},
+                    {detail, {string, detail(Error, Opts)}}
+                },
+                Opts
+            ),
+            Done
+    end.
+
+%% @doc Materialise the block the index records at a height, unless this node
+%% has already published it.
+materialize_at(Peers, Index, Height, Profile, Opts) ->
+    maybe
+        {ok, Expected} ?= index_entry(Index, Height, Opts),
+        Hash = hb_maps:get(<<"indep-hash">>, Expected, <<>>, Opts),
+        case hb_cache:read(block_key(Hash), Opts) of
+            {ok, _Block} ->
+                {ok, present};
+            _ ->
+                materialize_new(
+                    Peers, Index, Height, Hash, Expected, Profile, Opts)
+        end
+    end.
+
+%% @doc Fetch, check and publish one historical block.
+materialize_new(Peers, Index, Height, Hash, Expected, Profile, Opts) ->
+    maybe
+        {ok, Previous} ?= previous_entry(Index, Height, Opts),
+        {ok, Block, TXs} ?=
+            materialized(Peers, Expected, Previous, Profile, Opts),
+        {ok, _ID} ?= publish(Block, Hash, TXs, Opts),
+        {ok, published}
+    end.
+
+%% @doc The index entry below a height. Genesis has none, and carries a weave
+%% size of zero, which is what the weave arithmetic of the block above it reads.
+previous_entry(_Index, 0, _Opts) ->
+    {ok, #{ <<"weave-size">> => 0 }};
+previous_entry(Index, Height, Opts) ->
+    index_entry(Index, Height - 1, Opts).
+
+%% @doc Fetch a header from peers and materialise it against the authenticated
+%% entries the caller resolved from the block index. Returns the block and the
+%% transaction bodies, which publication writes before the block that places
+%% them.
+materialized(Peers, Expected, Previous, Profile, Opts) ->
+    Hash = hb_maps:get(<<"indep-hash">>, Expected, <<>>, Opts),
+    maybe
+        {ok, Header} ?= peer_block(Peers, Hash, Opts),
+        {ok, Fetched} ?=
+            materialized_transactions(Peers, Header, Profile, Opts),
+        {ok, Block} ?=
+            hb_ao:resolve(
+                Header#{ <<"device">> => ?BLOCK_DEVICE },
+                #{
+                    <<"path">> => <<"materialize">>,
+                    <<"profile">> => Profile,
+                    <<"expected">> => Expected,
+                    <<"previous-entry">> => Previous,
+                    <<"transactions">> => checked_transactions(Fetched)
+                },
+                Opts
+            ),
+        {ok, Block, stored_transactions(Fetched)}
+    end.
+
+%% @doc Fetch the transaction bodies a materialisation needs. A header-only
+%% materialisation establishes nothing about them, so it fetches none.
+materialized_transactions(_Peers, _Header, <<"headers">>, _Opts) ->
+    {ok, []};
+materialized_transactions(Peers, Header, _Profile, Opts) ->
+    transactions(Peers, Header, Opts).
 
 %%% Fork choice.
 
@@ -1425,60 +1916,89 @@ height(Hash, Opts) ->
 cumulative_diff(Hash, Opts) ->
     hb_util:int(field(<<"cumulative-diff">>, Hash, 0, Opts)).
 
-%% @doc Read a field of the block a stored chain state validated. A branch head
-%% this node has no state for has no fields to read, which is what makes it
-%% ineligible rather than an error.
+%% @doc Read a field of a published block. A branch head this node has not
+%% published has no fields to read, which is what makes it ineligible rather
+%% than an error.
 field(_Key, Hash, Default, _Opts) when not is_binary(Hash) ->
     Default;
 field(Key, Hash, Default, Opts) ->
-    case hb_cache:read(state_path(Hash), Opts) of
-        {ok, State} ->
-            hb_maps:get(
-                Key,
-                hb_maps:get(<<"block">>, State, #{}, Opts),
-                Default,
-                Opts
-            );
-        _ ->
-            Default
+    case hb_cache:read(block_key(Hash), Opts) of
+        {ok, Block} -> hb_maps:get(Key, Block, Default, Opts);
+        _ -> Default
     end.
 
-%%% Chain state storage.
+%%% Publication.
 
-%% @doc Write a chain state and index it by the block it validated. The index
-%% is what `sync' looks a parent up in, and what makes it skip a block it has
-%% already applied.
-record_state(State, Hash, Opts) ->
+%% @doc Publish a validated block, in the order that makes its presence mean
+%% something.
+%%
+%% Nothing records how far indexing has got, because the block itself is the
+%% record: it is linked under its own hash only once every index derived from it
+%% is written, so a block that reads back is a block whose local indexes are
+%% finished. That ordering is the whole of the guarantee, and it is why the
+%% steps are not interchangeable:
+%%
+%% <ol>
+%% <li>the transaction messages, each of which the generic match index picks up
+%%     as it is written, so a query can find them;</li>
+%% <li>the placements and their byte offsets, which link the transactions
+%%     written in step one;</li>
+%% <li>the components and the block message itself, which links the placements
+%%     written in step two;</li>
+%% <li>the block hash, which names the message written in step three.</li>
+%% </ol>
+%%
+%% A pass interrupted anywhere before the last step leaves content-addressed
+%% messages nothing points at, which the next pass rewrites at the same
+%% identifiers. There is nothing to clean up and nothing to resume from.
+publish(Block, Hash, TXs, Opts) ->
     maybe
-        {ok, ID} ?= hb_cache:write(State, Opts),
-        hb_cache:link(ID, state_path(Hash), Opts),
+        ok ?= write_transactions(TXs, Opts),
+        {ok, Placed} ?= write_placements(Block, Opts),
+        {ok, ID} ?= hb_cache:write(Placed, Opts),
+        hb_cache:link(ID, block_key(Hash), Opts),
         {ok, ID}
     end.
 
-%% @doc The store path a chain state is filed under.
-%%
-%% The separator check is a backstop, not the guard: callers that take a hash
-%% from a request validate it first (`block_hash/1'). It is here because this is
-%% the one place a hash becomes a path, and `hb_path:to_binary/1' does not
-%% collapse `..' -- so anything that reaches here carrying a separator would be
-%% resolved by the filesystem rather than treated as a name.
-state_path(Hash) when is_binary(Hash) ->
-    case binary:match(Hash, [<<"/">>, <<"..">>, <<0>>]) of
-        nomatch ->
-            hb_path:to_binary([?STATE_PATH, Hash]);
-        _ ->
-            throw({unsafe_state_path, Hash})
+%% @doc Write each transaction of the block as a `tx@1.0' message. Writing them
+%% is what puts them in the generic match index, and it is what makes the
+%% placement's link to a transaction resolvable.
+write_transactions([], _Opts) ->
+    ok;
+write_transactions([TX | TXs], Opts) ->
+    maybe
+        {ok, _ID} ?= hb_cache:write(TX, Opts),
+        write_transactions(TXs, Opts)
     end.
 
-%% @doc Read a chain state by block hash, answering with a message rather than
+%% @doc Write the block's placements, alias each under its transaction, record
+%% the byte offsets, and return the block carrying the placements as links.
+write_placements(Block, Opts) ->
+    maybe
+        {ok, Links} ?=
+            lib_arweave_placement:write(
+                hb_util:message_to_ordered_list(
+                    hb_maps:get(<<"transactions">>, Block, [], Opts),
+                    Opts
+                ),
+                Opts
+            ),
+        {ok, Block#{ <<"transactions">> => Links }}
+    end.
+
+%% @doc The store key a validated block is filed under.
+block_key(Hash) ->
+    lib_arweave_paths:block(Hash).
+
+%% @doc Read a published block by hash, answering with a message rather than
 %% the bare `{error, not_found}' the cache returns. A device key must not put an
 %% atom on the wire: `dev_meta:embed_status/2' renders a non-map error as HTTP
 %% 400 with the atom as the body, so `not_found' would reach a client as an
 %% underscored term with the wrong status.
-read_state(Hash, Message, Detail, Opts) ->
-    case hb_cache:read(state_path(Hash), Opts) of
-        {ok, State} ->
-            {ok, State};
+read_block(Hash, Message, Detail, Opts) ->
+    case hb_cache:read(block_key(Hash), Opts) of
+        {ok, Block} ->
+            {ok, Block};
         _ ->
             {error, error_message(404, Message, Detail)}
     end.
@@ -1486,19 +2006,12 @@ read_state(Hash, Message, Detail, Opts) ->
 %% @doc The block hash at the stored tip. A node that has not bootstrapped has
 %% no tip, and `sync' has nothing to extend.
 incumbent(Opts) ->
-    case hb_cache:read(?TIP_PATH, Opts) of
-        {ok, State} ->
-            {ok,
-                hb_maps:get(
-                    <<"indep-hash">>,
-                    hb_maps:get(<<"block">>, State, #{}, Opts),
-                    [],
-                    Opts
-                )
-            };
+    case hb_cache:read(lib_arweave_paths:tip(), Opts) of
+        {ok, Block} ->
+            {ok, hb_maps:get(<<"indep-hash">>, Block, [], Opts)};
         _ ->
             {error, error_message(<<"not-bootstrapped">>,
-                <<"The node has no chain state to extend.">>)}
+                <<"The node has no chain to extend.">>)}
     end.
 
 %%% Peers.

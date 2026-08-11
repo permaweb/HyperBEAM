@@ -41,7 +41,7 @@
 %%% and the window are both worth having.
 -module(lib_arweave_history).
 -export([length/2, entries/3, values/2, values/3]).
--export([append/5, from_binary/4, cap/2]).
+-export([append/5, from_binary/4, to_binary/2, from_message/3, cap/2]).
 -include("include/hb.hrl").
 
 -define(DEVICE, <<"arweave-history@2.9">>).
@@ -133,6 +133,30 @@ from_binary(Kind, Body, Height, Opts) ->
         {error, _Reason} ->
             {error, << "invalid-", Kind/binary >>}
     end.
+
+%% @doc Serialize a history into the wire form a peer serves it in, which is
+%% oldest entry first and is what the vendored decoders read.
+%%
+%% The whole history is walked rather than taken from the memoised window: this
+%% is an inspection of a history rather than a validation against one, and it
+%% may be asked of an older head, whose window is not the one a block needs.
+to_binary([], _Opts) ->
+    <<>>;
+to_binary(Head, Opts) ->
+    encode(
+        hb_maps:get(<<"kind">>, Head, <<>>, Opts),
+        values(Head, length(Head, Opts), Opts)
+    ).
+
+%% @doc Read one value out of the message that carries its fields, which is how
+%% a caller supplies the element it is appending. A kind this module does not
+%% hold is named rather than raised on: it arrives from a request.
+from_message(Kind, Msg, Opts)
+        when Kind == <<"reward-history">>;
+                Kind == <<"block-time-history">> ->
+    {ok, value(Kind, Msg, Opts)};
+from_message(_Kind, _Msg, _Opts) ->
+    {error, <<"unknown-history-kind">>}.
 
 %% @doc Return the number of entries the consensus rules read back from a
 %% history.
@@ -263,3 +287,11 @@ decode(<<"reward-history">>, Body) ->
     ar_serialize:binary_to_reward_history(Body);
 decode(<<"block-time-history">>, Body) ->
     ar_serialize:binary_to_block_time_history(Body).
+
+%% @doc Render a newest-first list of values in the wire form, which is oldest
+%% entry first. The encoders are the vendored ones, and each is the exact
+%% inverse of the decoder above it.
+encode(<<"reward-history">>, Values) ->
+    ar_serialize:reward_history_to_binary(Values);
+encode(<<"block-time-history">>, Values) ->
+    ar_serialize:block_time_history_to_binary(Values).

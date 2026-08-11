@@ -7,6 +7,7 @@
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
 -export([store_from_opts/1, write_offset/5, read_offset/3, read_chunks/3]).
+-export([read_location/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -101,6 +102,45 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
             not_found
     end;
 read_offset(_, _, _) -> not_found.
+
+%% @doc Read everything this node knows about where a transaction is: the byte
+%% offset its data occupies, and the placement recording which Arweave block
+%% included it and where.
+%%
+%% The two answer different questions and are kept in different places for that
+%% reason. An offset says where bytes can be fetched, in as few bytes as the
+%% encoding allows, for every data item on the weave. A placement says where a
+%% source transaction occurs in the chain, which a reorganisation can change and
+%% which only `~arweave@2.9' maintains. This is the one call that wants both, so
+%% it is the one place they meet.
+%%
+%% Either half may be absent -- a node indexing bytes without validating
+%% consensus has offsets and no placements, and one validating consensus without
+%% an offset store has the reverse -- so each is reported as it is found rather
+%% than gating the other.
+read_location(StoreOpts, ID, Opts) ->
+    Offset =
+        case read_offset(StoreOpts, ID, Opts) of
+            {ok, Found} -> Found;
+            _ -> []
+        end,
+    Placement =
+        case
+            hb_ao:resolve(
+                #{ <<"device">> => <<"arweave@2.9">> },
+                #{ <<"path">> => <<"placement">>, <<"tx">> => ID },
+                Opts
+            )
+        of
+            {ok, Placed} -> Placed;
+            _ -> []
+        end,
+    case {Offset, Placement} of
+        {[], []} ->
+            not_found;
+        _ ->
+            {ok, #{ <<"offset">> => Offset, <<"placement">> => Placement }}
+    end.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
@@ -300,7 +340,11 @@ read_chunks(StartOffset, Length, Opts) ->
         Opts
     ).
 
-%% @doc Write offset information to the index store.
+%% @doc Write offset information to the index store. A node with no Arweave
+%% store configured has nowhere to record one, which is a configuration rather
+%% than a failure, so the write is a no-op.
+write_offset(no_store, _ID, _CodecName, _StartOffset, _Length) ->
+    ok;
 write_offset(
         StoreOpts = #{ <<"index-store">> := IndexStore },
         ID,
@@ -436,6 +480,45 @@ write_read_tx_test() ->
     },
     ?assert(hb_message:match(ExpectedChild, Child, only_present)),
     ok.
+
+%% @doc The two indexes answer different questions and `read_location/3'
+%% returns whichever of them a node holds.
+%%
+%% A node indexing bytes without validating consensus has offsets and no
+%% placements; one validating consensus without an offset store has the
+%% reverse; a node doing both has both. Each half is reported as it is found
+%% rather than gating the other, so the caller can tell which of the two it is.
+read_location_test() ->
+    IndexStore = [hb_test_utils:test_store()],
+    Opts = #{ <<"store">> => IndexStore },
+    Store = #{ <<"index-store">> => IndexStore },
+    ID = hb_util:encode(crypto:strong_rand_bytes(32)),
+    ?assertEqual(not_found, read_location(Store, ID, Opts)),
+    ok = write_offset(Store, ID, <<"tx@1.0">>, 1000, 500),
+    ?assertMatch(
+        {ok,
+            #{
+                <<"offset">> := #{ <<"start-offset">> := 1000 },
+                <<"placement">> := []
+            }
+        },
+        read_location(Store, ID, Opts)
+    ),
+    % `~arweave@2.9' files the current placement of a transaction under this
+    % name; the helper is the one call that wants it alongside the offset.
+    {ok, PlacementID} =
+        hb_cache:write(#{ <<"id">> => ID, <<"height">> => 42 }, Opts),
+    hb_cache:link(
+        PlacementID, <<"~arweave@2.9/placements/", ID/binary>>, Opts),
+    ?assertMatch(
+        {ok,
+            #{
+                <<"offset">> := #{ <<"length">> := 500 },
+                <<"placement">> := #{ <<"height">> := _ }
+            }
+        },
+        read_location(Store, ID, Opts)
+    ).
 
 %% @doc Stale ANS-104 offset: fake ID pointing to a known bundle TX's
 %% data range. The deserialized item's ID won't match the fake ID.

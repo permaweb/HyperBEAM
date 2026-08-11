@@ -5,11 +5,11 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
--device_libraries([lib_arweave_common]).
+-device_libraries([lib_arweave_common, lib_arweave_paths, lib_arweave_placement]).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
--export([bootstrap/3, sync/3, tip/3, validated/3]).
+-export([bootstrap/3, sync/3, tip/3, validated/3, backfill/3, placement/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
@@ -45,17 +45,27 @@ bootstrap(Base, Req, Opts) ->
 sync(Base, Req, Opts) ->
     dev_arweave_sync:sync(Base, Req, Opts).
 
-%% @doc Return the chain state at the tip of the heaviest eligible branch,
-%% under Arweave's own fork-choice rules.
+%% @doc Materialise blocks below the ones this node holds, checked against the
+%% block index the selected tip carries. See `dev_arweave_sync'.
+backfill(Base, Req, Opts) ->
+    dev_arweave_sync:backfill(Base, Req, Opts).
+
+%% @doc Return the block at the tip of the heaviest eligible branch, under
+%% Arweave's own fork-choice rules.
 tip(Base, Req, Opts) ->
     dev_arweave_sync:tip(Base, Req, Opts).
 
-%% @doc Return the chain state this node validated for a block, named by
-%% `indep-hash', by height, or as `current'. Unlike `block/3', which answers
-%% from a gateway when the block is not held locally, this never contacts a
-%% peer: an answer here is one this node verified itself.
+%% @doc Return the block this node validated, named by `indep-hash', by height,
+%% or as `current'. Unlike `block/3', which answers from a gateway when the
+%% block is not held locally, this never contacts a peer: an answer here is one
+%% this node verified itself.
 validated(Base, Req, Opts) ->
     dev_arweave_sync:validated(Base, Req, Opts).
+
+%% @doc Return where a source transaction, named by `tx', occurs in the chain
+%% this node validated. See `dev_arweave_sync'.
+placement(Base, Req, Opts) ->
+    dev_arweave_sync:placement(Base, Req, Opts).
 
 %% @doc Returns the given transaction as an AO-Core message. By default, this
 %% embeds the `/raw` payload. Set `exclude-data` to true to return just the

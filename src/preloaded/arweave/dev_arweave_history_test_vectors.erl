@@ -157,6 +157,122 @@ take_key_returns_the_newest_entries_test() ->
         ]
     ).
 
+%% @doc The device builds and extends a history over AO-Core alone, and renders
+%% one back into the exact bytes a peer serves.
+%%
+%% The round trip is what makes the representation checkable without a block:
+%% bytes in through `from-binary', one element on through `push', the whole
+%% history back out through `to-binary'. What comes back is the wire form the
+%% vendored decoders read, so the persistent list and the format Arweave
+%% publishes are the same history rather than two descriptions of one.
+push_and_to_binary_round_trip_test() ->
+    Opts = test_opts(),
+    Wire = ar_serialize:block_time_history_to_binary(intervals(4)),
+    Seed = #{ <<"device">> => <<"arweave-history@2.9">>,
+        <<"kind">> => <<"block-time-history">>, <<"height">> => 1275480 },
+    {ok, Head} =
+        hb_ao:resolve(
+            Seed,
+            #{ <<"path">> => <<"from-binary">>, <<"body">> => Wire },
+            Opts
+        ),
+    ?assertEqual(4, hb_util:int(hb_maps:get(<<"length">>, Head, 0, Opts))),
+    ?assertEqual(Wire, to_binary(Head, Opts)),
+    % One element on, and the wire form grows by exactly that element.
+    {ok, Pushed} =
+        hb_ao:resolve(
+            Head,
+            #{
+                <<"path">> => <<"push">>,
+                <<"height">> => 1275481,
+                <<"block-interval">> => 99,
+                <<"vdf-interval">> => 98,
+                <<"chunk-count">> => 2
+            },
+            Opts
+        ),
+    ?assertEqual(5, hb_util:int(hb_maps:get(<<"length">>, Pushed, 0, Opts))),
+    ?assertEqual(
+        [{99, 98, 2} | intervals(4)],
+        lib_arweave_history:values(Pushed, Opts)
+    ),
+    ?assertEqual(
+        ar_serialize:block_time_history_to_binary([{99, 98, 2} | intervals(4)]),
+        to_binary(Pushed, Opts)
+    ),
+    % A history that does not exist yet is pushed onto directly.
+    {ok, First} =
+        hb_ao:resolve(
+            Seed,
+            #{
+                <<"path">> => <<"push">>,
+                <<"block-interval">> => 7,
+                <<"vdf-interval">> => 7,
+                <<"chunk-count">> => 1
+            },
+            Opts
+        ),
+    ?assertEqual(1, hb_util:int(hb_maps:get(<<"length">>, First, 0, Opts))),
+    % A kind this device does not hold is refused rather than guessed at.
+    ?assertMatch(
+        {error, #{ <<"message">> := <<"unknown-history-kind">> }},
+        hb_ao:resolve(
+            Seed#{ <<"kind">> => <<"weather-history">> },
+            #{ <<"path">> => <<"push">>, <<"block-interval">> => 1 },
+            Opts
+        )
+    ).
+
+%% @doc The same four keys hold for the reward history, whose entries carry
+%% four fields of their own rather than three.
+%%
+%% The two kinds share every line of the representation and differ only in what
+%% an element is, so what this vector establishes is that the difference really
+%% is confined to `fields/2' and `value/3': the wire form a peer serves round
+%% trips, and a pushed element reads back as the tuple `ar_rewards' works on.
+reward_history_push_round_trip_test() ->
+    Opts = test_opts(),
+    Address = crypto:strong_rand_bytes(32),
+    Values = [ {Address, N * 7, N * 1000, 1} || N <- lists:seq(1, 3) ],
+    Wire = ar_serialize:reward_history_to_binary(Values),
+    Seed =
+        #{
+            <<"device">> => <<"arweave-history@2.9">>,
+            <<"kind">> => <<"reward-history">>,
+            <<"height">> => 1500000
+        },
+    {ok, Head} =
+        hb_ao:resolve(
+            Seed,
+            #{ <<"path">> => <<"from-binary">>, <<"body">> => Wire },
+            Opts
+        ),
+    ?assertEqual(Values, lib_arweave_history:values(Head, Opts)),
+    ?assertEqual(Wire, to_binary(Head, Opts)),
+    Pushed = crypto:strong_rand_bytes(32),
+    {ok, Extended} =
+        hb_ao:resolve(
+            Head,
+            #{
+                <<"path">> => <<"push">>,
+                <<"height">> => 1500001,
+                <<"address">> => hb_util:encode(Pushed),
+                <<"hash-rate">> => 99,
+                <<"reward">> => 12345,
+                <<"denomination">> => 1
+            },
+            Opts
+        ),
+    ?assertEqual(
+        [{Pushed, 99, 12345, 1} | Values],
+        lib_arweave_history:values(Extended, Opts)
+    ),
+    ?assertEqual(
+        ar_serialize:reward_history_to_binary(
+            [{Pushed, 99, 12345, 1} | Values]),
+        to_binary(Extended, Opts)
+    ).
+
 %% @doc The device refuses a body that is not a whole number of entries.
 rejects_corrupt_history_binary_test() ->
     Opts = test_opts(),
@@ -202,6 +318,11 @@ block_time_history(Values, Opts) ->
         [],
         lists:reverse(Values)
     ).
+
+%% @doc Render a history through the device's own codec key.
+to_binary(Head, Opts) ->
+    {ok, Result} = hb_ao:resolve(Head, <<"to-binary">>, Opts),
+    hb_maps:get(<<"body">>, Result, not_found, Opts).
 
 %% @doc Add one block-time value to a history, at a height above the 2.7 fork.
 append_block_time(Value, Head, Opts) ->

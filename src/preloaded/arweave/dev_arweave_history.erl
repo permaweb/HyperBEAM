@@ -7,20 +7,24 @@
 %%% representation and the rules that bound a history's length; this device is
 %%% the surface over it.
 %%%
-%%% Two keys, because two callers need them. `~arweave@2.9/bootstrap' hands the
-%%% bytes a peer served to `from-binary/3', which is where a fetched history
-%%% becomes a stored one. `take/3' reads a history back, following one link per
-%%% entry it returns, so the newest few entries of a 64,850-entry history cost
-%%% the few and not the 64,850.
+%%% Four keys, which are the four things anything does to a history.
+%%% `~arweave@2.9/bootstrap' hands the bytes a peer served to `from-binary/3',
+%%% which is where a fetched history becomes a stored one, and `to-binary/3'
+%%% renders one back into the exact wire form the vendored decoders read.
+%%% `take/3' reads a history back as the newest-first list every consensus rule
+%%% consumes, following one link per entry it returns, so the newest few entries
+%%% of a 64,850-entry history cost the few and not the 64,850. `push/3' extends
+%%% one by a single element.
 %%%
-%%% Extending a history belongs to `~arweave-block@2.9/apply', which is the only
-%%% thing entitled to decide what the next element is: both elements are derived
-%%% from a validated block by the vendored rule that owns them, so there is no
-%%% element for a caller to supply and no key here that takes one.
+%%% `push/3' does not decide what the next element is, and cannot: both elements
+%%% are derived from a validated block by the vendored rule that owns them, and
+%%% `~arweave-block@2.9/apply' is what runs those rules. What this key adds is
+%%% the ability to build and extend a history without going through a block at
+%%% all, which is what makes the representation testable on its own terms.
 -module(dev_arweave_history).
 -implements(<<"arweave-history@2.9">>).
 -device_libraries([lib_arweave_history]).
--export([info/1, take/3, from_binary/3]).
+-export([info/1, take/3, push/3, from_binary/3, to_binary/3]).
 -include("include/hb.hrl").
 
 %% @doc Export only the history operations, leaving message manipulation to
@@ -43,6 +47,39 @@ take(Base, Req, Opts) ->
         }
     }.
 
+%% @doc Extend a history with one value and return its new head.
+%%
+%% The base is the history's newest entry, or a message naming only the kind
+%% when the history is empty. The value's own fields are read from the request
+%% alone: an entry carries exactly the field names of the value being appended,
+%% so falling back to the base would silently append the entry already there.
+%%
+%% `height' is what bounds the history's length, and is the height of the block
+%% the element belongs to.
+push(Base, Req, Opts) ->
+    Kind = required(<<"kind">>, Base, Req, Opts),
+    Height = hb_util:int(required(<<"height">>, Base, Req, Opts)),
+    case lib_arweave_history:from_message(Kind, Req, Opts) of
+        {ok, Value} ->
+            {ok,
+                lib_arweave_history:append(
+                    Kind, Value, Height, head(Base, Opts), Opts)
+            };
+        {error, Message} ->
+            {error, error_message(Message,
+                <<"A history is either a reward history or a block-time "
+                    "history.">>)}
+    end.
+
+%% @doc The history a push extends: the base when it is an entry, and nothing
+%% when it merely names the kind. An entry is what carries a `length', because
+%% every entry records the length of the history ending at it.
+head(Base, Opts) ->
+    case hb_maps:is_key(<<"length">>, Base, Opts) of
+        true -> Base;
+        false -> []
+    end.
+
 %% @doc Build a history from the binary form `/reward_history/<BH>' and
 %% `/block_time_history/<BH>' serve, returning its newest entry.
 %%
@@ -60,6 +97,13 @@ from_binary(Base, Req, Opts) ->
             {error, error_message(Message,
                 <<"The body is not a whole number of history entries.">>)}
     end.
+
+%% @doc Serialize a history into the binary form a peer serves it in, which is
+%% the form `from-binary/3' reads and the one the vendored decoders parse. The
+%% round trip is exact, so a history built from a peer's bytes renders back to
+%% the same bytes.
+to_binary(Base, _Req, Opts) ->
+    {ok, #{ <<"body">> => lib_arweave_history:to_binary(Base, Opts) }}.
 
 %%% Internal functions.
 

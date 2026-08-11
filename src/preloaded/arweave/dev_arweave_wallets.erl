@@ -17,11 +17,11 @@
 %%%
 %%% ```
 %%% #{
-%%%     <<"device">>   => <<"arweave-wallets@2.9">>,
-%%%     <<"root">>     => B64URLRootHash,
-%%%     <<"size">>     => AccountCount,
-%%%     <<"chunks">>   => #{ <<"0">> => Link, ..., <<"255">> => Link },
-%%%     <<"previous">> => B64URLRootHash of the state this was derived from
+%%%     <<"device">>        => <<"arweave-wallets@2.9">>,
+%%%     <<"root">>          => B64URLRootHash,
+%%%     <<"size">>          => AccountCount,
+%%%     <<"chunks">>        => #{ <<"0">> => Link, ..., <<"255">> => Link },
+%%%     <<"previous-root">> => B64URLRootHash of the earlier state
 %%% }
 %%% '''
 %%%
@@ -50,6 +50,7 @@
 -device_libraries([lib_arweave_accounts]).
 -compile({no_auto_import, [apply/3]}).
 -export([info/1, root/3, verify/3, get/3, apply/3, rollback/3, page/3]).
+-export([previous/3]).
 -ifdef(TEST).
 -export([tree_path/1]).
 -endif.
@@ -119,6 +120,15 @@ apply(Base, Req, Opts) ->
 rollback(Base, Req, Opts) ->
     unwind(Base, hb_util:int(get_first(<<"depth">>, Base, Req, 1, Opts)), Opts).
 
+%% @doc Return the account state this one was derived from.
+%%
+%% The relationship is `previous-root', the identity a block header and a peer
+%% both name an account tree by, and this key is the traversal over it. It is a
+%% key rather than a stored link because a stored link's target has to be a
+%% content identifier, where a root is the identity the protocol uses.
+previous(Base, _Req, Opts) ->
+    unwind(Base, 1, Opts).
+
 %% @doc Ingest one `GET /wallet_list/<root>[/<cursor>]' response body into the
 %% tree. Returns the accumulated state and the cursor to fetch next, or the
 %% binary `last' when the peer has served the final page. The state is only
@@ -184,7 +194,7 @@ write(Root, Tree, Chunks, Base, Opts) ->
                 <<"size">> => lib_arweave_accounts:count(Tree),
                 <<"chunks">> => Chunks
             },
-            previous(Base, Opts)
+            previous_state(Base, Opts)
         ),
     {ok, ID} = hb_cache:write(State, Opts),
     ok = hb_store:link(#{ tree_path(Root) => ID }, Opts),
@@ -240,18 +250,24 @@ chunk_link(Accounts, Opts) ->
     {link, ID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }}.
 
 %% @doc Record the state a new one is derived from, so that a reorg can walk
-%% back to it. An initial state has none, and so carries no key.
-previous(Base, Opts) ->
+%% back to it. An initial state has none, and so carries neither key.
+%%
+%% The root is the identity a block header and a peer both name an account tree
+%% by, and is what `rollback/3' and `previous/3' look the earlier state up
+%% under.
+previous_state(Base, Opts) ->
     case hb_maps:get(<<"root">>, Base, not_found, Opts) of
-        not_found -> #{};
-        Root -> #{ <<"previous">> => Root }
+        not_found ->
+            #{};
+        Root ->
+            #{ <<"previous-root">> => Root }
     end.
 
 %% @doc The store path a state is indexed under. The root is the identity both
 %% the block header and the peer API use for an account tree, so it is the
 %% identity the store uses too.
 %%
-%% `rollback/3' walks `previous' off a caller-supplied base, so a root can
+%% `rollback/3' walks `previous-root' off a caller-supplied base, so a root can
 %% arrive from a request. Nothing collapses `..' between here and the
 %% filesystem, so a root carrying a separator would be resolved by the OS
 %% rather than treated as a name -- which turns a tree lookup into an arbitrary
@@ -264,12 +280,15 @@ tree_path(Root) when is_binary(Root) ->
             throw({unsafe_tree_path, Root})
     end.
 
-%% @doc Walk back through the states each was derived from.
+%% @doc Walk back through the states each was derived from, by the root each
+%% records. A state whose earlier version this node no longer holds answers
+%% `unknown-account-tree'.
 unwind(State, 0, _Opts) ->
     {ok, State};
 unwind(State, Depth, Opts) ->
     maybe
-        {ok, Previous} ?= read(hb_maps:get(<<"previous">>, State, not_found, Opts), Opts),
+        {ok, Previous} ?=
+            read(hb_maps:get(<<"previous-root">>, State, not_found, Opts), Opts),
         unwind(Previous, Depth - 1, Opts)
     end.
 
