@@ -58,14 +58,12 @@ route(<<"index">>, M1, M2, Opts) ->
             ?event(manifest_not_parsed),
             {error, not_found}
     end;
-route(ID, _, _, Opts) when ?IS_ID(ID) ->
-    ?event({manifest_reading_id, ID}),
-    hb_cache:read(ID, Opts);
 route(Key, M1, M2, Opts) ->
     ?event(debug_manifest, {manifest_lookup, {key, Key}, {m1, M1}, {m2, {explicit, M2}}}),
-    {ok, Manifest} = manifest(M1, Key, Opts),
-    {ok, Res} = maps:find(<<"paths">>, Manifest),
-    case maps:get(Key, Res, no_path_match) of
+    case find_path(Key, M1, Opts) of
+        no_path_match when ?IS_ID(Key) ->
+            ?event({manifest_reading_id, Key}),
+            hb_cache:read(Key, Opts);
         no_path_match ->
             % Support materialized view in some JavaScript frameworks.
             case hb_opts:get(manifest_404, fallback, Opts) of
@@ -83,6 +81,29 @@ route(Key, M1, M2, Opts) ->
             end
     end.
 
+%% @doc Find a path in either a flat or already-nested manifest map.
+find_path(Key, Base, Opts) ->
+    Root = hb_path:hd(#{ <<"path">> => Key }, Opts),
+    case find_path(Key, Key, Base, Opts) of
+        no_path_match when Root =/= Key -> find_path(Key, Root, Base, Opts);
+        Result -> Result
+    end.
+
+%% @doc Parse the relevant manifest subtree and find the requested path.
+find_path(Key, Filter, Base, Opts) ->
+    {ok, Manifest} = manifest(Base, Filter, Opts),
+    {ok, Paths} = maps:find(<<"paths">>, Manifest),
+    find_path(hb_path:term_to_path_parts(Key, Opts), Paths).
+
+%% @doc Traverse a decoded manifest map without loading its leaf link.
+find_path([Key], Paths) ->
+    maps:get(Key, Paths, no_path_match);
+find_path([Key | Rest], Paths) ->
+    case maps:get(Key, Paths, no_path_match) of
+        Nested when is_map(Nested) -> find_path(Rest, Nested);
+        _ -> no_path_match
+    end.
+
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
 %% requests for legacy (non-device-tagged) manifests and casting them to
 %% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
@@ -98,8 +119,7 @@ request(Base, Req, Opts) ->
         % 2. The maybe_cast is a manifest, and there are no other elements of
         %    the path, so we add the `index' path and return.
         % 3. The maybe_cast is a manifest, and there are other elements of
-        %    the path, so we return the original request sequence with the first
-        %    message replaced with the casted manifest.
+        %    the path, so we resolve their combined key against the manifest.
         case {Rest, maybe_cast_manifest(Loaded, Opts)} of
             {_, ignored} ->
                 ?event(
@@ -109,9 +129,16 @@ request(Base, Req, Opts) ->
             {[], {ok, Casted}} ->
                 ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
                 {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
-            {_, {ok, Casted}} ->
-                ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
-                {ok, Req#{ <<"body">> => [Casted|Rest] }}
+            {_, {ok, _}} ->
+                Key = compact(Rest, Opts),
+                ?event(debug_manifest,
+                    {manifest_returning_subpath, {req, Req}, {key, Key}}),
+                case route(Key, Loaded, Req, Opts) of
+                    {ok, Result} ->
+                        {ok, Req#{ <<"body">> => [Result] }};
+                    {error, not_found} ->
+                        {error, not_found}
+                end
         end
     else
         {error, not_found} ->
@@ -128,6 +155,18 @@ request(Base, Req, Opts) ->
             % On other errors, we return the original request.
             {ok, Req}
     end.
+
+%% @doc Collapse the path fields in a request sequence into one manifest key.
+compact(Requests, Opts) ->
+    hb_path:to_binary(
+        [
+            case Req of
+                Map when is_map(Map) -> hb_maps:get(<<"path">>, Map, <<>>, Opts);
+                Path -> Path
+            end
+         || Req <- Requests
+        ]
+    ).
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
@@ -412,5 +451,47 @@ manifest_should_fallback_on_not_found_path_test_parallel() ->
         #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
+        Opts
+    ).
+
+compact_test() ->
+    Req = [#{<<"path">> => <<"guides">>}, #{<<"path">> => <<"http-api.html">>}],
+    ?assertEqual(<<"guides/http-api.html">>, compact(Req, #{})),
+    ?assertEqual(
+       <<"guides/http-api.html">>, 
+       compact([<<"guides">>, <<"http-api.html">>], #{})).
+
+%% @doc Make sure we can load assets under a folder.
+load_assets_under_a_folder_test_parallel() ->
+    % cookbook ARNS, VtlRjwcwJVBQOTU3nZFWrDLdM4l4ctZkHuDorLQBID4
+    Opts = hb_name_test_utils:manifest_opts(),
+    Node = hb_http_server:start_node(Opts),
+    Subdomain = <<"k3mvddyhgasvaubzgu3z3ekwvqzn2m4jpbznmza64dukznabea7a">>,
+    hb_test_utils:assert_manifest_response(
+        Node,
+        #{
+          <<"host">> => <<Subdomain/binary, ".localhost">>,
+          <<"path">> => <<"/es/references/http-api.html">>
+        },
+        <<"text/html">>,
+        <<"Obtener por campo">>,
+        Opts
+    ).
+
+%% @doc Resolve a manifest path before treating an ID-length key as an ID.
+manifest_path_precedes_id_fallback_test_parallel() ->
+    % cookbook ARNS, VtlRjwcwJVBQOTU3nZFWrDLdM4l4ctZkHuDorLQBID4
+    Opts = hb_name_test_utils:manifest_opts(),
+    Node = hb_http_server:start_node(Opts),
+    Subdomain = <<"k3mvddyhgasvaubzgu3z3ekwvqzn2m4jpbznmza64dukznabea7a">>,
+    hb_test_utils:assert_manifest_response(
+        Node,
+        #{
+          <<"host">> =>
+            <<Subdomain/binary, ".localhost">>,
+          <<"path">> => <<"/assets/http-api.html-b54313af.js">>
+        },
+        <<"application/javascript">>,
+        <<"Fetching Transaction Data">>,
         Opts
     ).
