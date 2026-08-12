@@ -15,7 +15,7 @@ These keys are typically used within an execution stack (managed by [`dev_stack`
 *   **`init`**
     *   **Action:** Initializes the Lua environment for the process. It finds and loads the Lua script(s) associated with the process, creates a `luerl` state, applies sandboxing rules if specified, installs the [`dev_lua_lib`](../resources/source-code/dev_lua_lib.md) (providing AO-specific functions like `ao.send`), and stores the initialized state in the process's private area (`priv/state`).
     *   **Inputs (Expected in Process Definition or `init` Message):**
-        *   `script`: Can be:
+        *   `module`: Can be:
             *   An Arweave Transaction ID of the Lua script file.
             *   A list of script IDs or script message maps.
             *   A message map containing the Lua script in its `body` tag (Content-Type `application/lua` or `text/x-lua`).
@@ -61,7 +61,7 @@ Like [`~wasm64@1.0`](../resources/source-code/dev_wasm.md), the `~lua@5.3a` devi
 # Example Process Definition Snippet
 Execution-Device: stack@1.0
 Execution-Stack: scheduler@1.0, lua@5.3a
-Script: <LuaScriptTxID>
+Module: <LuaScriptTxID>
 Sandbox: true
 ```
 
