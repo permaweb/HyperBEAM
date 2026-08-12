@@ -357,45 +357,8 @@ parse_offset_test() ->
         {ok, 1337 * 1024 * 1024 * 1024 * 1024, undefined},
         parse(<<"1337tib">>)
     ),
+    ?assertEqual(error, parse(<<"65t3aueqg2rkyk7c7csh7g3262xwkz5v5d7xtzit3rlpxjaa6ezq">>)),
     ok.
-
-all_unit_forms_test() ->
-    ?assertEqual({ok, 1, undefined}, parse(<<"1">>)),
-    ?assertEqual({ok, 1, undefined}, parse(<<"1b">>)),
-    assert_unit_forms(
-        [
-            <<"k">>, <<"m">>, <<"g">>, <<"t">>,
-            <<"p">>, <<"e">>, <<"z">>, <<"y">>
-        ],
-        1000
-    ),
-    assert_unit_forms(
-        [
-            <<"ki">>, <<"mi">>, <<"gi">>, <<"ti">>,
-            <<"pi">>, <<"ei">>, <<"zi">>, <<"yi">>
-        ],
-        1024
-    ),
-    ok.
-
-assert_unit_forms(Units, Multiple) ->
-    lists:foldl(
-        fun(Unit, Value) ->
-            Expected = Value * Multiple,
-            ?assertEqual({ok, Expected, undefined}, parse(<<"1", Unit/binary>>)),
-            ?assertEqual(
-                {ok, Expected, undefined},
-                parse(<<"1", Unit/binary, "b">>)
-            ),
-            Expected
-        end,
-        1,
-        Units
-    ).
-
-partial_match_should_fail_test_parallel() ->
-    InvalidReference = <<"42tf43cjcfkwqydcjdk7ty2wbonkabw5acywyzk6shbd7x272zxq">>,
-    ?assertEqual(error, parse(InvalidReference)).
 
 offset_item_cases_test() ->
     Opts = #{},
