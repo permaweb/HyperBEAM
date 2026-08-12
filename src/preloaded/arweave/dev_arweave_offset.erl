@@ -56,27 +56,32 @@ parse(Key) ->
 
 %% @doc Parses and applies a unit modifier to a base value, supporting both
 %% the `kb` and `kib` unit formats.
-unit(Binary) -> unit(0, Binary).
+unit(Binary) ->
+    UnitWithoutOptionalB =
+        case Binary of
+            <<Prefix:(byte_size(Binary) - 1)/binary, "b">> -> Prefix;
+            _ -> Binary
+        end,
+    unit(0, UnitWithoutOptionalB).
 unit(Complete, <<>>) -> Complete;
 unit(Base, <<Int:8/integer, Rest/binary>>) when Int >= $0 andalso Int =< $9 ->
     unit(Base * 10 + (Int - $0), Rest);
-unit(Base, <<"b">>) -> Base;
-unit(Base, <<"ki", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"b">>);
-unit(Base, <<"mi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"ki">>);
-unit(Base, <<"gi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"mi">>);
-unit(Base, <<"ti", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"gi">>);
-unit(Base, <<"pi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"ti">>);
-unit(Base, <<"ei", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"pi">>);
-unit(Base, <<"zi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"ei">>);
-unit(Base, <<"yi", _/binary>>) when Base > 0 -> unit(Base * 1024, <<"zi">>);
-unit(Base, <<"k", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"b">>);
-unit(Base, <<"m", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"k">>);
-unit(Base, <<"g", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"m">>);
-unit(Base, <<"t", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"g">>);
-unit(Base, <<"p", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"t">>);
-unit(Base, <<"e", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"p">>);
-unit(Base, <<"z", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"e">>);
-unit(Base, <<"y", _/binary>>) when Base > 0 -> unit(Base * 1000, <<"z">>).
+unit(Base, <<"ki">>) when Base > 0 -> unit(Base * 1024, <<>>);
+unit(Base, <<"mi">>) when Base > 0 -> unit(Base * 1024, <<"ki">>);
+unit(Base, <<"gi">>) when Base > 0 -> unit(Base * 1024, <<"mi">>);
+unit(Base, <<"ti">>) when Base > 0 -> unit(Base * 1024, <<"gi">>);
+unit(Base, <<"pi">>) when Base > 0 -> unit(Base * 1024, <<"ti">>);
+unit(Base, <<"ei">>) when Base > 0 -> unit(Base * 1024, <<"pi">>);
+unit(Base, <<"zi">>) when Base > 0 -> unit(Base * 1024, <<"ei">>);
+unit(Base, <<"yi">>) when Base > 0 -> unit(Base * 1024, <<"zi">>);
+unit(Base, <<"k">>) when Base > 0 -> unit(Base * 1000, <<>>);
+unit(Base, <<"m">>) when Base > 0 -> unit(Base * 1000, <<"k">>);
+unit(Base, <<"g">>) when Base > 0 -> unit(Base * 1000, <<"m">>);
+unit(Base, <<"t">>) when Base > 0 -> unit(Base * 1000, <<"g">>);
+unit(Base, <<"p">>) when Base > 0 -> unit(Base * 1000, <<"t">>);
+unit(Base, <<"e">>) when Base > 0 -> unit(Base * 1000, <<"p">>);
+unit(Base, <<"z">>) when Base > 0 -> unit(Base * 1000, <<"e">>);
+unit(Base, <<"y">>) when Base > 0 -> unit(Base * 1000, <<"z">>).
 
 %% @doc Load an ANS-104 item whose header begins at the given global offset.
 %% When a length is supplied it is treated as the exact ANS-104 data length, so
@@ -352,6 +357,7 @@ parse_offset_test() ->
         {ok, 1337 * 1024 * 1024 * 1024 * 1024, undefined},
         parse(<<"1337tib">>)
     ),
+    ?assertEqual(error, parse(<<"65t3aueqg2rkyk7c7csh7g3262xwkz5v5d7xtzit3rlpxjaa6ezq">>)),
     ok.
 
 offset_item_cases_test() ->
