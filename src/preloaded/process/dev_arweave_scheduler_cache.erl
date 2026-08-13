@@ -47,13 +47,19 @@ list_processes(RawOpts) ->
         _ -> []
     end.
 
-%% @doc Cache a data-free signed transaction header under its TXID.
+%% @doc Cache a signed transaction header under its TXID.
 write_header(Header, RawOpts) ->
     hb_cache:write(Header, opts(RawOpts)).
 
 %% @doc Read a cached signed transaction header by TXID.
 read_header(TXID, RawOpts) ->
-    hb_cache:read(TXID, opts(RawOpts)).
+    Opts = hb_store:scope(opts(RawOpts), local),
+    try hb_cache:read(TXID, Opts) of
+        {ok, Header} -> {ok, hb_cache:ensure_all_loaded(Header, Opts)};
+        Error -> Error
+    catch
+        _:_ -> {error, not_found}
+    end.
 
 %% @doc Cache and read canonical block messages under scheduler-owned height
 %% paths. This avoids coupling the scheduler package to the Arweave device's
@@ -283,3 +289,26 @@ linked_state_and_target_test() ->
         hb_util:human_id(hb_message:id(ReadHeader, signed, Opts))
     ),
     ok = hb_store:stop(Store).
+
+header_read_is_local_test() ->
+    Local = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-local">>),
+    Backing = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-remote">>),
+    Remote =
+        #{
+            <<"store-module">> => hb_store_multi,
+            <<"scope">> => remote,
+            <<"stores">> => [Backing],
+            <<"workers-per-store">> => 1
+        },
+    ok = hb_store:start(Local),
+    ok = hb_store:start(Remote),
+    CommitOpts = #{ <<"priv-wallet">> => ar_wallet:new() },
+    Header = hb_message:commit(#{ <<"message">> => <<"header">> }, CommitOpts),
+    TXID = hb_message:id(Header, signed, CommitOpts),
+    {ok, _} = hb_cache:write(Header, #{ <<"store">> => [Remote] }),
+    Opts = #{ <<"store">> => [Local, Remote] },
+    ?assertEqual({error, not_found}, read_header(TXID, Opts)),
+    {ok, _} = hb_cache:write(Header, #{ <<"store">> => [Local] }),
+    ?assertMatch({ok, _}, read_header(TXID, Opts)),
+    ok = hb_store:stop(Remote),
+    ok = hb_store:stop(Local).
