@@ -205,19 +205,24 @@ load_message(Base, Req, Opts) ->
             <<"base">> -> Base;
             <<"self">> -> Req;
             not_found -> hb_maps:get(<<"body">>, Req, Req, Opts);
-            Key -> hb_maps:get(Key, Req, Opts)
+            Key -> hb_maps:get(Key, Req, not_found, Opts)
         end,
-    try {ok, hb_cache:ensure_all_loaded(Raw, Opts)}
-    catch
-        error:{necessary_message_not_found, _, _} ->
-            {error,
-                #{
-                    <<"status">> => 404,
-                    <<"reason">> =>
-                        <<"Cannot fully load message to schedule.">>
-                }
-            }
+    case Raw of
+        not_found -> missing_message();
+        _ ->
+            try {ok, hb_cache:ensure_all_loaded(Raw, Opts)}
+            catch
+                error:{necessary_message_not_found, _, _} -> missing_message()
+            end
     end.
+
+missing_message() ->
+    {error,
+        #{
+            <<"status">> => 404,
+            <<"reason">> => <<"Cannot fully load message to schedule.">>
+        }
+    }.
 
 committed(Message, Opts) ->
     case hb_message:with_only_committed(Message, Opts) of
