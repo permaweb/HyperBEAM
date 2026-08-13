@@ -457,7 +457,7 @@ fetch_header(TXID, Opts, Fallback) ->
     case dev_arweave_scheduler_cache:read_header(TXID, Opts) of
         {ok, Header} ->
             case validate_header(TXID, Header, Opts) of
-                {ok, _, _} = Valid -> Valid;
+                {ok, _, #tx{ data = <<>> }} = Valid -> Valid;
                 _ -> Fallback(TXID, Opts)
             end;
         _ -> Fallback(TXID, Opts)
@@ -948,21 +948,36 @@ data_bearing_spawn_is_cached_before_slot_zero_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-spawn">>),
     ok = hb_store:start(Store),
     Opts = #{ <<"store">> => [Store], <<"priv-wallet">> => ar_wallet:new() },
-    Header =
+    FullHeader =
         hb_message:commit(
             #{ <<"type">> => <<"Process">>, <<"data">> => <<"spawn body">> },
             Opts,
             #{ <<"commitment-device">> => <<"tx@1.0">> }
         ),
-    ProcessID = hb_util:human_id(hb_message:id(Header, signed, Opts)),
-    {ok, Header, #tx{ data_size = DataSize }} =
-        validate_header(ProcessID, Header, Opts),
+    ProcessID = hb_util:human_id(hb_message:id(FullHeader, signed, Opts)),
+    {ok, FullHeader, FullTX = #tx{ data_size = DataSize }} =
+        validate_header(ProcessID, FullHeader, Opts),
     ?assert(DataSize > 0),
+    ?assertNotEqual(<<>>, FullTX#tx.data),
+    Header =
+        hb_message:convert(
+            FullTX#tx{ data = <<>> },
+            <<"structured@1.0">>,
+            <<"tx@1.0">>,
+            Opts#{ <<"exclude-data">> => true }
+        ),
+    {ok, _} = dev_arweave_scheduler_cache:write_header(FullHeader, Opts),
+    Fallback =
+        fun(ProcessID, FallbackOpts) ->
+            validate_header(ProcessID, Header, FallbackOpts)
+        end,
+    {ok, Header, #tx{ data = <<>> }} =
+        fetch_header(ProcessID, Opts, Fallback),
     ok = write_spawn_assignment(ProcessID, 100, 2, Header, Opts),
-    ?assertMatch(
-        {ok, _},
-        dev_arweave_scheduler_cache:read_header(ProcessID, Opts)
-    ),
+    {ok, CachedHeader} =
+        dev_arweave_scheduler_cache:read_header(ProcessID, Opts),
+    #tx{ data = <<>>, data_size = DataSize } =
+        hb_message:convert(CachedHeader, <<"tx@1.0">>, Opts),
     {ok, Assignment} =
         dev_arweave_scheduler_cache:read_assignment(ProcessID, 0, Opts),
     ?assertEqual(0, hb_maps:get(<<"slot">>, Assignment, not_found, Opts)),
@@ -973,6 +988,10 @@ data_bearing_spawn_is_cached_before_slot_zero_test() ->
     ?assertEqual(
         2,
         hb_maps:get(<<"block-index">>, Assignment, not_found, Opts)
+    ),
+    ?assertEqual(
+        not_found,
+        hb_maps:get([<<"body">>, <<"data">>], Assignment, not_found, Opts)
     ),
     ok = hb_store:stop(Store).
 
