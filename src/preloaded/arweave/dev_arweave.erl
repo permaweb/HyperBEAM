@@ -943,6 +943,21 @@ to_message(Path = <<"/tx/", TXID/binary>>, <<"GET">>, Result, LogExtra, Opts) ->
 to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, _Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     {ok, Body};
+to_message(Path = <<"/raw/", _/binary>>, <<"GET">>, {ok, Response}, LogExtra, Opts) ->
+    ContentLength = hb_maps:get(
+        <<"Content-Length">>,
+        Response,
+        hb_maps:get(<<"content-length">>, Response, -1, Opts),
+        Opts
+    ),
+    case hb_util:int(ContentLength) of
+        0 ->
+            event_request(Path, <<"GET">>, 200, LogExtra),
+            {ok, <<>>};
+        _ ->
+            event_request(Path, <<"GET">>, server_error, LogExtra),
+            {error, server_error}
+    end;
 to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body }}, LogExtra, Opts) ->
     event_request(Path, <<"GET">>, 200, LogExtra),
     Block =
@@ -1220,6 +1235,18 @@ best_response_non_map_error_round_trips_test_parallel() ->
     ?assertEqual(
         {error, FailedConnect},
         to_message(<<"/tx">>, <<"GET">>, {error, FailedConnect}, [], #{})
+    ).
+
+empty_raw_response_test() ->
+    ?assertEqual(
+        {ok, <<>>},
+        to_message(
+            <<"/raw/empty">>,
+            <<"GET">>,
+            {ok, #{ <<"Content-Length">> => <<"0">> }},
+            [],
+            #{}
+        )
     ).
 
 post_tx_json_two_node_test(Node1TxResponse, Node2TxResponse) ->
