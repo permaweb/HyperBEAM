@@ -100,15 +100,16 @@ write_targets_map(Targets, RawOpts) ->
     Store = hb_opts:get(store, no_viable_store, Opts),
     hb_store:link(Store, Targets, Opts).
 
-%% @doc Read an indexed target's header and recover its signed TXID. Reading
-%% the target path follows both cache links; resolving the store path directly
-%% would instead return the header's uncommitted cache ID.
+%% @doc Resolve an indexed target's signed TXID and read its cached header.
 read_target(Address, Ordinate, RawOpts) ->
     Opts = opts(RawOpts),
-    case hb_cache:read(target_path(Address, Ordinate), Opts) of
-        {ok, RawHeader} ->
-            Header = hb_message:normalize_commitments(RawHeader, Opts),
-            {ok, hb_util:human_id(hb_message:id(Header, signed, Opts)), Header};
+    Store = hb_opts:get(store, no_viable_store, Opts),
+    case hb_store:resolve(Store, target_path(Address, Ordinate), Opts) of
+        {ok, TXID} ->
+            case hb_cache:read(TXID, Opts) of
+                {ok, Header} -> {ok, TXID, Header};
+                {error, not_found} -> not_found
+            end;
         {error, not_found} -> not_found
     end.
 
@@ -278,8 +279,9 @@ linked_state_and_target_test() ->
     ok = write_target(ProcessID, <<"101-3">>, TXID, Opts),
     ?assertEqual([<<"101-3">>], list_targets(ProcessID, Opts)),
     {ok, ReadTXID, ReadHeader} = read_target(ProcessID, <<"101-3">>, Opts),
+    ?assertEqual(TXID, ReadTXID),
     ?assertEqual(
-        ReadTXID,
+        TXID,
         hb_util:human_id(hb_message:id(ReadHeader, signed, Opts))
     ),
     ok = hb_store:stop(Store).
