@@ -61,10 +61,20 @@ data_size_field(Prefix, Map, Opts) ->
 
 excluded_tags(TX, TABM, Opts) ->
     lib_arweave_common:excluded_tags(TX, TABM, Opts) ++
+    exclude_format_tag(TX, TABM, Opts) ++
     exclude_quantity_tag(TX, TABM, Opts) ++
     exclude_reward_tag(TX, TABM, Opts) ++
     exclude_data_root_tag(TX) ++
     exclude_data_size_tag(TX).
+
+%% @doc Exclude a format-one structural field from the transaction's tags.
+exclude_format_tag(#tx{ format = 1 }, TABM, _Opts) ->
+    case maps:get(<<"format">>, TABM, undefined) of
+        <<"1">> -> [<<"format">>];
+        _ -> []
+    end;
+exclude_format_tag(_TX, _TABM, _Opts) ->
+    [].
 
 decoded_field(Prefix, Key, Map, Default, Decode, Opts) ->
     case hb_maps:find(<<Prefix/binary, Key/binary>>, Map, Opts) of
