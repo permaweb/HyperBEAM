@@ -3,8 +3,8 @@
 ## Original prompt
 
 Replace the experimental dense Arweave scheduler with a clean global target
-index, ignore all existing test processes, and reissue the assets against the
-new protocol without legacy compatibility.
+index. Retain the existing test assets by moving the fixed boundary 10,000
+blocks earlier; their pre-`Assign-To` payments intentionally remain absent.
 
 ## Issue
 
@@ -19,17 +19,18 @@ explicitly makes unnecessary.
    different nodes can present different schedules for the same process.
 2. Backfill from genesis. Complete for discarded test processes, but far beyond
    the requested migration and operationally expensive.
-3. Fix a common rollout block immediately before reissuance and reject older
-   processes.
+3. Fix a common rollout block 10,000 blocks before the original boundary and
+   reject older processes.
 
 ## Decision
 
-Use block `1978888` as the default inclusive rollout boundary. It was the
-confirmed frontier at implementation time (current height minus the default
-10-block confirmation depth). Persist `from` in `sync/global` and fail closed
-if a node later supplies a different configured value for the same store.
+Use block `1968888` as the default inclusive rollout boundary. This is exactly
+10,000 blocks before the original `1978888` boundary and covers the existing
+test assets while preserving a finite, deterministic scan. Persist `from` in
+`sync/global` and fail closed if a node later supplies a different configured
+value for the same store.
 
-This gives every fresh node the same completeness boundary, keeps the first
-scan small for the reissued assets, and introduces no compatibility path for
-the abandoned test processes. Deployments may override the compiled default
-only as a coordinated protocol choice before building the store.
+This gives every fresh node the same completeness boundary and introduces no
+compatibility path for payments that lacked `Assign-To`. Deployments may
+override the compiled default only as a coordinated protocol choice before
+building the store.

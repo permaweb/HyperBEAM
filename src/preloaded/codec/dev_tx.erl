@@ -1175,6 +1175,57 @@ real_2048_bit_rsa_tx_test() ->
         [<<"tj76flZk936u0S2owyEzUFBvBAYle9Al5LH8zJ7icNc">>]
     ).
 
+format_one_roundtrip_test() ->
+    Signed = ar_tx:sign(
+        #tx{
+            format = 1,
+            target = crypto:strong_rand_bytes(32),
+            quantity = 1,
+            reward = 1
+        },
+        hb:wallet()
+    ),
+    Structured = hb_message:convert(
+        Signed,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        #{}
+    ),
+    Roundtripped = hb_message:convert(
+        Structured,
+        <<"tx@1.0">>,
+        <<"structured@1.0">>,
+        #{}
+    ),
+    ?assertEqual(Signed#tx.tags, Roundtripped#tx.tags),
+    ?assert(ar_tx:verify(Roundtripped)).
+
+duplicate_tags_roundtrip_test() ->
+    Signed = ar_tx:sign(
+        #tx{
+            format = 2,
+            tags = [
+                {<<"authority-actions">>, <<"Deposit">>},
+                {<<"authority-actions">>, <<"Withdraw">>}
+            ]
+        },
+        hb:wallet()
+    ),
+    Structured = hb_message:convert(
+        Signed,
+        <<"structured@1.0">>,
+        <<"tx@1.0">>,
+        #{}
+    ),
+    Roundtripped = hb_message:convert(
+        Structured,
+        <<"tx@1.0">>,
+        <<"structured@1.0">>,
+        #{}
+    ),
+    ?assertEqual(Signed#tx.tags, Roundtripped#tx.tags),
+    ?assert(ar_tx:verify(Roundtripped)).
+
 real_no_data_tx_test() ->
     do_real_tx_verify(
         <<"N1Cyu67lQtmZMQlIZVFpNfy3xz6k9wEZ8LLeDbOebbk">>,

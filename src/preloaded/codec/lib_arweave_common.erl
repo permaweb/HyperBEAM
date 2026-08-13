@@ -362,13 +362,20 @@ bundle_commitment_key(Tags, Opts) ->
 %% @doc Check whether a list of key-value pairs contains only normalized keys.
 normal_tags(BaseFields, Tags) ->
     ReservedFields = [<<"ao-types">>, <<"data">> | BaseFields],
-    lists:all(
-        fun({Key, _}) ->
-            hb_util:to_lower(hb_ao:normalize_key(Key)) =:= Key andalso
-            not lists:member(Key, ReservedFields)
-        end,
-        Tags
-    ).
+    NormalizedKeys =
+        [
+            hb_util:to_lower(hb_ao:normalize_key(Key))
+        ||
+            {Key, _} <- Tags
+        ],
+    length(NormalizedKeys) =:= length(lists:usort(NormalizedKeys)) andalso
+        lists:all(
+            fun({Key, _}) ->
+                hb_util:to_lower(hb_ao:normalize_key(Key)) =:= Key andalso
+                not lists:member(Key, ReservedFields)
+            end,
+            Tags
+        ).
 
 %% @doc Return the original tags of an item if it is applicable. Otherwise,
 %% return `undefined'.
