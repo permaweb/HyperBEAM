@@ -485,6 +485,8 @@ raw_default_message() ->
         % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         <<"process-now-from-cache">> => false,
+        % Maximum age, in seconds, for `/now' to serve from the process cache.
+        <<"process-now-max-age">> => infinity,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
