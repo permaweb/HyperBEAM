@@ -126,8 +126,8 @@ list_targets(Address, RawOpts) ->
 write_assignment(Assignment, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    ProcessID = hb_maps:get(<<"process">>, Assignment, Opts),
-    Slot = hb_maps:get(<<"slot">>, Assignment, Opts),
+    ProcessID = hb_maps:get(<<"process">>, Assignment, not_found, Opts),
+    Slot = hb_maps:get(<<"slot">>, Assignment, not_found, Opts),
     case hb_cache:write(Assignment, Opts) of
         {ok, _} ->
             hb_store:link(
@@ -177,7 +177,12 @@ assignments_to_bundle(ProcessID, Assignments, More, RawOpts) ->
                 hb_message:normalize_commitments(
                     hb_maps:from_list(
                         [
-                            {hb_maps:get(<<"slot">>, Assignment, Opts), Assignment}
+                            {
+                                hb_maps:get(
+                                    <<"slot">>, Assignment, not_found, Opts
+                                ),
+                                Assignment
+                            }
                         ||
                             Assignment <- Assignments
                         ]

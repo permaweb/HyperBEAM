@@ -14,24 +14,17 @@
 -define(DEFAULT_FROM_HEIGHT, 1978888).
 -define(DEFAULT_HEADER_WORKERS, 16).
 -define(DEFAULT_SYNC_INTERVAL_MS, 1000).
--define(SYNC_TABLE, dev_arweave_scheduler_sync_checks).
 
 %% @doc Bring the global target index to the confirmed chain frontier. The
-%% transaction is serialized per scheduler store, and repeated callers within
+%% pass is serialized per scheduler store, and repeated callers within
 %% the short check interval reuse the completed global record without another
 %% network-tip request.
 sync(Opts) ->
-    CacheOpts = dev_arweave_scheduler_cache:opts(Opts),
-    Store = hb_opts:get(store, no_viable_store, CacheOpts),
-    ensure_sync_table(),
-    case recent_state(Store, Opts) of
-        {ok, _} = Recent -> Recent;
-        stale ->
-            global:trans(
-                {?MODULE, Store},
-                fun() -> maybe_sync(Store, Opts) end
-            )
-    end.
+    Store = scheduler_store(Opts),
+    exclusive(
+        {?MODULE, sync, Store},
+        fun(Cached) -> sync_request(Cached, Opts) end
+    ).
 
 %% @doc Synchronize the global index and materialize one process's relevant
 %% entries into contiguous AO slots. Each process is serialized independently;
@@ -39,14 +32,16 @@ sync(Opts) ->
 process(ProcessID, Opts) ->
     case canonical_process_id(ProcessID) of
         {ok, HumanProcessID} ->
-            CacheOpts = dev_arweave_scheduler_cache:opts(Opts),
-            Store = hb_opts:get(store, no_viable_store, CacheOpts),
+            Store = scheduler_store(Opts),
             maybe
                 {ok, Global} ?= sync(Opts),
-                global:trans(
-                    {?MODULE, Store, HumanProcessID},
-                    fun() ->
-                        materialize_process(HumanProcessID, Global, Opts)
+                exclusive(
+                    {?MODULE, process, Store, HumanProcessID},
+                    fun(_State) ->
+                        {
+                            materialize_process(HumanProcessID, Global, Opts),
+                            undefined
+                        }
                     end
                 )
             end;
@@ -60,24 +55,26 @@ process(ProcessID, Opts) ->
             }
     end.
 
-maybe_sync(Store, Opts) ->
-    case recent_state(Store, Opts) of
-        {ok, _} = Recent -> Recent;
+sync_request(Cached, Opts) ->
+    case recent_state(Cached, Opts) of
+        {ok, _} = Recent -> {Recent, Cached};
         stale ->
-            StateResult = dev_arweave_scheduler_cache:read_global(Opts),
-            Result = do_sync(StateResult, Opts),
+            Result =
+                do_sync(
+                    dev_arweave_scheduler_cache:read_global(Opts),
+                    Opts
+                ),
             case Result of
                 {ok, State} ->
-                    ets:insert(
-                        ?SYNC_TABLE,
-                        {Store, erlang:monotonic_time(millisecond), State}
-                    );
-                _ -> ok
-            end,
-            Result
+                    {
+                        Result,
+                        {erlang:monotonic_time(millisecond), State}
+                    };
+                _ -> {Result, undefined}
+            end
     end.
 
-recent_state(Store, Opts) ->
+recent_state(Cached, Opts) ->
     Interval =
         hb_util:int(
             hb_opts:get(
@@ -88,8 +85,8 @@ recent_state(Store, Opts) ->
         ),
     Now = erlang:monotonic_time(millisecond),
     ConfiguredFrom = from_height(Opts),
-    case ets:lookup(?SYNC_TABLE, Store) of
-        [{Store, CheckedAt, State}]
+    case Cached of
+        {CheckedAt, State}
                 when Interval > 0, Now - CheckedAt < Interval ->
             case hb_util:int(hb_maps:get(<<"from">>, State, -1, #{})) of
                 ConfiguredFrom -> {ok, State};
@@ -286,7 +283,8 @@ write_process_assignments(
         {ok, NewNextSlot} ->
             NewState =
                 State#{
-                    <<"synced-to">> => hb_maps:get(<<"to">>, Global, Opts),
+                    <<"synced-to">> =>
+                        hb_maps:get(<<"to">>, Global, not_found, Opts),
                     <<"next-slot">> => NewNextSlot
                 },
             case dev_arweave_scheduler_cache:write_process(
@@ -575,14 +573,16 @@ canonical_process_id(ProcessID) ->
     end.
 
 trim_ascii(<<C, Rest/binary>>)
-        when C =:= $\s; C =:= $\t; C =:= $\r; C =:= $\n ->
+        when C =:= $\s; C =:= $\t; C =:= $\n; C =:= 11;
+             C =:= 12; C =:= $\r ->
     trim_ascii(Rest);
 trim_ascii(Bin) -> trim_ascii_right(Bin, byte_size(Bin)).
 
 trim_ascii_right(_, 0) -> <<>>;
 trim_ascii_right(Bin, Len) ->
     case binary:at(Bin, Len - 1) of
-        C when C =:= $\s; C =:= $\t; C =:= $\r; C =:= $\n ->
+        C when C =:= $\s; C =:= $\t; C =:= $\n; C =:= 11;
+               C =:= 12; C =:= $\r ->
             trim_ascii_right(Bin, Len - 1);
         _ -> binary:part(Bin, 0, Len)
     end.
@@ -730,34 +730,37 @@ no_result_cache(Opts) ->
         <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
     }.
 
-ensure_sync_table() ->
-    Owner =
-        hb_name:singleton(
-            {?MODULE, ?SYNC_TABLE},
-            fun() ->
-                ets:new(
-                    ?SYNC_TABLE,
-                    [
-                        named_table,
-                        public,
-                        set,
-                        {read_concurrency, true},
-                        {write_concurrency, true}
-                    ]
-                ),
-                sync_table_owner()
-            end
-        ),
-    Ref = make_ref(),
-    Owner ! {ready, self(), Ref},
-    receive {Ref, ok} -> ?SYNC_TABLE end.
-
-sync_table_owner() ->
+%% @doc Run one scheduler-store task at a time through a node-local worker.
+%% Global synchronization and each process have separate names, so one slow
+%% process initialization does not block unrelated schedules. Unexpected task
+%% failures terminate the worker; every queued caller monitors it and the next
+%% request starts with a clean mailbox.
+exclusive(Name, Fun) ->
+    Runner = hb_name:singleton(Name, fun() -> runner(undefined) end),
+    Monitor = erlang:monitor(process, Runner),
+    Runner ! {run, self(), Monitor, Fun},
     receive
-        {ready, Caller, Ref} ->
-            Caller ! {Ref, ok},
-            sync_table_owner()
+        {ran, Monitor, Result} ->
+            erlang:demonitor(Monitor, [flush]),
+            Result;
+        {'DOWN', Monitor, process, Runner, Reason} ->
+            exit({arweave_scheduler_sync_runner_down, Reason})
     end.
+
+runner(State) ->
+    receive
+        {run, Caller, Ref, Fun} ->
+            {Result, NewState} = Fun(State),
+            Caller ! {ran, Ref, Result},
+            runner(NewState)
+    end.
+
+scheduler_store(Opts) ->
+    hb_opts:get(
+        store,
+        no_viable_store,
+        dev_arweave_scheduler_cache:opts(Opts)
+    ).
 
 %%% Tests
 
@@ -772,8 +775,9 @@ targets_test() ->
             tags =
                 [
                     {<<"Assign-To">>,
-                        <<" ", A/binary, ",", B/binary, ",,", A/binary,
-                            ",", NativeAddress/binary, ",invalid ">>}
+                        <<11, 12, " ", A/binary, ",", B/binary, ",,",
+                            A/binary, ",", NativeAddress/binary,
+                            ",invalid \t\r\n", 11, 12>>}
                 ]
         },
     ?assertEqual(
@@ -801,6 +805,79 @@ ordinate_test() ->
     ?assertEqual({ok, {1966084, 23}}, parse_ordinate(<<"1966084-23">>)),
     ?assertEqual(error, parse_ordinate(<<"1966084">>)),
     ?assertEqual(error, parse_ordinate(<<"-1-2">>)).
+
+singleton_serialization_test() ->
+    Name = {?MODULE, test, make_ref()},
+    Parent = self(),
+    Run =
+        fun() ->
+            Result =
+                exclusive(
+                    Name,
+                    fun(State) ->
+                        Count = case State of undefined -> 0; _ -> State end,
+                        {{ok, Count}, Count + 1}
+                    end
+                ),
+            Parent ! {complete, Result}
+        end,
+    _ = [spawn(Run) || _ <- lists:seq(1, 12)],
+    Results = [receive {complete, {ok, N}} -> N end || _ <- lists:seq(1, 12)],
+    ?assertEqual(lists:seq(0, 11), lists:sort(Results)),
+    stop_test_runner(Name).
+
+public_process_path_test() ->
+    Store =
+        hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-public">>),
+    ok = hb_store:start(Store),
+    Opts =
+        #{
+            <<"store">> => [Store],
+            <<"arweave-scheduler-from">> => 100,
+            <<"arweave-scheduler-sync-interval">> => 10000,
+            <<"priv-wallet">> => ar_wallet:new()
+        },
+    ProcessID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    Global = #{ <<"from">> => 100, <<"to">> => 101 },
+    ProcessState =
+        #{
+            <<"process">> => ProcessID,
+            <<"spawn-ordinate">> => <<"100-0">>,
+            <<"synced-to">> => 101,
+            <<"next-slot">> => 1
+        },
+    {ok, _} = dev_arweave_scheduler_cache:write_global(Global, Opts),
+    {ok, _} =
+        dev_arweave_scheduler_cache:write_process(
+            ProcessID, ProcessState, Opts
+        ),
+    SyncName = {?MODULE, sync, scheduler_store(Opts)},
+    ?assertEqual(
+        {ok, seeded},
+        exclusive(
+            SyncName,
+            fun(_Cached) ->
+                {
+                    {ok, seeded},
+                    {erlang:monotonic_time(millisecond), Global}
+                }
+            end
+        )
+    ),
+    ?assertEqual({ok, ProcessState}, process(ProcessID, Opts)),
+    stop_test_runner(SyncName),
+    stop_test_runner(
+        {?MODULE, process, scheduler_store(Opts), ProcessID}
+    ),
+    ok = hb_store:stop(Store).
+
+stop_test_runner(Name) ->
+    case hb_name:lookup(Name) of
+        undefined -> ok;
+        Runner ->
+            exit(Runner, kill),
+            hb_name:unregister(Name)
+    end.
 
 block_validation_test() ->
     State = #{ <<"block-hash">> => <<"previous">> },
