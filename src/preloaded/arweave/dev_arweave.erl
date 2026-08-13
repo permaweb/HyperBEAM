@@ -813,7 +813,19 @@ price(Base, Request, Opts) ->
         not_found ->
             {error, not_found};
         _ ->
-            request(<<"GET">>, <<"/price/", (hb_util:bin(Size))/binary>>, Opts)
+            request(
+                <<"GET">>,
+                <<"/price/", (hb_util:bin(Size))/binary,
+                    (case hb_ao:get_first(
+                        [{Request, <<"target">>}, {Base, <<"target">>}],
+                        <<>>,
+                        Opts
+                    ) of
+                        Target when Target == not_found; Target == <<>> -> <<>>;
+                        Target -> <<"/", (hb_util:bin(Target))/binary>>
+                    end)/binary>>,
+                Opts
+            )
     end.
 
 tx_anchor(_Base, _Request, Opts) ->

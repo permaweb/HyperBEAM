@@ -224,6 +224,8 @@ ensure_tx_committed(Msg, Opts) ->
             {error,
                 #{
                     <<"status">> => 422,
+                    <<"accept-codec">> => <<"tx@1.0">>,
+                    <<"accept-bundle">> => false,
                     <<"body">> =>
                         <<"The Arweave scheduler only accepts messages ",
                             "committed with tx@1.0.">>

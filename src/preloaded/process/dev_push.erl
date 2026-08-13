@@ -318,6 +318,14 @@ push_result_message(TargetProcess, MsgToPush, Origin, Opts) ->
                 Opts
             ),
             case schedule_result(TargetProcess, MsgToPush, Origin, Opts) of
+                {ok, Assignment = #{ <<"status">> := 202 }} ->
+                    TXID = hb_ao:get(<<"tx-id">>, Assignment, Opts),
+                    #{
+                        <<"id">> => TXID,
+                        <<"target">> => TargetID,
+                        <<"status">> => 202,
+                        <<"resulted-in">> => <<"pending">>
+                    };
                 {ok, Assignment} ->
                     % Analyze the result of the message push.
                     NextSlotOnProc = hb_ao:get(<<"slot">>, Assignment, Opts),
@@ -555,8 +563,7 @@ calculate_base_id(GivenProcess, Opts) ->
     BaseID.
 
 %% @doc Add the necessary keys to the message to be scheduled, then schedule it.
-%% If the remote scheduler does not support the given codec, it will be
-%% downgraded and re-signed.
+%% If the remote scheduler rejects the codec, retry with its requested codec.
 schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
     schedule_result(
         TargetProcess,
@@ -570,55 +577,58 @@ schedule_result(TargetProcess, MsgToPush, Origin, Opts) ->
         Opts
     ).
 schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
-    Target = hb_ao:get(<<"target">>, MsgToPush, Opts),
+    MsgToSchedule = scheduler_message(MsgToPush, Codec, Opts),
+    Target = hb_ao:get(<<"target">>, MsgToSchedule, Opts),
     ?event(push,
         {push_scheduling_result,
             {target, {string, Target}},
             {target_process, TargetProcess},
-            {msg, MsgToPush},
+            {msg, MsgToSchedule},
             {codec, Codec},
             {origin, Origin}
         },
         Opts
     ),
-    AugmentedMsg = augment_message(Origin, MsgToPush, Opts),
+    AugmentedMsg = augment_message(Origin, MsgToSchedule, Opts),
     ?event(push, {prepared_msg, {msg, AugmentedMsg}}, Opts),
-    % Load the `accept-id`'d wallet into the `Opts` map, if requested.
-    SignedMsg = apply_security(AugmentedMsg, TargetProcess, Codec, Opts),
-    % Verify the signed message before writing to cache
-    true = hb_message:verify(SignedMsg, signers, Opts),
-    % Write the signed message to cache before including it in the schedule request
-    {ok, _} = hb_cache:write(SignedMsg, Opts),
-    ScheduleReq = #{
-        <<"path">> => <<"schedule">>,
-        <<"method">> => <<"POST">>,
-        <<"body">> => SignedMsg
-    },
-    ?event(push, {schedule_req, {req, ScheduleReq}}, Opts),
-    ?event(debug,
-        {push_scheduling_result,
-            {signed_req, SignedMsg}
-        }
-    ),
+    SignResult = sign_result(AugmentedMsg, TargetProcess, Codec, Opts),
     {ErlStatus, Res} =
-        case hb_message:signers(SignedMsg, Opts) of
-            [] ->
-                {error,
-                    <<
-                        "Application of security policy failed: ",
-                        "No identities matching authority were found."
-                    >>
-                };
-            _Committers ->
-                hb_ao:resolve(
-                    {as, <<"process@1.0">>, TargetProcess},
-                    ScheduleReq,
-                    Opts#{ <<"cache-control">> => <<"always">> }
-                )
+        case SignResult of
+            {error, Error} ->
+                {error, Error};
+            SignedMsg ->
+                case hb_message:signers(SignedMsg, Opts) of
+                    [] ->
+                        {error,
+                            <<
+                                "Application of security policy failed: ",
+                                "No identities matching authority were found."
+                            >>
+                        };
+                    _Committers ->
+                        true = hb_message:verify(SignedMsg, signers, Opts),
+                        {ok, _} = hb_cache:write(SignedMsg, Opts),
+                        ScheduleReq = #{
+                            <<"path">> => <<"schedule">>,
+                            <<"method">> => <<"POST">>,
+                            <<"body">> => SignedMsg
+                        },
+                        ?event(push, {schedule_req, {req, ScheduleReq}}, Opts),
+                        ?event(debug,
+                            {push_scheduling_result,
+                                {signed_req, SignedMsg}
+                            }
+                        ),
+                        hb_ao:resolve(
+                            {as, <<"process@1.0">>, TargetProcess},
+                            ScheduleReq,
+                            Opts#{ <<"cache-control">> => <<"always">> }
+                        )
+                end
         end,
     ?event(push, {push_sched_result, {status, ErlStatus}, {response, Res}}, Opts),
     case {ErlStatus, hb_ao:get(<<"status">>, Res, 200, Opts)} of
-        {ok, 200} ->
+        {ok, Code} when Code == 200; Code == 202 ->
             {ok, Res};
         {ok, 307} ->
             Location = hb_ao:get(<<"location">>, Res, Opts),
@@ -628,33 +638,181 @@ schedule_result(TargetProcess, MsgToPush, Codec, Origin, Opts) ->
             % `from-*' provenance and honoring the policy, rather than
             % re-committing the raw message with the default wallet.
             NormMsg = normalize_message(AugmentedMsg, Opts),
-            SignedNormMsg = apply_security(NormMsg, TargetProcess, Codec, Opts),
+            SignedNormMsg = sign_result(NormMsg, TargetProcess, Codec, Opts),
             remote_schedule_result(Location, SignedNormMsg, Opts);
         {error, 422} ->
             ?event(push, {wrong_format, {422, Res}, {codec, Codec}}, Opts),
-            case Codec of
-                <<"ans104@1.0">> ->
-                    {error, Res};
-                <<"httpsig@1.0">> ->
+            case next_schedule_codec(Codec, Res) of
+                {ok, NextCodec} ->
                     ?event(push,
-                        {downgrading_to_ans104,
+                        {retrying_schedule_codec,
                             {422, Res},
-                            {codec, Codec},
+                            {from, Codec},
+                            {to, NextCodec},
                             {origin, Origin}
                         },
                         Opts
                     ),
                     schedule_result(
                         TargetProcess,
-                        MsgToPush,
-                        <<"ans104@1.0">>,
+                        MsgToSchedule,
+                        NextCodec,
                         Origin,
                         Opts
-                    )
+                    );
+                error ->
+                    {error, Res}
             end;
         {error, _} ->
             {error, Res}
     end.
+
+next_schedule_codec(Codec, Res) ->
+    Next = case {codec_device(Codec), accept_codec(Res)} of
+        {<<"httpsig@1.0">>, not_found} -> <<"ans104@1.0">>;
+        {_, Hint} -> Hint
+    end,
+    case Next =/= not_found andalso codec_key(Codec) =/= codec_key(Next) of
+        true -> {ok, Next};
+        false -> error
+    end.
+
+accept_codec(#{ <<"accept-codec">> := Codec } = Res) ->
+    Decoded =
+        case is_map(Codec) of
+            true -> Codec;
+            false -> hb_http:accept_to_codec(#{ <<"accept">> => Codec }, #{})
+        end,
+    case maps:find(<<"accept-bundle">>, Res) of
+        {ok, Bundle} when is_map(Decoded) ->
+            Decoded#{ <<"bundle">> => hb_util:atom(Bundle) };
+        {ok, Bundle} ->
+            #{ <<"device">> => Decoded, <<"bundle">> => hb_util:atom(Bundle) };
+        error ->
+            Decoded
+    end;
+accept_codec(_Res) ->
+    not_found.
+
+codec_key(#{ <<"device">> := Device } = Codec) ->
+    {Device, hb_util:atom(maps:get(<<"bundle">>, Codec, not_found))};
+codec_key(#{ <<"commitment-device">> := Device } = Codec) ->
+    {Device, hb_util:atom(maps:get(<<"bundle">>, Codec, not_found))};
+codec_key(Device) when is_binary(Device) ->
+    {Device, not_found}.
+
+codec_device(Codec) -> element(1, codec_key(Codec)).
+
+scheduler_message(Msg, Codec, Opts) ->
+    case codec_device(Codec) of
+        <<"tx@1.0">> ->
+            hb_maps:without(
+                [<<"commitments">>, <<"ao-types">>],
+                hb_message:uncommitted_deep(hb_private:reset(Msg), Opts),
+                Opts
+            );
+        _ ->
+            Msg
+    end.
+
+sign_result(Msg, TargetProcess, Codec, Opts) ->
+    case codec_device(Codec) of
+        <<"tx@1.0">> -> sign_with_authority(Msg, TargetProcess, Opts);
+        _ -> apply_security(Msg, TargetProcess, Codec, Opts)
+    end.
+
+sign_with_authority(Msg, TargetProcess, Opts) ->
+    case authority_opts(TargetProcess, Opts) of
+        {ok, CommitterOpts} -> sign_l1_header(Msg, CommitterOpts, Opts);
+        error -> hb_message:uncommitted(Msg)
+    end.
+
+authority_opts(TargetProcess, Opts) ->
+    Authorities = case hb_ao:get(<<"authority">>, TargetProcess, not_found, Opts) of
+        not_found -> [];
+        List when is_list(List) -> List;
+        Authority -> hb_util:binary_to_strings(Authority)
+    end,
+    case [SignerOpts || Signer <- Authorities, {ok, SignerOpts} <- [hb_opts:as(Signer, Opts)]] of
+        [SignerOpts | _] -> {ok, SignerOpts};
+        [] -> error
+    end.
+
+sign_l1_header(Msg, CommitterOpts, Opts) ->
+    case {hb_opts:get(priv_wallet, no_viable_wallet, CommitterOpts),
+            l1_header_fields(Msg, Opts)} of
+        {no_viable_wallet, _} ->
+            {error,
+                #{
+                    <<"status">> => 500,
+                    <<"body">> => <<"Target authority has no local wallet.">>
+                }};
+        {Wallet, {ok, Price, Anchor}} ->
+            TX = ar_tx:normalize(
+                ar_tx:sign(message_to_l1_tx(Msg, Price, Anchor, Opts), Wallet)
+            ),
+            hb_message:convert(TX, <<"structured@1.0">>, <<"tx@1.0">>, Opts);
+        {_, {error, Error}} ->
+            {error, Error}
+    end.
+
+l1_header_fields(Msg, Opts) ->
+    case {
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"/price">>,
+                <<"size">> => 0,
+                <<"target">> => hb_ao:get(<<"target">>, Msg, Opts)
+            },
+            Opts),
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{ <<"path">> => <<"/tx_anchor">> },
+            Opts)
+    } of
+        {{ok, Price}, {ok, Anchor}} ->
+            {ok, Price, Anchor};
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 502,
+                    <<"body">> => <<"Failed to prepare Arweave L1 header.">>
+                }}
+    end.
+
+message_to_l1_tx(Msg, Reward, Anchor, Opts) ->
+    #tx{
+        format = 2,
+        target = hb_util:decode(hb_ao:get(<<"target">>, Msg, Opts)),
+        quantity = 1,
+        reward = Reward,
+        anchor = Anchor,
+        data = <<>>,
+        tags = l1_message_tags(Msg, Opts)
+    }.
+
+l1_message_tags(Msg, Opts) ->
+    TagMsg =
+        hb_maps:without(
+            [
+                <<"anchor">>,
+                <<"ao-types">>,
+                <<"commitments">>,
+                <<"data">>,
+                <<"data_root">>,
+                <<"data_size">>,
+                <<"format">>,
+                <<"reward">>,
+                <<"target">>
+            ],
+            hb_private:reset(Msg),
+            Opts
+        ),
+    lists:map(
+        fun({Key, Value}) -> {Key, hb_util:bin(Value)} end,
+        lists:sort(hb_maps:to_list(TagMsg, Opts))
+    ).
 
 %% @doc Set the necessary keys in order for the recipient to know where the
 %% message came from.
@@ -663,16 +821,22 @@ augment_message(Origin, ToSched, Opts) ->
     hb_message:uncommitted(
         hb_ao:set(
             ToSched,
-            #{
-                <<"data-protocol">> => <<"ao">>,
-                <<"variant">> => <<"ao.N.1">>,
-                <<"type">> => <<"Message">>,
-                <<"from-process">> => maps:get(<<"process">>, Origin),
-                <<"from-uncommitted">> => maps:get(<<"from-uncommitted">>, Origin),
-                <<"from-base">> => maps:get(<<"from-base">>, Origin),
-                <<"from-scheduler">> => maps:get(<<"from-scheduler">>, Origin),
-                <<"from-authority">> => maps:get(<<"from-authority">>, Origin)
-            },
+            maps:filter(
+                fun(_Key, Value) -> Value =/= not_found andalso Value =/= unset end,
+                #{
+                    <<"data-protocol">> => <<"ao">>,
+                    <<"variant">> => <<"ao.N.1">>,
+                    <<"type">> => <<"Message">>,
+                    <<"from-process">> => maps:get(<<"process">>, Origin, unset),
+                    <<"from-uncommitted">> =>
+                        maps:get(<<"from-uncommitted">>, Origin, unset),
+                    <<"from-base">> => maps:get(<<"from-base">>, Origin, unset),
+                    <<"from-scheduler">> =>
+                        maps:get(<<"from-scheduler">>, Origin, unset),
+                    <<"from-authority">> =>
+                        maps:get(<<"from-authority">>, Origin, unset)
+                }
+            ),
             Opts#{ <<"hashpath">> => ignore }
         )
     ).
@@ -814,7 +978,7 @@ remote_schedule_result(Location, SignedReq, Opts) ->
         {ok, Res} ->
             ?event(push, {remote_schedule_result, {res, Res}}, Opts),
             case hb_ao:get(<<"status">>, Res, 200, Opts) of
-                200 -> {ok, Res};
+                Code when Code == 200; Code == 202 -> {ok, Res};
                 307 ->
                     NewLocation = hb_ao:get(<<"location">>, Res, Opts),
                     remote_schedule_result(NewLocation, SignedReq, Opts)
