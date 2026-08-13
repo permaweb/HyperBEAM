@@ -14,6 +14,7 @@
 -define(DEFAULT_FROM_HEIGHT, 1978888).
 -define(DEFAULT_HEADER_WORKERS, 16).
 -define(DEFAULT_SYNC_INTERVAL_MS, 1000).
+-define(DEFAULT_PROCESS_IDLE_MS, 1000).
 
 %% @doc Bring the global target index to the confirmed chain frontier. The
 %% pass is serialized per scheduler store, and repeated callers within
@@ -42,7 +43,8 @@ process(ProcessID, Opts) ->
                             materialize_process(HumanProcessID, Global, Opts),
                             undefined
                         }
-                    end
+                    end,
+                    process_idle_timeout(Opts)
                 )
             end;
         error ->
@@ -177,16 +179,8 @@ initialize_process(
     maybe
         {ok, Height, Index, SpawnOrdinate} ?= spawn_ordinate(ProcessID, Opts),
         ok ?= require_covered_spawn(ProcessID, Height, From, To),
-        {ok, _, #tx{ data_size = 0 }} ?= fetch_header(ProcessID, Opts),
-        ok ?=
-            write_assignment(
-                ProcessID,
-                0,
-                Height,
-                Index,
-                ProcessID,
-                Opts
-            ),
+        {ok, Header, #tx{}} ?= fetch_header(ProcessID, Opts),
+        ok ?= write_spawn_assignment(ProcessID, Height, Index, Header, Opts),
         State =
             #{
                 <<"process">> => ProcessID,
@@ -198,15 +192,16 @@ initialize_process(
             dev_arweave_scheduler_cache:write_process(ProcessID, State, Opts),
         {ok, State}
     else
-        {ok, _, #tx{}} ->
-            {error,
-                #{
-                    <<"status">> => 422,
-                    <<"reason">> =>
-                        <<"An Arweave-scheduled process must be data-free.">>,
-                    <<"process">> => ProcessID
-                }
-            };
+        Error -> Error
+    end.
+
+%% @doc Persist the verified process header before linking slot zero to it.
+%% Process spawns may carry data, but only data-free transactions enter the
+%% global target index in `transaction_targets/1'.
+write_spawn_assignment(ProcessID, Height, Index, Header, Opts) ->
+    case dev_arweave_scheduler_cache:write_header(Header, Opts) of
+        {ok, _} ->
+            write_assignment(ProcessID, 0, Height, Index, ProcessID, Opts);
         Error -> Error
     end.
 
@@ -456,9 +451,16 @@ fetch_block_remote(Height, Opts) ->
 %% fetch it without data. The signed commitment must reproduce the requested
 %% TXID before it is admitted to the scheduler store.
 fetch_header(TXID, Opts) ->
+    fetch_header(TXID, Opts, fun fetch_header_remote/2).
+
+fetch_header(TXID, Opts, Fallback) ->
     case dev_arweave_scheduler_cache:read_header(TXID, Opts) of
-        {ok, Header} -> validate_header(TXID, Header, Opts);
-        _ -> fetch_header_remote(TXID, Opts)
+        {ok, Header} ->
+            case validate_header(TXID, Header, Opts) of
+                {ok, _, _} = Valid -> Valid;
+                _ -> Fallback(TXID, Opts)
+            end;
+        _ -> Fallback(TXID, Opts)
     end.
 
 fetch_header_remote(TXID, Opts) ->
@@ -732,28 +734,56 @@ no_result_cache(Opts) ->
 
 %% @doc Run one scheduler-store task at a time through a node-local worker.
 %% Global synchronization and each process have separate names, so one slow
-%% process initialization does not block unrelated schedules. Unexpected task
-%% failures terminate the worker; every queued caller monitors it and the next
-%% request starts with a clean mailbox.
+%% process initialization does not block unrelated schedules. Process workers
+%% retire when idle, while the global worker retains its recent synchronization
+%% state. Every caller monitors its worker so retirement races can retry safely.
 exclusive(Name, Fun) ->
-    Runner = hb_name:singleton(Name, fun() -> runner(undefined) end),
+    exclusive(Name, Fun, infinity).
+
+exclusive(Name, Fun, IdleTimeout) ->
+    Runner =
+        hb_name:singleton(
+            Name,
+            fun() ->
+                try runner(undefined, IdleTimeout)
+                after hb_name:unregister(Name)
+                end
+            end
+        ),
     Monitor = erlang:monitor(process, Runner),
     Runner ! {run, self(), Monitor, Fun},
     receive
         {ran, Monitor, Result} ->
             erlang:demonitor(Monitor, [flush]),
             Result;
+        {'DOWN', Monitor, process, Runner, Reason}
+                when Reason =:= normal; Reason =:= noproc ->
+            exclusive(Name, Fun, IdleTimeout);
         {'DOWN', Monitor, process, Runner, Reason} ->
             exit({arweave_scheduler_sync_runner_down, Reason})
     end.
 
-runner(State) ->
+runner(State, IdleTimeout) ->
     receive
         {run, Caller, Ref, Fun} ->
             {Result, NewState} = Fun(State),
             Caller ! {ran, Ref, Result},
-            runner(NewState)
+            runner(NewState, IdleTimeout)
+    after IdleTimeout ->
+        ok
     end.
+
+process_idle_timeout(Opts) ->
+    max(
+        1,
+        hb_util:int(
+            hb_opts:get(
+                arweave_scheduler_process_idle,
+                ?DEFAULT_PROCESS_IDLE_MS,
+                Opts
+            )
+        )
+    ).
 
 scheduler_store(Opts) ->
     hb_opts:get(
@@ -817,14 +847,134 @@ singleton_serialization_test() ->
                     fun(State) ->
                         Count = case State of undefined -> 0; _ -> State end,
                         {{ok, Count}, Count + 1}
-                    end
+                    end,
+                    20
                 ),
             Parent ! {complete, Result}
         end,
     _ = [spawn(Run) || _ <- lists:seq(1, 12)],
     Results = [receive {complete, {ok, N}} -> N end || _ <- lists:seq(1, 12)],
     ?assertEqual(lists:seq(0, 11), lists:sort(Results)),
-    stop_test_runner(Name).
+    ?assert(
+        hb_util:wait_until(
+            fun() -> ets:lookup(hb_name_registry, Name) =:= [] end,
+            500
+        )
+    ).
+
+distinct_workers_concurrent_test() ->
+    Parent = self(),
+    Names = [{?MODULE, test, make_ref()}, {?MODULE, test, make_ref()}],
+    _ =
+        [
+            spawn(
+                fun() ->
+                    Result =
+                        exclusive(
+                            Name,
+                            fun(_State) ->
+                                Parent ! {entered, Name, self()},
+                                receive release -> {{ok, Name}, undefined} end
+                            end,
+                            20
+                        ),
+                    Parent ! {complete, Result}
+                end
+            )
+        ||
+            Name <- Names
+        ],
+    [NameA, NameB] = Names,
+    PidA = receive {entered, NameA, A} -> A end,
+    PidB = receive {entered, NameB, B} -> B end,
+    ?assertNotEqual(PidA, PidB),
+    PidA ! release,
+    PidB ! release,
+    Results = [receive {complete, {ok, Name}} -> Name end || _ <- Names],
+    ?assertEqual(lists:sort(Names), lists:sort(Results)),
+    ?assert(
+        hb_util:wait_until(
+            fun() ->
+                lists:all(
+                    fun(Name) ->
+                        ets:lookup(hb_name_registry, Name) =:= []
+                    end,
+                    Names
+                )
+            end,
+            500
+        )
+    ).
+
+retirement_race_retries_test() ->
+    Name = {?MODULE, test, make_ref()},
+    Parent = self(),
+    Retiring =
+        spawn(
+            fun() ->
+                ok = hb_name:register(Name),
+                Parent ! registered,
+                receive
+                    retire -> receive {run, _, _, _} -> ok end
+                end
+            end
+        ),
+    receive registered -> ok end,
+    Retiring ! retire,
+    ?assertEqual(
+        {ok, retried},
+        exclusive(Name, fun(_State) -> {{ok, retried}, undefined} end, 20)
+    ),
+    ?assert(
+        hb_util:wait_until(
+            fun() -> ets:lookup(hb_name_registry, Name) =:= [] end,
+            500
+        )
+    ).
+
+unusable_cached_header_falls_back_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-header">>),
+    ok = hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store], <<"priv-wallet">> => ar_wallet:new() },
+    TXID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    BadHeader = hb_message:commit(#{ <<"message">> => <<"bad">> }, Opts),
+    {ok, BadID} = hb_cache:write(BadHeader, Opts),
+    ok = hb_store:link(Store, #{ TXID => BadID }, Opts),
+    Fallback = fun(TXID, _FallbackOpts) -> {ok, fetched} end,
+    ?assertEqual({ok, fetched}, fetch_header(TXID, Opts, Fallback)),
+    ok = hb_store:stop(Store).
+
+data_bearing_spawn_is_cached_before_slot_zero_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-spawn">>),
+    ok = hb_store:start(Store),
+    Opts = #{ <<"store">> => [Store], <<"priv-wallet">> => ar_wallet:new() },
+    Header =
+        hb_message:commit(
+            #{ <<"type">> => <<"Process">>, <<"data">> => <<"spawn body">> },
+            Opts,
+            #{ <<"commitment-device">> => <<"tx@1.0">> }
+        ),
+    ProcessID = hb_util:human_id(hb_message:id(Header, signed, Opts)),
+    {ok, Header, #tx{ data_size = DataSize }} =
+        validate_header(ProcessID, Header, Opts),
+    ?assert(DataSize > 0),
+    ok = write_spawn_assignment(ProcessID, 100, 2, Header, Opts),
+    ?assertMatch(
+        {ok, _},
+        dev_arweave_scheduler_cache:read_header(ProcessID, Opts)
+    ),
+    {ok, Assignment} =
+        dev_arweave_scheduler_cache:read_assignment(ProcessID, 0, Opts),
+    ?assertEqual(0, hb_maps:get(<<"slot">>, Assignment, not_found, Opts)),
+    ?assertEqual(
+        100,
+        hb_maps:get(<<"block-height">>, Assignment, not_found, Opts)
+    ),
+    ?assertEqual(
+        2,
+        hb_maps:get(<<"block-index">>, Assignment, not_found, Opts)
+    ),
+    ok = hb_store:stop(Store).
 
 public_process_path_test() ->
     Store =
