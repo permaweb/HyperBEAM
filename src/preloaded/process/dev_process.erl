@@ -635,7 +635,12 @@ now(RawBase, Req, Opts) ->
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
-            hb_ao:resolve(
+            dev_process_cache:refresh(
+                ProcessID,
+                hb_util:int(CurrentSlot),
+                Opts
+            ),
+            hb_ao:raw(
                 Base,
                 (hb_maps:with([<<"push">>], Req, Opts))#{
                     <<"path">> => <<"compute">>,
@@ -649,34 +654,55 @@ now(RawBase, Req, Opts) ->
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
-                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
-                    ?event(compute_cache,
-                        {serving_latest_cached_state,
-                            {proc_id, ProcessID},
-                            {slot, LatestSlot}
-                        },
-                        Opts
-                    ),
-                    dev_process_worker:notify_compute(
-                        ProcessID,
-                        LatestSlot,
-                        {ok, LatestMsg},
-                        Opts
-                    ),
-                    {ok, LatestMsg};
+                    case dev_process_cache:fresh(ProcessID, LatestSlot, Req, Opts) of
+                        true ->
+                            LatestMsg = without_snapshot(RawLatestMsg, Opts),
+                            ?event(compute_cache,
+                                {serving_latest_cached_state,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            dev_process_worker:notify_compute(
+                                ProcessID,
+                                LatestSlot,
+                                {ok, LatestMsg},
+                                Opts
+                            ),
+                            {ok, LatestMsg};
+                        false ->
+                            ?event(compute_cache,
+                                {latest_cached_state_stale,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            uncached_now(
+                                CacheParam,
+                                Base,
+                                Req,
+                                Opts,
+                                <<"No fresh cached state available.">>
+                            )
+                    end;
                 _ ->
-                    if CacheParam =/= always ->
-                        % The node is configured to use the cache if possible,
-                        % but forcing computation is also admissible. Subsequently,
-                        % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ <<"process-now-from-cache">> => false });
-                    true ->
-                        % The node is configured to only serve the latest known
-                        % state from the cache, so we return the latest slot.
-                        {failure, <<"No cached state available.">>}
-                    end
+                    uncached_now(CacheParam, Base, Req, Opts)
             end
     end.
+
+uncached_now(CacheParam, Base, Req, Opts) ->
+    uncached_now(CacheParam, Base, Req, Opts, <<"No cached state available.">>).
+
+uncached_now(always, _Base, _Req, _Opts, Failure) ->
+    {failure, Failure};
+uncached_now(<<"always">>, _Base, _Req, _Opts, Failure) ->
+    {failure, Failure};
+uncached_now(_CacheParam, Base, Req, Opts, _Failure) ->
+    % The node is configured to use the cache if possible, but forcing
+    % computation is also admissible.
+    now(Base, Req, Opts#{ <<"process-now-from-cache">> => false }).
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
