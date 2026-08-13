@@ -104,13 +104,23 @@ write_targets_map(Targets, RawOpts) ->
 read_target(Address, Ordinate, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    case hb_store:resolve(Store, target_path(Address, Ordinate), Opts) of
+    case resolve_target(Store, target_path(Address, Ordinate), Opts) of
         {ok, TXID} ->
             case hb_cache:read(TXID, Opts) of
                 {ok, Header} -> {ok, TXID, Header};
                 {error, not_found} -> not_found
             end;
         {error, not_found} -> not_found
+    end.
+
+resolve_target(Store, Path, Opts) when not is_list(Store) ->
+    resolve_target([Store], Path, Opts);
+resolve_target([], _Path, _Opts) -> {error, not_found};
+resolve_target([Store | Rest], Path, Opts) ->
+    case hb_store:resolve(Store, Path, Opts) of
+        {ok, Path} -> resolve_target(Rest, Path, Opts);
+        {ok, TXID} -> {ok, TXID};
+        _ -> resolve_target(Rest, Path, Opts)
     end.
 
 %% @doc List the ordinates that target an address. Callers parse and sort the
@@ -278,10 +288,14 @@ linked_state_and_target_test() ->
     {ok, _} = write_header(Header, Opts),
     ok = write_target(ProcessID, <<"101-3">>, TXID, Opts),
     ?assertEqual([<<"101-3">>], list_targets(ProcessID, Opts)),
-    {ok, ReadTXID, ReadHeader} = read_target(ProcessID, <<"101-3">>, Opts),
+    EmptyStore = hb_test_utils:test_store(hb_store_volatile, <<"empty">>),
+    ok = hb_store:start(EmptyStore),
+    ReadOpts = Opts#{ <<"scheduler-store">> => [EmptyStore, Store] },
+    {ok, ReadTXID, ReadHeader} = read_target(ProcessID, <<"101-3">>, ReadOpts),
     ?assertEqual(TXID, ReadTXID),
     ?assertEqual(
         TXID,
         hb_util:human_id(hb_message:id(ReadHeader, signed, Opts))
     ),
+    ok = hb_store:stop(EmptyStore),
     ok = hb_store:stop(Store).
