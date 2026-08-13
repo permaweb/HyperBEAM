@@ -296,3 +296,80 @@ I have already read [AGENTS.md](/Users/sam/.codex/worktrees/6010/hyperbeam/AGENT
   run. Every changed scheduler, swap, carrier, and process test passed in that
   sweep; the isolated volatile runs above are the authoritative final result.
 - `git diff --check` passes, and `git diff edge -- '*copycat*'` is empty.
+
+---
+
+## Live network continuation — 2026-08-13
+
+Current commander's intent (verbatim):
+
+> - Optimize the sync speed (can we just important the block2 route that the old flow used).
+> - Once in sync, demonstrate purchases and sales of test assets. Do not touch Dumdumz or names.
+
+- Integrated the upstream `fix/arweave-scheduler-sync-integrity` merge at
+  `6c8cce6290a78c60550fb1c0518ab2448015b82f` before restarting the node.
+- The source default and live rollout boundary are block `1968888`, preserving
+  the requested 10,000-block history window and the older test assets.
+- A new `hb_store_volatile` scheduler store completed the full contiguous
+  interval from `1968888` through the confirmed frontier. It first reached
+  `1979249` at `2026-08-13T17:33:30Z` and has continued following the tip; a
+  later explicit sync reached `1979256`.
+- The live pass exposed four concrete integrity issues now covered by tests:
+  faithful format-one TX reconstruction, valid zero-length Arweave data
+  responses, lossless preservation of duplicate normalized tags, and complete
+  loading of cross-store block links before the scheduler caches a block.
+- The `rebar3 eunit-all`, resumed mainnet sync, and browser-level purchase/sale
+  acceptance gates have all been exercised; exact results are recorded below.
+- The temporary store holding the earlier `1969830` frontier did not survive;
+  the current node therefore started a fresh contiguous pass at `1968888`.
+- The live node is PID `16225` on `http://localhost:10001`, backed by
+  `hb_store_volatile` as requested. Its exact runtime policy is eight-block
+  batches, four block fetchers, one global limit of 32 header workers, and 20
+  attempts at 250 ms for transient block/header transport failures.
+- Historical `/block2` responses were measured and inspected against Arweave's
+  implementation. They contain bare TXIDs once a block leaves the node's
+  bounded recent-block cache, so importing the binary decoder cannot accelerate
+  this 10,000-block backfill. The evidence and decision are recorded in
+  [decisions/arweave-scheduler-block2.md](decisions/arweave-scheduler-block2.md).
+- The first live pipeline exposed and removed a nested `4 * 16` header fan-out.
+  Batches now share one header-worker ceiling. The global completeness record
+  still advances only after the whole validated batch and all target links land.
+- Direct gateway reads and a 32-worker global header ceiling advanced the live
+  frontier from `1973511` to `1973967` in 66 seconds (6.9 blocks/second) without
+  a failed batch. The eight-block atomic batch remains unchanged, and 32 is now
+  the source default and live-node configuration.
+- Bazar is running at
+  `http://127.0.0.1:10002/k0IR1XuD-WUq93xVu4RF3iMO-hfxDyyzC15EuKt6XtY/?node=http%3A%2F%2Flocalhost%3A10001#/discover`.
+  It uses a local static mirror only for application assets; every AO process
+  read is directed to the live node on port `10001`.
+- The purchase/sale proof asset is `LightSteelBlue`
+  (`2KIwI3P4Rjq-y6euW9WOHweyrWZSp0hU6k1-HrRMZYg`), an `ASSET` token and neither
+  a Dumdumz nor name process. Its offer, registration, and payment are at blocks
+  `1979176`, `1979217`, and `1979222`; the payment carries the required
+  `assign-to` instruction. No transaction was created or sent to any process.
+- The local process execution reached `at-slot: 3` and `swap-height: 1979222`.
+  Its final linked balance table is seller `kaYP9b...tKiFI = 0`, buyer
+  `vZY2XY..._rKF0 = 1`, and the linked order table is empty. This proves the
+  sale and purchase settled from the sparse schedule rather than merely
+  appearing in an external index.
+- Bazar now opens that exact process through the local node at
+  `#/asset/created-assets/2KIwI3P4Rjq-y6euW9WOHweyrWZSp0hU6k1-HrRMZYg`.
+  It displays `Owned by vZY2XY..._rKF0`, supply `1 / 1`, no current order, and
+  the 0.11 AR listing plus purchase submission in Activity. The page reports
+  that its current state was requested via `localhost:10001`.
+
+### Final validation
+
+- `rebar3 as test compile` — passed.
+- `rebar3 device test -d dev_tx,dev_arweave --timeout 300` — all 69 passed.
+- `rebar3 device test -d dev_arweave_scheduler --timeout 300` — all 11 passed,
+  including the real-network format-one verification case.
+- `rebar3 device test -d dev_arweave_swap,dev_carrier --timeout 300` — all 56
+  passed.
+- `rebar3 eunit-all` completed the entire core and packaged-device test list:
+  3,586 passed and five failed. The failures are outside the patch: one
+  `dev_push` remote-route expectation returned `{error,{bad_peer,<<"/">>}}`,
+  and four legacy `dev_scheduler` live-HTTP cases returned `{error,<<>>}`. The
+  runner then exited 139 during its known LMDB teardown. None of the five
+  failing modules is modified here; every changed package passed its focused
+  run above.

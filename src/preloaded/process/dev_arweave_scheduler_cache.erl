@@ -73,9 +73,13 @@ write_block(Height, Block, RawOpts) ->
 
 read_block(Height, RawOpts) ->
     Opts = opts(RawOpts),
-    case hb_cache:read(block_path(Height), Opts) of
+    try hb_cache:read(block_path(Height), Opts) of
         {ok, Block} -> {ok, hb_cache:ensure_all_loaded(Block, Opts)};
-        {error, not_found} -> not_found
+        {error, not_found} -> not_found;
+        Error -> Error
+    catch
+        throw:{necessary_message_not_found, _, _} -> not_found;
+        throw:{could_not_read_lazy_link, _, _, _} -> not_found
     end.
 
 %% @doc Link an address and ordinate to the cached transaction header's TXID.

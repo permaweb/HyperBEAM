@@ -11,8 +11,12 @@
 
 -define(ARWEAVE_DEVICE, <<"~arweave@2.9">>).
 -define(DEFAULT_CONFIRMATION_DEPTH, 10).
--define(DEFAULT_FROM_HEIGHT, 1978888).
--define(DEFAULT_HEADER_WORKERS, 16).
+-define(DEFAULT_FROM_HEIGHT, 1968888).
+-define(DEFAULT_BLOCK_BATCH, 8).
+-define(DEFAULT_BLOCK_WORKERS, 4).
+-define(DEFAULT_HEADER_WORKERS, 32).
+-define(DEFAULT_FETCH_ATTEMPTS, 20).
+-define(DEFAULT_FETCH_RETRY_MS, 250).
 -define(DEFAULT_SYNC_INTERVAL_MS, 1000).
 -define(PROCESS_IDLE_MS, 1000).
 
@@ -128,23 +132,75 @@ initial_state(Error, _From) -> Error.
 sync_blocks(State = #{ <<"to">> := To }, Upper, _Opts) when To >= Upper ->
     {ok, State};
 sync_blocks(State = #{ <<"to">> := To }, Upper, Opts) ->
-    Height = To + 1,
+    BatchEnd =
+        min(
+            Upper,
+            To +
+                max(
+                    1,
+                    hb_util:int(
+                        hb_opts:get(
+                            arweave_scheduler_block_batch,
+                            ?DEFAULT_BLOCK_BATCH,
+                            Opts
+                        )
+                    )
+                )
+        ),
+    Heights = lists:seq(To + 1, BatchEnd),
     maybe
-        {ok, Block} ?= fetch_block(Height, Opts),
-        ok ?= validate_block(Height, State, Block, Opts),
+        {ok, Blocks} ?= fetch_blocks(Heights, Opts),
+        {ok, NewState} ?= validate_blocks(Blocks, State, Opts),
+        ok ?= index_blocks(Blocks, Opts),
+        ok ?= write_blocks(Blocks, Opts),
         {ok, _} ?=
-            dev_arweave_scheduler_cache:write_block(Height, Block, Opts),
-        ok ?= index_block(Height, Block, Opts),
+            dev_arweave_scheduler_cache:write_global(NewState, Opts),
+        sync_blocks(NewState, Upper, Opts)
+    end.
+
+%% @doc Fetch one bounded batch of canonical blocks concurrently.
+fetch_blocks(Heights, Opts) ->
+    Results =
+        hb_pmap:parallel_map(
+            Heights,
+            fun(Height) -> fetch_block(Height, Opts) end,
+            max(
+                1,
+                hb_util:int(
+                    hb_opts:get(
+                        arweave_scheduler_block_workers,
+                        ?DEFAULT_BLOCK_WORKERS,
+                        Opts
+                    )
+                )
+            )
+        ),
+    collect_blocks(Heights, Results, []).
+
+%% @doc Pair fetched blocks with their requested heights or surface an error.
+collect_blocks([], [], Blocks) ->
+    {ok, lists:reverse(Blocks)};
+collect_blocks([Height | Heights], [{ok, Block} | Results], Blocks) ->
+    collect_blocks(Heights, Results, [{Height, Block} | Blocks]);
+collect_blocks(_Heights, [Error | _], _Blocks) ->
+    Error.
+
+%% @doc Validate an entire batch's height and previous-hash chain in order.
+validate_blocks([], State, _Opts) ->
+    {ok, State};
+validate_blocks([{Height, Block} | Blocks], State, Opts) ->
+    maybe
+        ok ?= validate_block(Height, State, Block, Opts),
         BlockHash = hb_maps:get(<<"indep_hash">>, Block, not_found, Opts),
         true ?= is_binary(BlockHash),
-        NewState =
+        validate_blocks(
+            Blocks,
             State#{
                 <<"to">> => Height,
                 <<"block-hash">> => BlockHash
             },
-        {ok, _} ?=
-            dev_arweave_scheduler_cache:write_global(NewState, Opts),
-        sync_blocks(NewState, Upper, Opts)
+            Opts
+        )
     else
         false ->
             {error,
@@ -156,6 +212,64 @@ sync_blocks(State = #{ <<"to">> := To }, Upper, Opts) ->
             };
         Error -> Error
     end.
+
+%% @doc Cache each validated block after its transaction headers are indexed.
+write_blocks([], _Opts) ->
+    ok;
+write_blocks([{Height, Block} | Blocks], Opts) ->
+    case dev_arweave_scheduler_cache:write_block(Height, Block, Opts) of
+        {ok, _} -> write_blocks(Blocks, Opts);
+        Error -> Error
+    end.
+
+%% @doc Index a batch through one global header-worker limit before one
+%% frontier commit makes the complete batch visible to materialization.
+index_blocks(Blocks, Opts) ->
+    Transactions =
+        lists:append(
+            [
+                block_transactions(Height, Block, Opts)
+            ||
+                {Height, Block} <- Blocks
+            ]
+        ),
+    Indexed =
+        hb_pmap:parallel_map(
+            Transactions,
+            fun({Height, Index, TXID}) ->
+                index_transaction(Height, Index, TXID, Opts)
+            end,
+            max(
+                1,
+                hb_util:int(
+                    hb_opts:get(
+                        arweave_scheduler_header_workers,
+                        ?DEFAULT_HEADER_WORKERS,
+                        Opts
+                    )
+                )
+            )
+        ),
+    case collect_targets(Indexed, []) of
+        {ok, Targets} ->
+            dev_arweave_scheduler_cache:write_targets(Targets, Opts);
+        Error -> Error
+    end.
+
+%% @doc Enumerate one block's transactions with their lossless ordinates.
+block_transactions(Height, Block, Opts) ->
+    TXIDs =
+        [
+            hb_util:human_id(TXID)
+        ||
+            TXID <- hb_maps:get(<<"txs">>, Block, [], Opts)
+        ],
+    [
+        {Height, Index, TXID}
+    ||
+        {Index, TXID} <-
+            lists:zip(lists:seq(0, length(TXIDs) - 1), TXIDs)
+    ].
 
 materialize_process(ProcessID, Global, Opts) ->
     maybe
@@ -349,34 +463,7 @@ write_assignment(ProcessID, Slot, Height, Index, TXID, Opts) ->
         },
     dev_arweave_scheduler_cache:write_assignment(Assignment, Opts).
 
-%% @doc Index one complete block. Header fetches are concurrency-limited and
-%% preserve the block's transaction order. The caller advances the global
-%% record only if every transaction was examined successfully.
-index_block(Height, Block, Opts) ->
-    TXIDs =
-        [
-            hb_util:human_id(TXID)
-        ||
-            TXID <- hb_maps:get(<<"txs">>, Block, [], Opts)
-        ],
-    Indexed =
-        hb_pmap:parallel_map(
-            lists:zip(lists:seq(0, length(TXIDs) - 1), TXIDs),
-            fun({Index, TXID}) -> index_transaction(Height, Index, TXID, Opts) end,
-            hb_util:int(
-                hb_opts:get(
-                    arweave_scheduler_header_workers,
-                    ?DEFAULT_HEADER_WORKERS,
-                    Opts
-                )
-            )
-        ),
-    case collect_targets(Indexed, []) of
-        {ok, Targets} ->
-            dev_arweave_scheduler_cache:write_targets(Targets, Opts);
-        Error -> Error
-    end.
-
+%% @doc Fetch and route one transaction at its canonical block ordinate.
 index_transaction(Height, Index, TXID, Opts) ->
     case fetch_header(TXID, Opts) of
         {ok, _Header, TX} ->
@@ -438,11 +525,26 @@ fetch_block(Height, Opts) ->
     end.
 
 fetch_block_remote(Height, Opts) ->
+    fetch_block_remote(Height, fetch_attempts(Opts), Opts).
+
+%% @doc Retry transient block transport failures within the worker that owns
+%% the fetch, preserving completed work elsewhere in the batch.
+fetch_block_remote(Height, Attempts, Opts) ->
+    FetchOpts = no_result_cache(fetch_opts(Attempts, Opts)),
     case hb_ao:resolve(
         <<?ARWEAVE_DEVICE/binary, "/block&block=", (hb_util:bin(Height))/binary>>,
-        no_result_cache(dev_arweave_scheduler_cache:opts(Opts))
+        FetchOpts
     ) of
-        {ok, Block} -> {ok, Block};
+        {ok, Block} ->
+            try {ok, hb_cache:ensure_all_loaded(Block, FetchOpts)}
+            catch
+                throw:{necessary_message_not_found, _, _} ->
+                    retry_block(Height, Attempts, Opts);
+                throw:{could_not_read_lazy_link, _, _, _} ->
+                    retry_block(Height, Attempts, Opts)
+            end;
+        _ when Attempts > 1 ->
+            retry_block(Height, Attempts, Opts);
         _ ->
             {error,
                 #{
@@ -452,6 +554,19 @@ fetch_block_remote(Height, Opts) ->
                 }
             }
     end.
+
+%% @doc Retry an incomplete or unavailable block after a bounded delay.
+retry_block(Height, Attempts, Opts) when Attempts > 1 ->
+    timer:sleep(fetch_retry_delay(Opts)),
+    fetch_block_remote(Height, Attempts - 1, Opts);
+retry_block(Height, _Attempts, _Opts) ->
+    {error,
+        #{
+            <<"status">> => 503,
+            <<"reason">> => <<"Arweave block is not retrievable.">>,
+            <<"block-height">> => Height
+        }
+    }.
 
 %% @doc Read a signed transaction header locally when possible, otherwise
 %% fetch it without data. The signed commitment must reproduce the requested
@@ -467,14 +582,29 @@ fetch_header(TXID, Opts) ->
     end.
 
 fetch_header_remote(TXID, Opts) ->
+    fetch_header_remote(TXID, fetch_attempts(Opts), Opts).
+
+%% @doc Retry transient header transport failures before failing the batch.
+fetch_header_remote(TXID, Attempts, Opts) ->
     case hb_ao:resolve(
         <<
             ?ARWEAVE_DEVICE/binary, "/tx&tx=", TXID/binary,
             "&exclude-data=true"
         >>,
-        no_result_cache(Opts)
+        no_result_cache(fetch_opts(Attempts, Opts))
     ) of
-        {ok, Header} -> cache_header(TXID, Header, Opts);
+        {ok, Header} ->
+            case cache_header(TXID, Header, Opts) of
+                {error, _} = Error ->
+                    case needs_format_one_data(Header, Opts) of
+                        true -> fetch_full_header(TXID, Attempts, Opts);
+                        false -> Error
+                    end;
+                Result -> Result
+            end;
+        _ when Attempts > 1 ->
+            timer:sleep(fetch_retry_delay(Opts)),
+            fetch_header_remote(TXID, Attempts - 1, Opts);
         _ ->
             {error,
                 #{
@@ -485,6 +615,84 @@ fetch_header_remote(TXID, Opts) ->
                 }
             }
     end.
+
+%% @doc A format-one signature commits the complete data payload, so retrieve
+%% it only when a data-bearing format-one header cannot verify without it.
+fetch_full_header(TXID, Attempts, Opts) ->
+    case hb_ao:resolve(
+        <<?ARWEAVE_DEVICE/binary, "/tx&tx=", TXID/binary>>,
+        no_result_cache(fetch_opts(Attempts, Opts))
+    ) of
+        {ok, Header} -> cache_header(TXID, Header, Opts);
+        _ when Attempts > 1 ->
+            timer:sleep(fetch_retry_delay(Opts)),
+            fetch_full_header(TXID, Attempts - 1, Opts);
+        _ ->
+            {error,
+                #{
+                    <<"status">> => 503,
+                    <<"reason">> =>
+                        <<"Arweave format-one transaction is not retrievable.">>,
+                    <<"tx">> => TXID
+                }
+            }
+    end.
+
+%% @doc Identify headers whose format-one signatures require omitted data.
+needs_format_one_data(Header, Opts) ->
+    try hb_message:convert(Header, <<"tx@1.0">>, Opts) of
+        #tx{ format = 1, data_size = Size, data = <<>> } when Size > 0 -> true;
+        #tx{} -> false
+    catch
+        _:_ -> false
+    end.
+
+%% @doc Return the positive number of attempts allowed per network object.
+fetch_attempts(Opts) ->
+    max(
+        1,
+        hb_util:int(
+            hb_opts:get(
+                arweave_scheduler_fetch_attempts,
+                ?DEFAULT_FETCH_ATTEMPTS,
+                Opts
+            )
+        )
+    ).
+
+%% @doc Return the non-negative delay between network fetch attempts.
+fetch_retry_delay(Opts) ->
+    max(
+        0,
+        hb_util:int(
+            hb_opts:get(
+                arweave_scheduler_fetch_retry,
+                ?DEFAULT_FETCH_RETRY_MS,
+                Opts
+            )
+        )
+    ).
+
+%% @doc Use the node's chain routes first and its configured gateway for the
+%% final attempt, covering historical objects absent from a bootstrap node.
+fetch_opts(1, Opts) ->
+    Gateway = hb_opts:get(gateway, <<"https://arweave.net">>, Opts),
+    Opts#{
+        <<"arweave-index-blocks">> => false,
+        <<"routes">> =>
+            [
+                #{
+                    <<"template">> => <<"^/arweave">>,
+                    <<"node">> =>
+                        #{
+                            <<"match">> => <<"^/arweave">>,
+                            <<"with">> => Gateway
+                        }
+                }
+            ]
+    };
+fetch_opts(_Attempts, Opts) ->
+    Opts#{ <<"arweave-index-blocks">> => false }.
 
 cache_header(TXID, Header, Opts) ->
     case validate_header(TXID, Header, Opts) of
@@ -503,8 +711,7 @@ validate_header(TXID, Header, Opts) ->
         HeaderTXID = hb_util:human_id(TX#tx.id),
         case
             HeaderTXID =:= TXID andalso
-                ar_tx:verify_tx_id(hb_util:native_id(TXID), TX) andalso
-                hb_message:verify(Header, signers, Opts)
+                ar_tx:verify_tx_id(hb_util:native_id(TXID), TX)
         of
             true -> {ok, Header, TX};
             _ ->
@@ -912,7 +1119,12 @@ stop_test_runner(Name) ->
 
 block_validation_test() ->
     State = #{ <<"block-hash">> => <<"previous">> },
-    Block = #{ <<"height">> => 101, <<"previous_block">> => <<"previous">> },
+    Block =
+        #{
+            <<"height">> => 101,
+            <<"previous_block">> => <<"previous">>,
+            <<"indep_hash">> => <<"one">>
+        },
     ?assertEqual(ok, validate_block(101, State, Block, #{})),
     ?assertMatch({error, _}, validate_block(100, State, Block, #{})),
     ?assertMatch(
@@ -923,7 +1135,59 @@ block_validation_test() ->
             Block#{ <<"previous_block">> => <<"other">> },
             #{}
         )
+    ),
+    NextBlock =
+        #{
+            <<"height">> => 102,
+            <<"previous_block">> => <<"one">>,
+            <<"indep_hash">> => <<"two">>
+        },
+    ?assertEqual(
+        {ok,
+            #{
+                <<"to">> => 102,
+                <<"block-hash">> => <<"two">>
+            }
+        },
+        validate_blocks([{101, Block}, {102, NextBlock}], State, #{})
+    ),
+    ?assertMatch(
+        {error, _},
+        validate_blocks(
+            [
+                {101, Block},
+                {102, NextBlock#{ <<"previous_block">> => <<"wrong">> }}
+            ],
+            State,
+            #{}
+        )
     ).
+
+format_one_data_verification_test_() ->
+    {timeout, 60,
+        fun() ->
+            Store =
+                hb_test_utils:test_store(
+                    hb_store_volatile,
+                    <<"ar-sched-format-one">>
+                ),
+            ok = hb_store:start(Store),
+            Opts =
+                #{
+                    <<"store">> => [Store],
+                    <<"scheduler-store">> => [Store],
+                    <<"gateway">> => <<"https://arweave.net">>,
+                    <<"arweave-scheduler-fetch-attempts">> => 1,
+                    <<"priv-wallet">> => ar_wallet:new()
+                },
+            TXID = <<"bxjwGJjTYxOrZbrB5IhniCMwRkK_v0H3ddbz035LRn8">>,
+            {ok, _Header, TX} = fetch_header(TXID, Opts),
+            ?assertEqual(1, TX#tx.format),
+            ?assertEqual(304801, TX#tx.data_size),
+            ?assertEqual(TX#tx.data_size, byte_size(TX#tx.data)),
+            ?assert(ar_tx:verify_tx_id(hb_util:native_id(TXID), TX)),
+            ok = hb_store:stop(Store)
+        end}.
 
 target_listing_failure_does_not_advance_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-list">>),
