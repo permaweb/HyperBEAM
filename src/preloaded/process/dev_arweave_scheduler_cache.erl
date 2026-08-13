@@ -9,6 +9,7 @@
 -export([read_process/2, write_process/3, list_processes/1]).
 -export([write_header/2, read_header/2]).
 -export([write_block/3, read_block/2]).
+-export([ensure_target_root/2]).
 -export([write_target/4, write_targets/2, read_target/3, list_targets/2]).
 -export([write_assignment/2, read_assignment/3]).
 -export([assignments_to_bundle/4]).
@@ -123,15 +124,21 @@ resolve_target([Store | Rest], Path, Opts) ->
         _ -> resolve_target(Rest, Path, Opts)
     end.
 
+%% @doc Ensure that listing an address can distinguish no targets from failure.
+ensure_target_root(Address, RawOpts) ->
+    Opts = opts(RawOpts),
+    hb_store:group(
+        hb_opts:get(store, no_viable_store, Opts),
+        target_root(Address),
+        Opts
+    ).
+
 %% @doc List the ordinates that target an address. Callers parse and sort the
 %% numeric components; no store ordering guarantee is assumed.
 list_targets(Address, RawOpts) ->
     Opts = opts(RawOpts),
     Store = hb_opts:get(store, no_viable_store, Opts),
-    case hb_store:list(Store, target_root(Address), Opts) of
-        {ok, Ordinates} -> Ordinates;
-        _ -> []
-    end.
+    hb_store:list(Store, target_root(Address), Opts).
 
 %% @doc Write a deterministic assignment and link its process slot to it.
 write_assignment(Assignment, RawOpts) ->
@@ -287,7 +294,7 @@ linked_state_and_target_test() ->
     ?assertEqual([ProcessID], list_processes(Opts)),
     {ok, _} = write_header(Header, Opts),
     ok = write_target(ProcessID, <<"101-3">>, TXID, Opts),
-    ?assertEqual([<<"101-3">>], list_targets(ProcessID, Opts)),
+    ?assertEqual({ok, [<<"101-3">>]}, list_targets(ProcessID, Opts)),
     EmptyStore = hb_test_utils:test_store(hb_store_volatile, <<"empty">>),
     ok = hb_store:start(EmptyStore),
     ReadOpts = Opts#{ <<"scheduler-store">> => [EmptyStore, Store] },

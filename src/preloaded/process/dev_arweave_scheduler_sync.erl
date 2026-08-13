@@ -14,6 +14,7 @@
 -define(DEFAULT_FROM_HEIGHT, 1978888).
 -define(DEFAULT_HEADER_WORKERS, 16).
 -define(DEFAULT_SYNC_INTERVAL_MS, 1000).
+-define(PROCESS_IDLE_MS, 1000).
 
 %% @doc Bring the global target index to the confirmed chain frontier. The
 %% pass is serialized per scheduler store, and repeated callers within
@@ -42,7 +43,8 @@ process(ProcessID, Opts) ->
                             materialize_process(HumanProcessID, Global, Opts),
                             undefined
                         }
-                    end
+                    end,
+                    ?PROCESS_IDLE_MS
                 )
             end;
         error ->
@@ -234,18 +236,24 @@ materialize_targets(
     ) when SyncedTo >= GlobalTo ->
     {ok, State};
 materialize_targets(ProcessID, State, Global, Opts) ->
-    TargetOrdinates =
-        lists:filtermap(
-            fun(Ordinate) ->
-                case parse_ordinate(Ordinate) of
-                    {ok, Position} -> {true, {Position, Ordinate}};
-                    error -> false
-                end
-            end,
-            dev_arweave_scheduler_cache:list_targets(ProcessID, Opts)
-        ),
-    Selected = select_targets(lists:sort(TargetOrdinates), State, Global),
-    write_process_assignments(ProcessID, Selected, State, Global, Opts).
+    maybe
+        ok ?=
+            dev_arweave_scheduler_cache:ensure_target_root(ProcessID, Opts),
+        {ok, Ordinates} ?=
+            dev_arweave_scheduler_cache:list_targets(ProcessID, Opts),
+        TargetOrdinates =
+            lists:filtermap(
+                fun(Ordinate) ->
+                    case parse_ordinate(Ordinate) of
+                        {ok, Position} -> {true, {Position, Ordinate}};
+                        error -> false
+                    end
+                end,
+                Ordinates
+            ),
+        Selected = select_targets(lists:sort(TargetOrdinates), State, Global),
+        write_process_assignments(ProcessID, Selected, State, Global, Opts)
+    end.
 
 select_targets(
         Targets,
@@ -729,27 +737,43 @@ no_result_cache(Opts) ->
 
 %% @doc Run one scheduler-store task at a time through a node-local worker.
 %% Global synchronization and each process have separate names, so one slow
-%% process initialization does not block unrelated schedules. Unexpected task
-%% failures terminate the worker; every queued caller monitors it and the next
-%% request starts with a clean mailbox.
+%% process initialization does not block unrelated schedules. Process workers
+%% retire when idle, while the global worker retains its recent sync state.
+%% Unexpected task failures terminate the worker and surface to queued callers.
 exclusive(Name, Fun) ->
-    Runner = hb_name:singleton(Name, fun() -> runner(undefined) end),
+    exclusive(Name, Fun, infinity).
+
+exclusive(Name, Fun, IdleTimeout) ->
+    Runner =
+        hb_name:singleton(
+            Name,
+            fun() ->
+                try runner(undefined, IdleTimeout)
+                after hb_name:unregister(Name)
+                end
+            end
+        ),
     Monitor = erlang:monitor(process, Runner),
     Runner ! {run, self(), Monitor, Fun},
     receive
         {ran, Monitor, Result} ->
             erlang:demonitor(Monitor, [flush]),
             Result;
+        {'DOWN', Monitor, process, Runner, Reason}
+                when Reason =:= normal; Reason =:= noproc ->
+            exclusive(Name, Fun, IdleTimeout);
         {'DOWN', Monitor, process, Runner, Reason} ->
             exit({arweave_scheduler_sync_runner_down, Reason})
     end.
 
-runner(State) ->
+runner(State, IdleTimeout) ->
     receive
         {run, Caller, Ref, Fun} ->
             {Result, NewState} = Fun(State),
             Caller ! {ran, Ref, Result},
-            runner(NewState)
+            runner(NewState, IdleTimeout)
+    after IdleTimeout ->
+        ok
     end.
 
 scheduler_store(Opts) ->
@@ -823,6 +847,16 @@ singleton_serialization_test() ->
     ?assertEqual(lists:seq(0, 11), lists:sort(Results)),
     stop_test_runner(Name).
 
+idle_worker_retirement_test() ->
+    Name = {?MODULE, test, make_ref()},
+    ?assertEqual(
+        {ok, complete},
+        exclusive(Name, fun(_State) -> {{ok, complete}, undefined} end, 1)
+    ),
+    ?assert(
+        hb_util:wait_until(fun() -> hb_name:lookup(Name) =:= undefined end, 100)
+    ).
+
 public_process_path_test() ->
     Store =
         hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-public">>),
@@ -890,6 +924,29 @@ block_validation_test() ->
             #{}
         )
     ).
+
+target_listing_failure_does_not_advance_test() ->
+    Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-list">>),
+    ok = hb_store:start(Store),
+    ProcessID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    State =
+        #{
+            <<"process">> => ProcessID,
+            <<"spawn-ordinate">> => <<"100-0">>,
+            <<"synced-to">> => 100,
+            <<"next-slot">> => 1
+        },
+    Restricted = Store#{ <<"access">> => [<<"write">>] },
+    ?assertEqual(
+        {error, not_found},
+        materialize_targets(
+            ProcessID,
+            State,
+            #{ <<"to">> => 101 },
+            #{ <<"store">> => [Restricted] }
+        )
+    ),
+    ok = hb_store:stop(Store).
 
 %% @doc Materialization filters at the exact spawn ordinate, sorts numeric
 %% positions, writes dense slots, and is deterministic when replayed.
