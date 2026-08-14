@@ -799,28 +799,10 @@ encode_reply(Status, TABMReq, Message, Opts) ->
             };
         _ ->
             % Other codecs are already in binary format, so we can just convert
-            % the message to the codec. We also include all of the top-level 
-            % scalar fields in the message and return them as headers.
-            ExtraHdrs =
-                maps:filter(
-                    fun(<<"body">>, _V) -> false;
-                       (<<"data">>, _V) -> false;
-                       (_Key, V) ->
-                            not ?IS_LINK(V)
-                                andalso not is_map(V)
-                                andalso not is_list(V)
-                    end,
-                    Message
-                ),
-            % Encode all header values as strings.
-            EncodedExtraHdrs =
-                maps:map(
-                    fun(_K, V) -> hb_util:bin(V) end,
-                    ExtraHdrs
-                ),
+            % the message to the codec.
             {
                 Status,
-                hb_maps:merge(EncodedExtraHdrs, BaseHdrs, Opts),
+                BaseHdrs,
                 hb_message:convert(
                     Message,
                     #{ <<"device">> => Codec, <<"bundle">> => AcceptBundle },
@@ -1294,6 +1276,28 @@ paranoid_http_result_test() ->
     ?assertThrow(
         {paranoid_verification_failure, http_result, _, _, _},
         encode_reply(200, #{}, Valid#{ <<"body">> => <<"mangled">> }, Opts)
+    ).
+
+binary_codec_reply_headers_test() ->
+    Opts = test_opts(),
+    Message = #{ <<"body">> => <<"value">>, <<"result">> => <<"ok">> },
+    {200, Headers, Body} =
+        encode_reply(
+            200,
+            #{ <<"require-codec">> => <<"json@1.0">> },
+            Message,
+            Opts
+        ),
+    ?assertEqual(
+        #{
+            <<"codec-device">> => <<"json@1.0">>,
+            <<"content-type">> => <<"application/json">>
+        },
+        Headers
+    ),
+    ?assertEqual(
+        Message,
+        hb_message:convert(Body, <<"structured@1.0">>, <<"json@1.0">>, Opts)
     ).
 
 nested_ao_resolve_test() ->
