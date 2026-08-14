@@ -39,6 +39,8 @@
 %%%                      before the full (restorable) state should be cached.
 %%%     Cache-Keys:      A list of the keys that should be cached for all 
 %%%                      assignments, in addition to `/Results'.
+%%%     Process-Now-Max-Age: Maximum age in seconds for `/now' to serve a
+%%%                          cached process state without checking its schedule.
 -module(dev_process).
 -device_libraries([lib_process]).
 %%% Public API
@@ -635,6 +637,12 @@ now(RawBase, Req, Opts) ->
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
+            ok =
+                dev_process_cache:refresh(
+                    ProcessID,
+                    hb_util:int(CurrentSlot),
+                    Opts
+                ),
             hb_ao:resolve(
                 Base,
                 (hb_maps:with([<<"push">>], Req, Opts))#{
@@ -649,33 +657,59 @@ now(RawBase, Req, Opts) ->
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
-                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
-                    ?event(compute_cache,
-                        {serving_latest_cached_state,
-                            {proc_id, ProcessID},
-                            {slot, LatestSlot}
-                        },
-                        Opts
-                    ),
-                    dev_process_worker:notify_compute(
+                    case dev_process_cache:fresh(
                         ProcessID,
                         LatestSlot,
-                        {ok, LatestMsg},
+                        Req,
                         Opts
-                    ),
-                    {ok, LatestMsg};
+                    ) of
+                        true ->
+                            LatestMsg = without_snapshot(RawLatestMsg, Opts),
+                            ?event(compute_cache,
+                                {serving_latest_cached_state,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            dev_process_worker:notify_compute(
+                                ProcessID,
+                                LatestSlot,
+                                {ok, LatestMsg},
+                                Opts
+                            ),
+                            {ok, LatestMsg};
+                        false ->
+                            ?event(compute_cache,
+                                {latest_cached_state_stale,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            uncached_now(
+                                CacheParam,
+                                Base,
+                                Req,
+                                Opts,
+                                <<"No fresh cached state available.">>
+                            )
+                    end;
                 _ ->
-                    if CacheParam =/= always ->
-                        % The node is configured to use the cache if possible,
-                        % but forcing computation is also admissible. Subsequently,
-                        % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ <<"process-now-from-cache">> => false });
-                    true ->
-                        % The node is configured to only serve the latest known
-                        % state from the cache, so we return the latest slot.
-                        {failure, <<"No cached state available.">>}
-                    end
+                    uncached_now(CacheParam, Base, Req, Opts)
             end
+    end.
+
+%% @doc Compute `/now' when the cache is unavailable or stale, unless the node
+%% requires cache-only process reads.
+uncached_now(CacheParam, Base, Req, Opts) ->
+    uncached_now(CacheParam, Base, Req, Opts, <<"No cached state available.">>).
+uncached_now(CacheParam, Base, Req, Opts, Failure) ->
+    case hb_ao:normalize_key(CacheParam) of
+        <<"always">> ->
+            {failure, Failure};
+        _ ->
+            now(Base, Req, Opts#{ <<"process-now-from-cache">> => false })
     end.
 
 %% @doc Recursively push messages to the scheduler until we find a message
@@ -794,3 +828,61 @@ ensure_loaded(Base, Req, Opts) ->
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
     hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
+
+%%% Tests
+
+%% @doc A stale `/now' cache entry checks the scheduler and computes its latest
+%% slot through the public AO-Core device interface.
+now_cache_max_age_test_() ->
+    {timeout, 60, fun() ->
+        hb:init(),
+        Store = hb_test_utils:test_store(
+            hb_store_volatile,
+            <<"process-now-max-age">>
+        ),
+        ok = hb_store:start(Store),
+        Opts = #{
+            <<"store">> => [Store],
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"process-now-from-cache">> => true,
+            <<"process-now-max-age">> => 60,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+        },
+        Process = hb_process_test_vectors:aos_process(Opts),
+        hb_process_test_vectors:schedule_aos_call(
+            Process,
+            <<"return 1+1">>,
+            Opts
+        ),
+        Req = #{ <<"path">> => <<"now/results/data">> },
+        ?assertEqual(
+            {ok, <<"2">>},
+            hb_ao:resolve(
+                Process,
+                Req,
+                Opts#{ <<"process-clock">> => 100 }
+            )
+        ),
+        hb_process_test_vectors:schedule_aos_call(
+            Process,
+            <<"return 2+2">>,
+            Opts
+        ),
+        ?assertEqual(
+            {ok, <<"2">>},
+            hb_ao:resolve(
+                Process,
+                Req,
+                Opts#{ <<"process-clock">> => 160 }
+            )
+        ),
+        ?assertEqual(
+            {ok, <<"4">>},
+            hb_ao:resolve(
+                Process,
+                Req,
+                Opts#{ <<"process-clock">> => 161 }
+            )
+        ),
+        ok = hb_store:stop(Store)
+    end}.
