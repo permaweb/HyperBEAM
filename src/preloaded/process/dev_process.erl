@@ -343,7 +343,12 @@ compute_slot(ProcID, State, RawInputMsg, InitReq, TargetSlot, Opts) ->
     {RuntimeMicroSecs, Res} =
         timer:tc(
             fun() ->
-                lib_process:run_as(<<"execution">>, PreparedState, Req, Opts)
+                lib_process:run_as(
+                    <<"execution">>,
+                    PreparedState,
+                    Req,
+                    lib_process:execution_opts(Opts)
+                )
             end
         ),
     ?event(
@@ -518,7 +523,8 @@ dispatch_push(Process, Slot, MaxDepth, Req, Opts) ->
 %% @doc Store the resulting state in the cache, potentially with the snapshot
 %% key. The write is synchronous: callers may notify waiters or run push hooks
 %% as soon as this returns, so the slot must already be cache-visible.
-store_result(ForceSnapshot, ProcID, Slot, Res, Req, Opts) ->
+store_result(ForceSnapshot, ProcID, Slot, Res, Req, RawOpts) ->
+    Opts = lib_process:execution_opts(RawOpts),
     % Cache the `Snapshot' key as frequently as the node is configured to.
     ResMaybeWithSnapshot =
         case ForceSnapshot orelse should_snapshot(Slot, Res, Opts) of
