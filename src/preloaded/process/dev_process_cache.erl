@@ -520,3 +520,39 @@ isolated_process_store_test() ->
     hb_store:reset(ProcessStore),
     ?assertMatch({error, not_found}, read(ProcID, 1, Opts)),
     ?assertMatch({error, not_found}, latest(ProcID, Opts)).
+
+linked_trie_process_store_test() ->
+    MainStore = hb_test_utils:test_store(hb_store_fs, <<"trie-main">>),
+    ProcessStore = hb_test_utils:test_store(hb_store_fs, <<"trie-process">>),
+    Opts = #{
+        <<"store">> => [MainStore],
+        <<"process-store">> => [ProcessStore]
+    },
+    hb_store:start(MainStore),
+    hb_store:start(ProcessStore),
+    ExecOpts = lib_process:execution_opts(Opts),
+    {ok, Trie1} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"trie@1.0">> },
+            #{ <<"path">> => <<"set">>,
+                <<"w0MPTVR4CoZvasQxZi6bjVlgYNWTONwvQUyxTT5aA-8">> => 3 },
+            ExecOpts
+        ),
+    {ok, Trie2} =
+        hb_ao:resolve(
+            Trie1,
+            #{ <<"path">> => <<"set">>,
+                <<"wReY9V0F2PYI1bZgTpFjORh-_8hw_SUCEFjyqrFLpxM">> => 12 },
+            ExecOpts
+        ),
+    ProcID = hb_util:human_id(crypto:strong_rand_bytes(32)),
+    {ok, _} = write(ProcID, 12, #{ <<"dedup">> => Trie2 }, Opts),
+    {ok, Cached} = read(ProcID, 12, Opts),
+    ?assertEqual(
+        12,
+        hb_ao:get(
+            <<"dedup/wReY9V0F2PYI1bZgTpFjORh-_8hw_SUCEFjyqrFLpxM">>,
+            Cached,
+            lib_process:cache_opts(Opts)
+        )
+    ).

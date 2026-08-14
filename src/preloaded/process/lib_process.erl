@@ -7,6 +7,7 @@
     run_as/4,
     process_id/3,
     cache_opts/1,
+    execution_opts/1,
     cache_control/2,
     normalize_cache_control/1,
     only_if_cached/2,
@@ -50,6 +51,18 @@ cache_opts(Opts) ->
                 Opts
             )
     }.
+
+%% @doc Read and write process execution artifacts through `process-store',
+%% while retaining the general store chain as a read fallback.
+execution_opts(Opts) ->
+    Opts#{
+        <<"store">> =>
+            store_list(hb_opts:get(process_store, [], Opts)) ++
+            store_list(hb_opts:get(store, [], Opts))
+    }.
+
+store_list(Store) when is_map(Store) -> [Store];
+store_list(Stores) -> Stores.
 
 %% @doc Apply the process cache store and configured store scope to opts.
 scoped_opts(RawOpts) ->
