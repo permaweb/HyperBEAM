@@ -12,8 +12,8 @@
 %%% Because the supply is one indivisible unit, those two things compose into a
 %%% name: exactly one address holds it, that address alone may say what the name
 %%% points at, and transferring the unit hands over that right with it. Selling
-%%% or lending the unit -- with devices that settle against the same `balances'
-%%% -- sells or escrows the name.
+%%% the unit -- with `~arweave-swap@1.0', which settles against the same
+%%% `balances' -- sells the name.
 %%%
 %%% The protocol is two messages:
 %%% <ul>
@@ -24,8 +24,7 @@
 %%%       to resolve to -- or nothing, in which case the name inherits the keys
 %%%       of the `set' message itself, as `~reference@1.0' defines it. Only the
 %%%       holder of the whole supply may send it, judged against the balances as
-%%%       they stand at that slot. A live loan may also keep this right with the
-%%%       borrower while the unit is escrowed, if the loan allows it.</li>
+%%%       they stand at that slot.</li>
 %%% </ul>
 %%%
 %%% There is no mint path, so the supply is fixed at spawn: a name cannot be
@@ -51,8 +50,6 @@
 -define(BALANCES, <<"balances">>).
 %%% The linked message whose keys the name resolves through to.
 -define(VALUE, <<"value">>).
-%%% Existing carriers inherit this settlement device unless they override it.
--define(DEFAULT_LOAN_DEVICE, <<"arweave-loan@1.0">>).
 %%% The share of the supply a signer must hold to set the name, in basis
 %%% points. The whole supply, unless the token says otherwise.
 -define(DEFAULT_THRESHOLD_BPS, 10000).
@@ -95,14 +92,13 @@ request(_Base, Req, Opts) ->
 
 %% @doc Apply one assignment to the name's state.
 %%
-%% A name that is for sale or collateral is settled in the same balances it
-%% keeps, so every message is offered to those devices first -- including the
-%% ones this device would otherwise ignore, since payments are transfers between
-%% two other addresses. Which devices those are, are scalar keys on the process;
-%% see `loan/3' and `swap/3' for why this is not a `~stack@1.0'.
+%% A name that is for sale is settled in the same balances it keeps, so every
+%% message is offered to the selling device first -- including the ones this
+%% device would otherwise ignore, since the payment that buys a name is a
+%% transfer between two other addresses. Which device that is, is a scalar key
+%% on the process; see `swap/3' for why it is not a `~stack@1.0'.
 compute(Base, Assignment, Opts) ->
-    Loaned = loan(seed(Base, Opts), Assignment, Opts),
-    Sold = swap(Loaned, Assignment, Opts),
+    Sold = swap(seed(Base, Opts), Assignment, Opts),
     Body = hb_maps:get(<<"body">>, Assignment, #{}, Opts),
     ProcID = hb_maps:get(<<"process">>, Assignment, <<>>, Opts),
     case tx_field(Body, <<"target">>, <<>>, Opts) of
@@ -114,30 +110,14 @@ compute(Base, Assignment, Opts) ->
             {ok, Sold}
     end.
 
-%% @doc Hand the message to the device that lends this name, if it has one, and
+%% @doc Hand the message to the device that sells this name, if it has one, and
 %% take back the state it produces.
 %%
 %% This is a `~stack@1.0' written out by hand, and deliberately so. A process
 %% spawned as an Arweave transaction can only carry flat, scalar tags: the
 %% codec turns a submessage or a list into a `+link' to content that is not on
 %% the weave, so nothing else can read it back. `device-stack' is a list, so a
-%% stack cannot survive the spawn -- but `loan-device' is one word.
-loan(Base, Assignment, Opts) ->
-    case state(<<"loan-device">>, Base, ?DEFAULT_LOAN_DEVICE, Opts) of
-        not_found -> Base;
-        Device ->
-            try hb_ao:resolve(Base#{ <<"device">> => Device }, Assignment, Opts) of
-                {ok, Settled} -> Settled#{ <<"device">> => <<"carrier@1.0">> };
-                _ -> Base
-            catch
-                _:_ -> Base
-            end
-    end.
-
-%% @doc Hand the message to the device that sells this name, if it has one, and
-%% take back the state it produces.
-%%
-%% See `loan/3'.
+%% stack cannot survive the spawn -- but `swap-device' is one word.
 swap(Base, Assignment, Opts) ->
     case state(<<"swap-device">>, Base, not_found, Opts) of
         not_found -> Base;
@@ -276,7 +256,7 @@ notices(Base, Sender, Recipient, Quantity) ->
 set_value(Base, Body, Opts) ->
     maybe
         {ok, Signer} ?= signer(Body, Opts),
-        true ?= can_set(Base, Signer, Opts),
+        true ?= owns_supply(Base, Signer, Opts),
         Value = value_of(Body, Opts),
         ?event({carrier_set, {by, Signer}}),
         Base#{ ?VALUE => Value }
@@ -326,36 +306,6 @@ owns_supply(Base, Address, Opts) ->
             )
         ),
     balance(Base, Address, Opts) * 10000 >= Supply * Threshold.
-
-can_set(Base, Address, Opts) ->
-    owns_supply(Base, Address, Opts) orelse borrower_can_set(Base, Address, Opts).
-
-borrower_can_set(Base, Address, Opts) ->
-    lists:any(
-        fun
-            (#{
-                <<"status">> := <<"active">>,
-                <<"borrower">> := Borrower
-            } = Loan) when Borrower =:= Address ->
-                hb_util:bool(hb_maps:get(<<"borrower-set">>, Loan, true, Opts));
-            (_) -> false
-        end,
-        loans(Base, Opts)
-    ).
-
-loans(Base, Opts) ->
-    [
-        Loan
-    ||
-        Loan = #{ <<"loan-id">> := _ } <-
-            hb_maps:values(
-                hb_cache:ensure_all_loaded(
-                    state(<<"loans">>, Base, #{}, Opts),
-                    Opts
-                ),
-                Opts
-            )
-    ].
 
 %% @doc Read the name's supply, falling back to its single unit if malformed.
 supply(Base, Opts) ->
@@ -682,53 +632,6 @@ authority_follows_the_unit_test() ->
     ),
     ?assertEqual(1, held_by(Fresh, BuyerAddr, Opts)),
     ?assertEqual(0, held_by(Fresh, OwnerAddr, Opts)).
-
-%% @doc An active loan can leave name updates with the borrower while the unit
-%% is escrowed.
-active_loan_borrower_can_set_test() ->
-    Opts = test_opts(),
-    {Borrower, BorrowerAddr} = party(),
-    Loaned =
-        (name_held_by(BorrowerAddr))#{
-            ?BALANCES => #{ BorrowerAddr => 0 },
-            <<"loans">> =>
-                #{
-                    <<"loan">> =>
-                        #{
-                            <<"loan-id">> => <<"loan">>,
-                            <<"status">> => <<"active">>,
-                            <<"borrower">> => BorrowerAddr,
-                            <<"borrower-set">> => true
-                        }
-                }
-        },
-    Set = apply_tx(Loaned, set_tx(Borrower, #{ <<"points-at">> => <<"borrower">> }), Opts),
-    ?assertEqual(
-        <<"borrower">>,
-        hb_ao:get(<<"points-at">>, value(Set, Opts), not_found, Opts)
-    ).
-
-%% @doc A loan can also lock updates until the collateral is released or
-%% claimed.
-loan_can_disable_borrower_set_test() ->
-    Opts = test_opts(),
-    {Borrower, BorrowerAddr} = party(),
-    Loaned =
-        (name_held_by(BorrowerAddr))#{
-            ?BALANCES => #{ BorrowerAddr => 0 },
-            <<"loans">> =>
-                #{
-                    <<"loan">> =>
-                        #{
-                            <<"loan-id">> => <<"loan">>,
-                            <<"status">> => <<"active">>,
-                            <<"borrower">> => BorrowerAddr,
-                            <<"borrower-set">> => false
-                        }
-                }
-        },
-    Result = apply_tx(Loaned, set_tx(Borrower, #{ <<"points-at">> => <<"borrower">> }), Opts),
-    ?assertEqual(#{}, value(Result, Opts)).
 
 %% @doc A partial holding is not the whole supply, so it does not carry the
 %% authority. (A name is indivisible, but the rule is the supply threshold.)
