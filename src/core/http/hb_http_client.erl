@@ -794,6 +794,8 @@ get_status_class({error, {tls_alert, {internal_error, _}}}) ->
     <<"tls-alert-internal-error">>;
 get_status_class({error, {tls_alert, {handshake_failure, _}}}) ->
     <<"tls-alert-handshake-failure">>;
+get_status_class({error, {tls_alert, {certificate_expired, _}}}) ->
+    <<"tls-alert-certificate-expired">>;
 get_status_class({error, Error}) when is_atom(Error) ->
     hb_util:atom_to_dashed_binary(Error);
 get_status_class(208) ->
