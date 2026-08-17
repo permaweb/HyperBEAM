@@ -1,14 +1,34 @@
-%%% @doc A device for borrowing native Arweave value against a process token.
+%%% @doc Settle one token-collateralized borrowing position against native AR.
 %%%
-%%% Like `~arweave-swap@1.0', the AR leg never enters the process. The process
-%%% only controls the token ledger it shares with its execution device. A position
-%%% therefore escrows token collateral, observes ordinary layer-1 transfers for
-%%% funding and repayment, and releases or transfers the collateral according to
-%%% the observed payments and block heights.
+%%% The device is the first element of a `~stack@1.0', immediately before
+%%% `~token@1.0'. It escrows collateral in the token's `balances' ledger; AR
+%%% always moves directly between wallets in ordinary layer-1 transactions.
+%%% `~arweave-scheduler@1.0' assigns those transfers to the process through one
+%%% `Assign-To' tag.
 %%%
-%%% This device runs before `~token@1.0' in a native `~stack@1.0'. Control
-%%% transactions target the token process. Funding and repayment are normal AR
-%%% transfers between wallets with one `Assign-To' tag naming the process.
+%%% A process holds at most one position, in one of three states:
+%%% <ul>
+%%%   <li>`open': `open-position' has escrowed the requested
+%%%       `collateral-quantity'. Its terms are `principal' and `repayment' in
+%%%       winston, a relative `funding-deadline' and `maturity' in blocks, and
+%%%       optional `recipient', `reservation-duration' and `minimum-fee'.</li>
+%%%   <li>`reserved': `reserve-position' names the `position-id' and commits one
+%%%       funder for a bounded window. Its transaction reward must cover the
+%%%       position's minimum fee.</li>
+%%%   <li>`active': the reserved funder has transferred at least `principal' AR
+%%%       to the position's recipient. A transfer of at least `repayment' AR to
+%%%       the funder before maturity returns the collateral to its owner. After
+%%%       maturity, `claim-collateral' transfers it to the funder.</li>
+%%% </ul>
+%%%
+%%% `cancel-position' returns collateral while a position is open. Funding and
+%%% repayment transfers carry the `position-id' and assign themselves to the
+%%% token process. The device reads their native target and quantity from the
+%%% `tx@1.0' commitment rather than from forgeable tags.
+%%%
+%%% Borrowing actions and transfers naming a live position stop the stack after
+%%% this device. Unrelated assignments continue to the token. A token `Set' may
+%%% remove the stack only while no position exists.
 -module(dev_arweave_borrow).
 -implements(<<"arweave-borrow@1.0">>).
 -export([init/3, compute/3, normalize/3, snapshot/3]).
@@ -16,8 +36,6 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BALANCES, <<"balances">>).
--define(SEEN_POSITIONS, <<"seen-positions">>).
--define(SEEN_PAYMENTS, <<"seen-position-payments">>).
 -define(DEFAULT_COLLATERAL_QUANTITY, 1).
 -define(DEFAULT_RESERVATION_DURATION, 20).
 
@@ -26,7 +44,7 @@ init(Base, _Req, _Opts) -> {ok, Base}.
 normalize(Base, _Req, _Opts) -> {ok, Base}.
 snapshot(Base, _Req, _Opts) -> {ok, Base}.
 
-%% @doc Apply one scheduled assignment.
+%% @doc Advance deadlines, then route one scheduled L1 transaction.
 compute(Base, Assignment, Opts) ->
     Height = hb_util:int(field(<<"block-height">>, Assignment, 0, Opts)),
     ProcID = field(<<"process">>, Assignment, <<>>, Opts),
@@ -39,22 +57,17 @@ compute(Base, Assignment, Opts) ->
 
 %%% Position lifecycle
 
+%% @doc Apply a control transaction addressed to the process.
 control(Base, Body, Height, Opts) ->
     case action(Body, Opts) of
         <<"open-position">> -> {skip, open_position(Base, Body, Height, Opts)};
         <<"cancel-position">> -> {skip, cancel_position(Base, Body, Opts)};
-        <<"reserve-position">> ->
-            {skip,
-                case find_position(Base, Body, Opts) of
-                    {ok, Position} ->
-                        reserve_position(Base, Body, Height, Position, Opts);
-                    _ -> Base
-                end};
+        <<"reserve-position">> -> {skip, reserve_position(Base, Body, Height, Opts)};
         <<"claim-collateral">> -> {skip, claim_collateral(Base, Body, Height, Opts)};
         <<"set">> ->
-            case live_positions(Base, Opts) of
-                [] -> {ok, Base};
-                _ -> {skip, Base}
+            case position(Base, Opts) of
+                not_found -> {ok, Base};
+                _Position -> {skip, Base}
             end;
         _ -> {ok, Base}
     end.
@@ -85,7 +98,6 @@ open_position(Base, Body, Height, Opts) ->
         Recipient = field(<<"recipient">>, Body, PositionOwner, Opts),
         true ?= Principal >= 1,
         true ?= Repayment >= 1,
-        true ?= Repayment >= Principal,
         true ?= FundingWindow >= 1,
         true ?= MaturityWindow >= 1,
         true ?= ReservationDuration >= 1,
@@ -93,11 +105,9 @@ open_position(Base, Body, Height, Opts) ->
         true ?= Quantity >= 1,
         true ?= is_address(Recipient),
         true ?= supported_stack(Base, Opts),
-        false ?= has_live_sale(Base, Opts),
-        [] ?= live_positions(Base, Opts),
+        not_found ?= position(Base, Opts),
         true ?= balance(Base, PositionOwner, Opts) >= Quantity,
         PositionID = hb_util:human_id(hb_message:id(Body, signed, Opts)),
-        false ?= position_seen(Base, PositionID, Opts),
         Position =
             #{
                 <<"position-id">> => PositionID,
@@ -107,7 +117,6 @@ open_position(Base, Body, Height, Opts) ->
                 <<"repayment">> => Repayment,
                 <<"recipient">> => Recipient,
                 <<"collateral-quantity">> => Quantity,
-                <<"created-at">> => Height,
                 <<"funding-deadline">> => Height + FundingWindow,
                 <<"reservation-duration">> => ReservationDuration,
                 <<"minimum-fee">> => MinimumFee,
@@ -127,10 +136,12 @@ open_position(Base, Body, Height, Opts) ->
     end.
 
 %% @doc Give one funder an exclusive window in which to fund an open position.
-reserve_position(Base, Body, Height, Position, Opts) ->
+reserve_position(Base, Body, Height, Opts) ->
     maybe
         {ok, Funder} ?= signer(Body, Opts),
+        {ok, Position} ?= find_position(Base, Body, Opts),
         #{
+            <<"position-id">> := PositionID,
             <<"status">> := <<"open">>,
             <<"position-owner">> := PositionOwner,
             <<"recipient">> := Recipient,
@@ -138,7 +149,6 @@ reserve_position(Base, Body, Height, Position, Opts) ->
             <<"reservation-duration">> := Duration,
             <<"minimum-fee">> := Fee
         } ?= Position,
-        true ?= Height =< FundingDeadline,
         false ?= Funder =:= PositionOwner,
         false ?= Funder =:= Recipient,
         {ok, Reward} ?=
@@ -157,7 +167,7 @@ reserve_position(Base, Body, Height, Position, Opts) ->
             ),
         ?event(
             {position_reserved,
-                {position, maps:get(<<"position-id">>, Position)},
+                {position, PositionID},
                 {funder, Funder}
             }
         ),
@@ -172,37 +182,32 @@ cancel_position(Base, Body, Opts) ->
         {ok, Signer} ?= signer(Body, Opts),
         {ok, Position} ?= find_position(Base, Body, Opts),
         #{
+            <<"position-id">> := PositionID,
             <<"status">> := <<"open">>,
             <<"position-owner">> := Signer,
             <<"collateral-quantity">> := Quantity
         } ?= Position,
-        ?event(
-            {position_cancelled,
-                {position, maps:get(<<"position-id">>, Position)}}
-        ),
-        drop_position(credit(Base, Signer, Quantity, Opts), Position, Opts)
+        ?event({position_cancelled, {position, PositionID}}),
+        drop_position(credit(Base, Signer, Quantity, Opts), Opts)
     else
         _ -> Base
     end.
 
-%% @doc After maturity, move the collateral to the funder. Anyone may trigger
-%% the deterministic claim, but the message must still have a single signer.
+%% @doc After maturity, move the collateral to the funder. The transition is
+%% deterministic, so any transaction may trigger it.
 claim_collateral(Base, Body, Height, Opts) ->
     maybe
-        {ok, _Caller} ?= signer(Body, Opts),
         {ok, Position} ?= find_position(Base, Body, Opts),
         #{
+            <<"position-id">> := PositionID,
             <<"status">> := <<"active">>,
             <<"funder">> := Funder,
             <<"maturity">> := Maturity,
             <<"collateral-quantity">> := Quantity
         } ?= Position,
         true ?= Height > Maturity,
-        ?event(
-            {collateral_claimed,
-                {position, maps:get(<<"position-id">>, Position)}}
-        ),
-        drop_position(credit(Base, Funder, Quantity, Opts), Position, Opts)
+        ?event({collateral_claimed, {position, PositionID}}),
+        drop_position(credit(Base, Funder, Quantity, Opts), Opts)
     else
         _ -> Base
     end.
@@ -210,7 +215,7 @@ claim_collateral(Base, Body, Height, Opts) ->
 %% @doc Observe ordinary AR transfers for funding and repayment.
 payment(Base, Body, Target, Height, Opts) ->
     case find_position(Base, Body, Opts) of
-        {ok, _Position = #{ <<"status">> := <<"open">> }} ->
+        {ok, #{ <<"status">> := <<"open">> }} ->
             {skip, Base};
         {ok, Position = #{ <<"status">> := <<"reserved">> }} ->
             {skip, fund(Base, Body, Target, Height, Position, Opts)};
@@ -219,89 +224,75 @@ payment(Base, Body, Target, Height, Opts) ->
         _ -> {ok, Base}
     end.
 
+%% @doc Activate a reserved position with its funder's native AR transfer.
 fund(Base, Body, Target, Height, Position, Opts) ->
     maybe
         {ok, Signer} ?= signer(Body, Opts),
         #{
-            <<"position-owner">> := PositionOwner,
+            <<"position-id">> := PositionID,
             <<"funder">> := Signer,
             <<"principal">> := Principal,
             <<"recipient">> := Recipient,
-            <<"funding-deadline">> := Deadline,
-            <<"reserved-until">> := ReservedUntil,
             <<"maturity-duration">> := MaturityDuration
         } ?= Position,
         true ?= Target =:= Recipient,
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)),
         true ?= Paid >= Principal,
-        true ?= Height =< Deadline,
-        true ?= Height =< ReservedUntil,
-        true ?= is_address(Signer),
-        false ?= Signer =:= PositionOwner,
-        false ?= Signer =:= Recipient,
-        FundingTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
-        false ?= payment_seen(Base, FundingTX, Opts),
         Active =
             hb_ao:set(
                 Position,
                 #{
                     <<"status">> => <<"active">>,
-                    <<"repayment-recipient">> => Signer,
-                    <<"maturity">> => Height + MaturityDuration,
-                    <<"funding-tx">> => FundingTX
+                    <<"maturity">> => Height + MaturityDuration
                 },
                 Opts
             ),
         ?event(
             {position_funded,
-                {position, maps:get(<<"position-id">>, Position)},
+                {position, PositionID},
                 {funder, Signer}
             }
         ),
-        remember_payment(put_position(Base, Active, Opts), FundingTX, Opts)
+        put_position(Base, Active, Opts)
     else
         _ -> Base
     end.
 
+%% @doc Release collateral after a sufficient, timely transfer to the funder.
 repay(Base, Body, Target, Height, Position, Opts) ->
     maybe
-        {ok, _Payer} ?= signer(Body, Opts),
         #{
+            <<"position-id">> := PositionID,
             <<"position-owner">> := PositionOwner,
             <<"repayment">> := Repayment,
-            <<"repayment-recipient">> := Recipient,
+            <<"funder">> := Funder,
             <<"maturity">> := Maturity,
             <<"collateral-quantity">> := Quantity
         } ?= Position,
-        true ?= Target =:= Recipient,
+        true ?= Target =:= Funder,
         {ok, Paid} ?= hb_util:safe_int(tx_field(Body, <<"quantity">>, 0, Opts)),
         true ?= Paid >= Repayment,
         true ?= Height =< Maturity,
-        RepaymentTX = hb_util:human_id(hb_message:id(Body, signed, Opts)),
-        false ?= payment_seen(Base, RepaymentTX, Opts),
-        ?event({position_repaid, {position, maps:get(<<"position-id">>, Position)}}),
-        remember_payment(
-            drop_position(credit(Base, PositionOwner, Quantity, Opts), Position, Opts),
-            RepaymentTX,
-            Opts
-        )
+        ?event({position_repaid, {position, PositionID}}),
+        drop_position(credit(Base, PositionOwner, Quantity, Opts), Opts)
     else
         _ -> Base
     end.
 
 %%% Clock
 
+%% @doc Materialize any deadline crossed by this assignment.
 advance(Base, Height, Opts) ->
-    lists:foldl(
-        fun(Position, Acc) -> expire(Acc, Position, Height, Opts) end,
-        Base,
-        positions(Base, Opts)
-    ).
+    case position(Base, Opts) of
+        not_found -> Base;
+        Position -> expire(Base, Position, Height, Opts)
+    end.
 
+%% @doc Return collateral when the position's funding window closes.
 expire(
         Base,
-        Position =
-            #{
+        #{
+                <<"position-id">> := PositionID,
                 <<"status">> := Status,
                 <<"position-owner">> := PositionOwner,
                 <<"collateral-quantity">> := Quantity,
@@ -311,8 +302,9 @@ expire(
         Opts)
         when Height > Deadline,
              Status =:= <<"open">> orelse Status =:= <<"reserved">> ->
-    ?event({position_funding_expired, {position, maps:get(<<"position-id">>, Position)}}),
-    drop_position(credit(Base, PositionOwner, Quantity, Opts), Position, Opts);
+    ?event({position_funding_expired, {position, PositionID}}),
+    drop_position(credit(Base, PositionOwner, Quantity, Opts), Opts);
+%% @doc Reopen a position whose funder did not pay during its reservation.
 expire(
         Base,
         Position =
@@ -338,12 +330,15 @@ expire(Base, _Position, _Height, _Opts) ->
 
 %%% State helpers
 
+%% @doc Read process state without resolving through the active device.
 state(Key, Base, Default, Opts) ->
     hb_ao:get(Key, {as, <<"message@1.0">>, Base}, Default, Opts).
 
+%% @doc Read one field of an untrusted scheduled message as plain data.
 field(Key, Msg, Default, Opts) ->
     hb_maps:get(Key, Msg, Default, Opts).
 
+%% @doc Normalize an action using the deployed token's matching semantics.
 action(Body, Opts) ->
     case field(<<"action">>, Body, <<>>, Opts) of
         Action when is_binary(Action) ->
@@ -351,26 +346,17 @@ action(Body, Opts) ->
         _ -> <<>>
     end.
 
-positions(Base, Opts) ->
-    [
-        Position
-    ||
-        Position = #{ <<"position-id">> := _ } <-
-            hb_maps:values(
-                hb_cache:ensure_all_loaded(position_book(Base, Opts), Opts),
-                Opts
-            )
-    ].
-
-position_book(Base, Opts) -> state(<<"positions">>, Base, #{}, Opts).
-
-live_positions(Base, Opts) ->
-    [Position || Position = #{ <<"status">> := Status } <- positions(Base, Opts), is_live(Status)].
-
-is_live(<<"open">>) -> true;
-is_live(<<"reserved">>) -> true;
-is_live(<<"active">>) -> true;
-is_live(_) -> false.
+%% @doc Read the process's one live position, loading through cache links.
+position(Base, Opts) ->
+    case
+        hb_cache:ensure_all_loaded(
+            state(<<"position">>, Base, not_found, Opts),
+            Opts
+        )
+    of
+        Position = #{ <<"position-id">> := _ } -> Position;
+        _ -> not_found
+    end.
 
 %% @doc Borrowing may escrow balances only in its canonical native stack.
 supported_stack(Base, Opts) ->
@@ -399,74 +385,21 @@ supported_stack(Base, Opts) ->
                 Opts
             ) =:= not_found.
 
+%% @doc Return the live position only when the transaction names it exactly.
 find_position(Base, Body, Opts) ->
-    case
-        hb_cache:ensure_all_loaded(
-            hb_maps:get(
-                field(<<"position-id">>, Body, <<>>, Opts),
-                position_book(Base, Opts),
-                not_found,
-                Opts
-            ),
-            Opts
-        )
-    of
-        Position = #{ <<"position-id">> := _ } -> {ok, Position};
+    PositionID = field(<<"position-id">>, Body, <<>>, Opts),
+    case position(Base, Opts) of
+        Position = #{ <<"position-id">> := PositionID } -> {ok, Position};
         _ -> not_found
     end.
 
-seen_positions(Base, Opts) -> state(?SEEN_POSITIONS, Base, #{}, Opts).
+%% @doc Replace the process's live position without deep-merging old terms.
+put_position(Base, Position, Opts) ->
+    replace_key(Base, <<"position">>, Position, Opts).
 
-position_seen(Base, PositionID, Opts) ->
-    hb_maps:get(PositionID, seen_positions(Base, Opts), false, Opts) =:= true
-        orelse
-            hb_maps:get(PositionID, position_book(Base, Opts), not_found, Opts)
-                =/= not_found.
-
-remember_position(Base, PositionID, Opts) ->
-    replace_key(
-        Base,
-        ?SEEN_POSITIONS,
-        replace_key(seen_positions(Base, Opts), PositionID, true, Opts),
-        Opts
-    ).
-
-seen_payments(Base, Opts) -> state(?SEEN_PAYMENTS, Base, #{}, Opts).
-
-payment_seen(Base, TXID, Opts) ->
-    hb_maps:get(TXID, seen_payments(Base, Opts), false, Opts) =:= true.
-
-remember_payment(Base, TXID, Opts) ->
-    replace_key(
-        Base,
-        ?SEEN_PAYMENTS,
-        replace_key(seen_payments(Base, Opts), TXID, true, Opts),
-        Opts
-    ).
-
-put_position(Base, Position = #{ <<"position-id">> := PositionID }, Opts) ->
-    remember_position(
-        replace_key(
-            Base,
-            <<"positions">>,
-            replace_key(position_book(Base, Opts), PositionID, Position, Opts),
-            Opts
-        ),
-        PositionID,
-        Opts
-    ).
-
-drop_position(Base, #{ <<"position-id">> := PositionID }, Opts) ->
-    remember_position(
-        replace_key(
-            Base,
-            <<"positions">>,
-            replace_key(position_book(Base, Opts), PositionID, unset, Opts),
-            Opts
-        ),
-        PositionID,
-        Opts
-    ).
+%% @doc Remove the completed position from process state.
+drop_position(Base, Opts) ->
+    replace_key(Base, <<"position">>, unset, Opts).
 
 %% @doc Replace one message key without deep-merging its old value back in.
 replace_key(Base, Key, Value, Opts) ->
@@ -481,31 +414,11 @@ replace_key(Base, Key, Value, Opts) ->
         Opts
     ).
 
-has_live_sale(Base, Opts) ->
-    lists:any(
-        fun
-            (#{ <<"status">> := <<"open">> }) -> true;
-            (#{ <<"status">> := <<"reserved">> }) -> true;
-            (_) -> false
-        end,
-        orders(Base, Opts)
-    ).
-
-orders(Base, Opts) ->
-    [
-        Order
-    ||
-        Order = #{ <<"order-id">> := _ } <-
-            hb_maps:values(
-                hb_cache:ensure_all_loaded(state(<<"orders">>, Base, #{}, Opts), Opts),
-                Opts
-            )
-    ].
-
+%% @doc Read one address from the token ledger shared with `~token@1.0'.
 balance(Base, Address, Opts) ->
     hb_util:int(state([?BALANCES, Address], Base, 0, Opts)).
 
-credit(Base, _Address, 0, _Opts) -> Base;
+%% @doc Add token units to one address without replacing the ledger device.
 credit(Base, Address, Amount, Opts) ->
     Balances = state(?BALANCES, Base, #{}, Opts),
     {ok, Updated} =
@@ -519,42 +432,51 @@ credit(Base, Address, Amount, Opts) ->
         ),
     replace_key(Base, ?BALANCES, Updated, Opts).
 
+%% @doc Remove token units from one address.
 debit(Base, Address, Amount, Opts) -> credit(Base, Address, -Amount, Opts).
 
+%% @doc Parse a numeric protocol field without throwing on foreign input.
 amount(Key, Body, Opts) -> amount(Key, Body, 0, Opts).
 
 amount(Key, Body, Default, Opts) ->
     hb_util:safe_int(field(Key, Body, Default, Opts)).
 
+%% @doc Read a native transaction field from its `tx@1.0' commitment.
 tx_field(Body, Field, Default, Opts) ->
-    case hb_message:commitment(#{ <<"commitment-device">> => <<"tx@1.0">> }, Body, Opts) of
+    CommitmentReq = #{ <<"commitment-device">> => <<"tx@1.0">> },
+    case hb_message:commitment(CommitmentReq, Body, Opts) of
         {ok, _ID, Commitment} ->
             hb_maps:get(<<"field-", Field/binary>>, Commitment, Default, Opts);
         _ ->
             Default
     end.
 
+%% @doc Return the address of a message's sole signer.
 signer(Body, Opts) ->
     case hb_message:signers(Body, Opts) of
         [Signer] -> {ok, hb_util:human_id(Signer)};
         _ -> not_found
     end.
 
+%% @doc Whether a value is a canonical human-readable Arweave address.
 is_address(Address) ->
-    ?IS_ID(Address) andalso byte_size(Address) =:= 43.
+    is_binary(Address) andalso byte_size(Address) =:= 43.
 
 %%% Tests
 
+-define(PROCESS, <<"pRoCeSs000000000000000000000000000000000000">>).
+
+%% @doc Isolate each test's wallet-backed store.
 test_opts() ->
     hb:init(),
     #{ <<"priv-wallet">> => ar_wallet:new() }.
 
-process_id() -> hb_util:human_id(<<1:256>>).
-
+%% @doc Return a wallet and its native address.
 party() ->
     Wallet = ar_wallet:new(),
     {Wallet, hb_util:human_id(ar_wallet:to_address(Wallet))}.
 
+%% @doc Build the only execution stack in which collateral may be escrowed.
 base(Balances) ->
     #{
         <<"device">> => <<"arweave-borrow@1.0">>,
@@ -567,6 +489,7 @@ base(Balances) ->
         ?BALANCES => Balances
     }.
 
+%% @doc Commit a synthetic L1 transaction with the production codec.
 tx(Wallet, Fields) ->
     hb_message:commit(
         Fields,
@@ -574,6 +497,7 @@ tx(Wallet, Fields) ->
         #{ <<"commitment-device">> => <<"tx@1.0">> }
     ).
 
+%% @doc Apply a transaction through AO-Core at one block height.
 apply_tx(Base, Body, Height, Opts) ->
     Result =
         hb_ao:resolve(
@@ -586,23 +510,25 @@ apply_tx(Base, Body, Height, Opts) ->
         {skip, New} -> New
     end.
 
+%% @doc Build the scheduler assignment delivered to the execution stack.
 assignment(Body, Height) ->
     #{
         <<"path">> => <<"compute">>,
-        <<"process">> => process_id(),
+        <<"process">> => ?PROCESS,
         <<"slot">> => 1,
         <<"block-height">> => Height,
         <<"body">> => Body
     }.
 
+%% @doc Advance deadlines with an unrelated assignment.
 tick(Base, Height, Opts) ->
     apply_tx(Base, #{ <<"target">> => <<"someone-else">> }, Height, Opts).
 
-open_position(Wallet, Principal, Repayment, FundingDeadline, Maturity) ->
+open_tx(Wallet, Principal, Repayment, FundingDeadline, Maturity) ->
     tx(
         Wallet,
         #{
-            <<"target">> => process_id(),
+            <<"target">> => ?PROCESS,
             <<"action">> => <<"open-position">>,
             <<"principal">> => hb_util:bin(Principal),
             <<"repayment">> => hb_util:bin(Repayment),
@@ -611,45 +537,49 @@ open_position(Wallet, Principal, Repayment, FundingDeadline, Maturity) ->
         }
     ).
 
+%% @doc Open the standard test position at height 50.
 open(Base, Wallet, FundingDeadline, Opts) ->
     apply_tx(
         Base,
-        open_position(Wallet, 100, 120, FundingDeadline, 20),
+        open_tx(Wallet, 100, 120, FundingDeadline, 20),
         50,
         Opts
     ).
 
+%% @doc Build a control transaction naming one position.
 position_action(Wallet, Action, PositionID) ->
     tx(
         Wallet,
         #{
-            <<"target">> => process_id(),
+            <<"target">> => ?PROCESS,
             <<"action">> => Action,
             <<"position-id">> => PositionID
         }
     ).
 
-reserve_position(Wallet, PositionID) -> reserve_position(Wallet, PositionID, 0).
+reserve_tx(Wallet, PositionID) -> reserve_tx(Wallet, PositionID, 0).
 
-reserve_position(Wallet, PositionID, Reward) ->
+reserve_tx(Wallet, PositionID, Reward) ->
     tx(
         Wallet,
         #{
-            <<"target">> => process_id(),
+            <<"target">> => ?PROCESS,
             <<"action">> => <<"reserve-position">>,
             <<"position-id">> => PositionID,
             <<"reward">> => Reward
         }
     ).
 
+%% @doc Reserve the current test position.
 reserve(Base, Wallet, Height, Opts) ->
     apply_tx(
         Base,
-        reserve_position(Wallet, position_id(Base, Opts)),
+        reserve_tx(Wallet, position_id(Base, Opts)),
         Height,
         Opts
     ).
 
+%% @doc Build an ordinary native transfer assigned to the process.
 pay(Wallet, To, Winston, PositionID) ->
     tx(
         Wallet,
@@ -660,6 +590,7 @@ pay(Wallet, To, Winston, PositionID) ->
         }
     ).
 
+%% @doc Build a transaction whose payment-shaped values exist only as tags.
 tag_only_tx(Wallet, Tags) ->
     Signed = ar_tx:sign(#tx{ format = 2, reward = 1, tags = Tags }, Wallet),
     hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}).
@@ -674,23 +605,39 @@ tag_only_payment(Wallet, To, Winston, PositionID) ->
         ]
     ).
 
-only_position(Base, Opts) ->
-    [Position] = positions(Base, Opts),
-    Position.
-
 position_id(Base, Opts) ->
-    maps:get(<<"position-id">>, only_position(Base, Opts)).
+    maps:get(<<"position-id">>, position(Base, Opts)).
 
+position_status(Base, Opts) ->
+    maps:get(<<"status">>, position(Base, Opts)).
+
+%% @doc Build the standard active position used by settlement tests.
+active_position(Opts) ->
+    {PositionOwner, PositionOwnerAddr} = party(),
+    {Funder, FunderAddr} = party(),
+    Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
+    Reserved = reserve(Opened, Funder, 51, Opts),
+    Funded =
+        apply_tx(
+            Reserved,
+            pay(Funder, PositionOwnerAddr, 100, position_id(Reserved, Opts)),
+            55,
+            Opts
+        ),
+    {Funded, PositionOwner, PositionOwnerAddr, FunderAddr}.
+
+%% @doc Opening a position moves its collateral out of the owner's balance.
 open_position_escrows_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
     Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
-    Position = only_position(Opened, Opts),
+    Position = position(Opened, Opts),
     ?assertEqual(0, balance(Opened, PositionOwnerAddr, Opts)),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, Position)),
     ?assertEqual(60, maps:get(<<"funding-deadline">>, Position)),
     ?assertEqual(20, maps:get(<<"maturity-duration">>, Position)).
 
+%% @doc A standalone or reordered device cannot touch the token ledger.
 wrong_stack_does_not_escrow_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -703,27 +650,18 @@ wrong_stack_does_not_escrow_test() ->
                 }
         },
     Result = open(Wrong, PositionOwner, 10, Opts),
-    ?assertEqual([], positions(Result, Opts)),
+    ?assertEqual(not_found, position(Result, Opts)),
     ?assertEqual(1, balance(Result, PositionOwnerAddr, Opts)).
 
-sale_conflict_blocks_position_test() ->
+%% @doc Opening without the requested collateral changes nothing.
+insufficient_collateral_does_not_open_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
-    Base =
-        (base(#{ PositionOwnerAddr => 1 }))#{
-            <<"orders">> =>
-                #{
-                    <<"order">> =>
-                        #{
-                            <<"order-id">> => <<"order">>,
-                            <<"status">> => <<"open">>
-                        }
-                }
-        },
-    Result = open(Base, PositionOwner, 10, Opts),
-    ?assertEqual([], positions(Result, Opts)),
-    ?assertEqual(1, balance(Result, PositionOwnerAddr, Opts)).
+    Result = open(base(#{ PositionOwnerAddr => 0 }), PositionOwner, 10, Opts),
+    ?assertEqual(not_found, position(Result, Opts)),
+    ?assertEqual(0, balance(Result, PositionOwnerAddr, Opts)).
 
+%% @doc A recipient must be a native Arweave address.
 non_ar_recipient_is_rejected_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -732,7 +670,7 @@ non_ar_recipient_is_rejected_test() ->
         tx(
             PositionOwner,
             #{
-                <<"target">> => process_id(),
+                <<"target">> => ?PROCESS,
                 <<"action">> => <<"open-position">>,
                 <<"principal">> => <<"100">>,
                 <<"repayment">> => <<"120">>,
@@ -742,9 +680,10 @@ non_ar_recipient_is_rejected_test() ->
             }
         ),
     Result = apply_tx(base(#{ PositionOwnerAddr => 1 }), Open, 50, Opts),
-    ?assertEqual([], positions(Result, Opts)),
+    ?assertEqual(not_found, position(Result, Opts)),
     ?assertEqual(1, balance(Result, PositionOwnerAddr, Opts)).
 
+%% @doc The owner may cancel an open position and recover its collateral.
 cancel_open_position_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -760,9 +699,10 @@ cancel_open_position_test() ->
             51,
             Opts
         ),
-    ?assertEqual([], positions(Cancelled, Opts)),
+    ?assertEqual(not_found, position(Cancelled, Opts)),
     ?assertEqual(1, balance(Cancelled, PositionOwnerAddr, Opts)).
 
+%% @doc Reservation blocks both owner cancellation and another funder's payment.
 reservation_is_exclusive_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -773,7 +713,11 @@ reservation_is_exclusive_test() ->
     Cancelled =
         apply_tx(
             Reserved,
-            position_action(PositionOwner, <<"cancel-position">>, position_id(Reserved, Opts)),
+            position_action(
+                PositionOwner,
+                <<"cancel-position">>,
+                position_id(Reserved, Opts)
+            ),
             52,
             Opts
         ),
@@ -784,10 +728,11 @@ reservation_is_exclusive_test() ->
             53,
             Opts
         ),
-    Position = only_position(Paid, Opts),
+    Position = position(Paid, Opts),
     ?assertEqual(<<"reserved">>, maps:get(<<"status">>, Position)),
     ?assertEqual(FunderAddr, maps:get(<<"funder">>, Position)).
 
+%% @doc Funding cannot activate a position before reservation.
 unreserved_funding_is_ignored_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -800,8 +745,9 @@ unreserved_funding_is_ignored_test() ->
             55,
             Opts
         ),
-    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_position(Result, Opts))).
+    ?assertEqual(<<"open">>, position_status(Result, Opts)).
 
+%% @doc A transfer to anyone other than the fixed recipient cannot fund.
 funding_wrong_target_is_ignored_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -816,8 +762,9 @@ funding_wrong_target_is_ignored_test() ->
             55,
             Opts
         ),
-    ?assertEqual(<<"reserved">>, maps:get(<<"status">>, only_position(Result, Opts))).
+    ?assertEqual(<<"reserved">>, position_status(Result, Opts)).
 
+%% @doc Tags cannot impersonate the committed target or quantity fields.
 tag_only_payment_fields_are_ignored_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -826,43 +773,27 @@ tag_only_payment_fields_are_ignored_test() ->
     PositionID = position_id(Opened, Opts),
     Reserved = reserve(Opened, Funder, 51, Opts),
     Tagged = tag_only_payment(Funder, PositionOwnerAddr, 100, PositionID),
-    ?assertEqual(PositionOwnerAddr, hb_ao:get(<<"target">>, Tagged, not_found, Opts)),
+    ?assertEqual(
+        PositionOwnerAddr,
+        hb_ao:get(<<"target">>, Tagged, not_found, Opts)
+    ),
     ?assertEqual(<<>>, tx_field(Tagged, <<"target">>, <<>>, Opts)),
     Result = apply_tx(Reserved, Tagged, 55, Opts),
-    ?assertEqual(<<"reserved">>, maps:get(<<"status">>, only_position(Result, Opts))).
+    ?assertEqual(<<"reserved">>, position_status(Result, Opts)).
 
+%% @doc Timely funding fixes the funder and maturity height.
 funding_activates_position_test() ->
     Opts = test_opts(),
-    {PositionOwner, PositionOwnerAddr} = party(),
-    {Funder, FunderAddr} = party(),
-    Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
-    Reserved = reserve(Opened, Funder, 51, Opts),
-    Funded =
-        apply_tx(
-            Reserved,
-            pay(Funder, PositionOwnerAddr, 100, position_id(Reserved, Opts)),
-            55,
-            Opts
-        ),
-    Position = only_position(Funded, Opts),
+    {Funded, _PositionOwner, _PositionOwnerAddr, FunderAddr} = active_position(Opts),
+    Position = position(Funded, Opts),
     ?assertEqual(<<"active">>, maps:get(<<"status">>, Position)),
     ?assertEqual(FunderAddr, maps:get(<<"funder">>, Position)),
-    ?assertEqual(FunderAddr, maps:get(<<"repayment-recipient">>, Position)),
     ?assertEqual(75, maps:get(<<"maturity">>, Position)).
 
+%% @doc Timely repayment returns collateral to the position owner.
 repayment_releases_collateral_test() ->
     Opts = test_opts(),
-    {PositionOwner, PositionOwnerAddr} = party(),
-    {Funder, FunderAddr} = party(),
-    Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
-    Reserved = reserve(Opened, Funder, 51, Opts),
-    Funded =
-        apply_tx(
-            Reserved,
-            pay(Funder, PositionOwnerAddr, 100, position_id(Reserved, Opts)),
-            55,
-            Opts
-        ),
+    {Funded, PositionOwner, PositionOwnerAddr, FunderAddr} = active_position(Opts),
     Repaid =
         apply_tx(
             Funded,
@@ -870,23 +801,14 @@ repayment_releases_collateral_test() ->
             70,
             Opts
         ),
-    ?assertEqual([], positions(Repaid, Opts)),
+    ?assertEqual(not_found, position(Repaid, Opts)),
     ?assertEqual(1, balance(Repaid, PositionOwnerAddr, Opts)).
 
+%% @doc After maturity, a permissionless claim pays collateral to the funder.
 claim_collateral_transfers_collateral_test() ->
     Opts = test_opts(),
-    {PositionOwner, PositionOwnerAddr} = party(),
-    {Funder, FunderAddr} = party(),
+    {Funded, _PositionOwner, PositionOwnerAddr, FunderAddr} = active_position(Opts),
     {Caller, _CallerAddr} = party(),
-    Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
-    Reserved = reserve(Opened, Funder, 51, Opts),
-    Funded =
-        apply_tx(
-            Reserved,
-            pay(Funder, PositionOwnerAddr, 100, position_id(Reserved, Opts)),
-            55,
-            Opts
-        ),
     Claimed =
         apply_tx(
             Funded,
@@ -898,30 +820,33 @@ claim_collateral_transfers_collateral_test() ->
             76,
             Opts
         ),
-    ?assertEqual([], positions(Claimed, Opts)),
+    ?assertEqual(not_found, position(Claimed, Opts)),
     ?assertEqual(0, balance(Claimed, PositionOwnerAddr, Opts)),
     ?assertEqual(1, balance(Claimed, FunderAddr, Opts)).
 
+%% @doc An unfunded position returns collateral after its funding deadline.
 funding_expiry_returns_collateral_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
     Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
     Expired = tick(Opened, 61, Opts),
-    ?assertEqual([], positions(Expired, Opts)),
+    ?assertEqual(not_found, position(Expired, Opts)),
     ?assertEqual(1, balance(Expired, PositionOwnerAddr, Opts)).
 
+%% @doc An unpaid reservation reopens while its funding window remains live.
 reservation_lapses_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
     {Funder, _FunderAddr} = party(),
     Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 100, Opts),
     Reserved = reserve(Opened, Funder, 51, Opts),
-    ?assertEqual(71, maps:get(<<"reserved-until">>, only_position(Reserved, Opts))),
+    ?assertEqual(71, maps:get(<<"reserved-until">>, position(Reserved, Opts))),
     Lapsed = tick(Reserved, 72, Opts),
-    Position = only_position(Lapsed, Opts),
+    Position = position(Lapsed, Opts),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, Position)),
     ?assertEqual(false, maps:is_key(<<"funder">>, Position)).
 
+%% @doc The funding deadline retires a reserved position as well as an open one.
 reserved_funding_expiry_returns_collateral_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -929,9 +854,10 @@ reserved_funding_expiry_returns_collateral_test() ->
     Opened = open(base(#{ PositionOwnerAddr => 1 }), PositionOwner, 10, Opts),
     Reserved = reserve(Opened, Funder, 51, Opts),
     Expired = tick(Reserved, 61, Opts),
-    ?assertEqual([], positions(Expired, Opts)),
+    ?assertEqual(not_found, position(Expired, Opts)),
     ?assertEqual(1, balance(Expired, PositionOwnerAddr, Opts)).
 
+%% @doc Reservation fees use the committed reward, never a same-named tag.
 minimum_fee_uses_committed_reward_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -940,7 +866,7 @@ minimum_fee_uses_committed_reward_test() ->
         tx(
             PositionOwner,
             #{
-                <<"target">> => process_id(),
+                <<"target">> => ?PROCESS,
                 <<"action">> => <<"open-position">>,
                 <<"principal">> => <<"100">>,
                 <<"repayment">> => <<"120">>,
@@ -955,7 +881,7 @@ minimum_fee_uses_committed_reward_test() ->
         ar_tx:sign(
             #tx{
                 format = 2,
-                target = hb_util:native_id(process_id()),
+                target = hb_util:native_id(?PROCESS),
                 reward = 1,
                 tags =
                     [
@@ -968,10 +894,11 @@ minimum_fee_uses_committed_reward_test() ->
         ),
     Spoofed = hb_message:convert(Signed, <<"structured@1.0">>, <<"tx@1.0">>, #{}),
     Rejected = apply_tx(Opened, Spoofed, 51, Opts),
-    ?assertEqual(<<"open">>, maps:get(<<"status">>, only_position(Rejected, Opts))),
-    Accepted = apply_tx(Rejected, reserve_position(Funder, PositionID, 2), 52, Opts),
-    ?assertEqual(<<"reserved">>, maps:get(<<"status">>, only_position(Accepted, Opts))).
+    ?assertEqual(<<"open">>, position_status(Rejected, Opts)),
+    Accepted = apply_tx(Rejected, reserve_tx(Funder, PositionID, 2), 52, Opts),
+    ?assertEqual(<<"reserved">>, position_status(Accepted, Opts)).
 
+%% @doc Stack flow passes unrelated work and consumes every borrowing action.
 stack_routing_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -979,7 +906,7 @@ stack_routing_test() ->
         tx(
             PositionOwner,
             #{
-                <<"target">> => process_id(),
+                <<"target">> => ?PROCESS,
                 <<"action">> => <<"Set">>,
                 <<"execution-device">> => <<"token@1.0">>
             }
@@ -1008,6 +935,7 @@ stack_routing_test() ->
     {ok, Blocked} = hb_ao:resolve(Stack(Opened), assignment(Set, 51), Opts),
     ?assertEqual(false, state(<<"tail-called">>, Blocked, false, Opts)).
 
+%% @doc Escrow updates preserve a linked trie ledger across a cache round trip.
 trie_balances_survive_cache_test() ->
     Opts = test_opts(),
     {PositionOwner, PositionOwnerAddr} = party(),
@@ -1021,11 +949,15 @@ trie_balances_survive_cache_test() ->
     Cancelled =
         apply_tx(
             Opened,
-            position_action(PositionOwner, <<"cancel-position">>, position_id(Opened, Opts)),
+            position_action(
+                PositionOwner,
+                <<"cancel-position">>,
+                position_id(Opened, Opts)
+            ),
             51,
             Opts
         ),
     {ok, ID} = hb_cache:write(Cancelled, Opts),
     {ok, Cached} = hb_cache:read(ID, Opts),
     ?assertEqual(1, balance(Cached, PositionOwnerAddr, Opts)),
-    ?assertEqual([], positions(Cached, Opts)).
+    ?assertEqual(not_found, position(Cached, Opts)).
