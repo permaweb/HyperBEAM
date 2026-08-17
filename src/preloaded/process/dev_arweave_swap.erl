@@ -538,10 +538,13 @@ find_order(Base, Body, Opts) ->
 put_order(Base, Order = #{ <<"order-id">> := OrderID }, Opts) ->
     Base#{
         <<"orders">> =>
-            hb_maps:put(
-                OrderID,
-                Order,
-                order_book(Base, Opts),
+            hb_ao:set(
+                hb_ao:set(
+                    order_book(Base, Opts),
+                    #{ OrderID => unset },
+                    Opts
+                ),
+                #{ OrderID => Order },
                 Opts
             )
     }.
@@ -565,10 +568,9 @@ credit(Base, _Address, 0, _Opts) -> Base;
 credit(Base, Address, Amount, Opts) ->
     Base#{
         ?BALANCES =>
-            hb_maps:put(
-                Address,
-                balance(Base, Address, Opts) + Amount,
+            hb_ao:set(
                 state(?BALANCES, Base, #{}, Opts),
+                #{ Address => balance(Base, Address, Opts) + Amount },
                 Opts
             )
     }.
@@ -724,6 +726,36 @@ apply_tx(Base, Body, Height, Opts) ->
             Opts
         ),
     New.
+
+%% @doc A trie-backed token balance is updated through the ledger's device.
+trie_balance_update_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    Balances =
+        hb_ao:set(
+            #{ <<"device">> => <<"trie@1.0">> },
+            #{ SellerAddr => 100 },
+            Opts
+        ),
+    {ok, Updated} =
+        hb_ao:resolve(
+            (base(Balances))#{ <<"device">> => <<"arweave-swap@1.0">> },
+            #{
+                <<"path">> => <<"compute">>,
+                <<"process">> => ?PROCESS,
+                <<"slot">> => 1,
+                <<"block-height">> => 10,
+                <<"body">> => offer(Seller, 10, 500, 0, 20)
+            },
+            Opts
+        ),
+    UpdatedBalances =
+        hb_ao:get(
+            ?BALANCES,
+            {as, <<"message@1.0">>, Updated},
+            Opts
+        ),
+    ?assertEqual(90, hb_ao:get(SellerAddr, UpdatedBalances, Opts)).
 
 %% @doc Advance the process on its next relevant transaction without changing
 %% the order book through an action.
