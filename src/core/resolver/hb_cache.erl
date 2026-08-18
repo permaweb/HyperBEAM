@@ -75,21 +75,12 @@ ensure_loaded(Ref,
             {store, _Store}
         }
     ),
-    ReadLink =
-        fun(ReadOpts) ->
-            case hb_opts:get(commitment, undefined, ReadOpts) of
-                true ->
-                    do_read_commitment(ID, hb_util:deep_merge(ReadOpts, LkOpts, ReadOpts));
-                _ ->
-                    hb_cache:read(ID, hb_util:deep_merge(ReadOpts, LkOpts, ReadOpts))
-            end
-        end,
     CacheReadResult =
-        case ReadLink(Opts) of
-            {error, not_found} ->
-                ReadLink(hb_store:scope(UnscopedOpts, remote));
-            Res ->
-                Res
+        case hb_opts:get(commitment, undefined, Opts) of
+            true ->
+                do_read_commitment(ID, hb_util:deep_merge(Opts, LkOpts, Opts));
+            _ ->
+                hb_cache:read(ID, hb_util:deep_merge(Opts, LkOpts, Opts))
         end,
     case CacheReadResult of
         {ok, Next} ->
