@@ -1,0 +1,67 @@
+%%% @doc The store layout of the Arweave consensus cache.
+%%%
+%%% A validated block is named by its Arweave block hash, which is the identity
+%%% the protocol, the peers and every other block already know it by. Everything
+%%% else this device writes is named under its own path namespace: the selected
+%%% tip, the current placement of a transaction, the marker recording that a
+%%% block's transactions have been announced, and the account tree a bootstrap
+%%% fetched.
+%%%
+%%% They live in one module because both consensus devices build them. The
+%%% block device follows a header's `previous-block' through the same name the
+%%% sync device publishes, so a name spelled out in each would be a name that
+%%% can drift, and drift here is a chain that cannot be walked.
+%%%
+%%% Every name is built from a value that arrived from a peer or a request, and
+%%% `hb_path:to_binary/1' does not collapse `..': `hb_store_lmdb' interprets
+%%% separator-delimited components as hierarchical keys. So each builder
+%%% refuses a value that could be resolved as a path rather than passing it on.
+%%% The callers that take one from a request check it first -- see
+%%% `lib_arweave_sync:block_hash/1' -- and these are the chokepoints behind
+%%% them.
+-module(lib_arweave_paths).
+-export([tip/0, block/1, placement/1, settled/1, accounts_anchor/0]).
+-include("include/hb.hrl").
+
+-define(PREFIX, <<"~arweave@2.9">>).
+
+%% @doc The selected head of the chain.
+tip() ->
+    hb_path:to_binary([?PREFIX, <<"tip">>]).
+
+%% @doc A validated block, by its Arweave block hash. Publication links this
+%% last, so a block that reads back here is one whose local indexes are
+%% complete.
+%%
+%% The bare hash, not a path under this device: it is the protocol identity the
+%% block device reads from `previous-block'. It is a store alias, not an AO-Core
+%% message identifier.
+block(Hash) ->
+    safe(Hash).
+
+%% @doc The current placement of a transaction, by its identifier. A
+%% reorganisation replaces this; it deletes nothing.
+placement(ID) ->
+    hb_path:to_binary([?PREFIX, <<"placements">>, safe(ID)]).
+
+%% @doc The marker recording that a block's transactions have been announced on
+%% the settled-transaction hook.
+settled(Hash) ->
+    hb_path:to_binary([?PREFIX, <<"settled">>, safe(Hash)]).
+
+%% @doc The account tree a bootstrap fetched, and the block that vouches for it.
+accounts_anchor() ->
+    hb_path:to_binary([?PREFIX, <<"accounts-anchor">>]).
+
+%%% Internal functions.
+
+%% @doc Refuse a value that could be resolved as a path rather than treated as
+%% a name. Every identifier this subsystem files under is base64url and carries
+%% none of these.
+safe(Value) when is_binary(Value) ->
+    case binary:match(Value, [<<"/">>, <<"..">>, <<0>>]) of
+        nomatch -> Value;
+        _ -> throw({'unsafe-arweave-path', Value})
+    end;
+safe(Value) ->
+    throw({'unsafe-arweave-path', Value}).
