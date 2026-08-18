@@ -1,0 +1,653 @@
+%%% @doc Copied and adapted from the arweave codebase.
+%%% Should track: https://github.com/ArweaveTeam/arweave/blob/master/apps/arweave/src/ar_block.erl
+-module(ar_block).
+
+-export([get_consensus_window_size/0, get_max_tx_anchor_depth/0,
+		partition_size/0,
+		get_replica_2_9_entropy_sector_size/0,
+		get_sub_chunks_per_replica_2_9_entropy/0, strict_data_split_threshold/0,
+		get_merkle_rebase_support_threshold/0,
+		verify_timestamp/2, get_max_timestamp_deviation/0, verify_last_retarget/2,
+		verify_weave_size/3, verify_cumulative_diff/2, verify_block_hash_list_merkle/2,
+		compute_h0/6, compute_h1/3, compute_h2/3,
+		indep_hash2/2, get_block_signature_preimage/4,
+		generate_signed_hash/1, verify_signature/3, get_reward_key/2,
+		get_recall_range/3, get_recall_range/5, verify_tx_root/1,
+		hash_wallet_list/1,
+		generate_tx_root_for_block/1, generate_tx_root_for_block/2,
+		generate_size_tagged_list_from_txs/2, generate_tx_tree/1, generate_tx_tree/2,
+		get_packing_threshold/2, compute_next_vdf_difficulty/1,
+		validate_proof_size/1, vdf_step_number/1, get_packing/3,
+		validate_replica_format/3,
+		get_max_nonce/1, get_recall_range_size/1, get_recall_byte/3,
+		get_sub_chunk_index/2,
+		get_chunk_padded_offset/1, get_double_signing_condition/4]).
+
+-include("include/ar.hrl").
+-include("include/ar_consensus.hrl").
+-include("include/ar_block.hrl").
+-include("include/ar_vdf.hrl").
+
+%%%===================================================================
+%%% Public interface.
+%%%===================================================================
+
+%% @doc Return the number of blocks we track during consensus. The node
+%% does not accept new blocks originating from blocks older than the oldest
+%% block in this window.
+get_consensus_window_size() ->
+	?STORE_BLOCKS_BEHIND_CURRENT.
+
+%% @doc Return the maximum allowed block depth of the transaction block anchor.
+get_max_tx_anchor_depth() ->
+	ar_block:get_consensus_window_size().
+
+%% @doc Expose constants through a function to allow mocking/injection in tests.
+partition_size() -> ?PARTITION_SIZE.
+strict_data_split_threshold() -> ?STRICT_DATA_SPLIT_THRESHOLD.
+get_merkle_rebase_support_threshold() -> ?MERKLE_REBASE_SUPPORT_THRESHOLD.
+
+%% @doc Return the 2.9 entropy sector size - the largest total size in bytes of the contiguous
+%% area where the 2.9 entropy of every chunk is unique.
+-spec get_replica_2_9_entropy_sector_size() -> pos_integer().
+get_replica_2_9_entropy_sector_size() ->
+	?REPLICA_2_9_ENTROPY_COUNT * ?COMPOSITE_PACKING_SUB_CHUNK_SIZE.
+
+%% @doc Return the number of sub-chunks per entropy. We'll generally create 32x entropies
+%% in order to fully encipher this many chunks.
+-spec get_sub_chunks_per_replica_2_9_entropy() -> pos_integer().
+get_sub_chunks_per_replica_2_9_entropy() ->
+	?REPLICA_2_9_ENTROPY_SIZE div ?COMPOSITE_PACKING_SUB_CHUNK_SIZE.
+
+%% VENDOR: upstream's block_field_size_limit/1 (src/ar_block.erl:86) and its
+%% validate_tags_size/1 and validate_tags_length/2 helpers are dropped. The only
+%% caller is ar_node_utils:validate_block(block_field_sizes, ...), an
+%% unreachable clause; the same limits are enforced structurally by
+%% ar_serialize:binary_to_block/1.
+
+%% @doc Verify the block timestamp is not too far in the future nor too far in
+%% the past. We calculate the maximum reasonable clock difference between any
+%% two nodes. This is a simplification since there is a chaining effect in the
+%% network which we don't take into account. Instead, we assume two nodes can
+%% deviate JOIN_CLOCK_TOLERANCE seconds in the opposite direction from each
+%% other.
+verify_timestamp(#block{ timestamp = Timestamp }, #block{ timestamp = PrevTimestamp }) ->
+	MaxNodesClockDeviation = get_max_timestamp_deviation(),
+	case Timestamp >= PrevTimestamp - MaxNodesClockDeviation of
+		false ->
+			false;
+		true ->
+			CurrentTime = os:system_time(seconds),
+			Timestamp =< CurrentTime + MaxNodesClockDeviation
+	end.
+
+%% @doc Return the largest possible value by which the previous block's timestamp
+%% may exceed the next block's timestamp.
+get_max_timestamp_deviation() ->
+	?JOIN_CLOCK_TOLERANCE * 2 + ?CLOCK_DRIFT_MAX.
+
+%% @doc Verify the retarget timestamp on NewB is correct.
+verify_last_retarget(NewB, OldB) ->
+	case ar_retarget:is_retarget_height(NewB#block.height) of
+		true ->
+			NewB#block.last_retarget == NewB#block.timestamp;
+		false ->
+			NewB#block.last_retarget == OldB#block.last_retarget
+	end.
+
+%% @doc Verify the new weave size is computed correctly given the previous block
+%% and the list of transactions of the new block.
+verify_weave_size(NewB, OldB, TXs) ->
+	BlockSize = lists:foldl(
+		fun(TX, Acc) ->
+			Acc + ar_tx:get_weave_size_increase(TX, NewB#block.height)
+		end,
+		0,
+		TXs
+	),
+	(NewB#block.height < ar_fork:height_2_6() orelse BlockSize == NewB#block.block_size)
+			andalso NewB#block.weave_size == OldB#block.weave_size + BlockSize.
+
+%% @doc Verify the new cumulative difficulty is computed correctly.
+verify_cumulative_diff(NewB, OldB) ->
+	NewB#block.cumulative_diff ==
+		ar_difficulty:next_cumulative_diff(
+			OldB#block.cumulative_diff,
+			NewB#block.diff,
+			NewB#block.height
+		).
+
+%% @doc Verify the root of the new block tree is computed correctly.
+verify_block_hash_list_merkle(NewB, CurrentB) ->
+	true = NewB#block.height > ar_fork:height_2_0(),
+	NewB#block.hash_list_merkle == ar_unbalanced_merkle:root(CurrentB#block.hash_list_merkle,
+			{CurrentB#block.indep_hash, CurrentB#block.weave_size, CurrentB#block.tx_root},
+			fun ar_unbalanced_merkle:hash_block_index_entry/1).
+
+%% @doc Compute "h0" - a cryptographic hash used as a source of entropy when choosing
+%% two recall ranges on the weave as unlocked by the given nonce limiter output.
+compute_h0(NonceLimiterOutput, PartitionNumber, Seed, MiningAddr, PackingDifficulty,
+		PackingState) ->
+	Preimage =
+		case PackingDifficulty of
+			0 ->
+				<< NonceLimiterOutput:32/binary,
+					PartitionNumber:256, Seed:32/binary, MiningAddr/binary >>;
+			_ ->
+				<< NonceLimiterOutput:32/binary,
+					PartitionNumber:256, Seed:32/binary, MiningAddr/binary,
+					PackingDifficulty:8 >>
+		end,
+	RandomXState = ar_packing_server:get_randomx_state_for_h0(PackingDifficulty, PackingState),
+	ar_mine_randomx:hash(RandomXState, Preimage).
+
+%% @doc Compute "h1" - a cryptographic hash which is either the hash of a solution not
+%% involving the second chunk or a carrier of the information about the first chunk
+%% used when computing the solution hash off the second chunk.
+compute_h1(H0, Nonce, Chunk) ->
+	Preimage = crypto:hash(sha256, << H0:32/binary, Nonce:64, Chunk/binary >>),
+	{compute_solution_h(H0, Preimage), Preimage}.
+
+%% @doc Compute "h2" - the hash of a solution involving the second chunk.
+compute_h2(H1, Chunk, H0) ->
+	Preimage = crypto:hash(sha256, << H1:32/binary, Chunk/binary >>),
+	{compute_solution_h(H0, Preimage), Preimage}.
+
+%% @doc Compute the solution hash from the preimage and H0.
+compute_solution_h(H0, Preimage) ->
+	crypto:hash(sha256, << H0:32/binary, Preimage/binary >>).
+
+compute_next_vdf_difficulty(PrevB) ->
+	Height = PrevB#block.height + 1,
+	#nonce_limiter_info{
+		vdf_difficulty = VDFDifficulty,
+		next_vdf_difficulty = NextVDFDifficulty
+	} = PrevB#block.nonce_limiter_info,
+	case ar_block_time_history:has_history(Height) of
+		true ->
+			case (Height rem ?VDF_DIFFICULTY_RETARGET == 0) andalso
+					(VDFDifficulty == NextVDFDifficulty) of
+				false ->
+					NextVDFDifficulty;
+				true ->
+					case Height < ar_fork:height_2_7_1() of
+						true ->
+							HistoryPart = lists:nthtail(?VDF_HISTORY_CUT,
+									ar_block_time_history:get_history(PrevB)),
+							{IntervalTotal, VDFIntervalTotal} =
+								lists:foldl(
+									fun({BlockInterval, VDFInterval, _ChunkCount}, {Acc1, Acc2}) ->
+										{
+											Acc1 + BlockInterval,
+											Acc2 + VDFInterval
+										}
+									end,
+									{0, 0},
+									HistoryPart
+								),
+							NewVDFDifficulty =
+								(VDFIntervalTotal * VDFDifficulty) div IntervalTotal,
+							?LOG_DEBUG([{event, vdf_difficulty_retarget},
+									{height, Height},
+									{old_vdf_difficulty, VDFDifficulty},
+									{new_vdf_difficulty, NewVDFDifficulty},
+									{interval_total, IntervalTotal},
+									{vdf_interval_total, VDFIntervalTotal}]),
+							NewVDFDifficulty;
+						false ->
+							HistoryPartCut1 = lists:nthtail(?VDF_HISTORY_CUT,
+								ar_block_time_history:get_history(PrevB)),
+							HistoryPart = lists:sublist(HistoryPartCut1, ?VDF_DIFFICULTY_RETARGET),
+							{IntervalTotal, VDFIntervalTotal} =
+								lists:foldl(
+									fun({BlockInterval, VDFInterval, _ChunkCount}, {Acc1, Acc2}) ->
+										{
+											Acc1 + BlockInterval,
+											Acc2 + VDFInterval
+										}
+									end,
+									{0, 0},
+									HistoryPart
+								),
+							NewVDFDifficulty =
+								(VDFIntervalTotal * VDFDifficulty) div IntervalTotal,
+							EMAVDFDifficulty = (9*VDFDifficulty + NewVDFDifficulty) div 10,
+							?LOG_DEBUG([{event, vdf_difficulty_retarget},
+									{height, Height},
+									{old_vdf_difficulty, VDFDifficulty},
+									{new_vdf_difficulty, NewVDFDifficulty},
+									{ema_vdf_difficulty, EMAVDFDifficulty},
+									{interval_total, IntervalTotal},
+									{vdf_interval_total, VDFIntervalTotal}]),
+							EMAVDFDifficulty
+					end
+			end;
+		false ->
+			?VDF_DIFFICULTY
+	end.
+
+validate_proof_size(PoA) ->
+	byte_size(PoA#poa.tx_path) =< ?MAX_TX_PATH_SIZE andalso
+			byte_size(PoA#poa.data_path) =< ?MAX_DATA_PATH_SIZE andalso
+			byte_size(PoA#poa.chunk) =< ?DATA_CHUNK_SIZE andalso
+			byte_size(PoA#poa.unpacked_chunk) =< ?DATA_CHUNK_SIZE.
+
+%% @doc Compute the block identifier (also referred to as "independent hash").
+%% VENDOR: upstream branches to the pre-2.6 block data segment path below
+%% ar_fork:height_2_6() (src/ar_block.erl:336-344). The BDS path, its
+%% generate_block_data_segment/1,2, generate_block_data_segment_base/1,
+%% indep_hash/2, poa_to_list/1 and encode_tags/1 helpers are dropped: this
+%% subsystem only validates post-2.9 blocks.
+%% @doc Compute the hash signed by the block producer.
+generate_signed_hash(#block{ previous_block = PrevH, timestamp = TS,
+		nonce = Nonce, height = Height, diff = Diff, cumulative_diff = CDiff,
+		last_retarget = LastRetarget, hash = Hash, block_size = BlockSize,
+		weave_size = WeaveSize, tx_root = TXRoot, wallet_list = WalletList,
+		hash_list_merkle = HashListMerkle, reward_pool = RewardPool,
+		packing_2_5_threshold = Packing_2_5_Threshold, reward_addr = Addr,
+		reward_key = RewardKey, strict_data_split_threshold = StrictChunkThreshold,
+		usd_to_ar_rate = {RateDividend, RateDivisor},
+		scheduled_usd_to_ar_rate = {ScheduledRateDividend, ScheduledRateDivisor},
+		tags = Tags, txs = TXs,
+		reward = Reward, hash_preimage = HashPreimage, recall_byte = RecallByte,
+		partition_number = PartitionNumber, recall_byte2 = RecallByte2,
+		nonce_limiter_info = NonceLimiterInfo,
+		previous_solution_hash = PreviousSolutionHash,
+		price_per_gib_minute = PricePerGiBMinute,
+		scheduled_price_per_gib_minute = ScheduledPricePerGiBMinute,
+		reward_history_hash = RewardHistoryHash,
+		block_time_history_hash = BlockTimeHistoryHash, debt_supply = DebtSupply,
+		kryder_plus_rate_multiplier = KryderPlusRateMultiplier,
+		kryder_plus_rate_multiplier_latch = KryderPlusRateMultiplierLatch,
+		denomination = Denomination, redenomination_height = RedenominationHeight,
+		double_signing_proof = DoubleSigningProof, previous_cumulative_diff = PrevCDiff,
+		merkle_rebase_support_threshold = RebaseThreshold,
+		poa = #poa{ data_path = DataPath, tx_path = TXPath },
+		poa2 = #poa{ data_path = DataPath2, tx_path = TXPath2 },
+		chunk_hash = ChunkHash, chunk2_hash = Chunk2Hash,
+		packing_difficulty = PackingDifficulty,
+		unpacked_chunk_hash = UnpackedChunkHash,
+		unpacked_chunk2_hash = UnpackedChunk2Hash,
+		replica_format = ReplicaFormat }) ->
+	GetTXID = fun(TXID) when is_binary(TXID) -> TXID; (TX) -> TX#tx.id end,
+	Nonce2 = binary:encode_unsigned(Nonce),
+	%% The only block where reward_address may be unclaimed
+	%% is the genesis block of a new weave.
+	Addr2 = case Addr of unclaimed -> <<>>; _ -> Addr end,
+	RewardKey2 = case RewardKey of undefined -> undefined; {_Type, Pub} -> Pub end,
+	#nonce_limiter_info{ output = Output, global_step_number = N, seed = Seed,
+			next_seed = NextSeed, partition_upper_bound = PartitionUpperBound,
+			next_partition_upper_bound = NextPartitionUpperBound,
+			steps = Steps, prev_output = PrevOutput,
+			last_step_checkpoints = LastStepCheckpoints,
+			vdf_difficulty = VDFDifficulty,
+			next_vdf_difficulty = NextVDFDifficulty } = NonceLimiterInfo,
+	{RebaseThresholdBin, DataPathBin, TXPathBin, DataPath2Bin, TXPath2Bin,
+			ChunkHashBin, Chunk2HashBin, BlockTimeHistoryHashBin,
+			VDFDifficultyBin, NextVDFDifficultyBin} =
+		case Height >= ar_fork:height_2_7() of
+			true ->
+				{encode_int(RebaseThreshold, 16), ar_serialize:encode_bin(DataPath, 24),
+						ar_serialize:encode_bin(TXPath, 24),
+						ar_serialize:encode_bin(DataPath2, 24),
+						ar_serialize:encode_bin(TXPath2, 24),
+						<< ChunkHash:32/binary >>,
+						ar_serialize:encode_bin(Chunk2Hash, 8),
+						<< BlockTimeHistoryHash:32/binary >>,
+						ar_serialize:encode_int(VDFDifficulty, 8),
+						ar_serialize:encode_int(NextVDFDifficulty, 8)};
+			false ->
+				{<<>>, <<>>, <<>>, <<>>, <<>>, <<>>, <<>>, <<>>, <<>>, <<>>}
+		end,
+	{PackingDifficultyBin, UnpackedChunkHashBin, UnpackedChunk2HashBin} =
+		case Height >= ar_fork:height_2_8() of
+			true ->
+				{<< PackingDifficulty:8 >>,
+						ar_serialize:encode_bin(UnpackedChunkHash, 8),
+						ar_serialize:encode_bin(UnpackedChunk2Hash, 8)};
+			false ->
+				{<<>>, <<>>, <<>>}
+		end,
+	ReplicaFormatBin =
+		case Height >= ar_fork:height_2_9() of
+			true ->
+				<< ReplicaFormat:8 >>;
+			false ->
+				<<>>
+		end,
+	%% The elements must be either fixed-size or separated by the size separators (
+	%% the ar_serialize:encode_* functions).
+	Segment = << (encode_bin(PrevH, 8))/binary, (encode_int(TS, 8))/binary,
+			(encode_bin(Nonce2, 16))/binary, (encode_int(Height, 8))/binary,
+			(encode_int(Diff, 16))/binary, (encode_int(CDiff, 16))/binary,
+			(encode_int(LastRetarget, 8))/binary, (encode_bin(Hash, 8))/binary,
+			(encode_int(BlockSize, 16))/binary, (encode_int(WeaveSize, 16))/binary,
+			(encode_bin(Addr2, 8))/binary, (encode_bin(TXRoot, 8))/binary,
+			(encode_bin(WalletList, 8))/binary,
+			(encode_bin(HashListMerkle, 8))/binary, (encode_int(RewardPool, 8))/binary,
+			(encode_int(Packing_2_5_Threshold, 8))/binary,
+			(encode_int(StrictChunkThreshold, 8))/binary,
+					(encode_int(RateDividend, 8))/binary,
+			(encode_int(RateDivisor, 8))/binary,
+					(encode_int(ScheduledRateDividend, 8))/binary,
+			(encode_int(ScheduledRateDivisor, 8))/binary,
+			(encode_bin_list(Tags, 16, 16))/binary,
+			(encode_bin_list([GetTXID(TX) || TX <- TXs], 16, 8))/binary,
+			(encode_int(Reward, 8))/binary,
+			(encode_int(RecallByte, 16))/binary, (encode_bin(HashPreimage, 8))/binary,
+			(encode_int(RecallByte2, 16))/binary, (encode_bin(RewardKey2, 16))/binary,
+			(encode_int(PartitionNumber, 8))/binary, Output:32/binary, N:64,
+			Seed:48/binary, NextSeed:48/binary, PartitionUpperBound:256,
+			NextPartitionUpperBound:256, (encode_bin(PrevOutput, 8))/binary,
+			(length(Steps)):16, (iolist_to_binary(Steps))/binary,
+			(length(LastStepCheckpoints)):16, (iolist_to_binary(LastStepCheckpoints))/binary,
+			(encode_bin(PreviousSolutionHash, 8))/binary,
+			(encode_int(PricePerGiBMinute, 8))/binary,
+			(encode_int(ScheduledPricePerGiBMinute, 8))/binary,
+			RewardHistoryHash:32/binary, (encode_int(DebtSupply, 8))/binary,
+			KryderPlusRateMultiplier:24, KryderPlusRateMultiplierLatch:8, Denomination:24,
+			(encode_int(RedenominationHeight, 8))/binary,
+			(ar_serialize:encode_double_signing_proof(DoubleSigningProof, Height))/binary,
+			(encode_int(PrevCDiff, 16))/binary, RebaseThresholdBin/binary,
+			DataPathBin/binary, TXPathBin/binary, DataPath2Bin/binary, TXPath2Bin/binary,
+			ChunkHashBin/binary, Chunk2HashBin/binary, BlockTimeHistoryHashBin/binary,
+			VDFDifficultyBin/binary, NextVDFDifficultyBin/binary,
+			PackingDifficultyBin/binary, UnpackedChunkHashBin/binary,
+			UnpackedChunk2HashBin/binary, ReplicaFormatBin/binary >>,
+	crypto:hash(sha256, Segment).
+
+%% @doc Compute the block identifier from the signed hash and block signature.
+indep_hash2(SignedH, Signature) ->
+	crypto:hash(sha384, << SignedH:32/binary, Signature/binary >>).
+
+%% @doc Return the signed block signature preimage.
+get_block_signature_preimage(CDiff, PrevCDiff, Preimage, Height) ->
+	EncodedCDiff = ar_serialize:encode_int(CDiff, 16),
+	EncodedPrevCDiff = ar_serialize:encode_int(PrevCDiff, 16),
+	SignaturePreimage = << EncodedCDiff/binary,
+			EncodedPrevCDiff/binary, Preimage/binary >>,
+	case Height >= ar_fork:height_2_9() of
+		false ->
+			SignaturePreimage;
+		true ->
+			<< 0:(32 * 8), SignaturePreimage/binary >>
+	end.
+
+%% @doc Verify the block signature.
+verify_signature(BlockPreimage, PrevCDiff,
+		#block{ signature = Signature, reward_key = {?RSA_KEY_TYPE, Pub} = RewardKey,
+				reward_addr = RewardAddr, previous_solution_hash = PrevSolutionH,
+				cumulative_diff = CDiff, height = Height })
+		when byte_size(Signature) == ?RSA_BLOCK_SIG_SIZE,
+				byte_size(Pub) == ?RSA_BLOCK_SIG_SIZE ->
+	SignaturePreimage = get_block_signature_preimage(CDiff, PrevCDiff,
+			<< PrevSolutionH/binary, BlockPreimage/binary >>, Height),
+	ar_wallet:to_address(RewardKey) == RewardAddr andalso
+			ar_wallet:verify(RewardKey, SignaturePreimage, Signature);
+verify_signature(BlockPreimage, PrevCDiff,
+		#block{ signature = Signature, reward_key = {?ECDSA_KEY_TYPE, Pub} = RewardKey,
+				reward_addr = RewardAddr, previous_solution_hash = PrevSolutionH,
+				cumulative_diff = CDiff, height = Height })
+		when byte_size(Signature) == ?ECDSA_SIG_SIZE, byte_size(Pub) == ?ECDSA_PUB_KEY_SIZE ->
+	SignaturePreimage = get_block_signature_preimage(CDiff, PrevCDiff,
+			<< PrevSolutionH/binary, BlockPreimage/binary >>, Height),
+	case Height >= ar_fork:height_2_9() of
+		true ->
+			ar_wallet:to_address(RewardKey) == RewardAddr andalso
+					ar_wallet:verify(RewardKey, SignaturePreimage, Signature);
+		false ->
+			false
+	end;
+verify_signature(_BlockPreimage, _PrevCDiff, _B) ->
+	false.
+
+%% @doc Return the key suitable for ar_wallet:sign/3 from the given public key.
+get_reward_key(Pub, Height) ->
+	case Height >= ar_fork:height_2_9() of
+		false ->
+			{?DEFAULT_KEY_TYPE, Pub};
+		true ->
+			case byte_size(Pub) of
+				?ECDSA_PUB_KEY_SIZE ->
+					{?ECDSA_KEY_TYPE, Pub};
+				_ ->
+					{?RSA_KEY_TYPE, Pub}
+			end
+	end.
+
+%% @doc Return {RecallRange1Start, RecallRange2Start} - the start offsets
+%% of the two recall ranges.
+get_recall_range(H0, PartitionNumber, PartitionUpperBound, _RecallRange1, _RecallRange2) ->
+	RecallRange1Offset = binary:decode_unsigned(binary:part(H0, 0, 8), big),
+	RecallRange1Start = PartitionNumber * ar_block:partition_size()
+			+ RecallRange1Offset rem min(ar_block:partition_size(), PartitionUpperBound),
+	RecallRange2Start = binary:decode_unsigned(H0, big) rem PartitionUpperBound,
+	{RecallRange1Start, RecallRange2Start}.
+
+%% @doc Compatibility version for 3 arguments.
+get_recall_range(H0, PartitionNumber, PartitionUpperBound) ->
+	get_recall_range(H0, PartitionNumber, PartitionUpperBound, not_set, not_set).
+
+vdf_step_number(#block{ nonce_limiter_info = Info }) ->
+	Info#nonce_limiter_info.global_step_number.
+
+get_packing(PackingDifficulty, MiningAddress, 0) ->
+	case PackingDifficulty >= 1 of
+		true ->
+			{composite, MiningAddress, PackingDifficulty};
+		false ->
+			{spora_2_6, MiningAddress}
+	end;
+get_packing(_PackingDifficulty, MiningAddress, 1) ->
+	{replica_2_9, MiningAddress}.
+
+validate_replica_format(Height, PackingDifficulty, 1) ->
+	Height >= ar_fork:height_2_9()
+			andalso PackingDifficulty == ?REPLICA_2_9_PACKING_DIFFICULTY;
+validate_replica_format(Height, 0, 0) ->
+	%% Support for spora_2_6 discontinued at
+	%% ar_fork:height_2_8() + ?SPORA_PACKING_EXPIRATION_PERIOD_BLOCKS.
+	Height - ?SPORA_PACKING_EXPIRATION_PERIOD_BLOCKS < ar_fork:height_2_8();
+validate_replica_format(Height, CompositePackingDifficulty, 0) ->
+	case Height - ?COMPOSITE_PACKING_EXPIRATION_PERIOD_BLOCKS < ar_fork:height_2_9() of
+		true ->
+			%% Composite is still supported - difficulty 1 through 32
+			Height >= ar_fork:height_2_8()
+				andalso CompositePackingDifficulty =< ?MAX_PACKING_DIFFICULTY;
+		false ->
+			%% Composite packing is no longer supported.
+			false
+	end;
+validate_replica_format(_, _, _) ->
+	false.
+
+get_recall_range_size(0) ->
+	?LEGACY_RECALL_RANGE_SIZE;
+get_recall_range_size(PackingDifficulty) ->
+	?RECALL_RANGE_SIZE div PackingDifficulty.
+
+get_recall_byte(RecallRangeStart, Nonce, 0) ->
+	RecallRangeStart + Nonce * ?DATA_CHUNK_SIZE;
+get_recall_byte(RecallRangeStart, Nonce, _PackingDifficulty) ->
+	ChunkNumber = Nonce div ?COMPOSITE_PACKING_SUB_CHUNK_COUNT,
+	RecallRangeStart + ChunkNumber * ?DATA_CHUNK_SIZE.
+
+%% @doc Return the number of bytes per sub-chunk. This also drives how far each mining nonce
+%% increments the recall byte.
+get_sub_chunk_size(0) ->
+	?DATA_CHUNK_SIZE;
+get_sub_chunk_size(_PackingDifficulty) ->
+	?COMPOSITE_PACKING_SUB_CHUNK_SIZE.
+
+%% @doc Return the number of mining nonces contained in each data chunk.
+get_nonces_per_chunk(0) ->
+	1;
+get_nonces_per_chunk(_PackingDifficulty) ->
+	?COMPOSITE_PACKING_SUB_CHUNK_COUNT.
+
+get_nonces_per_recall_range(PackingDifficulty) ->
+	%% Call ar_block: here so that it is mockable in tests on all nodes.
+	max(1, ar_block:get_recall_range_size(PackingDifficulty) div get_sub_chunk_size(PackingDifficulty)).
+
+%% @doc For packing difficulty 0 (aka spora_2_6 packing), there is one nonce per chunk, so
+%% the max nonce is the same as the max chunk number. For packing difficulty >= 1 (aka
+%% composite packing and the 2.9 replication), there are ?COMPOSITE_PACKING_SUB_CHUNK_COUNT
+%% nonces per chunk.
+get_max_nonce(PackingDifficulty) ->
+	%% The max(...) is included mostly for testing, where the recall range can be less than
+	%% a chunk.
+	max(get_nonces_per_chunk(PackingDifficulty) - 1,
+		get_nonces_per_recall_range(PackingDifficulty) - 1).
+
+%% @doc Return the 0-based sub-chunk index the mining nonce is pointing to.
+get_sub_chunk_index(0, _Nonce) ->
+	-1;
+get_sub_chunk_index(_PackingDifficulty, Nonce) ->
+	Nonce rem ?COMPOSITE_PACKING_SUB_CHUNK_COUNT.
+
+%% @doc Return Offset if it is smaller than or equal to ar_block:strict_data_split_threshold().
+%% Otherwise, return the offset of the last byte of the chunk + the size of the padding.
+-spec get_chunk_padded_offset(Offset :: non_neg_integer()) -> non_neg_integer().
+get_chunk_padded_offset(Offset) ->
+	case Offset > ar_block:strict_data_split_threshold() of
+		true ->
+			ar_poa:get_padded_offset(Offset, ar_block:strict_data_split_threshold());
+		false ->
+			Offset
+	end.
+
+%% @doc Return true if the given cumulative difficulty - previous cumulative difficulty
+%% pairs satisfy the double signing condition.
+-spec get_double_signing_condition(
+		CDiff1 :: non_neg_integer(),
+		PrevCDiff1 :: non_neg_integer(),
+		CDiff2 :: non_neg_integer(),
+		PrevCDiff2 :: non_neg_integer()
+) -> boolean().
+get_double_signing_condition(CDiff1, PrevCDiff1, CDiff2, PrevCDiff2) ->
+	CDiff1 == CDiff2 orelse (CDiff1 > PrevCDiff2 andalso CDiff2 > PrevCDiff1).
+
+%%%===================================================================
+%%% Private functions.
+%%%===================================================================
+
+encode_int(N, S) -> ar_serialize:encode_int(N, S).
+encode_bin(N, S) -> ar_serialize:encode_bin(N, S).
+encode_bin_list(L, LS, ES) -> ar_serialize:encode_bin_list(L, LS, ES).
+
+hash_wallet_list(WalletList) ->
+	ar_patricia_tree:compute_hash(WalletList,
+		fun	(Addr, {Balance, LastTX}) ->
+				EncodedBalance = binary:encode_unsigned(Balance),
+				ar_deep_hash:hash([Addr, EncodedBalance, LastTX]);
+			(Addr, {Balance, LastTX, Denomination, MiningPermission}) ->
+				MiningPermissionBin =
+					case MiningPermission of
+						true ->
+							<<1>>;
+						false ->
+							<<0>>
+					end,
+				Preimage = << (ar_serialize:encode_bin(Addr, 8))/binary,
+						(ar_serialize:encode_int(Balance, 8))/binary,
+						(ar_serialize:encode_bin(LastTX, 8))/binary,
+						(ar_serialize:encode_int(Denomination, 8))/binary,
+						MiningPermissionBin/binary >>,
+				crypto:hash(sha384, Preimage)
+		end
+	).
+
+%% @doc Generate the TX tree and set the TX root for a block.
+generate_tx_tree(B) ->
+	SizeTaggedTXs = generate_size_tagged_list_from_txs(B#block.txs, B#block.height),
+	SizeTaggedDataRoots = [{Root, Offset} || {{_, Root}, Offset} <- SizeTaggedTXs],
+	generate_tx_tree(B, SizeTaggedDataRoots).
+
+generate_tx_tree(B, SizeTaggedDataRoots) ->
+	{Root, Tree} = ar_merkle:generate_tree(SizeTaggedDataRoots),
+	B#block{ tx_tree = Tree, tx_root = Root }.
+
+%% VENDOR: upstream tags each entry with `TX#tx.id' rather than the whole `#tx{}'
+%% record (src/ar_block.erl:850). HyperBEAM's variant, kept here unchanged,
+%% carries the record because `dev_copycat_arweave:process_tx/4' reads
+%% `TX#tx.id' and `TX#tx.data_size' off it. Every consensus consumer projects
+%% the pair away with `[{Root, Offset} || {{_, Root}, Offset} <- ...]', so the
+%% tx_root this feeds is identical either way.
+generate_size_tagged_list_from_txs(TXs, Height) ->
+	lists:reverse(
+		element(2,
+			lists:foldl(
+				fun(TX, {Pos, List}) ->
+					DataSize = TX#tx.data_size,
+					End = Pos + DataSize,
+					case Height >= ar_fork:height_2_5() of
+						true ->
+							Padding = ar_tx:get_weave_size_increase(DataSize, Height)
+									- DataSize,
+							%% Encode the padding information in the Merkle tree.
+							case Padding > 0 of
+								true ->
+									PaddingRoot = ?PADDING_NODE_DATA_ROOT,
+									{End + Padding, [{{padding, PaddingRoot}, End + Padding},
+											{{TX, get_tx_data_root(TX)}, End} | List]};
+								false ->
+									{End, [{{TX, get_tx_data_root(TX)}, End} | List]}
+							end;
+						false ->
+							{End, [{{TX, get_tx_data_root(TX)}, End} | List]}
+					end
+				end,
+				{0, []},
+				lists:sort(TXs)
+			)
+		)
+	).
+
+%% @doc Compute the 2.5 packing threshold.
+get_packing_threshold(B, SearchSpaceUpperBound) ->
+	#block{ height = Height, packing_2_5_threshold = PrevPackingThreshold } = B,
+	Fork_2_5 = ar_fork:height_2_5(),
+	case Height + 1 == Fork_2_5 of
+		true ->
+			SearchSpaceUpperBound;
+		false ->
+			case Height + 1 > Fork_2_5 of
+				true ->
+					shift_packing_2_5_threshold(PrevPackingThreshold);
+				false ->
+					undefined
+			end
+	end.
+
+%% @doc Move the fork 2.5 packing threshold.
+shift_packing_2_5_threshold(0) ->
+	0;
+shift_packing_2_5_threshold(Threshold) ->
+	TargetTime = ar_testnet:target_block_time(ar_fork:height_2_5()),
+	Shift = (?DATA_CHUNK_SIZE) * (?PACKING_2_5_THRESHOLD_CHUNKS_PER_SECOND) * TargetTime,
+	max(0, Threshold - Shift).
+
+verify_tx_root(B) ->
+	B#block.tx_root == generate_tx_root_for_block(B).
+
+%% @doc Given a list of TXs in various formats, or a block, generate the
+%% correct TX merkle tree root.
+%% VENDOR: upstream also accepts a list of TX identifiers and resolves them
+%% through `ar_storage:read_tx/1' (src/ar_block.erl:925). There is no
+%% `ar_storage' here - HyperBEAM resolves transaction bodies through `hb_cache' -
+%% so the caller must pass resolved `#tx{}' records.
+generate_tx_root_for_block(B) when is_record(B, block) ->
+	generate_tx_root_for_block(B#block.txs, B#block.height).
+
+generate_tx_root_for_block([], _Height) ->
+	<<>>;
+generate_tx_root_for_block(TXs = [TX | _], Height) when is_record(TX, tx) ->
+	SizeTaggedTXs = generate_size_tagged_list_from_txs(TXs, Height),
+	SizeTaggedDataRoots = [{Root, Offset} || {{_, Root}, Offset} <- SizeTaggedTXs],
+	{Root, _Tree} = ar_merkle:generate_tree(SizeTaggedDataRoots),
+	Root.
+
+get_tx_data_root(#tx{ format = 2, data_root = DataRoot }) ->
+	DataRoot;
+get_tx_data_root(TX) ->
+	(ar_tx:generate_chunk_tree(TX))#tx.data_root.

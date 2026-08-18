@@ -1,0 +1,340 @@
+#include <erl_nif.h>
+#include <string.h>
+#include <openssl/sha.h>
+#include <ar_nif.h>
+#include "vdf.h"
+
+#if defined(__x86_64__) || defined(__amd64__) || defined(__i386__)
+#include <cpuid.h>
+#endif
+#if defined(__linux__)
+	#include <sys/auxv.h>
+#endif
+#if defined(__APPLE__)
+	#include <sys/types.h>
+	#include <sys/sysctl.h>
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+//    SHA
+////////////////////////////////////////////////////////////////////////////////////////////////////
+/* VENDOR: this file's own `vdf_sha2_fn' typedef now lives in vdf.h, which needs
+   it for vdf_set_verify_sha2; two identical typedefs is a C11 feature and this
+   file is built as C99. */
+static vdf_sha2_fn vdf_sha2_fused_ptr = NULL;
+static vdf_sha2_fn vdf_sha2_hiopt_ptr = NULL;
+/* VENDOR: expose the physical kernels behind the NIF entry points so runtime
+   evidence distinguishes a fast kernel from an alias to OpenSSL. */
+static const char* vdf_arch_name = "unknown";
+static const char* vdf_fused_name = "openssl";
+static const char* vdf_hiopt_name = "openssl";
+static const char* vdf_verify_name = "openssl";
+
+/* VENDOR: hand vdf.cpp's verification driver the same kernel this probe picked
+   for computation, so validation is not stuck on OpenSSL. vdf_set_verify_sha2
+   accepts the kernel only after it has reproduced the OpenSSL one bit for bit
+   on this machine, and keeps OpenSSL otherwise. */
+static void vdf_set_verify_backend(vdf_sha2_fn kernel, const char* name) {
+	if (vdf_set_verify_sha2(kernel)) {
+		vdf_verify_name = name;
+		printf("VDF verify kernel %s\n", name);
+	} else {
+		vdf_verify_name = "openssl";
+		printf("VDF verify kernel OpenSSL (candidate failed self-test)\n");
+	}
+}
+
+static int vdf_load(ErlNifEnv* env, void** priv, ERL_NIF_TERM load_info) {
+	#if defined(__x86_64__) || defined(__i386__)
+		{
+			unsigned int eax, ebx, ecx, edx;
+			// leaf 7, subleaf 0
+			if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx) && (ebx & (1u << 29))) {
+				printf("VDF arch x86\n");
+				vdf_arch_name = "x86";
+				vdf_fused_name = "fused_x86";
+				vdf_hiopt_name = "fused_x86";
+				vdf_sha2_fused_ptr = vdf_sha2_fused_x86;
+				vdf_sha2_hiopt_ptr = vdf_sha2_fused_x86; // fallback
+				vdf_set_verify_backend(_vdf_sha2_fused_x86, "fused_x86"); // VENDOR
+				return 0;
+			}
+		}
+	#endif
+
+	#if defined(__aarch64__) || defined(__arm__)
+		#if defined(__linux__)
+			if (getauxval(AT_HWCAP) & HWCAP_SHA2) {
+				printf("VDF arch ARM linux\n");
+				vdf_arch_name = "arm_linux";
+				vdf_fused_name = "fused_arm";
+				vdf_hiopt_name = "hiopt_arm";
+				vdf_sha2_fused_ptr = vdf_sha2_fused_arm;
+				vdf_sha2_hiopt_ptr = vdf_sha2_hiopt_arm;
+				vdf_set_verify_backend(_vdf_sha2_fused_arm, "fused_arm"); // VENDOR
+				return 0;
+			}
+		#elif defined(__APPLE__)
+			{
+				int val = 0; size_t len = sizeof(val);
+				if (sysctlbyname("hw.optional.arm.FEAT_SHA256", &val, &len, NULL, 0) == 0 && val != 0) {
+					printf("VDF arch ARM macos\n");
+					vdf_arch_name = "arm_macos";
+					vdf_fused_name = "fused_arm";
+					vdf_hiopt_name = "hiopt_arm";
+					vdf_sha2_fused_ptr = vdf_sha2_fused_arm;
+					vdf_sha2_hiopt_ptr = vdf_sha2_hiopt_arm;
+					vdf_set_verify_backend(_vdf_sha2_fused_arm, "fused_arm"); // VENDOR
+					return 0;
+				}
+			}
+		#endif
+	#endif
+
+	printf("VDF arch unknown\n");
+	vdf_sha2_fused_ptr = vdf_sha2;
+	vdf_sha2_hiopt_ptr = vdf_sha2;
+	vdf_set_verify_backend(_vdf_sha2, "openssl"); // VENDOR: no extensions to reach
+	return 0;
+}
+
+/* VENDOR: return the physical backend selected at NIF load. */
+static ERL_NIF_TERM vdf_backend_info_nif(
+	ErlNifEnv* envPtr,
+	int argc,
+	const ERL_NIF_TERM argv[]
+) {
+	ERL_NIF_TERM result = enif_make_new_map(envPtr);
+	ERL_NIF_TERM next;
+	if (argc != 0) {
+		return enif_make_badarg(envPtr);
+	}
+	(void)argv;
+	enif_make_map_put(envPtr, result, enif_make_atom(envPtr, "arch"),
+		enif_make_atom(envPtr, vdf_arch_name), &next);
+	result = next;
+	enif_make_map_put(envPtr, result, enif_make_atom(envPtr, "fused"),
+		enif_make_atom(envPtr, vdf_fused_name), &next);
+	result = next;
+	enif_make_map_put(envPtr, result, enif_make_atom(envPtr, "hiopt"),
+		enif_make_atom(envPtr, vdf_hiopt_name), &next);
+	result = next;
+	enif_make_map_put(envPtr, result, enif_make_atom(envPtr, "verify"),
+		enif_make_atom(envPtr, vdf_verify_name), &next);
+	return next;
+}
+static ERL_NIF_TERM vdf_sha2_nif(ErlNifEnv* envPtr, int argc, const ERL_NIF_TERM argv[])
+{
+	ErlNifBinary Salt, Seed;
+	int checkpointCount;
+	int skipCheckpointCount;
+	int hashingIterations;
+
+	if (argc != 5) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[0], &Salt)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Salt.size != SALT_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[1], &Seed)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Seed.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[2], &checkpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[3], &skipCheckpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[4], &hashingIterations)) {
+		return enif_make_badarg(envPtr);
+	}
+
+	unsigned char temp_result[VDF_SHA_HASH_SIZE];
+	size_t outCheckpointSize = VDF_SHA_HASH_SIZE*checkpointCount;
+	ERL_NIF_TERM outputTermCheckpoint;
+	unsigned char* outCheckpoint = enif_make_new_binary(envPtr, outCheckpointSize, &outputTermCheckpoint);
+	vdf_sha2(Salt.data, Seed.data, temp_result, outCheckpoint, checkpointCount, skipCheckpointCount, hashingIterations);
+
+	return ok_tuple2(envPtr, make_output_binary(envPtr, temp_result, VDF_SHA_HASH_SIZE), outputTermCheckpoint);
+}
+static ERL_NIF_TERM vdf_sha2_fused_nif(ErlNifEnv* envPtr, int argc, const ERL_NIF_TERM argv[])
+{
+	ErlNifBinary Salt, Seed;
+	int checkpointCount;
+	int skipCheckpointCount;
+	int hashingIterations;
+
+	if (argc != 5) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[0], &Salt)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Salt.size != SALT_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[1], &Seed)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Seed.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[2], &checkpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[3], &skipCheckpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[4], &hashingIterations)) {
+		return enif_make_badarg(envPtr);
+	}
+
+	unsigned char temp_result[VDF_SHA_HASH_SIZE];
+	size_t outCheckpointSize = VDF_SHA_HASH_SIZE*checkpointCount;
+	ERL_NIF_TERM outputTermCheckpoint;
+	unsigned char* outCheckpoint = enif_make_new_binary(envPtr, outCheckpointSize, &outputTermCheckpoint);
+	vdf_sha2_fused_ptr(Salt.data, Seed.data, temp_result, outCheckpoint, checkpointCount, skipCheckpointCount, hashingIterations);
+
+	return ok_tuple2(envPtr, make_output_binary(envPtr, temp_result, VDF_SHA_HASH_SIZE), outputTermCheckpoint);
+}
+static ERL_NIF_TERM vdf_sha2_hiopt_nif(ErlNifEnv* envPtr, int argc, const ERL_NIF_TERM argv[])
+{
+	ErlNifBinary Salt, Seed;
+	int checkpointCount;
+	int skipCheckpointCount;
+	int hashingIterations;
+
+	if (argc != 5) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[0], &Salt)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Salt.size != SALT_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[1], &Seed)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Seed.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[2], &checkpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[3], &skipCheckpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[4], &hashingIterations)) {
+		return enif_make_badarg(envPtr);
+	}
+
+	unsigned char temp_result[VDF_SHA_HASH_SIZE];
+	size_t outCheckpointSize = VDF_SHA_HASH_SIZE*checkpointCount;
+	ERL_NIF_TERM outputTermCheckpoint;
+	unsigned char* outCheckpoint = enif_make_new_binary(envPtr, outCheckpointSize, &outputTermCheckpoint);
+	vdf_sha2_hiopt_ptr(Salt.data, Seed.data, temp_result, outCheckpoint, checkpointCount, skipCheckpointCount, hashingIterations);
+
+	return ok_tuple2(envPtr, make_output_binary(envPtr, temp_result, VDF_SHA_HASH_SIZE), outputTermCheckpoint);
+}
+
+static ERL_NIF_TERM vdf_parallel_sha_verify_with_reset_nif(
+	ErlNifEnv* envPtr,
+	int argc,
+	const ERL_NIF_TERM argv[]
+) {
+	ErlNifBinary Salt, Seed, InCheckpoint, InRes, ResetSalt, ResetSeed;
+	int checkpointCount;
+	int skipCheckpointCount;
+	int hashingIterations;
+	int maxThreadCount;
+
+	if (argc != 10) {
+		return enif_make_badarg(envPtr);
+	}
+
+	if (!enif_inspect_binary(envPtr, argv[0], &Salt)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Salt.size != SALT_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[1], &Seed)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (Seed.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[2], &checkpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[3], &skipCheckpointCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[4], &hashingIterations)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[5], &InCheckpoint)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (InCheckpoint.size != checkpointCount*VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[6], &InRes)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (InRes.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[7], &ResetSalt)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (ResetSalt.size != 32) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_inspect_binary(envPtr, argv[8], &ResetSeed)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (ResetSeed.size != VDF_SHA_HASH_SIZE) {
+		return enif_make_badarg(envPtr);
+	}
+	if (!enif_get_int(envPtr, argv[9], &maxThreadCount)) {
+		return enif_make_badarg(envPtr);
+	}
+	if (maxThreadCount < 1) {
+		return enif_make_badarg(envPtr);
+	}
+
+	// NOTE last paramemter will be array later
+	size_t outCheckpointSize = VDF_SHA_HASH_SIZE*(1+checkpointCount)*(1+skipCheckpointCount);
+	ERL_NIF_TERM outputTermCheckpoint;
+	unsigned char* outCheckpoint = enif_make_new_binary(
+		envPtr, outCheckpointSize, &outputTermCheckpoint);
+	bool res = vdf_parallel_sha_verify_with_reset(
+		Salt.data, Seed.data, checkpointCount, skipCheckpointCount, hashingIterations,
+		InRes.data, InCheckpoint.data, outCheckpoint, ResetSalt.data, ResetSeed.data,
+		maxThreadCount);
+	// TODO return all checkpoints
+	if (!res) {
+		return error_tuple(envPtr, "verification failed");
+	}
+
+	return ok_tuple(envPtr, outputTermCheckpoint);
+}
+
+static ErlNifFunc nif_funcs[] = {
+	{"vdf_backend_info_nif", 0, vdf_backend_info_nif},
+	{"vdf_sha2_nif", 5, vdf_sha2_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+	{"vdf_sha2_fused_nif", 5, vdf_sha2_fused_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+	{"vdf_sha2_hiopt_nif", 5, vdf_sha2_hiopt_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND},
+	{"vdf_parallel_sha_verify_with_reset_nif", 10, vdf_parallel_sha_verify_with_reset_nif,
+		ERL_NIF_DIRTY_JOB_CPU_BOUND}
+};
+
+ERL_NIF_INIT(ar_vdf_nif, nif_funcs, vdf_load, NULL, NULL, NULL);

@@ -13,12 +13,37 @@
 -export([chunk_binary/2, chunk_binary/3, chunking_mode/1]).
 -export([chunks_to_size_tagged_chunks/1, sized_chunks_to_sized_chunk_ids/1]).
 -export([get_weave_size_increase/2]).
+%% VENDOR: the L1 consensus surface, ported from upstream
+%% apps/arweave/src/ar_tx.erl. `ar_tx_replay_pool' calls verify/3 and
+%% check_last_tx/2; the block transition also calls get_addresses/1. get_tx_fee/1 and
+%% get_tx_fee2/1 are exported because upstream exports them and
+%% is_tx_fee_sufficient/1 reaches get_tx_fee/1 module-qualified.
+-export([verify/2, verify/3, check_last_tx/2, get_addresses/1, utility/1]).
+-export([get_tx_fee/1, get_tx_fee2/1]).
+%% VENDOR: the field-shape predicates upstream's do_verify_v1/3 and
+%% do_verify_v2/3 apply. Upstream keeps them private because its only caller
+%% collects them into one boolean; `~arweave-tx@2.9/verify' names the failing
+%% check to its caller, so it calls each one separately. Exporting them is the
+%% whole change - the bodies are the ones vendored below, untouched.
+-export([verify_denomination/4, verify_target_length/2, verify_malleability/1]).
+-export([tx_field_size_limit_v1/3, tx_field_size_limit_v2/3]).
 
 -include("include/hb.hrl").
+%% VENDOR: upstream includes ar.hrl and ar_pricing.hrl. hb.hrl includes ar.hrl,
+%% so only ar_pricing.hrl - ?STATIC_2_6_8_FEE_WINSTON and
+%% ?NEW_ACCOUNT_FEE_DATA_SIZE_EQUIVALENT - has to be added here.
+-include("include/ar_pricing.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %% Minimum chunk size targeted by the arweave-js chuking algorithm.
 -define(MIN_CHUNK_SIZE, (32 * 1024)).
+
+%% Prioritize format=1 transactions with data size bigger than this
+%% value (in bytes) lower than every other transaction. The motivation
+%% is to encourage people uploading data to use the new v2 transaction
+%% format. Large v1 transactions may significantly slow down the rate
+%% of acceptance of transactions into the weave.
+-define(DEPRIORITIZE_V1_TX_SIZE_THRESHOLD, 100).
 
 %%%===================================================================
 %%% Public interface.
@@ -299,6 +324,79 @@ data_root(Mode, Bin) ->
     Root.
 
 %%%===================================================================
+%%% VENDOR: L1 consensus interface, ported from upstream ar_tx.erl.
+%%% Upstream tabs, comments and relative function order are kept so that a
+%%% diff against apps/arweave/src/ar_tx.erl stays the upgrade workflow.
+%%% Every upstream `TX#tx.last_tx' reads `TX#tx.anchor' here - the same field,
+%%% spelled differently in HyperBEAM's ar.hrl, exactly as ar_tx_replay_pool
+%%% already maps it.
+%%%===================================================================
+
+%% @doc Verify whether a transaction is valid.
+%% Signature verification can be optionally skipped, useful for
+%% repeatedly checking mempool transactions' validity.
+verify(TX, Args) ->
+	verify(TX, Args, verify_signature).
+
+%% VENDOR: upstream guards verify/3 with an -ifdef(AR_TEST) clause that
+%% short-circuits `#tx{ signature = <<>> }' to true. Only the -else. branch is
+%% vendored: a validator that accepts unsigned transactions verifies nothing.
+%% VENDOR: HyperBEAM's #tx.format holds the atom `ans104' for bundle data
+%% items. L1 consensus code must only ever see integer formats - upstream's
+%% do_verify/3 would quietly answer false, which is indistinguishable from a
+%% genuinely invalid transaction - so an ans104 item reaching here is a
+%% programming error and crashes.
+verify(#tx{ format = Format }, _Args, _VerifySignature) when not is_integer(Format) ->
+	error({unexpected_tx_format, Format});
+verify(TX, Args, VerifySignature) ->
+	do_verify(TX, Args, VerifySignature).
+
+%% VENDOR: upstream guards check_last_tx/2 with an -ifdef(AR_TEST) clause that
+%% answers true for `TX#tx.owner == <<>>'. Only the -else. branch is vendored,
+%% for the same reason as verify/3's.
+%% @doc Check if the given transaction anchors one of the wallets - its last_tx
+%% matches the last transaction made from the wallet.
+check_last_tx(WalletList, _TX) when map_size(WalletList) == 0 ->
+	true;
+check_last_tx(WalletList, TX) ->
+	Addr = get_owner_address(TX),
+	case maps:get(Addr, WalletList, not_found) of
+		not_found ->
+			false;
+		{_Balance, LastTX} ->
+			LastTX == TX#tx.anchor;
+		{_Balance, LastTX, _Denomination, _MiningPermission} ->
+			LastTX == TX#tx.anchor
+	end.
+
+%% @doc Get a list of unique source and destination addresses from the given list of txs.
+get_addresses(TXs) ->
+	get_addresses(TXs, sets:new()).
+
+%% @doc Return the transaction's utility for the miner. Transactions with higher utility
+%% are more attractive and therefore preferred when assembling blocks.
+%% VENDOR: the format guard is the same hardening as verify/3's. Without it an
+%% `ans104' item silently lands in the second clause below - the "not
+%% deprioritized" bucket - rather than being recognised as not an L1 format.
+utility(#tx{ format = Format }) when not is_integer(Format) ->
+	error({unexpected_tx_format, Format});
+utility(TX = #tx{ data_size = DataSize }) ->
+	utility(TX, ?TX_SIZE_BASE + DataSize).
+
+utility(#tx{ format = 1, reward = Reward, data_size = DataSize,
+		denomination = Denomination }, _Size)
+		when DataSize > ?DEPRIORITIZE_V1_TX_SIZE_THRESHOLD ->
+	%% For convenience, value higher denomination more.
+	%% If we normalize by dividing by denomination, higher-denomination amounts
+	%% may stop being distinguishable.
+	%% To use the current block denomination, we would need to update
+	%% comparators, which is somewhat cumbersome.
+	%% Therefore, we simply choose to prefer higher denominations.
+	{1, Denomination, Reward};
+utility(#tx{ reward = Reward, denomination = Denomination }, _Size) ->
+	{2, Denomination, Reward}.
+
+%%%===================================================================
 %%% Private functions.
 %%%===================================================================
 
@@ -400,6 +498,15 @@ signature_data_segment_v1(TX) ->
                 << (integer_to_binary(TX#tx.denomination))/binary >>,
                 << (TX#tx.owner)/binary >>,
                 << (TX#tx.target)/binary >>,
+                %% VENDOR: `data' was absent here, making this a 7-element
+                %% deep-hash list against upstream's 8. `ar_deep_hash' tags a
+                %% list with its length, so every byte of the preimage differed
+                %% and no denominated v1 transaction could verify against a
+                %% signature any other node produced. Reachable without a
+                %% redenomination: `verify_denomination/4' accepts a `#tx{}'
+                %% denomination of 1 against a block denomination of 1, which
+                %% is the default.
+                << (TX#tx.data)/binary >>,
                 << (list_to_binary(integer_to_list(TX#tx.quantity)))/binary >>,
                 << (list_to_binary(integer_to_list(TX#tx.reward)))/binary >>,
                 << (TX#tx.anchor)/binary >>,
@@ -640,6 +747,14 @@ generate_chunk_id(Chunk) ->
 %% @doc Split the binary into chunks. Used for computing the Merkle roots of
 %% v1 transactions' data and computing Merkle proofs for v2 transactions' when
 %% their data is uploaded without proofs.
+%% VENDOR: upstream's `chunk_binary/2' splits in `legacy' mode; this fork
+%% defaults to `arweavejs', which rebalances the final two chunks and therefore
+%% produces different chunk boundaries, chunk IDs and `data_root'. It is inert
+%% on the consensus path -- every caller here uses the explicit-mode `/3', and
+%% `generate_chunk_tree/1' routes on `chunking_mode(TX#tx.format)', which
+%% selects `legacy' for the only format L1 validation recomputes. Left alone
+%% because HyperBEAM's bundling depends on this default; do not "fix" it to
+%% match upstream without checking `ar_bundles'.
 chunk_binary(ChunkSize, Bin) ->
     chunk_binary(arweavejs, ChunkSize, Bin).
 
@@ -714,6 +829,389 @@ get_weave_size_increase(DataSize, Height) ->
 		false ->
 			DataSize
 	end.
+
+%%%===================================================================
+%%% VENDOR: private helpers of the L1 consensus interface above, ported from
+%%% upstream ar_tx.erl in upstream's relative order.
+%%%
+%%% Four upstream private functions are deliberately not ported:
+%%%
+%%% - collect_validation_results/2 and verify_hash/1 already exist above.
+%%%   HyperBEAM's collect_validation_results/2 reports failures through ?event
+%%%   rather than ar_tx_db:put_error_codes/2 - ar_tx_db is a node-local ets
+%%%   error-code store, not vendored, and not consensus. The boolean result is
+%%%   identical. HyperBEAM's verify_hash/1 is `ID == generate_id(TX, signed)',
+%%%   and generate_id(TX, signed) is `crypto:hash(sha256, TX#tx.signature)' -
+%%%   the same expression as upstream's `ID == crypto:hash(?HASH_ALG, Sig)'.
+%%% - tags_to_binary/1 already exists above, byte-identical to upstream's.
+%%% - verify_signature_v1/2 and verify_signature_v2/2 are reached only from
+%%%   upstream's verify_tx_id/2. HyperBEAM's verify_tx_id/2 is a fork that goes
+%%%   through its own verify_signature/1, so both would be dead code here.
+%%%===================================================================
+
+verify_signature_type(#tx{ format = 1 } = TX, _Height) ->
+	case TX#tx.signature_type of
+		{?RSA_SIGN_ALG, 65537} ->
+			true;
+		_ ->
+			false
+	end;
+verify_signature_type(#tx{ format = 2 } = TX, Height) ->
+	case TX#tx.signature_type of
+		{?RSA_SIGN_ALG, 65537} ->
+			true;
+		{?ECDSA_SIGN_ALG, secp256k1} ->
+			Height >= ar_fork:height_2_9();
+		_ ->
+			false
+	end.
+
+do_verify(#tx{ format = 1 } = TX, Args, VerifySignature) ->
+	{_Rate, _PricePerGiBMinute, _KryderPlusRateMultiplier, _Denomination,
+			_RedenominationHeight, Height, _Accounts, _Timestamp} = Args,
+	case verify_signature_type(TX, Height) of
+		true ->
+			do_verify_v1(TX, Args, VerifySignature);
+		false ->
+			collect_validation_results(TX#tx.id,
+					[{"tx_signature_type_not_supported", false}])
+	end;
+do_verify(#tx{ format = 2 } = TX, Args, VerifySignature) ->
+	{_Rate, _PricePerGiBMinute, _KryderPlusRateMultiplier, _Denomination,
+			_RedenominationHeight, Height, _Accounts, _Timestamp} = Args,
+	case Height < ar_fork:height_2_0() of
+		true ->
+			collect_validation_results(TX#tx.id, [{"tx_format_not_supported", false}]);
+		false ->
+			case verify_signature_type(TX, Height) of
+				true ->
+					do_verify_v2(TX, Args, VerifySignature);
+				false ->
+					collect_validation_results(TX#tx.id,
+							[{"tx_signature_type_not_supported", false}])
+			end
+	end;
+do_verify(TX, _Args, _VerifySignature) ->
+	collect_validation_results(TX#tx.id, [{"tx_format_not_supported", false}]).
+
+get_addresses([], Addresses) ->
+	sets:to_list(Addresses);
+get_addresses([TX | TXs], Addresses) ->
+	Source = get_owner_address(TX),
+	WithSource = sets:add_element(Source, Addresses),
+	WithDest = sets:add_element(TX#tx.target, WithSource),
+	get_addresses(TXs, WithDest).
+
+do_verify_v1(TX, Args, VerifySignature) ->
+	{_Rate, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination, RedenominationHeight,
+			Height, Accounts, _Timestamp} = Args,
+	Fork_1_8 = ar_fork:height_1_8(),
+	LastTXCheck = case Height of
+		H when H >= Fork_1_8 ->
+			true;
+		_ ->
+			check_last_tx(Accounts, TX)
+	end,
+	case verify_denomination(TX, Denomination, Height, RedenominationHeight) of
+		false ->
+			collect_validation_results(TX#tx.id, [{"invalid_denomination", false}]);
+		true ->
+			From = get_owner_address(TX),
+			FeeArgs = {TX, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination,
+					Height, Accounts, TX#tx.target},
+			Checks = [
+				{"quantity_negative", TX#tx.quantity >= 0},
+				{"same_owner_as_target", (From =/= TX#tx.target)},
+				{"tx_too_cheap", is_tx_fee_sufficient(FeeArgs)},
+				{"tx_fields_too_large", tx_field_size_limit_v1(TX, Height, Denomination)},
+				{"last_tx_not_valid", LastTXCheck},
+				{"tx_id_not_valid", verify_hash(TX)},
+				{"overspend", validate_overspend(TX,
+						ar_node_utils:apply_tx(Accounts, Denomination, TX))},
+				{"tx_signature_not_valid", verify_signature_v1(TX, VerifySignature, Height)},
+				{"tx_malleable", verify_malleability({TX, PricePerGiBMinute,
+						KryderPlusRateMultiplier, Denomination, Height, Accounts})},
+				{"invalid_target_length", verify_target_length(TX, Height)}
+			],
+			collect_validation_results(TX#tx.id, Checks)
+	end.
+
+do_verify_v2(TX, Args, VerifySignature) ->
+	{_Rate, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination, RedenominationHeight,
+			Height, Accounts, _Timestamp} = Args,
+	case verify_denomination(TX, Denomination, Height, RedenominationHeight) of
+		false ->
+			collect_validation_results(TX#tx.id, [{"invalid_denomination", false}]);
+		true ->
+			From = get_owner_address(TX),
+			FeeArgs = {TX, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination,
+					Height, Accounts, TX#tx.target},
+			Checks = [
+				{"quantity_negative", TX#tx.quantity >= 0},
+				{"same_owner_as_target", (From =/= TX#tx.target)},
+				{"tx_too_cheap", is_tx_fee_sufficient(FeeArgs)},
+				{"tx_fields_too_large", tx_field_size_limit_v2(TX, Height, Denomination)},
+				{"tx_id_not_valid", verify_hash(TX)},
+				{"overspend", validate_overspend(TX,
+						ar_node_utils:apply_tx(Accounts, Denomination, TX))},
+				{"tx_signature_not_valid", verify_signature_v2(TX, VerifySignature, Height)},
+				{"tx_data_size_negative", TX#tx.data_size >= 0},
+				{"tx_data_size_data_root_mismatch",
+						(TX#tx.data_size == 0) == (TX#tx.data_root == <<>>)},
+				{"invalid_target_length", verify_target_length(TX, Height)}
+			],
+			collect_validation_results(TX#tx.id, Checks)
+	end.
+
+%% @doc Check whether each field in a transaction is within the given byte size limits.
+tx_field_size_limit_v1(TX, Height, Denomination) ->
+	LastTXLimit =
+		case Height >= ar_fork:height_1_8() of
+			true ->
+				48;
+			false ->
+				32
+		end,
+	MaxDigits =
+		case Height + 1 >= ar_fork:height_2_6() of
+			true ->
+				30 + (Denomination - 1) * 3;
+			false ->
+				21
+		end,
+	(byte_size(TX#tx.id) =< 32) andalso
+	(byte_size(TX#tx.anchor) =< LastTXLimit) andalso
+	(byte_size(TX#tx.owner) =< 512) andalso
+	validate_tags_size(TX, Height) andalso
+	(byte_size(integer_to_binary(TX#tx.quantity)) =< MaxDigits) andalso
+	(byte_size(TX#tx.data) =< (?TX_DATA_SIZE_LIMIT)) andalso
+	(byte_size(TX#tx.signature) =< 512) andalso
+	(byte_size(integer_to_binary(TX#tx.reward)) =< MaxDigits).
+
+%% VENDOR: ar_wallet:verify_pre_fork_2_4/3 (rsa_pss:verify_legacy/4) is not
+%% exported by HyperBEAM's ar_wallet fork, so the pre-fork-2.4 branch of the two
+%% functions below raises `undef' instead of verifying. That is the correct
+%% failure mode - a validator that does not implement pre-2.4 signatures must
+%% not silently check them with the post-2.4 scheme - and it is unreachable for
+%% every height this tree validates. The call is left exactly as upstream wrote
+%% it so restoring the function in ar_wallet is all that is needed.
+verify_signature_v1(_TX, do_not_verify_signature, _Height) ->
+	true;
+verify_signature_v1(TX, verify_signature, Height) ->
+	SignatureDataSegment = generate_signature_data_segment(TX),
+	case Height >= ar_fork:height_2_4() of
+		true ->
+			ar_wallet:verify({?DEFAULT_KEY_TYPE, TX#tx.owner}, SignatureDataSegment,
+					TX#tx.signature);
+		false ->
+			ar_wallet:verify_pre_fork_2_4({?DEFAULT_KEY_TYPE, TX#tx.owner}, SignatureDataSegment,
+					TX#tx.signature)
+	end.
+
+verify_malleability(Args) ->
+	{TX, _PricePerGiBMinute, _KryderMultiplier, _Denomination, Height, _Accounts} = Args,
+	case Height + 1 >= ar_fork:height_2_4() of
+		false ->
+			true;
+		true ->
+			case TX#tx.denomination > 0 of
+				true ->
+					%% The signtaure preimage is constructed differently for v1 transactions
+					%% with the explicitly set denomination.
+					true;
+				false ->
+					verify_malleability2(Args)
+			end
+	end.
+
+verify_malleability2(Args) ->
+	{TX, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination, Height, Accounts} = Args,
+	Target = TX#tx.target,
+	case {byte_size(Target), TX#tx.quantity > 0} of
+		{TargetSize, true} when TargetSize /= 32 ->
+			false;
+		{TargetSize, false} when TargetSize > 0 ->
+			false;
+		_ ->
+			case ends_with_digit(TX#tx.data) of
+				true ->
+					false;
+				false ->
+					Fee = TX#tx.reward,
+					case Fee < 10 of
+						true ->
+							true;
+						false ->
+							TruncatedReward = ar_pricing:redenominate(list_to_integer(
+									tl(integer_to_list(TX#tx.reward))),
+									TX#tx.denomination,
+									Denomination),
+							not is_tx_fee_sufficient({TX#tx{ reward = TruncatedReward },
+									PricePerGiBMinute, KryderPlusRateMultiplier,
+									Denomination, Height, Accounts, Target})
+					end
+			end
+	end.
+
+ends_with_digit(<<>>) ->
+	false;
+ends_with_digit(Data) ->
+	LastByte = binary:last(Data),
+	LastByte >= 48 andalso LastByte =< 57.
+
+verify_signature_v2(_TX, do_not_verify_signature, _Height) ->
+	true;
+verify_signature_v2(TX, verify_signature, Height) ->
+	SignatureDataSegment = generate_signature_data_segment(TX),
+	Wallet =
+		case TX#tx.signature_type of
+			?RSA_KEY_TYPE ->
+				{{?RSA_SIGN_ALG, 65537}, TX#tx.owner};
+			?ECDSA_KEY_TYPE ->
+				{?ECDSA_KEY_TYPE, TX#tx.owner}
+		end,
+	case Height >= ar_fork:height_2_4() of
+		true ->
+			ar_wallet:verify(Wallet, SignatureDataSegment, TX#tx.signature);
+		false ->
+			ar_wallet:verify_pre_fork_2_4({{?RSA_SIGN_ALG, 65537}, TX#tx.owner},
+					SignatureDataSegment, TX#tx.signature)
+	end.
+
+validate_overspend(TX, Accounts) ->
+	From = get_owner_address(TX),
+	Addresses = case TX#tx.target of
+		<<>> ->
+			[From];
+		To ->
+			[From, To]
+	end,
+	lists:all(
+		fun(Addr) ->
+			case maps:get(Addr, Accounts, not_found) of
+				{0, LastTX} when byte_size(LastTX) == 0 ->
+					false;
+				{0, LastTX, _Denomination, _MiningPermission} when byte_size(LastTX) == 0 ->
+					false;
+				{Quantity, _} when Quantity < 0 ->
+					false;
+				{Quantity, _, _Denomination, _MiningPermission} when Quantity < 0 ->
+					false;
+				not_found ->
+					false;
+				_ ->
+					true
+			end
+		end,
+		Addresses
+	).
+
+is_tx_fee_sufficient(Args) ->
+	{TX, PricePerGiBMinute, KryderPlusRateMultiplier, Denomination, Height, Accounts,
+			Addr} = Args,
+	DataSize = get_weave_size_increase(TX, Height + 1),
+	MinimumRequiredFee = ar_tx:get_tx_fee({DataSize, PricePerGiBMinute,
+			KryderPlusRateMultiplier, Addr, Accounts, Height + 1}),
+	Fee = TX#tx.reward,
+	ar_pricing:redenominate(Fee, TX#tx.denomination, Denomination) >= MinimumRequiredFee.
+
+get_tx_fee(Args) ->
+	{DataSize, PricePerGiBMinute, KryderPlusRateMultiplier, Addr, Accounts, Height} = Args,
+	Fork_2_6_8 = ar_fork:height_2_6_8(),
+	Args2 = {DataSize, PricePerGiBMinute, KryderPlusRateMultiplier, Addr, Accounts, Height},
+	true = Height >= Fork_2_6_8,
+	case Height < ar_pricing_transition:static_pricing_height() of
+		true ->
+			%% Pre-2.6.8 transition period. Use a static fee-based pricing + new account fee.
+			get_static_2_6_8_tx_fee(DataSize, Addr, Accounts);
+		false ->
+			get_tx_fee2(Args2)
+	end.
+
+get_static_2_6_8_tx_fee(DataSize, Addr, Accounts) ->
+	UploadFee = (?STATIC_2_6_8_FEE_WINSTON div ?GiB) * (DataSize + ?TX_SIZE_BASE),
+	case Addr == <<>> orelse maps:is_key(Addr, Accounts) of
+		true ->
+			UploadFee;
+		false ->
+			NewAccountFee = (?STATIC_2_6_8_FEE_WINSTON div ?GiB) *
+					?NEW_ACCOUNT_FEE_DATA_SIZE_EQUIVALENT,
+			UploadFee + NewAccountFee
+	end.
+
+get_tx_fee2(Args) ->
+	{DataSize, PricePerGiBMinute, KryderPlusRateMultiplier, Addr, Accounts, Height} = Args,
+	Args2 = {DataSize + ?TX_SIZE_BASE, PricePerGiBMinute, KryderPlusRateMultiplier, Height},
+	UploadFee = ar_pricing:get_tx_fee(Args2),
+	case Addr == <<>> orelse maps:is_key(Addr, Accounts) of
+		true ->
+			UploadFee;
+		false ->
+			NewAccountFee = get_new_account_fee(PricePerGiBMinute, KryderPlusRateMultiplier,
+					Height),
+			UploadFee + NewAccountFee
+	end.
+
+get_new_account_fee(BytePerMinutePrice, KryderPlusRateMultiplier, Height) ->
+	Args = {?NEW_ACCOUNT_FEE_DATA_SIZE_EQUIVALENT, BytePerMinutePrice,
+			KryderPlusRateMultiplier, Height},
+	ar_pricing:get_tx_fee(Args).
+
+verify_target_length(TX, Height) ->
+	case Height >= ar_fork:height_2_4() of
+		true ->
+			(TX#tx.quantity == 0 andalso byte_size(TX#tx.target) =< 32)
+				orelse byte_size(TX#tx.target) == 32;
+		false ->
+			byte_size(TX#tx.target) =< 32
+	end.
+
+verify_denomination(TX, Denomination, Height, RedenominationHeight) ->
+	case Height + 1 >= ar_fork:height_2_6() of
+		false ->
+			TX#tx.denomination == 0;
+		true ->
+			case TX#tx.denomination of
+				0 ->
+					Height == 0 orelse Height > RedenominationHeight;
+				_ ->
+					TX#tx.denomination > 0 andalso TX#tx.denomination =< Denomination
+			end
+	end.
+
+tx_field_size_limit_v2(TX, Height, Denomination) ->
+	MaxDigits =
+		case Height + 1 >= ar_fork:height_2_6() of
+			true ->
+				30 + (Denomination - 1) * 3;
+			false ->
+				21
+		end,
+	(byte_size(TX#tx.id) =< 32) andalso
+			(byte_size(TX#tx.anchor) =< 48) andalso
+			(byte_size(TX#tx.owner) =< 512) andalso
+			validate_tags_size(TX, Height) andalso
+			(byte_size(integer_to_binary(TX#tx.quantity)) =< MaxDigits) andalso
+			(byte_size(integer_to_binary(TX#tx.data_size)) =< 21) andalso
+			(byte_size(TX#tx.signature) =< 512) andalso
+			(byte_size(integer_to_binary(TX#tx.reward)) =< MaxDigits) andalso
+			(byte_size(TX#tx.data_root) =< 32).
+
+validate_tags_size(TX, Height) ->
+	case Height >= ar_fork:height_2_5() of
+		true ->
+			Tags = TX#tx.tags,
+			validate_tags_length(Tags, 0) andalso byte_size(tags_to_binary(Tags)) =< 2048;
+		false ->
+			byte_size(tags_to_binary(TX#tx.tags)) =< 2048
+	end.
+
+validate_tags_length(_, N) when N > 2048 ->
+	false;
+validate_tags_length([_ | Tags], N) ->
+	validate_tags_length(Tags, N + 1);
+validate_tags_length([], _) ->
+	true.
 
 %%%===================================================================
 %%% Tests.

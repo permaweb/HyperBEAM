@@ -1,11 +1,13 @@
 -module(ar_wallet).
 -export([sign/2, sign/3, hmac/1, hmac/2, verify/3, verify/4]).
 -export([to_pubkey/1, to_pubkey/2, to_address/1, to_address/2, new/0, new_ecdsa/0, new/1]).
+-export([hash_pub_key/1]).
 -export([new_keyfile/2, load_keyfile/1, load_keyfile/2, load_key/1, load_key/2]).
 -export([to_json/1, from_json/1, from_json/2]).
 -export([recover_key/3]).
 -export([compress_ecdsa_pubkey/1]).
 -include("include/ar.hrl").
+-include("include/hb.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
 %%% @doc Utilities for manipulating wallets.
@@ -151,16 +153,26 @@ hmac(Data, DigestType) -> crypto:mac(hmac, DigestType, <<"ar">>, Data).
 verify(Key, Data, Sig) ->
     verify(Key, Data, Sig, sha256).
 
+%% VENDOR: the `try'/`catch' is upstream's (`ar_wallet:verify/3'), restored
+%% because HyperBEAM's fork had dropped it and this module is kept diffable
+%% against upstream. No input is known that makes `rsa_pss:verify/4' raise --
+%% malformed keys and signatures answer `false' on both sides -- so this is a
+%% fidelity change, not a fix for a demonstrated hazard.
 verify({{rsa, PublicExpnt}, Pub}, Data, Sig, DigestType) when PublicExpnt =:= 65537 ->
-    rsa_pss:verify(
-        Data,
-        DigestType,
-        Sig,
-        #'RSAPublicKey'{
-            publicExponent = PublicExpnt,
-            modulus = binary:decode_unsigned(Pub)
-        }
-    );
+    try
+        rsa_pss:verify(
+            Data,
+            DigestType,
+            Sig,
+            #'RSAPublicKey'{
+                publicExponent = PublicExpnt,
+                modulus = binary:decode_unsigned(Pub)
+            }
+        )
+    catch
+        _:_ ->
+            false
+    end;
 %% NOTE: We will not write pubkey for ECDSA signature. So don't use verify function 
 %% for ECDSA directly, use ecrecover pattern. This function will return always false 
 %% if called with no Pub.
@@ -192,6 +204,17 @@ to_pubkey(PubKey, {rsa, 65537}) ->
     PubKey.
 
 %% @doc Generate an address from a public key.
+%% VENDOR: upstream's `to_address/1' (ArweaveTeam/arweave @ 50e47de,
+%% src/ar_wallet.erl) dispatches on the `{KeyType, Pub}' and
+%% `{KeyType, Priv, Pub}' forms; HyperBEAM's arity-1 clause instead takes a bare
+%% public key binary and assumes ?DEFAULT_KEY_TYPE. The two upstream forms are
+%% added ahead of it rather than replacing it - both currently raise, so nothing
+%% that works today changes. `ar_block:verify_signature/3' passes
+%% `{KeyType, Pub}'.
+to_address({SigType, Pub}) when is_binary(Pub) ->
+    to_address(Pub, SigType);
+to_address({SigType, _Priv, Pub}) when is_binary(Pub) ->
+    to_address(Pub, SigType);
 to_address(Pubkey) ->
     to_address(Pubkey, ?DEFAULT_KEY_TYPE).
 to_address(PubKey, {rsa, 65537}) when bit_size(PubKey) == 256 ->
@@ -212,6 +235,14 @@ to_address(PubKey, ethereum) ->
     to_ethereum_address(PubKey);
 to_address(PubKey, typed_ethereum) ->
     to_ethereum_address(PubKey).
+
+%% VENDOR: restored from upstream `ar_wallet:hash_pub_key/1'. HyperBEAM's fork
+%% dropped it, but the vendored `ar_node_utils:update_accounts/3' calls it on
+%% the double-signing-proof path -- so a block carrying such a proof raised
+%% `undef' rather than being validated. Rare on mainnet, but a correctness hole
+%% while it lasted.
+hash_pub_key(PubKey) ->
+	crypto:hash(?HASH_ALG, PubKey).
 
 %% @doc Generate a new wallet public and private key, with a corresponding keyfile.
 %% The provided key is used as part of the file name.

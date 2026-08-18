@@ -9,6 +9,10 @@
 		height_2_7/0, height_2_7_1/0, height_2_7_2/0,
 		height_2_8/0, height_2_9/0]).
 
+%% VENDOR: upstream includes these via -include_lib("arweave/...").
+-include("include/ar.hrl").
+-include("include/ar_consensus.hrl").
+
 -ifdef(FORKS_RESET).
 height_1_6() ->
 	0.

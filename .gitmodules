@@ -1,3 +1,6 @@
 [submodule "native/lib/secp256k1"]
 	path = native/lib/secp256k1
 	url = https://github.com/bitcoin-core/secp256k1.git
+[submodule "native/lib/RandomX"]
+	path = native/lib/RandomX
+	url = https://github.com/ArweaveTeam/RandomX.git
