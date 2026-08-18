@@ -100,21 +100,23 @@ query(Obj, <<"blocks">>, Args, Opts) ->
         }),
     Matches = match_args(Args, Opts),
     ?event({blocks_matches, Matches}),
-    Blocks =
-        lists:filtermap(
-            fun(Match) ->
-                case hb_cache:read(Match, Opts) of
-                    {ok, Msg} -> {true, Msg};
-                    _ -> false
-                end
-            end,
-            Matches
-        ),
+    Blocks = lists:filtermap(fun(Match) -> block(Match, Opts) end, Matches),
     % Return the blocks as a list of messages.
     % Individual access methods are defined below.
     {ok, Blocks};
 query(Block, <<"previous">>, _Args, Opts) ->
-    {ok, hb_maps:get(<<"previous_block">>, Block, null, Opts)};
+    % Either spelling: a gateway response is a `json@1.0' projection and spells
+    % the field with an underscore, while a block `~arweave@2.9' validated is
+    % the canonical message and spells it with a hyphen. Both are blocks and
+    % both answer this field.
+    {ok,
+        hb_maps:get(
+            <<"previous_block">>,
+            Block,
+            hb_maps:get(<<"previous-block">>, Block, null, Opts),
+            Opts
+        )
+    };
 query(Block, <<"height">>, _Args, Opts) ->
     {ok, hb_maps:get(<<"height">>, Block, null, Opts)};
 query(Block, <<"timestamp">>, _Args, Opts) ->
@@ -624,6 +626,35 @@ do_filter_offset_annotated(AnnotatedIDs, Heights, Opts) ->
         ),
     ?event({filtered_out_of_range, length(AnnotatedIDs) - length(Filtered)}),
     Filtered.
+
+%% @doc Read the block a match named.
+%%
+%% A match is either a message identifier -- as the height filter returns -- or
+%% an Arweave block hash. A hash may name a block this node validated, which is
+%% in the cache under it, or one it merely fetched from a gateway, which
+%% `~arweave@2.9' files under a path of its own. This device returns whichever
+%% it finds and does not fetch: a query answers from what the node holds.
+block(Match, Opts) ->
+    case hb_cache:read(Match, Opts) of
+        {ok, Msg} -> {true, Msg};
+        _ -> cached_block(Match, Opts)
+    end.
+
+cached_block(Match, Opts) ->
+    case
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave@2.9">> },
+            #{
+                <<"path">> => <<"block">>,
+                <<"block">> => Match,
+                <<"cache-control">> => [<<"only-if-cached">>]
+            },
+            Opts
+        )
+    of
+        {ok, Msg} when is_map(Msg) -> {true, Msg};
+        _ -> false
+    end.
 
 %% @doc Return the base IDs for messages that have a matching commitment.
 matching_commitments(Field, Values, Opts) when is_list(Values) ->

@@ -3,6 +3,9 @@
     "example": 9001,
     "node_host": "https://ao.computer",
     "await_inprogress": false,
+    "http-private-network-access-allow-origins": [
+        "https://bazar.arweave.net"
+    ],
     "store": [
         {
             "store-module": "hb_store_fs",

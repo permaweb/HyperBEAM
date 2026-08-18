@@ -635,48 +635,85 @@ now(RawBase, Req, Opts) ->
                     Opts
                 ),
             ?event({now_called, {process, ProcessID}, {slot, CurrentSlot}}),
-            hb_ao:resolve(
-                Base,
-                (hb_maps:with([<<"push">>], Req, Opts))#{
-                    <<"path">> => <<"compute">>,
-                    <<"slot">> => CurrentSlot
-                },
-                Opts
-            );
+            ComputeResult =
+                hb_ao:raw(
+                    Base,
+                    (hb_maps:with([<<"push">>], Req, Opts))#{
+                        <<"path">> => <<"compute">>,
+                        <<"slot">> => CurrentSlot
+                    },
+                    Opts
+                ),
+            case ComputeResult of
+                {ok, _} = Success ->
+                    case
+                        dev_process_cache:refresh(
+                            ProcessID,
+                            hb_util:int(CurrentSlot),
+                            Opts
+                        )
+                    of
+                        ok -> Success;
+                        Error -> Error
+                    end;
+                _ ->
+                    ComputeResult
+            end;
         CacheParam ->
             % We are serving the latest known state from the cache, rather
             % than computing it.
             LatestKnown = dev_process_cache:latest(ProcessID, [], Opts),
             case LatestKnown of
                 {ok, LatestSlot, RawLatestMsg} ->
-                    LatestMsg = without_snapshot(RawLatestMsg, Opts),
-                    ?event(compute_cache,
-                        {serving_latest_cached_state,
-                            {proc_id, ProcessID},
-                            {slot, LatestSlot}
-                        },
-                        Opts
-                    ),
-                    dev_process_worker:notify_compute(
-                        ProcessID,
-                        LatestSlot,
-                        {ok, LatestMsg},
-                        Opts
-                    ),
-                    {ok, LatestMsg};
+                    case dev_process_cache:fresh(ProcessID, LatestSlot, Req, Opts) of
+                        true ->
+                            LatestMsg = without_snapshot(RawLatestMsg, Opts),
+                            ?event(compute_cache,
+                                {serving_latest_cached_state,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            dev_process_worker:notify_compute(
+                                ProcessID,
+                                LatestSlot,
+                                {ok, LatestMsg},
+                                Opts
+                            ),
+                            {ok, LatestMsg};
+                        false ->
+                            ?event(compute_cache,
+                                {latest_cached_state_stale,
+                                    {proc_id, ProcessID},
+                                    {slot, LatestSlot}
+                                },
+                                Opts
+                            ),
+                            uncached_now(
+                                CacheParam,
+                                Base,
+                                Req,
+                                Opts,
+                                <<"No fresh cached state available.">>
+                            )
+                    end;
                 _ ->
-                    if CacheParam =/= always ->
-                        % The node is configured to use the cache if possible,
-                        % but forcing computation is also admissible. Subsequently,
-                        % as no other option is available, we compute the state.
-                        now(Base, Req, Opts#{ <<"process-now-from-cache">> => false });
-                    true ->
-                        % The node is configured to only serve the latest known
-                        % state from the cache, so we return the latest slot.
-                        {failure, <<"No cached state available.">>}
-                    end
+                    uncached_now(CacheParam, Base, Req, Opts)
             end
     end.
+
+uncached_now(CacheParam, Base, Req, Opts) ->
+    uncached_now(CacheParam, Base, Req, Opts, <<"No cached state available.">>).
+
+uncached_now(always, _Base, _Req, _Opts, Failure) ->
+    {failure, Failure};
+uncached_now(<<"always">>, _Base, _Req, _Opts, Failure) ->
+    {failure, Failure};
+uncached_now(_CacheParam, Base, Req, Opts, _Failure) ->
+    % The node is configured to use the cache if possible, but forcing
+    % computation is also admissible.
+    now(Base, Req, Opts#{ <<"process-now-from-cache">> => false }).
 
 %% @doc Recursively push messages to the scheduler until we find a message
 %% that does not lead to any further messages being scheduled.
@@ -794,3 +831,84 @@ ensure_loaded(Base, Req, Opts) ->
 %% @doc Remove the `snapshot' key from a message and return it.
 without_snapshot(Msg, Opts) ->
     hb_ao:set(Msg, <<"snapshot">>, unset, Opts).
+
+%%% Tests
+
+%% @doc `/now' records freshness after successful computation, but not failure.
+now_refreshes_only_after_success_test_() ->
+    {timeout, 30, fun() ->
+        hb_process_test_vectors:init(),
+        Wallet = ar_wallet:new(),
+        Store = hb_test_utils:test_store(hb_store_lmdb, <<"process-now">>),
+        Opts = #{
+            <<"store">> => [Store],
+            <<"priv-wallet">> => Wallet,
+            <<"process-clock">> => 100
+        },
+        Base = hb_process_test_vectors:aos_process(Opts),
+        {ok, _} =
+            hb_process_test_vectors:schedule_aos_call(
+                Base,
+                <<"return 1+1">>,
+                Opts
+            ),
+        ?assertMatch(
+            {ok, _},
+            hb_ao:resolve(Base, #{ <<"path">> => <<"now">> }, Opts)
+        ),
+        ProcID = hb_message:id(Base, all, Opts),
+        MarkerPath =
+            hb_path:to_binary(
+                [<<"computed">>, hb_util:human_id(ProcID), <<"latest">>]
+            ),
+        ?assertMatch(
+            {ok, _},
+            hb_cache:read(
+                MarkerPath,
+                lib_process:scoped_opts(Opts)
+            )
+        ),
+        BadBase =
+            hb_message:commit(
+                (hb_message:uncommitted(Base, Opts))#{
+                    <<"execution-device">> => <<"missing@1.0">>,
+                    <<"test-random-seed">> => crypto:strong_rand_bytes(16)
+                },
+                Opts
+            ),
+        {ok, _} =
+            hb_process_test_vectors:schedule_aos_call(
+                BadBase,
+                <<"return 2+2">>,
+                Opts
+            ),
+        BadResult =
+            catch hb_ao:resolve(
+                BadBase,
+                #{ <<"path">> => <<"now">> },
+                Opts
+            ),
+        ?assertMatch(
+            {
+                error,
+                {
+                    device_not_loadable,
+                    <<"missing@1.0">>,
+                    <<"device-name-not-resolvable">>
+                }
+            },
+            BadResult
+        ),
+        BadProcID = hb_message:id(BadBase, all, Opts),
+        BadMarkerPath =
+            hb_path:to_binary(
+                [<<"computed">>, hb_util:human_id(BadProcID), <<"latest">>]
+            ),
+        ?assertMatch(
+            {error, not_found},
+            hb_cache:read(
+                BadMarkerPath,
+                lib_process:scoped_opts(Opts)
+            )
+        )
+    end}.

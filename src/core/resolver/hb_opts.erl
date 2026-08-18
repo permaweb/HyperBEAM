@@ -489,6 +489,8 @@ raw_default_message() ->
         % default_index => #{ <<"device">> => <<"hyperbuddy@1.0">> },
         % Should we use the latest cached state of a process when computing?
         <<"process-now-from-cache">> => false,
+        % Maximum age, in seconds, for `/now' to serve from the process cache.
+        <<"process-now-max-age">> => infinity,
         % Should we trust the GraphQL API when converting to ANS-104? Some GQL
         % services do not provide the `anchor' or `last_tx' fields, so their
         % responses are not verifiable.
@@ -500,6 +502,8 @@ raw_default_message() ->
                 <<"force-message">> => true,
                 <<"cache-control">> => [<<"always">>]
             },
+        % Origins allowed to request browser access to this private network.
+        <<"http-private-network-access-allow-origins">> => [],
         % Should the node store all signed messages?
         <<"store-all-signed">> => true,
         % Should the node use persistent processes?
@@ -1022,6 +1026,10 @@ load_json_test() ->
     ?assertEqual(<<"https://ao.computer">>, hb_maps:get(<<"node-host">>, Conf)),
     % An atom, where the key contained a header-key `-' rather than a `_'.
     ?assertEqual(false, hb_maps:get(<<"await-inprogress">>, Conf)),
+    ?assertEqual(
+        [<<"https://bazar.arweave.net">>],
+        hb_maps:get(<<"http-private-network-access-allow-origins">>, Conf)
+    ),
     % Ensure that a store with `ao-types' is loaded correctly.
     ?assertMatch(
         [#{ <<"store-module">> := hb_store_fs }|_],

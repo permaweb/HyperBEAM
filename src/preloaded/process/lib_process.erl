@@ -6,6 +6,8 @@
     as_process/2,
     run_as/4,
     process_id/3,
+    only_if_cached/2,
+    scoped_opts/1,
     set_results/3,
     ensure_process_key/2,
     default_device/3
@@ -33,6 +35,42 @@ process_id(Base, Req, Opts) ->
                     )
             end
     end.
+
+%% @doc Apply the configured store scope to the process cache options.
+scoped_opts(RawOpts) ->
+    Scope = hb_opts:get(process_cache_scope, local, RawOpts),
+    % Normalize the store descriptor to a list of stores.
+    UnscopedStore =
+        case hb_opts:get(store, no_viable_store, RawOpts) of
+            StoreMsg when is_map(StoreMsg) -> [StoreMsg];
+            Other -> Other
+        end,
+    RawOpts#{ <<"store">> => hb_store:scope(UnscopedStore, Scope) }.
+
+%% @doc Return the effective cache-control directives from a request, falling
+%% back to the node options when the request does not specify them.
+cache_control(Req, Opts) when is_map(Req) ->
+    normalize_cache_control(
+        hb_maps:get(
+            <<"cache-control">>,
+            Req,
+            hb_opts:get(cache_control, [], Opts),
+            Opts
+        )
+    );
+cache_control(_Req, Opts) ->
+    normalize_cache_control(hb_opts:get(cache_control, [], Opts)).
+
+%% @doc Normalize cache-control values to the binary directive form used by
+%% process devices.
+normalize_cache_control(CC) when is_list(CC) ->
+    lists:map(fun hb_ao:normalize_key/1, CC);
+normalize_cache_control(CC) ->
+    normalize_cache_control([CC]).
+
+%% @doc Return whether the request or node opts require cached results only.
+only_if_cached(Req, Opts) ->
+    lists:member(<<"only-if-cached">>, cache_control(Req, Opts)).
 
 %% @doc Run a message against Base, with the device being swapped out for
 %% the device found at `Key'. After execution, the device is swapped back

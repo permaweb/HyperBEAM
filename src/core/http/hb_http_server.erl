@@ -19,6 +19,7 @@
 -include("include/hb.hrl").
 %% Define the max size we can return in 500 error details field.
 -define(DEFAULT_ERROR_DETAILS_MAX_SIZE, 32*1024).
+-define(CORS_METHODS, <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>).
 
 %% @doc Starts the HTTP server. Optionally accepts an `Opts' message, which
 %% is used as the source for server configuration settings, as well as the
@@ -413,16 +414,55 @@ read_body(Req0, Acc) ->
         {more, Data, Req} -> read_body(Req, << Acc/binary, Data/binary >>)
     end.
 
-%% @doc Reply to CORS preflight requests.
-cors_reply(Req, _ServerID) ->
-    Req2 = cowboy_req:reply(204, #{
+%% @doc Reply to CORS preflight requests. Private Network Access is granted
+%% only to an exact origin named by the node operator.
+cors_reply(Req, ServerID) ->
+    Headers = #{
         <<"access-control-allow-origin">> => <<"*">>,
         <<"access-control-allow-headers">> => <<"*">>,
-        <<"access-control-allow-methods">> =>
-            <<"GET, POST, PUT, DELETE, OPTIONS, PATCH">>
-    }, Req),
+        <<"access-control-allow-methods">> => ?CORS_METHODS
+    },
+    Req2 = cowboy_req:reply(
+        204,
+        private_network_headers(
+            Req,
+            get_opts(#{ <<"http-server">> => ServerID }),
+            Headers
+        ),
+        Req
+    ),
     ?event(debug_http, {cors_reply, {req, Req}, {req2, Req2}}),
     {ok, Req2, no_state}.
+
+%% @doc Grant a requested private-network preflight to an allowed origin.
+private_network_headers(Req, Opts, Headers) ->
+    Origin = cowboy_req:header(<<"origin">>, Req, undefined),
+    Requested =
+        cowboy_req:header(
+            <<"access-control-request-private-network">>,
+            Req,
+            undefined
+        ),
+    Allowed =
+        hb_opts:get(
+            http_private_network_access_allow_origins,
+            [],
+            Opts
+        ),
+    case Requested =:= <<"true">>
+            andalso is_binary(Origin)
+            andalso is_list(Allowed)
+            andalso lists:member(Origin, Allowed) of
+        true ->
+            Headers#{
+                <<"access-control-allow-origin">> => Origin,
+                <<"access-control-allow-private-network">> => <<"true">>,
+                <<"vary">> =>
+                    <<"origin, access-control-request-private-network">>
+            };
+        false ->
+            Headers
+    end.
 
 %% @doc Handle all non-CORS preflight requests as AO-Core requests. Execution 
 %% starts by parsing the HTTP request into HyerBEAM's message format, then
@@ -637,6 +677,105 @@ start_node(Opts) ->
 %%% Tests
 %%% The following only covering the HTTP server initialization process. For tests
 %%% of HTTP server requests/responses, see `hb_http.erl'.
+
+%% @doc Private Network Access is granted only when the request opts in and its
+%% exact origin is in the node's allowlist. Each case uses a separate live node,
+%% port and store so no server configuration can leak into another assertion.
+private_network_preflight_test() ->
+    Origin = <<"https://bazar.arweave.net">>,
+    Matching = pna_test_node(<<"pna-matching">>, [Origin]),
+    Mismatch = pna_test_node(<<"pna-mismatch">>, [Origin]),
+    Default = pna_test_node(<<"pna-default">>),
+    Nodes = [Matching, Mismatch, Default],
+    ?assertEqual(3, length(lists:usort([URL || {URL, _, _} <- Nodes]))),
+    try
+        ?assertEqual(
+            {Origin, <<"*">>, ?CORS_METHODS, <<"true">>},
+            cors_values(preflight(Matching, Origin, true))
+        ),
+        Denied = {<<"*">>, <<"*">>, ?CORS_METHODS, undefined},
+        ?assertEqual(
+            Denied,
+            cors_values(preflight(Mismatch, <<"https://example.com">>, true))
+        ),
+        ?assertEqual(
+            Denied,
+            cors_values(preflight(Default, Origin, true))
+        ),
+        ?assertEqual(
+            Denied,
+            cors_values(preflight(Matching, Origin, false))
+        )
+    after
+        lists:foreach(fun stop_pna_test_node/1, Nodes)
+    end.
+
+%% @doc Start an isolated HTTP/2 node for a Private Network Access vector.
+pna_test_node(Tag) ->
+    pna_test_node(Tag, undefined).
+pna_test_node(Tag, AllowedOrigins) ->
+    Wallet = ar_wallet:new(),
+    Store = [hb_test_utils:test_store(hb_store_volatile, Tag)],
+    BaseOpts = #{
+        <<"port">> => 0,
+        <<"protocol">> => http2,
+        <<"priv-wallet">> => Wallet,
+        <<"store">> => Store
+    },
+    Opts =
+        case AllowedOrigins of
+            undefined -> BaseOpts;
+            _ ->
+                BaseOpts#{
+                    <<"http-private-network-access-allow-origins">> =>
+                        AllowedOrigins
+                }
+        end,
+    URL = start_node(Opts),
+    {URL, hb_util:human_id(ar_wallet:to_address(Wallet)), Store}.
+
+%% @doc Stop a test-owned HTTP node and reset its isolated store.
+stop_pna_test_node({_URL, Listener, Store}) ->
+    cowboy:stop_listener(Listener),
+    hb_store:reset(Store).
+
+%% @doc Send a public HTTP preflight, optionally requesting private access.
+preflight({Node, _Listener, _Store}, Origin, PrivateNetwork) ->
+    BaseHeaders = #{
+        <<"origin">> => Origin,
+        <<"access-control-request-method">> => <<"HEAD">>
+    },
+    RequestHeaders =
+        case PrivateNetwork of
+            true ->
+                BaseHeaders#{
+                    <<"access-control-request-private-network">> => <<"true">>
+                };
+            false ->
+                BaseHeaders
+        end,
+    {ok, 204, ResponseHeaders, <<>>} =
+        hb_http_client:request(
+            #{
+                peer => Node,
+                path => <<"/~meta@1.0/info">>,
+                method => <<"OPTIONS">>,
+                headers => RequestHeaders,
+                body => <<>>
+            },
+            #{ <<"http-retry">> => 0 }
+        ),
+    ResponseHeaders.
+
+%% @doc Project the CORS and PNA response fields a preflight must preserve.
+cors_values(Headers) ->
+    Names = [
+        <<"access-control-allow-origin">>,
+        <<"access-control-allow-headers">>,
+        <<"access-control-allow-methods">>,
+        <<"access-control-allow-private-network">>
+    ],
+    list_to_tuple([proplists:get_value(Name, Headers) || Name <- Names]).
 
 %% @doc Ensure that the `start' hook can be used to modify the node options. We
 %% do this by creating a message with a device that has a `start' key. This 
