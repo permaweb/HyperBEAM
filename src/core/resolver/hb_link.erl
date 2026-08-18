@@ -141,24 +141,29 @@ remove_link_specifier(Key) ->
     end.
 
 %% @doc Format a link as a short string suitable for printing. Checks the node
-%% options (optionally) given, to see if it should resolve the link to a value
-%% before printing.
+%% options (optionally) given, to see how many link levels it should resolve
+%% before printing. `true' resolves links without a depth limit.
 format(Link) -> format(Link, #{}).
 format(Link, Opts) ->
     format(Link, Opts, 0).
 format(Link, Opts, Indent) ->
     case hb_opts:get(debug_resolve_links, false, Opts) of
-        true ->
-            try
-                hb_format:message(
-                    hb_cache:ensure_all_loaded(Link, Opts),
-                    Opts,
-                    Indent
-                )
-            catch
-                _:_ -> << "!UNRESOLVABLE! ", (format_unresolved(Link, Opts))/binary >>
-            end;
-        false -> format_unresolved(Link, Opts, Indent)
+        true -> format_resolved(Link, Opts, Indent);
+        Depth when is_integer(Depth) andalso Depth > 0 ->
+            format_resolved(
+                Link,
+                Opts#{ <<"debug-resolve-links">> => Depth - 1 },
+                Indent
+            );
+        _ -> format_unresolved(Link, Opts, Indent)
+    end.
+
+%% @doc Resolve and format one link using the remaining resolution depth.
+format_resolved(Link, Opts, Indent) ->
+    try
+        hb_format:message(hb_cache:ensure_loaded(Link, Opts), Opts, Indent)
+    catch
+        _:_ -> << "!UNRESOLVABLE! ", (format_unresolved(Link, Opts))/binary >>
     end.
 
 %% @doc Format a link without resolving it.
