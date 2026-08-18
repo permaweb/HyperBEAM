@@ -94,6 +94,8 @@ events(_, _Req, _Opts) ->
 %% ```
 %% GET /.../~hyperbuddy@1.0/format=request?truncate-keys=20
 %% ```
+%% `resolve-links' sets the link depth to resolve. It defaults to the node's
+%% `debug-resolve-links' option; `true' resolves all levels.
 format(Base, Req, Opts) ->
     % Find the scope of the environment that should be printed.
     Scope =
@@ -122,11 +124,22 @@ format(Base, Req, Opts) ->
         true ->
             CombinedMsg
         end,
-    MsgLoaded = hb_cache:ensure_all_loaded(MsgBeforeLoad, Opts),
+    ResolveLinksValue =
+        hb_maps:get(
+            <<"resolve-links">>,
+            Req,
+            hb_opts:get(debug_resolve_links, false, Opts),
+            Opts
+        ),
+    ResolveLinks =
+        case hb_util:safe_int(ResolveLinksValue) of
+            {ok, Depth} -> Depth;
+            {error, invalid} -> hb_util:bool(ResolveLinksValue)
+        end,
     TruncateKeys =
         case hb_maps:get(<<"truncate-keys">>, Req, infinity, Opts) of
             infinity -> infinity;
-            Value -> hb_util:int(Value)
+            MaxKeys -> hb_util:int(MaxKeys)
         end,
     ?event(debug_format, {using_truncation, TruncateKeys}),
     {ok,
@@ -134,10 +147,11 @@ format(Base, Req, Opts) ->
             <<"body">> =>
                 hb_util:bin(
                     hb_format:message(
-                        MsgLoaded,
+                        MsgBeforeLoad,
                         Opts#{
                             <<"linkify-mode">> => discard,
                             <<"cache-control">> => [<<"no-cache">>, <<"no-store">>],
+                            <<"debug-resolve-links">> => ResolveLinks,
                             <<"debug-print-truncate">> => TruncateKeys
                         }
                     )
