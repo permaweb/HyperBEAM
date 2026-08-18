@@ -433,7 +433,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                 ),
             tags =
                 [
-                    {Name, Value}
+                    {normalize_graphql_tag_name(Name), Value}
                 ||
                     #{<<"name">> := Name, <<"value">> := Value} <- Tags
                 ],
@@ -444,7 +444,13 @@ result_to_message(ExpectedID, Item, Opts) ->
     ?event({ans104_form_response, TX}),
     TABM = hb_message:convert(TX, tabm, <<"ans104@1.0">>, Opts),
     ?event({decoded_tabm, TABM}),
-    Structured = hb_message:convert(TABM, <<"structured@1.0">>, tabm, Opts),
+    Structured =
+        hb_message:convert(
+            TABM,
+            <<"structured@1.0">>,
+            tabm,
+            Opts#{ <<"link-scope">> => remote }
+        ),
     % Some graphql nodes do not grant the `anchor' or `last_tx' fields, so we
     % verify the data item and optionally add the explicit keys as committed
     % fields _if_ the node desires it.
@@ -511,6 +517,22 @@ decode_or_null(Bin) when is_binary(Bin) ->
 decode_or_null(_) ->
     <<>>.
 
+%% @doc Some gateway GraphQL responses can expose TABM link tag names with
+%% `+' decoded as a form-space, yielding `balances link' instead of the
+%% canonical `balances+link'. Normalize only the TABM link suffix recovered from
+%% GraphQL so downstream link decoding sees the intended `+link' form.
+normalize_graphql_tag_name(Name) when is_binary(Name), byte_size(Name) >= 5 ->
+    Size = byte_size(Name),
+    case binary:part(Name, Size - 5, 5) of
+        <<" link">> ->
+            Prefix = binary:part(Name, 0, Size - 5),
+            <<Prefix/binary, "+link">>;
+        _ ->
+            Name
+    end;
+normalize_graphql_tag_name(Name) ->
+    Name.
+
 %% @doc Takes a list of messages with `name' and `value' fields, and formats
 %% them as a GraphQL `tags' argument.
 subindex_to_tags(Subindex) ->
@@ -555,6 +577,20 @@ device_valid_until_height_query_test() ->
     ),
     ?assertEqual([Bob], maps:get(<<"trusted">>, BobVars)),
     ?assertEqual(nomatch, binary:match(BobQuery, <<"validUntilHeight">>)).
+
+graphql_link_tag_name_normalization_test() ->
+    ?assertEqual(
+        <<"balances+link">>,
+        normalize_graphql_tag_name(<<"balances link">>)
+    ),
+    ?assertEqual(
+        <<"26wkmnkmn3u99knn5dukjd0cgyotdiw6jj6eyc_ied4+link">>,
+        normalize_graphql_tag_name(
+            <<"26wkmnkmn3u99knn5dukjd0cgyotdiw6jj6eyc_ied4 link">>
+        )
+    ),
+    ?assertEqual(<<"plain link tag">>, normalize_graphql_tag_name(<<"plain link tag">>)),
+    ?assertEqual(<<"already+link">>, normalize_graphql_tag_name(<<"already+link">>)).
 
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.

@@ -233,7 +233,10 @@ to(TABM0, Req, Opts) when is_list(TABM0) ->
 to(TABM0, Req, Opts) ->
     Types = decode_ao_types(TABM0, Opts),
     % Decode all links to their HyperBEAM-native, resolvable form.
-    TABM1 = hb_link:decode_all_links(TABM0),
+    TABM1 = hb_link:decode_all_links(
+        TABM0,
+        #{ scope => hb_opts:get(<<"link-scope">>, undefined, Opts) }
+    ),
     % 1. Remove 'ao-types' field
     % 2. Decode any binary values that have a type;
     % 3. Recursively decode any maps that we encounter;

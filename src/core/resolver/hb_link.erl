@@ -2,7 +2,7 @@
 -module(hb_link).
 -export([is_link_key/1, remove_link_specifier/1]).
 -export([normalize/2, normalize/3]).
--export([decode_all_links/1]).
+-export([decode_all_links/1, decode_all_links/2]).
 -export([format/1, format/2, format/3]).
 -export([format_unresolved/1, format_unresolved/2, format_unresolved/3]).
 -include("include/hb.hrl").
@@ -100,7 +100,9 @@ normalize(OtherVal, _Mode, _Opts) ->
     OtherVal.
 
 %% @doc Decode links embedded in the headers of a message.
-decode_all_links(Msg) when is_map(Msg) ->
+decode_all_links(Msg) ->
+    decode_all_links(Msg, #{}).
+decode_all_links(Msg, LinkOpts) when is_map(Msg) ->
     maps:from_list(
         lists:map(
             fun({Key, MaybeID}) ->
@@ -111,10 +113,16 @@ decode_all_links(Msg) when is_map(Msg) ->
                             {
                                 link,
                                 MaybeID,
-                                #{
-                                    <<"type">> => <<"link">>,
-                                    <<"lazy">> => false
-                                }
+                                maps:merge(
+                                    #{
+                                        <<"type">> => <<"link">>,
+                                        <<"lazy">> => false
+                                    },
+                                    maps:filter(
+                                        fun(_, V) -> V =/= undefined end,
+                                        LinkOpts
+                                    )
+                                )
                             }
                         };
                     _ -> {Key, MaybeID}
@@ -123,9 +131,9 @@ decode_all_links(Msg) when is_map(Msg) ->
             maps:to_list(Msg)
         )
     );
-decode_all_links(List) when is_list(List) ->
-    lists:map(fun(X) -> decode_all_links(X) end, List);
-decode_all_links(OtherVal) ->
+decode_all_links(List, LinkOpts) when is_list(List) ->
+    lists:map(fun(X) -> decode_all_links(X, LinkOpts) end, List);
+decode_all_links(OtherVal, _LinkOpts) ->
     OtherVal.
 
 %% @doc Determine if a key is an encoded link.
@@ -216,3 +224,38 @@ offload_list_test() ->
     Req = hb_message:convert(Linkified, <<"structured@1.0">>, tabm, Opts),
     Res = hb_cache:ensure_all_loaded(Req, Opts),
     ?assertEqual(Msg, Res).
+
+decode_links_with_opts_test() ->
+    ?assertEqual(
+        #{
+            <<"child">> =>
+                {link,
+                    <<"child-id">>,
+                    #{
+                        <<"type">> => <<"link">>,
+                        <<"lazy">> => false,
+                        scope => remote
+                    }
+                }
+        },
+        decode_all_links(
+            #{ <<"child+link">> => <<"child-id">> },
+            #{ scope => remote }
+        )
+    ),
+    ?assertEqual(
+        #{
+            <<"child">> =>
+                {link,
+                    <<"child-id">>,
+                    #{
+                        <<"type">> => <<"link">>,
+                        <<"lazy">> => false
+                    }
+                }
+        },
+        decode_all_links(
+            #{ <<"child+link">> => <<"child-id">> },
+            #{ scope => undefined }
+        )
+    ).
