@@ -33,7 +33,8 @@
     [
         error, http_error, cron_error, hook_error, warning,
         http_server_short, http_client_short,
-        compute_short, push_short, copycat_short, bundler_short
+        compute_short, push_short, copycat_short, bundler_short,
+        arweave_sync_short
     ]
 ).
 -endif.
@@ -283,6 +284,9 @@ raw_default_message() ->
         <<"wasm-allow-aot">> => false,
         % Options for the relay device
         <<"relay-http-client">> => httpc,
+        % Maximum native workers an Arweave VDF request may use.
+        <<"arweave-max-vdf-workers">> =>
+            max(1, erlang:system_info(schedulers) div 2),
         % The default codec to use for commitment signatures.
         <<"commitment-device">> => <<"httpsig@1.0">>,
         % Dev options
