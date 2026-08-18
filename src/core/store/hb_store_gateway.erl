@@ -78,8 +78,18 @@ read(BaseStoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
                             {error, not_found};
                         {ok, Message} ->
                             ?event({read_found, {key, ID}}),
-                            hb_store_remote_node:maybe_cache(StoreOpts, Message, [ID]),
-                            extract_path_value(Message, Rest, ReadOpts)
+                            % Materialize GraphQL links while their remote scope
+                            % is still available, then persist the full closure.
+                            LoadedMessage = hb_cache:ensure_all_loaded(
+                                Message,
+                                ReadOpts#{ <<"store">> => [StoreOpts] }
+                            ),
+                            hb_store_remote_node:maybe_cache(
+                                StoreOpts,
+                                LoadedMessage,
+                                [ID]
+                            ),
+                            extract_path_value(LoadedMessage, Rest, ReadOpts)
                     catch Class:Reason:Stacktrace ->
                         ?event(
                             gateway,
