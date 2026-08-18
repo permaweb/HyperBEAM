@@ -9,6 +9,7 @@
 %%% strings because transmission.
 -module(hb_escape).
 -export([encode/1, decode/1, encode_keys/2, decode_keys/2]).
+-export([encode_header/1, decode_header/1]).
 -export([encode_quotes/1, decode_quotes/1]).
 -export([encode_ampersand/1]).
 -include_lib("eunit/include/eunit.hrl").
@@ -30,6 +31,18 @@ decode(<<$%, _/binary>>, Original) ->
     iolist_to_binary(lists:reverse(percent_unescape(Original, [])));
 decode(<<_C, Rest/binary>>, Original) ->
     decode(Rest, Original).
+
+encode_header(<<>>) -> <<>>;
+encode_header(<<$\\, Rest/binary>>) -> <<"\\\\", (encode_header(Rest))/binary>>;
+encode_header(<<$\r, Rest/binary>>) -> <<"\\r", (encode_header(Rest))/binary>>;
+encode_header(<<$\n, Rest/binary>>) -> <<"\\n", (encode_header(Rest))/binary>>;
+encode_header(<<C, Rest/binary>>) -> <<C, (encode_header(Rest))/binary>>.
+
+decode_header(<<>>) -> <<>>;
+decode_header(<<$\\, $\\, Rest/binary>>) -> <<$\\, (decode_header(Rest))/binary>>;
+decode_header(<<$\\, $r, Rest/binary>>) -> <<$\r, (decode_header(Rest))/binary>>;
+decode_header(<<$\\, $n, Rest/binary>>) -> <<$\n, (decode_header(Rest))/binary>>;
+decode_header(<<C, Rest/binary>>) -> <<C, (decode_header(Rest))/binary>>.
 
 %% @doc Encode a string with escaped quotes.
 encode_quotes(String) when is_binary(String) ->

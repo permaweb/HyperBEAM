@@ -100,6 +100,8 @@ test_suite() ->
             fun structured_field_atom_parsing_test/2},
         {<<"Structured field decimal parsing">>,
             fun structured_field_decimal_parsing_test/2},
+        {<<"Header escaping">>,
+            fun header_escaping_test/2},
         {<<"Unsigned id">>,
             fun unsigned_id_test/2},
         % Nested structures
@@ -575,6 +577,13 @@ structured_field_decimal_parsing_test(Codec, Opts) ->
     Msg = #{ integer_field => 1234567890 },
     Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
     Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
+
+header_escaping_test(Codec, Opts) ->
+    Msg = hb_message:commit(#{ <<"description">> => <<"line 1\nline 2">> }, Opts, Codec),
+    Encoded = hb_message:convert(Msg, Codec, <<"structured@1.0">>, Opts),
+    Decoded = hb_message:convert(Encoded, <<"structured@1.0">>, Codec, Opts),
+    ?assert(hb_message:verify(Decoded, all, Opts)),
     ?assert(hb_message:match(Msg, Decoded, strict, Opts)).
 
 %% @doc Test that the data field is correctly managed when we have multiple

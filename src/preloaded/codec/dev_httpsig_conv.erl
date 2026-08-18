@@ -44,7 +44,15 @@ from(Link, _Req, _Opts) when ?IS_LINK(Link) -> {ok, Link};
 from(HTTP, _Req, Opts) ->
     % First, parse all headers excluding the signature-related headers, as they
     % are handled separately.
-    Headers = hb_maps:without([<<"body">>], HTTP, Opts),
+    Headers =
+        maps:map(
+            fun(<<"signature">>, Value) -> Value;
+               (<<"signature-input">>, Value) -> Value;
+               (_Key, Value) when is_binary(Value) -> hb_escape:decode_header(Value);
+               (_Key, Value) -> Value
+            end,
+            hb_maps:without([<<"body">>], HTTP, Opts)
+        ),
     % Next, we need to potentially parse the body, get the ordering of the body
     % parts, and add them to the TABM.
     {OrderedBodyKeys, BodyTABM} = body_to_tabm(HTTP, Opts),
@@ -786,7 +794,7 @@ field_to_http(Httpsig, {Name, Value}, Opts) when is_binary(Value) ->
         end,
     case maps:get(where, Opts, DefaultWhere) of
         headers ->
-            Httpsig#{ NormalizedName => Value };
+            Httpsig#{ NormalizedName => hb_escape:encode_header(Value) };
         body ->
             OldBody = hb_maps:get(<<"body">>, Httpsig, #{}, Opts),
             Httpsig#{ <<"body">> => OldBody#{ NormalizedName => Value } }
