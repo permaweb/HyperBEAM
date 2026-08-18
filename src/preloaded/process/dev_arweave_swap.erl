@@ -22,9 +22,10 @@
 %%%   <li>`make-offer' (to the process, from the seller), carrying
 %%%       `offer-quantity' in token units, `asking' in winston, and what the
 %%%       seller asks of a buyer to reserve it: a `minimum-fee' in winston, a
-%%%       `deposit' in token units, and a `deadline' in blocks. Any of the
-%%%       three may be zero. The `offer-quantity' moves into escrow at once, so
-%%%       delivery is never in doubt: the goods are held before any buyer
+%%%       `deposit' in token units, and a positive `deadline' in blocks. The
+%%%       `minimum-fee' and `deposit' may be zero. The `offer-quantity' moves
+%%%       into escrow at once, so delivery is never in doubt: the goods are held
+%%%       before any buyer
 %%%       commits anything, and the seller stakes nothing further. The offered
 %%%       amount cannot be called `quantity': that is a transaction's own value
 %%%       field, so the codec would carry it as winston of AR sent to the
@@ -254,12 +255,16 @@ register_interest(Base, Body, Height, Opts) ->
         #{
             <<"order-id">> := OrderID,
             <<"status">> := <<"open">>,
+            <<"creator">> := Creator,
+            <<"recipient">> := Recipient,
             <<"quantity">> := Quantity,
             <<"asking">> := Asking,
             <<"minimum-fee">> := Fee,
             <<"deposit">> := Deposit,
             <<"deadline">> := Deadline
         } ?= Order,
+        false ?= Buyer =:= Creator,
+        false ?= Buyer =:= Recipient,
         {ok, Fill} ?= amount(<<"fill-quantity">>, Body, Quantity, Opts),
         true ?= Fill >= 1 andalso Fill =< Quantity,
         Rest = Quantity - Fill,
@@ -1007,6 +1012,69 @@ cancel_by_stranger_test() ->
     Result =
         apply_tx(Opened, order_action(Stranger, <<"cancel-order">>, OrderID), 110, Opts),
     ?assertEqual(<<"open">>, maps:get(<<"status">>, only_order(Result, Opts))).
+
+%% @doc A seller cannot reserve their own order: the settlement path would reject
+%% their payment, so the reservation would only block real buyers.
+seller_cannot_reserve_own_order_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    Opened =
+        apply_tx(
+            base(#{ SellerAddr => 100 }),
+            offer(Seller, 10, 500, 5, 20),
+            100,
+            Opts
+        ),
+    OrderID = maps:get(<<"order-id">>, only_order(Opened, Opts)),
+    Result =
+        apply_tx(
+            Opened,
+            order_action(Seller, <<"register-interest">>, OrderID),
+            110,
+            Opts
+        ),
+    Order = only_order(Result, Opts),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, Order)),
+    ?assertEqual(not_found, maps:get(<<"buyer">>, Order, not_found)),
+    ?assertEqual(90, balance(Result, SellerAddr, Opts)).
+
+%% @doc A recipient cannot reserve an order: their own payment would be ignored,
+%% and exclusivity would only hold the order away from buyers who can settle.
+recipient_cannot_reserve_order_test() ->
+    Opts = test_opts(),
+    {Seller, SellerAddr} = party(),
+    {Recipient, RecipientAddr} = party(),
+    Opened =
+        apply_tx(
+            base(#{ SellerAddr => 100, RecipientAddr => 5 }),
+            tx(
+                Seller,
+                #{
+                    <<"target">> => ?PROCESS,
+                    <<"action">> => <<"make-offer">>,
+                    <<"offer-quantity">> => <<"10">>,
+                    <<"asking">> => <<"500">>,
+                    <<"deposit">> => <<"5">>,
+                    <<"minimum-fee">> => <<"0">>,
+                    <<"deadline">> => <<"20">>,
+                    <<"recipient">> => RecipientAddr
+                }
+            ),
+            100,
+            Opts
+        ),
+    OrderID = maps:get(<<"order-id">>, only_order(Opened, Opts)),
+    Result =
+        apply_tx(
+            Opened,
+            order_action(Recipient, <<"register-interest">>, OrderID),
+            110,
+            Opts
+        ),
+    Order = only_order(Result, Opts),
+    ?assertEqual(<<"open">>, maps:get(<<"status">>, Order)),
+    ?assertEqual(not_found, maps:get(<<"buyer">>, Order, not_found)),
+    ?assertEqual(5, balance(Result, RecipientAddr, Opts)).
 
 %% @doc A reserved order cannot be pulled out from under the buyer who reserved
 %% it. This is the guarantee that makes paying safe.
