@@ -234,15 +234,21 @@ decode_links_with_opts_test() ->
                     #{
                         <<"type">> => <<"link">>,
                         <<"lazy">> => false,
-                        scope => remote
+                        <<"scope">> => remote
                     }
                 }
         },
         decode_all_links(
             #{ <<"child+link">> => <<"child-id">> },
-            #{ scope => remote }
+            #{ <<"scope">> => remote }
         )
     ),
+    #{ <<"child">> := {link, _, ScopedLinkOpts} } =
+        decode_all_links(
+            #{ <<"child+link">> => <<"child-id">> },
+            #{ <<"scope">> => remote }
+        ),
+    ?assertEqual(remote, hb_opts:get(scope, local, ScopedLinkOpts)),
     ?assertEqual(
         #{
             <<"child">> =>
@@ -256,6 +262,6 @@ decode_links_with_opts_test() ->
         },
         decode_all_links(
             #{ <<"child+link">> => <<"child-id">> },
-            #{ scope => undefined }
+            #{ <<"scope">> => undefined }
         )
     ).

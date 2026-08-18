@@ -235,7 +235,7 @@ to(TABM0, Req, Opts) ->
     % Decode all links to their HyperBEAM-native, resolvable form.
     TABM1 = hb_link:decode_all_links(
         TABM0,
-        #{ scope => hb_opts:get(<<"link-scope">>, undefined, Opts) }
+        #{ <<"scope">> => hb_opts:get(<<"link-scope">>, undefined, Opts) }
     ),
     % 1. Remove 'ao-types' field
     % 2. Decode any binary values that have a type;
