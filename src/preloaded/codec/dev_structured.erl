@@ -235,7 +235,10 @@ to(TABM0, Req, Opts) ->
     % Decode all links to their HyperBEAM-native, resolvable form.
     TABM1 = hb_link:decode_all_links(
         TABM0,
-        #{ <<"scope">> => hb_opts:get(<<"link-scope">>, undefined, Opts) }
+        #{
+            <<"scope">> => hb_opts:get(<<"link-scope">>, undefined, Opts),
+            <<"store">> => hb_opts:get(store, undefined, Opts)
+        }
     ),
     % 1. Remove 'ao-types' field
     % 2. Decode any binary values that have a type;
@@ -383,6 +386,22 @@ decode_value(Type, Value) ->
     hb_util:decode(Type, Value).
 
 %%% Tests
+
+link_decode_preserves_store_test() ->
+    ID = <<"4Jmk5JRKtIVQrX9R5r_I3S9WAHsTYOf_GCZEbwhjmb8">>,
+    Store = #{ <<"store-module">> => hb_store_fs },
+    {ok, Decoded} =
+        to(
+            #{ <<"child+link">> => ID },
+            #{},
+            #{
+                <<"link-scope">> => remote,
+                <<"store">> => [Store]
+            }
+        ),
+    {link, ID, LinkOpts} = maps:get(<<"child">>, Decoded),
+    ?assertEqual(remote, maps:get(<<"scope">>, LinkOpts)),
+    ?assertEqual([Store], maps:get(<<"store">>, LinkOpts)).
 
 list_encoding_test() ->
     % Test that we can encode and decode a list of integers.

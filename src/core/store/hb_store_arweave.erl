@@ -197,7 +197,10 @@ load_item(ExpectedID, StartOffset, Length, Opts) ->
                                 Item,
                                 <<"structured@1.0">>,
                                 <<"ans104@1.0">>,
-                                Opts
+                                Opts#{
+                                    <<"link-scope">> => remote,
+                                    <<"store">> => [Opts]
+                                }
                             )};
                         ActualID ->
                             {error,

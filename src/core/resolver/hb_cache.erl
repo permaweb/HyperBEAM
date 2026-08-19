@@ -92,17 +92,67 @@ ensure_loaded(Ref,
             case Lazy of
                 true ->
                     % We have resolved the ID of the submessage, so we continue
-                    % to load the submessage itself.
-                    ensure_loaded(
+                    % to load the submessage itself. A cached `+link' first
+                    % resolves through a local metadata path, but an ID stored
+                    % at that path may name content in any configured store.
+                    % Non-ID paths retain the existing local-only behavior.
+                    TargetScope =
+                        case ?IS_ID(Next) of
+                            true -> [local, remote];
+                            false -> local
+                        end,
+                    TargetLink =
                         {link,
                             Next,
                             #{
                                 <<"type">> => <<"link">>,
-                                <<"lazy">> => false
+                                <<"lazy">> => false,
+                                <<"scope">> => TargetScope
                             }
                         },
-                        Opts
-                    );
+                    try ensure_loaded(TargetLink, RawOpts)
+                    catch
+                        throw:Error = {necessary_message_not_found, _, _} ->
+                            case ?IS_ID(Next) of
+                                true ->
+                                    % Scheduler/process caches may call us
+                                    % with only their local store. The ID can
+                                    % still name content in the node's global
+                                    % configured store chain.
+                                    GlobalStore =
+                                        hb_opts:get(
+                                            store,
+                                            [],
+                                            #{ <<"only">> => global }
+                                        ),
+                                    RemoteGlobal =
+                                        hb_store:scope(GlobalStore, remote),
+                                    FallbackStore =
+                                        case hb_opts:get(
+                                            arweave_index_store,
+                                            not_found,
+                                            RawOpts
+                                        ) of
+                                            ArweaveStore when is_map(ArweaveStore) ->
+                                                [ArweaveStore | RemoteGlobal];
+                                            _ ->
+                                                RemoteGlobal
+                                        end,
+                                    ensure_loaded(
+                                        {link,
+                                            Next,
+                                            #{
+                                                <<"type">> => <<"link">>,
+                                                <<"lazy">> => false,
+                                                <<"scope">> => remote
+                                            }
+                                        },
+                                        RawOpts#{ <<"store">> => FallbackStore }
+                                    );
+                                false ->
+                                    throw(Error)
+                            end
+                    end;
                 false ->
                     % The already had the ID of the submessage, so now we have
                     % the data, we simply return it.
@@ -1439,6 +1489,27 @@ match_store_control_test() ->
     ?assertEqual([Store], match_store(#{ <<"store">> => Store })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => false })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => [] })).
+
+cached_id_link_can_resolve_remote_target_test() ->
+    Local = hb_test_utils:test_store(hb_store_fs, <<"cached-id-link-local">>),
+    Remote =
+        (hb_test_utils:test_store(hb_store_fs, <<"cached-id-link-remote">>))#{
+            <<"scope">> => remote
+        },
+    hb_store:reset(Local),
+    hb_store:reset(Remote),
+    Target = #{ <<"value">> => <<"remote-only">> },
+    {ok, TargetID} = write(Target, #{ <<"store">> => [Remote] }),
+    Linked =
+        hb_link:decode_all_links(#{ <<"child+link">> => TargetID }),
+    {ok, LinkedID} = write(Linked, #{ <<"store">> => [Local] }),
+    Opts = #{ <<"store">> => [Local, Remote] },
+    % Reproduce a scheduler cache read: the reconstructed nested link stashes
+    % only the local store, while the caller still has the full runtime stores.
+    {ok, Cached} = read(LinkedID, #{ <<"store">> => [Local] }),
+    Resolved = hb_maps:get(<<"child">>, Cached, not_found, Opts),
+    ?assert(is_map(Resolved)),
+    ?assert(maps:is_key(<<"value">>, Resolved)).
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([
