@@ -748,6 +748,12 @@ subpath_in_key_test() ->
 
 %%% Advanced path syntax tests
 
+path_with_space_test() ->
+    ?assertEqual(
+        [#{}, #{ <<"path">> => <<"foo bar">> }],
+        from(<<"/foo%20bar">>, #{})
+    ).
+
 subpath_in_path_test() ->
     Req = #{
         <<"path">> => <<"/a/(x/y/z)/z">>
