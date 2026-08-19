@@ -66,7 +66,8 @@ ensure_loaded(Ref,
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
     UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
-    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
+    Scope = load_scope(LkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, Scope),
     _Store = hb_opts:get(store, no_viable_store, Opts),
     ?event_debug(debug_cache,
         {loading_multi_link,
@@ -115,7 +116,8 @@ ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpt
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link.
     UnscopedOpts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
-    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LinkOpts)),
+    Scope = load_scope(LinkOpts, RawOpts),
+    Opts = hb_store:scope(UnscopedOpts, Scope),
     CacheReadResult = 
         case hb_opts:get(commitment, undefined, Opts) of
             true ->
@@ -143,6 +145,11 @@ ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
 	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
 ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
     Msg.
+
+%% @doc Use explicit per-link provenance when present, otherwise let the
+%% caller choose the stores that may satisfy an unscoped link.
+load_scope(LinkOpts, RawOpts) ->
+    hb_opts:get(scope, hb_opts:get(scope, local, RawOpts), LinkOpts).
 
 %% @doc Report that a value was not found in the cache. If a key is provided,
 %% we report that the key was not found, otherwise we report that the link was
@@ -1129,6 +1136,68 @@ test_unsigned(Data) ->
 test_signed(Data) -> test_signed(Data, #{ <<"priv-wallet">> => ar_wallet:new() }).
 test_signed(Data, Opts) ->
     hb_message:commit(test_unsigned(Data), Opts).
+
+ensure_loaded_scope_precedence_test() ->
+    ServerStore =
+        hb_test_utils:test_store(hb_store_volatile, <<"scope-server">>),
+    LocalStore =
+        hb_test_utils:test_store(hb_store_volatile, <<"scope-local">>),
+    ServerOpts = #{ <<"store">> => [ServerStore], <<"port">> => 0 },
+    hb_store:reset(ServerStore),
+    hb_store:reset(LocalStore),
+    Msg = #{ <<"value">> => <<"from-remote">> },
+    {ok, ID} = write(Msg, ServerOpts),
+    Peer = hb_http_server:start_node(ServerOpts),
+    RemoteStore =
+        #{
+            <<"store-module">> => hb_store_remote_node,
+            <<"node">> => Peer,
+            <<"access">> => [<<"read">>]
+        },
+    BaseOpts = #{ <<"store">> => [LocalStore, RemoteStore] },
+    Links =
+        [
+            {link, ID, #{ <<"type">> => <<"link">>, <<"lazy">> => false }},
+            {link, ID, #{ <<"lazy">> => true }}
+        ],
+    lists:foreach(
+        fun(Link = {link, LinkID, LinkOpts}) ->
+            ?assertThrow(
+                {necessary_message_not_found, _, _},
+                ensure_loaded(Link, BaseOpts)
+            ),
+            ?assertEqual(
+                <<"from-remote">>,
+                hb_ao:get(
+                    <<"value">>,
+                    ensure_loaded(
+                        Link,
+                        BaseOpts#{ <<"scope">> => [local, remote] }
+                    ),
+                    BaseOpts
+                )
+            ),
+            ?assertThrow(
+                {necessary_message_not_found, _, _},
+                ensure_loaded(
+                    {link, LinkID, LinkOpts#{ <<"scope">> => local }},
+                    BaseOpts#{ <<"scope">> => [local, remote] }
+                )
+            ),
+            ?assertEqual(
+                <<"from-remote">>,
+                hb_ao:get(
+                    <<"value">>,
+                    ensure_loaded(
+                        {link, LinkID, LinkOpts#{ <<"scope">> => remote }},
+                        BaseOpts#{ <<"scope">> => local }
+                    ),
+                    BaseOpts
+                )
+            )
+        end,
+        Links
+    ).
 
 test_store_binary(Store) ->
     Bin = <<"Simple unsigned data item">>,

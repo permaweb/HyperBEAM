@@ -14,7 +14,7 @@
 %%% `{00, 11, 01, 10}`, which is why each node in a radix-4 trie can have at-most
 %%% 4 children!)
 -module(dev_trie).
--export([info/0, keys/2, set/3, get/3, get/4]).
+-export([info/0, keys/2, keys/3, set/3, get/3, get/4]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -41,6 +41,8 @@ info() ->
 
 keys(Trie, Opts) ->
     collect_keys(Trie, <<>>, Opts, []).
+keys(Trie, _Req, Opts) ->
+    keys(Trie, Opts).
 
 collect_keys(TrieNode, Prefix, Opts, Acc) ->
     EdgeLabels = edges(TrieNode, Opts),
@@ -468,7 +470,7 @@ basic_key_collection_test() ->
          },
          Opts
     ),
-    ?assertEqual(
+    ExpectedKeys =
         [
             <<"zebra">>,
             <<"carmex">>,
@@ -477,7 +479,16 @@ basic_key_collection_test() ->
             <<"car">>,
             <<"camshaft">>
         ],
+    ?assertEqual(
+        ExpectedKeys,
         keys(Trie, Opts)
+    ),
+    {ok, _Device, KeysFun} =
+        hb_device:message_to_fun(Trie, <<"keys">>, Opts),
+    ?assertEqual({arity, 3}, erlang:fun_info(KeysFun, arity)),
+    ?assertEqual(
+        {ok, ExpectedKeys},
+        hb_ao:resolve(Trie, #{ <<"path">> => <<"keys">> }, Opts)
     ).
 
 verify_test() ->
