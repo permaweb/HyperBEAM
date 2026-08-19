@@ -171,11 +171,22 @@ read_assignment(ProcessID, Slot, RawOpts) ->
         {ok, Resolved} ->
             case hb_cache:read(Resolved, Opts) of
                 {ok, RawAssignment} ->
+                    Assignment =
+                        hb_message:normalize_commitments(RawAssignment, Opts),
                     {ok,
-                        hb_cache:ensure_all_loaded(
-                            hb_message:normalize_commitments(RawAssignment, Opts),
-                            Opts
-                        )
+                        case Slot of
+                            0 ->
+                                Assignment#{
+                                    <<"body">> =>
+                                        hb_maps:get(
+                                            <<"body">>,
+                                            Assignment,
+                                            not_found,
+                                            lib_process:execution_opts(Opts)
+                                        )
+                                };
+                            _ -> hb_cache:ensure_all_loaded(Assignment, Opts)
+                        end
                     };
                 {error, not_found} -> not_found
             end;
@@ -269,6 +280,63 @@ block_path(Height) ->
     hb_path:to_binary([?CACHE_PREFIX, <<"blocks">>, hb_util:bin(Height)]).
 
 %%% Tests
+
+linked_spawn_uses_process_store_test() ->
+    Source = hb_test_utils:test_store(hb_store_volatile, <<"linked-source">>),
+    Target =
+        (hb_test_utils:test_store(hb_store_volatile, <<"linked-target">>))#{
+            <<"scope">> => remote
+        },
+    Scheduler = hb_test_utils:test_store(hb_store_volatile, <<"linked-scheduler">>),
+    Process = hb_test_utils:test_store(hb_store_volatile, <<"linked-process">>),
+    lists:foreach(fun hb_store:start/1, [Source, Target, Scheduler, Process]),
+    Opts =
+        #{
+            <<"store">> => [Source, Target],
+            <<"scheduler-store">> => [Scheduler],
+            <<"process-store">> => [Process]
+        },
+    CacheOpts = lib_process:cache_opts(Opts),
+    LinkOpts = #{ <<"type">> => <<"link">>, <<"lazy">> => false },
+    Balances = #{ <<"alice">> => <<"100">> },
+    {ok, BalancesID} = hb_cache:write(Balances, Opts#{ <<"store">> => [Target] }),
+    Spawn = #{ <<"balances">> => {link, BalancesID, LinkOpts} },
+    {ok, ProcessID} = hb_cache:write(Spawn, Opts#{ <<"store">> => [Source] }),
+    {ok, LazySpawn} = hb_cache:read(ProcessID, Opts#{ <<"store">> => [Source] }),
+    ?assertEqual(
+        ProcessID,
+        hb_message:id(LazySpawn, all, Opts#{ <<"store">> => [Target] })
+    ),
+    {ok, ProcessID} = hb_cache:write(LazySpawn, CacheOpts),
+    ok =
+        write_assignment(
+            #{
+                <<"process">> => ProcessID,
+                <<"slot">> => 0,
+                <<"body">> => {link, ProcessID, LinkOpts}
+            },
+            Opts
+        ),
+    hb_store:stop(Source),
+    {ok, Assignment} = read_assignment(ProcessID, 0, Opts),
+    ReadSpawn = maps:get(<<"body">>, Assignment),
+    ReadBalances =
+        hb_maps:get(
+            <<"balances">>,
+            ReadSpawn,
+            not_found,
+            lib_process:execution_opts(Opts)
+        ),
+    ?assertEqual(
+        <<"100">>,
+        hb_maps:get(
+            <<"alice">>,
+            ReadBalances,
+            not_found,
+            lib_process:execution_opts(Opts)
+        )
+    ),
+    lists:foreach(fun hb_store:stop/1, [Target, Scheduler, Process]).
 
 linked_state_and_target_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile, <<"ar-sched-cache">>),

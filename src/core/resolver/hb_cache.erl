@@ -65,8 +65,7 @@ ensure_loaded(Ref,
         RawOpts) ->
     % The link is to a submessage; either in lazy (unresolved) form, or direct
     % form.
-    UnscopedOpts = hb_util:deep_merge(RawOpts, LkOpts, RawOpts),
-    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LkOpts)),
+    Opts = link_opts(LkOpts, RawOpts),
     _Store = hb_opts:get(store, no_viable_store, Opts),
     ?event_debug(debug_cache,
         {loading_multi_link,
@@ -101,7 +100,7 @@ ensure_loaded(Ref,
                                 <<"lazy">> => false
                             }
                         },
-                        Opts
+                        RawOpts
                     );
                 false ->
                     % The already had the ID of the submessage, so now we have
@@ -114,8 +113,7 @@ ensure_loaded(Ref,
 ensure_loaded(Ref, Link = {link, ID, LinkOpts = #{ <<"lazy">> := true }}, RawOpts) ->
     % If the user provided their own options, we merge them and _overwrite_
     % the options that are already set in the link.
-    UnscopedOpts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
-    Opts = hb_store:scope(UnscopedOpts, hb_opts:get(scope, local, LinkOpts)),
+    Opts = link_opts(LinkOpts, RawOpts),
     CacheReadResult = 
         case hb_opts:get(commitment, undefined, Opts) of
             true ->
@@ -143,6 +141,17 @@ ensure_loaded(Ref, {link, ID, LinkOpts}, Opts) ->
 	ensure_loaded(Ref, {link, ID, LinkOpts#{ <<"lazy">> => true}}, Opts);
 ensure_loaded(_Ref, Msg, _Opts) when not ?IS_LINK(Msg) ->
     Msg.
+
+link_opts(LinkOpts, RawOpts) ->
+    Opts = hb_util:deep_merge(RawOpts, LinkOpts, RawOpts),
+    case hb_opts:get(store, not_found, LinkOpts) of
+        not_found ->
+            hb_store:scope(
+                Opts,
+                hb_opts:get(scope, hb_opts:get(scope, local, RawOpts), LinkOpts)
+            );
+        _ -> Opts
+    end.
 
 %% @doc Report that a value was not found in the cache. If a key is provided,
 %% we report that the key was not found, otherwise we report that the link was
@@ -941,7 +950,8 @@ prepare_typed_values(Target, RootPath, Subpaths, Values, Store, Opts) ->
                                     binary:part(Subpath, 0, byte_size(Subpath) - 5),
                                     {link, SubkeyPath, #{
                                         <<"type">> => <<"link">>,
-                                        <<"lazy">> => true
+                                        <<"lazy">> => true,
+                                        <<"store">> => Store
                                     }}
                                 }
                             }

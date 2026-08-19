@@ -819,6 +819,11 @@ ensure_loaded(Base, Req, Opts) ->
                             {slot, TargetSlot}
                         }
                     ),
+                    {ok, _} =
+                        hb_cache:write(
+                            hb_maps:get(<<"process">>, Base, Base, Opts),
+                            lib_process:cache_opts(Opts)
+                        ),
                     init(Base, Req, Opts)
             end
     end.
