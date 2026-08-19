@@ -17,6 +17,7 @@ nav:
   - Run a Node:
       - Running a HyperBEAM node: 'run/running-a-hyperbeam-node.md'
       - Configuring your machine: 'run/configuring-your-machine.md'
+      - ACME DNS-01: 'run/acme-dns-01.md'
       - TEE nodes: 'run/tee-nodes.md'
       - Joining/running a router: 'run/joining-running-a-router.md'
   - Build on HyperBEAM:
