@@ -111,7 +111,7 @@ read(StoreOpts, #{ <<"read">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
                 arweave_offsets,
                 {local_store_hit, {id, {explicit, ID}}}
             ),
-            {ok, Message};
+            {ok, materialize_cached(StoreOpts, Message, StoreOpts)};
         _ ->
             case do_read(StoreOpts, ID, StoreOpts) of
                 not_found -> {error, not_found};
@@ -158,25 +158,7 @@ do_read(StoreOpts, ID, Opts) ->
                         Opts
                     ) of
                         {ok, CachedMessage} ->
-                            LocalStore =
-                                case hb_maps:get(
-                                    <<"local-store">>,
-                                    StoreOpts,
-                                    [],
-                                    StoreOpts
-                                ) of
-                                    Stores when is_list(Stores) -> Stores;
-                                    Store when is_map(Store) -> [Store];
-                                    _ -> []
-                                end,
-                            {ok,
-                                hb_cache:ensure_all_loaded(
-                                    CachedMessage,
-                                    Opts#{
-                                        <<"store">> => LocalStore ++ [StoreOpts]
-                                    }
-                                )
-                            };
+                            {ok, materialize_cached(StoreOpts, CachedMessage, Opts)};
                         _ -> Loaded
                     end;
                 {error, Reason} ->
@@ -203,6 +185,23 @@ do_read(StoreOpts, ID, Opts) ->
             ),
             not_found
     end.
+
+materialize_cached(StoreOpts, Message, Opts) ->
+    LocalStore =
+        case hb_maps:get(
+            <<"local-store">>,
+            StoreOpts,
+            [],
+            StoreOpts
+        ) of
+            Stores when is_list(Stores) -> Stores;
+            Store when is_map(Store) -> [Store];
+            _ -> []
+        end,
+    hb_cache:ensure_all_loaded(
+        Message,
+        Opts#{ <<"store">> => LocalStore ++ [StoreOpts] }
+    ).
 
 %% @doc Load an ANS-104 item from the given start offset and length.
 %% Returns an `ok' tuple with the deserialized item, or an `error' tuple with
