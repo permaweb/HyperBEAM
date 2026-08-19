@@ -596,6 +596,8 @@ is_admissible(#{ <<"access">> := Access }, Function) ->
 is_admissible(_, _) ->
     true.
 
+get_store_scope_result(Store = #{ <<"scope">> := Scope }) ->
+    normalize_scope(Scope);
 get_store_scope_result(Store = #{ <<"store-module">> := Mod }) ->
     try
         code:ensure_loaded(Mod),
@@ -603,10 +605,10 @@ get_store_scope_result(Store = #{ <<"store-module">> := Mod }) ->
             true -> normalize_scope(Mod:scope(Store, #{}, Store));
             false ->
                 case erlang:function_exported(Mod, scope, 1) of
-                    true -> Mod:scope(Store);
+                    true -> normalize_scope(Mod:scope(Store));
                     false ->
                         case erlang:function_exported(Mod, scope, 0) of
-                            true -> Mod:scope();
+                            true -> normalize_scope(Mod:scope());
                             false -> not_found
                         end
                 end
