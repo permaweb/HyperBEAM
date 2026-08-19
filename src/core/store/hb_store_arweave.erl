@@ -152,7 +152,33 @@ do_read(StoreOpts, ID, Opts) ->
                         }
                     ),
                     record_partition_metric(StartOffset, ok, Opts),
-                    Loaded;
+                    case hb_store_remote_node:read_local_cache(
+                        StoreOpts,
+                        ID,
+                        Opts
+                    ) of
+                        {ok, CachedMessage} ->
+                            LocalStore =
+                                case hb_maps:get(
+                                    <<"local-store">>,
+                                    StoreOpts,
+                                    [],
+                                    StoreOpts
+                                ) of
+                                    Stores when is_list(Stores) -> Stores;
+                                    Store when is_map(Store) -> [Store];
+                                    _ -> []
+                                end,
+                            {ok,
+                                hb_cache:ensure_all_loaded(
+                                    CachedMessage,
+                                    Opts#{
+                                        <<"store">> => LocalStore ++ [StoreOpts]
+                                    }
+                                )
+                            };
+                        _ -> Loaded
+                    end;
                 {error, Reason} ->
                     ?event(
                         arweave_offsets,
