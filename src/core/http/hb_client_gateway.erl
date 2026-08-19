@@ -433,7 +433,7 @@ result_to_message(ExpectedID, Item, Opts) ->
                 ),
             tags =
                 [
-                    {Name, Value}
+                    {normalize_graphql_tag_name(Name, Value), Value}
                 ||
                     #{<<"name">> := Name, <<"value">> := Value} <- Tags
                 ],
@@ -511,6 +511,26 @@ decode_or_null(Bin) when is_binary(Bin) ->
 decode_or_null(_) ->
     <<>>.
 
+%% @doc Some gateway GraphQL responses can expose TABM link tag names with
+%% `+' decoded as a form-space, yielding `balances link' instead of the
+%% canonical `balances+link'. Normalize only when the value has HyperBEAM's ID
+%% shape, so ordinary tags whose names end in ` link' remain unchanged.
+normalize_graphql_tag_name(Name, Value)
+        when is_binary(Name), byte_size(Name) >= 5 ->
+    Size = byte_size(Name),
+    case {
+        binary:part(Name, Size - 5, 5),
+        ?IS_ID(Value)
+    } of
+        {<<" link">>, true} ->
+            Prefix = binary:part(Name, 0, Size - 5),
+            <<Prefix/binary, "+link">>;
+        _ ->
+            Name
+    end;
+normalize_graphql_tag_name(Name, _Value) ->
+    Name.
+
 %% @doc Takes a list of messages with `name' and `value' fields, and formats
 %% them as a GraphQL `tags' argument.
 subindex_to_tags(Subindex) ->
@@ -555,6 +575,32 @@ device_valid_until_height_query_test() ->
     ),
     ?assertEqual([Bob], maps:get(<<"trusted">>, BobVars)),
     ?assertEqual(nomatch, binary:match(BobQuery, <<"validUntilHeight">>)).
+
+graphql_link_tag_name_normalization_test() ->
+    ID = <<"5wE86A8Z3QRqYIQBDQY-rws-Lb-b2uaXO7yfdf4_NAg">>,
+    ?assertEqual(
+        <<"balances+link">>,
+        normalize_graphql_tag_name(<<"balances link">>, ID)
+    ),
+    ?assertEqual(
+        <<"26wkmnkmn3u99knn5dukjd0cgyotdiw6jj6eyc_ied4+link">>,
+        normalize_graphql_tag_name(
+            <<"26wkmnkmn3u99knn5dukjd0cgyotdiw6jj6eyc_ied4 link">>,
+            ID
+        )
+    ),
+    ?assertEqual(
+        <<"balances link">>,
+        normalize_graphql_tag_name(<<"balances link">>, <<"not-an-id">>)
+    ),
+    ?assertEqual(
+        <<"plain link tag">>,
+        normalize_graphql_tag_name(<<"plain link tag">>, ID)
+    ),
+    ?assertEqual(
+        <<"already+link">>,
+        normalize_graphql_tag_name(<<"already+link">>, ID)
+    ).
 
 ans104_no_data_item_test() ->
     % Start a random node so that all of the services come up.
