@@ -16,8 +16,9 @@
 %%% it is built once per variant, owned by an `hb_name' singleton, and shared.
 -module(dev_arweave_spora).
 -implements(<<"arweave-spora@2.9">>).
+-device_libraries([lib_arweave_packing]).
 -export([info/1, validate/3, recall_range/3, recall_byte/3, h0/3, h1/3, h2/3]).
--export([unpack/3, unpack_sub_chunk/3, entropy/3]).
+-export([pack_sub_chunk/3, unpack/3, unpack_sub_chunk/3, entropy/3]).
 -include("include/hb.hrl").
 -include("include/ar_consensus.hrl").
 
@@ -55,9 +56,10 @@ validate(Base, Req, Opts) ->
     RecallOffset = hb_util:int(required(<<"recall-offset">>, Base, Req, Opts)),
     SubChunkIndex = hb_util:int(required(<<"sub-chunk-index">>, Base, Req, Opts)),
     SeekOffset = recall_bucket_offset(RecallOffset, BlockStartOffset),
+    Expected = get_first(<<"expected-chunk-id">>, Base, Req, [], Opts),
     maybe
         ok ?= proof_size(TXPath, DataPath, Chunk, UnpackedChunk),
-        {ok, Packing} ?= packing(required(<<"packing">>, Base, Req, Opts), Opts),
+        {ok, Packing} ?= binding_packing(Expected, Base, Req, Opts),
         {ok, DataRoot, TXStartOffset, TXEndOffset} ?=
             tx_path(TXRoot, TXPath, SeekOffset, BlockSize, Opts),
         {ok, ChunkID, ChunkStartOffset, ChunkEndOffset} ?=
@@ -79,12 +81,24 @@ validate(Base, Req, Opts) ->
                     SubChunkIndex * ?COMPOSITE_PACKING_SUB_CHUNK_SIZE,
                 <<"tx-root">> => hb_util:decode(TXRoot)
             },
-        Expected = get_first(<<"expected-chunk-id">>, Base, Req, [], Opts),
         ok ?= chunk(Expected, Packing, Leaf, Chunk, UnpackedChunk, Opts),
         {ok,
             #{
                 <<"valid">> => true,
                 <<"chunk-id">> => ChunkID,
+                % Where the two paths place the chunk, which is not derivable
+                % from the recalled offset: below the strict data split
+                % threshold nothing is bucket aligned, and the end offset a
+                % chunk's packing is keyed on follows the transaction's own
+                % Merkle layout. A caller storing the chunk needs both.
+                <<"absolute-end-offset">> =>
+                    BlockStartOffset + TXStartOffset + ChunkEndOffset,
+                <<"chunk-size">> => ChunkEndOffset - ChunkStartOffset,
+                % Already in its wire form: the leaf of a transaction path is
+                % the root of the data path that follows it, and `merkle/6'
+                % answers with leaves as they are spelled on the wire.
+                <<"data-root">> => DataRoot,
+                <<"relative-offset">> => ChunkEndOffset,
                 % Whether the packed chunk itself was unpacked and bound to the
                 % Merkle leaf, or the caller's own `expected-chunk-id' was
                 % compared against it instead. The second is a strictly weaker
@@ -144,7 +158,7 @@ h0(Base, Req, Opts) ->
                         hb_util:decode(required(<<"seed">>, Base, Req, Opts)),
                         hb_util:decode(required(<<"reward-addr">>, Base, Req, Opts)),
                         PackingDifficulty,
-                        packing_state(h0_variant(PackingDifficulty), Opts)
+                        lib_arweave_packing:state(h0_variant(PackingDifficulty), Opts)
                     )
                 )
         }
@@ -172,6 +186,53 @@ h2(Base, Req, Opts) ->
             hb_util:decode(required(<<"h0">>, Base, Req, Opts))
         )
     ).
+
+%% @doc Pack one sub-chunk of a chunk for a mining address: the 8 KiB a miner
+%% hashes, and the whole zero-padded unpacked chunk its proof carries beside it.
+%%
+%% The whole chunk is supplied rather than the sub-chunk alone, because the
+%% padding a short chunk is packed under is a property of the chunk: the last
+%% sub-chunk of a 100-byte chunk is entirely padding, and cannot be formed from
+%% its own bytes. The padded chunk is answered with every sub-chunk of it for
+%% the same reason it is asked for -- it is what the proof carries -- and a
+%% caller walking the sub-chunks of one chunk holds the first answer rather
+%% than reading it again.
+%%
+%% Replica-2.9 enciphers each sub-chunk by exclusive-or with a slice of that
+%% sub-chunk's own entropy, so packing and unpacking are one operation and are
+%% served by one implementation. Every other format is a cipher rather than an
+%% involution and is refused here: a `pack' that quietly deciphered would yield
+%% chunks no proof of access accepts.
+pack_sub_chunk(Base, Req, Opts) ->
+    Chunk = hb_util:decode(required(<<"chunk">>, Base, Req, Opts)),
+    Index = hb_util:int(required(<<"sub-chunk-index">>, Base, Req, Opts)),
+    maybe
+        {ok, Packing} ?=
+            packing(required(<<"packing">>, Base, Req, Opts), Opts),
+        ok ?= involutive(Packing),
+        {ok, SubChunkStartOffset} ?= sub_chunk_start_offset(Index),
+        {ok, Unpacked} ?= pad_chunk(Chunk),
+        {ok, Packed} ?=
+            unpack_sub_chunk(
+                Packing,
+                hb_util:int(
+                    required(<<"absolute-end-offset">>, Base, Req, Opts)),
+                <<>>,
+                binary:part(
+                    Unpacked,
+                    SubChunkStartOffset,
+                    ?COMPOSITE_PACKING_SUB_CHUNK_SIZE
+                ),
+                SubChunkStartOffset,
+                Opts
+            ),
+        {ok,
+            #{
+                <<"chunk">> => cache_link(Packed, Opts),
+                <<"unpacked-chunk">> => cache_link(Unpacked, Opts)
+            }
+        }
+    end.
 
 %% @doc Unpack a whole packed chunk. `chunk-size' is the unpadded size the
 %% Merkle leaf claims, and defaults to the packed size -- which is the same for
@@ -223,7 +284,7 @@ entropy(Base, Req, Opts) ->
             hb_util:int(required(<<"sub-chunk-start-offset">>, Base, Req, Opts)),
             ar_packing_server:get_randomx_state_by_packing(
                 Packing,
-                packing_state(packing_variant(Packing), Opts)
+                lib_arweave_packing:state(lib_arweave_packing:variant(Packing), Opts)
             )
         ),
     {ok, #{ <<"entropy">> => cache_link(Entropy, Opts) }}.
@@ -327,6 +388,15 @@ merkle(Root, Proof, Offset, Size, Ruleset, Opts) ->
         {error, Error} ->
             {error, Error}
     end.
+
+%% @doc Return the packing the proof's chunk is bound through. A caller that
+%% supplies an `expected-chunk-id' is asking for the paths to be walked and
+%% nothing to be unpacked, so it need not name a packing -- and a chunk it holds
+%% unpacked has no packing to name.
+binding_packing([], Base, Req, Opts) ->
+    packing(required(<<"packing">>, Base, Req, Opts), Opts);
+binding_packing(_Expected, _Base, _Req, _Opts) ->
+    {ok, none}.
 
 %% @doc Bind the proof's packed chunk to the Merkle leaf the two paths resolved
 %% to. An `expected-chunk-id' replaces the binding with a comparison against a
@@ -446,7 +516,7 @@ unpack(Packing, AbsoluteEndOffset, TXRoot, Chunk, ChunkSize, Opts) ->
             TXRoot,
             Chunk,
             ChunkSize,
-            packing_state(packing_variant(Packing), Opts)
+            lib_arweave_packing:state(lib_arweave_packing:variant(Packing), Opts)
         )
     ).
 
@@ -459,7 +529,7 @@ unpack_sub_chunk(Packing, AbsoluteEndOffset, TXRoot, Chunk, SubChunkStartOffset,
             TXRoot,
             Chunk,
             SubChunkStartOffset,
-            packing_state(packing_variant(Packing), Opts)
+            lib_arweave_packing:state(lib_arweave_packing:variant(Packing), Opts)
         )
     ).
 
@@ -482,6 +552,31 @@ unpack_result({error, invalid_chunk_size}) ->
 unpack_result(Error) ->
     throw({'unpacking-failed', Error}).
 
+%% @doc Hold only for the packing whose cipher is its own inverse.
+involutive({replica_2_9, _RewardAddr}) ->
+    ok;
+involutive(_Packing) ->
+    {error, error_message(<<"unsupported-packing">>,
+        <<"This node can only pack the `replica-2-9' format.">>)}.
+
+%% @doc Return the offset a sub-chunk index denotes within its chunk.
+sub_chunk_start_offset(Index)
+        when Index < 0; Index >= ?COMPOSITE_PACKING_SUB_CHUNK_COUNT ->
+    {error, error_message(<<"invalid-sub-chunk-index">>,
+        <<"The sub-chunk index is beyond the sub-chunks of a chunk.">>)};
+sub_chunk_start_offset(Index) ->
+    {ok, Index * ?COMPOSITE_PACKING_SUB_CHUNK_SIZE}.
+
+%% @doc Extend a chunk to the full size the packing operates on. Only the last
+%% chunk of a transaction is ever shorter than one, and it is packed, proved and
+%% hashed at full size with its tail zeroed.
+pad_chunk(Chunk) when byte_size(Chunk) > ?DATA_CHUNK_SIZE ->
+    {error, error_message(<<"invalid-chunk-size">>,
+        <<"The chunk to pack is larger than a chunk of the weave.">>)};
+pad_chunk(Chunk) ->
+    Padding = ?DATA_CHUNK_SIZE - byte_size(Chunk),
+    {ok, << Chunk/binary, 0:(Padding * 8) >>}.
+
 %% @doc Map a `packing' message onto the term the vendored packing code takes.
 %% The mapping is explicit rather than derived, both because the wire names are
 %% dashed where the vendored atoms are not, and because an unrecognised format
@@ -502,83 +597,10 @@ packing(Format, _RewardAddr, _PackingDifficulty) ->
     {error, error_message(<<"unsupported-packing">>,
         <<"This node cannot unpack the format `", Format/binary, "'.">>)}.
 
-%% @doc Return the RandomX variant a packing format is built from.
-packing_variant({spora_2_6, _RewardAddr}) -> rx512;
-packing_variant({composite, _RewardAddr, _PackingDifficulty}) -> rx4096;
-packing_variant({replica_2_9, _RewardAddr}) -> rxsquared.
-
 %% @doc Return the RandomX variant H0 is computed with. Packing difficulty 0
 %% predates the 2.8 fork; every block since uses rx4096.
 h0_variant(0) -> rx512;
 h0_variant(_PackingDifficulty) -> rx4096.
-
-%% @doc Return an `ar_packing_server' packing state carrying an initialised
-%% RandomX state for `Variant', starting the singleton that owns it if this is
-%% its first use.
-%%
-%% RandomX state is the one genuinely process-bound resource in the subsystem: a
-%% NIF resource costing a second to build in light mode and minutes in fast
-%% mode, holding a gibibyte or more. It is keyed on `?RANDOMX_PACKING_KEY', a
-%% fixed protocol constant, so a state built once stays valid for the life of
-%% the network -- which is why it is a singleton rather than a cache. The three
-%% variants are independent, so a node pays only for the ones it uses.
-%%
-%% `hb_name' is BEAM-global, so the name is scoped by the node's address: nodes
-%% share a BEAM throughout the test suite, and two of them wanting different
-%% modes must not be handed each other's state.
-packing_state(Variant, Opts) ->
-    Mode = randomx_mode(hb_opts:get(<<"arweave-randomx-mode">>, <<"light">>, Opts)),
-    Name =
-        {
-            arweave_randomx,
-            Variant,
-            Mode,
-            node_scope(hb_opts:get(priv_wallet, [], Opts))
-        },
-    % Named for what it is: every caller asking for the state, not the state
-    % being built. The build happens once, inside the singleton below. Read as
-    % a creation, a run of these looks like a singleton dying and respawning --
-    % which is a diagnosis this event has already caused once.
-    ?event(arweave_spora,
-        {randomx_state_requested, {variant, Variant}, {mode, Mode}},
-        Opts
-    ),
-    PID = hb_name:singleton(Name, fun() -> randomx_owner(Variant, Mode) end),
-    Ref = monitor(process, PID),
-    PID ! {randomx_state, self(), Ref},
-    receive
-        {randomx_state, Ref, PackingState} ->
-            demonitor(Ref, [flush]),
-            PackingState;
-        {'DOWN', Ref, process, PID, Reason} ->
-            throw({'randomx-state-unavailable', Variant, Reason})
-    end.
-
-%% @doc Own a RandomX state for the life of the node. The state is built before
-%% the first request is served, and then handed out unchanged: NIF resources are
-%% reference-counted, so every caller may hold one, while the owner keeps the
-%% underlying allocation alive.
-randomx_owner(Variant, Mode) ->
-    randomx_owner(ar_packing_server:init_packing_state(Mode, [Variant])).
-randomx_owner(PackingState) ->
-    receive
-        {randomx_state, From, Ref} ->
-            From ! {randomx_state, Ref, PackingState},
-            randomx_owner(PackingState)
-    end.
-
-
-%% @doc Map the node's configured RandomX mode onto the atom the vendored
-%% packing code takes. Mapped explicitly rather than coerced: the two atoms are
-%% a closed vocabulary, and neither is guaranteed to be interned before the
-%% packing code is first loaded -- which is exactly when this runs.
-randomx_mode(<<"light">>) -> light;
-randomx_mode(<<"fast">>) -> fast.
-
-%% @doc Name the node a RandomX singleton belongs to. A node with no wallet
-%% configured owns the `[]' scope, which is a scope like any other.
-node_scope([]) -> [];
-node_scope(Wallet) -> hb_util:human_id(ar_wallet:to_address(Wallet)).
 
 %% @doc Return the standard shape of a hash key's result.
 hash({Hash, Preimage}) ->

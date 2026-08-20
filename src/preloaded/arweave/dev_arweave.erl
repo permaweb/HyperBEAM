@@ -18,7 +18,8 @@
     lib_arweave_tx
 ]).
 -export([info/0]).
--export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
+-export([tx/3, raw/3, chunk/3, chunk_proof/3, block/3, current/3, status/3,
+    price/3, tx_anchor/3]).
 -export([pending/3]).
 -export([bootstrap/3, sync/3, tip/3, validated/3, backfill/3, placement/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
@@ -762,6 +763,69 @@ get_chunk(Offset, Opts) ->
     % needed.
     Path = <<"/chunk/", (hb_util:bin(Offset))/binary>>,
     request(<<"GET">>, Path, #{ <<"route-by">> => Offset }, Opts).
+
+%% @doc Return the chunk of the weave holding a byte, with the two Merkle paths
+%% that place it there. `chunk' answers with bytes alone; this is the whole of
+%% Arweave's own `GET /chunk/<offset>' answer.
+%%
+%% A miner reads the weave through this key. The paths are the proof of access
+%% its solution has to carry, and `absolute-end-offset' is the offset the
+%% chunk's packing is keyed on -- an offset the transaction's Merkle layout
+%% determines, which no arithmetic over the recall byte recovers below the
+%% strict data split threshold.
+%%
+%% Two details of the peer protocol are what make the answer the one a proof of
+%% access is checked against. Arweave addresses a chunk by a byte *inside* it
+%% and its offsets are inclusive ends, so the byte asked for is the one after
+%% the caller's: at a bucket boundary the raw byte belongs to the chunk below,
+%% and a peer would answer with it. And `x-bucket-based-offset' asks the peer
+%% to seek on the padded 256 KiB grid the proof rules use above the strict data
+%% split threshold, rather than on the transaction's own data; without it every
+%% byte in the zero-padding tail of a short chunk is answered as absent.
+%%
+%% Nothing here is checked. The bytes and the paths are a peer's claim until a
+%% consumer resolves them through `~arweave-spora@2.9/validate'.
+chunk_proof(_Base, Request, Opts) ->
+    Offset = hb_util:int(hb_maps:get(<<"offset">>, Request, 0, Opts)),
+    Path = <<"/chunk/", (hb_util:bin(Offset + 1))/binary>>,
+    maybe
+        {ok, JSON} ?=
+            request(
+                <<"GET">>,
+                Path,
+                #{
+                    <<"route-by">> => Offset,
+                    <<"x-bucket-based-offset">> => <<"true">>
+                },
+                Opts
+            ),
+        {ok,
+            #{
+                <<"chunk">> => field(<<"chunk">>, JSON, Opts),
+                <<"data-path">> => field(<<"data_path">>, JSON, Opts),
+                <<"tx-path">> => field(<<"tx_path">>, JSON, Opts),
+                % The peer's own spelling, unchanged: this node asks for no
+                % packing, so a peer answers `unpacked' or refuses, and a name
+                % it answers with instead is one a consumer must refuse by
+                % name rather than one this key may coerce.
+                <<"packing">> => field(<<"packing">>, JSON, Opts),
+                <<"chunk-size">> =>
+                    hb_util:int(field(<<"chunk_size">>, JSON, Opts)),
+                <<"absolute-end-offset">> =>
+                    hb_util:int(field(<<"absolute_end_offset">>, JSON, Opts))
+            }
+        }
+    end.
+
+%% @doc Read a field of a peer's chunk answer. Every one of them is part of
+%% what places the chunk in the weave, so an answer missing one is not a chunk
+%% this node can mine from or prove against, and defaulting it would be the
+%% silent wrong answer this key exists to avoid.
+field(Key, JSON, Opts) ->
+    case hb_maps:get(Key, JSON, not_found, Opts) of
+        not_found -> throw({'missing-key', Key});
+        Value -> Value
+    end.
 
 %% @doc Retrieve (and cache) block information from Arweave. If the `block' key
 %% is present, it is used to look up the associated block. If it is of Arweave
