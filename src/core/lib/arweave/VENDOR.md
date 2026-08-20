@@ -24,7 +24,9 @@ The port includes the pure consensus paths for:
 - transaction verification, replay-window checks, pricing, and account
   transitions;
 - Patricia and Merkle trees, proof of access, RandomX packing, and replica 2.9;
-- nonce-limiter/VDF verification; and
+- nonce-limiter/VDF verification;
+- the on-disk layout of a storage module: where a chunk sits in a chunk file,
+  which entropy enciphers it, and the interval algebra the sync record is; and
 - the RandomX and VDF Erlang NIF wrappers.
 
 The corresponding records and constants are in:
@@ -32,6 +34,7 @@ The corresponding records and constants are in:
 ```text
 src/core/include/ar.hrl
 src/core/include/ar_block.hrl
+src/core/include/ar_chunk_storage.hrl
 src/core/include/ar_consensus.hrl
 src/core/include/ar_inflation.hrl
 src/core/include/ar_poa.hrl
@@ -61,6 +64,18 @@ classes are:
    required by the devices rather than the upstream HTTP/node surface.
 7. `ar_wallet` and `ar_tx` retain HyperBEAM's existing AO transaction support
    while adding the upstream L1 verification functions used here.
+8. The storage modules are reduced to their format surface. `ar_chunk_storage`
+   keeps the offset, bucket and position arithmetic and the 262147-byte record
+   layout; `ar_storage_module` keeps the identifier, range and packing;
+   `ar_entropy_gen` keeps the footprint offsets, the entropy keys and the slice
+   combination. The gen_servers, ETS indexes, prometheus counters, device locks
+   and `ar_kv` calls around them are not ported: the file handles, the write
+   ordering, the index and the sync record are `lib_arweave_chunks`,
+   `lib_arweave_chunk_index` and `lib_arweave_sync_record`, and the data
+   directory and chunk group size are passed in rather than read from
+   `arweave_config`.
+9. `ar_intervals` is copied whole, including its tests. Only `jiffy:encode/1`
+   differs, replaced by `hb_json:encode/1`.
 
 The source diff against the pinned checkout is the authority. A same-named
 function without a local note must not be assumed byte-identical, because some
@@ -81,11 +96,23 @@ modules are intentionally reduced to the validator surface.
 ```shell
 rebar3 device test --devices \
   dev_arweave,dev_arweave_block,dev_arweave_block_index,\
-dev_arweave_merkle,dev_arweave_spora,dev_arweave_tx,\
-dev_arweave_vdf,dev_arweave_wallets
+dev_arweave_merkle,dev_arweave_mining,dev_arweave_spora,\
+dev_arweave_storage,dev_arweave_tx,dev_arweave_vdf,dev_arweave_wallets
 
 rebar3 device test --devices dev_arweave \
   --test all:live_account_transition --timeout 1800
+```
+
+The packing has one further check that no amount of self-consistency can
+replace. `dev_arweave_spora_test_vectors:mainnet_entropy_test/0` generates the
+entropy for one bucket of the mainnet weave and compares its hash against the
+entropy an upstream Arweave node actually enciphered that bucket with -- derived
+from that node's own disk, by holding the same range twice, once packed and once
+not, and taking the difference. Repin it if the entropy derivation changes
+upstream; a mismatch there means blocks nothing accepts.
+
+```shell
+rebar3 device test --devices dev_arweave_spora --test all:mainnet_entropy_test
 ```
 
 The live vector is required because public peers prune historical wallet lists;

@@ -14,6 +14,8 @@
 		get_randomx_state_for_h0/2, get_randomx_state_by_packing/2,
 		unpack/6, unpack_sub_chunk/6, chunk_key/3,
 		generate_replica_2_9_entropy/4, do_generate_entropy/2,
+		encipher_replica_2_9_chunk/2, decipher_replica_2_9_chunk/2,
+		pad_chunk/1, pad_chunk/2,
 		unpad_chunk/3, unpad_chunk/4]).
 
 -include("include/ar.hrl").
@@ -191,6 +193,43 @@ do_generate_entropy(RandomXState, Key) ->
 	%% Primarily needed for testing where the entropy generated exceeds the entropy
 	%% needed for tests.
 	binary_part(Entropy, 0, ?REPLICA_2_9_ENTROPY_SIZE).
+
+%% @doc Encipher a whole 256 KiB unpacked chunk with the whole 256 KiB of entropy
+%% assembled for it. The cipher is its own inverse, so this is also how a stored
+%% chunk is deciphered.
+%%
+%% VENDOR: upstream wraps each of these in a prometheus counter increment.
+encipher_replica_2_9_chunk(Chunk, Entropy) ->
+	exor_replica_2_9_chunk(Chunk, Entropy).
+
+decipher_replica_2_9_chunk(Chunk, Entropy) ->
+	exor_replica_2_9_chunk(Chunk, Entropy).
+
+exor_replica_2_9_chunk(Chunk, Entropy) ->
+	iolist_to_binary(exor_replica_2_9_sub_chunks(Chunk, Entropy)).
+
+exor_replica_2_9_sub_chunks(<<>>, <<>>) ->
+	[];
+exor_replica_2_9_sub_chunks(
+		<< SubChunk:(?COMPOSITE_PACKING_SUB_CHUNK_SIZE)/binary, ChunkRest/binary >>,
+		<< EntropyPart:(?COMPOSITE_PACKING_SUB_CHUNK_SIZE)/binary, EntropyRest/binary >>) ->
+	[ar_mine_randomx:exor_sub_chunk(SubChunk, EntropyPart)
+			| exor_replica_2_9_sub_chunks(ChunkRest, EntropyRest)].
+
+%% @doc Extend a chunk to the full size the packing operates on. Only the last
+%% chunk of a transaction is ever shorter than one, and it is packed, proved and
+%% hashed at full size with its tail zeroed.
+%%
+%% VENDOR: upstream builds the padding from a 256 KiB zero binary held in the
+%% process dictionary. A bit-syntax literal of the padding size costs the same
+%% and owns nothing.
+pad_chunk(Chunk) ->
+	pad_chunk(Chunk, byte_size(Chunk)).
+pad_chunk(Chunk, ChunkSize) when ChunkSize == (?DATA_CHUNK_SIZE) ->
+	Chunk;
+pad_chunk(Chunk, ChunkSize) ->
+	PaddingSize = (?DATA_CHUNK_SIZE) - ChunkSize,
+	<< Chunk/binary, 0:(PaddingSize * 8) >>.
 
 unpad_chunk(spora_2_5, Unpacked, ChunkSize, _PackedSize) ->
 	binary:part(Unpacked, 0, ChunkSize);

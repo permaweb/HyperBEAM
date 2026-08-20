@@ -1,12 +1,8 @@
 -module(ar_replica_2_9).
 
-%% VENDOR: upstream also exports get_entropy_partition_range/1 and
-%% get_next_fetch_offset/3. Both are chunk-storage syncing helpers that reach
-%% into ar_chunk_storage, a gen_server-backed storage module that is not
-%% vendored (chunk storage is an explicit non-goal). Neither is reachable from
-%% proof validation, so both are dropped rather than left to fail at runtime.
--export([get_entropy_partition/1, get_entropy_key/3,
-    get_slice_index/1, get_partition_offset/1, get_entropy_index/2]).
+-export([get_entropy_partition/1, get_entropy_partition_range/1, get_entropy_key/3,
+    get_slice_index/1, get_partition_offset/1, get_entropy_index/2,
+    get_next_fetch_offset/3]).
 
 -include("include/ar.hrl").
 -include("include/ar_consensus.hrl").
@@ -107,11 +103,80 @@ get_entropy_partition(AbsoluteChunkEndOffset) ->
     %% integer here, so the body is inlined.
     BucketStart div ar_block:partition_size().
 
-%% VENDOR: upstream's get_next_fetch_offset/3 and get_entropy_partition_range/1
-%% sat here. They walk a chunk-storage cursor and reverse the partition mapping
-%% via ar_poa:get_padded_offset/2 and
-%% ar_chunk_storage:get_chunk_byte_from_bucket_end/1. ar_chunk_storage is not
-%% vendored, so both functions are dropped - see the note above the -export.
+%% @doc Return the byte offsets that map to the given 2.9 entropy partition.
+get_entropy_partition_range(PartitionNumber) ->
+    %% The goal of this function is to return the minimum and maximum byte offsets that, when
+    %% fed to ar_replica_2_9:get_entropy_partition/1 will yield the provided PartitinNumber.
+    %% 
+    %% To do this we do a rough reversal of the steps taken by
+    %% ar_replica_2_9:get_entropy_partition/1:
+    %% 
+    %% get_entropy_partition(AbsoluteChunkEndOffset) ->
+    %%    BucketStart = get_entropy_bucket_start(AbsoluteChunkEndOffset),
+    %%    ar_node:get_partition_number(BucketStart).
+    %% 
+    %% I say "rough reverseal" because several of the steps are not reversible (e.g. 
+    %% ar_util:floor_int/2 discards data and so it not perfectly reversible). 
+    %% 
+    %% 1. Reverse ar_node:get_partition_number(BucketStart) to get the pick offsets
+    %%    representing the byte boundaries of the recall partition.
+    StartRecall = PartitionNumber * ar_block:partition_size(),
+    EndRecall = (PartitionNumber + 1) * ar_block:partition_size(),
+    %% 2. The next 3 steps reverse ar_replica_2_9:get_entropy_bucket_start/1 to yield the
+    %%    first and last bytes of the entropy partition.
+    %% 
+    %%    Get the first bucket boundary greater than the recall boundaries. This represents
+    %%    the bucket end offset of the bucket which contains the first/last byte of the
+    %%    recall partition. 
+    %% 
+    %%    Note: by passing 0 into get_padded_offset/2 we ignore the strict data split
+    %%    threshold and focus on just finding the nearest 256 KiB aligned boundary greater
+    %%    than the recall boundaries.
+    StartBucket1 = ar_poa:get_padded_offset(StartRecall, 0),
+    EndBucket1 = ar_poa:get_padded_offset(EndRecall, 0),
+    %% 3. ar_replica_2_9:get_entropy_partition/1 allocates this straddling bucket to the 
+    %%    previous partition. So the start of the entropy partition is the first byte which
+    %%    falls in the *next* bucket, and the end of the entropy partition is the last byte
+    %%    which falls in *this* bucket. To get those bytes we'll advance to the next bucket...
+    StartBucket2 = StartBucket1 + ?DATA_CHUNK_SIZE,
+    EndBucket2 = EndBucket1 + ?DATA_CHUNK_SIZE,
+    %% 4. ... and then get the first byte which falls in that bucket
+    StartByte1 = ar_chunk_storage:get_chunk_byte_from_bucket_end(StartBucket2) + 1,
+    EndByte1 = ar_chunk_storage:get_chunk_byte_from_bucket_end(EndBucket2),
+
+    %% 5. Handle the special case of partition 0. Since it has no preceding partition its
+    %%    byte start is 0.
+    StartByte2 = case PartitionNumber of
+        0 ->
+            0;
+        _ ->
+            StartByte1
+    end,
+
+    {StartByte2, EndByte1}.
+
+%% @doc Return the offset a partition preparation cursor advances to. Within a
+%% sector the cursor steps one chunk at a time; at the last chunk of a sector it
+%% jumps to the end of the entropy partition.
+-spec get_next_fetch_offset(
+        Offset :: non_neg_integer(),
+        Start :: non_neg_integer(),
+        End :: non_neg_integer()
+) -> non_neg_integer().
+get_next_fetch_offset(Offset, Start, End) ->
+    SectorSize = ar_block:get_replica_2_9_entropy_sector_size(),
+    Partition = get_entropy_partition(Offset + ?DATA_CHUNK_SIZE),
+    {PartitionStart, PartitionEnd} = get_entropy_partition_range(Partition),
+    SectorStart = max(Start, PartitionStart),
+    SectorEnd = min(PartitionEnd, SectorStart + SectorSize),
+    Offset2 =
+        case Offset + 2 * ?DATA_CHUNK_SIZE > SectorEnd of
+            true ->
+                PartitionEnd;
+            false ->
+                Offset + ?DATA_CHUNK_SIZE
+        end,
+    min(Offset2, End).
 
 %% @doc Return the key used to generate the entropy for the 2.9 replication format.
 %% RewardAddr: The address of the miner that mined the chunk.
