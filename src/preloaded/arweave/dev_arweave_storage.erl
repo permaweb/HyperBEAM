@@ -28,6 +28,8 @@
     lib_arweave_chunk_index_test_vectors,
     lib_arweave_chunks,
     lib_arweave_chunks_test_vectors,
+    lib_arweave_data_sync,
+    lib_arweave_data_sync_test_vectors,
     lib_arweave_entropy,
     lib_arweave_packing,
     lib_arweave_state,
@@ -36,7 +38,7 @@
     lib_arweave_sync_record_test_vectors
 ]).
 -export([info/1, modules/3, range/3, chunk/3, chunk_proof/3]).
--export([sync_record/3, prepare/3, store/3]).
+-export([sync_record/3, prepare/3, store/3, sync/3]).
 -include("include/hb.hrl").
 -include("include/ar.hrl").
 -include("include/ar_chunk_storage.hrl").
@@ -192,6 +194,32 @@ store(Base, Req, Opts) ->
             fun() -> write(Module, Chunk, Placement, Base, Req, Opts) end,
             Opts
         )
+    end.
+
+%% @doc Fetch and store up to `chunks' more of a module's range from peers.
+%%
+%% Bounded and idempotent, and intended to be driven by `~cron@1.0/every'
+%% alongside `prepare'. Every chunk it fetches is placed by `store', so a peer
+%% names the bytes and never the offset they land at.
+%%
+%% The pass takes no lock of its own and must not be given one: each chunk is
+%% written by a `store' resolution, which is where a module's writes are
+%% serialised, and a pass running as the module's own runner would be waiting on
+%% itself.
+sync(Base, Req, Opts) ->
+    Chunks =
+        hb_util:int(
+            get_first(
+                <<"chunks">>,
+                Base,
+                Req,
+                hb_opts:get(<<"arweave-storage-batch">>, 100, Opts),
+                Opts
+            )
+        ),
+    maybe
+        {ok, Module} ?= requested_module(Base, Req, Opts),
+        lib_arweave_data_sync:sync(Module, Chunks, Opts)
     end.
 
 %%% Internal functions.
