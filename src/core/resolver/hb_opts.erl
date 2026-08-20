@@ -277,6 +277,7 @@ raw_default_message() ->
         <<"http-client-connect-timeout">> => 5000,
         <<"http-client-keepalive">> => 120000,
         <<"http-client-send-timeout">> => 300_000,
+        <<"http-post-size-limit">> => infinity,
         <<"port">> => 8734,
         <<"process-sampler">> => true,
         <<"process-sampler-interval">> => 15000,
