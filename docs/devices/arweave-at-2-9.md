@@ -239,6 +239,8 @@ should size the store for it.
 | `~arweave-spora@2.9` | Recall ranges, RandomX packing, and proof of access |
 | `~arweave-history@2.9` | The two carried histories, as persistent linked lists |
 | `~arweave-tx@2.9` | Transaction admission and weave-root rules |
+| `~arweave-mining@2.9` | Recall range search, solutions, and block production |
+| `~arweave-storage@2.9` | Storage modules: chunks on disk, packing, and the sync record |
 | `~arweave-vdf@2.9` | Nonce-limiter chain, seeds, and difficulty |
 | `~arweave-wallets@2.9` | AO-linked Arweave Patricia graph and sparse updates |
 
@@ -256,6 +258,14 @@ block's identity, reconstructs and verifies its block index, fetches the
 checkpoint histories, verifies the checkpoint's account tree against its signed
 root, and materialises the blocks of the transaction-anchor window below it as
 headers so that the chain reaches back far enough for the anchor rules to read.
+
+Bootstrap against mainnet takes minutes -- five, on a well-connected host --
+and HTTP is the usual way to ask for it. Cowboy closes an idle connection after
+`idle_timeout`, which defaults to 300 000 ms, and a request that outlasts it
+returns an empty body while the bootstrap goes on and commits. Raise
+`idle_timeout` in the node message before bootstrapping over HTTP, or read the
+result from a second call: a node that has a chain answers `already-bootstrapped`
+rather than starting another.
 
 Schedule `GET /~arweave@2.9/sync` with `~cron@1.0` after bootstrap. A typical
 interval is 30 seconds. Sync is idempotent: each validated block is published
@@ -335,9 +345,11 @@ change to publication or the chain's shape:
 
 ## Scope
 
-Supported blocks start at the Arweave 2.9 fork. The subsystem does not mine,
-gossip, retain the weave, implement pre-2.9 proof formats, or replay from
-genesis. It also has no persistent VDF server. With `arweave-vdf-timeline`
+Supported blocks start at the Arweave 2.9 fork. The subsystem does not gossip,
+implement pre-2.9 proof formats, or replay from genesis. Two parts of an Arweave
+node live beside it and are documented separately: `~arweave-storage@2.9` holds
+the weave, and `~arweave-mining@2.9` searches it. Neither announces what it
+finds. It also has no persistent VDF server. With `arweave-vdf-timeline`
 disabled, validation recomputes each child's VDF interval. When enabled, one
 bounded process computes ahead of the validated tip and reuses only exact
 output and checkpoint matches from the same seed and difficulty; all absent or

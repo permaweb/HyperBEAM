@@ -849,6 +849,103 @@ anchored_timeline(Info, PrevStep, Step, Opts, Tries) ->
             anchored_timeline(Info, PrevStep, Step, Opts, Tries - 1)
     end.
 
+%% @doc `~arweave-mining@2.9/mine` composes the search and the producer into
+%% one pass, and the block it answers with is one this node's own validation
+%% accepts under the `full' profile.
+%%
+%% Where the vectors above establish `produce' against a solution made by hand,
+%% this establishes the whole path: the pass advances the nonce limiter itself,
+%% searches the weave through an ordinary `chunk-proof' source, derives the
+%% difficulty a solution must beat from the timestamp the block is mined at,
+%% and checks what it built before answering with it. A wiring fault between
+%% the two devices -- a search run against one step and a block built at
+%% another, or against one timestamp and built at another -- is visible here
+%% and nowhere else.
+mine_yields_a_valid_block_test() ->
+    Opts = mining_opts(),
+    {Base, _Prev} = mining_chain(Opts),
+    {ok, Result} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-mining@2.9">> },
+            #{
+                <<"path">> => <<"mine">>,
+                <<"parent">> => Base,
+                <<"steps">> => ?MINING_STEP_LIMIT,
+                <<"max-nonces">> => ?MINING_NONCES,
+                <<"weave">> => mining_source(Opts)
+            },
+            Opts
+        ),
+    ?assertEqual(true, hb_maps:get(<<"mined">>, Result, false, Opts)),
+    Block = hb_maps:get(<<"block">>, Result, not_found, Opts),
+    assert_valid(Base, Block, [], Opts),
+    ?assertEqual(?MINING_HEIGHT + 1, hb_maps:get(<<"height">>, Block, 0, Opts)),
+    ?assertEqual(
+        hb_util:encode(
+            ar_wallet:to_address(hb_opts:get(priv_wallet, [], Opts))),
+        hb_maps:get(<<"reward-addr">>, Block, not_found, Opts)
+    ).
+
+%% @doc The block a pass answers with is the block it checked, whatever the
+%% `arweave-mined-block' handler returns. The hook is where an operator
+%% attaches an announcement, not where the block is decided: a pass that
+%% answered with a handler's return value would let one substitute a message
+%% nothing validated, under a result saying it was mined.
+mine_answers_with_the_block_it_checked_test() ->
+    Opts = mining_opts(),
+    {Base, _Prev} = mining_chain(Opts),
+    Substitute =
+        #{
+            <<"device">> =>
+                #{
+                    arweave_mined_block =>
+                        fun(_Base, _Req, _Opts) ->
+                            {ok, #{ <<"height">> => 1 }}
+                        end
+                }
+        },
+    {ok, Result} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-mining@2.9">> },
+            #{
+                <<"path">> => <<"mine">>,
+                <<"parent">> => Base,
+                <<"steps">> => ?MINING_STEP_LIMIT,
+                <<"max-nonces">> => ?MINING_NONCES,
+                <<"weave">> => mining_source(Opts)
+            },
+            Opts#{
+                <<"on">> => #{ <<"arweave-mined-block">> => Substitute }
+            }
+        ),
+    Block = hb_maps:get(<<"block">>, Result, not_found, Opts),
+    ?assertEqual(?MINING_HEIGHT + 1, hb_maps:get(<<"height">>, Block, 0, Opts)),
+    assert_valid(Base, Block, [], Opts).
+
+%% @doc A pass over a weave this node does not hold is not a failure: it
+%% answers that it mined nothing, which is what a miner missing the partition
+%% it is searching concludes too.
+%%
+%% The pass is unbounded, which is the shape a caller who names no `max-nonces'
+%% gets: every nonce of both ranges is walked and every one of them is a hole,
+%% so the whole range is covered without a chunk being read or packed.
+mine_without_a_weave_test() ->
+    Opts = mining_opts(),
+    {Base, _Prev} = mining_chain(Opts),
+    ?assertMatch(
+        {ok, #{ <<"mined">> := false }},
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-mining@2.9">> },
+            #{
+                <<"path">> => <<"mine">>,
+                <<"parent">> => Base,
+                <<"steps">> => 2,
+                <<"weave">> => empty_mining_source()
+            },
+            Opts
+        )
+    ).
+
 %% @doc A solution mined for an address this node holds no key for is refused,
 %% before anything is derived from it.
 %%
@@ -1395,6 +1492,169 @@ mining_weave() ->
         data_tree => DataTree,
         tx_root => TXRoot,
         tx_tree => TXTree
+    }.
+
+%% @doc A weave source over the same chunks a produced block is mined from,
+%% answering `chunk-proof' exactly as a peer answers `GET /chunk/<offset>'. An
+%% offset past the end of the weave is a hole, which is what a node that holds
+%% nothing there returns.
+mining_source(Opts) ->
+    % The chunks are packed once, here, and served by both keys. A pass reads a
+    % range at every step it walks, and packing a chunk of them costs
+    % thirty-two 8 MiB RandomX blobs -- so a source that packed on demand would
+    % spend the whole vector doing it.
+    Packed = mining_packed_chunks(Opts),
+    #{
+        <<"device">> =>
+            #{
+                range =>
+                    fun(_Base, Req, Opts2) ->
+                        mining_range(Packed, Req, Opts2)
+                    end,
+                chunk_proof =>
+                    fun(_Base, Req, Opts2) ->
+                        mining_chunk_proof(
+                            Packed,
+                            hb_util:int(
+                                hb_maps:get(<<"offset">>, Req, 0, Opts2))
+                        )
+                    end
+            }
+    }.
+
+%% @doc A weave source holding nothing at all. It still answers in the packing
+%% it was asked for, because holding nothing is not the same thing as holding
+%% the wrong thing.
+empty_mining_source() ->
+    #{
+        <<"device">> =>
+            #{
+                range =>
+                    fun(_Base, Req, Opts) ->
+                        {ok,
+                            #{
+                                <<"packing">> =>
+                                    hb_maps:get(
+                                        <<"packing">>, Req, <<>>, Opts),
+                                <<"chunks">> => []
+                            }
+                        }
+                    end,
+                chunk_proof => fun(_Base, _Req, _Opts) -> mining_hole() end
+            }
+    }.
+
+%% @doc Every chunk of the weave, packed for the address the vectors mine to,
+%% by the absolute end offset it sits at.
+mining_packed_chunks(Opts) ->
+    RewardAddr = ar_wallet:to_address(hb_opts:get(priv_wallet, [], Opts)),
+    [
+        {
+            (Index + 1) * ?DATA_CHUNK_SIZE,
+            mining_packed_chunk(Index, RewardAddr, Opts)
+        }
+    ||
+        Index <- lists:seq(0, ?MINING_CHUNKS - 1)
+    ].
+
+%% @doc One whole chunk in the form a partition holds it: every sub-chunk of it
+%% packed for the mining address at the offset it sits at.
+mining_packed_chunk(Index, RewardAddr, Opts) ->
+    <<
+        <<
+            (mining_packed_sub_chunk(Index, SubChunk, RewardAddr, Opts))/binary
+        >>
+    ||
+        SubChunk <- lists:seq(0, ?COMPOSITE_PACKING_SUB_CHUNK_COUNT - 1)
+    >>.
+
+mining_packed_sub_chunk(Index, SubChunkIndex, RewardAddr, Opts) ->
+    {ok, Packed} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"arweave-spora@2.9">>,
+                <<"chunk">> => hb_util:encode(mining_chunk(Index)),
+                <<"sub-chunk-index">> => SubChunkIndex,
+                <<"absolute-end-offset">> =>
+                    (Index + 1) * ?DATA_CHUNK_SIZE,
+                <<"packing">> => mining_packing(RewardAddr)
+            },
+            <<"pack-sub-chunk">>,
+            Opts
+        ),
+    hb_maps:get(<<"chunk">>, Packed, not_found, Opts).
+
+%% @doc The packing the vectors' weave is held in.
+mining_packing(RewardAddr) ->
+    #{
+        <<"format">> => <<"replica-2-9">>,
+        <<"reward-addr">> => hb_util:encode(RewardAddr),
+        <<"packing-difficulty">> => ?REPLICA_2_9_PACKING_DIFFICULTY
+    }.
+
+%% @doc Answer with the chunks of the weave lying inside a span.
+mining_range(Packed, Req, Opts) ->
+    Start = hb_util:int(hb_maps:get(<<"range-start">>, Req, 0, Opts)),
+    Size =
+        ar_block:get_recall_range_size(
+            hb_util:int(
+                hb_maps:get(<<"packing-difficulty">>, Req, 0, Opts))),
+    {ok,
+        #{
+            <<"packing">> => hb_maps:get(<<"packing">>, Req, <<>>, Opts),
+            <<"chunks">> =>
+                hb_util:list_to_numbered_message(
+                    [
+                        #{
+                            <<"absolute-end-offset">> => EndOffset,
+                            <<"chunk">> => Chunk
+                        }
+                    ||
+                        {EndOffset, Chunk} <- Packed,
+                        EndOffset > Start,
+                        EndOffset - ?DATA_CHUNK_SIZE < Start + Size
+                    ]
+                )
+        }
+    }.
+
+mining_chunk_proof(_Packed, Offset)
+        when Offset < 0; Offset >= ?MINING_CHUNKS * ?DATA_CHUNK_SIZE ->
+    mining_hole();
+mining_chunk_proof(Packed, Offset) ->
+    #{
+        data_root := DataRoot,
+        data_tree := DataTree,
+        tx_root := TXRoot,
+        tx_tree := TXTree
+    } = mining_weave(),
+    Index = Offset div ?DATA_CHUNK_SIZE,
+    EndOffset = (Index + 1) * ?DATA_CHUNK_SIZE,
+    {EndOffset, Chunk} = lists:keyfind(EndOffset, 1, Packed),
+    {ok,
+        #{
+            <<"chunk">> => hb_util:encode(Chunk),
+            <<"unpacked-chunk">> => hb_util:encode(mining_chunk(Index)),
+            <<"chunk-size">> => ?DATA_CHUNK_SIZE,
+            <<"absolute-end-offset">> => EndOffset,
+            <<"packing">> => <<"replica-2-9">>,
+            <<"tx-path">> =>
+                hb_util:encode(
+                    ar_merkle:generate_path(TXRoot, Offset, TXTree)),
+            <<"data-path">> =>
+                hb_util:encode(
+                    ar_merkle:generate_path(DataRoot, Offset, DataTree))
+        }
+    }.
+
+%% @doc The answer a weave source gives for a byte it holds no chunk at.
+mining_hole() ->
+    {error,
+        #{
+            <<"status">> => 404,
+            <<"message">> => <<"chunk-not-found">>,
+            <<"detail">> => <<"This node holds no chunk at that offset.">>
+        }
     }.
 
 %% @doc The bytes of one chunk of that weave: a full 256 KiB, so no chunk of it

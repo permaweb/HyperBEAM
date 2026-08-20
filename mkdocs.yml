@@ -37,6 +37,8 @@ nav:
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
       - '~arweave@2.9': 'devices/arweave-at-2-9.md'
+      - '~arweave-mining@2.9': 'devices/arweave-mining-at-2-9.md'
+      - '~arweave-storage@2.9': 'devices/arweave-storage-at-2-9.md'
       - 'Arweave state and cache architecture': 'devices/arweave-cache-architecture.md'
   - Resources:
     # - Overview: 'resources/source-code/index.md'
