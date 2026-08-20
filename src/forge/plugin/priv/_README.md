@@ -19,7 +19,7 @@ rebar3 device verify
 
 ```sh
 rebar3 device test
-rebar3 eunit-all
+ulimit -n 65536 && rebar3 eunit-all
 ```
 
 ## Local Node
