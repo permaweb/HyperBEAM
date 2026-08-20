@@ -287,6 +287,32 @@ raw_default_message() ->
         % Maximum native workers an Arweave VDF request may use.
         <<"arweave-max-vdf-workers">> =>
             max(1, erlang:system_info(schedulers) div 2),
+        % The directory the Arweave storage modules live under. Point this at
+        % the data directory of an Arweave node to read what it holds.
+        <<"arweave-data-dir">> => <<"arweave-data">>,
+        % The storage modules this node holds the weave in. Each entry names a
+        % `bucket', optionally a `bucket-size', a `packing' and an `address'.
+        <<"arweave-storage-modules">> => [],
+        % Bytes of chunk data one chunk file holds. An Arweave node run with a
+        % different value wrote different files.
+        <<"arweave-chunk-group-size">> => 256 * 1024 * 8000,
+        % Chunks one bounded storage pass reads, writes or enciphers.
+        <<"arweave-storage-batch">> => 100,
+        % The store every storage module's index and sync records are kept in.
+        % Empty takes one under `index' in the data directory. One store for
+        % all of them: every key names its own module, and an LMDB environment
+        % is scarce whatever its capacity.
+        <<"arweave-storage-index">> => [],
+        % Entropy footprints one bounded `prepare' pass generates. One footprint
+        % is thirty-two 8 MiB RandomX runs, so this is the unit of work an
+        % operator schedules.
+        <<"arweave-prepare-footprints">> => 1,
+        % Entropies generated at once. Each saturates one scheduler.
+        <<"arweave-packing-workers">> =>
+            max(1, erlang:system_info(schedulers) div 2),
+        % Where a storage pass reads the weave from when it needs a chunk this
+        % node does not hold: a peer, through the Arweave device.
+        <<"arweave-weave">> => #{ <<"device">> => <<"arweave@2.9">> },
         % The default codec to use for commitment signatures.
         <<"commitment-device">> => <<"httpsig@1.0">>,
         % Dev options
