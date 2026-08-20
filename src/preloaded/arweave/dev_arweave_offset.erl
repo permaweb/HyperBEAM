@@ -388,9 +388,9 @@ offset_item_cases_test() ->
     ok.
 
 offset_nested_item_test() ->
-    Opts = #{},
     TXID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
-    Node = hb_http_server:start_node(),
+    Opts = dev_arweave:setup_arweave_index_opts([TXID]),
+    Node = hb_http_server:start_node(Opts),
     {ok, Expected} =
         hb_http:get(
             Node,
