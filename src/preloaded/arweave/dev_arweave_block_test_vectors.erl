@@ -5,6 +5,7 @@
 %%% recent checkpoint because public peers prune historical wallet lists.
 -module(dev_arweave_block_test_vectors).
 -include("include/hb.hrl").
+-include("include/ar_consensus.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 %%% Mainnet blocks 1132210-1132214, the first five above the 2.6 fork, as
@@ -50,6 +51,55 @@
     {1275483, 1696514280, 20992766,
         <<"zbbfsrF24QhcrbSewNnbLilvdODTPFUBbYo84OlTwbE">>}
 ]).
+
+%%% The height a produced block is mined at. It is above the 2.9 fork and away
+%%% from every schedule its parent drives: not a difficulty retarget height, not
+%%% a price adjustment height and not a VDF difficulty retarget height, so what
+%%% a solution produces is checked against the plain inheritance rules rather
+%%% than against three retargets at once.
+-define(MINING_HEIGHT, 1_700_000).
+
+%%% The nonce limiter step the parent of a produced block was found at. It sits
+%%% on an entropy reset line, so the next one is a full interval of 1,200 steps
+%%% away and no search a vector performs can reach it.
+-define(MINING_PARENT_STEP, 1_200_000).
+
+%%% The step a reset-crossing vector's parent was found at instead: the last one
+%%% below a reset line, so every step its child's search reaches is above one.
+-define(MINING_RESET_PARENT_STEP, 1_201_199).
+
+%%% The VDF difficulty the vectors' timeline runs at. Nothing in the nonce
+%%% limiter reads `?VDF_DIFFICULTY' rather than the blocks' own field, and a
+%%% step at mainnet's difficulty costs six seconds where this costs a fraction
+%%% of a millisecond.
+%%%
+%%% It has to be more than a single iteration. The VDF NIF picks a fused SHA-2
+%%% kernel per architecture and accepts it after a load-time self-test at one
+%%% difficulty; the kernel accepted on x86 disagrees with the reference at a
+%%% single iteration and agrees at every difficulty above it, so a vector run at
+%%% one iteration verifies on ARM and refuses on x86 -- a property of the kernel
+%%% rather than of anything these vectors check.
+%%% `lib_arweave_vdf_timeline' documents the same disagreement for the
+%%% computation kernels, and self-tests per difficulty because of it.
+-define(MINING_VDF_DIFFICULTY, 2).
+
+%%% The weave a produced block is mined from -- two chunks, in one transaction,
+%%% in the block below -- and the leading nonces of each chunk a search tries.
+%%% Every candidate nonce addresses one 8 KiB sub-chunk and packing one costs an
+%%% 8 MiB RandomX entropy blob, so the search space is bounded by what it costs
+%%% to build rather than by what the protocol permits.
+-define(MINING_CHUNKS, 2).
+-define(MINING_NONCES, 4).
+
+%%% How far past its parent a search may advance the timeline. The odds per
+%%% attempt are the protocol's own and they are not close to certain:
+%%% `ar_difficulty:min_difficulty/1' floors the packing-difficulty-10 threshold
+%%% at three quarters of the hash space, so a two-chunk solution passes one
+%%% attempt in four, and the hundredfold proof-of-access multiplier a one-chunk
+%%% solution pays leaves it about one in eighty. Four hundred steps of four
+%%% nonces leaves the slower of the two searches failing about once in a
+%%% billion runs.
+-define(MINING_STEP_LIMIT, 400).
 
 %% @doc A wide range carries the standard 10,800-step suffix without being
 %% rejected merely because the parent is farther away.
@@ -612,6 +662,333 @@ anchor_window_walks_the_chain_test() ->
     Shallow = test_chain(3, Opts),
     ?assertEqual(3, length(lib_arweave_state:block_anchors(Shallow, Opts))).
 
+%% @doc `produce' builds a block this node's own `validate' accepts under the
+%% `full' profile. This is the property the producer exists for: every field it
+%% derives is the one the check that reads it recomputes.
+%%
+%% The solution is mined here rather than by the mining device, so that what is
+%% established is `produce' alone. It is built through `~arweave-spora@2.9' --
+%% `h0' over the parent's seed and the step's own nonce limiter output,
+%% `recall-range' and `recall-byte' from that entropy, `pack-sub-chunk' for the
+%% 8 KiB a nonce hashes, and `h1' over it -- and the search advances the nonce
+%% limiter one step at a time, exactly as a miner does.
+produce_yields_a_valid_block_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    {ok, Block} = produce(Base, Prev, mine(one_chunk, Prev, Opts), [], Opts),
+    assert_valid(Base, Block, [], Opts),
+    % A one-chunk solution proves one recall byte, and the block says so by
+    % declaring neither a second one nor anything derived from a second chunk.
+    ?assertEqual(false, maps:is_key(<<"recall-byte2">>, Block)),
+    ?assertEqual(false, maps:is_key(<<"chunk2-hash">>, Block)),
+    ?assertEqual(false, maps:is_key(<<"unpacked-chunk2-hash">>, Block)),
+    ?assertEqual(?REPLICA_2_9_PACKING_DIFFICULTY,
+        maps:get(<<"packing-difficulty">>, Block)),
+    ?assertEqual(1, maps:get(<<"replica-format">>, Block)),
+    ?assertEqual(?MINING_HEIGHT + 1, maps:get(<<"height">>, Block)).
+
+%% @doc A solution found in both recall ranges produces a valid block carrying
+%% the second recall byte, the second proof and the two hashes over its chunk.
+%%
+%% The search takes only the steps whose two ranges fall in different chunks of
+%% the weave, so `poa2' is a second proof of a second chunk rather than the
+%% first one restated -- which is what makes the second recall byte something
+%% the checks can be wrong about.
+produce_yields_a_valid_two_chunk_block_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    {ok, Block} = produce(Base, Prev, mine(two_chunk, Prev, Opts), [], Opts),
+    assert_valid(Base, Block, [], Opts),
+    Header = lib_arweave_block:to(Block, Opts),
+    ?assert(is_integer(Header#block.recall_byte2)),
+    ?assertNotEqual(Header#block.recall_byte, Header#block.recall_byte2),
+    ?assertNotEqual((Header#block.poa2)#poa.chunk, <<>>),
+    ?assertNotEqual(
+        (Header#block.poa)#poa.chunk,
+        (Header#block.poa2)#poa.chunk
+    ),
+    ?assertEqual(
+        crypto:hash(sha256, (Header#block.poa2)#poa.chunk),
+        Header#block.chunk2_hash
+    ),
+    ?assertEqual(
+        crypto:hash(sha256, (Header#block.poa2)#poa.unpacked_chunk),
+        Header#block.unpacked_chunk2_hash
+    ).
+
+%% @doc The signature is a real one over the block's own signed hash, the
+%% identifier is the hash of the two together, and a block whose signed fields
+%% were restated afterwards is refused.
+%%
+%% Both are asked of the device rather than computed here: `verify-signature'
+%% and `id' are the keys a producer's own output is judged by, and a vector that
+%% recomputed them itself would only prove that two copies of one expression
+%% agree.
+produce_signs_the_block_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    {ok, Block} = produce(Base, Prev, mine(one_chunk, Prev, Opts), [], Opts),
+    ?assertEqual(
+        {ok, #{ <<"valid">> => true }},
+        without_priv(
+            hb_ao:resolve(
+                Block,
+                #{
+                    <<"path">> => <<"verify-signature">>,
+                    <<"previous-cumulative-diff">> =>
+                        Prev#block.cumulative_diff
+                },
+                Opts
+            ),
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, #{ <<"indep-hash">> => maps:get(<<"indep-hash">>, Block) }},
+        without_priv(hb_ao:resolve(Block, <<"id">>, Opts), Opts)
+    ),
+    % The signature covers every consensus field, so restating one after the
+    % fact leaves a block nothing can have signed.
+    lists:foreach(
+        fun({Key, Value}) ->
+            ?assertMatch(
+                {error, #{ <<"message">> := <<"invalid-signature">> }},
+                validate(Base, Block#{ Key => Value }, [], Opts)
+            )
+        end,
+        [
+            {<<"hash-list-merkle">>, hb_util:encode(crypto:hash(sha384, <<>>))},
+            {<<"reward-pool">>, maps:get(<<"reward-pool">>, Block) + 1},
+            {<<"signature">>, hb_util:encode(crypto:strong_rand_bytes(512))}
+        ]
+    ).
+
+%% @doc A block is the same block whether or not the node's own nonce limiter
+%% has already run the steps it declares.
+%%
+%% `lib_arweave_vdf_timeline' is anchored on each validated block and computes
+%% forward from it at close to real time, on a kernel it self-tests against
+%% `ar_vdf:compute/3'. A producer that ignored it would recompute, on the slower
+%% portable kernel, work the node had already done -- and at mainnet's VDF
+%% difficulty that is the difference between a pass that keeps pace with the
+%% timeline and one that cannot.
+%%
+%% Taking those steps has to be invisible, which is what this asserts: the
+%% interval is held in full, and the block produced from it differs from the one
+%% produced without it in exactly two fields. Those two are the signature and
+%% the identifier taken over it -- RSA-PSS salts each signing, so no two
+%% signings of one block agree. Every field the signature covers, the whole
+%% nonce limiter info among them, is identical.
+produce_consumes_the_nonce_limiter_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    Solution = mine(one_chunk, Prev, Opts),
+    {ok, Computed} = produce(Base, Prev, Solution, [], Opts),
+    Running = Opts#{ <<"arweave-vdf-timeline">> => true },
+    Info = Prev#block.nonce_limiter_info,
+    PrevStep = Info#nonce_limiter_info.global_step_number,
+    Step = hb_util:int(hb_maps:get(<<"global-step-number">>, Solution, 0, Opts)),
+    % Non-vacuous only if the timeline really is the source: without every step
+    % of the interval it would fall back and the two blocks would be equal for
+    % the wrong reason.
+    ?assertEqual(
+        Step - PrevStep,
+        map_size(anchored_timeline(Info, PrevStep, Step, Running))
+    ),
+    {ok, FromTimeline} = produce(Base, Prev, Solution, [], Running),
+    ?assertEqual(
+        [<<"indep-hash">>, <<"signature">>],
+        block_difference(Computed, FromTimeline, Opts)
+    ),
+    assert_valid(Base, FromTimeline, [], Running).
+
+%% @doc The keys two block messages differ on, so that a failure names the
+%% field rather than printing two headers.
+block_difference(Left, Right, Opts) ->
+    [
+        Key
+    ||
+        Key <-
+            lists:usort(
+                maps:keys(hb_private:reset(Left))
+                    ++ maps:keys(hb_private:reset(Right))
+            ),
+        hb_maps:get(Key, Left, not_found, Opts)
+            =/= hb_maps:get(Key, Right, not_found, Opts)
+    ].
+
+%% @doc Anchor the node's nonce limiter on a block and wait for it to hold the
+%% interval up to a step. It computes between messages, so what it holds is
+%% whatever it has reached when asked.
+anchored_timeline(Info, PrevStep, Step, Opts) ->
+    lib_arweave_vdf_timeline:advance(
+        Info#nonce_limiter_info.seed,
+        Info#nonce_limiter_info.vdf_difficulty,
+        PrevStep,
+        Info#nonce_limiter_info.output,
+        ar_nonce_limiter:get_entropy_reset_point(
+            PrevStep, PrevStep + ?MINING_STEP_LIMIT),
+        Opts
+    ),
+    anchored_timeline(Info, PrevStep, Step, Opts, 500).
+anchored_timeline(_Info, _PrevStep, _Step, _Opts, 0) ->
+    #{};
+anchored_timeline(Info, PrevStep, Step, Opts, Tries) ->
+    Held =
+        lib_arweave_vdf_timeline:snapshot(
+            PrevStep,
+            Step,
+            Info#nonce_limiter_info.seed,
+            Info#nonce_limiter_info.vdf_difficulty,
+            Opts
+        ),
+    case map_size(Held) == Step - PrevStep of
+        true -> Held;
+        false ->
+            timer:sleep(10),
+            anchored_timeline(Info, PrevStep, Step, Opts, Tries - 1)
+    end.
+
+%% @doc A solution mined for an address this node holds no key for is refused,
+%% before anything is derived from it.
+%%
+%% Nothing but the address is read, which is why the solution here carries
+%% nothing else: a block is verified against the key its mining address is
+%% derived from, so one naming another miner's address is one this node could
+%% not sign whatever else it carried.
+produce_refuses_a_foreign_solution_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    ?assertMatch(
+        {error, #{ <<"message">> := <<"unowned-reward-addr">> }},
+        produce(
+            Base,
+            Prev,
+            #{
+                <<"reward-addr">> =>
+                    hb_util:encode(ar_wallet:to_address(ar_wallet:new()))
+            },
+            [],
+            Opts
+        )
+    ).
+
+%% @doc Each field the producer derives is the one the check that reads it
+%% demands: restating any of them makes that check refuse the block, by its own
+%% name.
+%%
+%% Each is put to the one check that owns it rather than to the whole profile,
+%% because the signature covers all six: under `full' the identity check
+%% reaches four of them before the check that owns them does and answers
+%% `invalid-signature', which establishes that they were signed and nothing
+%% about where they came from.
+produce_derives_the_checked_fields_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} = mining_chain(Opts),
+    {ok, Block} = produce(Base, Prev, mine(one_chunk, Prev, Opts), [], Opts),
+    lists:foreach(
+        fun({Check, Key, Value, Message}) ->
+            ?assertMatch(
+                {error, #{ <<"message">> := Message }},
+                validate(Base, Block#{ Key => Value }, [], Check, Opts)
+            )
+        end,
+        [
+            {<<"fields">>, <<"diff">>, Prev#block.diff + 1,
+                <<"invalid-difficulty">>},
+            % The parent's own cumulative difficulty, which the block declares
+            % beside this one as `previous-cumulative-diff': one block's worth
+            % of work short of what it must extend the parent by.
+            {<<"fields">>, <<"cumulative-diff">>, Prev#block.cumulative_diff,
+                <<"invalid-cumulative-diff">>},
+            {<<"block-index">>, <<"hash-list-merkle">>,
+                hb_util:encode(crypto:hash(sha384, <<>>)),
+                <<"invalid-block-index-root">>},
+            {<<"transactions">>, <<"tx-root">>,
+                hb_util:encode(crypto:hash(sha256, <<>>)),
+                <<"invalid-tx-root">>},
+            {<<"transactions">>, <<"weave-size">>, Prev#block.weave_size + 1,
+                <<"invalid-weave-size">>},
+            {<<"transactions,accounts">>, <<"wallet-list">>,
+                hb_util:encode(crypto:hash(sha384, <<>>)),
+                <<"invalid-wallet-list-root">>}
+        ]
+    ).
+
+%% @doc A produced block carries the transactions it was given: the transaction
+%% root, the block size and the weave size it declares are the ones they lay
+%% down, and the account transition it commits to has spent them.
+%%
+%% The transfer is between two represented accounts because the admission rules
+%% require it: a transaction paying into an account that does not exist is
+%% refused as an overspend, whatever the sender's balance.
+produce_includes_transactions_test() ->
+    Opts = mining_opts(),
+    Sender = maps:get(<<"priv-wallet">>, Opts),
+    Recipient = crypto:hash(sha256, <<"mining-recipient">>),
+    {Base, Prev} =
+        mining_chain(
+            ?MINING_PARENT_STEP,
+            funded_accounts(
+                [
+                    {ar_wallet:to_address(Sender), 1_000_000_000_000_000},
+                    {Recipient, 1_000_000_000}
+                ],
+                Opts
+            ),
+            Opts
+        ),
+    TX = mining_transaction(Sender, Recipient, Prev),
+    TXs = [lib_arweave_tx:from_tx(TX, Opts)],
+    {ok, Block} =
+        produce(Base, Prev, mine(one_chunk, Prev, Opts), TXs, Opts),
+    assert_valid(Base, Block, TXs, Opts),
+    ?assertEqual([hb_util:encode(TX#tx.id)], maps:get(<<"txs">>, Block)),
+    ?assertEqual(?DATA_CHUNK_SIZE, maps:get(<<"block-size">>, Block)),
+    ?assertEqual(
+        Prev#block.weave_size + ?DATA_CHUNK_SIZE,
+        maps:get(<<"weave-size">>, Block)
+    ),
+    ?assertEqual(
+        hb_util:encode(
+            ar_block:generate_tx_root_for_block([TX], Prev#block.height + 1)),
+        maps:get(<<"tx-root">>, Block)
+    ).
+
+%% @doc A block whose nonce limiter interval crosses an entropy reset line
+%% carries the rotated seed data, and the steps above the line are computed from
+%% its own seed mixed into the output below it.
+%%
+%% No other vector reaches a reset line: the ordinary parent sits a full
+%% interval below the next one. The mixing is the rule of the nonce limiter
+%% with the least margin for error -- one hash, in Erlang, at one step -- and
+%% here the producer performs it and `~arweave-vdf@2.9/verify-chain' takes its
+%% own reset branch to establish that it performed it the same way.
+produce_crosses_an_entropy_reset_test() ->
+    Opts = mining_opts(),
+    {Base, Prev} =
+        mining_chain(
+            ?MINING_RESET_PARENT_STEP, empty_account_state(Opts), Opts),
+    {ok, Block} = produce(Base, Prev, mine(one_chunk, Prev, Opts), [], Opts),
+    assert_valid(Base, Block, [], Opts),
+    % All four seeds and bounds rotate forward together, and only here.
+    PrevInfo = Prev#block.nonce_limiter_info,
+    Info = (lib_arweave_block:to(Block, Opts))#block.nonce_limiter_info,
+    ?assertEqual(
+        {
+            PrevInfo#nonce_limiter_info.next_seed,
+            Prev#block.indep_hash,
+            PrevInfo#nonce_limiter_info.next_partition_upper_bound,
+            Prev#block.weave_size
+        },
+        {
+            Info#nonce_limiter_info.seed,
+            Info#nonce_limiter_info.next_seed,
+            Info#nonce_limiter_info.partition_upper_bound,
+            Info#nonce_limiter_info.next_partition_upper_bound
+        }
+    ).
+
 %%% Test helpers.
 
 %% @doc A store of this vector's own, so that what one vector writes cannot be
@@ -876,3 +1253,575 @@ block_time_history_block({Height, Timestamp, Steps, none}) ->
 block_time_history_block({Height, Timestamp, Steps, Hash}) ->
     Block = block_time_history_block({Height, Timestamp, Steps, none}),
     Block#block{ block_time_history_hash = hb_util:decode(Hash) }.
+
+%%% Block production helpers.
+
+%% @doc A store and a mining key of this vector's own. The key is the node's
+%% mining identity: it signs the block, and its address is what every sub-chunk
+%% the search reads is packed for.
+mining_opts() ->
+    #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => ar_wallet:new()
+    }.
+
+%% @doc The chain state a produced block extends: the parent header, the
+%% account tree it left behind, a block index covering the weave below it, and
+%% the two histories its child extends.
+mining_chain(Opts) ->
+    mining_chain(?MINING_PARENT_STEP, empty_account_state(Opts), Opts).
+mining_chain(StepNumber, Accounts, Opts) ->
+    Prev = mining_parent(StepNumber),
+    Base =
+        (lib_arweave_block:from(Prev, Opts))#{
+            <<"device">> => <<"arweave-block@2.9">>,
+            <<"accounts">> => Accounts,
+            <<"block-index">> => block_index([index_entry(Prev)], Opts),
+            <<"reward-history">> =>
+                lib_arweave_history:append(
+                    <<"reward-history">>,
+                    {Prev#block.reward_addr, 1, Prev#block.reward, 1},
+                    Prev#block.height,
+                    [],
+                    Opts
+                ),
+            <<"block-time-history">> =>
+                lib_arweave_history:append(
+                    <<"block-time-history">>,
+                    {120, 60, 1},
+                    Prev#block.height,
+                    [],
+                    Opts
+                )
+        },
+    {Base, Prev}.
+
+%% @doc The block a produced block extends, found at the nonce limiter step
+%% given -- which is what decides whether its child's search crosses an entropy
+%% reset line.
+%%
+%% Its nonce limiter runs at the vectors' own VDF difficulty so that a search
+%% can drive the timeline forward, and its partition upper bound is the whole
+%% weave, which is a small fraction of one partition: 0 is therefore the only
+%% partition number `check_partition_number/1' admits and the only one a search
+%% may use.
+mining_parent(StepNumber) ->
+    #{ tx_root := TXRoot } = mining_weave(),
+    Timestamp = os:system_time(second) - 120,
+    #block{
+        height = ?MINING_HEIGHT,
+        previous_block = crypto:hash(sha384, <<"mining-grandparent">>),
+        indep_hash = crypto:hash(sha384, <<"mining-parent">>),
+        hash = crypto:hash(sha256, <<"mining-parent-solution">>),
+        hash_preimage = crypto:hash(sha256, <<"mining-parent-preimage">>),
+        previous_solution_hash =
+            crypto:hash(sha256, <<"mining-grandparent-solution">>),
+        timestamp = Timestamp,
+        last_retarget = Timestamp - 1080,
+        nonce = 0,
+        diff = 1,
+        cumulative_diff = 1,
+        previous_cumulative_diff = 0,
+        txs = [],
+        tx_root = TXRoot,
+        block_size = mining_weave_size(),
+        weave_size = mining_weave_size(),
+        wallet_list = crypto:hash(sha384, <<"mining-parent-wallets">>),
+        reward_addr = crypto:hash(sha256, <<"mining-parent-miner">>),
+        tags = [],
+        reward = 1,
+        reward_pool = 1_000_000_000_000,
+        hash_list_merkle = crypto:hash(sha384, <<"mining-parent-index">>),
+        usd_to_ar_rate = {1, 1},
+        scheduled_usd_to_ar_rate = {1, 1},
+        packing_2_5_threshold = 0,
+        strict_data_split_threshold = ?STRICT_DATA_SPLIT_THRESHOLD,
+        merkle_rebase_support_threshold = ?MERKLE_REBASE_SUPPORT_THRESHOLD,
+        recall_byte = 0,
+        partition_number = 0,
+        nonce_limiter_info =
+            #nonce_limiter_info{
+                output = crypto:hash(sha256, <<"mining-parent-output">>),
+                prev_output =
+                    crypto:hash(sha256, <<"mining-grandparent-output">>),
+                seed = crypto:hash(sha384, <<"mining-seed">>),
+                next_seed = crypto:hash(sha384, <<"mining-next-seed">>),
+                partition_upper_bound = mining_weave_size(),
+                % Deliberately not the weave size, so that a range crossing a
+                % reset line moves the bound the recall ranges are drawn from
+                % to a value nothing else in the parent already holds.
+                next_partition_upper_bound = ?DATA_CHUNK_SIZE,
+                global_step_number = StepNumber,
+                vdf_difficulty = ?MINING_VDF_DIFFICULTY,
+                next_vdf_difficulty = ?MINING_VDF_DIFFICULTY
+            },
+        price_per_gib_minute = 1_000,
+        scheduled_price_per_gib_minute = 1_000,
+        reward_history_hash = crypto:hash(sha256, <<"mining-parent-rewards">>),
+        block_time_history_hash =
+            crypto:hash(sha256, <<"mining-parent-times">>),
+        debt_supply = 0,
+        kryder_plus_rate_multiplier = 1,
+        kryder_plus_rate_multiplier_latch = 0,
+        denomination = 1,
+        redenomination_height = 0,
+        chunk_hash = crypto:hash(sha256, <<"mining-parent-chunk">>),
+        packing_difficulty = ?REPLICA_2_9_PACKING_DIFFICULTY,
+        replica_format = 1,
+        unpacked_chunk_hash = crypto:hash(sha256, <<"mining-parent-unpacked">>)
+    }.
+
+%% @doc The weave a produced block's solution is drawn from: one transaction of
+%% two whole chunks, in the block below, with the Merkle trees a proof of
+%% access walks. Every byte of it is fixed, so the parent header and the search
+%% build the same weave without one being handed the other's.
+mining_weave() ->
+    Indexes = lists:seq(0, ?MINING_CHUNKS - 1),
+    {DataRoot, DataTree} =
+        ar_merkle:generate_tree(
+            [
+                {
+                    ar_tx:generate_chunk_id(mining_chunk(Index)),
+                    (Index + 1) * ?DATA_CHUNK_SIZE
+                }
+            ||
+                Index <- Indexes
+            ]
+        ),
+    {TXRoot, TXTree} =
+        ar_merkle:generate_tree([{DataRoot, mining_weave_size()}]),
+    #{
+        data_root => DataRoot,
+        data_tree => DataTree,
+        tx_root => TXRoot,
+        tx_tree => TXTree
+    }.
+
+%% @doc The bytes of one chunk of that weave: a full 256 KiB, so no chunk of it
+%% is padded and every sub-chunk of it is data.
+mining_chunk(Index) ->
+    binary:copy(
+        crypto:hash(sha256, <<"mining-chunk-", Index:8>>),
+        ?DATA_CHUNK_SIZE div 32
+    ).
+
+%% @doc The size of the weave a produced block extends.
+mining_weave_size() ->
+    ?MINING_CHUNKS * ?DATA_CHUNK_SIZE.
+
+%% @doc Search the timeline for a solution of the kind asked for, advancing the
+%% nonce limiter one step at a time and trying each candidate nonce at each
+%% step, exactly as a miner does.
+%%
+%% The difficulty a solution must beat is derived here rather than taken from
+%% the producer: at a height that is not a retarget height the child inherits
+%% the parent's, and a search and a block that disagreed about it would be the
+%% failure this whole vector exists to rule out.
+mine(Kind, Prev, Opts) ->
+    Info = Prev#block.nonce_limiter_info,
+    Step = Info#nonce_limiter_info.global_step_number,
+    % A vector's parent either sits a full interval below the next entropy
+    % reset line, so no step a search reaches crosses one, or directly below
+    % it, so every step does. Nothing in between, which is what lets the
+    % rotation the crossing performs be stated once here rather than per step.
+    Reset =
+        ar_nonce_limiter:get_entropy_reset_point(
+            Step, Step + ?MINING_STEP_LIMIT),
+    Weave = mining_weave(),
+    RewardAddr = ar_wallet:to_address(maps:get(<<"priv-wallet">>, Opts)),
+    mine(
+        Kind,
+        #{
+            step => Step + 1,
+            output => Info#nonce_limiter_info.output,
+            seed => Info#nonce_limiter_info.seed,
+            reset => Reset,
+            % The seed mixed at a reset line is the block's own, which is the
+            % one the parent had scheduled.
+            reset_seed => Info#nonce_limiter_info.next_seed,
+            reward_addr => RewardAddr,
+            partition_upper_bound =>
+                rotated(
+                    Reset,
+                    Info#nonce_limiter_info.partition_upper_bound,
+                    Info#nonce_limiter_info.next_partition_upper_bound
+                ),
+            diff_pair =>
+                ar_difficulty:diff_pair(
+                    #block{
+                        diff = Prev#block.diff,
+                        height = Prev#block.height + 1
+                    }
+                ),
+            proofs => mining_proofs(Weave, RewardAddr, Opts)
+        },
+        Step + ?MINING_STEP_LIMIT,
+        Opts
+    ).
+
+mine(_Kind, #{ step := Step }, Limit, _Opts) when Step > Limit ->
+    error('no-solution-found');
+mine(Kind, Session = #{ step := Step, output := Output }, Limit, Opts) ->
+    {ok, Next, _Checkpoints} =
+        ar_vdf:compute(
+            Step,
+            timeline_input(Step, Output, Session),
+            ?MINING_VDF_DIFFICULTY
+        ),
+    Advanced = entropy(Session#{ output := Next }, Opts),
+    case candidates(Kind, Advanced, lists:seq(0, ?MINING_NONCES - 1), Opts) of
+        {ok, Solution} -> Solution;
+        none -> mine(Kind, Advanced#{ step := Step + 1 }, Limit, Opts)
+    end.
+
+%% @doc The nonce limiter field a block's search draws on: the parent's own
+%% below an entropy reset line, and the one the parent scheduled above it.
+rotated(none, Held, _Scheduled) ->
+    Held;
+rotated(_Reset, _Held, Scheduled) ->
+    Scheduled.
+
+%% @doc The output a step is computed from: the one below it, with the block's
+%% own seed mixed in at an entropy reset line. Both difficulties a vector's
+%% parent carries are `?MINING_VDF_DIFFICULTY', so a line moves the entropy and
+%% not the cost.
+timeline_input(Reset, Output, #{ reset := Reset, reset_seed := Seed }) ->
+    ar_nonce_limiter:mix_seed(Output, Seed);
+timeline_input(_Step, Output, _Session) ->
+    Output.
+
+%% @doc Compute a step's mining entropy and the two recall ranges it selects,
+%% through the device that owns both.
+entropy(Session, Opts) ->
+    #{
+        output := Output,
+        seed := Seed,
+        reward_addr := RewardAddr,
+        partition_upper_bound := UpperBound
+    } = Session,
+    {ok, Entropy} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"arweave-spora@2.9">>,
+                <<"nonce-limiter-output">> => hb_util:encode(Output),
+                <<"partition-number">> => 0,
+                <<"seed">> => hb_util:encode(Seed),
+                <<"reward-addr">> => hb_util:encode(RewardAddr),
+                <<"packing-difficulty">> => ?REPLICA_2_9_PACKING_DIFFICULTY
+            },
+            <<"h0">>,
+            Opts
+        ),
+    H0 = hb_maps:get(<<"h0">>, Entropy, <<>>, Opts),
+    {ok, Ranges} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"arweave-spora@2.9">>,
+                <<"h0">> => H0,
+                <<"partition-number">> => 0,
+                <<"partition-upper-bound">> => UpperBound
+            },
+            <<"recall-range">>,
+            Opts
+        ),
+    Session#{
+        h0 => H0,
+        range1 => hb_util:int(hb_maps:get(<<"range1-start">>, Ranges, 0, Opts)),
+        range2 => hb_util:int(hb_maps:get(<<"range2-start">>, Ranges, 0, Opts))
+    }.
+
+%% @doc Try each candidate nonce at one step, stopping at the first solution
+%% the difficulty check accepts.
+candidates(_Kind, _Session, [], _Opts) ->
+    none;
+candidates(Kind, Session, [Nonce | Nonces], Opts) ->
+    case candidate(Kind, Session, Nonce, Opts) of
+        {ok, Solution} -> {ok, Solution};
+        none -> candidates(Kind, Session, Nonces, Opts)
+    end.
+
+%% @doc Hash one nonce's sub-chunk and answer with a solution if the result
+%% beats the difficulty its solution type is held to. A one-chunk solution pays
+%% the hundredfold proof-of-access multiplier, which is why the two are searched
+%% for separately rather than one being taken whenever it turns up.
+candidate(one_chunk, Session, Nonce, Opts) ->
+    #{ h0 := H0, range1 := Range1, diff_pair := DiffPair } = Session,
+    RecallByte = recall_byte(Range1, Nonce, Opts),
+    PoA = recalled(RecallByte, Nonce, Session),
+    {H1, Preimage} = solution_hash(<<"h1">>, h1_request(H0, Nonce, PoA), Opts),
+    case
+        ar_node_utils:h1_passes_diff_check(
+            hb_util:decode(H1), DiffPair, ?REPLICA_2_9_PACKING_DIFFICULTY)
+    of
+        true ->
+            {ok,
+                solution(Session, Nonce, H1, Preimage,
+                    #{ <<"recall-byte">> => RecallByte, <<"poa">> => PoA })};
+        false ->
+            none
+    end;
+candidate(two_chunk, Session, Nonce, Opts) ->
+    #{ h0 := H0, range1 := Range1, range2 := Range2, diff_pair := DiffPair } =
+        Session,
+    RecallByte = recall_byte(Range1, Nonce, Opts),
+    RecallByte2 = recall_byte(Range2, Nonce, Opts),
+    case mining_chunk_index(RecallByte) == mining_chunk_index(RecallByte2) of
+        true ->
+            % Both ranges fall in the one chunk, so the second proof would be
+            % the first one restated and would establish nothing.
+            none;
+        false ->
+            PoA = recalled(RecallByte, Nonce, Session),
+            PoA2 = recalled(RecallByte2, Nonce, Session),
+            {H1, _Preimage1} =
+                solution_hash(<<"h1">>, h1_request(H0, Nonce, PoA), Opts),
+            {H2, Preimage2} =
+                solution_hash(<<"h2">>,
+                    #{
+                        <<"h0">> => H0,
+                        <<"h1">> => H1,
+                        <<"chunk">> => maps:get(<<"chunk">>, PoA2)
+                    },
+                    Opts),
+            case
+                ar_node_utils:h2_passes_diff_check(
+                    hb_util:decode(H2), DiffPair,
+                    ?REPLICA_2_9_PACKING_DIFFICULTY)
+            of
+                true ->
+                    {ok,
+                        solution(Session, Nonce, H2, Preimage2,
+                            #{
+                                <<"recall-byte">> => RecallByte,
+                                <<"poa">> => PoA,
+                                <<"recall-byte2">> => RecallByte2,
+                                <<"poa2">> => PoA2
+                            })};
+                false ->
+                    none
+            end
+    end.
+
+%% @doc The request `~arweave-spora@2.9/h1' takes over a nonce's packed
+%% sub-chunk.
+h1_request(H0, Nonce, PoA) ->
+    #{
+        <<"h0">> => H0,
+        <<"nonce">> => Nonce,
+        <<"chunk">> => maps:get(<<"chunk">>, PoA)
+    }.
+
+%% @doc The solution message a search answers with, in the shape
+%% `~arweave-block@2.9/produce' takes.
+solution(Session, Nonce, Hash, Preimage, Recalled) ->
+    #{ step := Step, output := Output, reward_addr := RewardAddr } = Session,
+    maps:merge(
+        #{
+            <<"solution-hash">> => Hash,
+            <<"hash-preimage">> => Preimage,
+            <<"nonce">> => Nonce,
+            <<"partition-number">> => 0,
+            <<"packing-difficulty">> => ?REPLICA_2_9_PACKING_DIFFICULTY,
+            <<"replica-format">> => 1,
+            <<"reward-addr">> => hb_util:encode(RewardAddr),
+            <<"nonce-limiter-output">> => hb_util:encode(Output),
+            <<"global-step-number">> => Step
+        },
+        Recalled
+    ).
+
+%% @doc Pack the sub-chunk every candidate nonce addresses and pair each with
+%% the two Merkle paths that prove it. One pass rather than one per attempt:
+%% packing an 8 KiB sub-chunk costs an 8 MiB RandomX entropy blob, and a search
+%% revisits the same sub-chunks at every step.
+mining_proofs(Weave, RewardAddr, Opts) ->
+    maps:from_list(
+        [
+            {
+                {ChunkIndex, SubChunkIndex},
+                mining_proof(ChunkIndex, SubChunkIndex, Weave, RewardAddr, Opts)
+            }
+        ||
+            ChunkIndex <- lists:seq(0, ?MINING_CHUNKS - 1),
+            SubChunkIndex <- lists:seq(0, ?MINING_NONCES - 1)
+        ]
+    ).
+
+%% @doc One proof of access: the paths from the transaction root to the chunk,
+%% the 8 KiB of it packed for the mining address, and the whole unpacked chunk
+%% the proof carries beside it.
+mining_proof(ChunkIndex, SubChunkIndex, Weave, RewardAddr, Opts) ->
+    #{
+        data_root := DataRoot,
+        data_tree := DataTree,
+        tx_root := TXRoot,
+        tx_tree := TXTree
+    } = Weave,
+    Offset = ChunkIndex * ?DATA_CHUNK_SIZE,
+    {ok, Packed} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"arweave-spora@2.9">>,
+                <<"chunk">> => hb_util:encode(mining_chunk(ChunkIndex)),
+                <<"sub-chunk-index">> => SubChunkIndex,
+                <<"absolute-end-offset">> => Offset + ?DATA_CHUNK_SIZE,
+                <<"packing">> =>
+                    #{
+                        <<"format">> => <<"replica-2-9">>,
+                        <<"reward-addr">> => hb_util:encode(RewardAddr),
+                        <<"packing-difficulty">> =>
+                            ?REPLICA_2_9_PACKING_DIFFICULTY
+                    }
+            },
+            <<"pack-sub-chunk">>,
+            Opts
+        ),
+    #{
+        <<"tx-path">> =>
+            hb_util:encode(ar_merkle:generate_path(TXRoot, Offset, TXTree)),
+        <<"data-path">> =>
+            hb_util:encode(ar_merkle:generate_path(DataRoot, Offset, DataTree)),
+        <<"chunk">> =>
+            hb_util:encode(hb_maps:get(<<"chunk">>, Packed, <<>>, Opts)),
+        <<"unpacked-chunk">> =>
+            hb_util:encode(
+                hb_maps:get(<<"unpacked-chunk">>, Packed, <<>>, Opts))
+    }.
+
+%% @doc The proof of access for the sub-chunk a nonce addresses at a recall
+%% byte.
+recalled(RecallByte, Nonce, #{ proofs := Proofs }) ->
+    maps:get(
+        {
+            mining_chunk_index(RecallByte),
+            ar_block:get_sub_chunk_index(
+                ?REPLICA_2_9_PACKING_DIFFICULTY, Nonce)
+        },
+        Proofs
+    ).
+
+%% @doc The chunk of the weave a recall byte falls in.
+mining_chunk_index(RecallByte) ->
+    RecallByte div ?DATA_CHUNK_SIZE.
+
+%% @doc The byte a nonce recalls from a range, from the device that owns the
+%% arithmetic the proof of access check repeats.
+recall_byte(RangeStart, Nonce, Opts) ->
+    {ok, Recalled} =
+        hb_ao:resolve(
+            #{
+                <<"device">> => <<"arweave-spora@2.9">>,
+                <<"range-start">> => RangeStart,
+                <<"nonce">> => Nonce,
+                <<"packing-difficulty">> => ?REPLICA_2_9_PACKING_DIFFICULTY
+            },
+            <<"recall-byte">>,
+            Opts
+        ),
+    hb_util:int(hb_maps:get(<<"recall-byte">>, Recalled, 0, Opts)).
+
+%% @doc Compute one of the two solution hashes over a packed sub-chunk.
+solution_hash(Key, Request, Opts) ->
+    {ok, Result} =
+        hb_ao:resolve(
+            Request#{ <<"device">> => <<"arweave-spora@2.9">> },
+            Key,
+            Opts
+        ),
+    {
+        hb_maps:get(<<"hash">>, Result, <<>>, Opts),
+        hb_maps:get(<<"preimage">>, Result, <<>>, Opts)
+    }.
+
+%% @doc Resolve `produce' against the state the block extends, over the
+%% transactions it includes and at the timestamp the search derived the
+%% difficulty it beat from.
+produce(Base, Prev, Solution, TXs, Opts) ->
+    hb_ao:resolve(
+        Base,
+        #{
+            <<"path">> => <<"produce">>,
+            <<"solution">> => Solution,
+            <<"transactions">> => TXs,
+            <<"timestamp">> => Prev#block.timestamp + 120
+        },
+        Opts
+    ).
+
+%% @doc Resolve `validate' for a produced block and the transactions it carries,
+%% under the whole profile or under the checks named.
+validate(Base, Block, TXs, Opts) ->
+    hb_ao:resolve(
+        Base,
+        #{
+            <<"path">> => <<"validate">>,
+            <<"next">> => Block,
+            <<"transactions">> => TXs
+        },
+        Opts
+    ).
+validate(Base, Block, TXs, Verify, Opts) ->
+    hb_ao:resolve(
+        Base,
+        #{
+            <<"path">> => <<"validate">>,
+            <<"verify">> => Verify,
+            <<"next">> => Block,
+            <<"transactions">> => TXs
+        },
+        Opts
+    ).
+
+%% @doc Assert that a block validates under every check the `full' profile
+%% names. Equality with the whole set is the assertion rather than `valid'
+%% alone: `ran/2' strips the account check from what it reports when the block
+%% carries no tree, so a shorter list would mean the transition it declares was
+%% never checked.
+assert_valid(Base, Block, TXs, Opts) ->
+    {ok, Full} = lib_arweave_block:selected(#{}, Opts),
+    ?assertEqual(
+        {ok, #{ <<"valid">> => true, <<"checks">> => Full }},
+        without_priv(validate(Base, Block, TXs, Opts), Opts)
+    ).
+
+%% @doc An account tree holding the accounts a produced block's transactions
+%% spend from and pay into.
+funded_accounts(Credits, Opts) ->
+    {ok, Inserted} =
+        hb_ao:resolve(
+            #{ <<"device">> => <<"arweave-wallets@2.9">> },
+            #{
+                <<"path">> => <<"insert">>,
+                <<"accounts">> =>
+                    maps:from_list(
+                        [
+                            {
+                                hb_util:encode(Address),
+                                lib_arweave_accounts:account_message(
+                                    {Balance, <<>>})
+                            }
+                        ||
+                            {Address, Balance} <- Credits
+                        ]
+                    )
+            },
+            Opts
+        ),
+    hb_util:ok(
+        hb_ao:resolve(Inserted, #{ <<"path">> => <<"finalize">> }, Opts)).
+
+%% @doc A signed transfer of one chunk's worth of data, anchored on the block
+%% being extended and paying far above the fee the parent's storage price sets.
+mining_transaction(Wallet, Recipient, Prev) ->
+    ar_tx:sign(
+        #tx{
+            format = 2,
+            anchor = Prev#block.indep_hash,
+            target = Recipient,
+            quantity = 1_000,
+            reward = 1_000_000_000_000,
+            data_size = ?DATA_CHUNK_SIZE,
+            data_root = crypto:hash(sha256, <<"mining-transaction-data">>)
+        },
+        Wallet
+    ).

@@ -45,10 +45,12 @@
     lib_arweave_paths,
     lib_arweave_placement,
     lib_arweave_tx,
-    lib_arweave_accounts
+    lib_arweave_accounts,
+    lib_arweave_candidate,
+    lib_arweave_vdf_timeline
 ]).
 -compile({no_auto_import, [apply/3]}).
--export([info/1, apply/3, validate/3, materialize/3, previous/3]).
+-export([info/1, apply/3, produce/3, validate/3, materialize/3, previous/3]).
 -export([id/3, signed_hash/3, verify_signature/3]).
 -include("include/hb.hrl").
 -include("include/ar_consensus.hrl").
@@ -101,6 +103,29 @@ require_accounts([], Opts) ->
     end;
 require_accounts(_Accounts, _Opts) ->
     ok.
+
+%% @doc Build the signed block a mining `solution' extends this one with, over
+%% the `transactions' it includes and at the `timestamp' it is mined at.
+%%
+%% This is the inverse of `apply/3': every field it fills is one a check
+%% recomputes, and the derivations the two sides share have one implementation
+%% in `lib_arweave_candidate'. A block whose producer and validator could
+%% disagree is a node that mines blocks it will not accept.
+%%
+%% The signing key is the node's own, so the result is a block only this node
+%% can have produced. The block is returned rather than applied: what a node
+%% does with a block it mined -- validating it, publishing it, moving its tip
+%% to it -- is the business of whoever asked for it.
+produce(Base, Req, Opts) ->
+    maybe
+        {ok, Block} ?=
+            lib_arweave_candidate:produce(
+                lib_arweave_state:materialize_histories(Base, Opts),
+                Req,
+                Opts
+            ),
+        {ok, Block#{ <<"device">> => ?DEVICE }}
+    end.
 
 %% @doc Run the same checks as `apply/3' without producing the next block, for
 %% inspection and for testing a single transition in isolation.
@@ -422,7 +447,7 @@ check_index_transactions(Next, Previous, Opts) ->
     end.
 
 check_index_weave_size(Next, Previous, Opts) ->
-    Size = block_size(Next),
+    Size = lib_arweave_candidate:block_size(Next),
     equal(
         {Next#block.block_size, Next#block.weave_size},
         {
@@ -490,16 +515,6 @@ check_transaction_signatures(Next) ->
         <<"invalid-tx-signature">>,
         <<"A transaction's identifier is not the hash of a signature that "
             "verifies over it.">>
-    ).
-
-%% @doc The bytes the block's transactions add to the weave.
-block_size(Next) ->
-    lists:foldl(
-        fun(TX, Size) ->
-            Size + ar_tx:get_weave_size_increase(TX, Next#block.height)
-        end,
-        0,
-        Next#block.txs
     ).
 
 %% @doc The block extends the block it was applied to, one height further on,
@@ -1104,19 +1119,12 @@ check_next_vdf_difficulty(Next, Prev) ->
 %% @doc The two storage prices are the ones the parent determines, redenominated
 %% if the block redenominates.
 check_price_per_gib_minute(Next, Prev) ->
-    {Price, ScheduledPrice} = ar_pricing:recalculate_price_per_gib_minute(Prev),
-    Denomination = Next#block.denomination,
-    PrevDenomination = Prev#block.denomination,
     equal(
         {
             Next#block.price_per_gib_minute,
             Next#block.scheduled_price_per_gib_minute
         },
-        {
-            ar_pricing:redenominate(Price, PrevDenomination, Denomination),
-            ar_pricing:redenominate(
-                ScheduledPrice, PrevDenomination, Denomination)
-        },
+        lib_arweave_candidate:prices(Prev, Next#block.denomination),
         <<"invalid-price-per-gib-minute">>,
         <<"The storage prices are not the ones the parent determines.">>
     ).
@@ -1215,33 +1223,19 @@ check_accounts([], _Next, _Prev, _TXs, _Block, _Opts) ->
     {ok, []};
 check_accounts(Accounts, Next, Prev, TXs, Block, Opts) ->
     maybe
-        {ok, Balances} ?= balances(Accounts, Next, Prev, TXs, Opts),
+        {ok, Balances} ?=
+            lib_arweave_candidate:balances(Accounts, Next, Prev, TXs, Opts),
         ok ?= check_txs(Next, Prev, Balances, Block, Opts),
-        {ok, Applied} ?= update_accounts(Next, Prev, Balances),
-        % `ar_node_utils:update_accounts/3' takes its endowment arguments as
-        % `{MinerReward, EndowmentPool, ...}' and returns them as
-        % `{EndowmentPool, MinerReward, ...}'. The two are unequal in every
-        % real block, so a transposition here is silent until the root fails.
-        {EndowmentPool, MinerReward, DebtSupply, Latch, Multiplier, Updated} =
-            Applied,
-        Changed = maps:filter(
-            fun(Address, Account) ->
-                maps:get(Address, Balances, not_found) =/= Account
-            end,
-            Updated
-        ),
-        Denomination = Prev#block.denomination,
-        Denomination2 = Next#block.denomination,
-        ok ?= equal(Next#block.reward_pool,
-            ar_pricing:redenominate(EndowmentPool, Denomination, Denomination2),
+        {ok, Endowment, Changed} ?=
+            lib_arweave_candidate:transition(Next, Prev, Balances),
+        {EndowmentPool, MinerReward, DebtSupply, Latch, Multiplier} = Endowment,
+        ok ?= equal(Next#block.reward_pool, EndowmentPool,
             <<"invalid-reward-pool">>,
             <<"The endowment pool is not the one the transition produces.">>),
-        ok ?= equal(Next#block.reward,
-            ar_pricing:redenominate(MinerReward, Denomination, Denomination2),
+        ok ?= equal(Next#block.reward, MinerReward,
             <<"invalid-reward">>,
             <<"The mining reward is not the one the transition produces.">>),
-        ok ?= equal(Next#block.debt_supply,
-            ar_pricing:redenominate(DebtSupply, Denomination, Denomination2),
+        ok ?= equal(Next#block.debt_supply, DebtSupply,
             <<"invalid-debt-supply">>,
             <<"The debt supply is not the one the transition produces.">>),
         ok ?= equal(
@@ -1253,131 +1247,12 @@ check_accounts(Accounts, Next, Prev, TXs, Block, Opts) ->
             <<"invalid-kryder-multiplier">>,
             <<"The Kryder multiplier is not the one the transition "
                 "produces.">>),
-        apply_accounts(Accounts, Next, Changed, Opts)
+        % The account tree device owns both the insertion and the comparison
+        % against the root the block signed, and reports a mismatch as
+        % `invalid-wallet-list-root'.
+        lib_arweave_candidate:accounts(
+            Accounts, Changed, hb_util:encode(Next#block.wallet_list), Opts)
     end.
-
-%% @doc Run the vendored account transition, mapping its rejections onto the
-%% error convention.
-update_accounts(Next, Prev, Balances) ->
-    case ar_node_utils:update_accounts(Next, Prev, Balances) of
-        {ok, Applied} ->
-            {ok, Applied};
-        {error, invalid_account_anchors} ->
-            {error, error_message(<<"invalid-txs">>,
-                <<"A transaction is anchored on an account state it may not "
-                    "spend from.">>)};
-        {error, mining_address_banned} ->
-            {error, error_message(<<"invalid-mining-address">>,
-                <<"The mining address is banned for double signing.">>)};
-        {error, Reason} ->
-            {error, error_message(<<"invalid-double-signing-proof">>,
-                hb_util:bin(io_lib:format("~p", [Reason])))}
-    end.
-
-%% @doc Insert the accounts the transition changed into the tree, and check the
-%% resulting root against the one the block signed. The account tree device
-%% owns both, and reports a mismatch as `invalid-wallet-list-root'.
-apply_accounts(Accounts, Next, Updated, Opts) ->
-    hb_ao:resolve(
-        Accounts,
-        #{
-            <<"path">> => <<"apply">>,
-            <<"diff">> =>
-                maps:fold(
-                    fun(Address, Account, Diff) ->
-                        Diff#{
-                            hb_util:encode(Address) =>
-                                lib_arweave_accounts:account_message(Account)
-                        }
-                    end,
-                    #{},
-                    Updated
-                ),
-            <<"expected-root">> => hb_util:encode(Next#block.wallet_list)
-        },
-        Opts
-    ).
-
-%% @doc Load the accounts the block's transition reads, in the vendored form.
-%%
-%% The set is the one upstream assembles: the mining address, every sender and
-%% recipient of the block's transactions, the address whose locked reward this
-%% block releases, and the address a double signing proof bans. An address the
-%% transition would read but that is not fetched reads as absent rather than as
-%% its real balance, so this set is part of the consensus rule rather than an
-%% optimisation.
-balances(Accounts, Next, Prev, TXs, Opts) ->
-    Addresses =
-        lists:usort(
-            [
-                hb_util:encode(Next#block.reward_addr),
-                hb_util:encode(ar_rewards:get_oldest_locked_address(Prev))
-            ]
-            ++ [
-                % The record's own field, not `ar_tx:get_owner_address/1'.
-                % That function answers the atom `not_set' when the owner is
-                % 512 zero bytes -- no RSA modulus, and so a transaction whose
-                % signature cannot verify -- and the encoder would raise on it.
-                % No such transaction reaches here: the transaction check
-                % refuses it, it runs before this one, and `checks/0' names it
-                % as one this check reads from, so a set that asks for this
-                % without it is refused rather than run.
-                hb_util:encode(TX#tx.owner_address)
-            ||
-                TX <- Next#block.txs
-            ]
-            ++ [
-                hb_maps:get(<<"target">>, TX, <<>>, Opts)
-            ||
-                TX <- TXs
-            ]
-            ++ banned_addresses(Next)
-        ),
-    maybe
-        {ok, Loaded} ?=
-            hb_ao:resolve(
-                Accounts,
-                #{
-                    <<"path">> => <<"get">>,
-                    <<"addresses">> => Addresses
-                },
-                Opts
-            ),
-        % Every resolved result carries the resolver's own private section
-        % alongside the device's keys. Folding over it unreset would read
-        % `priv' as an address, decode it to three bytes of nothing and insert
-        % a phantom account -- which the account tree would then hash into a
-        % root no block ever signed.
-        {ok,
-            hb_maps:fold(
-                fun(Address, Account, Balances) ->
-                    Balances#{
-                        hb_util:decode(Address) =>
-                            lib_arweave_accounts:account(Account, Opts)
-                    }
-                end,
-                #{},
-                hb_private:reset(Loaded),
-                Opts
-            )
-        }
-    end.
-
-%% @doc Return the address a block's double signing proof bans, if it carries
-%% one.
-banned_addresses(#block{ double_signing_proof = undefined }) ->
-    [];
-banned_addresses(Next) ->
-    [
-        hb_util:encode(
-            ar_wallet:to_address(
-                ar_block:get_reward_key(
-                    element(1, Next#block.double_signing_proof),
-                    Next#block.height
-                )
-            )
-        )
-    ].
 
 %%% Internal functions.
 

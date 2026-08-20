@@ -14,11 +14,14 @@
 -export([from_nonce_limiter/2]).
 -export([selected/2, selected/3]).
 -export([
+    block_time_history_hash/2,
     check_block_time_history_hash/2,
     check_reward_history_hash/2,
     check_step_number/2,
     extend_block_index/3,
-    holds/3
+    holds/3,
+    reward_history_hash/2,
+    to_poa/2
 ]).
 -include("include/hb.hrl").
 -include("include/ar_consensus.hrl").
@@ -405,8 +408,11 @@ check_step_number(Next, Prev) ->
             "the parent's.">>
     ).
 
-%% @doc Check the hash chaining the next reward-history element.
-check_reward_history_hash(Next, Prev) ->
+%% @doc The hash chaining this block's reward-history element onto the
+%% parent's. The block producer fills the field from this and the check below
+%% recomputes it from the same expression, because a producer and a checker
+%% that spell one rule twice are a node that mines blocks it will not accept.
+reward_history_hash(Next, Prev) ->
     Element =
         {
             Next#block.reward_addr,
@@ -414,25 +420,33 @@ check_reward_history_hash(Next, Prev) ->
             Next#block.reward,
             Next#block.denomination
         },
-    equal(
-        ar_rewards:reward_history_hash(
+    ar_rewards:reward_history_hash(
+        Next#block.height,
+        Prev#block.reward_history_hash,
+        ar_rewards:trim_locked_rewards(
             Next#block.height,
-            Prev#block.reward_history_hash,
-            ar_rewards:trim_locked_rewards(
-                Next#block.height,
-                [Element | Prev#block.reward_history]
-            )
-        ),
+            [Element | Prev#block.reward_history]
+        )
+    ).
+
+%% @doc Check the hash chaining the next reward-history element.
+check_reward_history_hash(Next, Prev) ->
+    equal(
+        reward_history_hash(Next, Prev),
         Next#block.reward_history_hash,
         <<"invalid-reward-history-hash">>,
         <<"The reward history hash does not chain onto the parent's.">>
     ).
 
+%% @doc The hash over the parent's block-time history extended with this block.
+block_time_history_hash(Next, Prev) ->
+    ar_block_time_history:hash(
+        ar_block_time_history:update_history(Next, Prev)).
+
 %% @doc Check the hash over the extended block-time history.
 check_block_time_history_hash(Next, Prev) ->
     equal(
-        ar_block_time_history:hash(
-            ar_block_time_history:update_history(Next, Prev)),
+        block_time_history_hash(Next, Prev),
         Next#block.block_time_history_hash,
         <<"invalid-block-time-history-hash">>,
         <<"The block time history hash does not cover the parent's history "
