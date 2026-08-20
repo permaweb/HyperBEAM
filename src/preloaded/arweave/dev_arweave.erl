@@ -5,14 +5,16 @@
 %%% `/arweave` route in the node's configuration message.
 -module(dev_arweave).
 -implements(<<"arweave@2.9">>).
--device_libraries([lib_arweave_common]).
+-device_libraries([lib_arweave_common, lib_arweave_paths, lib_arweave_placement]).
 -export([info/0]).
 -export([tx/3, raw/3, chunk/3, block/3, current/3, status/3, price/3, tx_anchor/3]).
 -export([pending/3]).
+-export([bootstrap/3, sync/3, tip/3, validated/3, backfill/3, placement/3]).
 -export([post_tx_header/2, post_tx/3, post_tx/4, post_chunk/2]).
 %%% Helper functions
 -export([get_chunk/2]).
 -include("include/hb.hrl").
+-include("include/ar_consensus.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
 -define(IS_BLOCK_ID(X), (is_binary(X) andalso byte_size(X) == 64)).
@@ -28,6 +30,42 @@ info() ->
 %% @doc Proxy the `/info' endpoint from the Arweave node.
 status(_Base, _Request, Opts) ->
     request(<<"GET">>, <<"/info">>, Opts).
+
+%% @doc Establish the node's initial chain state from an operator-selected
+%% trusted checkpoint. See `dev_arweave_sync'.
+%%
+%% Refused once the node has validated a chain at or beyond the checkpoint it
+%% would anchor on: this key is reachable by anyone the node answers, and
+%% re-running it re-trusts the peer set. `force' overrides that.
+bootstrap(Base, Req, Opts) ->
+    dev_arweave_sync:bootstrap(Base, Req, Opts).
+
+%% @doc Ingest and validate blocks from peers on top of the locally cached
+%% chain. Idempotent; intended to be driven by `~cron@1.0/every'.
+sync(Base, Req, Opts) ->
+    dev_arweave_sync:sync(Base, Req, Opts).
+
+%% @doc Materialise blocks below the ones this node holds, checked against the
+%% block index the selected tip carries. See `dev_arweave_sync'.
+backfill(Base, Req, Opts) ->
+    dev_arweave_sync:backfill(Base, Req, Opts).
+
+%% @doc Return the block at the tip of the heaviest eligible branch, under
+%% Arweave's own fork-choice rules.
+tip(Base, Req, Opts) ->
+    dev_arweave_sync:tip(Base, Req, Opts).
+
+%% @doc Return the block this node validated, named by `indep-hash', by height,
+%% or as `current'. Unlike `block/3', which answers from a gateway when the
+%% block is not held locally, this never contacts a peer: an answer here is one
+%% this node verified itself.
+validated(Base, Req, Opts) ->
+    dev_arweave_sync:validated(Base, Req, Opts).
+
+%% @doc Return where a source transaction, named by `tx', occurs in the chain
+%% this node validated. See `dev_arweave_sync'.
+placement(Base, Req, Opts) ->
+    dev_arweave_sync:placement(Base, Req, Opts).
 
 %% @doc Returns the given transaction as an AO-Core message. By default, this
 %% embeds the `/raw` payload. Set `exclude-data` to true to return just the
@@ -745,7 +783,28 @@ block(Base, Request, Opts) when is_map(Base) ->
             end
     end;
 block({id, ID}, Req, Opts) ->
-    case hb_cache:read(ID, Opts) of
+    % `?IS_BLOCK_ID' is a length test, and a length test is not enough: 64
+    % characters of `..' and `/' are 64 bytes, so they reach `hb_cache:read/2'
+    % as a store key and the fs store walks out of its own root. `validated'
+    % refuses the same shape, and the two keys must agree about what a block
+    % hash is -- so both ask `dev_arweave_sync' rather than each keeping a
+    % check that can drift from the other.
+    maybe
+        {ok, ID} ?= dev_arweave_sync:block_hash(ID),
+        block_by_id(ID, Req, Opts)
+    end;
+block({height, Height}, Req, Opts) ->
+    block_by_height(Height, Req, Opts).
+
+%% @doc Read a block named by its hash, falling back to a peer.
+%%
+%% The gateway cache is read, not the consensus cache. A block this node
+%% validated is a canonical `arweave-block@2.9' message and a gateway response
+%% is a `json@1.0' projection of one; they carry different keys, and one key
+%% must not answer with two shapes. `validated' is where the checked block
+%% lives.
+block_by_id(ID, Req, Opts) ->
+    case hb_cache:read(dev_arweave_cache:hash_path(ID), Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {id, {explicit, ID}}
@@ -758,9 +817,11 @@ block({id, ID}, Req, Opts) ->
             end;
         {error, not_found} ->
             request(<<"GET">>, <<"/block/hash/", ID/binary>>, Opts)
-    end;
-block({height, Height}, Req, Opts) ->
-    case dev_arweave_block_cache:read(Height, Opts) of
+    end.
+
+%% @doc Read a block named by its height, falling back to a peer.
+block_by_height(Height, Req, Opts) ->
+    case dev_arweave_cache:read(Height, Opts) of
         {ok, Block} ->
             ?event(arweave_short, {read_block_from_cache,
                 {height, Height}
@@ -959,7 +1020,7 @@ to_message(Path = <<"/block/", _/binary>>, <<"GET">>, {ok, #{ <<"body">> := Body
         ),
     CacheRes =
         case hb_opts:get(arweave_index_blocks, true, Opts) of
-            true -> dev_arweave_block_cache:write(Block, Opts);
+            true -> dev_arweave_cache:write(Block, Opts);
             false -> skipped
         end,
     ?event(

@@ -39,7 +39,12 @@ CLEAN_GENERATED = \
 	native/hb_beamr/*.o \
 	native/hb_beamr/*.d \
 	native/hb_keccak/*.o \
-	native/hb_keccak/*.d
+	native/hb_keccak/*.d \
+	native/arweave_randomx/*.o \
+	native/arweave_randomx/randomx/*.o \
+	native/arweave_randomx/randomx/*/*.o \
+	native/arweave_vdf/*.o \
+	native/arweave_vdf/vdf/*.o
 
 ifdef HB_DEBUG
 	WAMR_FLAGS = -DWAMR_ENABLE_LOG=1 -DWAMR_BUILD_DUMP_CALL_STACK=1 -DCMAKE_BUILD_TYPE=Debug

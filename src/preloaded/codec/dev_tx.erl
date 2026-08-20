@@ -7,8 +7,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(BASE_FIELDS, [
-    <<"anchor">>, <<"format">>, <<"quantity">>, <<"reward">>, <<"target">>,
-    <<"data_root">>, <<"data_size">> ]).
+    <<"anchor">>, <<"denomination">>, <<"format">>, <<"quantity">>,
+    <<"reward">>, <<"target">>, <<"data_root">>, <<"data_size">> ]).
 
 %% @doc Sign a message using the `priv-wallet' key in the options. Supports both
 %% the `hmac-sha256' and `rsa-pss-sha256' algorithms, offering unsigned and
@@ -203,10 +203,13 @@ enforce_valid_tx(TX) ->
         hb_util:check_type(TX#tx.reward, integer),
         {invalid_field, reward, TX#tx.reward}
     ),
-    % Arweave L1 #tx doesn't support denomination changes yet.
-    % Refresh from arweave source to add support.
+    % The denomination code is either zero -- "whatever the block says", and
+    % the only code a transaction signed before redenomination support carries
+    % -- or the positive code the transaction states, which its signature
+    % preimage then includes.
     hb_util:ok_or_throw(TX,
-        hb_util:check_value(TX#tx.denomination, [0]),
+        hb_util:check_type(TX#tx.denomination, integer)
+            andalso TX#tx.denomination >= 0,
         {invalid_field, denomination, TX#tx.denomination}
     ),
     % Arweave L1 #tx supports RSA and ECDSA signatures
@@ -272,7 +275,8 @@ enforce_valid_tx_test() ->
         {data_root_too_long_33, BaseTX#tx{data_root = BadID33}, {invalid_field, data_root, BadID33}},
         {signature_invalid_type, BaseTX#tx{signature = "hello"}, {invalid_field, signature, "hello"}},
         {reward_not_integer, BaseTX#tx{reward = 1.0}, {invalid_field, reward, 1.0}},
-        {denomination_not_zero, BaseTX#tx{denomination = 1}, {invalid_field, denomination, 1}},
+        {denomination_negative, BaseTX#tx{denomination = -1}, {invalid_field, denomination, -1}},
+        {denomination_not_integer, BaseTX#tx{denomination = <<"1">>}, {invalid_field, denomination, <<"1">>}},
         %% ECDSA signature type is now supported, removed signature_type_not_rsa test
         {tags_not_list, BaseTX#tx{tags = #{}}, {invalid_field, tags, #{}}},
         {tag_name_not_binary, BaseTX#tx{tags = [{not_binary, <<"val">>}]}, {invalid_field, tag_name, not_binary}},
@@ -331,6 +335,69 @@ happy_tx_test() ->
         <<"field-anchor">> => hb_util:encode(Anchor),
         <<"field-quantity">> => <<"1000">>,
         <<"field-reward">> => <<"2000">>
+    },
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
+
+%% @doc A format 1 transaction carries its format as a field. The field must not
+%% also be written back as a tag: the record would then carry a tag the signed
+%% transaction never had, and no format 1 transaction would verify.
+format_1_test() ->
+    Anchor = crypto:strong_rand_bytes(32),
+    TX = #tx{
+        format = 1,
+        anchor = Anchor,
+        reward = 2000
+    },
+    UnsignedTABM = #{
+        <<"anchor">> => hb_util:encode(Anchor),
+        <<"format">> => <<"1">>,
+        <<"reward">> => <<"2000">>
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [<<"anchor">>, <<"format">>, <<"reward">>],
+        <<"type">> => ?RSA_SIGN_TYPE,
+        <<"bundle">> => <<"false">>,
+        <<"field-anchor">> => hb_util:encode(Anchor),
+        <<"field-format">> => <<"1">>,
+        <<"field-reward">> => <<"2000">>
+    },
+    do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
+
+%% @doc A transaction that states a denomination code signs it, so the message
+%% has to carry it. Zero -- "whatever the block says" -- is the default and is
+%% absent from the message, which is why an explicit code is a field of its own
+%% rather than something inferred from the rest.
+denomination_test() ->
+    Anchor = crypto:strong_rand_bytes(32),
+    Target = crypto:strong_rand_bytes(32),
+    TX = #tx{
+        format = 2,
+        anchor = Anchor,
+        target = Target,
+        quantity = 1000,
+        reward = 2000,
+        denomination = 1
+    },
+    UnsignedTABM = #{
+        <<"anchor">> => hb_util:encode(Anchor),
+        <<"denomination">> => <<"1">>,
+        <<"quantity">> => <<"1000">>,
+        <<"reward">> => <<"2000">>,
+        <<"target">> => hb_util:encode(Target)
+    },
+    SignedCommitment = #{
+        <<"commitment-device">> => <<"tx@1.0">>,
+        <<"committed">> => [
+            <<"anchor">>, <<"denomination">>, <<"quantity">>, <<"reward">>,
+            <<"target">>],
+        <<"type">> => ?RSA_SIGN_TYPE,
+        <<"bundle">> => <<"false">>,
+        <<"field-anchor">> => hb_util:encode(Anchor),
+        <<"field-denomination">> => <<"1">>,
+        <<"field-quantity">> => <<"1000">>,
+        <<"field-reward">> => <<"2000">>,
+        <<"field-target">> => hb_util:encode(Target)
     },
     do_tx_roundtrips(TX, UnsignedTABM, SignedCommitment).
 

@@ -718,9 +718,12 @@ lowest_distance([{Node, Distance}|Nodes], {CurrentNode, CurrentDistance}) ->
         _ -> lowest_distance(Nodes, {CurrentNode, CurrentDistance})
     end.
 
-%% @doc Cast a human-readable or native-encoded ID to a big integer.
+%% @doc Cast a human-readable or native-encoded ID to a big integer. An ID need
+%% not be 256 bits: an Arweave block hash is 384, and an Ethereum address stays
+%% in its 42 character text form. The leading 256 bits are taken, which is the
+%% whole of a message identifier and a prefix of anything longer.
 binary_to_bignum(Bin) when ?IS_ID(Bin) ->
-    << Num:256/unsigned-integer >> = hb_util:native_id(Bin),
+    << Num:256/unsigned-integer, _/binary >> = hb_util:native_id(Bin),
     Num.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.

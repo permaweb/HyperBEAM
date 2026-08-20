@@ -36,6 +36,7 @@ nav:
       - '~json@1.0': 'devices/json-at-1-0.md'
       - '~scheduler@1.0': 'devices/scheduler-at-1-0.md'
       - '~relay@1.0': 'devices/relay-at-1-0.md'
+      - '~arweave@2.9': 'devices/arweave-at-2-9.md'
   - Resources:
     # - Overview: 'resources/source-code/index.md'
     - FAQ: 'resources/reference/faq.md'
