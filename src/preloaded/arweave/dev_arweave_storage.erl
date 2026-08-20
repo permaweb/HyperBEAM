@@ -31,6 +31,8 @@
     lib_arweave_data_sync,
     lib_arweave_data_sync_test_vectors,
     lib_arweave_entropy,
+    lib_arweave_import,
+    lib_arweave_import_test_vectors,
     lib_arweave_packing,
     lib_arweave_state,
     lib_arweave_storage,
@@ -38,7 +40,7 @@
     lib_arweave_sync_record_test_vectors
 ]).
 -export([info/1, modules/3, range/3, chunk/3, chunk_proof/3]).
--export([sync_record/3, prepare/3, store/3, sync/3]).
+-export([sync_record/3, prepare/3, store/3, sync/3, import/3]).
 -include("include/hb.hrl").
 -include("include/ar.hrl").
 -include("include/ar_chunk_storage.hrl").
@@ -220,6 +222,45 @@ sync(Base, Req, Opts) ->
     maybe
         {ok, Module} ?= requested_module(Base, Req, Opts),
         lib_arweave_data_sync:sync(Module, Chunks, Opts)
+    end.
+
+%% @doc Read the metadata an Arweave node keeps in RocksDB into the store this
+%% node's own storage module uses, so an operator with a node's data directory
+%% mines from it without re-downloading or re-packing anything.
+%%
+%% The source is opened read-only: the directory stays exactly as the node that
+%% built it left it. `source' names the `rocksdb' directory to read; without it,
+%% the one beside the module's own chunk files. Requires the `rocksdb' build
+%% profile, and says so rather than failing obscurely when it is absent.
+import(Base, Req, Opts) ->
+    maybe
+        {ok, Module} ?= requested_module(Base, Req, Opts),
+        {ok, Source} ?= source(Module, Base, Req, Opts),
+        lib_arweave_import:import(Module, Source, Opts)
+    end.
+
+%% @doc The directory an import reads a module's databases from: the one beside
+%% its own chunk files, or the one the caller named.
+%%
+%% A named directory is refused if it could be resolved as a path rather than
+%% read as one. This key names a directory on the host, and the node answers it
+%% to whoever it answers.
+source(Module, Base, Req, Opts) ->
+    Default =
+        hb_util:bin(
+            filename:join(
+                lib_arweave_storage:module_path(Module, Opts), "rocksdb")
+        ),
+    named_source(get_first(<<"source">>, Base, Req, Default, Opts)).
+
+named_source(Source) ->
+    case binary:match(hb_util:bin(Source), [<<"..">>, <<0>>]) of
+        nomatch ->
+            {ok, hb_util:list(Source)};
+        _Match ->
+            {error, error_message(422, <<"unsafe-import-source">>,
+                <<"An import source names a directory to read, not a path to "
+                    "resolve.">>)}
     end.
 
 %%% Internal functions.
