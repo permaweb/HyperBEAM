@@ -31,7 +31,7 @@
 %%% steps mix in comes from a block this node has not seen, so the timeline
 %%% stops at the line and waits to be re-anchored rather than guessing.
 -module(lib_arweave_vdf_timeline).
--export([snapshot/5, advance/6]).
+-export([snapshot/5, advance/6, head/1, subscribe/2]).
 -include("include/hb.hrl").
 -include("include/ar_vdf.hrl").
 -ifdef(TEST).
@@ -95,6 +95,48 @@ advance(Seed, Difficulty, StepNumber, Output, Reset, Opts) ->
     Timeline ! {advance, Seed, Difficulty, StepNumber, Output, Reset},
     ok.
 
+%% @doc The newest step this timeline holds, with the epoch it computed it
+%% under. A miner searches what the timeline has already run, so this is the
+%% question it asks when it starts and after any gap.
+%%
+%% `not_running' is a timeline with no anchor -- one this node has not yet
+%% validated a block into -- and is a state of the node rather than a failure.
+head(Opts) ->
+    Timeline = hb_name:singleton(name(Opts), fun timeline/0),
+    Ref = erlang:monitor(process, Timeline),
+    Reply = alias([reply]),
+    Timeline ! {head, Reply, Ref},
+    receive
+        {head, Ref, Head} ->
+            unalias(Reply),
+            erlang:demonitor(Ref, [flush]),
+            Head;
+        {'DOWN', Ref, process, Timeline, _Reason} ->
+            unalias(Reply),
+            not_running
+    after ?ANSWER_TIMEOUT ->
+        unalias(Reply),
+        erlang:demonitor(Ref, [flush]),
+        not_running
+    end.
+
+%% @doc Send `{vdf_step, StepNumber, Output, Seed, Difficulty}' to `Pid' as each
+%% step is computed, until it dies.
+%%
+%% A miner cannot poll for this. The timeline handles messages only between
+%% steps and a step is one uninterruptible NIF call, so a poll either waits out
+%% the remainder of a step or misses one; and the interval it would have to poll
+%% at is the interval it is waiting for. Pushing costs the timeline one send per
+%% step and delivers each step the moment it exists.
+%%
+%% The epoch travels with the step because a miner's session key is `{seed,
+%% difficulty}': a subscriber that read those separately could pair a step with
+%% the epoch that succeeded it.
+subscribe(Pid, Opts) ->
+    Timeline = hb_name:singleton(name(Opts), fun timeline/0),
+    Timeline ! {subscribe, Pid},
+    ok.
+
 %%% Internal functions.
 
 %% @doc The timeline's own name. `hb_name' is BEAM-global, so an HTTP node gets
@@ -111,9 +153,16 @@ name(Opts) ->
 %% @doc The process loop. With no anchor there is nothing to compute, so it
 %% waits; with one it computes the next step whenever no message is pending.
 timeline() ->
-    timeline(#{ anchor => none, steps => #{} }).
+    timeline(
+        #{
+            anchor => none,
+            computing => false,
+            steps => #{},
+            subscribers => #{}
+        }
+    ).
 
-timeline(State = #{ anchor := none }) ->
+timeline(State = #{ computing := false }) ->
     receive
         Message -> timeline(handle(Message, State))
     end;
@@ -124,22 +173,97 @@ timeline(State) ->
         timeline(compute_next(State))
     end.
 
-%% @doc Answer what is held, or take a new anchor and drop what preceded it.
+%% @doc Answer what is held, take a new anchor, or add a subscriber.
 handle({known, From, Ref, Start, End, Seed, Difficulty}, State) ->
     From ! {known, Ref, held(Start, End, Seed, Difficulty, State)},
     State;
+handle({head, From, Ref}, State) ->
+    From ! {head, Ref, newest(State)},
+    State;
+handle({subscribe, Pid}, State = #{ subscribers := Subscribers }) ->
+    State#{ subscribers => Subscribers#{ Pid => erlang:monitor(process, Pid) } };
+handle({'DOWN', _Ref, process, Pid, _Reason},
+        State = #{ subscribers := Subscribers }) ->
+    State#{ subscribers => maps:remove(Pid, Subscribers) };
 handle({advance, Seed, Difficulty, StepNumber, Output, Reset}, State) ->
+    anchored(Seed, Difficulty, StepNumber, Output, Reset, State);
+handle(_Message, State) ->
+    State.
+
+%% @doc The newest step held, with the epoch it was computed under.
+newest(#{ anchor := none }) ->
+    not_running;
+newest(State = #{ at := At, head := Head, seed := Seed,
+        difficulty := Difficulty }) ->
+    #{
+        <<"global-step-number">> => Head,
+        <<"nonce-limiter-output">> => previous_output(State),
+        <<"seed">> => Seed,
+        <<"difficulty">> => Difficulty,
+        <<"anchored-at">> => At
+    }.
+
+%% @doc Take a new anchor, keeping every step the anchor does not invalidate.
+%%
+%% A block re-anchors the timeline on its own output, and the steps above that
+%% output are the ones this process just spent real seconds computing. Dropping
+%% them costs the whole run again at one step a second, on every block, forever
+%% -- and for a miner following the timeline it is worse than a cost, because
+%% the steps it would have searched next stop existing. They are kept when the
+%% anchor lands inside the run this timeline is already on: same epoch, and the
+%% step it names is the one already computed there.
+%%
+%% Anything else -- a different seed or difficulty, an output this timeline did
+%% not compute, an anchor above the head -- is a different chain, and the steps
+%% held do not belong to it.
+anchored(Seed, Difficulty, StepNumber, Output, Reset,
+        State = #{ seed := Seed, difficulty := Difficulty, head := Head,
+            steps := Steps })
+        when Head > StepNumber ->
+    case maps:get(StepNumber, Steps, not_found) of
+        {Output, _Checkpoints} ->
+            State#{
+                anchor => Output,
+                at => StepNumber,
+                reset => Reset,
+                computing => true,
+                steps =>
+                    maps:filter(fun(Step, _) -> Step > StepNumber end, Steps)
+            };
+        _Other ->
+            fresh(Seed, Difficulty, StepNumber, Output, Reset, State)
+    end;
+anchored(Seed, Difficulty, StepNumber, Output, Reset, State) ->
+    fresh(Seed, Difficulty, StepNumber, Output, Reset, State).
+
+%% @doc Start a new run at an anchor, holding nothing.
+fresh(Seed, Difficulty, StepNumber, Output, Reset,
+        #{ subscribers := Subscribers }) ->
     #{
         anchor => Output,
         at => StepNumber,
+        head => StepNumber,
         seed => Seed,
         difficulty => Difficulty,
-        kernel => kernel(Difficulty, State),
-        reset => Reset,
-        steps => #{}
-    };
-handle(_Message, State) ->
-    State.
+        kernel => kernel(Difficulty, #{}),
+        reset => bounded_reset(Reset, StepNumber),
+        computing => true,
+        steps => #{},
+        subscribers => Subscribers
+    }.
+
+%% @doc The step a run must stop at, whatever window its caller looked over.
+%%
+%% A caller passes the reset line it found between the block's step and some
+%% horizon of its own. If that horizon is shorter than `?MAX_AHEAD' the caller
+%% answers `none' for a line this run would reach, and the timeline would
+%% compute straight through it without mixing the seed -- producing outputs
+%% that are not the chain's, silently, for as long as the run lasts. Deriving
+%% the line here as well makes that impossible to arrange from outside.
+bounded_reset(none, At) ->
+    ar_nonce_limiter:get_entropy_reset_point(At, At + ?MAX_AHEAD);
+bounded_reset(Reset, _At) ->
+    Reset.
 
 %% @doc The subset of the computed steps a caller may use: those inside the
 %% range asked for, and only when the epoch matches.
@@ -149,24 +273,42 @@ held(Start, End, Seed, Difficulty,
 held(_Start, _End, _Seed, _Difficulty, _State) ->
     #{}.
 
-%% @doc Compute one step past the last one held, and stop at the epoch's end or
-%% once far enough ahead of the anchor.
-compute_next(State = #{ at := At, steps := Steps }) ->
-    Next = At + map_size(Steps) + 1,
+%% @doc Compute one step past the newest held, tell the subscribers, and stop
+%% at the epoch's end or once far enough ahead of the anchor.
+compute_next(State = #{ head := Head, steps := Steps }) ->
+    Next = Head + 1,
     case stop_at(Next, State) of
         true ->
-            State#{ anchor => none };
+            % The run is over, not the timeline. What it computed is still the
+            % newest this node has, and a miner is still entitled to search it
+            % -- so the state stays and only the computing stops. Conflating
+            % the two would make a timeline that had reached an entropy reset
+            % line indistinguishable from one that had never seen a block.
+            State#{ computing => false };
         false ->
-            #{ difficulty := Difficulty, kernel := Kernel } = State,
+            #{ seed := Seed, difficulty := Difficulty, kernel := Kernel } =
+                State,
             {ok, Output, Checkpoints} =
                 Kernel(Next, previous_output(State), Difficulty),
-            State#{ steps => Steps#{ Next => {Output, Checkpoints} } }
+            told(
+                {vdf_step, Next, Output, Seed, Difficulty},
+                State#{
+                    head => Next,
+                    steps => Steps#{ Next => {Output, Checkpoints} }
+                }
+            )
     end.
+
+%% @doc Hand a step to every subscriber. A dead one is dropped when its monitor
+%% fires, so a send here is never to a pid this process has not seen die.
+told(Message, State = #{ subscribers := Subscribers }) ->
+    maps:foreach(fun(Pid, _Ref) -> Pid ! Message end, Subscribers),
+    State.
 
 %% @doc The output the next step follows: the newest one computed, or the
 %% anchor when none has been.
-previous_output(#{ anchor := Anchor, at := At, steps := Steps }) ->
-    case maps:get(At + map_size(Steps), Steps, not_found) of
+previous_output(#{ anchor := Anchor, head := Head, steps := Steps }) ->
+    case maps:get(Head, Steps, not_found) of
         {Output, _Checkpoints} -> Output;
         not_found -> Anchor
     end.
