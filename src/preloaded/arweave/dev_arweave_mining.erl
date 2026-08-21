@@ -35,18 +35,34 @@
     lib_arweave_block,
     lib_arweave_candidate,
     lib_arweave_history,
+    lib_arweave_miner,
     lib_arweave_paths,
     lib_arweave_placement,
     lib_arweave_state,
     lib_arweave_tx,
     lib_arweave_vdf_timeline
 ]).
--export([info/1, mine/3, solve/3, range/3]).
+-export([info/1, mine/3, solve/3, range/3, session/3, declare/3]).
+-export([search/3, partitions/3]).
+-export([start/3, stop/3, status/3]).
 -include("include/hb.hrl").
 -include("include/ar_consensus.hrl").
 
 %%% This device, for the passes that search through its own `solve'.
 -define(DEVICE, <<"arweave-mining@2.9">>).
+
+%%% The leading zero bits a hash must have for a pass to report it as a partial
+%%% proof. Nothing in consensus knows about partials: this is a monitoring
+%%% signal, and the only one a miner has that is proportional to the work it is
+%%% doing rather than to its luck.
+%%%
+%%% Twenty-two bits is one hash in four million. A partition searched at every
+%%% step is 320 nonces a second, so a miner holding one whole partition reports
+%%% one about every three and a half hours, and one holding two reports twice
+%%% as often -- rare enough to read, frequent enough to notice stopping.
+%%% `arweave-mining-partial-bits' moves it; a node that sets it to zero reports
+%%% every hash, which is a thing to do to a test and not to a miner.
+-define(PARTIAL_BITS, 22).
 
 %%% The hook a block this node mined is announced on. Nothing in a pass
 %%% publishes: what to do with a block is the operator's decision, and this is
@@ -273,6 +289,198 @@ range(Base, Req, Opts) ->
                 <<"chunks">> => Chunks
             }
         }
+    end.
+
+%% @doc Start mining and keep mining, on the newest nonce-limiter step this
+%% node has, for as long as the node runs. One call.
+%%
+%% The session that results follows `lib_arweave_vdf_timeline', which is
+%% re-anchored on every block this node validates -- so a block landing moves
+%% the search onto it without the caller doing anything. Every argument `mine'
+%% takes, this takes: `partitions', `weave', `max-nonces', `transactions', and
+%% `workers' for how many searches may run at once.
+%%
+%% Answers with what the session is doing, not with a block. A miner that
+%% answered with a block would be a miner that had stopped.
+start(Base, Req, Opts) ->
+    lib_arweave_miner:start(hb_maps:merge(Base, Req, Opts), Opts).
+
+%% @doc Stop searching. The session survives and starts again on the next
+%% `start'.
+stop(_Base, _Req, Opts) ->
+    lib_arweave_miner:stop(Opts).
+
+%% @doc What the session is doing: the newest step it has seen, the newest it
+%% has searched, how far behind that leaves it, and the counters since it
+%% started. `behind' is the number to watch -- it is how many steps of the
+%% chain this machine could not keep up with.
+status(_Base, _Req, Opts) ->
+    maybe
+        {ok, Status} ?= lib_arweave_miner:status(Opts),
+        {ok, Status#{ <<"timeline">> => timeline_head(Opts) }}
+    end.
+
+%% @doc Where the node's nonce limiter has reached, beside where the session
+%% has. The two together answer the only question an operator has: a session
+%% that is behind is a machine that cannot keep up, and a session level with a
+%% timeline that has stopped is a node waiting for a block rather than a miner
+%% that has failed.
+timeline_head(Opts) ->
+    case lib_arweave_vdf_timeline:head(Opts) of
+        not_running -> <<"not-running">>;
+        Head -> Head
+    end.
+
+%% @doc Search one partition at one step, deriving what that step is searched
+%% under and turning a solution into a checked block.
+%%
+%% This is `session', `solve' and `declare' composed, and it exists so that a
+%% mining session can dispatch one resolution per partition per step and hold
+%% nothing itself. The derivation belongs on this side of the boundary: it
+%% reads the parent and the histories, which is work a scheduler must not be
+%% doing in the loop it takes steps on.
+%%
+%% A step the parent has already passed is `stale-step-number' from `session',
+%% and it is returned rather than raised: a timeline running behind the chain
+%% offers stale steps continuously, and that is a fact about the machine for a
+%% caller to count, not an error to fail on.
+search(Base, Req, Opts) ->
+    Partition = required(<<"partition-number">>, Base, Req, Opts),
+    case session(Base, Req, Opts) of
+        {ok, Session} ->
+            searched(
+                hb_ao:resolve(
+                    Session#{
+                        <<"device">> => ?DEVICE,
+                        <<"partition-number">> => Partition
+                    },
+                    <<"solve">>,
+                    Opts
+                ),
+                Session,
+                Opts
+            );
+        {error, Error} ->
+            {ok,
+                #{
+                    <<"solution">> => false,
+                    <<"nonces-searched">> => 0,
+                    <<"stale">> => stale(Error, Opts)
+                }
+            }
+    end.
+
+%% @doc Whether a refusal was the step being behind the parent, which is the
+%% one a miner meets in normal running.
+stale(Error, Opts) ->
+    hb_maps:get(<<"message">>, Error, <<>>, Opts) == <<"stale-step-number">>.
+
+%% @doc Carry the search's answer, and build the block when it found one.
+searched({ok, Result}, Session, Opts) ->
+    case hb_maps:get(<<"solution">>, Result, false, Opts) of
+        true -> declared(Result, Session, Opts);
+        false -> {ok, Result#{ <<"stale">> => false }}
+    end;
+searched({error, Error}, _Session, _Opts) ->
+    {error, Error}.
+
+declared(Solution, Session, Opts) ->
+    maybe
+        {ok, Block} ?=
+            declare(
+                Session#{ <<"device">> => ?DEVICE },
+                #{ <<"solution">> => Solution },
+                Opts
+            ),
+        {ok,
+            Solution#{
+                <<"stale">> => false,
+                <<"block">> => hb_maps:get(<<"block">>, Block, not_found, Opts)
+            }
+        }
+    end.
+
+%% @doc The partitions a weave source holds. A mining session asks once and
+%% searches them at every step; they change only when the modules do.
+partitions(Base, Req, Opts) ->
+    Weave =
+        get_first(
+            <<"weave">>,
+            Base,
+            Req,
+            #{ <<"device">> => <<"arweave-storage@2.9">> },
+            Opts
+        ),
+    {ok,
+        #{
+            <<"partitions">> =>
+                hb_util:list_to_numbered_message(
+                    partitions(Weave, Base, Req, Opts))
+        }
+    }.
+
+%% @doc The message a search of one step runs against: everything `solve' needs
+%% but the partition, and the partitions to search.
+%%
+%% This is the seam between the scheduler and the search. Every value in it is
+%% a derivation of the parent block and the step -- the difficulty the retarget
+%% rule gives that height and timestamp, the seed the step falls under, the
+%% upper bound a recall range is drawn from -- so a caller holding one of these
+%% holds everything a step's search is determined by, and nothing about how the
+%% search is driven.
+%%
+%% The step is an argument rather than something read from a clock, because the
+%% seed data depends on it: a step past an entropy reset line takes the epoch
+%% after the line, and asking for the wrong step would search the wrong weave.
+session(Base, Req, Opts) ->
+    Step = hb_util:int(required(<<"global-step-number">>, Base, Req, Opts)),
+    Output = required(<<"nonce-limiter-output">>, Base, Req, Opts),
+    maybe
+        {ok, Parent} ?= parent(Base, Req, Opts),
+        State = lib_arweave_state:materialize_histories(Parent, Opts),
+        Prev = lib_arweave_state:previous_block(State, Opts),
+        Pass = pass(State, Prev, Base, Req, Opts),
+        {ok, Parameters} ?=
+            lib_arweave_candidate:parameters(
+                Prev,
+                Step,
+                hb_util:int(field(<<"timestamp">>, Pass, Opts)),
+                Opts
+            ),
+        {ok,
+            Parameters#{
+                <<"nonce-limiter-output">> => Output,
+                <<"global-step-number">> => Step,
+                <<"state">> => State,
+                <<"previous">> => Prev,
+                <<"timestamp">> => field(<<"timestamp">>, Pass, Opts),
+                <<"transactions">> => field(<<"transactions">>, Pass, Opts),
+                <<"reward-addr">> => field(<<"reward-addr">>, Pass, Opts),
+                <<"weave-size">> => field(<<"weave-size">>, Pass, Opts),
+                <<"weave">> => field(<<"weave">>, Pass, Opts),
+                <<"max-nonces">> => field(<<"max-nonces">>, Pass, Opts),
+                <<"partitions">> =>
+                    hb_util:list_to_numbered_message(
+                        field(<<"partitions">>, Pass, Opts))
+            }
+        }
+    end.
+
+%% @doc Turn a solution into the signed block it entitles this node to, check
+%% it, and hand it to the `arweave-mined-block' hook.
+%%
+%% Resolved on a `session' message, so the block is built against exactly the
+%% parent and step the search ran under rather than against whatever the tip
+%% has become since -- a solution found on one parent is not a solution on
+%% another.
+declare(Base, Req, Opts) ->
+    Solution = required(<<"solution">>, Base, Req, Opts),
+    maybe
+        {ok, Block} ?= produce(Solution, Base, Opts),
+        ok ?= valid(Block, Base, Opts),
+        % The hook's own answer is discarded, for the reason `mine' gives.
+        {ok, _Announced} ?= hb_hook:on(?MINED_HOOK, Block, Opts),
+        {ok, #{ <<"mined">> => true, <<"block">> => Block }}
     end.
 
 %%% Internal functions.
@@ -789,6 +997,7 @@ examined({ok, EndOffset, Chunk}, Nonce, Byte, Index, Session, Opts) ->
                 },
                 Opts
             ),
+        partial(<<"h1">>, Hash, Nonce, Byte, Session, Opts),
         second(
             passes(<<"h1">>, Hash, Session, Opts),
             #{
@@ -845,6 +1054,14 @@ two_chunk({ok, EndOffset, Chunk}, Found, Index, Session, Opts) ->
                 },
                 Opts
             ),
+        partial(
+            <<"h2">>,
+            Hash,
+            field(<<"nonce">>, Found, Opts),
+            field(<<"recall-byte2">>, Found, Opts),
+            Session,
+            Opts
+        ),
         solved(
             passes(<<"h2">>, Hash, Session, Opts),
             Found#{
@@ -1066,6 +1283,48 @@ hash(Key, Request, Opts) ->
             hb_maps:get(<<"preimage">>, Result, not_found, Opts)
         }
     end.
+
+%% @doc Report a hash that cleared the partial-proof bar.
+%%
+%% A miner that finds nothing for a week is indistinguishable from a miner that
+%% is not working, and at mainnet difficulty finding nothing for a week is the
+%% expected case. Partials are the same search reported at a bar low enough to
+%% clear regularly: their rate is the hash rate, so an operator can see that a
+%% partition is being read and hashed, watch the rate move when a module
+%% finishes packing, and notice it stop.
+%%
+%% They are worth nothing to anyone else and are never carried anywhere. This
+%% emits an event and returns nothing.
+partial(Kind, Hash, Nonce, Byte, Session, Opts) ->
+    Bits = leading_zeros(hb_util:decode(Hash)),
+    case Bits >= hb_util:int(hb_opts:get(<<"arweave-mining-partial-bits">>,
+            ?PARTIAL_BITS, Opts)) of
+        true ->
+            ?event(arweave_mining,
+                {partial_proof,
+                    {kind, {string, Kind}},
+                    {bits, Bits},
+                    {nonce, Nonce},
+                    {recall_byte, Byte},
+                    {step,
+                        hb_util:int(
+                            field(<<"global-step-number">>, Session, Opts))},
+                    {hash, {string, Hash}}
+                },
+                Opts
+            );
+        false ->
+            ok
+    end.
+
+%% @doc How many zero bits a hash begins with. Counted rather than compared
+%% against a threshold value because the number itself is the useful one: the
+%% rate at each width says what the hash rate is, and a widening tail says the
+%% miner has been running long enough to have been lucky.
+leading_zeros(<<0:1, Rest/bitstring>>) ->
+    1 + leading_zeros(Rest);
+leading_zeros(_Hash) ->
+    0.
 
 %% @doc Check a solution hash against the difficulty its kind of solution must
 %% meet: a one-chunk solution against the difficulty scaled by the protocol's

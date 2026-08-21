@@ -849,6 +849,112 @@ anchored_timeline(Info, PrevStep, Step, Opts, Tries) ->
             anchored_timeline(Info, PrevStep, Step, Opts, Tries - 1)
     end.
 
+%% @doc `~arweave-mining@2.9/start' mines continuously from one call: it
+%% follows the node's own nonce limiter, searches each step as that step is
+%% produced, and keeps going without being asked again.
+%%
+%% This is the claim a one-shot pass cannot make. `mine' searches a window from
+%% the parent and returns; a session subscribes to the timeline and is driven by
+%% it, so the steps it searches are the steps that exist, and it searches each
+%% of them once. The vector watches the counters move: steps seen, searches
+%% dispatched and completed, and how far behind the newest step the newest
+%% searched one is.
+mines_continuously_test_() ->
+    {timeout, 300, fun test_mines_continuously/0}.
+
+test_mines_continuously() ->
+    Opts = (mining_opts())#{ <<"arweave-vdf-timeline">> => true },
+    {Base, Prev} = mining_chain(Opts),
+    Info = Prev#block.nonce_limiter_info,
+    PrevStep = Info#nonce_limiter_info.global_step_number,
+    % The session starts before the nonce limiter has an anchor, which is the
+    % order a node comes up in: there is nothing to mine until a block has been
+    % validated, and the miner waits rather than failing.
+    {ok, Started} = started(Base, Opts),
+    ?assertEqual(true, maps:get(<<"running">>, Started)),
+    ?assertEqual(0, maps:get(<<"steps">>, Started)),
+    % Anchoring the nonce limiter is what validating a block does. From here it
+    % computes, and every step it computes is pushed at the session.
+    anchored_timeline(Info, PrevStep, PrevStep + 2, Opts),
+    % The session searches without being asked again.
+    Searched = mined_until(fun(S) -> maps:get(<<"completed">>, S) > 0 end, Opts),
+    ?assert(maps:get(<<"steps">>, Searched) > 0),
+    ?assert(maps:get(<<"dispatched">>, Searched) > 0),
+    ?assertEqual(
+        maps:get(<<"dispatched">>, Searched),
+        maps:get(<<"completed">>, Searched) + maps:get(<<"in-flight">>, Searched)
+    ),
+    ?assert(maps:get(<<"steps">>, Searched) > 1),
+    % And it moves onto each new block without being asked. Every block this
+    % session produces is validated, and validating a block re-anchors the
+    % nonce limiter on it -- so the timeline the session is following moves
+    % under it, repeatedly, and the session keeps searching across every one of
+    % those moves. That is the jump-forward, exercised by the node's own blocks
+    % rather than by a simulated one.
+    Mined =
+        mined_until(fun(S) -> maps:get(<<"blocks">>, S) > 1 end, Opts),
+    ?assert(maps:get(<<"blocks">>, Mined) > 1),
+    ?assertEqual(
+        maps:get(<<"solutions">>, Mined),
+        maps:get(<<"blocks">>, Mined)
+    ),
+    ?assert(maps:get(<<"steps">>, Mined) >= maps:get(<<"steps">>, Searched)),
+    ?assertEqual(0, maps:get(<<"errors">>, Mined)),
+    % The timeline it is following is the node's own, anchored on a block the
+    % node validated rather than on anything the session asserted.
+    ?assert(
+        is_integer(
+            maps:get(<<"anchored-at">>, maps:get(<<"timeline">>, Mined)))),
+    % Stopping leaves the session alive and holding nothing.
+    {ok, Stopped} = control(<<"stop">>, Opts),
+    ?assertEqual(false, maps:get(<<"running">>, Stopped)),
+    ?assertEqual(0, maps:get(<<"queued">>, Stopped)),
+    {ok, Idle} = control(<<"status">>, Opts),
+    ?assertEqual(false, maps:get(<<"running">>, Idle)).
+
+%% @doc Start the session on a parent, over the vectors' own weave source.
+%%
+%% The source is built once. Building it packs chunks, which is thirty-two
+%% RandomX runs each, so a poll loop that rebuilt it would be measuring the
+%% harness rather than the miner.
+started(Base, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave-mining@2.9">> },
+        #{
+            <<"path">> => <<"start">>,
+            <<"parent">> => Base,
+            <<"max-nonces">> => ?MINING_NONCES,
+            <<"weave">> => mining_source(Opts)
+        },
+        Opts
+    ).
+
+%% @doc Ask the running session something. `stop' and `status' read nothing
+%% from the request, so nothing is built to ask them.
+control(Path, Opts) ->
+    hb_ao:resolve(
+        #{ <<"device">> => <<"arweave-mining@2.9">> },
+        #{ <<"path">> => Path },
+        Opts
+    ).
+
+%% @doc Poll the session until it reports what the caller is waiting for. The
+%% timeline computes a step at a time and the session is driven by it, so what
+%% is true is whatever it has reached when asked.
+mined_until(Done, Opts) ->
+    mined_until(Done, Opts, 600).
+mined_until(_Done, Opts, 0) ->
+    {ok, Status} = control(<<"status">>, Opts),
+    error({'miner-made-no-progress', Status});
+mined_until(Done, Opts, Tries) ->
+    {ok, Status} = control(<<"status">>, Opts),
+    case Done(Status) of
+        true -> Status;
+        false ->
+            timer:sleep(50),
+            mined_until(Done, Opts, Tries - 1)
+    end.
+
 %% @doc `~arweave-mining@2.9/mine` composes the search and the producer into
 %% one pass, and the block it answers with is one this node's own validation
 %% accepts under the `full' profile.

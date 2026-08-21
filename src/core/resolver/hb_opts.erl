@@ -298,6 +298,14 @@ raw_default_message() ->
         <<"arweave-chunk-group-size">> => 256 * 1024 * 8000,
         % Chunks one bounded storage pass reads, writes or enciphers.
         <<"arweave-storage-batch">> => 100,
+        % Searches a mining session may run at once. One is one partition at
+        % one nonce-limiter step: a recall range read and hashed, so the useful
+        % bound is what the disks under the storage modules can serve.
+        <<"arweave-mining-workers">> => 4,
+        % The leading zero bits a hash needs for a mining pass to report it as a
+        % partial proof. Nothing in consensus reads this; it is the monitoring
+        % signal whose rate is the hash rate.
+        <<"arweave-mining-partial-bits">> => 22,
         % The store every storage module's index and sync records are kept in.
         % Empty takes one under `index' in the data directory. One store for
         % all of them: every key names its own module, and an LMDB environment
