@@ -361,7 +361,7 @@ bundle_commitment_key(Tags, Opts) ->
 
 %% @doc Check whether a list of key-value pairs contains only normalized keys.
 normal_tags(BaseFields, Tags) ->
-    ReservedFields = [<<"ao-types">>, <<"data">> | BaseFields],
+    ReservedFields = [<<"ao-data-key">>, <<"ao-types">>, <<"data">> | BaseFields],
     NormalizedKeys =
         [
             hb_util:to_lower(hb_ao:normalize_key(Key))
