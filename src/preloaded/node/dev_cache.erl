@@ -153,10 +153,9 @@ check_response_matches_expected(Response, Expected, Opts) ->
         not_found ->
             false;
         _ ->
-            {ok, OnlyCommitted} = hb_message:with_only_committed(Response, Opts),
             CommitmentIDs =
                 hb_maps:keys(
-                    hb_maps:get(<<"commitments">>, OnlyCommitted, #{}, Opts),
+                    hb_maps:get(<<"commitments">>, Response, #{}, Opts),
                     Opts
                 ),
             MembershipOk =
@@ -168,7 +167,7 @@ check_response_matches_expected(Response, Expected, Opts) ->
                     false -> #{ <<"committers">> => <<"all">> }
                 end,
             MembershipOk
-                andalso hb_message:verify(OnlyCommitted, VerifyReq, Opts)
+                andalso hb_message:verify(Response, VerifyReq, Opts)
     end.
 
 %% @doc Write data to the cache.
