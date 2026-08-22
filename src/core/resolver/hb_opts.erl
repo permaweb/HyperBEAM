@@ -476,6 +476,7 @@ raw_default_message() ->
                     <<"store-module">> => hb_store_arweave,
                     <<"name">> => <<"cache-arweave">>,
                     <<"index-store">> => [?DEFAULT_PRIMARY_STORE],
+                    <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
                     <<"remote-index">> => true,
                     <<"arweave-node">> => ?DEFAULT_GATEWAY
                 },
