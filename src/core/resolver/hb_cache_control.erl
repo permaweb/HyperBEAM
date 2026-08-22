@@ -37,6 +37,8 @@ maybe_store(Base, Req, Res, Opts) ->
 %%                        a 504 `Status'.
 %%      `no_cache':       If set, the cached values are never used. Returns
 %%                        `continue' to the caller.
+%%      `max-age':        If set, cached results must have a sufficiently
+%%                        recent `created-at' timestamp.
 maybe_lookup(Base, Req, Opts) ->
     case exec_likely_faster_heuristic(Base, Req, Opts) of
         true ->
@@ -60,26 +62,50 @@ lookup(Base, Req, Opts) ->
                 {hit, not_found} ->
                     {error, not_found};
                 {hit, {ok, Res}} ->
-                    ?event(caching,
-                        {cache_hit,
-                            {base, Base},
-                            {req, Req},
-                            {res, Res}
-                        }
-                    ),
-                    {ok, Res};
+                    case fresh(Res, Req, Opts) of
+                        true ->
+                            ?event(caching,
+                                {cache_hit,
+                                    {base, Base},
+                                    {req, Req},
+                                    {res, Res}
+                                }
+                            ),
+                            {ok, cached_result(Res)};
+                        false ->
+                            ?event(caching, {stale_cache_result, Base, Req}),
+                            cache_miss(Base, Req, Settings, Opts)
+                    end;
                 _ ->
                     ?event(caching, {result_cache_miss, Base, Req}),
-                    case Settings of
-                        #{ <<"only-if-cached">> := true } ->
-                            only_if_cached_not_found_error(Base, Req, Opts);
-                        _ ->
-                            maybe_load_base(Base, Req, Opts)
-                        end
+                    cache_miss(Base, Req, Settings, Opts)
             end
     end.
 
 %%% Internal functions
+
+%% @doc Return whether a cached result satisfies the requested `max-age'.
+fresh(Res, Req, Opts) ->
+    case hb_maps:get(<<"max-age">>, Req, infinity, Opts) of
+        infinity -> true;
+        <<"infinity">> -> true;
+        RawMaxAge ->
+            try
+                CreatedAt = hb_maps:get(<<"created-at">>, Res, undefined, Opts),
+                os:system_time(second) =<
+                    hb_util:int(CreatedAt) + max(0, hb_util:int(RawMaxAge))
+            catch
+                _:_ -> false
+            end
+    end.
+
+cache_miss(Base, Req, #{ <<"only-if-cached">> := true }, Opts) ->
+    only_if_cached_not_found_error(Base, Req, Opts);
+cache_miss(Base, Req, _Settings, Opts) ->
+    maybe_load_base(Base, Req, Opts).
+
+cached_result(Res) when is_map(Res) -> maps:remove(<<"created-at">>, Res);
+cached_result(Res) -> Res.
 
 %% @doc Load an ID base required to execute the request.
 maybe_load_base(Base, Req, _Opts) when not ?IS_ID(Base) ->
@@ -140,7 +166,10 @@ perform_cache_write(Base, Req, Res, Opts) ->
                 Opts
             );
         Map when is_map(Map) ->
-            hb_cache:write(Res, Opts);
+            hb_cache:write(
+                Map#{ <<"created-at">> => os:system_time(second) },
+                Opts
+            );
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
@@ -422,3 +451,23 @@ cache_message_result_test() ->
     ?event({res2, Res2}),
     ?event({res3, Res3}),
     ?assertEqual(Res2, Res3).
+
+cache_result_max_age_test() ->
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 1 },
+    Result = #{ <<"value">> => <<"cached">> },
+    {ok, ResultPath} = perform_cache_write(Base, Req, Result, Opts),
+    {ok, Cached} = hb_cache:read(ResultPath, Opts),
+    CreatedAt = hb_maps:get(<<"created-at">>, Cached, Opts),
+    ?assert(is_integer(CreatedAt)),
+    hb_cache:link(ResultPath, hb_path:hashpath(Base, Req, Opts), Opts),
+    {ok, Served} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(not_found, hb_maps:get(<<"created-at">>, Served, not_found, Opts)),
+    timer:sleep(2100),
+    {ok, Refreshed} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(not_found, hb_maps:get(<<"created-at">>, Refreshed, not_found, Opts)),
+    ?assertNotEqual(Served, Refreshed).
