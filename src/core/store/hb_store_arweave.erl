@@ -1,12 +1,16 @@
 %%% @doc A store implementation that relays to an Arweave node, using an 
-%%% intermediate cache of offsets as an ID->ArweaveLocation mapping.
+%%% intermediate cache of offsets as an ID->ArweaveLocation mapping. Stores with
+%%% `remote-index' set additionally source the offsets they lack from the nodes
+%%% serving the `~arweave@2.9' routes, allowing a node to read data from Arweave
+%%% before it has indexed the weave itself.
 -module(hb_store_arweave).
 %%% Store API:
 -export([scope/0, scope/1, type/3, read/3, start/3]).
 %%% Unused Store API:
 -export([resolve/3, write/3, link/3, group/3]).
 %%% Indexing API:
--export([store_from_opts/1, write_offset/5, read_offset/3, read_chunks/3]).
+-export([store_from_opts/1, write_offset/5, read_chunks/3]).
+-export([read_offset/3, read_index_offset/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -59,23 +63,25 @@ group(_, _, _) -> {error, not_found}.
 %% @doc Get the type of the data at the given key. We potentially cache the
 %% result, so that we don't have to read the data from the GraphQL route
 %% multiple times.
-type(#{ <<"index-store">> := IndexStore }, #{ <<"type">> := ID }, NodeOpts)
-        when ?IS_ID(ID) ->
-    case hb_store:read(
-        IndexStore,
-        #{ <<"read">> => hb_store_arweave_offset:path(ID) },
-        NodeOpts
-    ) of
-        {ok, _Offset} ->
-            {ok, simple};
-        _ ->
-            {error, not_found}
+type(StoreOpts, #{ <<"type">> := ID }, _NodeOpts) when ?IS_ID(ID) ->
+    case read_index_offset(StoreOpts, ID) of
+        {ok, _Offset} -> {ok, simple};
+        not_found -> {error, not_found}
     end;
 type(_Store, #{ <<"type">> := _ID }, _NodeOpts) ->
     {error, not_found}.
 
 %% @doc Read the offset of the data at the given key.
-read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
+read_offset(StoreOpts, ID, Opts) ->
+    case read_index_offset(StoreOpts, ID) of
+        not_found -> read_remote_offset(StoreOpts, ID, Opts);
+        Offset -> Offset
+    end.
+
+%% @doc Read the offset of the data at the given key from the local index alone.
+%% Nodes answer each other's offset requests from their own indexes, such that a
+%% cycle of routes cannot recurse.
+read_index_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
@@ -100,7 +106,53 @@ read_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID, _Opts) ->
         _ ->
             not_found
     end;
-read_offset(_, _, _) -> not_found.
+read_index_offset(_, _) -> not_found.
+
+%% @doc Find the offset of a message from the nodes serving the `~arweave@2.9'
+%% routes, adding it to the local index so that they are asked once per message.
+%% The response gives the start of the item alongside the lengths of its header
+%% and data segments: an item with no header inside the weave's data tree is a
+%% transaction, one with a header is an ANS-104 item, and the two lengths sum to
+%% the span that the loader reads. Pending transactions report offsets relative
+%% to themselves, so only confirmed items are indexed.
+read_remote_offset(
+        StoreOpts = #{ <<"index-store">> := _, <<"remote-index">> := true },
+        ID,
+        Opts
+    ) ->
+    Res =
+        hb_http:request(
+            #{
+                <<"method">> => <<"HEAD">>,
+                <<"path">> => <<"/~arweave@2.9/raw=", ID/binary>>
+            },
+            Opts
+        ),
+    ?event(arweave_offsets, {remote_index, {id, {explicit, ID}}, {result, Res}}),
+    case Res of
+        {ok,
+            #{
+                <<"offset">> := StartOffset,
+                <<"header-length">> := HeaderLength,
+                <<"content-length">> := DataLength
+            }} when is_integer(StartOffset) ->
+            CodecName =
+                case HeaderLength of
+                    0 -> <<"tx@1.0">>;
+                    _ -> <<"ans104@1.0">>
+                end,
+            write_offset(
+                StoreOpts,
+                ID,
+                CodecName,
+                StartOffset,
+                HeaderLength + DataLength
+            ),
+            read_index_offset(StoreOpts, ID);
+        _ ->
+            not_found
+    end;
+read_remote_offset(_, _, _) -> not_found.
 
 %% @doc Read the data at the given key, reading the `local-store' first if
 %% available.
@@ -463,3 +515,28 @@ write_read_fake_bundle_tx_test() ->
     {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
+
+%% @doc A node with no offset index of its own finds the offsets of an Arweave
+%% transaction and an ANS-104 item from its routes, serving the item over HTTP
+%% and retaining both offsets for subsequent reads.
+remote_index_test() ->
+    Local =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [hb_test_utils:test_store()]
+        },
+    Store = Local#{ <<"remote-index">> => true },
+    TXID = <<"bndIwac23-s0K11TLC1N7z472sLGAkiOdhds87ZywoE">>,
+    ItemID = <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>,
+    ?assertEqual(not_found, read_offset(Local, TXID, #{})),
+    ?assertMatch(
+        {ok, #{ <<"codec-device">> := <<"tx@1.0">>, <<"length">> := 8387 }},
+        read_offset(Store, TXID, #{})
+    ),
+    % The offset is retained, so the routes are asked once per message.
+    ?assertMatch({ok, #{ <<"length">> := 8387 }}, read_offset(Local, TXID, #{})),
+    Node = hb_http_server:start_node(#{ <<"store">> => [Store] }),
+    {ok, Msg} = hb_http:get(Node, <<"/", ItemID/binary>>, #{}),
+    ?assert(hb_message:verify(Msg, all, #{})),
+    ?assertEqual(ItemID, hb_message:id(Msg, signed, #{})),
+    ?assertEqual(<<"1984">>, hb_ao:get(<<"data">>, Msg, #{})).
