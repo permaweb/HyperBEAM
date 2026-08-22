@@ -800,3 +800,12 @@ to_with_private_cookies_does_not_load_body_test() ->
         {ok, #{ <<"set-cookie">> := [<<"sid=\"v1\"">>] }},
         dev_cookie:to(Msg, #{ <<"format">> => <<"set-cookie">> }, #{})
     ).
+
+malformed_cookie_pair_test() ->
+    {ok, Msg} = dev_cookie:from(
+        #{ <<"cookie">> => <<68, 3, 67, 56, "; sid=valid">> }, #{}, #{}
+    ),
+    ?assertEqual(
+        {ok, #{ <<"sid">> => <<"valid">> }},
+        dev_cookie:extract(Msg, #{}, #{})
+    ).
