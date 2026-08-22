@@ -888,6 +888,69 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
+top_holders_cache_test() ->
+    Store = hb_test_utils:test_store(),
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"store">> => [Store],
+        <<"priv-wallet">> => Wallet,
+        <<"cache-control">> => [<<"always">>]
+    },
+    Balances = #{ <<"alice">> => <<"1">>, <<"bob">> => <<"3">> },
+    Trie = maps:fold(
+        fun(Address, Balance, Acc) ->
+            {ok, Updated} = hb_ao:resolve(
+                Acc,
+                #{ <<"path">> => <<"set">>, Address => Balance },
+                Opts
+            ),
+            Updated
+        end,
+        #{ <<"device">> => <<"trie@1.0">> },
+        Balances
+    ),
+    Process = hb_message:commit(
+        #{
+            <<"device">> => <<"process@1.0">>,
+            <<"scheduler-device">> => <<"scheduler@1.0">>,
+            <<"scheduler-location">> =>
+                hb_util:human_id(ar_wallet:to_address(Wallet)),
+            <<"execution-device">> => <<"message@1.0">>,
+            <<"type">> => <<"Process">>
+        },
+        Opts
+    ),
+    ProcessID = hb_util:human_id(hb_message:id(Process, all, Opts)),
+    {ok, TrieID} = hb_cache:write(Trie, Opts),
+    {ok, StateID} = hb_cache:write(
+        (hb_message:uncommitted(Process, Opts))#{
+            <<"at-slot">> => 0,
+            <<"balances">> => {link, TrieID, #{ <<"type">> => <<"link">> }},
+            <<"process">> => Process
+        },
+        Opts
+    ),
+    ok = hb_cache:link(
+        StateID,
+        <<"computed/", ProcessID/binary, "/slot/0">>,
+        Opts
+    ),
+    {ok, Script} = file:read_file("scripts/lua-top-holders.lua"),
+    Function = #{
+        <<"device">> => <<"lua@5.3a">>,
+        <<"content-type">> => <<"application/lua">>,
+        <<"body">> => Script
+    },
+    Req = #{
+        <<"path">> => <<"top">>,
+        <<"top">> => 2,
+        <<"process-id">> => ProcessID,
+        <<"max-age">> => 60
+    },
+    {ok, Result} = hb_ao:resolve(Function, Req, Opts),
+    Holders = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
+    ?assertEqual(<<"bob">>, hb_maps:get(<<"address">>, hd(Holders), Opts)).
+
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->
     {ok, Module} = file:read_file("test/test.lua"),
