@@ -169,9 +169,9 @@ head_raw(Base, Request, Opts) ->
     ?event(debug_raw, {raw, {base, Base}, {request, Request}}),
     case find_key(<<"raw">>, Base, Request, Opts) of
         TXID when ?IS_ID(TXID) ->
-            % Read the data from the local cache.
+            % Locate the item with the offsets this node holds.
             IndexStore = hb_store_arweave:store_from_opts(Opts),
-            case hb_store_arweave:read_offset(IndexStore, TXID, Opts) of
+            case hb_store_arweave:read_index_offset(IndexStore, TXID) of
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,

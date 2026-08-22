@@ -436,6 +436,25 @@ raw_default_message() ->
                 <<"stop-after">> => true,
                 <<"admissible-status">> => 200
             },
+            % Message offsets from an index node. Read over HTTP/2, whose
+            % header names are always lower-case, such that the typed fields of
+            % the response survive intermediaries and decode.
+            #{
+                <<"template">> =>
+                    #{
+                        <<"path">> => <<"^/~arweave@2.9/raw">>,
+                        <<"method">> => <<"HEAD">>
+                    },
+                <<"node">> =>
+                    #{
+                        <<"prefix">> => ?DEFAULT_GATEWAY,
+                        <<"opts">> =>
+                            #{
+                                <<"http-client">> => gun,
+                                <<"protocol">> => http2
+                            }
+                    }
+            },
             % Raw data requests via arweave.net gateway. TODO: Update later.
             #{
                 <<"template">> => <<"/raw">>,
@@ -457,6 +476,7 @@ raw_default_message() ->
                     <<"store-module">> => hb_store_arweave,
                     <<"name">> => <<"cache-arweave">>,
                     <<"index-store">> => [?DEFAULT_PRIMARY_STORE],
+                    <<"remote-index">> => true,
                     <<"arweave-node">> => ?DEFAULT_GATEWAY
                 },
                 #{
