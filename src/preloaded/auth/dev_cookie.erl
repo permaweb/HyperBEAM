@@ -294,7 +294,9 @@ from_cookie(Cookies, Req, Opts) when is_list(Cookies) ->
         ),
     {ok, MergedParsed};
 from_cookie(Cookie, _Req, _Opts) when is_binary(Cookie) ->
-    BinaryCookiePairs = split(semicolon, Cookie),
+    BinaryCookiePairs = [
+        Pair || Pair <- split(semicolon, Cookie), binary:match(Pair, <<"=">>) =/= nomatch
+    ],
     KeyValList =
         lists:map(
             fun(BinaryCookiePair) ->
