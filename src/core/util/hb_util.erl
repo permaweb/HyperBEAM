@@ -261,7 +261,10 @@ key_to_atom(Key, Mode) ->
     end.
 
 %% @doc Convert a human readable ID to a native binary ID. If the ID is already
-%% a native binary ID, it is returned as is.
+%% a native binary ID, it is returned as is. `ao:' IDs are their own native form.
+native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) > 3
+        andalso binary_part(Bin, 0, 3) == <<"ao:">> ->
+    Bin;
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 43 ->
     decode(Bin);
 native_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
@@ -274,6 +277,9 @@ native_id(Wallet = {_Priv, _Pub}) ->
 %% @doc Convert a native binary ID to a human readable ID. If the ID is already
 %% a human readable ID, it is returned as is. If it is an ethereum address, it
 %% is returned as is.
+human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) > 3
+        andalso binary_part(Bin, 0, 3) == <<"ao:">> ->
+    Bin;
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 32 ->
     encode(Bin);
 human_id(Bin) when is_binary(Bin) andalso byte_size(Bin) == 44 ->
