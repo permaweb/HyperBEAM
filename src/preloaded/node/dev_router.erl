@@ -719,9 +719,12 @@ lowest_distance([{Node, Distance}|Nodes], {CurrentNode, CurrentDistance}) ->
     end.
 
 %% @doc Cast a human-readable or native-encoded ID to a big integer.
+%% `ao:' IDs have no 256-bit native form, so they are hashed into the ring.
 binary_to_bignum(Bin) when ?IS_ID(Bin) ->
-    << Num:256/unsigned-integer >> = hb_util:native_id(Bin),
-    Num.
+    case hb_util:native_id(Bin) of
+        << Num:256/unsigned-integer >> -> Num;
+        Other -> << Num:256/unsigned-integer >> = hb_crypto:sha256(Other), Num
+    end.
 
 %% @doc Preprocess a request to check if it should be relayed to a different node.
 preprocess(Base, RawReq, Opts) ->
