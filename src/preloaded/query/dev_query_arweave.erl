@@ -56,36 +56,16 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     case valid_after_cursor(Args, Opts) of
         true ->
-            Matches = match_args(Args, Opts),
-            WithExplicit =
-                case explicit_ids(Args, Opts) of
-                    [] -> Matches;
-                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-                end,
-            Ordered =
-                case annotate_ids(WithExplicit, Opts) of
-                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-                    Annotated ->
-                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                        sort_offset_annotated(
-                            filter_offset_annotated(
-                                Annotated,
-                                maps:get(<<"block">>, Args, undefined),
-                                Opts
-                            ),
-                            Order,
-                            Opts
-                        )
-                end,
-            ?event({transactions_matches, Matches}),
-            {ok, connection(Ordered, Args, Opts)};
+            Bounds = index_bounds(Args, Opts),
+            Ordered = ordered(Args, Bounds, Opts),
+            {ok, connection(Ordered, Args, Bounds, Opts)};
         false ->
             ?event(
                 {invalid_after_cursor,
                     hb_maps:get(<<"after">>, Args, not_found, Opts)
                 }
             ),
-            {ok, connection([], Args, Opts)}
+            {ok, connection([], Args, #{}, Opts)}
     end;
 query(Obj, <<"block">>, Args, Opts) ->
     case query(Obj, <<"blocks">>, Args, Opts) of
@@ -225,11 +205,112 @@ find_field_key(Field, Msg, Opts) ->
             end
     end.
 
+%% @doc The results of a query, in the order the client asked for.
+%%
+%% Where the index can seek to the page the client wants, it is asked for that
+%% page and for the position of each result in the weave. The walk found them
+%% by that position, so it is already known; looking each one up again would
+%% mean holding an index of the node's own, which is the thing a published
+%% index exists to make unnecessary.
+ordered(Args, Bounds, Opts) when map_size(Bounds) > 0 ->
+    case hb_cache:locate(tags_template(Args, Opts), Bounds, Opts) of
+        {ok, Located} -> with_cursors(Located, undefined, 0);
+        _ -> []
+    end;
+ordered(Args, _Bounds, Opts) ->
+    Matches = match_args(Args, Opts),
+    WithExplicit =
+        case explicit_ids(Args, Opts) of
+            [] -> Matches;
+            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+        end,
+    ?event({transactions_matches, Matches}),
+    case annotate_ids(WithExplicit, Opts) of
+        unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
+        Annotated ->
+            Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+            sort_offset_annotated(
+                filter_offset_annotated(
+                    Annotated,
+                    maps:get(<<"block">>, Args, undefined),
+                    Opts
+                ),
+                Order,
+                Opts
+            )
+    end.
+
+%% @doc The page of the index a query wants, where the index can seek to it.
+%%
+%% A hashed index is ordered by the weave offset of each item, and the cursor a
+%% page ends with is that offset, so continuing is a seek rather than a scan of
+%% everything before it. The walk is bounded only where `tags' is the whole of
+%% the filter and no block range is given: a page of one filter, intersected
+%% afterwards with another or cut by a range, is not a page of the two.
+index_bounds(Args, Opts) ->
+    Filters = maps:keys(maps:with(?SUPPORTED_QUERY_ARGS, Args)),
+    Block = hb_maps:get(<<"block">>, Args, undefined, Opts),
+    case
+        (hb_opts:get(match_hash_size, false, Opts) =/= false)
+            andalso (Filters == [<<"tags">>])
+            andalso (Block == undefined orelse Block == null)
+            andalso seekable(hb_maps:get(<<"after">>, Args, null, Opts))
+    of
+        true -> page_bounds(Args, Opts);
+        false -> #{}
+    end.
+
+%% @doc Report whether a cursor names a place the index can be seeked to.
+%%
+%% A walk's own cursors are always a bare offset, since every result it finds
+%% it finds by one. A cursor from elsewhere -- a pending item, one whose
+%% position was never known, or one carrying the ordinate that tells two
+%% results at one offset apart -- names a place the index cannot be put down
+%% at, so the query is answered by reading the results and walking to it.
+seekable(null) -> true;
+seekable(undefined) -> true;
+seekable(<<>>) -> true;
+seekable(<<"offset=", Cursor/binary>>) -> binary:match(Cursor, <<"-">>) == nomatch;
+seekable(_Cursor) -> false.
+
+page_bounds(Args, Opts) ->
+    Direction =
+        case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
+            <<"HEIGHT_ASC">> -> forward;
+            _ -> backward
+        end,
+    % One more than the page, which is how `connection/4' learns that there is
+    % another page to come.
+    Bounds =
+        #{
+            <<"limit">> => page_size(Args, Opts) + 1,
+            <<"direction">> => Direction
+        },
+    case hb_maps:get(<<"after">>, Args, null, Opts) of
+        <<"offset=", Cursor/binary>> ->
+            Bounds#{ <<"from">> => hb_util:bin(after_cursor(Cursor, Direction)) };
+        _ ->
+            Bounds
+    end.
+
+%% A cursor names the last result of the page before, so the next page begins
+%% one offset along from it.
+after_cursor(Cursor, forward) -> hb_util:int(Cursor) + 1;
+after_cursor(Cursor, backward) -> max(0, hb_util:int(Cursor) - 1).
+
+tags_template(Args, Opts) ->
+    dev_query_graphql:keys_to_template(hb_maps:get(<<"tags">>, Args, [], Opts)).
+
 %% @doc Generate the connection response for a ordered, annotated list of 
 %% results.
-connection(Ordered, Args, Opts) ->
+connection(Ordered, Args, Bounds, Opts) ->
     ResultsCount = length(Ordered),
-    Remaining = drop_to_cursor(Args, Ordered, Opts),
+    % A walk that seeked to the cursor has already dropped what came before it.
+    Remaining =
+        case map_size(Bounds) of
+            0 -> drop_to_cursor(Args, Ordered, Opts);
+            _ -> Ordered
+        end,
     CountToReturn = page_size(Args, Opts),
     ResultsPagePlusOne = read_ids(Remaining, CountToReturn + 1, Opts),
     ResultsPage = lists:sublist(ResultsPagePlusOne, CountToReturn),
@@ -548,25 +629,34 @@ match(UnsupportedFilter, _, _) ->
 %% @doc Offset-annotate a list of IDs, returning {StartOffset, ID} pairs.
 annotate_ids(IDs, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
-        no_store -> unavailable;
-        StoreOpts -> annotate_offsets(IDs, StoreOpts, undefined, 0, Opts)
+        no_store ->
+            unavailable;
+        StoreOpts ->
+            with_cursors(
+                [from_offset_index(ID, StoreOpts, Opts) || ID <- IDs],
+                undefined,
+                0
+            )
     end.
-annotate_offsets([], _StoreOpts, _LastOffset, _Ordinate, _Opts) -> [];
-annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
-    {Offset, Annotated} =
-        case hb_store_arweave:read_offset(StoreOpts, ID, Opts) of
-            {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
-                {
-                    StartOffset,
-                    #{
-                        <<"id">> => ID,
-                        <<"offset">> => StartOffset,
-                        <<"length">> => Length
-                    }
-                };
-            _ ->
-                {undefined, #{ <<"id">> => ID }}
-        end,
+
+from_offset_index(ID, StoreOpts, Opts) ->
+    case hb_store_arweave:read_offset(StoreOpts, ID, Opts) of
+        {ok, #{ <<"start-offset">> := StartOffset, <<"length">> := Length }} ->
+            #{
+                <<"id">> => ID,
+                <<"offset">> => StartOffset,
+                <<"length">> => Length
+            };
+        _ ->
+            #{ <<"id">> => ID }
+    end.
+
+%% @doc Attach a cursor to each annotated result. Consecutive results sharing
+%% one offset are told apart by an ordinate, so that a cursor names one of
+%% them rather than the group.
+with_cursors([], _LastOffset, _Ordinate) -> [];
+with_cursors([Annotated = #{ <<"id">> := ID } | Rest], LastOffset, Ordinate) ->
+    Offset = maps:get(<<"offset">>, Annotated, undefined),
     {NewOrdinate, Postfix} =
         case Offset =/= undefined andalso not pending_offset(Offset) andalso Offset =:= LastOffset of
             true -> {Ordinate + 1, <<"-", (hb_util:bin(Ordinate + 1))/binary>>};
@@ -576,7 +666,7 @@ annotate_offsets([ID|IDs], StoreOpts, LastOffset, Ordinate, Opts) ->
         Annotated#{
             <<"cursor">> => << (offset_cursor(ID, Offset))/binary, Postfix/binary >>
         },
-    [WithCursor | annotate_offsets(IDs, StoreOpts, Offset, NewOrdinate, Opts)].
+    [WithCursor | with_cursors(Rest, Offset, NewOrdinate)].
 
 offset_cursor(ID, undefined) when is_binary(ID) -> <<"ephemeral=", ID/binary>>;
 offset_cursor(ID, Offset) when is_binary(ID) ->
@@ -717,3 +807,139 @@ pending_offsets_page_by_cursor_test() ->
     #{ <<"id">> := PendingA, <<"cursor">> := FirstCursor } = Page(BaseArgs),
     #{ <<"id">> := NumericID } = Page(BaseArgs#{ <<"after">> => FirstCursor }),
     ok.
+
+%% Six ANS-104 items in block 1,889,322 of the weave, each tagged
+%% `App-Name: ArDrive-App', in the order their offsets put them in.
+-define(HASHED_ITEMS,
+    [
+        {386310990766550, <<"zvFNNmZwXxeznEjO5fHc6D7_bJWyTEmrSQWcKw_Z0wQ">>},
+        {386310990767812, <<"SD9obWV59R7JZuLIqzEztuaWaJ7FGY8N9XRy0JXwDGc">>},
+        {386310990769443, <<"Mx-GlwBslqsd-OkXGY84PxBzN_dhCPva_XANecNXKPs">>},
+        {386310990770705, <<"npAzk_BomjWBQQr_xnmlhdxjyl97EJnNv_MAaXffs1s">>},
+        {386310990772336, <<"SyLRPOOdz4MrJEupDwhOh8zYagCLoJuWF1RYxRr85X4">>},
+        {386310990773598, <<"Vlw8xwVZRl-GulRjelEpOZm9xJowjluKOmVRtFQmIjE">>}
+    ]).
+
+%% @doc A tags query over a hashed index is answered a page at a time.
+%%
+%% The index is seeked to the cursor rather than read up to it, and the
+%% position each result was found by is what the next cursor names -- so the
+%% node needs no index of its own to order or page by, which is the
+%% configuration a published index is meant to be read in.
+hashed_index_pages_test_() ->
+    {timeout, 300, fun hashed_index_pages/0}.
+hashed_index_pages() ->
+    Content = hb_test_utils:test_store(),
+    Index =
+        #{
+            <<"store-module">> => hb_store_lmdb,
+            <<"name">> =>
+                <<"cache-TEST/query-index-",
+                    (hb_util:bin(erlang:unique_integer([positive])))/binary>>,
+            <<"sorted-set">> => true,
+            <<"prefix">> => <<"~match@1.0/">>,
+            <<"path-normalization">> =>
+                [<<"decode-base64url">>, <<"decode-int-56">>],
+            <<"strip-slashes">> => true
+        },
+    Opts =
+        #{
+            <<"store">> =>
+                [
+                    Content,
+                    #{
+                        <<"store-module">> => hb_store_arweave,
+                        <<"name">> => <<"cache-arweave">>,
+                        <<"index-store">> => [Content],
+                        <<"arweave-node">> => <<"https://arweave.net">>
+                    },
+                    #{
+                        <<"store-module">> => hb_store_gateway,
+                        <<"local-store">> => [Content]
+                    }
+                ],
+            <<"match-index">> => [Index],
+            <<"match-hash-size">> => 8,
+            <<"match-offsets">> => <<"lookup">>
+        },
+    ok = hb_store:reset(Index, #{}),
+    Address = hb_cache:match_address(<<"app-name">>, <<"ArDrive-App">>, Opts),
+    ok =
+        hb_store:write(
+            [Index],
+            hb_maps:from_list(
+                [
+                    {<<Address/binary, "/", (hb_util:bin(Offset))/binary>>, <<>>}
+                ||
+                    {Offset, _ID} <- ?HASHED_ITEMS
+                ]
+            ),
+            Opts
+        ),
+    Args =
+        #{
+            <<"tags">> =>
+                [#{ <<"name">> => <<"App-Name">>, <<"values">> => [<<"ArDrive-App">>] }],
+            <<"first">> => 2
+        },
+    Page =
+        fun(PageArgs) ->
+            {ok, Connection} = query(#{}, <<"transactions">>, PageArgs, Opts),
+            Connection
+        end,
+    % Read each item once so that the pages below are assembled from the
+    % node's own store. `read_ids/3' drops an ID it cannot read, so a gateway
+    % that declines one would otherwise show up as a short page rather than as
+    % what it is.
+    lists:foreach(
+        fun({_Offset, ID}) ->
+            ?assertMatch({ok, _}, hb_cache:read(ID, Opts))
+        end,
+        ?HASHED_ITEMS
+    ),
+    % The index answers before the query surface is asked, so a failure below
+    % is in the surface rather than in the walk.
+    ?assertMatch(
+        {ok, [#{ <<"offset">> := _ } | _]},
+        hb_cache:locate(
+            #{ <<"app-name">> => <<"ArDrive-App">> },
+            #{ <<"limit">> => 2 },
+            Opts
+        )
+    ),
+    Newest = lists:reverse(?HASHED_ITEMS),
+    % The default order is newest first, which for a weave-ordered index is the
+    % highest offsets first.
+    #{ <<"edges">> := FirstEdges, <<"pageInfo">> := FirstInfo } = Page(Args),
+    ?assertEqual(
+        [ID || {_Offset, ID} <- lists:sublist(Newest, 2)],
+        [ID || #{ <<"id">> := ID } <- FirstEdges]
+    ),
+    ?assertEqual(#{ <<"hasNextPage">> => true }, FirstInfo),
+    % A cursor names the offset the walk reached, so the next page continues
+    % from it rather than from the beginning.
+    #{ <<"cursor">> := Cursor } = lists:last(FirstEdges),
+    ?assertEqual(
+        <<"offset=", (hb_util:bin(element(1, lists:nth(2, Newest))))/binary>>,
+        Cursor
+    ),
+    #{ <<"edges">> := SecondEdges } = Page(Args#{ <<"after">> => Cursor }),
+    ?assertEqual(
+        [ID || {_Offset, ID} <- lists:sublist(Newest, 3, 2)],
+        [ID || #{ <<"id">> := ID } <- SecondEdges]
+    ),
+    % Oldest first walks the other way.
+    #{ <<"edges">> := AscendingEdges } =
+        Page(Args#{ <<"sort">> => <<"HEIGHT_ASC">> }),
+    ?assertEqual(
+        [ID || {_Offset, ID} <- lists:sublist(?HASHED_ITEMS, 2)],
+        [ID || #{ <<"id">> := ID } <- AscendingEdges]
+    ),
+    % The last page says there is nothing after it.
+    #{ <<"pageInfo">> := LastInfo } =
+        Page(Args#{
+            <<"after">> =>
+                <<"offset=",
+                    (hb_util:bin(element(1, lists:nth(4, Newest))))/binary>>
+        }),
+    ?assertEqual(#{ <<"hasNextPage">> => false }, LastInfo).

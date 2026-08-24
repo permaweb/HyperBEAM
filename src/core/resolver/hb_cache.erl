@@ -41,7 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
--export([match/2, match/3, list/2, list_numbered/2]).
+-export([match/2, match/3, locate/3, list/2, list_numbered/2]).
 -export([match_address/3]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -235,6 +235,22 @@ match(MatchSpec, Req, Opts) ->
                 {ok, Matches} when length(Matches) > 0 -> {ok, Matches};
                 _ -> {error, not_found}
             end
+    end.
+
+%% @doc Match a template against the cache, carrying each message's position in
+%% the weave alongside its ID.
+%%
+%% A hashed index is keyed by that position, so it is what the walk found the
+%% message by. A caller that orders or pages by it -- which is what the Arweave
+%% query surface does -- would otherwise have to look each one up again in an
+%% index of the node's own, which a node reading a published index does not
+%% have.
+locate(MatchSpec, Req, Opts) ->
+    ReadMode = hb_opts:get(cache_read_mode, normal, Opts),
+    NormalizedSpec = normalize_match_spec(MatchSpec, ReadMode, Opts),
+    case hb_ao:raw(<<"match@1.0">>, <<"locate">>, NormalizedSpec, Req, Opts) of
+        {ok, Located} when length(Located) > 0 -> {ok, Located};
+        _ -> {error, not_found}
     end.
 
 %% @doc Normalize match values for store reverse-index lookups.
@@ -1620,11 +1636,22 @@ hashed_match_index_test() ->
 %% @doc Ensure that `always' refuses a row it cannot place in the weave, and
 %% that `false' writes the predicate and nothing under it.
 match_offset_modes_test() ->
-    {Always, _, AlwaysOpts} = hashed_index_opts(<<"always">>),
-    {ok, _} = write(#{ <<"x">> => <<"1">> }, AlwaysOpts),
+    {Always, Arweave, AlwaysOpts} = hashed_index_opts(<<"always">>),
+    % An item whose position is known is written at it.
+    Located = #{ <<"x">> => <<"1">> },
+    LocatedID = hb_message:id(Located, none, AlwaysOpts),
+    ok = hb_store_arweave:write_offset(Arweave, LocatedID, <<"tx@1.0">>, 8192, 100),
+    {ok, LocatedID} = write(Located, AlwaysOpts),
+    ?assertEqual(
+        {ok, [<<"8192">>]},
+        hb_store:list(Always, hashed_address(<<"x">>, <<"1">>), AlwaysOpts)
+    ),
+    % One whose position is not known is written at no offset at all, where
+    % `lookup' would have written it at zero.
+    {ok, _} = write(#{ <<"y">> => <<"2">> }, AlwaysOpts),
     ?assertEqual(
         {ok, []},
-        hb_store:list(Always, hashed_address(<<"x">>, <<"1">>), AlwaysOpts)
+        hb_store:list(Always, hashed_address(<<"y">>, <<"2">>), AlwaysOpts)
     ),
     {Never, _, NeverOpts} = hashed_index_opts(<<"false">>),
     {ok, _} = write(#{ <<"x">> => <<"1">> }, NeverOpts),

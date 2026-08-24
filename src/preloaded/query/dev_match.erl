@@ -11,7 +11,7 @@
 %%% orders numerically; a store holding the offsets as decimal text would order
 %%% `100' before `99' and answer wrongly.
 -module(dev_match).
--export([info/0, all/3]).
+-export([info/0, all/3, locate/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -83,11 +83,27 @@ match(Key, Base, Opts) ->
 %% what a page cursor is -- along with `limit' and `direction'. Continuing is a
 %% seek rather than a scan, so the fiftieth page costs what the first does.
 all(Base, Req, Opts) ->
+    case locate(Base, Req, Opts) of
+        {ok, Located} -> {ok, [ID || #{ <<"id">> := ID } <- Located]};
+        Error -> Error
+    end.
+
+%% @doc As `all/3', carrying each message's position in the weave alongside it.
+%%
+%% A caller that orders or pages results wants the offset, and the walk has it
+%% already: deriving it again would mean holding an index of the node's own,
+%% which is the thing a published index exists to make unnecessary.
+locate(Base, Req, Opts) ->
     IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
     case hb_opts:get(match_hash_size, false, Opts) of
-        false -> intersect(IndexBase, Opts);
+        false -> unlocated(intersect(IndexBase, Opts));
         _ -> leapfrog(IndexBase, Req, Opts)
     end.
+
+%% The index whose rows name messages rather than positions says nothing about
+%% where they sit in the weave.
+unlocated({ok, IDs}) -> {ok, [#{ <<"id">> => ID } || ID <- IDs]};
+unlocated(Error) -> Error.
 
 %% @doc Intersect the predicates of a template by walking their rows in step.
 %%
@@ -148,6 +164,9 @@ first(-1) -> ?MAX_OFFSET.
 bound(unbounded) -> unbounded;
 bound(Limit) -> hb_util:int(Limit).
 
+%% Walk from one offset to the next, keeping the ones every predicate carries.
+%% `Cursor' is where the walk has reached, `Step' which way it is going,
+%% `Limit' how many more results it may return, and `Found' the ones it has.
 walk(_Store, _Addresses, _Cursor, 0, _Step, Found, _Opts) ->
     lists:reverse(Found);
 walk(_Store, _Addresses, Cursor, _Limit, _Step, Found, _Opts) when Cursor < 0 ->
@@ -156,8 +175,13 @@ walk(Store, Addresses, Cursor, Limit, Step, Found, Opts) ->
     case step(Store, Addresses, Cursor, Step, Opts) of
         exhausted ->
             lists:reverse(Found);
-        {advance, Next} ->
+        {advance, Next} when (Next - Cursor) * Step > 0 ->
             walk(Store, Addresses, Next, Limit, Step, Found, Opts);
+        {advance, _Behind} ->
+            % A store whose rows are not in the order the walk assumes would
+            % otherwise send it back over ground it has already covered, and
+            % it would never finish. Its answer ends here instead.
+            lists:reverse(Found);
         carried ->
             walk(
                 Store, Addresses, Cursor + Step, decrement(Limit), Step,
@@ -211,6 +235,21 @@ direction_of(-1) -> backward.
 %% anyway, because the item is what the query returns. A row that does not
 %% check out is dropped rather than raised: a collision is not an error.
 %%
+%% What the check establishes, and what it does not: the pairs a result is
+%% returned for are the pairs the bytes at its offset carry, and its ID is the
+%% hash of the signature those bytes carry. It is not established that those
+%% bytes are the item that signature belongs to. An ANS-104 item does not
+%% record how far it runs -- its extent is known only from the bundle header
+%% above it -- so its signature cannot be checked from an offset alone.
+%%
+%% Against a colliding address, which is what the check exists for, that is
+%% enough: the bytes at the colliding row are some other real item, and its
+%% pairs will not be the ones asked for. Against an index whose publisher chose
+%% both the rows and the bytes they point at, it is not: such a publisher can
+%% make a real ID appear among the results of a query it does not belong to. A
+%% reader that does not trust its index that far reads each result back by its
+%% ID, which is what the Arweave query surface does before it answers.
+%%
 %% The reads are independent of each other, so they are made at once. Serially
 %% a page of a hundred results is a hundred round trips.
 verified(Base, Offsets, Opts) ->
@@ -220,7 +259,13 @@ verified(Base, Offsets, Opts) ->
             fun(Offset) -> carries(Offset, Base, Opts) end,
             hb_opts:get(match_verify_workers, 32, Opts)
         ),
-    {ok, [ID || {ok, ID} <- Checked]}.
+    {ok,
+        [
+            #{ <<"id">> => ID, <<"offset">> => Offset }
+        ||
+            {ok, ID, Offset} <- Checked
+        ]
+    }.
 
 %% @doc Read the item that begins at an offset and report its ID if it carries
 %% every pair of the template.
@@ -235,11 +280,17 @@ carries(0, _Base, _Opts) ->
     skip;
 carries(Offset, Base, Opts) ->
     case header(Offset, Opts) of
-        {ok, Item} -> checked(Item, Base, Opts);
+        {ok, Item} ->
+            try checked(Item, Base, Offset, Opts)
+            catch _:_:_ -> skip
+            end;
         % The bytes at the offset are not an item this reader can parse: a
         % transaction whose header sits outside the data tree, or a row whose
-        % predicate collided with another's. Neither is an error.
-        {error, _} -> skip
+        % predicate collided with another's. Neither is an error, and neither
+        % is an item the codec cannot make a message of: one row that cannot
+        % be checked is one result dropped rather than a query lost.
+        {error, _} ->
+            skip
     end.
 
 %% @doc Read the item whose header begins at an offset.
@@ -280,31 +331,36 @@ whole(Bytes) ->
     end.
 
 %% The item's tags, target, anchor and committer are what a template names,
-%% and are all that a header carries.
-checked(Item, Base, Opts) ->
+%% and are all that a header carries. The key of a pair is lower-cased, as it
+%% is when the pair is hashed into an address: a template naming `App-Name' and
+%% one naming `app-name' address the same rows and must accept the same items.
+checked(Item, Base, Offset, Opts) ->
+    % Compared as a TABM, where every value is the binary the index was
+    % written from: a structured message decodes its `ao-types' back into
+    % terms, and a template naming an integer would then be compared against
+    % one and never match.
     Fields =
         hb_message:uncommitted(
-            hb_message:convert(
-                Item,
-                <<"structured@1.0">>,
-                <<"ans104@1.0">>,
-                Opts
-            ),
+            hb_message:convert(Item, tabm, <<"ans104@1.0">>, Opts),
             Opts
         ),
     Matches =
         hb_maps:fold(
             fun(_Key, _Value, false) -> false;
                (Key, Value, true) ->
-                    hb_maps:get(hb_ao:normalize_key(Key), Fields, not_found, Opts)
-                        == Value
+                    hb_maps:get(
+                        hb_util:to_lower(hb_ao:normalize_key(Key)),
+                        Fields,
+                        not_found,
+                        Opts
+                    ) == Value
             end,
             true,
             Base,
             Opts
         ),
     case Matches of
-        true -> {ok, hb_util:encode(ar_bundles:id(Item, signed))};
+        true -> {ok, hb_util:encode(ar_bundles:id(Item, signed)), Offset};
         false -> skip
     end.
 
@@ -429,9 +485,16 @@ walks_in_step() ->
     All = [Offset || {Offset, _ID} <- ?WEAVE_ITEMS],
     Files = [386310990767812, 386310990770705, 386310990773598],
     Ciphered = [386310990767812],
-    test_rows(Index, <<"app-name">>, <<"ArDrive-App">>, All, Opts),
-    test_rows(Index, <<"entity-type">>, <<"file">>, Files, Opts),
-    test_rows(Index, <<"cipher">>, <<"AES256-GCM">>, Ciphered, Opts),
+    % Two rows that the index asserts and the items deny: one row of a
+    % predicate at the offset of an item that does not carry it, which is what
+    % a collision between two truncated hashes looks like, and one at the
+    % sentinel offset that stands for a position never found. Neither may
+    % reach a result.
+    Colliding = 386310990769443,
+    test_rows(Index, <<"app-name">>, <<"ArDrive-App">>, All ++ [0], Opts),
+    test_rows(Index, <<"entity-type">>, <<"file">>, Files ++ [0], Opts),
+    test_rows(
+        Index, <<"cipher">>, <<"AES256-GCM">>, Ciphered ++ [Colliding], Opts),
     IDs = hb_maps:from_list([{Offset, ID} || {Offset, ID} <- ?WEAVE_ITEMS]),
     Expected = fun(Offsets) -> [hb_maps:get(O, IDs, Opts) || O <- Offsets] end,
     ?assertEqual(
@@ -443,7 +506,14 @@ walks_in_step() ->
     ?assertEqual({ok, Expected(Files)}, hb_cache:match(Two, Opts)),
     TwoSeeks = index_seeks() - Before,
     Three = Two#{ <<"cipher">> => <<"AES256-GCM">> },
+    % The colliding row is in every predicate's set, so the walk emits its
+    % offset; the item at it carries no `cipher', so it is dropped.
+    ?assert(lists:member(Colliding, All)),
     ?assertEqual({ok, Expected(Ciphered)}, hb_cache:match(Three, Opts)),
+    ?assertEqual(
+        {ok, Expected(Ciphered)},
+        hb_cache:match(#{ <<"cipher">> => <<"AES256-GCM">> }, Opts)
+    ),
     % A third predicate that rules almost everything out costs no more seeks
     % than the two it is added to: the walk is stopped by whichever predicate
     % runs out first rather than by how many there are. Intersecting three
@@ -452,8 +522,13 @@ walks_in_step() ->
     ?assertEqual({ok, Expected(Ciphered)}, hb_cache:match(Three, Opts)),
     ?assert(index_seeks() - ThreeBefore =< TwoSeeks).
 
-%% @doc A page of results is a seek into the index rather than a scan up to it,
-%% so continuing from a cursor costs what starting did.
+%% @doc Continuing from a cursor asks the index no more than starting did.
+%%
+%% `hb_match_index_seeks' counts what this module asks of the store, which is
+%% what says the walk does not re-read the pages before the cursor. What the
+%% store does to answer a seek is its own to measure, and
+%% `hb_store_arlmdb:published_block_index_reads_test_' counts that in ranged
+%% reads of the weave.
 leapfrog_pages_test_() ->
     {timeout, 300, fun pages_by_cursor/0}.
 pages_by_cursor() ->
@@ -476,8 +551,8 @@ pages_by_cursor() ->
         [hb_maps:get(O, IDs, Opts) || O <- lists:sublist(All, 3, 2)],
         Page(#{ <<"from">> => hb_util:bin(lists:nth(2, All) + 1), <<"limit">> => 2 })
     ),
-    % A later page costs no more seeks than the first: `from' is where the
-    % cursor is put down, not how far it is walked.
+    % A later page asks the index no more than the first: `from' is where the
+    % cursor is put down, not how far it is walked to.
     Before = index_seeks(),
     _ = Page(#{ <<"limit">> => 2 }),
     First = index_seeks() - Before,
@@ -489,4 +564,43 @@ pages_by_cursor() ->
     ?assertEqual(
         [hb_maps:get(O, IDs, Opts) || O <- lists:reverse(lists:nthtail(4, All))],
         Page(#{ <<"limit">> => 2, <<"direction">> => backward })
+    ).
+
+%% An AO assignment on the weave, whose `slot' is typed as an integer rather
+%% than held as the binary its tag carries.
+-define(TYPED_ITEM_OFFSET, 386414055714272).
+-define(TYPED_ITEM_ID, <<"tprBTrqaA3bEkC2BSVZkWxUU2gM3Dgs3E01hL0G1_5k">>).
+-define(TYPED_ITEM_SLOT, 2382).
+
+%% @doc A template naming a typed value matches the item that carries it.
+%%
+%% The index is written from a message's TABM, where every value is a binary,
+%% and a template arrives as one too. An item read back as a structured message
+%% has its `ao-types' decoded into terms, so a slot of 2382 would be compared
+%% against `<<"2382">>' and never match -- the row would be found and then
+%% thrown away.
+typed_values_test_() ->
+    {timeout, 300, fun typed_values/0}.
+typed_values() ->
+    {Index, Opts} = test_opts(),
+    test_rows(
+        Index,
+        <<"slot">>,
+        hb_util:bin(?TYPED_ITEM_SLOT),
+        [?TYPED_ITEM_OFFSET],
+        Opts
+    ),
+    ?assertEqual(
+        {ok, [?TYPED_ITEM_ID]},
+        hb_cache:match(#{ <<"slot">> => ?TYPED_ITEM_SLOT }, Opts)
+    ),
+    % The same pair written as the binary the tag holds addresses the same row.
+    ?assertEqual(
+        {ok, [?TYPED_ITEM_ID]},
+        hb_cache:match(#{ <<"slot">> => hb_util:bin(?TYPED_ITEM_SLOT) }, Opts)
+    ),
+    % A slot the item does not carry finds nothing.
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:match(#{ <<"slot">> => ?TYPED_ITEM_SLOT + 1 }, Opts)
     ).
