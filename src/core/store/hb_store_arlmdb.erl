@@ -45,6 +45,19 @@
 -define(DEFAULT_MAX_VALUE, 16 * 1024 * 1024).
 -define(MAX_LINKS, 1000).
 
+%% The pages a store holds after reading them, unless it is given a store of
+%% its own or `[]'. A published database is immutable, so the only reason to
+%% let a page go is to bound what the node holds: the default resets every ten
+%% minutes, and every lookup after a reset pays the top of the tree once more.
+-define(DEFAULT_PAGE_STORE,
+    [
+        #{
+            <<"store-module">> => hb_store_volatile,
+            <<"name">> => <<"arlmdb-pages">>,
+            <<"max-ttl">> => 600
+        }
+    ]).
+
 %% @doc Start the store by resolving its locator: the range of the weave that
 %% holds the database. The data is immutable, so the range is resolved once and
 %% carried in the store's instance message for the life of the node.
@@ -421,12 +434,75 @@ read_range(#{ <<"size">> := Size }, Offset, Length, _Opts, _Kind)
             Offset + Length > Size ->
     {error, {out_of_bounds, Offset, Length}};
 read_range(Store, Offset, Length, Opts, Kind) ->
+    held(
+        Store,
+        page_store(Store),
+        page_key(Store, Offset, Length),
+        Offset,
+        Length,
+        Opts,
+        Kind
+    ).
+
+%% @doc Take a range from the page store where it holds it already.
+%%
+%% A published database never changes, so a page of it is the same bytes for as
+%% long as anything is willing to hold them. Every lookup crosses the meta
+%% pages and the top of the tree, so holding those turns each lookup after the
+%% first into a read of the leaf and little else. The store is volatile and
+%% resets on a timer by default; `[]' turns it off, and `hb_store' reads that
+%% as no viable store without a branch of its own.
+held(Store, [], _Key, Offset, Length, Opts, Kind) ->
+    fetch(Store, Offset, Length, Opts, Kind);
+held(Store, _PageStore, no_key, Offset, Length, Opts, Kind) ->
+    fetch(Store, Offset, Length, Opts, Kind);
+held(Store, PageStore, Key, Offset, Length, Opts, Kind) ->
+    case hb_store:read(PageStore, Key, Opts) of
+        {ok, Bin} ->
+            hb_prometheus:inc(
+                counter, hb_store_arlmdb_page_hits, [hb_util:bin(Kind)]),
+            {ok, Bin};
+        _ ->
+            keep(PageStore, Key, fetch(Store, Offset, Length, Opts, Kind), Opts)
+    end.
+
+keep(PageStore, Key, {ok, Bin}, Opts) ->
+    hb_store:write(PageStore, #{ Key => Bin }, Opts),
+    {ok, Bin};
+keep(_PageStore, _Key, Result, _Opts) ->
+    Result.
+
+fetch(Store, Offset, Length, Opts, Kind) ->
     hb_prometheus:inc(counter, hb_store_arlmdb_reads, [hb_util:bin(Kind)]),
     hb_prometheus:measure_and_report(
         fun() -> read_chunks(Store, Offset, Length, Opts) end,
         hb_store_arlmdb_read_duration_seconds,
         [hb_util:bin(Kind)]
     ).
+
+%% @doc The store that holds the pages already read.
+page_store(#{ <<"page-store">> := PageStore }) -> PageStore;
+page_store(_Store) -> ?DEFAULT_PAGE_STORE.
+
+%% @doc The page store's key for a range of the weave.
+%%
+%% A range is named by where it begins in the weave and how far it runs. Two
+%% ranges can begin at the same place -- the pair of meta pages and the first
+%% page of the database both begin at its start -- and are not the same bytes,
+%% so the length is part of the name. A weave offset names one range of one
+%% database, so two stores may share a page store without colliding.
+%%
+%% A database still in the mempool has no place in the weave yet, and is still
+%% being written, so its pages are not held.
+page_key(#{ <<"start">> := Start }, Offset, Length) ->
+    <<
+        "~arweave@2.9/offset=",
+        (hb_util:bin(Start + Offset))/binary,
+        "/length=",
+        (hb_util:bin(Length))/binary
+    >>;
+page_key(_Store, _Offset, _Length) ->
+    no_key.
 
 read_chunks(#{ <<"start">> := Start }, Offset, Length, Opts) ->
     hb_store_arweave:read_chunks(Start + Offset, Length, Opts);
@@ -927,6 +1003,14 @@ init_prometheus() ->
         ]
     ),
     hb_prometheus:declare(
+        counter,
+        [
+            {name, hb_store_arlmdb_page_hits},
+            {labels, [kind]},
+            {help, "Ranges served from the page store rather than the weave"}
+        ]
+    ),
+    hb_prometheus:declare(
         histogram,
         [
             {name, hb_store_arlmdb_read_duration_seconds},
@@ -1172,12 +1256,16 @@ published_index() ->
     ?assertEqual(?INDEX_ENTRIES div 100_000, length(Listed)),
     ?assert(lists:member(hb_util:encode(index_key(0)), Listed)).
 
-%% @doc A lookup costs the depth of the tree plus one ranged read: one for the
-%% meta page, and one for each level it descends. Counted rather than asserted.
+%% @doc A cold lookup costs the depth of the tree plus one ranged read: one for
+%% the meta pages, and one for each level it descends. Counted rather than
+%% asserted, with the page store turned off so that the count is of the weave.
 published_index_reads_test_() ->
     {timeout, 300, fun published_index_reads/0}.
 published_index_reads() ->
-    Store = store(<<"arlmdb-index-reads">>, ?PUBLISHED_INDEX),
+    Store =
+        (store(<<"arlmdb-index-reads">>, ?PUBLISHED_INDEX))#{
+            <<"page-store">> => []
+        },
     {ok, Located, #{ <<"depth">> := Depth }} = open(Store, #{}),
     ?assert(Depth > 1),
     lists:foreach(
@@ -1191,6 +1279,45 @@ published_index_reads() ->
         end,
         [0, 4242, ?INDEX_ENTRIES - 1]
     ).
+
+%% @doc Every lookup crosses the meta pages and the top of the tree, and a
+%% published database never changes, so a store that holds the pages it has
+%% read pays for those levels once rather than once per lookup. The second
+%% lookup of a key costs nothing at all, and a lookup of a different key costs
+%% only the levels the two do not share.
+published_index_page_store_test_() ->
+    {timeout, 300, fun published_index_page_store/0}.
+published_index_page_store() ->
+    Store =
+        (store(<<"arlmdb-index-pages">>, ?PUBLISHED_INDEX))#{
+            <<"page-store">> =>
+                [
+                    #{
+                        <<"store-module">> => hb_store_volatile,
+                        <<"name">> =>
+                            <<"arlmdb-pages-",
+                                (hb_util:bin(erlang:unique_integer([positive])))/binary>>
+                    }
+                ]
+        },
+    {ok, Located, #{ <<"depth">> := Depth }} = open(Store, #{}),
+    Read =
+        fun(I) ->
+            Before = ranged_reads(),
+            ?assertEqual(
+                {ok, index_value(I)},
+                hb_store:read([Located], index_key(I), #{})
+            ),
+            ranged_reads() - Before
+        end,
+    % The first lookup pays for the whole descent, including the read that
+    % `open/2' has already made of the meta pages.
+    ?assert(Read(0) =< Depth + 1),
+    ?assertEqual(0, Read(0)),
+    % A different key shares the meta pages and the root, and pays only for
+    % the levels below the point at which the two descents part.
+    ?assert(Read(?INDEX_ENTRIES - 1) =< Depth - 1),
+    ?assertEqual(0, Read(?INDEX_ENTRIES - 1)).
 
 %% @doc Count the ranged reads that the store has made of the weave.
 ranged_reads() ->
