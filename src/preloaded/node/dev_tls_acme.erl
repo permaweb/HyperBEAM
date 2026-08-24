@@ -29,17 +29,17 @@ obtain(TLS, Wallet, AccountWallet, Challenge, Opts) ->
         State4 = authorize(maps:get(<<"authorizations">>, Order),
             Challenge, State3),
         {_Ready, State5} = poll(OrderURL, <<"ready">>, State4),
-        ?event(tls,
+        ?event(debug_tls,
             {acme_certificate_generation_requested,
                 {domain_count, length(Domains)}}),
         State6 = finalize(maps:get(<<"finalize">>, Order), Domains, State5),
         {Valid, State7} = poll(OrderURL, <<"valid">>, State6),
-        ?event(tls, acme_certificate_generated),
+        ?event(debug_tls, acme_certificate_generated),
         {_Headers, PEM, _State8} = expect(jws_post(
             maps:get(<<"certificate">>, Valid), post_as_get, State7
         ), [200]),
         Chain = certificate_chain(PEM),
-        ?event(tls,
+        ?event(debug_tls,
             {acme_certificate_downloaded,
                 {chain_length, length(Chain)}}),
         {ok, Chain}
@@ -155,11 +155,11 @@ authorize([URL | Rest], Challenge, State) ->
         <<"valid">> -> authorize(Rest, Challenge, State1);
         _ ->
             ChallengeType = maps:get(challenge_type, State1),
-            ?event(tls, {authorize, {challenge_type, ChallengeType}}),
+            ?event(debug_tls, {authorize, {challenge_type, ChallengeType}}),
             ACMEChallenge = acme_challenge(ChallengeType, Authorization),
             Token = maps:get(<<"token">>, ACMEChallenge),
             validate_token(Token),
-            ?event(tls, {authorize, token_validated}),
+            ?event(debug_tls, {authorize, token_validated}),
             KeyAuthorization = <<Token/binary, ".",
                 (maps:get(thumbprint, State1))/binary>>,
             {Cleanup, Readiness} = present_challenge(
@@ -420,7 +420,7 @@ retry_after(Headers, Default) ->
     end.
 
 wait(Delay, State) ->
-    ?event(tls, {wait, {delay, Delay}}),
+    ?event(debug_tls, {wait, {delay, Delay}}),
     case deadline(State) > Delay of
         true -> timer:sleep(Delay);
         false -> throw({acme, 'acme-timeout'})

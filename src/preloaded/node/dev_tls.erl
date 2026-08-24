@@ -10,9 +10,14 @@
 -define(RENEW_RETRY_MS, 60 * 60 * 1000).
 
 info(_) ->
-    #{ exports => [
-        <<"request">>, <<"well-known">>, <<"obtain">>, <<"challenge-type">>
-    ] }.
+    #{
+        exports => [
+            <<"request">>,
+            <<"well-known">>,
+            <<"obtain">>,
+            <<"challenge-type">>
+        ]
+    }.
 
 %% @doc Route the exact HTTP-01 path through the normal AO-Core hook.
 request(_Base, HookRequest, Opts) ->
@@ -31,7 +36,8 @@ request(_Base, HookRequest, Opts) ->
                     <<"token">> => Token
                 }
             ] }};
-        _ -> not_found()
+        _ ->
+            not_found()
     end.
 
 %% @doc Serve an active key authorization from the singleton.
@@ -92,10 +98,11 @@ obtain(_Base, Request, Opts) ->
 
 %% @doc Select the ACME challenge type for a TLS configuration.
 challenge_type(_Base, Request, Opts) ->
-    ACME = #{
-        <<"challenge-type">> =>
-            hb_maps:get(<<"challenge-type">>, Request, undefined, Opts)
-    },
+    ACME =
+        #{
+            <<"challenge-type">> =>
+                hb_maps:get(<<"challenge-type">>, Request, undefined, Opts)
+        },
     Domains = hb_maps:get(<<"domains">>, Request, [], Opts),
     {ok, dev_tls_acme:challenge_type(ACME, Domains, Opts)}.
 
