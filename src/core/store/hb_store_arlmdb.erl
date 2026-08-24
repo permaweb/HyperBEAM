@@ -88,9 +88,18 @@ match(_, _, _) -> {error, not_found}.
 read(Store, #{ <<"read">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
+        read_entry(Located, Meta, key(Path), Opts)
+    end.
+
+%% An element of a sorted set is a key and nothing else, so a member reads back
+%% as an empty binary rather than as itself.
+read_entry(Store, Meta = #{ <<"width">> := _ }, Key, Opts) ->
+    member(Store, Meta, Key, Opts);
+read_entry(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
         case Value of
-            <<"group">> -> composite(Located, Meta, Resolved, Opts);
+            <<"group">> -> composite(Store, Meta, Resolved, Opts);
             _ -> {ok, Value}
         end
     end.
@@ -99,7 +108,18 @@ read(Store, #{ <<"read">> := Path }, Opts) ->
 type(Store, #{ <<"type">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, _Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
+        type_entry(Located, Meta, key(Path), Opts)
+    end.
+
+%% Every element of a sorted set is a direct value; a set holds no groups.
+type_entry(Store, Meta = #{ <<"width">> := _ }, Key, Opts) ->
+    maybe
+        {ok, _Value} ?= member(Store, Meta, Key, Opts),
+        {ok, simple}
+    end;
+type_entry(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, _Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
         case Value of
             <<"group">> -> {ok, composite};
             _ -> {ok, simple}
@@ -111,8 +131,15 @@ type(Store, #{ <<"type">> := Path }, Opts) ->
 resolve(Store, #{ <<"resolve">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Parts} ?=
-            resolve_links(Located, Meta, split(key(Path), [global]), Opts),
+        resolve_entry(Located, Meta, key(Path), Opts)
+    end.
+
+%% A sorted set holds no link markers, so a path resolves to itself.
+resolve_entry(_Store, #{ <<"width">> := _ }, Key, _Opts) ->
+    {ok, Key};
+resolve_entry(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, Parts} ?= resolve_links(Store, Meta, split(Key, [global]), Opts),
         {ok, join(Parts)}
     end.
 
@@ -120,13 +147,30 @@ resolve(Store, #{ <<"resolve">> := Path }, Opts) ->
 %% `group' marker is not a group, even where keys sit below it: the marker is
 %% what `hb_cache' writes, and a listing that ignored it would disagree with the
 %% same database read locally.
-list(Store, #{ <<"list">> := Path }, Opts) ->
+list(Store, Req = #{ <<"list">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
+        list_entry(Located, Meta, key(Path), Req, Opts)
+    end.
+
+%% The children of a sorted set's prefix are the elements that carry it, named
+%% by the bytes after it. The walk seeks to `from' and stops at `limit', so a
+%% page of a large set costs the page rather than the set. A group of a
+%% key-value database has to be read before it can be bounded, so its bounds
+%% are applied to the children it yields.
+list_entry(Store, Meta = #{ <<"width">> := _ }, Prefix, Req, Opts) ->
+    elements(Store, Meta, Prefix, Req, Opts);
+list_entry(Store, Meta, Key, Req, Opts) ->
+    maybe
+        {ok, Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
         case Value of
-            <<"group">> -> names(children(Located, Meta, Resolved, Opts));
-            _ -> {error, not_found}
+            <<"group">> ->
+                hb_store:bound_children(
+                    Req,
+                    names(children(Store, Meta, Resolved, Opts))
+                );
+            _ ->
+                {error, not_found}
         end
     end.
 
@@ -141,8 +185,46 @@ open(Store, Opts) ->
     maybe
         {ok, Located} ?= ensure_locator(Store, Opts),
         {ok, Meta} ?= meta(Located, Opts),
-        {ok, Located, Meta}
+        {ok, Resolved} ?= elements_of(Located, Meta, Opts),
+        {ok, Located, Resolved}
     end.
+
+%% @doc Describe the database that holds the entries a caller asks about.
+%%
+%% A `MDB_DUPSORT' database is a sorted set: one key, whose duplicates are the
+%% whole set, each the same width, in a database of its own that the key's leaf
+%% node names. Rewriting the meta to describe that database lets one descent
+%% read both shapes, and `width' -- the size of one element -- is what tells
+%% them apart. Reaching it costs a read of the main database's root, which is
+%% one page and never changes.
+elements_of(_Store, Meta = #{ <<"depth">> := 0 }, _Opts) ->
+    {ok, Meta};
+elements_of(Store, Meta = #{ <<"root">> := Root }, Opts) ->
+    case hb_lmdb_page:duplicates(Meta) of
+        true ->
+            maybe
+                {ok, Page} ?= page(Store, Meta, Root, Opts),
+                set_meta(Meta, hb_lmdb_page:node(Page, 0))
+            end;
+        false ->
+            {ok, Meta}
+    end.
+
+%% The single leaf node of a sorted set's main database names the database that
+%% holds its elements, and `pad' is the width of one of them.
+set_meta(Meta, {ok, _Key, {leaf, {database, Set}}}) ->
+    {ok,
+        Meta#{
+            <<"root">> => maps:get(<<"root">>, Set),
+            <<"depth">> => maps:get(<<"depth">>, Set),
+            <<"entries">> => maps:get(<<"entries">>, Set),
+            <<"width">> => maps:get(<<"pad">>, Set)
+        }
+    };
+set_meta(_Meta, {ok, _Key, _Reference}) ->
+    {error, not_a_duplicate_set};
+set_meta(_Meta, {error, _} = Error) ->
+    Error.
 
 %% @doc Resolve the locator, if it is not already attached. `hb_store' holds
 %% the resolution in the store's instance message, which is keyed by the store's
@@ -492,7 +574,7 @@ children(Store, Meta, Key, Opts) ->
 %% the branch pages it descended through, to take the next child from there.
 scan(Store, Meta, Stack, _Leaf, Keys, Index, Prefix, Found, Opts)
         when Index >= Keys ->
-    case next_leaf(Store, Meta, Stack, Opts) of
+    case adjacent_leaf(Store, Meta, Stack, 1, Opts) of
         {ok, NextStack, NextLeaf, NextKeys, NextIndex} ->
             scan(
                 Store, Meta, NextStack, NextLeaf, NextKeys, NextIndex,
@@ -534,6 +616,120 @@ child(Store, Meta, Name, Reference, Found, Opts) ->
             {ok, Found}
     end.
 
+%%% Reading a sorted set.
+
+%% @doc Test whether a sorted set holds an element. Every element is the same
+%% width, so a key of any other length is not one.
+member(Store, Meta = #{ <<"width">> := Width }, Key, Opts)
+        when byte_size(Key) == Width ->
+    maybe
+        {ok, _Stack, Leaf, Items, Index} ?= seek(Store, Meta, Key, Opts),
+        held(Leaf, Items, Index, Width, Key)
+    end;
+member(_Store, _Meta, _Key, _Opts) ->
+    {error, not_found}.
+
+held(Leaf, Items, Index, Width, Key) when Index < Items ->
+    case hb_lmdb_page:item(Leaf, Index, Width) of
+        {ok, Key} -> {ok, <<>>};
+        {ok, _Other} -> {error, not_found};
+        {error, _} = Error -> Error
+    end;
+held(_Leaf, _Items, _Index, _Width, _Key) ->
+    {error, not_found}.
+
+%% @doc Walk the elements of a sorted set that begin with a prefix, naming each
+%% by the bytes that follow it.
+%%
+%% The walk starts at the prefix extended by `from' -- the first element at or
+%% after it going forward, the last at or before it going backward -- and stops
+%% at `limit'. Both are seeks rather than scans, so the page a caller asks for
+%% costs what the page holds and nothing more, and page fifty costs what page
+%% one does.
+elements(Store, Meta, Prefix, Req, Opts) ->
+    Start = <<Prefix/binary, (maps:get(<<"from">>, Req, <<>>))/binary>>,
+    Limit =
+        case maps:get(<<"limit">>, Req, unbounded) of
+            unbounded -> unbounded;
+            Bound -> hb_util:int(Bound)
+        end,
+    Step =
+        case hb_util:atom(maps:get(<<"direction">>, Req, forward)) of
+            backward -> -1;
+            forward -> 1
+        end,
+    maybe
+        {ok, Stack, Leaf, Items, Index} ?= start(Store, Meta, Start, Step, Opts),
+        walk(Store, Meta, Stack, Leaf, Items, Index, Prefix, Step, Limit, [], Opts)
+    end.
+
+%% Position the walk on the element it starts from. Going backward that is the
+%% last element before the first one that sorts after everything carrying the
+%% starting bytes, which is the element at or before them.
+start(Store, Meta, Start, 1, Opts) ->
+    seek(Store, Meta, Start, Opts);
+start(Store, Meta = #{ <<"root">> := Root }, Start, -1, Opts) ->
+    case increment(Start) of
+        no_successor ->
+            outermost(Store, Meta, Root, [], -1, max_depth(Store, Meta), Opts);
+        Bound ->
+            maybe
+                {ok, Stack, Leaf, Items, Index} ?= seek(Store, Meta, Bound, Opts),
+                {ok, Stack, Leaf, Items, Index - 1}
+            end
+    end.
+
+%% @doc The smallest binary that sorts after every binary starting with the
+%% given one, or `no_successor' where there is none: the bytes are empty, or
+%% every one of them is `16#ff'.
+increment(<<>>) ->
+    no_successor;
+increment(Bytes) ->
+    Head = binary:part(Bytes, 0, byte_size(Bytes) - 1),
+    case binary:last(Bytes) of
+        16#ff -> increment(Head);
+        Last -> <<Head/binary, (Last + 1)>>
+    end.
+
+%% Walk from one element to the next, taking the leaf on either side when the
+%% index leaves the one in hand. A leaf carries no pointer to its neighbour, so
+%% the branch pages the descent came through are what the walk climbs.
+walk(_Store, _Meta, _Stack, _Leaf, _Items, _Index, _Prefix, _Step, 0, Found, _Opts) ->
+    {ok, lists:reverse(Found)};
+walk(Store, Meta, Stack, _Leaf, Items, Index, Prefix, Step, Limit, Found, Opts)
+        when Index >= Items; Index < 0 ->
+    case adjacent_leaf(Store, Meta, Stack, Step, Opts) of
+        {ok, NextStack, NextLeaf, NextItems, NextIndex} ->
+            walk(
+                Store, Meta, NextStack, NextLeaf, NextItems, NextIndex, Prefix,
+                Step, Limit, Found, Opts
+            );
+        {error, no_more_leaves} ->
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
+    end;
+walk(
+        Store, Meta = #{ <<"width">> := Width }, Stack, Leaf, Items, Index,
+        Prefix, Step, Limit, Found, Opts
+    ) ->
+    Size = byte_size(Prefix),
+    case hb_lmdb_page:item(Leaf, Index, Width) of
+        {ok, <<Prefix:Size/binary, Name/binary>>} ->
+            walk(
+                Store, Meta, Stack, Leaf, Items, Index + Step, Prefix, Step,
+                remaining(Limit), [Name | Found], Opts
+            );
+        {ok, _Other} ->
+            % The walk has passed the last element carrying the prefix.
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
+    end.
+
+remaining(unbounded) -> unbounded;
+remaining(Limit) -> Limit - 1.
+
 %% @doc Reduce a group's children to their names alone, which is what `list/3'
 %% answers with; a composite read carries the values along with them.
 names({ok, Children}) -> {ok, [Name || {Name, _Value} <- Children]};
@@ -554,6 +750,17 @@ seek(Store, Meta, Number, Key, Stack, Remaining, Opts) ->
         seek_page(Store, Meta, Page, Key, Stack, Remaining, Opts)
     end.
 
+seek_page(Store, Meta = #{ <<"width">> := Width }, Page, Key, Stack, Remaining, Opts) ->
+    case hb_lmdb_page:page(Page) of
+        {ok, #{ <<"type">> := branch }} ->
+            branch_step(Store, Meta, Page, Key, Stack, Remaining, Opts);
+        {ok, #{ <<"type">> := leaf2, <<"keys">> := Items }} ->
+            cursor(Stack, Page, Items, hb_lmdb_page:seek_item(Page, Key, Width));
+        {ok, #{ <<"type">> := Type }} ->
+            {error, {not_a_leaf2_page, Type}};
+        {error, _} = Error ->
+            Error
+    end;
 seek_page(Store, Meta, Page, Key, Stack, Remaining, Opts) ->
     case hb_lmdb_page:search(Page, Key) of
         {branch, Index, Child} ->
@@ -567,26 +774,55 @@ seek_page(Store, Meta, Page, Key, Stack, Remaining, Opts) ->
             cursor(Stack, Page, hb_lmdb_page:seek(Page, Key))
     end.
 
-%% @doc Take the next leaf after the one a scan has exhausted: climb to the
-%% nearest branch page with a child left to take, step to it, and descend to the
-%% leftmost leaf below.
-next_leaf(_Store, _Meta, [], _Opts) ->
-    {error, no_more_leaves};
-next_leaf(Store, Meta, [{Page, Index} | Above], Opts) ->
-    case hb_lmdb_page:num_keys(Page) of
-        {ok, Keys} when Index + 1 < Keys ->
-            take_child(Store, Meta, Page, Index + 1, Above, Opts);
-        {ok, _Keys} ->
-            next_leaf(Store, Meta, Above, Opts);
+%% Take the child of a branch page that covers the key, keeping the index taken
+%% so that a walk can climb back and take the next one.
+branch_step(Store, Meta, Page, Key, Stack, Remaining, Opts) ->
+    case hb_lmdb_page:search(Page, Key) of
+        {branch, Index, Child} ->
+            seek(
+                Store, Meta, Child, Key, [{Page, Index} | Stack],
+                Remaining - 1, Opts
+            );
         {error, _} = Error ->
             Error
     end.
 
-take_child(Store, Meta, Page, Index, Above, Opts) ->
+%% @doc Take the leaf on one side of the one a walk has exhausted: climb to the
+%% nearest branch page with a child left on that side, step to it, and descend
+%% to the leaf a walk travelling that way enters first.
+%%
+%% LMDB leaves carry no pointer to their neighbours, so the branch pages the
+%% descent came through are what a walk climbs.
+adjacent_leaf(_Store, _Meta, [], _Step, _Opts) ->
+    {error, no_more_leaves};
+adjacent_leaf(Store, Meta, [{Page, Index} | Above], Step, Opts) ->
+    case sibling(Page, Index, Step) of
+        exhausted ->
+            adjacent_leaf(Store, Meta, Above, Step, Opts);
+        {ok, Next} ->
+            take_child(Store, Meta, Page, Next, Above, Step, Opts);
+        {error, _} = Error ->
+            Error
+    end.
+
+%% The child of a branch page on the far side of the one a walk came through,
+%% or `exhausted' where it has none left on that side.
+sibling(_Page, Index, -1) when Index > 0 ->
+    {ok, Index - 1};
+sibling(_Page, _Index, -1) ->
+    exhausted;
+sibling(Page, Index, 1) ->
+    case hb_lmdb_page:num_keys(Page) of
+        {ok, Keys} when Index + 1 < Keys -> {ok, Index + 1};
+        {ok, _Keys} -> exhausted;
+        {error, _} = Error -> Error
+    end.
+
+take_child(Store, Meta, Page, Index, Above, Step, Opts) ->
     case hb_lmdb_page:node(Page, Index) of
         {ok, _Key, {branch, Child}} ->
-            leftmost(
-                Store, Meta, Child, [{Page, Index} | Above],
+            outermost(
+                Store, Meta, Child, [{Page, Index} | Above], Step,
                 max_depth(Store, Meta), Opts
             );
         {ok, _Key, _Reference} ->
@@ -595,33 +831,48 @@ take_child(Store, Meta, Page, Index, Above, Opts) ->
             Error
     end.
 
-leftmost(_Store, _Meta, _Number, _Stack, 0, _Opts) ->
+%% @doc Descend to the leaf a walk travelling in the given direction enters
+%% first below a page, positioned on the entry it enters that leaf at: the
+%% leftmost of each going forward, the rightmost going backward.
+outermost(_Store, _Meta, _Number, _Stack, _Step, 0, _Opts) ->
     {error, descent_too_deep};
-leftmost(Store, Meta, Number, Stack, Remaining, Opts) ->
+outermost(Store, Meta, Number, Stack, Step, Remaining, Opts) ->
     maybe
         {ok, Page} ?= page(Store, Meta, Number, Opts),
         {ok, Parsed} ?= hb_lmdb_page:page(Page),
-        leftmost_page(Store, Meta, Page, Parsed, Stack, Remaining, Opts)
+        outermost_page(Store, Meta, Page, Parsed, Stack, Step, Remaining, Opts)
     end.
 
-leftmost_page(Store, Meta, Page, #{ <<"type">> := branch }, Stack, Remaining, Opts) ->
-    case hb_lmdb_page:node(Page, 0) of
+outermost_page(
+        Store, Meta, Page, #{ <<"type">> := branch, <<"keys">> := Keys },
+        Stack, Step, Remaining, Opts
+    ) ->
+    Index = entered_at(Keys, Step),
+    case hb_lmdb_page:node(Page, Index) of
         {ok, _Key, {branch, Child}} ->
-            leftmost(
-                Store, Meta, Child, [{Page, 0} | Stack], Remaining - 1, Opts
+            outermost(
+                Store, Meta, Child, [{Page, Index} | Stack], Step,
+                Remaining - 1, Opts
             );
         {ok, _Key, _Reference} ->
             {error, invalid_branch_page};
         {error, _} = Error ->
             Error
     end;
-leftmost_page(
-        _Store, _Meta, Page, #{ <<"type">> := leaf, <<"keys">> := Keys },
-        Stack, _Remaining, _Opts
+outermost_page(
+        _Store, _Meta, Page, #{ <<"type">> := Type, <<"keys">> := Keys },
+        Stack, Step, _Remaining, _Opts
+    ) when Type == leaf; Type == leaf2 ->
+    {ok, Stack, Page, Keys, entered_at(Keys, Step)};
+outermost_page(
+        _Store, _Meta, _Page, #{ <<"type">> := Type }, _Stack, _Step, _R, _Opts
     ) ->
-    {ok, Stack, Page, Keys, 0};
-leftmost_page(_Store, _Meta, _Page, #{ <<"type">> := Type }, _Stack, _R, _Opts) ->
     {error, {not_a_node_page, Type}}.
+
+%% The entry of a page that a walk travelling in the given direction reaches
+%% first.
+entered_at(_Keys, 1) -> 0;
+entered_at(Keys, -1) -> Keys - 1.
 
 %% @doc Pair a leaf with the index a scan of it starts from.
 cursor(_Stack, _Page, {error, _} = Error) ->
@@ -631,6 +882,10 @@ cursor(Stack, Page, Index) ->
         {ok, Keys} -> {ok, Stack, Page, Keys, Index};
         {error, _} = Error -> Error
     end.
+cursor(_Stack, _Page, _Keys, {error, _} = Error) ->
+    Error;
+cursor(Stack, Page, Keys, Index) ->
+    {ok, Stack, Page, Keys, Index}.
 
 %%% Helpers.
 
@@ -1080,3 +1335,157 @@ published_index_as_offsets() ->
         end,
         [0, 1, 4242, 5_000_000, ?INDEX_ENTRIES - 1]
     ).
+
+%% The published copy of `hb_lmdb_page''s duplicate-set fixture: one main key
+%% whose 3,000 duplicates are fifteen-byte rows of an eight-byte hash and a
+%% seven-byte offset, the shape `~match@1.0' writes.
+-define(PUBLISHED_SET, <<"mvtlyM3yZl_M2ZlCGUcUaABFqutCMRN0i_Pd9CfFeTs">>).
+-define(SET_FIXTURE, "test/lmdb-1.0-dupfixed.mdb").
+
+%% @doc A published sorted set answers by membership and by prefix.
+%%
+%% The store reads the database's flags rather than being told what it is: a
+%% duplicate set is a database of its own, named by the single leaf node of the
+%% main database, and its leaves carry fixed-width elements in place of nodes.
+published_set_test_() ->
+    {timeout, 300, fun published_set/0}.
+published_set() ->
+    Store = store(<<"arlmdb-set">>, ?PUBLISHED_SET),
+    {ok, Located, Meta} = open(Store, #{}),
+    ?assertMatch(#{ <<"width">> := 15, <<"entries">> := 3000 }, Meta),
+    ?assertEqual(3, maps:get(<<"depth">>, Meta)),
+    % An element reads back as an empty binary, and one the set does not hold
+    % is absent rather than empty.
+    ?assertEqual({ok, <<>>}, hb_store:read([Located], set_row(0, 0), #{})),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read([Located], set_row(0, 100), #{})
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read([Located], <<"not-fifteen-bytes">>, #{})
+    ),
+    ?assertEqual({ok, simple}, hb_store:type([Located], set_row(0, 0), #{})),
+    % A prefix is a group of the elements carrying it, named by what follows.
+    ?assertEqual(
+        {ok, [<<Offset:56>> || Offset <- lists:seq(0, 99)]},
+        hb_store:list([Located], set_prefix(7), #{})
+    ),
+    lists:foreach(
+        fun({Bounds, Expected}) ->
+            ?assertEqual(
+                {ok, Expected},
+                hb_store:list(
+                    [Located],
+                    Bounds#{ <<"list">> => set_prefix(7) },
+                    #{}
+                )
+            )
+        end,
+        [
+            {#{ <<"limit">> => 3 }, [<<Offset:56>> || Offset <- [0, 1, 2]]},
+            {
+                #{ <<"from">> => <<40:56>>, <<"limit">> => 3 },
+                [<<Offset:56>> || Offset <- [40, 41, 42]]
+            },
+            {
+                #{
+                    <<"from">> => <<40:56>>,
+                    <<"limit">> => 3,
+                    <<"direction">> => backward
+                },
+                [<<Offset:56>> || Offset <- [40, 39, 38]]
+            },
+            {
+                #{ <<"limit">> => 2, <<"direction">> => backward },
+                [<<Offset:56>> || Offset <- [99, 98]]
+            },
+            {#{ <<"from">> => <<100:56>> }, []}
+        ]
+    ),
+    % A prefix no element carries has no elements.
+    ?assertEqual({ok, []}, hb_store:list([Located], set_prefix(30), #{})).
+
+%% @doc The same bytes, read from disk through `hb_store_lmdb' and from the
+%% weave through `hb_store_arlmdb', answer identically.
+%%
+%% This is what publishing an ordinary LMDB file rather than a bespoke format
+%% buys: the published index and a local copy of it are one artefact, and a
+%% node chooses between downloading it and reading it where it lies without
+%% anything standing between the two.
+published_set_equivalence_test_() ->
+    {timeout, 300, fun published_set_equivalence/0}.
+published_set_equivalence() ->
+    Directory =
+        filename:join(
+            <<"cache-TEST">>,
+            <<"arlmdb-equivalence-",
+                (hb_util:bin(erlang:unique_integer([positive])))/binary>>
+        ),
+    ok = filelib:ensure_dir(filename:join(Directory, <<"data.mdb">>)),
+    {ok, Bytes} = file:read_file(?SET_FIXTURE),
+    ok = file:write_file(filename:join(Directory, <<"data.mdb">>), Bytes),
+    Local =
+        #{
+            <<"store-module">> => hb_store_lmdb,
+            <<"name">> => Directory,
+            <<"sorted-set">> => true
+        },
+    {ok, Remote, _Meta} = open(store(<<"arlmdb-equivalence">>, ?PUBLISHED_SET), #{}),
+    Requests =
+        [
+            #{ <<"read">> => set_row(3, 7) },
+            #{ <<"read">> => set_row(3, 100) },
+            #{ <<"type">> => set_row(3, 7) },
+            #{ <<"list">> => set_prefix(3) },
+            #{ <<"list">> => set_prefix(3), <<"limit">> => 4 },
+            #{
+                <<"list">> => set_prefix(3),
+                <<"from">> => <<60:56>>,
+                <<"limit">> => 4
+            },
+            #{
+                <<"list">> => set_prefix(3),
+                <<"limit">> => 4,
+                <<"direction">> => backward
+            }
+        ],
+    Answers =
+        lists:map(
+            fun(Request) ->
+                Callback =
+                    hd(maps:keys(
+                        maps:with([<<"read">>, <<"type">>, <<"list">>], Request))),
+                Answer =
+                    apply(hb_store, callback(Callback), [[Local], Request, #{}]),
+                ?assertEqual(
+                    {Request, Answer},
+                    {Request,
+                        apply(hb_store, callback(Callback), [[Remote], Request, #{}])}
+                ),
+                Answer
+            end,
+            Requests
+        ),
+    % The answers agreeing is only worth something if they are the right ones.
+    ?assertEqual(
+        [
+            {ok, <<>>},
+            {error, not_found},
+            {ok, simple},
+            {ok, [<<Offset:56>> || Offset <- lists:seq(0, 99)]},
+            {ok, [<<Offset:56>> || Offset <- [0, 1, 2, 3]]},
+            {ok, [<<Offset:56>> || Offset <- [60, 61, 62, 63]]},
+            {ok, [<<Offset:56>> || Offset <- [99, 98, 97, 96]]}
+        ],
+        Answers
+    ),
+    file:del_dir_r(Directory).
+
+callback(<<"read">>) -> read;
+callback(<<"type">>) -> type;
+callback(<<"list">>) -> list.
+
+%% The fixture's rows, as `hb_lmdb_page:fixture_dup_rows/0' builds them.
+set_row(Hash, Offset) -> <<Hash:64, Offset:56>>.
+set_prefix(Hash) -> <<Hash:64>>.

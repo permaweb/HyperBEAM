@@ -34,6 +34,13 @@
                                                 % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 
+%% A `sorted-set' database holds every element as a duplicate of one key, so
+%% that LMDB stores them on `MDB_DUPFIXED' leaves -- fixed-width, with no node
+%% header and no pointer array, at a twentieth of a byte of overhead each
+%% rather than eleven. The key itself carries no meaning; it is one byte
+%% because a shorter one does not exist.
+-define(SET_KEY, <<0>>).
+
 %% @doc Start the LMDB storage system for a given database configuration.
 %%
 %% This function initializes or connects to an existing LMDB database instance.
@@ -65,6 +72,10 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
             no_mem_init,
             no_sync
         ] ++
+        case maps:get(<<"page-size">>, Opts, false) of
+            false -> [];
+            PageSize -> [{page_size, hb_util:int(PageSize)}]
+        end ++
         case maps:get(<<"read-ahead">>, Opts, true) of
             true -> [];
             false -> [no_readahead]
@@ -83,10 +94,24 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
         end,
     % Create the LMDB environment with specified size limit
     {ok, Env} = open_env(DataDirPath, EnvOpts),
-    {ok, DBInstance} = elmdb:db_open(Env, [create]),
+    {ok, DBInstance} = elmdb:db_open(Env, [create] ++ db_flags(Opts)),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_Store, _Req, _NodeOpts) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
+
+%% @doc The database flags a store's shape asks for. A `sorted-set' store holds
+%% keys and no values, which is what a duplicate set is.
+db_flags(#{ <<"sorted-set">> := true }) -> [dupsort, dupfixed];
+db_flags(_Opts) -> [].
+
+%% @doc Report whether a store holds a sorted set of keys rather than a map of
+%% keys to values.
+is_set(Opts) -> maps:get(<<"sorted-set">>, Opts, false) == true.
+
+%% @doc An element of a sorted set is raw bytes rather than a path, so it is
+%% taken as it is: normalizing it would collapse the `/' bytes it may hold.
+element_key(Key) when is_binary(Key) -> Key;
+element_key(Key) -> hb_path:to_binary(Key).
 
 %% @doc Open an environment, rebuilding one written in an older on-disk
 %% format. LMDB refuses a file whose data version is not its own, and the
@@ -122,6 +147,13 @@ ensure_dir(DataDirPath) ->
 %% @param KeyReq Request of the form `#{<<"type">> => Key}`.
 %% @returns `{ok, composite}` for group entries, `{ok, simple}` for regular
 %%          values, or `{error, not_found}`.
+type(Opts, #{ <<"type">> := Key }, _NodeOpts)
+        when map_get(<<"sorted-set">>, Opts) == true ->
+    % Every element of a sorted set is a direct value; a set holds no groups.
+    case read_path(Opts, element_key(Key)) of
+        {ok, _Value} -> {ok, simple};
+        {error, _} = Error -> Error
+    end;
 type(Opts, #{ <<"type">> := Key }, _NodeOpts) ->
     KeyBin =
         case is_binary(Key) of
@@ -168,10 +200,23 @@ write(#{ <<"read-only">> := true }, _PathParts, _Value) ->
     {error, not_found};
 write(Opts, PathParts, Value) when is_list(PathParts) ->
     write(Opts, to_path(PathParts), Value);
+write(Opts, Path, <<>>)
+        when map_get(<<"sorted-set">>, Opts) == true ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    ?event_debug({elmdb_write, {db, DBInstance}, {element, Path}}),
+    put_result(elmdb:put(DBInstance, ?SET_KEY, Path));
+write(Opts, _Path, _Value)
+        when map_get(<<"sorted-set">>, Opts) == true ->
+    % A sorted set holds keys and nothing else, so there is nowhere to put a
+    % value. Refusing is better than dropping it silently.
+    {error, {badarg, <<"A `sorted-set' store holds no values.">>}};
 write(Opts, Path, Value) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),
     ?event_debug({elmdb_write, {db, DBInstance}, {path, Path}, {value, Value}}),
-    case elmdb:put(DBInstance, Path, Value) of
+    put_result(elmdb:put(DBInstance, Path, Value)).
+
+put_result(Result) ->
+    case Result of
         ok -> ok;
         {error, Type, Description} ->
             ?event(
@@ -203,9 +248,24 @@ write(Opts, Path, Value) ->
 %% @returns `{ok, Value}` on success, `{composite, Keys}` for groups, or
 %%          `{error, not_found}` on failure
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) when is_binary(Path) ->
-    read_result(Opts, Path);
+    read_path(Opts, Path);
 read(Opts, #{ <<"read">> := Path }, _NodeOpts) ->
-    read_result(Opts, hb_path:to_binary(Path)).
+    read_path(Opts, hb_path:to_binary(Path)).
+
+%% An element of a sorted set is a key and nothing else, so a member reads back
+%% as an empty binary rather than as itself.
+read_path(Opts, Path) ->
+    case is_set(Opts) of
+        true ->
+            #{ <<"db">> := DBInstance } = ensure_env(Opts),
+            case elmdb:member(DBInstance, ?SET_KEY, Path) of
+                true -> {ok, <<>>};
+                false -> {error, not_found};
+                {error, _Type, _Description} -> {error, not_found}
+            end;
+        false ->
+            read_result(Opts, Path)
+    end.
 
 %% A single `read_prefix' over the bare `Path' (no trailing slash) returns the
 %% marker row (key == `Path') alongside every descendant in one cursor scan, so
@@ -480,6 +540,25 @@ list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
             true -> Path;
             false -> hb_path:to_binary(Path)
         end,
+    case is_set(Opts) of
+        true -> list_elements(EnvOpts, PathBin, list_bounds(Req));
+        false -> list_group(EnvOpts, PathBin, Req)
+    end.
+
+%% @doc The elements of a sorted set that carry a prefix, named by the bytes
+%% that follow it. Every prefix is a group, so there is no marker to find
+%% first, and the cursor seeks to `from' rather than reading up to it.
+list_elements(Opts, Prefix, Bounds) ->
+    #{ <<"db">> := DBInstance } = find_env(Opts),
+    Size = byte_size(Prefix),
+    case elmdb:dups(DBInstance, ?SET_KEY, [{prefix, Prefix} | Bounds]) of
+        {ok, Elements} ->
+            {ok, [binary:part(E, Size, byte_size(E) - Size) || E <- Elements]};
+        not_found -> {ok, []};
+        {error, _Type, _Description} -> {error, not_found}
+    end.
+
+list_group(EnvOpts, PathBin, Req) ->
     case read_resolved(EnvOpts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
             list_children(EnvOpts, ResolvedPath, list_bounds(Req));
@@ -615,9 +694,12 @@ match_patterns(DBInstance, Patterns) ->
 %% @param GroupName Binary name for the group
 %% @returns Result of the write operation
 group(Opts, #{ <<"group">> := GroupName }, _NodeOpts) ->
-    case is_binary(GroupName) of
-        true -> write(Opts, GroupName, <<"group">>);
-        false -> write(Opts, hb_path:to_binary(GroupName), <<"group">>)
+    case {is_set(Opts), is_binary(GroupName)} of
+        % Every prefix of a sorted set is a group of the elements carrying it,
+        % so there is no marker to write and nothing to create.
+        {true, _} -> ok;
+        {false, true} -> write(Opts, GroupName, <<"group">>);
+        {false, false} -> write(Opts, hb_path:to_binary(GroupName), <<"group">>)
     end.
 
 %% @doc Ensure all parent groups exist for a given path.
@@ -724,6 +806,10 @@ link(Opts, Existing, New) ->
 %% @param StoreOpts Database configuration map
 %% @param Path The path to resolve (binary or list)
 %% @returns The resolved path as a binary
+resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts)
+        when map_get(<<"sorted-set">>, Opts) == true ->
+    % A sorted set holds no link markers, so a path resolves to itself.
+    {ok, element_key(Path)};
 resolve(Opts, #{ <<"resolve">> := Path }, _NodeOpts) ->
     PathBin = hb_path:to_binary(Path),
     case resolve_path_links(Opts, binary:split(PathBin, <<"/">>, [global])) of
@@ -1285,7 +1371,7 @@ outdated_format_rebuild_test() ->
     test_write(Written, <<"before">>, <<"value">>),
     ok = test_stop(Written),
     Outdated = hb_test_utils:test_store(?MODULE),
-    OutdatedDir = hb_util:list(maps:get(<<"name">>, Outdated)),
+    OutdatedDir = data_dir(Outdated),
     ok = ensure_dir(OutdatedDir),
     {ok, File} = file:read_file(filename:join(data_dir(Written), "data.mdb")),
     ok =
@@ -1314,3 +1400,128 @@ set_data_version(File, Version) ->
 
 data_dir(StoreOpts) ->
     hb_util:list(maps:get(<<"name">>, StoreOpts)).
+
+%% @doc A `sorted-set' store holds fixed-width keys and no values, which is the
+%% shape the published match index takes: every element is one row, every
+%% prefix is a group of the rows carrying it, and a listing seeks to where it
+%% starts rather than reading up to it.
+sorted_set_test() ->
+    StoreOpts = (hb_test_utils:test_store(?MODULE))#{ <<"sorted-set">> => true },
+    test_reset(StoreOpts),
+    Hash = <<"aaaaaaaa">>,
+    Other = <<"bbbbbbbb">>,
+    Offsets = lists:seq(1, 100),
+    lists:foreach(
+        fun(Offset) ->
+            ok = write(StoreOpts, <<Hash/binary, Offset:56>>, <<>>),
+            ok = write(StoreOpts, <<Other/binary, Offset:56>>, <<>>)
+        end,
+        Offsets
+    ),
+    % A member reads back as an empty binary; a non-member is absent.
+    ?assertEqual(
+        {ok, <<>>},
+        read(StoreOpts, #{ <<"read">> => <<Hash/binary, 1:56>> }, #{})
+    ),
+    ?assertEqual(
+        {error, not_found},
+        read(StoreOpts, #{ <<"read">> => <<Hash/binary, 0:56>> }, #{})
+    ),
+    ?assertEqual(
+        {ok, simple},
+        type(StoreOpts, #{ <<"type">> => <<Hash/binary, 1:56>> }, #{})
+    ),
+    % Every prefix is a group already, so there is no marker to create.
+    ?assertEqual(ok, group(StoreOpts, #{ <<"group">> => Hash }, #{})),
+    ?assertEqual(
+        {ok, [<<Offset:56>> || Offset <- Offsets]},
+        list(StoreOpts, #{ <<"list">> => Hash }, #{})
+    ),
+    ?assertEqual(
+        {ok, [<<Offset:56>> || Offset <- lists:seq(40, 42)]},
+        list(
+            StoreOpts,
+            #{ <<"list">> => Hash, <<"from">> => <<40:56>>, <<"limit">> => 3 },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, [<<Offset:56>> || Offset <- [100, 99]]},
+        list(
+            StoreOpts,
+            #{
+                <<"list">> => Other,
+                <<"limit">> => 2,
+                <<"direction">> => backward
+            },
+            #{}
+        )
+    ),
+    % A value has nowhere to go in a set, and is refused rather than dropped.
+    ?assertMatch(
+        {error, {badarg, _}},
+        write(StoreOpts, <<Hash/binary, 1:56>>, <<"value">>)
+    ),
+    ok = test_stop(StoreOpts).
+
+%% @doc The file a `sorted-set' store writes is an ordinary LMDB database with
+%% the duplicate-set flags on its main database, and `hb_lmdb_page' reads the
+%% elements out of it.
+%%
+%% Every read and write of a set goes through `elmdb', which behaves the same
+%% whether or not the elements are fixed-width; only the bytes on disk say
+%% which was asked for, and those bytes are what a published index is.
+sorted_set_format_test() ->
+    StoreOpts =
+        (hb_test_utils:test_store(?MODULE))#{
+            <<"sorted-set">> => true,
+            <<"page-size">> => 512
+        },
+    test_reset(StoreOpts),
+    Hash = <<"aaaaaaaa">>,
+    Elements = [<<Hash/binary, Offset:56>> || Offset <- lists:seq(1, 12)],
+    lists:foreach(
+        fun(Element) -> ok = write(StoreOpts, Element, <<>>) end,
+        Elements
+    ),
+    % A listing settles the writes the store still holds in memory.
+    ?assertEqual(
+        {ok, [<<Offset:56>> || Offset <- lists:seq(1, 12)]},
+        list(StoreOpts, #{ <<"list">> => Hash }, #{})
+    ),
+    {ok, File} =
+        file:read_file(
+            filename:join(hb_util:list(maps:get(<<"name">>, StoreOpts)), "data.mdb")
+        ),
+    {ok, First = #{ <<"page-size">> := PageSize }} =
+        hb_lmdb_page:meta(binary:part(File, 0, 256)),
+    ?assertEqual(512, PageSize),
+    % Both pages zero and one are meta pages and alternate on commit, so the
+    % one carrying the later transaction is the database's current state.
+    {ok, Second} = hb_lmdb_page:meta(binary:part(File, PageSize, PageSize)),
+    Meta =
+        case maps:get(<<"txnid">>, Second) > maps:get(<<"txnid">>, First) of
+            true -> Second;
+            false -> First
+        end,
+    % `MDB_DUPSORT' and `MDB_DUPFIXED' together.
+    ?assertEqual(16#14, maps:get(<<"flags">>, Meta)),
+    ?assertEqual(length(Elements), maps:get(<<"entries">>, Meta)),
+    Root = maps:get(<<"root">>, Meta),
+    RootPage = binary:part(File, Root * PageSize, PageSize),
+    {ok, ?SET_KEY, {leaf, {subpage, Set}}} = hb_lmdb_page:node(RootPage, 0),
+    ?assertEqual(
+        {ok, #{
+            <<"type">> => leaf2,
+            <<"keys">> => length(Elements),
+            <<"width">> => 15
+        }},
+        hb_lmdb_page:page(Set)
+    ),
+    lists:foreach(
+        fun({Index, Element}) ->
+            ?assertEqual({ok, Element}, hb_lmdb_page:item(Set, Index, 15))
+        end,
+        lists:zip(lists:seq(0, length(Elements) - 1), Elements)
+    ),
+    ok = test_stop(StoreOpts).
