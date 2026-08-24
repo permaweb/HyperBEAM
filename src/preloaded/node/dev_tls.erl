@@ -1,6 +1,6 @@
 %%% @doc Node-wallet TLS and ACME renewal device.
 -module(dev_tls).
--export([info/1, request/3, well_known/3, obtain/3]).
+-export([info/1, request/3, well_known/3, obtain/3, challenge_type/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -10,7 +10,14 @@
 -define(RENEW_RETRY_MS, 60 * 60 * 1000).
 
 info(_) ->
-    #{ exports => [<<"request">>, <<"well-known">>, <<"obtain">>] }.
+    #{
+        exports => [
+            <<"request">>,
+            <<"well-known">>,
+            <<"obtain">>,
+            <<"challenge-type">>
+        ]
+    }.
 
 %% @doc Route the exact HTTP-01 path through the normal AO-Core hook.
 request(_Base, HookRequest, Opts) ->
@@ -29,7 +36,8 @@ request(_Base, HookRequest, Opts) ->
                     <<"token">> => Token
                 }
             ] }};
-        _ -> not_found()
+        _ ->
+            not_found()
     end.
 
 %% @doc Serve an active key authorization from the singleton.
@@ -88,6 +96,16 @@ obtain(_Base, Request, Opts) ->
             end
     end.
 
+%% @doc Select the ACME challenge type for a TLS configuration.
+challenge_type(_Base, Request, Opts) ->
+    ACME =
+        #{
+            <<"challenge-type">> =>
+                hb_maps:get(<<"challenge-type">>, Request, undefined, Opts)
+        },
+    Domains = hb_maps:get(<<"domains">>, Request, [], Opts),
+    {ok, dev_tls_acme:challenge_type(ACME, Domains, Opts)}.
+
 ensure_started(Opts) ->
     TLS = hb_tls:config(Opts),
     true = is_map(TLS),
@@ -97,6 +115,7 @@ ensure_started(Opts) ->
         loop(#{
             server_id => ServerID,
             tls => TLS,
+            opts => Opts,
             wallet => hb_opts:get(priv_wallet, no_viable_wallet, Opts),
             account_wallet => ar_wallet:new(),
             challenges => #{},
@@ -154,15 +173,27 @@ renew(State) ->
     end.
 
 issue(Operation, State) ->
+    ?event(tls, {certificate_issuance_started,
+        {operation, operation_name(Operation)}}),
     Parent = self(),
+    TLS = maps:get(tls, State),
+    Opts = maps:get(opts, State),
     spawn_link(fun() ->
-        Challenge = fun(Action) -> call(Parent, Action, ?CALL_TIMEOUT) end,
+        Challenge = fun
+            ({dns_put, _, _} = Action) ->
+                dev_tls_dns:challenge(Action, TLS, Opts);
+            ({dns_delete, _} = Action) ->
+                dev_tls_dns:challenge(Action, TLS, Opts);
+            ({dns_wait, _, _, _} = Action) ->
+                dev_tls_dns:challenge(Action, TLS, Opts);
+            (Action) -> call(Parent, Action, ?CALL_TIMEOUT)
+        end,
         Parent ! {acme_result, dev_tls_acme:obtain(
-            maps:get(tls, State),
+            TLS,
             maps:get(wallet, State),
             maps:get(account_wallet, State),
             Challenge,
-            maps:get(tls, State)
+            Opts
         )}
     end),
     State#{operation => Operation}.
@@ -170,7 +201,9 @@ issue(Operation, State) ->
 complete(Result, State = #{operation := {obtain, From, Ref}}) ->
     From ! {Ref, Result},
     case Result of
-        {ok, Chain} -> schedule_certificate(Chain, State#{operation => idle});
+        {ok, Chain} ->
+            ?event(tls, certificate_event(acme_certificate_ready, Chain)),
+            schedule_certificate(Chain, State#{operation => idle});
         {error, Reason} -> retry(Reason, State#{operation => idle})
     end;
 complete({ok, Chain}, State = #{operation := renew}) ->
@@ -178,7 +211,9 @@ complete({ok, Chain}, State = #{operation := renew}) ->
     case hb_tls:install(
         maps:get(server_id, State), maps:get(wallet, State), Chain
     ) of
-        ok -> schedule_certificate(Chain, maps:remove(pending_chain, Idle));
+        ok ->
+            ?event(tls, certificate_event(acme_certificate_installed, Chain)),
+            schedule_certificate(Chain, maps:remove(pending_chain, Idle));
         {error, Reason} -> retry(Reason, Idle#{pending_chain => Chain})
     end;
 complete({error, Reason}, State = #{operation := renew}) ->
@@ -205,6 +240,18 @@ schedule(Delay, State) ->
 retry(Reason, State) ->
     ?event(tls, {acme_renewal_failed, {reason, Reason}}),
     schedule(?RENEW_RETRY_MS, State).
+
+%% @doc Build a TLS certificate lifecycle event with chain metadata.
+certificate_event(Name, Chain) ->
+    {
+        Name,
+        {chain_length, length(Chain)},
+        {expires_at_ms, hb_tls:certificate_expiry(Chain)}
+    }.
+
+%% @doc Return the event name for a TLS lifecycle operation.
+operation_name({obtain, _, _}) -> obtain;
+operation_name(renew) -> renew.
 
 call(undefined, _Request, _Timeout) ->
     {error, 'tls-runtime-not-found'};

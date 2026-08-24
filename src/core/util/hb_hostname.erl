@@ -1,6 +1,7 @@
 %%% @doc Public DNS and local-network exclusion helpers.
 -module(hb_hostname).
 -export([is_public/2, public_ips/2, is_public_ip/1, uri_host/1, normalize/1]).
+-export([records/3]).
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_DNS_SERVERS, [{{1, 1, 1, 1}, 53}, {{8, 8, 8, 8}, 53}]).
@@ -30,13 +31,18 @@ public_ips(Host, Opts) ->
 
 %% @doc Return public-DNS A and AAAA answers for `Host'.
 dns_ips(Host, Opts) ->
+    records(Host, a, Opts) ++ records(Host, aaaa, Opts).
+
+%% @doc Resolve public DNS records without consulting host files or search
+%% domains. DNS failures return an empty list.
+records(Host, Type, Opts) ->
     ResOpts = [
         % Query DNS directly so host files and search domains are ignored.
         {nameservers, dns_servers(Opts)},
         {timeout, hb_opts:get(dns_timeout, 1000, Opts)},
         {retry, hb_opts:get(dns_retries, 1, Opts)}
     ],
-    lookup(Host, a, ResOpts) ++ lookup(Host, aaaa, ResOpts).
+    lookup(Host, Type, ResOpts).
 
 %% @doc True iff `IP' is neither special-use nor on a local interface subnet.
 is_public_ip(IP) ->
@@ -202,6 +208,13 @@ local_ip_test() ->
 public_ips_literal_test() ->
     ?assertEqual([{8, 8, 8, 8}], public_ips(<<"8.8.8.8">>, #{})),
     ?assertEqual([], public_ips(<<"127.0.0.1">>, #{})).
+
+%% @doc Test generic DNS record lookup failure and resolver validation.
+records_test() ->
+    ?assertEqual([], records(<<"invalid host">>, ns, #{})),
+    ?assertThrow(invalid_dns_server, records(
+        <<"example.com">>, ns, #{<<"dns-servers">> => []}
+    )).
 
 uri_host_test() ->
     ?assertEqual({ok, <<"example.com">>}, uri_host(<<"https://Example.COM./x">>)),

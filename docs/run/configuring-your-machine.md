@@ -81,7 +81,7 @@ These options control identity and security settings.
 
 #### TLS termination
 
-TLS is opt-in and uses ACME HTTP-01 to obtain and renew a certificate whose
+TLS is opt-in and uses ACME to obtain and renew a certificate whose
 leaf key is the node's RSA `priv-wallet`:
 
 ```text
@@ -98,6 +98,48 @@ tls/acme/http-port: 80
 
 `tls/acme/http-port` defaults to `80` and must be reachable for HTTP-01
 validation. This cleartext listener serves only the exact ACME challenge path.
+Wildcard domains automatically use DNS-01 instead. DNS providers are configured
+by device name; HyperBEAM includes DigitalOcean and Cloudflare implementations:
+
+```text
+tls/domains/ao-types: .=list
+tls/domains/1: example.com
+tls/domains/2: *.example.com
+
+tls/acme/directory-url: https://acme-v02.api.letsencrypt.org/directory
+tls/acme/terms-of-service-agreed: true
+tls/acme/dns-provider: tls-dns-digitalocean@1.0
+tls/acme/dns-zone: example.com
+tls/acme/priv-dns-api-token: replace-with-token
+tls/acme/dns-propagation-timeout: 60000
+tls/acme/dns-poll-interval: 2000
+```
+
+The token needs permission to create and delete domain records. Its `priv-`
+prefix marks it as private so it is excluded from public messages and sanitized
+event output. Restrict access to the configuration file. HyperBEAM polls every
+authoritative nameserver for the expected TXT value before requesting ACME
+validation. `dns-propagation-timeout` and `dns-poll-interval` are milliseconds;
+they default to `30000` and `2000`. The former `dns-propagation-delay` setting
+is accepted as a compatibility alias for the timeout. Set
+`tls/acme/challenge-type: dns-01` to use DNS-01 without a wildcard.
+
+For Cloudflare, use:
+
+```text
+tls/acme/dns-provider: tls-dns-cloudflare@1.0
+tls/acme/dns-zone: example.com
+tls/acme/priv-dns-api-token: replace-with-token
+```
+
+The Cloudflare token needs `DNS Write` on the zone. HyperBEAM resolves the zone
+ID by name, which additionally requires `Zone Read`. To avoid that lookup and
+permission, set `tls/acme/dns-zone-id` to the 32-character Cloudflare zone ID.
+
+See [ACME DNS-01 provider devices](./acme-dns-01.md) for provider setup, the
+third-party provider interface, startup, verification, renewal, and
+troubleshooting steps.
+
 The ACME directory uses the operating-system trust store unless
 `tls/acme/ca-certificate` supplies a PEM CA certificate. TLS supports `http1`
 and `http2`, not `http3`.

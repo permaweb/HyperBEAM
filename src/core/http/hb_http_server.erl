@@ -313,13 +313,17 @@ prepare_tls(TLS, Wallet, ServerID, NodeMsg) ->
     ChallengeRef = {tls_http_01, ServerID},
     stop_tls(ServerID),
     try
-        ChallengeNode = challenge_node(ACME, ServerID, NodeMsg),
-        {ok, _, _} = start_http2(
-            ChallengeRef,
-            listener_protocol_options(ChallengeRef, ChallengeNode),
-            ChallengeNode,
-            []
-        ),
+        case uses_http_challenge(ACME, TLS, NodeMsg) of
+            true ->
+                ChallengeNode = challenge_node(ACME, ServerID, NodeMsg),
+                {ok, _, _} = start_http2(
+                    ChallengeRef,
+                    listener_protocol_options(ChallengeRef, ChallengeNode),
+                    ChallengeNode,
+                    []
+                );
+            false -> ok
+        end,
         PrivateTLS = #{
             <<"server-id">> => ServerID,
             <<"lifecycle-capability">> => make_ref()
@@ -373,6 +377,27 @@ challenge_node(ACME, ServerID, NodeMsg) ->
         #{ <<"tls">> => #{ <<"server-id">> => ServerID } },
         NodeMsg
     ).
+
+%% @doc Return whether TLS issuance requires an HTTP-01 challenge listener.
+uses_http_challenge(ACME, TLS, Opts) ->
+    Domains = hb_maps:get(<<"domains">>, TLS, [], Opts),
+    Request = 
+        #{
+            <<"path">> => <<"challenge-type">>,
+            <<"challenge-type">> =>
+                hb_maps:get(<<"challenge-type">>, ACME, undefined, Opts),
+            <<"domains">> => Domains
+        },
+    ResolveOpts = 
+        Opts#{
+            <<"only">> => local,
+            <<"hashpath">> => ignore,
+            <<"cache-control">> => [<<"no-cache">>, <<"no-store">>]
+        },
+    {ok, ChallengeType} = hb_ao:resolve(
+        #{ <<"device">> => <<"tls@1.0">> }, Request, ResolveOpts
+    ),
+    ChallengeType =:= <<"http-01">>.
 
 listener_protocol_options(ServerID, NodeMsg) ->
     Dispatcher = cowboy_router:compile([{'_', [{'_', ?MODULE, ServerID}]}]),
@@ -811,6 +836,17 @@ set_tls_opts_rejected_test() ->
         {error, <<"TLS configuration cannot be changed at runtime.">>},
         set_opts(#{ <<"tls">> => false }, #{})
     ).
+
+%% @doc Test selecting an ACME challenge listener from TLS configuration.
+tls_challenge_listener_test() ->
+    ?assert(uses_http_challenge(#{},
+        #{<<"domains">> => [<<"node.example">>]}, #{})),
+    ?assertNot(uses_http_challenge(#{},
+        #{<<"domains">> => [<<"*.node.example">>]}, #{})),
+    ?assertNot(uses_http_challenge(
+        #{<<"challenge-type">> => <<"dns-01">>},
+        #{<<"domains">> => [<<"node.example">>]}, #{}
+    )).
 
 tls_http3_rejected_before_start_test() ->
     ?assertError(

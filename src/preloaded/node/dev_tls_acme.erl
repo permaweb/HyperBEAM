@@ -1,6 +1,7 @@
 %%% @doc Bounded RFC 8555 client for a node-wallet certificate.
 -module(dev_tls_acme).
--export([obtain/5]).
+-export([obtain/5, challenge_type/3]).
+-include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -include_lib("public_key/include/public_key.hrl").
 
@@ -18,6 +19,7 @@ obtain(TLS, Wallet, AccountWallet, Challenge, Opts) ->
             nonce => undefined,
             kid => undefined,
             thumbprint => account_thumbprint(AccountWallet),
+            challenge_type => challenge_type(ACME, Domains, Opts),
             http_opts => http_options(ACME, Opts),
             deadline => erlang:monotonic_time(millisecond) + ?ISSUANCE_TIMEOUT
         },
@@ -27,12 +29,20 @@ obtain(TLS, Wallet, AccountWallet, Challenge, Opts) ->
         State4 = authorize(maps:get(<<"authorizations">>, Order),
             Challenge, State3),
         {_Ready, State5} = poll(OrderURL, <<"ready">>, State4),
+        ?event(debug_tls,
+            {acme_certificate_generation_requested,
+                {domain_count, length(Domains)}}),
         State6 = finalize(maps:get(<<"finalize">>, Order), Domains, State5),
         {Valid, State7} = poll(OrderURL, <<"valid">>, State6),
+        ?event(debug_tls, acme_certificate_generated),
         {_Headers, PEM, _State8} = expect(jws_post(
             maps:get(<<"certificate">>, Valid), post_as_get, State7
         ), [200]),
-        {ok, certificate_chain(PEM)}
+        Chain = certificate_chain(PEM),
+        ?event(debug_tls,
+            {acme_certificate_downloaded,
+                {chain_length, length(Chain)}}),
+        {ok, Chain}
     catch
         throw:{acme, Reason} -> {error, Reason};
         _:Reason -> {error, Reason}
@@ -58,13 +68,50 @@ require(true, _Reason) -> ok;
 require(false, Reason) -> throw({acme, Reason}).
 
 domains(Domains) when is_list(Domains), Domains =/= [] ->
-    require(lists:all(fun(Domain) ->
-        is_binary(Domain) andalso byte_size(Domain) > 0
-            andalso binary:match(Domain, <<"*">>) =:= nomatch
-    end, Domains), 'invalid-tls-domains'),
+    require(
+        lists:all(
+            fun(Domain) ->
+                is_binary(Domain)
+                andalso byte_size(Domain) > 0
+                andalso valid_wildcard(Domain)
+            end,
+            Domains
+         ),
+        'invalid-tls-domains'),
     [hb_util:to_lower(Domain) || Domain <- Domains];
 domains(_) ->
     throw({acme, 'invalid-tls-domains'}).
+
+%% @doc Return whether a domain has no wildcard or one leading wildcard.
+valid_wildcard(<<"*.", Rest/binary>>) ->
+    Rest =/= <<>> andalso binary:match(Rest, <<"*">>) =:= nomatch;
+valid_wildcard(Domain) ->
+    binary:match(Domain, <<"*">>) =:= nomatch.
+
+%% @doc Select and validate the configured ACME challenge type.
+challenge_type(ACME, Domains, Opts) ->
+    Wildcard =
+        lists:any(
+            fun
+                (<<"*.", _/binary>>) -> true;
+                (_) -> false
+            end,
+            Domains),
+    Type =
+        case hb_maps:get(<<"challenge-type">>, ACME, undefined, Opts) of
+            undefined when Wildcard -> <<"dns-01">>;
+            undefined -> <<"http-01">>;
+            Value -> hb_util:to_lower(hb_util:bin(Value))
+        end,
+    require(
+      Type =:= <<"dns-01">> orelse Type =:= <<"http-01">>,
+        'invalid-acme-challenge-type'
+    ),
+    require(
+        not Wildcard orelse Type =:= <<"dns-01">>,
+        'acme-wildcard-requires-dns-01'
+    ),
+    Type.
 
 account_thumbprint(Wallet) ->
     #{<<"e">> := E, <<"n">> := N} = jwk(Wallet),
@@ -107,28 +154,81 @@ authorize([URL | Rest], Challenge, State) ->
     case maps:get(<<"status">>, Authorization) of
         <<"valid">> -> authorize(Rest, Challenge, State1);
         _ ->
-            HTTPChallenge = http_challenge(Authorization),
-            Token = maps:get(<<"token">>, HTTPChallenge),
+            ChallengeType = maps:get(challenge_type, State1),
+            ?event(debug_tls, {authorize, {challenge_type, ChallengeType}}),
+            ACMEChallenge = acme_challenge(ChallengeType, Authorization),
+            Token = maps:get(<<"token">>, ACMEChallenge),
             validate_token(Token),
+            ?event(debug_tls, {authorize, token_validated}),
             KeyAuthorization = <<Token/binary, ".",
                 (maps:get(thumbprint, State1))/binary>>,
-            ok = Challenge({put, Token, KeyAuthorization}),
-            try
-                {_H, _B, State2} = expect(jws_post(
-                    maps:get(<<"url">>, HTTPChallenge), #{}, State1
-                ), [200, 202]),
-                {_Valid, State3} = poll(URL, <<"valid">>, State2),
-                authorize(Rest, Challenge, State3)
-            after
-                Challenge({delete, Token})
-            end
+            {Cleanup, Readiness} = present_challenge(
+                Authorization, Token, KeyAuthorization, Challenge, State1
+            ),
+            run_challenge(
+                Cleanup, Readiness, Challenge, State1,
+                fun() ->
+                    {_H, _B, State2} =
+                        expect(
+                            jws_post(
+                                maps:get(<<"url">>, ACMEChallenge),
+                                #{},
+                                State1
+                            ),
+                            [200, 202]
+                        ),
+                    {_Valid, State3} = poll(URL, <<"valid">>, State2),
+                    authorize(Rest, Challenge, State3)
+                end
+            )
     end.
 
-http_challenge(Authorization) ->
+%% @doc Select the offered ACME challenge matching `Type'.
+acme_challenge(Type, Authorization) ->
     case [Challenge || Challenge <- maps:get(<<"challenges">>, Authorization, []),
-            maps:get(<<"type">>, Challenge, undefined) =:= <<"http-01">>] of
+            maps:get(<<"type">>, Challenge, undefined) =:= Type] of
         [Challenge | _] -> Challenge;
-        [] -> throw({acme, 'acme-http-01-not-offered'})
+        [] -> throw({acme, {acme_challenge_not_offered, Type}})
+    end.
+
+%% @doc Present an HTTP-01 or DNS-01 challenge and return cleanup instructions.
+present_challenge(_Authorization, Token, KeyAuthorization, Challenge,
+        #{challenge_type := <<"http-01">>}) ->
+    ok = challenge_result(Challenge({put, Token, KeyAuthorization})),
+    {{delete, Token}, ready};
+present_challenge(Authorization, _Token, KeyAuthorization, Challenge, _State) ->
+    Identifier = maps:get(
+        <<"value">>, maps:get(<<"identifier">>, Authorization, #{})
+    ),
+    Record = <<"_acme-challenge.", Identifier/binary>>,
+    Value = hb_util:encode(crypto:hash(sha256, KeyAuthorization)),
+    Handle =
+        case Challenge({dns_put, Record, Value}) of
+            {ok, Result} -> Result;
+            Result -> challenge_result(Result)
+        end,
+    {{dns_delete, Handle}, {dns_wait, Record, Value}}.
+
+%% @doc Normalize a challenge callback result or throw its ACME error.
+challenge_result(ok) -> ok;
+challenge_result({error, Reason}) -> throw({acme, Reason});
+challenge_result(Other) ->
+    throw({acme, {'invalid-acme-challenge-response', Other}}).
+
+%% @doc Wait for a presented challenge to become ready for ACME validation.
+challenge_ready(ready, _Challenge, _State) -> ok;
+challenge_ready({dns_wait, Record, Value}, Challenge, State) ->
+    challenge_result(Challenge(
+        {dns_wait, Record, Value, deadline(State)}
+    )).
+
+%% @doc Wait for challenge readiness, execute `Fun', and always clean up.
+run_challenge(Cleanup, Readiness, Challenge, State, Fun) ->
+    try
+        ok = challenge_ready(Readiness, Challenge, State),
+        Fun()
+    after
+        Challenge(Cleanup)
     end.
 
 finalize(URL, Domains, State) ->
@@ -296,7 +396,12 @@ rsa_sign({{{rsa, E}, D, N}, {{rsa, E}, N}}, Data) ->
         [{rsa_padding, rsa_pkcs1_padding}]).
 
 header(Name, Headers) ->
-    proplists:get_value(Name, Headers, not_found).
+    Normalized = [{
+        hb_util:to_lower(hb_util:bin(Key)), hb_util:bin(Value)
+    } || {Key, Value} <- Headers],
+    proplists:get_value(
+        hb_util:to_lower(hb_util:bin(Name)), Normalized, not_found
+    ).
 
 is_bad_nonce(400, Body) ->
     case decode_json(Body) of
@@ -315,6 +420,7 @@ retry_after(Headers, Default) ->
     end.
 
 wait(Delay, State) ->
+    ?event(debug_tls, {wait, {delay, Delay}}),
     case deadline(State) > Delay of
         true -> timer:sleep(Delay);
         false -> throw({acme, 'acme-timeout'})
@@ -333,8 +439,7 @@ http_options(ACME, Opts) ->
         not_found -> public_key:cacerts_get();
         PEM -> certificate_chain(PEM)
     end,
-    #{
-        <<"http-client">> => gun,
+    Opts#{
         <<"protocol">> => http1,
         <<"http-retry">> => 0,
         <<"http-client-connect-timeout">> => ?REQUEST_TIMEOUT,
@@ -438,3 +543,86 @@ protocol_validation_test() ->
     ?assert(is_bad_nonce(400, hb_json:encode(#{
         <<"type">> => <<"urn:ietf:params:acme:error:badNonce">>
     }))).
+
+%% @doc Test normalization of response header names and values.
+response_header_normalization_test() ->
+    Headers =
+        [
+            {<<"Replay-Nonce">>, <<"nonce">>},
+            {"Retry-After", "10"}
+        ],
+    ?assertEqual(<<"nonce">>, header(<<"replay-nonce">>, Headers)),
+    ?assertEqual(<<"10">>, header(<<"retry-after">>, Headers)),
+    ?assertEqual(not_found, header(<<"missing">>, Headers)).
+
+%% @doc Test automatic and configured ACME challenge selection.
+challenge_type_test() ->
+    ?assertEqual(
+        <<"http-01">>,
+        challenge_type(#{}, [<<"node.example">>], #{})
+    ),
+    ?assertEqual(
+        <<"dns-01">>,
+        challenge_type(#{}, [<<"*.node.example">>], #{})
+    ),
+    ?assertThrow(
+        {acme, 'acme-wildcard-requires-dns-01'},
+        challenge_type(#{<<"challenge-type">> => <<"http-01">>},
+            [<<"*.node.example">>], #{})
+    ).
+
+%% @doc Test construction and presentation of a DNS-01 challenge.
+dns_challenge_test() ->
+    Self = self(),
+    Callback =
+        fun(Action) ->
+            Self ! Action,
+            case Action of
+                {dns_put, _, _} -> {ok, 42};
+                _ -> ok
+            end
+        end,
+    Authorization = #{<<"identifier">> => #{<<"value">> => <<"node.example">>}},
+    State = #{
+        challenge_type => <<"dns-01">>,
+        deadline => erlang:monotonic_time(millisecond) + 1000
+    },
+    Digest = hb_util:encode(crypto:hash(sha256, <<"token.thumbprint">>)),
+    {Cleanup, Readiness} = present_challenge(
+        Authorization, <<"token">>, <<"token.thumbprint">>, Callback, State
+    ),
+    ?assertEqual(ok, run_challenge(
+        Cleanup, Readiness, Callback, State, fun() -> ok end
+    )),
+    Put = receive PutAction -> PutAction after 0 -> timeout end,
+    Wait = receive WaitAction -> WaitAction after 0 -> timeout end,
+    Delete = receive DeleteAction -> DeleteAction after 0 -> timeout end,
+    ?assertEqual(
+        {dns_put, <<"_acme-challenge.node.example">>, Digest}, Put
+    ),
+    ?assertMatch(
+        {dns_wait, <<"_acme-challenge.node.example">>, Digest, _}, Wait
+    ),
+    ?assertEqual({dns_delete, 42}, Delete).
+
+%% @doc Test that DNS challenge cleanup runs after validation failure.
+dns_challenge_cleanup_test() ->
+    Self = self(),
+    Callback = fun(Action) -> Self ! Action, ok end,
+    State = #{deadline => erlang:monotonic_time(millisecond) + 1000},
+    ?assertThrow(validation_failed, run_challenge(
+        {dns_delete, 42},
+        {dns_wait, <<"_acme-challenge.node.example">>, <<"digest">>},
+        Callback,
+        State,
+        fun() -> throw(validation_failed) end
+    )),
+    Wait = receive WaitAction -> WaitAction after 0 -> timeout end,
+    Delete = receive DeleteAction -> DeleteAction after 0 -> timeout end,
+    ?assertMatch({dns_wait, _, _, _}, Wait),
+    ?assertEqual({dns_delete, 42}, Delete).
+
+%% @doc Test preserving a configured HTTP client in ACME request options.
+configured_http_client_test() ->
+    HTTPOpts = http_options(#{}, #{ <<"http-client">> => httpc }),
+    ?assertEqual(httpc, hb_opts:get(http_client, undefined, HTTPOpts)).
