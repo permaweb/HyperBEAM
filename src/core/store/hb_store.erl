@@ -93,6 +93,9 @@ behavior_info(callbacks) ->
         {resolve, 3}
     ].
 
+%% The keys a store definition may carry to transform paths on their way in.
+-define(INPUT_TRANSFORMS,
+    [<<"prefix">>, <<"path-normalization">>, <<"strip-slashes">>]).
 -define(DEFAULT_SCOPE, local).
 -define(DEFAULT_RETRIES, 1).
 -define(COMMON_POLICIES, [start, stop, scope]).
@@ -512,7 +515,18 @@ do_call_function([Store = #{<<"store-module">> := Mod} | Rest], Function, Args, 
 %% given maximum number of times.
 apply_store_function(Mod, Store, Function, Args) ->
     MaxAttempts = maps:get(<<"max-retries">>, Store, ?DEFAULT_RETRIES) + 1,
-    apply_store_function(Mod, Store, Function, Args, MaxAttempts).
+    case transform_request(Store, Function, Args) of
+        no_match ->
+            % The store's prefix does not cover this path, so the next store in
+            % the list answers instead.
+            {error, not_found};
+        {StoreArgs, Context} ->
+            transform_result(
+                Context,
+                Function,
+                apply_store_function(Mod, Store, Function, StoreArgs, MaxAttempts)
+            )
+    end.
 apply_store_function(_Mod, _Store, _Function, _Args, 0) ->
     % Too many attempts have already failed. Bail.
     {error, not_found};
@@ -539,6 +553,261 @@ apply_store_function(Mod, Store, Function, Args, AttemptsRemaining) ->
         ),
         retry(Mod, Store, Function, Args, AttemptsRemaining, {error, not_found})
     end.
+
+%% @doc The transformations a store definition applies to a path before its
+%% module is called.
+%%
+%% <ul>
+%%   <li>`prefix': the store holds only paths under this prefix, which is
+%%       removed before the module sees the path. A path that does not carry
+%%       the prefix is not this store's, and the next store answers.</li>
+%%   <li>`path-normalization': one entry per `/'-separated part of what
+%%       remains, or a single entry applied to every part. `decode-base64url',
+%%       `encode-base64url', `decode-int', `encode-int', `decode-int-BITS',
+%%       `encode-int-BITS' and `none'. A `decode' turns text into bytes and an
+%%       `encode' turns bytes into text. Parts past the end of the list are
+%%       left alone, and entries past the end of the path are ignored.</li>
+%%   <li>`strip-slashes': join the parts with no separator.</li>
+%% </ul>
+%%
+%% Together these turn a path a device writes, such as
+%% `~match@1.0/<hash>/<offset>', into the bytes a sorted set holds: eight raw
+%% bytes of hash followed by seven of offset, in fifteen bytes with no
+%% separator and nothing to parse.
+%%
+%% Names the store returns come back in the caller's encoding, so the inverse
+%% of each normalization is applied on the way out.
+transformations(Store) ->
+    case maps:with(?INPUT_TRANSFORMS, Store) of
+        Empty when map_size(Empty) == 0 -> none;
+        Transformations -> Transformations
+    end.
+
+%% @doc Apply a store's input transformations to the paths a request carries,
+%% returning the request its module sees and the context its results are
+%% transformed back with.
+transform_request(Store, Function, Args) ->
+    transform_request(transformations(Store), Store, Function, Args).
+transform_request(none, _Store, _Function, Args) ->
+    {Args, none};
+transform_request(Transformations, _Store, Function, [Req | Rest])
+        when Function == write; Function == link ->
+    % Both callbacks carry a map of paths rather than a single one: `write'
+    % keys it by path, `link' keys the new path by the existing one.
+    Transformed =
+        maps:fold(
+            fun(_Path, _Value, no_match) -> no_match;
+               (Path, Value, Acc) ->
+                    case {transform_path(Transformations, Path), Function} of
+                        {no_match, _} -> no_match;
+                        {{Key, _Widths}, write} -> Acc#{ Key => Value };
+                        {{Key, _Widths}, link} ->
+                            case transform_path(Transformations, Value) of
+                                no_match -> no_match;
+                                {Target, _} -> Acc#{ Key => Target }
+                            end
+                    end
+            end,
+            #{},
+            Req
+        ),
+    case Transformed of
+        no_match -> no_match;
+        _ -> {[Transformed | Rest], none}
+    end;
+transform_request(Transformations, _Store, Function, Args = [Req | Rest]) ->
+    Key = path_key(Function),
+    case maps:get(Key, Req, no_path) of
+        no_path -> {Args, none};
+        Path ->
+            case transform_path(Transformations, Path) of
+                no_match -> no_match;
+                {Transformed, Widths} ->
+                    Bounded =
+                        transform_bounds(
+                            Transformations,
+                            Widths,
+                            Req#{ Key => Transformed }
+                        ),
+                    {[Bounded | Rest], {Transformations, Widths}}
+            end
+    end.
+
+%% @doc The request key that carries a path, for each callback that takes one.
+path_key(read) -> <<"read">>;
+path_key(list) -> <<"list">>;
+path_key(type) -> <<"type">>;
+path_key(resolve) -> <<"resolve">>;
+path_key(group) -> <<"group">>;
+path_key(_Function) -> no_path.
+
+%% @doc Normalize a list request's `from' bound, which names a child of the
+%% listed path and so takes the normalization of the part after it.
+transform_bounds(Transformations, Widths, Req = #{ <<"from">> := From }) ->
+    Normalization = normalization(Transformations, length(Widths)),
+    Req#{ <<"from">> => normalize(Normalization, From) };
+transform_bounds(_Transformations, _Widths, Req) ->
+    Req.
+
+%% @doc Turn a path into the bytes a store's module sees, and the width of each
+%% of its parts.
+transform_path(Transformations, RawPath) ->
+    case remove_prefix(Transformations, hb_path:to_binary(RawPath)) of
+        no_match -> no_match;
+        Path ->
+            Parts = normalize_parts(Transformations, parts(Path)),
+            {join(Transformations, Parts), [byte_size(Part) || Part <- Parts]}
+    end.
+
+%% @doc The parts of a path. A path with none -- the root of the store, which
+%% is what remains of a path that is exactly the store's prefix -- has an empty
+%% list of them rather than no answer at all.
+parts(Path) ->
+    case hb_path:term_to_path_parts(Path) of
+        undefined -> [];
+        Parts -> Parts
+    end.
+
+%% @doc Remove a store's prefix from a path, or report that the path is not the
+%% store's to answer.
+remove_prefix(#{ <<"prefix">> := Prefix }, Path) ->
+    Size = byte_size(Prefix),
+    case Path of
+        <<Prefix:Size/binary, Rest/binary>> -> Rest;
+        _ -> no_match
+    end;
+remove_prefix(_Transformations, Path) ->
+    Path.
+
+%% @doc Apply the normalization at each part's position, or the one that
+%% undoes it -- which is what turns a store's own bytes back into the encoding
+%% its caller used.
+normalize_parts(Transformations, Parts) ->
+    normalize_parts(Transformations, Parts, forward).
+normalize_parts(Transformations, Parts, Direction) ->
+    lists:map(
+        fun({Position, Part}) ->
+            normalize(
+                normalization(Transformations, Position, Direction),
+                Part
+            )
+        end,
+        lists:zip(lists:seq(0, length(Parts) - 1), Parts)
+    ).
+
+%% @doc The normalization a part at the given position takes. A single
+%% normalization rather than a list applies to every part.
+normalization(#{ <<"path-normalization">> := Normalization }, _Position)
+        when is_binary(Normalization) ->
+    Normalization;
+normalization(#{ <<"path-normalization">> := Normalizations }, Position)
+        when Position < length(Normalizations) ->
+    lists:nth(Position + 1, Normalizations);
+normalization(_Transformations, _Position) ->
+    <<"none">>.
+normalization(Transformations, Position, forward) ->
+    normalization(Transformations, Position);
+normalization(Transformations, Position, inverse) ->
+    inverse(normalization(Transformations, Position)).
+
+%% @doc Apply one normalization to one path part. A `decode' turns text into
+%% bytes and an `encode' turns bytes into text.
+normalize(<<"none">>, Part) -> Part;
+normalize(<<"decode-base64url">>, Part) -> hb_util:decode(Part);
+normalize(<<"encode-base64url">>, Part) -> hb_util:encode(Part);
+normalize(<<"decode-int">>, Part) -> binary:encode_unsigned(hb_util:int(Part));
+normalize(<<"encode-int">>, Part) -> hb_util:bin(binary:decode_unsigned(Part));
+normalize(<<"decode-int-", Bits/binary>>, Part) ->
+    Width = hb_util:int(Bits),
+    <<(hb_util:int(Part)):Width>>;
+normalize(<<"encode-int-", _Bits/binary>>, Part) ->
+    hb_util:bin(binary:decode_unsigned(Part));
+normalize(Normalization, Part) when not is_binary(Normalization) ->
+    normalize(hb_util:bin(Normalization), Part);
+normalize(Normalization, _Part) ->
+    throw({unknown_path_normalization, Normalization}).
+
+%% @doc The normalization that undoes another.
+inverse(<<"none">>) -> <<"none">>;
+inverse(<<"decode-", Rest/binary>>) -> <<"encode-", Rest/binary>>;
+inverse(<<"encode-", Rest/binary>>) -> <<"decode-", Rest/binary>>;
+inverse(Normalization) when not is_binary(Normalization) ->
+    inverse(hb_util:bin(Normalization));
+inverse(Normalization) ->
+    throw({unknown_path_normalization, Normalization}).
+
+%% @doc Join normalized parts back into the bytes the store's module sees.
+join(#{ <<"strip-slashes">> := true }, Parts) ->
+    iolist_to_binary(Parts);
+join(_Transformations, Parts) ->
+    iolist_to_binary(lists:join(<<"/">>, Parts)).
+
+%% @doc Return a store's results in the encoding the caller used.
+transform_result(none, _Function, Result) ->
+    Result;
+transform_result({Transformations, Widths}, list, {ok, Children}) ->
+    {ok, denormalize_children(Transformations, Widths, Children)};
+transform_result({Transformations, Widths}, read, {composite, Children}) ->
+    {composite, denormalize_children(Transformations, Widths, Children)};
+transform_result({Transformations, Widths}, resolve, {ok, Path}) ->
+    case split(Transformations, Widths, Path) of
+        {ok, Parts} -> resolved(Transformations, Parts);
+        {error, _} = Error -> Error
+    end;
+transform_result(_Context, _Function, Result) ->
+    Result.
+
+%% @doc Rebuild a resolved path in the encoding the caller used.
+resolved(Transformations, Parts) ->
+    Denormalized = normalize_parts(Transformations, Parts, inverse),
+    {ok,
+        <<
+            (maps:get(<<"prefix">>, Transformations, <<>>))/binary,
+            (iolist_to_binary(lists:join(<<"/">>, Denormalized)))/binary
+        >>
+    }.
+
+%% @doc Return child names in the caller's encoding. A child of a path with
+%% `Widths' parts sits one position further along the normalization list.
+denormalize_children(Transformations, Widths, Children) ->
+    Inverse = normalization(Transformations, length(Widths), inverse),
+    lists:map(
+        fun({Name, Value}) -> {normalize(Inverse, Name), Value};
+           (Name) -> normalize(Inverse, Name)
+        end,
+        Children
+    ).
+
+%% @doc Split a path in the store's own space back into its parts.
+%%
+%% Without a separator to split on, the widths recorded while normalizing the
+%% request say where each part ends. A path those widths do not account for
+%% exactly is one this store cannot describe, and saying so is better than
+%% returning the part of it that happens to fit.
+split(#{ <<"strip-slashes">> := true }, Widths, Path) ->
+    split_result(
+        lists:foldl(
+            fun(_Width, {error, _} = Error) ->
+                    Error;
+               (Width, {ok, Rest, Parts}) ->
+                    case Rest of
+                        <<Part:Width/binary, Remaining/binary>> ->
+                            {ok, Remaining, [Part | Parts]};
+                        _ ->
+                            {error, {unsplittable_path, Path}}
+                    end
+            end,
+            {ok, Path, []},
+            Widths
+        ),
+        Path
+    );
+split(_Transformations, _Widths, Path) ->
+    {ok, parts(Path)}.
+
+split_result({ok, <<>>, Parts}, _Path) -> {ok, lists:reverse(Parts)};
+split_result({ok, _Rest, _Parts}, Path) -> {error, {unsplittable_path, Path}};
+split_result({error, _} = Error, _Path) -> Error.
 
 %% @doc Stop and start the store, then retry.
 retry(_Mod, _Store, _Function, _Args, AttemptsRemaining, Result)
@@ -580,6 +849,26 @@ admin_post_process(reset, Store) ->
 admin_post_process(_, _Store) ->
     ok.
 
+
+
+%% @doc Report whether a store's normalizations can be undone. Without a
+%% separator between the parts, only fixed-width normalizations say where one
+%% part ends and the next begins, so a variable-width one is refused rather
+%% than answered wrongly.
+invertible(#{ <<"strip-slashes">> := true } = Transformations) ->
+    Normalizations =
+        case maps:get(<<"path-normalization">>, Transformations, []) of
+            Single when is_binary(Single) -> [Single];
+            List -> List
+        end,
+    lists:all(fun fixed_width/1, Normalizations);
+invertible(_Transformations) ->
+    true.
+
+fixed_width(<<"decode-int">>) -> false;
+fixed_width(<<"encode-int">>) -> false;
+fixed_width(_Normalization) -> true.
+
 start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     case is_admissible(Store, start) of
         false ->
@@ -608,6 +897,17 @@ start_one(Store = #{ <<"store-module">> := Mod }, Req, Opts) ->
     end.
 
 call_store_start(Mod, Store, Req, Opts) ->
+    case invertible(transformations(Store)) of
+        false ->
+            {error,
+                {badarg,
+                    <<"A store that strips slashes needs every path "
+                        "normalization to be fixed-width.">>}};
+        true ->
+            do_call_store_start(Mod, Store, Req, Opts)
+    end.
+
+do_call_store_start(Mod, Store, Req, Opts) ->
     %% function_exported doesn't load the module. We need to call ensure_loaded
     %% here since is the first time we call a function to load the module.
     code:ensure_loaded(Mod),
@@ -807,7 +1107,10 @@ bounded_list_test(Store) ->
         end,
         Children
     ),
-    List = fun(Bounds) -> list(Store, Bounds#{ <<"list">> => <<"test-group">> }, #{}) end,
+    List =
+        fun(Bounds) ->
+            list(Store, Bounds#{ <<"list">> => <<"test-group">> }, #{})
+        end,
     ?assertEqual({ok, Children}, List(#{})),
     ?assertEqual({ok, [<<"aa">>, <<"bb">>]}, List(#{ <<"limit">> => 2 })),
     ?assertEqual(
@@ -828,6 +1131,133 @@ bounded_list_test(Store) ->
     ),
     % A bound that no child satisfies is an empty page, not a missing group.
     ?assertEqual({ok, []}, List(#{ <<"from">> => <<"zz">> })).
+
+%% @doc Ensure that a store's input transformations reach its module as the
+%% bytes they describe, and that a path the prefix does not cover is left for
+%% the next store.
+input_transform_test() ->
+    Raw = hb_test_utils:test_store(hb_store_volatile),
+    Hash = <<"12345678">>,
+    Offset = 390000000000,
+    Store =
+        Raw#{
+            <<"prefix">> => <<"~match@1.0/">>,
+            <<"path-normalization">> =>
+                [<<"decode-base64url">>, <<"decode-int-56">>],
+            <<"strip-slashes">> => true
+        },
+    ok = start(Store),
+    Path =
+        <<
+            "~match@1.0/",
+            (hb_util:encode(Hash))/binary,
+            "/",
+            (integer_to_binary(Offset))/binary
+        >>,
+    ok = write(Store, write_req(Path, <<"indexed">>), #{}),
+    % The module holds the fifteen bytes the transformations describe, and
+    % nothing of the path the caller wrote.
+    ?assertEqual(
+        {ok, <<"indexed">>},
+        read(Raw, <<Hash/binary, Offset:56>>, #{})
+    ),
+    ?assertEqual({ok, <<"indexed">>}, read(Store, Path, #{})),
+    % A path the prefix does not cover is not this store's to answer.
+    ?assertEqual({error, not_found}, read(Store, <<"elsewhere/thing">>, #{})).
+
+%% @doc Ensure that a path a store's prefix does not cover is left for the next
+%% store rather than answered.
+%%
+%% Both outcomes are `{error, not_found}' to the caller, so only a second store
+%% behind the first can tell "not mine" from "mine, and absent".
+input_transform_declines_test() ->
+    Behind = hb_test_utils:test_store(hb_store_volatile),
+    Prefixed =
+        (hb_test_utils:test_store(hb_store_volatile))#{
+            <<"prefix">> => <<"~match@1.0/">>
+        },
+    Chain = [Prefixed, Behind],
+    ok = start(Prefixed),
+    ok = start(Behind),
+    ok = write(Behind, write_req(<<"elsewhere/thing">>, <<"behind">>), #{}),
+    ok = write(Chain, write_req(<<"~match@1.0/held">>, <<"in-front">>), #{}),
+    % The prefixed store declined the first path, so the store behind it holds
+    % it; it took the second, so the store behind it does not.
+    ?assertEqual({ok, <<"behind">>}, read(Chain, <<"elsewhere/thing">>, #{})),
+    ?assertEqual({ok, <<"in-front">>}, read(Chain, <<"~match@1.0/held">>, #{})),
+    ?assertEqual({ok, <<"in-front">>}, read(Prefixed, <<"~match@1.0/held">>, #{})),
+    ?assertEqual({error, not_found}, read(Behind, <<"~match@1.0/held">>, #{})),
+    % A path the prefix does not cover is absent from the prefixed store
+    % whether or not anything behind it holds one.
+    ?assertEqual({error, not_found}, read(Prefixed, <<"elsewhere/thing">>, #{})).
+
+%% @doc Ensure that a transformed store answers for its own root, which is a
+%% path with no parts rather than a path with no answer.
+input_transform_root_test() ->
+    Store =
+        (hb_test_utils:test_store(hb_store_volatile))#{
+            <<"path-normalization">> => <<"none">>,
+            <<"strip-slashes">> => true
+        },
+    ok = start(Store),
+    ok = write(Store, write_req(<<"a-child">>, <<"held">>), #{}),
+    ?assertEqual({ok, [<<"a-child">>]}, list(Store, <<"/">>, #{})),
+    ?assertEqual({ok, [<<"a-child">>]}, list(Store, <<>>, #{})),
+    ?assertEqual({ok, <<"held">>}, read(Store, <<"a-child">>, #{})).
+
+%% @doc Ensure that the names a transformed store returns come back in the
+%% encoding its caller used.
+input_transform_list_test() ->
+    Raw = hb_test_utils:test_store(hb_store_volatile),
+    Hash = <<"12345678">>,
+    % Offsets of differing digit counts: they order numerically because the
+    % store compares them as fixed-width bytes, where sorting them as decimal
+    % text would put 100 before 99.
+    Offsets = [99, 100, 123456789012, 390000000000, 390000000001],
+    Store =
+        Raw#{
+            <<"prefix">> => <<"~match@1.0/">>,
+            <<"path-normalization">> =>
+                [<<"decode-base64url">>, <<"decode-int-56">>]
+        },
+    ok = start(Store),
+    Group = <<"~match@1.0/", (hb_util:encode(Hash))/binary>>,
+    ok = group(Store, Group, #{}),
+    lists:foreach(
+        fun(Offset) ->
+            ok =
+                write(
+                    Store,
+                    write_req(
+                        <<Group/binary, "/", (integer_to_binary(Offset))/binary>>,
+                        <<>>
+                    ),
+                    #{}
+                )
+        end,
+        Offsets
+    ),
+    % The module holds the raw parts, separated as the path was.
+    ?assertEqual(
+        {ok, <<>>},
+        read(Raw, <<Hash/binary, "/", (hd(Offsets)):56>>, #{})
+    ),
+    Sorted = [hb_util:bin(Offset) || Offset <- lists:sort(Offsets)],
+    ?assertEqual({ok, Sorted}, list(Store, Group, #{})),
+    ?assertEqual(
+        {ok, [hd(Sorted)]},
+        list(Store, #{ <<"list">> => Group, <<"limit">> => 1 }, #{})
+    ).
+
+%% @doc Ensure that a store whose parts cannot be told apart once joined is
+%% refused rather than answered wrongly.
+input_transform_variable_width_test() ->
+    Store =
+        (hb_test_utils:test_store(hb_store_volatile))#{
+            <<"path-normalization">> => [<<"decode-int">>],
+            <<"strip-slashes">> => true
+        },
+    ?assertMatch({error, {badarg, _}}, start(Store)).
 
 store_suite_test_() ->
     generate_test_suite([
