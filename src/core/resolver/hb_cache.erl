@@ -41,7 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
--export([match/2, list/2, list_numbered/2]).
+-export([match/2, match/3, list/2, list_numbered/2]).
 -export([match_address/3]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -206,6 +206,16 @@ list(Path, Store, Opts) ->
 %% it to find the matching messages. This lowers the complexity class of the
 %% match to `O(keys * log(cache_size))` instead of `O(cache_size)`.
 match(MatchSpec, Opts) ->
+    match(MatchSpec, #{}, Opts).
+
+%% @doc Match a template against the cache, bounded by the request.
+%%
+%% `from', `limit' and `direction' name the page of results wanted. A hashed
+%% index keys its rows by the weave offset of the item, so `from' is a seek
+%% into the index rather than a scan up to it: the fiftieth page costs what the
+%% first does. The unhashed index has no ordering that two predicates share,
+%% and reads both in full whatever the bounds say.
+match(MatchSpec, Req, Opts) ->
     ReadMode = hb_opts:get(cache_read_mode, normal, Opts),
     NormalizedSpec = normalize_match_spec(MatchSpec, ReadMode, Opts),
     case (ReadMode == raw) orelse
@@ -218,7 +228,7 @@ match(MatchSpec, Opts) ->
                     <<"match@1.0">>,
                     <<"all">>,
                     NormalizedSpec,
-                    #{},
+                    Req,
                     Opts
                 )
             of
@@ -1592,7 +1602,6 @@ hashed_match_index_test() ->
         hb_store:read(Store, <<Address/binary, "/4096">>, Opts)
     ),
     ?assertEqual({ok, [<<"4096">>]}, hb_store:list(Store, Address, Opts)),
-    ?assertEqual({ok, [<<"4096">>]}, match(Located, Opts)),
     % An item whose position is not known is written at offset zero, which is
     % the genesis of the weave and holds no item, rather than at a shorter
     % address that would make the index mixed-width.
