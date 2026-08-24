@@ -82,11 +82,25 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
             false -> [no_lock]
         end,
     % Create the LMDB environment with specified size limit
-    {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
+    {ok, Env} = open_env(DataDirPath, EnvOpts),
     {ok, DBInstance} = elmdb:db_open(Env, [create]),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_Store, _Req, _NodeOpts) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
+
+%% @doc Open an environment, rebuilding one written in an older on-disk
+%% format. LMDB refuses a file whose data version is not its own, and the
+%% store holds derived data, so the file is discarded rather than migrated.
+open_env(DataDirPath, EnvOpts) ->
+    case elmdb:env_open(DataDirPath, EnvOpts) of
+        {error, version_mismatch} ->
+            ?event(lmdb_store,
+                {rebuilding_outdated_database, {path, DataDirPath}}),
+            ok = file:delete(filename:join(DataDirPath, "data.mdb")),
+            _ = file:delete(filename:join(DataDirPath, "lock.mdb")),
+            elmdb:env_open(DataDirPath, EnvOpts);
+        Result -> Result
+    end.
 
 %% @doc Ensure that the database directory exists.
 ensure_dir(DataDirPath) ->
@@ -1244,3 +1258,43 @@ read_prefix_composite_test() ->
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
     test_stop(StoreOpts).
+
+%% @doc Verify that a database written in an older on-disk format is rebuilt
+%% rather than refused. LMDB stamps its data version into both meta pages, so
+%% rewriting them is the only way to produce a file the current library will
+%% not open.
+outdated_format_rebuild_test() ->
+    Written = hb_test_utils:test_store(?MODULE),
+    test_reset(Written),
+    test_write(Written, <<"before">>, <<"value">>),
+    ok = test_stop(Written),
+    Outdated = hb_test_utils:test_store(?MODULE),
+    OutdatedDir = hb_util:list(maps:get(<<"name">>, Outdated)),
+    ok = ensure_dir(OutdatedDir),
+    {ok, File} = file:read_file(filename:join(data_dir(Written), "data.mdb")),
+    ok =
+        file:write_file(
+            filename:join(OutdatedDir, "data.mdb"),
+            set_data_version(File, 1)
+        ),
+    ?assertEqual(not_found, test_read(Outdated, <<"before">>)),
+    test_write(Outdated, <<"after">>, <<"value">>),
+    ?assertEqual({ok, <<"value">>}, test_read(Outdated, <<"after">>)),
+    ok = test_stop(Outdated).
+
+%% Rewrite the data version stamped into both of a file's meta pages. The meta
+%% structure starts 24 bytes into the page and the version is 4 bytes into it,
+%% after the magic.
+set_data_version(File, Version) ->
+    <<_:48/binary, PageSize:32/little, _/binary>> = File,
+    lists:foldl(
+        fun(Offset, Acc) ->
+            <<Before:Offset/binary, _:32/little, After/binary>> = Acc,
+            <<Before/binary, Version:32/little, After/binary>>
+        end,
+        File,
+        [28, PageSize + 28]
+    ).
+
+data_dir(StoreOpts) ->
+    hb_util:list(maps:get(<<"name">>, StoreOpts)).
