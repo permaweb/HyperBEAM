@@ -223,8 +223,19 @@ elements_of(Store, Meta = #{ <<"root">> := Root }, Opts) ->
             {ok, Meta}
     end.
 
-%% The single leaf node of a sorted set's main database names the database that
-%% holds its elements, and `pad' is the width of one of them.
+%% The single leaf node of a sorted set's main database names the elements: a
+%% database of its own once the set outgrows a page, and a page held inside the
+%% node itself while it has not. A page carries the width of its items where a
+%% database carries it as `pad'.
+set_meta(Meta, {ok, _Key, {leaf, {subpage, Page}}}) ->
+    case hb_lmdb_page:page(Page) of
+        {ok, #{ <<"type">> := leaf2, <<"width">> := Width }} ->
+            {ok, Meta#{ <<"subpage">> => Page, <<"width">> => Width }};
+        {ok, #{ <<"type">> := Type }} ->
+            {error, {not_a_leaf2_page, Type}};
+        {error, _} = Error ->
+            Error
+    end;
 set_meta(Meta, {ok, _Key, {leaf, {database, Set}}}) ->
     {ok,
         Meta#{
@@ -700,18 +711,20 @@ member(Store, Meta = #{ <<"width">> := Width }, Key, Opts)
         when byte_size(Key) == Width ->
     maybe
         {ok, _Stack, Leaf, Items, Index} ?= seek(Store, Meta, Key, Opts),
-        held(Leaf, Items, Index, Width, Key)
+        at_index(Leaf, Items, Index, Width, Key)
     end;
 member(_Store, _Meta, _Key, _Opts) ->
     {error, not_found}.
 
-held(Leaf, Items, Index, Width, Key) when Index < Items ->
+%% Report whether the element a seek landed on is the one sought. A seek that
+%% ran off the end of its leaf landed on no element at all.
+at_index(Leaf, Items, Index, Width, Key) when Index < Items ->
     case hb_lmdb_page:item(Leaf, Index, Width) of
         {ok, Key} -> {ok, <<>>};
         {ok, _Other} -> {error, not_found};
         {error, _} = Error -> Error
     end;
-held(_Leaf, _Items, _Index, _Width, _Key) ->
+at_index(_Leaf, _Items, _Index, _Width, _Key) ->
     {error, not_found}.
 
 %% @doc Walk the elements of a sorted set that begin with a prefix, naming each
@@ -744,16 +757,25 @@ elements(Store, Meta, Prefix, Req, Opts) ->
 %% starting bytes, which is the element at or before them.
 start(Store, Meta, Start, 1, Opts) ->
     seek(Store, Meta, Start, Opts);
-start(Store, Meta = #{ <<"root">> := Root }, Start, -1, Opts) ->
+start(Store, Meta, Start, -1, Opts) ->
     case increment(Start) of
         no_successor ->
-            outermost(Store, Meta, Root, [], -1, max_depth(Store, Meta), Opts);
+            last(Store, Meta, Opts);
         Bound ->
             maybe
                 {ok, Stack, Leaf, Items, Index} ?= seek(Store, Meta, Bound, Opts),
                 {ok, Stack, Leaf, Items, Index - 1}
             end
     end.
+
+%% Position on the last element of the set.
+last(_Store, #{ <<"subpage">> := Page }, _Opts) ->
+    case hb_lmdb_page:num_keys(Page) of
+        {ok, Items} -> {ok, [], Page, Items, Items - 1};
+        {error, _} = Error -> Error
+    end;
+last(Store, Meta = #{ <<"root">> := Root }, Opts) ->
+    outermost(Store, Meta, Root, [], -1, max_depth(Store, Meta), Opts).
 
 %% @doc The smallest binary that sorts after every binary starting with the
 %% given one, or `no_successor' where there is none: the bytes are empty, or
@@ -814,6 +836,9 @@ names({error, _} = Error) -> Error.
 %% @doc Descend to the leaf that holds the first key at or after the given one,
 %% keeping the branch pages walked through and the child of each that was taken.
 %% That stack is what lets the scan move on to the next leaf.
+seek(_Store, #{ <<"subpage">> := Page, <<"width">> := Width }, Key, _Opts) ->
+    % A set held inside one page has no tree above it to descend.
+    cursor([], Page, hb_lmdb_page:seek_item(Page, Key, Width));
 seek(_Store, #{ <<"depth">> := 0 }, _Key, _Opts) ->
     {error, not_found};
 seek(Store, Meta = #{ <<"root">> := Root }, Key, Opts) ->
@@ -826,7 +851,10 @@ seek(Store, Meta, Number, Key, Stack, Remaining, Opts) ->
         seek_page(Store, Meta, Page, Key, Stack, Remaining, Opts)
     end.
 
-seek_page(Store, Meta = #{ <<"width">> := Width }, Page, Key, Stack, Remaining, Opts) ->
+seek_page(
+        Store, Meta = #{ <<"width">> := Width }, Page, Key, Stack, Remaining,
+        Opts
+    ) ->
     case hb_lmdb_page:page(Page) of
         {ok, #{ <<"type">> := branch }} ->
             branch_step(Store, Meta, Page, Key, Stack, Remaining, Opts);
@@ -1580,15 +1608,18 @@ published_set_equivalence() ->
     Answers =
         lists:map(
             fun(Request) ->
-                Callback =
-                    hd(maps:keys(
-                        maps:with([<<"read">>, <<"type">>, <<"list">>], Request))),
+                Callback = callback_of(Request),
                 Answer =
-                    apply(hb_store, callback(Callback), [[Local], Request, #{}]),
+                    apply(
+                        hb_store, hb_util:atom(Callback), [[Local], Request, #{}]),
                 ?assertEqual(
                     {Request, Answer},
                     {Request,
-                        apply(hb_store, callback(Callback), [[Remote], Request, #{}])}
+                        apply(
+                            hb_store,
+                            hb_util:atom(Callback),
+                            [[Remote], Request, #{}]
+                        )}
                 ),
                 Answer
             end,
@@ -1609,10 +1640,144 @@ published_set_equivalence() ->
     ),
     file:del_dir_r(Directory).
 
-callback(<<"read">>) -> read;
-callback(<<"type">>) -> type;
-callback(<<"list">>) -> list.
+%% The key a request carries its path under names the callback it is for.
+callback_of(#{ <<"read">> := _ }) -> <<"read">>;
+callback_of(#{ <<"type">> := _ }) -> <<"type">>;
+callback_of(#{ <<"list">> := _ }) -> <<"list">>.
 
 %% The fixture's rows, as `hb_lmdb_page:fixture_dup_rows/0' builds them.
 set_row(Hash, Offset) -> <<Hash:64, Offset:56>>.
 set_prefix(Hash) -> <<Hash:64>>.
+
+%% A published index built by `~copycat@1.0' in `full' mode over block
+%% 1,889,322: 1,223 rows, small enough that its duplicate set is held inside
+%% the node that names it rather than promoted to a database of its own. Six of
+%% its rows are the items tagged `App-Name: ArDrive-App' in that block, and one
+%% more is the sentinel that stands for an item whose position was not known.
+-define(PUBLISHED_BLOCK_INDEX,
+    <<"z6yYEGs4XrHxqcElbSSJUqJ6xs5eM0C63QdXLYsCybA">>).
+-define(BLOCK_INDEX_PREDICATE, <<"~match@1.0/p_JoMqZ0uG8">>).
+-define(BLOCK_INDEX_OFFSETS,
+    [
+        0,
+        386310990766550,
+        386310990767812,
+        386310990769443,
+        386310990770705,
+        386310990772336,
+        386310990773598
+    ]).
+
+%% @doc A published index answers through the store definition of the design:
+%% the rows are fifteen raw bytes, and the paths that reach them are
+%% `~match@1.0/<hash>/<offset>'.
+published_block_index_test_() ->
+    {timeout, 300, fun published_block_index/0}.
+published_block_index() ->
+    Store =
+        (store(<<"arlmdb-block-index">>, ?PUBLISHED_BLOCK_INDEX))#{
+            <<"prefix">> => <<"~match@1.0/">>,
+            <<"path-normalization">> =>
+                [<<"decode-base64url">>, <<"decode-int-56">>],
+            <<"strip-slashes">> => true
+        },
+    Offsets = [hb_util:bin(Offset) || Offset <- ?BLOCK_INDEX_OFFSETS],
+    ?assertEqual(
+        {ok, Offsets},
+        hb_store:list([Store], ?BLOCK_INDEX_PREDICATE, #{})
+    ),
+    % The bounds seek into the set rather than reading up to their start.
+    ?assertEqual(
+        {ok, lists:sublist(Offsets, 2)},
+        hb_store:list(
+            [Store],
+            #{ <<"list">> => ?BLOCK_INDEX_PREDICATE, <<"limit">> => 2 },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, lists:sublist(Offsets, 4, 2)},
+        hb_store:list(
+            [Store],
+            #{
+                <<"list">> => ?BLOCK_INDEX_PREDICATE,
+                <<"from">> => lists:nth(4, Offsets),
+                <<"limit">> => 2
+            },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, lists:reverse(lists:nthtail(5, Offsets))},
+        hb_store:list(
+            [Store],
+            #{
+                <<"list">> => ?BLOCK_INDEX_PREDICATE,
+                <<"limit">> => 2,
+                <<"direction">> => backward
+            },
+            #{}
+        )
+    ),
+    % A row of the set reads back as an empty binary, and one it does not hold
+    % is absent.
+    ?assertEqual(
+        {ok, <<>>},
+        hb_store:read(
+            [Store],
+            <<?BLOCK_INDEX_PREDICATE/binary, "/",
+                (lists:nth(2, Offsets))/binary>>,
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read(
+            [Store],
+            <<?BLOCK_INDEX_PREDICATE/binary, "/1">>,
+            #{}
+        )
+    ),
+    % A predicate the index does not hold has no rows.
+    ?assertEqual(
+        {ok, []},
+        hb_store:list([Store], <<"~match@1.0/AAAAAAAAAAA">>, #{})
+    ).
+
+%% @doc A page taken from the middle of a published set costs no more ranged
+%% reads of the weave than one taken from its start.
+%%
+%% `dev_match' counts what it asks of a store; this counts what the store does
+%% to answer, which is where a scan up to the cursor would show itself.
+published_block_index_reads_test_() ->
+    {timeout, 300, fun published_block_index_reads/0}.
+published_block_index_reads() ->
+    Store =
+        (store(<<"arlmdb-block-index-reads">>, ?PUBLISHED_BLOCK_INDEX))#{
+            <<"prefix">> => <<"~match@1.0/">>,
+            <<"path-normalization">> =>
+                [<<"decode-base64url">>, <<"decode-int-56">>],
+            <<"strip-slashes">> => true,
+            % The page store would answer every read after the first, which is
+            % the opposite of what this measures.
+            <<"page-store">> => []
+        },
+    Offsets = [hb_util:bin(Offset) || Offset <- ?BLOCK_INDEX_OFFSETS],
+    Page =
+        fun(Bounds) ->
+            Before = ranged_reads(),
+            {ok, Found} =
+                hb_store:list(
+                    [Store],
+                    Bounds#{ <<"list">> => ?BLOCK_INDEX_PREDICATE },
+                    #{}
+                ),
+            {Found, ranged_reads() - Before}
+        end,
+    {First, FirstReads} = Page(#{ <<"limit">> => 2 }),
+    ?assertEqual(lists:sublist(Offsets, 2), First),
+    ?assert(FirstReads > 0),
+    {Later, LaterReads} =
+        Page(#{ <<"from">> => lists:nth(6, Offsets), <<"limit">> => 2 }),
+    ?assertEqual(lists:sublist(Offsets, 6, 2), Later),
+    ?assertEqual(FirstReads, LaterReads).

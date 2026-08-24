@@ -18,8 +18,10 @@
 %%% HyperBEAM store writes, and the `MDB_DUPSORT'/`MDB_DUPFIXED' kind that
 %%% holds a sorted set: one main key whose duplicates are the whole set, each
 %%% the same width, laid out on `P_LEAF2' pages with no node header and no
-%%% pointer array. The other database flags change the key comparator, so
-%%% `meta/1' still refuses those.
+%%% pointer array. A set small enough to fit inside the node that names it is
+%%% held there as a `P_SUBP' page rather than promoted to a database of its
+%%% own, so both forms are read. The other database flags change the key
+%%% comparator, so `meta/1' still refuses those.
 -module(hb_lmdb_page).
 -export([meta/1, page/1, search/2, seek/2, node/2, num_keys/1]).
 -export([database/1, duplicates/1, item/3, seek_item/3]).
@@ -51,9 +53,12 @@
 
 %% Node flags. `F_BIGDATA' replaces a leaf's value with a reference to the
 %% overflow pages that hold it; `F_SUBDATA' replaces it with a whole nested
-%% database, the shape a duplicate set takes once it outgrows a single page.
+%% database, the shape a duplicate set takes once it outgrows a single page;
+%% `F_DUPDATA' without it means the set is still small enough to sit inside
+%% the node as a page of its own.
 -define(F_BIGDATA, 16#01).
 -define(F_SUBDATA, 16#02).
+-define(F_DUPDATA, 16#04).
 
 %% Size, in bytes, of `MDB_db': the record that describes a database, carried
 %% by a meta page for the free and main databases and by an `F_SUBDATA' node
@@ -173,12 +178,12 @@ duplicates(#{ <<"flags">> := Flags }) -> Flags band ?MDB_DUPSORT =/= 0.
 page(Page = <<
             _PageNumber:64/little,
             _TxnID:64/little,
-            _Pad:16/little,
+            Pad:16/little,
             Flags:16/little,
             Bounds:4/binary,
             _/binary
         >>) ->
-    classify(Flags, Bounds, byte_size(Page) - ?PAGE_HEADER_SIZE);
+    classify(Flags, Pad, Bounds, byte_size(Page) - ?PAGE_HEADER_SIZE);
 page(Bin) when is_binary(Bin) ->
     {error, truncated_page}.
 
@@ -186,22 +191,32 @@ page(Bin) when is_binary(Bin) ->
 %% space, or the page count of an overflow page. `lower', `upper' and the
 %% pointer array are all relative to the end of the header, so the bounds are
 %% checked against the page size less that header.
-classify(Flags, _Bounds, _Limit) when Flags band (bnot ?PAGE_FLAG_MASK) =/= 0 ->
+classify(Flags, _Pad, _Bounds, _Limit)
+        when Flags band (bnot ?PAGE_FLAG_MASK) =/= 0 ->
     {error, {invalid_page_flags, Flags}};
-classify(Flags, _Bounds, _Limit) when Flags band ?P_SUBP =/= 0 ->
+classify(Flags, _Pad, _Bounds, _Limit)
+        when Flags band ?P_SUBP =/= 0, Flags band ?P_LEAF2 == 0 ->
     {error, {unsupported_page_layout, Flags}};
-classify(Flags, <<Pages:32/little>>, _Limit) when Flags band ?P_OVERFLOW =/= 0 ->
+classify(Flags, _Pad, <<Pages:32/little>>, _Limit)
+        when Flags band ?P_OVERFLOW =/= 0 ->
     {ok, #{ <<"type">> => overflow, <<"pages">> => Pages }};
-classify(Flags, <<Lower:16/little, Upper:16/little>>, Limit)
+classify(Flags, Pad, <<Lower:16/little, Upper:16/little>>, Limit)
         when Flags band (?P_BRANCH bor ?P_LEAF) =/= 0 ->
     case Lower band 1 == 0 andalso Lower =< Upper andalso Upper =< Limit of
         true ->
-            Type = page_type(Flags),
-            {ok, #{ <<"type">> => Type, <<"keys">> => Lower bsr 1 }};
+            % A page held inside a node carries the width of its items where a
+            % page of the file carries nothing; the database says it otherwise.
+            {ok,
+                #{
+                    <<"type">> => page_type(Flags),
+                    <<"keys">> => Lower bsr 1,
+                    <<"width">> => Pad
+                }
+            };
         false ->
             {error, {invalid_free_space_bounds, Lower, Upper}}
     end;
-classify(Flags, _Bounds, _Limit) ->
+classify(Flags, _Pad, _Bounds, _Limit) ->
     {error, {unsupported_page_type, Flags}}.
 
 %% A `P_LEAF2' page is a leaf carrying fixed-width items in place of nodes.
@@ -255,6 +270,15 @@ num_keys(Page) ->
         {error, _} = Error -> Error
     end.
 
+%% Parse a page that must carry nodes. A `leaf2' page carries fixed-width
+%% items instead, which `item/3' and `seek_item/3' read; interpreting one as
+%% nodes would read a pointer array that is not there.
+keyed_page(Page) ->
+    case node_page(Page) of
+        {ok, leaf2, _Items} -> {error, {not_a_node_page, leaf2}};
+        Result -> Result
+    end.
+
 %% Parse a page that must carry keys, refusing every other kind.
 node_page(Page) ->
     case page(Page) of
@@ -268,7 +292,7 @@ node_page(Page) ->
 %% number and size of a value held on overflow pages.
 node(Page, Index) ->
     maybe
-        {ok, Type, Keys} ?= node_page(Page),
+        {ok, Type, Keys} ?= keyed_page(Page),
         true ?= Index >= 0 andalso Index < Keys orelse {error, no_such_node},
         {ok, Start} ?= node_offset(Page, Index),
         <<
@@ -305,6 +329,12 @@ node_offset(Page, Index) ->
 %% page the value starts on; the size stays the true size of the value.
 reference(_Page, branch, _DataStart, NodeFlags, Packed) ->
     {ok, {branch, Packed bor (NodeFlags bsl 32)}};
+reference(Page, leaf, DataStart, NodeFlags, Size)
+        when NodeFlags band (?F_SUBDATA bor ?F_DUPDATA) == ?F_DUPDATA ->
+    case DataStart + Size =< byte_size(Page) of
+        true -> {ok, {leaf, {subpage, binary:part(Page, DataStart, Size)}}};
+        false -> {error, value_overruns_page}
+    end;
 reference(Page, leaf, DataStart, NodeFlags, _Size)
         when NodeFlags band ?F_SUBDATA =/= 0 ->
     case DataStart + ?DATABASE_SIZE =< byte_size(Page) of
@@ -351,7 +381,7 @@ seek(Page, Key) ->
 %% or `not_found' if the key is absent from the page and therefore from the
 %% database.
 search(Page, Key) ->
-    case node_page(Page) of
+    case keyed_page(Page) of
         {ok, branch, Keys} -> search_branch(Page, Key, Keys);
         {ok, leaf, Keys} -> search_leaf(Page, Key, Keys);
         {error, _} = Error -> Error
@@ -438,6 +468,14 @@ lower_bound(Page, Key, Low, High) ->
 -define(DUP_FIXTURE, "test/lmdb-1.0-dupfixed.mdb").
 -define(DUP_FIXTURE_HASHES, 30).
 -define(DUP_FIXTURE_OFFSETS, 100).
+
+%% The third fixture is the same shape while it is still small: LMDB keeps a
+%% duplicate set inside the node that names it until it outgrows half a page,
+%% and only then promotes it to a database of its own. Twelve rows on 512-byte
+%% pages is on the near side of that line.
+-define(SUB_FIXTURE, "test/lmdb-1.0-subpage.mdb").
+-define(SUB_FIXTURE_HASHES, 3).
+-define(SUB_FIXTURE_OFFSETS, 4).
 
 %% @doc The key-value pairs that the fixture was built from, in no particular
 %% order.
@@ -773,10 +811,19 @@ refuses_malformed_leaf2_test() ->
     ?assertEqual({error, no_such_item}, item(Leaf, -1, 15)),
     ?assertEqual({error, item_overruns_page}, item(Leaf, Items - 1, PageSize)),
     % The nodes of an ordinary leaf are not items and are not read as them.
-    {Ordinary, _} = fixture_lookup(fixture(), fixture_meta(fixture()),
-        <<"kv/000000">>, seek),
+    Plain = fixture(),
+    {Ordinary, _} =
+        fixture_lookup(Plain, fixture_meta(Plain), <<"kv/000000">>, seek),
     ?assertMatch({error, {not_a_leaf2_page, leaf}}, item(Ordinary, 0, 15)),
-    ?assertMatch({error, {not_a_leaf2_page, leaf}}, seek_item(Ordinary, <<>>, 15)).
+    ?assertMatch({error, {not_a_leaf2_page, leaf}}, seek_item(Ordinary, <<>>, 15)),
+    % Nor are a `leaf2' page's items nodes: it carries no pointer array, so
+    % reading one as a node would read whatever lies where one would have been.
+    Leaf2 = <<0:64, 0:64, 15:16/little, 16#22:16/little, 2:16/little,
+        100:16/little, 0:(128 - 24)/unit:8>>,
+    ?assertMatch({ok, #{ <<"type">> := leaf2 }}, page(Leaf2)),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, node(Leaf2, 0)),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, search(Leaf2, <<"any">>)),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, seek(Leaf2, <<"any">>)).
 
 %% Descend to the leaf holding the first row of the duplicate set.
 dup_leaf(File, #{ <<"page-size">> := PageSize }, Sub) ->
@@ -791,3 +838,43 @@ dup_leaf(File, PageSize, Number, Remaining) ->
         {ok, #{ <<"type">> := leaf2 }} ->
             Page
     end.
+
+%% @doc A duplicate set small enough to sit inside the node that names it is
+%% held there as a page rather than as a database, and carries the width of its
+%% items where a database carries it as `pad'. Both forms hold the same
+%% elements and are read by the same two functions.
+dup_subpage_test() ->
+    {ok, File} = file:read_file(?SUB_FIXTURE),
+    Meta = #{ <<"page-size">> := PageSize } = fixture_meta(File),
+    ?assertEqual(16#14, maps:get(<<"flags">>, Meta)),
+    Root = fixture_page(File, PageSize, maps:get(<<"root">>, Meta)),
+    {ok, <<0>>, {leaf, {subpage, Page}}} = node(Root, 0),
+    Rows =
+        [
+            <<Hash:64, Offset:56>>
+        ||
+            Hash <- lists:seq(0, ?SUB_FIXTURE_HASHES - 1),
+            Offset <- lists:seq(0, ?SUB_FIXTURE_OFFSETS - 1)
+        ],
+    ?assertEqual(
+        {ok, #{ <<"type">> => leaf2, <<"keys">> => length(Rows), <<"width">> => 15 }},
+        page(Page)
+    ),
+    lists:foreach(
+        fun({Index, Row}) ->
+            ?assertEqual({ok, Row}, item(Page, Index, 15)),
+            ?assertEqual(Index, seek_item(Page, Row, 15))
+        end,
+        lists:zip(lists:seq(0, length(Rows) - 1), Rows)
+    ),
+    % A row the set does not hold seeks to the next one it does, and one past
+    % every row seeks past the end.
+    ?assertEqual(4, seek_item(Page, <<0:64, ?SUB_FIXTURE_OFFSETS:56>>, 15)),
+    ?assertEqual(
+        length(Rows),
+        seek_item(
+            Page,
+            <<(?SUB_FIXTURE_HASHES - 1):64, ?SUB_FIXTURE_OFFSETS:56>>,
+            15
+        )
+    ).
