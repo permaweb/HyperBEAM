@@ -249,8 +249,7 @@ fetch_blocks(Req, Current, undefined, IndexMode, Opts) ->
             stop_at_indexed_block(Req, Current);
         false ->
             BlockRes = fetch_block_header(Current, Opts),
-            case IndexMode =:= shallow andalso
-                    is_already_indexed(BlockRes, Opts) of
+            case IndexMode =:= shallow andalso is_already_indexed(BlockRes, Opts) of
                 true ->
                     stop_at_indexed_block(Req, Current);
                 false ->
@@ -286,10 +285,7 @@ stop_at_indexed_block(Req, Current) ->
 
 is_already_indexed({ok, Block}, Opts) ->
     TXIDs = hb_maps:get(<<"txs">>, Block, [], Opts),
-    lists:any(
-        fun(TXID) -> is_tx_indexed(TXID, Opts) end,
-        TXIDs
-    );
+    lists:any(fun(TXID) -> is_tx_indexed(TXID, Opts) end, TXIDs);
 is_already_indexed({error, _}, _Opts) ->
     false.
 
@@ -316,6 +312,7 @@ process_block(BlockRes, Current, To, IndexMode, Request, Opts) ->
                     SkippedTXs = maps:get(skipped_count, Results, 0),
                     case {requested_txid(Request, Opts), SkippedTXs} of
                         {undefined, 0} ->
+                            %% No TXID filter was requested and no TX was skipped.
                             ok = write_block_index(Current, IndexMode, Opts);
                         _ ->
                             ok
@@ -418,10 +415,12 @@ maybe_index_ids(Block, IndexMode, Request, Opts) ->
                     RequestedTXID = requested_txid(Request, Opts),
                     ValidTXs = lists:filter(
                         fun
-                            ({{padding, _}, _}) -> false;
-                            ({{_TX, _}, _}) when RequestedTXID == undefined -> true;
-                            ({{TX, _}, _}) -> hb_util:encode(TX#tx.id) == RequestedTXID;
-                            (_) -> true
+                            ({{padding, _}, _}) ->
+                                false;
+                            ({{TX, _}, _}) when RequestedTXID /= undefined ->
+                                hb_util:encode(TX#tx.id) == RequestedTXID;
+                            (_) ->
+                                true
                         end,
                         TXsWithData
                     ),
