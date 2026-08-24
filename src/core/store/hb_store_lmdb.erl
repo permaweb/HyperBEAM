@@ -473,7 +473,7 @@ scope(_) -> scope().
 %% @param StoreOpts Database configuration map
 %% @param Path Binary prefix to search for
 %% @returns {ok, [Key]} list of matching keys, {error, Reason} on failure
-list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
+list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
     EnvOpts = ensure_env(Opts),
     PathBin =
         case is_binary(Path) of
@@ -482,7 +482,7 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
         end,
     case read_resolved(EnvOpts, PathBin) of
         {ok, ResolvedPath, <<"group">>} ->
-            list_children(EnvOpts, ResolvedPath);
+            list_children(EnvOpts, ResolvedPath, list_bounds(Req));
         {ok, _ResolvedPath, _Value} ->
             {error, not_found};
         not_found ->
@@ -490,14 +490,30 @@ list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
     end.
 
 list_children(Opts, ResolvedPath) ->
+    list_children(Opts, ResolvedPath, []).
+list_children(Opts, ResolvedPath, Bounds) ->
     SearchPath = child_prefix(ResolvedPath),
     % Use native elmdb:list function
     #{ <<"db">> := DBInstance } = find_env(Opts),
-    case elmdb:list(DBInstance, SearchPath) of
+    case elmdb:list(DBInstance, SearchPath, Bounds) of
         {ok, Children} -> {ok, Children};
         {error, not_found} -> {ok, []};
         not_found -> {ok, []}
     end.
+
+%% @doc Translate the bounds a list request carries into cursor options. The
+%% cursor seeks to `from' rather than reading up to it.
+list_bounds(Req) ->
+    maps:fold(
+        fun(<<"from">>, From, Acc) -> [{from, From} | Acc];
+           (<<"limit">>, Limit, Acc) -> [{limit, hb_util:int(Limit)} | Acc];
+           (<<"direction">>, Direction, Acc) ->
+                [{direction, hb_util:atom(Direction)} | Acc];
+           (_Key, _Value, Acc) -> Acc
+        end,
+        [],
+        Req
+    ).
 
 read_prefix_rows(Opts, Path) ->
     #{ <<"db">> := DBInstance } = find_env(Opts),

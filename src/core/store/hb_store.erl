@@ -30,7 +30,10 @@
 %%%                   term, using a request map of the form `#{<<"read">> => Path}`.
 %%%     write/3:      Write a request map of the form `#{Path => Value}`.
 %%%     list/3:       For `composite' type keys, return child keys using a
-%%%                   request map of the form `#{<<"list">> => Path}`.
+%%%                   request map of the form `#{<<"list">> => Path}`. The
+%%%                   request may also carry `from', `limit' and `direction'
+%%%                   keys, which bound the result in the store's key order;
+%%%                   see `bound_children/2'.
 %%%                   Composite read results may also return children as
 %%%                   `{Key, Value}' pairs when the store can provide a child
 %%%                   value without an additional read.
@@ -55,6 +58,7 @@
     reset/1, reset/2, reset/3
 ]).
 -export([filter/2, scope/2, sort/2]).
+-export([bound_children/2]).
 -export([
     type/2, type/3,
     read/2, read/3,
@@ -356,12 +360,52 @@ resolve(Modules, Path, Opts) ->
 %% @doc List the keys in a group in the store. Use only in debugging.
 %% The hyperbeam model assumes that stores are built as efficient hash-based
 %% structures, so this is likely to be very slow for most stores.
+%%
+%% The request may carry `from', `limit' and `direction' keys:
+%% <ul>
+%%   <li>`from': only children at or after this name, or at or before it when
+%%       the direction is `backward'.</li>
+%%   <li>`limit': at most this many children.</li>
+%%   <li>`direction': `forward' (the default) or `backward'.</li>
+%% </ul>
+%% A bounded page is an answer, so it is served by the first store that has the
+%% group rather than merged across the chain -- the rule `read/3' follows.
 list(Path, Opts) ->
     list(hb_opts:get(store, [], Opts), Path, Opts).
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
     call_function(Modules, list, [Req, Opts]);
 list(Modules, Path, Opts) ->
     list(Modules, #{ <<"list">> => hb_path:to_binary(Path) }, Opts).
+
+%% @doc Apply a list request's `from', `limit' and `direction' bounds to a set
+%% of child names.
+%%
+%% The bounds are expressed in the store's key order, which is the binary order
+%% of the names in every store, so a store whose enumeration cannot be bounded
+%% at the source hands the whole set here and it is ordered, cut and truncated
+%% in Erlang. `limit' therefore bounds the result rather than the work; the
+%% walk that is bounded in both is `elmdb:dups/3', over a sorted set.
+bound_children(Req, {ok, Children}) ->
+    Direction = hb_util:atom(maps:get(<<"direction">>, Req, forward)),
+    Ordered =
+        case Direction of
+            backward -> lists:reverse(lists:sort(Children));
+            forward -> lists:sort(Children)
+        end,
+    Started =
+        case maps:get(<<"from">>, Req, no_bound) of
+            no_bound -> Ordered;
+            From when Direction == forward ->
+                lists:dropwhile(fun(Child) -> Child < From end, Ordered);
+            From ->
+                lists:dropwhile(fun(Child) -> Child > From end, Ordered)
+        end,
+    case maps:get(<<"limit">>, Req, no_bound) of
+        no_bound -> {ok, Started};
+        Limit -> {ok, lists:sublist(Started, hb_util:int(Limit))}
+    end;
+bound_children(_Req, Result) ->
+    Result.
 
 %% @doc Match a series of keys and values against the store. Returns 
 %% `{ok, Matches}' if the match is successful, or `not_found' if there are no
@@ -748,11 +792,49 @@ hierarchical_path_resolution_test(Store) ->
         read(Store, [<<"test-link">>, <<"test-file">>], #{})
     ).
 
+%% @doc Ensure that a list request's bounds hold in every store.
+bounded_list_test(Store) ->
+    Children = [<<"aa">>, <<"bb">>, <<"cc">>, <<"dd">>, <<"ee">>],
+    ok = group(Store, <<"test-group">>, #{}),
+    lists:foreach(
+        fun(Child) ->
+            ok =
+                write(
+                    Store,
+                    write_req([<<"test-group">>, Child], <<"test-data">>),
+                    #{}
+                )
+        end,
+        Children
+    ),
+    List = fun(Bounds) -> list(Store, Bounds#{ <<"list">> => <<"test-group">> }, #{}) end,
+    ?assertEqual({ok, Children}, List(#{})),
+    ?assertEqual({ok, [<<"aa">>, <<"bb">>]}, List(#{ <<"limit">> => 2 })),
+    ?assertEqual(
+        {ok, [<<"cc">>, <<"dd">>, <<"ee">>]},
+        List(#{ <<"from">> => <<"cc">> })
+    ),
+    ?assertEqual(
+        {ok, [<<"cc">>, <<"dd">>]},
+        List(#{ <<"from">> => <<"cc">>, <<"limit">> => 2 })
+    ),
+    ?assertEqual(
+        {ok, [<<"ee">>, <<"dd">>]},
+        List(#{ <<"limit">> => 2, <<"direction">> => <<"backward">> })
+    ),
+    ?assertEqual(
+        {ok, [<<"cc">>, <<"bb">>, <<"aa">>]},
+        List(#{ <<"from">> => <<"cc">>, <<"direction">> => backward })
+    ),
+    % A bound that no child satisfies is an empty page, not a missing group.
+    ?assertEqual({ok, []}, List(#{ <<"from">> => <<"zz">> })).
+
 store_suite_test_() ->
     generate_test_suite([
         {"simple path resolution", fun simple_path_resolution_test/1},
         {"resursive path resolution", fun resursive_path_resolution_test/1},
-        {"hierarchical path resolution", fun hierarchical_path_resolution_test/1}
+        {"hierarchical path resolution", fun hierarchical_path_resolution_test/1},
+        {"bounded list", fun bounded_list_test/1}
     ]).
 
 benchmark_suite_test_() ->

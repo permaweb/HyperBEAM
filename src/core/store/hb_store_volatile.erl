@@ -161,8 +161,8 @@ resolve_path(Opts, CurrPath, [Next | Rest], Depth) ->
     end.
 
 %% @doc List immediate child names under a group path.
-list(Opts, #{ <<"list">> := RawPath }, _NodeOpts) ->
-    list_path(Opts, hb_path:to_binary(RawPath)).
+list(Opts, Req = #{ <<"list">> := RawPath }, _NodeOpts) ->
+    hb_store:bound_children(Req, list_path(Opts, hb_path:to_binary(RawPath))).
 
 list_path(Opts, <<"">>) ->
     list_path(Opts, ?ROOT_GROUP);

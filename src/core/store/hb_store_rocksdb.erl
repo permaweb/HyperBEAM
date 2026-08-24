@@ -144,8 +144,8 @@ list_path(Opts, Path) ->
             ?event(rocksdb, {could_not_list_folder, Reason}),
             {ok, []}
     end.
-list(Opts, #{ <<"list">> := Path }, _NodeOpts) ->
-    list_path(Opts, hb_path:to_binary(Path)).
+list(Opts, Req = #{ <<"list">> := Path }, _NodeOpts) ->
+    hb_store:bound_children(Req, list_path(Opts, hb_path:to_binary(Path))).
 
 %% @doc Replace links in a path with the target of the link.
 -spec resolve_path(Opts, Path) -> Result when
