@@ -42,6 +42,7 @@
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
+-export([match_address/3]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -512,25 +513,22 @@ write_match_index(IDs, Base, Opts) ->
         [] -> {skip, <<"No store configured for match index.">>};
         Store ->
             IndexBase = hb_message:uncommitted(hb_private:reset(Base)),
+            % Every key of a message names the same IDs, so the rows they add
+            % are found once for the message rather than once for each key.
+            % Finding one costs a read of the offset index, and a miss costs a
+            % request to a node that holds it.
+            Rows = match_rows(IDs, Opts),
             Ops =
                 hb_maps:fold(
                 fun(RawKey, Value, Acc) ->
-                    Key = hb_ao:normalize_key(RawKey),
-                    ValuePath = match_value_path(Value, Opts),
-                    MatchAddress = match_address(Key, ValuePath),
-                    lists:foldl(
-                        fun(ID, InnerAcc) ->
-                            Address = match_address_id(MatchAddress, ID),
-                            [{write, Address, <<"">>} | InnerAcc]
-                        end,
-                        [{group, MatchAddress} | Acc],
-                        IDs
-                    )
+                    Address =
+                        match_address(hb_ao:normalize_key(RawKey), Value, Opts),
+                    match_ops(Address, Rows, Acc)
                 end,
                 [],
                 IndexBase
             ),
-            apply_write_ops(Store, lists:reverse(Ops), Opts)
+            apply_write_ops(Store, Ops, Opts)
     end.
 
 %% @doc Select the store that should receive reverse match-index writes.
@@ -569,6 +567,41 @@ match_store(Opts) ->
     end.
 
 %% @doc Calculate the address of a key-value pair in the match index.
+%%
+%% Without `match-hash-size' a predicate is addressed by itself:
+%% `~match@1.0&<key>=<value>', where a binary value is the `data/<hashpath>'
+%% path the cache links it by. The address grows with the pair it names, and
+%% two predicates' rows sort by nothing they share.
+%%
+%% With it a predicate is addressed by a hash of itself, `~match@1.0/<hash>',
+%% where the hash is the first `match-hash-size' bytes of the SHA2-256 of
+%%
+%%      `<<LowerCasedKey/binary, "=", Value/binary>>'
+%%
+%% written base64url. The key is lower-cased and the value is not; a binary
+%% value is hashed as it is and a message by its ID. Every writer and every
+%% reader has to produce those bytes identically, so this is where they are
+%% fixed. Truncating the hash is safe because a reader fetches the item to
+%% answer with it anyway and can see whether it really carries the pair: a
+%% collision costs a fetch rather than a wrong answer.
+match_address(Key, Value, Opts) ->
+    case hb_opts:get(match_hash_size, false, Opts) of
+        false -> match_address(Key, match_value_path(Value, Opts));
+        Size ->
+            Preimage =
+                <<
+                    (hb_util:to_lower(match_bin(Key)))/binary,
+                    "=",
+                    (match_value_bin(Value, Opts))/binary
+                >>,
+            <<
+                ?MATCH_PREFIX/binary,
+                "/",
+                (hb_util:encode(
+                    binary:part(hb_crypto:sha256(Preimage), 0, hb_util:int(Size))
+                ))/binary
+            >>
+    end.
 match_address(Key, Value) ->
     KeyBin = match_bin(Key),
     ValueBin = match_bin(Value),
@@ -576,6 +609,70 @@ match_address(Key, Value) ->
 match_address_id(Address, ID) ->
     IDBin = match_bin(ID),
     <<Address/binary, "/", IDBin/binary>>.
+
+%% @doc The row that each of a message's IDs contributes to a predicate.
+%%
+%% Without `match-hash-size' a row names the message. With it a row names the
+%% item's position in the weave instead, so that every predicate's rows carry
+%% the same ordering and two of them can be intersected by walking rather than
+%% by materializing both. `match-offsets' says how hard to look for that
+%% position:
+%% <ul>
+%%   <li>`false': no row per item at all, only the predicate.</li>
+%%   <li>`lookup': write the offset where it is known and zero where it is
+%%       not. Offset zero is the genesis of the weave and no item sits there,
+%%       so it stands for `unknown' without making some rows wider than
+%%       others -- a mixed-width index cannot be stored as a fixed-width
+%%       sorted set, and that is the whole of its size advantage.</li>
+%%   <li>`always': write no row whose offset would be zero.</li>
+%% </ul>
+match_rows(IDs, Opts) ->
+    case hb_opts:get(match_hash_size, false, Opts) of
+        false ->
+            [match_bin(ID) || ID <- IDs];
+        _ ->
+            match_offset_rows(
+                IDs,
+                hb_util:atom(hb_opts:get(match_offsets, false, Opts)),
+                Opts
+            )
+    end.
+
+match_offset_rows(_IDs, false, _Opts) ->
+    none;
+match_offset_rows(IDs, Mode, Opts) ->
+    lists:filtermap(
+        fun(ID) ->
+            case {match_offset(ID, Opts), Mode} of
+                {0, always} -> false;
+                {Offset, _} -> {true, hb_util:bin(Offset)}
+            end
+        end,
+        IDs
+    ).
+
+%% @doc The write operations that one predicate's address needs. A predicate
+%% with no row beneath it is a marker that something carries it, and is not a
+%% group.
+match_ops(Address, none, Acc) ->
+    [{write, Address, <<>>} | Acc];
+match_ops(Address, Rows, Acc) ->
+    [
+        {group, Address}
+    |
+        [{write, match_address_id(Address, Row), <<>>} || Row <- Rows]
+    ] ++ Acc.
+
+%% @doc The weave offset of an item's first byte, or zero when it is unknown.
+match_offset(ID, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> 0;
+        ArweaveStore ->
+            case hb_store_arweave:read_offset(ArweaveStore, ID, Opts) of
+                {ok, #{ <<"start-offset">> := Offset }} -> Offset;
+                _ -> 0
+            end
+    end.
 
 %% @doc Normalize a match-index path part.
 match_bin(Bin) when is_binary(Bin) -> Bin;
@@ -589,23 +686,37 @@ match_bin(List) when is_list(List) ->
 match_bin(Other) ->
     term_to_binary(Other).
 
-%% @doc Return the path representation used by cache key-value links.
-match_value_path(Bin, Opts) when is_binary(Bin) ->
-    generate_binary_path(Bin, Opts);
-match_value_path(Map, Opts) when is_map(Map) ->
-    hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard });
-match_value_path(List, Opts) when is_list(List) ->
+%% @doc Reduce a value to the bytes that identify it, and to which kind of
+%% thing those bytes are. A message's ID identifies it already; a raw value is
+%% identified by the path the cache links it at.
+match_value(Bin, _Opts) when is_binary(Bin) ->
+    {raw, Bin};
+match_value(Map, Opts) when is_map(Map) ->
+    {id, hb_message:id(Map, none, Opts#{ <<"linkify-mode">> => discard })};
+match_value(List, Opts) when is_list(List) ->
     case io_lib:printable_unicode_list(List) of
         true ->
-            match_value_path(iolist_to_binary(List), Opts);
+            {raw, iolist_to_binary(List)};
         false ->
-            match_value_path(
+            match_value(
                 hb_message:convert(List, tabm, <<"structured@1.0">>, Opts),
                 Opts
             )
     end;
-match_value_path(Other, Opts) ->
-    match_value_path(hb_path:to_binary(Other), Opts).
+match_value(Other, Opts) ->
+    match_value(hb_path:to_binary(Other), Opts).
+
+%% @doc The bytes of a value as a predicate hashes them.
+match_value_bin(Value, Opts) ->
+    {_Kind, Bytes} = match_value(Value, Opts),
+    Bytes.
+
+%% @doc Return the path representation used by cache key-value links.
+match_value_path(Value, Opts) ->
+    case match_value(Value, Opts) of
+        {raw, Bin} -> generate_binary_path(Bin, Opts);
+        {id, ID} -> ID
+    end.
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents
@@ -1433,6 +1544,85 @@ test_immediate_marker_values(Store) ->
         _ ->
             ok
     end.
+
+%% @doc The options a hashed index is written under, over stores of its own.
+hashed_index_opts(Mode) ->
+    Store = hb_test_utils:test_store(hb_store_lmdb),
+    Offsets = hb_test_utils:test_store(hb_store_lmdb),
+    hb_store:reset(Store),
+    hb_store:reset(Offsets),
+    Arweave =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => Offsets
+        },
+    {
+        Store,
+        Arweave,
+        #{
+            <<"store">> => Store,
+            <<"match-index">> => true,
+            <<"match-hash-size">> => 8,
+            <<"match-offsets">> => Mode,
+            <<"arweave-index-store">> => Arweave
+        }
+    }.
+
+%% @doc The address `match_address/3' documents, derived here rather than
+%% called, so that the two have to agree on the bytes rather than on a call.
+hashed_address(Key, Value) ->
+    <<
+        "~match@1.0/",
+        (hb_util:encode(
+            binary:part(hb_crypto:sha256(<<Key/binary, "=", Value/binary>>), 0, 8)
+        ))/binary
+    >>.
+
+%% @doc Ensure that a hashed index addresses a predicate by the bytes its
+%% moduledoc names, and keys each row by the item's position in the weave.
+hashed_match_index_test() ->
+    {Store, Arweave, Opts} = hashed_index_opts(<<"lookup">>),
+    Located = #{ <<"x">> => <<"1">> },
+    LocatedID = hb_message:id(Located, none, Opts),
+    ok = hb_store_arweave:write_offset(Arweave, LocatedID, <<"tx@1.0">>, 4096, 100),
+    {ok, LocatedID} = write(Located, Opts),
+    Address = hashed_address(<<"x">>, <<"1">>),
+    ?assertEqual(
+        {ok, <<>>},
+        hb_store:read(Store, <<Address/binary, "/4096">>, Opts)
+    ),
+    ?assertEqual({ok, [<<"4096">>]}, hb_store:list(Store, Address, Opts)),
+    ?assertEqual({ok, [<<"4096">>]}, match(Located, Opts)),
+    % An item whose position is not known is written at offset zero, which is
+    % the genesis of the weave and holds no item, rather than at a shorter
+    % address that would make the index mixed-width.
+    {ok, _} = write(#{ <<"y">> => <<"2">> }, Opts),
+    ?assertEqual(
+        {ok, [<<"0">>]},
+        hb_store:list(Store, hashed_address(<<"y">>, <<"2">>), Opts)
+    ),
+    % The key is lower-cased and the value is not.
+    {ok, _} = write(#{ <<"Mixed-Case">> => <<"Value">> }, Opts),
+    ?assertEqual(
+        {ok, [<<"0">>]},
+        hb_store:list(Store, hashed_address(<<"mixed-case">>, <<"Value">>), Opts)
+    ).
+
+%% @doc Ensure that `always' refuses a row it cannot place in the weave, and
+%% that `false' writes the predicate and nothing under it.
+match_offset_modes_test() ->
+    {Always, _, AlwaysOpts} = hashed_index_opts(<<"always">>),
+    {ok, _} = write(#{ <<"x">> => <<"1">> }, AlwaysOpts),
+    ?assertEqual(
+        {ok, []},
+        hb_store:list(Always, hashed_address(<<"x">>, <<"1">>), AlwaysOpts)
+    ),
+    {Never, _, NeverOpts} = hashed_index_opts(<<"false">>),
+    {ok, _} = write(#{ <<"x">> => <<"1">> }, NeverOpts),
+    ?assertEqual(
+        {ok, <<>>},
+        hb_store:read(Never, hashed_address(<<"x">>, <<"1">>), NeverOpts)
+    ).
 
 match_store_control_test() ->
     Store = hb_test_utils:test_store(hb_store_volatile, <<"match-control">>),
