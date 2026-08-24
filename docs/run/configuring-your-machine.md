@@ -98,8 +98,8 @@ tls/acme/http-port: 80
 
 `tls/acme/http-port` defaults to `80` and must be reachable for HTTP-01
 validation. This cleartext listener serves only the exact ACME challenge path.
-Wildcard domains automatically use DNS-01 instead. DigitalOcean and Cloudflare
-DNS are supported:
+Wildcard domains automatically use DNS-01 instead. DNS providers are configured
+by device name; HyperBEAM includes DigitalOcean and Cloudflare implementations:
 
 ```text
 tls/domains/ao-types: .=list
@@ -108,7 +108,7 @@ tls/domains/2: *.example.com
 
 tls/acme/directory-url: https://acme-v02.api.letsencrypt.org/directory
 tls/acme/terms-of-service-agreed: true
-tls/acme/dns-provider: digitalocean
+tls/acme/dns-provider: tls-dns-digitalocean@1.0
 tls/acme/dns-zone: example.com
 tls/acme/priv-dns-api-token: replace-with-token
 tls/acme/dns-propagation-timeout: 60000
@@ -127,7 +127,7 @@ is accepted as a compatibility alias for the timeout. Set
 For Cloudflare, use:
 
 ```text
-tls/acme/dns-provider: cloudflare
+tls/acme/dns-provider: tls-dns-cloudflare@1.0
 tls/acme/dns-zone: example.com
 tls/acme/priv-dns-api-token: replace-with-token
 ```
@@ -136,8 +136,9 @@ The Cloudflare token needs `DNS Write` on the zone. HyperBEAM resolves the zone
 ID by name, which additionally requires `Zone Read`. To avoid that lookup and
 permission, set `tls/acme/dns-zone-id` to the 32-character Cloudflare zone ID.
 
-See [ACME DNS-01 with DigitalOcean or Cloudflare](./acme-dns-01.md) for complete
-provider setup, startup, verification, renewal, and troubleshooting steps.
+See [ACME DNS-01 provider devices](./acme-dns-01.md) for provider setup, the
+third-party provider interface, startup, verification, renewal, and
+troubleshooting steps.
 
 The ACME directory uses the operating-system trust store unless
 `tls/acme/ca-certificate` supplies a PEM CA certificate. TLS supports `http1`

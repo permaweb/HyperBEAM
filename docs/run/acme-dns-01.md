@@ -1,12 +1,13 @@
-# ACME DNS-01 with DigitalOcean or Cloudflare
+# ACME DNS-01 provider devices
 
 This guide configures HyperBEAM to obtain and renew a TLS certificate through
 ACME DNS-01. DNS-01 is required for wildcard certificates such as
 `*.example.com`.
 
-DigitalOcean and Cloudflare are alternative providers. Use the provider that
-hosts the authoritative DNS zone; do not configure both for the same
-certificate order.
+HyperBEAM includes provider devices for DigitalOcean and Cloudflare. The DNS
+orchestrator resolves the configured provider through the normal AO-Core device
+loader, so third-party provider devices can be packaged and installed without
+changing `tls@1.0`.
 
 ## Before you begin
 
@@ -47,7 +48,7 @@ Start with the following `config.json` structure, replacing the example domain:
     "acme": {
       "directory-url": "https://acme-v02.api.letsencrypt.org/directory",
       "terms-of-service-agreed": true,
-      "dns-provider": "PROVIDER",
+      "dns-provider": "PROVIDER_DEVICE",
       "dns-zone": "example.com",
       "dns-propagation-timeout": 60000,
       "dns-poll-interval": 2000
@@ -93,11 +94,12 @@ With custom scopes, grant `domain:create` and `domain:delete`.
 
 ### 3. Configure HyperBEAM
 
-Replace `PROVIDER` in the common configuration with `digitalocean`:
+Set the common configuration's provider device to
+`tls-dns-digitalocean@1.0`:
 
 ```json
 {
-  "dns-provider": "digitalocean",
+  "dns-provider": "tls-dns-digitalocean@1.0",
   "dns-zone": "example.com",
   "dns-propagation-timeout": 60000,
   "dns-poll-interval": 2000
@@ -164,7 +166,7 @@ With automatic zone-ID lookup:
 
 ```json
 {
-  "dns-provider": "cloudflare",
+  "dns-provider": "tls-dns-cloudflare@1.0",
   "dns-zone": "example.com",
   "dns-propagation-timeout": 60000,
   "dns-poll-interval": 2000
@@ -179,7 +181,7 @@ With an explicit zone ID and no `Zone Read` permission:
 
 ```json
 {
-  "dns-provider": "cloudflare",
+  "dns-provider": "tls-dns-cloudflare@1.0",
   "dns-zone": "example.com",
   "dns-zone-id": "023e105f4ecef8ad9ca31a8372d0c353",
   "dns-propagation-timeout": 60000,
@@ -212,13 +214,81 @@ expected value is visible, completes validation, and deletes the record.
 `dns-propagation-delay` property remains accepted as a compatibility alias for
 the timeout when `dns-propagation-timeout` is absent.
 
+## Integrating another provider
+
+`tls.acme.dns-provider` is a device name or specification ID, not a provider
+keyword. The named device receives the `tls.acme` message as its base and must
+export these keys:
+
+Existing configurations using `cloudflare` or `digitalocean` as keywords must
+switch to the full built-in device names shown above.
+
+| Key | Request | Successful result |
+|-----|---------|-------------------|
+| `put` | `record`: full TXT record name; `value`: TXT value | `{ok, Handle}`, where `Handle` is an AO-Core message containing everything needed for cleanup |
+| `delete` | `handle`: the exact handle returned by `put` | `{ok, ok}` |
+
+Both handlers may return `{error, Reason}`. A handle must be an Erlang map with
+normal AO-Core message values; do not return tuples or process-local state.
+HyperBEAM keeps propagation polling in the `tls@1.0` orchestrator, so providers
+implement only record creation and deletion.
+
+A provider root has this interface:
+
+```erlang
+%%% @doc ACME DNS-01 support for Example DNS.
+-module(dev_tls_dns_example).
+-implements(<<"tls-dns-example@1.0">>).
+-export([info/1, put/3, delete/3]).
+
+info(_Opts) -> #{exports => [put, delete]}.
+
+put(Base, Req, Opts) ->
+    Record = hb_maps:get(<<"record">>, Req, undefined, Opts),
+    Value = hb_maps:get(<<"value">>, Req, undefined, Opts),
+    %% Validate the inputs and create the provider's TXT record.
+    {ok, #{<<"record-id">> => ProviderRecordID}}.
+
+delete(Base, Req, Opts) ->
+    Handle = hb_maps:get(<<"handle">>, Req, #{}, Opts),
+    %% Validate the handle against Base, then delete the record.
+    {ok, ok}.
+```
+
+The names `Base`, `Req`, and `Opts` describe the contract; a production device
+must validate all inputs and provider responses. Use `hb_maps` rather than map
+pattern matching when reading messages because AO-Core messages may be
+lazy-loaded. Store provider secrets under provider-defined `priv-` keys inside
+`tls.acme` so they are removed from public configuration and sanitized events.
+A provider must not include credentials in its handle, errors, or logs.
+
+Package and test the implementation using
+[Building a third-party device repository](../build/external-device-repository.md).
+Once it is present in the node's preloaded store, pinned in `trusted-devices`,
+or loadable from a trusted signer, configure its declared name:
+
+```json
+{
+  "tls": {
+    "acme": {
+      "dns-provider": "tls-dns-example@1.0",
+      "dns-zone": "example.com"
+    }
+  }
+}
+```
+
+Provider calls use raw AO-Core dispatch locally. Normal device loading and
+export checks apply, while provider results do not acquire hashpaths or enter
+the resolver cache.
+
 ## What to expect
 
 At boot, HyperBEAM emits sanitized events on the `tls` topic. The successful
 flow includes:
 
 1. `certificate_issuance_started`
-2. `dns_challenge` with provider and action only
+2. `dns_challenge` with provider device and action only
 3. `dns_record_created`
 4. `dns_propagation_started`
 5. `dns_record_propagated`
@@ -264,6 +334,7 @@ run because HyperBEAM deletes it immediately after ACME validation.
 | Symptom or error | Check |
 |------------------|-------|
 | `acme-dns-api-token-missing` | `HB_CONFIG` includes the `config.flat` file containing `tls/acme/priv-dns-api-token`. |
+| `acme-dns-provider-not-loadable` | The configured provider device is preloaded, explicitly pinned, or signed by a configured trusted device signer. |
 | Provider returns 401 or 403 | The token is valid, scoped to the correct zone, and has create/delete permission. Cloudflare automatic lookup also needs `Zone Read`. |
 | `cloudflare-zone-not-found` | `dns-zone` is the authoritative Cloudflare zone, or configure its exact `dns-zone-id`. |
 | `acme-dns-record-outside-zone` | `dns-zone` must contain every configured TLS hostname. For `example.com` and `*.example.com`, use `example.com`. |
