@@ -571,7 +571,10 @@ fetch_and_collect(Offsets, Opts) ->
     ).
 fetch_and_collect(Offsets, GETFun, Opts) ->
     Concurrency = hb_opts:get(arweave_chunk_fetch_concurrency, 10, Opts),
-    collect_chunks(hb_pmap:parallel_map(Offsets, GETFun, Concurrency)).
+    case hb_pmap:parallel_map_until_error(Offsets, GETFun, Concurrency) of
+        {ok, Results} -> collect_chunks(Results);
+        Error -> Error
+    end.
 
 %% @doc Generate a list of offsets from Start to End (inclusive) stepping by
 %% Step bytes. Used to produce candidate query offsets at 256KiB increments.
