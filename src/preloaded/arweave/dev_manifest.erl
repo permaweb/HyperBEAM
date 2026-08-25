@@ -319,21 +319,37 @@ resolve_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< ManifestID/binary, "/index" >>),
+            Opts
+        )
     ),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
-        hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< ManifestID/binary, "/nested/page2" >>),
+            Opts
+        )),
     % Making the same requests to a node with the `request' hook enabled should
     % yield the same results.
     ?event({legacy_manifest_id, LegacyManifestID}),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(Node, << LegacyManifestID/binary, "/index" >>, Opts)
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< LegacyManifestID/binary, "/index" >>),
+            Opts
+        )
     ),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
-        hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< LegacyManifestID/binary, "/nested/page2" >>),
+            Opts
+        )),
     ok.
 
 manifest_default_fallback_test_parallel() ->
@@ -343,7 +359,11 @@ manifest_default_fallback_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< ManifestID/binary, "/invalid_path" >>),
+            Opts
+        )
     ),
     ok.
 
@@ -357,7 +377,11 @@ manifest_404_error_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, not_found},
-        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
+        hb_http:get(
+            Node,
+            canonical_manifest_request(<< ManifestID/binary, "/invalid_path" >>),
+            Opts
+        )
     ),
     ok.
 
@@ -425,7 +449,9 @@ manifest_inner_redirect_test_parallel() ->
     %% Request manifest to node.
     hb_test_utils:assert_manifest_response(
         Node,
-        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
+        canonical_manifest_request(
+            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>
+        ),
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
@@ -437,7 +463,9 @@ access_key_path_in_manifest_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
         Node,
-        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
+        canonical_manifest_request(
+            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>
+        ),
         <<"application/javascript">>,
         <<"const __vite__mapDeps">>,
         Opts
@@ -450,8 +478,17 @@ manifest_should_fallback_on_not_found_path_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
         Node,
-        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
+        canonical_manifest_request(
+            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>
+        ),
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
     ).
+
+canonical_manifest_request(Path) ->
+    [TxId|_] = [Segment || Segment <- binary:split(Path, <<"/">>, [global]), Segment =/= <<>>],
+    #{
+        <<"host">> => <<(b32_encode(TxId))/binary, ".localhost">>,
+        <<"path">> => Path
+    }.
