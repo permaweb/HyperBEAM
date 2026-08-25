@@ -889,12 +889,65 @@ invoke_non_compute_key_test() ->
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
 top_holders_cache_test() ->
-    Store = hb_test_utils:test_store(),
+    {Function, Req, Opts} = top_holders_cache_fixture(),
+    {ok, Result} = hb_ao:resolve(
+        Function,
+        Req#{ <<"max-age">> => 60 },
+        Opts
+    ),
+    Holders = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
+    ?assertEqual(<<"bob">>, hb_maps:get(<<"address">>, hd(Holders), Opts)).
+
+%% @doc Serve a fresh Lua map from cache, then reject it after max-age.
+top_holders_max_age_cache_test() ->
+    {Function, Req, Opts} = top_holders_cache_fixture(),
+    CacheReq = Req#{ <<"max-age">> => 3 },
+    {ok, First} = hb_ao:resolve(Function, CacheReq, Opts),
+    ?event(j, {first_result, First}),
+    CacheOnlyOpts = Opts#{
+        <<"cache-control">> => [<<"only-if-cached">>]
+    },
+    FreshResult = hb_ao:resolve(Function, CacheReq, CacheOnlyOpts),
+    ?event(j, {fresh_result, FreshResult}),
+    ?assertMatch({ok, _}, FreshResult),
+    {ok, Fresh} = FreshResult,
+    ?assertEqual(
+        hb_maps:get(<<"body">>, First, Opts),
+        hb_maps:get(<<"body">>, Fresh, Opts)
+    ),
+    timer:sleep(4100),
+    ?assertMatch(
+        {error, #{
+            <<"status">> := 504,
+            <<"cache-status">> := <<"miss">>
+        }},
+        hb_ao:resolve(Function, CacheReq, CacheOnlyOpts)
+    ).
+
+%% @doc Serve a fresh cached Lua result when the function is addressed by ID.
+top_holders_max_age_cache_by_id_test() ->
+    {Function, Req, Opts} = top_holders_cache_fixture(),
+    {ok, FunctionID} = hb_cache:write(Function, Opts),
+    CacheReq = Req#{ <<"max-age">> => 60 },
+    {ok, First} = hb_ao:resolve(FunctionID, CacheReq, Opts),
+    CacheOnlyOpts = Opts#{
+        <<"cache-control">> => [<<"only-if-cached">>]
+    },
+    {ok, Cached} = hb_ao:resolve(FunctionID, CacheReq, CacheOnlyOpts),
+    ?assertEqual(
+        hb_maps:get(<<"body">>, First, Opts),
+        hb_maps:get(<<"body">>, Cached, Opts)
+    ).
+
+%% @doc Build the Lua top-holders function and its cached process state.
+top_holders_cache_fixture() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb),
     Wallet = ar_wallet:new(),
     Opts = #{
         <<"store">> => [Store],
         <<"priv-wallet">> => Wallet,
-        <<"cache-control">> => [<<"always">>]
+        <<"cache-control">> => [<<"always">>],
+        <<"async-cache">> => false
     },
     Balances = #{ <<"alice">> => <<"1">>, <<"bob">> => <<"3">> },
     Trie = maps:fold(
@@ -944,12 +997,9 @@ top_holders_cache_test() ->
     Req = #{
         <<"path">> => <<"top">>,
         <<"top">> => 2,
-        <<"process-id">> => ProcessID,
-        <<"max-age">> => 60
+        <<"process-id">> => ProcessID
     },
-    {ok, Result} = hb_ao:resolve(Function, Req, Opts),
-    Holders = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
-    ?assertEqual(<<"bob">>, hb_maps:get(<<"address">>, hd(Holders), Opts)).
+    {Function, Req, Opts}.
 
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->

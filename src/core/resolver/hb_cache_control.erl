@@ -62,7 +62,7 @@ lookup(Base, Req, Opts) ->
                 {hit, not_found} ->
                     {error, not_found};
                 {hit, {ok, Res}} ->
-                    case fresh(Res, Req, Opts) of
+                    case fresh(Base, Req, OutputScopedOpts) of
                         true ->
                             ?event(caching,
                                 {cache_hit,
@@ -71,7 +71,7 @@ lookup(Base, Req, Opts) ->
                                     {res, Res}
                                 }
                             ),
-                            {ok, cached_result(Res)};
+                            {ok, Res};
                         false ->
                             ?event(caching, {stale_cache_result, Base, Req}),
                             cache_miss(Base, Req, Settings, Opts)
@@ -85,27 +85,44 @@ lookup(Base, Req, Opts) ->
 %%% Internal functions
 
 %% @doc Return whether a cached result satisfies the requested `max-age'.
-fresh(Res, Req, Opts) ->
+fresh(Base, Req, Opts) ->
     case hb_maps:get(<<"max-age">>, Req, infinity, Opts) of
         infinity -> true;
         <<"infinity">> -> true;
         RawMaxAge ->
             try
-                CreatedAt = hb_maps:get(<<"created-at">>, Res, undefined, Opts),
-                os:system_time(second) =<
-                    hb_util:int(CreatedAt) + max(0, hb_util:int(RawMaxAge))
+                {ok, CreatedAtBin} = hb_store:read(
+                    created_at_path(Base, Req, Opts),
+                    Opts
+                ),
+                CreatedAt = hb_util:int(CreatedAtBin),
+                Now = os:system_time(second),
+                CreatedAt =< Now andalso
+                    Now =< CreatedAt + max(0, hb_util:int(RawMaxAge))
             catch
                 _:_ -> false
             end
     end.
 
+%% @doc Return the cache-owned timestamp path for a resolved result.
+created_at_path(Base, Req, Opts) ->
+    CacheAddress = hb_path:hashpath(Base, Req, Opts),
+    <<"created-at/", (hb_path:to_binary(CacheAddress))/binary>>.
+
+%% @doc Store the creation time for a resolved cache entry.
+write_created_at(Base, Req, Opts) ->
+    hb_store:write(
+        #{
+            created_at_path(Base, Req, Opts) =>
+                integer_to_binary(os:system_time(second))
+        },
+        Opts
+    ).
+
 cache_miss(Base, Req, #{ <<"only-if-cached">> := true }, Opts) ->
     only_if_cached_not_found_error(Base, Req, Opts);
 cache_miss(Base, Req, _Settings, Opts) ->
     maybe_load_base(Base, Req, Opts).
-
-cached_result(Res) when is_map(Res) -> maps:remove(<<"created-at">>, Res);
-cached_result(Res) -> Res.
 
 %% @doc Load an ID base required to execute the request.
 maybe_load_base(Base, Req, _Opts) when not ?IS_ID(Base) ->
@@ -158,21 +175,42 @@ async_writer() ->
 perform_cache_write(Base, Req, Res, Opts) ->
     hb_cache:write(Base, Opts),
     hb_cache:write(Req, Opts),
-    case Res of
-        <<_/binary>> ->
-            hb_cache:write_binary(
-                hb_path:hashpath(Base, Req, Opts),
-                Res,
-                Opts
-            );
-        Map when is_map(Map) ->
-            hb_cache:write(
-                Map#{ <<"created-at">> => os:system_time(second) },
-                Opts
-            );
-        _ ->
-            ?event({cannot_write_result, Res}),
-            skip_caching
+    WriteResult =
+        case Res of
+            <<_/binary>> ->
+                hb_cache:write_binary(
+                    hb_path:hashpath(Base, Req, Opts),
+                    Res,
+                    Opts
+                );
+            Map when is_map(Map) ->
+                case hb_cache:write(Map, Opts) of
+                    {ok, ResultPath} = MapWritten ->
+                        case hb_maps:find(<<"max-age">>, Req, Opts) of
+                            {ok, _} ->
+                                case hb_cache:link(
+                                    ResultPath,
+                                    hb_path:hashpath(Base, Req, Opts),
+                                    Opts
+                                ) of
+                                    ok -> MapWritten;
+                                    LinkError -> LinkError
+                                end;
+                            _ -> MapWritten
+                        end;
+                    MapWriteError -> MapWriteError
+                end;
+            _ ->
+                ?event({cannot_write_result, Res}),
+                skip_caching
+        end,
+    case WriteResult of
+        {ok, _} = Written ->
+            case write_created_at(Base, Req, Opts) of
+                ok -> Written;
+                MetadataError -> MetadataError
+            end;
+        Other -> Other
     end.
 
 %% @doc Generate a message to return when `only_if_cached' was specified, and
@@ -462,9 +500,13 @@ cache_result_max_age_test() ->
     Result = #{ <<"value">> => <<"cached">> },
     {ok, ResultPath} = perform_cache_write(Base, Req, Result, Opts),
     {ok, Cached} = hb_cache:read(ResultPath, Opts),
-    CreatedAt = hb_maps:get(<<"created-at">>, Cached, Opts),
+    ?assertEqual(
+        not_found,
+        hb_maps:get(<<"created-at">>, Cached, not_found, Opts)
+    ),
+    {ok, CreatedAtBin} = hb_store:read(created_at_path(Base, Req, Opts), Opts),
+    CreatedAt = hb_util:int(CreatedAtBin),
     ?assert(is_integer(CreatedAt)),
-    hb_cache:link(ResultPath, hb_path:hashpath(Base, Req, Opts), Opts),
     {ok, Served} = hb_ao:resolve(Base, Req, Opts),
     ?assertEqual(not_found, hb_maps:get(<<"created-at">>, Served, not_found, Opts)),
     timer:sleep(2100),
