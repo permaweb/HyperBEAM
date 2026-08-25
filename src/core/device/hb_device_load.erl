@@ -44,11 +44,30 @@ reference(Ref, Opts) when is_binary(Ref) ->
 do_not_try_to_load_empty_device_test() ->
     ?assertEqual({error, not_found}, reference(<<>>, #{})).
 
+%% @doc Resolve and memoise a reference, refusing re-entrant resolutions:
+%% a reference whose resolution requires resolving itself (for example,
+%% `name@1.0' resolving its own name when it is absent from every
+%% high-trust source) can never succeed, only recurse. The references
+%% being resolved are carried in `Opts', scoping them to this resolution
+%% tree.
 resolve_cached(Ref, Opts) ->
-    case resolve(Ref, Opts) of
-        {cached, Mod} -> {ok, Mod};
-        {ok, Mod} = Ok -> put_resolved_device(Ref, Mod, Opts), Ok;
-        {error, Err} -> {error, Err}
+    Resolving = maps:get(<<"resolving-devices">>, Opts, []),
+    case lists:member(Ref, Resolving) of
+        true ->
+            {error,
+                <<
+                    "Circular device resolution detected for reference `",
+                    Ref/binary,
+                    "`. Check `preloaded-store` viability."
+                >>
+            };
+        false ->
+            ResOpts = Opts#{ <<"resolving-devices">> => [Ref | Resolving] },
+            case resolve(Ref, ResOpts) of
+                {cached, Mod} -> {ok, Mod};
+                {ok, Mod} = Ok -> put_resolved_device(Ref, Mod, Opts), Ok;
+                {error, Err} -> {error, Err}
+            end
     end.
 
 %% @doc The resolved-device store, then the high-trust sources, then the
@@ -170,10 +189,10 @@ preloaded(Opts) ->
 %%% Low trust
 %%% --------------------------------------------------------------------
 
-%% @doc Resolve the name through `name@1.0' (safe here -- the codecs are
-%% already loaded via the high-trust path), then load the first signed,
-%% compatible implementation. Local caches are always searched -- gateway
-%% lookup is gated by an explicit `trusted-device-signers' list.
+%% @doc Resolve the name through `name@1.0' (safe: a resolution that
+%% re-enters itself is refused by `resolve_cached/2'), then load the first
+%% signed, compatible implementation. Local caches are always searched --
+%% gateway lookup is gated by an explicit `trusted-device-signers' list.
 from_low_trust(Ref, Opts) ->
     maybe
         {ok, SpecID} ?= resolve_spec(Ref, Opts),
@@ -412,3 +431,26 @@ compatible(Msg, Opts) ->
         [] -> ok;
         _ -> {error, {failed_requirements, Failed}}
     end.
+
+%% @doc Resolution against a preloaded store holding no devices must fail
+%% promptly with a circular-resolution error, not recurse through `name@1.0'.
+circular_name_resolution_test() ->
+    % Shed this (shared EUnit worker) process's memos of the devices used.
+    erlang:erase({?MODULE, <<"message@1.0">>}),
+    erlang:erase({?MODULE, <<"name@1.0">>}),
+    Opts =
+        #{
+            <<"preloaded-store">> =>
+                hb_test_utils:test_store(hb_store_lmdb, <<"preload-empty">>),
+            <<"loaded-device-store">> => []
+        },
+    ?assertThrow(
+        {error,
+            {device_not_loadable,
+                <<"name@1.0">>,
+                <<"Circular device resolution detected for reference "
+                    "`name@1.0`. Check `preloaded-store` viability.">>
+            }
+        },
+        reference(<<"message@1.0">>, Opts)
+    ).
