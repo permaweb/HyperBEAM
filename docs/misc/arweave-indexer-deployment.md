@@ -40,7 +40,10 @@ further k-way pass, so per-machine outputs are the collection unit.
 | query/store stack | branch `claude/arweave-indexing-implementation-f3ef8c` | `f0899dde9` |
 | elmdb (LMDB 1.0, dup sets) | `~/src/elmdb`, branch `feat/dup-sets` of elmdb-rs | `b2690e2` |
 
-The two HyperBEAM branches are slated to merge (disjoint files). NOTHING is
+The scanner branch is merged into `claude/arweave-indexing-implementation-
+f3ef8c` (9a74db9e1) — deploy from that one branch. One follow-up commit (the
+interval-exclusion implementation) lands on `feat/arweave-index-scanner`
+and folds in with `git merge feat/arweave-index-scanner`. NOTHING is
 pushed anywhere — deployment is by rsync of a worktree. The indexer modules
 are `src/core/lib/lib_arweave_index_*.erl` (+ `_test_vectors`), the NIF is
 `native/lib_arweave_index_item/`, the chunk-storage layer is the vendored
