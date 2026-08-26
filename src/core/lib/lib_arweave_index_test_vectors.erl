@@ -73,9 +73,9 @@ test_enrich_live() ->
     Gateway = <<"https://arweave.net">>,
     {ok, Info} = live_json(Gateway, <<"/info">>),
     Height = hb_util:int(maps:get(<<"height">>, Info)) - 50,
-    {ok, Block} =
-        live_json(Gateway, << "/block/height/", (hb_util:bin(Height))/binary >>),
-    Known = known_offsets(Gateway, maps:get(<<"txs">>, Block), 8, []),
+    % Blocks holding only dataless transactions are common; walk back until
+    % the ground-truth sample has substance.
+    Known = known_block_offsets(Gateway, Height, Height - 10, 8),
     ?assertNotEqual([], Known),
     % The lattice: every start is Threshold + k * 262144.
     lists:foreach(
@@ -119,6 +119,18 @@ test_enrich_live() ->
         end,
         Known
     ).
+
+%% @doc Ground-truth placements from descending blocks until enough of
+%% their transactions carry data.
+known_block_offsets(_Gateway, Height, Floor, _Wanted) when Height =< Floor ->
+    [];
+known_block_offsets(Gateway, Height, Floor, Wanted) ->
+    {ok, Block} =
+        live_json(Gateway, << "/block/height/", (hb_util:bin(Height))/binary >>),
+    case known_offsets(Gateway, maps:get(<<"txs">>, Block, []), Wanted, []) of
+        [] -> known_block_offsets(Gateway, Height - 1, Floor, Wanted);
+        Known -> Known
+    end.
 
 %% @doc Ground-truth placements for up to `Wanted' of a block's transactions
 %% that carry data, from each transaction's own offset endpoint. Most of a
