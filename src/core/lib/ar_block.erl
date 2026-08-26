@@ -2,15 +2,18 @@
 %%% Should track: https://github.com/ArweaveTeam/arweave/blob/master/apps/arweave/src/ar_block.erl
 -module(ar_block).
 
--export([strict_data_split_threshold/0, get_chunk_padded_offset/1, generate_size_tagged_list_from_txs/2]).
+-export([strict_data_split_threshold/0, partition_size/0, get_chunk_padded_offset/1, generate_size_tagged_list_from_txs/2]).
 
 -include("include/ar.hrl").
+-include("include/ar_consensus.hrl").
 
 %%%===================================================================
 %%% Public interface.
 %%%===================================================================
 
 strict_data_split_threshold() -> ?STRICT_DATA_SPLIT_THRESHOLD.
+
+partition_size() -> ?PARTITION_SIZE.
 
 %% @doc Return Offset if it is smaller than or equal to ar_block:strict_data_split_threshold().
 %% Otherwise, return the offset of the last byte of the chunk + the size of the padding.

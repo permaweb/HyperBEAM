@@ -1,0 +1,457 @@
+%%% @doc Vectors for the indexer over a synthetic unpacked storage module.
+%%%
+%%% Everything here runs against a real data directory of its own: bundles
+%%% are built and signed with `ar_bundles', laid into chunk files in the
+%%% exact on-disk layout an Arweave node writes (`lib_arweave_chunks:write'),
+%%% and scanned back through the full pipeline -- manifest, reader, scan,
+%%% runs, merge -- as `lib_arweave_index:run/1' drives it in production.
+%%%
+%%% The expectations are computed in this module with independent arithmetic:
+%%% row bit-packing by integer maths, IDs and predicate hashes by direct
+%%% `crypto:hash/2', item placement by summing the serialized bytes laid
+%%% down. The scanner's own encoders are never consulted for an expected
+%%% value, so a format drift on either side fails the comparison.
+%%%
+%%% The module sits above the strict data split threshold, as every unpacked
+%%% mainnet partition of the present era does, with a small chunk group size
+%%% so that chunk-file boundaries are reachable without gigabytes of sparse
+%%% file. The weave it holds exercises: multi-item bundles with unicode,
+%%% empty and long tags; a RedStone look-alike; recipients; a nested bundle;
+%%% items whose headers straddle chunk and chunk-file boundaries; a
+%%% transaction that is not a bundle; a manifest entry marked not-a-bundle;
+%%% and a hole where a chunk was never written.
+-module(lib_arweave_index_test_vectors).
+-include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
+
+%%% A chunk file of eight buckets, so that boundaries are reachable.
+-define(SMALL_GROUP_SIZE, (8 * ?DATA_CHUNK_SIZE)).
+
+%%% The synthetic module: 16 MiB buckets, placed far above the strict data
+%%% split threshold, unpacked.
+-define(BUCKET_SIZE, (16 * 1024 * 1024)).
+-define(BUCKET, 2000000).
+
+%% @doc The full pipeline over the synthetic weave, once with one worker and
+%% once with three: identical merged indexes, exactly the expected row sets.
+end_to_end_test_() ->
+    {timeout, 240, fun test_end_to_end/0}.
+
+test_end_to_end() ->
+    Opts = test_opts(<<"end-to-end">>),
+    {Txs, Expected, Placed} = weave(Opts),
+    ok =
+        lib_arweave_index_manifest:write(
+            hb_opts:get(<<"arweave-index-manifest">>, no_path, Opts),
+            Txs
+        ),
+    {ok, Report} = lib_arweave_index:run(Opts#{ <<"arweave-index-workers">> => 3 }),
+    {ok, _MergeReport} = lib_arweave_index:merge(Opts),
+    assert_items(Opts, Expected),
+    assert_counts(Report, Placed),
+    % The same weave scanned by a single worker merges to the same bytes.
+    Opts1 = Opts#{
+        <<"arweave-index-output">> =>
+            << (hb_opts:get(<<"arweave-index-output">>, no_dir, Opts))/binary,
+                "-single" >>
+    },
+    {ok, _Report1} = lib_arweave_index:run(Opts1#{ <<"arweave-index-workers">> => 1 }),
+    {ok, _MergeReport1} = lib_arweave_index:merge(Opts1),
+    ?assertEqual(items(Opts, <<"offset">>), items(Opts1, <<"offset">>)),
+    ?assertEqual(items(Opts, <<"match">>), items(Opts1, <<"match">>)).
+
+%%% The synthetic weave.
+
+%% @doc Build and place every transaction, returning the manifest specs, the
+%% expected rows, and the placement facts the count assertions check.
+weave(Opts) ->
+    Wallet = ar_wallet:new(),
+    Wallet2 = ar_wallet:new(),
+    Recipient = crypto:hash(sha256, <<"the recipient wallet">>),
+    TxAID = crypto:hash(sha256, <<"txid of bundle A">>),
+    % Transaction A: five items, including a RedStone look-alike, a
+    % multi-chunk item, and an item whose header straddles a chunk boundary.
+    I1 =
+        item(Wallet,
+            <<>>,
+            [
+                {<<"Content-Type">>, <<"text/html">>},
+                {<<"App-Name">>, <<"Test-App">>}
+            ],
+            <<"<h1>hello, weave</h1>">>
+        ),
+    I2 =
+        item(Wallet2,
+            Recipient,
+            [
+                {<<"Unicode-Тег"/utf8>>, <<"значение-\x{1F680}"/utf8>>},
+                {<<"Empty">>, <<>>},
+                {<<"Long">>, binary:copy(<<"v">>, 3000)}
+            ],
+            crypto:strong_rand_bytes(1000)
+        ),
+    I3 =
+        item(Wallet,
+            <<>>,
+            [
+                {<<"dataFeedId">>, <<"BTC">>},
+                {<<"dataServiceId">>, <<"redstone-primary-prod">>},
+                {<<"signerAddress">>, <<"0x926E370Fd53c23f8B71ad2B3217b227E41A92b12">>},
+                {<<"timestamp">>, <<"1756080000000">>},
+                {<<"type">>, <<"redstone-oracles">>}
+            ],
+            crypto:strong_rand_bytes(300)
+        ),
+    % Item four's data is sized so that item five's header begins thirty
+    % bytes before a chunk boundary, three or more chunks in, which the
+    % placement assertions verify.
+    I4Base =
+        item(Wallet, <<>>, [{<<"Big">>, <<"item">>}], <<>>),
+    PrefixSizes =
+        lists:sum([byte_size(ar_bundles:serialize(I)) || I <- [I1, I2, I3]]),
+    I4DataStart = 32 + 64 * 5 + PrefixSizes + byte_size(ar_bundles:serialize(I4Base)),
+    I4Data =
+        boundary_pad(I4DataStart, 3 * ?DATA_CHUNK_SIZE, ?DATA_CHUNK_SIZE, 30),
+    I4 =
+        item(Wallet, <<>>, [{<<"Big">>, <<"item">>}],
+            crypto:strong_rand_bytes(I4Data)),
+    I5 =
+        item(Wallet2, <<>>, [{<<"After-Boundary">>, <<"yes">>}],
+            crypto:strong_rand_bytes(200)),
+    A = [I1, I2, I3, I4, I5],
+    % Transaction B: a nested bundle. Sub-items S1 and S2 travel inside item
+    % P, whose tags name it a bundle.
+    S1 =
+        item(Wallet,
+            <<>>,
+            [{<<"Nested-Level">>, <<"1">>}],
+            <<"first nested payload">>
+        ),
+    S2 =
+        item(Wallet2,
+            Recipient,
+            [{<<"Nested-Level">>, <<"1">>}, {<<"Kind">>, <<"second">>}],
+            crypto:strong_rand_bytes(400)
+        ),
+    P =
+        item(Wallet,
+            <<>>,
+            [
+                {<<"Bundle-Format">>, <<"binary">>},
+                {<<"Bundle-Version">>, <<"2.0.0">>},
+                {<<"App-Name">>, <<"Nested-Carrier">>}
+            ],
+            payload([S1, S2])
+        ),
+    B = [P],
+    % Transaction D: an item header straddling a chunk-file boundary. The
+    % transaction begins exactly at a chunk file's own start, and item two's
+    % header begins forty bytes before that file's end.
+    D1Base = item(Wallet, <<>>, [{<<"Filler">>, <<"d1">>}], <<>>),
+    D1DataStart = 32 + 64 * 2 + byte_size(ar_bundles:serialize(D1Base)),
+    D1Data = boundary_pad(D1DataStart, 1, ?SMALL_GROUP_SIZE, 40),
+    D1 =
+        item(Wallet, <<>>, [{<<"Filler">>, <<"d1">>}],
+            crypto:strong_rand_bytes(D1Data)),
+    D2 =
+        item(Wallet2, <<>>, [{<<"Cross-File">>, <<"yes">>}],
+            crypto:strong_rand_bytes(100)),
+    D = [D1, D2],
+    % Transaction E: three small items with a hole where the module never
+    % wrote the second chunk. The first item survives; the two whose headers
+    % sit in the hole are lost to it.
+    E1 =
+        item(Wallet, <<>>, [{<<"Hole">>, <<"before">>}],
+            crypto:strong_rand_bytes(?DATA_CHUNK_SIZE div 2)),
+    E2 =
+        item(Wallet, <<>>, [{<<"Hole">>, <<"inside">>}],
+            crypto:strong_rand_bytes(?DATA_CHUNK_SIZE div 2)),
+    E3 =
+        item(Wallet2, <<>>, [{<<"Hole">>, <<"inside-too">>}], <<"tail">>),
+    E = [E1, E2, E3],
+    % Placement: each transaction begins at the bucket after its
+    % predecessor's data, except D, which is pinned to the next chunk file's
+    % own start so that its second item's header crosses a file boundary.
+    % C is not a bundle; F is marked skipped in the manifest.
+    APayload = payload(A),
+    BPayload = payload(B),
+    CPayload = crypto:strong_rand_bytes(100000),
+    DPayload = payload(D),
+    EPayload = payload(E),
+    FPayload = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
+    AStart = range_start(),
+    BStart = next_bucket(AStart + byte_size(APayload)),
+    CStart = next_bucket(BStart + byte_size(BPayload)),
+    DStart =
+        hb_util:ceil_int(CStart + byte_size(CPayload), ?SMALL_GROUP_SIZE),
+    EStart = next_bucket(DStart + byte_size(DPayload)),
+    FStart = next_bucket(EStart + byte_size(EPayload)),
+    place(AStart, APayload, Opts),
+    place(BStart, BPayload, Opts),
+    place(CStart, CPayload, Opts),
+    place(DStart, DPayload, Opts),
+    place(EStart, EPayload, Opts),
+    % The hole: transaction E's second chunk is unwritten after placement.
+    hole(EStart + ?DATA_CHUNK_SIZE, Opts),
+    place(FStart, FPayload, Opts),
+    % The boundary geometry the paddings were solved for really occurred.
+    [_, _, _, {I4Start, _}, {I5Start, _}] = offsets(AStart, A),
+    ?assertEqual(?DATA_CHUNK_SIZE - 30, I5Start rem ?DATA_CHUNK_SIZE),
+    ?assert(I5Start - I4Start >= 3 * ?DATA_CHUNK_SIZE),
+    [_, {D2Start, _}] = offsets(DStart, D),
+    ?assertEqual(?SMALL_GROUP_SIZE - 40, D2Start rem ?SMALL_GROUP_SIZE),
+    Txs =
+        [
+            #{ <<"start">> => AStart, <<"size">> => byte_size(APayload),
+                <<"id">> => TxAID },
+            #{ <<"start">> => BStart, <<"size">> => byte_size(BPayload) },
+            #{ <<"start">> => CStart, <<"size">> => byte_size(CPayload) },
+            #{ <<"start">> => DStart, <<"size">> => byte_size(DPayload),
+                <<"bundle">> => true },
+            #{ <<"start">> => EStart, <<"size">> => byte_size(EPayload) },
+            #{ <<"start">> => FStart, <<"size">> => byte_size(FPayload),
+                <<"bundle">> => false }
+        ],
+    % Expected rows: every indexed item, with its independently computed
+    % placement, parentage and predicates. I3 is RedStone; E3's header sits
+    % in the hole (E2's header is still in the chunk before it, though its
+    % data is not); C and F yield nothing.
+    PID = crypto:hash(sha256, P#tx.signature),
+    PHeader = byte_size(ar_bundles:serialize(P)) - byte_size(P#tx.data),
+    SubStart = BStart + 32 + 64 + PHeader,
+    [{E3Start, _}] = lists:nthtail(2, offsets(EStart, E)),
+    ?assert(E3Start > EStart + ?DATA_CHUNK_SIZE),
+    ?assert(E3Start < EStart + 2 * ?DATA_CHUNK_SIZE),
+    Expected =
+        lists:append(
+            [
+                expected(AStart, A, hb_util:encode(TxAID), [3]),
+                expected(BStart, B, undefined, []),
+                expected(SubStart, [S1, S2], hb_util:encode(PID), []),
+                expected(DStart, D, undefined, []),
+                expected(EStart, [E1, E2, E3], undefined, [3])
+            ]
+        ),
+    Placed =
+        #{
+            <<"items">> => 11,
+            <<"redstone">> => 1,
+            <<"in-holes">> => 1,
+            <<"nested">> => 1,
+            <<"not-bundle">> => 1,
+            <<"skipped">> => 1
+        },
+    {Txs, Expected, Placed}.
+
+%%% Expectation helpers: independent arithmetic only.
+
+%% @doc The expected rows of a run of items placed from `Start', excluding
+%% the 1-based positions in `Excluded' (RedStone or lost to holes).
+expected(Start, Items, BundledIn, Excluded) ->
+    Placements = offsets(Start, Items),
+    [
+        expected_item(Item, Offset, Size, BundledIn)
+    ||
+        {N, {Item, {Offset, Size}}} <-
+            lists:enumerate(lists:zip(Items, Placements)),
+        not lists:member(N, Excluded)
+    ].
+
+%% @doc One item's expected offset row and match rows, packed by integer
+%% maths on independently hashed inputs.
+expected_item(Item, Offset, Size, BundledIn) ->
+    ID = crypto:hash(sha256, Item#tx.signature),
+    OffsetRow =
+        <<
+            (binary:part(ID, 0, 10))/binary,
+            (2 * (1 bsl 84) + Offset * (1 bsl 34) + Size):88
+        >>,
+    Owner = hb_util:encode(crypto:hash(sha256, Item#tx.owner)),
+    Predicates =
+        [
+            <<
+                "~match@1.0/",
+                (string:lowercase(Name))/binary,
+                "=",
+                Value/binary
+            >>
+        ||
+            {Name, Value} <- Item#tx.tags
+        ]
+        ++ [<<"~match@1.0/owner=", Owner/binary>>]
+        ++
+            case Item#tx.target of
+                <<>> -> [];
+                Target ->
+                    [<<"~match@1.0/recipient=",
+                        (hb_util:encode(Target))/binary>>]
+            end
+        ++
+            case BundledIn of
+                undefined -> [];
+                Parent -> [<<"~match@1.0/bundled-in=", Parent/binary>>]
+            end,
+    {
+        OffsetRow,
+        [
+            <<
+                (binary:part(crypto:hash(sha256, Predicate), 0, 10))/binary,
+                (Offset * (1 bsl 7)):56
+            >>
+        ||
+            Predicate <- Predicates
+        ]
+    }.
+
+%% @doc Where each of a payload's items lands: absolute offset and size, by
+%% summing the serialized bytes.
+offsets(Start, Items) ->
+    Bins = [ar_bundles:serialize(Item) || Item <- Items],
+    First = Start + 32 + 64 * length(Items),
+    {_End, Placements} =
+        lists:foldl(
+            fun(Bin, {Pos, Acc}) ->
+                {Pos + byte_size(Bin), [{Pos, byte_size(Bin)} | Acc]}
+            end,
+            {First, []},
+            Bins
+        ),
+    lists:reverse(Placements).
+
+%% @doc Compare the merged item files to the expected rows exactly.
+assert_items(Opts, Expected) ->
+    ExpectedOffset = lists:usort([Row || {Row, _Match} <- Expected]),
+    ExpectedMatch =
+        lists:usort(lists:append([Match || {_Row, Match} <- Expected])),
+    ?assertEqual(ExpectedOffset, items(Opts, <<"offset">>)),
+    ?assertEqual(ExpectedMatch, items(Opts, <<"match">>)).
+
+%% @doc The merged items of one kind, as a list of fixed-width binaries.
+items(Opts, Kind) ->
+    Out = hb_opts:get(<<"arweave-index-output">>, no_dir, Opts),
+    Width = lib_arweave_index_runs:item_size(Kind),
+    {ok, Bin} =
+        file:read_file(filename:join(Out, << Kind/binary, ".items" >>)),
+    [Item || << Item:Width/binary >> <= Bin].
+
+%% @doc The scan's counters match the weave that was placed.
+assert_counts(Report, Placed) ->
+    Counts = maps:get(<<"counts">>, Report),
+    ?assertEqual(maps:get(<<"items">>, Placed), maps:get(<<"items">>, Counts)),
+    ?assertEqual(
+        maps:get(<<"redstone">>, Placed),
+        maps:get(<<"items-redstone">>, Counts)
+    ),
+    ?assertEqual(
+        maps:get(<<"in-holes">>, Placed),
+        maps:get(<<"items-in-holes">>, Counts)
+    ),
+    ?assertEqual(
+        maps:get(<<"nested">>, Placed),
+        maps:get(<<"bundles-nested">>, Counts)
+    ),
+    ?assertEqual(
+        maps:get(<<"not-bundle">>, Placed),
+        maps:get(<<"txs-not-bundle">>, Counts)
+    ),
+    ?assertEqual(
+        maps:get(<<"skipped">>, Placed),
+        maps:get(<<"txs-skipped">>, Counts)
+    ),
+    ?assertEqual(5, maps:get(<<"txs">>, Counts)).
+
+%%% Weave-building helpers.
+
+%% @doc A signed data item.
+item(Wallet, Target, Tags, Data) ->
+    ar_bundles:sign_item(ar_bundles:new_item(Target, <<>>, Tags, Data), Wallet).
+
+%% @doc A bundle payload: the item-count table, then the items. Built here
+%% by hand -- table arithmetic included -- rather than through the code under
+%% test.
+payload(Items) ->
+    Bins = [ar_bundles:serialize(Item) || Item <- Items],
+    iolist_to_binary(
+        [
+            << (length(Items)):256/little >>,
+            [
+                <<
+                    (byte_size(Bin)):256/little,
+                    (crypto:hash(sha256, Item#tx.signature))/binary
+                >>
+            ||
+                {Item, Bin} <- lists:zip(Items, Bins)
+            ],
+            Bins
+        ]
+    ).
+
+%% @doc The data size that places the next item's header `Margin' bytes
+%% before an `Align'-multiple boundary at least `Floor' bytes past the data's
+%% own start at `Used' bytes into the payload.
+boundary_pad(Used, Floor, Align, Margin) ->
+    hb_util:ceil_int(Used + Floor + Margin, Align) - Margin - Used.
+
+%% @doc Write one payload into the module's chunk files from its bucket-
+%% aligned start, zero-padding the final chunk as the layout demands.
+place(Start, Payload, Opts) ->
+    0 = Start rem ?DATA_CHUNK_SIZE,
+    chunks(Start, Payload, Opts).
+
+chunks(_Offset, <<>>, _Opts) ->
+    ok;
+chunks(Offset, << Chunk:?DATA_CHUNK_SIZE/binary, Rest/binary >>, Opts) ->
+    ok =
+        lib_arweave_chunks:write(
+            module(), Offset + ?DATA_CHUNK_SIZE, Chunk, Opts),
+    chunks(Offset + ?DATA_CHUNK_SIZE, Rest, Opts);
+chunks(Offset, Tail, Opts) ->
+    Padded =
+        << Tail/binary, 0:((?DATA_CHUNK_SIZE - byte_size(Tail)) * 8) >>,
+    ok =
+        lib_arweave_chunks:write(
+            module(), Offset + ?DATA_CHUNK_SIZE, Padded, Opts),
+    ok.
+
+%% @doc Unwrite the chunk whose bucket begins at the given offset, leaving
+%% the zero prefix that means `never written'.
+hole(BucketStart, Opts) ->
+    {_FileStart, Path, Position, _ChunkOffset} =
+        lib_arweave_chunks:locate(module(), BucketStart + ?DATA_CHUNK_SIZE, Opts),
+    {ok, File} = file:open(Path, [read, write, raw, binary]),
+    ok = file:pwrite(File, Position, << 0:((3 + ?DATA_CHUNK_SIZE) * 8) >>),
+    ok = file:close(File).
+
+%% @doc The next bucket boundary at or after an offset.
+next_bucket(Offset) ->
+    hb_util:ceil_int(Offset, ?DATA_CHUNK_SIZE).
+
+%% @doc The synthetic module and its geometry.
+module() ->
+    {?BUCKET_SIZE, ?BUCKET, unpacked}.
+
+range_start() ->
+    ?BUCKET_SIZE * ?BUCKET.
+
+%% @doc A test's own data directory, manifest and output paths.
+test_opts(Tag) ->
+    Base =
+        hb_util:bin(
+            filename:join([
+                os:getenv("TMPDIR", "/tmp"),
+                "hb-arweave-index",
+                <<
+                    Tag/binary,
+                    "-",
+                    (hb_util:encode(crypto:strong_rand_bytes(6)))/binary
+                >>
+            ])
+        ),
+    #{
+        <<"arweave-data-dir">> => << Base/binary, "/data" >>,
+        <<"arweave-chunk-group-size">> => ?SMALL_GROUP_SIZE,
+        <<"arweave-index-module">> => lib_arweave_storage:id(module()),
+        <<"arweave-index-manifest">> => << Base/binary, "/manifest.aimf" >>,
+        <<"arweave-index-output">> => << Base/binary, "/out" >>,
+        <<"arweave-index-run-rows">> => 7
+    }.
