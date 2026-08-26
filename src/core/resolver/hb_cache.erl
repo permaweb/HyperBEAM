@@ -785,12 +785,12 @@ match_field(Name, Key, Commitment, Opts) ->
         _ -> []
     end.
 
-%% @doc Write packed rows to the sorted-set stores. Items ride in the request's
-%% `write' key as opaque binaries: a path form would re-interpret their bytes.
+%% @doc Write packed rows to the sorted-set stores in one batched request.
+%% The items ride as the request map's keys -- the form every store's `write'
+%% takes -- and are opaque binaries to the store.
 write_match_rows(_Stores, [], _Opts) -> ok;
-write_match_rows(Stores, [Item | Rest], Opts) ->
-    hb_store:write(Stores, #{ <<"write">> => Item }, Opts),
-    write_match_rows(Stores, Rest, Opts).
+write_match_rows(Stores, Items, Opts) ->
+    hb_store:write(Stores, maps:from_keys(Items, <<>>), Opts).
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents
@@ -1647,6 +1647,63 @@ match_index_disabled_control_test() ->
             Opts
         )
     ).
+
+%% @doc Cache writes emit packed match rows for messages whose weave offset
+%% the offset index knows, and the `~match@1.0' device locates them by
+%% predicate: tags, owner and recipient. The data payload is not a predicate,
+%% and a message with no known offset adds no rows.
+match_items_write_and_locate_test() ->
+    Store = hb_test_utils:test_store(),
+    SetStore = hb_test_utils:test_store(hb_store_lmdb_set, <<"match-items">>),
+    hb_store:reset(SetStore, #{}, #{}),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [Store]
+        },
+    Wallet = ar_wallet:new(),
+    Opts =
+        #{
+            <<"priv-wallet">> => Wallet,
+            <<"store">> => [Store],
+            <<"match-store">> => [SetStore],
+            <<"arweave-index-store">> => ArweaveStore
+        },
+    Target = hb_util:encode(crypto:strong_rand_bytes(32)),
+    Msg =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"type">> => <<"Message">>,
+                <<"target">> => Target,
+                <<"data">> => <<"match-items payload">>
+            },
+            Opts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+    SignedID = hb_message:id(Msg, signed, Opts),
+    ok =
+        hb_store_arweave:write_offset(
+            ArweaveStore, SignedID, <<"ans104@1.0">>, 4096, 512),
+    {ok, _} = write(Msg, Opts),
+    Locate =
+        fun(Template) ->
+            hb_ao:raw(<<"match@1.0">>, <<"locate">>, Template, #{}, Opts)
+        end,
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"type">> => <<"Message">> })),
+    ?assertEqual(
+        {ok, [4096]},
+        Locate(#{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> })
+    ),
+    Owner = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"owner">> => Owner })),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"recipient">> => Target })),
+    ?assertEqual({ok, []}, Locate(#{ <<"data">> => <<"match-items payload">> })),
+    % A message the offset index knows nothing about writes no rows: it stays
+    % covered by the path-row index alone.
+    {ok, _} = write(#{ <<"type">> => <<"Offsetless">> }, Opts),
+    ?assertEqual({ok, []}, Locate(#{ <<"type">> => <<"Offsetless">> })),
+    ok = hb_store:stop(SetStore).
 
 match_item_codec_test() ->
     Prefix = match_item_prefix(<<"Data-Protocol">>, <<"ao">>),

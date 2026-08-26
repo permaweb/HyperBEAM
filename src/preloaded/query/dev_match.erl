@@ -19,6 +19,7 @@
 -module(dev_match).
 -export([info/0, all/3, locate/3]).
 -include("include/hb.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_LOCATE_LIMIT, 1000).
 
@@ -257,3 +258,140 @@ list_items(Store, Prefix, From, Limit, Opts) ->
         },
         Opts
     ).
+
+%%% Tests
+
+%% @doc A sorted-set store seeded with the given packed rows.
+test_set_store(Tag, Rows) ->
+    Store = hb_test_utils:test_store(hb_store_lmdb_set, Tag),
+    hb_store:reset(Store, #{}, #{}),
+    ok = hb_store:write([Store], maps:from_keys(Rows, <<>>), #{}),
+    Store.
+
+%% @doc Packed rows for a list of `{Key, Value, Offsets}' predicates.
+test_rows(Predicates) ->
+    [
+        hb_cache:encode_match_item(
+            hb_cache:match_item_prefix(Key, Value),
+            Offset
+        )
+    ||
+        {Key, Value, Offsets} <- Predicates,
+        Offset <- Offsets
+    ].
+
+test_locate(Template, Req, Opts) ->
+    hb_ao:raw(<<"match@1.0">>, <<"locate">>, Template, Req, Opts).
+
+%% @doc A single predicate's run pages with `from' (inclusive), `to'
+%% (exclusive) and `limit', and a typed template value matches the wire form
+%% it was indexed under.
+locate_single_predicate_test() ->
+    Store =
+        test_set_store(
+            <<"locate-single">>,
+            test_rows([
+                {<<"type">>, <<"Message">>, [10, 20, 30]},
+                {<<"slot">>, <<"2382">>, [20]}
+            ])
+        ),
+    Opts = #{ <<"match-store">> => [Store] },
+    Template = #{ <<"type">> => <<"Message">> },
+    ?assertEqual({ok, [10, 20, 30]}, test_locate(Template, #{}, Opts)),
+    ?assertEqual(
+        {ok, [20, 30]},
+        test_locate(Template, #{ <<"from">> => 20 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, [30]},
+        test_locate(Template, #{ <<"from">> => 21 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, [10, 20]},
+        test_locate(Template, #{ <<"limit">> => 2 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, [20]},
+        test_locate(Template, #{ <<"from">> => 11, <<"to">> => 30 }, Opts)
+    ),
+    ?assertEqual({ok, [20]}, test_locate(#{ <<"slot">> => 2382 }, #{}, Opts)),
+    ok = hb_store:stop(Store).
+
+%% @doc Leapfrog intersection over two and three predicates, paged by the
+%% same cursor bounds as a single-predicate scan.
+locate_intersection_test() ->
+    Store =
+        test_set_store(
+            <<"locate-intersect">>,
+            test_rows([
+                {<<"type">>, <<"Message">>, [10, 20, 30, 40]},
+                {<<"data-protocol">>, <<"ao">>, [20, 40, 50]},
+                {<<"variant">>, <<"ao.TN.1">>, [5, 40]}
+            ])
+        ),
+    Opts = #{ <<"match-store">> => [Store] },
+    Two = #{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> },
+    Three = Two#{ <<"variant">> => <<"ao.TN.1">> },
+    ?assertEqual({ok, [20, 40]}, test_locate(Two, #{}, Opts)),
+    ?assertEqual({ok, [40]}, test_locate(Three, #{}, Opts)),
+    ?assertEqual({ok, [40]}, test_locate(Two, #{ <<"from">> => 21 }, Opts)),
+    ?assertEqual({ok, [20]}, test_locate(Two, #{ <<"limit">> => 1 }, Opts)),
+    ?assertEqual({ok, [20]}, test_locate(Two, #{ <<"to">> => 40 }, Opts)),
+    ok = hb_store:stop(Store).
+
+%% @doc Layered stores answer as one logical set: a predicate's rows merge
+%% across the store list, duplicate offsets collapse, and intersections see
+%% the union of every layer.
+locate_layering_test() ->
+    First =
+        test_set_store(
+            <<"locate-layer-1">>,
+            test_rows([
+                {<<"type">>, <<"Message">>, [10, 30]},
+                {<<"data-protocol">>, <<"ao">>, [30]}
+            ])
+        ),
+    Second =
+        test_set_store(
+            <<"locate-layer-2">>,
+            test_rows([
+                {<<"type">>, <<"Message">>, [10, 20]},
+                {<<"data-protocol">>, <<"ao">>, [10]}
+            ])
+        ),
+    Opts = #{ <<"match-store">> => [First, Second] },
+    ?assertEqual(
+        {ok, [10, 20, 30]},
+        test_locate(#{ <<"type">> => <<"Message">> }, #{}, Opts)
+    ),
+    ?assertEqual(
+        {ok, [10, 30]},
+        test_locate(
+            #{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> },
+            #{},
+            Opts
+        )
+    ),
+    ok = hb_store:stop(First),
+    ok = hb_store:stop(Second).
+
+%% @doc An empty page and a predicate with no rows are both completed, empty
+%% answers. Only a node with no configured match-store cannot answer at all
+%% -- the distinction a paging caller needs to fall back on the right cases.
+locate_empty_page_test() ->
+    Store =
+        test_set_store(
+            <<"locate-empty">>,
+            test_rows([{<<"type">>, <<"Message">>, [10]}])
+        ),
+    Opts = #{ <<"match-store">> => [Store] },
+    ?assertEqual(
+        {ok, []},
+        test_locate(#{ <<"type">> => <<"Message">> }, #{ <<"from">> => 11 }, Opts)
+    ),
+    ?assertEqual({ok, []}, test_locate(#{ <<"type">> => <<"Other">> }, #{}, Opts)),
+    ?assertEqual(
+        {error, not_found},
+        test_locate(#{ <<"type">> => <<"Message">> }, #{}, #{})
+    ),
+    ok = hb_store:stop(Store).
