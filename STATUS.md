@@ -217,3 +217,39 @@ Recorded in `decisions/` as they are made.
   zeroed so nonzero prefix == real chunk. Verification gate passed 39/39
   (30/30 external arweave.net byte-matches) BEFORE any in-place write.
   UNPACK-CURSOR advances at band boundaries (8 steps).
+- 2026-08-26 ~02:05 **W4 complete**, merged (feat/match-query, fc76f5858):
+  spec §2 packed codec in hb_store_arweave_offset (varint stays local-KV for
+  pending/relative); match row construction collapsed into hb_cache
+  (exported helpers; drifted dev_match:store/1 fixed by delegation — core
+  cannot call preloaded modules, Forge renames them); new
+  `<<"match-store">>`/match_store opt (default []); write_match_items on the
+  existing {match, IDs, Msg} op, offset via the local offset index only;
+  ~match@1.0/locate = leapfrog both directions, k-way layer merge + dedupe;
+  backward walks added to hb_store_lmdb_set (elmdb direction) AND
+  hb_store_arlmdb (prev_leaf/rightmost mirror); dev_query_arweave
+  index_connection: tags/owner/recipient predicates, height→offset windows,
+  both sorts, honest hasNextPage (walk-based, page+1, continues past
+  unresolvable offsets), count exact up to query_arweave_max_index_count
+  (default 10,000). Full eunit 1024 passed; eunit-all Failed 5/Passed 3600 =
+  the A/B baseline. Leapfrog bench (50k rows): ~150k single-predicate
+  25-row pages/s; 2.9-4k intersect pages/s.
+  Known gap: first full-stack locate over an arlmdb layer awaits W5's
+  published spec-format container (committed fixtures are pre-spec items).
+- 2026-08-26 ~02:10 dev-2: W7 band 0/8 done in 18.6 min; UNPACK-CURSOR
+  382,050,032,156,672 (~450 GB unpacked + verified 30/30). Two real edge
+  cases found + handled with cryptographic adjudication: orphan slots
+  (packed chunk absent from index AND sync records — gateway byte-match
+  before deciphering) and all-zero chunks (encipher to exactly their
+  entropy — index leaf adjudicates before zeroing). Full eunit-all running
+  here as the integration gate on the merged tree (83 core store/cache
+  tests already green).
+
+## Morning follow-ups for Sam
+
+- elmdb `feat/dup-sets` (~/src/elmdb, 5+ commits) is LOCAL. To make fresh
+  clones/CI work, push it to permaweb/elmdb-rs and repin rebar.config
+  (currently: untracked symlink src/forge/elmdb + old pin in rebar.lock).
+  Pushing is external — left for you.
+- Same for the four HyperBEAM branches (this coordination branch +
+  feat/arlmdb-dup, feat/store-set, feat/match-query merged into it, and
+  feat/arweave-index-scanner) — all local, nothing pushed.
