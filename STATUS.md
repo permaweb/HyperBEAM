@@ -394,3 +394,15 @@ and repins are yours).
   scan9 running on dev-2 (healthy: runs spilling, load ramped). Its
   report (boundary semantics, validation rates, count-vs-baseline,
   GB/s) follows; any fixes it forces land as a follow-up commit.
+- 2026-08-26 ~22:1xZ **W9 complete** (d2da0bc66, merged at 7c949ccbd):
+  interval semantics determined half-open [Start, End) — the intervals are
+  L1 tx data extents (2,000/2,000 lattice checks; 14,348/17,064 reproduced
+  from the manifest; decisions/redstone-intervals.md in the scanner
+  worktree). Validation: 504/504 items inside intervals are RedStone;
+  9.0% lookalikes outside are now indexed by design; ZERO collateral
+  exclusions of previously-indexed items. Full-partition ledger balances
+  exactly: excluded 214,865,139 vs tag-based 214,885,035 (= -112,673
+  uncovered lookalikes + 92,777 covered hole-items). Throughput: full
+  partition in 699.9 s = 5.13 GB/s weave (+26% vs tag-based; 602.8 GB
+  skipped unread). scan9 merge finishing detached, self-cleaning;
+  out-scan8 kept as baseline. eunit 1000/1000 local, 14/14 dev-2.

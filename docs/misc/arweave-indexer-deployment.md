@@ -128,11 +128,9 @@ output dir, intervals file path.
   fully converted; read only below it).
 
 Expected rates (measured on dev-2, 24 workers, 24 real cores):
-full 3.6 TB partition in **748.5 s ≈ 4.8 GB/s weave-relative** (1.93 GB/s
-physical reads after tx-clipping) under the final vocabulary with tag-based
-exclusion; ~12 min merge. Interval-based exclusion should raise this
-(excluded items never reach the parser) — take the scan9 numbers from the
-scanner branch STATUS as the current reference. Fleet math: ~50 TB/machine
+full 3.6 TB partition in **699.9 s = 5.13 GB/s weave-relative** under the
+final vocabulary with interval exclusion (1.12 TB physically read; 603 GB
+of covered ranges skipped unread); ~12 min merge follows. Fleet math: ~50 TB/machine
 across 10 machines is hours, not days, against the 72 h network goal;
 spinning-disk machines contribute at ~0.2 GB/s x spindles.
 
