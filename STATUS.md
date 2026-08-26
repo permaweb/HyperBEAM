@@ -362,3 +362,12 @@ and repins are yours).
   the scanner (NIF+oracle+vectors), then dev-2 sanity sample + full scan
   relaunch. macOS note: rebuilt elmdb checkout .so needs codesign -f -s -
   (Code Signature Invalid SIGKILL otherwise) — hit again tonight.
+- 2026-08-26 ~20:45Z New ruling: RedStone exclusion moves from
+  tag-signature detection to weave-offset intervals
+  (~/Downloads/redstone-exclusion-intervals.bin: 1,187,180 sorted BE
+  <<Start:64,End:64>> pairs, 19 MB, sha256 c4e0145c…72a818f2). Items in
+  covered ranges are fully excluded (no offset or match rows) and skipped
+  before parsing — expected throughput gain since parse was the ceiling.
+  W8 agent resumed to implement, validate boundary semantics empirically,
+  cross-check against the tag-based scan8 baseline (214,885,035 excluded
+  in partition 106), and relaunch the full scan as out-scan9.
