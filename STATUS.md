@@ -253,3 +253,7 @@ Recorded in `decisions/` as they are made.
 - Same for the four HyperBEAM branches (this coordination branch +
   feat/arlmdb-dup, feat/store-set, feat/match-query merged into it, and
   feat/arweave-index-scanner) — all local, nothing pushed.
+- 2026-08-26 ~02:40 Integration gate on the merged coordination branch:
+  eunit-all Failed: 5. Passed: 3600. — exactly the A/B-verified pre-existing
+  baseline (dev_scheduler legacy-net x4, dev_push x1). Zero regressions with
+  W2+W3+W4 all merged.
