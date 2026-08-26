@@ -121,6 +121,10 @@ enrich(Path, Opts) ->
 %%% Internal functions.
 
 %% @doc The manifest with block metadata joined in, and the join's counters.
+%% Blocks are fetched and reconstructed concurrently -- the layout of one
+%% block depends only on its predecessor's weave size, which the summary
+%% fetch pass supplies -- so the join is bounded by the gateway's patience,
+%% not by chain length.
 enriched(All, [], _Opts) ->
     {ok, All, #{ <<"enriched">> => 0, <<"blocks">> => 0 }};
 enriched(All, Needed, Opts) ->
@@ -130,18 +134,75 @@ enriched(All, Needed, Opts) ->
             [maps:get(<<"start">>, Tx) + maps:get(<<"size">>, Tx) || Tx <- Needed]),
     maybe
         {ok, Tip} ?= tip_height(Opts),
-        {ok, Height, Blocks} ?= covering_height(From, Tip, Opts),
-        {ok, Assignments, Report} ?=
-            assignments(Height, To, Blocks, #{}, #{}, Opts),
-        Joined = [joined(Tx, Assignments) || Tx <- All],
+        {ok, First} ?= covering_height(From, Tip, Opts),
+        {ok, Last} ?= covering_height(To - 1, Tip, Opts),
+        Summaries =
+            hb_pmap:parallel_map(
+                lists:seq(First - 1, Last),
+                fun(Height) -> summary(Height, Opts) end,
+                fetch_workers(Opts)
+            ),
+        Weaves =
+            maps:from_list(
+                [{H, W} || #{ <<"height">> := H, <<"weave-size">> := W } <- Summaries]),
+        Reconstructed =
+            hb_pmap:parallel_map(
+                [S || S = #{ <<"height">> := H } <- Summaries, H >= First],
+                fun(Summary) -> reconstructed(Summary, Weaves, Opts) end,
+                fetch_workers(Opts)
+            ),
+        Merged =
+            lists:foldl(
+                fun({ok, Map}, Acc) -> maps:merge(Acc, Map);
+                    (dropped, Acc) -> Acc
+                end,
+                #{},
+                Reconstructed
+            ),
+        Joined = [joined(Tx, Merged) || Tx <- All],
         AlreadyNamed = length(All) - length(Needed),
         Named = length([Tx || Tx <- Joined, maps:is_key(<<"id">>, Tx)]),
         {ok, Joined,
-            Report#{
+            #{
                 <<"enriched">> => Named - AlreadyNamed,
-                <<"needed">> => length(Needed)
+                <<"needed">> => length(Needed),
+                <<"blocks">> => length(Reconstructed),
+                <<"blocks-dropped">> =>
+                    length([dropped || dropped <- Reconstructed])
             }
         }
+    end.
+
+%% @doc One block's summary: its height, weave size and transaction ids.
+%% Fetched inside a parallel map, so a failure is thrown rather than
+%% returned; `hb_pmap' surfaces it as the run's failure.
+summary(Height, Opts) ->
+    case fetch_json(
+            << "/block/height/", (hb_util:bin(Height))/binary >>, Opts) of
+        {ok, Block} ->
+            #{
+                <<"height">> => Height,
+                <<"weave-size">> => weave_size(Block, Opts),
+                <<"txs">> => hb_maps:get(<<"txs">>, Block, [], Opts)
+            };
+        {error, Reason} ->
+            throw({'block-fetch-failed', Height, Reason})
+    end.
+
+%% @doc One block's transaction starts, or `dropped' when the block does not
+%% reconstruct exactly.
+reconstructed(Summary, Weaves, Opts) ->
+    #{ <<"height">> := Height, <<"weave-size">> := Expected } = Summary,
+    BlockStart = maps:get(Height - 1, Weaves),
+    case maps:get(<<"txs">>, Summary) of
+        [] when BlockStart == Expected ->
+            {ok, #{}};
+        _Ids ->
+            case block_starts(Height, BlockStart, Expected, Opts) of
+                {ok, Assignments} -> {ok, Assignments};
+                dropped -> dropped;
+                {error, Reason} -> throw({'block-txs-failed', Height, Reason})
+            end
     end.
 
 %% @doc One manifest record with its assignment applied, when one agrees.
@@ -161,104 +222,57 @@ tip_height(Opts) ->
     end.
 
 %% @doc The lowest height whose weave size exceeds the offset, by binary
-%% search, along with the blocks the search fetched.
+%% search over the gateway's blocks.
 covering_height(Offset, Tip, Opts) ->
-    covering_height(Offset, 0, Tip, #{}, Opts).
+    covering_height(Offset, 0, Tip, Opts).
 
-covering_height(_Offset, Lo, Hi, Blocks, _Opts) when Lo >= Hi ->
-    {ok, Lo, Blocks};
-covering_height(Offset, Lo, Hi, Blocks, Opts) ->
+covering_height(_Offset, Lo, Hi, _Opts) when Lo >= Hi ->
+    {ok, Lo};
+covering_height(Offset, Lo, Hi, Opts) ->
     Mid = (Lo + Hi) div 2,
     maybe
-        {ok, Block, Blocks2} ?= block(Mid, Blocks, Opts),
+        {ok, Block} ?=
+            fetch_json(
+                << "/block/height/", (hb_util:bin(Mid))/binary >>, Opts),
         case weave_size(Block, Opts) > Offset of
-            true -> covering_height(Offset, Lo, Mid, Blocks2, Opts);
-            false -> covering_height(Offset, Mid + 1, Hi, Blocks2, Opts)
+            true -> covering_height(Offset, Lo, Mid, Opts);
+            false -> covering_height(Offset, Mid + 1, Hi, Opts)
         end
     end.
 
-%% @doc Walk blocks from a height, reconstructing each block's transaction
-%% starts, until the walk passes the end of the wanted range.
-assignments(Height, To, Blocks, Acc, Counts, Opts) ->
+%% @doc One block's transaction starts from its GraphQL metadata, if the
+%% reconstruction lands exactly on the block's reported weave size.
+block_starts(Height, BlockStart, Expected, Opts) ->
     maybe
-        {ok, Previous, Blocks2} ?= block(Height - 1, Blocks, Opts),
-        BlockStart = weave_size(Previous, Opts),
-        case BlockStart >= To of
-            true ->
-                {ok, Acc,
-                    #{
-                        <<"blocks">> => maps:get(<<"blocks">>, Counts, 0),
-                        <<"blocks-dropped">> =>
-                            maps:get(<<"blocks-dropped">>, Counts, 0)
+        {ok, Txs} ?= block_txs(Height, Opts),
+        Sorted = lists:sort(fun({IDA, _}, {IDB, _}) -> IDA =< IDB end, Txs),
+        {End, Assignments} =
+            lists:foldl(
+                fun({ID, Size}, {Pos, List}) ->
+                    {
+                        Pos + ar_tx:get_weave_size_increase(Size, Height),
+                        case Size of
+                            0 -> List;
+                            _ -> [{Pos, {Size, ID}} | List]
+                        end
                     }
-                };
+                end,
+                {BlockStart, []},
+                Sorted
+            ),
+        case End == Expected of
+            true ->
+                {ok, maps:from_list(Assignments)};
             false ->
-                walked(Height, To, BlockStart, Blocks2, Acc, Counts, Opts)
+                ?event(arweave_index,
+                    {block_reconstruction_mismatch,
+                        {height, Height},
+                        {expected, Expected},
+                        {reconstructed, End}
+                    }
+                ),
+                dropped
         end
-    end.
-
-%% @doc Reconstruct one block of the walk and continue past it.
-walked(Height, To, BlockStart, Blocks, Acc, Counts, Opts) ->
-    maybe
-        {ok, Block, Blocks2} ?= block(Height, Blocks, Opts),
-        {ok, Acc2, Counts2} ?=
-            block_assignments(Height, Block, BlockStart, Acc, Counts, Opts),
-        assignments(Height + 1, To, Blocks2, Acc2, Counts2, Opts)
-    end.
-
-%% @doc One block's transaction starts, if its reconstruction lands exactly
-%% on the block's reported weave size.
-block_assignments(Height, Block, BlockStart, Acc, Counts, Opts) ->
-    Expected = weave_size(Block, Opts),
-    case hb_maps:get(<<"txs">>, Block, [], Opts) of
-        [] when BlockStart == Expected ->
-            {ok, Acc, counted(<<"blocks">>, Counts)};
-        _Ids ->
-            maybe
-                {ok, Txs} ?= block_txs(Height, Opts),
-                Sorted =
-                    lists:sort(
-                        fun({IDA, _}, {IDB, _}) -> IDA =< IDB end, Txs),
-                {End, Assignments} =
-                    lists:foldl(
-                        fun({ID, Size}, {Pos, List}) ->
-                            {
-                                Pos + ar_tx:get_weave_size_increase(Size, Height),
-                                case Size of
-                                    0 -> List;
-                                    _ -> [{Pos, Size, ID} | List]
-                                end
-                            }
-                        end,
-                        {BlockStart, []},
-                        Sorted
-                    ),
-                case End == Expected of
-                    true ->
-                        {ok,
-                            maps:merge(
-                                Acc,
-                                maps:from_list(
-                                    [
-                                        {Pos, {Size, ID}}
-                                    ||
-                                        {Pos, Size, ID} <- Assignments
-                                    ]
-                                )
-                            ),
-                            counted(<<"blocks">>, Counts)
-                        };
-                    false ->
-                        ?event(arweave_index,
-                            {block_reconstruction_mismatch,
-                                {height, Height},
-                                {expected, Expected},
-                                {reconstructed, End}
-                            }
-                        ),
-                        {ok, Acc, counted(<<"blocks-dropped">>, Counts)}
-                end
-            end
     end.
 
 %% @doc A block's L1 transactions from the gateway's GraphQL API, as
@@ -324,22 +338,6 @@ block_txs(Height, Cursor, Acc, Opts) ->
         end
     end.
 
-%% @doc A block's JSON, from the walk's cache or the gateway.
-block(Height, Blocks, Opts) ->
-    case maps:get(Height, Blocks, not_found) of
-        not_found ->
-            maybe
-                {ok, Block} ?=
-                    fetch_json(
-                        << "/block/height/", (hb_util:bin(Height))/binary >>,
-                        Opts
-                    ),
-                {ok, Block, Blocks#{ Height => Block }}
-            end;
-        Block ->
-            {ok, Block, Blocks}
-    end.
-
 %% @doc A block's cumulative weave size.
 weave_size(Block, Opts) ->
     hb_util:int(hb_maps:get(<<"weave_size">>, Block, 0, Opts)).
@@ -391,9 +389,9 @@ retried(Fun, Attempts, _Reason) ->
 gateway(Opts) ->
     hb_opts:get(<<"arweave-index-gateway">>, <<"https://arweave.net">>, Opts).
 
-%% @doc Step one counter.
-counted(Key, Counts) ->
-    maps:update_with(Key, fun(N) -> N + 1 end, 1, Counts).
+%% @doc How many gateway fetches run concurrently.
+fetch_workers(Opts) ->
+    hb_util:int(hb_opts:get(<<"arweave-index-fetch-workers">>, 8, Opts)).
 
 %% @doc One transaction's fixed-width record.
 record(Spec) ->

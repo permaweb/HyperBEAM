@@ -127,25 +127,33 @@ known_offsets(_Gateway, [], _Wanted, Acc) ->
 known_offsets(_Gateway, _IDs, 0, Acc) ->
     Acc;
 known_offsets(Gateway, [ID | IDs], Wanted, Acc) ->
-    {ok, Offset} = live_json(Gateway, << "/tx/", ID/binary, "/offset" >>),
-    Size = hb_util:int(maps:get(<<"size">>, Offset)),
-    End = hb_util:int(maps:get(<<"offset">>, Offset)),
-    case Size > 0 of
-        true ->
-            known_offsets(
-                Gateway,
-                IDs,
-                Wanted - 1,
-                [{End - Size, Size, hb_util:native_id(ID)} | Acc]
-            );
-        false ->
+    % A transaction the gateway serves no offset for -- dataless, or not yet
+    % seeded -- is simply not part of the sample.
+    case live_json(Gateway, << "/tx/", ID/binary, "/offset" >>) of
+        {ok, Offset} ->
+            Size = hb_util:int(maps:get(<<"size">>, Offset, 0)),
+            End = hb_util:int(maps:get(<<"offset">>, Offset, 0)),
+            case Size > 0 of
+                true ->
+                    known_offsets(
+                        Gateway,
+                        IDs,
+                        Wanted - 1,
+                        [{End - Size, Size, hb_util:native_id(ID)} | Acc]
+                    );
+                false ->
+                    known_offsets(Gateway, IDs, Wanted, Acc)
+            end;
+        {error, _Reason} ->
             known_offsets(Gateway, IDs, Wanted, Acc)
     end.
 
 %% @doc Fetch one JSON resource from the live gateway.
 live_json(Gateway, Path) ->
-    {ok, Res} = hb_http:get(Gateway, Path, #{}),
-    {ok, hb_json:decode(maps:get(<<"body">>, Res))}.
+    case hb_http:get(Gateway, Path, #{}) of
+        {ok, Res} -> {ok, hb_json:decode(maps:get(<<"body">>, Res))};
+        {error, Reason} -> {error, Reason}
+    end.
 
 %%% The synthetic weave.
 
