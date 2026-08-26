@@ -351,3 +351,14 @@ unpacked module 106 + the indexer deployment + kept artifacts
 <session scratchpad>/demo-report.md, w5/evidence/, eunit-all-final.log;
 dev-2:/home/hb/unpack-scratch/. Morning follow-ups listed above (pushes
 and repins are yours).
+- 2026-08-26 (evening) Vocabulary ruling applied (Sam): predicates are
+  commitment-extension keys — committer (was owner), field-target (was
+  recipient), parent (was bundled-in; scanner emits nested-bundle parents
+  only, no enrichment dependency), + commitment-device=ans104@1.0 per
+  commitment; bundle-format/bundle-version tags filtered (legacy queries
+  translate in ~query@1.0/arweave). L1 header row source deferred to a
+  later base-layer pass. Node side committed (b0f1c78c0), 83 core tests
+  green, eunit-all gate running. W8 agent applying the same vocabulary to
+  the scanner (NIF+oracle+vectors), then dev-2 sanity sample + full scan
+  relaunch. macOS note: rebuilt elmdb checkout .so needs codesign -f -s -
+  (Code Signature Invalid SIGKILL otherwise) — hit again tonight.
