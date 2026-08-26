@@ -970,6 +970,10 @@ init_prometheus() ->
 -define(PUBLISHED_DUPFIXED, <<"czOyExU5DbhzJUarTZjp9ZYWBRFHWxgt_BWEdav7xU4">>).
 -define(DUPFIXED_SUB_DEPTH, 3).
 
+%% The sub-page fixture, published alike: six items, few enough that the set
+%% sits inside the main leaf node rather than a sub-database.
+-define(PUBLISHED_SUBPAGE, <<"ka3n3rUqYrhvwCi2O05K1sbSXEgnwiyle9u9KUjxXhQ">>).
+
 %% An Arweave offset index of ten million entries, on 64 KiB pages and three
 %% levels deep: 540,934,144 bytes, with a `~match@1.0' group over every
 %% hundred-thousandth of its keys.
@@ -1337,6 +1341,53 @@ published_dupfixed_reads() ->
             )
         end,
         [hd(Items), lists:nth(length(Items) div 2, Items), lists:last(Items)]
+    ).
+
+%% @doc A container small enough to hold its whole set as a sub-page answers
+%% with the same semantics as a promoted one, from a cursor that is a single
+%% leaf with no stack to climb. A lookup costs the meta page and the main
+%% tree's one leaf alone: there is no sub-database to descend.
+published_subpage_test_() ->
+    {timeout, 300, fun published_subpage/0}.
+published_subpage() ->
+    Store = store(<<"arlmdb-subpage">>, ?PUBLISHED_SUBPAGE),
+    {ok, Located, Meta = #{ <<"depth">> := Depth }} = open(Store, #{}),
+    ?assert(duplicates(Meta)),
+    Items = hb_lmdb_page:subpage_fixture_items(),
+    ?assertEqual(
+        {ok, Items},
+        hb_store:list([Located], #{ <<"list">> => <<>> }, #{})
+    ),
+    Before = ranged_reads(),
+    ?assertEqual(
+        {ok, hd(Items)},
+        hb_store:read(
+            [Located],
+            #{ <<"read">> => binary:part(hd(Items), 0, 10) },
+            #{}
+        )
+    ),
+    ?assertEqual(Depth + 1, ranged_reads() - Before),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read(
+            [Located],
+            #{ <<"read">> => binary:copy(<<255>>, 17) },
+            #{}
+        )
+    ),
+    % Resuming at the last item leaves nothing above the leaf to climb to.
+    ?assertEqual(
+        {ok, [lists:last(Items)]},
+        hb_store:list(
+            [Located],
+            #{
+                <<"list">> => <<>>,
+                <<"from">> => lists:last(Items),
+                <<"limit">> => 5
+            },
+            #{}
+        )
     ).
 
 %% @doc A store carrying nothing but a locator answers from a published index of

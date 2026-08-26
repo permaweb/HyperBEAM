@@ -30,7 +30,7 @@
 %% The fixtures that the tests below read are also published to Arweave, where
 %% `hb_store_arlmdb' reads the same bytes. Its tests take the contents to expect
 %% from here, so that both readers are held to one description of them.
--export([fixture_entries/0, dup_fixture_items/0]).
+-export([fixture_entries/0, dup_fixture_items/0, subpage_fixture_items/0]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% Sizes, in bytes, of the fixed-length structures of the format.
@@ -531,6 +531,11 @@ dup_fixture_items(Groups, Members) ->
         ]
     ).
 
+%% @doc The items of the sub-page fixture: few enough to stay inside the main
+%% leaf node rather than being promoted to a sub-database.
+subpage_fixture_items() ->
+    dup_fixture_items(?SUBPAGE_FIXTURE_GROUPS, ?SUBPAGE_FIXTURE_MEMBERS).
+
 dup_fixture_hash(G) ->
     <<(splitmix(2 * G)):64, (splitmix(2 * G + 1) bsr 48):16>>.
 
@@ -786,10 +791,7 @@ dup_subpage_test() ->
         {ok, #{ <<"type">> := leaf2, <<"pad">> := ?DUP_FIXTURE_PAD }},
         page(Sub)
     ),
-    ?assertEqual(
-        dup_fixture_items(?SUBPAGE_FIXTURE_GROUPS, ?SUBPAGE_FIXTURE_MEMBERS),
-        dup_fixture_leaf_items(Sub)
-    ).
+    ?assertEqual(subpage_fixture_items(), dup_fixture_leaf_items(Sub)).
 
 %% @doc `item_seek' finds the first item at or after its key: an exact key
 %% finds its own index, a group's hash the start of that group's run, and a
