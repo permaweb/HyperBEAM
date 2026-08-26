@@ -28,10 +28,10 @@
 %%% `committer'; the target address under `field-target' when the item
 %%% carries one; the enclosing ans104 item's ID under `parent' for nested
 %%% items; and the commitment device under `commitment-device', always
-%%% `ans104@1.0'. RedStone oracle items (tag signature
-%%% `dataFeedId'/`dataServiceId'/`signerAddress'/`timestamp'/`type') are
-%%% excluded by policy and get no rows of either kind, as are items whose
-%%% offset or length overflows its field.
+%%% `ans104@1.0'. Items whose offset or length overflows its field get no
+%%% row of the affected kind. Policy exclusion -- RedStone oracle items --
+%%% is the scan's concern, applied by weave-offset interval
+%%% (`lib_arweave_index_exclude') before any row is built.
 -module(lib_arweave_index_rows).
 -export([offset_item/4, match_item/2, predicate/2, match_rows/2, redstone/1]).
 -export([decode_offset_item/1, decode_match_item/1]).
@@ -46,7 +46,9 @@
 -define(MATCH_OFFSET_SIZE, 49).
 -define(MATCH_PAD_SIZE, 7).
 
-%%% The tag names whose joint presence marks a RedStone oracle item.
+%%% The tag names whose joint presence marks a RedStone oracle item. The
+%%% detector validates the interval-based exclusion in tests and audits;
+%%% the row paths never consult it.
 -define(REDSTONE_TAGS,
     [
         <<"dataFeedId">>,
@@ -123,7 +125,8 @@ match_rows(Header, Offset) ->
     ].
 
 %% @doc Whether a tag list carries the RedStone oracle signature: all five of
-%% the marker names present, byte-exact.
+%% the marker names present, byte-exact. A validator for the exclusion
+%% intervals, not a row-path check.
 redstone(Tags) ->
     Names = [Name || {Name, _Value} <- Tags],
     lists:all(fun(Marker) -> lists:member(Marker, Names) end, ?REDSTONE_TAGS).

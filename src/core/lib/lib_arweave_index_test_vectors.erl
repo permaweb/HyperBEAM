@@ -16,11 +16,14 @@
 %%% mainnet partition of the present era does, with a small chunk group size
 %%% so that chunk-file boundaries are reachable without gigabytes of sparse
 %%% file. The weave it holds exercises: multi-item bundles with unicode,
-%%% empty and long tags; a RedStone look-alike; field targets; a nested
-%%% bundle;
-%%% items whose headers straddle chunk and chunk-file boundaries; a
-%%% transaction that is not a bundle; a manifest entry marked not-a-bundle;
-%%% and a hole where a chunk was never written.
+%%% empty and long tags; field targets; a nested bundle; items whose
+%%% headers straddle chunk and chunk-file boundaries; a transaction that is
+%%% not a bundle; a manifest entry marked not-a-bundle; a hole where a
+%%% chunk was never written; and the exclusion intervals -- one at an
+%%% item's exact extent (its end pinning the half-open boundary against the
+%%% next item), one strictly inside an item's interior, one covering a
+%%% nested item -- with a RedStone-tagged item outside every interval,
+%%% which is indexed like any other.
 -module(lib_arweave_index_test_vectors).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
@@ -178,8 +181,9 @@ weave(Opts) ->
     Wallet2 = ar_wallet:new(),
     Recipient = crypto:hash(sha256, <<"the recipient wallet">>),
     TxAID = crypto:hash(sha256, <<"txid of bundle A">>),
-    % Transaction A: five items, including a RedStone look-alike, a
-    % multi-chunk item, and an item whose header straddles a chunk boundary.
+    % Transaction A: five items, including a RedStone look-alike the
+    % exclusion intervals cover, a multi-chunk item, and an item whose
+    % header straddles a chunk boundary.
     I1 =
         item(Wallet,
             <<>>,
@@ -255,9 +259,11 @@ weave(Opts) ->
     B = [P],
     % Transaction D: an item header straddling a chunk-file boundary. The
     % transaction begins exactly at a chunk file's own start, and item two's
-    % header begins forty bytes before that file's end.
+    % header begins forty bytes before that file's end. Item three carries
+    % the full RedStone tag signature but sits outside every exclusion
+    % interval, so it is indexed like any other item.
     D1Base = item(Wallet, <<>>, [{<<"Filler">>, <<"d1">>}], <<>>),
-    D1DataStart = 32 + 64 * 2 + byte_size(ar_bundles:serialize(D1Base)),
+    D1DataStart = 32 + 64 * 3 + byte_size(ar_bundles:serialize(D1Base)),
     D1Data = boundary_pad(D1DataStart, 1, ?SMALL_GROUP_SIZE, 40),
     D1 =
         item(Wallet, <<>>, [{<<"Filler">>, <<"d1">>}],
@@ -265,7 +271,18 @@ weave(Opts) ->
     D2 =
         item(Wallet2, <<>>, [{<<"Cross-File">>, <<"yes">>}],
             crypto:strong_rand_bytes(100)),
-    D = [D1, D2],
+    D3 =
+        item(Wallet,
+            <<>>,
+            [
+                {<<"dataFeedId">>, <<"ETH">>},
+                {<<"dataServiceId">>, <<"redstone-primary-prod">>},
+                {<<"signerAddress">>, <<"0x0">>},
+                {<<"timestamp">>, <<"1756080000000">>},
+                {<<"type">>, <<"redstone-oracles">>}
+            ],
+            crypto:strong_rand_bytes(150)),
+    D = [D1, D2, D3],
     % Transaction E: three small items with a hole where the module never
     % wrote the second chunk. The first item survives; the two whose headers
     % sit in the hole are lost to it.
@@ -305,13 +322,13 @@ weave(Opts) ->
     % The boundary geometry the paddings were solved for really occurred:
     % boundaries sit on the threshold-anchored lattice, so positions are
     % taken relative to the residue.
-    [_, _, _, {I4Start, _}, {I5Start, _}] = offsets(AStart, A),
+    [_, _, {I3Start, I3Size}, {I4Start, _}, {I5Start, _}] = offsets(AStart, A),
     ?assertEqual(
         ?DATA_CHUNK_SIZE - 30,
         (I5Start - residue()) rem ?DATA_CHUNK_SIZE
     ),
     ?assert(I5Start - I4Start >= 3 * ?DATA_CHUNK_SIZE),
-    [_, {D2Start, _}] = offsets(DStart, D),
+    [_, {D2Start, _}, _] = offsets(DStart, D),
     ?assertEqual(
         ?SMALL_GROUP_SIZE - 40,
         (D2Start - residue()) rem ?SMALL_GROUP_SIZE
@@ -329,13 +346,28 @@ weave(Opts) ->
                 <<"bundle">> => false }
         ],
     % Expected rows: every indexed item, with its independently computed
-    % placement, parentage and predicates. I3 is RedStone; E3's header sits
-    % in the hole (E2's header is still in the chunk before it, though its
-    % data is not); C and F yield nothing. A's manifest txid yields no rows:
-    % `parent' marks nested containment only, so only S1 and S2 carry one.
+    % placement, parentage and predicates. I3 and S1 sit inside exclusion
+    % intervals; E3's header sits in the hole (E2's header is still in the
+    % chunk before it, though its data is not); C and F yield nothing. A's
+    % manifest txid yields no rows: `parent' marks nested containment only,
+    % so only S2 carries one.
     PID = crypto:hash(sha256, P#tx.signature),
     PHeader = byte_size(ar_bundles:serialize(P)) - byte_size(P#tx.data),
     SubStart = BStart + 32 + 64 + PHeader,
+    [{S1Start, S1Size}, _] = offsets(SubStart, [S1, S2]),
+    % The exclusion intervals: I3's exact extent, whose end -- the very
+    % offset I4 begins at -- pins the half-open boundary; a strict interior
+    % of I4, which does not catch an item that merely overlaps it; and the
+    % nested S1's extent inside P's payload.
+    ok =
+        file:write_file(
+            hb_opts:get(<<"arweave-index-exclusions">>, no_path, Opts),
+            <<
+                I3Start:64, (I3Start + I3Size):64,
+                (I4Start + 100):64, (I4Start + 200):64,
+                S1Start:64, (S1Start + S1Size):64
+            >>
+        ),
     [{E3Start, _}] = lists:nthtail(2, offsets(EStart, E)),
     ?assert(E3Start > EStart + ?DATA_CHUNK_SIZE),
     ?assert(E3Start < EStart + 2 * ?DATA_CHUNK_SIZE),
@@ -344,7 +376,7 @@ weave(Opts) ->
             [
                 expected(AStart, A, undefined, [3]),
                 expected(BStart, B, undefined, []),
-                expected(SubStart, [S1, S2], hb_util:encode(PID), []),
+                expected(SubStart, [S1, S2], hb_util:encode(PID), [1]),
                 expected(DStart, D, undefined, []),
                 expected(EStart, [E1, E2, E3], undefined, [3])
             ]
@@ -352,7 +384,8 @@ weave(Opts) ->
     Placed =
         #{
             <<"items">> => 11,
-            <<"redstone">> => 1,
+            <<"excluded">> => 2,
+            <<"bytes-skipped">> => I3Size + S1Size,
             <<"in-holes">> => 1,
             <<"nested">> => 1,
             <<"not-bundle">> => 1,
@@ -513,8 +546,12 @@ assert_counts(Report, Placed) ->
     Counts = maps:get(<<"counts">>, Report),
     ?assertEqual(maps:get(<<"items">>, Placed), maps:get(<<"items">>, Counts)),
     ?assertEqual(
-        maps:get(<<"redstone">>, Placed),
-        maps:get(<<"items-redstone">>, Counts)
+        maps:get(<<"excluded">>, Placed),
+        maps:get(<<"items-excluded-intervals">>, Counts)
+    ),
+    ?assertEqual(
+        maps:get(<<"bytes-skipped">>, Placed),
+        maps:get(<<"bytes-skipped">>, Counts)
     ),
     ?assertEqual(
         maps:get(<<"in-holes">>, Placed),
@@ -637,6 +674,7 @@ test_opts(Tag) ->
         <<"arweave-chunk-group-size">> => ?SMALL_GROUP_SIZE,
         <<"arweave-index-module">> => lib_arweave_storage:id(module()),
         <<"arweave-index-manifest">> => << Base/binary, "/manifest.aimf" >>,
+        <<"arweave-index-exclusions">> => << Base/binary, "/exclusions.bin" >>,
         <<"arweave-index-output">> => << Base/binary, "/out" >>,
         <<"arweave-index-run-rows">> => 7
     }.

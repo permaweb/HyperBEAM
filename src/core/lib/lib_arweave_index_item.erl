@@ -6,15 +6,14 @@
 %%% bundle's ID (empty for a top-level item) -- and returns the finished
 %%% artifacts: the item's 21-byte offset-index item (or `excluded'), its
 %%% 17-byte match-index items, and, when its tags name it a bundle, the
-%%% header size and recomputed ID the scan recurses with. RedStone items
-%%% come back as the atom `redstone' before anything is hashed; a window
-%%% the header does not parse in is `failed', for the caller to regrow or
+%%% header size and recomputed ID the scan recurses with. A window the
+%%% header does not parse in is `failed', for the caller to regrow or
 %%% count malformed.
 %%%
 %%% The NIF performs the whole computation -- the
-%%% `ar_bundles:deserialize_header/1' walk, the RedStone check, the
-%%% sha256 of the signature and predicates, the owner address, the row
-%%% encoding of `lib_arweave_index_rows' -- in one native pass. Its byte
+%%% `ar_bundles:deserialize_header/1' walk, the sha256 of the signature
+%%% and predicates, the owner address, the row encoding of
+%%% `lib_arweave_index_rows' -- in one native pass. Its byte
 %%% semantics mirror `reference/4', the pure Erlang computation kept both
 %%% as the parity oracle for the tests and as the live fallback: input the
 %%% native code cannot reproduce byte-exactly (tag names beyond ASCII,
@@ -39,7 +38,7 @@ init() ->
     SoName = filename:join([code:priv_dir(hb), "lib_arweave_index_item"]),
     erlang:load_nif(SoName, 0).
 
-%% @doc One item's rows: `redstone', `failed',
+%% @doc One item's rows: `failed',
 %% `{ok, OffsetItem | excluded, MatchItems}', or
 %% `{bundle, OffsetItem | excluded, MatchItems, HeaderSize, ID}' for an
 %% item to recurse into. `Parent' is the enclosing ans104 item's
@@ -85,27 +84,19 @@ header(Bin) ->
         error:_ -> failed
     end.
 
-%% @doc Build one parsed item's rows. RedStone items produce no rows and
-%% are never bundles.
+%% @doc Build one parsed item's rows.
 emit(TX, HeaderSize, Pos, Size, Parent) ->
-    #tx{ signature = Signature, tags = Tags } = TX,
-    case lib_arweave_index_rows:redstone(Tags) of
+    ID = crypto:hash(sha256, TX#tx.signature),
+    OffsetItem =
+        lib_arweave_index_rows:offset_item(ID, <<"ans104@1.0">>, Pos, Size),
+    MatchItems =
+        lib_arweave_index_rows:match_rows(header_map(TX, Parent), Pos),
+    case bundle_tagged(TX) of
         true ->
-            redstone;
+            {bundle, OffsetItem, MatchItems, HeaderSize,
+                hb_util:human_id(ID)};
         false ->
-            ID = crypto:hash(sha256, Signature),
-            OffsetItem =
-                lib_arweave_index_rows:offset_item(
-                    ID, <<"ans104@1.0">>, Pos, Size),
-            MatchItems =
-                lib_arweave_index_rows:match_rows(header_map(TX, Parent), Pos),
-            case bundle_tagged(TX) of
-                true ->
-                    {bundle, OffsetItem, MatchItems, HeaderSize,
-                        hb_util:human_id(ID)};
-                false ->
-                    {ok, OffsetItem, MatchItems}
-            end
+            {ok, OffsetItem, MatchItems}
     end.
 
 %% @doc The parsed fields the row builder draws predicates from.
