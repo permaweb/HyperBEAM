@@ -93,27 +93,17 @@ write(#{ <<"read-only">> := true }, _Req, _NodeOpts) ->
 write(Opts, Req, _NodeOpts) when is_map(Req) ->
     #{ <<"db">> := DB } = find_env(Opts),
     maps:fold(
-        fun(Item, _Value, ok) -> put_item(DB, Item);
-           (_Item, _Value, Error) -> Error
+        fun(Item, _Value, ok) ->
+            case elmdb:put(DB, ?MAIN_KEY, Item) of
+                ok -> ok;
+                {error, Type, Description} -> surface(Type, Description)
+            end;
+           (_Item, _Value, Error) ->
+            Error
         end,
         ok,
         Req
     ).
-
-%% @doc Add a single item to the set's duplicate run.
-put_item(DB, Item) ->
-    case elmdb:put(DB, ?MAIN_KEY, Item) of
-        ok -> ok;
-        {error, Type, Description} ->
-            ?event(
-                error,
-                {lmdb_set_error,
-                    {type, Type},
-                    {description, Description}
-                }
-            ),
-            {error, Type}
-    end.
 
 %% @doc Append a strictly-ascending batch of items in one transaction.
 %% The direct bulk entry the index builder and merger write through:
@@ -126,15 +116,7 @@ append(Opts, Items) ->
     #{ <<"db">> := DB } = find_env(Opts),
     case elmdb:put_batch_append(DB, [{?MAIN_KEY, Item} || Item <- Items]) of
         ok -> ok;
-        {error, Type, Description} ->
-            ?event(
-                error,
-                {lmdb_set_error,
-                    {type, Type},
-                    {description, Description}
-                }
-            ),
-            {error, Type}
+        {error, Type, Description} -> surface(Type, Description)
     end.
 
 %% @doc Read the first item in the set matching the given prefix. A full
@@ -148,7 +130,7 @@ read(Opts, #{ <<"read">> := Prefix }, _NodeOpts) ->
         {ok, [Item]} -> {ok, Item};
         {ok, []} -> {error, not_found};
         not_found -> {error, not_found};
-        {error, Type, _Description} -> {error, Type}
+        {error, Type, Description} -> surface(Type, Description)
     end.
 
 %% @doc Return the ascending run of items sharing the `list' prefix. The
@@ -172,7 +154,7 @@ list(Opts, Req = #{ <<"list">> := Prefix }, _NodeOpts) ->
     case elmdb:read_dups(DB, ?MAIN_KEY, Selection) of
         {ok, Items} -> {ok, Items};
         not_found -> {error, not_found};
-        {error, Type, _Description} -> {error, Type}
+        {error, Type, Description} -> surface(Type, Description)
     end.
 
 %% @doc Every present item is a `simple' value: the set has no composite
@@ -182,6 +164,14 @@ type(Opts, #{ <<"type">> := Prefix }, NodeOpts) ->
         {ok, _Item} -> {ok, simple};
         Error -> Error
     end.
+
+%% @doc Log an elmdb error and surface it by its type atom.
+surface(Type, Description) ->
+    ?event(
+        error,
+        {lmdb_set_error, {type, Type}, {description, Description}}
+    ),
+    {error, Type}.
 
 %% @doc Retrieve or create the environment handle for the set.
 find_env(Opts = #{ <<"db">> := _ }) -> Opts;
@@ -221,87 +211,53 @@ forget_instance(#{ <<"store-module">> := Mod, <<"name">> := Name }) ->
     catch persistent_term:erase(StoreRef),
     ok.
 
+test_read(S, Prefix) -> hb_store:read(S, #{ <<"read">> => Prefix }, #{}).
+
+test_list(S, Prefix) -> test_list(S, Prefix, #{}).
+test_list(S, Prefix, Bounds) ->
+    hb_store:list(S, Bounds#{ <<"list">> => Prefix }, #{}).
+
 test_items(S) ->
-    ok = hb_store:write(
-        S,
-        #{
-            item(1, 10) => <<>>,
-            item(1, 20) => <<>>,
-            item(1, 30) => <<>>,
-            item(2, 5) => <<>>,
-            item(2, 15) => <<>>
-        },
-        #{}
-    ).
+    All = [item(1, 10), item(1, 20), item(1, 30), item(2, 5), item(2, 15)],
+    ok = hb_store:write(S, maps:from_keys(All, <<>>), #{}),
+    All.
 
 list_test() ->
     S = hb_test_utils:test_store(?MODULE),
     hb_store:reset(S, #{}, #{}),
     % An empty set reports not_found so that a store list falls through.
-    ?assertEqual(
-        {error, not_found},
-        hb_store:list(S, #{ <<"list">> => <<>> }, #{})
-    ),
-    test_items(S),
+    ?assertEqual({error, not_found}, test_list(S, <<>>)),
+    All = test_items(S),
+    Run = [item(1, 10), item(1, 20), item(1, 30)],
     % A prefix selects its full ascending run; an empty prefix, the set.
+    ?assertEqual({ok, Run}, test_list(S, <<1:80>>)),
+    ?assertEqual({ok, All}, test_list(S, <<>>)),
+    % `from' is inclusive: at the start, middle and end of the run, and
+    % past its end (present set, empty selection).
     ?assertEqual(
-        {ok, [item(1, 10), item(1, 20), item(1, 30)]},
-        hb_store:list(S, #{ <<"list">> => <<1:80>> }, #{})
+        {ok, Run},
+        test_list(S, <<1:80>>, #{ <<"from">> => item(1, 10) })
     ),
     ?assertEqual(
-        {ok, [item(1, 10), item(1, 20), item(1, 30), item(2, 5), item(2, 15)]},
-        hb_store:list(S, #{ <<"list">> => <<>> }, #{})
-    ),
-    % `from' is inclusive: at the start, middle and end of the run.
-    ?assertEqual(
-        {ok, [item(1, 10), item(1, 20), item(1, 30)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"from">> => item(1, 10) },
-            #{}
-        )
-    ),
-    ?assertEqual(
-        {ok, [item(1, 20), item(1, 30)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"from">> => item(1, 15) },
-            #{}
-        )
+        {ok, tl(Run)},
+        test_list(S, <<1:80>>, #{ <<"from">> => item(1, 15) })
     ),
     ?assertEqual(
         {ok, [item(1, 30)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"from">> => item(1, 30) },
-            #{}
-        )
+        test_list(S, <<1:80>>, #{ <<"from">> => item(1, 30) })
     ),
-    % Past the end of the run: present set, empty selection.
     ?assertEqual(
         {ok, []},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"from">> => item(1, 31) },
-            #{}
-        )
+        test_list(S, <<1:80>>, #{ <<"from">> => item(1, 31) })
     ),
     % `limit' caps the page; with `from' it forms a stateless cursor.
     ?assertEqual(
         {ok, [item(1, 10), item(1, 20)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"limit">> => 2 },
-            #{}
-        )
+        test_list(S, <<1:80>>, #{ <<"limit">> => 2 })
     ),
     ?assertEqual(
         {ok, [item(1, 30), item(2, 5)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<>>, <<"from">> => item(1, 21), <<"limit">> => 2 },
-            #{}
-        )
+        test_list(S, <<>>, #{ <<"from">> => item(1, 21), <<"limit">> => 2 })
     ),
     ok = hb_store:stop(S).
 
@@ -311,18 +267,9 @@ read_membership_test() ->
     test_items(S),
     % A full item is a membership test; a proper prefix returns the first
     % item carrying it; an absent prefix is a miss.
-    ?assertEqual(
-        {ok, item(1, 20)},
-        hb_store:read(S, #{ <<"read">> => item(1, 20) }, #{})
-    ),
-    ?assertEqual(
-        {ok, item(2, 5)},
-        hb_store:read(S, #{ <<"read">> => <<2:80>> }, #{})
-    ),
-    ?assertEqual(
-        {error, not_found},
-        hb_store:read(S, #{ <<"read">> => <<3:80>> }, #{})
-    ),
+    ?assertEqual({ok, item(1, 20)}, test_read(S, item(1, 20))),
+    ?assertEqual({ok, item(2, 5)}, test_read(S, <<2:80>>)),
+    ?assertEqual({error, not_found}, test_read(S, <<3:80>>)),
     ?assertEqual(
         {ok, simple},
         hb_store:type(S, #{ <<"type">> => item(1, 10) }, #{})
@@ -336,14 +283,11 @@ read_membership_test() ->
 restart_persistence_test() ->
     S = hb_test_utils:test_store(?MODULE),
     hb_store:reset(S, #{}, #{}),
-    test_items(S),
+    All = test_items(S),
     ok = hb_store:stop(S),
     forget_instance(S),
     % A fresh instance over the same directory serves the same set.
-    ?assertEqual(
-        {ok, [item(1, 10), item(1, 20), item(1, 30), item(2, 5), item(2, 15)]},
-        hb_store:list(S, #{ <<"list">> => <<>> }, #{})
-    ),
+    ?assertEqual({ok, All}, test_list(S, <<>>)),
     ok = hb_store:stop(S).
 
 read_only_test() ->
@@ -353,20 +297,14 @@ read_only_test() ->
     ok = hb_store:stop(S),
     forget_instance(S),
     RO = S#{ <<"read-only">> => true },
-    ?assertEqual(
-        {ok, item(1, 10)},
-        hb_store:read(RO, #{ <<"read">> => <<1:80>> }, #{})
-    ),
+    ?assertEqual({ok, item(1, 10)}, test_read(RO, <<1:80>>)),
     % Writes and appends are refused so that a store list falls through.
     ?assertEqual(
         {error, not_found},
         hb_store:write(RO, #{ item(3, 1) => <<>> }, #{})
     ),
     ?assertEqual({error, not_found}, append(RO, [item(3, 1)])),
-    ?assertEqual(
-        {error, not_found},
-        hb_store:read(RO, #{ <<"read">> => <<3:80>> }, #{})
-    ),
+    ?assertEqual({error, not_found}, test_read(RO, <<3:80>>)),
     ok = hb_store:stop(RO).
 
 reset_test() ->
@@ -374,15 +312,9 @@ reset_test() ->
     hb_store:reset(S, #{}, #{}),
     test_items(S),
     hb_store:reset(S, #{}, #{}),
-    ?assertEqual(
-        {error, not_found},
-        hb_store:list(S, #{ <<"list">> => <<>> }, #{})
-    ),
+    ?assertEqual({error, not_found}, test_list(S, <<>>)),
     ok = hb_store:write(S, #{ item(9, 9) => <<>> }, #{}),
-    ?assertEqual(
-        {ok, item(9, 9)},
-        hb_store:read(S, #{ <<"read">> => item(9, 9) }, #{})
-    ),
+    ?assertEqual({ok, item(9, 9)}, test_read(S, item(9, 9))),
     ok = hb_store:stop(S).
 
 two_store_fallthrough_test() ->
@@ -394,33 +326,19 @@ two_store_fallthrough_test() ->
     ok = hb_store:write(S2, #{ item(1, 3) => <<>>, item(2, 4) => <<>> }, #{}),
     % A point read is served by the first store carrying the prefix; an
     % item only in the second store is reached by fallthrough.
-    ?assertEqual(
-        {ok, item(1, 7)},
-        hb_store:read([S1, S2], #{ <<"read">> => <<1:80>> }, #{})
-    ),
-    ?assertEqual(
-        {ok, item(2, 4)},
-        hb_store:read([S1, S2], #{ <<"read">> => <<2:80>> }, #{})
-    ),
-    ?assertEqual(
-        {error, not_found},
-        hb_store:read([S1, S2], #{ <<"read">> => <<3:80>> }, #{})
-    ),
+    ?assertEqual({ok, item(1, 7)}, test_read([S1, S2], <<1:80>>)),
+    ?assertEqual({ok, item(2, 4)}, test_read([S1, S2], <<2:80>>)),
+    ?assertEqual({error, not_found}, test_read([S1, S2], <<3:80>>)),
     ok = hb_store:stop(S1),
     ok = hb_store:stop(S2).
 
 append_test() ->
     S = hb_test_utils:test_store(?MODULE),
     hb_store:reset(S, #{}, #{}),
-    Sorted = [item(1, O) || O <- lists:seq(1, 100)],
-    ok = append(S, Sorted),
+    ok = append(S, [item(1, O) || O <- lists:seq(1, 100)]),
     ?assertEqual(
         {ok, [item(1, 98), item(1, 99), item(1, 100)]},
-        hb_store:list(
-            S,
-            #{ <<"list">> => <<1:80>>, <<"from">> => item(1, 98) },
-            #{}
-        )
+        test_list(S, <<1:80>>, #{ <<"from">> => item(1, 98) })
     ),
     % In-batch disorder and below-tail appends are refused whole.
     ?assertEqual(
@@ -428,8 +346,5 @@ append_test() ->
         append(S, [item(2, 2), item(2, 1)])
     ),
     ?assertEqual({error, key_exist}, append(S, [item(1, 50)])),
-    ?assertEqual(
-        {error, not_found},
-        hb_store:read(S, #{ <<"read">> => <<2:80>> }, #{})
-    ),
+    ?assertEqual({error, not_found}, test_read(S, <<2:80>>)),
     ok = hb_store:stop(S).
