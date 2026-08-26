@@ -733,6 +733,21 @@ write_match_items(IDs, Base, Opts) ->
 match_offset(IDs, Opts) ->
     case hb_store_arweave:store_from_opts(Opts) of
         no_store -> not_found;
+        StoreOpts = #{ <<"index-store">> := IndexStore } ->
+            % Only the local index layers are consulted: a published, remote
+            % layer answering here would put network round-trips on the write
+            % path.
+            match_offset(
+                IDs,
+                StoreOpts#{
+                    <<"index-store">> =>
+                        hb_store:filter(
+                            IndexStore,
+                            fun(Scope, _) -> Scope =:= local end
+                        )
+                },
+                Opts
+            );
         StoreOpts -> match_offset(IDs, StoreOpts, Opts)
     end.
 match_offset([], _StoreOpts, _Opts) -> not_found;
