@@ -1063,6 +1063,31 @@ refuses_out_of_bounds_range_test() ->
         [{0, 1025}, {1024, 1}, {-1, 8}, {0, 0}, {512, 513}, {not_an_offset, 8}]
     ).
 
+%% @doc A sub-database's `MDB_db' comes off the weave, so each of its fields is
+%% checked before it can size a read or trap a scan: an item width of zero or
+%% one wider than a page, a rootless tree, and a root past the file are all
+%% refused whole, while the shape the published containers carry passes.
+refuses_invalid_subdatabase_test() ->
+    Meta = #{ <<"page-size">> => 512, <<"last-page">> => 100 },
+    Db = #{ <<"pad">> => 17, <<"depth">> => 3, <<"root">> => 24 },
+    ?assertMatch({ok, #{ <<"pad">> := 17 }}, sub_meta(Meta, Db)),
+    lists:foreach(
+        fun(Broken) ->
+            ?assertMatch(
+                {error, {invalid_subdatabase, _}},
+                sub_meta(Meta, maps:merge(Db, Broken))
+            )
+        end,
+        [
+            #{ <<"pad">> => 0 },
+            #{ <<"pad">> => 512 - ?PAGE_HEADER_SIZE + 1 },
+            #{ <<"depth">> => 0 },
+            #{ <<"root">> => 101 },
+            % An empty sub-database names no root at all: `P_INVALID'.
+            #{ <<"root">> => 16#FFFFFFFFFFFFFFFF }
+        ]
+    ).
+
 %% @doc The published copy of `hb_lmdb_page''s fixture answers with the contents
 %% it was built from. Listing a group asserts its whole key set in one scan --
 %% the walk crosses every leaf the group spans -- while reading proves the
