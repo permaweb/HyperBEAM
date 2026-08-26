@@ -371,3 +371,11 @@ and repins are yours).
   W8 agent resumed to implement, validate boundary semantics empirically,
   cross-check against the tag-based scan8 baseline (214,885,035 excluded
   in partition 106), and relaunch the full scan as out-scan9.
+- 2026-08-26 ~21:2xZ Deployment/operations guide committed
+  (docs/misc/arweave-indexer-deployment.md, e163fa1fb). scan8 final:
+  full 3.6 TB partition in 748.5 s (~4.8 GB/s weave-relative, 1.93 GB/s
+  physical after tx-clipping), merge complete; artifacts kept as the
+  tag-based baseline. W8 agent died in a credits outage mid-interval-work
+  (Erlang side + new lib_arweave_index_exclude.erl + NIF edit already in
+  its tree); resumed to finish build/tests/validation and launch the
+  interval-based full rescan (out-scan9).
