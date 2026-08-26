@@ -22,6 +22,8 @@
 -include_lib("eunit/include/eunit.hrl").
 
 -define(DEFAULT_LOCATE_LIMIT, 1000).
+%% The largest weave offset a packed 17-byte row can carry: a 49-bit uint.
+-define(MAX_OFFSET, (1 bsl 49) - 1).
 
 %% @doc Default all non-message@1.0 and device keys to match a single key in the
 %% index.
@@ -85,21 +87,32 @@ all(Base, _Req, Opts) ->
 
 %% @doc Find the weave offsets that carry every predicate of the base template,
 %% by leapfrog intersection over the sorted-set stores: each predicate is asked
-%% for its first row at or after the cursor, an answer above the cursor moves
-%% the cursor there, and an offset that every predicate answers with is
-%% emitted. The request's `from' (inclusive) is where the walk starts, `to'
-%% (exclusive) is where it stops, and `limit' caps the page. The result is the
-%% ascending run of matching offsets: an empty list is a completed page, not a
-%% missing predicate.
+%% for its row nearest the cursor, an answer past the cursor moves the cursor
+%% there, and an offset that every predicate answers with is emitted. The walk
+%% runs ascending by default and descending when the request's `direction' is
+%% `desc'. The request's `from' (inclusive) is where the walk starts -- its
+%% low end ascending, its high end descending -- `to' (exclusive) is where it
+%% stops, and `limit' caps the page. The result is the run of matching offsets
+%% in walk order: an empty list is a completed page, not a missing predicate.
 locate(Base, Req, Opts) ->
     case hb_cache:match_item_stores(Opts) of
         [] -> {error, not_found};
         Stores ->
             Template = locate_template(Base, Opts),
-            From = hb_util:int(hb_maps:get(<<"from">>, Req, 0, Opts)),
+            Direction =
+                case hb_maps:get(<<"direction">>, Req, <<"asc">>, Opts) of
+                    <<"desc">> -> desc;
+                    _ -> asc
+                end,
+            From =
+                case {Direction, hb_maps:get(<<"from">>, Req, none, Opts)} of
+                    {asc, none} -> 0;
+                    {desc, none} -> ?MAX_OFFSET;
+                    {_, Given} -> hb_util:int(Given)
+                end,
             To =
-                case hb_maps:get(<<"to">>, Req, infinity, Opts) of
-                    infinity -> infinity;
+                case hb_maps:get(<<"to">>, Req, none, Opts) of
+                    none -> none;
                     Bound -> hb_util:int(Bound)
                 end,
             Limit =
@@ -110,6 +123,7 @@ locate(Base, Req, Opts) ->
                 [] -> {error, not_found};
                 [{Key, Value}] ->
                     scan(
+                        Direction,
                         Stores,
                         hb_cache:match_item_prefix(Key, Value),
                         From, To, Limit, Opts
@@ -121,7 +135,9 @@ locate(Base, Req, Opts) ->
                         ||
                             {Key, Value} <- Pairs
                         ],
-                    intersect(Stores, Prefixes, From, To, Limit, [], Opts)
+                    intersect(
+                        Direction, Stores, Prefixes, From, To, Limit, [], Opts
+                    )
             end
     end.
 
@@ -139,89 +155,118 @@ locate_template(Base, Opts) ->
         ),
     hb_maps:without([<<"ao-types">>, <<"device">>], Spec, Opts).
 
-%% @doc Walk the leapfrog intersection of a set of predicates forward from the
+%% @doc Walk the leapfrog intersection of a set of predicates from the
 %% cursor, emitting each offset that all of them carry.
-intersect(_Stores, _Prefixes, _Cursor, _To, Limit, Acc, _Opts) when Limit =< 0 ->
+intersect(_Direction, _Stores, _Prefixes, _Cursor, _To, Limit, Acc, _Opts)
+        when Limit =< 0 ->
     {ok, lists:reverse(Acc)};
-intersect(_Stores, _Prefixes, Cursor, To, _Limit, Acc, _Opts)
-        when is_integer(To) andalso Cursor >= To ->
+intersect(Direction, _Stores, _Prefixes, Cursor, _To, _Limit, Acc, _Opts)
+        when
+        (Direction =:= asc andalso Cursor > ?MAX_OFFSET) orelse
+            (Direction =:= desc andalso Cursor < 0)
+    ->
     {ok, lists:reverse(Acc)};
-intersect(Stores, Prefixes, Cursor, To, Limit, Acc, Opts) ->
-    case probe(Stores, Prefixes, Cursor, Opts) of
-        {ok, Cursor} ->
-            intersect(
-                Stores, Prefixes, Cursor + 1, To, Limit - 1,
-                [Cursor | Acc], Opts
-            );
-        {ok, Next} ->
-            intersect(Stores, Prefixes, Next, To, Limit, Acc, Opts);
-        exhausted ->
-            {ok, lists:reverse(Acc)};
-        {error, _} = Error ->
-            Error
+intersect(Direction, Stores, Prefixes, Cursor, To, Limit, Acc, Opts) ->
+    case past_bound(Direction, Cursor, To) of
+        true -> {ok, lists:reverse(Acc)};
+        false ->
+            case probe(Direction, Stores, Prefixes, Cursor, Opts) of
+                {ok, Cursor} ->
+                    intersect(
+                        Direction, Stores, Prefixes, step(Direction, Cursor),
+                        To, Limit - 1, [Cursor | Acc], Opts
+                    );
+                {ok, Next} ->
+                    intersect(
+                        Direction, Stores, Prefixes, Next, To, Limit, Acc, Opts
+                    );
+                exhausted ->
+                    {ok, lists:reverse(Acc)};
+                {error, _} = Error ->
+                    Error
+            end
     end.
 
-%% @doc Ask each predicate in turn for its first offset at or after the
-%% cursor. An answer above the cursor restarts the walk there; agreement from
-%% every predicate is a match; a predicate with nothing left ends the walk.
-probe(_Stores, [], Cursor, _Opts) -> {ok, Cursor};
-probe(Stores, [Prefix | Rest], Cursor, Opts) ->
-    case next_offset(Stores, Prefix, Cursor, Opts) of
+step(asc, Cursor) -> Cursor + 1;
+step(desc, Cursor) -> Cursor - 1.
+
+%% @doc Whether the cursor has crossed the walk's exclusive stop bound.
+past_bound(_Direction, _Cursor, none) -> false;
+past_bound(asc, Cursor, To) -> Cursor >= To;
+past_bound(desc, Cursor, To) -> Cursor =< To.
+
+%% @doc Ask each predicate in turn for its offset nearest the cursor. An
+%% answer past the cursor restarts the walk there; agreement from every
+%% predicate is a match; a predicate with nothing left ends the walk.
+probe(_Direction, _Stores, [], Cursor, _Opts) -> {ok, Cursor};
+probe(Direction, Stores, [Prefix | Rest], Cursor, Opts) ->
+    case nearest_offset(Direction, Stores, Prefix, Cursor, Opts) of
         none -> exhausted;
-        {ok, Cursor} -> probe(Stores, Rest, Cursor, Opts);
+        {ok, Cursor} -> probe(Direction, Stores, Rest, Cursor, Opts);
         {ok, Next} -> {ok, Next};
         {error, _} = Error -> Error
     end.
 
-%% @doc The first offset at or after `From' among a predicate's rows, across
-%% the store list. Each layer answers with its own next row and the smallest
-%% wins: the layers are deltas of one logical set, so the earliest row is the
-%% set's next.
-next_offset(Stores, Prefix, From, Opts) ->
-    next_offset(Stores, Prefix, From, none, Opts).
-next_offset([], _Prefix, _From, none, _Opts) -> none;
-next_offset([], _Prefix, _From, Best, _Opts) -> {ok, Best};
-next_offset([Store | Rest], Prefix, From, Best, Opts) ->
-    case list_items(Store, Prefix, From, 1, Opts) of
+%% @doc The offset nearest the cursor among a predicate's rows, across the
+%% store list: the first at or after it ascending, the last at or before it
+%% descending. Each layer answers with its own nearest row and the nearest
+%% wins: the layers are deltas of one logical set.
+nearest_offset(Direction, Stores, Prefix, From, Opts) ->
+    nearest_offset(Direction, Stores, Prefix, From, none, Opts).
+nearest_offset(_Direction, [], _Prefix, _From, none, _Opts) -> none;
+nearest_offset(_Direction, [], _Prefix, _From, Best, _Opts) -> {ok, Best};
+nearest_offset(Direction, [Store | Rest], Prefix, From, Best, Opts) ->
+    case list_items(Direction, Store, Prefix, From, 1, Opts) of
         {ok, []} ->
-            next_offset(Rest, Prefix, From, Best, Opts);
+            nearest_offset(Direction, Rest, Prefix, From, Best, Opts);
         {ok, [Item | _]} ->
             {_Prefix, Offset} = hb_cache:decode_match_item(Item),
-            next_offset(Rest, Prefix, From, min_offset(Best, Offset), Opts);
+            nearest_offset(
+                Direction, Rest, Prefix, From,
+                nearer(Direction, Best, Offset), Opts
+            );
         not_found ->
-            next_offset(Rest, Prefix, From, Best, Opts);
+            nearest_offset(Direction, Rest, Prefix, From, Best, Opts);
         {error, not_found} ->
-            next_offset(Rest, Prefix, From, Best, Opts);
+            nearest_offset(Direction, Rest, Prefix, From, Best, Opts);
         {error, _} = Error ->
             Error
     end.
 
-min_offset(none, Offset) -> Offset;
-min_offset(Best, Offset) -> min(Best, Offset).
+nearer(_Direction, none, Offset) -> Offset;
+nearer(asc, Best, Offset) -> min(Best, Offset);
+nearer(desc, Best, Offset) -> max(Best, Offset).
 
-%% @doc The ascending run of a single predicate's offsets. Each layer
+%% @doc The run of a single predicate's offsets in walk order. Each layer
 %% contributes its own bounded run and the merged result is deduplicated: the
 %% same row may sit in several layers.
-scan(Stores, Prefix, From, To, Limit, Opts) ->
-    case runs(Stores, Prefix, From, Limit, Opts) of
+scan(Direction, Stores, Prefix, From, To, Limit, Opts) ->
+    case runs(Direction, Stores, Prefix, From, Limit, Opts) of
         {ok, Runs} ->
-            Merged = lists:umerge(Runs),
-            Bounded =
-                case To of
-                    infinity -> Merged;
-                    _ -> lists:takewhile(fun(Offset) -> Offset < To end, Merged)
-                end,
-            {ok, lists:sublist(Bounded, Limit)};
+            Merged = merge(Direction, Runs),
+            {ok, lists:sublist(bound(Direction, Merged, To), Limit)};
         {error, _} = Error ->
             Error
     end.
 
+merge(asc, Runs) ->
+    lists:umerge(Runs);
+merge(desc, Runs) ->
+    lists:reverse(lists:umerge([ lists:reverse(Run) || Run <- Runs ])).
+
+bound(_Direction, Offsets, none) ->
+    Offsets;
+bound(asc, Offsets, To) ->
+    lists:takewhile(fun(Offset) -> Offset < To end, Offsets);
+bound(desc, Offsets, To) ->
+    lists:takewhile(fun(Offset) -> Offset > To end, Offsets).
+
 %% @doc One bounded run of offsets per store that answers for a predicate.
-runs([], _Prefix, _From, _Limit, _Opts) -> {ok, []};
-runs([Store | Rest], Prefix, From, Limit, Opts) ->
-    case list_items(Store, Prefix, From, Limit, Opts) of
+runs(_Direction, [], _Prefix, _From, _Limit, _Opts) -> {ok, []};
+runs(Direction, [Store | Rest], Prefix, From, Limit, Opts) ->
+    case list_items(Direction, Store, Prefix, From, Limit, Opts) of
         {ok, Items} ->
-            case runs(Rest, Prefix, From, Limit, Opts) of
+            case runs(Direction, Rest, Prefix, From, Limit, Opts) of
                 {ok, Runs} ->
                     {ok,
                         [
@@ -238,9 +283,9 @@ runs([Store | Rest], Prefix, From, Limit, Opts) ->
                     Error
             end;
         not_found ->
-            runs(Rest, Prefix, From, Limit, Opts);
+            runs(Direction, Rest, Prefix, From, Limit, Opts);
         {error, not_found} ->
-            runs(Rest, Prefix, From, Limit, Opts);
+            runs(Direction, Rest, Prefix, From, Limit, Opts);
         {error, _} = Error ->
             Error
     end.
@@ -248,14 +293,19 @@ runs([Store | Rest], Prefix, From, Limit, Opts) ->
 %% @doc List a predicate's rows from a single store, from an offset cursor
 %% (inclusive). The cursor rides as a whole packed item, so the store's seek
 %% lands exactly where the caller's last page ended.
-list_items(Store, Prefix, From, Limit, Opts) ->
-    hb_store:list(
-        [Store],
+list_items(Direction, Store, Prefix, From, Limit, Opts) ->
+    Request =
         #{
             <<"list">> => Prefix,
             <<"from">> => hb_cache:encode_match_item(Prefix, From),
             <<"limit">> => Limit
         },
+    hb_store:list(
+        [Store],
+        case Direction of
+            asc -> Request;
+            desc -> Request#{ <<"direction">> => <<"backward">> }
+        end,
         Opts
     ).
 
@@ -315,6 +365,22 @@ locate_single_predicate_test() ->
         test_locate(Template, #{ <<"from">> => 11, <<"to">> => 30 }, Opts)
     ),
     ?assertEqual({ok, [20]}, test_locate(#{ <<"slot">> => 2382 }, #{}, Opts)),
+    % Descending: from the run's end by default, resumed by an inclusive
+    % upper cursor, stopped by an exclusive lower bound.
+    Desc = #{ <<"direction">> => <<"desc">> },
+    ?assertEqual({ok, [30, 20, 10]}, test_locate(Template, Desc, Opts)),
+    ?assertEqual(
+        {ok, [20, 10]},
+        test_locate(Template, Desc#{ <<"from">> => 20 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, [30, 20]},
+        test_locate(Template, Desc#{ <<"limit">> => 2 }, Opts)
+    ),
+    ?assertEqual(
+        {ok, [30, 20]},
+        test_locate(Template, Desc#{ <<"to">> => 10 }, Opts)
+    ),
     ok = hb_store:stop(Store).
 
 %% @doc Leapfrog intersection over two and three predicates, paged by the
@@ -337,6 +403,16 @@ locate_intersection_test() ->
     ?assertEqual({ok, [40]}, test_locate(Two, #{ <<"from">> => 21 }, Opts)),
     ?assertEqual({ok, [20]}, test_locate(Two, #{ <<"limit">> => 1 }, Opts)),
     ?assertEqual({ok, [20]}, test_locate(Two, #{ <<"to">> => 40 }, Opts)),
+    % The same intersections walk descending.
+    Desc = #{ <<"direction">> => <<"desc">> },
+    ?assertEqual({ok, [40, 20]}, test_locate(Two, Desc, Opts)),
+    ?assertEqual({ok, [40]}, test_locate(Three, Desc, Opts)),
+    ?assertEqual(
+        {ok, [20]},
+        test_locate(Two, Desc#{ <<"from">> => 39 }, Opts)
+    ),
+    ?assertEqual({ok, [40]}, test_locate(Two, Desc#{ <<"limit">> => 1 }, Opts)),
+    ?assertEqual({ok, [40]}, test_locate(Two, Desc#{ <<"to">> => 20 }, Opts)),
     ok = hb_store:stop(Store).
 
 %% @doc Layered stores answer as one logical set: a predicate's rows merge
@@ -369,6 +445,23 @@ locate_layering_test() ->
         test_locate(
             #{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> },
             #{},
+            Opts
+        )
+    ),
+    % The layered walks mirror descending.
+    ?assertEqual(
+        {ok, [30, 20, 10]},
+        test_locate(
+            #{ <<"type">> => <<"Message">> },
+            #{ <<"direction">> => <<"desc">> },
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, [30, 10]},
+        test_locate(
+            #{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> },
+            #{ <<"direction">> => <<"desc">> },
             Opts
         )
     ),
