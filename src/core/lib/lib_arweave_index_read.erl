@@ -172,16 +172,23 @@ planned(Wanted, End, #{ <<"batch-chunks">> := BatchChunks, <<"limit">> := Limit 
     max(Needed, Clipped).
 
 %% @doc How many chunks of read-ahead to arm past a fetch: a full batch,
-%% clipped to the limit, zero when the limit leaves nothing to read.
+%% clipped to the limit. When the limit leaves nothing -- the fetch ends
+%% the current transaction -- a probe's worth is armed anyway: the next
+%% transaction usually begins exactly there, and its table and first
+%% headers hiding behind one small read is what keeps a run of small
+%% bundles from paying the disk's latency once per transaction.
 ahead(After, #{ <<"batch-chunks">> := BatchChunks, <<"limit">> := Limit }) ->
     case Limit of
-        infinity -> BatchChunks;
+        infinity ->
+            BatchChunks;
         _ ->
-            min(
-                BatchChunks,
-                hb_util:ceil_int(max(0, Limit - After), ?DATA_CHUNK_SIZE)
-                    div ?DATA_CHUNK_SIZE
-            )
+            Clipped =
+                min(
+                    BatchChunks,
+                    hb_util:ceil_int(max(0, Limit - After), ?DATA_CHUNK_SIZE)
+                        div ?DATA_CHUNK_SIZE
+                ),
+            max(Clipped, ?PROBE_CHUNKS)
     end.
 
 %% @doc Install a refilled buffer and answer from it, or report the shortfall.
@@ -224,16 +231,23 @@ call(Fetcher, Request) ->
 fetcher(IO, Ahead) ->
     receive
         {{fetch, BucketStart, Residue, Chunks, AheadChunks}, From, Ref} ->
-            Params = {BucketStart, Residue, Chunks},
-            {Result, IO2} =
+            % An armed batch serves any request it covers: the reader's
+            % next fetch may plan fewer chunks than were read ahead --
+            % a smaller transaction's worth -- and a larger buffer answers
+            % it all the same.
+            {Result, IO2, Served} =
                 case Ahead of
-                    {Params, Ready} ->
-                        {Ready, counted_prefetch(IO)};
+                    {{BucketStart, Residue, Armed}, Ready}
+                            when Armed >= Chunks ->
+                        {Ready, counted_prefetch(IO), Armed};
                     _MissOrNone ->
-                        batch(BucketStart, Residue, Chunks, IO)
+                        {Read, IOAfter} =
+                            batch(BucketStart, Residue, Chunks, IO),
+                        {Read, IOAfter, Chunks}
                 end,
             From ! {Ref, result(Result)},
-            fetcher_ahead(IO2, Params, AheadChunks, Result);
+            fetcher_ahead(
+                IO2, {BucketStart, Residue, Served}, AheadChunks, Result);
         {stats, From, Ref} ->
             From !
                 {Ref,

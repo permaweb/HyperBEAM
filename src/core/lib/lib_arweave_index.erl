@@ -221,6 +221,12 @@ report(Results, From, To, Wall) ->
     BytesRead =
         lists:sum(
             [maps:get(<<"bytes-read">>, maps:get(<<"reader">>, R)) || R <- Results]),
+    Reads =
+        lists:sum(
+            [maps:get(<<"reads">>, maps:get(<<"reader">>, R)) || R <- Results]),
+    Prefetches =
+        lists:sum(
+            [maps:get(<<"prefetches">>, maps:get(<<"reader">>, R)) || R <- Results]),
     Counts =
         lists:foldl(
             fun(R, Acc) ->
@@ -248,6 +254,8 @@ report(Results, From, To, Wall) ->
             <<"to">> => To,
             <<"weave-bytes">> => To - From,
             <<"bytes-read">> => BytesRead,
+            <<"reads">> => Reads,
+            <<"prefetches">> => Prefetches,
             <<"wall-ms">> => Wall,
             <<"read-gbps">> => gbps(BytesRead, Wall),
             <<"weave-gbps">> => gbps(To - From, Wall),
