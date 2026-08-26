@@ -49,6 +49,7 @@ test_end_to_end() ->
     {ok, _MergeReport} = lib_arweave_index:merge(Opts),
     assert_items(Opts, Expected),
     assert_counts(Report, Placed),
+    assert_containers(Opts),
     % The same weave scanned by a single worker merges to the same bytes.
     Opts1 = Opts#{
         <<"arweave-index-output">> =>
@@ -435,6 +436,57 @@ items(Opts, Kind) ->
     {ok, Bin} =
         file:read_file(filename:join(Out, << Kind/binary, ".items" >>)),
     [Item || << Item:Width/binary >> <= Bin].
+
+%% @doc The published containers round-trip: built from the merged item
+%% files by sorted appends, they carry the LMDB 1.0 meta page the format
+%% specifies and read back as exactly the items that went in. When the
+%% linked `elmdb' does not carry the append API, the build must say so
+%% rather than produce something else.
+assert_containers(Opts) ->
+    Out = hb_opts:get(<<"arweave-index-output">>, no_dir, Opts),
+    _Loaded = code:ensure_loaded(elmdb),
+    case erlang:function_exported(elmdb, put_batch_append, 2) of
+        false ->
+            ?assertEqual(
+                {error, <<"elmdb-append-unavailable">>},
+                lib_arweave_index_runs:container(
+                    <<"offset">>,
+                    filename:join(Out, <<"offset.items">>),
+                    filename:join(Out, <<"offset.db">>)
+                )
+            );
+        true ->
+            lists:foreach(
+                fun(Kind) -> assert_container(Kind, Out) end,
+                [<<"offset">>, <<"match">>]
+            )
+    end.
+
+assert_container(Kind, Out) ->
+    ItemsPath = filename:join(Out, << Kind/binary, ".items" >>),
+    DBPath = filename:join(Out, << Kind/binary, ".db" >>),
+    ok = lib_arweave_index_runs:container(Kind, ItemsPath, DBPath),
+    Width = lib_arweave_index_runs:item_size(Kind),
+    {ok, Items} = file:read_file(ItemsPath),
+    % The container is one published file of whole 64 KiB pages, whose
+    % first meta page carries the LMDB magic and data version 3.
+    Size = filelib:file_size(DBPath),
+    ?assert(Size > 0 andalso Size rem 65536 == 0),
+    {ok, DBFile} = file:open(DBPath, [read, raw, binary]),
+    {ok, Meta} = file:pread(DBFile, 0, 32),
+    ok = file:close(DBFile),
+    << _:24/binary, Magic:32/little, Version:32/little >> = Meta,
+    ?assertEqual({16#BEEFC0DE, 3}, {Magic, Version}),
+    % Every item reads back, ascending, through the positioned dup read.
+    {ok, Env} =
+        elmdb:env_open(DBPath, [{page_size, 65536}, read_only, no_subdir]),
+    {ok, DB} = elmdb:db_open(Env, [dupsort, dupfixed]),
+    {ok, Read} = elmdb:read_dups(DB, << 0 >>, [{limit, 0}]),
+    ok = elmdb:env_close(Env),
+    ?assertEqual(
+        [Item || << Item:Width/binary >> <= Items],
+        Read
+    ).
 
 %% @doc The scan's counters match the weave that was placed.
 assert_counts(Report, Placed) ->

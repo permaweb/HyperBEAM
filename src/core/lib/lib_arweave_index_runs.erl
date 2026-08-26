@@ -95,6 +95,7 @@ merge(Kind, RunFiles, OutPath) ->
 %% linked `elmdb' carries the sorted-append API the container needs. Until it
 %% does, the item file itself is the artifact.
 container(Kind, ItemsPath, DBPath) ->
+    _Loaded = code:ensure_loaded(elmdb),
     case erlang:function_exported(elmdb, put_batch_append, 2) of
         false ->
             {error, <<"elmdb-append-unavailable">>};
@@ -228,11 +229,13 @@ merged(Heads, Tails, Width, Last, Out, Written) ->
     end.
 
 %% @doc Build the published container by sorted appends: an LMDB 1.0
-%% environment of 64 KiB pages whose main database is `DUPSORT|DUPFIXED'
-%% holding every item as a duplicate of the single key `<<0>>'.
+%% environment of 64 KiB pages, `no_subdir' so the path names the single
+%% published file, whose main database is `DUPSORT|DUPFIXED' holding every
+%% item as a duplicate of the single key `<<0>>'.
 appended(Kind, ItemsPath, DBPath) ->
     Width = item_size(Kind),
     MapSize = filelib:file_size(ItemsPath) * 4 + 1073741824,
+    ok = filelib:ensure_path(filename:dirname(DBPath)),
     {ok, Env} =
         elmdb:env_open(
             DBPath,
@@ -240,19 +243,22 @@ appended(Kind, ItemsPath, DBPath) ->
         ),
     {ok, DB} = elmdb:db_open(Env, [create, dupsort, dupfixed]),
     {ok, In} = file:open(ItemsPath, [read, raw, binary]),
-    Result = append_blocks(In, DB, Width),
+    % Blocks are whole items, so no item straddles two reads.
+    Result = append_blocks(In, DB, Width, (?MERGE_BLOCK div Width) * Width),
     ok = file:close(In),
     ok = elmdb:env_close(Env),
     Result.
 
 %% @doc Feed the item file to the append path block by block.
-append_blocks(In, DB, Width) ->
-    case file:read(In, ?MERGE_BLOCK) of
-        {ok, Block} ->
+append_blocks(In, DB, Width, BlockSize) ->
+    case file:read(In, BlockSize) of
+        {ok, Block} when byte_size(Block) rem Width == 0 ->
             Pairs =
-                [{<<0>>, Item} || << Item:Width/binary >> <= Block],
+                [{<< 0 >>, Item} || << Item:Width/binary >> <= Block],
             ok = elmdb:put_batch_append(DB, Pairs),
-            append_blocks(In, DB, Width);
+            append_blocks(In, DB, Width, BlockSize);
+        {ok, Block} ->
+            {error, {'items-truncated', byte_size(Block) rem Width}};
         eof ->
             ok
     end.
