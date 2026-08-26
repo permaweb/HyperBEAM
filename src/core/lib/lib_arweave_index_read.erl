@@ -35,7 +35,7 @@
 %%% past one comes back `short' rather than as the wrong bytes; the scanner
 %%% counts the loss and carries on at the next transaction.
 -module(lib_arweave_index_read).
--export([open/2, read/3, close/1, stats/1]).
+-export([open/2, read/3, limit/2, close/1, stats/1]).
 -include("include/hb.hrl").
 -include("include/ar_chunk_storage.hrl").
 
@@ -73,7 +73,8 @@ open(Module, Opts) ->
         <<"fetcher">> => spawn_link(fun() -> fetcher(IO, none) end),
         <<"batch-chunks">> => BatchChunks,
         <<"buffer">> => <<>>,
-        <<"base">> => 0
+        <<"base">> => 0,
+        <<"limit">> => infinity
     }.
 
 %% @doc Read `Len' bytes of the weave beginning at `Offset', as
@@ -100,25 +101,27 @@ read(Offset, Len, Reader = #{ <<"buffer">> := Buffer, <<"base">> := Base })
 read(Offset, Len, Reader) ->
     probed(Offset, Len, Reader).
 
+%% @doc Tell the reader how far the bytes it is being walked through
+%% extend -- the current transaction's own end. Batches and read-aheads
+%% clip to it, so a nine-megabyte bundle costs nine megabytes of reads,
+%% not a full batch and a wasted batch of read-ahead beyond it.
+limit(Offset, Reader) ->
+    Reader#{ <<"limit">> => Offset }.
+
 %% @doc Continue the buffer: keep its tail from the request's own chunk and
 %% append a batch fetched from its end.
 extended(Offset, Len, Reader) ->
     #{
         <<"fetcher">> := Fetcher,
-        <<"batch-chunks">> := BatchChunks,
         <<"buffer">> := Buffer,
         <<"base">> := Base
     } = Reader,
     Residue = residue(Offset),
     End = Base + byte_size(Buffer),
     NewBase = Offset - ((Offset - Residue) rem ?DATA_CHUNK_SIZE),
-    Chunks =
-        max(
-            BatchChunks,
-            hb_util:ceil_int(
-                Offset + Len - End, ?DATA_CHUNK_SIZE) div ?DATA_CHUNK_SIZE
-        ),
-    case call(Fetcher, {fetch, End - Residue, Residue, Chunks}) of
+    Chunks = planned(Offset + Len, End, Reader),
+    Ahead = ahead(End + Chunks * ?DATA_CHUNK_SIZE, Reader),
+    case call(Fetcher, {fetch, End - Residue, Residue, Chunks, Ahead}) of
         {ok, Batch} ->
             Tail = binary:part(Buffer, NewBase - Base, End - NewBase),
             served(
@@ -132,21 +135,53 @@ extended(Offset, Len, Reader) ->
             {error, Reason}
     end.
 
-%% @doc Serve a jumped-to range from a probe of its own chunks.
+%% @doc Serve a jumped-to range from a probe of its own chunks. A jump is
+%% no evidence of what comes next, so a probe arms no read-ahead.
 probed(Offset, Len, Reader = #{ <<"fetcher">> := Fetcher }) ->
     Residue = residue(Offset),
     NewBase = Offset - ((Offset - Residue) rem ?DATA_CHUNK_SIZE),
     Chunks =
         max(
-            ?PROBE_CHUNKS,
+            min(?PROBE_CHUNKS, planned(Offset + Len, NewBase, Reader)),
             hb_util:ceil_int(
                 Offset + Len - NewBase, ?DATA_CHUNK_SIZE) div ?DATA_CHUNK_SIZE
         ),
-    case call(Fetcher, {fetch, NewBase - Residue, Residue, Chunks}) of
+    case call(Fetcher, {fetch, NewBase - Residue, Residue, Chunks, 0}) of
         {ok, Batch} ->
             served(Offset, Len, NewBase, Batch, Reader);
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% @doc How many chunks to fetch from `End': a full batch, clipped to the
+%% limit, and never less than the request needs.
+planned(Wanted, End, #{ <<"batch-chunks">> := BatchChunks, <<"limit">> := Limit }) ->
+    Needed =
+        hb_util:ceil_int(max(0, Wanted - End), ?DATA_CHUNK_SIZE)
+            div ?DATA_CHUNK_SIZE,
+    Clipped =
+        case Limit of
+            infinity -> BatchChunks;
+            _ ->
+                min(
+                    BatchChunks,
+                    hb_util:ceil_int(max(0, Limit - End), ?DATA_CHUNK_SIZE)
+                        div ?DATA_CHUNK_SIZE
+                )
+        end,
+    max(Needed, Clipped).
+
+%% @doc How many chunks of read-ahead to arm past a fetch: a full batch,
+%% clipped to the limit, zero when the limit leaves nothing to read.
+ahead(After, #{ <<"batch-chunks">> := BatchChunks, <<"limit">> := Limit }) ->
+    case Limit of
+        infinity -> BatchChunks;
+        _ ->
+            min(
+                BatchChunks,
+                hb_util:ceil_int(max(0, Limit - After), ?DATA_CHUNK_SIZE)
+                    div ?DATA_CHUNK_SIZE
+            )
     end.
 
 %% @doc Install a refilled buffer and answer from it, or report the shortfall.
@@ -181,13 +216,14 @@ call(Fetcher, Request) ->
             erlang:error({'fetcher-down', Reason})
     end.
 
-%% @doc The fetcher: every `pread' of the reader happens here. After serving
-%% a whole batch it reads the next one before waiting again, and a request
-%% continuing exactly there is answered without touching the disk. `Ahead'
-%% is `none', or `{Params, Result}' for the batch read in advance.
+%% @doc The fetcher: every `pread' of the reader happens here. When a fetch
+%% asks for read-ahead, the following batch is read before waiting again,
+%% and a request continuing exactly there is answered without touching the
+%% disk. `Ahead' is `none', or `{Params, Result}' for the batch read in
+%% advance.
 fetcher(IO, Ahead) ->
     receive
-        {{fetch, BucketStart, Residue, Chunks}, From, Ref} ->
+        {{fetch, BucketStart, Residue, Chunks, AheadChunks}, From, Ref} ->
             Params = {BucketStart, Residue, Chunks},
             {Result, IO2} =
                 case Ahead of
@@ -197,7 +233,7 @@ fetcher(IO, Ahead) ->
                         batch(BucketStart, Residue, Chunks, IO)
                 end,
             From ! {Ref, result(Result)},
-            fetcher_ahead(IO2, Params, Result);
+            fetcher_ahead(IO2, Params, AheadChunks, Result);
         {stats, From, Ref} ->
             From !
                 {Ref,
@@ -212,17 +248,17 @@ fetcher(IO, Ahead) ->
             From ! {Ref, ok}
     end.
 
-%% @doc Arm the read-ahead after a served batch. Only an ordinary batch
-%% consumed whole predicts its continuation: one that ended early hit a hole
-%% the scanner will now step over, and an oversized one -- a bundle table
-%% wider than a batch -- is followed by requests inside it, not after it.
-fetcher_ahead(IO = #{ <<"batch-chunks">> := Chunks },
-        {BucketStart, Residue, Chunks}, {ok, Buffer})
-        when byte_size(Buffer) == Chunks * ?DATA_CHUNK_SIZE ->
+%% @doc Arm the read-ahead the fetch asked for, after a batch consumed
+%% whole. One that ended early hit a hole the scanner will now step over,
+%% and a fetch that asked for no read-ahead -- a probe, or a batch ending
+%% at the reader's limit -- predicts nothing.
+fetcher_ahead(IO, {BucketStart, Residue, Chunks}, AheadChunks, {ok, Buffer})
+        when AheadChunks > 0
+        andalso byte_size(Buffer) == Chunks * ?DATA_CHUNK_SIZE ->
     NextBucketStart = BucketStart + Chunks * ?DATA_CHUNK_SIZE,
-    {Result, IO2} = batch(NextBucketStart, Residue, Chunks, IO),
-    fetcher(IO2, {{NextBucketStart, Residue, Chunks}, Result});
-fetcher_ahead(IO, _Params, _Result) ->
+    {Result, IO2} = batch(NextBucketStart, Residue, AheadChunks, IO),
+    fetcher(IO2, {{NextBucketStart, Residue, AheadChunks}, Result});
+fetcher_ahead(IO, _Params, _AheadChunks, _Result) ->
     fetcher(IO, none).
 
 %% @doc Shape a batch result for the reply.

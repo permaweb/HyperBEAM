@@ -52,7 +52,18 @@ run(Opts) ->
             hb_util:int(
                 hb_opts:get(<<"arweave-index-from">>, RangeStart, Opts)),
         To = hb_util:int(hb_opts:get(<<"arweave-index-to">>, RangeEnd, Opts)),
-        {ok, Txs} ?= manifest(From, To, Opts),
+        {ok, Overlapping} ?= manifest(From, To, Opts),
+        % A transaction reaching past the scan's end would read bytes the
+        % caller bounded away -- an unpack cursor's mid-conversion files,
+        % another machine's share -- so it is left whole to whoever scans
+        % the range it ends in.
+        Txs =
+            [
+                Tx
+            ||
+                Tx <- Overlapping,
+                maps:get(<<"start">>, Tx) + maps:get(<<"size">>, Tx) =< To
+            ],
         Workers = workers(Opts),
         Spans = spans(Txs, Workers),
         ?event(arweave_index,

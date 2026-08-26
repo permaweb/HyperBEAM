@@ -64,14 +64,22 @@ open(Reader, Sink, SinkState) ->
 %% the module are all counted and stepped over.
 tx(#{ <<"bundle">> := false }, State) ->
     {ok, counted(<<"txs-skipped">>, State)};
-tx(Spec = #{ <<"start">> := Start, <<"size">> := Size }, State) ->
+tx(Spec = #{ <<"start">> := Start, <<"size">> := Size },
+        State = #{ <<"reader">> := Reader }) ->
     Parent =
         case maps:get(<<"id">>, Spec, undefined) of
             undefined -> undefined;
             ID -> hb_util:human_id(ID)
         end,
+    % The transaction's extent bounds every read it can cause, so the
+    % reader clips its batches and read-ahead to it.
+    Limited =
+        State#{
+            <<"reader">> =>
+                lib_arweave_index_read:limit(Start + Size, Reader)
+        },
     maybe
-        {ok, State2} ?= bundle(Start, Size, Parent, 0, State),
+        {ok, State2} ?= bundle(Start, Size, Parent, 0, Limited),
         {ok, counted(<<"txs">>, State2)}
     end.
 
