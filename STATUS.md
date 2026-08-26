@@ -287,3 +287,12 @@ Recorded in `decisions/` as they are made.
   W6b launched: profile + header-scan NIF to close the 4 GB/s criterion
   (W6 measured 2.60 GB/s full-partition, parse-bound on 24 real cores,
   disks ~8 GB/s).
+- 2026-08-26 ~08:2xZ **Both containers published and MINED**:
+  offset gXk2EYyhGKG_ZAeyhQZtGko11CHqU7H8Ysc2h7P-6s8 (232,259,584 B, block
+  1,987,823, weave offset 390,058,031,227,126); match
+  9IEf9h9l_w6qW2M05hjMrikRB7MkrkqNMSYkOVUrV8U (1,915,879,424 B, 7,309
+  chunks seeded 0 failed, block 1,987,824). Spend ~24.03 AR; wallet holds
+  26.20 AR. W5 demo agent launched: live node with both containers as
+  arlmdb stores behind writable heads, end-to-end GraphQL proofs, and the
+  query-pace benchmark (remote arlmdb vs local set-store A/B).
+  eunit-all rerunning after the original-tags parity fix.
