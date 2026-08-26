@@ -193,3 +193,27 @@ Recorded in `decisions/` as they are made.
   in worktree match-query; it merges feat/store-set when W2 lands.
   Known gap logged by W3: no backward set scan in arlmdb yet (DESC paging) —
   W4 instructed to close or bound it.
+- 2026-08-25 ~01:50 **W2 complete**, merged (feat/store-set): hb_store_lmdb
+  on LMDB 1.0 with `page-size` (default 65536) + real read-only;
+  new hb_store_lmdb_set (~205 impl lines; byte-stable files, sha256-identical
+  across rebuilds; bulk append 0.9 M items/s; from/limit paging at 22-26k
+  pages/s); hb_store_opts recursion into store/stores/index-store/
+  local-store; hb_store list docs rewritten + dead scope branch deleted;
+  escript code path fix for checkout builds. eunit-all: Failed 5 /
+  Passed 3576, A/B-identical to pristine edge (zero regressions).
+  Integration facts: this repo remaps `_checkouts` to `src/forge` — the
+  elmdb checkout is the untracked symlink `src/forge/elmdb -> ~/src/elmdb`;
+  compiles with the checkout strip the elmdb pin from rebar.lock (restore
+  before committing; repin once elmdb feat/dup-sets is pushed); 0.9-format
+  store dirs (cache-mainnet/lmdb, _build/preloaded-store,
+  _build/device-test-store) must be deleted once — they rebuild as v3.
+  Merged tree verified here: compile + 24 lmdb/set tests green. W4 messaged
+  to merge feat/store-set and continue.
+- 2026-08-25 ~01:55 W7 decision logged (decisions/dev2-unpack-banding.md):
+  replica_2_9 entropy is sector-interleaved across the whole partition, so
+  file-by-file unpack would cost 1024x the RandomX work (~500 h). Chosen:
+  8 sector bands (~420 GiB each, ~29 min entropy per band at 40 workers,
+  ~4-6 h total), byte-level verified idempotent writes, entropy-only slots
+  zeroed so nonzero prefix == real chunk. Verification gate passed 39/39
+  (30/30 external arweave.net byte-matches) BEFORE any in-place write.
+  UNPACK-CURSOR advances at band boundaries (8 steps).
