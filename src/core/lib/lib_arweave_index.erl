@@ -194,12 +194,13 @@ span(Module, N, Txs, Opts) ->
         ),
     Wall = erlang:monotonic_time(millisecond) - Started,
     {SinkState, Reader2, Counts} = lib_arweave_index_scan:finish(State),
+    ReaderStats = lib_arweave_index_read:stats(Reader2),
     ok = lib_arweave_index_read:close(Reader2),
     Runs = lib_arweave_index_runs:close(SinkState),
     #{
         <<"span">> => N,
         <<"wall-ms">> => Wall,
-        <<"reader">> => lib_arweave_index_read:stats(Reader2),
+        <<"reader">> => ReaderStats,
         <<"counts">> => Counts,
         <<"runs">> => Runs
     }.
