@@ -17,6 +17,8 @@
 %%%   <li>`arweave-index-module': the storage module directory name to scan;
 %%%       defaults to the first unpacked module the data directory holds.</li>
 %%%   <li>`arweave-index-manifest': the boundary manifest's path.</li>
+%%%   <li>`arweave-index-exclusions': the exclusion-interval file's path
+%%%       (`lib_arweave_index_exclude'); unset excludes nothing.</li>
 %%%   <li>`arweave-index-output': where runs, merged item files and reports
 %%%       land. Default `arweave-index-out'.</li>
 %%%   <li>`arweave-index-workers': concurrent scan spans. Default 4: right
@@ -53,6 +55,7 @@ run(Opts) ->
                 hb_opts:get(<<"arweave-index-from">>, RangeStart, Opts)),
         To = hb_util:int(hb_opts:get(<<"arweave-index-to">>, RangeEnd, Opts)),
         {ok, Overlapping} ?= manifest(From, To, Opts),
+        {ok, Exclusions, ExclusionsSha} ?= lib_arweave_index_exclude:load(Opts),
         % A transaction reaching past the scan's end would read bytes the
         % caller bounded away -- an unpack cursor's mid-conversion files,
         % another machine's share -- so it is left whole to whoever scans
@@ -79,11 +82,11 @@ run(Opts) ->
         Results =
             hb_pmap:parallel_map(
                 lists:enumerate(Spans),
-                fun({N, Span}) -> span(Module, N, Span, Opts) end,
+                fun({N, Span}) -> span(Module, N, Span, Exclusions, Opts) end,
                 Workers
             ),
         Wall = erlang:monotonic_time(millisecond) - Started,
-        {ok, report(Results, From, To, Wall)}
+        {ok, report(Results, From, To, ExclusionsSha, Wall)}
     end.
 
 %% @doc Merge every spilled run in the output directory into one ascending
@@ -182,7 +185,7 @@ closed([], Spans) -> Spans;
 closed(Span, Spans) -> [lists:reverse(Span) | Spans].
 
 %% @doc Scan one span of transactions: one reader, one sink, one pass.
-span(Module, N, Txs, Opts) ->
+span(Module, N, Txs, Exclusions, Opts) ->
     Reader = lib_arweave_index_read:open(Module, Opts),
     Sink =
         lib_arweave_index_runs:open(
@@ -200,7 +203,7 @@ span(Module, N, Txs, Opts) ->
                 end
             end,
             lib_arweave_index_scan:open(
-                Reader, fun lib_arweave_index_runs:add/3, Sink),
+                Reader, Exclusions, fun lib_arweave_index_runs:add/3, Sink),
             Txs
         ),
     Wall = erlang:monotonic_time(millisecond) - Started,
@@ -216,8 +219,10 @@ span(Module, N, Txs, Opts) ->
         <<"runs">> => Runs
     }.
 
-%% @doc Fold the span results into the run's report.
-report(Results, From, To, Wall) ->
+%% @doc Fold the span results into the run's report. The exclusion-interval
+%% file's hash is part of the run's identity: two runs with different
+%% interval files are scans of different indexes.
+report(Results, From, To, ExclusionsSha, Wall) ->
     BytesRead =
         lists:sum(
             [maps:get(<<"bytes-read">>, maps:get(<<"reader">>, R)) || R <- Results]),
@@ -252,6 +257,11 @@ report(Results, From, To, Wall) ->
         #{
             <<"from">> => From,
             <<"to">> => To,
+            <<"interval-sha256">> =>
+                case ExclusionsSha of
+                    none -> <<>>;
+                    Sha -> hb_util:encode(Sha)
+                end,
             <<"weave-bytes">> => To - From,
             <<"bytes-read">> => BytesRead,
             <<"reads">> => Reads,

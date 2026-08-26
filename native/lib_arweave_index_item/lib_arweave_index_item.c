@@ -7,9 +7,9 @@
  * offset and full size, and the enclosing bundle's ID -- and receives the
  * finished artifacts: the 21-byte offset-index item, the 17-byte match-index
  * items, and whether the item is itself a bundle to recurse into. One call
- * replaces the per-item `ar_bundles:deserialize_header' walk, the RedStone
- * tag check, the sha256 calls for the item ID, owner address and predicate
- * hashes, and the row encoding of `lib_arweave_index_rows'.
+ * replaces the per-item `ar_bundles:deserialize_header' walk, the sha256
+ * calls for the item ID, owner address and predicate hashes, and the row
+ * encoding of `lib_arweave_index_rows'.
  *
  * Parity contract: the byte semantics mirror the Erlang reference
  * (`lib_arweave_index_item:reference/4') clause for clause -- including the
@@ -22,8 +22,7 @@
  * with such bytes, varints in Erlang-bignum territory, solana addresses
  * whose base58 form leaves `hb_util:human_id''s passthrough widths -- comes
  * back as the atom `fallback', and the Erlang side runs the reference for
- * that one item. RedStone items are detected before any of that applies,
- * byte-exactly, and cost no hashing on either path.
+ * that one item.
  *
  * The module's static state -- the shared atoms and the constant
  * commitment-device predicate hash -- is written only at load; its
@@ -73,7 +72,6 @@ typedef SHA256_CTX sha256_ctx_t;
 
 static ERL_NIF_TERM am_ok;
 static ERL_NIF_TERM am_bundle;
-static ERL_NIF_TERM am_redstone;
 static ERL_NIF_TERM am_failed;
 static ERL_NIF_TERM am_fallback;
 static ERL_NIF_TERM am_excluded;
@@ -351,28 +349,6 @@ parse_header(const uint8_t *win, size_t win_len, header_t *h, tagvec_t *vec)
     return PARSE_OK;
 }
 
-/* Whether the tags carry the RedStone oracle signature: all five marker
- * names present, byte-exact (`lib_arweave_index_rows:redstone/1'). */
-static int
-is_redstone(const tagvec_t *vec)
-{
-    static const char *markers[] =
-        {"dataFeedId", "dataServiceId", "signerAddress", "timestamp", "type"};
-    unsigned found = 0;
-    size_t i, m;
-    for (i = 0; i < vec->count; i++) {
-        for (m = 0; m < 5; m++) {
-            if ((found & (1U << m)) == 0
-                    && vec->tags[i].name_len == strlen(markers[m])
-                    && memcmp(vec->tags[i].name, markers[m],
-                        vec->tags[i].name_len) == 0) {
-                found |= 1U << m;
-            }
-        }
-    }
-    return found == 0x1F;
-}
-
 static inline uint8_t
 lower_byte(uint8_t c)
 {
@@ -613,12 +589,6 @@ rows_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         tagvec_free(&tags);
         return rc == PARSE_FAILED ? am_failed : am_fallback;
     }
-    /* RedStone drops before any lowering or hashing, byte-exactly, so it
-     * needs no fallback checks. */
-    if (is_redstone(&tags)) {
-        tagvec_free(&tags);
-        return am_redstone;
-    }
     /* Tag names with bytes >= 0x80 reach Unicode case folding on the Erlang
      * path, in the predicate keys and in the bundle-tag search alike. */
     for (i = 0; i < tags.count; i++) {
@@ -773,7 +743,6 @@ load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
 {
     am_ok = enif_make_atom(env, "ok");
     am_bundle = enif_make_atom(env, "bundle");
-    am_redstone = enif_make_atom(env, "redstone");
     am_failed = enif_make_atom(env, "failed");
     am_fallback = enif_make_atom(env, "fallback");
     am_excluded = enif_make_atom(env, "excluded");

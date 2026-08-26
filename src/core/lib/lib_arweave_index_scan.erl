@@ -24,12 +24,14 @@
 %%% `bundle-version: 2.0.0', names case-insensitive, values lower-cased, as
 %%% `ar_tx:type/1' reads them) and whose data passes the same structural
 %%% table checks is recursed into, its children's `parent' being the
-%%% enclosing item's ID. RedStone oracle items are dropped before their
-%%% signature is ever hashed. The item-count table is believed only within
-%%% bounds: a count that does not fit its transaction, or a table whose item
-%%% sizes overrun it, marks the transaction as not a bundle.
+%%% enclosing item's ID. An item whose start offset falls inside one of the
+%%% scan's exclusion intervals (`lib_arweave_index_exclude') is skipped
+%%% before its header is read: no rows, no parse, no recursion, its bytes
+%%% never requested. The item-count table is believed only within bounds: a
+%%% count that does not fit its transaction, or a table whose item sizes
+%%% overrun it, marks the transaction as not a bundle.
 -module(lib_arweave_index_scan).
--export([open/3, tx/2, finish/1]).
+-export([open/4, tx/2, finish/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -46,13 +48,14 @@
 %%% How deep nested bundles are followed.
 -define(MAX_DEPTH, 8).
 
-%% @doc A scan state over a reader and a row sink. The sink is
-%% `fun(OffsetItem, MatchItems, SinkState) -> SinkState', receiving one
-%% encoded 21-byte offset item (or `excluded') and the item's 17-byte match
-%% items per data item scanned.
-open(Reader, Sink, SinkState) ->
+%% @doc A scan state over a reader, the exclusion intervals, and a row
+%% sink. The sink is `fun(OffsetItem, MatchItems, SinkState) -> SinkState',
+%% receiving one encoded 21-byte offset item (or `excluded') and the item's
+%% 17-byte match items per data item scanned.
+open(Reader, Exclusions, Sink, SinkState) ->
     #{
         <<"reader">> => Reader,
+        <<"exclusions">> => Exclusions,
         <<"sink">> => Sink,
         <<"sink-state">> => SinkState,
         <<"counts">> => #{}
@@ -152,10 +155,17 @@ items(Pos, [Size | Sizes], Parent, Depth, State) ->
         items(Pos + Size, Sizes, Parent, Depth, State2)
     end.
 
-%% @doc Parse one item's header and emit its rows, growing the parse window
-%% as the tag section demands.
-item(Pos, Size, Parent, Depth, State) ->
-    windowed(Pos, Size, Parent, Depth, ?WINDOWS, State).
+%% @doc Skip an excluded item, or parse its header and emit its rows,
+%% growing the parse window as the tag section demands.
+item(Pos, Size, Parent, Depth, State = #{ <<"exclusions">> := Exclusions }) ->
+    case lib_arweave_index_exclude:excluded(Pos, Exclusions) of
+        true ->
+            {ok,
+                added(<<"bytes-skipped">>, Size,
+                    counted(<<"items-excluded-intervals">>, State))};
+        false ->
+            windowed(Pos, Size, Parent, Depth, ?WINDOWS, State)
+    end.
 
 windowed(Pos, Size, Parent, Depth, [Window | Windows], State) ->
     Take = min(Size, Window),
@@ -166,8 +176,6 @@ windowed(Pos, Size, Parent, Depth, [Window | Windows], State) ->
                     windowed(Pos, Size, Parent, Depth, Windows, State2);
                 failed ->
                     {ok, counted(<<"items-malformed">>, State2)};
-                redstone ->
-                    {ok, counted(<<"items-redstone">>, State2)};
                 {ok, OffsetItem, MatchItems} ->
                     {ok,
                         counted(<<"items">>,
@@ -219,8 +227,14 @@ bytes(Offset, Len, State = #{ <<"reader">> := Reader }) ->
     end.
 
 %% @doc Step one of the scan's counters.
-counted(Key, State = #{ <<"counts">> := Counts }) ->
-    State#{ <<"counts">> => maps:update_with(Key, fun(N) -> N + 1 end, 1, Counts) }.
+counted(Key, State) ->
+    added(Key, 1, State).
+
+%% @doc Add to one of the scan's counters.
+added(Key, N, State = #{ <<"counts">> := Counts }) ->
+    State#{
+        <<"counts">> => maps:update_with(Key, fun(V) -> V + N end, N, Counts)
+    }.
 
 %% @doc The counter a skipped payload steps: an L1 transaction that is not a
 %% bundle is expected; a nested one that fails its table is a malformed item.
