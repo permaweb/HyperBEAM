@@ -328,3 +328,7 @@ Recorded in `decisions/` as they are made.
   local-ceiling node remaining; W6b: NIF benchmark walls in hand, two
   proofs still running). Both resumed with state notes; their detached
   processes survived the outage.
+- 2026-08-26 ~10:4xZ Final gate after the W5 fixes: rerun with full log =
+  Failed: 5. Passed: 3600. — the exact A/B baseline (push encoding-change
+  x1, scheduler legacy-net x4). The transient 6th in the previous run was a
+  network flake. Tree is clean at 9da82fbd6 (+docs).
