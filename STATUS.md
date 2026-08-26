@@ -287,6 +287,30 @@ Recorded in `decisions/` as they are made.
   W6b launched: profile + header-scan NIF to close the 4 GB/s criterion
   (W6 measured 2.60 GB/s full-partition, parse-bound on 24 real cores,
   disks ~8 GB/s).
+- 2026-08-26 ~13:0xZ **W5 complete** — live demo + benchmark done; full
+  report at `<session scratchpad>/demo-report.md`. Ground truth: 7 items
+  decoded from the local offset container across the id space, ids
+  recomputed from weave bytes (7/7 prefix match), 26/26 predicate rows
+  found in the match container. Live nodes (8844 + 8855, separate BEAMs,
+  fresh heads, nothing shared but the published containers) answered
+  tag / tag+owner / tag∩tag / ids / paged / absent-predicate GraphQL
+  queries with exact ground-truth equality; page-2 cursors replayed
+  across nodes byte-identically in both sort orders. Two defects found
+  by the first benchmark run, fixed + committed: 8f6cf7499 (hb_cache
+  match_offset walked remote index layers on every cache write — ~120
+  wasted ranged reads/query) and 87cd824be (arlmdb descended the sub-DB
+  for over-width prefixes — ~5 wasted reads/lookup); affected suites
+  73/73 + dev_query 40/40. Benchmarks (N=30, c=1/c=8): remote steady
+  point-id 3.4/19.6 qps at 7 reads/query (spec §4 predicts 5-6; the +2
+  is the native-ID KV probe), selective tag 3.7/15.3 qps at exactly 5
+  reads, common-tag pages 0.37/1.8 qps at 48 reads (the always-computed
+  `count` walk is ~40 of them), intersect 0.11/0.49 qps at 260 reads
+  (leapfrog re-descends per seek). Same bytes served locally: point-id
+  588 qps @ 8.8 ms — the format is round-trip-bound, not compute-bound.
+  Biggest follow-ups, in order: count-on-demand, layer-caching the 5
+  constant top pages (7→~2 reads), probe-avoidance for cache-resident
+  edges. Demo config note: the arweave store needs `local-store` set
+  (decisions/demo-node-local-store.md).
 - 2026-08-26 ~08:2xZ **Both containers published and MINED**:
   offset gXk2EYyhGKG_ZAeyhQZtGko11CHqU7H8Ysc2h7P-6s8 (232,259,584 B, block
   1,987,823, weave offset 390,058,031,227,126); match
