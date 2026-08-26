@@ -80,23 +80,37 @@ read_offset(StoreOpts, ID, Opts) ->
 
 %% @doc Read the offset of the data at the given key from the local index alone.
 %% Nodes answer each other's offset requests from their own indexes, such that a
-%% cycle of routes cannot recurse.
+%% cycle of routes cannot recurse. The index-store list may mix key-value
+%% stores, holding varint rows at the full native ID, with sorted-set
+%% containers of the published index's packed 21-byte items. The key-value
+%% form answers first -- it is the only home of pending and relative rows --
+%% and a miss falls through to a seek on the ID's packed-item prefix.
 read_index_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
-                hb_store:read(
+                case hb_store:read(
                     IndexStore,
                     #{ <<"read">> => hb_store_arweave_offset:path(ID) },
                     StoreOpts
-                )
+                ) of
+                    {ok, OffsetBinary} -> {ok, OffsetBinary};
+                    _ -> read_packed_offset(IndexStore, ID, StoreOpts)
+                end
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
     case ReadRes of
-        {ok, OffsetBinary} ->
+        {ok, packed, CodecName, StartOffset, Length} ->
+            {ok, #{
+                <<"version">> => 2,
+                <<"codec-device">> => CodecName,
+                <<"start-offset">> => StartOffset,
+                <<"length">> => Length
+            }};
+        {ok, OffsetBin} ->
             {Version, CodecName, StartOffset, Length} =
-                hb_store_arweave_offset:decode(OffsetBinary),
+                hb_store_arweave_offset:decode(OffsetBin),
             {ok, #{
                 <<"version">> => Version,
                 <<"codec-device">> => CodecName,
@@ -107,6 +121,24 @@ read_index_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
             not_found
     end;
 read_index_offset(_, _) -> not_found.
+
+%% @doc Seek an ID's packed 21-byte item in the sorted-set containers of the
+%% index-store list. The landing is confirmed to carry the sought prefix, and
+%% a truncated-prefix collision is detected rather than believed: the loaders
+%% recompute the deserialized item's ID and refuse a mismatch.
+read_packed_offset(IndexStore, ID, StoreOpts) ->
+    Prefix = hb_store_arweave_offset:item_prefix(ID),
+    case hb_store:read(IndexStore, #{ <<"read">> => Prefix }, StoreOpts) of
+        {ok, Item = <<_:21/binary>>} ->
+            case hb_store_arweave_offset:decode_item(Item) of
+                {Prefix, CodecName, StartOffset, Length} ->
+                    {ok, packed, CodecName, StartOffset, Length};
+                {_OtherPrefix, _, _, _} ->
+                    not_found
+            end;
+        _ ->
+            not_found
+    end.
 
 %% @doc Find the offset of a message from the nodes serving the `~arweave@2.9'
 %% routes, adding it to the local index so that they are asked once per message.
@@ -515,6 +547,49 @@ write_read_fake_bundle_tx_test() ->
     {ok, TX} = read(Opts, #{ <<"read">> => ID }, Opts),
     ?assert(hb_message:verify(TX, all, #{})),
     ok.
+
+%% @doc A packed 21-byte item behind a sorted-set position of the index-store
+%% list answers offset reads when the key-value form has no row for the ID.
+%% The key-value form answers first when it holds one, and a landing that does
+%% not carry the sought ID's prefix is refused.
+packed_index_offset_read_test() ->
+    KV = hb_test_utils:test_store(),
+    Set = hb_test_utils:test_store(hb_store_volatile, <<"packed-offset">>),
+    Opts = #{ <<"index-store">> => [KV, Set] },
+    ok = hb_store:start([KV, Set], Opts),
+    % IDs are chosen so that their ten-byte prefixes contain no slash byte:
+    % the stand-in store resolves paths, where a sorted-set store would not.
+    ID = hb_util:encode(binary:copy(<<1>>, 32)),
+    Prefix = hb_store_arweave_offset:item_prefix(ID),
+    Item = hb_store_arweave_offset:encode_item(ID, <<"ans104@1.0">>, 1234567, 89),
+    ok = hb_store:write([Set], #{ Prefix => Item }, Opts),
+    ?assertMatch(
+        {ok, #{
+            <<"codec-device">> := <<"ans104@1.0">>,
+            <<"start-offset">> := 1234567,
+            <<"length">> := 89
+        }},
+        read_index_offset(Opts, ID)
+    ),
+    % A key-value row for the same ID wins over the packed item.
+    ok = write_offset(Opts, ID, <<"tx@1.0">>, 55, 66),
+    ?assertMatch(
+        {ok, #{ <<"codec-device">> := <<"tx@1.0">>, <<"start-offset">> := 55 }},
+        read_index_offset(Opts, ID)
+    ),
+    % An item that does not carry the sought prefix is a miss, not an answer.
+    Other = hb_util:encode(binary:copy(<<2>>, 32)),
+    Neighbour = hb_util:encode(binary:copy(<<3>>, 32)),
+    ok = hb_store:write(
+        [Set],
+        #{
+            hb_store_arweave_offset:item_prefix(Other) =>
+                hb_store_arweave_offset:encode_item(
+                    Neighbour, <<"tx@1.0">>, 1, 2)
+        },
+        Opts
+    ),
+    ?assertEqual(not_found, read_index_offset(Opts, Other)).
 
 %% @doc A node with no offset index of its own finds the offsets of an Arweave
 %% transaction and an ANS-104 item from its routes, serving the item over HTTP
