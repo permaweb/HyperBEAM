@@ -1,3 +1,5 @@
+-ifndef(AR_HRL).
+-define(AR_HRL, true).
 
 %% Maximum size of a single data chunk, in bytes.
 -define(DATA_CHUNK_SIZE, (256 * 1024)).
@@ -137,3 +139,5 @@
 %% submitted after the threshold must adhere to stricter validation rules.
 %% This offset is about half way through partition 8
 -define(STRICT_DATA_SPLIT_THRESHOLD, 30_607_159_107_830).
+
+-endif.

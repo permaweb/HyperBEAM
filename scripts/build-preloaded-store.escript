@@ -54,9 +54,12 @@ run(_Args) ->
     halt(0).
 
 add_code_paths() ->
+    % Checkout dependencies shadow locked copies of the same application in
+    % the build; the newest-beam sort below gives their ebins the same
+    % precedence here.
     AllPaths =
-        filelib:wildcard("_build/*/lib/*/ebin") ++
-            filelib:wildcard("_build/*/checkouts/*/ebin") ++
+        filelib:wildcard("_build/*/checkouts/*/ebin") ++
+            filelib:wildcard("_build/*/lib/*/ebin") ++
             filelib:wildcard("_build/*/plugins/*/ebin"),
     Paths = lists:sort(fun newer_path/2, AllPaths),
     lists:foreach(
