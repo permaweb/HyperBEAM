@@ -265,3 +265,13 @@ Recorded in `decisions/` as they are made.
   state + the upload-budget decision (decisions/demo-upload-budget.md:
   ~11M-item contiguous slice, ~23 AR, since the full match container would
   cost ~47 of the 50.23 AR held).
+- 2026-08-26 ~05:45Z **W7 complete**: module 106 fully unpacked and renamed
+  to storage_module_106_unpacked. 8 sector-band passes, 4 h 56 min total
+  (fused rxsquared entropy: 99.6 MiB/s/core, 1,978 MiB/s at 40 workers,
+  ~29 min/full-module pass). Verification: pre-write gate 39/39 (30/30
+  gateway byte-matches), every written slot verified during conversion,
+  post-conversion 60/60 whole-module (24/24 gateway). Anomalies resolved:
+  1 orphan slot (gateway-adjudicated), 2,234 all-zero chunks (entropy-
+  equality adjudicated), index-only entries zeroed. Chunk-index key format
+  + old-StoreID spelling documented for the indexer. Box free; evidence in
+  /home/hb/unpack-scratch on dev-2.
