@@ -297,45 +297,34 @@ block_starts(Height, BlockStart, Expected, Ids, Opts) ->
     end.
 
 %% @doc A block's transactions from the gateway's GraphQL API, as
-%% `{NativeID, DataSize}' pairs, one query per hundred of the block's own
-%% txids. Filtering by ids rather than by block matters: the block filter
-%% answers with every bundled item the block carries -- hundreds of pages
-%% where the block's own transaction list is one.
+%% `{NativeID, DataSize}' pairs. Filtering by the block header's own txids
+%% rather than by block matters: the block filter answers with every
+%% bundled item the block carries -- hundreds of pages where the block's
+%% own transaction list is one. The gateway caps the `ids' argument at
+%% nine, so one request carries up to ten aliased nine-id selections.
 block_txs(Ids, Opts) ->
     block_txs(Ids, Opts, []).
 
 block_txs([], _Opts, Acc) ->
     {ok, Acc};
 block_txs(Ids, Opts, Acc) ->
-    {Chunk, Rest} = lists:split(min(100, length(Ids)), Ids),
-    Quoted =
-        lists:join(
-            <<",">>,
-            [<< "\"", ID/binary, "\"" >> || ID <- Chunk]
-        ),
-    Query =
-        iolist_to_binary(
+    {Request, Rest} = lists:split(min(90, length(Ids)), Ids),
+    Selections =
+        [
             [
-                <<"query { transactions(ids: [">>,
-                Quoted,
-                <<"], first: 100) "
-                    "{ edges { node { id data { size } } } } }">>
+                <<"t">>, integer_to_binary(N), <<": transactions(ids: [">>,
+                lists:join(
+                    <<",">>,
+                    [<< "\"", ID/binary, "\"" >> || ID <- Chunk]
+                ),
+                <<"], first: 9) { edges { node { id data { size } } } } ">>
             ]
-        ),
+        ||
+            {N, Chunk} <- lists:enumerate(chunks(Request, 9))
+        ],
+    Query = iolist_to_binary([<<"query { ">>, Selections, <<"}">>]),
     maybe
         {ok, Result} ?= fetch_graphql(Query, Opts),
-        Edges =
-            hb_maps:get(
-                <<"edges">>,
-                hb_maps:get(
-                    <<"transactions">>,
-                    hb_maps:get(<<"data">>, Result, #{}, Opts),
-                    #{},
-                    Opts
-                ),
-                [],
-                Opts
-            ),
         Txs =
             [
                 {
@@ -350,7 +339,10 @@ block_txs(Ids, Opts, Acc) ->
                     )
                 }
             ||
-                Edge <- Edges,
+                Connection <-
+                    maps:values(hb_maps:get(<<"data">>, Result, #{}, Opts)),
+                is_map(Connection),
+                Edge <- hb_maps:get(<<"edges">>, Connection, [], Opts),
                 (Node = hb_maps:get(<<"node">>, Edge, #{}, Opts)) /= #{}
             ],
         % A transaction the gateway has no node for reconstructs nothing;
@@ -358,6 +350,13 @@ block_txs(Ids, Opts, Acc) ->
         % than assigning around the gap.
         block_txs(Rest, Opts, Txs ++ Acc)
     end.
+
+%% @doc A list in runs of at most `Size'.
+chunks([], _Size) ->
+    [];
+chunks(List, Size) ->
+    {Chunk, Rest} = lists:split(min(Size, length(List)), List),
+    [Chunk | chunks(Rest, Size)].
 
 %% @doc A block's cumulative weave size.
 weave_size(Block, Opts) ->
