@@ -169,3 +169,27 @@ Recorded in `decisions/` as they are made.
   mining-gossip chunk storage, match-offsets post-mortem).
 - 2026-08-25 ~00:05 dev-2 recon done (facts above); mining test node
   terminated with evidence. Storage modules stable for indexer work.
+- 2026-08-25 ~00:30 Launched builders W1 (elmdb), W3 (arlmdb DUP*), W6
+  (indexer), W7 (dev-2 unpack) after committing the feat/arlmdb cherry-pick
+  (d5d153a7d) and the decisions.
+- 2026-08-25 ~01:10 **W1 complete**: elmdb `feat/dup-sets` @ ~/src/elmdb —
+  LMDB 1.0 vendored (sha256-verified at openldap bac0ccf), {page_size},
+  read_only, no_subdir, dupsort/dupfixed, dup-aware (K,V) overlay,
+  put_batch_append (mdb_load pattern), read_dups (GET_BOTH_RANGE,
+  from/prefix/limit/direction). All 200 tests green; clean-clone build
+  verified. Bench: 10M x 17 B appends at 14.3-14.6 Mrows/s, file
+  171,245,568 B = 17.125 B/row (byte-identical across runs). Launched W2
+  (hb_store_lmdb page-size/read-only + hb_store_lmdb_set + hb_store_opts
+  recursion + two narrow hb_store.erl cleanups) in worktree store-set.
+- 2026-08-25 ~01:15 **W3 complete**: feat/arlmdb-dup — hb_lmdb_page admits
+  DUPSORT|DUPFIXED (pair only), P_LEAF2 + P_SUBP handled, F_SUBDATA/
+  F_DUPDATA references, item/3 + item_seek/3; hb_store_arlmdb dispatches
+  container vs path semantics, GET_BOTH_RANGE point lookups + prefix-bounded
+  set scans with exact read accounting. 3 committed fixtures (512 B promoted
+  depth-3, sub-page, 64 KiB with 3,853 items/leaf = the spec figure); two
+  published containers (czOyExU5…7xU4 promoted, ka3n3rUq…xXhQ sub-page),
+  0.0059 AR total. Full suite: 1007 passed. Merged into this branch
+  (e68d91258). Launched W4 (dev_match spec rows + leapfrog + GraphQL paging)
+  in worktree match-query; it merges feat/store-set when W2 lands.
+  Known gap logged by W3: no backward set scan in arlmdb yet (DESC paging) —
+  W4 instructed to close or bound it.
