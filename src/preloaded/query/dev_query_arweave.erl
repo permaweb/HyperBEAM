@@ -56,29 +56,10 @@ query(Obj, <<"transactions">>, Args, Opts) ->
     }),
     case valid_after_cursor(Args, Opts) of
         true ->
-            Matches = match_args(Args, Opts),
-            WithExplicit =
-                case explicit_ids(Args, Opts) of
-                    [] -> Matches;
-                    ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
-                end,
-            Ordered =
-                case annotate_ids(WithExplicit, Opts) of
-                    unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
-                    Annotated ->
-                        Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
-                        sort_offset_annotated(
-                            filter_offset_annotated(
-                                Annotated,
-                                maps:get(<<"block">>, Args, undefined),
-                                Opts
-                            ),
-                            Order,
-                            Opts
-                        )
-                end,
-            ?event({transactions_matches, Matches}),
-            {ok, connection(Ordered, Args, Opts)};
+            case index_connection(Args, Opts) of
+                {ok, IndexConnection} -> {ok, IndexConnection};
+                unservable -> query_transactions(Args, Opts)
+            end;
         false ->
             ?event(
                 {invalid_after_cursor,
@@ -193,6 +174,34 @@ query(Obj, Field, Args, _Opts) ->
         {args, Args}
     }),
     {ok, <<"Not implemented.">>}.
+
+%% @doc Serve a transactions page by materialising the candidate set: every
+%% supported argument yields its matches, the intersection is annotated with
+%% offsets, ordered, and paged in memory.
+query_transactions(Args, Opts) ->
+    Matches = match_args(Args, Opts),
+    WithExplicit =
+        case explicit_ids(Args, Opts) of
+            [] -> Matches;
+            ExplicitIDs -> hb_util:list_with(Matches, ExplicitIDs)
+        end,
+    Ordered =
+        case annotate_ids(WithExplicit, Opts) of
+            unavailable -> [#{ <<"id">> => ID } || ID <- Matches];
+            Annotated ->
+                Order = maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>),
+                sort_offset_annotated(
+                    filter_offset_annotated(
+                        Annotated,
+                        maps:get(<<"block">>, Args, undefined),
+                        Opts
+                    ),
+                    Order,
+                    Opts
+                )
+        end,
+    ?event({transactions_matches, Matches}),
+    {ok, connection(Ordered, Args, Opts)}.
 
 %% @doc Encode a transaction anchor (`last_tx`) for the GraphQL response.
 %% Per the Arweave spec, an anchor is one of:
@@ -468,6 +477,322 @@ latest_cached_block(Opts) ->
     case Blocks of
         [] -> not_found;
         _ -> {ok, lists:max(Blocks)}
+    end.
+
+%%% Index-served pages. Queries whose filters compile to predicates are
+%%% answered by the `~match@1.0' sorted-set index: the page is a bounded
+%%% leapfrog walk over weave offsets, and each result offset is resolved to
+%%% its item by one probe read at the offset. Every other shape falls to the
+%%% materialised path.
+
+%% The bytes probed at a result offset to recover the item it holds. ANS-104
+%% headers are self-delimiting and their tags are capped at 4 KiB, so every
+%% valid header fits in the probe.
+-define(ITEM_PROBE_LENGTH, 8192).
+%% The default ceiling on how many index rows a page's `count' walks.
+-define(DEFAULT_MAX_INDEX_COUNT, 10_000).
+
+%% @doc Serve a transactions page from the sorted-set match index, when the
+%% query is predicate-shaped and a match-store is configured.
+index_connection(Args, Opts) ->
+    maybe
+        true ?= hb_cache:match_item_stores(Opts) =/= [] orelse unservable,
+        {ok, Template} ?= index_template(Args, Opts),
+        {ok, After} ?= index_cursor(Args, Opts),
+        {ok, Window} ?= index_window(Args, Opts),
+        {ok, build_index_page(Template, After, Window, Args, Opts)}
+    end.
+
+%% @doc Compile the query's filters to match predicates. Tags carry their
+%% values raw; owners and recipients become the `owner' and `recipient'
+%% predicates their rows are written under. Explicit ID queries and
+%% multi-value filters are not predicate-shaped, and a query with no
+%% predicates at all has nothing to walk.
+index_template(Args, Opts) ->
+    maybe
+        true ?= explicit_ids(Args, Opts) =:= [] orelse unservable,
+        {ok, Tags} ?=
+            index_tags(hb_maps:get(<<"tags">>, Args, null, Opts)),
+        {ok, WithOwner} ?=
+            index_field(
+                <<"owner">>, hb_maps:get(<<"owners">>, Args, null, Opts), Tags),
+        {ok, Template} ?=
+            index_field(
+                <<"recipient">>,
+                hb_maps:get(<<"recipients">>, Args, null, Opts),
+                WithOwner
+            ),
+        true ?= map_size(Template) > 0 orelse unservable,
+        {ok, Template}
+    end.
+
+index_tags(null) -> {ok, #{}};
+index_tags(Tags) when is_list(Tags) ->
+    lists:foldl(
+        fun(_Tag, unservable) ->
+                unservable;
+           (#{ <<"name">> := Name, <<"value">> := Value }, {ok, Acc}) ->
+                {ok, Acc#{ Name => Value }};
+           (#{ <<"name">> := Name, <<"values">> := [Value] }, {ok, Acc}) ->
+                {ok, Acc#{ Name => Value }};
+           (_MultiValue, {ok, _Acc}) ->
+                unservable
+        end,
+        {ok, #{}},
+        Tags
+    );
+index_tags(_) -> unservable.
+
+index_field(_Name, null, Acc) -> {ok, Acc};
+index_field(Name, Value, Acc) when is_binary(Value) -> {ok, Acc#{ Name => Value }};
+index_field(Name, [Value], Acc) when is_binary(Value) -> {ok, Acc#{ Name => Value }};
+index_field(_Name, _Values, _Acc) -> unservable.
+
+%% @doc The offset the page resumes after. Only native offset cursors are
+%% index-servable: pending and ephemeral cursors name items with no place in
+%% the weave.
+index_cursor(Args, Opts) ->
+    case hb_maps:get(<<"after">>, Args, null, Opts) of
+        null -> {ok, none};
+        undefined -> {ok, none};
+        <<>> -> {ok, none};
+        <<"offset=", Cursor/binary>> ->
+            [Offset | _] = binary:split(Cursor, <<"-">>),
+            {ok, hb_util:int(Offset)};
+        _ -> unservable
+    end.
+
+%% @doc The offset bounds the query's block height range implies.
+index_window(Args, Opts) ->
+    case hb_maps:get(<<"block">>, Args, null, Opts) of
+        Unset when Unset =:= null orelse Unset =:= undefined ->
+            {ok, {0, infinity}};
+        Heights ->
+            case hb_opts:get(query_arweave_ignore_block_ranges, false, Opts) of
+                true -> {ok, {0, infinity}};
+                false -> {ok, block_range_to_offset_range(Heights, Opts)}
+            end
+    end.
+
+%% @doc Build the page: walk one more offset than the page needs -- so that
+%% `hasNextPage' reflects the walk, resolution drops never shortening the
+%% page while rows remain -- then extend the walk without resolving items to
+%% count the query's matches.
+build_index_page(Template, After, {StartOffset, EndOffset}, Args, Opts) ->
+    Direction =
+        case hb_maps:get(<<"sort">>, Args, <<"HEIGHT_DESC">>, Opts) of
+            <<"HEIGHT_ASC">> -> asc;
+            _ -> desc
+        end,
+    {From, To} = index_bounds(Direction, After, StartOffset, EndOffset),
+    PageSize = page_size(Args, Opts),
+    {Edges, Exhausted, Seen, NextFrom} =
+        collect_edges(Template, Direction, From, To, PageSize + 1, Opts),
+    HasNextPage = length(Edges) > PageSize,
+    Page = lists:sublist(Edges, PageSize),
+    Count = index_count(Template, Direction, NextFrom, To, Seen, Exhausted, Opts),
+    ForceNextPage = force_next_page(Args, Opts),
+    ResponseEdges =
+        case ForceNextPage andalso (not HasNextPage) of
+            true -> force_terminal_cursor(Page);
+            false -> Page
+        end,
+    #{
+        <<"count">> => hb_util:bin(Count),
+        <<"edges">> => ResponseEdges,
+        <<"pageInfo">> =>
+            #{
+                <<"hasNextPage">> => HasNextPage orelse ForceNextPage
+            }
+    }.
+
+%% @doc The walk bounds: the cursor is exclusive -- the page starts one step
+%% past it -- and the height range's offsets clamp both ends.
+index_bounds(asc, After, StartOffset, EndOffset) ->
+    From =
+        case After of
+            none -> StartOffset;
+            _ -> max(StartOffset, After + 1)
+        end,
+    To =
+        case EndOffset of
+            infinity -> none;
+            _ -> EndOffset
+        end,
+    {From, To};
+index_bounds(desc, After, StartOffset, EndOffset) ->
+    From =
+        case {After, EndOffset} of
+            {none, infinity} -> none;
+            {none, _} -> EndOffset - 1;
+            {_, infinity} -> After - 1;
+            {_, _} -> min(EndOffset - 1, After - 1)
+        end,
+    To =
+        case StartOffset of
+            0 -> none;
+            _ -> StartOffset - 1
+        end,
+    {From, To}.
+
+%% @doc Walk matching offsets in batches, resolving each to an edge, until
+%% the page is full or the index is exhausted. Offsets that cannot be
+%% resolved are dropped and the walk continues past them.
+collect_edges(Template, Direction, From, To, Needed, Opts) ->
+    collect_edges(Template, Direction, From, To, Needed, [], 0, Opts).
+collect_edges(Template, Direction, From, To, Needed, Edges, Seen, Opts) ->
+    {ok, Offsets} = index_locate(Template, Direction, From, To, Needed, Opts),
+    Resolved = resolve_offsets(Offsets, Opts),
+    AllEdges = lists:reverse(Resolved, Edges),
+    NewSeen = Seen + length(Offsets),
+    StillNeeded = Needed - length(Resolved),
+    NextFrom =
+        case Offsets of
+            [] -> From;
+            _ -> index_step(Direction, lists:last(Offsets))
+        end,
+    Exhausted = length(Offsets) < Needed,
+    case {StillNeeded =< 0, Exhausted} of
+        {true, _} ->
+            {lists:reverse(AllEdges), false, NewSeen, NextFrom};
+        {false, true} ->
+            {lists:reverse(AllEdges), true, NewSeen, NextFrom};
+        {false, false} ->
+            collect_edges(
+                Template, Direction, NextFrom, To, StillNeeded,
+                AllEdges, NewSeen, Opts
+            )
+    end.
+
+index_step(asc, Offset) -> Offset + 1;
+index_step(desc, Offset) -> Offset - 1.
+
+%% @doc Count the query's matches by extending the offset walk past the page
+%% without resolving items, up to a bounded budget: an exhausted walk makes
+%% the count exact, and a capped one reports the rows it saw.
+index_count(_Template, _Direction, _From, _To, Seen, true, _Opts) ->
+    Seen;
+index_count(Template, Direction, From, To, Seen, false, Opts) ->
+    Budget =
+        hb_opts:get(
+            query_arweave_max_index_count,
+            ?DEFAULT_MAX_INDEX_COUNT,
+            Opts
+        ),
+    count_offsets(Template, Direction, From, To, Seen, Budget - Seen, Opts).
+count_offsets(_Template, _Direction, _From, _To, Seen, Budget, _Opts)
+        when Budget =< 0 ->
+    Seen;
+count_offsets(Template, Direction, From, To, Seen, Budget, Opts) ->
+    Batch = min(Budget, 1000),
+    {ok, Offsets} = index_locate(Template, Direction, From, To, Batch, Opts),
+    case length(Offsets) < Batch of
+        true ->
+            Seen + length(Offsets);
+        false ->
+            count_offsets(
+                Template,
+                Direction,
+                index_step(Direction, lists:last(Offsets)),
+                To,
+                Seen + length(Offsets),
+                Budget - length(Offsets),
+                Opts
+            )
+    end.
+
+%% @doc Walk one batch of matching offsets through the `~match@1.0' device.
+%% A store failure mid-walk is surfaced rather than falling back: the
+%% materialised path would answer from a different corpus.
+index_locate(Template, Direction, From, To, Limit, Opts) ->
+    Req =
+        #{
+            <<"limit">> => Limit,
+            <<"direction">> =>
+                case Direction of
+                    asc -> <<"asc">>;
+                    desc -> <<"desc">>
+                end
+        },
+    WithFrom =
+        case From of
+            none -> Req;
+            _ -> Req#{ <<"from">> => From }
+        end,
+    WithTo =
+        case To of
+            none -> WithFrom;
+            _ -> WithFrom#{ <<"to">> => To }
+        end,
+    case hb_ao:raw(<<"match@1.0">>, <<"locate">>, Template, WithTo, Opts) of
+        {ok, Offsets} -> {ok, Offsets};
+        {error, Reason} -> throw({index_page_walk_failed, Reason})
+    end.
+
+resolve_offsets([], _Opts) -> [];
+resolve_offsets([Offset | Rest], Opts) ->
+    case resolve_offset(Offset, Opts) of
+        {ok, Edge} ->
+            [Edge | resolve_offsets(Rest, Opts)];
+        {error, Reason} ->
+            ?event(
+                warning,
+                {index_offset_unresolvable,
+                    {offset, Offset},
+                    {reason, Reason}
+                }
+            ),
+            resolve_offsets(Rest, Opts)
+    end.
+
+%% @doc Resolve a weave offset to a page edge. One probe read at the offset
+%% recovers the item's header, and the ID is the hash of its signature. The
+%% full message is preferred from the caches -- which reach through the
+%% offset index to the weave -- and an item they cannot serve is answered
+%% from its header fields alone, without its data.
+resolve_offset(Offset, Opts) ->
+    maybe
+        {ok, Probe} ?= probe_item(Offset, Opts),
+        {ok, TX} ?= probe_header(Probe),
+        ID = hb_util:encode(hb_crypto:sha256(TX#tx.signature)),
+        {ok, Node} ?= probe_node(ID, TX, Opts),
+        {ok, #{
+            <<"id">> => ID,
+            <<"offset">> => Offset,
+            <<"cursor">> => offset_cursor(ID, Offset),
+            <<"node">> => Node
+        }}
+    end.
+
+probe_item(Offset, Opts) ->
+    case hb_store_arweave:read_chunks(Offset, ?ITEM_PROBE_LENGTH, Opts) of
+        {ok, Probe} -> {ok, Probe};
+        {error, Reason} -> {error, {probe_unreadable, Offset, Reason}}
+    end.
+
+probe_header(Probe) ->
+    try ar_bundles:deserialize_header(Probe) of
+        {ok, _HeaderSize, TX} -> {ok, TX}
+    catch _:Reason ->
+        {error, {probe_undecodable, Reason}}
+    end.
+
+probe_node(ID, TX, Opts) ->
+    case hb_cache:read(ID, Opts) of
+        {ok, Msg} ->
+            {ok, Msg};
+        _ ->
+            try
+                {ok,
+                    hb_message:convert(
+                        TX#tx{ data = <<>>, data_size = 0 },
+                        <<"structured@1.0">>,
+                        <<"ans104@1.0">>,
+                        Opts
+                    )}
+            catch _:Reason ->
+                {error, {probe_unconvertible, Reason}}
+            end
     end.
 
 %%% Match argument processing

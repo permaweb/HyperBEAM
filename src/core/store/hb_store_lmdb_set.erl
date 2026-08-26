@@ -133,12 +133,14 @@ read(Opts, #{ <<"read">> := Prefix }, _NodeOpts) ->
         {error, Type, Description} -> surface(Type, Description)
     end.
 
-%% @doc Return the ascending run of items sharing the `list' prefix. The
-%% optional `from' key is an inclusive lower bound and `limit' caps the
-%% result, together forming a stateless cursor over the set; an empty
-%% prefix lists from the start. `{error, not_found}' means the set itself
-%% is empty — so a store list falls through — while an in-range empty
-%% selection is `{ok, []}'.
+%% @doc Return the run of items sharing the `list' prefix, ascending by
+%% default and descending when the `direction' key is `backward'. The
+%% optional `from' key is an inclusive bound -- lower for forward walks,
+%% upper for backward ones -- and `limit' caps the result, together forming
+%% a stateless cursor over the set; an empty prefix lists from the walk's
+%% end of the set. `{error, not_found}' means the set itself is empty — so
+%% a store list falls through — while an in-range empty selection is
+%% `{ok, []}'.
 list(Opts, Req = #{ <<"list">> := Prefix }, _NodeOpts) ->
     #{ <<"db">> := DB } = find_env(Opts),
     Selection =
@@ -150,6 +152,12 @@ list(Opts, Req = #{ <<"list">> := Prefix }, _NodeOpts) ->
         case maps:get(<<"limit">>, Req, false) of
             false -> [];
             Limit -> [{limit, hb_util:int(Limit)}]
+        end ++
+        case maps:get(<<"direction">>, Req, false) of
+            false -> [];
+            <<"backward">> -> [{direction, backward}];
+            backward -> [{direction, backward}];
+            _Forward -> []
         end,
     case elmdb:read_dups(DB, ?MAIN_KEY, Selection) of
         {ok, Items} -> {ok, Items};
@@ -258,6 +266,36 @@ list_test() ->
     ?assertEqual(
         {ok, [item(1, 30), item(2, 5)]},
         test_list(S, <<>>, #{ <<"from">> => item(1, 21), <<"limit">> => 2 })
+    ),
+    % A backward walk descends from an inclusive upper bound: at a member,
+    % between members, and unbounded from the set's end.
+    ?assertEqual(
+        {ok, [item(1, 20), item(1, 10)]},
+        test_list(
+            S,
+            <<1:80>>,
+            #{ <<"from">> => item(1, 20), <<"direction">> => <<"backward">> }
+        )
+    ),
+    ?assertEqual(
+        {ok, [item(1, 20), item(1, 10)]},
+        test_list(
+            S,
+            <<1:80>>,
+            #{ <<"from">> => item(1, 25), <<"direction">> => <<"backward">> }
+        )
+    ),
+    ?assertEqual(
+        {ok, [item(2, 15), item(2, 5)]},
+        test_list(
+            S,
+            <<>>,
+            #{
+                <<"from">> => item(2, 15),
+                <<"limit">> => 2,
+                <<"direction">> => <<"backward">>
+            }
+        )
     ),
     ok = hb_store:stop(S).
 

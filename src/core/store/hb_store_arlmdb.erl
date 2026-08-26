@@ -150,8 +150,9 @@ resolve(Store, #{ <<"resolve">> := Path }, Opts) ->
 %% `group' marker is not a group, even where keys sit below it: the marker is
 %% what `hb_cache' writes, and a listing that ignored it would disagree with the
 %% same database read locally. On a sorted-set container the request instead
-%% names an item prefix, and the answer is the ascending run of items carrying
-%% it: from the request's `from' (inclusive) where one is given, capped at its
+%% names an item prefix, and the answer is the run of items carrying it --
+%% ascending, or descending when the request's `direction' is `backward' --
+%% from the request's `from' (inclusive) where one is given, capped at its
 %% `limit'.
 list(Store, Request = #{ <<"list">> := Path }, Opts) ->
     maybe
@@ -727,20 +728,34 @@ item(Store, Meta, Prefix, Opts) ->
         {error, _} = Error -> Error
     end.
 
-%% @doc Collect the ascending run of items that begin with a prefix. The run
-%% starts at the request's `from' where that is beyond the prefix itself --
-%% which is how a caller resumes a scan, the last item it saw being its
-%% cursor -- and stops at `limit' items, or at the first item that no longer
-%% carries the prefix.
+%% @doc Collect the run of items that begin with a prefix, ascending unless
+%% the request's `direction' is `backward'. The run starts at the request's
+%% `from' where one is given -- which is how a caller resumes a scan, the
+%% last item it saw being its cursor; the bound is inclusive, and is a lower
+%% bound forwards and an upper bound backwards -- and stops at `limit' items,
+%% or at the first item that no longer carries the prefix.
 items(Store, Meta, Prefix, Request, Opts) ->
-    items(
-        Store,
-        Meta,
-        Prefix,
-        max(Prefix, maps:get(<<"from">>, Request, Prefix)),
-        hb_util:int(maps:get(<<"limit">>, Request, ?DEFAULT_LIST_LIMIT)),
-        Opts
-    ).
+    Limit = hb_util:int(maps:get(<<"limit">>, Request, ?DEFAULT_LIST_LIMIT)),
+    case maps:get(<<"direction">>, Request, <<"forward">>) of
+        <<"backward">> ->
+            items_back(
+                Store,
+                Meta,
+                Prefix,
+                maps:get(<<"from">>, Request, none),
+                Limit,
+                Opts
+            );
+        _ ->
+            items(
+                Store,
+                Meta,
+                Prefix,
+                max(Prefix, maps:get(<<"from">>, Request, Prefix)),
+                Limit,
+                Opts
+            )
+    end.
 items(Store, Meta, Prefix, From, Limit, Opts) ->
     maybe
         {ok, Set} ?= container(Store, Meta, Opts),
@@ -898,6 +913,150 @@ set_scan(
         {error, _} = Error ->
             Error
     end.
+
+%% @doc Collect the descending run of items that begin with a prefix, from
+%% the last item at or before the bound down to the first that carries the
+%% prefix, capped at `limit'. The seek is the forward one: its landing is
+%% stepped one back when it overshoots the bound, and a step below the
+%% leaf's first item is resolved by the scan's climb.
+items_back(Store, Meta, Prefix, From, Limit, Opts) ->
+    maybe
+        {ok, Set} ?= container(Store, Meta, Opts),
+        {ok, Pad} ?= set_pad(Set),
+        Bound = back_bound(Prefix, From, Pad),
+        {ok, SubMeta, Stack, Leaf, Keys, Index} ?=
+            set_seek(Store, Meta, Set, Bound, Opts),
+        set_scan_back(
+            Store, SubMeta, Stack, Leaf, Keys,
+            back_position(Leaf, Keys, Index, Bound, Pad),
+            Prefix, Limit, [], Opts
+        )
+    end.
+
+%% @doc The width of a set's items, as the container itself carries it.
+set_pad({subdb, #{ <<"pad">> := Pad }}) ->
+    {ok, Pad};
+set_pad({subpage, Bin}) ->
+    case hb_lmdb_page:page(Bin) of
+        {ok, #{ <<"type">> := leaf2, <<"pad">> := Pad }} -> {ok, Pad};
+        {ok, #{ <<"type">> := Type }} -> {error, {not_a_fixed_width_page, Type}};
+        {error, _} = Error -> Error
+    end.
+
+%% @doc The inclusive upper bound a backward walk starts from: the given
+%% cursor, or -- when none is given -- bytes above every item that could
+%% carry the prefix, so the walk starts at the prefix run's end.
+back_bound(Prefix, none, Pad) ->
+    <<Prefix/binary, (binary:copy(<<16#FF>>, Pad))/binary>>;
+back_bound(_Prefix, From, _Pad) ->
+    From.
+
+%% @doc The index of the last item at or before the bound, given the forward
+%% seek's landing on the first at or after it.
+back_position(_Leaf, Keys, Index, _Bound, _Pad) when Index >= Keys ->
+    Keys - 1;
+back_position(Leaf, _Keys, Index, Bound, Pad) ->
+    case hb_lmdb_page:item(Leaf, Index, Pad) of
+        {ok, Bound} -> Index;
+        _ -> Index - 1
+    end.
+
+%% @doc Walk backwards from the cursor, collecting items while they carry the
+%% prefix -- the items are ascending, so nothing carrying the prefix can
+%% precede one that lacks it. An exhausted leaf hands the walk to
+%% `prev_leaf/4', the mirror of the forward scan's climb.
+set_scan_back(
+        _Store, _Meta, _Stack, _Leaf, _Keys, _Index, _Prefix, Limit, Found,
+        _Opts
+    ) when Limit =< 0 ->
+    {ok, lists:reverse(Found)};
+set_scan_back(Store, Meta, Stack, _Leaf, _Keys, Index, Prefix, Limit, Found, Opts)
+        when Index < 0 ->
+    case prev_leaf(Store, Meta, Stack, Opts) of
+        {ok, PrevStack, PrevLeaf, PrevKeys, PrevIndex} ->
+            set_scan_back(
+                Store, Meta, PrevStack, PrevLeaf, PrevKeys, PrevIndex,
+                Prefix, Limit, Found, Opts
+            );
+        {error, no_more_leaves} ->
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
+    end;
+set_scan_back(
+        Store, Meta = #{ <<"pad">> := Pad }, Stack, Leaf, Keys, Index,
+        Prefix, Limit, Found, Opts
+    ) ->
+    Size = byte_size(Prefix),
+    case hb_lmdb_page:item(Leaf, Index, Pad) of
+        {ok, Item = <<Prefix:Size/binary, _/binary>>} ->
+            set_scan_back(
+                Store, Meta, Stack, Leaf, Keys, Index - 1, Prefix,
+                Limit - 1, [Item | Found], Opts
+            );
+        {ok, _Item} ->
+            % The scan has passed below the first item carrying the prefix.
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Take the leaf before the one a backward scan has exhausted: climb to
+%% the nearest branch page with a child before the one taken, step to it, and
+%% descend to the rightmost leaf below, positioned on its last item.
+prev_leaf(_Store, _Meta, [], _Opts) ->
+    {error, no_more_leaves};
+prev_leaf(Store, Meta, [{Page, Index} | Above], Opts) when Index > 0 ->
+    take_child_back(Store, Meta, Page, Index - 1, Above, Opts);
+prev_leaf(Store, Meta, [_Frame | Above], Opts) ->
+    prev_leaf(Store, Meta, Above, Opts).
+
+take_child_back(Store, Meta, Page, Index, Above, Opts) ->
+    case hb_lmdb_page:node(Page, Index) of
+        {ok, _Key, {branch, Child}} ->
+            rightmost(
+                Store, Meta, Child, [{Page, Index} | Above],
+                max_depth(Store, Meta), Opts
+            );
+        {ok, _Key, _Reference} ->
+            {error, invalid_branch_page};
+        {error, _} = Error ->
+            Error
+    end.
+
+rightmost(_Store, _Meta, _Number, _Stack, 0, _Opts) ->
+    {error, descent_too_deep};
+rightmost(Store, Meta, Number, Stack, Remaining, Opts) ->
+    maybe
+        {ok, Page} ?= page(Store, Meta, Number, Opts),
+        {ok, Parsed} ?= hb_lmdb_page:page(Page),
+        rightmost_page(Store, Meta, Page, Parsed, Stack, Remaining, Opts)
+    end.
+
+rightmost_page(Store, Meta, Page, #{ <<"type">> := branch }, Stack, Remaining, Opts) ->
+    case hb_lmdb_page:num_keys(Page) of
+        {ok, Keys} ->
+            case hb_lmdb_page:node(Page, Keys - 1) of
+                {ok, _Key, {branch, Child}} ->
+                    rightmost(
+                        Store, Meta, Child, [{Page, Keys - 1} | Stack],
+                        Remaining - 1, Opts
+                    );
+                {ok, _Key, _Reference} ->
+                    {error, invalid_branch_page};
+                {error, _} = Error ->
+                    Error
+            end;
+        {error, _} = Error ->
+            Error
+    end;
+rightmost_page(
+        _Store, _Meta, Page, #{ <<"type">> := leaf2, <<"keys">> := Keys },
+        Stack, _Remaining, _Opts
+    ) ->
+    {ok, Stack, Page, Keys, Keys - 1};
+rightmost_page(_Store, _Meta, _Page, #{ <<"type">> := Type }, _Stack, _R, _Opts) ->
+    {error, {not_a_node_page, Type}}.
 
 %%% Helpers.
 
@@ -1315,6 +1474,41 @@ published_dupfixed_scan() ->
             #{ <<"list">> => Hash, <<"from">> => Hash, <<"limit">> => 0 },
             #{}
         )
+    ),
+    % Backward: a group's run in reverse, resumed mid-run by an inclusive
+    % upper cursor, and the set's tail when no bound is given -- the walk
+    % crossing leaf boundaries by the same climb in mirror.
+    ?assertEqual(
+        {ok, lists:reverse(Run)},
+        hb_store:list(
+            Store,
+            #{ <<"list">> => Hash, <<"direction">> => <<"backward">> },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, lists:reverse(lists:sublist(Run, 4))},
+        hb_store:list(
+            Store,
+            #{
+                <<"list">> => Hash,
+                <<"from">> => lists:nth(4, Run),
+                <<"direction">> => <<"backward">>
+            },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, lists:reverse(lists:sublist(Items, length(Items) - 99, 100))},
+        hb_store:list(
+            Store,
+            #{
+                <<"list">> => <<>>,
+                <<"limit">> => 100,
+                <<"direction">> => <<"backward">>
+            },
+            #{}
+        )
     ).
 
 %% @doc A point lookup of the container costs one ranged read for the meta
@@ -1386,6 +1580,15 @@ published_subpage() ->
                 <<"from">> => lists:last(Items),
                 <<"limit">> => 5
             },
+            #{}
+        )
+    ),
+    % A backward walk over the single leaf runs out of leaves at its start.
+    ?assertEqual(
+        {ok, lists:reverse(Items)},
+        hb_store:list(
+            [Located],
+            #{ <<"list">> => <<>>, <<"direction">> => <<"backward">> },
             #{}
         )
     ).

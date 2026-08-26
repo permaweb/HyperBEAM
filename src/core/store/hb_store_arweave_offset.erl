@@ -25,12 +25,19 @@
 %%% Codec indexes should, in general, be sorted by the time of their first write
 %%% to Arweave: Arweave TXs as 0, ANS-102 as 1, ANS-104 as 2, etc.
 %%% 
-%%% All `length` values are read by decoding all of the remaining bytes in the 
+%%% All `length` values are read by decoding all of the remaining bytes in the
 %%% offset encoding as an unsigned big-endian integer. This allows the length
 %%% to contract to only the number of bytes actually necessary to represent it.
-%%% 
+%%%
+%%% Published sorted-set containers (see `docs/misc/published-arweave-indexes.md')
+%%% carry the same information packed to a fixed 21 bytes, sorted by the leading
+%%% bytes of the ID so that a prefix seek finds the row:
+%%%     << IDPrefix:10/binary, Type:4, StartOffset:50, Length:34 >>
+%%% Pending and relative forms are excluded from the packed encoding: they live
+%%% only in the local key-value index.
 -module(hb_store_arweave_offset).
 -export([encode/3, decode/1, path/1]).
+-export([encode_item/4, decode_item/1, item_prefix/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -40,6 +47,10 @@
 -define(OFFSET_SZ, (8*8)). % 64-bit uint. Max: 2^64-1.
 -define(OFFSET_MAX, ((1 bsl ?OFFSET_SZ) - 1)).
 -define(FORMAT_VERSION, 1). % 4-bit uint. Max: 15.
+
+-define(ITEM_PREFIX_SZ, 10). % Leading bytes of the native ID in a packed item.
+-define(ITEM_OFFSET_SZ, 50). % 50-bit uint. Max: ~1.1 PB.
+-define(ITEM_LENGTH_SZ, 34). % 34-bit uint. Max: ~17 GB.
 
 %% @doc Reserved for future use. At the present time, store containing offsets are
 %% expected to be utilized only as sub-stores to a `hb_store_arweave' store. As
@@ -100,6 +111,40 @@ decode(<<Format:1/binary, StartOffset:?OFFSET_SZ, Length/binary>>) ->
 decode(Binary) ->
     throw({cannot_decode_offset, Binary}).
 
+%% @doc The leading bytes of an ID as a packed item carries them: the seek
+%% prefix that finds the item's row in a sorted-set container.
+item_prefix(ID) -> binary:part(hb_util:native_id(ID), 0, ?ITEM_PREFIX_SZ).
+
+%% @doc Encode a published-index item: the leading bytes of the ID, the codec
+%% type, and the item's byte range in the weave, packed to 21 bytes. Only
+%% absolute ranges encode; pending and relative forms have no packed form.
+encode_item(ID, CodecName, StartOffset, Length)
+        when
+        ?IN_BIT_RANGE(StartOffset, ?ITEM_OFFSET_SZ)
+        andalso ?IN_BIT_RANGE(Length, ?ITEM_LENGTH_SZ)
+    ->
+    <<
+        (item_prefix(ID))/binary,
+        (encode_type(CodecName)):4,
+        StartOffset:?ITEM_OFFSET_SZ,
+        Length:?ITEM_LENGTH_SZ
+    >>;
+encode_item(ID, CodecName, StartOffset, Length) ->
+    throw({cannot_encode_item, {ID, CodecName, StartOffset, Length}}).
+
+%% @doc Decode a packed 21-byte item to the ID prefix it carries and the codec,
+%% offset and length of the data it points at. The prefix is returned so that
+%% the caller can confirm it against the ID it sought.
+decode_item(<<
+        IDPrefix:?ITEM_PREFIX_SZ/binary,
+        Type:4,
+        StartOffset:?ITEM_OFFSET_SZ,
+        Length:?ITEM_LENGTH_SZ
+>>) ->
+    {IDPrefix, decode_type(Type), StartOffset, Length};
+decode_item(Binary) ->
+    throw({cannot_decode_item, Binary}).
+
 %% @doc Encode the type of the data.
 encode_type(<<"tx@1.0">>) -> 0;
 encode_type(<<"ans102@1.0">>) -> 1;
@@ -133,3 +178,40 @@ relative_ref_round_trip_test() ->
         {?FORMAT_VERSION, <<"ans104@1.0">>, Offset, 654},
         decode(Encoded)
     ).
+
+packed_item_round_trip_test() ->
+    ID = hb_util:encode(crypto:strong_rand_bytes(32)),
+    Item = encode_item(ID, <<"ans104@1.0">>, 123456789, 4321),
+    ?assertEqual(21, byte_size(Item)),
+    ?assertEqual(
+        {item_prefix(ID), <<"ans104@1.0">>, 123456789, 4321},
+        decode_item(Item)
+    ),
+    % The ID prefix leads the item, so a seek for the ID lands on its row.
+    ?assertEqual(item_prefix(ID), binary:part(Item, 0, 10)).
+
+packed_item_boundaries_test() ->
+    ID = hb_util:encode(crypto:strong_rand_bytes(32)),
+    MaxOffset = (1 bsl 50) - 1,
+    MaxLength = (1 bsl 34) - 1,
+    ?assertEqual(
+        {item_prefix(ID), <<"tx@1.0">>, MaxOffset, MaxLength},
+        decode_item(encode_item(ID, <<"tx@1.0">>, MaxOffset, MaxLength))
+    ),
+    ?assertEqual(
+        {item_prefix(ID), <<"httpsig@1.0">>, 0, 0},
+        decode_item(encode_item(ID, <<"httpsig@1.0">>, 0, 0))
+    ),
+    ?assertThrow(
+        {cannot_encode_item, _},
+        encode_item(ID, <<"tx@1.0">>, MaxOffset + 1, 0)
+    ),
+    ?assertThrow(
+        {cannot_encode_item, _},
+        encode_item(ID, <<"tx@1.0">>, 0, MaxLength + 1)
+    ),
+    ?assertThrow(
+        {cannot_encode_item, _},
+        encode_item(ID, <<"tx@1.0">>, relative, 0)
+    ),
+    ?assertThrow({cannot_decode_item, _}, decode_item(<<0:160>>)).

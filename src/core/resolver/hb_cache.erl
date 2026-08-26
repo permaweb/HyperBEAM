@@ -42,11 +42,26 @@
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
 -export([match/2, list/2, list_numbered/2]).
+%%% Match-index row construction and store selection, shared with the
+%%% `~match@1.0' device so that the write and read sides cannot drift:
+-export([match_store/1, match_address/2, match_value_path/2]).
+-export([match_item_stores/1, match_item_prefix/2]).
+-export([encode_match_item/2, decode_match_item/1]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 -define(MATCH_PREFIX, <<"~match@1.0">>).
 -define(DIRECT_VALUE_LENGTH, 60).
+
+%% @doc Determine if a value is within a given unsigned bit range.
+-define(IN_BIT_RANGE(X, Bits), (X >= 0 andalso X < (1 bsl Bits))).
+
+%%% The packed 17-byte match-item layout: the leading bytes of the predicate
+%%% hash, a 49-bit weave offset, and reserved bits that are always zero. See
+%%% `docs/misc/published-arweave-indexes.md'.
+-define(MATCH_ITEM_HASH_SZ, 10).
+-define(MATCH_ITEM_OFFSET_SZ, 49).
+-define(MATCH_ITEM_RESERVED_SZ, 7).
 
 %% @doc Ensure that a value is loaded from the cache if it is an ID or a link.
 %% If it is not loadable we raise an error. If the value is a message, we will
@@ -207,9 +222,7 @@ list(Path, Store, Opts) ->
 match(MatchSpec, Opts) ->
     ReadMode = hb_opts:get(cache_read_mode, normal, Opts),
     NormalizedSpec = normalize_match_spec(MatchSpec, ReadMode, Opts),
-    case (ReadMode == raw) orelse
-        (hb_opts:get(match_index, false, Opts) == false)
-    of
+    case (ReadMode == raw) orelse (match_store(Opts) == []) of
         true -> store_match(NormalizedSpec, Opts);
         false ->
             case
@@ -342,8 +355,8 @@ write_message_ops(Msg, Opts) when is_map(Msg) ->
             maps:without([<<"priv">>], Msg)
         ),
     MatchOps =
-        case match_store(Opts) of
-            [] -> KeyOps;
+        case {match_store(Opts), match_item_stores(Opts)} of
+            {[], []} -> KeyOps;
             _ -> [{match, AllIDs, Msg} | KeyOps]
         end,
     Ops =
@@ -465,6 +478,7 @@ run_write_ops(Store, [], Opts, Pending) ->
 run_write_ops(Store, [{match, IDs, Msg} | Rest], Opts, Pending) ->
     flush_write_ops(Store, Pending, Opts),
     write_match_index(IDs, Msg, Opts),
+    write_match_items(IDs, Msg, Opts),
     run_write_ops(Store, Rest, Opts, []);
 run_write_ops(Store, [Op | Rest], Opts, Pending) ->
     run_write_ops(Store, Rest, Opts, [Op | Pending]).
@@ -539,7 +553,9 @@ write_match_index(IDs, Base, Opts) ->
 %% caller-provided store". If neither is present, use the global node
 %% `match-index' setting. The selected value is interpreted as:
 %% `false' disables index writes, `true' uses the normal configured
-%% store, and a store definition/list writes the index there.
+%% store, and a store definition/list writes the index there. The
+%% `~match@1.0' device resolves its reads through this function, so the
+%% write and read sides of the index cannot disagree.
 match_store(Opts) ->
     LocalMatchIndex = maps:get(<<"match-index">>, Opts, undefined),
     LocalStore = maps:get(<<"store">>, Opts, undefined),
@@ -606,6 +622,175 @@ match_value_path(List, Opts) when is_list(List) ->
     end;
 match_value_path(Other, Opts) ->
     match_value_path(hb_path:to_binary(Other), Opts).
+
+%%% The published sorted-set match index. Rows are packed 17-byte items keyed
+%%% by predicate hash and sorted by weave offset; the `~match@1.0' device
+%%% reads them back with `locate'.
+
+%% @doc Select the sorted-set stores that hold packed match items. A local
+%% `match-store' option wins when present. A caller-provided local `store'
+%% without one disables item rows: the global setting describes the node's
+%% own index, not the caller's stores -- and unlike path rows, packed items
+%% only mean anything inside a sorted-set container. Otherwise the global
+%% `match_store' setting applies.
+match_item_stores(Opts) ->
+    LocalMatchStore = maps:get(<<"match-store">>, Opts, undefined),
+    LocalStore = maps:get(<<"store">>, Opts, undefined),
+    MatchStore =
+        case {LocalMatchStore, LocalStore} of
+            {undefined, undefined} ->
+                hb_opts:get(match_store, [], #{ <<"only">> => global });
+            {undefined, _} ->
+                [];
+            {Local, _} ->
+                Local
+        end,
+    case MatchStore of
+        false -> [];
+        Stores when is_list(Stores) -> Stores;
+        Store -> [Store]
+    end.
+
+%% @doc The published-index predicate for one key-value pair. The key is
+%% lower-cased -- ANS-104 tag names match case-insensitively -- and the value
+%% is indexed exactly as its bytes appear.
+match_predicate(Key, Value) ->
+    <<
+        ?MATCH_PREFIX/binary, "/",
+        (hb_util:to_lower(hb_ao:normalize_key(Key)))/binary,
+        "=", Value/binary
+    >>.
+
+%% @doc The leading bytes that every row of a predicate carries: the head of
+%% the predicate's hash, and the seek prefix for its run.
+match_item_prefix(Key, Value) ->
+    binary:part(
+        hb_crypto:sha256(match_predicate(Key, Value)),
+        0,
+        ?MATCH_ITEM_HASH_SZ
+    ).
+
+%% @doc Encode a published-index row: a predicate's hash prefix followed by the
+%% weave offset of an item that carries the predicate, packed to 17 bytes.
+encode_match_item(Prefix, Offset)
+        when
+        byte_size(Prefix) =:= ?MATCH_ITEM_HASH_SZ
+        andalso ?IN_BIT_RANGE(Offset, ?MATCH_ITEM_OFFSET_SZ)
+    ->
+    <<
+        Prefix/binary,
+        Offset:?MATCH_ITEM_OFFSET_SZ,
+        0:?MATCH_ITEM_RESERVED_SZ
+    >>;
+encode_match_item(Prefix, Offset) ->
+    throw({cannot_encode_match_item, {Prefix, Offset}}).
+
+%% @doc Unpack a row to the hash prefix and weave offset it carries. A row
+%% with its reserved bits set is not of this format version and is refused.
+decode_match_item(
+        <<
+            Prefix:?MATCH_ITEM_HASH_SZ/binary,
+            Offset:?MATCH_ITEM_OFFSET_SZ,
+            0:?MATCH_ITEM_RESERVED_SZ
+        >>
+    ) ->
+    {Prefix, Offset};
+decode_match_item(Item) ->
+    throw({cannot_decode_match_item, Item}).
+
+%% @doc Write one packed row per predicate of a message to the configured
+%% sorted-set stores. Rows exist only for messages whose absolute weave offset
+%% the offset index already knows: an item without a place in the weave has no
+%% offset to point at, and remains covered by the path-row index. The offset
+%% is read from the local index alone -- a cache write must not trigger a
+%% network round-trip per message.
+write_match_items(IDs, Base, Opts) ->
+    case match_item_stores(Opts) of
+        [] -> {skip, <<"No sorted-set store configured for match items.">>};
+        Stores ->
+            case match_offset(IDs, Opts) of
+                {ok, Offset} ->
+                    Items =
+                        hb_util:unique(
+                            [
+                                encode_match_item(
+                                    match_item_prefix(Key, Value),
+                                    Offset
+                                )
+                            ||
+                                {Key, Value} <- match_predicates(Base, Opts)
+                            ]
+                        ),
+                    write_match_rows(Stores, Items, Opts);
+                not_found ->
+                    {skip, <<"No weave offset known for message.">>}
+            end
+    end.
+
+%% @doc Find the absolute weave offset that the offset index holds for any of
+%% a message's IDs. Pending and relative forms have no absolute offset, so
+%% they yield no rows.
+match_offset(IDs, Opts) ->
+    case hb_store_arweave:store_from_opts(Opts) of
+        no_store -> not_found;
+        StoreOpts -> match_offset(IDs, StoreOpts, Opts)
+    end.
+match_offset([], _StoreOpts, _Opts) -> not_found;
+match_offset([ID | IDs], StoreOpts, Opts) ->
+    case hb_store_arweave:read_index_offset(StoreOpts, ID) of
+        {ok, #{ <<"start-offset">> := Offset }} when is_integer(Offset) ->
+            {ok, Offset};
+        _ ->
+            match_offset(IDs, StoreOpts, Opts)
+    end.
+
+%% @doc The key-value pairs a message is indexed under: its tags -- the
+%% binary-valued keys of the uncommitted message, less `data' and `body' --
+%% with the owner, recipient and parent bundle that its commitments carry.
+match_predicates(Base, Opts) ->
+    Uncommitted = hb_message:uncommitted(hb_private:reset(Base)),
+    Tags =
+        lists:filtermap(
+            fun({Key, _}) when Key =:= <<"data">>; Key =:= <<"body">> ->
+                    false;
+               ({Key, RawValue}) ->
+                    case ensure_loaded(RawValue, Opts) of
+                        Value when is_binary(Value) -> {true, {Key, Value}};
+                        _ -> false
+                    end
+            end,
+            hb_maps:to_list(Uncommitted, Opts)
+        ),
+    Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
+    Fields =
+        hb_maps:fold(
+            fun(_CommID, Commitment, Acc) ->
+                Acc
+                    ++ match_field(<<"owner">>, <<"committer">>, Commitment, Opts)
+                    ++ match_field(
+                        <<"recipient">>, <<"field-target">>, Commitment, Opts)
+                    ++ match_field(
+                        <<"bundled-in">>, <<"bundled-in">>, Commitment, Opts)
+            end,
+            [],
+            Commitments,
+            Opts
+        ),
+    hb_util:unique(Tags ++ Fields).
+
+%% @doc A single indexed field of a commitment, when it is present.
+match_field(Name, Key, Commitment, Opts) ->
+    case hb_maps:get(Key, Commitment, not_found, Opts) of
+        Value when is_binary(Value) -> [{Name, Value}];
+        _ -> []
+    end.
+
+%% @doc Write packed rows to the sorted-set stores in one batched request.
+%% The items ride as the request map's keys -- the form every store's `write'
+%% takes -- and are opaque binaries to the store.
+write_match_rows(_Stores, [], _Opts) -> ok;
+write_match_rows(Stores, Items, Opts) ->
+    hb_store:write(Stores, maps:from_keys(Items, <<>>), Opts).
 
 %% @doc The `structured@1.0` encoder does not typically encode `commitments`,
 %% subsequently, when we encounter a commitments message we prepare its contents
@@ -1439,6 +1624,120 @@ match_store_control_test() ->
     ?assertEqual([Store], match_store(#{ <<"store">> => Store })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => false })),
     ?assertEqual([], match_store(#{ <<"store">> => Store, <<"match-index">> => [] })).
+
+%% @doc A disabled match index is symmetric between the write and read sides:
+%% no index rows are written, and the reader answers from a store scan rather
+%% than consulting the absent index.
+match_index_disabled_control_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb, <<"match-disabled">>),
+    Opts = #{ <<"store">> => Store, <<"match-index">> => false },
+    {ok, ID} = write(#{ <<"control-key">> => <<"control-value">> }, Opts),
+    ?assertEqual(
+        {ok, [ID]},
+        match(#{ <<"control-key">> => <<"control-value">> }, Opts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:list(
+            [Store],
+            match_address(
+                <<"control-key">>,
+                match_value_path(<<"control-value">>, Opts)
+            ),
+            Opts
+        )
+    ).
+
+%% @doc Cache writes emit packed match rows for messages whose weave offset
+%% the offset index knows, and the `~match@1.0' device locates them by
+%% predicate: tags, owner and recipient. The data payload is not a predicate,
+%% and a message with no known offset adds no rows.
+match_items_write_and_locate_test() ->
+    Store = hb_test_utils:test_store(),
+    SetStore = hb_test_utils:test_store(hb_store_lmdb_set, <<"match-items">>),
+    hb_store:reset(SetStore, #{}, #{}),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [Store]
+        },
+    Wallet = ar_wallet:new(),
+    Opts =
+        #{
+            <<"priv-wallet">> => Wallet,
+            <<"store">> => [Store],
+            <<"match-store">> => [SetStore],
+            <<"arweave-index-store">> => ArweaveStore
+        },
+    Target = hb_util:encode(crypto:strong_rand_bytes(32)),
+    Msg =
+        hb_message:commit(
+            #{
+                <<"data-protocol">> => <<"ao">>,
+                <<"type">> => <<"Message">>,
+                <<"target">> => Target,
+                <<"data">> => <<"match-items payload">>
+            },
+            Opts,
+            #{ <<"commitment-device">> => <<"ans104@1.0">> }
+        ),
+    SignedID = hb_message:id(Msg, signed, Opts),
+    ok =
+        hb_store_arweave:write_offset(
+            ArweaveStore, SignedID, <<"ans104@1.0">>, 4096, 512),
+    {ok, _} = write(Msg, Opts),
+    Locate =
+        fun(Template) ->
+            hb_ao:raw(<<"match@1.0">>, <<"locate">>, Template, #{}, Opts)
+        end,
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"type">> => <<"Message">> })),
+    ?assertEqual(
+        {ok, [4096]},
+        Locate(#{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> })
+    ),
+    Owner = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"owner">> => Owner })),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"recipient">> => Target })),
+    ?assertEqual({ok, []}, Locate(#{ <<"data">> => <<"match-items payload">> })),
+    % A message the offset index knows nothing about writes no rows: it stays
+    % covered by the path-row index alone.
+    {ok, _} = write(#{ <<"type">> => <<"Offsetless">> }, Opts),
+    ?assertEqual({ok, []}, Locate(#{ <<"type">> => <<"Offsetless">> })),
+    ok = hb_store:stop(SetStore).
+
+match_item_codec_test() ->
+    Prefix = match_item_prefix(<<"Data-Protocol">>, <<"ao">>),
+    ?assertEqual(10, byte_size(Prefix)),
+    % The key is lower-cased before hashing; the value is left untouched.
+    ?assertEqual(Prefix, match_item_prefix(<<"data-protocol">>, <<"ao">>)),
+    ?assertNotEqual(Prefix, match_item_prefix(<<"data-protocol">>, <<"AO">>)),
+    ?assertEqual(
+        binary:part(
+            hb_crypto:sha256(<<"~match@1.0/data-protocol=ao">>), 0, 10),
+        Prefix
+    ),
+    Item = encode_match_item(Prefix, 123456789),
+    ?assertEqual(17, byte_size(Item)),
+    ?assertEqual({Prefix, 123456789}, decode_match_item(Item)),
+    % Boundary offsets round-trip; out-of-range offsets are refused.
+    MaxOffset = (1 bsl 49) - 1,
+    ?assertEqual(
+        {Prefix, MaxOffset},
+        decode_match_item(encode_match_item(Prefix, MaxOffset))
+    ),
+    ?assertEqual({Prefix, 0}, decode_match_item(encode_match_item(Prefix, 0))),
+    ?assertThrow(
+        {cannot_encode_match_item, _},
+        encode_match_item(Prefix, MaxOffset + 1)
+    ),
+    ?assertThrow({cannot_encode_match_item, _}, encode_match_item(Prefix, -1)),
+    % A row with reserved bits set is not of this format version.
+    <<Head:16/binary, Last>> = Item,
+    ?assertThrow(
+        {cannot_decode_match_item, _},
+        decode_match_item(<<Head/binary, (Last bor 1)>>)
+    ),
+    ?assertThrow({cannot_decode_match_item, _}, decode_match_item(<<0:128>>)).
 
 cache_suite_test_() ->
     hb_store:generate_test_suite([

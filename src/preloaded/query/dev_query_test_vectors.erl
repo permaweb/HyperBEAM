@@ -202,6 +202,271 @@ write_test_message_with_recipient(Recipient, Opts) ->
     ),
     {ok, Msg}.
 
+%%% Two confirmed ANS-104 items sharing an owner and their `Type: Process' /
+%%% `Data-Protocol: ao' tags, used to exercise index-served pages. Their
+%%% offsets are learned from the routes at run time.
+-define(INDEX_ITEM_A, <<"1R5QEtX53Z_RRQJwzFWf40oXiPW2FibErT_h02pu8MU">>).
+-define(INDEX_ITEM_B, <<"VeQHybQQfhRam0PrasK5Fzrvzt5Px3H0ClVdPUxUBRc">>).
+-define(INDEX_ITEMS_OWNER, <<"QGWqtJdLLgm2ehFWiiPzMaoFLD50CnGuzZIPEdoDRGQ">>).
+
+index_page_query() ->
+    <<"""
+        query($tags: [TagFilter!], $owners: [String!], $sort: SortOrder,
+                $first: Int, $after: String) {
+            transactions(
+                tags: $tags,
+                owners: $owners,
+                sort: $sort,
+                first: $first,
+                after: $after
+            ) {
+                count
+                pageInfo {
+                    hasNextPage
+                }
+                edges {
+                    cursor
+                    node {
+                        id
+                    }
+                }
+            }
+        }
+    """>>.
+
+%% @doc An environment whose match-store carries spec rows for the two test
+%% items at their real weave offsets, exactly as a published index would.
+test_env_with_match_store() ->
+    LocalStore = hb_test_utils:test_store(),
+    SetStore = hb_test_utils:test_store(hb_store_lmdb_set, <<"query-index">>),
+    hb_store:reset(SetStore, #{}, #{}),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [hb_test_utils:test_store()],
+            <<"remote-index">> => true
+        },
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [LocalStore, ArweaveStore],
+            <<"match-store">> => [SetStore]
+        },
+    Offset =
+        fun(ID) ->
+            {ok, #{ <<"start-offset">> := Start }} =
+                hb_store_arweave:read_offset(ArweaveStore, ID, Opts),
+            Start
+        end,
+    OffsetA = Offset(?INDEX_ITEM_A),
+    OffsetB = Offset(?INDEX_ITEM_B),
+    Rows =
+        [
+            hb_cache:encode_match_item(
+                hb_cache:match_item_prefix(Key, Value),
+                ItemOffset
+            )
+        ||
+            {Key, Value} <-
+                [
+                    {<<"Type">>, <<"Process">>},
+                    {<<"Data-Protocol">>, <<"ao">>},
+                    {<<"owner">>, ?INDEX_ITEMS_OWNER}
+                ],
+            ItemOffset <- [OffsetA, OffsetB]
+        ],
+    ok = hb_store:write([SetStore], maps:from_keys(Rows, <<>>), #{}),
+    {ok, Opts, OffsetA, OffsetB}.
+
+%% @doc Index-served pages: a tags query over a configured match-store walks
+%% the sorted-set index, resolves each offset to its item from the weave, and
+%% pages by stateless offset cursors in both directions -- the cursors
+%% remaining valid on a different node sharing the same stores.
+transactions_query_index_page_test_() ->
+    {timeout, 300, fun transactions_query_index_page/0}.
+transactions_query_index_page() ->
+    {ok, Opts, OffsetA, OffsetB} = test_env_with_match_store(),
+    Node = hb_http_server:start_node(Opts),
+    {Lo, Hi} = {min(OffsetA, OffsetB), max(OffsetA, OffsetB)},
+    IDFor =
+        fun(Offset) ->
+            case Offset == OffsetA of
+                true -> ?INDEX_ITEM_A;
+                false -> ?INDEX_ITEM_B
+            end
+        end,
+    Tags =
+        [
+            #{ <<"name">> => <<"Type">>, <<"values">> => [<<"Process">>] },
+            #{ <<"name">> => <<"Data-Protocol">>, <<"values">> => [<<"ao">>] }
+        ],
+    Page =
+        fun(Variables) ->
+            dev_query_graphql:test_query(
+                Node, index_page_query(), Variables, Opts)
+        end,
+    % The default HEIGHT_DESC order pages from the highest offset down.
+    FirstDesc = Page(#{ <<"tags">> => Tags, <<"first">> => 1 }),
+    HiID = IDFor(Hi),
+    LoID = IDFor(Lo),
+    HiCursor = <<"offset=", (hb_util:bin(Hi))/binary>>,
+    LoCursor = <<"offset=", (hb_util:bin(Lo))/binary>>,
+    ?assertEqual([HiID], transaction_ids(FirstDesc, Opts)),
+    ?assertEqual(HiCursor, transaction_cursor(FirstDesc, Opts)),
+    ?assertEqual(true, transaction_has_next_page(FirstDesc, Opts)),
+    ?assertEqual(
+        <<"2">>,
+        hb_util:deep_get(<<"data/transactions/count">>, FirstDesc, Opts)
+    ),
+    SecondDesc =
+        Page(#{
+            <<"tags">> => Tags,
+            <<"first">> => 1,
+            <<"after">> => HiCursor
+        }),
+    ?assertEqual([LoID], transaction_ids(SecondDesc, Opts)),
+    ?assertEqual(false, transaction_has_next_page(SecondDesc, Opts)),
+    % Ascending pages mirror the walk.
+    FirstAsc =
+        Page(#{
+            <<"tags">> => Tags,
+            <<"sort">> => <<"HEIGHT_ASC">>,
+            <<"first">> => 1
+        }),
+    ?assertEqual([LoID], transaction_ids(FirstAsc, Opts)),
+    ?assertEqual(true, transaction_has_next_page(FirstAsc, Opts)),
+    SecondAsc =
+        Page(#{
+            <<"tags">> => Tags,
+            <<"sort">> => <<"HEIGHT_ASC">>,
+            <<"first">> => 1,
+            <<"after">> => LoCursor
+        }),
+    ?assertEqual([HiID], transaction_ids(SecondAsc, Opts)),
+    ?assertEqual(false, transaction_has_next_page(SecondAsc, Opts)),
+    % An owners filter compiles to the `owner' predicate.
+    Owners = Page(#{ <<"owners">> => [?INDEX_ITEMS_OWNER] }),
+    ?assertEqual([HiID, LoID], transaction_ids(Owners, Opts)),
+    % The cursor is the weave offset: stateless, so a different node over the
+    % same stores resumes the page exactly.
+    OtherNode =
+        hb_http_server:start_node(Opts#{ <<"priv-wallet">> => ar_wallet:new() }),
+    Resumed =
+        dev_query_graphql:test_query(
+            OtherNode,
+            index_page_query(),
+            #{ <<"tags">> => Tags, <<"first">> => 1, <<"after">> => HiCursor },
+            Opts
+        ),
+    ?assertEqual([LoID], transaction_ids(Resumed, Opts)),
+    ok.
+
+%% @doc The cache write path feeds the index that the GraphQL interface
+%% serves: caching a message whose weave offset the offset index knows makes
+%% its tags, owner and recipient queryable over HTTP, with no rows written
+%% by hand.
+transactions_query_cache_written_index_test_() ->
+    {timeout, 300, fun transactions_query_cache_written_index/0}.
+transactions_query_cache_written_index() ->
+    LocalStore = hb_test_utils:test_store(),
+    SetStore = hb_test_utils:test_store(hb_store_lmdb_set, <<"cache-written">>),
+    hb_store:reset(SetStore, #{}, #{}),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [hb_test_utils:test_store()],
+            <<"remote-index">> => true
+        },
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [LocalStore, ArweaveStore],
+            <<"match-store">> => [SetStore]
+        },
+    {ok, #{ <<"start-offset">> := Offset }} =
+        hb_store_arweave:read_offset(ArweaveStore, ?INDEX_ITEM_A, Opts),
+    {ok, Msg} = hb_cache:read(?INDEX_ITEM_A, Opts),
+    {ok, _} = hb_cache:write(Msg, Opts),
+    Node = hb_http_server:start_node(Opts),
+    Res =
+        dev_query_graphql:test_query(
+            Node,
+            index_page_query(),
+            #{
+                <<"tags">> =>
+                    [
+                        #{
+                            <<"name">> => <<"Type">>,
+                            <<"values">> => [<<"Process">>]
+                        },
+                        #{
+                            <<"name">> => <<"app-name">>,
+                            <<"values">> => [<<"aos">>]
+                        }
+                    ]
+            },
+            Opts
+        ),
+    ?assertEqual([?INDEX_ITEM_A], transaction_ids(Res, Opts)),
+    ?assertEqual(
+        <<"offset=", (hb_util:bin(Offset))/binary>>,
+        transaction_cursor(Res, Opts)
+    ),
+    ?assertEqual(false, transaction_has_next_page(Res, Opts)).
+
+%% @doc The index-served page returns the same result set that the
+%% materialised path serves from a fully local cache of the same items.
+transactions_query_index_parity_test_() ->
+    {timeout, 300, fun transactions_query_index_parity/0}.
+transactions_query_index_parity() ->
+    {ok, IndexOpts, _OffsetA, _OffsetB} = test_env_with_match_store(),
+    IndexNode = hb_http_server:start_node(IndexOpts),
+    % The control environment caches both items locally with no match-store:
+    % its pages come from the materialised path over the path-row index.
+    ControlStore = hb_test_utils:test_store(),
+    ControlArweave =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [hb_test_utils:test_store()],
+            <<"remote-index">> => true
+        },
+    ControlOpts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [ControlStore, ControlArweave]
+        },
+    lists:foreach(
+        fun(ID) ->
+            {ok, Msg} = hb_cache:read(ID, ControlOpts),
+            {ok, _} = hb_cache:write(Msg, ControlOpts)
+        end,
+        [?INDEX_ITEM_A, ?INDEX_ITEM_B]
+    ),
+    ControlNode = hb_http_server:start_node(ControlOpts),
+    % Tag names are given lower-case: the materialised path matches them
+    % byte-for-byte against the cache's lower-cased keys, while the index
+    % path lower-cases every predicate itself.
+    Tags =
+        [
+            #{ <<"name">> => <<"type">>, <<"values">> => [<<"Process">>] },
+            #{ <<"name">> => <<"data-protocol">>, <<"values">> => [<<"ao">>] }
+        ],
+    Variables = #{ <<"tags">> => Tags, <<"first">> => 10 },
+    IndexRes =
+        dev_query_graphql:test_query(
+            IndexNode, index_page_query(), Variables, IndexOpts),
+    ControlRes =
+        dev_query_graphql:test_query(
+            ControlNode, index_page_query(), Variables, ControlOpts),
+    ?assertEqual(
+        lists:sort(transaction_ids(ControlRes, ControlOpts)),
+        lists:sort(transaction_ids(IndexRes, IndexOpts))
+    ),
+    ?assertEqual(
+        [?INDEX_ITEM_A, ?INDEX_ITEM_B],
+        lists:sort(transaction_ids(IndexRes, IndexOpts))
+    ).
+
 %%% Tests
 
 simple_blocks_query_test_parallel() ->
