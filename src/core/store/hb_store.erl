@@ -236,16 +236,9 @@ scope(Opts, Scope) when is_map(Opts) ->
             % Store is already a list, apply scope normally
             Opts#{ <<"store">> => scope(Store, Scope) };
         Store when is_map(Store) ->
-            % Check if Store already has a nested 'store' key
-            case maps:find(store, Store) of
-                {ok, _NestedStores} ->
-                    % Already has nested structure, return as-is
-                    Opts;
-                error ->
-                    % Single store map, wrap in list before scoping
-                    % This ensures consistent behavior
-                    Opts#{ <<"store">> => scope([Store], Scope) }
-            end
+            % Single store map, wrap in list before scoping
+            % This ensures consistent behavior
+            Opts#{ <<"store">> => scope([Store], Scope) }
     end;
 scope(Store, Scope) ->
     filter(
@@ -353,9 +346,13 @@ resolve(Modules, Req = #{ <<"resolve">> := _ }, Opts) ->
 resolve(Modules, Path, Opts) ->
     resolve(Modules, #{ <<"resolve">> => hb_path:to_binary(Path) }, Opts).
 
-%% @doc List the keys in a group in the store. Use only in debugging.
-%% The hyperbeam model assumes that stores are built as efficient hash-based
-%% structures, so this is likely to be very slow for most stores.
+%% @doc List keys in the store. The request-map form accepts optional
+%% `from' (inclusive lower bound) and `limit' keys alongside `list',
+%% which together form a stateless cursor over the listing. Hierarchical
+%% stores list a group's child keys and can bound only the result — child
+%% names are not stored contiguously — while sorted-set stores return the
+%% ascending run of items sharing the `list' prefix and bound the walk
+%% itself, making paged listing a primary read path there.
 list(Path, Opts) ->
     list(hb_opts:get(store, [], Opts), Path, Opts).
 list(Modules, Req = #{ <<"list">> := _ }, Opts) ->
