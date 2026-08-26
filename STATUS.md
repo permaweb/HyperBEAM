@@ -299,3 +299,8 @@ Recorded in `decisions/` as they are made.
 - 2026-08-26 ~08:5xZ eunit-all after the original-tags parity fix:
   Failed: 5. Passed: 3600. — the pre-existing baseline exactly. Fix is
   clean; branch tip 31f344022.
+- 2026-08-26 ~09:5xZ Second usage-limit outage killed the W5/W6b agent
+  loops near their finish lines (W5: all remote benchmark classes done,
+  local-ceiling node remaining; W6b: NIF benchmark walls in hand, two
+  proofs still running). Both resumed with state notes; their detached
+  processes survived the outage.
