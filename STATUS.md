@@ -332,3 +332,22 @@ Recorded in `decisions/` as they are made.
   Failed: 5. Passed: 3600. — the exact A/B baseline (push encoding-change
   x1, scheduler legacy-net x4). The transient 6th in the previous run was a
   network flake. Tree is clean at 9da82fbd6 (+docs).
+- 2026-08-26 ~11:0xZ **W6b complete — the last acceptance criterion is
+  MET**: per-item parse moved into lib_arweave_index_item NIF (one call per
+  item: header walk, RedStone check, sha256, owner addresses, row build;
+  Erlang oracle retained for fallback inputs). Full 3.6 TB partition, cold,
+  24 workers: 4.11 GB/s in 875 s (W6 Erlang: 2.60/1384 s); 4.69 GB/s at 48
+  workers on the dense prefix; warm 4.5+. Full-partition rescan counters
+  identical and merged artifacts sha256-identical to the Erlang scanner
+  (76,112,123 items / 705,656,183 rows). eunit 998/998. One commit
+  56cc7d1d2 on feat/arweave-index-scanner. dev-2 left clean.
+
+## Final state
+
+Both commander intents are demonstrated end-to-end with evidence. All
+agents terminated; all demo nodes torn down; dev-2 carries only the
+unpacked module 106 + the indexer deployment + kept artifacts
+(out-scan5, slice-final, manifests). Full evidence index:
+<session scratchpad>/demo-report.md, w5/evidence/, eunit-all-final.log;
+dev-2:/home/hb/unpack-scratch/. Morning follow-ups listed above (pushes
+and repins are yours).
