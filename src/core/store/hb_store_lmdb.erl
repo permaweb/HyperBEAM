@@ -30,7 +30,9 @@
 
 %% Configuration constants with reasonable defaults
 -define(DEFAULT_SIZE, 2 * 1024 * 1024 * 1024 * 1024). % 2TiB default database size
--define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or 
+-define(DEFAULT_PAGE_SIZE, 65536).              % 64 KiB pages: one page read of
+                                                % a published copy is one chunk.
+-define(DEFAULT_BATCH_SIZE, 5_000).             % Flush keys on every read or
                                                 % every 5,000 write operations.
 -define(MAX_REDIRECTS, 1000).                   % Only resolve 1000 links to data
 
@@ -41,9 +43,12 @@
 %% will return the same server process. The server process manages the LMDB
 %% environment and coordinates all database operations.
 %%
-%% The StoreOpts map must contain a "prefix" key specifying the
-%% database directory path. Also the required configuration includes "capacity"
-%% for the maximum database size and flush timing parameters.
+%% The StoreOpts map must contain a "name" key specifying the
+%% database directory path. Optional keys include "capacity" for the
+%% maximum database size, "page-size" for the page size of newly created
+%% database files (an existing file keeps the page size it was created
+%% with), and "read-only" for opening an existing database without write
+%% access.
 %%
 %% @param StoreOpts A map containing database configuration options
 %% @returns {ok, ServerPid} on success, {error, Reason} on failure
@@ -52,11 +57,16 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
     % Ensure the directory exists before opening LMDB environment
     DataDirPath = hb_util:list(DataDir),
     ok = ensure_dir(DataDirPath),
+    ReadOnly = maps:get(<<"read-only">>, Opts, false),
     EnvOpts =
         [
             {
                 map_size,
                 hb_util:int(maps:get(<<"capacity">>, Opts, ?DEFAULT_SIZE))
+            },
+            {
+                page_size,
+                hb_util:int(maps:get(<<"page-size">>, Opts, ?DEFAULT_PAGE_SIZE))
             },
             {
                 batch_size,
@@ -69,8 +79,8 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
             true -> [];
             false -> [no_readahead]
         end ++
-        case maps:get(<<"read-only">>, Opts, false) of
-            true -> [no_lock];
+        case ReadOnly of
+            true -> [read_only, no_lock];
             false -> []
         end ++
         case maps:get(<<"max-readers">>, Opts, false) of
@@ -81,9 +91,18 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
             true -> [];
             false -> [no_lock]
         end,
-    % Create the LMDB environment with specified size limit
+    % Create the LMDB environment with specified size limit. Read-only
+    % stores open the environment `MDB_RDONLY' and the database without
+    % `create'.
     {ok, Env} = elmdb:env_open(DataDirPath, EnvOpts),
-    {ok, DBInstance} = elmdb:db_open(Env, [create]),
+    {ok, DBInstance} =
+        elmdb:db_open(
+            Env,
+            case ReadOnly of
+                true -> [];
+                false -> [create]
+            end
+        ),
     {ok, #{ <<"env">> => Env, <<"db">> => DBInstance }};
 start(_Store, _Req, _NodeOpts) ->
     {error, {badarg, <<"StoreOpts must be a map">>}}.
@@ -1244,3 +1263,71 @@ read_prefix_composite_test() ->
     ),
     ?assertEqual({ok, [<<"a">>, <<"b">>]}, test_list(StoreOpts, <<"root">>)),
     test_stop(StoreOpts).
+
+%% Drop the cached instance for a store so the next access reopens the
+%% environment from the store options, as a fresh node boot would.
+forget_instance(#{ <<"store-module">> := Mod, <<"name">> := Name }) ->
+    StoreRef = {store, Mod, Name},
+    erlang:erase(StoreRef),
+    catch persistent_term:erase(StoreRef),
+    ok.
+
+%% Parse one LMDB meta page at byte Offset of a data file: the 24-byte
+%% page header, then MDB_meta — magic, version, address, map size, the
+%% FREE DB (whose md_pad carries the page size), the MAIN DB, last page
+%% and transaction id.
+parse_meta(Bin, Offset) ->
+    <<_:Offset/binary, _PageHdr:24/binary, Magic:32/little, Version:32/little,
+        _Address:8/binary, _MapSize:8/binary, PSize:32/little,
+        _FreeRest:44/binary, _Main:48/binary, _LastPg:64/little,
+        TxnId:64/little, _/binary>> = Bin,
+    #{ magic => Magic, version => Version, psize => PSize, txnid => TxnId }.
+
+%% Read the live meta page of a store's data file: pages 0 and 1
+%% alternate per commit, so take the one with the higher txnid.
+read_meta(#{ <<"name">> := DataDir }) ->
+    {ok, Bin} = file:read_file(filename:join(hb_util:list(DataDir), "data.mdb")),
+    Meta0 = parse_meta(Bin, 0),
+    Meta1 = parse_meta(Bin, maps:get(psize, Meta0)),
+    case maps:get(txnid, Meta1) > maps:get(txnid, Meta0) of
+        true -> Meta1;
+        false -> Meta0
+    end.
+
+%% @doc Newly created data files carry the LMDB 1.0 format (data version
+%% 3) and 64 KiB pages by default; `page-size' overrides the page size at
+%% creation time.
+page_size_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    test_write(StoreOpts, <<"key">>, <<"value">>),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"key">>)),
+    ok = test_stop(StoreOpts),
+    Meta = read_meta(StoreOpts),
+    ?assertEqual(16#BEEFC0DE, maps:get(magic, Meta)),
+    ?assertEqual(3, maps:get(version, Meta)),
+    ?assertEqual(65536, maps:get(psize, Meta)),
+    Small = (hb_test_utils:test_store(?MODULE))#{ <<"page-size">> => 4096 },
+    test_reset(Small),
+    test_write(Small, <<"key">>, <<"value">>),
+    ?assertEqual({ok, <<"value">>}, test_read(Small, <<"key">>)),
+    ok = test_stop(Small),
+    ?assertEqual(4096, maps:get(psize, read_meta(Small))).
+
+%% @doc A read-only store serves reads over an existing database and
+%% refuses writes, so a store list falls through to a writable store.
+read_only_test() ->
+    StoreOpts = hb_test_utils:test_store(?MODULE),
+    test_reset(StoreOpts),
+    test_write(StoreOpts, <<"key">>, <<"value">>),
+    ?assertEqual({ok, <<"value">>}, test_read(StoreOpts, <<"key">>)),
+    ok = test_stop(StoreOpts),
+    forget_instance(StoreOpts),
+    ROOpts = StoreOpts#{ <<"read-only">> => true },
+    ?assertEqual({ok, <<"value">>}, hb_store:read(ROOpts, <<"key">>, #{})),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:write(ROOpts, #{ <<"other">> => <<"x">> }, #{})
+    ),
+    ?assertEqual({error, not_found}, hb_store:read(ROOpts, <<"other">>, #{})),
+    ok = test_stop(ROOpts).
