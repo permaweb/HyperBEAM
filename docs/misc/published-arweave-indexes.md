@@ -61,14 +61,22 @@ bit    6..0    reserved   7   zero
 `predicate = <<"~match@1.0/", LowerCaseKey/binary, "=", Value/binary>>`. The
 key is lower-cased; the value is **not** normalised.
 
-One row per indexed predicate per item:
+Every predicate key is a key of the base message under commitment-extension
+resolution: indexing `Key=Value` asserts that resolving the message at `Key`
+yields `Value`. One row per indexed predicate per item:
 
 | predicate key | value |
 |---|---|
 | each tag name | tag value |
-| `owner` | owner address |
-| `recipient` | target, when present |
-| `bundled-in` | parent bundle id |
+| `committer` | committer address, per commitment |
+| `field-target` | target address, when present |
+| `parent` | containing bundle item id (nested items) |
+| `commitment-device` | `ans104@1.0` |
+
+The encoding tags the codec consumes (`bundle-format`, `bundle-version`) get
+no rows; the legacy query surface translates requests for them. Legacy
+`owners`/`recipients`/`bundledIn` arguments map onto `committer`,
+`field-target` and `parent` inside `~query@1.0/arweave`.
 
 `id` needs no row — the offset index answers it. Block height needs no row — it
 is a range over the offset ordering.

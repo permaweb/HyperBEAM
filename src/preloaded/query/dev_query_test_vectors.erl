@@ -271,7 +271,7 @@ test_env_with_match_store() ->
                 [
                     {<<"Type">>, <<"Process">>},
                     {<<"Data-Protocol">>, <<"ao">>},
-                    {<<"owner">>, ?INDEX_ITEMS_OWNER}
+                    {<<"committer">>, ?INDEX_ITEMS_OWNER}
                 ],
             ItemOffset <- [OffsetA, OffsetB]
         ],

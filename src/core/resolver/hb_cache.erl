@@ -759,10 +759,14 @@ match_offset([ID | IDs], StoreOpts, Opts) ->
             match_offset(IDs, StoreOpts, Opts)
     end.
 
-%% @doc The key-value pairs a message is indexed under: its wire tags -- the
-%% `original-tags' of its commitments when any carries them, else the
-%% binary-valued keys of the uncommitted message, less `data' and `body' --
-%% with the owner, recipient and parent bundle that its commitments carry.
+%% @doc The key-value pairs a message is indexed under. Every predicate key
+%% is a key of the base message under commitment-extension resolution: its
+%% wire tags -- the `original-tags' of its commitments when any carries them,
+%% else the binary-valued keys of the uncommitted message, less `data' and
+%% `body' -- with the `committer', `field-target', parent bundle and
+%% `commitment-device' of each commitment. Encoding tags the codecs consume
+%% (`bundle-format', `bundle-version') get no rows; the legacy query surface
+%% translates requests for them.
 match_predicates(Base, Opts) ->
     Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
     Tags =
@@ -774,11 +778,18 @@ match_predicates(Base, Opts) ->
         hb_maps:fold(
             fun(_CommID, Commitment, Acc) ->
                 Acc
-                    ++ match_field(<<"owner">>, <<"committer">>, Commitment, Opts)
                     ++ match_field(
-                        <<"recipient">>, <<"field-target">>, Commitment, Opts)
+                        <<"committer">>, <<"committer">>, Commitment, Opts)
                     ++ match_field(
-                        <<"bundled-in">>, <<"bundled-in">>, Commitment, Opts)
+                        <<"field-target">>, <<"field-target">>, Commitment, Opts)
+                    ++ match_field(
+                        <<"parent">>, <<"bundled-in">>, Commitment, Opts)
+                    ++ match_field(
+                        <<"commitment-device">>,
+                        <<"commitment-device">>,
+                        Commitment,
+                        Opts
+                    )
             end,
             [],
             Commitments,
@@ -802,7 +813,11 @@ original_tags(Commitments, Opts) ->
                                 hb_maps:values(
                                     ensure_all_loaded(Numbered, Opts),
                                     Opts
-                                )
+                                ),
+                            not lists:member(
+                                hb_util:to_lower(Name),
+                                [<<"bundle-format">>, <<"bundle-version">>]
+                            )
                         ];
                 _ -> Acc
             end
@@ -1746,8 +1761,12 @@ match_items_write_and_locate_test() ->
         Locate(#{ <<"type">> => <<"Message">>, <<"data-protocol">> => <<"ao">> })
     ),
     Owner = hb_util:human_id(ar_wallet:to_address(Wallet)),
-    ?assertEqual({ok, [4096]}, Locate(#{ <<"owner">> => Owner })),
-    ?assertEqual({ok, [4096]}, Locate(#{ <<"recipient">> => Target })),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"committer">> => Owner })),
+    ?assertEqual({ok, [4096]}, Locate(#{ <<"field-target">> => Target })),
+    ?assertEqual(
+        {ok, [4096]},
+        Locate(#{ <<"commitment-device">> => <<"ans104@1.0">> })
+    ),
     ?assertEqual({ok, []}, Locate(#{ <<"data">> => <<"match-items payload">> })),
     % A message the offset index knows nothing about writes no rows: it stays
     % covered by the path-row index alone.

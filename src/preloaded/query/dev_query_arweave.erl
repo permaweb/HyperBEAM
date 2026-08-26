@@ -504,10 +504,10 @@ index_connection(Args, Opts) ->
     end.
 
 %% @doc Compile the query's filters to match predicates. Tags carry their
-%% values raw; owners and recipients become the `owner' and `recipient'
-%% predicates their rows are written under. Explicit ID queries and
-%% multi-value filters are not predicate-shaped, and a query with no
-%% predicates at all has nothing to walk.
+%% values raw; owners and recipients become the `committer' and
+%% `field-target' predicates their rows are written under. Explicit ID
+%% queries and multi-value filters are not predicate-shaped, and a query with
+%% no predicates at all has nothing to walk.
 index_template(Args, Opts) ->
     maybe
         true ?= explicit_ids(Args, Opts) =:= [] orelse unservable,
@@ -515,10 +515,13 @@ index_template(Args, Opts) ->
             index_tags(hb_maps:get(<<"tags">>, Args, null, Opts)),
         {ok, WithOwner} ?=
             index_field(
-                <<"owner">>, hb_maps:get(<<"owners">>, Args, null, Opts), Tags),
+                <<"committer">>,
+                hb_maps:get(<<"owners">>, Args, null, Opts),
+                Tags
+            ),
         {ok, Template} ?=
             index_field(
-                <<"recipient">>,
+                <<"field-target">>,
                 hb_maps:get(<<"recipients">>, Args, null, Opts),
                 WithOwner
             ),
