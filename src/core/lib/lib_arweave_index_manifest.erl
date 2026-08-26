@@ -34,7 +34,7 @@
 
 %%% How often a failed gateway request is retried, and the pause between
 %%% attempts.
--define(FETCH_ATTEMPTS, 3).
+-define(FETCH_ATTEMPTS, 6).
 -define(FETCH_PAUSE, 500).
 
 %% @doc Write a manifest of transaction specs, sorting by start offset.
@@ -395,14 +395,19 @@ fetched(Fun, Attempts) ->
                 not_found -> retried(Fun, Attempts, no_body);
                 Body -> {ok, hb_json:decode(Body)}
             end;
-        {error, Reason} ->
-            retried(Fun, Attempts, Reason)
+        % `error', `failure', and whatever else the transport spells a bad
+        % round trip as: all of it retries, and the last shape is the
+        % report.
+        Other ->
+            retried(Fun, Attempts, Other)
     end.
 
 retried(_Fun, Attempts, Reason) when Attempts =< 1 ->
     {error, Reason};
 retried(Fun, Attempts, _Reason) ->
-    timer:sleep(?FETCH_PAUSE),
+    % Later attempts back off further: a gateway blip outlasting a fixed
+    % pause would otherwise fail a whole join for one block.
+    timer:sleep(?FETCH_PAUSE * (1 + ?FETCH_ATTEMPTS - Attempts)),
     fetched(Fun, Attempts - 1).
 
 %% @doc The gateway block metadata is joined in from.
