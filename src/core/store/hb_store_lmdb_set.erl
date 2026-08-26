@@ -55,7 +55,11 @@ start(Opts = #{ <<"name">> := DataDir }, _Req, _NodeOpts) ->
                 page_size,
                 hb_util:int(maps:get(<<"page-size">>, Opts, ?DEFAULT_PAGE_SIZE))
             },
-            no_mem_init,
+            % Deliberately not `no_mem_init': with buffers initialized,
+            % unused page regions hold zeros rather than heap garbage,
+            % so an identical input builds a byte-identical file — the
+            % property that lets a published snapshot be audited against
+            % a local rebuild by hash.
             no_sync
         ] ++
         case ReadOnly of
