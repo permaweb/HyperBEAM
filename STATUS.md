@@ -379,3 +379,12 @@ and repins are yours).
   (Erlang side + new lib_arweave_index_exclude.erl + NIF edit already in
   its tree); resumed to finish build/tests/validation and launch the
   interval-based full rescan (out-scan9).
+- 2026-08-26 ~21:5xZ **Branches consolidated**: feat/arweave-index-scanner
+  merged into this branch (9a74db9e1; one trivial conflict in
+  build-preloaded-store.escript resolved to the scanner side). One
+  HyperBEAM branch now carries both intents; elmdb feat/dup-sets remains
+  its own repo branch. Cross-branch modules verified together (55 tests).
+  When W8s in-flight interval-exclusion commit lands on
+  feat/arweave-index-scanner, fold it in with:
+  git merge feat/arweave-index-scanner
+  PRs are Sams; nothing pushed.
