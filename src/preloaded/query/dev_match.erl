@@ -119,26 +119,31 @@ locate(Base, Req, Opts) ->
                 hb_util:int(
                     hb_maps:get(<<"limit">>, Req, ?DEFAULT_LOCATE_LIMIT, Opts)
                 ),
-            case hb_maps:to_list(Template, Opts) of
-                [] -> {error, not_found};
-                [{Key, Value}] ->
-                    scan(
-                        Direction,
-                        Stores,
-                        hb_cache:match_item_prefix(Key, Value),
-                        From, To, Limit, Opts
-                    );
-                Pairs ->
-                    Prefixes =
-                        [
-                            hb_cache:match_item_prefix(Key, Value)
-                        ||
-                            {Key, Value} <- Pairs
-                        ],
-                    intersect(
-                        Direction, Stores, Prefixes, From, To, Limit, [], Opts
-                    )
+            % A cursor past either end of the offsets rows can carry starts
+            % a walk with nothing left in it.
+            case From < 0 orelse From > ?MAX_OFFSET of
+                true -> {ok, []};
+                false -> locate(Direction, Stores, Template, From, To, Limit, Opts)
             end
+    end.
+locate(Direction, Stores, Template, From, To, Limit, Opts) ->
+    case hb_maps:to_list(Template, Opts) of
+        [] -> {error, not_found};
+        [{Key, Value}] ->
+            scan(
+                Direction,
+                Stores,
+                hb_cache:match_item_prefix(Key, Value),
+                From, To, Limit, Opts
+            );
+        Pairs ->
+            Prefixes =
+                [
+                    hb_cache:match_item_prefix(Key, Value)
+                ||
+                    {Key, Value} <- Pairs
+                ],
+            intersect(Direction, Stores, Prefixes, From, To, Limit, [], Opts)
     end.
 
 %% @doc The predicates a template message names. The template is compared in
@@ -554,6 +559,23 @@ locate_empty_page_test() ->
         test_locate(#{ <<"type">> => <<"Message">> }, #{ <<"from">> => 11 }, Opts)
     ),
     ?assertEqual({ok, []}, test_locate(#{ <<"type">> => <<"Other">> }, #{}, Opts)),
+    % A cursor past either end of the encodable offsets is an empty page.
+    ?assertEqual(
+        {ok, []},
+        test_locate(
+            #{ <<"type">> => <<"Message">> },
+            #{ <<"from">> => -1, <<"direction">> => <<"desc">> },
+            Opts
+        )
+    ),
+    ?assertEqual(
+        {ok, []},
+        test_locate(
+            #{ <<"type">> => <<"Message">> },
+            #{ <<"from">> => (1 bsl 49) },
+            Opts
+        )
+    ),
     ?assertEqual(
         {error, not_found},
         test_locate(#{ <<"type">> => <<"Message">> }, #{}, #{})

@@ -361,6 +361,59 @@ transactions_query_index_page() ->
     ?assertEqual([LoID], transaction_ids(Resumed, Opts)),
     ok.
 
+%% @doc The cache write path feeds the index that the GraphQL interface
+%% serves: caching a message whose weave offset the offset index knows makes
+%% its tags, owner and recipient queryable over HTTP, with no rows written
+%% by hand.
+transactions_query_cache_written_index_test_() ->
+    {timeout, 300, fun transactions_query_cache_written_index/0}.
+transactions_query_cache_written_index() ->
+    LocalStore = hb_test_utils:test_store(),
+    SetStore = hb_test_utils:test_store(hb_store_lmdb_set, <<"cache-written">>),
+    hb_store:reset(SetStore, #{}, #{}),
+    ArweaveStore =
+        #{
+            <<"store-module">> => hb_store_arweave,
+            <<"index-store">> => [hb_test_utils:test_store()],
+            <<"remote-index">> => true
+        },
+    Opts =
+        #{
+            <<"priv-wallet">> => ar_wallet:new(),
+            <<"store">> => [LocalStore, ArweaveStore],
+            <<"match-store">> => [SetStore]
+        },
+    {ok, #{ <<"start-offset">> := Offset }} =
+        hb_store_arweave:read_offset(ArweaveStore, ?INDEX_ITEM_A, Opts),
+    {ok, Msg} = hb_cache:read(?INDEX_ITEM_A, Opts),
+    {ok, _} = hb_cache:write(Msg, Opts),
+    Node = hb_http_server:start_node(Opts),
+    Res =
+        dev_query_graphql:test_query(
+            Node,
+            index_page_query(),
+            #{
+                <<"tags">> =>
+                    [
+                        #{
+                            <<"name">> => <<"Type">>,
+                            <<"values">> => [<<"Process">>]
+                        },
+                        #{
+                            <<"name">> => <<"app-name">>,
+                            <<"values">> => [<<"aos">>]
+                        }
+                    ]
+            },
+            Opts
+        ),
+    ?assertEqual([?INDEX_ITEM_A], transaction_ids(Res, Opts)),
+    ?assertEqual(
+        <<"offset=", (hb_util:bin(Offset))/binary>>,
+        transaction_cursor(Res, Opts)
+    ),
+    ?assertEqual(false, transaction_has_next_page(Res, Opts)).
+
 %% @doc The index-served page returns the same result set that the
 %% materialised path serves from a fully local cache of the same items.
 transactions_query_index_parity_test_() ->
