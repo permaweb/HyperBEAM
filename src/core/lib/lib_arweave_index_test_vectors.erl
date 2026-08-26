@@ -179,13 +179,12 @@ weave(Opts) ->
     DPayload = payload(D),
     EPayload = payload(E),
     FPayload = crypto:strong_rand_bytes(?DATA_CHUNK_SIZE),
-    AStart = range_start(),
-    BStart = next_bucket(AStart + byte_size(APayload)),
-    CStart = next_bucket(BStart + byte_size(BPayload)),
-    DStart =
-        hb_util:ceil_int(CStart + byte_size(CPayload), ?SMALL_GROUP_SIZE),
-    EStart = next_bucket(DStart + byte_size(DPayload)),
-    FStart = next_bucket(EStart + byte_size(EPayload)),
+    AStart = next_lattice(range_start()),
+    BStart = next_lattice(AStart + byte_size(APayload)),
+    CStart = next_lattice(BStart + byte_size(BPayload)),
+    DStart = next_file_lattice(CStart + byte_size(CPayload)),
+    EStart = next_lattice(DStart + byte_size(DPayload)),
+    FStart = next_lattice(EStart + byte_size(EPayload)),
     place(AStart, APayload, Opts),
     place(BStart, BPayload, Opts),
     place(CStart, CPayload, Opts),
@@ -194,12 +193,20 @@ weave(Opts) ->
     % The hole: transaction E's second chunk is unwritten after placement.
     hole(EStart + ?DATA_CHUNK_SIZE, Opts),
     place(FStart, FPayload, Opts),
-    % The boundary geometry the paddings were solved for really occurred.
+    % The boundary geometry the paddings were solved for really occurred:
+    % boundaries sit on the threshold-anchored lattice, so positions are
+    % taken relative to the residue.
     [_, _, _, {I4Start, _}, {I5Start, _}] = offsets(AStart, A),
-    ?assertEqual(?DATA_CHUNK_SIZE - 30, I5Start rem ?DATA_CHUNK_SIZE),
+    ?assertEqual(
+        ?DATA_CHUNK_SIZE - 30,
+        (I5Start - residue()) rem ?DATA_CHUNK_SIZE
+    ),
     ?assert(I5Start - I4Start >= 3 * ?DATA_CHUNK_SIZE),
     [_, {D2Start, _}] = offsets(DStart, D),
-    ?assertEqual(?SMALL_GROUP_SIZE - 40, D2Start rem ?SMALL_GROUP_SIZE),
+    ?assertEqual(
+        ?SMALL_GROUP_SIZE - 40,
+        (D2Start - residue()) rem ?SMALL_GROUP_SIZE
+    ),
     Txs =
         [
             #{ <<"start">> => AStart, <<"size">> => byte_size(APayload),
@@ -392,10 +399,10 @@ payload(Items) ->
 boundary_pad(Used, Floor, Align, Margin) ->
     hb_util:ceil_int(Used + Floor + Margin, Align) - Margin - Used.
 
-%% @doc Write one payload into the module's chunk files from its bucket-
+%% @doc Write one payload into the module's chunk files from its lattice-
 %% aligned start, zero-padding the final chunk as the layout demands.
 place(Start, Payload, Opts) ->
-    0 = Start rem ?DATA_CHUNK_SIZE,
+    true = Start rem ?DATA_CHUNK_SIZE == residue(),
     chunks(Start, Payload, Opts).
 
 chunks(_Offset, <<>>, _Opts) ->
@@ -422,9 +429,20 @@ hole(BucketStart, Opts) ->
     ok = file:pwrite(File, Position, << 0:((3 + ?DATA_CHUNK_SIZE) * 8) >>),
     ok = file:close(File).
 
-%% @doc The next bucket boundary at or after an offset.
-next_bucket(Offset) ->
-    hb_util:ceil_int(Offset, ?DATA_CHUNK_SIZE).
+%% @doc The offset of the padded lattice within the absolute buckets: real
+%% transactions above the strict data split threshold begin at
+%% `Threshold + k * 262144'.
+residue() ->
+    ar_block:strict_data_split_threshold() rem ?DATA_CHUNK_SIZE.
+
+%% @doc The first lattice point at or after an offset.
+next_lattice(Offset) ->
+    residue() + hb_util:ceil_int(Offset - residue(), ?DATA_CHUNK_SIZE).
+
+%% @doc The first lattice point at or after an offset whose slot begins a
+%% chunk file of its own.
+next_file_lattice(Offset) ->
+    residue() + hb_util:ceil_int(Offset - residue(), ?SMALL_GROUP_SIZE).
 
 %% @doc The synthetic module and its geometry.
 module() ->
