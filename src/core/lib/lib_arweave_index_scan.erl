@@ -23,7 +23,7 @@
 %%% An item whose tags name it a bundle (`bundle-format: binary',
 %%% `bundle-version: 2.0.0', names case-insensitive, values lower-cased, as
 %%% `ar_tx:type/1' reads them) and whose data passes the same structural
-%%% table checks is recursed into, its children's `bundled-in' being the
+%%% table checks is recursed into, its children's `parent' being the
 %%% enclosing item's ID. RedStone oracle items are dropped before their
 %%% signature is ever hashed. The item-count table is believed only within
 %%% bounds: a count that does not fit its transaction, or a table whose item
@@ -59,19 +59,15 @@ open(Reader, Sink, SinkState) ->
     }.
 
 %% @doc Scan one L1 transaction: `start' and `size' place its data in the
-%% weave; `id' (when known) becomes its top-level items' `bundled-in';
-%% `bundle' set false skips it without a read. Only reader failures are
-%% errors -- a transaction that is not a bundle, a malformed item, a hole in
-%% the module are all counted and stepped over.
+%% weave; `bundle' set false skips it without a read. Top-level items carry
+%% no `parent' -- the predicate marks nested containment only, so the
+%% manifest's txid is never consulted. Only reader failures are errors -- a
+%% transaction that is not a bundle, a malformed item, a hole in the module
+%% are all counted and stepped over.
 tx(#{ <<"bundle">> := false }, State) ->
     {ok, counted(<<"txs-skipped">>, State)};
-tx(Spec = #{ <<"start">> := Start, <<"size">> := Size },
+tx(#{ <<"start">> := Start, <<"size">> := Size },
         State = #{ <<"reader">> := Reader }) ->
-    Parent =
-        case maps:get(<<"id">>, Spec, <<>>) of
-            <<>> -> <<>>;
-            ID -> hb_util:human_id(ID)
-        end,
     % The transaction's extent bounds every read it can cause, so the
     % reader clips its batches and read-ahead to it.
     Limited =
@@ -80,7 +76,7 @@ tx(Spec = #{ <<"start">> := Start, <<"size">> := Size },
                 lib_arweave_index_read:limit(Start + Size, Reader)
         },
     maybe
-        {ok, State2} ?= bundle(Start, Size, Parent, 0, Limited),
+        {ok, State2} ?= bundle(Start, Size, <<>>, 0, Limited),
         {ok, counted(<<"txs">>, State2)}
     end.
 

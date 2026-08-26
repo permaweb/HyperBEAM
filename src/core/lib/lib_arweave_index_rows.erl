@@ -23,11 +23,15 @@
 %%% '''
 %%%
 %%% One match row per indexed predicate per item: each tag (lower-cased name,
-%%% raw un-normalised value), the owner's address, the recipient when the item
-%%% carries a target, and the parent bundle under `bundled-in'. RedStone
-%%% oracle items (tag signature `dataFeedId'/`dataServiceId'/`signerAddress'/
-%%% `timestamp'/`type') are excluded by policy and get no rows of either kind,
-%%% as are items whose offset or length overflows its field.
+%%% raw un-normalised value) except `bundle-format' and `bundle-version',
+%%% which the ans104 codec consumes; the committer's address under
+%%% `committer'; the target address under `field-target' when the item
+%%% carries one; the enclosing ans104 item's ID under `parent' for nested
+%%% items; and the commitment device under `commitment-device', always
+%%% `ans104@1.0'. RedStone oracle items (tag signature
+%%% `dataFeedId'/`dataServiceId'/`signerAddress'/`timestamp'/`type') are
+%%% excluded by policy and get no rows of either kind, as are items whose
+%%% offset or length overflows its field.
 -module(lib_arweave_index_rows).
 -export([offset_item/4, match_item/2, predicate/2, match_rows/2, redstone/1]).
 -export([decode_offset_item/1, decode_match_item/1]).
@@ -52,6 +56,10 @@
         <<"type">>
     ]
 ).
+
+%%% The tag names the ans104 codec consumes: they describe the transport
+%%% encoding, not the item, and get no match rows.
+-define(CODEC_TAGS, [<<"bundle-format">>, <<"bundle-version">>]).
 
 %% @doc Encode one offset-index item, or `excluded' for a row whose offset or
 %% length does not fit its field. The ID may be given in native or human form.
@@ -84,19 +92,20 @@ predicate(Key, Value) ->
 
 %% @doc Every match-index item of one data item, given its parsed header and
 %% its absolute weave offset. The header is a map of the fields the scan
-%% recovers: `tags' as `[{Name, Value}]' in item order, `owner-address' and
-%% optionally `recipient' and `bundled-in' as human-readable IDs. Predicates
-%% whose row cannot be encoded are dropped.
+%% recovers: `tags' as `[{Name, Value}]' in item order, `committer' and
+%% optionally `field-target' and `parent' as human-readable IDs. Codec-
+%% consumed tags and predicates whose row cannot be encoded are dropped.
 match_rows(Header, Offset) ->
     Tags = maps:get(<<"tags">>, Header, []),
     Fields =
         [
-            {<<"owner">>, maps:get(<<"owner-address">>, Header)}
+            {<<"commitment-device">>, <<"ans104@1.0">>},
+            {<<"committer">>, maps:get(<<"committer">>, Header)}
         |
             [
                 {Key, maps:get(Key, Header)}
             ||
-                Key <- [<<"recipient">>, <<"bundled-in">>],
+                Key <- [<<"field-target">>, <<"parent">>],
                 maps:is_key(Key, Header)
             ]
         ],
@@ -105,6 +114,7 @@ match_rows(Header, Offset) ->
     ||
         {Key, Value} <- Tags ++ Fields,
         (LowerKey = lower(Key)) /= invalid,
+        not lists:member(LowerKey, ?CODEC_TAGS),
         (Item =
             match_item(
                 <<"~match@1.0/", LowerKey/binary, "=", Value/binary>>,
@@ -211,8 +221,9 @@ match_item_layout_test() ->
     << _:10/binary, Tail:56 >> = Item,
     ?assertEqual(Offset * (1 bsl 7), Tail).
 
-%% @doc Predicates lower-case the key and leave the value untouched, and the
-%% full row set of an item covers tags, owner, recipient and bundled-in.
+%% @doc Predicates lower-case the key and leave the value untouched; the
+%% full row set of an item covers tags, committer, field-target, parent and
+%% commitment-device, with the codec-consumed bundle tags dropped.
 match_rows_test() ->
     ?assertEqual(
         <<"~match@1.0/content-type=Text/HTML">>,
@@ -221,18 +232,24 @@ match_rows_test() ->
     Offset = 1024,
     Header =
         #{
-            <<"tags">> => [{<<"App-Name">>, <<"Test">>}],
-            <<"owner-address">> => <<"ownerAddr">>,
-            <<"recipient">> => <<"recipientAddr">>,
-            <<"bundled-in">> => <<"parentID">>
+            <<"tags">> =>
+                [
+                    {<<"App-Name">>, <<"Test">>},
+                    {<<"Bundle-Format">>, <<"binary">>},
+                    {<<"Bundle-Version">>, <<"2.0.0">>}
+                ],
+            <<"committer">> => <<"committerAddr">>,
+            <<"field-target">> => <<"targetAddr">>,
+            <<"parent">> => <<"parentID">>
         },
     Rows = match_rows(Header, Offset),
     Expected =
         [
             match_item(<<"~match@1.0/app-name=Test">>, Offset),
-            match_item(<<"~match@1.0/owner=ownerAddr">>, Offset),
-            match_item(<<"~match@1.0/recipient=recipientAddr">>, Offset),
-            match_item(<<"~match@1.0/bundled-in=parentID">>, Offset)
+            match_item(<<"~match@1.0/commitment-device=ans104@1.0">>, Offset),
+            match_item(<<"~match@1.0/committer=committerAddr">>, Offset),
+            match_item(<<"~match@1.0/field-target=targetAddr">>, Offset),
+            match_item(<<"~match@1.0/parent=parentID">>, Offset)
         ],
     ?assertEqual(lists:sort(Expected), lists:sort(Rows)).
 

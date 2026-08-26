@@ -25,9 +25,10 @@
  * that one item. RedStone items are detected before any of that applies,
  * byte-exactly, and cost no hashing on either path.
  *
- * The module carries no mutable static state; its `upgrade' callback is a
- * no-op so it reloads cleanly under the device-test preloader's code
- * upgrade.
+ * The module's static state -- the shared atoms and the constant
+ * commitment-device predicate hash -- is written only at load; its
+ * `upgrade' callback re-runs the same load, so it reloads cleanly under
+ * the device-test preloader's code upgrade.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -76,6 +77,10 @@ static ERL_NIF_TERM am_redstone;
 static ERL_NIF_TERM am_failed;
 static ERL_NIF_TERM am_fallback;
 static ERL_NIF_TERM am_excluded;
+
+/* The hash of the constant `commitment-device=ans104@1.0' predicate every
+ * indexed item carries a row of, computed once at load. */
+static uint8_t commitment_device_hash[32];
 
 /* One decoded tag: name and value slices into the window. */
 typedef struct {
@@ -421,6 +426,15 @@ all_ascii(const uint8_t *bytes, size_t len)
     return 1;
 }
 
+/* Whether a tag is one the ans104 codec consumes
+ * (`lib_arweave_index_rows''s `?CODEC_TAGS'): it gets no match row.
+ * Callers have established the name is pure ASCII. */
+static int
+codec_tag(const tag_t *tag)
+{
+    return name_is(tag, "bundle-format") || name_is(tag, "bundle-version");
+}
+
 static void
 sha256(const uint8_t *in, size_t len, uint8_t out[32])
 {
@@ -678,13 +692,19 @@ rows_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
     } else {
         offset_term = am_excluded;
     }
-    /* The match rows: every tag, the owner, the recipient when a target is
-     * present, and the enclosing bundle. All share the item's offset, so one
-     * bound check drops them together. */
+    /* The match rows: every tag the codec does not consume, the commitment
+     * device, the committer, the field target when present, and the
+     * enclosing item. All share the item's offset, so one bound check drops
+     * them together. */
     match_count = 0;
     if (offset < MATCH_OFFSET_BOUND) {
-        match_count = tags.count + 1 + (h.target != NULL ? 1 : 0)
+        match_count = 2 + (h.target != NULL ? 1 : 0)
             + (parent.size > 0 ? 1 : 0);
+        for (i = 0; i < tags.count; i++) {
+            if (!codec_tag(&tags.tags[i])) {
+                match_count++;
+            }
+        }
     }
     blob = enif_make_new_binary(env, match_count * MATCH_ITEM_SIZE,
         &blob_term);
@@ -693,29 +713,34 @@ rows_nif(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[])
         sha256_ctx_t ctx;
         uint8_t hash[32];
         for (i = 0; i < tags.count; i++) {
+            if (codec_tag(&tags.tags[i])) {
+                continue;
+            }
             predicate_row(tags.tags[i].name, tags.tags[i].name_len,
                 tags.tags[i].value, tags.tags[i].value_len, offset, row);
             row += MATCH_ITEM_SIZE;
         }
+        match_item(commitment_device_hash, offset, row);
+        row += MATCH_ITEM_SIZE;
         sha256_init(&ctx);
-        sha256_update(&ctx, "~match@1.0/owner=", 17);
+        sha256_update(&ctx, "~match@1.0/committer=", 21);
         sha256_update(&ctx, address, address_len);
         sha256_final(hash, &ctx);
         match_item(hash, offset, row);
         row += MATCH_ITEM_SIZE;
         if (h.target != NULL) {
-            uint8_t recipient[43];
-            b64url(h.target, 32, recipient);
+            uint8_t field_target[43];
+            b64url(h.target, 32, field_target);
             sha256_init(&ctx);
-            sha256_update(&ctx, "~match@1.0/recipient=", 21);
-            sha256_update(&ctx, recipient, 43);
+            sha256_update(&ctx, "~match@1.0/field-target=", 24);
+            sha256_update(&ctx, field_target, 43);
             sha256_final(hash, &ctx);
             match_item(hash, offset, row);
             row += MATCH_ITEM_SIZE;
         }
         if (parent.size > 0) {
             sha256_init(&ctx);
-            sha256_update(&ctx, "~match@1.0/bundled-in=", 22);
+            sha256_update(&ctx, "~match@1.0/parent=", 18);
             sha256_update(&ctx, parent.data, parent.size);
             sha256_final(hash, &ctx);
             match_item(hash, offset, row);
@@ -752,6 +777,8 @@ load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info)
     am_failed = enif_make_atom(env, "failed");
     am_fallback = enif_make_atom(env, "fallback");
     am_excluded = enif_make_atom(env, "excluded");
+    sha256((const uint8_t *)"~match@1.0/commitment-device=ans104@1.0", 39,
+        commitment_device_hash);
     return 0;
 }
 

@@ -8,8 +8,9 @@
 %%% difference and its size is the largest relative offset seen. Txids do
 %%% not: an L1 txid is a hash over the signed transaction header, which is
 %%% not in the weave data, so it can only be joined in from block metadata.
-%%% A manifest without txids is complete except that top-level items get no
-%%% `bundled-in' row; the scan itself never needs the network.
+%%% The scan reads only boundaries, sizes and bundle flags -- txids ride
+%%% along for tooling and the base-layer containment pass -- so it never
+%%% needs the network.
 %%%
 %%% The file is fixed-width and sorted by start offset:
 %%%

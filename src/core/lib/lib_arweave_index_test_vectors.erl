@@ -16,7 +16,8 @@
 %%% mainnet partition of the present era does, with a small chunk group size
 %%% so that chunk-file boundaries are reachable without gigabytes of sparse
 %%% file. The weave it holds exercises: multi-item bundles with unicode,
-%%% empty and long tags; a RedStone look-alike; recipients; a nested bundle;
+%%% empty and long tags; a RedStone look-alike; field targets; a nested
+%%% bundle;
 %%% items whose headers straddle chunk and chunk-file boundaries; a
 %%% transaction that is not a bundle; a manifest entry marked not-a-bundle;
 %%% and a hole where a chunk was never written.
@@ -330,7 +331,8 @@ weave(Opts) ->
     % Expected rows: every indexed item, with its independently computed
     % placement, parentage and predicates. I3 is RedStone; E3's header sits
     % in the hole (E2's header is still in the chunk before it, though its
-    % data is not); C and F yield nothing.
+    % data is not); C and F yield nothing. A's manifest txid yields no rows:
+    % `parent' marks nested containment only, so only S1 and S2 carry one.
     PID = crypto:hash(sha256, P#tx.signature),
     PHeader = byte_size(ar_bundles:serialize(P)) - byte_size(P#tx.data),
     SubStart = BStart + 32 + 64 + PHeader,
@@ -340,7 +342,7 @@ weave(Opts) ->
     Expected =
         lists:append(
             [
-                expected(AStart, A, hb_util:encode(TxAID), [3]),
+                expected(AStart, A, undefined, [3]),
                 expected(BStart, B, undefined, []),
                 expected(SubStart, [S1, S2], hb_util:encode(PID), []),
                 expected(DStart, D, undefined, []),
@@ -362,10 +364,10 @@ weave(Opts) ->
 
 %% @doc The expected rows of a run of items placed from `Start', excluding
 %% the 1-based positions in `Excluded' (RedStone or lost to holes).
-expected(Start, Items, BundledIn, Excluded) ->
+expected(Start, Items, Parent, Excluded) ->
     Placements = offsets(Start, Items),
     [
-        expected_item(Item, Offset, Size, BundledIn)
+        expected_item(Item, Offset, Size, Parent)
     ||
         {N, {Item, {Offset, Size}}} <-
             lists:enumerate(lists:zip(Items, Placements)),
@@ -373,15 +375,16 @@ expected(Start, Items, BundledIn, Excluded) ->
     ].
 
 %% @doc One item's expected offset row and match rows, packed by integer
-%% maths on independently hashed inputs.
-expected_item(Item, Offset, Size, BundledIn) ->
+%% maths on independently hashed inputs. The codec-consumed
+%% `bundle-format'/`bundle-version' tags yield no predicates.
+expected_item(Item, Offset, Size, Parent) ->
     ID = crypto:hash(sha256, Item#tx.signature),
     OffsetRow =
         <<
             (binary:part(ID, 0, 10))/binary,
             (2 * (1 bsl 84) + Offset * (1 bsl 34) + Size):88
         >>,
-    Owner = hb_util:encode(crypto:hash(sha256, Item#tx.owner)),
+    Committer = hb_util:encode(crypto:hash(sha256, Item#tx.owner)),
     Predicates =
         [
             <<
@@ -391,20 +394,25 @@ expected_item(Item, Offset, Size, BundledIn) ->
                 Value/binary
             >>
         ||
-            {Name, Value} <- Item#tx.tags
+            {Name, Value} <- Item#tx.tags,
+            not lists:member(
+                string:lowercase(Name),
+                [<<"bundle-format">>, <<"bundle-version">>]
+            )
         ]
-        ++ [<<"~match@1.0/owner=", Owner/binary>>]
+        ++ [<<"~match@1.0/commitment-device=ans104@1.0">>]
+        ++ [<<"~match@1.0/committer=", Committer/binary>>]
         ++
             case Item#tx.target of
                 <<>> -> [];
                 Target ->
-                    [<<"~match@1.0/recipient=",
+                    [<<"~match@1.0/field-target=",
                         (hb_util:encode(Target))/binary>>]
             end
         ++
-            case BundledIn of
+            case Parent of
                 undefined -> [];
-                Parent -> [<<"~match@1.0/bundled-in=", Parent/binary>>]
+                ParentID -> [<<"~match@1.0/parent=", ParentID/binary>>]
             end,
     {
         OffsetRow,

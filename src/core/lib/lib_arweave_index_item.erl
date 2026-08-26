@@ -42,8 +42,8 @@ init() ->
 %% @doc One item's rows: `redstone', `failed',
 %% `{ok, OffsetItem | excluded, MatchItems}', or
 %% `{bundle, OffsetItem | excluded, MatchItems, HeaderSize, ID}' for an
-%% item to recurse into. `Parent' is the enclosing bundle's human-readable
-%% ID, or empty.
+%% item to recurse into. `Parent' is the enclosing ans104 item's
+%% human-readable ID, or empty at the top level.
 rows(Window, Offset, Size, Parent) ->
     Result =
         case byte_size(Window) > ?DIRTY_WINDOW of
@@ -119,17 +119,17 @@ header_map(TX, Parent) ->
     Base =
         #{
             <<"tags">> => Tags,
-            <<"owner-address">> =>
+            <<"committer">> =>
                 hb_util:human_id(ar_wallet:to_address(Owner, SigType))
         },
     WithTarget =
         case Target of
             <<>> -> Base;
-            _ -> Base#{ <<"recipient">> => hb_util:human_id(Target) }
+            _ -> Base#{ <<"field-target">> => hb_util:human_id(Target) }
         end,
     case Parent of
         <<>> -> WithTarget;
-        _ -> WithTarget#{ <<"bundled-in">> => Parent }
+        _ -> WithTarget#{ <<"parent">> => Parent }
     end.
 
 %% @doc Whether the item's tags name it a bundle (`bundle-format: binary',
@@ -191,8 +191,8 @@ avro_block_form_parity_test() ->
     assert_windowed_parity(Item, 4096, byte_size(Item), <<>>),
     {ok, _Offset, Rows} =
         rows(Item, 4096, byte_size(Item), <<>>),
-    % Two tag rows and the owner row.
-    ?assertEqual(3, length(Rows)).
+    % Two tag rows, the commitment-device row and the committer row.
+    ?assertEqual(4, length(Rows)).
 
 %% @doc A varint reaching Erlang-bignum territory defers to the reference
 %% rather than wrapping in native arithmetic.
@@ -203,8 +203,8 @@ bignum_varint_parity_test() ->
     assert_windowed_parity(Item, 4096, byte_size(Item), <<>>).
 
 %% @doc The native ethereum owner path reproduces the known checksummed
-%% address vector, end to end into the owner predicate row.
-ethereum_owner_row_test() ->
+%% address vector, end to end into the committer predicate row.
+ethereum_committer_row_test() ->
     rand:seed(exsss, {41, 42, 43}),
     Key =
         hb_util:decode(
@@ -219,13 +219,15 @@ ethereum_owner_row_test() ->
                 <<"tags">> => []
             }
         ),
-    {ok, _OffsetItem, [OwnerRow]} = rows(Item, 4096, byte_size(Item), <<>>),
+    {ok, _OffsetItem, [_DeviceRow, CommitterRow]} =
+        rows(Item, 4096, byte_size(Item), <<>>),
     ?assertEqual(
         lib_arweave_index_rows:match_item(
-            <<"~match@1.0/owner=0xb7B4360F7F6298dE2e7a11009270F35F189Bd77E">>,
+            <<"~match@1.0/committer=",
+                "0xb7B4360F7F6298dE2e7a11009270F35F189Bd77E">>,
             4096
         ),
-        OwnerRow
+        CommitterRow
     ).
 
 %% @doc One item's native and reference results, over the full item as the
