@@ -69,26 +69,47 @@ load(Path, From, To) ->
         {error, Reason} -> {error, Reason}
     end.
 
-%% @doc Derive boundary records from the chunk index a mining node keeps in
-%% its store, for one storage module's rows, and write them as a manifest.
-%% The index carries no txids, so none are recorded.
+%% @doc Derive boundary records from the chunk index a mining node keeps,
+%% for one storage module's rows, and write them as a manifest. The index
+%% carries no txids, so none are recorded.
 %%
-%% Rows are read in bucket order, which is weave order: each names its
-%% transaction's start (`AbsoluteEndOffset - RelativeOffset') and raises its
-%% size high-water (`RelativeOffset'). The `TXRoot' runs the rows arrive in
-%% are preserved as block groups for later metadata joins.
+%% Each chunk row names its transaction's start (`AbsoluteEndOffset -
+%% RelativeOffset') and raises its size high-water (`RelativeOffset'). The
+%% index is one fold: its keys are flat -- the importer writes rows without
+%% group markers, so a store-level walk has nothing to resolve -- and a
+%% partition is tens of millions of rows, which is one sequential pass of
+%% the file rather than a call per bucket. `arweave-index-store' names the
+%% index's directory and capacity in `hb_store_lmdb''s own option spelling.
 from_chunk_index(Path, StoreID, Opts) ->
-    Store = hb_opts:get(<<"arweave-index-store">>, no_store, Opts),
+    Store = hb_opts:get(<<"arweave-index-store">>, #{}, Opts),
     Prefix =
         <<
             (?INDEX_PREFIX)/binary,
             "/",
             (hb_util:bin(StoreID))/binary,
-            "/chunks"
+            "/chunks/"
         >>,
     maybe
-        {ok, Buckets} ?= hb_store:list(Store, Prefix, Opts),
-        Txs = boundaries(lists:sort(Buckets), Prefix, Store, #{}, Opts),
+        {ok, Env} ?=
+            elmdb:env_open(
+                hb_maps:get(<<"name">>, Store, <<"index">>, Opts),
+                [{map_size, hb_util:int(
+                    hb_maps:get(<<"capacity">>, Store, 268435456000, Opts))}]
+            ),
+        {ok, DB} ?= elmdb:db_open(Env, []),
+        {ok, Boundaries} ?=
+            elmdb:fold(
+                DB,
+                fun(Key, Value, Acc) -> chunk_row(Key, Value, Prefix, Acc) end,
+                #{}
+            ),
+        ok = elmdb:env_close(Env),
+        Txs =
+            [
+                #{ <<"start">> => Start, <<"size">> => Size }
+            ||
+                {Start, Size} <- lists:sort(maps:to_list(Boundaries))
+            ],
         ok ?= write(Path, Txs),
         {ok, length(Txs)}
     end.
@@ -428,51 +449,26 @@ spec(Start, Size, Flags, TXID) when Flags =< 7 ->
 spec(_Start, _Size, _Flags, _TXID) ->
     invalid.
 
-%% @doc Fold the index's bucket groups into per-transaction boundaries. Each
-%% bucket group holds the row of one chunk, keyed by absolute end offset.
-boundaries([], _Prefix, _Store, Acc, _Opts) ->
-    [
-        #{ <<"start">> => Start, <<"size">> => Size }
-    ||
-        {Start, Size} <- lists:sort(maps:to_list(Acc))
-    ];
-boundaries([Bucket | Buckets], Prefix, Store, Acc, Opts) ->
-    BucketPath = << Prefix/binary, "/", (hb_util:bin(Bucket))/binary >>,
-    Acc2 =
-        case hb_store:list(Store, BucketPath, Opts) of
-            {ok, Ends} ->
-                lists:foldl(
-                    fun(End, Fold) ->
-                        chunk_row(BucketPath, End, Store, Fold, Opts)
-                    end,
-                    Acc,
-                    Ends
-                );
-            _ ->
-                Acc
-        end,
-    boundaries(Buckets, Prefix, Store, Acc2, Opts).
-
-%% @doc Raise one chunk row's transaction to the boundary map.
-chunk_row(BucketPath, End, Store, Acc, Opts) ->
-    Path = << BucketPath/binary, "/", (hb_util:bin(End))/binary >>,
-    maybe
-        {ok, Value} ?= hb_store:read(Store, Path, Opts),
-        << 1:8, _ChunkSize:32, RelativeOffset:64, _/binary >> ?= Value,
-        AbsoluteEnd = hb_util:int(End),
-        Start = AbsoluteEnd - RelativeOffset,
-        maps:update_with(
-            Start,
-            fun(Size) -> max(Size, RelativeOffset) end,
-            RelativeOffset,
-            Acc
-        )
-    else
-        Other ->
-            % A row the store lists but cannot produce, or one written by a
-            % format this decoder does not know, contributes no boundary.
-            ?event(warning,
-                {chunk_index_row_skipped, {path, Path}, {result, Other}}),
+%% @doc Raise one chunk row's transaction to the boundary map. Keys outside
+%% the module's `chunks' prefix, and values this decoder does not know, pass
+%% through untouched: the fold crosses every row the index holds.
+chunk_row(Key, Value, Prefix, Acc) ->
+    PrefixSize = byte_size(Prefix),
+    case Key of
+        << Prefix:PrefixSize/binary, _Bucket:20/binary, "/", End:20/binary >> ->
+            case Value of
+                << 1:8, _ChunkSize:32, RelativeOffset:64, _/binary >> ->
+                    Start = hb_util:int(End) - RelativeOffset,
+                    maps:update_with(
+                        Start,
+                        fun(Size) -> max(Size, RelativeOffset) end,
+                        RelativeOffset,
+                        Acc
+                    );
+                _Unknown ->
+                    Acc
+            end;
+        _Other ->
             Acc
     end.
 
