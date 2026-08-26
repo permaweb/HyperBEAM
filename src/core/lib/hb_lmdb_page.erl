@@ -27,10 +27,10 @@
 -module(hb_lmdb_page).
 -export([meta/1, page/1, search/2, seek/2, node/2, num_keys/1]).
 -export([item/3, item_seek/3]).
-%% The fixture that the tests below read is also published to Arweave, where
+%% The fixtures that the tests below read are also published to Arweave, where
 %% `hb_store_arlmdb' reads the same bytes. Its tests take the contents to expect
 %% from here, so that both readers are held to one description of them.
--export([fixture_entries/0]).
+-export([fixture_entries/0, dup_fixture_items/0]).
 -include_lib("eunit/include/eunit.hrl").
 
 %% Sizes, in bytes, of the fixed-length structures of the format.
@@ -464,6 +464,24 @@ item_lower_bound(Page, Key, Pad, Low, High) ->
 -define(FIXTURE_MATCHES, 64).
 -define(FIXTURE_BLOB_SIZE, 8192).
 
+%% Three sorted-set containers, written by the reference `liblmdb' with
+%% `MDB_APPENDDUP': one key `<<0>>' whose duplicates are 17-byte items, each a
+%% 10-byte group hash followed by a 7-byte ascending tail. The first holds
+%% 5,000 items on 512-byte pages, promoting the set to a sub-database three
+%% levels deep; the second holds six, few enough to stay a sub-page inside the
+%% main leaf node; the third holds 50,000 on the 64 KiB pages a published
+%% index uses, filling its `P_LEAF2' leaves to 3,853 items each.
+-define(DUPFIXED_FIXTURE, "test/lmdb-1.0-dupfixed.mdb").
+-define(SUBPAGE_FIXTURE, "test/lmdb-1.0-subpage.mdb").
+-define(DUPFIXED_64K_FIXTURE, "test/lmdb-1.0-dupfixed-64k.mdb").
+-define(DUP_FIXTURE_PAD, 17).
+-define(DUP_FIXTURE_GROUPS, 200).
+-define(DUP_FIXTURE_MEMBERS, 25).
+-define(SUBPAGE_FIXTURE_GROUPS, 2).
+-define(SUBPAGE_FIXTURE_MEMBERS, 3).
+-define(DUPFIXED_64K_GROUPS, 2000).
+-define(DUPFIXED_64K_MEMBERS, 25).
+
 %% @doc The key-value pairs that the fixture was built from, in no particular
 %% order.
 fixture_entries() ->
@@ -498,8 +516,35 @@ fixture_blob() ->
 fixture_id(J) ->
     hb_util:encode(<< <<((J * K) rem 251)>> || K <- lists:seq(0, 31) >>).
 
+%% @doc The items that the promoted duplicate-set fixture was built from, in
+%% ascending order. The group hashes are generated with splitmix64 so that
+%% they spread over the whole key space, as hashed predicates do.
+dup_fixture_items() ->
+    dup_fixture_items(?DUP_FIXTURE_GROUPS, ?DUP_FIXTURE_MEMBERS).
+dup_fixture_items(Groups, Members) ->
+    lists:usort(
+        [
+            <<(dup_fixture_hash(G))/binary, (M * 4096 + G):56>>
+        ||
+            G <- lists:seq(0, Groups - 1),
+            M <- lists:seq(0, Members - 1)
+        ]
+    ).
+
+dup_fixture_hash(G) ->
+    <<(splitmix(2 * G)):64, (splitmix(2 * G + 1) bsr 48):16>>.
+
+splitmix(X) ->
+    Mask = 16#FFFFFFFFFFFFFFFF,
+    A = (X + 16#9E3779B97F4A7C15) band Mask,
+    B = ((A bxor (A bsr 30)) * 16#BF58476D1CE4E5B9) band Mask,
+    C = ((B bxor (B bsr 27)) * 16#94D049BB133111EB) band Mask,
+    C bxor (C bsr 31).
+
 fixture() ->
-    {ok, Bin} = file:read_file(?FIXTURE),
+    fixture(?FIXTURE).
+fixture(Path) ->
+    {ok, Bin} = file:read_file(Path),
     Bin.
 
 %% @doc Take the meta page of the snapshot the file most recently committed.
@@ -625,6 +670,201 @@ seek_test() ->
     ?assertEqual(lists:sublist(Expected, length(Found)), Found),
     % A key beyond everything the page holds seeks past its last node.
     ?assertEqual({ok, Keys}, {ok, seek(Page, <<255>>)}).
+
+%% @doc Take a container fixture's duplicate set. The main tree of each is one
+%% leaf holding the single key `<<0>>', whose node carries the set.
+dup_fixture_set(File) ->
+    Meta = #{ <<"page-size">> := PageSize, <<"root">> := Root } =
+        fixture_meta(File),
+    {leaf, Set} = search(fixture_page(File, PageSize, Root), <<0>>),
+    {Meta, Set}.
+
+%% @doc Collect a sub-database's leaves in order, descending its branch pages
+%% depth-first. The branches are ordinary node pages; only the leaves differ.
+dup_fixture_leaves(File, PageSize, Number) ->
+    Page = fixture_page(File, PageSize, Number),
+    case page(Page) of
+        {ok, #{ <<"type">> := branch, <<"keys">> := Keys }} ->
+            lists:append(
+                [
+                    dup_fixture_leaves(File, PageSize, Child)
+                ||
+                    I <- lists:seq(0, Keys - 1),
+                    {ok, _Key, {branch, Child}} <- [node(Page, I)]
+                ]
+            );
+        {ok, #{ <<"type">> := leaf2 }} ->
+            [Page]
+    end.
+
+%% @doc Read every item that a fixed-width page holds, in order.
+dup_fixture_leaf_items(Leaf) ->
+    {ok, #{ <<"keys">> := Keys, <<"pad">> := Pad }} = page(Leaf),
+    [
+        Item
+    ||
+        I <- lists:seq(0, Keys - 1),
+        {ok, Item} <- [item(Leaf, I, Pad)]
+    ].
+
+%% @doc The container fixtures' meta pages each name an LMDB 1.0 database of
+%% the built page size, whose main database carries both duplicate flags, one
+%% level of tree, and every item of the set as an entry.
+dup_meta_test() ->
+    lists:foreach(
+        fun({Path, PageSize, Groups, Members}) ->
+            Meta = fixture_meta(fixture(Path)),
+            ?assertMatch(#{ <<"flags">> := 16#14, <<"depth">> := 1 }, Meta),
+            ?assertEqual(PageSize, maps:get(<<"page-size">>, Meta)),
+            ?assertEqual(
+                length(dup_fixture_items(Groups, Members)),
+                maps:get(<<"entries">>, Meta)
+            )
+        end,
+        [
+            {?DUPFIXED_FIXTURE, 512,
+                ?DUP_FIXTURE_GROUPS, ?DUP_FIXTURE_MEMBERS},
+            {?SUBPAGE_FIXTURE, 512,
+                ?SUBPAGE_FIXTURE_GROUPS, ?SUBPAGE_FIXTURE_MEMBERS},
+            {?DUPFIXED_64K_FIXTURE, 65536,
+                ?DUPFIXED_64K_GROUPS, ?DUPFIXED_64K_MEMBERS}
+        ]
+    ).
+
+%% @doc The promoted form: the single main-database entry is an `F_SUBDATA'
+%% node whose data is the sub-database's `MDB_db'. Every leaf below its root
+%% is fixed-width; each but the last is full, holding
+%% `(page size - header) div pad' items; and the items of all of them, taken
+%% in leaf order, are exactly the ones the fixture was built from -- strictly
+%% ascending, with no duplicates, since the expectation itself is a sorted
+%% set.
+dup_subdatabase_test() ->
+    lists:foreach(
+        fun({Path, PageSize, Groups, Members}) ->
+            File = fixture(Path),
+            {Meta, {subdb, Db}} = dup_fixture_set(File),
+            Expected = dup_fixture_items(Groups, Members),
+            ?assertMatch(
+                #{ <<"pad">> := ?DUP_FIXTURE_PAD, <<"flags">> := 16#10 },
+                Db
+            ),
+            ?assertEqual(length(Expected), maps:get(<<"entries">>, Db)),
+            ?assert(maps:get(<<"depth">>, Db) >= 2),
+            ?assert(maps:get(<<"root">>, Db) =< maps:get(<<"last-page">>, Meta)),
+            Leaves =
+                dup_fixture_leaves(File, PageSize, maps:get(<<"root">>, Db)),
+            Full = (PageSize - ?PAGE_HEADER_SIZE) div ?DUP_FIXTURE_PAD,
+            {Filled, [_Last]} = lists:split(length(Leaves) - 1, Leaves),
+            lists:foreach(
+                fun(Leaf) ->
+                    ?assertMatch({ok, #{ <<"keys">> := Full }}, page(Leaf))
+                end,
+                Filled
+            ),
+            ?assertEqual(
+                Expected,
+                lists:append(
+                    [dup_fixture_leaf_items(Leaf) || Leaf <- Leaves]
+                )
+            )
+        end,
+        [
+            {?DUPFIXED_FIXTURE, 512,
+                ?DUP_FIXTURE_GROUPS, ?DUP_FIXTURE_MEMBERS},
+            {?DUPFIXED_64K_FIXTURE, 65536,
+                ?DUPFIXED_64K_GROUPS, ?DUPFIXED_64K_MEMBERS}
+        ]
+    ).
+
+%% @doc The sub-page form: a set small enough stays inside its leaf node as a
+%% fixed-width sub-page, marked `F_DUPDATA' without `F_SUBDATA', and reads
+%% with the same item calls as a full page.
+dup_subpage_test() ->
+    File = fixture(?SUBPAGE_FIXTURE),
+    {_Meta, {subpage, Sub}} = dup_fixture_set(File),
+    ?assertMatch(
+        {ok, #{ <<"type">> := leaf2, <<"pad">> := ?DUP_FIXTURE_PAD }},
+        page(Sub)
+    ),
+    ?assertEqual(
+        dup_fixture_items(?SUBPAGE_FIXTURE_GROUPS, ?SUBPAGE_FIXTURE_MEMBERS),
+        dup_fixture_leaf_items(Sub)
+    ).
+
+%% @doc `item_seek' finds the first item at or after its key: an exact key
+%% finds its own index, a group's hash the start of that group's run, and a
+%% key past everything the item count. The node calls stay off fixed-width
+%% pages, which have no node structure for them to read.
+dup_item_seek_test() ->
+    File = fixture(?DUPFIXED_FIXTURE),
+    {#{ <<"page-size">> := PageSize }, {subdb, Db}} = dup_fixture_set(File),
+    [Leaf | _] = dup_fixture_leaves(File, PageSize, maps:get(<<"root">>, Db)),
+    Items = dup_fixture_leaf_items(Leaf),
+    Third = lists:nth(3, Items),
+    ?assertEqual(2, item_seek(Leaf, Third, ?DUP_FIXTURE_PAD)),
+    ?assertEqual(0, item_seek(Leaf, <<>>, ?DUP_FIXTURE_PAD)),
+    % A group hash is a prefix of its items, so it lands on the first of them.
+    Hash = binary:part(lists:last(Items), 0, 10),
+    First = item_seek(Leaf, Hash, ?DUP_FIXTURE_PAD),
+    ?assertMatch(<<Hash:10/binary, _/binary>>, lists:nth(First + 1, Items)),
+    ?assert(First == 0 orelse
+        binary:part(lists:nth(First, Items), 0, 10) =/= Hash),
+    {ok, #{ <<"keys">> := Keys }} = page(Leaf),
+    ?assertEqual(
+        Keys,
+        item_seek(Leaf, binary:copy(<<255>>, ?DUP_FIXTURE_PAD),
+            ?DUP_FIXTURE_PAD)
+    ),
+    ?assertEqual({error, no_such_item}, item(Leaf, Keys, ?DUP_FIXTURE_PAD)),
+    ?assertEqual({error, no_such_item}, item(Leaf, -1, ?DUP_FIXTURE_PAD)),
+    ?assertEqual({error, {item_width_mismatch, 21, 17}}, item(Leaf, 0, 21)),
+    SubRoot = fixture_page(File, PageSize, maps:get(<<"root">>, Db)),
+    ?assertEqual(
+        {error, {not_a_fixed_width_page, branch}},
+        item(SubRoot, 0, ?DUP_FIXTURE_PAD)
+    ),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, node(Leaf, 0)),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, seek(Leaf, <<>>)),
+    ?assertEqual({error, {not_a_node_page, leaf2}}, num_keys(Leaf)).
+
+%% @doc A container whose own bookkeeping does not agree with its bytes is
+%% refused wherever the disagreement lies: an item width of zero or one wider
+%% than the page, an `F_SUBDATA' node sized as anything but an `MDB_db', and a
+%% sub-page shorter than a page header.
+refuses_malformed_container_test() ->
+    File = fixture(?DUPFIXED_FIXTURE),
+    {Meta = #{ <<"page-size">> := PageSize }, {subdb, Db}} =
+        dup_fixture_set(File),
+    [Leaf | _] = dup_fixture_leaves(File, PageSize, maps:get(<<"root">>, Db)),
+    ?assertMatch(
+        {error, {invalid_fixed_width_bounds, 0, _, _}},
+        page(overwrite(Leaf, 16, <<0:16/little>>))
+    ),
+    ?assertMatch(
+        {error, {invalid_fixed_width_bounds, 1024, _, _}},
+        page(overwrite(Leaf, 16, <<1024:16/little>>))
+    ),
+    ?assertMatch(
+        {error, {invalid_fixed_width_bounds, _, _, _}},
+        page(overwrite(Leaf, 20, <<3:16/little>>))
+    ),
+    % The main leaf's node claims a sub-database description of 47 bytes.
+    MainRoot = fixture_page(File, PageSize, maps:get(<<"root">>, Meta)),
+    {ok, Offset} = node_offset(MainRoot, 0),
+    ?assertEqual(
+        {error, {invalid_subdatabase_node, 47}},
+        node(overwrite(MainRoot, Offset, <<47:16/little>>), 0)
+    ),
+    % A sub-page must at least hold its own header.
+    SubFile = fixture(?SUBPAGE_FIXTURE),
+    {#{ <<"page-size">> := SubPageSize, <<"root">> := SubRoot }, {subpage, _}} =
+        dup_fixture_set(SubFile),
+    SubLeaf = fixture_page(SubFile, SubPageSize, SubRoot),
+    {ok, SubOffset} = node_offset(SubLeaf, 0),
+    ?assertEqual(
+        {error, value_overruns_page},
+        node(overwrite(SubLeaf, SubOffset, <<10:16/little>>), 0)
+    ).
 
 %% @doc Input that is not an LMDB 1.0 database is refused rather than
 %% interpreted, including a database written by the 0.9 series that the local
