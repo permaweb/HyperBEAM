@@ -50,21 +50,23 @@ apply_type_defaults(StoreOpt, TypeKey, Defaults) ->
             StoreOpt
     end.
 
-%% @doc Apply defaults to sub-stores recursively.
+%% @doc Apply defaults to sub-stores recursively, under every store-option
+%% key that carries a nested store list: `store' (wrapped stores, e.g.
+%% gateway), `stores' (hb_store_multi), and the `index-store' and
+%% `local-store' lists of hb_store_arweave.
 apply_defaults_to_substores(StoreOpt, Defaults) ->
-    case maps:get(<<"store">>, StoreOpt, undefined) of
-        SubStores when is_list(SubStores) ->
-            UpdatedSubStores = 
-                lists:map(
-                    fun(SubStore) ->
-                        apply_defaults_to_store(SubStore, Defaults)
-                    end,
-                    SubStores
-                ),
-            maps:put(<<"store">>, UpdatedSubStores, StoreOpt);
-        _ ->
-            StoreOpt
-    end.
+    lists:foldl(
+        fun(Key, Acc) ->
+            case maps:get(Key, Acc, undefined) of
+                SubStores when is_list(SubStores) ->
+                    maps:put(Key, apply(SubStores, Defaults), Acc);
+                _ ->
+                    Acc
+            end
+        end,
+        StoreOpt,
+        [<<"store">>, <<"stores">>, <<"index-store">>, <<"local-store">>]
+    ).
 
 %% EUnit tests
 
@@ -158,6 +160,47 @@ nested_stores_test() ->
         ],
     Result = apply(StoreOpts, Defaults),
     ?assertEqual(Expected, Result).
+
+substore_keys_test() ->
+    % Defaults reach the sub-store lists under `stores' (hb_store_multi)
+    % and `index-store'/`local-store' (hb_store_arweave), including one
+    % nested level down.
+    LmdbSub =
+        #{
+            <<"name">> => <<"sub-lmdb">>,
+            <<"store-module">> => hb_store_lmdb
+        },
+    StoreOpts =
+        [
+            #{
+                <<"store-module">> => hb_store_multi,
+                <<"stores">> => [LmdbSub]
+            },
+            #{
+                <<"store-module">> => hb_store_arweave,
+                <<"index-store">> => [LmdbSub],
+                <<"local-store">> => [
+                    #{
+                        <<"store-module">> => hb_store_gateway,
+                        <<"store">> => [LmdbSub]
+                    }
+                ]
+            }
+        ],
+    Defaults =
+        #{
+            <<"lmdb">> => #{
+                <<"capacity">> => 1073741824
+            }
+        },
+    [MultiStore, ArweaveStore] = apply(StoreOpts, Defaults),
+    [MultiSub] = maps:get(<<"stores">>, MultiStore),
+    ?assertEqual(1073741824, maps:get(<<"capacity">>, MultiSub)),
+    [IndexSub] = maps:get(<<"index-store">>, ArweaveStore),
+    ?assertEqual(1073741824, maps:get(<<"capacity">>, IndexSub)),
+    [LocalGateway] = maps:get(<<"local-store">>, ArweaveStore),
+    [GatewaySub] = maps:get(<<"store">>, LocalGateway),
+    ?assertEqual(1073741824, maps:get(<<"capacity">>, GatewaySub)).
 
 %% @doc Integration test to verify that capacity is properly set for hb_store_lmdb
 %% This test verifies that the capacity value is correctly applied and accessible
