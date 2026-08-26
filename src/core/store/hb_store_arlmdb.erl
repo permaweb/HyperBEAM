@@ -20,6 +20,17 @@
 %%% the unindexed fallback, a scan of the whole store, and is not a path this
 %%% store serves.
 %%%
+%%% A database whose main tree carries the `MDB_DUPSORT|MDB_DUPFIXED' flags is
+%%% a sorted-set container rather than a path hierarchy: one entry, the key
+%%% `<<0>>', whose fixed-width duplicates are the whole index. Requests then
+%%% name item prefixes instead of paths, and every item is an opaque binary --
+%%% the store knows the container, never the items. `read/3' answers with the
+%%% first item carrying the sought prefix; `list/3' with the ascending run of
+%%% items that carry it, from the request's `from' (inclusive) where one is
+%%% given, capped at its `limit'. A lookup descends the main tree to the
+%%% container's single entry and the sub-database below it, so it costs the
+%%% two depths plus the meta page in ranged reads.
+%%%
 %%% The store is read-only: every mutating callback returns `{error, not_found}'
 %%% so that `hb_store' falls through to the next store in the node's list.
 %%%
@@ -42,8 +53,13 @@
 -define(META_SPAN, 2 * 65536).
 %% The header that precedes a value on the overflow pages holding it.
 -define(PAGE_HEADER_SIZE, 24).
+%% The main-database flag that marks a sorted-set container. `hb_lmdb_page'
+%% admits it only alongside `MDB_DUPFIXED', so one bit decides the model.
+-define(MDB_DUPSORT, 16#04).
 -define(DEFAULT_MAX_VALUE, 16 * 1024 * 1024).
 -define(MAX_LINKS, 1000).
+%% How many items a sorted-set listing returns when its request does not say.
+-define(DEFAULT_LIST_LIMIT, 1000).
 
 %% @doc Start the store by resolving its locator: the range of the weave that
 %% holds the database. The data is immutable, so the range is resolved once and
@@ -82,51 +98,67 @@ group(_, _, _) -> {error, not_found}.
 %% the reverse index that `dev_match' lists, not by scanning the store.
 match(_, _, _) -> {error, not_found}.
 
-%% @doc Read the value at a key, following link markers. A `group' marker makes
-%% the entry composite, and its immediate children come back with it, each
-%% carrying the value it holds.
+%% @doc Read the entry at a key. On a path database the value is followed
+%% through link markers, and a `group' marker makes the entry composite, its
+%% immediate children coming back with it. On a sorted-set container the key
+%% is an item prefix, and the answer is the first item that carries it.
 read(Store, #{ <<"read">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
-        case Value of
-            <<"group">> -> composite(Located, Meta, Resolved, Opts);
-            _ -> {ok, Value}
+        case duplicates(Meta) of
+            true -> item(Located, Meta, key(Path), Opts);
+            false -> entry(Located, Meta, key(Path), Opts)
         end
     end.
 
-%% @doc Classify the entry at a key as a group or a direct value.
+%% @doc Classify the entry at a key as a group or a direct value. An item of a
+%% sorted set carries no marker, so one that is present is `simple'.
 type(Store, #{ <<"type">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, _Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
-        case Value of
-            <<"group">> -> {ok, composite};
-            _ -> {ok, simple}
+        case duplicates(Meta) of
+            true ->
+                case item(Located, Meta, key(Path), Opts) of
+                    {ok, _Item} -> {ok, simple};
+                    {error, _} = Error -> Error
+                end;
+            false ->
+                entry_type(Located, Meta, key(Path), Opts)
         end
     end.
 
 %% @doc Follow the links in a path's intermediate segments, returning the path
-%% that the entry itself sits at.
+%% that the entry itself sits at. Items carry no links, so on a sorted-set
+%% container a path resolves to itself.
 resolve(Store, #{ <<"resolve">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Parts} ?=
-            resolve_links(Located, Meta, split(key(Path), [global]), Opts),
-        {ok, join(Parts)}
+        case duplicates(Meta) of
+            true ->
+                {ok, key(Path)};
+            false ->
+                case resolve_links(
+                    Located, Meta, split(key(Path), [global]), Opts
+                ) of
+                    {ok, Parts} -> {ok, join(Parts)};
+                    {error, _} = Error -> Error
+                end
+        end
     end.
 
 %% @doc List the immediate children of a group. A path that does not carry a
 %% `group' marker is not a group, even where keys sit below it: the marker is
 %% what `hb_cache' writes, and a listing that ignored it would disagree with the
-%% same database read locally.
-list(Store, #{ <<"list">> := Path }, Opts) ->
+%% same database read locally. On a sorted-set container the request instead
+%% names an item prefix, and the answer is the ascending run of items carrying
+%% it: from the request's `from' (inclusive) where one is given, capped at its
+%% `limit'.
+list(Store, Request = #{ <<"list">> := Path }, Opts) ->
     maybe
         {ok, Located, Meta} ?= open(Store, Opts),
-        {ok, Resolved, Value} ?= resolved(Located, Meta, key(Path), Opts),
-        case Value of
-            <<"group">> -> names(children(Located, Meta, Resolved, Opts));
-            _ -> {error, not_found}
+        case duplicates(Meta) of
+            true -> items(Located, Meta, key(Path), Request, Opts);
+            false -> listing(Located, Meta, key(Path), Opts)
         end
     end.
 
@@ -143,6 +175,11 @@ open(Store, Opts) ->
         {ok, Meta} ?= meta(Located, Opts),
         {ok, Located, Meta}
     end.
+
+%% @doc Whether the database is a sorted-set container: a main tree whose
+%% entries carry duplicate sets rather than values. The flag pair was already
+%% validated whole by `hb_lmdb_page:meta/1', so one bit answers.
+duplicates(#{ <<"flags">> := Flags }) -> Flags band ?MDB_DUPSORT =/= 0.
 
 %% @doc Resolve the locator, if it is not already attached. `hb_store' holds
 %% the resolution in the store's instance message, which is keyed by the store's
@@ -357,6 +394,28 @@ read_chunks(#{ <<"relative">> := ID }, Offset, Length, Opts) ->
 
 %%% Walking the tree.
 
+%% @doc Read the entry at a path, following the links that lead to it. A
+%% `group' marker makes the entry composite, and its immediate children come
+%% back with it, each carrying the value it holds.
+entry(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
+        case Value of
+            <<"group">> -> composite(Store, Meta, Resolved, Opts);
+            _ -> {ok, Value}
+        end
+    end.
+
+%% @doc Classify the entry at a path by the marker it carries.
+entry_type(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, _Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
+        case Value of
+            <<"group">> -> {ok, composite};
+            _ -> {ok, simple}
+        end
+    end.
+
 %% @doc Find the value stored at a key. The descent is bounded by the depth the
 %% meta page records: a database read out of the weave is untrusted input, so a
 %% cycle in its page pointers must terminate.
@@ -386,12 +445,18 @@ found(Store, Meta, Page, Key, Remaining, Opts) ->
     end.
 
 %% @doc Take the value that a leaf node holds, reading the overflow pages it
-%% names where the value was too large to sit on the leaf itself.
+%% names where the value was too large to sit on the leaf itself. A duplicate
+%% set is not a value: one on the path side of the dispatch means a database
+%% whose main flags disown the nodes it carries, and is refused.
 value(Store, _Meta, {leaf, Value}, _Opts) when is_binary(Value) ->
     case byte_size(Value) =< max_value(Store) of
         true -> {ok, Value};
         false -> {error, {value_too_large, byte_size(Value)}}
     end;
+value(_Store, _Meta, {leaf, {subdb, _Db}}, _Opts) ->
+    {error, unexpected_duplicate_set};
+value(_Store, _Meta, {leaf, {subpage, _Bin}}, _Opts) ->
+    {error, unexpected_duplicate_set};
 value(Store, Meta, {leaf, {overflow, Number, Size}}, Opts) ->
     overflow(Store, Meta, Number, Size, Opts).
 
@@ -467,6 +532,16 @@ resolve_links(Store, Meta, [Head | Tail], Resolved, Opts, Links) ->
     end.
 
 %%% Scanning a range of the tree.
+
+%% @doc List the entry at a path, where the marker it carries makes it a group.
+listing(Store, Meta, Key, Opts) ->
+    maybe
+        {ok, Resolved, Value} ?= resolved(Store, Meta, Key, Opts),
+        case Value of
+            <<"group">> -> names(children(Store, Meta, Resolved, Opts));
+            _ -> {error, not_found}
+        end
+    end.
 
 %% @doc Read a group as a composite, carrying its immediate children with it.
 composite(Store, Meta, Key, Opts) ->
@@ -620,6 +695,12 @@ leftmost_page(
         Stack, _Remaining, _Opts
     ) ->
     {ok, Stack, Page, Keys, 0};
+% A sub-database's leaves are fixed-width pages, taken by the same climb.
+leftmost_page(
+        _Store, _Meta, Page, #{ <<"type">> := leaf2, <<"keys">> := Keys },
+        Stack, _Remaining, _Opts
+    ) ->
+    {ok, Stack, Page, Keys, 0};
 leftmost_page(_Store, _Meta, _Page, #{ <<"type">> := Type }, _Stack, _R, _Opts) ->
     {error, {not_a_node_page, Type}}.
 
@@ -630,6 +711,192 @@ cursor(Stack, Page, Index) ->
     case hb_lmdb_page:num_keys(Page) of
         {ok, Keys} -> {ok, Stack, Page, Keys, Index};
         {error, _} = Error -> Error
+    end.
+
+%%% Reading a sorted-set container.
+
+%% @doc Answer a point request with the first item at or after the sought
+%% bytes that begins with them -- `MDB_GET_BOTH_RANGE' semantics, with the
+%% landing confirmed rather than believed: an item that does not carry the
+%% prefix is a miss, not a neighbour. The sought bytes may be a whole item or
+%% any leading part of one.
+item(Store, Meta, Prefix, Opts) ->
+    case items(Store, Meta, Prefix, Prefix, 1, Opts) of
+        {ok, [Item]} -> {ok, Item};
+        {ok, []} -> {error, not_found};
+        {error, _} = Error -> Error
+    end.
+
+%% @doc Collect the ascending run of items that begin with a prefix. The run
+%% starts at the request's `from' where that is beyond the prefix itself --
+%% which is how a caller resumes a scan, the last item it saw being its
+%% cursor -- and stops at `limit' items, or at the first item that no longer
+%% carries the prefix.
+items(Store, Meta, Prefix, Request, Opts) ->
+    items(
+        Store,
+        Meta,
+        Prefix,
+        max(Prefix, maps:get(<<"from">>, Request, Prefix)),
+        hb_util:int(maps:get(<<"limit">>, Request, ?DEFAULT_LIST_LIMIT)),
+        Opts
+    ).
+items(Store, Meta, Prefix, From, Limit, Opts) ->
+    maybe
+        {ok, Set} ?= container(Store, Meta, Opts),
+        {ok, SubMeta, Stack, Leaf, Keys, Index} ?=
+            set_seek(Store, Meta, Set, From, Opts),
+        set_scan(
+            Store, SubMeta, Stack, Leaf, Keys, Index, Prefix, Limit, [], Opts
+        )
+    end.
+
+%% @doc Descend the main tree to the container's single entry -- the duplicate
+%% set of the key `<<0>>' -- returning the set as the node carries it: the
+%% `MDB_db' of a promoted sub-database, or a sub-page held in the node itself.
+%% Any other kind of entry means the main flags and the node disagree about
+%% what the database holds, and is refused.
+container(_Store, #{ <<"depth">> := 0 }, _Opts) ->
+    {error, not_found};
+container(Store, Meta = #{ <<"root">> := Root }, Opts) ->
+    container(Store, Meta, Root, max_depth(Store, Meta), Opts).
+container(_Store, _Meta, _Number, 0, _Opts) ->
+    {error, descent_too_deep};
+container(Store, Meta, Number, Remaining, Opts) ->
+    maybe
+        {ok, Page} ?= page(Store, Meta, Number, Opts),
+        case hb_lmdb_page:search(Page, <<0>>) of
+            {branch, _Index, Child} ->
+                container(Store, Meta, Child, Remaining - 1, Opts);
+            {leaf, {subdb, _Db} = Set} ->
+                {ok, Set};
+            {leaf, {subpage, _Bin} = Set} ->
+                {ok, Set};
+            {leaf, _Value} ->
+                {error, invalid_container_entry};
+            not_found ->
+                {error, not_found};
+            {error, _} = Error ->
+                Error
+        end
+    end.
+
+%% @doc Position a cursor on the first item at or after the given bytes. A
+%% promoted sub-database is descended with its branch stack kept, exactly as
+%% `seek/7' keeps one, so that `next_leaf/4' can climb it; a sub-page is a
+%% single leaf already in hand, and its cursor holds no stack to climb.
+set_seek(Store, Meta, {subdb, Db}, From, Opts) ->
+    maybe
+        {ok, SubMeta = #{ <<"root">> := Root }} ?= sub_meta(Meta, Db),
+        {ok, Stack, Leaf, Keys, Index} ?=
+            set_descend(
+                Store, SubMeta, Root, From, [],
+                max_depth(Store, SubMeta), Opts
+            ),
+        {ok, SubMeta, Stack, Leaf, Keys, Index}
+    end;
+set_seek(_Store, Meta, {subpage, Bin}, From, _Opts) ->
+    case hb_lmdb_page:page(Bin) of
+        {ok, #{ <<"type">> := leaf2, <<"pad">> := Pad, <<"keys">> := Keys }} ->
+            case hb_lmdb_page:item_seek(Bin, From, Pad) of
+                {error, _} = Error ->
+                    Error;
+                Index ->
+                    {ok, Meta#{ <<"pad">> => Pad }, [], Bin, Keys, Index}
+            end;
+        {ok, #{ <<"type">> := Type }} ->
+            {error, {not_a_fixed_width_page, Type}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Shape a sub-database's `MDB_db' into the meta map that the reads below
+%% take their bounds from: the sub-tree's root, depth, and item width over the
+%% page size and last page of the file around it. Every field is untrusted --
+%% a width of zero or one wider than a page, a rootless tree, or a root past
+%% the file would size a read or trap a scan, so each is refused here, before
+%% anything is fetched on its word.
+sub_meta(Meta = #{ <<"page-size">> := PageSize, <<"last-page">> := Last }, Db) ->
+    case Db of
+        #{ <<"pad">> := Pad, <<"depth">> := Depth, <<"root">> := Root } when
+                Pad >= 1, Pad =< PageSize - ?PAGE_HEADER_SIZE,
+                Depth >= 1, Root =< Last ->
+            {ok, maps:merge(Meta, Db)};
+        _ ->
+            {error, {invalid_subdatabase, Db}}
+    end.
+
+%% @doc Descend a sub-database towards the first item at or after `From',
+%% keeping the branch pages walked through and the child of each that was
+%% taken. The branches are ordinary node pages whose keys are whole items;
+%% only the fixed-width leaf at the bottom is read differently.
+set_descend(_Store, _Meta, _Number, _From, _Stack, 0, _Opts) ->
+    {error, descent_too_deep};
+set_descend(
+        Store, Meta = #{ <<"pad">> := Pad }, Number, From, Stack,
+        Remaining, Opts
+    ) ->
+    maybe
+        {ok, Page} ?= page(Store, Meta, Number, Opts),
+        {ok, Parsed} ?= hb_lmdb_page:page(Page),
+        case Parsed of
+            #{ <<"type">> := branch } ->
+                case hb_lmdb_page:search(Page, From) of
+                    {branch, Index, Child} ->
+                        set_descend(
+                            Store, Meta, Child, From, [{Page, Index} | Stack],
+                            Remaining - 1, Opts
+                        );
+                    {error, _} = Error ->
+                        Error
+                end;
+            #{ <<"type">> := leaf2, <<"keys">> := Keys } ->
+                case hb_lmdb_page:item_seek(Page, From, Pad) of
+                    {error, _} = Error -> Error;
+                    Index -> {ok, Stack, Page, Keys, Index}
+                end;
+            #{ <<"type">> := Type } ->
+                {error, {not_a_fixed_width_page, Type}}
+        end
+    end.
+
+%% @doc Walk forwards from the cursor, collecting items while they carry the
+%% prefix, until `limit' of them are in hand or the first item without it is
+%% seen -- the items are ascending, so nothing carrying the prefix can follow
+%% one that lacks it. An exhausted leaf hands the walk to `next_leaf/4', whose
+%% climb serves both kinds of leaf alike.
+set_scan(_Store, _Meta, _Stack, _Leaf, _Keys, _Index, _Prefix, Limit, Found, _Opts)
+        when Limit =< 0 ->
+    {ok, lists:reverse(Found)};
+set_scan(Store, Meta, Stack, _Leaf, Keys, Index, Prefix, Limit, Found, Opts)
+        when Index >= Keys ->
+    case next_leaf(Store, Meta, Stack, Opts) of
+        {ok, NextStack, NextLeaf, NextKeys, NextIndex} ->
+            set_scan(
+                Store, Meta, NextStack, NextLeaf, NextKeys, NextIndex,
+                Prefix, Limit, Found, Opts
+            );
+        {error, no_more_leaves} ->
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
+    end;
+set_scan(
+        Store, Meta = #{ <<"pad">> := Pad }, Stack, Leaf, Keys, Index,
+        Prefix, Limit, Found, Opts
+    ) ->
+    Size = byte_size(Prefix),
+    case hb_lmdb_page:item(Leaf, Index, Pad) of
+        {ok, Item = <<Prefix:Size/binary, _/binary>>} ->
+            set_scan(
+                Store, Meta, Stack, Leaf, Keys, Index + 1, Prefix,
+                Limit - 1, [Item | Found], Opts
+            );
+        {ok, _Item} ->
+            % The scan has passed the last item carrying the prefix.
+            {ok, lists:reverse(Found)};
+        {error, _} = Error ->
+            Error
     end.
 
 %%% Helpers.
@@ -695,6 +962,13 @@ init_prometheus() ->
 %% same bytes, so the store must answer with what the local reader finds.
 %% 52,736 bytes on 512-byte pages, three levels deep.
 -define(PUBLISHED_FIXTURE, <<"OLuXZuP3L1Sjj1ysJeYqf_782tWUmky0UYY3cBuYre4">>).
+
+%% The promoted duplicate-set fixture, published the same way with the
+%% container tags of the published-index spec: 99,328 bytes on 512-byte pages,
+%% 5,000 17-byte items in a sub-database three levels deep below a main tree
+%% of one. Its contents come from `hb_lmdb_page:dup_fixture_items/0'.
+-define(PUBLISHED_DUPFIXED, <<"czOyExU5DbhzJUarTZjp9ZYWBRFHWxgt_BWEdav7xU4">>).
+-define(DUPFIXED_SUB_DEPTH, 3).
 
 %% An Arweave offset index of ten million entries, on 64 KiB pages and three
 %% levels deep: 540,934,144 bytes, with a `~match@1.0' group over every
@@ -884,6 +1158,161 @@ published_fixture_match_group() ->
         ),
     ?assert(length(Expected) > 0),
     ?assertEqual({ok, Expected}, hb_store:list(Store, Group, #{})).
+
+%% @doc A published sorted-set container answers point requests with the first
+%% item carrying the sought prefix -- a whole item finds itself, a group's
+%% hash the first item of its run -- and a prefix that no item carries is a
+%% miss however close the landing: the leading bytes are confirmed, not
+%% believed.
+published_dupfixed_test_() ->
+    {timeout, 300, fun published_dupfixed/0}.
+published_dupfixed() ->
+    Store = [store(<<"arlmdb-dupfixed">>, ?PUBLISHED_DUPFIXED)],
+    Items = hb_lmdb_page:dup_fixture_items(),
+    Middle = lists:nth(length(Items) div 2, Items),
+    lists:foreach(
+        fun(Item) ->
+            ?assertEqual(
+                {ok, Item},
+                hb_store:read(Store, #{ <<"read">> => Item }, #{})
+            )
+        end,
+        [hd(Items), Middle, lists:last(Items)]
+    ),
+    Hash = binary:part(Middle, 0, 10),
+    Run = [Item || Item <- Items, binary:part(Item, 0, 10) == Hash],
+    ?assertEqual(
+        {ok, hd(Run)},
+        hb_store:read(Store, #{ <<"read">> => Hash }, #{})
+    ),
+    ?assertEqual(
+        {ok, simple},
+        hb_store:type(Store, #{ <<"type">> => Middle }, #{})
+    ),
+    % A prefix absent from the set seeks to a real neighbour and is refused by
+    % its leading bytes; one past everything runs out of leaves instead.
+    Missing = <<(binary:part(Hash, 0, 9))/binary, (binary:last(Hash) bxor 1)>>,
+    ?assertEqual(
+        [],
+        [Item || Item <- Items, binary:part(Item, 0, 10) == Missing]
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read(Store, #{ <<"read">> => Missing }, #{})
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:read(Store, #{ <<"read">> => binary:copy(<<255>>, 17) }, #{})
+    ).
+
+%% @doc Range scans over the published container: a group's hash lists its
+%% whole run, `from' starts the run mid-way and is inclusive -- it is the
+%% cursor form the query layer resumes with -- and `limit' caps the walk
+%% wherever it stands, including across leaf boundaries. Past the set's end,
+%% the scan runs out of leaves and answers with nothing.
+published_dupfixed_scan_test_() ->
+    {timeout, 300, fun published_dupfixed_scan/0}.
+published_dupfixed_scan() ->
+    Store = [store(<<"arlmdb-dupfixed-scan">>, ?PUBLISHED_DUPFIXED)],
+    Items = hb_lmdb_page:dup_fixture_items(),
+    Middle = lists:nth(length(Items) div 2, Items),
+    Hash = binary:part(Middle, 0, 10),
+    Run = [Item || Item <- Items, binary:part(Item, 0, 10) == Hash],
+    ?assertEqual(
+        {ok, Run},
+        hb_store:list(Store, #{ <<"list">> => Hash }, #{})
+    ),
+    % From the set's start: the first items, crossing several leaves.
+    ?assertEqual(
+        {ok, lists:sublist(Items, 100)},
+        hb_store:list(
+            Store,
+            #{ <<"list">> => <<>>, <<"from">> => <<>>, <<"limit">> => 100 },
+            #{}
+        )
+    ),
+    % From the middle of the set, the cursor item leads the page.
+    Tail = lists:dropwhile(fun(Item) -> Item < Middle end, Items),
+    ?assertEqual(
+        {ok, lists:sublist(Tail, 100)},
+        hb_store:list(
+            Store,
+            #{ <<"list">> => <<>>, <<"from">> => Middle, <<"limit">> => 100 },
+            #{}
+        )
+    ),
+    % Resuming inside a group's run keeps its prefix bound.
+    ?assertEqual(
+        {ok, lists:nthtail(3, Run)},
+        hb_store:list(
+            Store,
+            #{
+                <<"list">> => Hash,
+                <<"from">> => lists:nth(4, Run),
+                <<"limit">> => 100
+            },
+            #{}
+        )
+    ),
+    % At the run's end one item remains; past the set's end, none do.
+    ?assertEqual(
+        {ok, [lists:last(Run)]},
+        hb_store:list(
+            Store,
+            #{
+                <<"list">> => Hash,
+                <<"from">> => lists:last(Run),
+                <<"limit">> => 100
+            },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, []},
+        hb_store:list(
+            Store,
+            #{
+                <<"list">> => <<>>,
+                <<"from">> => binary:copy(<<255>>, 17),
+                <<"limit">> => 5
+            },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {ok, []},
+        hb_store:list(
+            Store,
+            #{ <<"list">> => Hash, <<"from">> => Hash, <<"limit">> => 0 },
+            #{}
+        )
+    ).
+
+%% @doc A point lookup of the container costs one ranged read for the meta
+%% page, one per level of the main tree, and one per level of the
+%% sub-database: five in all here. The sub-tree's depth of three is a fact of
+%% the committed fixture, asserted offline by `hb_lmdb_page''s audit tests.
+published_dupfixed_reads_test_() ->
+    {timeout, 300, fun published_dupfixed_reads/0}.
+published_dupfixed_reads() ->
+    Store = store(<<"arlmdb-dupfixed-reads">>, ?PUBLISHED_DUPFIXED),
+    {ok, Located, Meta = #{ <<"depth">> := Depth }} = open(Store, #{}),
+    ?assert(duplicates(Meta)),
+    Items = hb_lmdb_page:dup_fixture_items(),
+    lists:foreach(
+        fun(Item) ->
+            Before = ranged_reads(),
+            ?assertEqual(
+                {ok, Item},
+                hb_store:read([Located], #{ <<"read">> => Item }, #{})
+            ),
+            ?assertEqual(
+                Depth + ?DUPFIXED_SUB_DEPTH + 1,
+                ranged_reads() - Before
+            )
+        end,
+        [hd(Items), lists:nth(length(Items) div 2, Items), lists:last(Items)]
+    ).
 
 %% @doc A store carrying nothing but a locator answers from a published index of
 %% ten million entries, with no index of its own and no warm-up.
