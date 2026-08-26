@@ -257,3 +257,11 @@ Recorded in `decisions/` as they are made.
   eunit-all Failed: 5. Passed: 3600. — exactly the A/B-verified pre-existing
   baseline (dev_scheduler legacy-net x4, dev_push x1). Zero regressions with
   W2+W3+W4 all merged.
+- 2026-08-26 ~04:55Z Session-limit outage killed the W6/W7 agent loops;
+  their detached dev-2 processes ran on unattended. Verified: W7 bands 1-5/8
+  done (cursor 384300192366592, ~2.3 TB unpacked), converter alive on band
+  6; W6 scan3 = 900 GB in 764 s (1.18 GB/s under entropy load), 26.1M items
+  / 246M match rows, amplification fixed (0.93x). Both agents resumed with
+  state + the upload-budget decision (decisions/demo-upload-budget.md:
+  ~11M-item contiguous slice, ~23 AR, since the full match container would
+  cost ~47 of the 50.23 AR held).
