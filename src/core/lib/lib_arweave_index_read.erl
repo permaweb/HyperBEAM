@@ -43,6 +43,11 @@
 %%% whole slots, so the bytes moved per `pread' are this plus three per chunk.
 -define(BATCH_SIZE, (256 * ?DATA_CHUNK_SIZE)). % 64 MiB.
 
+%%% How many chunks a jumped-to range is probed with. Large enough for the
+%%% headers and small items a jump lands on, small enough that skipping the
+%%% weave costs reads proportional to what is parsed, not to the batch size.
+-define(PROBE_CHUNKS, 8). % 2 MiB.
+
 %% @doc Open a reader over one storage module. The batch size is read from
 %% `arweave-index-read-size' (bytes, rounded up to whole chunks).
 open(Module, Opts) ->
@@ -75,31 +80,81 @@ open(Module, Opts) ->
 %% `{ok, Binary, Reader}'. Bytes the module does not hold -- an unwritten
 %% slot, a chunk file that is not there -- end the answer early: the caller
 %% receives `{short, Reader}' and decides what the loss means.
+%%
+%% A miss extending past the buffer's end continues it: the buffer's own
+%% tail is kept and a full batch is fetched from exactly where it ended,
+%% which is also exactly where the fetcher's read-ahead points. A miss that
+%% jumps -- the scanner skipping data -- fetches only a small probe around
+%% the request, so a region of large items costs header-sized reads; the
+%% probe's own continuation is a full batch again, so a region of small
+%% items promotes itself back to streaming after one probe.
 read(Offset, Len, Reader = #{ <<"buffer">> := Buffer, <<"base">> := Base })
         when Offset >= Base
         andalso Offset + Len =< Base + byte_size(Buffer) ->
     {ok, binary:part(Buffer, Offset - Base, Len), Reader};
+read(Offset, Len, Reader = #{ <<"buffer">> := Buffer, <<"base">> := Base })
+        when byte_size(Buffer) > 0
+        andalso Offset >= Base
+        andalso Offset =< Base + byte_size(Buffer) ->
+    extended(Offset, Len, Reader);
 read(Offset, Len, Reader) ->
-    #{ <<"fetcher">> := Fetcher, <<"batch-chunks">> := BatchChunks } = Reader,
+    probed(Offset, Len, Reader).
+
+%% @doc Continue the buffer: keep its tail from the request's own chunk and
+%% append a batch fetched from its end.
+extended(Offset, Len, Reader) ->
+    #{
+        <<"fetcher">> := Fetcher,
+        <<"batch-chunks">> := BatchChunks,
+        <<"buffer">> := Buffer,
+        <<"base">> := Base
+    } = Reader,
     Residue = residue(Offset),
-    Base = Offset - ((Offset - Residue) rem ?DATA_CHUNK_SIZE),
+    End = Base + byte_size(Buffer),
+    NewBase = Offset - ((Offset - Residue) rem ?DATA_CHUNK_SIZE),
     Chunks =
         max(
             BatchChunks,
             hb_util:ceil_int(
-                Offset + Len - Base, ?DATA_CHUNK_SIZE) div ?DATA_CHUNK_SIZE
+                Offset + Len - End, ?DATA_CHUNK_SIZE) div ?DATA_CHUNK_SIZE
         ),
-    case call(Fetcher, {fetch, Base - Residue, Residue, Chunks}) of
-        {ok, Buffer} ->
-            Refilled = Reader#{ <<"buffer">> => Buffer, <<"base">> => Base },
-            case Offset + Len =< Base + byte_size(Buffer) of
-                true ->
-                    {ok, binary:part(Buffer, Offset - Base, Len), Refilled};
-                false ->
-                    {short, Refilled}
-            end;
+    case call(Fetcher, {fetch, End - Residue, Residue, Chunks}) of
+        {ok, Batch} ->
+            Tail = binary:part(Buffer, NewBase - Base, End - NewBase),
+            served(
+                Offset,
+                Len,
+                NewBase,
+                iolist_to_binary([Tail, Batch]),
+                Reader
+            );
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% @doc Serve a jumped-to range from a probe of its own chunks.
+probed(Offset, Len, Reader = #{ <<"fetcher">> := Fetcher }) ->
+    Residue = residue(Offset),
+    NewBase = Offset - ((Offset - Residue) rem ?DATA_CHUNK_SIZE),
+    Chunks =
+        max(
+            ?PROBE_CHUNKS,
+            hb_util:ceil_int(
+                Offset + Len - NewBase, ?DATA_CHUNK_SIZE) div ?DATA_CHUNK_SIZE
+        ),
+    case call(Fetcher, {fetch, NewBase - Residue, Residue, Chunks}) of
+        {ok, Batch} ->
+            served(Offset, Len, NewBase, Batch, Reader);
+        {error, Reason} ->
+            {error, Reason}
+    end.
+
+%% @doc Install a refilled buffer and answer from it, or report the shortfall.
+served(Offset, Len, Base, Buffer, Reader) ->
+    Refilled = Reader#{ <<"buffer">> => Buffer, <<"base">> => Base },
+    case Offset + Len =< Base + byte_size(Buffer) of
+        true -> {ok, binary:part(Buffer, Offset - Base, Len), Refilled};
+        false -> {short, Refilled}
     end.
 
 %% @doc Stop the reader's fetcher, closing its open chunk file.
