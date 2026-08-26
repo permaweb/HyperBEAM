@@ -759,6 +759,10 @@ items(Store, Meta, Prefix, Request, Opts) ->
 items(Store, Meta, Prefix, From, Limit, Opts) ->
     maybe
         {ok, Set} ?= container(Store, Meta, Opts),
+        % A prefix wider than the set's items can match nothing, so the run
+        % is known empty before the sub-database is descended.
+        {ok, Pad} ?= set_pad(Set),
+        true ?= byte_size(Prefix) =< Pad orelse {ok, []},
         {ok, SubMeta, Stack, Leaf, Keys, Index} ?=
             set_seek(Store, Meta, Set, From, Opts),
         set_scan(
@@ -923,6 +927,9 @@ items_back(Store, Meta, Prefix, From, Limit, Opts) ->
     maybe
         {ok, Set} ?= container(Store, Meta, Opts),
         {ok, Pad} ?= set_pad(Set),
+        % A prefix wider than the set's items can match nothing, so the run
+        % is known empty before the sub-database is descended.
+        true ?= byte_size(Prefix) =< Pad orelse {ok, []},
         Bound = back_bound(Prefix, From, Pad),
         {ok, SubMeta, Stack, Leaf, Keys, Index} ?=
             set_seek(Store, Meta, Set, Bound, Opts),
