@@ -388,3 +388,9 @@ and repins are yours).
   feat/arweave-index-scanner, fold it in with:
   git merge feat/arweave-index-scanner
   PRs are Sams; nothing pushed.
+- 2026-08-26 ~21:5xZ W8 committed the interval exclusion properly
+  (d2da0bc66, +264/-110 incl. new lib_arweave_index_exclude) — no wip
+  needed; merged here (7c949ccbd), compile + 50 module tests green.
+  scan9 running on dev-2 (healthy: runs spilling, load ramped). Its
+  report (boundary semantics, validation rates, count-vs-baseline,
+  GB/s) follows; any fixes it forces land as a follow-up commit.
