@@ -468,6 +468,77 @@ locate_layering_test() ->
     ok = hb_store:stop(First),
     ok = hb_store:stop(Second).
 
+%% @doc Throughput of the walks over a fifty-thousand-item set, the shape of
+%% the committed 64 KiB-page fixture: full posting-list pages of a selective
+%% predicate, and two- and three-way leapfrog intersections against a
+%% predicate carried by every item.
+locate_benchmark_test_() ->
+    {timeout, 120, fun locate_benchmark/0}.
+locate_benchmark() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb_set, <<"locate-bench">>),
+    hb_store:reset(Store, #{}, #{}),
+    Items = 50_000,
+    Rows =
+        lists:usort(
+            lists:flatten(
+                [
+                    [
+                        hb_cache:encode_match_item(
+                            hb_cache:match_item_prefix(Key, Value),
+                            Offset
+                        )
+                    ||
+                        {Key, Value} <-
+                            [
+                                {<<"type">>, <<"Message">>},
+                                {<<"app">>,
+                                    <<"bench-",
+                                        (hb_util:bin(Offset rem 2000))/binary>>},
+                                {<<"owner">>,
+                                    <<"owner-",
+                                        (hb_util:bin(Offset rem 40))/binary>>}
+                            ]
+                    ]
+                ||
+                    Offset <- lists:seq(1, Items)
+                ]
+            )
+        ),
+    ok = hb_store_lmdb_set:append(Store, Rows),
+    Opts = #{ <<"match-store">> => [Store] },
+    Bench =
+        fun(Name, Template, Req) ->
+            {ok, Expected} = test_locate(Template, Req, Opts),
+            ?assert(length(Expected) > 0),
+            Pages =
+                hb_test_utils:benchmark(
+                    fun() -> {ok, _} = test_locate(Template, Req, Opts) end
+                ),
+            hb_test_utils:benchmark_print(
+                <<"Served">>, <<Name/binary, " pages">>, Pages)
+        end,
+    Selective = #{ <<"app">> => <<"bench-7">> },
+    Bench(<<"single-predicate">>, Selective, #{ <<"limit">> => 25 }),
+    Bench(
+        <<"two-predicate">>,
+        Selective#{ <<"type">> => <<"Message">> },
+        #{ <<"limit">> => 25 }
+    ),
+    Bench(
+        <<"three-predicate">>,
+        Selective#{
+            <<"type">> => <<"Message">>,
+            <<"owner">> => <<"owner-7">>
+        },
+        #{ <<"limit">> => 25 }
+    ),
+    Bench(
+        <<"descending two-predicate">>,
+        Selective#{ <<"type">> => <<"Message">> },
+        #{ <<"limit">> => 25, <<"direction">> => <<"desc">> }
+    ),
+    ok = hb_store:stop(Store).
+
 %% @doc An empty page and a predicate with no rows are both completed, empty
 %% answers. Only a node with no configured match-store cannot answer at all
 %% -- the distinction a paging caller needs to fall back on the right cases.
