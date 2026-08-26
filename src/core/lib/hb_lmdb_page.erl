@@ -14,12 +14,19 @@
 %%% `MDB_DATA_VERSION' 1 and a shorter page header; `meta/1' refuses them
 %%% rather than misreading them.
 %%%
-%%% Only the plain, single-value database that a HyperBEAM store writes is
-%%% supported. `MDB_DUPSORT' and its relatives change both the layout of a leaf
-%%% page and the key comparator, so `meta/1' refuses a main database carrying
-%%% any of their flags.
+%%% Two databases are readable. The plain, single-value kind that a HyperBEAM
+%%% store writes, and the sorted-set container that a published index uses: a
+%%% main database flagged `MDB_DUPSORT|MDB_DUPFIXED' whose entries each carry a
+%%% set of fixed-width duplicates. A small set sits inside its leaf node as a
+%%% `P_SUBP' sub-page; a large one is promoted to a sub-database -- the node
+%%% then holds that database's `MDB_db' under `F_SUBDATA' -- whose leaves are
+%%% `P_LEAF2': bare items packed after the header, with no node structure at
+%%% all. `item/3' and `item_seek/3' read those, as `node/2' and `seek/2' read
+%%% pages that carry nodes. Every other database flag changes the layout or the
+%%% comparator in ways this module has no reader for, so `meta/1' refuses it.
 -module(hb_lmdb_page).
 -export([meta/1, page/1, search/2, seek/2, node/2, num_keys/1]).
+-export([item/3, item_seek/3]).
 %% The fixture that the tests below read is also published to Arweave, where
 %% `hb_store_arlmdb' reads the same bytes. Its tests take the contents to expect
 %% from here, so that both readers are held to one description of them.
@@ -30,6 +37,7 @@
 -define(PAGE_HEADER_SIZE, 24).      % PAGEHDRSZ, and PAGEBASE with it
 -define(NODE_HEADER_SIZE, 8).       % NODESIZE
 -define(OVERFLOW_REF_SIZE, 24).     % sizeof(MDB_ovpage)
+-define(DB_SIZE, 48).               % sizeof(MDB_db)
 
 %% Constants that identify a file this module can read.
 -define(MAGIC, 16#BEEFC0DE).
@@ -47,13 +55,22 @@
 -define(PAGE_FLAG_MASK, 16#6F).
 
 %% Node flags. `F_BIGDATA' replaces a leaf's value with a reference to the
-%% overflow pages that hold it.
+%% overflow pages that hold it. `F_DUPDATA' replaces it with the key's
+%% duplicate set, held as a sub-page inside the node -- or, once too large for
+%% one, as a sub-database whose `MDB_db' the node carries under `F_SUBDATA'.
 -define(F_BIGDATA, 16#01).
+-define(F_SUBDATA, 16#02).
+-define(F_DUPDATA, 16#04).
 
-%% Database flags that alter the leaf layout or the key comparator:
-%% `MDB_REVERSEKEY', `MDB_DUPSORT', `MDB_INTEGERKEY', `MDB_DUPFIXED',
-%% `MDB_INTEGERDUP' and `MDB_REVERSEDUP'.
--define(UNSUPPORTED_DB_FLAGS, 16#7E).
+%% Database flags. `MDB_DUPSORT' and `MDB_DUPFIXED' together are the sorted-set
+%% container, and are refused apart: either alone gives a leaf layout this
+%% module has no reader for. `MDB_REVERSEKEY', `MDB_INTEGERKEY',
+%% `MDB_INTEGERDUP' and `MDB_REVERSEDUP' alter the key comparator, and a
+%% database using one cannot be searched with byte order.
+-define(MDB_DUPSORT, 16#04).
+-define(MDB_DUPFIXED, 16#10).
+-define(DUPLICATE_DB_FLAGS, (?MDB_DUPSORT bor ?MDB_DUPFIXED)).
+-define(UNSUPPORTED_DB_FLAGS, 16#6A).
 
 %% @doc Parse a meta page, returning the parameters of the snapshot it names.
 %% Pages 0 and 1 are both meta pages and alternate on commit, so a caller reads
@@ -75,29 +92,20 @@ meta(
             _FreeStatistics:32/binary,
             _FreeRoot:64/little,
             % mm_dbs[1], the main database.
-            _MainPad:32/little,
-            MainFlags:16/little,
-            Depth:16/little,
-            _BranchPages:64/little,
-            _LeafPages:64/little,
-            _OverflowPages:64/little,
-            Entries:64/little,
-            Root:64/little,
+            MainDb:?DB_SIZE/binary,
             LastPage:64/little,
             TxnID:64/little,
             _/binary
         >>
     ) ->
+    Main = #{ <<"flags">> := MainFlags } = db(MainDb),
     validate_meta(
         Magic,
         Version,
         PageSize,
         MainFlags,
-        #{
+        Main#{
             <<"page-size">> => PageSize,
-            <<"root">> => Root,
-            <<"depth">> => Depth,
-            <<"entries">> => Entries,
             <<"last-page">> => LastPage,
             <<"txnid">> => TxnID
         }
@@ -105,10 +113,33 @@ meta(
 meta(Bin) when is_binary(Bin) ->
     {error, truncated_meta_page}.
 
+%% @doc Parse an `MDB_db', the 48 bytes that describe one database: its flags,
+%% its depth and entry count, and the page its tree is rooted at. The meta page
+%% carries one for the main database, and a leaf node flagged `F_SUBDATA'
+%% carries one for the sub-database holding its key's duplicates -- there,
+%% `pad' is the width of the items on the sub-database's fixed-width pages.
+db(<<
+        Pad:32/little,
+        Flags:16/little,
+        Depth:16/little,
+        _BranchPages:64/little,
+        _LeafPages:64/little,
+        _OverflowPages:64/little,
+        Entries:64/little,
+        Root:64/little
+    >>) ->
+    #{
+        <<"pad">> => Pad,
+        <<"flags">> => Flags,
+        <<"depth">> => Depth,
+        <<"entries">> => Entries,
+        <<"root">> => Root
+    }.
+
 %% @doc Refuse every meta page that this module cannot read: one belonging to
 %% another format entirely, one written by a version whose layout differs, one
 %% claiming a page size LMDB could not have used, and one whose main database
-%% is not the plain single-value kind.
+%% is neither the plain single-value kind nor the sorted-set container.
 validate_meta(Magic, _Version, _PageSize, _Flags, _Meta) when Magic =/= ?MAGIC ->
     {error, not_lmdb};
 validate_meta(_Magic, Version, _PageSize, _Flags, _Meta)
@@ -120,23 +151,26 @@ validate_meta(_Magic, _Version, PageSize, _Flags, _Meta) when
         PageSize band (PageSize - 1) =/= 0 ->
     {error, {invalid_page_size, PageSize}};
 validate_meta(_Magic, _Version, _PageSize, Flags, _Meta)
-        when Flags band ?UNSUPPORTED_DB_FLAGS =/= 0 ->
+        when Flags band ?UNSUPPORTED_DB_FLAGS =/= 0;
+            Flags band ?DUPLICATE_DB_FLAGS == ?MDB_DUPSORT;
+            Flags band ?DUPLICATE_DB_FLAGS == ?MDB_DUPFIXED ->
     {error, {unsupported_database_flags, Flags}};
 validate_meta(_Magic, _Version, _PageSize, _Flags, Meta) ->
     {ok, Meta}.
 
 %% @doc Parse a page header, returning the kind of page it is: a `branch' or
-%% `leaf' page reports the number of nodes it holds as `keys', and an
+%% `leaf' page reports the number of nodes it holds as `keys', a `leaf2' page
+%% reports its fixed-width items as `keys' and their width as `pad', and an
 %% `overflow' page reports the number of pages its value spans as `pages'.
 page(Page = <<
             _PageNumber:64/little,
             _TxnID:64/little,
-            _Pad:16/little,
+            Pad:16/little,
             Flags:16/little,
             Bounds:4/binary,
             _/binary
         >>) ->
-    classify(Flags, Bounds, byte_size(Page) - ?PAGE_HEADER_SIZE);
+    classify(Flags, Pad, Bounds, byte_size(Page) - ?PAGE_HEADER_SIZE);
 page(Bin) when is_binary(Bin) ->
     {error, truncated_page}.
 
@@ -144,13 +178,36 @@ page(Bin) when is_binary(Bin) ->
 %% space, or the page count of an overflow page. `lower', `upper' and the
 %% pointer array are all relative to the end of the header, so the bounds are
 %% checked against the page size less that header.
-classify(Flags, _Bounds, _Limit) when Flags band (bnot ?PAGE_FLAG_MASK) =/= 0 ->
+classify(Flags, _Pad, _Bounds, _Limit)
+        when Flags band (bnot ?PAGE_FLAG_MASK) =/= 0 ->
     {error, {invalid_page_flags, Flags}};
-classify(Flags, _Bounds, _Limit) when Flags band (?P_LEAF2 bor ?P_SUBP) =/= 0 ->
+% A fixed-width page holds bare items with no node structure: `P_LEAF|P_LEAF2'
+% on a full page of a duplicate sub-database, with `P_SUBP' added on the
+% sub-page held inside a leaf node. The header's `pad' field is the width of
+% every item, so a page whose items would not all fit inside it is refused.
+classify(Flags, Pad, <<Lower:16/little, Upper:16/little>>, Limit)
+        when Flags band ?P_LEAF2 =/= 0,
+            Flags band (?P_BRANCH bor ?P_LEAF bor ?P_OVERFLOW) == ?P_LEAF ->
+    case
+        Pad >= 1 andalso Lower band 1 == 0 andalso Lower =< Upper
+            andalso Upper =< Limit andalso (Lower bsr 1) * Pad =< Limit
+    of
+        true ->
+            {ok, #{
+                <<"type">> => leaf2,
+                <<"keys">> => Lower bsr 1,
+                <<"pad">> => Pad
+            }};
+        false ->
+            {error, {invalid_fixed_width_bounds, Pad, Lower, Upper}}
+    end;
+classify(Flags, _Pad, _Bounds, _Limit)
+        when Flags band (?P_LEAF2 bor ?P_SUBP) =/= 0 ->
     {error, {unsupported_page_layout, Flags}};
-classify(Flags, <<Pages:32/little>>, _Limit) when Flags band ?P_OVERFLOW =/= 0 ->
+classify(Flags, _Pad, <<Pages:32/little>>, _Limit)
+        when Flags band ?P_OVERFLOW =/= 0 ->
     {ok, #{ <<"type">> => overflow, <<"pages">> => Pages }};
-classify(Flags, <<Lower:16/little, Upper:16/little>>, Limit)
+classify(Flags, _Pad, <<Lower:16/little, Upper:16/little>>, Limit)
         when Flags band (?P_BRANCH bor ?P_LEAF) =/= 0 ->
     case Lower band 1 == 0 andalso Lower =< Upper andalso Upper =< Limit of
         true ->
@@ -159,7 +216,7 @@ classify(Flags, <<Lower:16/little, Upper:16/little>>, Limit)
         false ->
             {error, {invalid_free_space_bounds, Lower, Upper}}
     end;
-classify(Flags, _Bounds, _Limit) ->
+classify(Flags, _Pad, _Bounds, _Limit) ->
     {error, {unsupported_page_type, Flags}}.
 
 %% @doc Return the number of nodes held by a branch or leaf page.
@@ -169,12 +226,17 @@ num_keys(Page) ->
         {error, _} = Error -> Error
     end.
 
-%% Parse a page that must carry nodes, refusing every other kind.
+%% Parse a page that must carry nodes, refusing every other kind: a `leaf2'
+%% page counts its items as `keys' but has no node structure to read them by.
 node_page(Page) ->
     case page(Page) of
-        {ok, #{ <<"type">> := Type, <<"keys">> := Keys }} -> {ok, Type, Keys};
-        {ok, #{ <<"type">> := Type }} -> {error, {not_a_node_page, Type}};
-        {error, _} = Error -> Error
+        {ok, #{ <<"type">> := Type, <<"keys">> := Keys }}
+                when Type == branch; Type == leaf ->
+            {ok, Type, Keys};
+        {ok, #{ <<"type">> := Type }} ->
+            {error, {not_a_node_page, Type}};
+        {error, _} = Error ->
+            Error
     end.
 
 %% @doc Return the node at the given index as its key and the thing that it
@@ -214,11 +276,28 @@ node_offset(Page, Index) ->
 
 %% @doc Return what a node points at. A branch node carries its child's page
 %% number packed across the three header words that a leaf uses for its value
-%% size and flags. A leaf's value sits inline unless the node is flagged
-%% `F_BIGDATA', in which case the node instead holds an `MDB_ovpage' naming the
-%% page the value starts on; the size stays the true size of the value.
+%% size and flags. A leaf's value sits inline unless the node is flagged:
+%% `F_BIGDATA' replaces it with an `MDB_ovpage' naming the overflow page the
+%% value starts on, the size staying the true size of the value; `F_SUBDATA'
+%% with the `MDB_db' of the sub-database holding the key's duplicates; and
+%% `F_DUPDATA' alone with the sub-page holding them, a fixed-width page
+%% embedded whole in the node's data.
 reference(_Page, branch, _DataStart, NodeFlags, Packed) ->
     {ok, {branch, Packed bor (NodeFlags bsl 32)}};
+reference(Page, leaf, DataStart, NodeFlags, Size)
+        when NodeFlags band ?F_SUBDATA =/= 0 ->
+    case Size == ?DB_SIZE andalso DataStart + Size =< byte_size(Page) of
+        true -> {ok, {leaf, {subdb, db(binary:part(Page, DataStart, Size))}}};
+        false -> {error, {invalid_subdatabase_node, Size}}
+    end;
+reference(Page, leaf, DataStart, NodeFlags, Size)
+        when NodeFlags band ?F_DUPDATA =/= 0 ->
+    case
+        Size >= ?PAGE_HEADER_SIZE andalso DataStart + Size =< byte_size(Page)
+    of
+        true -> {ok, {leaf, {subpage, binary:part(Page, DataStart, Size)}}};
+        false -> {error, value_overruns_page}
+    end;
 reference(Page, leaf, DataStart, NodeFlags, Size)
         when NodeFlags band ?F_BIGDATA == 0 ->
     case DataStart + Size =< byte_size(Page) of
@@ -317,6 +396,58 @@ lower_bound(Page, Key, Low, High) ->
             lower_bound(Page, Key, Middle + 1, High);
         {ok, _NodeKey, _} ->
             lower_bound(Page, Key, Low, Middle - 1);
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Return the fixed-width item at the given index of a `leaf2' page. Such
+%% a page packs bare items back to back after its header, so an item is
+%% addressed by index and width alone. The width the caller took from the
+%% sub-database's `MDB_db' must agree with the one the page's header carries:
+%% a file whose two widths differ is describing two different layouts at once,
+%% and is refused rather than read by either.
+item(Page, Index, Pad) ->
+    maybe
+        {ok, Keys} ?= fixed_width_page(Page, Pad),
+        true ?= Index >= 0 andalso Index < Keys orelse {error, no_such_item},
+        {ok, binary:part(Page, ?PAGE_HEADER_SIZE + (Index * Pad), Pad)}
+    end.
+
+%% Parse a page that must hold fixed-width items of the given width, refusing
+%% every other kind of page, and the right kind whose own width disagrees.
+fixed_width_page(Page, Pad) ->
+    case page(Page) of
+        {ok, #{ <<"type">> := leaf2, <<"pad">> := Pad, <<"keys">> := Keys }} ->
+            {ok, Keys};
+        {ok, #{ <<"type">> := leaf2, <<"pad">> := Other }} ->
+            {error, {item_width_mismatch, Pad, Other}};
+        {ok, #{ <<"type">> := Type }} ->
+            {error, {not_a_fixed_width_page, Type}};
+        {error, _} = Error ->
+            Error
+    end.
+
+%% @doc Find the index of the first item that is greater than or equal to the
+%% given key, or the item count if the page holds no such item. The key may be
+%% shorter than the items: a prefix sorts before every item that begins with
+%% it, so a scan over one prefix's run starts here and walks forwards.
+item_seek(Page, Key, Pad) ->
+    case fixed_width_page(Page, Pad) of
+        {ok, Keys} -> item_lower_bound(Page, Key, Pad, 0, Keys - 1);
+        {error, _} = Error -> Error
+    end.
+
+%% Binary search for the first item in `[Low, High]' that is greater than or
+%% equal to `Key', mirroring `lower_bound/4' over items instead of nodes.
+item_lower_bound(_Page, _Key, _Pad, Low, High) when Low > High ->
+    Low;
+item_lower_bound(Page, Key, Pad, Low, High) ->
+    Middle = (Low + High) div 2,
+    case item(Page, Middle, Pad) of
+        {ok, Item} when Item < Key ->
+            item_lower_bound(Page, Key, Pad, Middle + 1, High);
+        {ok, _Item} ->
+            item_lower_bound(Page, Key, Pad, Low, Middle - 1);
         {error, _} = Error ->
             Error
     end.
@@ -513,9 +644,23 @@ refuses_foreign_input_test() ->
         {error, {invalid_page_size, 1000}},
         meta(overwrite(Meta, 48, <<1000:32/little>>))
     ),
+    % A comparator-changing flag is refused, and so is either duplicate flag
+    % alone; the pair together is the sorted-set container and is admitted.
+    ?assertEqual(
+        {error, {unsupported_database_flags, 2}},
+        meta(overwrite(Meta, 100, <<2:16/little>>))
+    ),
     ?assertEqual(
         {error, {unsupported_database_flags, 4}},
         meta(overwrite(Meta, 100, <<4:16/little>>))
+    ),
+    ?assertEqual(
+        {error, {unsupported_database_flags, 16#10}},
+        meta(overwrite(Meta, 100, <<16#10:16/little>>))
+    ),
+    ?assertMatch(
+        {ok, #{ <<"flags">> := 16#14 }},
+        meta(overwrite(Meta, 100, <<16#14:16/little>>))
     ).
 
 %% @doc A page whose own bookkeeping does not agree with its size is refused,
@@ -532,9 +677,16 @@ refuses_malformed_page_test() ->
         {error, {invalid_page_flags, _}},
         page(overwrite(Page, 18, <<16#8000:16/little>>))
     ),
+    % Flagging the branch page `P_LEAF|P_LEAF2' makes it claim a fixed-width
+    % layout whose item width -- its `pad' field -- is zero, and a sub-page
+    % flag without the fixed-width one is a layout with no reader here.
+    ?assertMatch(
+        {error, {invalid_fixed_width_bounds, 0, _, _}},
+        page(overwrite(Page, 18, <<16#22:16/little>>))
+    ),
     ?assertMatch(
         {error, {unsupported_page_layout, _}},
-        page(overwrite(Page, 18, <<16#22:16/little>>))
+        page(overwrite(Page, 18, <<16#42:16/little>>))
     ),
     ?assertMatch(
         {error, {invalid_free_space_bounds, _, _}},
