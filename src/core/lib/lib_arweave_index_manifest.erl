@@ -218,8 +218,8 @@ reconstructed(Summary, Weaves, Opts) ->
     case maps:get(<<"txs">>, Summary) of
         [] when BlockStart == Expected ->
             {ok, #{}};
-        _Ids ->
-            case block_starts(Height, BlockStart, Expected, Opts) of
+        Ids ->
+            case block_starts(Height, BlockStart, Expected, Ids, Opts) of
                 {ok, Assignments} -> {ok, Assignments};
                 dropped -> dropped;
                 {error, Reason} -> throw({'block-txs-failed', Height, Reason})
@@ -263,9 +263,9 @@ covering_height(Offset, Lo, Hi, Opts) ->
 
 %% @doc One block's transaction starts from its GraphQL metadata, if the
 %% reconstruction lands exactly on the block's reported weave size.
-block_starts(Height, BlockStart, Expected, Opts) ->
+block_starts(Height, BlockStart, Expected, Ids, Opts) ->
     maybe
-        {ok, Txs} ?= block_txs(Height, Opts),
+        {ok, Txs} ?= block_txs(Ids, Opts),
         Sorted = lists:sort(fun({IDA, _}, {IDB, _}) -> IDA =< IDB end, Txs),
         {End, Assignments} =
             lists:foldl(
@@ -296,35 +296,46 @@ block_starts(Height, BlockStart, Expected, Opts) ->
         end
     end.
 
-%% @doc A block's L1 transactions from the gateway's GraphQL API, as
-%% `{NativeID, DataSize}' pairs, across pages.
-block_txs(Height, Opts) ->
-    block_txs(Height, undefined, [], Opts).
+%% @doc A block's transactions from the gateway's GraphQL API, as
+%% `{NativeID, DataSize}' pairs, one query per hundred of the block's own
+%% txids. Filtering by ids rather than by block matters: the block filter
+%% answers with every bundled item the block carries -- hundreds of pages
+%% where the block's own transaction list is one.
+block_txs(Ids, Opts) ->
+    block_txs(Ids, Opts, []).
 
-block_txs(Height, Cursor, Acc, Opts) ->
-    After =
-        case Cursor of
-            undefined -> <<>>;
-            _ -> << ", after: \"", Cursor/binary, "\"" >>
-        end,
-    HeightBin = hb_util:bin(Height),
+block_txs([], _Opts, Acc) ->
+    {ok, Acc};
+block_txs(Ids, Opts, Acc) ->
+    {Chunk, Rest} = lists:split(min(100, length(Ids)), Ids),
+    Quoted =
+        lists:join(
+            <<",">>,
+            [<< "\"", ID/binary, "\"" >> || ID <- Chunk]
+        ),
     Query =
-        <<
-            "query { transactions(block: {min: ", HeightBin/binary,
-            ", max: ", HeightBin/binary, "}, first: 100", After/binary,
-            ") { pageInfo { hasNextPage } "
-            "edges { cursor node { id bundledIn { id } data { size } } } } }"
-        >>,
+        iolist_to_binary(
+            [
+                <<"query { transactions(ids: [">>,
+                Quoted,
+                <<"], first: 100) "
+                    "{ edges { node { id data { size } } } } }">>
+            ]
+        ),
     maybe
         {ok, Result} ?= fetch_graphql(Query, Opts),
-        Connection =
+        Edges =
             hb_maps:get(
-                <<"transactions">>,
-                hb_maps:get(<<"data">>, Result, #{}, Opts),
-                #{},
+                <<"edges">>,
+                hb_maps:get(
+                    <<"transactions">>,
+                    hb_maps:get(<<"data">>, Result, #{}, Opts),
+                    #{},
+                    Opts
+                ),
+                [],
                 Opts
             ),
-        Edges = hb_maps:get(<<"edges">>, Connection, [], Opts),
         Txs =
             [
                 {
@@ -340,23 +351,12 @@ block_txs(Height, Cursor, Acc, Opts) ->
                 }
             ||
                 Edge <- Edges,
-                (Node = hb_maps:get(<<"node">>, Edge, #{}, Opts)) /= #{},
-                hb_maps:get(<<"bundledIn">>, Node, null, Opts) == null
+                (Node = hb_maps:get(<<"node">>, Edge, #{}, Opts)) /= #{}
             ],
-        More =
-            hb_maps:get(
-                <<"hasNextPage">>,
-                hb_maps:get(<<"pageInfo">>, Connection, #{}, Opts),
-                false,
-                Opts
-            ),
-        case {More, Edges} of
-            {true, [_ | _]} ->
-                Last = hb_maps:get(<<"cursor">>, lists:last(Edges), <<>>, Opts),
-                block_txs(Height, Last, Txs ++ Acc, Opts);
-            _ ->
-                {ok, Txs ++ Acc}
-        end
+        % A transaction the gateway has no node for reconstructs nothing;
+        % the count mismatch fails the block's weave-size check rather
+        % than assigning around the gap.
+        block_txs(Rest, Opts, Txs ++ Acc)
     end.
 
 %% @doc A block's cumulative weave size.

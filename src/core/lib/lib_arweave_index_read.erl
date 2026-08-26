@@ -74,7 +74,8 @@ open(Module, Opts) ->
         <<"batch-chunks">> => BatchChunks,
         <<"buffer">> => <<>>,
         <<"base">> => 0,
-        <<"limit">> => infinity
+        <<"limit">> => infinity,
+        <<"hole">> => undefined
     }.
 
 %% @doc Read `Len' bytes of the weave beginning at `Offset', as
@@ -93,6 +94,13 @@ read(Offset, Len, Reader = #{ <<"buffer">> := Buffer, <<"base">> := Base })
         when Offset >= Base
         andalso Offset + Len =< Base + byte_size(Buffer) ->
     {ok, binary:part(Buffer, Offset - Base, Len), Reader};
+read(Offset, Len, Reader = #{ <<"hole">> := Hole })
+        when is_integer(Hole)
+        andalso Offset < Hole + ?DATA_CHUNK_SIZE
+        andalso Offset + Len > Hole ->
+    % The hole that ended the last batch answers again without a read:
+    % every item of a dead chunk would otherwise probe the same slot.
+    {short, Reader};
 read(Offset, Len, Reader = #{ <<"buffer">> := Buffer, <<"base">> := Base })
         when byte_size(Buffer) > 0
         andalso Offset >= Base
@@ -191,12 +199,16 @@ ahead(After, #{ <<"batch-chunks">> := BatchChunks, <<"limit">> := Limit }) ->
             max(Clipped, ?PROBE_CHUNKS)
     end.
 
-%% @doc Install a refilled buffer and answer from it, or report the shortfall.
+%% @doc Install a refilled buffer and answer from it, or report the
+%% shortfall -- remembering where the batch was cut off, so the dead slot
+%% is not probed once per item it holds.
 served(Offset, Len, Base, Buffer, Reader) ->
     Refilled = Reader#{ <<"buffer">> => Buffer, <<"base">> => Base },
     case Offset + Len =< Base + byte_size(Buffer) of
-        true -> {ok, binary:part(Buffer, Offset - Base, Len), Refilled};
-        false -> {short, Refilled}
+        true ->
+            {ok, binary:part(Buffer, Offset - Base, Len), Refilled};
+        false ->
+            {short, Refilled#{ <<"hole">> => Base + byte_size(Buffer) }}
     end.
 
 %% @doc Stop the reader's fetcher, closing its open chunk file.
