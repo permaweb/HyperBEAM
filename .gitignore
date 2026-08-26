@@ -31,6 +31,7 @@ rebar3.crashdump
 native/hb_beamr/*.o
 native/hb_beamr/*.d
 native/hb_keccak/*.d
+native/lib_arweave_index_item/*.d
 
 native/hb_util_string/*.o
 native/hb_util_string/*.d

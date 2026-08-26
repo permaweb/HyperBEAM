@@ -11,13 +11,14 @@
 %%% costs a fraction of its size in reads, while a module dense with small
 %%% items is read whole, sequentially.
 %%%
-%%% Parsing is `ar_bundles:deserialize_header/1' over a window of the item:
-%%% the scanner indexes exactly what the AO-Core write path would have
-%%% parsed, by construction. A window that proves too small for the tags is
-%%% regrown geometrically and reparsed; an item whose header does not parse
-%%% at its full extent is malformed on chain and is counted and skipped, as
-%%% are items lost to holes in the module. Item IDs are recomputed as
-%%% `sha256(signature)' -- the table's claimed IDs are not believed.
+%%% Items parse through `lib_arweave_index_item': one native pass per item
+%%% window that mirrors `ar_bundles:deserialize_header/1' -- the same parse
+%%% the AO-Core write path applies -- and returns the item's finished rows.
+%%% A window that proves too small for the tags is regrown geometrically and
+%%% reparsed; an item whose header does not parse at its full extent is
+%%% malformed on chain and is counted and skipped, as are items lost to
+%%% holes in the module. Item IDs are recomputed as `sha256(signature)' --
+%%% the table's claimed IDs are not believed.
 %%%
 %%% An item whose tags name it a bundle (`bundle-format: binary',
 %%% `bundle-version: 2.0.0', names case-insensitive, values lower-cased, as
@@ -67,8 +68,8 @@ tx(#{ <<"bundle">> := false }, State) ->
 tx(Spec = #{ <<"start">> := Start, <<"size">> := Size },
         State = #{ <<"reader">> := Reader }) ->
     Parent =
-        case maps:get(<<"id">>, Spec, undefined) of
-            undefined -> undefined;
+        case maps:get(<<"id">>, Spec, <<>>) of
+            <<>> -> <<>>;
             ID -> hb_util:human_id(ID)
         end,
     % The transaction's extent bounds every read it can cause, so the
@@ -164,13 +165,26 @@ windowed(Pos, Size, Parent, Depth, [Window | Windows], State) ->
     Take = min(Size, Window),
     case bytes(Pos, Take, State) of
         {ok, Bin, State2} ->
-            case header(Bin) of
-                {ok, HeaderSize, TX} ->
-                    emit(TX, HeaderSize, Pos, Size, Parent, Depth, State2);
+            case lib_arweave_index_item:rows(Bin, Pos, Size, Parent) of
                 failed when Take < Size andalso Windows /= [] ->
                     windowed(Pos, Size, Parent, Depth, Windows, State2);
                 failed ->
-                    {ok, counted(<<"items-malformed">>, State2)}
+                    {ok, counted(<<"items-malformed">>, State2)};
+                redstone ->
+                    {ok, counted(<<"items-redstone">>, State2)};
+                {ok, OffsetItem, MatchItems} ->
+                    {ok,
+                        counted(<<"items">>,
+                            sunk(OffsetItem, MatchItems, State2))};
+                {bundle, OffsetItem, MatchItems, HeaderSize, ID} ->
+                    nested(
+                        ID,
+                        Pos + HeaderSize,
+                        Size - HeaderSize,
+                        Depth,
+                        counted(<<"items">>,
+                            sunk(OffsetItem, MatchItems, State2))
+                    )
             end;
         {short, State2} ->
             {ok, counted(<<"items-in-holes">>, State2)};
@@ -178,84 +192,23 @@ windowed(Pos, Size, Parent, Depth, [Window | Windows], State) ->
             {error, Reason}
     end.
 
-%% @doc Deserialize an item header through `ar_bundles', reporting any parse
-%% failure -- a window ending mid-field, an unsupported signature type, a tag
-%% section that does not decode -- as `failed' for the caller to size up or
-%% count. The try is confined to the vendored parser, whose interface for
-%% foreign bytes is to throw.
-header(Bin) ->
-    try ar_bundles:deserialize_header(Bin)
-    catch
-        throw:{invalid_ans104_tags, _} -> failed;
-        error:_ -> failed
-    end.
-
-%% @doc Emit one parsed item's rows and recurse into it if it is itself a
-%% bundle. RedStone items produce no rows and are never bundles.
-emit(TX, HeaderSize, Pos, Size, Parent, Depth, State) ->
-    #tx{ signature = Signature, tags = Tags } = TX,
-    case lib_arweave_index_rows:redstone(Tags) of
-        true ->
-            {ok, counted(<<"items-redstone">>, State)};
-        false ->
-            ID = crypto:hash(sha256, Signature),
-            State2 = sunk(TX, ID, Pos, Size, Parent, State),
-            nested(TX, ID, Pos + HeaderSize, Size - HeaderSize, Depth,
-                counted(<<"items">>, State2))
-    end.
-
 %% @doc Push one item's rows through the sink.
-sunk(TX, ID, Pos, Size, Parent, State) ->
+sunk(OffsetItem, MatchItems, State) ->
     #{ <<"sink">> := Sink, <<"sink-state">> := SinkState } = State,
-    OffsetItem =
-        lib_arweave_index_rows:offset_item(ID, <<"ans104@1.0">>, Pos, Size),
-    MatchItems = lib_arweave_index_rows:match_rows(header_map(TX, ID, Parent), Pos),
     State#{ <<"sink-state">> => Sink(OffsetItem, MatchItems, SinkState) }.
 
-%% @doc The parsed fields the row builder draws predicates from.
-header_map(TX, _ID, Parent) ->
-    #tx{
-        owner = Owner,
-        signature_type = SigType,
-        target = Target,
-        tags = Tags
-    } = TX,
-    Base =
-        #{
-            <<"tags">> => Tags,
-            <<"owner-address">> =>
-                hb_util:human_id(ar_wallet:to_address(Owner, SigType))
-        },
-    WithTarget =
-        case Target of
-            <<>> -> Base;
-            _ -> Base#{ <<"recipient">> => hb_util:human_id(Target) }
-        end,
-    case Parent of
-        undefined -> WithTarget;
-        _ -> WithTarget#{ <<"bundled-in">> => Parent }
-    end.
-
-%% @doc Recurse into an item that is itself a bundle. The tag reading is
-%% `ar_tx:type/1''s: both bundle tags present, names case-insensitive,
-%% values lower-cased -- except that the data here is raw weave bytes, so
-%% the structural table check stands in for `decode_bundle_header'.
-nested(TX, ID, DataPos, DataSize, Depth, State) ->
-    Format = ar_tx:tagfind(<<"bundle-format">>, TX#tx.tags, <<>>),
-    Version = ar_tx:tagfind(<<"bundle-version">>, TX#tx.tags, <<>>),
-    IsBundle =
-        {hb_util:to_lower(Format), hb_util:to_lower(Version)}
-            == {<<"binary">>, <<"2.0.0">>},
-    case IsBundle andalso Depth < ?MAX_DEPTH of
-        false when IsBundle ->
-            {ok, counted(<<"bundles-too-deep">>, State)};
+%% @doc Recurse into an item whose tags name it a bundle. The data here is
+%% raw weave bytes, so the structural table check stands in for
+%% `decode_bundle_header'.
+nested(ID, DataPos, DataSize, Depth, State) ->
+    case Depth < ?MAX_DEPTH of
         false ->
-            {ok, State};
+            {ok, counted(<<"bundles-too-deep">>, State)};
         true ->
             bundle(
                 DataPos,
                 DataSize,
-                hb_util:human_id(ID),
+                ID,
                 Depth + 1,
                 counted(<<"bundles-nested">>, State)
             )
