@@ -16,6 +16,7 @@
 %%
 %% @param StoreOpts A message with the store options (ignored).
 %% @returns remote.
+scope(#{ <<"scope">> := Scope }) -> Scope;
 scope(_StoreOpts) ->
     remote.
 start(_StoreOpts) ->
