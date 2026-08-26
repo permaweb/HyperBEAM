@@ -744,24 +744,17 @@ match_offset([ID | IDs], StoreOpts, Opts) ->
             match_offset(IDs, StoreOpts, Opts)
     end.
 
-%% @doc The key-value pairs a message is indexed under: its tags -- the
+%% @doc The key-value pairs a message is indexed under: its wire tags -- the
+%% `original-tags' of its commitments when any carries them, else the
 %% binary-valued keys of the uncommitted message, less `data' and `body' --
 %% with the owner, recipient and parent bundle that its commitments carry.
 match_predicates(Base, Opts) ->
-    Uncommitted = hb_message:uncommitted(hb_private:reset(Base)),
-    Tags =
-        lists:filtermap(
-            fun({Key, _}) when Key =:= <<"data">>; Key =:= <<"body">> ->
-                    false;
-               ({Key, RawValue}) ->
-                    case ensure_loaded(RawValue, Opts) of
-                        Value when is_binary(Value) -> {true, {Key, Value}};
-                        _ -> false
-                    end
-            end,
-            hb_maps:to_list(Uncommitted, Opts)
-        ),
     Commitments = hb_maps:get(<<"commitments">>, Base, #{}, Opts),
+    Tags =
+        case original_tags(Commitments, Opts) of
+            [] -> match_key_tags(Base, Opts);
+            Original -> Original
+        end,
     Fields =
         hb_maps:fold(
             fun(_CommID, Commitment, Acc) ->
@@ -777,6 +770,48 @@ match_predicates(Base, Opts) ->
             Opts
         ),
     hb_util:unique(Tags ++ Fields).
+
+%% @doc The wire tag list carried by a message's commitments: the tags exactly
+%% as they appear on-chain, which include the encoding tags the codecs consume
+%% on conversion and exclude the fields the structured view lifts to keys.
+original_tags(Commitments, Opts) ->
+    hb_maps:fold(
+        fun(_CommID, Commitment, Acc) ->
+            case hb_maps:get(<<"original-tags">>, Commitment, #{}, Opts) of
+                Numbered when map_size(Numbered) > 0 ->
+                    Acc
+                        ++ [
+                            {Name, Value}
+                        ||
+                            #{ <<"name">> := Name, <<"value">> := Value } <-
+                                hb_maps:values(
+                                    ensure_all_loaded(Numbered, Opts),
+                                    Opts
+                                )
+                        ];
+                _ -> Acc
+            end
+        end,
+        [],
+        Commitments,
+        Opts
+    ).
+
+%% @doc The tag pairs of a message that carries no wire tags: its uncommitted
+%% binary-valued keys, less `data' and `body'.
+match_key_tags(Base, Opts) ->
+    Uncommitted = hb_message:uncommitted(hb_private:reset(Base)),
+    lists:filtermap(
+        fun({Key, _}) when Key =:= <<"data">>; Key =:= <<"body">> ->
+                false;
+           ({Key, RawValue}) ->
+                case ensure_loaded(RawValue, Opts) of
+                    Value when is_binary(Value) -> {true, {Key, Value}};
+                    _ -> false
+                end
+        end,
+        hb_maps:to_list(Uncommitted, Opts)
+    ).
 
 %% @doc A single indexed field of a commitment, when it is present.
 match_field(Name, Key, Commitment, Opts) ->

@@ -275,3 +275,15 @@ Recorded in `decisions/` as they are made.
   equality adjudicated), index-only entries zeroed. Chunk-index key format
   + old-StoreID spelling documented for the indexer. Box free; evidence in
   /home/hb/unpack-scratch on dev-2.
+- 2026-08-26 ~08:0xZ W5 underway: demo containers built by W6 (11,000,000
+  offset items, 112,527,983 match rows + 8.02M bundled-in rows; slice bound
+  O = 381,948,870,323,729; spec §8 audits pass; deterministic). Offset
+  container PUBLISHED and MINED: gXk2EYyhGKG_ZAeyhQZtGko11CHqU7H8Ysc2h7P-6s8
+  (232,259,584 B at weave offset 390,058,031,227,126, block 1,987,823).
+  Match container (1,915,879,424 B) seeding. Parity fixes applied to
+  hb_cache:match_predicates: tag rows derive from commitments original-tags
+  when present (adds bundle-format/version rows, drops structured-view
+  target/anchor rows) — full test rerun pending upload completion.
+  W6b launched: profile + header-scan NIF to close the 4 GB/s criterion
+  (W6 measured 2.60 GB/s full-partition, parse-bound on 24 real cores,
+  disks ~8 GB/s).
