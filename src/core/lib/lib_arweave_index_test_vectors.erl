@@ -60,6 +60,93 @@ test_end_to_end() ->
     ?assertEqual(items(Opts, <<"offset">>), items(Opts1, <<"offset">>)),
     ?assertEqual(items(Opts, <<"match">>), items(Opts1, <<"match">>)).
 
+%% @doc The gateway enrichment against the live network: boundaries derived
+%% one way (each transaction's own `/tx/<id>/offset') are assigned the right
+%% txids by the other (block-level reconstruction from ids and sizes). Also
+%% the on-chain proof of the scan's lattice: every real transaction start
+%% sits at `Threshold + k * 262144'.
+enrich_live_test_() ->
+    {timeout, 120, fun test_enrich_live/0}.
+
+test_enrich_live() ->
+    Gateway = <<"https://arweave.net">>,
+    {ok, Info} = live_json(Gateway, <<"/info">>),
+    Height = hb_util:int(maps:get(<<"height">>, Info)) - 50,
+    {ok, Block} =
+        live_json(Gateway, << "/block/height/", (hb_util:bin(Height))/binary >>),
+    Known = known_offsets(Gateway, maps:get(<<"txs">>, Block), 8, []),
+    ?assertNotEqual([], Known),
+    % The lattice: every start is Threshold + k * 262144.
+    lists:foreach(
+        fun({Start, _Size, _ID}) ->
+            ?assertEqual(
+                ar_block:strict_data_split_threshold() rem ?DATA_CHUNK_SIZE,
+                Start rem ?DATA_CHUNK_SIZE
+            )
+        end,
+        Known
+    ),
+    % Enrichment reproduces every txid from block metadata alone.
+    Path =
+        filename:join(
+            os:getenv("TMPDIR", "/tmp"),
+            <<
+                "hb-enrich-live-",
+                (hb_util:encode(crypto:strong_rand_bytes(6)))/binary
+            >>
+        ),
+    ok =
+        lib_arweave_index_manifest:write(
+            Path,
+            [
+                #{ <<"start">> => Start, <<"size">> => Size }
+            ||
+                {Start, Size, _ID} <- Known
+            ]
+        ),
+    {ok, Report} = lib_arweave_index_manifest:enrich(Path, #{}),
+    ?assertEqual(length(Known), maps:get(<<"enriched">>, Report)),
+    {ok, After} = lib_arweave_index_manifest:load(Path, 0, 1 bsl 62),
+    ByStart =
+        maps:from_list([{maps:get(<<"start">>, Tx), Tx} || Tx <- After]),
+    lists:foreach(
+        fun({Start, _Size, ID}) ->
+            ?assertEqual(
+                ID,
+                maps:get(<<"id">>, maps:get(Start, ByStart))
+            )
+        end,
+        Known
+    ).
+
+%% @doc Ground-truth placements for up to `Wanted' of a block's transactions
+%% that carry data, from each transaction's own offset endpoint. Most of a
+%% block's transactions carry none.
+known_offsets(_Gateway, [], _Wanted, Acc) ->
+    Acc;
+known_offsets(_Gateway, _IDs, 0, Acc) ->
+    Acc;
+known_offsets(Gateway, [ID | IDs], Wanted, Acc) ->
+    {ok, Offset} = live_json(Gateway, << "/tx/", ID/binary, "/offset" >>),
+    Size = hb_util:int(maps:get(<<"size">>, Offset)),
+    End = hb_util:int(maps:get(<<"offset">>, Offset)),
+    case Size > 0 of
+        true ->
+            known_offsets(
+                Gateway,
+                IDs,
+                Wanted - 1,
+                [{End - Size, Size, hb_util:native_id(ID)} | Acc]
+            );
+        false ->
+            known_offsets(Gateway, IDs, Wanted, Acc)
+    end.
+
+%% @doc Fetch one JSON resource from the live gateway.
+live_json(Gateway, Path) ->
+    {ok, Res} = hb_http:get(Gateway, Path, #{}),
+    {ok, hb_json:decode(maps:get(<<"body">>, Res))}.
+
 %%% The synthetic weave.
 
 %% @doc Build and place every transaction, returning the manifest specs, the
