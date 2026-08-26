@@ -114,13 +114,14 @@ multirequest_opts(Config, Message, Opts) ->
 
 %% @doc Get a value for a multirequest option from the config or message.
 multirequest_opt(Key, Config, Message, Default, Opts) ->
+    %% force-message allow us to kep the response Erlang friendly
     hb_ao:get_first(
         [
             {Message, <<"multirequest-", Key/binary>>},
             {Config, Key}
         ],
         Default,
-        Opts#{ <<"hashpath">> => ignore }
+        Opts#{ <<"hashpath">> => ignore, <<"force-message">> => false }
     ).
 
 %% @doc Check if a response is admissible, according to the configuration. First,
@@ -254,6 +255,9 @@ admissible_response(Response, Msg, NOpts, Opts) ->
         {ok, Res} when is_atom(Res) or is_binary(Res) ->
             ?event(debug_multi, {admissible_result, {result, Res}}),
             hb_util:atom(Res) == true;
+        {ok, #{<<"ao-result">> := Key} = Res} ->
+            ?event(debug_multi, {admissible_result, {result, Res}}),
+            hb_util:atom(maps:get(Key, Res, false)) == true;
         {error, Reason} ->
             ?event(debug_multi, {admissible_error, {reason, Reason}}),
             false

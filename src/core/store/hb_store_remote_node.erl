@@ -123,6 +123,7 @@ multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
     Config =
         #{
             <<"nodes">> => [ node_request(N) || N <- Nodes ],
+            %% TODO: We might want to keep the same definition as previously set
             <<"parallel">> => true,
             <<"responses">> => 1,
             <<"stop-after">> => true,
@@ -140,6 +141,7 @@ multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
         },
     ?event(store_remote_node,
         {executing_multiread, {node_count, length(Nodes)}, {key, Key}}),
+    %% TODO: We should use the abstraction that exists, just make it work with multiple nodes.
     case
         hb_http:request(
             <<"GET">>,
