@@ -296,3 +296,6 @@ Recorded in `decisions/` as they are made.
   arlmdb stores behind writable heads, end-to-end GraphQL proofs, and the
   query-pace benchmark (remote arlmdb vs local set-store A/B).
   eunit-all rerunning after the original-tags parity fix.
+- 2026-08-26 ~08:5xZ eunit-all after the original-tags parity fix:
+  Failed: 5. Passed: 3600. — the pre-existing baseline exactly. Fix is
+  clean; branch tip 31f344022.
