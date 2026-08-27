@@ -888,7 +888,7 @@ invoke_non_compute_key_test() ->
     ?event({result2, Result2}),
     ?assertEqual(<<"Alice">>, hb_ao:get(<<"hello">>, Result2, #{})).
 
-top_holders_cache_test() ->
+top_holders_fixture(MaxAge) ->
     Store = hb_test_utils:test_store(),
     Wallet = ar_wallet:new(),
     Opts = #{
@@ -945,11 +945,57 @@ top_holders_cache_test() ->
         <<"path">> => <<"top">>,
         <<"top">> => 2,
         <<"process-id">> => ProcessID,
-        <<"max-age">> => 60
+        <<"max-age">> => MaxAge
     },
+    {Function, Req, Opts}.
+
+top_holders_cache_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
     {ok, Result} = hb_ao:resolve(Function, Req, Opts),
     Holders = hb_json:decode(hb_maps:get(<<"body">>, Result, Opts)),
     ?assertEqual(<<"bob">>, hb_maps:get(<<"address">>, hd(Holders), Opts)).
+
+top_holders_max_age_cache_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
+    assert_top_holders_max_age_cache(Function, Req, Opts).
+
+%% @doc Cache and expire a Lua map when the function is addressed by its ID.
+top_holders_max_age_cache_by_id_test() ->
+    {Function, Req, Opts} = top_holders_fixture(60),
+    {ok, FunctionID} = hb_cache:write(Function, Opts),
+    assert_top_holders_max_age_cache(FunctionID, Req, Opts).
+
+%% @doc Assert the fresh and stale cache behavior for a Lua function reference.
+assert_top_holders_max_age_cache(Function, Req, Opts) ->
+    {ok, First} = hb_ao:resolve(Function, Req, Opts),
+    CacheOnlyOpts = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    {ok, Fresh} = hb_ao:resolve(Function, Req, CacheOnlyOpts),
+    ?assertEqual(
+        hb_message:id(First, none, Opts),
+        hb_message:id(Fresh, none, Opts)
+    ),
+    ?assertEqual(
+        hb_message:id(First, all, Opts),
+        hb_message:id(Fresh, all, Opts)
+    ),
+    ?assertEqual(
+        hb_maps:get(<<"commitments">>, First, Opts),
+        hb_maps:get(<<"commitments">>, Fresh, Opts)
+    ),
+    ?assert(hb_message:verify(Fresh, all, Opts)),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Fresh)),
+    ?assertEqual(false, maps:is_key(<<"created-at">>, Fresh)),
+    CacheAddress = hb_cache:resolved_address(Function, Req, Opts),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        First,
+        os:system_time(second) - 61,
+        Opts
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        hb_ao:resolve(Function, Req, CacheOnlyOpts)
+    ).
 
 %% @doc Use a Lua module as a hook on the HTTP server via `~meta@1.0'.
 lua_http_hook_test() ->

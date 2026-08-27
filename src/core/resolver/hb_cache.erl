@@ -40,7 +40,9 @@
 -module(hb_cache).
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
--export([read/2, read_resolved/3, write/2, write_binary/3, write_hashpath/2, link/3]).
+-export([read/2, read_resolved/3, resolved_address/3]).
+-export([write/2, write_binary/3, write_hashpath/2, write_hashpath/3, write_resolved/4]).
+-export([link/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
 -include("include/hb.hrl").
@@ -266,9 +268,21 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    hb_message:paranoid_verify(cache_write, RawMsg, Opts),
-    {ok, Msg} = hb_message:with_only_committed(RawMsg, Opts),
-    TABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    % Reattach only cache-owned freshness after private keys are filtered.
+    PrivCreatedAt =
+        case maps:find(<<"priv-created-at">>, RawMsg) of
+            {ok, CreatedAt}
+                    when is_binary(CreatedAt),
+                         byte_size(CreatedAt) < ?DIRECT_VALUE_LENGTH ->
+                #{ <<"priv-created-at">> => CreatedAt };
+            _ ->
+                #{}
+        end,
+    PublicRawMsg = maps:remove(<<"priv-created-at">>, RawMsg),
+    hb_message:paranoid_verify(cache_write, PublicRawMsg, Opts),
+    {ok, Msg} = hb_message:with_only_committed(PublicRawMsg, Opts),
+    PublicTABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
+    TABM = maps:merge(PublicTABM, PrivCreatedAt),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
@@ -665,6 +679,17 @@ write_binary(Hashpath, Bin, Store, Opts) ->
     {ok, Path} = do_write_message(Bin, Store, Opts),
     hb_store:link(Store, #{ hb_path:to_binary(Hashpath) => Path }, Opts),
     {ok, Path}.
+
+%% @doc Write a resolved message with its private cache creation timestamp.
+write_resolved(CacheAddress, Msg, CreatedAt, Opts) ->
+    write_hashpath(
+        CacheAddress,
+        Msg#{
+            <<"priv-created-at">> =>
+                integer_to_binary(hb_util:int(CreatedAt))
+        },
+        Opts
+    ).
 
 %% @doc Read the message at a path. Returns in `structured@1.0' format: Either
 %% a richly typed map or a direct binary. If `cache-read-mode' is `raw',
@@ -1096,13 +1121,28 @@ read_in_memory_key(BaseMsg, NormKey, _Opts) ->
 %% @doc Read the output of a prior computation, given BaseMsg and Req.
 read_hashpath(BaseMsgID, ReqID, Opts) when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
     ?event_debug({cache_lookup, {base, BaseMsgID}, {req, ReqID}, {opts, Opts}}),
-    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
+    hashpath_read_result(read(resolved_address(BaseMsgID, ReqID, Opts), Opts));
 read_hashpath(BaseMsgID, Req, Opts) when ?IS_ID(BaseMsgID) and is_map(Req) ->
-    ReqID = hb_message:id(Req, all, Opts),
-    hashpath_read_result(read(<<BaseMsgID/binary, "/", ReqID/binary>>, Opts));
+    hashpath_read_result(read(resolved_address(BaseMsgID, Req, Opts), Opts));
 read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
-    hashpath_read_result(read(hb_path:hashpath(BaseMsg, Req, Opts), Opts));
+    hashpath_read_result(read(resolved_address(BaseMsg, Req, Opts), Opts));
 read_hashpath(_, _, _) -> miss.
+
+%% @doc Return the cache address for a resolved Base and request. `max-age'
+%% controls cache reuse, but does not identify the computation itself.
+resolved_address(BaseMsgID, ReqID, _Opts)
+        when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
+    <<BaseMsgID/binary, "/", ReqID/binary>>;
+resolved_address(BaseMsgID, Req, Opts)
+        when ?IS_ID(BaseMsgID) and is_map(Req) ->
+    ReqID = hb_message:id(cache_request(Req, Opts), all, Opts),
+    <<BaseMsgID/binary, "/", ReqID/binary>>;
+resolved_address(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
+    hb_path:hashpath(BaseMsg, cache_request(Req, Opts), Opts).
+
+%% @doc Remove cache policy fields that do not identify a computation.
+cache_request(Req, Opts) ->
+    hb_maps:without([<<"max-age">>], Req, Opts).
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
 hashpath_read_result({error, not_found}) -> miss;
@@ -1432,6 +1472,169 @@ test_immediate_marker_values(Store) ->
             ?assertEqual({ok, [ID]}, match(#{ <<"rawish">> => <<"raw:literal">> }, Opts));
         _ ->
             ok
+    end.
+
+%% @doc Resolved freshness is stored on the ordinary canonical message record.
+resolved_entry_canonical_record_test() ->
+    Opts = #{
+        <<"store">> => [
+            hb_test_utils:test_store(hb_store_lmdb, <<"resolved-canonical">>)
+        ],
+        <<"priv-wallet">> => ar_wallet:new()
+    },
+    Address1 = <<"resolved/canonical-1">>,
+    Address2 = <<"resolved/canonical-2">>,
+    Public = hb_message:commit(
+        #{
+            <<"body">> => <<"same-result">>,
+            <<"created-at">> => <<"application-value">>
+        },
+        Opts
+    ),
+    Msg = Public#{ <<"priv-other">> => <<"must-not-be-stored">> },
+    ResultID = hb_message:id(Public, none, Opts),
+    ?assertEqual({ok, ResultID}, write_resolved(Address1, Msg, 10, Opts)),
+    {ok, Entry1} = read(Address1, Opts),
+    ?assertEqual(<<"same-result">>, hb_maps:get(<<"body">>, Entry1, Opts)),
+    ?assertEqual(
+        <<"application-value">>,
+        hb_maps:get(<<"created-at">>, Entry1, Opts)
+    ),
+    ?assertEqual(
+        <<"10">>,
+        hb_maps:get(<<"priv-created-at">>, Entry1, Opts)
+    ),
+    ?assertEqual(false, maps:is_key(<<"priv-other">>, Entry1)),
+    PublicEntry1 = hb_private:reset(Entry1),
+    Restored1 = read_all_commitments(PublicEntry1, Opts),
+    ?assertEqual(
+        maps:get(<<"commitments">>, Public),
+        maps:get(<<"commitments">>, Restored1)
+    ),
+    ?assertEqual(
+        hb_message:id(Public, none, Opts),
+        hb_message:id(Restored1, none, Opts)
+    ),
+    ?assertEqual(
+        hb_message:id(Public, all, Opts),
+        hb_message:id(Restored1, all, Opts)
+    ),
+    ?assert(hb_message:verify(Restored1, all, Opts)),
+    ?assertEqual({ok, ResultID}, write_resolved(Address2, Msg, 20, Opts)),
+    {ok, Updated1} = read(Address1, Opts),
+    {ok, Entry2} = read(Address2, Opts),
+    ?assertEqual(
+        <<"20">>,
+        hb_maps:get(<<"priv-created-at">>, Updated1, Opts)
+    ),
+    ?assertEqual(
+        <<"20">>,
+        hb_maps:get(<<"priv-created-at">>, Entry2, Opts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        read(<<"created-at/", Address1/binary>>, Opts)
+    ),
+    {ok, InvalidID} = write(
+        #{ <<"body">> => <<"invalid-timestamp">>, <<"priv-created-at">> => 1 },
+        Opts
+    ),
+    {ok, InvalidEntry} = read(InvalidID, Opts),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, InvalidEntry)),
+    {ok, MissingLinkID} = write(
+        #{
+            <<"body">> => <<"missing-link-timestamp">>,
+            <<"priv-created-at">> => {link, <<"missing">>}
+        },
+        Opts
+    ),
+    {ok, MissingLinkEntry} = read(MissingLinkID, Opts),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, MissingLinkEntry)),
+    {ok, OversizedID} = write(
+        #{
+            <<"body">> => <<"oversized-timestamp">>,
+            <<"priv-created-at">> =>
+                binary:copy(<<"1">>, ?DIRECT_VALUE_LENGTH)
+        },
+        Opts
+    ),
+    {ok, OversizedEntry} = read(OversizedID, Opts),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, OversizedEntry)).
+
+%% @doc One LMDB root read returns the result and co-located freshness value.
+resolved_entry_lmdb_single_root_read_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb, <<"resolved-single-read">>),
+    Opts = #{ <<"store">> => [Store] },
+    Address = <<"resolved/single-read">>,
+    {ok, _} = write_resolved(
+        Address,
+        #{ <<"body">> => <<"cached">> },
+        12345,
+        Opts
+    ),
+    Parent = self(),
+    Tracer = spawn(fun() -> cache_trace_forwarder(Parent) end),
+    erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    erlang:trace_pattern({hb_store, read, 3}, true, []),
+    Entry =
+        try
+            {ok, ReadEntry} = read(Address, Opts),
+            ReadEntry
+        after
+            stop_cache_trace(Tracer)
+        end,
+    ?assertEqual(1, store_read_trace_count(0)),
+    ?assertEqual(<<"cached">>, hb_maps:get(<<"body">>, Entry, Opts)),
+    ?assertEqual(
+        <<"12345">>,
+        hb_maps:get(<<"priv-created-at">>, Entry, Opts)
+    ).
+
+%% @doc Disable store-read tracing and stop its forwarding process.
+stop_cache_trace(Tracer) ->
+    erlang:trace_pattern({hb_store, read, 3}, false, []),
+    erlang:trace(self(), false, [call]),
+    TraceRef = erlang:trace_delivered(self()),
+    Delivered =
+        receive
+            {trace_delivered, _, TraceRef} -> true
+        after 1000 ->
+            false
+        end,
+    Tracer ! {flush, self()},
+    Flushed =
+        receive
+            trace_flushed -> true
+        after 1000 ->
+            false
+        end,
+    Tracer ! stop,
+    case {Delivered, Flushed} of
+        {true, true} -> ok;
+        {false, _} -> error(trace_delivery_timeout);
+        {_, false} -> error(trace_flush_timeout)
+    end.
+
+%% @doc Forward cache trace events and provide an ordered flush barrier.
+cache_trace_forwarder(Parent) ->
+    receive
+        {flush, ReplyTo} ->
+            ReplyTo ! trace_flushed,
+            cache_trace_forwarder(Parent);
+        stop ->
+            ok;
+        TraceEvent ->
+            Parent ! {trace_event, TraceEvent},
+            cache_trace_forwarder(Parent)
+    end.
+
+%% @doc Count traced calls to the store read boundary.
+store_read_trace_count(Count) ->
+    receive
+        {trace_event, {trace, _, call, {hb_store, read, _}}} ->
+            store_read_trace_count(Count + 1)
+    after 0 ->
+        Count
     end.
 
 match_store_control_test() ->

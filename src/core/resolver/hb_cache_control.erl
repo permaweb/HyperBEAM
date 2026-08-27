@@ -38,7 +38,7 @@ maybe_store(Base, Req, Res, Opts) ->
 %%      `no_cache':       If set, the cached values are never used. Returns
 %%                        `continue' to the caller.
 %%      `max-age':        If set, cached results must have a sufficiently
-%%                        recent `created-at' timestamp.
+%%                        recent `priv-created-at' timestamp.
 maybe_lookup(Base, Req, Opts) ->
     case exec_likely_faster_heuristic(Base, Req, Opts) of
         true ->
@@ -64,14 +64,15 @@ lookup(Base, Req, Opts) ->
                 {hit, {ok, Res}} ->
                     case fresh(Res, Req, Opts) of
                         true ->
+                            CachedRes = cached_result(Res, OutputScopedOpts),
                             ?event(caching,
                                 {cache_hit,
                                     {base, Base},
                                     {req, Req},
-                                    {res, Res}
+                                    {res, CachedRes}
                                 }
                             ),
-                            {ok, cached_result(Res)};
+                            {ok, CachedRes};
                         false ->
                             ?event(caching, {stale_cache_result, Base, Req}),
                             cache_miss(Base, Req, Settings, Opts)
@@ -91,9 +92,15 @@ fresh(Res, Req, Opts) ->
         <<"infinity">> -> true;
         RawMaxAge ->
             try
-                CreatedAt = hb_maps:get(<<"created-at">>, Res, undefined, Opts),
-                os:system_time(second) =<
-                    hb_util:int(CreatedAt) + max(0, hb_util:int(RawMaxAge))
+                CreatedAt = hb_util:int(
+                    hb_maps:get(<<"priv-created-at">>, Res, Opts)
+                ),
+                MaxAge = hb_util:int(RawMaxAge),
+                Now = os:system_time(second),
+                true = CreatedAt >= 0,
+                true = CreatedAt =< Now,
+                true = MaxAge >= 0,
+                Now - CreatedAt < MaxAge
             catch
                 _:_ -> false
             end
@@ -104,8 +111,16 @@ cache_miss(Base, Req, #{ <<"only-if-cached">> := true }, Opts) ->
 cache_miss(Base, Req, _Settings, Opts) ->
     maybe_load_base(Base, Req, Opts).
 
-cached_result(Res) when is_map(Res) -> maps:remove(<<"created-at">>, Res);
-cached_result(Res) -> Res.
+%% @doc Remove private freshness and restore separately stored commitments.
+cached_result(Res, Opts) when is_map(Res) ->
+    PublicRes = maps:remove(<<"priv-created-at">>, Res),
+    WithCommitments = hb_cache:read_all_commitments(PublicRes, Opts),
+    case maps:get(<<"commitments">>, WithCommitments, #{}) of
+        Commitments when map_size(Commitments) > 0 -> WithCommitments;
+        _ -> PublicRes
+    end;
+cached_result(Res, _Opts) ->
+    Res.
 
 %% @doc Load an ID base required to execute the request.
 maybe_load_base(Base, Req, _Opts) when not ?IS_ID(Base) ->
@@ -158,16 +173,26 @@ async_writer() ->
 perform_cache_write(Base, Req, Res, Opts) ->
     hb_cache:write(Base, Opts),
     hb_cache:write(Req, Opts),
-    case Res of
-        <<_/binary>> ->
+    TracksFreshness = hb_maps:is_key(<<"max-age">>, Req, Opts),
+    CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
+    case {Res, TracksFreshness} of
+        {<<_/binary>>, _} ->
             hb_cache:write_binary(
-                hb_path:hashpath(Base, Req, Opts),
+                CacheAddress,
                 Res,
                 Opts
             );
-        Map when is_map(Map) ->
-            hb_cache:write(
-                Map#{ <<"created-at">> => os:system_time(second) },
+        {Map, true} when is_map(Map) ->
+            hb_cache:write_resolved(
+                CacheAddress,
+                Map,
+                os:system_time(second),
+                Opts
+            );
+        {Map, false} when is_map(Map) ->
+            hb_cache:write_hashpath(
+                CacheAddress,
+                maps:remove(<<"priv-created-at">>, Map),
                 Opts
             );
         _ ->
@@ -458,16 +483,274 @@ cache_result_max_age_test() ->
         <<"cache-control">> => [<<"always">>]
     },
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
-    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 1 },
-    Result = #{ <<"value">> => <<"cached">> },
-    {ok, ResultPath} = perform_cache_write(Base, Req, Result, Opts),
-    {ok, Cached} = hb_cache:read(ResultPath, Opts),
-    CreatedAt = hb_maps:get(<<"created-at">>, Cached, Opts),
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60 },
+    Result = #{
+        <<"value">> => <<"cached">>,
+        <<"priv-created-at">> =>
+            integer_to_binary(os:system_time(second) + 3600)
+    },
+    {ok, _} = perform_cache_write(Base, Req, Result, Opts),
+    {hit, {ok, Cached}} = hb_cache:read_resolved(Base, Req, Opts),
+    CreatedAt = hb_util:int(hb_maps:get(<<"priv-created-at">>, Cached, Opts)),
     ?assert(is_integer(CreatedAt)),
-    hb_cache:link(ResultPath, hb_path:hashpath(Base, Req, Opts), Opts),
     {ok, Served} = hb_ao:resolve(Base, Req, Opts),
-    ?assertEqual(not_found, hb_maps:get(<<"created-at">>, Served, not_found, Opts)),
-    timer:sleep(2100),
+    ?assertEqual(
+        not_found,
+        hb_maps:get(<<"priv-created-at">>, Served, not_found, Opts)
+    ),
+    CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        Result,
+        os:system_time(second) - 61,
+        Opts
+    ),
     {ok, Refreshed} = hb_ao:resolve(Base, Req, Opts),
-    ?assertEqual(not_found, hb_maps:get(<<"created-at">>, Refreshed, not_found, Opts)),
+    ?assertEqual(
+        not_found,
+        hb_maps:get(<<"priv-created-at">>, Refreshed, not_found, Opts)
+    ),
     ?assertNotEqual(Served, Refreshed).
+
+cache_result_priv_created_at_regression_test() ->
+    Wallet = ar_wallet:new(),
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"priv-wallet">> => Wallet,
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 3600 },
+    Result = hb_message:commit(
+        #{
+            <<"body">> => <<"cached">>,
+            <<"content-type">> => <<"text/plain">>,
+            <<"created-at">> => <<"application-value">>,
+            <<"status">> => 200
+        },
+        Opts
+    ),
+    {ok, _} = perform_cache_write(Base, Req, Result, Opts),
+    CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        Result,
+        os:system_time(second) - 1000,
+        Opts
+    ),
+    {hit, {ok, CachedEntry}} = hb_cache:read_resolved(Base, Req, Opts),
+    CachedTimestamp = hb_maps:get(<<"priv-created-at">>, CachedEntry, Opts),
+    ?assert(is_integer(hb_util:int(CachedTimestamp))),
+    Parent = self(),
+    EventHandler = #{
+        <<"device">> => #{
+            event =>
+                fun(_, EventReq, _) ->
+                    case {
+                        maps:get(<<"module">>, EventReq),
+                        maps:get(<<"body">>, EventReq)
+                    } of
+                        {?MODULE, {cache_hit, _, _, _} = Event} ->
+                            Parent ! {cache_hit_event, Event};
+                        _ -> ok
+                    end,
+                    {ok, EventReq}
+                end
+        }
+    },
+    CacheOnlyOpts = Opts#{
+        <<"cache-control">> => [<<"only-if-cached">>],
+        <<"on">> => #{ <<"event">> => EventHandler }
+    },
+    OldEventOpts = erlang:get({hb_event, event_opts}),
+    erlang:put({hb_event, event_opts}, CacheOnlyOpts),
+    Served =
+        try
+            {ok, CachedResult} = maybe_lookup(Base, Req, CacheOnlyOpts),
+            CachedResult
+        after
+            case OldEventOpts of
+                undefined -> erlang:erase({hb_event, event_opts});
+                _ -> erlang:put({hb_event, event_opts}, OldEventOpts)
+            end
+        end,
+    CacheHitEvent =
+        receive
+            {cache_hit_event, Event} -> Event
+        after 1000 ->
+            error(cache_hit_event_not_observed)
+        end,
+    EncodedEvent = term_to_binary(CacheHitEvent),
+    ?assertEqual(nomatch, binary:match(EncodedEvent, <<"priv-created-at">>)),
+    ?assertEqual(nomatch, binary:match(EncodedEvent, CachedTimestamp)),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)),
+    ?assertEqual(
+        <<"application-value">>,
+        hb_maps:get(<<"created-at">>, Served, Opts)
+    ),
+    ?assertEqual(
+        hb_message:id(Result, none, Opts),
+        hb_message:id(Served, none, Opts)
+    ),
+    ?assertEqual(
+        hb_message:id(Result, all, Opts),
+        hb_message:id(Served, all, Opts)
+    ),
+    ?assertEqual(
+        hb_maps:get(<<"commitments">>, Result, Opts),
+        hb_maps:get(<<"commitments">>, Served, Opts)
+    ),
+    ?assert(hb_message:verify(Served, all, Opts)),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        Result,
+        os:system_time(second) - 3601,
+        Opts
+    ),
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        maybe_lookup(Base, Req, CacheOnlyOpts)
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_cache:read(<<"created-at/", CacheAddress/binary>>, Opts)
+    ).
+
+cache_binary_max_age_remains_available_without_age_test() ->
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60 },
+    ReqWithoutMaxAge = maps:remove(<<"max-age">>, Req),
+    ?assertEqual(
+        hb_cache:resolved_address(Base, ReqWithoutMaxAge, Opts),
+        hb_cache:resolved_address(Base, Req, Opts)
+    ),
+    {ok, _} = perform_cache_write(Base, Req, <<"cached">>, Opts),
+    CacheOnlyOpts = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        maybe_lookup(Base, Req, CacheOnlyOpts)
+    ),
+    ?assertEqual(
+        {ok, <<"cached">>},
+        maybe_lookup(Base, ReqWithoutMaxAge, CacheOnlyOpts)
+    ).
+
+cache_map_without_max_age_is_reusable_test() ->
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>]
+    },
+    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
+    Req = #{ <<"path">> => <<"index">> },
+    ReqWithMaxAge = Req#{ <<"max-age">> => 60 },
+    Result = #{
+        <<"value">> => <<"cached">>,
+        <<"priv-created-at">> =>
+            integer_to_binary(os:system_time(second) + 3600)
+    },
+    ?assertEqual(
+        hb_cache:resolved_address(Base, Req, Opts),
+        hb_cache:resolved_address(Base, ReqWithMaxAge, Opts)
+    ),
+    {ok, _} = perform_cache_write(Base, Req, Result, Opts),
+    {hit, {ok, Cached}} = hb_cache:read_resolved(Base, Req, Opts),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Cached)),
+    CacheOnlyOpts = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        maybe_lookup(Base, ReqWithMaxAge, CacheOnlyOpts)
+    ),
+    {ok, Served} = maybe_lookup(Base, Req, CacheOnlyOpts),
+    ?assertEqual(<<"cached">>, hb_maps:get(<<"value">>, Served, Opts)),
+    ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)).
+
+fresh_uses_loaded_metadata_without_store_read_test() ->
+    Parent = self(),
+    Tracer = spawn(fun() -> cache_control_trace_forwarder(Parent) end),
+    erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    erlang:trace_pattern({hb_store, read, 3}, true, []),
+    IsFresh =
+        try
+            fresh(
+                #{
+                    <<"priv-created-at">> =>
+                        integer_to_binary(os:system_time(second))
+                },
+                #{ <<"max-age">> => 60 },
+                #{}
+            )
+        after
+            stop_cache_control_trace(Tracer)
+        end,
+    ?assert(IsFresh),
+    receive
+        {trace_event, {trace, _, call, {hb_store, read, _}}} ->
+            ?assert(false)
+    after 0 ->
+        ok
+    end.
+
+%% @doc Disable store-read tracing and stop its forwarding process.
+stop_cache_control_trace(Tracer) ->
+    erlang:trace_pattern({hb_store, read, 3}, false, []),
+    erlang:trace(self(), false, [call]),
+    TraceRef = erlang:trace_delivered(self()),
+    Delivered =
+        receive
+            {trace_delivered, _, TraceRef} -> true
+        after 1000 ->
+            false
+        end,
+    Tracer ! {flush, self()},
+    Flushed =
+        receive
+            trace_flushed -> true
+        after 1000 ->
+            false
+        end,
+    Tracer ! stop,
+    case {Delivered, Flushed} of
+        {true, true} -> ok;
+        {false, _} -> error(trace_delivery_timeout);
+        {_, false} -> error(trace_flush_timeout)
+    end.
+
+%% @doc Missing or invalid private timestamps fail closed when max-age applies.
+freshness_private_metadata_validation_test() ->
+    Now = os:system_time(second),
+    Req = #{ <<"max-age">> => 60 },
+    ?assert(fresh(#{}, #{}, #{})),
+    ?assertNot(fresh(#{}, Req, #{})),
+    ?assertNot(fresh(#{ <<"priv-created-at">> => <<"invalid">> }, Req, #{})),
+    ?assertNot(fresh(#{ <<"priv-created-at">> => <<"-1">> }, Req, #{})),
+    ?assertNot(
+        fresh(
+            #{ <<"priv-created-at">> => integer_to_binary(Now + 1) },
+            Req,
+            #{}
+        )
+    ),
+    ?assert(
+        fresh(
+            #{ <<"priv-created-at">> => integer_to_binary(Now) },
+            Req,
+            #{}
+        )
+    ).
+
+%% @doc Forward test trace events and provide an ordered flush barrier.
+cache_control_trace_forwarder(Parent) ->
+    receive
+        {flush, ReplyTo} ->
+            ReplyTo ! trace_flushed,
+            cache_control_trace_forwarder(Parent);
+        stop ->
+            ok;
+        TraceEvent ->
+            Parent ! {trace_event, TraceEvent},
+            cache_control_trace_forwarder(Parent)
+    end.
