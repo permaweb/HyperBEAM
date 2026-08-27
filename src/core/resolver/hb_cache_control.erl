@@ -11,6 +11,7 @@
 %%% following settings.
 -define(DEFAULT_STORE_OPT, false).
 -define(DEFAULT_LOOKUP_OPT,  true).
+-define(MAX_DELTA_SECONDS, 2147483647).
 
 %%% Public API
 
@@ -305,41 +306,337 @@ cache_source_to_cache_settings(Msg, Opts) ->
         _ -> #{}
     end.
 
-%% @doc Convert a cache control list as received via HTTP headers into a 
-%% normalized map of simply whether we should store and/or lookup the result.
-specifiers_to_cache_settings(CCSpecifier) when not is_list(CCSpecifier) ->
-    specifiers_to_cache_settings([CCSpecifier]);
-specifiers_to_cache_settings(RawCCList) ->
-    CCList = lists:map(fun hb_ao:normalize_key/1, RawCCList),
+%% @doc Parse Cache-Control values while preserving each original directive.
+parse_cache_control(undefined) -> [];
+parse_cache_control(RawList) when is_list(RawList) ->
+    lists:append(lists:map(fun parse_cache_control/1, RawList));
+parse_cache_control(Raw) ->
+    try
+        Bin = hb_util:bin(Raw),
+        lists:filtermap(
+            fun parse_cache_directive/1,
+            hb_util:split_depth_string_aware($,, Bin)
+        )
+    catch
+        _:_ -> []
+    end.
+
+%% @doc Parse one Cache-Control directive with Cowlib and a tolerant fallback.
+parse_cache_directive(RawDirective) ->
+    Directive = string:trim(RawDirective),
+    case Directive of
+        <<>> -> false;
+        _ ->
+            try cow_http_hd:parse_cache_control(Directive) of
+                [Parsed] -> {true, normalize_cache_directive(Parsed, Directive)};
+                _ -> parse_legacy_cache_directive(Directive)
+            catch
+                _:_ -> parse_legacy_cache_directive(Directive)
+            end
+    end.
+
+%% @doc Normalize a Cowlib directive without creating input-derived atoms.
+normalize_cache_directive({RawName, RawValue}, Raw) ->
+    Name = normalize_cache_directive_name(RawName),
+    {
+        Name,
+        normalize_cache_directive_value(Name, RawValue),
+        Raw
+    };
+normalize_cache_directive(RawName, Raw) ->
+    {normalize_cache_directive_name(RawName), true, Raw}.
+
+%% @doc Normalize only the case-insensitive directive name.
+normalize_cache_directive_name(Name) ->
+    hb_ao:normalize_key(string:lowercase(Name)).
+
+%% @doc Bound numeric parser output while preserving extension values.
+normalize_cache_directive_value(_Name, Value) when is_integer(Value) ->
+    min(max(0, Value), ?MAX_DELTA_SECONDS);
+normalize_cache_directive_value(Name, Value) ->
+    Unquoted = hb_util:unquote(Value),
+    case lists:member(
+        Name,
+        [
+            <<"max-age">>,
+            <<"max-stale">>,
+            <<"min-fresh">>,
+            <<"stale-while-revalidate">>,
+            <<"stale-if-error">>
+        ]
+    ) of
+        false -> Unquoted;
+        true ->
+            case parse_delta_seconds(Unquoted) of
+                invalid -> Unquoted;
+                Delta -> Delta
+            end
+    end.
+
+%% @doc Parse OWS around `=' and quoted commas rejected by strict Cowlib.
+parse_legacy_cache_directive(Directive) ->
+    case hb_util:split_depth_string_aware_single($=, Directive) of
+        {no_match, RawName, <<>>} ->
+            {
+                true,
+                {
+                    normalize_cache_directive_name(string:trim(RawName)),
+                    true,
+                    Directive
+                }
+            };
+        {_Match, RawName, RawValue} ->
+            Name = normalize_cache_directive_name(string:trim(RawName)),
+            Value = normalize_cache_directive_value(
+                Name,
+                string:trim(RawValue)
+            ),
+            {true, {Name, Value, Directive}}
+    end.
+
+%% @doc Return all normalized values for one directive name.
+directive_values(Name, Parsed) ->
+    [Value || {Directive, Value, _Raw} <- Parsed, Directive =:= Name].
+
+%% @doc Return whether a directive is present, regardless of its argument.
+has_directive(Name, Parsed) ->
+    directive_values(Name, Parsed) =/= [].
+
+%% @doc Parse one non-negative delta-seconds value conservatively.
+parse_delta_seconds(Value) when is_integer(Value), Value >= 0 ->
+    min(Value, ?MAX_DELTA_SECONDS);
+parse_delta_seconds(Value) when is_binary(Value) ->
+    Trimmed = string:trim(hb_util:unquote(Value)),
+    case is_decimal(Trimmed) of
+        false -> invalid;
+        true when byte_size(Trimmed) > 10 -> ?MAX_DELTA_SECONDS;
+        true -> min(binary_to_integer(Trimmed), ?MAX_DELTA_SECONDS)
+    end;
+parse_delta_seconds(_) ->
+    invalid.
+
+%% @doc Return whether a binary is a non-empty ASCII decimal number.
+is_decimal(<<>>) -> false;
+is_decimal(Bin) ->
+    lists:all(
+        fun(Char) -> Char >= $0 andalso Char =< $9 end,
+        binary_to_list(Bin)
+    ).
+
+%% @doc Parse a directive that must occur once with a delta-seconds value.
+numeric_directive(Name, Parsed) ->
+    case directive_values(Name, Parsed) of
+        [] -> undefined;
+        [Value] -> parse_delta_seconds(Value);
+        _ -> invalid
+    end.
+
+%% @doc Parse request max-stale, including its valueless form.
+max_stale_directive(Parsed) ->
+    case directive_values(<<"max-stale">>, Parsed) of
+        [] -> absent;
+        [true] -> any;
+        [Value] ->
+            case parse_delta_seconds(Value) of
+                invalid -> absent;
+                Delta -> Delta
+            end;
+        _ -> absent
+    end.
+
+%% @doc Combine header and compatibility max-age using the stricter value.
+combine_max_age(undefined, undefined) -> undefined;
+combine_max_age(invalid, _) -> invalid;
+combine_max_age(_, invalid) -> invalid;
+combine_max_age(undefined, Legacy) -> Legacy;
+combine_max_age(Header, undefined) -> Header;
+combine_max_age(Header, Legacy) -> min(Header, Legacy).
+
+%% @doc Parse the legacy top-level request max-age compatibility field.
+legacy_max_age(Msg, Opts) ->
+    case hb_maps:find(<<"max-age">>, Msg, Opts) of
+        error -> undefined;
+        {ok, <<"infinity">>} -> undefined;
+        {ok, infinity} -> undefined;
+        {ok, Value} -> parse_delta_seconds(Value)
+    end.
+
+%% @doc Build the request-side cache policy without response directives.
+request_policy(Msg, Opts) ->
+    Parsed = message_cache_control(Msg, Opts),
+    HeaderMaxAge = numeric_directive(<<"max-age">>, Parsed),
+    #{
+        <<"max-age">> =>
+            combine_max_age(HeaderMaxAge, legacy_max_age(Msg, Opts)),
+        <<"max-stale">> => max_stale_directive(Parsed),
+        <<"min-fresh">> => numeric_directive(<<"min-fresh">>, Parsed),
+        <<"no-cache">> => has_directive(<<"no-cache">>, Parsed),
+        <<"no-store">> => has_directive(<<"no-store">>, Parsed),
+        <<"only-if-cached">> =>
+            has_directive(<<"only-if-cached">>, Parsed)
+    }.
+
+%% @doc Build the response-side cache policy without request directives.
+response_policy(Msg, Opts) ->
+    Parsed = message_cache_control(Msg, Opts),
+    #{
+        <<"max-age">> => numeric_directive(<<"max-age">>, Parsed),
+        <<"no-cache">> => has_directive(<<"no-cache">>, Parsed),
+        <<"no-store">> => has_directive(<<"no-store">>, Parsed),
+        <<"private">> => has_directive(<<"private">>, Parsed),
+        <<"must-revalidate">> =>
+            has_directive(<<"must-revalidate">>, Parsed)
+    }.
+
+%% @doc Parse the Cache-Control field of an AO message when present.
+message_cache_control(Msg, Opts) ->
+    case hb_maps:find(<<"cache-control">>, Msg, Opts) of
+        {ok, Raw} -> parse_cache_control(Raw);
+        _ -> []
+    end.
+
+%% @doc Classify a cached result using already loaded timing metadata.
+classify_cached(Res, ReqPolicy, ResPolicy, Now) ->
+    case cache_policy_prohibition(ReqPolicy, ResPolicy) of
+        none -> classify_cached_age(Res, ReqPolicy, ResPolicy, Now);
+        Reason -> {unacceptable, Reason}
+    end.
+
+%% @doc Return the first rule that requires validation or prohibits reuse.
+cache_policy_prohibition(ReqPolicy, ResPolicy) ->
+    case {
+        maps:get(<<"no-cache">>, ReqPolicy),
+        maps:get(<<"no-store">>, ResPolicy),
+        maps:get(<<"private">>, ResPolicy),
+        maps:get(<<"no-cache">>, ResPolicy),
+        maps:get(<<"max-age">>, ReqPolicy),
+        maps:get(<<"min-fresh">>, ReqPolicy),
+        maps:get(<<"max-age">>, ResPolicy)
+    } of
+        {true, _, _, _, _, _, _} -> request_no_cache;
+        {_, true, _, _, _, _, _} -> response_no_store;
+        {_, _, true, _, _, _, _} -> response_private;
+        {_, _, _, true, _, _, _} -> response_no_cache;
+        {_, _, _, _, invalid, _, _} -> invalid_request_max_age;
+        {_, _, _, _, _, invalid, _} -> invalid_request_min_fresh;
+        {_, _, _, _, _, _, invalid} -> invalid_response_max_age;
+        _ -> none
+    end.
+
+%% @doc Calculate age only when some request or response rule needs it.
+classify_cached_age(Res, ReqPolicy, ResPolicy, Now) ->
+    case age_required(ReqPolicy, ResPolicy) of
+        false -> {fresh, undefined};
+        true ->
+            case cached_age(Res, Now) of
+                {ok, Age} -> classify_cached_lifetime(Age, ReqPolicy, ResPolicy);
+                error -> {unacceptable, invalid_created_at}
+            end
+    end.
+
+%% @doc Return whether the decision depends upon a stored timestamp.
+age_required(ReqPolicy, ResPolicy) ->
+    maps:get(<<"max-age">>, ReqPolicy) =/= undefined orelse
+        maps:get(<<"min-fresh">>, ReqPolicy) =/= undefined orelse
+        maps:get(<<"max-stale">>, ReqPolicy) =/= absent orelse
+        maps:get(<<"max-age">>, ResPolicy) =/= undefined orelse
+        maps:get(<<"must-revalidate">>, ResPolicy).
+
+%% @doc Read a bounded immediate timestamp without invoking the cache/store.
+cached_age(Res, Now) when is_map(Res), is_integer(Now), Now >= 0 ->
+    try hb_util:int(maps:get(<<"priv-created-at">>, Res)) of
+        CreatedAt when CreatedAt >= 0, CreatedAt =< Now -> {ok, Now - CreatedAt};
+        _ -> error
+    catch
+        _:_ -> error
+    end;
+cached_age(_, _) ->
+    error.
+
+%% @doc Apply request ceilings before the response freshness lifetime.
+classify_cached_lifetime(Age, ReqPolicy, ResPolicy) ->
+    case maps:get(<<"max-age">>, ReqPolicy) of
+        MaxAge when is_integer(MaxAge), Age > MaxAge ->
+            {unacceptable, request_max_age};
+        _ ->
+            classify_response_lifetime(
+                Age,
+                ReqPolicy,
+                ResPolicy,
+                maps:get(<<"max-age">>, ResPolicy)
+            )
+    end.
+
+%% @doc Preserve legacy hits when no response lifetime-dependent rule exists.
+classify_response_lifetime(Age, ReqPolicy, ResPolicy, undefined) ->
+    case {
+        maps:get(<<"min-fresh">>, ReqPolicy),
+        maps:get(<<"max-stale">>, ReqPolicy),
+        maps:get(<<"must-revalidate">>, ResPolicy)
+    } of
+        {undefined, absent, false} -> {fresh, Age};
+        _ -> {unacceptable, response_lifetime_missing}
+    end;
+classify_response_lifetime(Age, ReqPolicy, ResPolicy, Lifetime) ->
+    case min_fresh_satisfied(Age, Lifetime, ReqPolicy) of
+        false -> {unacceptable, min_fresh};
+        true when Age < Lifetime -> {fresh, Age};
+        true -> classify_stale(Age, Lifetime, ReqPolicy, ResPolicy)
+    end.
+
+%% @doc Require both freshness and the requested remaining lifetime.
+min_fresh_satisfied(Age, Lifetime, ReqPolicy) ->
+    case maps:get(<<"min-fresh">>, ReqPolicy) of
+        undefined -> true;
+        MinFresh -> Age < Lifetime andalso Lifetime - Age >= MinFresh
+    end.
+
+%% @doc Permit stale reuse only through request max-stale.
+classify_stale(Age, Lifetime, ReqPolicy, ResPolicy) ->
+    case maps:get(<<"must-revalidate">>, ResPolicy) of
+        true -> {unacceptable, must_revalidate};
+        false ->
+            StaleBy = Age - Lifetime,
+            case maps:get(<<"max-stale">>, ReqPolicy) of
+                any -> {stale_allowed, Age, StaleBy, max_stale};
+                MaxStale when is_integer(MaxStale), StaleBy =< MaxStale ->
+                    {stale_allowed, Age, StaleBy, max_stale};
+                _ -> {unacceptable, stale}
+            end
+    end.
+
+%% @doc Convert Cache-Control input into legacy store and lookup settings.
+specifiers_to_cache_settings(CCSpecifier) ->
+    Parsed = parse_cache_control(CCSpecifier),
     #{
         <<"store">> =>
-            case lists:member(<<"always">>, CCList) of
+            case has_directive(<<"always">>, Parsed) of
                 true -> true;
                 false ->
-                    case lists:member(<<"no-store">>, CCList) of
+                    case has_directive(<<"no-store">>, Parsed) of
                         true -> false;
                         false ->
-                            case lists:member(<<"store">>, CCList) of
+                            case has_directive(<<"store">>, Parsed) of
                                 true -> true;
                                 false -> undefined
                             end
                     end
             end,
         <<"lookup">> =>
-            case lists:member(<<"always">>, CCList) of
+            case has_directive(<<"always">>, Parsed) of
                 true -> true;
                 false ->
-                    case lists:member(<<"no-cache">>, CCList) of
+                    case has_directive(<<"no-cache">>, Parsed) of
                         true -> false;
                     false ->
-                        case lists:member(<<"cache">>, CCList) of
+                        case has_directive(<<"cache">>, Parsed) of
                             true -> true;
                             false -> undefined
                         end
                     end
             end,
         <<"only-if-cached">> =>
-            case lists:member(<<"only-if-cached">>, CCList) of
+            case has_directive(<<"only-if-cached">>, Parsed) of
                 true -> true;
                 false -> undefined
             end
@@ -754,3 +1051,177 @@ cache_control_trace_forwarder(Parent) ->
             Parent ! {trace_event, TraceEvent},
             cache_control_trace_forwarder(Parent)
     end.
+
+%% @doc Parse wire and list Cache-Control forms without losing quoted commas.
+cache_control_parser_regression_test() ->
+    Parsed = parse_cache_control(
+        <<"MaX-aGe = \"60\", only-if-cached, community = \"A,B\"">>
+    ),
+    ?assertEqual([60], directive_values(<<"max-age">>, Parsed)),
+    ?assertEqual([true], directive_values(<<"only-if-cached">>, Parsed)),
+    ?assertEqual([<<"A,B">>], directive_values(<<"community">>, Parsed)),
+    ListParsed = parse_cache_control([<<"always">>, <<"NO-STORE">>]),
+    ?assertEqual([true], directive_values(<<"always">>, ListParsed)),
+    ?assertEqual([true], directive_values(<<"no-store">>, ListParsed)).
+
+%% @doc Request policy handles numeric, bare, duplicate, and invalid forms.
+request_cache_policy_regression_test() ->
+    Policy = request_policy(
+        #{
+            <<"cache-control">> =>
+                <<"max-age=60, max-stale=10, min-fresh=5, only-if-cached">>
+        },
+        #{}
+    ),
+    ?assertEqual(60, maps:get(<<"max-age">>, Policy)),
+    ?assertEqual(10, maps:get(<<"max-stale">>, Policy)),
+    ?assertEqual(5, maps:get(<<"min-fresh">>, Policy)),
+    ?assert(maps:get(<<"only-if-cached">>, Policy)),
+    Bare = request_policy(
+        #{ <<"cache-control">> => <<"max-stale">> },
+        #{}
+    ),
+    ?assertEqual(any, maps:get(<<"max-stale">>, Bare)),
+    Duplicate = request_policy(
+        #{ <<"cache-control">> => <<"max-age=60, max-age=30">> },
+        #{}
+    ),
+    ?assertEqual(invalid, maps:get(<<"max-age">>, Duplicate)),
+    Invalid = request_policy(
+        #{ <<"cache-control">> => <<"min-fresh=-1, max-stale=nope">> },
+        #{}
+    ),
+    ?assertEqual(invalid, maps:get(<<"min-fresh">>, Invalid)),
+    ?assertEqual(absent, maps:get(<<"max-stale">>, Invalid)),
+    Overflow = request_policy(
+        #{ <<"cache-control">> => <<"max-age=999999999999999999999">> },
+        #{}
+    ),
+    ?assertEqual(2147483647, maps:get(<<"max-age">>, Overflow)).
+
+%% @doc Response policy remains independent from request-only directives.
+response_cache_policy_regression_test() ->
+    Policy = response_policy(
+        #{
+            <<"cache-control">> =>
+                <<"max-age=60, no-cache=\"body\", private=\"secret\", "
+                  "must-revalidate, max-stale=99">>
+        },
+        #{}
+    ),
+    ?assertEqual(60, maps:get(<<"max-age">>, Policy)),
+    ?assert(maps:get(<<"no-cache">>, Policy)),
+    ?assert(maps:get(<<"private">>, Policy)),
+    ?assert(maps:get(<<"must-revalidate">>, Policy)),
+    ?assertEqual(false, maps:is_key(<<"max-stale">>, Policy)),
+    Duplicate = response_policy(
+        #{ <<"cache-control">> => <<"max-age=60, max-age=30">> },
+        #{}
+    ),
+    ?assertEqual(invalid, maps:get(<<"max-age">>, Duplicate)).
+
+%% @doc Freshness boundaries use explicit time and the correct policy side.
+cache_freshness_classifier_boundaries_test() ->
+    Now = 1000,
+    Response60 = response_policy(
+        #{ <<"cache-control">> => <<"max-age=60">> },
+        #{}
+    ),
+    EmptyRequest = request_policy(#{}, #{}),
+    ?assertEqual(
+        {fresh, 59},
+        classify_cached(cache_entry(Now - 59), EmptyRequest, Response60, Now)
+    ),
+    ?assertEqual(
+        {unacceptable, stale},
+        classify_cached(cache_entry(Now - 60), EmptyRequest, Response60, Now)
+    ),
+    Request60 = request_policy(#{ <<"max-age">> => 60 }, #{}),
+    ?assertEqual(
+        {fresh, 60},
+        classify_cached(
+            cache_entry(Now - 60),
+            Request60,
+            response_policy(
+                #{ <<"cache-control">> => <<"max-age=120">> },
+                #{}
+            ),
+            Now
+        )
+    ),
+    Request0 = request_policy(#{ <<"max-age">> => 0 }, #{}),
+    ?assertEqual(
+        {fresh, 0},
+        classify_cached(cache_entry(Now), Request0, Response60, Now)
+    ),
+    MinFresh = request_policy(
+        #{ <<"cache-control">> => <<"min-fresh=10">> },
+        #{}
+    ),
+    ?assertEqual(
+        {fresh, 50},
+        classify_cached(cache_entry(Now - 50), MinFresh, Response60, Now)
+    ).
+
+%% @doc Max-stale is measured from the response freshness lifetime.
+cache_max_stale_classifier_regression_test() ->
+    Now = 1000,
+    Response60 = response_policy(
+        #{ <<"cache-control">> => <<"max-age=60">> },
+        #{}
+    ),
+    MaxStale10 = request_policy(
+        #{ <<"cache-control">> => <<"max-stale=10">> },
+        #{}
+    ),
+    ?assertEqual(
+        {stale_allowed, 70, 10, max_stale},
+        classify_cached(cache_entry(Now - 70), MaxStale10, Response60, Now)
+    ),
+    ?assertEqual(
+        {unacceptable, stale},
+        classify_cached(cache_entry(Now - 71), MaxStale10, Response60, Now)
+    ),
+    Bare = request_policy(
+        #{ <<"cache-control">> => <<"max-stale">> },
+        #{}
+    ),
+    ?assertEqual(
+        {stale_allowed, 500, 440, max_stale},
+        classify_cached(cache_entry(Now - 500), Bare, Response60, Now)
+    ),
+    ?assertEqual(
+        {unacceptable, response_lifetime_missing},
+        classify_cached(
+            cache_entry(Now - 1),
+            Bare,
+            response_policy(#{}, #{}),
+            Now
+        )
+    ).
+
+%% @doc Age-dependent decisions reject unusable co-located metadata.
+cache_freshness_metadata_regression_test() ->
+    Now = 1000,
+    Req = request_policy(#{ <<"max-age">> => 60 }, #{}),
+    Res = response_policy(#{}, #{}),
+    lists:foreach(
+        fun(Candidate) ->
+            ?assertEqual(
+                {unacceptable, invalid_created_at},
+                classify_cached(Candidate, Req, Res, Now)
+            )
+        end,
+        [
+            #{},
+            #{ <<"priv-created-at">> => <<"invalid">> },
+            #{ <<"priv-created-at">> => <<"-1">> },
+            #{ <<"priv-created-at">> => <<"1001">> },
+            #{ <<"priv-created-at">> => {link, <<"missing">>} },
+            <<"binary-candidate">>
+        ]
+    ).
+
+%% @doc Build a deterministic cached map for classifier tests.
+cache_entry(CreatedAt) ->
+    #{ <<"priv-created-at">> => integer_to_binary(CreatedAt) }.
