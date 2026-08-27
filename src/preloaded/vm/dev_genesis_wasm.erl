@@ -202,22 +202,10 @@ ensure_started(Opts) ->
     IsRunning = is_genesis_wasm_server_running(Opts),
     IsCompiled = hb_features:genesis_wasm(),
     GenWASMProc = is_pid(hb_name:lookup(<<"genesis-wasm@1.0">>)),
-    ServerDirExists = filelib:is_dir(GenesisWasmServerDir),
     case IsRunning orelse (IsCompiled andalso GenWASMProc) of
         true ->
             % If it is, do nothing.
             true;
-        false when not ServerDirExists ->
-            % The sidecar isn't present on disk (e.g. a development host that
-            % hasn't fetched the `genesis-wasm-server' Node subproject). Report
-            % as unavailable rather than spawning an open_port that will die
-            % with `enoent' and leaving the caller hanging in the start poll.
-            ?event(
-                warning,
-                {ensure_started, genesis_wasm_server_missing,
-                    GenesisWasmServerDir}
-            ),
-            false;
         false ->
 			% The device is not running, so we need to start it.
             PID =
