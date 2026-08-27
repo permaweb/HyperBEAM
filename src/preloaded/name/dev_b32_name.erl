@@ -1,7 +1,7 @@
 %%% @doc Allows Arweave message IDs to be used via their base32 encoding as
 %%% subdomains on a HyperBEAM node.
 -module(dev_b32_name).
--export([info/1, encode/1, decode/1]).
+-export([info/1]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
