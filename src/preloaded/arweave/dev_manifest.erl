@@ -85,90 +85,49 @@ route(Key, M1, M2, Opts) ->
 
 %% @doc Implement the `on/request' hook for the `manifest@1.0' device, finding
 %% requests for legacy (non-device-tagged) manifests and casting them to
-%% `manifest@1.0' before execution. When a manifest is hit on the root domain
-%% it redirects to its canonical b32 subdomain so browsers resolve absolute
-%% asset paths correctly.
+%% `manifest@1.0' before execution. Allowing `/ID/path` style access for old data.
 request(Base, Req, Opts) ->
     ?event({on_req_manifest_detector, {base, Base}, {req, Req}}),
     maybe
         {ok, [PrimaryMsg|Rest]} ?= hb_maps:find(<<"body">>, Req, Opts),
         {ok, Loaded} ?= load(PrimaryMsg, Opts),
         ?event(debug_manifest, {loaded, Loaded}),
-        case maybe_cast_manifest(Loaded, Opts) of
-            ignored ->
+        % Must handle three cases:
+        % 1. The maybe_cast is not a manifest, so we return the *loaded* request,
+        %    such that the work to load it is not wasted.
+        % 2. The maybe_cast is a manifest, and there are no other elements of
+        %    the path, so we add the `index' path and return.
+        % 3. The maybe_cast is a manifest, and there are other elements of
+        %    the path, so we return the original request sequence with the first
+        %    message replaced with the casted manifest.
+        case {Rest, maybe_cast_manifest(Loaded, Opts)} of
+            {_, ignored} ->
+                ?event(
+                    debug_manifest,
+                    {non_manifest_returning_loaded, {loaded, Loaded}, {rest, Rest}}),
                 {ok, Req#{ <<"body">> => [Loaded|Rest] }};
-            {ok, Casted} ->
-                serve_or_redirect(PrimaryMsg, Casted, Rest, Req, Opts)
+            {[], {ok, Casted}} ->
+                ?event(debug_manifest, {manifest_returning_index, {req, Req}}),
+                {ok, Req#{ <<"body">> => [Casted, #{<<"path">> => <<"index">>}] }};
+            {_, {ok, Casted}} ->
+                ?event(debug_manifest, {manifest_returning_subpath, {req, Req}}),
+                {ok, Req#{ <<"body">> => [Casted|Rest] }}
         end
     else
         {error, not_found} ->
-            {error, #{<<"status">> => 404, <<"body">> => <<"Not Found">>}};
-        _ ->
+            ?event(debug_manifest, {not_found_on_load, {req, Req}}),
+            {
+                error,
+                #{
+                    <<"status">> => 404,
+                    <<"body">> => <<"Not Found">>
+                }
+            };
+        Error ->
+            ?event(debug_manifest, {request_ignored, {unexpected, Error}}),
+            % On other errors, we return the original request.
             {ok, Req}
     end.
-
-serve_or_redirect(TxId, Casted, Rest, Req, Opts) ->
-    case needs_b32_redirect(TxId, Rest, Req, Opts) of
-        {redirect, Url} ->
-            redirect_response(Url);
-        no_redirect when Rest =:= [] ->
-            {ok, Req#{<<"body">> => [Casted, #{<<"path">> => <<"index">>}]}};
-        no_redirect ->
-            {ok, Req#{<<"body">> => [Casted|Rest]}}
-    end.
-
-%% @doc A redirect is needed when the URL is `/<tx>/...' on the root domain
-%% and no device invocations in the tail, host present, and not already on the
-%% canonical `<b32>.<node-host>' subdomain.
-needs_b32_redirect(TxId, Rest, Req, Opts) when ?IS_ID(TxId) ->
-    ReqInner = hb_maps:get(<<"request">>, Req, #{}, Opts),
-    Host = hb_maps:get(<<"host">>, ReqInner, <<>>, Opts),
-    B32 = b32_encode(TxId),
-    PlainTail = lists:all(fun(X) -> plain_path_segment(X, Opts) end, Rest),
-    Prefix = <<B32/binary, ".">>,
-    AlreadyCanonical =
-        byte_size(Host) >= byte_size(Prefix)
-            andalso binary:part(Host, 0, byte_size(Prefix)) == Prefix,
-    case {Host =/= <<>>, PlainTail, AlreadyCanonical} of
-        {true, true, false} ->
-            {redirect, b32_url(B32, ReqInner, Opts)};
-        _ -> no_redirect
-    end;
-needs_b32_redirect(_, _, _, _) -> no_redirect.
-
-%% @doc Base32-encode a tx id (lowercased, unpadded) for the canonical
-%% subdomain. Inlined from `dev_b32_name:encode/1' because preloaded devices are
-%% loaded under content-hashed module names and cannot be called by source name.
-b32_encode(ID) ->
-    hb_util:bin(
-        string:replace(
-            string:to_lower(hb_util:list(base32:encode(hb_util:native_id(ID)))),
-            "=", "", all
-        )
-    ).
-
-%% @doc A plain path segment is a bare ID binary or a map without a device key.
-plain_path_segment(X, _Opts) when is_binary(X) -> true;
-plain_path_segment(M, Opts) when is_map(M) ->
-    not hb_maps:is_key(<<"device">>, M, Opts);
-plain_path_segment(_,_) -> false.
-
-b32_url(B32, ReqInner, Opts) ->
-    Host = hb_maps:get(<<"host">>, ReqInner, <<>>, Opts),
-    Path = hb_maps:get(<<"path">>, ReqInner, <<"/">>, Opts),
-    HostPort = case hb_maps:get(<<"port">>, ReqInner, undefined, Opts) of
-        P when P == undefined; P == 80; P == 443 -> Host;
-        P -> <<Host/binary, ":", (hb_util:bin(P))/binary>>
-    end,
-    <<"//", B32/binary, ".", HostPort/binary, Path/binary>>.
-
-redirect_response(Url) ->
-    ?event(debug_manifest, {b32_redirect, {url, Url}}),
-    {error, #{
-        <<"status">> => 302,
-        <<"location">> => Url,
-        <<"body">> => <<"Redirecting to canonical manifest subdomain: ", Url/binary>>
-    }}.
 
 %% @doc Cast a message to `manifest@1.0` if it has the correct content-type but
 %% no other device is specified.
@@ -258,7 +217,7 @@ decode_manifest(JSON, Path, Opts) ->
 %% @doc Generate a nested message of links to content from a parsed (and
 %% structured) manifest.
 linkify(#{ <<"id">> := ID }, Opts) when is_binary(ID) ->
-    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ scope => [local, remote]},
+    LinkOptsBase = (maps:with([<<"store">>], Opts))#{ <<"scope">> => [local, remote]},
     {link, ID, LinkOptsBase#{ <<"type">> => <<"link">>, <<"lazy">> => false }};
 linkify(Manifest, Opts) when is_map(Manifest) ->
     hb_maps:map(
@@ -319,37 +278,21 @@ resolve_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< ManifestID/binary, "/index" >>),
-            Opts
-        )
+        hb_http:get(Node, << ManifestID/binary, "/index" >>, Opts)
     ),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< ManifestID/binary, "/nested/page2" >>),
-            Opts
-        )),
+        hb_http:get(Node, << ManifestID/binary, "/nested/page2" >>, Opts)),
     % Making the same requests to a node with the `request' hook enabled should
     % yield the same results.
     ?event({legacy_manifest_id, LegacyManifestID}),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< LegacyManifestID/binary, "/index" >>),
-            Opts
-        )
+        hb_http:get(Node, << LegacyManifestID/binary, "/index" >>, Opts)
     ),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 2">>}}, 
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< LegacyManifestID/binary, "/nested/page2" >>),
-            Opts
-        )),
+        hb_http:get(Node, << LegacyManifestID/binary, "/nested/page2" >>, Opts)),
     ok.
 
 manifest_default_fallback_test_parallel() ->
@@ -359,11 +302,7 @@ manifest_default_fallback_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {ok, #{ <<"body">> := <<"Page 1">> }},
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< ManifestID/binary, "/invalid_path" >>),
-            Opts
-        )
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
     ),
     ok.
 
@@ -377,11 +316,7 @@ manifest_404_error_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     ?assertMatch(
         {error, not_found},
-        hb_http:get(
-            Node,
-            canonical_manifest_request(<< ManifestID/binary, "/invalid_path" >>),
-            Opts
-        )
+        hb_http:get(Node, << ManifestID/binary, "/invalid_path" >>, Opts)
     ),
     ok.
 
@@ -449,9 +384,7 @@ manifest_inner_redirect_test_parallel() ->
     %% Request manifest to node.
     hb_test_utils:assert_manifest_response(
         Node,
-        canonical_manifest_request(
-            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>
-        ),
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
@@ -463,9 +396,7 @@ access_key_path_in_manifest_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
         Node,
-        canonical_manifest_request(
-            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>
-        ),
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/assets/ArticleBlock-Dtwjc54T.js">>},
         <<"application/javascript">>,
         <<"const __vite__mapDeps">>,
         Opts
@@ -478,17 +409,8 @@ manifest_should_fallback_on_not_found_path_test_parallel() ->
     Node = hb_http_server:start_node(Opts),
     hb_test_utils:assert_manifest_response(
         Node,
-        canonical_manifest_request(
-            <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>
-        ),
+        #{<<"path">> => <<"/42jky7O3rzKkMOfHBXgK-304YjulzEYqHc9qyjT3efA/x.js">>},
         <<"text/html">>,
         <<"<title>Portal</title>">>,
         Opts
     ).
-
-canonical_manifest_request(Path) ->
-    [TxId|_] = [Segment || Segment <- binary:split(Path, <<"/">>, [global]), Segment =/= <<>>],
-    #{
-        <<"host">> => <<(b32_encode(TxId))/binary, ".localhost">>,
-        <<"path">> => Path
-    }.
