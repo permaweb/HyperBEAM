@@ -114,13 +114,13 @@ multirequest_opts(Config, Message, Opts) ->
 
 %% @doc Get a value for a multirequest option from the config or message.
 multirequest_opt(Key, Config, Message, Default, Opts) ->
-    %% force-message allow us to kep the response Erlang friendly
     hb_ao:get_first(
         [
             {Message, <<"multirequest-", Key/binary>>},
             {Config, Key}
         ],
         Default,
+        %% force-message allow us to kep the response Erlang friendly
         Opts#{ <<"hashpath">> => ignore, <<"force-message">> => false }
     ).
 
