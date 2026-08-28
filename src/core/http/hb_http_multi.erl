@@ -238,15 +238,15 @@ admissible_status(Status, Statuses) when is_list(Statuses) ->
 
 %% @doc If an `admissable` message is set for the request, check if the response
 %% adheres to it. Else, return `true'.
-admissible_response(_Response, undefined, _NOpts, _Opts) -> true;
-admissible_response(Response, Msg, NOpts, Opts) ->
+admissible_response(_Response, undefined, _NodeOpts, _Opts) -> true;
+admissible_response(Response, Msg, NodeOpts, Opts) ->
     Path = hb_maps:get(<<"path">>, Msg, <<"is-admissible">>, Opts),
     Req = Response#{ <<"path">> => Path },
     %% Stamp the serving node's `http-reference' (from its per-node `opts') onto
     %% the admissibility base so the hook can report which node was validated.
     Base =
         (hb_message:without_unless_signed([<<"path">>], Msg, Opts))#{
-            <<"http-reference">> => hb_maps:get(<<"http-reference">>, NOpts, <<>>, Opts)
+            <<"http-reference">> => hb_maps:get(<<"http-reference">>, NodeOpts, <<>>, Opts)
         },
     ?event(debug_multi,
         {executing_admissible_message, {message, Base}, {req, Req}}
