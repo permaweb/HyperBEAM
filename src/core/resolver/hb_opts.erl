@@ -450,7 +450,7 @@ raw_default_message() ->
                         <<"prefix">> => ?DEFAULT_GATEWAY,
                         <<"opts">> =>
                             #{
-                                <<"http-client">> => gun,
+                                <<"http-client">> => ?DEFAULT_HTTP_CLIENT,
                                 <<"protocol">> => http2
                             }
                     }
