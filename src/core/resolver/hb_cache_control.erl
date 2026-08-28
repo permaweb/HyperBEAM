@@ -188,10 +188,10 @@ request_policy(Req, Opts) ->
 response_policy(Res, Opts) ->
     Parsed = parse_message_cache_control(Res, Opts),
     #{
-        <<"max-age">> => numeric_directive(<<"max-age">>, Parsed),
-        <<"no-cache">> => has_directive(<<"no-cache">>, Parsed),
+        <<"max-age">> => parse_numeric_setting(<<"max-age">>, Parsed),
+        <<"no-cache">> => has_setting(<<"no-cache">>, Parsed),
         <<"must-revalidate">> =>
-            has_directive(<<"must-revalidate">>, Parsed)
+            has_setting(<<"must-revalidate">>, Parsed)
     }.
 
 cache_miss(Base, Req, #{ <<"only-if-cached">> := true }, Opts) ->
@@ -272,7 +272,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
         response_policy(PolicyRes, Opts)
     ),
     CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
-    WriteResult = case {Res, TracksFreshness} of
+    case {Res, TracksFreshness} of
         {<<_/binary>>, _} ->
             hb_cache:write_binary(
                 CacheAddress,
@@ -294,33 +294,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
         _ ->
             ?event({cannot_write_result, Res}),
             skip_caching
-    end,
-    mirror_base_id_address(
-        Base,
-        Req,
-        CacheAddress,
-        WriteResult,
-        TracksFreshness,
-        Opts
-    ).
-
-%% @doc Mirror freshness-tracked results only; untracked maps stay canonical.
-mirror_base_id_address(
-        Base, Req, CacheAddress, {ok, Path} = Result, true, Opts
-    ) when is_map(Base) ->
-    IDAddress = hb_cache:resolved_address(
-        hb_message:id(Base, all, Opts),
-        Req,
-        Opts
-    ),
-    case IDAddress =:= CacheAddress of
-        true -> Result;
-        false ->
-            hb_cache:link(Path, IDAddress, Opts),
-            Result
-    end;
-mirror_base_id_address(_Base, _Req, _CacheAddress, Result, _Tracked, _Opts) ->
-    Result.
+    end.
 
 %% @doc Return whether a cached map needs co-located age metadata.
 tracks_freshness(ReqPolicy, ResPolicy) ->
@@ -454,8 +428,8 @@ parse_delta_seconds(Value) when is_binary(Value) ->
 parse_delta_seconds(_) -> invalid.
 
 %% @doc Return one numeric directive, rejecting malformed duplicates.
-numeric_directive(_Name, invalid) -> invalid;
-numeric_directive(Name, Parsed) ->
+parse_numeric_setting(_Name, invalid) -> invalid;
+parse_numeric_setting(Name, Parsed) ->
     case {lists:member(Name, Parsed), [Value || {Key, Value} <- Parsed, Key =:= Name]} of
         {false, []} -> undefined;
         {false, [Value]} -> parse_delta_seconds(Value);
@@ -463,8 +437,8 @@ numeric_directive(Name, Parsed) ->
     end.
 
 %% @doc Return whether one argumentless directive is present.
-has_directive(_Name, invalid) -> false;
-has_directive(Name, Parsed) -> lists:member(Name, Parsed).
+has_setting(_Name, invalid) -> false;
+has_setting(Name, Parsed) -> lists:member(Name, Parsed).
 
 %% @doc Parse Cache-Control directly from a map-shaped message.
 parse_message_cache_control(Msg, Opts) when is_map(Msg) ->
@@ -477,33 +451,33 @@ specifiers_to_cache_settings(CCSpecifier) ->
     CCList = parse_cache_control(CCSpecifier),
     #{
         <<"store">> =>
-            case has_directive(<<"always">>, CCList) of
+            case has_setting(<<"always">>, CCList) of
                 true -> true;
                 false ->
-                    case has_directive(<<"no-store">>, CCList) of
+                    case has_setting(<<"no-store">>, CCList) of
                         true -> false;
                         false ->
-                            case has_directive(<<"store">>, CCList) of
+                            case has_setting(<<"store">>, CCList) of
                                 true -> true;
                                 false -> undefined
                             end
                     end
             end,
         <<"lookup">> =>
-            case has_directive(<<"always">>, CCList) of
+            case has_setting(<<"always">>, CCList) of
                 true -> true;
                 false ->
-                    case has_directive(<<"no-cache">>, CCList) of
+                    case has_setting(<<"no-cache">>, CCList) of
                         true -> false;
                     false ->
-                        case has_directive(<<"cache">>, CCList) of
+                        case has_setting(<<"cache">>, CCList) of
                             true -> true;
                             false -> undefined
                         end
                     end
             end,
         <<"only-if-cached">> =>
-            case has_directive(<<"only-if-cached">>, CCList) of
+            case has_setting(<<"only-if-cached">>, CCList) of
                 true -> true;
                 false -> undefined
             end
