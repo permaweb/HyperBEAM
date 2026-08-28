@@ -1141,8 +1141,12 @@ resolved_address(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hb_path:hashpath(BaseMsg, cache_request(Req, Opts), Opts).
 
 %% @doc Remove cache policy fields that do not identify a computation.
+cache_request(Req, _Opts) when is_map(Req),
+        not is_map_key(<<"max-age">>, Req),
+        not is_map_key(<<"max-stale">>, Req) ->
+    Req;
 cache_request(Req, Opts) ->
-    hb_maps:without([<<"max-age">>], Req, Opts).
+    hb_message:without_unless_signed([<<"max-age">>, <<"max-stale">>], Req, Opts).
 
 hashpath_read_result({ok, Msg}) -> {hit, {ok, Msg}};
 hashpath_read_result({error, not_found}) -> miss;
@@ -1579,16 +1583,14 @@ resolved_entry_lmdb_single_root_read_test() ->
     Entry =
         try
             {ok, ReadEntry} = read(Address, Opts),
+            ?assertEqual(<<"12345">>,
+                hb_maps:get(<<"priv-created-at">>, ReadEntry, Opts)),
             ReadEntry
         after
             stop_cache_trace(Tracer)
         end,
     ?assertEqual(1, store_read_trace_count(0)),
-    ?assertEqual(<<"cached">>, hb_maps:get(<<"body">>, Entry, Opts)),
-    ?assertEqual(
-        <<"12345">>,
-        hb_maps:get(<<"priv-created-at">>, Entry, Opts)
-    ).
+    ?assertEqual(<<"cached">>, hb_maps:get(<<"body">>, Entry, Opts)).
 
 %% @doc Disable store-read tracing and stop its forwarding process.
 stop_cache_trace(Tracer) ->

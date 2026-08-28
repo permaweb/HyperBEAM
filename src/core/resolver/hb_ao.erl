@@ -111,6 +111,7 @@
         <<"add-key">>,
         <<"force-message">>,
         <<"cache-control">>,
+        <<"priv-cache-request-policy">>,
         <<"spawn-worker">>,
         <<"only">>,
         <<"prefer">>
@@ -415,7 +416,8 @@ resolve_stage(1, RawBase, RawReq, Opts) ->
     ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
     Base = normalize_keys(RawBase, Opts),
     Req = normalize_keys(RawReq, Opts),
-    resolve_stage(2, Base, Req, Opts);
+    {SemanticReq, PreparedOpts} = hb_cache_control:prepare(Req, Opts),
+    resolve_stage(2, Base, SemanticReq, PreparedOpts);
 resolve_stage(2, Base, Req, Opts) ->
     ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
     % Lookup request in the cache. If we find a result, return it.
