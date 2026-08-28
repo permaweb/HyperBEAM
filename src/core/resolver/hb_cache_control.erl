@@ -3,7 +3,7 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/4, maybe_lookup/3, prepare/2]).
+-export([maybe_store/4, maybe_lookup/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -11,32 +11,9 @@
 %%% following settings.
 -define(DEFAULT_STORE_OPT, false).
 -define(DEFAULT_LOOKUP_OPT,  true).
--define(REQUEST_POLICY_OPT, <<"priv-cache-request-policy">>).
 -define(MAX_DELTA_SECONDS, 2147483647).
 
 %%% Public API
-
-%% @doc Remove uncommitted request freshness policy before AO execution.
-prepare(Req, Opts) when is_map(Req),
-        not is_map_key(<<"max-age">>, Req),
-        not is_map_key(<<"max-stale">>, Req) ->
-    {Req, Opts};
-prepare(Req, Opts) ->
-    SemanticReq = hb_message:without_unless_signed(
-        [<<"max-age">>, <<"max-stale">>],
-        Req,
-        Opts
-    ),
-    Policy = #{
-        <<"max-age">> => removed_max_age(Req, SemanticReq),
-        <<"max-stale">> => removed_max_stale(Req, SemanticReq)
-    },
-    case Policy of
-        #{ <<"max-age">> := undefined, <<"max-stale">> := absent } ->
-            {SemanticReq, Opts};
-        _ ->
-            {SemanticReq, Opts#{ ?REQUEST_POLICY_OPT => Policy }}
-    end.
 
 %% @doc Write a resulting M3 message to the cache if requested. The precedence
 %% order of cache control sources is as follows:
@@ -190,39 +167,29 @@ cached_age(Res, Now, Opts) when is_map(Res), is_integer(Now), Now >= 0 ->
     end;
 cached_age(_, _, _) -> error.
 
-%% @doc Return a removed, uncommitted request max-age value.
-removed_max_age(Req, SemanticReq) ->
-    case removed_value(<<"max-age">>, Req, SemanticReq) of
+%% @doc Return the request max-age policy.
+request_max_age(Req, Opts) ->
+    case hb_maps:get(<<"max-age">>, Req, undefined, Opts) of
         undefined -> undefined;
         infinity -> undefined;
         <<"infinity">> -> undefined;
         Value -> parse_delta_seconds(Value)
     end.
 
-%% @doc Return a removed, uncommitted request max-stale value.
-removed_max_stale(Req, SemanticReq) ->
-    case removed_value(<<"max-stale">>, Req, SemanticReq) of
+%% @doc Return the request max-stale policy.
+request_max_stale(Req, Opts) ->
+    case hb_maps:get(<<"max-stale">>, Req, undefined, Opts) of
         undefined -> absent;
         true -> any;
         Value -> parse_delta_seconds(Value)
     end.
 
-%% @doc Return a field only when preparation removed it from the request.
-removed_value(Key, Req, SemanticReq) ->
-    case {maps:find(Key, Req), maps:is_key(Key, SemanticReq)} of
-        {{ok, Value}, false} -> Value;
-        _ -> undefined
-    end.
-
-%% @doc Read request policy prepared by AO stage 1, with a direct-call fallback.
+%% @doc Read freshness policy directly from the request.
 request_policy(Req, Opts) ->
-    case maps:find(?REQUEST_POLICY_OPT, Opts) of
-        {ok, Policy} -> Policy;
-        error ->
-            {_SemanticReq, PreparedOpts} = prepare(Req, Opts),
-            maps:get(?REQUEST_POLICY_OPT, PreparedOpts,
-                #{ <<"max-age">> => undefined, <<"max-stale">> => absent })
-    end.
+    #{
+        <<"max-age">> => request_max_age(Req, Opts),
+        <<"max-stale">> => request_max_stale(Req, Opts)
+    }.
 
 %% @doc Read the response lifetime and rules that prohibit reuse.
 response_policy(Res, Opts) ->
@@ -786,8 +753,7 @@ cache_result_priv_created_at_regression_test() ->
     erlang:put({hb_event, event_opts}, CacheOnlyOpts),
     Served =
         try
-            {PreparedReq, PreparedOpts} = prepare(Req, CacheOnlyOpts),
-            {ok, CachedResult} = maybe_lookup(Base, PreparedReq, PreparedOpts),
+            {ok, CachedResult} = maybe_lookup(Base, Req, CacheOnlyOpts),
             CachedResult
         after
             case OldEventOpts of
@@ -925,14 +891,12 @@ minimal_freshness_policy_test() ->
         classify_cached(#{}, Req0, Res0, 100, #{})
     ).
 
-%% @doc Consume only uncommitted policy and reject malformed lifetimes.
+%% @doc Parse request policy and keep only uncommitted policy out of identity.
 minimal_policy_parsing_and_identity_test() ->
     Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
         <<"max-stale">> => true },
-    {SemanticReq, PreparedOpts} = prepare(Req, #{}),
-    ?assertEqual(#{ <<"path">> => <<"index">> }, SemanticReq),
     ?assertEqual(#{ <<"max-age">> => 60, <<"max-stale">> => any },
-        maps:get(?REQUEST_POLICY_OPT, PreparedOpts)),
+        request_policy(Req, #{})),
     ?assertEqual(response_policy(#{ <<"cache-control">> => <<"max-age=60">> }, #{}),
         response_policy(#{ <<"cache-control">> => [<<"max-age=60">>] }, #{})),
     lists:foreach(fun(CC) ->
@@ -946,34 +910,33 @@ minimal_policy_parsing_and_identity_test() ->
         hb_message:commit(Req#{ <<"max-age">> => MaxAge }, WalletOpts,
             #{ <<"committed">> => [<<"path">>, <<"max-age">>, <<"max-stale">>] })
     end,
-    {Committed60, _} = prepare(Commit(60), WalletOpts),
-    {Committed30, _} = prepare(Commit(30), WalletOpts),
+    Committed60 = Commit(60),
+    Committed30 = Commit(30),
     ?assert(hb_message:verify(Committed60, all, WalletOpts)),
     Base = #{ <<"device">> => <<"test-device@1.0">> },
+    ?assertEqual(
+        hb_cache:resolved_address(Base, Req, #{}),
+        hb_cache:resolved_address(Base, Req#{ <<"max-age">> => 30 }, #{})
+    ),
+    ?assertEqual(60, maps:get(<<"max-age">>,
+        request_policy(Committed60, WalletOpts))),
     ?assertNotEqual(hb_cache:resolved_address(Base, Committed60, WalletOpts),
         hb_cache:resolved_address(Base, Committed30, WalletOpts)).
 
-%% @doc Resolver policy is absent from grouping and device inputs.
-minimal_request_policy_is_resolver_private_test() ->
-    Parent = self(),
-    Grouper = fun(_, Req, Opts) ->
-        Parent ! {policy_seen, Req, Opts}, ungrouped_exec
-    end,
-    Handler = fun(_, Req, Opts) ->
-        Parent ! {policy_seen, Req, Opts}, {ok, #{ <<"body">> => <<"ok">> }}
-    end,
-    Base = #{ <<"device">> => #{
-        info => fun(_, _) -> #{ grouper => Grouper } end,
-        index => Handler
-    } },
-    {ok, _} = hb_ao:resolve(
-        Base,
-        #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
-            <<"max-stale">> => true },
-        #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] }
-    ),
-    assert_policy_hidden(),
-    assert_policy_hidden(),
+%% @doc Request freshness policy remains visible to the executing device.
+request_policy_remains_in_device_input_test() ->
+    Handler = fun(_, Req, _) -> {ok, Req} end,
+    Base = #{ <<"device">> => #{ index => Handler } },
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
+        <<"max-stale">> => true },
+    {ok, Result} = hb_ao:resolve(Base, Req,
+        #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] }),
+    ?assertEqual(60, hb_maps:get(<<"max-age">>, Result, #{})),
+    ?assertEqual(true, hb_maps:get(<<"max-stale">>, Result, #{})).
+
+%% @doc An explicit cache-only request never executes with lookup disabled.
+no_cache_only_if_cached_test() ->
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
     CacheOnlyReq = #{ <<"path">> => <<"index">>, <<"cache-control">> =>
         [<<"no-cache">>, <<"only-if-cached">>] },
     ?assertMatch({error, #{ <<"status">> := 504 }},
@@ -983,16 +946,6 @@ inherited_no_cache_does_not_preempt_device_cache_only_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
     Req = #{ <<"path">> => <<"index">>, <<"cache-control">> => [<<"only-if-cached">>] },
     ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})).
-
-assert_policy_hidden() ->
-    receive
-        {policy_seen, Req, Opts} ->
-            ?assertEqual(false, maps:is_key(<<"max-age">>, Req)),
-            ?assertEqual(false, maps:is_key(<<"max-stale">>, Req)),
-            ?assertEqual(false, maps:is_key(?REQUEST_POLICY_OPT, Opts))
-    after 1000 ->
-        error(policy_boundary_not_observed)
-    end.
 
 %% @doc Response max-age stores time and max-stale controls live cache reuse.
 cache_response_max_age_and_request_max_stale_test() ->
@@ -1010,12 +963,12 @@ cache_response_max_age_and_request_max_stale_test() ->
     {ok, _} = hb_cache:write_resolved(
         Address, Result, os:system_time(second) - 70, Opts),
     CacheOnly = Opts#{ <<"cache-control">> => [<<"only-if-cached">>] },
-    {AllowedReq, AllowedOpts} = prepare(Req#{ <<"max-stale">> => 100 }, CacheOnly),
-    {ok, _Stale} = maybe_lookup(Base, AllowedReq, AllowedOpts),
-    {DeniedReq, DeniedOpts} = prepare(Req#{ <<"max-stale">> => 0 }, CacheOnly),
+    AllowedReq = Req#{ <<"max-stale">> => 100 },
+    {ok, _Stale} = maybe_lookup(Base, AllowedReq, CacheOnly),
+    DeniedReq = Req#{ <<"max-stale">> => 0 },
     ?assertMatch(
         {error, #{ <<"status">> := 504 }},
-        maybe_lookup(Base, DeniedReq, DeniedOpts)
+        maybe_lookup(Base, DeniedReq, CacheOnly)
     ),
     ?assertMatch({continue, _, _}, maybe_lookup(Base, Req, Opts)).
 
