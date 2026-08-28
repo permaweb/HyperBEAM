@@ -41,7 +41,7 @@
 -export([read_all_commitments/2]).
 -export([ensure_loaded/1, ensure_loaded/2, ensure_all_loaded/1, ensure_all_loaded/2]).
 -export([read/2, read_resolved/3, resolved_address/3]).
--export([write/2, write_binary/3, write_hashpath/2, write_hashpath/3, write_resolved/4]).
+-export([write/2, write_binary/3, write_hashpath/2, write_resolved/4]).
 -export([link/3]).
 -export([match/2, list/2, list_numbered/2]).
 -export([test_unsigned/1, test_signed/1]).
@@ -268,21 +268,26 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    % Reattach only cache-owned freshness after private keys are filtered.
-    PrivCreatedAt =
-        case maps:find(<<"priv-created-at">>, RawMsg) of
-            {ok, CreatedAt}
-                    when is_binary(CreatedAt),
-                         byte_size(CreatedAt) < ?DIRECT_VALUE_LENGTH ->
-                #{ <<"priv-created-at">> => CreatedAt };
-            _ ->
-                #{}
+    % Reattach only bounded cache-owned metadata after private keys are filtered.
+    PrivCacheMetadata = maps:filter(
+        fun(<<"priv-created-at">>, Value) ->
+                is_immediate_value(<<"priv-created-at">>, Value);
+           (<<"priv-has-commitments">>, Value) ->
+                Value =:= <<"true">> orelse Value =:= <<"false">>
         end,
-    PublicRawMsg = maps:remove(<<"priv-created-at">>, RawMsg),
+        maps:with(
+            [<<"priv-created-at">>, <<"priv-has-commitments">>],
+            RawMsg
+        )
+    ),
+    PublicRawMsg = maps:without(
+        [<<"priv-created-at">>, <<"priv-has-commitments">>],
+        RawMsg
+    ),
     hb_message:paranoid_verify(cache_write, PublicRawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(PublicRawMsg, Opts),
     PublicTABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
-    TABM = maps:merge(PublicTABM, PrivCreatedAt),
+    TABM = maps:merge(PublicTABM, PrivCacheMetadata),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
@@ -682,12 +687,16 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 
 %% @doc Write a resolved message with its private cache creation timestamp.
 write_resolved(CacheAddress, Msg, CreatedAt, Opts) ->
+    CacheMsg = (maps:remove(<<"priv-has-commitments">>, Msg))#{
+        <<"priv-created-at">> => integer_to_binary(hb_util:int(CreatedAt))
+    },
+    WithCommitmentMarker = case hb_maps:is_key(<<"commitments">>, Msg, Opts) of
+        true -> CacheMsg#{ <<"priv-has-commitments">> => <<"true">> };
+        false -> CacheMsg
+    end,
     write_hashpath(
         CacheAddress,
-        Msg#{
-            <<"priv-created-at">> =>
-                integer_to_binary(hb_util:int(CreatedAt))
-        },
+        WithCommitmentMarker,
         Opts
     ).
 
@@ -1128,8 +1137,9 @@ read_hashpath(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hashpath_read_result(read(resolved_address(BaseMsg, Req, Opts), Opts));
 read_hashpath(_, _, _) -> miss.
 
-%% @doc Return the cache address for a resolved Base and request. `max-age'
-%% controls cache reuse, but does not identify the computation itself.
+%% @doc Return the cache address for a resolved Base and request. Uncommitted
+%% freshness policy controls reuse but does not identify the computation;
+%% committed policy remains part of request identity.
 resolved_address(BaseMsgID, ReqID, _Opts)
         when ?IS_ID(BaseMsgID) and ?IS_ID(ReqID) ->
     <<BaseMsgID/binary, "/", ReqID/binary>>;
@@ -1140,7 +1150,7 @@ resolved_address(BaseMsgID, Req, Opts)
 resolved_address(BaseMsg, Req, Opts) when is_map(BaseMsg) and is_map(Req) ->
     hb_path:hashpath(BaseMsg, cache_request(Req, Opts), Opts).
 
-%% @doc Remove cache policy fields that do not identify a computation.
+%% @doc Remove only uncommitted cache policy from computation identity.
 cache_request(Req, _Opts) when is_map(Req),
         not is_map_key(<<"max-age">>, Req),
         not is_map_key(<<"max-stale">>, Req) ->
@@ -1508,6 +1518,10 @@ resolved_entry_canonical_record_test() ->
         <<"10">>,
         hb_maps:get(<<"priv-created-at">>, Entry1, Opts)
     ),
+    ?assertEqual(
+        <<"true">>,
+        hb_maps:get(<<"priv-has-commitments">>, Entry1, Opts)
+    ),
     ?assertEqual(false, maps:is_key(<<"priv-other">>, Entry1)),
     PublicEntry1 = hb_private:reset(Entry1),
     Restored1 = read_all_commitments(PublicEntry1, Opts),
@@ -1524,7 +1538,8 @@ resolved_entry_canonical_record_test() ->
         hb_message:id(Restored1, all, Opts)
     ),
     ?assert(hb_message:verify(Restored1, all, Opts)),
-    ?assertEqual({ok, ResultID}, write_resolved(Address2, Msg, 20, Opts)),
+    Unsigned = maps:remove(<<"commitments">>, Msg),
+    ?assertEqual({ok, ResultID}, write_resolved(Address2, Unsigned, 20, Opts)),
     {ok, Updated1} = read(Address1, Opts),
     {ok, Entry2} = read(Address2, Opts),
     ?assertEqual(
@@ -1535,6 +1550,17 @@ resolved_entry_canonical_record_test() ->
         <<"20">>,
         hb_maps:get(<<"priv-created-at">>, Entry2, Opts)
     ),
+    ?assertEqual(
+        <<"true">>,
+        hb_maps:get(<<"priv-has-commitments">>, Updated1, Opts)
+    ),
+    RestoredAfterUnsigned = read_all_commitments(
+        hb_private:reset(Updated1), Opts),
+    ?assertEqual(
+        hb_message:id(Public, all, Opts),
+        hb_message:id(RestoredAfterUnsigned, all, Opts)
+    ),
+    ?assert(hb_message:verify(RestoredAfterUnsigned, all, Opts)),
     ?assertEqual(
         {error, not_found},
         read(<<"created-at/", Address1/binary>>, Opts)

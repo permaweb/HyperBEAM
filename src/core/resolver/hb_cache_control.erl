@@ -3,7 +3,7 @@
 %%% node Opts. It applies these settings when asked to maybe store/lookup in 
 %%% response to a request.
 -module(hb_cache_control).
--export([maybe_store/4, maybe_lookup/3]).
+-export([maybe_store/4, maybe_lookup/3, prepare/2]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -11,9 +11,30 @@
 %%% following settings.
 -define(DEFAULT_STORE_OPT, false).
 -define(DEFAULT_LOOKUP_OPT,  true).
+-define(REQUEST_POLICY_OPT, <<"priv-cache-request-policy">>).
 -define(MAX_DELTA_SECONDS, 2147483647).
 
 %%% Public API
+
+%% @doc Remove uncommitted request freshness policy before AO execution.
+prepare(Req, Opts) when is_map(Req),
+        not is_map_key(<<"max-age">>, Req),
+        not is_map_key(<<"max-stale">>, Req) ->
+    {Req, maps:remove(?REQUEST_POLICY_OPT, Opts)};
+prepare(Req, Opts) ->
+    CleanOpts = maps:remove(?REQUEST_POLICY_OPT, Opts),
+    SemanticReq = hb_message:without_unless_signed(
+        [<<"max-age">>, <<"max-stale">>],
+        Req,
+        CleanOpts
+    ),
+    Policy = request_policy_from_message(Req, CleanOpts),
+    case Policy of
+        #{ <<"max-age">> := undefined, <<"max-stale">> := absent } ->
+            {SemanticReq, CleanOpts};
+        _ ->
+            {SemanticReq, CleanOpts#{ ?REQUEST_POLICY_OPT => Policy }}
+    end.
 
 %% @doc Write a resulting M3 message to the cache if requested. The precedence
 %% order of cache control sources is as follows:
@@ -31,15 +52,14 @@ maybe_store(Base, Req, Res, Opts) ->
             not_caching
     end.
 
-%% @doc Handles cache lookup, modulated by the caching options requested by
-%% the user. Honors the following `Opts' cache keys: 
-%%      `only_if_cached': If set and we do not find a result in the cache,
+%% @doc Handles cache lookup, modulated by cache-control and request freshness.
+%% Honors these cache-control directives:
+%%      `only-if-cached': If set and we do not find a result in the cache,
 %%                        return an error with a `Cache-Status' of `miss' and
 %%                        a 504 `Status'.
-%%      `no_cache':       If set, the cached values are never used. Returns
+%%      `no-cache':       If set, the cached values are never used. Returns
 %%                        `continue' to the caller.
-%%      `max-age':        If set, cached results must have a sufficiently
-%%                        recent `priv-created-at' timestamp.
+%% Top-level request `max-age' and `max-stale' fields constrain acceptable age.
 maybe_lookup(Base, Req, Opts) ->
     case exec_likely_faster_heuristic(Base, Req, Opts) of
         true ->
@@ -167,7 +187,14 @@ cached_age(Res, Now, Opts) when is_map(Res), is_integer(Now), Now >= 0 ->
     end;
 cached_age(_, _, _) -> error.
 
-%% @doc Return the request max-age policy.
+%% @doc Parse freshness policy from the original request. Preparation decides
+%% independently whether each field remains visible in the semantic request.
+request_policy_from_message(Req, Opts) ->
+    #{
+        <<"max-age">> => request_max_age(Req, Opts),
+        <<"max-stale">> => request_max_stale(Req, Opts)
+    }.
+
 request_max_age(Req, Opts) ->
     case hb_maps:get(<<"max-age">>, Req, undefined, Opts) of
         undefined -> undefined;
@@ -176,20 +203,19 @@ request_max_age(Req, Opts) ->
         Value -> parse_delta_seconds(Value)
     end.
 
-%% @doc Return the request max-stale policy.
 request_max_stale(Req, Opts) ->
-    case hb_maps:get(<<"max-stale">>, Req, undefined, Opts) of
-        undefined -> absent;
+    case hb_maps:get(<<"max-stale">>, Req, absent, Opts) of
+        absent -> absent;
         true -> any;
         Value -> parse_delta_seconds(Value)
     end.
 
-%% @doc Read freshness policy directly from the request.
+%% @doc Read request policy prepared by AO stage 1, with a direct-call fallback.
 request_policy(Req, Opts) ->
-    #{
-        <<"max-age">> => request_max_age(Req, Opts),
-        <<"max-stale">> => request_max_stale(Req, Opts)
-    }.
+    case maps:find(?REQUEST_POLICY_OPT, Opts) of
+        {ok, Policy} -> Policy;
+        error -> request_policy_from_message(Req, Opts)
+    end.
 
 %% @doc Read the response lifetime and rules that prohibit reuse.
 response_policy(Res, Opts) ->
@@ -208,11 +234,23 @@ cache_miss(Base, Req, _Settings, Opts) ->
 
 %% @doc Remove private freshness and restore separately stored commitments.
 cached_result(Res, Opts) when is_map(Res) ->
-    PublicRes = maps:remove(<<"priv-created-at">>, Res),
-    WithCommitments = hb_cache:read_all_commitments(PublicRes, Opts),
-    case maps:get(<<"commitments">>, WithCommitments, #{}) of
-        Commitments when map_size(Commitments) > 0 -> WithCommitments;
-        _ -> PublicRes
+    HasCommitments =
+        hb_maps:get(
+            <<"priv-has-commitments">>, Res, <<"false">>, Opts
+        ) =:= <<"true">>,
+    PublicRes = maps:without(
+        [<<"priv-created-at">>, <<"priv-has-commitments">>],
+        Res
+    ),
+    case HasCommitments of
+        false ->
+            PublicRes;
+        true ->
+            WithCommitments = hb_cache:read_all_commitments(PublicRes, Opts),
+            case maps:get(<<"commitments">>, WithCommitments, #{}) of
+                Commitments when map_size(Commitments) > 0 -> WithCommitments;
+                _ -> PublicRes
+            end
     end;
 cached_result(Res, _Opts) ->
     Res.
@@ -268,15 +306,15 @@ async_writer() ->
 perform_cache_write(Base, Req, Res, Opts) ->
     hb_cache:write(Base, Opts),
     hb_cache:write(Req, Opts),
-    StorableRes = case Res of
+    PolicyRes = case Res of
         Candidate when is_map(Candidate) ->
-            {ok, StorableMap} = hb_message:with_only_committed(Candidate, Opts),
-            StorableMap;
+            {ok, CommittedPolicyRes} = hb_message:with_only_committed(Candidate, Opts),
+            CommittedPolicyRes;
         _ -> Res
     end,
     TracksFreshness = tracks_freshness(
         request_policy(Req, Opts),
-        response_policy(StorableRes, Opts)
+        response_policy(PolicyRes, Opts)
     ),
     CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
     WriteResult = case {Res, TracksFreshness} of
@@ -295,7 +333,10 @@ perform_cache_write(Base, Req, Res, Opts) ->
             );
         {Map, false} when is_map(Map) ->
             hb_cache:write(
-                maps:remove(<<"priv-created-at">>, Map),
+                maps:without(
+                    [<<"priv-created-at">>, <<"priv-has-commitments">>],
+                    Map
+                ),
                 Opts
             );
         _ ->
@@ -728,6 +769,10 @@ cache_result_priv_created_at_regression_test() ->
     {hit, {ok, CachedEntry}} = hb_cache:read_resolved(Base, Req, Opts),
     CachedTimestamp = hb_maps:get(<<"priv-created-at">>, CachedEntry, Opts),
     ?assert(is_integer(hb_util:int(CachedTimestamp))),
+    ?assertEqual(
+        <<"true">>,
+        hb_maps:get(<<"priv-has-commitments">>, CachedEntry, Opts)
+    ),
     Parent = self(),
     EventHandler = #{
         <<"device">> => #{
@@ -771,6 +816,7 @@ cache_result_priv_created_at_regression_test() ->
     ?assertEqual(nomatch, binary:match(EncodedEvent, <<"priv-created-at">>)),
     ?assertEqual(nomatch, binary:match(EncodedEvent, CachedTimestamp)),
     ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)),
+    ?assertEqual(false, maps:is_key(<<"priv-has-commitments">>, Served)),
     ?assertEqual(
         <<"application-value">>,
         hb_maps:get(<<"created-at">>, Served, Opts)
@@ -860,6 +906,56 @@ cache_map_tracked_then_reusable_without_max_age_test() ->
     ?assertEqual(<<"cached">>, hb_maps:get(<<"value">>, Served, Opts)),
     ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)).
 
+%% @doc An unsigned cache hit needs no commitment scan after its root read.
+unsigned_hit_avoids_commitment_lookup_test() ->
+    Store = hb_test_utils:test_store(hb_store_lmdb, <<"unsigned-hit-read">>),
+    Opts = #{ <<"store">> => [Store],
+        <<"cache-control">> => [<<"always">>] },
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
+    Req = #{ <<"path">> => <<"index">> },
+    Result = #{ <<"body">> => <<"cached">>,
+        <<"cache-control">> => <<"max-age=60">> },
+    {ok, _} = perform_cache_write(Base, Req, Result, Opts),
+    Parent = self(),
+    Tracer = spawn(fun() -> cache_store_trace_forwarder(Parent, 0) end),
+    erlang:trace(self(), true, [call, {tracer, Tracer}]),
+    erlang:trace_pattern({hb_store, list, 2}, true, []),
+    try
+        ?assertMatch(
+            {ok, #{ <<"body">> := <<"cached">> }},
+            maybe_lookup(
+                Base,
+                Req,
+                Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
+            )
+        )
+    after
+        erlang:trace_pattern({hb_store, list, 2}, false, []),
+        erlang:trace(self(), false, [call])
+    end,
+    TraceRef = erlang:trace_delivered(self()),
+    receive {trace_delivered, _, TraceRef} -> ok after 1000 ->
+        error(cache_trace_delivery_timeout)
+    end,
+    Tracer ! {flush, self()},
+    Lists = receive {cache_store_trace_lists, Value} -> Value after 1000 ->
+        error(cache_trace_flush_timeout)
+    end,
+    Tracer ! stop,
+    ?assertEqual(0, Lists).
+
+%% @doc Count commitment lists for the traced cache hit.
+cache_store_trace_forwarder(Parent, Lists) ->
+    receive
+        {trace, _, call, {hb_store, list, _}} ->
+            cache_store_trace_forwarder(Parent, Lists + 1);
+        {flush, Parent} ->
+            Parent ! {cache_store_trace_lists, Lists},
+            cache_store_trace_forwarder(Parent, Lists);
+        stop ->
+            ok
+    end.
+
 %% @doc Cover the exact freshness, stale, and prohibition boundaries.
 minimal_freshness_policy_test() ->
     Req0 = #{ <<"max-age">> => undefined, <<"max-stale">> => absent },
@@ -891,12 +987,14 @@ minimal_freshness_policy_test() ->
         classify_cached(#{}, Req0, Res0, 100, #{})
     ).
 
-%% @doc Parse request policy and keep only uncommitted policy out of identity.
+%% @doc Consume only uncommitted policy and reject malformed lifetimes.
 minimal_policy_parsing_and_identity_test() ->
     Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
         <<"max-stale">> => true },
+    {SemanticReq, PreparedOpts} = prepare(Req, #{}),
+    ?assertEqual(#{ <<"path">> => <<"index">> }, SemanticReq),
     ?assertEqual(#{ <<"max-age">> => 60, <<"max-stale">> => any },
-        request_policy(Req, #{})),
+        maps:get(?REQUEST_POLICY_OPT, PreparedOpts)),
     ?assertEqual(response_policy(#{ <<"cache-control">> => <<"max-age=60">> }, #{}),
         response_policy(#{ <<"cache-control">> => [<<"max-age=60">>] }, #{})),
     lists:foreach(fun(CC) ->
@@ -910,29 +1008,156 @@ minimal_policy_parsing_and_identity_test() ->
         hb_message:commit(Req#{ <<"max-age">> => MaxAge }, WalletOpts,
             #{ <<"committed">> => [<<"path">>, <<"max-age">>, <<"max-stale">>] })
     end,
-    Committed60 = Commit(60),
-    Committed30 = Commit(30),
+    {Committed60, _} = prepare(Commit(60), WalletOpts),
+    {Committed30, _} = prepare(Commit(30), WalletOpts),
     ?assert(hb_message:verify(Committed60, all, WalletOpts)),
     Base = #{ <<"device">> => <<"test-device@1.0">> },
-    ?assertEqual(
-        hb_cache:resolved_address(Base, Req, #{}),
-        hb_cache:resolved_address(Base, Req#{ <<"max-age">> => 30 }, #{})
-    ),
-    ?assertEqual(60, maps:get(<<"max-age">>,
-        request_policy(Committed60, WalletOpts))),
     ?assertNotEqual(hb_cache:resolved_address(Base, Committed60, WalletOpts),
         hb_cache:resolved_address(Base, Committed30, WalletOpts)).
 
-%% @doc Request freshness policy remains visible to the executing device.
-request_policy_remains_in_device_input_test() ->
-    Handler = fun(_, Req, _) -> {ok, Req} end,
+%% @doc Committing request policy preserves its identity and still applies it.
+committed_request_policy_remains_active_test() ->
+    WalletOpts = #{
+        <<"priv-wallet">> => ar_wallet:new(),
+        <<"commitment-device">> => <<"httpsig@1.0">>,
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>]
+    },
+    Req = hb_message:commit(
+        #{ <<"path">> => <<"max-age">>, <<"max-age">> => 1 },
+        WalletOpts,
+        #{ <<"committed">> => [<<"path">>, <<"max-age">>] }
+    ),
+    {PreparedReq, PreparedOpts} = prepare(Req, WalletOpts),
+    ?assert(hb_message:verify(PreparedReq, all, PreparedOpts)),
+    ?assertEqual(1, hb_maps:get(<<"max-age">>, PreparedReq, PreparedOpts)),
+    ?assertEqual(1, maps:get(<<"max-age">>,
+        maps:get(?REQUEST_POLICY_OPT, PreparedOpts))),
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
+    {ok, _} = hb_ao:resolve(Base, Req, WalletOpts),
+    {hit, {ok, Cached}} = hb_cache:read_resolved(Base, Req, WalletOpts),
+    {ok, _} = hb_cache:write_resolved(
+        hb_cache:resolved_address(Base, Req, WalletOpts),
+        Cached,
+        os:system_time(second) - 2,
+        WalletOpts
+    ),
+    CacheOnlyOpts = WalletOpts#{
+        <<"cache-control">> => [<<"only-if-cached">>]
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504 }},
+        hb_ao:resolve(Base, Req, CacheOnlyOpts)
+    ).
+
+%% @doc Prepared policy belongs only to the request that supplied it.
+prepared_policy_does_not_reach_the_next_request_test() ->
+    {_, OuterOpts} = prepare(
+        #{ <<"path">> => <<"outer">>, <<"max-age">> => 60 },
+        #{}
+    ),
+    ?assert(maps:is_key(?REQUEST_POLICY_OPT, OuterOpts)),
+    {InnerReq, InnerOpts} = prepare(#{ <<"path">> => <<"inner">> }, OuterOpts),
+    ?assertEqual(#{ <<"path">> => <<"inner">> }, InnerReq),
+    ?assertEqual(false, maps:is_key(?REQUEST_POLICY_OPT, InnerOpts)).
+
+%% @doc Reserved freshness policy cannot affect a shared computation.
+reserved_request_policy_is_not_device_input_test() ->
+    Parent = self(),
+    Ref = make_ref(),
+    Handler = fun(_, Req, Opts) ->
+        SeenPolicy = {
+            hb_maps:get(<<"max-age">>, Req, absent, Opts),
+            hb_maps:get(<<"max-stale">>, Req, absent, Opts)
+        },
+        SeenPrivateOpt = maps:is_key(<<"priv-cache-request-policy">>, Opts),
+        Parent ! {executed, Ref, SeenPolicy, SeenPrivateOpt},
+        {ok, #{
+            <<"body">> => <<"cached">>,
+            <<"cache-control">> => <<"max-age=60">>
+        }}
+    end,
     Base = #{ <<"device">> => #{ index => Handler } },
-    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
-        <<"max-stale">> => true },
-    {ok, Result} = hb_ao:resolve(Base, Req,
-        #{ <<"cache-control">> => [<<"no-cache">>, <<"no-store">>] }),
-    ?assertEqual(60, hb_maps:get(<<"max-age">>, Result, #{})),
-    ?assertEqual(true, hb_maps:get(<<"max-stale">>, Result, #{})).
+    Req60 = #{ <<"path">> => <<"index">>, <<"max-age">> => 60,
+        <<"max-stale">> => 5 },
+    Req30 = Req60#{ <<"max-age">> => 30, <<"max-stale">> => 0 },
+    Opts = #{
+        <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>]
+    },
+    % Freshness policy does not identify a computation, so these requests
+    % intentionally share one cache address.
+    ?assertEqual(
+        hb_cache:resolved_address(Base, Req60, Opts),
+        hb_cache:resolved_address(Base, Req30, Opts)
+    ),
+    {ok, First} = hb_ao:resolve(Base, Req60, Opts),
+    {ok, Second} = hb_ao:resolve(Base, Req30, Opts),
+    ?assertEqual(hb_message:id(First, all, Opts),
+        hb_message:id(Second, all, Opts)),
+    receive
+        {executed, Ref, {absent, absent}, false} -> ok;
+        {executed, Ref, Seen, SeenPrivate} ->
+            error({reserved_policy_reached_device, Seen, SeenPrivate})
+    after 1000 ->
+        error(device_not_executed)
+    end,
+    receive
+        {executed, Ref, _, _} -> error(device_recomputed)
+    after 0 ->
+        ok
+    end.
+
+%% @doc Resolver-private policy is not exposed while awaiting shared work.
+reserved_policy_is_not_persistent_callback_input_test() ->
+    Parent = self(),
+    Ref = make_ref(),
+    Grouper = fun(_, _, _) -> {cache_policy_test, Ref} end,
+    Await = fun(Worker, Group, Base, Req, Opts) ->
+        Parent ! {await_policy, Ref,
+            maps:is_key(?REQUEST_POLICY_OPT, Opts)},
+        hb_persistent:default_await(Worker, Group, Base, Req, Opts)
+    end,
+    Handler = fun(_, _, _) ->
+        Parent ! {execution_started, Ref, self()},
+        receive {finish_execution, Ref} ->
+            {ok, #{ <<"body">> => <<"done">> }}
+        end
+    end,
+    Base = #{ <<"device">> => #{
+        info => fun() -> #{ grouper => Grouper, await => Await } end,
+        index => Handler
+    }},
+    Req = #{ <<"path">> => <<"index">>, <<"max-age">> => 60 },
+    Opts = #{
+        <<"await-inprogress">> => true,
+        <<"cache-control">> => [<<"no-store">>]
+    },
+    FirstPID = spawn(fun() -> Parent ! {first_result, Ref,
+        hb_ao:resolve(Base, Req, Opts)} end),
+    Leader = receive
+        {execution_started, Ref, PID} -> PID
+    after 1000 ->
+        error(first_execution_not_started)
+    end,
+    SecondPID = spawn(fun() -> Parent ! {second_result, Ref,
+        hb_ao:resolve(Base, Req, Opts)} end),
+    try
+        PolicyVisible = receive
+            {await_policy, Ref, Visible} -> Visible
+        after 1000 ->
+            error(second_execution_did_not_await)
+        end,
+        Leader ! {finish_execution, Ref},
+        First = receive {first_result, Ref, Res1} -> Res1 after 1000 -> timeout end,
+        Second = receive {second_result, Ref, Res2} -> Res2 after 1000 -> timeout end,
+        ?assertEqual(First, Second),
+        ?assertEqual(false, PolicyVisible)
+    after
+        Leader ! {finish_execution, Ref},
+        exit(FirstPID, kill),
+        exit(SecondPID, kill)
+    end.
 
 %% @doc An explicit cache-only request never executes with lookup disabled.
 no_cache_only_if_cached_test() ->
@@ -941,6 +1166,31 @@ no_cache_only_if_cached_test() ->
         [<<"no-cache">>, <<"only-if-cached">>] },
     ?assertMatch({error, #{ <<"status">> := 504 }},
         hb_ao:resolve(Base, CacheOnlyReq, #{})).
+
+%% @doc An expired device response cannot satisfy a cache-only request.
+device_response_max_age_cache_only_expiry_test() ->
+    Base = #{ <<"device">> => <<"test-device@1.0">> },
+    Req = #{ <<"path">> => <<"max-age">> },
+    Opts = #{ <<"store">> => [hb_test_utils:test_store()],
+        <<"cache-control">> => [<<"always">>] },
+    {ok, First} = hb_ao:resolve(Base, Req, Opts),
+    ?assertEqual(<<"max-age=1">>,
+        hb_maps:get(<<"cache-control">>, First, Opts)),
+    CacheAddress = hb_cache:resolved_address(Base, Req, Opts),
+    {hit, {ok, Cached}} = hb_cache:read_resolved(Base, Req, Opts),
+    {ok, _} = hb_cache:write_resolved(
+        CacheAddress,
+        Cached,
+        os:system_time(second) - 1,
+        Opts
+    ),
+    CacheOnlyOpts = Opts#{
+        <<"cache-control">> => [<<"only-if-cached">>]
+    },
+    ?assertMatch(
+        {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
+        hb_ao:resolve(Base, Req, CacheOnlyOpts)
+    ).
 
 inherited_no_cache_does_not_preempt_device_cache_only_test() ->
     Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },

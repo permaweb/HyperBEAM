@@ -1,3 +1,6 @@
+-- Walk an AO balance trie while retaining only a bounded min-heap of the
+-- strongest holders. Balances remain decimal strings so ranking is exact even
+-- above Lua's numeric precision; length is compared before lexical value.
 local function decimal(value)
     local result = tostring(value):match("^0*(%d+)$")
     return result or "0"

@@ -105,12 +105,15 @@
 -export([deep_set/4]).
 -include("include/hb.hrl").
 
+-define(REQUEST_POLICY_OPT, <<"priv-cache-request-policy">>).
+
 -define(
     TEMP_OPTS,
     [
         <<"add-key">>,
         <<"force-message">>,
         <<"cache-control">>,
+        ?REQUEST_POLICY_OPT,
         <<"spawn-worker">>,
         <<"only">>,
         <<"prefer">>
@@ -415,7 +418,8 @@ resolve_stage(1, RawBase, RawReq, Opts) ->
     ?event_debug(debug_ao_core, {stage, 1, normalize}, Opts),
     Base = normalize_keys(RawBase, Opts),
     Req = normalize_keys(RawReq, Opts),
-    resolve_stage(2, Base, Req, Opts);
+    {SemanticReq, PreparedOpts} = hb_cache_control:prepare(Req, Opts),
+    resolve_stage(2, Base, SemanticReq, PreparedOpts);
 resolve_stage(2, Base, Req, Opts) ->
     ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
     % Lookup request in the cache. If we find a result, return it.
@@ -470,7 +474,9 @@ resolve_stage(4, Base, Req, Opts) ->
             % There is another executor of this resolution in-flight.
             % Bail execution, register to receive the response, then
             % wait.
-            case hb_persistent:await(Leader, Base, Req, Opts) of
+            case hb_persistent:await(
+                Leader, Base, Req, without_request_policy(Opts)
+            ) of
                 {error, leader_died} ->
                     ?event(
                         ao_core,
@@ -760,8 +766,11 @@ resolve_stage(12, _Base, _Req, {ok, Res} = Res, ExecName, Opts) ->
             Res;
         {_, _} ->
             % Spawn a worker for the current execution
-            WorkerPID = hb_persistent:start_worker(ExecName, Res, Opts),
-            hb_persistent:forward_work(WorkerPID, Opts),
+            PersistentOpts = without_request_policy(Opts),
+            WorkerPID = hb_persistent:start_worker(
+                ExecName, Res, PersistentOpts
+            ),
+            hb_persistent:forward_work(WorkerPID, PersistentOpts),
             Res
     end;
 resolve_stage(12, _Base, _Req, OtherRes, _ExecName, _Opts) ->
@@ -1308,3 +1317,7 @@ execution_opts(Opts) ->
         recursive -> Opts1#{ <<"spawn-worker">> => recursive };
         _ -> Opts1
     end.
+
+%% @doc Keep parsed request cache policy inside the resolver.
+without_request_policy(Opts) ->
+    hb_maps:remove(?REQUEST_POLICY_OPT, Opts, Opts).
