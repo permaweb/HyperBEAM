@@ -51,13 +51,7 @@ lookup(Base, Req, Opts) ->
     case derive_cache_settings([Base, Req], Opts) of
         Settings = #{ <<"lookup">> := false } ->
             ?event({skip_cache_check, lookup_disabled}),
-            case derive_cache_settings(
-                [Base, Req], Opts#{ <<"only">> => local }
-            ) of
-                #{ <<"lookup">> := false, <<"only-if-cached">> := true } ->
-                    cache_miss(Base, Req, Settings, Opts);
-                _ -> maybe_load_base(Base, Req, Opts)
-            end;
+            cache_miss(Base, Req, Settings, Opts);
         Settings = #{ <<"lookup">> := true } ->
             OutputScopedOpts =
                 hb_store:scope(
@@ -192,7 +186,7 @@ request_policy(Req, Opts) ->
 
 %% @doc Read the response lifetime and rules that prohibit reuse.
 response_policy(Res, Opts) ->
-    Parsed = message_cache_control(Res, Opts),
+    Parsed = parse_message_cache_control(Res, Opts),
     #{
         <<"max-age">> => numeric_directive(<<"max-age">>, Parsed),
         <<"no-cache">> => has_directive(<<"no-cache">>, Parsed),
@@ -207,23 +201,11 @@ cache_miss(Base, Req, _Settings, Opts) ->
 
 %% @doc Remove private freshness and restore separately stored commitments.
 cached_result(Res, Opts) when is_map(Res) ->
-    HasCommitments =
-        hb_maps:get(
-            <<"priv-has-commitments">>, Res, <<"false">>, Opts
-        ) =:= <<"true">>,
-    PublicRes = maps:without(
-        [<<"priv-created-at">>, <<"priv-has-commitments">>],
-        Res
-    ),
-    case HasCommitments of
-        false ->
-            PublicRes;
-        true ->
-            WithCommitments = hb_cache:read_all_commitments(PublicRes, Opts),
-            case maps:get(<<"commitments">>, WithCommitments, #{}) of
-                Commitments when map_size(Commitments) > 0 -> WithCommitments;
-                _ -> PublicRes
-            end
+    PublicRes = maps:remove(<<"priv-created-at">>, Res),
+    WithCommitments = hb_cache:read_all_commitments(PublicRes, Opts),
+    case maps:get(<<"commitments">>, WithCommitments, #{}) of
+        Commitments when map_size(Commitments) > 0 -> WithCommitments;
+        _ -> PublicRes
     end;
 cached_result(Res, _Opts) ->
     Res.
@@ -306,10 +288,7 @@ perform_cache_write(Base, Req, Res, Opts) ->
             );
         {Map, false} when is_map(Map) ->
             hb_cache:write(
-                maps:without(
-                    [<<"priv-created-at">>, <<"priv-has-commitments">>],
-                    Map
-                ),
+                maps:remove(<<"priv-created-at">>, Map),
                 Opts
             );
         _ ->
@@ -488,9 +467,9 @@ has_directive(_Name, invalid) -> false;
 has_directive(Name, Parsed) -> lists:member(Name, Parsed).
 
 %% @doc Parse Cache-Control directly from a map-shaped message.
-message_cache_control(Msg, Opts) when is_map(Msg) ->
+parse_message_cache_control(Msg, Opts) when is_map(Msg) ->
     parse_cache_control(hb_maps:get(<<"cache-control">>, Msg, [], Opts));
-message_cache_control(_, _) -> [].
+parse_message_cache_control(_, _) -> [].
 
 %% @doc Convert a cache control list as received via HTTP headers into a
 %% normalized map of simply whether we should store and/or lookup the result.
@@ -742,10 +721,6 @@ cache_result_priv_created_at_regression_test() ->
     {hit, {ok, CachedEntry}} = hb_cache:read_resolved(Base, Req, Opts),
     CachedTimestamp = hb_maps:get(<<"priv-created-at">>, CachedEntry, Opts),
     ?assert(is_integer(hb_util:int(CachedTimestamp))),
-    ?assertEqual(
-        <<"true">>,
-        hb_maps:get(<<"priv-has-commitments">>, CachedEntry, Opts)
-    ),
     Parent = self(),
     EventHandler = #{
         <<"device">> => #{
@@ -789,7 +764,6 @@ cache_result_priv_created_at_regression_test() ->
     ?assertEqual(nomatch, binary:match(EncodedEvent, <<"priv-created-at">>)),
     ?assertEqual(nomatch, binary:match(EncodedEvent, CachedTimestamp)),
     ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)),
-    ?assertEqual(false, maps:is_key(<<"priv-has-commitments">>, Served)),
     ?assertEqual(
         <<"application-value">>,
         hb_maps:get(<<"created-at">>, Served, Opts)
@@ -878,56 +852,6 @@ cache_map_tracked_then_reusable_without_max_age_test() ->
     {ok, Served} = maybe_lookup(Base, Req, CacheOnlyOpts),
     ?assertEqual(<<"cached">>, hb_maps:get(<<"value">>, Served, Opts)),
     ?assertEqual(false, maps:is_key(<<"priv-created-at">>, Served)).
-
-%% @doc An unsigned cache hit needs no commitment scan after its root read.
-unsigned_hit_avoids_commitment_lookup_test() ->
-    Store = hb_test_utils:test_store(hb_store_lmdb, <<"unsigned-hit-read">>),
-    Opts = #{ <<"store">> => [Store],
-        <<"cache-control">> => [<<"always">>] },
-    Base = #{ <<"device">> => <<"test-device@1.0">> },
-    Req = #{ <<"path">> => <<"index">> },
-    Result = #{ <<"body">> => <<"cached">>,
-        <<"cache-control">> => <<"max-age=60">> },
-    {ok, _} = perform_cache_write(Base, Req, Result, Opts),
-    Parent = self(),
-    Tracer = spawn(fun() -> cache_store_trace_forwarder(Parent, 0) end),
-    erlang:trace(self(), true, [call, {tracer, Tracer}]),
-    erlang:trace_pattern({hb_store, list, 2}, true, []),
-    try
-        ?assertMatch(
-            {ok, #{ <<"body">> := <<"cached">> }},
-            maybe_lookup(
-                Base,
-                Req,
-                Opts#{ <<"cache-control">> => [<<"only-if-cached">>] }
-            )
-        )
-    after
-        erlang:trace_pattern({hb_store, list, 2}, false, []),
-        erlang:trace(self(), false, [call])
-    end,
-    TraceRef = erlang:trace_delivered(self()),
-    receive {trace_delivered, _, TraceRef} -> ok after 1000 ->
-        error(cache_trace_delivery_timeout)
-    end,
-    Tracer ! {flush, self()},
-    Lists = receive {cache_store_trace_lists, Value} -> Value after 1000 ->
-        error(cache_trace_flush_timeout)
-    end,
-    Tracer ! stop,
-    ?assertEqual(0, Lists).
-
-%% @doc Count commitment lists for the traced cache hit.
-cache_store_trace_forwarder(Parent, Lists) ->
-    receive
-        {trace, _, call, {hb_store, list, _}} ->
-            cache_store_trace_forwarder(Parent, Lists + 1);
-        {flush, Parent} ->
-            Parent ! {cache_store_trace_lists, Lists},
-            cache_store_trace_forwarder(Parent, Lists);
-        stop ->
-            ok
-    end.
 
 %% @doc Cover the exact freshness, stale, and prohibition boundaries.
 minimal_freshness_policy_test() ->
@@ -1035,11 +959,6 @@ device_response_max_age_cache_only_expiry_test() ->
         {error, #{ <<"status">> := 504, <<"cache-status">> := <<"miss">> }},
         hb_ao:resolve(Base, Req, CacheOnlyOpts)
     ).
-
-inherited_no_cache_does_not_preempt_device_cache_only_test() ->
-    Base = #{ <<"device">> => <<"test-device@1.0">>, <<"name">> => <<"HB">> },
-    Req = #{ <<"path">> => <<"index">>, <<"cache-control">> => [<<"only-if-cached">>] },
-    ?assertMatch({ok, _}, hb_ao:resolve(Base, Req, #{})).
 
 %% @doc Response max-age stores time and max-stale controls live cache reuse.
 cache_response_max_age_and_request_max_stale_test() ->

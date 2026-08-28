@@ -268,26 +268,20 @@ generate_binary_path(Bin, Opts) ->
 %% the commitments of the inner messages. We do not, however, store the IDs from
 %% commitments on signed _inner_ messages. We may wish to revisit this.
 write(RawMsg, Opts) when is_map(RawMsg) ->
-    % Reattach only bounded cache-owned metadata after private keys are filtered.
-    PrivCacheMetadata = maps:filter(
-        fun(<<"priv-created-at">>, Value) ->
-                is_immediate_value(<<"priv-created-at">>, Value);
-           (<<"priv-has-commitments">>, Value) ->
-                Value =:= <<"true">> orelse Value =:= <<"false">>
-        end,
-        maps:with(
-            [<<"priv-created-at">>, <<"priv-has-commitments">>],
-            RawMsg
-        )
-    ),
-    PublicRawMsg = maps:without(
-        [<<"priv-created-at">>, <<"priv-has-commitments">>],
-        RawMsg
-    ),
+    % Reattach only cache-owned freshness after private keys are filtered.
+    PrivCreatedAt = case maps:find(<<"priv-created-at">>, RawMsg) of
+        {ok, CreatedAt} ->
+            case is_immediate_value(<<"priv-created-at">>, CreatedAt) of
+                true -> #{ <<"priv-created-at">> => CreatedAt };
+                false -> #{}
+            end;
+        error -> #{}
+    end,
+    PublicRawMsg = maps:remove(<<"priv-created-at">>, RawMsg),
     hb_message:paranoid_verify(cache_write, PublicRawMsg, Opts),
     {ok, Msg} = hb_message:with_only_committed(PublicRawMsg, Opts),
     PublicTABM = hb_message:convert(Msg, tabm, <<"structured@1.0">>, Opts),
-    TABM = maps:merge(PublicTABM, PrivCacheMetadata),
+    TABM = maps:merge(PublicTABM, PrivCreatedAt),
     ?event_debug(debug_cache, {writing_full_message, {msg, TABM}}),
     try
         do_write_message(
@@ -687,16 +681,12 @@ write_binary(Hashpath, Bin, Store, Opts) ->
 
 %% @doc Write a resolved message with its private cache creation timestamp.
 write_resolved(CacheAddress, Msg, CreatedAt, Opts) ->
-    CacheMsg = (maps:remove(<<"priv-has-commitments">>, Msg))#{
-        <<"priv-created-at">> => integer_to_binary(hb_util:int(CreatedAt))
-    },
-    WithCommitmentMarker = case hb_maps:is_key(<<"commitments">>, Msg, Opts) of
-        true -> CacheMsg#{ <<"priv-has-commitments">> => <<"true">> };
-        false -> CacheMsg
-    end,
     write_hashpath(
         CacheAddress,
-        WithCommitmentMarker,
+        Msg#{
+            <<"priv-created-at">> =>
+                integer_to_binary(hb_util:int(CreatedAt))
+        },
         Opts
     ).
 
@@ -1518,10 +1508,6 @@ resolved_entry_canonical_record_test() ->
         <<"10">>,
         hb_maps:get(<<"priv-created-at">>, Entry1, Opts)
     ),
-    ?assertEqual(
-        <<"true">>,
-        hb_maps:get(<<"priv-has-commitments">>, Entry1, Opts)
-    ),
     ?assertEqual(false, maps:is_key(<<"priv-other">>, Entry1)),
     PublicEntry1 = hb_private:reset(Entry1),
     Restored1 = read_all_commitments(PublicEntry1, Opts),
@@ -1538,8 +1524,7 @@ resolved_entry_canonical_record_test() ->
         hb_message:id(Restored1, all, Opts)
     ),
     ?assert(hb_message:verify(Restored1, all, Opts)),
-    Unsigned = maps:remove(<<"commitments">>, Msg),
-    ?assertEqual({ok, ResultID}, write_resolved(Address2, Unsigned, 20, Opts)),
+    ?assertEqual({ok, ResultID}, write_resolved(Address2, Msg, 20, Opts)),
     {ok, Updated1} = read(Address1, Opts),
     {ok, Entry2} = read(Address2, Opts),
     ?assertEqual(
@@ -1550,17 +1535,6 @@ resolved_entry_canonical_record_test() ->
         <<"20">>,
         hb_maps:get(<<"priv-created-at">>, Entry2, Opts)
     ),
-    ?assertEqual(
-        <<"true">>,
-        hb_maps:get(<<"priv-has-commitments">>, Updated1, Opts)
-    ),
-    RestoredAfterUnsigned = read_all_commitments(
-        hb_private:reset(Updated1), Opts),
-    ?assertEqual(
-        hb_message:id(Public, all, Opts),
-        hb_message:id(RestoredAfterUnsigned, all, Opts)
-    ),
-    ?assert(hb_message:verify(RestoredAfterUnsigned, all, Opts)),
     ?assertEqual(
         {error, not_found},
         read(<<"created-at/", Address1/binary>>, Opts)
