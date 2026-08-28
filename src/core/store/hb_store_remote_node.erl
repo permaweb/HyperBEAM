@@ -43,19 +43,11 @@ resolve(#{ <<"node">> := Node }, #{ <<"resolve">> := Key }, _NodeOpts) ->
 %%
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key whose value type is determined.
-%% @returns `{ok, simple}' or `{ok, composite}' if found, or
+%% @returns `{ok, simple}' if found, or
 %%          `{error, not_found}' otherwise.
-type(StoreOpts = #{ <<"nodes">> := Nodes }, #{ <<"type">> := Key }, NodeOpts)
-        when is_list(Nodes) ->
-    ?event({remote_type, {nodes, length(Nodes)}, {key, Key}}),
-    case multi_read(StoreOpts, Nodes, Key, NodeOpts) of
-        {ok, _} -> {ok, simple};
-        Other -> Other
-    end;
-type(Opts = #{ <<"node">> := Node }, #{ <<"type">> := Key }, _NodeOpts) ->
-    ?event({remote_type, {node, Node}, {key, Key}}),
-    case read_request(Opts, Key) of
-        {composite, _} -> {ok, composite};
+type(StoreOpts, #{ <<"type">> := Key }, NodeOpts) ->
+    ?event({remote_type, {key, Key}}),
+    case read_request(StoreOpts, Key, NodeOpts) of
         {ok, _} -> {ok, simple};
         Other -> Other
     end.
@@ -68,16 +60,31 @@ type(Opts = #{ <<"node">> := Node }, #{ <<"type">> := Key }, _NodeOpts) ->
 %% @param Opts A map of options (including node configuration).
 %% @param Key The key to read.
 %% @returns `{ok, Msg}' on success or `{error, not_found}' if the key is missing.
-read_request(#{ <<"only-ids">> := true }, Key) when not ?IS_ID(Key) ->
+read_request(#{ <<"only-ids">> := true }, Key, _NodeOpts) when not ?IS_ID(Key) ->
     {error, not_found};
-read_request(Opts = #{ <<"node">> := Node }, Key) ->
-    ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+read_request(StoreOpts, Key, Opts) ->
     HTTPRes =
-        hb_http:get(
-            Node,
-            #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
-            Opts
-        ),
+        case StoreOpts of
+            #{ <<"node">> := Node } ->
+                ?event(store_remote_node, {executing_read, {node, Node}, {key, Key}}),
+                hb_http:get(
+                    Node,
+                    #{ <<"path">> => <<"/~cache@1.0/read">>, <<"read">> => Key },
+                    Opts
+                );
+            #{ <<"nodes">> := Nodes } when is_list(Nodes) ->
+                ?event(store_remote_node, {executing_read, {nodes, length(Nodes)}, {key, Key}}),
+                Config = multi_request_config(Nodes, Key, StoreOpts, Opts),
+                hb_http:request(
+                    <<"GET">>,
+                    Config,
+                    <<"/~cache@1.0/read">>,
+                    #{ <<"read">> => Key },
+                    Opts
+                );
+            _ ->
+                {error, not_found}
+        end,
     case HTTPRes of
         {ok, Res} ->
             % returning the whole response to get the test-key
@@ -87,18 +94,34 @@ read_request(Opts = #{ <<"node">> := Node }, Key) ->
                     Opts
                 ),
             ?event(store_remote_node, {read_found, {result, Msg, response, Res}}),
-            maybe_cache(Opts, Msg, [Key]),
+            maybe_cache(StoreOpts, Msg, [Key]),
             {ok, Msg};
         {error, _Err} ->
             ?event(store_remote_node, {read_not_found, {key, Key}}),
             {error, not_found}
-    end;
-read_request(_, _) -> {error, not_found}.
-read(StoreOpts = #{ <<"nodes">> := Nodes }, #{ <<"read">> := Key }, NodeOpts)
-        when is_list(Nodes) ->
-    multi_read(StoreOpts, Nodes, Key, NodeOpts);
-read(Opts, #{ <<"read">> := Key }, _NodeOpts) ->
-    read_request(Opts, Key).
+    end.
+
+multi_request_config(Nodes, Key,  StoreOpts, Opts) ->
+    #{
+        <<"nodes">> => [ node_request(N) || N <- Nodes ],
+        <<"parallel">> => hb_maps:get(parallel, StoreOpts, true, Opts),
+        <<"responses">> => hb_maps:get(responses, StoreOpts, 1, Opts),
+        <<"stop-after">> => hb_maps:get(stop_after, StoreOpts, true, Opts),
+        <<"admissible">> =>
+            #{
+                <<"device">> => <<"cache@1.0">>,
+                <<"path">> => <<"expected-response">>,
+                <<"expected">> => Key,
+                %% Hook config rides the admissibility spec (the `Base' that
+                %% reaches `expected_response'), never `NodeOpts', no collision.
+                <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, Opts),
+                <<"commit-hook-response">> =>
+                    hb_opts:get(commit_hook_response, false, Opts)
+            }
+    }.
+
+read(StoreOpts, #{ <<"read">> := Key }, NodeOpts) ->
+    read_request(StoreOpts, Key, NodeOpts).
 
 %% @doc Remove the transport commitments from the response.
 without_transport_commitment(Msg, Opts) when is_map(Msg) ->
@@ -117,57 +140,6 @@ without_transport_commitment(Res, _Opts) ->
 %% proves to be the requested, cryptographically-valid message. Uses `NodeOpts'
 %% (the runtime node options) so the admissibility resolution can dispatch the
 %% `cache@1.0' device; `StoreOpts' carries the store-level `nodes'/`local-store'.
-multi_read(#{ <<"only-ids">> := true }, _Nodes, Key, _NodeOpts) when not ?IS_ID(Key) ->
-    {error, not_found};
-multi_read(StoreOpts, Nodes, Key, NodeOpts) ->
-    Config =
-        #{
-            <<"nodes">> => [ node_request(N) || N <- Nodes ],
-            %% TODO: We might want to keep the same definition as previously set
-            <<"parallel">> => true,
-            <<"responses">> => 1,
-            <<"stop-after">> => true,
-            <<"admissible">> =>
-                #{
-                    <<"device">> => <<"cache@1.0">>,
-                    <<"path">> => <<"expected-response">>,
-                    <<"expected">> => Key,
-                    %% Hook config rides the admissibility spec (the `Base' that
-                    %% reaches `expected_response'), never `NodeOpts', no collision.
-                    <<"on">> => hb_maps:get(<<"on">>, StoreOpts, #{}, StoreOpts),
-                    <<"commit-hook-response">> =>
-                        hb_opts:get(commit_hook_response, false, StoreOpts)
-                }
-        },
-    ?event(store_remote_node,
-        {executing_multiread, {node_count, length(Nodes)}, {key, Key}}),
-    %% TODO: We should use the abstraction that exists, just make it work with multiple nodes.
-    case
-        hb_http:request(
-            <<"GET">>,
-            Config,
-            <<"/~cache@1.0/read">>,
-            %% Send both `read' (edge convention) and `target' (legacy/branch
-            %% convention) so the fan-out works against a heterogeneous peer
-            %% pool running either HyperBEAM lineage.
-            #{ <<"read">> => Key, <<"target">> => Key },
-            NodeOpts
-        )
-    of
-        {ok, Res} ->
-            {ok, Msg} =
-                hb_message:with_only_committed(
-                    without_transport_commitment(Res, NodeOpts),
-                    NodeOpts
-                ),
-            ?event(store_remote_node, {multiread_found, {key, Key}}),
-            maybe_cache(StoreOpts, Msg, [Key]),
-            {ok, Msg};
-        Other ->
-            ?event(store_remote_node,
-                {multiread_not_found, {key, Key}, {result, Other}}),
-            {error, not_found}
-    end.
 
 %% @doc Extract the base URL of a configured remote node. Accepts a bare URL
 %% binary, or a node map carrying a `prefix' or `uri' key.
