@@ -79,51 +79,47 @@ read_offset(StoreOpts, ID, Opts) ->
     end.
 
 %% @doc Read the offset of the data at the given key from the local index alone.
-%% Nodes answer each other's offset requests from their own indexes, such that a
-%% cycle of routes cannot recurse.
-read_index_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
+read_index_offset(StoreOpts = #{ <<"index-store">> := _ }, ID) ->
+    maybe
+        % First check the full offset path from the `~arweave@2.9` device.
+        not_found ?= read_offset_path(StoreOpts, <<"~arweave@2.9/offset=", ID/binary>>),
+        % ...otherwise, check the raw binary path for the ID.
+        read_offset_path(StoreOpts, hb_store_arweave_offset:path(ID))
+    end;
+read_index_offset(_, _) -> not_found.
+
+%% @doc Read and parse offset results. Processes both a message response or a
+%% version 1 binary encoded response.
+read_offset_path(StoreOpts = #{ <<"index-store">> := IndexStore }, Path) ->
     ReadRes =
         hb_prometheus:measure_and_report(
             fun() ->
                 hb_store:read(
                     IndexStore,
-                    #{ <<"read">> => hb_store_arweave_offset:path(ID) },
+                    #{ <<"read">> => Path },
                     StoreOpts
                 )
             end,
             hb_store_arweave_index_check_duration_seconds
         ),
     case ReadRes of
-        {ok, OffsetBinary} ->
+        {ok, Res} when is_map(Res) ->
+            {ok, Res#{
+                <<"version">> => maps:get(<<"version">>, Res, 2),
+                <<"codec-device">> =>
+                    maps:get(
+                        <<"codec-device">>,
+                        Res,
+                        <<"ans104@1.0">>
+                    )
+            }};
+        {ok, OffsetBinary} when is_binary(OffsetBinary) ->
             {Version, CodecName, StartOffset, Length} =
                 hb_store_arweave_offset:decode(OffsetBinary),
             {ok, #{
                 <<"version">> => Version,
                 <<"codec-device">> => CodecName,
-                <<"start-offset">> => StartOffset,
-                <<"length">> => Length
-            }};
-        _ ->
-            read_published_offset(StoreOpts, ID)
-    end;
-read_index_offset(_, _) -> not_found.
-
-%% @doc Read the offset of a data item from a published offset index in the
-%% `index-store' list, keyed by the item's ID under the `~arweave@2.9/offset='
-%% prefix. Published indexes hold confirmed ANS-104 items alone.
-read_published_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
-    ReadRes =
-        hb_store:read(
-            IndexStore,
-            #{ <<"read">> => <<"~arweave@2.9/offset=", ID/binary>> },
-            StoreOpts
-        ),
-    case ReadRes of
-        {ok, #{ <<"start">> := StartOffset, <<"length">> := Length }} ->
-            {ok, #{
-                <<"version">> => 2,
-                <<"codec-device">> => <<"ans104@1.0">>,
-                <<"start-offset">> => StartOffset,
+                <<"start">> => StartOffset,
                 <<"length">> => Length
             }};
         _ ->
@@ -204,7 +200,7 @@ do_read(StoreOpts, ID, Opts) ->
             #{
                 <<"version">> := Version,
                 <<"codec-device">> := CodecName,
-                <<"start-offset">> := StartOffset,
+                <<"start">> := StartOffset,
                 <<"length">> := Length
             }} ->
             Loaded =
@@ -466,7 +462,7 @@ slash_offset_key_read_test_parallel() ->
     ),
     ok = write_offset(Store, ID, <<"tx@1.0">>, 123, 456),
     ?assertMatch(
-        {ok, #{ <<"start-offset">> := 123, <<"length">> := 456 }},
+        {ok, #{ <<"start">> := 123, <<"length">> := 456 }},
         read_offset(Store, ID, Opts)
     ).
 

@@ -849,7 +849,7 @@ transactions_query_ids_preserve_arweave_tx_id_test_parallel() ->
     {ok, _Node, Opts} = test_env_with_blocks(1892487, 1892487),
     ID = <<"mT7pIQx9ORnemXoIzWmKwymiZJxtOSvzxm3P44M9C1A">>,
     ?assertMatch(
-        {ok, #{ <<"start-offset">> := _ }},
+        {ok, #{ <<"start">> := _ }},
         hb_store_arweave:read_offset(hb_store_arweave:store_from_opts(Opts), ID, Opts)
     ),
     ?assertMatch(
@@ -881,9 +881,9 @@ transactions_query_cursor_by_offset_test_parallel() ->
     EarlierID = <<"xBpOR2KOjYEgv5HmddMlAgYa-yMvfEVl-0XzRIfm2uY">>,
     LaterID = <<"HVr7EpRhlPkbwdnoXKHf25p7BPa0qJOs6C7XueLthA0">>,
     StoreOpts = hb_store_arweave:store_from_opts(Opts),
-    {ok, #{ <<"start-offset">> := EarlierOffset }} =
+    {ok, #{ <<"start">> := EarlierOffset }} =
         hb_store_arweave:read_offset(StoreOpts, EarlierID, Opts),
-    {ok, #{ <<"start-offset">> := LaterOffset }} =
+    {ok, #{ <<"start">> := LaterOffset }} =
         hb_store_arweave:read_offset(StoreOpts, LaterID, Opts),
     Query = transactions_cursor_query(),
     VerifyFun =

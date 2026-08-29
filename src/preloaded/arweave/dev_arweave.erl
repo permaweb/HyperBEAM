@@ -175,7 +175,7 @@ head_raw(Base, Request, Opts) ->
                 {ok,
                     #{
                         <<"codec-device">> := CodecDevice,
-                        <<"start-offset">> := StartOffset,
+                        <<"start">> := StartOffset,
                         <<"length">> := Length
                     }} ->
                         CodecFun =

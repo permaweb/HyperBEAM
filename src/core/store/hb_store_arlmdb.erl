@@ -18,8 +18,8 @@
 %%% '''
 %%% The container is an LMDB 1.0 file (`MDB_DATA_VERSION' 3, 64 KiB pages,
 %%% little-endian). Each page opens with a 24 byte header: the page number and
-%%% the transaction ID as 64 bit integers, then `pad', `flags', `lower', and
-%%% `upper' as 16 bit integers. The meta pages are pages 0 and 1; the one with
+%%% the LMDB internal transaction as 64 bit ints, then `pad', `flags',
+%%% `lower', and `upper' as 16 bit integers. The meta pages are pages 0 and 1; the one with
 %%% the higher transaction ID wins. The main database must be `MDB_DUPSORT bor
 %%% MDB_DUPFIXED' with a single-leaf root holding one `F_SUBDATA' node keyed
 %%% `<<0>>', whose data is the sub-database record: its `pad' is the row width
@@ -583,7 +583,7 @@ read_offset_fallback_test() ->
         {ok, #{
             <<"codec-device">> := <<"ans104@1.0">>,
             <<"version">> := 2,
-            <<"start-offset">> := 381852134215637,
+            <<"start">> := 381852134215637,
             <<"length">> := 3947
         }},
         hb_store_arweave:read_offset(

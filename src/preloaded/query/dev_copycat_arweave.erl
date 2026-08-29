@@ -1649,11 +1649,11 @@ pending_range_indexes_bundle_children_test() ->
                 <<"~copycat@1.0/arweave&mode=full&from=pending&to=pending">>,
                 Opts),
         ?assertMatch(
-            {ok, #{ <<"start-offset">> := relative }},
+            {ok, #{ <<"start">> := relative }},
             hb_store_arweave:read_offset(ReadStore, TXID, Opts)
         ),
         ?assertMatch(
-            {ok, #{ <<"start-offset">> := #{ <<"relative">> := TXID } }},
+            {ok, #{ <<"start">> := #{ <<"relative">> := TXID } }},
             hb_store_arweave:read_offset(ReadStore, ChildID, Opts)
         ),
         {ok, ChildMsg} =
