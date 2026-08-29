@@ -28,6 +28,14 @@
 %%% `pad' bytes at page offset `24 + I * pad', with `lower bsr 1' rows in the
 %%% page, ascending strictly.
 %%%
+%%% Fetched chunks are retained in the stores named by the `chunk-store' key
+%%% of the store message, defaulting to a volatile store that expires every
+%%% five minutes; `[]' retains nothing. Published containers are
+%%% defragmented -- the first chunk carries the meta pages, main root and
+%%% sub-root, branch pages cluster four to a chunk, and leaves follow in key
+%%% order -- so the chunks a read retains answer most of the reads that
+%%% follow it.
+%%%
 %%% Every container shape outside this contract is refused with a distinct
 %%% error, never treated as a miss, and a failed byte-range fetch surfaces as
 %%% `{error, {unavailable, ...}}': a proven miss requires a successfully read
@@ -40,6 +48,12 @@
 
 %%% The byte-level constants of the LMDB 1.0 container.
 -define(PAGE_SIZE, 65536).
+%% An Arweave chunk holds four pages, and a published container's data begins
+%% on a chunk boundary, so every page fetch lies within one chunk of the
+%% container.
+-define(CHUNK_SIZE, (4 * ?PAGE_SIZE)).
+%% The default chunk store expires its whole table on this cadence.
+-define(CHUNK_TTL_MS, 300000).
 -define(PAGE_HDR, 24).
 -define(MDB_MAGIC, 16#BEEFC0DE).
 -define(MDB_VERSION, 3).
@@ -51,7 +65,8 @@
 
 %% @doc Resolve the root transaction's weave location and tags, validate the
 %% container's meta page, and return the store instance. The instance holds
-%% only the location and tags: pages are never cached.
+%% only the location and tags; fetched chunks are retained by the chunk
+%% store alone.
 start(StoreOpts = #{ <<"root">> := Root }, _Req, _Opts) ->
     maybe
         {ok, Start, Size} ?= read_location(Root, StoreOpts),
@@ -186,7 +201,7 @@ read_meta(Start, Size, Opts) ->
             Size >= 2 * ?PAGE_SIZE
                 orelse {error, {'invalid-container-size', Size}},
         {ok, <<Page0:?PAGE_SIZE/binary, Page1:?PAGE_SIZE/binary>>} ?=
-            fetch(Start, 0, 2 * ?PAGE_SIZE, Opts),
+            fetch(Start, Size, 0, 2 * ?PAGE_SIZE, Opts),
         {ok, Meta0} ?= parse_meta(Page0),
         {ok, Meta1} ?= parse_meta(Page1),
         validate_meta(
@@ -415,17 +430,72 @@ read_page(PgNo, #{ last_page := LastPage, start := Start, size := Size }, Opts) 
         true ?=
             PgNo =< LastPage andalso (PgNo + 1) * ?PAGE_SIZE =< Size
                 orelse {error, {'invalid-page-number', PgNo}},
-        fetch(Start, PgNo * ?PAGE_SIZE, ?PAGE_SIZE, Opts)
+        fetch(Start, Size, PgNo * ?PAGE_SIZE, ?PAGE_SIZE, Opts)
     end.
 
-%% @doc Fetch a byte range of the container from the weave. Failed fetches are
-%% unavailability, never misses.
-fetch(Start, Offset, Length, Opts) ->
-    case hb_store_arweave:read_chunks(Start + Offset, Length, Opts) of
-        {ok, Data} when byte_size(Data) =:= Length -> {ok, Data};
-        {ok, Data} -> {error, {unavailable, {short_read, byte_size(Data)}}};
+%% @doc Fetch a byte range of the container, sliced from the chunk that holds
+%% it. Pages align within the container's chunks, so a range never spans two.
+%% Failed fetches are unavailability, never misses.
+fetch(Start, Size, Offset, Length, Opts) ->
+    Chunk = Offset div ?CHUNK_SIZE,
+    Within = Offset - (Chunk * ?CHUNK_SIZE),
+    maybe
+        true ?=
+            Within + Length =< ?CHUNK_SIZE
+                orelse {error, {'invalid-fetch-span', Offset, Length}},
+        {ok, Bytes} ?= read_chunk(Start, Size, Chunk, Opts),
+        true ?=
+            Within + Length =< byte_size(Bytes)
+                orelse {error, {unavailable, {short_read, byte_size(Bytes)}}},
+        {ok, binary:part(Bytes, Within, Length)}
+    end.
+
+%% @doc One whole chunk of the container, from the chunk store when it is
+%% held, and from the weave -- retained for the next read -- when it is not.
+%% The defragmented layout clusters the tree: the first chunk carries the
+%% meta pages, main root and sub-root, and a chunk holding one branch page
+%% holds its neighbours, so held chunks answer most of every descent.
+read_chunk(Start, Size, Chunk, Opts) ->
+    Stores = chunk_store(Opts),
+    Key =
+        <<
+            (hb_util:bin(Start))/binary, "/chunk=", (hb_util:bin(Chunk))/binary
+        >>,
+    case hb_store:read(Stores, Key, Opts) of
+        {ok, Bytes} -> {ok, Bytes};
+        _ -> fill_chunk(Stores, Key, Start, Size, Chunk, Opts)
+    end.
+
+%% @doc Fetch a chunk from the weave and retain it. Retention is best-effort:
+%% a store that refuses the write costs the next read a fetch, nothing more.
+fill_chunk(Stores, Key, Start, Size, Chunk, Opts) ->
+    ChunkStart = Chunk * ?CHUNK_SIZE,
+    Length = min(?CHUNK_SIZE, Size - ChunkStart),
+    case hb_store_arweave:read_chunks(Start + ChunkStart, Length, Opts) of
+        {ok, Bytes} when byte_size(Bytes) =:= Length ->
+            case hb_store:write(Stores, #{ Key => Bytes }, Opts) of
+                ok -> ok;
+                Refused -> ?event(store_arlmdb, {chunk_not_retained, Refused})
+            end,
+            {ok, Bytes};
+        {ok, Bytes} -> {error, {unavailable, {short_read, byte_size(Bytes)}}};
         Error -> {error, {unavailable, Error}}
     end.
+
+%% @doc The stores retaining fetched chunks, from the `chunk-store' key of
+%% the store message. The default is a volatile store named for the
+%% container, expiring wholesale every five minutes; `[]' retains nothing.
+chunk_store(#{ <<"chunk-store">> := Stores }) when is_list(Stores) -> Stores;
+chunk_store(#{ <<"chunk-store">> := Store }) -> [Store];
+chunk_store(StoreOpts = #{ <<"root">> := Root }) ->
+    Name = maps:get(<<"name">>, StoreOpts, Root),
+    [
+        #{
+            <<"store-module">> => hb_store_volatile,
+            <<"name">> => <<Name/binary, "-chunks">>,
+            <<"max-ttl-ms">> => ?CHUNK_TTL_MS
+        }
+    ].
 
 %%% Tests
 
@@ -535,4 +605,28 @@ invalid_container_test() ->
     ?assertMatch(
         {error, {'invalid-main-flags', 0}},
         hb_store:start([Store])
+    ).
+
+%% @doc Retained chunks serve repeated reads without the weave: a key looked
+%% up once answers again through a store whose routes are gone, while an
+%% indexed key whose leaf chunk was never fetched cannot. The second key's
+%% unavailability reaches the store manager, which reports an exhausted
+%% store list as its terminal miss.
+chunk_retention_test_() ->
+    {timeout, 120, fun chunk_retention/0}.
+chunk_retention() ->
+    Store = (test_store())#{ <<"name">> => <<?LIVE_INDEX/binary, "-cached">> },
+    Key =
+        <<"~arweave@2.9/offset="
+            "AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
+    {ok, First} = hb_store:read([Store], Key, #{}),
+    Unrouted = Store#{ <<"routes">> => [] },
+    ?assertEqual({ok, First}, hb_store:read([Unrouted], Key, #{})),
+    Fresh =
+        <<"~arweave@2.9/offset="
+            "KgADUJYkEY0dbUKTI3aDZy2c_nb4WLh7VDh2ZHrb1yY">>,
+    ?assertMatch({error, _}, hb_store:read([Unrouted], Fresh, #{})),
+    ?assertMatch(
+        {ok, #{ <<"start">> := 381838173656091 }},
+        hb_store:read([Store], Fresh, #{})
     ).
