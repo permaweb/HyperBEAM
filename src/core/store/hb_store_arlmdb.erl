@@ -457,9 +457,13 @@ fetch(Start, Size, Offset, Length, Opts) ->
 %% holds its neighbours, so held chunks answer most of every descent.
 read_chunk(Start, Size, Chunk, Opts) ->
     Stores = chunk_store(Opts),
+    % The key is the `~arweave@2.9' device's own address for the chunk: the
+    % 1-based absolute weave offset of its first byte, so every store and
+    % device retaining weave chunks shares one namespace.
     Key =
         <<
-            (hb_util:bin(Start))/binary, "/chunk=", (hb_util:bin(Chunk))/binary
+            "~arweave@2.9/chunk=",
+            (hb_util:bin(Start + (Chunk * ?CHUNK_SIZE) + 1))/binary
         >>,
     case hb_store:read(Stores, Key, Opts) of
         {ok, Bytes} -> {ok, Bytes};
