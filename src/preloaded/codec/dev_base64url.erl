@@ -15,10 +15,10 @@ encode(Base, _Req, Opts) ->
     with_body(Base, Opts, fun hb_util:encode/1).
 
 %% @doc Apply a codec function to the base message's body, in place.
-with_body(Base, Opts, Codec) ->
+with_body(Base, Opts, Func) ->
     case hb_maps:find(<<"body">>, Base, Opts) of
         {ok, Body} when is_binary(Body) ->
-            {ok, hb_ao:set(Base, #{ <<"body">> => Codec(Body) }, Opts)};
+            {ok, hb_ao:set(Base, #{ <<"body">> => Func(Body) }, Opts)};
         _ ->
             {error, {'invalid-body', <<"No binary `body' key found.">>}}
     end.

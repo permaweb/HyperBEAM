@@ -6,9 +6,9 @@
 %%%     format = fields | "repeat(" fields ")"
 %%%     fields = field ("," field)*
 %%%     field  = name ":" size ("+" type)?
+%%%     type   = "integer" | "float" | "atom" | enum(atom ("," atom)*)
 %%%     name   = any bytes except `:' and `,'; `_' alone is padding
 %%%     size   = a positive decimal bit count
-%%%     type   = "integer"
 %%% '''
 %%% For example, `_:77,start:49+integer,length:34+integer' names the two
 %%% trailing fields of a 160-bit row and discards its leading 77 bits, and
@@ -23,11 +23,15 @@
 %%% consumed and omitted from the result (any other name, including ones
 %%% merely beginning with `_', is an ordinary field, and a repeated name
 %%% keeps the last field's value). `integer' fields decode as unsigned
-%%% big-endian integers of their bit size; untyped fields decode as
-%%% bitstrings, byte-aligned only when their size is a multiple of eight.
-%%% The empty format, an empty field name, a non-positive or non-decimal
-%%% size, an unknown type, and a body whose bit size does not match the
-%%% format are refused.
+%%% big-endian integers of their bit size; `float' fields as IEEE floats of
+%%% 16, 32 or 64 bits; `atom' fields as the atom whose UTF-8 name fills the
+%%% field, at byte-multiple sizes; `enum' fields as the member named by the
+%%% field's unsigned integer value, zero-indexed, returned as a binary;
+%%% untyped fields decode as bitstrings, byte-aligned only when their size
+%%% is a multiple of eight. The empty format, an empty field name, a
+%%% non-positive or non-decimal size, an unknown type, a float or atom size
+%%% outside those above, an enum value past its last member, and a body
+%%% whose bit size does not match the format are refused.
 %%%
 %%% Keys:
 %%% ```
@@ -60,7 +64,7 @@ decode({repeat, Fields}, Body) ->
         true ?=
             bit_size(Body) rem Record =:= 0
                 orelse {error, {'invalid-body-size', bit_size(Body), Record}},
-        {ok, decode_records(Fields, Record, Body, [])}
+        decode_records(Fields, Record, Body, [])
     end;
 decode(Fields, Body) ->
     Total = record_size(Fields),
@@ -68,7 +72,7 @@ decode(Fields, Body) ->
         true ?=
             Total =:= bit_size(Body)
                 orelse {error, {'invalid-body-size', bit_size(Body), Total}},
-        {ok, decode_fields(Fields, Body, #{})}
+        decode_fields(Fields, Body, #{})
     end.
 
 %% @doc The bit size of one record of the given fields.
@@ -76,15 +80,14 @@ record_size(Fields) ->
     lists:sum([ Size || {_Name, Size, _Type} <- Fields ]).
 
 %% @doc Decode each record of a repeated body in order.
-decode_records(_Fields, _Record, <<>>, Records) -> lists:reverse(Records);
+decode_records(_Fields, _Record, <<>>, Records) ->
+    {ok, lists:reverse(Records)};
 decode_records(Fields, Record, Body, Records) ->
     <<Head:Record/bitstring, Rest/bitstring>> = Body,
-    decode_records(
-        Fields,
-        Record,
-        Rest,
-        [decode_fields(Fields, Head, #{}) | Records]
-    ).
+    maybe
+        {ok, Decoded} ?= decode_fields(Fields, Head, #{}),
+        decode_records(Fields, Record, Rest, [Decoded | Records])
+    end.
 
 %% @doc Return the leading N bits of the base message's body.
 take(Base, Req, Opts) ->
@@ -117,7 +120,9 @@ parse_format(<<"repeat(", Inner/binary>>) ->
         {ok, {repeat, Fields}}
     end;
 parse_format(Format) ->
-    parse_fields(binary:split(Format, <<",">>, [global]), []).
+    % The depth-aware split keeps an enum's comma-separated members inside
+    % their field.
+    parse_fields(hb_util:split_depth_string_aware($,, Format), []).
 parse_fields([], Fields) -> {ok, lists:reverse(Fields)};
 parse_fields([Spec | Rest], Fields) ->
     maybe
@@ -132,6 +137,10 @@ parse_field(Spec) ->
             case binary:split(SizeType, <<"+">>) of
                 [Size] -> sized_field(Name, Size, bitstring);
                 [Size, <<"integer">>] -> sized_field(Name, Size, integer);
+                [Size, <<"float">>] -> float_field(Name, Size);
+                [Size, <<"atom">>] -> atom_field(Name, Size);
+                [Size, <<"enum(", Members/binary>>] ->
+                    enum_field(Name, Size, Members);
                 [_Size, Type] -> {error, {'invalid-format-type', Type}}
             end;
         _ ->
@@ -145,6 +154,42 @@ sized_field(Name, Size, Type) ->
         {ok, {Name, Bits, Type}}
     end.
 
+%% @doc A float field, at the IEEE sizes alone.
+float_field(Name, Size) ->
+    maybe
+        {ok, Field = {_, Bits, _}} ?= sized_field(Name, Size, float),
+        true ?=
+            lists:member(Bits, [16, 32, 64])
+                orelse {error, {'invalid-float-size', Bits}},
+        {ok, Field}
+    end.
+
+%% @doc An atom field: its UTF-8 name fills the field, so the size must be a
+%% whole number of bytes.
+atom_field(Name, Size) ->
+    maybe
+        {ok, Field = {_, Bits, _}} ?= sized_field(Name, Size, atom),
+        true ?=
+            Bits rem 8 =:= 0
+                orelse {error, {'invalid-atom-size', Bits}},
+        {ok, Field}
+    end.
+
+%% @doc An enum field: the members arrive as the comma-separated remainder of
+%% the type, up to its closing parenthesis.
+enum_field(Name, Size, Members) ->
+    MembersSize = byte_size(Members) - 1,
+    case Members of
+        <<Names:MembersSize/binary, ")">> when Names =/= <<>> ->
+            sized_field(
+                Name,
+                Size,
+                {enum, binary:split(Names, <<",">>, [global])}
+            );
+        _ ->
+            {error, {'invalid-format-type', <<"enum(", Members/binary>>}}
+    end.
+
 %% @doc Parse a positive bit count, refusing malformed values.
 parse_size(Value) ->
     try hb_util:int(Value) of
@@ -154,21 +199,38 @@ parse_size(Value) ->
     end.
 
 %% @doc Decode the fields from the body in order, skipping `_' padding.
-decode_fields([], <<>>, Msg) -> Msg;
+decode_fields([], <<>>, Msg) -> {ok, Msg};
 decode_fields([{Name, Size, Type} | Rest], Body, Msg) ->
     <<Value:Size/bitstring, Remaining/bitstring>> = Body,
     case Name of
         <<"_">> -> decode_fields(Rest, Remaining, Msg);
-        _ -> decode_fields(Rest, Remaining, Msg#{ Name => typed(Type, Value) })
+        _ ->
+            maybe
+                {ok, Typed} ?= typed(Type, Value),
+                decode_fields(Rest, Remaining, Msg#{ Name => Typed })
+            end
     end.
 
 %% @doc Convert a decoded bitstring by field type. Integers are unsigned and
-%% big-endian.
-typed(bitstring, Bits) -> Bits;
+%% big-endian; an enum value past its last member is refused.
+typed(bitstring, Bits) -> {ok, Bits};
 typed(integer, Bits) ->
     Size = bit_size(Bits),
     <<Int:Size/integer>> = Bits,
-    Int.
+    {ok, Int};
+typed(float, Bits) ->
+    Size = bit_size(Bits),
+    <<Float:Size/float>> = Bits,
+    {ok, Float};
+typed(atom, Bits) -> {ok, hb_util:atom(Bits)};
+typed({enum, Members}, Bits) ->
+    {ok, Index} = typed(integer, Bits),
+    maybe
+        true ?=
+            Index < length(Members)
+                orelse {error, {'invalid-enum-value', Index, Members}},
+        {ok, lists:nth(Index + 1, Members)}
+    end.
 
 %%% Tests
 
@@ -325,4 +387,52 @@ from_published_intervals() ->
         end,
         0,
         lists:sublist(Records, 100)
+    ).
+
+%% @doc Decode float, atom and enum fields, refusing malformed sizes and an
+%% enum value past its last member.
+from_typed_fields_test() ->
+    {ok, Decoded} =
+        hb_ao:resolve(
+            #{
+                <<"path">> =>
+                    <<"~bits@1.0/from=ratio:32+float,unit:40+atom,"
+                        "codec:4+enum(tx@1.0,ans104@1.0),_:4">>,
+                <<"body">> =>
+                    <<1.5:32/float, "chunk", 1:4, 0:4>>
+            },
+            #{}
+        ),
+    ?assertEqual(1.5, hb_maps:get(<<"ratio">>, Decoded)),
+    ?assertEqual(chunk, hb_maps:get(<<"unit">>, Decoded)),
+    ?assertEqual(<<"ans104@1.0">>, hb_maps:get(<<"codec">>, Decoded)),
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"~bits@1.0/from=bad:24+float">>,
+                <<"body">> => <<0:24>>
+            },
+            #{}
+        )
+    ),
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"~bits@1.0/from=bad:12+atom">>,
+                <<"body">> => <<0:12>>
+            },
+            #{}
+        )
+    ),
+    ?assertMatch(
+        {error, _},
+        hb_ao:resolve(
+            #{
+                <<"path">> => <<"~bits@1.0/from=c:4+enum(a,b),_:4">>,
+                <<"body">> => <<3:4, 0:4>>
+            },
+            #{}
+        )
     ).
