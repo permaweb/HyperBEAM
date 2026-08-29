@@ -65,6 +65,15 @@
     <<"name">> => <<"cache-mainnet/lmdb">>,
     <<"store-module">> => hb_store_lmdb
 }).
+%% The published Arweave offset index: a mined transaction holding
+%% 8,560,638,056 packed rows mapping ANS-104 data item IDs to their weave
+%% byte ranges, read in place by `hb_store_arlmdb'. Offset resolution
+%% through it is served by Arweave peers alone.
+-define(DEFAULT_OFFSET_INDEX, #{
+    <<"store-module">> => hb_store_arlmdb,
+    <<"name">> => <<"published-offset-index">>,
+    <<"root">> => <<"7vg2832WFsisEcBr1oBQ8ldc4EGOkjQdwW46hDvJsOs">>
+}).
 -define(DEFAULT_GATEWAY, <<"https://arweave.net">>).
 -define(
     DEFAULT_HTTP_OPTS,
@@ -475,10 +484,10 @@ raw_default_message() ->
                 #{
                     <<"store-module">> => hb_store_arweave,
                     <<"name">> => <<"cache-arweave">>,
-                    <<"index-store">> => [?DEFAULT_PRIMARY_STORE],
+                    <<"index-store">> =>
+                        [?DEFAULT_PRIMARY_STORE, ?DEFAULT_OFFSET_INDEX],
                     <<"local-store">> => [?DEFAULT_PRIMARY_STORE],
-                    <<"remote-index">> => true,
-                    <<"arweave-node">> => ?DEFAULT_GATEWAY
+                    <<"remote-index">> => false
                 },
                 #{
                     <<"store-module">> => hb_store_gateway,
