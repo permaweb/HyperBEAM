@@ -16,11 +16,16 @@
 %%%                        row as the request body. The result is the message
 %%%                        that the read returns.
 %%% '''
+%%% Reads answer with one row's message. Lists answer with the ascending run
+%%% of rows sharing the normalized key's bits, each normalized as a read's
+%%% row is, resumed inclusively from the raw row bits of the request's
+%%% `from' and bounded by its `limit' (1,000 rows when unnamed).
+%%%
 %%% The container is an LMDB 1.0 file (`MDB_DATA_VERSION' 3, 64 KiB pages,
-%%% little-endian). Each page opens with a 24 byte header: the page number and
-%%% the LMDB internal transaction as 64 bit ints, then `pad', `flags',
-%%% `lower', and `upper' as 16 bit integers. The meta pages are pages 0 and 1; the one with
-%%% the higher transaction ID wins. The main database must be `MDB_DUPSORT bor
+%%% little-endian). Each page opens with a 24 byte header: the page number
+%%% and the LMDB internal transaction as 64 bit ints, then `pad', `flags',
+%%% `lower', and `upper' as 16 bit integers. The meta pages are pages 0 and
+%%% 1; the one with the higher transaction ID wins. The main database must be `MDB_DUPSORT bor
 %%% MDB_DUPFIXED' with a single-leaf root holding one `F_SUBDATA' node keyed
 %%% `<<0>>', whose data is the sub-database record: its `pad' is the row width
 %%% in bytes. The sub-database's branch pages hold full rows as node keys, and
@@ -42,7 +47,7 @@
 %%% leaf.
 -module(hb_store_arlmdb).
 -export([start/3, stop/3, scope/0, scope/1]).
--export([read/3, resolve/3, type/3]).
+-export([read/3, list/3, resolve/3, type/3]).
 -include("include/hb.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
@@ -108,6 +113,53 @@ read(StoreOpts, #{ <<"read">> := Key }, _NodeOpts) ->
             lookup(Suffix, Start, Size, Tags, StoreOpts);
         _ ->
             {error, not_found}
+    end.
+
+%% @doc Serve a bounded ascending run of rows for a key under the index's
+%% prefix. `from' -- raw row bits, sought inclusively -- resumes a run, and
+%% `limit' bounds it; each row normalizes exactly as a read's does. An
+%% in-range empty page is `{ok, []}': `not_found' names only keys the index
+%% does not serve.
+list(StoreOpts, Req = #{ <<"list">> := Key }, _NodeOpts) ->
+    #{ <<"start">> := Start, <<"size">> := Size, <<"tags">> := Tags } =
+        hb_store:find(StoreOpts),
+    Prefix = maps:get(<<"prefix">>, Tags),
+    PrefixSize = byte_size(Prefix),
+    case Key of
+        <<Prefix:PrefixSize/binary, Suffix/binary>> ->
+            run(Suffix, Req, Start, Size, Tags, StoreOpts);
+        _ ->
+            {error, not_found}
+    end.
+
+%% @doc Collect and normalize one page of the run a key names.
+run(Suffix, Req, Start, Size, Tags, Opts) ->
+    maybe
+        {ok, Prefix} ?=
+            normalize(maps:get(<<"normalize-key">>, Tags), Suffix, Opts),
+        true ?= is_bitstring(Prefix) orelse {error, {'invalid-seek', Prefix}},
+        From = maps:get(<<"from">>, Req, Prefix),
+        true ?= is_bitstring(From) orelse {error, {'invalid-from', From}},
+        Limit = hb_util:int(maps:get(<<"limit">>, Req, 1000)),
+        {ok, Meta} ?= read_meta(Start, Size, Opts),
+        {ok, SubDB = #{ pad := Pad }} ?= read_main_db(Meta, Opts),
+        true ?=
+            Pad > 0 andalso ?PAGE_HDR + Pad =< ?PAGE_SIZE
+                orelse {error, {'invalid-row-width', Pad}},
+        true ?=
+            bit_size(From) =< Pad * 8
+                orelse {error, {'invalid-seek-size', bit_size(From)}},
+        Target = <<From/bitstring, 0:(Pad * 8 - bit_size(From))>>,
+        {ok, Rows} ?= scan(Target, Prefix, Limit, SubDB, Meta, Opts, []),
+        normalize_rows(maps:get(<<"normalize-result">>, Tags), Rows, Opts, [])
+    end.
+
+%% @doc Normalize each row of a run in order, as reads normalize one.
+normalize_rows(_Path, [], _Opts, Msgs) -> {ok, lists:reverse(Msgs)};
+normalize_rows(Path, [Row | Rows], Opts, Msgs) ->
+    maybe
+        {ok, Msg} ?= normalize(Path, Row, Opts),
+        normalize_rows(Path, Rows, Opts, [Msg | Msgs])
     end.
 
 %% @doc Look up one key: normalize its remainder to the seek bits, descend to
@@ -313,20 +365,65 @@ seek(Seek, #{ pad := Pad, root := Root, depth := Depth }, Meta, Opts) ->
             SeekSize =< RowBits
                 orelse {error, {'invalid-seek-size', SeekSize}},
         Target = <<Seek/bitstring, 0:(RowBits - SeekSize)>>,
-        {ok, Row} ?= descend(Root, Depth, Target, Pad, none, Meta, Opts),
-        true ?= byte_size(Row) =:= Pad orelse {error, {'invalid-row', Row}},
-        confirm(Row, Seek)
+        {ok, Landing} ?= descend(Root, Depth, Target, Pad, none, Meta, Opts),
+        case first_row(Landing, Pad) of
+            none -> {error, not_found};
+            Row when byte_size(Row) =:= Pad -> confirm(Row, Seek);
+            Row -> {error, {'invalid-row', Row}}
+        end
+    end.
+
+%% @doc The first row at-or-after a descent's target: the landed slot when
+%% the leaf holds one, and the successor row carried down otherwise.
+first_row({Page, Slot, Count, _Next}, Pad) when Slot < Count ->
+    row(Page, Slot, Pad);
+first_row({_Page, _Slot, _Count, Next}, _Pad) -> Next.
+
+%% @doc Collect up to the limit of rows carrying the prefix, from the first
+%% row at-or-after the target. Crossing a leaf re-seeks at the successor row
+%% the descent carries down: the pages above the leaves are retained, so a
+%% crossing costs one leaf fetch.
+scan(Target, Prefix, Limit, SubDB, Meta, Opts, Rows) ->
+    #{ pad := Pad, root := Root, depth := Depth } = SubDB,
+    maybe
+        {ok, {Page, Slot, Count, Next}} ?=
+            descend(Root, Depth, Target, Pad, none, Meta, Opts),
+        {Taken, Left} = collect(Page, Slot, Count, Pad, Prefix, Limit, Rows),
+        case Left > 0 andalso Next =/= none andalso carries(Next, Prefix) of
+            true -> scan(Next, Prefix, Left, SubDB, Meta, Opts, Taken);
+            false -> {ok, lists:reverse(Taken)}
+        end
+    end.
+
+%% @doc The rows of one leaf from a slot onward that carry the prefix, onto
+%% the reversed accumulator, with the limit that remains. A row that diverges
+%% from the prefix ends the run: rows ascend, so no later row carries it.
+collect(_Page, Slot, Count, _Pad, _Prefix, Limit, Rows)
+        when Slot >= Count; Limit =:= 0 ->
+    {Rows, Limit};
+collect(Page, Slot, Count, Pad, Prefix, Limit, Rows) ->
+    Row = row(Page, Slot, Pad),
+    case carries(Row, Prefix) of
+        true ->
+            collect(Page, Slot + 1, Count, Pad, Prefix, Limit - 1, [Row | Rows]);
+        false ->
+            {Rows, 0}
+    end.
+
+%% @doc Whether a row begins with the given prefix bits.
+carries(Row, Prefix) ->
+    PrefixSize = bit_size(Prefix),
+    case Row of
+        <<Lead:PrefixSize/bitstring, _/bitstring>> -> Lead =:= Prefix;
+        _ -> false
     end.
 
 %% @doc Require the found row to begin with the seek bits: a row at-or-after
 %% the target that diverges within them is a proven miss.
 confirm(Row, Seek) ->
-    SeekSize = bit_size(Seek),
-    case Row of
-        <<Lead:SeekSize/bitstring, _/bitstring>> when Lead =:= Seek ->
-            {ok, Row};
-        _ ->
-            {error, not_found}
+    case carries(Row, Seek) of
+        true -> {ok, Row};
+        false -> {error, not_found}
     end.
 
 %% @doc Take one step of the descent. Branch pages recurse into the last child
@@ -355,11 +452,7 @@ step({Flags, Count}, Page, _Depth, Target, Pad, Next, _Meta, _Opts)
         true ?=
             ?PAGE_HDR + (Count * Pad) =< ?PAGE_SIZE
                 orelse {error, {'invalid-leaf-count', Count}},
-        case leaf_slot(Page, 0, Count, Pad, Target) of
-            Slot when Slot < Count -> {ok, row(Page, Slot, Pad)};
-            _ when Next =:= none -> {error, not_found};
-            _ -> {ok, Next}
-        end
+        {ok, {Page, leaf_slot(Page, 0, Count, Pad, Target), Count, Next}}
     end;
 step({Flags, _Count}, _Page, _Depth, _Target, _Pad, _Next, _Meta, _Opts) ->
     {error, {'invalid-page-flags', Flags}}.
@@ -633,4 +726,44 @@ chunk_retention() ->
     ?assertMatch(
         {ok, #{ <<"start">> := 381838173656091 }},
         hb_store:read([Store], Fresh, #{})
+    ).
+
+%% @doc List serves prefix-bounded ascending runs: a full-id run matches its
+%% read, resumes inclusively from raw row bits, answers past its end with
+%% the empty page rather than a miss, and keys outside the index's prefix
+%% fall through.
+list_runs_test_() ->
+    {timeout, 120, fun list_runs/0}.
+list_runs() ->
+    Store = test_store(),
+    ID = <<"AAAAhyV8_NwududSxuraAj7DLWiZHDTqVKWrZglpNok">>,
+    Key = <<"~arweave@2.9/offset=", ID/binary>>,
+    {ok, Read} = hb_store:read([Store], Key, #{}),
+    ?assertEqual(
+        {ok, [Read]},
+        hb_store:list([Store], #{ <<"list">> => Key }, #{})
+    ),
+    ?assertEqual(
+        {ok, [Read]},
+        hb_store:list([Store], #{ <<"list">> => Key, <<"limit">> => 5 }, #{})
+    ),
+    % The raw row resumes its own run inclusively; its successor is past it.
+    <<Prefix:77/bitstring, _/bitstring>> = hb_util:native_id(ID),
+    Row = <<Prefix/bitstring, 381852134215637:49, 3947:34>>,
+    ?assertEqual(
+        {ok, [Read]},
+        hb_store:list([Store], #{ <<"list">> => Key, <<"from">> => Row }, #{})
+    ),
+    <<RowInt:160/integer>> = Row,
+    ?assertEqual(
+        {ok, []},
+        hb_store:list(
+            [Store],
+            #{ <<"list">> => Key, <<"from">> => <<(RowInt + 1):160/integer>> },
+            #{}
+        )
+    ),
+    ?assertEqual(
+        {error, not_found},
+        hb_store:list([Store], #{ <<"list">> => <<"other/key">> }, #{})
     ).
