@@ -104,9 +104,31 @@ read_index_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
                 <<"length">> => Length
             }};
         _ ->
-            not_found
+            read_published_offset(StoreOpts, ID)
     end;
 read_index_offset(_, _) -> not_found.
+
+%% @doc Read the offset of a data item from a published offset index in the
+%% `index-store' list, keyed by the item's ID under the `~arweave@2.9/offset='
+%% prefix. Published indexes hold confirmed ANS-104 items alone.
+read_published_offset(StoreOpts = #{ <<"index-store">> := IndexStore }, ID) ->
+    ReadRes =
+        hb_store:read(
+            IndexStore,
+            #{ <<"read">> => <<"~arweave@2.9/offset=", ID/binary>> },
+            StoreOpts
+        ),
+    case ReadRes of
+        {ok, #{ <<"start">> := StartOffset, <<"length">> := Length }} ->
+            {ok, #{
+                <<"version">> => 2,
+                <<"codec-device">> => <<"ans104@1.0">>,
+                <<"start-offset">> => StartOffset,
+                <<"length">> => Length
+            }};
+        _ ->
+            not_found
+    end.
 
 %% @doc Find the offset of a message from the nodes serving the `~arweave@2.9'
 %% routes, adding it to the local index so that they are asked once per message.
