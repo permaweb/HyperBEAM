@@ -86,15 +86,15 @@
 %%% The HyperBEAM resolver also takes a number of runtime options that change
 %%% the way that the environment operates:
 %%% 
-%%% `update_hashpath':  Whether to add the `Req' to `HashPath' for the `Res'.
-%%% 					Default: true.
-%%% `add_key':          Whether to add the key to the start of the arguments.
-%%% 					Default: `<not set>'.
+%%% `hashpath':         Whether to add the `Req' to `HashPath' for the `Res'.
+%%% `add-key':          Whether to add the key to the start of the arguments.
+%%% `resolve-mode':     Set to `raw' to apply device functions directly,
+%%% 					skipping the resolver's management stages.
 %%% </pre>
 -module(hb_ao).
 %%% Main AO-Core API:
 -export([resolve/2, resolve/3, resolve_many/2]).
--export([raw/3, raw/4, raw/5]).
+-export([raw/2, raw/3, raw/4, raw/5]).
 -export([normalize_key/1, normalize_key/2, normalize_keys/1, normalize_keys/2]).
 -export([force_message/2]).
 %%% Shortcuts and tools:
@@ -160,6 +160,13 @@ resolve(Base, Req, Opts) ->
         }
     ),
     resolve_many([Base | MessagesToExec], Opts).
+
+%% @doc Resolve a full singleton in `raw' mode: the sequence is normalized
+%% and stepped as normal, but each step applies its device function directly,
+%% skipping the cache, validation, persistence, linking, and worker stages.
+%% Equivalent to `resolve/2' with `resolve-mode' set to `raw' in the `Opts'.
+raw(Msg, Opts) ->
+    resolve(Msg, Opts#{ <<"resolve-mode">> => raw }).
 
 %% @doc Invoke only the raw execution of the AO-Core resolution flow, ignoring
 %% normalization, cache, hashpath, worker, and other management components.
@@ -416,6 +423,11 @@ resolve_stage(1, RawBase, RawReq, Opts) ->
     Base = normalize_keys(RawBase, Opts),
     Req = normalize_keys(RawReq, Opts),
     resolve_stage(2, Base, Req, Opts);
+resolve_stage(2, Base, Req, Opts = #{ <<"resolve-mode">> := raw }) ->
+    ?event_debug(debug_ao_core, {stage, 2, raw_execution}, Opts),
+    % Raw mode: apply the device function directly, skipping the cache,
+    % validation, persistence, linking, and worker stages.
+    raw(Base, Req, Opts);
 resolve_stage(2, Base, Req, Opts) ->
     ?event_debug(debug_ao_core, {stage, 2, cache_lookup}, Opts),
     % Lookup request in the cache. If we find a result, return it.

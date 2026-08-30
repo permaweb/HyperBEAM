@@ -199,6 +199,21 @@ test_opts() ->
                 paranoid_input_verification,
                 paranoid_result_verification
             ]
+        },
+        #{
+            name => raw,
+            desc => "Raw execution mode",
+            opts => #{
+                <<"resolve-mode">> => raw,
+                <<"store">> => hb_test_utils:test_store()
+            },
+            skip => [
+                % Skip tests that assert behaviors of the management stages
+                % that raw mode explicitly skips.
+                step_hook,
+                paranoid_input_verification,
+                paranoid_result_verification
+            ]
         }
     ].
 
