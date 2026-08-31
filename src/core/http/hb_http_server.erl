@@ -49,6 +49,8 @@ start() ->
             _ -> StoreOpts
         end,
     hb_store:start(UpdatedStoreOpts),
+    % Also start default stores
+    hb_store:start(hb_opts:get(<<"store">>, [], #{})),
     PrivWallet =
         hb:wallet(
             hb_opts:get(
