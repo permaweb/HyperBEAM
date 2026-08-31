@@ -689,6 +689,11 @@ set(Base, NewValuesMsg, Opts) ->
             KeysToSet
         )
     ),
+    AddedKeys =
+        lists:filter(
+            fun(Key) -> not hb_maps:is_key(Key, Base, Opts) end,
+            maps:keys(NewValues)
+        ),
     % Calculate if the keys to be set conflict with any committed keys.
     {ok, CommittedKeys} =
         committed(
@@ -728,11 +733,13 @@ set(Base, NewValuesMsg, Opts) ->
             end,
             OriginalPriv
         ),
-    case OverwrittenCommittedKeys of
-        [] ->
+    case {AddedKeys, OverwrittenCommittedKeys} of
+        {[_ | _], _} ->
+            {ok, hb_maps:without([<<"commitments">>], Merged, Opts)};
+        {[], []} ->
             ?event_debug(message_set, {no_overwritten_committed_keys, {merged, Merged}}),
             {ok, Merged};
-        _ ->
+        {[], _} ->
             % We did overwrite some keys, but do their values match the original?
             % If not, we must remove the commitments.
             ChangedBaseKeys = hb_maps:with(OverwrittenCommittedKeys, Base, Opts),
@@ -997,6 +1004,21 @@ set_conflicting_keys_test() ->
 	Req = #{ <<"path">> => <<"set">>, <<"dangerous">> => <<"Value2">> },
 	?assertMatch({ok, #{ <<"dangerous">> := <<"Value2">> }},
 		hb_ao:resolve(Base, Req, #{})).
+
+set_new_key_drops_commitments_test() ->
+    Opts = #{
+        <<"store">> => hb_test_utils:test_store(),
+        <<"priv-wallet">> => hb:wallet()
+    },
+    Signed = hb_message:commit(#{ <<"a">> => <<"1">> }, Opts, <<"httpsig@1.0">>),
+    {ok, Updated} = hb_ao:resolve(
+        Signed,
+        #{ <<"path">> => <<"set">>, <<"b">> => <<"2">> },
+        Opts
+    ),
+    ?assertNot(maps:is_key(<<"commitments">>, Updated)),
+    {ok, Canonical} = hb_message:with_only_committed(Updated, Opts),
+    ?assertEqual(<<"2">>, maps:get(<<"b">>, Canonical)).
 
 unset_with_set_test() ->
 	Base = #{ <<"dangerous">> => <<"Value1">> },
